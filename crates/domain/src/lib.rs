@@ -54,7 +54,10 @@ pub use playback::{
 pub use playback_session::PlaybackSession;
 pub use playlist::{Playlist, PlaylistEntry};
 pub use playlist_folder::{PlaylistFolder, PlaylistItem};
-pub use query::{LibraryQuery, SortDirection, TrackSort, TrackSortColumn, compare_optional_text};
+pub use query::{
+    LibraryQuery, SortDirection, TrackSort, TrackSortColumn, compare_optional_text,
+    effective_sort_key,
+};
 pub use rating::Rating;
 pub use settings::{
     AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage,

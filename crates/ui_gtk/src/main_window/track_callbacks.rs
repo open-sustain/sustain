@@ -131,11 +131,12 @@ pub(super) fn track_row_changed_callback(
     Rc::new(move |track_id: TrackId| {
         let row = {
             let runtime_borrow = runtime.borrow();
+            let honor_sort_tags = runtime_borrow.settings().library.honor_sort_tags;
             runtime_borrow
                 .library_tracks()
                 .iter()
                 .find(|track| track.id == track_id)
-                .map(TrackTableRow::from_track)
+                .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
         };
         let Some(row) = row else {
             return;
