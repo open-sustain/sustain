@@ -1029,7 +1029,7 @@ columnview.track-table listview row:selected .track-table-status-missing,
 }
 
 .statistics-section-title {
-    font-size: 1.15em;
+    font-size: 1.3em;
     font-weight: 600;
 }
 
@@ -1043,17 +1043,54 @@ columnview.track-table listview row:selected .track-table-status-missing,
     font-style: italic;
 }
 
-.statistics-row-label {
+/* Accent source for the donut ring and its legend swatches: no trough,
+   just the live accent for the Cairo draw funcs to read. */
+.statistics-chart {
+    color: @theme_selected_bg_color;
+}
+
+/* The centred total inside a donut's hole. */
+.statistics-donut-total {
+    color: alpha(@theme_fg_color, 0.75);
+    font-size: 0.95em;
+    font-weight: 600;
+}
+
+/* One slice's label and value in a donut legend. */
+.statistics-legend-label {
     color: alpha(@theme_fg_color, 0.85);
 }
 
-.statistics-row-value {
+.statistics-legend-value {
     color: alpha(@theme_fg_color, 0.6);
     font-variant-numeric: tabular-nums;
 }
 
-.statistics-bar {
-    background-color: alpha(@theme_fg_color, 0.10);
-    border-radius: 3px;
+/* A histogram bar: full-height trough plus the accent fill (Cairo). */
+.statistics-vbar {
+    background-color: alpha(@theme_fg_color, 0.08);
+    border-radius: 2px;
     color: @theme_selected_bg_color;
+}
+
+/* The value above each histogram bar and the axis label below it. */
+.statistics-bar-value {
+    color: alpha(@theme_fg_color, 0.6);
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+}
+
+.statistics-axis-label {
+    color: alpha(@theme_fg_color, 0.6);
+    font-size: 0.85em;
+}
+
+/* Each chart sits in a card: a faintly contrasting surface matching the
+   sync view's playlist container (a fold of the foreground over the
+   window), so it reads as raised in light themes and recessed in dark
+   ones without a hard-coded colour. */
+.statistics-card {
+    background-color: alpha(@theme_fg_color, 0.05);
+    border-radius: 6px;
+    padding: 14px;
 }

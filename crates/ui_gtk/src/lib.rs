@@ -22,6 +22,7 @@ mod albums;
 mod app_css;
 mod artwork_color;
 mod artwork_loader;
+mod chart;
 mod command_controller;
 mod content_stack;
 mod date_format;

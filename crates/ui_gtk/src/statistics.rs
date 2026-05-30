@@ -3,7 +3,7 @@
 
 //! The Statistics screen (issue #20): a single scrollable page of
 //! whole-library diagnostic charts — genre and bitrate distributions,
-//! the most-played and most-liked genres, and release-year / year-added
+//! the most-played and most-liked genres, and release-decade / year-added
 //! histograms.
 //!
 //! Every figure comes from the runtime's in-memory track list, which is
@@ -13,11 +13,14 @@
 //! rules are unit-tested without a UI; this module only turns the result
 //! into widgets.
 //!
-//! Every widget speaks one visual language: a labelled horizontal
-//! proportion bar (a `GtkDrawingArea` that resolves the live theme accent
-//! at draw time, like the device-sync occupation meter), so the page
-//! reads consistently and tracks the system accent in both light and
-//! dark themes.
+//! Layout: each chart sits in its own card (a contrasting surface). The
+//! four genre/bitrate charts — all donuts, drawn by [`crate::chart`] with
+//! an accent-derived palette and a legend — flow into a responsive
+//! two-up grid that reflows to one column when the window is narrow; the
+//! two distributions over time (release decade, year added) run full
+//! width below as vertical-bar histograms. Every chart is drawn with
+//! Cairo against the live theme accent, so the page tracks the system
+//! accent in both light and dark themes.
 //!
 //! The page is rebuilt lazily — on the first switch to it and on a
 //! library change while it is on screen — never during cold start, so
@@ -34,22 +37,16 @@ use sustain_app_runtime::{
 };
 
 use crate::SharedRuntime;
+use crate::chart::{self, DonutSlice, VerticalBar};
 
-/// Fixed character width of every chart's left label column, so the bars
-/// of all six charts start at the same x and read as one aligned page.
-const LABEL_WIDTH_CHARS: i32 = 16;
-
-/// Height of each proportion bar, in pixels.
-const BAR_HEIGHT: i32 = 14;
-
-/// Opacity of the accent fill painted over the CSS trough — solid enough
-/// to read crisply while letting the trough show at zero width.
-const BAR_FILL_ALPHA: f64 = 0.85;
+/// Gap between cards, in pixels, both within the donut grid and above the
+/// full-width histograms.
+const CARD_SPACING: i32 = 14;
 
 #[derive(Clone)]
 pub(crate) struct StatisticsView {
     scroller: gtk::ScrolledWindow,
-    /// The vertical stack of chart sections; cleared and rebuilt by
+    /// The vertical stack of cards; cleared and rebuilt by
     /// [`Self::refresh`].
     content: gtk::Box,
     runtime: SharedRuntime,
@@ -57,7 +54,7 @@ pub(crate) struct StatisticsView {
 
 impl StatisticsView {
     pub(crate) fn new(runtime: SharedRuntime) -> Self {
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 22);
+        let content = gtk::Box::new(gtk::Orientation::Vertical, CARD_SPACING);
         content.add_css_class("statistics-page");
         content.set_hexpand(true);
 
@@ -100,14 +97,26 @@ impl StatisticsView {
             return;
         }
 
-        self.content
-            .append(&genre_distribution_section(&stats.genre_distribution));
-        self.content
-            .append(&quality_distribution_section(&stats.quality_distribution));
-        self.content
-            .append(&most_played_section(&stats.most_played_genres));
-        self.content
-            .append(&most_liked_section(&stats.most_liked_genres));
+        // The four donut cards reflow into a two-up grid (one column when
+        // narrow); the homogeneous sizing keeps the tiles aligned.
+        let grid = gtk::FlowBox::new();
+        grid.set_orientation(gtk::Orientation::Horizontal);
+        grid.set_min_children_per_line(1);
+        grid.set_max_children_per_line(2);
+        grid.set_column_spacing(CARD_SPACING.unsigned_abs());
+        grid.set_row_spacing(CARD_SPACING.unsigned_abs());
+        grid.set_homogeneous(true);
+        grid.set_selection_mode(gtk::SelectionMode::None);
+        grid.set_hexpand(true);
+        grid.insert(&genre_distribution_section(&stats.genre_distribution), -1);
+        grid.insert(
+            &quality_distribution_section(&stats.quality_distribution),
+            -1,
+        );
+        grid.insert(&most_played_section(&stats.most_played_genres), -1);
+        grid.insert(&most_liked_section(&stats.most_liked_genres), -1);
+        self.content.append(&grid);
+
         self.content
             .append(&release_years_section(&stats.release_decades));
         self.content
@@ -125,14 +134,6 @@ impl StatisticsView {
     }
 }
 
-/// One labelled proportion bar: a left label, a fill whose width is
-/// `fraction` of the row, and a right-aligned value readout.
-struct BarRow {
-    label: String,
-    fraction: f64,
-    value: String,
-}
-
 /// The local calendar year of a `SystemTime`, or `None` for instants the
 /// calendar cannot place (before the Unix epoch). Backs the year-added
 /// bucketing; the release-year axis needs no calendar (it is already a
@@ -144,8 +145,18 @@ fn local_year(time: SystemTime) -> Option<i32> {
 }
 
 /// `"<count> (<pct>%)"` — a count alongside its share of `total`. Used by
-/// the two distribution charts, whose bars are fractions of the library.
+/// the distribution donut legends.
 fn share_text(count: usize, total: usize) -> String {
+    let percent = if total == 0 {
+        0.0
+    } else {
+        count as f64 / total as f64 * 100.0
+    };
+    format!("{count} ({percent:.0}%)")
+}
+
+/// [`share_text`] over `u64` counts, for the play-count donut.
+fn share_text_u64(count: u64, total: u64) -> String {
     let percent = if total == 0 {
         0.0
     } else {
@@ -160,19 +171,26 @@ fn genre_label(genre: &Option<String>) -> String {
     genre.clone().unwrap_or_else(|| "Unknown".to_owned())
 }
 
+/// The centred readout shown inside a donut's hole: the denominator the
+/// slices are shares of, over a unit word.
+fn donut_center(total: impl std::fmt::Display, unit: &str) -> String {
+    format!("{total}\n{unit}")
+}
+
 fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
     let total = distribution.total_tracks;
-    let mut rows: Vec<BarRow> = distribution
+    let mut slices: Vec<DonutSlice> = distribution
         .entries
         .iter()
-        .map(|entry| BarRow {
+        .map(|entry| DonutSlice {
             label: genre_label(&entry.genre),
             fraction: fraction(entry.track_count, total),
             value: share_text(entry.track_count, total),
+            muted: false,
         })
         .collect();
     if let Some(other) = distribution.other {
-        rows.push(BarRow {
+        slices.push(DonutSlice {
             label: format!(
                 "Other ({} {})",
                 other.genre_count,
@@ -184,32 +202,41 @@ fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
             ),
             fraction: fraction(other.track_count, total),
             value: share_text(other.track_count, total),
+            muted: true,
         });
     }
+    let content =
+        (!slices.is_empty()).then(|| chart::donut(slices, Some(donut_center(total, "tracks"))));
     section(
-        "Genre distribution",
+        "Genre",
         Some("Share of tracks per genre across the whole library."),
-        rows,
+        content,
         "No genres tagged yet.",
     )
 }
 
 fn quality_distribution_section(distribution: &QualityDistribution) -> gtk::Widget {
     let total = distribution.total_with_bitrate;
-    let rows: Vec<BarRow> = distribution
-        .buckets
-        .iter()
-        .map(|bucket| BarRow {
-            label: quality_label(bucket.range).to_owned(),
-            fraction: fraction(bucket.track_count, total),
-            value: share_text(bucket.track_count, total),
-        })
-        .collect();
-    let rows = if total == 0 { Vec::new() } else { rows };
+    let slices: Vec<DonutSlice> = if total == 0 {
+        Vec::new()
+    } else {
+        distribution
+            .buckets
+            .iter()
+            .map(|bucket| DonutSlice {
+                label: quality_label(bucket.range).to_owned(),
+                fraction: fraction(bucket.track_count, total),
+                value: share_text(bucket.track_count, total),
+                muted: false,
+            })
+            .collect()
+    };
+    let content =
+        (!slices.is_empty()).then(|| chart::donut(slices, Some(donut_center(total, "tracks"))));
     section(
-        "Quality distribution",
+        "Quality",
         Some("Share of tracks per bitrate range."),
-        rows,
+        content,
         "No tracks carry a bitrate yet.",
     )
 }
@@ -224,43 +251,51 @@ fn quality_label(range: QualityRange) -> &'static str {
 }
 
 fn most_played_section(genres: &[GenrePlayCount]) -> gtk::Widget {
-    // Bars are scaled to the busiest genre, so the ranking reads as a
-    // relative comparison rather than a share of some total.
-    let max = genres
+    // A play count is a real quantity, so the donut shows each genre's
+    // share of the plays among the most-played five.
+    let total: u64 = genres.iter().map(|genre| genre.total_play_count).sum();
+    let slices: Vec<DonutSlice> = genres
         .iter()
-        .map(|genre| genre.total_play_count)
-        .max()
-        .unwrap_or(0);
-    let rows: Vec<BarRow> = genres
-        .iter()
-        .map(|genre| BarRow {
+        .map(|genre| DonutSlice {
             label: genre_label(&genre.genre),
-            fraction: fraction_u64(genre.total_play_count, max),
-            value: genre.total_play_count.to_string(),
+            fraction: fraction_u64(genre.total_play_count, total),
+            value: share_text_u64(genre.total_play_count, total),
+            muted: false,
         })
         .collect();
+    let content = (total > 0).then(|| chart::donut(slices, Some(donut_center(total, "plays"))));
     section(
         "Most played genres",
         Some("Top 5 by total play count."),
-        rows,
+        content,
         "No plays recorded yet.",
     )
 }
 
 fn most_liked_section(genres: &[GenreRating]) -> gtk::Widget {
-    let rows: Vec<BarRow> = genres
+    // Average rating is not a part of a whole, so this donut sizes each
+    // slice by the genre's average relative to the others — a comparison
+    // ring. The legend carries the absolute star value; no percentage is
+    // shown, since a share of summed averages would be meaningless.
+    let total: f64 = genres.iter().map(|genre| genre.average_stars).sum();
+    let slices: Vec<DonutSlice> = genres
         .iter()
-        .map(|genre| BarRow {
+        .map(|genre| DonutSlice {
             label: genre_label(&genre.genre),
-            // Absolute 0–5 scale: a full bar is a five-star average.
-            fraction: genre.average_stars / f64::from(sustain_app_runtime::Rating::MAX_STARS),
+            fraction: if total > 0.0 {
+                genre.average_stars / total
+            } else {
+                0.0
+            },
             value: format!("{:.1}★ ({})", genre.average_stars, genre.rated_track_count),
+            muted: false,
         })
         .collect();
+    let content = (total > 0.0).then(|| chart::donut(slices, None));
     section(
         "Most liked genres",
         Some("Top 5 by average rating; genres with at least 5 rated tracks."),
-        rows,
+        content,
         "Not enough rated tracks yet.",
     )
 }
@@ -271,9 +306,9 @@ fn release_years_section(decades: &[DecadeCount]) -> gtk::Widget {
         .map(|decade| decade.track_count)
         .max()
         .unwrap_or(0);
-    let rows: Vec<BarRow> = decades
+    let bars: Vec<VerticalBar> = decades
         .iter()
-        .map(|decade| BarRow {
+        .map(|decade| VerticalBar {
             label: decade
                 .decade
                 .map(|year| format!("{year}s"))
@@ -282,19 +317,20 @@ fn release_years_section(decades: &[DecadeCount]) -> gtk::Widget {
             value: decade.track_count.to_string(),
         })
         .collect();
+    let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
     section(
         "Release years",
         Some("Number of tracks per release decade."),
-        rows,
+        content,
         "No release years tagged yet.",
     )
 }
 
 fn added_years_section(years: &[YearCount]) -> gtk::Widget {
     let max = years.iter().map(|year| year.track_count).max().unwrap_or(0);
-    let rows: Vec<BarRow> = years
+    let bars: Vec<VerticalBar> = years
         .iter()
-        .map(|year| BarRow {
+        .map(|year| VerticalBar {
             label: year
                 .year
                 .map(|year| year.to_string())
@@ -303,10 +339,11 @@ fn added_years_section(years: &[YearCount]) -> gtk::Widget {
             value: year.track_count.to_string(),
         })
         .collect();
+    let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
     section(
         "Year added",
         Some("Number of tracks added to the library each year."),
-        rows,
+        content,
         "Nothing added yet.",
     )
 }
@@ -329,104 +366,56 @@ fn fraction_u64(numerator: u64, denominator: u64) -> f64 {
     }
 }
 
-/// Assemble one chart: a title, an explanatory caption, and either the
-/// aligned grid of proportion bars or — when there is nothing to show — a
-/// muted `empty` line in its place.
-fn section(title: &str, caption: Option<&str>, rows: Vec<BarRow>, empty: &str) -> gtk::Widget {
-    let container = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    container.set_hexpand(true);
+/// Assemble one chart card: a contrasting surface holding a title, an
+/// explanatory caption, and either the supplied chart widget or — when
+/// there is nothing to show — a muted `empty` line in its place.
+fn section(
+    title: &str,
+    caption: Option<&str>,
+    content: Option<gtk::Widget>,
+    empty: &str,
+) -> gtk::Widget {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    card.add_css_class("statistics-card");
+    card.set_hexpand(true);
+    card.set_halign(gtk::Align::Fill);
+    card.set_valign(gtk::Align::Fill);
+
+    // Title and caption ride in a tight header block so the description
+    // sits right under the title; the card spacing then separates that
+    // header from the chart below.
+    let header = gtk::Box::new(gtk::Orientation::Vertical, 1);
 
     let title_label = gtk::Label::new(Some(title));
     title_label.add_css_class("statistics-section-title");
     title_label.set_xalign(0.0);
-    container.append(&title_label);
+    header.append(&title_label);
 
     if let Some(caption) = caption {
         let caption_label = gtk::Label::new(Some(caption));
         caption_label.add_css_class("statistics-section-caption");
         caption_label.set_xalign(0.0);
         caption_label.set_wrap(true);
-        container.append(&caption_label);
+        header.append(&caption_label);
     }
+    card.append(&header);
 
-    if rows.is_empty() {
-        let empty_label = gtk::Label::new(Some(empty));
-        empty_label.add_css_class("statistics-empty");
-        empty_label.set_xalign(0.0);
-        container.append(&empty_label);
-    } else {
-        container.append(&bar_grid(&rows));
-    }
-
-    container.upcast()
-}
-
-/// The aligned three-column grid of `(label, bar, value)` rows.
-fn bar_grid(rows: &[BarRow]) -> gtk::Grid {
-    let grid = gtk::Grid::new();
-    grid.set_column_spacing(10);
-    grid.set_row_spacing(6);
-    grid.set_hexpand(true);
-
-    for (index, row) in rows.iter().enumerate() {
-        let line = index as i32;
-
-        let label = gtk::Label::new(Some(&row.label));
-        label.add_css_class("statistics-row-label");
-        label.set_xalign(0.0);
-        label.set_halign(gtk::Align::Start);
-        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        label.set_width_chars(LABEL_WIDTH_CHARS);
-        label.set_max_width_chars(LABEL_WIDTH_CHARS);
-        grid.attach(&label, 0, line, 1, 1);
-
-        grid.attach(&proportion_bar(row.fraction), 1, line, 1, 1);
-
-        let value = gtk::Label::new(Some(&row.value));
-        value.add_css_class("statistics-row-value");
-        value.set_xalign(1.0);
-        value.set_halign(gtk::Align::End);
-        grid.attach(&value, 2, line, 1, 1);
-    }
-
-    grid
-}
-
-/// A single proportion bar. The CSS-painted `.statistics-bar` background
-/// is the trough; the draw-func fills `fraction` of the width with the
-/// live theme accent (resolved from `area.color()`, set by the CSS
-/// `color` property), so the meter follows the system accent in both
-/// themes without a hard-coded colour.
-fn proportion_bar(fraction: f64) -> gtk::DrawingArea {
-    let fraction = fraction.clamp(0.0, 1.0);
-    let area = gtk::DrawingArea::new();
-    area.add_css_class("statistics-bar");
-    area.set_hexpand(true);
-    area.set_content_height(BAR_HEIGHT);
-    area.set_valign(gtk::Align::Center);
-    // Clip the square Cairo fill to the trough's CSS border-radius.
-    area.set_overflow(gtk::Overflow::Hidden);
-    area.set_draw_func(move |area, cr, width, height| {
-        let width = width as f64;
-        let height = height as f64;
-        if width <= 0.0 || height <= 0.0 {
-            return;
+    match content {
+        Some(widget) => {
+            widget.set_vexpand(true);
+            card.append(&widget);
         }
-        let fill_width = fraction * width;
-        if fill_width <= 0.0 {
-            return;
+        None => {
+            let empty_label = gtk::Label::new(Some(empty));
+            empty_label.add_css_class("statistics-empty");
+            empty_label.set_xalign(0.0);
+            empty_label.set_vexpand(true);
+            empty_label.set_valign(gtk::Align::Center);
+            card.append(&empty_label);
         }
-        let accent = area.color();
-        cr.set_source_rgba(
-            accent.red() as f64,
-            accent.green() as f64,
-            accent.blue() as f64,
-            BAR_FILL_ALPHA,
-        );
-        cr.rectangle(0.0, 0.0, fill_width, height);
-        let _ = cr.fill();
-    });
-    area
+    }
+
+    card.upcast()
 }
 
 #[cfg(test)]
@@ -440,6 +429,13 @@ mod tests {
         assert_eq!(share_text(1, 4), "1 (25%)");
         assert_eq!(share_text(1, 3), "1 (33%)");
         assert_eq!(share_text(10, 10), "10 (100%)");
+    }
+
+    #[test]
+    fn share_text_u64_matches_share_text() {
+        assert_eq!(share_text_u64(0, 0), "0 (0%)");
+        assert_eq!(share_text_u64(1, 4), "1 (25%)");
+        assert_eq!(share_text_u64(10, 10), "10 (100%)");
     }
 
     #[test]
@@ -466,9 +462,8 @@ mod tests {
 /// Headless widget smoke test. Mirrors `shuffle_tab`'s `size_probe`: it
 /// needs a display, so it skips cleanly under headless CI and runs on the
 /// maintainer's machine. Builds the page over an empty library, maps it,
-/// and spins the loop so the CSS resolves and the (zero) draw funcs run —
-/// proving the widget machinery and CSS classes hold together without a
-/// panic.
+/// and spins the loop so the CSS resolves — proving the widget machinery
+/// and CSS classes hold together without a panic.
 #[cfg(test)]
 mod widget_smoke {
     use std::cell::RefCell;

@@ -691,9 +691,8 @@ const GENRE_PALETTE_CAP: usize = 8;
 
 /// Resolve a [`SegmentTint`] to an opaque `(r, g, b)` against the live
 /// `accent` colour. Hues are spread from the accent so the palette
-/// honours the user's system accent; the muted tail is the accent fully
-/// desaturated and pulled to a mid lightness, so it reads as a neutral
-/// grey in either theme without a hard-coded colour.
+/// honours the user's system accent; the muted tail is a theme-neutral
+/// grey ([`crate::chart::MUTED_GREY`]).
 fn resolve_tint(tint: SegmentTint, accent: gdk::RGBA) -> (f64, f64, f64) {
     match tint {
         SegmentTint::Plain => (
@@ -701,62 +700,12 @@ fn resolve_tint(tint: SegmentTint, accent: gdk::RGBA) -> (f64, f64, f64) {
             accent.green() as f64,
             accent.blue() as f64,
         ),
-        // Nudge the saturation up a touch and floor it, so genres read as
-        // vivid as the meter's translucency allows and stay distinguishable
-        // even with a muted accent; clamp lightness away from the extremes
-        // so no hue washes out or goes black at that translucency.
-        SegmentTint::AccentHue(degrees) => {
-            let (h, s, l) = rgb_to_hsl(
-                accent.red() as f64,
-                accent.green() as f64,
-                accent.blue() as f64,
-            );
-            hsl_to_rgb(
-                (h + degrees).rem_euclid(360.0),
-                (s + 0.08).clamp(0.6, 1.0),
-                l.clamp(0.45, 0.62),
-            )
-        }
-        // Fully desaturated and mid-lightness: a theme-neutral grey.
-        SegmentTint::Muted => (0.6, 0.6, 0.6),
+        // The shared categorical palette (also used by the Statistics
+        // donuts): the accent rotated around the hue wheel, kept vivid and
+        // legible at this meter's translucency.
+        SegmentTint::AccentHue(degrees) => crate::chart::categorical_color(accent, degrees),
+        SegmentTint::Muted => crate::chart::MUTED_GREY,
     }
-}
-
-/// RGB (each `0.0..=1.0`) to HSL with hue in degrees `0.0..360.0`.
-fn rgb_to_hsl(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let l = (max + min) / 2.0;
-    let delta = max - min;
-    if delta <= f64::EPSILON {
-        return (0.0, 0.0, l);
-    }
-    let s = delta / (1.0 - (2.0 * l - 1.0).abs());
-    let h = if max == r {
-        60.0 * (((g - b) / delta).rem_euclid(6.0))
-    } else if max == g {
-        60.0 * ((b - r) / delta + 2.0)
-    } else {
-        60.0 * ((r - g) / delta + 4.0)
-    };
-    (h.rem_euclid(360.0), s, l)
-}
-
-/// Inverse of [`rgb_to_hsl`]; `h` in degrees, `s`/`l` in `0.0..=1.0`.
-fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
-    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-    let h_prime = h / 60.0;
-    let x = c * (1.0 - (h_prime.rem_euclid(2.0) - 1.0).abs());
-    let (r1, g1, b1) = match h_prime as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    let m = l - c / 2.0;
-    (r1 + m, g1 + m, b1 + m)
 }
 
 /// Build the occupation bar's per-genre segments from a sync plan. The
