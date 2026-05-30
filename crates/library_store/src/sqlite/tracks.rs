@@ -46,6 +46,11 @@ pub(super) fn save_track(connection: &Connection, track: &Track) -> StoreResult<
                 track.content_hash.as_ref().map(|hash| hash.as_str()),
                 track.file_size_bytes.map(|size| size as i64),
                 track.has_embedded_artwork.map(i64::from),
+                metadata.title_sort.as_deref(),
+                metadata.artist_sort.as_deref(),
+                metadata.album_sort.as_deref(),
+                metadata.album_artist_sort.as_deref(),
+                metadata.composer_sort.as_deref(),
             ],
         )
         .map(|_| ())
