@@ -38,8 +38,8 @@ pub struct SyncInputTrack {
     pub date_added: Option<String>,
     /// Lower-case file extension without the dot (e.g. `mp3`).
     pub extension: String,
-    /// Source fingerprint (content hash when known, else a size token).
-    /// A change means the on-device copy is stale.
+    /// Source staleness fingerprint (a file-size token). A change means
+    /// the on-device copy is stale and will be re-copied on the next sync.
     pub fingerprint: String,
     /// Preview waveform (Pioneer layout only). `None` when the track has
     /// not been waveform-analysed.
