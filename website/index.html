@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Sustain (iTunes for Linux)</title>
+  <meta name="description" content="A free, open-source iTunes-style music library and player for Linux. Manage, rate, search and play your local music, no ads, no tracking, no account, no subscription. Native GTK4." />
+
+  <!-- Social preview -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Sustain (iTunes for Linux)" />
+  <meta property="og:description" content="The dense, fast, iTunes-style music library you wanted, rebuilt native for Linux. Free and open source. No ads, no tracking, no catch." />
+  <meta property="og:image" content="assets/screenshot-light-songs.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" type="image/png" href="assets/icon-256.png" />
+  <link rel="stylesheet" href="style.css" />
+
+</head>
+<body>
+
+  <header class="site-header">
+    <a class="brand" href="#top">
+      <img src="assets/logo.png" alt="" width="36" height="36" />
+      <span>Sustain</span>
+    </a>
+    <nav class="site-nav">
+      <a href="#why">No catch</a>
+      <a href="#features">Features</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#install">Install</a>
+      <a class="nav-cta" href="https://github.com/open-sustain/sustain">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+
+    <!-- ───────────────────────── Hero ───────────────────────── -->
+    <section class="hero">
+      <h1>iTunes for Linux<span class="asterisk">*</span></h1>
+      <p class="h1-aside"><span class="asterisk">*</span> Well, almost. Not actually iTunes, not affiliated with Apple, rebuilt from scratch and cherry-picked to taste.</p>
+      <p class="lede">
+        Music library you remember, rebuilt from scratch for Linux.<br /> Manage, rate, search
+        and play your local collection (the iTunes workflow,
+        cherry-picked across its good years and shaped to taste).
+      </p>
+
+      <ul class="trust-strip" aria-label="What Sustain is and isn't">
+        <li>Free</li>
+        <li>Open source</li>
+        <li>Offline</li>
+      </ul>
+
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#install">Install on Debian / Ubuntu</a>
+        <a class="btn btn-ghost" href="https://github.com/open-sustain/sustain">Read the source on GitHub</a>
+      </div>
+
+      <figure class="hero-shot">
+        <img src="assets/screenshot-light-songs.png"
+             alt="Sustain's main library view: a dense, sortable track table with ratings, BPM, key and play counts." />
+      </figure>
+    </section>
+
+    <!-- ─────────────────────── No catch ─────────────────────── -->
+    <section id="why" class="why">
+      <h2>No catch.</h2>
+
+      <div class="why-grid">
+        <div class="nope"><span>✕</span> No ads</div>
+        <div class="nope"><span>✕</span> No telemetry</div>
+        <div class="nope"><span>✕</span> No sign-up</div>
+        <div class="nope"><span>✕</span> No subscription</div>
+        <div class="nope"><span>✕</span> No paid plugins</div>
+        <div class="nope"><span>✕</span> No locked features</div>
+      </div>
+
+      <p class="why-tail">
+        There is nothing to sell and nothing hidden, the entire thing is on
+        <a href="https://github.com/open-sustain/sustain">GitHub</a> under the
+        GPL-3.0, yours to read, build and keep.
+      </p>
+
+      <blockquote class="personal">
+        <p>
+          I would have <em>loved</em> for this software to exist when I switched
+          from macOS to Linux. There's no big plan to make money out of it,
+          just having it for myself, tuned to exactly my use case, is already
+          priceless to me.
+        </p>
+        <p>
+          It's here for <strong>you</strong> to use, so your own migration away
+          from Apple is a little more pleasant. That's the whole point.
+        </p>
+        <footer>Julien - author</footer>
+      </blockquote>
+    </section>
+
+    <!-- ─────────────────── Switching from iTunes ────────────── -->
+    <section id="migrate" class="migrate">
+      <h2>Switching from iTunes (or macOS)?</h2>
+      <p class="section-lede">
+        Trying to bolt iTunes onto Linux with Wine, or hunting for something
+        that finally feels right? Point Sustain at your
+        music folder and your library, playlists and ratings come along.
+      </p>
+      <div class="migrate-links">
+        <a class="card-link" href="https://github.com/open-sustain/sustain/blob/main/docs/migrating-from-itunes.md">
+          <strong>Migrating from iTunes / Apple Music →</strong>
+          <span>Bring your library and playlists across.</span>
+        </a>
+        <a class="card-link" href="https://github.com/open-sustain/sustain/blob/main/docs/migrating-to-sustain.md">
+          <strong>Coming from another Linux player →</strong>
+          <span>Rhythmbox, Clementine, and friends.</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- ─────────────────────── Features ─────────────────────── -->
+    <section id="features" class="features">
+      <h2>What you get</h2>
+      <p class="section-lede">
+        Everything the good old library workflow had, and a few things it never did.
+      </p>
+
+      <div class="feature-grid">
+        <article>
+          <h3>The dense Songs table</h3>
+          <p>A full-width, sortable track table with multi-select, inline star ratings, in-place cell editing and customizable columns. The dense default view you land in.</p>
+        </article>
+        <article>
+          <h3>The Albums artwork grid</h3>
+          <p>The cover-art wall iTunes was loved for: a full-width grid of album covers, grouped by album. Click a cover to play that album on its own.</p>
+        </article>
+        <article>
+          <h3>Local-first, your files</h3>
+          <p>Index your folder in place and never move a file, or let Sustain keep it tidied by artist and album. Your call.</p>
+        </article>
+        <article>
+          <h3>Playlists &amp; smart playlists</h3>
+          <p>Ordinary playlists, iTunes-style rule-based smart playlists, and folders to nest them. Queue tracks on the fly with <em>Play Next</em> and <em>Add to Queue</em>.</p>
+        </article>
+        <article>
+          <h3>Ratings &amp; listening history</h3>
+          <p>5-star ratings, play counts, skip counts, last-played and last-skipped, kept in your own library, fed to the smart-playlist engine.</p>
+        </article>
+        <article>
+          <h3>Instant search &amp; columns</h3>
+          <p>Real-time filtering across the whole library, with sortable, reorderable, resizable columns. Built to stay fast well past 10,000 tracks.</p>
+        </article>
+        <article>
+          <h3>BPM &amp; musical-key detection</h3>
+          <p>Sustain can analyzes each track to estimate its tempo and musical key, then exposes both to tempo- and harmony-aware smart-playlist rules, computed locally.</p>
+        </article>
+        <article>
+          <h3>Fill in what's missing</h3>
+          <p>Local libraries get messy. Optional background retrieval backfills missing artwork, ID3 tags and lyrics from MusicBrainz, Cover Art Archive, AcoustID and LRClib (only the gaps, only if you ask).</p>
+        </article>
+        <article>
+          <h3>Smart Shuffle</h3>
+          <p>A third shuffle mode that picks each next track as a <em>continuation</em> of the one playing, a transparent, local perceptual match on tempo, key, loudness and feel. No cloud, no learning, no profiling.</p>
+        </article>
+        <article>
+          <h3>Sync to USB &amp; SD</h3>
+          <p>Driving a young-timer with an SD-card or USB head unit? Sync playlists to a stick or card just like you used to sync an iPod, incrementally, only what changed. A deduplicated <code>.m3u8</code> tree, or one folder per playlist for folder-navigating stereos.</p>
+        </article>
+        <article class="feature-standout">
+          <h3>CDJ / XDJ Rekordbox export</h3>
+          <p>Writes a real Pioneer Rekordbox database to the drive (BPM, key, beat grids, mono + colour waveforms, ratings and rendered cover-art thumbnails) so CDJ/XDJ hardware reads it natively. To our knowledge, the only Linux app that does this.</p>
+        </article>
+        <article>
+          <h3>Native light &amp; dark</h3>
+          <p>Respects your system light/dark mode and accent color out of the box. No bespoke theme picker fighting your desktop.</p>
+        </article>
+        <article class="feature-standout">
+          <h3>No Electron. Built for big libraries.</h3>
+          <p>Rust, GTK4 and GStreamer (no Electron, no web wrapper, no half-gigabyte of Chromium). Designed and tested for 10,000-track libraries: instant search, smooth scrolling, and a cold start under half a second.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ────────────────────── Screenshots ───────────────────── -->
+    <section id="screenshots" class="screenshots">
+      <h2>See it</h2>
+      <p class="section-lede">Native on both light and dark, with your system accent color.</p>
+
+      <figure class="shot">
+        <img src="assets/screenshot-dark-albums.png"
+             alt="Sustain's album grid in dark mode with an expanded album track list and large cover art." />
+        <figcaption>Album grid · dark</figcaption>
+      </figure>
+
+      <figure class="shot">
+        <img src="assets/screenshot-light-albums.png"
+             alt="Sustain's album grid in light mode." />
+        <figcaption>Album grid · light</figcaption>
+      </figure>
+
+      <!--
+        PLACEHOLDER, replace with a real Smart Shuffle screenshot when ready.
+        Drop the image at: website/assets/screenshot-smart-shuffle.png
+        then swap this <figure> for:
+          <figure class="shot">
+            <img src="assets/screenshot-smart-shuffle.png" alt="Sustain's Smart Shuffle choosing the next track as a continuation of the current one." />
+            <figcaption>Smart Shuffle</figcaption>
+          </figure>
+      -->
+      <figure class="shot shot--placeholder" aria-hidden="true">
+        <div class="placeholder-box">
+          <span class="placeholder-label">Smart Shuffle</span>
+          <span class="placeholder-hint">screenshot coming soon</span>
+        </div>
+        <figcaption>Smart Shuffle</figcaption>
+      </figure>
+
+      <!--
+        PLACEHOLDER, replace with a real Device Sync screenshot when ready.
+        Drop the image at: website/assets/screenshot-device-sync.png
+        then swap this <figure> for an <img> figure like the ones above.
+      -->
+      <figure class="shot shot--placeholder" aria-hidden="true">
+        <div class="placeholder-box">
+          <span class="placeholder-label">Sync to external devices</span>
+          <span class="placeholder-hint">screenshot coming soon</span>
+        </div>
+        <figcaption>USB / SD &amp; Pioneer export</figcaption>
+      </figure>
+
+      <div class="shot-row">
+        <figure class="shot shot--small">
+          <img src="assets/settings-library.png" alt="Sustain library settings." />
+          <figcaption>Library settings</figcaption>
+        </figure>
+        <figure class="shot shot--small">
+          <img src="assets/settings-analysis.png" alt="Sustain analysis settings." />
+          <figcaption>Analysis settings</figcaption>
+        </figure>
+        <figure class="shot shot--small">
+          <img src="assets/settings-online.png" alt="Sustain online-services settings." />
+          <figcaption>Online settings</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ──────────────────────── Install ─────────────────────── -->
+    <section id="install" class="install">
+      <h2>Install</h2>
+      <p class="section-lede">
+        Pre-built artefacts are attached to every
+        <a href="https://github.com/open-sustain/sustain/releases">GitHub release</a>.
+        Sustain needs <strong>GTK 4.18</strong>: install the native package on a
+        recent enough system, or the Flatpak everywhere else (it bundles its own
+        GTK, so your system version doesn't matter).
+      </p>
+
+      <div class="install-block">
+        <h3>Debian / Ubuntu<span class="muted">, native .deb (amd64 or arm64)</span></h3>
+        <p>The <code>.deb</code> is built against Debian trixie's GTK 4.18 and installs cleanly on <strong>Debian testing (trixie)</strong> and <strong>Ubuntu 25.10+</strong>. Distributions still on older GTK (Linux Mint, elementary OS) can't run the native package yet; use the Flatpak below.</p>
+        <pre><code>sudo apt install ./sustain_&lt;version&gt;_&lt;arch&gt;.deb</code></pre>
+      </div>
+
+      <div class="install-block">
+        <h3>Every other distribution<span class="muted">, Flatpak (Fedora, openSUSE, Linux Mint, elementary OS, Zorin, …)</span></h3>
+        <p>The Flatpak runs on the <code>org.gnome.Platform//48</code> runtime and brings its own GTK 4 / GStreamer stack, so it works regardless of how old your system's GTK is.</p>
+        <pre><code>flatpak install --user ./sustain.flatpak
+flatpak run io.github.open_sustain.sustain</code></pre>
+        <p class="muted">A Flathub submission will follow once the application stabilises.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <strong>Sustain</strong>, a music library for Linux.
+      Free software under the
+      <a href="https://github.com/open-sustain/sustain/blob/main/LICENSE">GPL-3.0</a>.
+    </p>
+    <p class="links">
+      <a href="https://github.com/open-sustain/sustain">Source</a> ·
+      <a href="https://github.com/open-sustain/sustain/blob/main/docs/features.md">Features</a> ·
+      <a href="https://github.com/open-sustain/sustain/releases">Releases</a> ·
+      <a href="https://github.com/open-sustain/sustain/issues">Issues</a>
+    </p>
+    <p class="disclaimer">
+      Not affiliated with, endorsed by, or connected to Apple Inc.
+      “iTunes” and “Apple Music” are trademarks of Apple Inc., referenced here
+      only descriptively. No Apple code, binaries or assets are used.
+    </p>
+    <p class="disclaimer">
+      Not affiliated with, endorsed by, or connected to AlphaTheta Corporation
+      or Pioneer DJ. “Rekordbox”, “Pioneer”, “CDJ” and “XDJ” are trademarks of
+      their respective owners, referenced here only descriptively. Sustain's
+      Pioneer export is an independent implementation of a compatible on-disk
+      format; no Pioneer DJ / AlphaTheta code, binaries or assets are used.
+    </p>
+  </footer>
+
+</body>
+</html>
