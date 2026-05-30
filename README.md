@@ -12,6 +12,11 @@
 </p>
 
 <p align="center">
+	<img src=".github/assets/screenshot-dark-smart-shuffle.png" alt="Sustain interface screenshot Smart Shuffle settings" width="49%" />
+	<img src=".github/assets/screenshot-dark-sync-pioneer-rekordbox.png" alt="Sustain interface screenshot device sync with Pioneer Rekordbox export" width="49%" />
+</p>
+
+<p align="center">
   <img src=".github/assets/settings-library.png" alt="Sustain interface screenshot settings library" width="32%" />
   <img src=".github/assets/settings-analysis.png" alt="Sustain interface screenshot settings analysis" width="32%" />
   <img src=".github/assets/settings-online.png" alt="Sustain interface screenshot settings online" width="32%" />
@@ -61,12 +66,13 @@ See [docs/features.md](docs/features.md) for the full reference.
 
 Implemented:
 - Library management with two modes — "Don't touch my files" or "Keep my library organized" (*iso-iTunes*)
-- Sidebar-driven navigation — LIBRARY (Music, Albums) and PLAYLISTS — with a collapsible left column (*Sustain-native*)
+- Sidebar-driven navigation — LIBRARY (Music, Albums, Statistics) and PLAYLISTS — with a collapsible left column (*Sustain-native*)
 - Dense, keyboard-friendly Music and playlist track tables, full-width album grid (*iso-iTunes*)
 - Playlists, smart playlists, and playlist folders (*iso-iTunes*)
 - 5-star ratings, play count, skip count, last played, last skipped (*iso-iTunes*)
 - Up Next queue with `Play Next` and `Add to Queue` (*iso-iTunes*)
 - Real-time search, sortable and customizable columns (*iso-iTunes*)
+- Library-wide Statistics screen — genre and bitrate distributions, most-played and most-liked genres, release-year and year-added histograms (*Sustain-native*)
 - Background BPM and musical-key detection, with a tempo/harmony-aware smart-playlist rule engine (*Sustain-native*)
 - Background backfill of artwork, ID3 tags, and lyrics via MusicBrainz, Cover Art Archive, AcoustID, and LRClib (*iTunes-adjacent*)
 - Smart Shuffle that picks each next track as a continuation of the one playing — a local, transparent perceptual match, no cloud, no learning (*Sustain-native*)
