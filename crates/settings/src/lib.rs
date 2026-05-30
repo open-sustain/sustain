@@ -289,6 +289,7 @@ enum UiSidebarSelectionDocument {
     #[default]
     Music,
     Albums,
+    Statistics,
     Playlist(i64),
     SmartPlaylist(i64),
     Folder(i64),
@@ -417,6 +418,7 @@ impl UiSidebarSelectionDocument {
         match selection {
             UiSidebarSelection::Music => Self::Music,
             UiSidebarSelection::Albums => Self::Albums,
+            UiSidebarSelection::Statistics => Self::Statistics,
             UiSidebarSelection::Playlist(PlaylistItem::Playlist(id)) => Self::Playlist(id.get()),
             UiSidebarSelection::Playlist(PlaylistItem::SmartPlaylist(id)) => {
                 Self::SmartPlaylist(id.get())
@@ -435,6 +437,7 @@ impl UiSidebarSelectionDocument {
         match self {
             Self::Music => UiSidebarSelection::Music,
             Self::Albums => UiSidebarSelection::Albums,
+            Self::Statistics => UiSidebarSelection::Statistics,
             Self::Playlist(id) => PlaylistId::new(id)
                 .map(PlaylistItem::Playlist)
                 .map(UiSidebarSelection::Playlist)

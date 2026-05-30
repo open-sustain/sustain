@@ -16,19 +16,21 @@ use std::{
 
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, ApplicationQuery, BackgroundJobsSettings,
-    BackgroundResourceUsage, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DeviceKind, DeviceLayout,
-    FieldChange, FilesPerFolderCap, LazyPickContext, LibraryManagementMode, LibrarySettings,
-    MetadataChange, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
+    BackgroundResourceUsage, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind,
+    DeviceLayout, FieldChange, FilesPerFolderCap, GenreDistribution, GenrePlayCount, GenreRating,
+    GenreShare, LazyPickContext, LibraryManagementMode, LibrarySettings, LibraryStatistics,
+    MetadataChange, OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
     PlaybackQueueRequest, PlaybackQueueSource, PlaybackSession, PlaybackSettings, PlaybackState,
-    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating,
-    RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField, SmartPlaylistId,
-    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice,
-    SyncDeviceId, SystemClock, Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout,
-    TrackColumnLayoutScope, TrackContentHash, TrackId, TrackLocation, TrackMetadata,
-    TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings,
-    VolumePercent, compare_optional_text, matching_tracks, track_matches_rule_set,
+    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem,
+    QualityBucket, QualityDistribution, QualityRange, Rating, RepeatMode, ShuffleMode,
+    SmartPlaylist, SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistLimit,
+    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
+    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
+    SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice, SyncDeviceId, SystemClock, Track,
+    TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
+    TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
+    TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings, VolumePercent, YearCount,
+    compare_optional_text, compute_library_statistics, matching_tracks, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
 pub use sustain_metadata::MetadataService;

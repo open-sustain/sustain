@@ -308,6 +308,7 @@ pub(super) fn sidebar_selection_changed_callback(
         let target = match selection {
             Some(SidebarSelection::Music) | None => SONGS_VIEW,
             Some(SidebarSelection::Albums) => ALBUMS_VIEW,
+            Some(SidebarSelection::Statistics) => STATISTICS_VIEW,
             Some(SidebarSelection::Item(_)) => PLAYLISTS_VIEW,
         };
         if content_stack.visible_child_name().as_deref() != Some(target) {

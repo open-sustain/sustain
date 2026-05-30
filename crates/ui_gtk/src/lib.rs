@@ -39,6 +39,7 @@ mod shuffle_icon;
 mod sidebar;
 mod sidebar_context;
 mod smart_playlist_editor;
+mod statistics;
 mod status_bar;
 mod titlebar;
 mod track_context;
@@ -83,6 +84,7 @@ const WINDOW_SHADOW_MARGIN: i32 = 24;
 const APP_ID: &str = "io.github.open_sustain.sustain";
 const SONGS_VIEW: &str = "songs";
 const ALBUMS_VIEW: &str = "albums";
+const STATISTICS_VIEW: &str = "statistics";
 const PLAYLISTS_VIEW: &str = "playlists";
 const DEVICES_VIEW: &str = "devices";
 

@@ -73,4 +73,5 @@ assets = [
     ["../../data/icons/hicolor/128x128/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
     ["../../data/icons/hicolor/256x256/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
     ["../../data/icons/hicolor/512x512/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    ["../../data/icons/hicolor/scalable/actions/sustain-statistics-symbolic.svg", "usr/share/icons/hicolor/scalable/actions/", "644"],
 ]

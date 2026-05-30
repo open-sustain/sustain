@@ -118,6 +118,8 @@ pub enum UiSidebarSelection {
     Music,
     /// LIBRARY → Albums. Full-width album-cover grid.
     Albums,
+    /// LIBRARY → Statistics. Whole-library diagnostic charts.
+    Statistics,
     /// PLAYLISTS → a specific playlist, smart playlist, or folder row.
     Playlist(PlaylistItem),
 }

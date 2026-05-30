@@ -58,17 +58,20 @@ pub(crate) type SidebarAnalysisEnabledQuery = Rc<dyn Fn(AnalysisCapability) -> b
 /// previously found nothing (issue #61).
 pub(crate) type SidebarOnlineBusyQuery = Rc<dyn Fn() -> bool>;
 
-/// The sidebar's three selection targets.
+/// The sidebar's top-level selection targets.
 ///
 /// The sidebar drives every top-level navigation choice:
 /// - `Music` — the LIBRARY → Music row, the whole-library track table.
 /// - `Albums` — the LIBRARY → Albums row, the album-cover grid.
+/// - `Statistics` — the LIBRARY → Statistics row, the library-wide
+///   diagnostic charts.
 /// - `Item` — a row under the PLAYLISTS section (regular playlist,
 ///   smart playlist, or folder).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SidebarSelection {
     Music,
     Albums,
+    Statistics,
     Item(PlaylistItem),
 }
 
@@ -89,8 +92,9 @@ enum LibraryRowState {
     #[default]
     Music,
     Albums,
-    /// A playlist (or no row at all) is selected — neither library row
-    /// paints itself active.
+    Statistics,
+    /// A playlist (or no row at all) is selected — no library row paints
+    /// itself active.
     None,
 }
 
@@ -101,6 +105,7 @@ pub(crate) struct PlaylistSidebar {
     selection: gtk::SingleSelection,
     music_row: gtk::TreeExpander,
     albums_row: gtk::TreeExpander,
+    statistics_row: gtk::TreeExpander,
     library_state: Rc<Cell<LibraryRowState>>,
     runtime: SharedRuntime,
     on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
@@ -149,8 +154,10 @@ impl PlaylistSidebar {
 
         let music_row = build_library_row("Music", "audio-x-generic-symbolic");
         let albums_row = build_library_row("Albums", "media-optical-symbolic");
+        let statistics_row = build_library_row("Statistics", "sustain-statistics-symbolic");
         root.append(&music_row);
         root.append(&albums_row);
+        root.append(&statistics_row);
 
         // DEVICES section: connected USB sticks / SD cards. Sits between
         // LIBRARY and PLAYLISTS; the playlist list view below keeps
@@ -239,6 +246,7 @@ impl PlaylistSidebar {
             vec![
                 music_row.clone().upcast::<gtk::Widget>(),
                 albums_row.clone().upcast::<gtk::Widget>(),
+                statistics_row.clone().upcast::<gtk::Widget>(),
             ],
         );
         connect_section_toggle(
@@ -266,6 +274,7 @@ impl PlaylistSidebar {
             LibraryRowState::Music,
             &music_row,
             &albums_row,
+            &statistics_row,
             &library_state,
             &selection,
             on_selection_changed.clone(),
@@ -275,6 +284,17 @@ impl PlaylistSidebar {
             LibraryRowState::Albums,
             &music_row,
             &albums_row,
+            &statistics_row,
+            &library_state,
+            &selection,
+            on_selection_changed.clone(),
+        );
+        connect_library_row(
+            &statistics_row,
+            LibraryRowState::Statistics,
+            &music_row,
+            &albums_row,
+            &statistics_row,
             &library_state,
             &selection,
             on_selection_changed.clone(),
@@ -283,6 +303,7 @@ impl PlaylistSidebar {
             &selection,
             &music_row,
             &albums_row,
+            &statistics_row,
             &library_state,
             on_selection_changed.clone(),
         );
@@ -303,6 +324,7 @@ impl PlaylistSidebar {
             selection,
             music_row,
             albums_row,
+            statistics_row,
             library_state,
             runtime,
             on_selection_changed,
@@ -461,8 +483,7 @@ impl PlaylistSidebar {
         // or playlist view, fighting the transient view being shown.
         let suspended = self.on_selection_changed.borrow_mut().take();
         self.library_state.set(LibraryRowState::None);
-        self.music_row.remove_css_class("selected");
-        self.albums_row.remove_css_class("selected");
+        self.paint_library_rows();
         self.selection.set_selected(gtk::INVALID_LIST_POSITION);
         *self.on_selection_changed.borrow_mut() = suspended;
 
@@ -502,6 +523,7 @@ impl PlaylistSidebar {
         match self.library_state.get() {
             LibraryRowState::Music => Some(SidebarSelection::Music),
             LibraryRowState::Albums => Some(SidebarSelection::Albums),
+            LibraryRowState::Statistics => Some(SidebarSelection::Statistics),
             LibraryRowState::None => selected_item(&self.selection).map(SidebarSelection::Item),
         }
     }
@@ -514,10 +536,13 @@ impl PlaylistSidebar {
         self.activate_library_row(LibraryRowState::Albums);
     }
 
+    pub(crate) fn select_statistics(&self) {
+        self.activate_library_row(LibraryRowState::Statistics);
+    }
+
     pub(crate) fn select_item(&self, item: PlaylistItem) {
         self.library_state.set(LibraryRowState::None);
-        self.music_row.remove_css_class("selected");
-        self.albums_row.remove_css_class("selected");
+        self.paint_library_rows();
         if !select_item(&self.selection, item) {
             // The playlist no longer exists (e.g. deleted between
             // sessions). Fall back to the default landing surface.
@@ -527,24 +552,22 @@ impl PlaylistSidebar {
 
     fn activate_library_row(&self, target: LibraryRowState) {
         self.library_state.set(target);
-        match target {
-            LibraryRowState::Music => {
-                self.music_row.add_css_class("selected");
-                self.albums_row.remove_css_class("selected");
-            }
-            LibraryRowState::Albums => {
-                self.albums_row.add_css_class("selected");
-                self.music_row.remove_css_class("selected");
-            }
-            LibraryRowState::None => {
-                self.music_row.remove_css_class("selected");
-                self.albums_row.remove_css_class("selected");
-            }
-        }
+        self.paint_library_rows();
         self.selection.set_selected(gtk::INVALID_LIST_POSITION);
         if let Some(callback) = self.on_selection_changed.borrow().as_ref() {
             callback(self.current_selection());
         }
+    }
+
+    /// Paint the `.selected` CSS class onto exactly the LIBRARY row that
+    /// matches the current [`LibraryRowState`], clearing it from the
+    /// others. Centralised so adding a row (Statistics) does not multiply
+    /// the per-call-site class juggling.
+    fn paint_library_rows(&self) {
+        let state = self.library_state.get();
+        set_row_selected(&self.music_row, state == LibraryRowState::Music);
+        set_row_selected(&self.albums_row, state == LibraryRowState::Albums);
+        set_row_selected(&self.statistics_row, state == LibraryRowState::Statistics);
     }
 
     pub(crate) fn install_context_menu(&self, menu: SidebarContextMenu) {
@@ -568,14 +591,16 @@ impl PlaylistSidebar {
         match previous {
             Some(SidebarSelection::Item(item)) => {
                 self.library_state.set(LibraryRowState::None);
-                self.music_row.remove_css_class("selected");
-                self.albums_row.remove_css_class("selected");
+                self.paint_library_rows();
                 if !select_item(&self.selection, item) {
                     self.library_state.set(LibraryRowState::Music);
-                    self.music_row.add_css_class("selected");
+                    self.paint_library_rows();
                 }
             }
-            Some(SidebarSelection::Music) | Some(SidebarSelection::Albums) | None => {
+            Some(SidebarSelection::Music)
+            | Some(SidebarSelection::Albums)
+            | Some(SidebarSelection::Statistics)
+            | None => {
                 // The library-row CSS state was left untouched; only
                 // ensure the playlist list view shows no selection.
                 self.selection.set_selected(gtk::INVALID_LIST_POSITION);
@@ -754,11 +779,49 @@ fn connect_section_toggle(
     header.add_controller(keys);
 }
 
+/// Toggle the `.selected` highlight on a single LIBRARY row.
+fn set_row_selected(row: &gtk::TreeExpander, selected: bool) {
+    if selected {
+        row.add_css_class("selected");
+    } else {
+        row.remove_css_class("selected");
+    }
+}
+
+/// Paint the `.selected` highlight onto the row matching `state`, clearing
+/// it from the others. The free-function counterpart of
+/// [`PlaylistSidebar::paint_library_rows`], used by the per-row click
+/// gesture and the selection-change signal, which hold the rows directly
+/// rather than `&self`.
+fn paint_library_rows(
+    state: LibraryRowState,
+    music_row: &gtk::TreeExpander,
+    albums_row: &gtk::TreeExpander,
+    statistics_row: &gtk::TreeExpander,
+) {
+    set_row_selected(music_row, state == LibraryRowState::Music);
+    set_row_selected(albums_row, state == LibraryRowState::Albums);
+    set_row_selected(statistics_row, state == LibraryRowState::Statistics);
+}
+
+/// Map a LIBRARY row's state to the selection it represents. Returns
+/// `None` for [`LibraryRowState::None`], which is not a row.
+fn library_row_selection(state: LibraryRowState) -> Option<SidebarSelection> {
+    match state {
+        LibraryRowState::Music => Some(SidebarSelection::Music),
+        LibraryRowState::Albums => Some(SidebarSelection::Albums),
+        LibraryRowState::Statistics => Some(SidebarSelection::Statistics),
+        LibraryRowState::None => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn connect_library_row(
     target_row: &gtk::TreeExpander,
     target_state: LibraryRowState,
     music_row: &gtk::TreeExpander,
     albums_row: &gtk::TreeExpander,
+    statistics_row: &gtk::TreeExpander,
     library_state: &Rc<Cell<LibraryRowState>>,
     selection: &gtk::SingleSelection,
     on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
@@ -768,6 +831,7 @@ fn connect_library_row(
 
     let music_row = music_row.clone();
     let albums_row = albums_row.clone();
+    let statistics_row = statistics_row.clone();
     let library_state = library_state.clone();
     let selection = selection.clone();
     gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
@@ -775,25 +839,12 @@ fn connect_library_row(
         let already_active = library_state.get() == target_state;
         if !already_active {
             library_state.set(target_state);
-            match target_state {
-                LibraryRowState::Music => {
-                    music_row.add_css_class("selected");
-                    albums_row.remove_css_class("selected");
-                }
-                LibraryRowState::Albums => {
-                    albums_row.add_css_class("selected");
-                    music_row.remove_css_class("selected");
-                }
-                LibraryRowState::None => {}
-            }
+            paint_library_rows(target_state, &music_row, &albums_row, &statistics_row);
             selection.set_selected(gtk::INVALID_LIST_POSITION);
         }
-        if let Some(callback) = on_selection_changed.borrow().as_ref() {
-            let selection = match target_state {
-                LibraryRowState::Music => SidebarSelection::Music,
-                LibraryRowState::Albums => SidebarSelection::Albums,
-                LibraryRowState::None => return,
-            };
+        if let Some(callback) = on_selection_changed.borrow().as_ref()
+            && let Some(selection) = library_row_selection(target_state)
+        {
             callback(Some(selection));
         }
     });
@@ -804,12 +855,14 @@ fn connect_selection_signal(
     selection: &gtk::SingleSelection,
     music_row: &gtk::TreeExpander,
     albums_row: &gtk::TreeExpander,
+    statistics_row: &gtk::TreeExpander,
     library_state: &Rc<Cell<LibraryRowState>>,
     on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
 ) {
     let selection_clone = selection.clone();
     let music_row = music_row.clone();
     let albums_row = albums_row.clone();
+    let statistics_row = statistics_row.clone();
     let library_state = library_state.clone();
     selection.connect_selected_notify(move |_selection| {
         let item = selected_item(&selection_clone);
@@ -818,16 +871,16 @@ fn connect_selection_signal(
             // loses its highlight.
             if library_state.get() != LibraryRowState::None {
                 library_state.set(LibraryRowState::None);
-                music_row.remove_css_class("selected");
-                albums_row.remove_css_class("selected");
+                paint_library_rows(
+                    LibraryRowState::None,
+                    &music_row,
+                    &albums_row,
+                    &statistics_row,
+                );
             }
             Some(SidebarSelection::Item(item))
         } else {
-            match library_state.get() {
-                LibraryRowState::Music => Some(SidebarSelection::Music),
-                LibraryRowState::Albums => Some(SidebarSelection::Albums),
-                LibraryRowState::None => None,
-            }
+            library_row_selection(library_state.get())
         };
         if let Some(callback) = on_selection_changed.borrow().as_ref() {
             callback(new_selection);

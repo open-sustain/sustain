@@ -109,10 +109,10 @@ the next rescan.
 ## Views
 
 Sustain has a single navigation surface: a sidebar to the left of the
-main content. The sidebar's LIBRARY section lists **Music** and
-**Albums**; the PLAYLISTS section lists every playlist, smart playlist,
-and folder. Clicking any entry swaps the right-hand content. There is
-no separate horizontal mode switcher.
+main content. The sidebar's LIBRARY section lists **Music**, **Albums**,
+and **Statistics**; the PLAYLISTS section lists every playlist, smart
+playlist, and folder. Clicking any entry swaps the right-hand content.
+There is no separate horizontal mode switcher.
 
 ### Music — *iso-iTunes*
 The default entry under LIBRARY, and the landing page for a fresh
@@ -126,6 +126,29 @@ Tiles group by album (title + album artist + year). Clicking the
 cover button on a tile plays the album in isolation. The grid
 intentionally searches album-level fields only (title, artist, year),
 not individual track titles.
+
+### Statistics — *Sustain-native*
+The third entry under LIBRARY opens a single scrollable page of
+whole-library diagnostic charts, rendered as aligned proportion bars in
+the system accent colour:
+
+- **Genre distribution** — share of tracks per genre (the largest dozen
+  genres individually, the long tail folded into one *Other* bar;
+  untagged tracks counted as *Unknown*).
+- **Quality distribution** — share of tracks per bitrate range
+  (≤ 128, 129–255, 256–320, > 320 kbps).
+- **Most played genres** — the top five by total play count.
+- **Most liked genres** — the top five by average rating, over genres
+  with at least five rated tracks; zero-star tracks are excluded, per the
+  rating-as-exclusion convention.
+- **Release years** — track counts per release decade.
+- **Year added** — track counts per calendar year a track entered the
+  library.
+
+Every figure comes from SQLite (the authoritative library copy); no file
+tags are re-read at view time. The page is computed lazily — only when it
+is shown, and refreshed when it is on screen and the library changes — so
+it never affects cold start.
 
 ### Playlists — *iso-iTunes*
 Selecting any row under the PLAYLISTS section opens that playlist's

@@ -22,9 +22,9 @@ use super::{
     DeviceSyncEventReceiver, LibraryChangedCallback, LibraryChangedHolder,
     MetadataWriteResultReceiver, MprisCommandReceiver, OnlineProgressReceiver, PLAYLISTS_VIEW,
     PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
-    SONGS_VIEW, SharedMprisService, SharedRuntime, ShowAlbumAction, ShowAlbumHolder,
-    SmartPlaylistTrackStatus, SmartShuffleRebuildResultReceiver, TrackRowChangedCallback,
-    TrackRowChangedHolder, TrackUpdatedReceiver,
+    SONGS_VIEW, STATISTICS_VIEW, SharedMprisService, SharedRuntime, ShowAlbumAction,
+    ShowAlbumHolder, SmartPlaylistTrackStatus, SmartShuffleRebuildResultReceiver,
+    TrackRowChangedCallback, TrackRowChangedHolder, TrackUpdatedReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
@@ -52,6 +52,7 @@ use super::{
         SidebarContextMenu, unique_default_name,
     },
     smart_playlist_editor::{SmartPlaylistEditorMode, open_smart_playlist_editor},
+    statistics::StatisticsView,
     status_bar::StatusBar,
     titlebar::{
         Titlebar, build_titlebar, connect_titlebar_play_button, connect_titlebar_playback_controls,
@@ -409,13 +410,16 @@ pub(crate) fn build_main_window(
     songs_drop_overlay.add_overlay(&songs_drop_indicator);
 
     let device_panel = DeviceSyncPanel::new(runtime.clone(), command_controller.clone());
+    let statistics_view = StatisticsView::new(runtime.clone());
     let content_stack = build_content_stack(
         &songs_drop_overlay,
         &albums_view.widget(),
+        &statistics_view.widget(),
         &playlists_view,
         device_panel.widget(),
     );
     install_albums_view_activator(&content_stack, &albums_view);
+    install_statistics_view_activator(&content_stack, &statistics_view);
     install_device_sync_view(&content_stack, &sidebar, &device_panel, &runtime);
     // The playlists table is built empty. It only needs to be populated
     // when the user actually opens the Playlists view; rebuilding it on
@@ -459,6 +463,7 @@ pub(crate) fn build_main_window(
         &runtime,
         &songs_table,
         &albums_view,
+        &statistics_view,
         &sidebar,
         &titlebar,
         visible_summary_refresh.clone(),
@@ -744,6 +749,7 @@ impl DeferredStartup {
         let restore_selection: Option<Box<dyn FnOnce()>> = match selection {
             UiSidebarSelection::Music => None,
             UiSidebarSelection::Albums => Some(Box::new(move || sidebar.select_albums())),
+            UiSidebarSelection::Statistics => Some(Box::new(move || sidebar.select_statistics())),
             UiSidebarSelection::Playlist(item) => Some(Box::new(move || sidebar.select_item(item))),
         };
         Self {
@@ -843,6 +849,20 @@ fn install_albums_view_activator(content_stack: &gtk::Stack, albums_view: &Album
     });
 }
 
+/// Rebuild the Statistics page each time it becomes the visible view, so
+/// its figures are current without doing the work during cold start or
+/// while it is hidden. `refresh` is cheap (one O(n) pass plus a few dozen
+/// small widgets), so an unconditional rebuild on every visit is simpler
+/// — and always-fresh — versus dirty-flag bookkeeping.
+fn install_statistics_view_activator(content_stack: &gtk::Stack, statistics_view: &StatisticsView) {
+    let statistics_view = statistics_view.clone();
+    content_stack.connect_visible_child_name_notify(move |stack| {
+        if stack.visible_child_name().as_deref() == Some(STATISTICS_VIEW) {
+            statistics_view.refresh();
+        }
+    });
+}
+
 fn ui_settings_from_widgets(
     titlebar: &Titlebar,
     sidebar: &PlaylistSidebar,
@@ -859,6 +879,7 @@ fn ui_settings_from_widgets(
         sidebar_selection: match sidebar.persisted_selection() {
             Some(SidebarSelection::Music) | None => UiSidebarSelection::Music,
             Some(SidebarSelection::Albums) => UiSidebarSelection::Albums,
+            Some(SidebarSelection::Statistics) => UiSidebarSelection::Statistics,
             Some(SidebarSelection::Item(item)) => UiSidebarSelection::Playlist(item),
         },
         sidebar_collapsed,
@@ -868,10 +889,12 @@ fn ui_settings_from_widgets(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn library_changed_callback(
     runtime: &SharedRuntime,
     songs_table: &TrackTable,
     albums_view: &AlbumsView,
+    statistics_view: &StatisticsView,
     sidebar: &PlaylistSidebar,
     titlebar: &Titlebar,
     visible_summary_refresh: VisibleSummaryRefreshCallback,
@@ -880,6 +903,7 @@ fn library_changed_callback(
     let runtime = runtime.clone();
     let songs_table = songs_table.clone();
     let albums_view = albums_view.clone();
+    let statistics_view = statistics_view.clone();
     let sidebar = sidebar.clone();
     let titlebar = titlebar.clone();
     let current_search_text = current_search_text.clone();
@@ -892,6 +916,11 @@ fn library_changed_callback(
         // set from the new track list using the search text it already
         // holds, so we don't need to call set_search_text here.
         albums_view.replace_tracks(runtime.borrow().library_tracks().to_vec());
+        // The Statistics page is library-wide; rebuild it only when it is
+        // the visible view (otherwise its activator refreshes it on the
+        // next visit), so a scan/import does not pay for an off-screen
+        // rebuild.
+        statistics_view.refresh_if_visible();
         // sidebar.refresh() rebuilds the sidebar tree-model and fires the
         // selection callback exactly once. That callback owns the
         // playlists view — it runs `refresh_playlists_view_if_visible`,

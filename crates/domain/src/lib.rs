@@ -8,6 +8,7 @@ mod clock;
 mod command;
 mod device_sync;
 mod id;
+mod library_statistics;
 mod managed_library;
 mod metadata;
 mod musical_key;
@@ -35,6 +36,11 @@ pub use device_sync::{
     SyncManifestEntry,
 };
 pub use id::{PlaylistFolderId, PlaylistId, SmartPlaylistId, TrackId};
+pub use library_statistics::{
+    DecadeCount, GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LibraryStatistics,
+    OtherGenres, QualityBucket, QualityDistribution, QualityRange, YearCount,
+    compute_library_statistics,
+};
 pub use managed_library::{
     ManagedTrackPathError, ManagedTrackPathInput, ManagedTrackPathPlan, ManagedTrackPathPlanner,
 };

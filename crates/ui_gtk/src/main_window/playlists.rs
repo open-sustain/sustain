@@ -124,6 +124,7 @@ fn playlists_header_state_for(
         Some(SidebarSelection::Item(PlaylistItem::Folder(_)))
         | Some(SidebarSelection::Music)
         | Some(SidebarSelection::Albums)
+        | Some(SidebarSelection::Statistics)
         | None => return None,
     };
     Some(PlaylistsHeaderState {
