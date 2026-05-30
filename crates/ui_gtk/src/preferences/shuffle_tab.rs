@@ -312,7 +312,7 @@ fn index_status(
             // library also has the heavier audio analysis (loudness,
             // timbre) that sharpens continuity.
             stats: Some(format!(
-                "{} tracks indexed ({}%)",
+                "{} tracks indexed ({}% audio profiled)",
                 group_thousands(meta.indexed_track_count),
                 (meta.analysis_coverage * 100.0).round() as i64
             )),
