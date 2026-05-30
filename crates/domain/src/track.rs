@@ -9,6 +9,14 @@ use crate::{PlayStatistics, Rating, TrackId, TrackMetadata};
 pub struct Track {
     pub id: TrackId,
     pub location: TrackLocation,
+    /// SHA-256 of the file's bytes, captured **once** when the file is
+    /// copy-imported into the managed library (it is the integrity check
+    /// `copy_file_verified` performs). It is import-time only and
+    /// **non-authoritative**: in-place tag, rating, artwork, and online
+    /// enrichment writes rewrite the file without refreshing it, and
+    /// scan-imported / referenced tracks never receive one at all. Do not
+    /// treat it as the file's current fingerprint or use it for identity
+    /// decisions — hash the bytes on disk instead (see #72).
     pub content_hash: Option<TrackContentHash>,
     pub metadata: TrackMetadata,
     pub rating: Rating,
@@ -35,6 +43,10 @@ pub struct TrackLocation {
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TrackRelativePath(PathBuf);
 
+/// A file content hash (lower-case hex SHA-256). See the caveat on
+/// [`Track::content_hash`]: a stored value is import-time only and is not
+/// kept in sync with later in-place writes, so it must not be used as a
+/// live content fingerprint.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TrackContentHash(String);
 

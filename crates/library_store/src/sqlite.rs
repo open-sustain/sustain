@@ -49,14 +49,6 @@ impl LibraryStore for SqliteLibraryStore {
         tracks::track(&connection, track_id)
     }
 
-    fn track_by_content_hash(
-        &self,
-        content_hash: &sustain_domain::TrackContentHash,
-    ) -> StoreResult<Option<Track>> {
-        let connection = self.connection_guard()?;
-        tracks::track_by_content_hash(&connection, content_hash)
-    }
-
     fn tracks(&self) -> StoreResult<Vec<Track>> {
         let connection = self.connection_guard()?;
         tracks::tracks(&connection)

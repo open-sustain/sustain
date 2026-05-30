@@ -96,12 +96,12 @@ impl LibraryImportContext {
             .iter()
             .map(|track| track.location.relative_path.clone())
             .collect::<BTreeSet<_>>();
-        let mut seen_hashes = self
-            .existing_tracks
-            .iter()
-            .filter_map(|track| track.content_hash.as_ref().map(TrackContentHash::as_str))
-            .map(str::to_owned)
-            .collect::<HashSet<_>>();
+        // Within-batch dedup only: catch two byte-identical source files
+        // dropped in the same import. Cross-existing dedup is decided
+        // against ground truth on disk by `library_contains_matching_content`,
+        // never against the stored content hash, which is import-time only
+        // and may be stale or absent (see #72).
+        let mut seen_hashes: HashSet<String> = HashSet::new();
 
         let planner = ManagedTrackPathPlanner::default();
         let mut imports = Vec::new();
@@ -320,32 +320,21 @@ impl LibraryImportContext {
         })
     }
 
+    /// Whether a file with the given size and freshly computed content
+    /// hash is already in the library, decided against ground truth on
+    /// disk. The stored `content_hash` column is import-time only and is
+    /// not refreshed after in-place tag / rating / artwork / enrichment
+    /// writes (and is absent for scan-imported tracks), so it is never
+    /// consulted here — an existing track whose on-disk size matches is
+    /// hashed fresh and compared byte-for-byte. The size pre-filter keeps
+    /// this from hashing the whole library on every import (see #72).
     fn library_contains_matching_content(
         &self,
         library_path: &Path,
         source_size: u64,
         content_hash: &TrackContentHash,
     ) -> ApplicationRuntimeResult<bool> {
-        if self
-            .library_store
-            .track_by_content_hash(content_hash)
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
-            .is_some()
-        {
-            return Ok(true);
-        }
-
         for track in &self.existing_tracks {
-            if track.content_hash.as_ref() == Some(content_hash) {
-                return Ok(true);
-            }
-
-            // A non-matching or absent stored hash is not conclusive: the
-            // stored hash goes stale because in-place tag edits and online
-            // enrichment rewrite the file without refreshing it. Fall back
-            // to ground truth and compare the bytes on disk whenever the
-            // size matches — the size pre-filter keeps this from hashing
-            // the whole library on every import.
             let track_path = track.location.absolute_path(library_path);
             let Ok(metadata) = fs::metadata(&track_path) else {
                 continue;

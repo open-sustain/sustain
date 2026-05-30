@@ -1125,6 +1125,11 @@ impl ApplicationRuntime {
         flag_set(self.library_scan_cancellation.as_ref())
             || flag_set(self.library_import_cancellation.as_ref())
             || flag_set(self.library_consolidation_cancellation.as_ref())
+            // The device sync worker is not part of the mutually-exclusive
+            // library-task set and tracks its own cancel flag, so consult
+            // it directly — otherwise the lane never shows "Cancelling..."
+            // after the user cancels a running sync.
+            || self.device_sync_scheduler.is_cancelling()
     }
 
     /// Read-only view onto the notification surface for renderers.

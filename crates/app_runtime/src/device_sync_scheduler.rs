@@ -64,6 +64,19 @@ impl DeviceSyncScheduler {
         self.is_syncing.load(Ordering::Acquire)
     }
 
+    /// True once cancellation has been requested for the in-flight sync
+    /// but the worker has not yet wound down. The engine polls the cancel
+    /// flag only at file boundaries, so there is a window — potentially a
+    /// whole multi-gigabyte file long — between the click and the sync
+    /// actually stopping; the status lane reads this to show
+    /// "Cancelling..." during it so the user sees their click landed.
+    /// Gated on `is_syncing` so a cancel flag left set from a previous run
+    /// (it is only reset when the next sync starts) never reports a phantom
+    /// cancelling state while idle.
+    pub fn is_cancelling(&self) -> bool {
+        self.is_syncing.load(Ordering::Acquire) && self.cancel.load(Ordering::Acquire)
+    }
+
     /// Ask the in-flight sync to stop at the next file boundary.
     pub fn request_cancellation(&self) {
         self.cancel.store(true, Ordering::Release);
@@ -105,5 +118,23 @@ impl DeviceSyncScheduler {
 impl Default for DeviceSyncScheduler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_scheduler_never_reports_cancelling() {
+        let scheduler = DeviceSyncScheduler::new();
+        assert!(!scheduler.is_syncing());
+        assert!(!scheduler.is_cancelling());
+        // A cancel request while no sync is running must not produce a
+        // phantom "Cancelling..." state: the flag stays set until the next
+        // sync starts, and `is_cancelling` gates on `is_syncing` precisely
+        // so a stale flag cannot leak into the idle status lane.
+        scheduler.request_cancellation();
+        assert!(!scheduler.is_cancelling());
     }
 }

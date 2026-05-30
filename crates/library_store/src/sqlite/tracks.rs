@@ -81,23 +81,6 @@ pub(super) fn track(connection: &Connection, track_id: TrackId) -> StoreResult<O
         .transpose()
 }
 
-pub(super) fn track_by_content_hash(
-    connection: &Connection,
-    content_hash: &sustain_domain::TrackContentHash,
-) -> StoreResult<Option<Track>> {
-    let mut statement = connection
-        .prepare(SELECT_TRACK_BY_CONTENT_HASH_SQL.as_str())
-        .map_err(StoreError::from)?;
-    let mut rows = statement
-        .query(params![content_hash.as_str()])
-        .map_err(StoreError::from)?;
-
-    rows.next()
-        .map_err(StoreError::from)?
-        .map(track_from_row)
-        .transpose()
-}
-
 pub(super) fn tracks(connection: &Connection) -> StoreResult<Vec<Track>> {
     let mut statement = connection
         .prepare(SELECT_ALL_TRACKS_SQL.as_str())

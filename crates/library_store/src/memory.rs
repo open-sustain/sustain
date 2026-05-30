@@ -117,17 +117,6 @@ impl LibraryStore for InMemoryLibraryStore {
         Ok(self.tracks_guard()?.get(&track_id).cloned())
     }
 
-    fn track_by_content_hash(
-        &self,
-        content_hash: &sustain_domain::TrackContentHash,
-    ) -> StoreResult<Option<Track>> {
-        Ok(self
-            .tracks_guard()?
-            .values()
-            .find(|track| track.content_hash.as_ref() == Some(content_hash))
-            .cloned())
-    }
-
     fn tracks(&self) -> StoreResult<Vec<Track>> {
         Ok(self.tracks_guard()?.values().cloned().collect())
     }

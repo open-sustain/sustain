@@ -39,15 +39,13 @@ fn in_memory_store_starts_empty() {
 fn in_memory_store_saves_and_loads_tracks() {
     let store = InMemoryLibraryStore::new();
     let mut track = track(1, "a.flac");
+    // The import-time content hash still round-trips through the column
+    // (it is persisted, just no longer indexed or looked up — see #72).
     track.content_hash = Some(test_hash(1));
 
     assert_eq!(store.save_track(track.clone()), Ok(()));
 
     assert_eq!(store.track(track.id), Ok(Some(track.clone())));
-    assert_eq!(
-        store.track_by_content_hash(track.content_hash.as_ref().expect("hash")),
-        Ok(Some(track.clone()))
-    );
     assert_eq!(store.tracks(), Ok(vec![track]));
 }
 
@@ -124,16 +122,14 @@ fn sqlite_store_saves_and_loads_tracks() {
     track.metadata.artist = Some("Artist".to_owned());
     track.metadata.bitrate_kbps = Some(1411);
     track.metadata.duration = Some(std::time::Duration::from_secs(245));
+    // Persisted but non-authoritative; confirm it survives the round-trip
+    // through SQLite (see #72).
     track.content_hash = Some(test_hash(42));
     track.rating = Rating::new(4).expect("valid test rating");
 
     assert_eq!(store.save_track(track.clone()), Ok(()));
 
     assert_eq!(store.track(track.id), Ok(Some(track.clone())));
-    assert_eq!(
-        store.track_by_content_hash(track.content_hash.as_ref().expect("hash")),
-        Ok(Some(track.clone()))
-    );
     assert_eq!(store.tracks(), Ok(vec![track]));
 }
 

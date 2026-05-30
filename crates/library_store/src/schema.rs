@@ -60,10 +60,6 @@ CREATE TABLE IF NOT EXISTS tracks (
     composer_sort TEXT
 );
 
-CREATE INDEX IF NOT EXISTS tracks_content_hash_idx
-    ON tracks(content_hash)
-    WHERE content_hash IS NOT NULL;
-
 CREATE TABLE IF NOT EXISTS playlist_folders (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -406,20 +402,6 @@ SELECT
 {}
 FROM tracks
 WHERE id = ?1
-"#,
-        indented_track_column_names("    "),
-    )
-});
-
-pub(super) static SELECT_TRACK_BY_CONTENT_HASH_SQL: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        r#"
-SELECT
-{}
-FROM tracks
-WHERE content_hash = ?1
-ORDER BY id
-LIMIT 1
 "#,
         indented_track_column_names("    "),
     )
