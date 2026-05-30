@@ -1,8 +1,8 @@
 # Sustain landing page
 
-A single static page that the Google Ads campaign points at (see issue about
-outreach). Zero JavaScript, zero build step, light/dark aware, self-contained
-in this directory.
+A single static page that the outreach campaign (see issue #75) points at.
+Zero JavaScript, zero build step, light/dark aware, self-contained in this
+directory.
 
 ```
 website/
@@ -11,37 +11,34 @@ website/
 └── assets/         # logo, icon, screenshots
 ```
 
-## Adding the upcoming screenshots
+## Screenshots
 
-`index.html` has two clearly-marked placeholder figures. To fill them:
+Screenshots live in `assets/` and are copied from the repository's
+`.github/assets/` (which the project README also uses). If you update or add
+one there, copy it here so the page stays self-contained:
 
-1. Drop the image into `assets/`:
-   - Smart Shuffle → `assets/screenshot-smart-shuffle.png`
-   - Device sync → `assets/screenshot-device-sync.png`
-2. Replace the matching `<figure class="shot shot--placeholder">` block with a
-   real one (the HTML comment right above each placeholder shows the exact
-   markup to paste).
+```sh
+cp ../.github/assets/<name>.png assets/
+```
 
-The other screenshots are copied from `.github/assets/`; if you update those,
-re-copy them here so the page stays self-contained.
+then reference it from `index.html` as `assets/<name>.png`.
 
-## Deploying to GitHub Pages
+## Deployment
 
-Two equally-fine options:
+The site is published to GitHub Pages by `.github/workflows/pages.yml`, which
+uploads this directory whenever anything under `website/` changes. Pages is
+configured with the **GitHub Actions** source (Settings → Pages → Source).
+Live at <https://open-sustain.github.io/sustain/>.
 
-- **Pages → "Deploy from a branch", folder `/website`** (simplest): enable it in
-  the repo settings, no workflow needed.
-- **Pages → GitHub Actions**: upload this directory as the Pages artifact from a
-  workflow. Use this if you later add a build step.
-
-Set up a custom domain in the same settings screen if you want one; add a
-`CNAME` file here with the domain.
+For a custom domain, set it in Settings → Pages and add a `CNAME` file here
+containing the domain so it survives redeploys. The page uses relative asset
+paths, so it works at either the project subpath or a domain root unchanged.
 
 ## A note on analytics
 
 The page deliberately ships **no** tracking script, because it promises "no
 tracking" to a justifiably suspicious Linux audience. If you want anonymous,
 cookieless visit counts for the campaign, add a self-hosted GoatCounter or
-Plausible snippet at the marked spot in `index.html`'s `<head>` **and** tighten
-the on-page wording to say exactly what it counts. Never add anything that sets
-cookies, fingerprints visitors, or reports to an ad network.
+Plausible snippet to `index.html`'s `<head>` **and** tighten the on-page
+wording to say exactly what it counts. Never add anything that sets cookies,
+fingerprints visitors, or reports to an ad network.

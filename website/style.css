@@ -295,20 +295,6 @@ h2 { font-size: clamp(1.7rem, 3.5vw, 2.3rem); margin: 0 0 0.4rem; }
 }
 .shot--small { margin-bottom: 0; }
 
-.shot--placeholder .placeholder-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  aspect-ratio: 16 / 10;
-  border-radius: var(--radius);
-  border: 2px dashed var(--border);
-  background: var(--surface-2);
-}
-.placeholder-label { font-weight: 700; font-size: 1.15rem; }
-.placeholder-hint { color: var(--muted); font-size: 0.9rem; }
-
 /* ───────────────── Install ───────────────── */
 .install-block { margin-bottom: 2rem; }
 .install-block h3 { margin: 0 0 0.3rem; font-size: 1.2rem; }
