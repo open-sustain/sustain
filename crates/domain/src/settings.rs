@@ -10,10 +10,25 @@ use crate::{PlaylistItem, ShuffleMode, VolumePercent};
 /// be obviously audible without startling anyone with sensitive headphones.
 pub const DEFAULT_PLAYBACK_VOLUME_PERCENT: u8 = 80;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LibrarySettings {
     pub path: Option<PathBuf>,
     pub management_mode: LibraryManagementMode,
+    /// Honor the tag-derived "sort as" names (issue #13) when ordering
+    /// the library. On by default for well-tagged libraries; users who
+    /// tag sort fields inconsistently can turn it off for strict
+    /// alphabetic-as-shown ordering.
+    pub honor_sort_tags: bool,
+}
+
+impl Default for LibrarySettings {
+    fn default() -> Self {
+        Self {
+            path: None,
+            management_mode: LibraryManagementMode::default(),
+            honor_sort_tags: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -248,6 +263,7 @@ impl UserSettings {
             library: LibrarySettings {
                 path: library_path,
                 management_mode: LibraryManagementMode::ReferenceFilesInPlace,
+                honor_sort_tags: true,
             },
             playback: PlaybackSettings::default(),
             ui: UiSettings::default(),

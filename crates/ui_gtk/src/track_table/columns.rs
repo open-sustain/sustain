@@ -207,11 +207,19 @@ impl TrackTableColumn {
 
     pub(super) fn compare(self, left: &TrackTableRow, right: &TrackTableRow) -> CmpOrdering {
         match self {
-            Self::TrackName => {
-                compare_optional_text(Some(&left.track_name), Some(&right.track_name))
+            // Text columns with parallel "sort as" tags order by the
+            // pre-resolved sort keys (issue #13), so "The Beatles" files
+            // under B while still displaying as written.
+            Self::TrackName => compare_optional_text(
+                Some(&left.track_name_sort_key),
+                Some(&right.track_name_sort_key),
+            ),
+            Self::Artist => {
+                compare_optional_text(Some(&left.artist_sort_key), Some(&right.artist_sort_key))
             }
-            Self::Artist => compare_optional_text(Some(&left.artist), Some(&right.artist)),
-            Self::Album => compare_optional_text(Some(&left.album), Some(&right.album)),
+            Self::Album => {
+                compare_optional_text(Some(&left.album_sort_key), Some(&right.album_sort_key))
+            }
             Self::Genre => compare_optional_text(Some(&left.genre), Some(&right.genre)),
             Self::Year => left.year.cmp(&right.year),
             Self::Bpm => left.bpm.cmp(&right.bpm),

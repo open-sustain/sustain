@@ -458,7 +458,7 @@ pub trait LibraryStore: Send + Sync {
             tracks.retain(|track| track_matches_search(track, search_text));
         }
 
-        sort_tracks(&mut tracks, query.sort);
+        sort_tracks(&mut tracks, query.sort, query.honor_sort_tags);
         Ok(tracks)
     }
 }

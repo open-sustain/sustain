@@ -189,12 +189,15 @@ pub(super) fn playlist_table_rows_for(
         _ => return Vec::new(),
     };
 
+    let honor_sort_tags = runtime.settings().library.honor_sort_tags;
     candidates
         .into_iter()
         .filter(|(track, _)| {
             search_text.is_empty() || track_matches_search_text(track, search_text)
         })
-        .map(|(track, position)| TrackTableRow::from_track(&track).with_playlist_position(position))
+        .map(|(track, position)| {
+            TrackTableRow::from_track(&track, honor_sort_tags).with_playlist_position(position)
+        })
         .collect()
 }
 

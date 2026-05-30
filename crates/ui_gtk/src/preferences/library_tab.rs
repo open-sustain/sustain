@@ -257,9 +257,39 @@ pub(super) fn build(
     path_row.append(&folder_button);
     path_row.append(&scan_button);
 
+    let sort_tags_enabled = command_controller
+        .runtime()
+        .borrow()
+        .settings()
+        .library
+        .honor_sort_tags;
+    let sort_tags_row = build_switch_row(
+        "Sort using sort-order tags",
+        "Order the library by the \u{201C}sort as\u{201D} tags some files carry \
+         (ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT, and friends), so \
+         \u{201C}The Beatles\u{201D} files under B and \u{201C}Björk\u{201D} sorts as \
+         \u{201C}Bjork\u{201D}. Turn off for strict alphabetic-as-shown ordering.",
+        sort_tags_enabled,
+    );
+    let command_controller_for_sort_tags = command_controller.clone();
+    sort_tags_row
+        .switch
+        .connect_state_set(move |_switch, requested_state| {
+            let mut settings = command_controller_for_sort_tags
+                .runtime()
+                .borrow()
+                .settings()
+                .clone();
+            settings.library.honor_sort_tags = requested_state;
+            let _result = command_controller_for_sort_tags
+                .dispatch(ApplicationCommand::UpdateSettings(settings));
+            Propagation::Proceed
+        });
+
     content.append(&label_group);
     content.append(&path_row);
     content.append(&keep_organized_row.container);
+    content.append(&sort_tags_row.container);
     content.append(&scan_status);
 
     content.upcast()

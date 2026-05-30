@@ -992,6 +992,7 @@ fn visible_summary_refresh_callback(
         // (deduplicated) tracks, not whatever table was last shown.
         if content_stack.visible_child_name().as_deref() == Some(DEVICES_VIEW) {
             let runtime = runtime.borrow();
+            let honor_sort_tags = runtime.settings().library.honor_sort_tags;
             let rows: Vec<TrackTableRow> = current_device
                 .borrow()
                 .as_ref()
@@ -999,7 +1000,7 @@ fn visible_summary_refresh_callback(
                     runtime
                         .device_selected_tracks(&device.id)
                         .iter()
-                        .map(TrackTableRow::from_track)
+                        .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -1157,11 +1158,12 @@ fn runtime_library_table_rows(
     runtime: &ApplicationRuntime,
     search_text: &str,
 ) -> Vec<TrackTableRow> {
+    let honor_sort_tags = runtime.settings().library.honor_sort_tags;
     runtime
         .library_tracks()
         .iter()
         .filter(|track| search_text.is_empty() || track_matches_search_text(track, search_text))
-        .map(TrackTableRow::from_track)
+        .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
         .collect()
 }
 

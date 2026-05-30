@@ -22,6 +22,21 @@ pub struct TrackMetadata {
     pub key: Option<String>,
     pub comments: Option<String>,
     pub lyrics: Option<String>,
+    /// Tag-derived "sort as" names — the parallel sort fields some
+    /// taggers write next to the display fields (ID3 `TSOT`/`TSOP`/
+    /// `TSOA`/`TSO2`/`TSOC`, Vorbis `TITLESORT`/`ARTISTSORT`/`ALBUMSORT`/
+    /// `ALBUMARTISTSORT`/`COMPOSERSORT`, MP4 equivalents) so "The Beatles"
+    /// sorts under **B** and "Björk" sorts as "Bjork". Captured once at
+    /// import like every other tag value (see the persistence policy in
+    /// AGENTS.md) and used only for ordering, never displayed. Like the
+    /// audio-stream properties below they are read-only: not part of
+    /// [`MetadataChange`] and not mirrored back to files — editing sort
+    /// fields is deferred (issue #13).
+    pub title_sort: Option<String>,
+    pub artist_sort: Option<String>,
+    pub album_sort: Option<String>,
+    pub album_artist_sort: Option<String>,
+    pub composer_sort: Option<String>,
     pub duration: Option<Duration>,
     pub bitrate_kbps: Option<u32>,
     pub sample_rate_hz: Option<u32>,

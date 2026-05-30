@@ -3,7 +3,9 @@
 
 use std::cmp::Ordering;
 
-use sustain_domain::{SortDirection, Track, TrackSortColumn, compare_optional_text};
+use sustain_domain::{
+    SortDirection, Track, TrackSortColumn, compare_optional_text, effective_sort_key,
+};
 
 pub(crate) fn track_matches_search(track: &Track, search_text: &str) -> bool {
     let needle = search_text.to_ascii_lowercase();
@@ -21,9 +23,13 @@ pub(crate) fn track_matches_search(track: &Track, search_text: &str) -> bool {
     .any(|value| value.to_ascii_lowercase().contains(&needle))
 }
 
-pub(crate) fn sort_tracks(tracks: &mut [Track], sort: sustain_domain::TrackSort) {
+pub(crate) fn sort_tracks(
+    tracks: &mut [Track],
+    sort: sustain_domain::TrackSort,
+    honor_sort_tags: bool,
+) {
     tracks.sort_by(|left, right| {
-        let ordering = compare_tracks(left, right, sort.column);
+        let ordering = compare_tracks(left, right, sort.column, honor_sort_tags);
         let ordering = if sort.column == TrackSortColumn::PlaylistPosition {
             ordering
         } else {
@@ -36,20 +42,49 @@ pub(crate) fn sort_tracks(tracks: &mut [Track], sort: sustain_domain::TrackSort)
     });
 }
 
-fn compare_tracks(left: &Track, right: &Track, column: TrackSortColumn) -> Ordering {
+fn compare_tracks(
+    left: &Track,
+    right: &Track,
+    column: TrackSortColumn,
+    honor_sort_tags: bool,
+) -> Ordering {
     match column {
         TrackSortColumn::PlaylistPosition => Ordering::Equal,
         TrackSortColumn::Title => compare_optional_text(
-            left.metadata.title.as_deref(),
-            right.metadata.title.as_deref(),
+            effective_sort_key(
+                left.metadata.title_sort.as_deref(),
+                left.metadata.title.as_deref(),
+                honor_sort_tags,
+            ),
+            effective_sort_key(
+                right.metadata.title_sort.as_deref(),
+                right.metadata.title.as_deref(),
+                honor_sort_tags,
+            ),
         ),
         TrackSortColumn::Artist => compare_optional_text(
-            left.metadata.artist.as_deref(),
-            right.metadata.artist.as_deref(),
+            effective_sort_key(
+                left.metadata.artist_sort.as_deref(),
+                left.metadata.artist.as_deref(),
+                honor_sort_tags,
+            ),
+            effective_sort_key(
+                right.metadata.artist_sort.as_deref(),
+                right.metadata.artist.as_deref(),
+                honor_sort_tags,
+            ),
         ),
         TrackSortColumn::Album => compare_optional_text(
-            left.metadata.album.as_deref(),
-            right.metadata.album.as_deref(),
+            effective_sort_key(
+                left.metadata.album_sort.as_deref(),
+                left.metadata.album.as_deref(),
+                honor_sort_tags,
+            ),
+            effective_sort_key(
+                right.metadata.album_sort.as_deref(),
+                right.metadata.album.as_deref(),
+                honor_sort_tags,
+            ),
         ),
         TrackSortColumn::Genre => compare_optional_text(
             left.metadata.genre.as_deref(),

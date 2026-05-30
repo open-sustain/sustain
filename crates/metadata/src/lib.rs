@@ -278,6 +278,24 @@ impl MetadataService for LoftyMetadataService {
             lyrics: tag
                 .and_then(|tag| tag.get_string(ItemKey::Lyrics))
                 .map(ToOwned::to_owned),
+            // Tag-derived "sort as" names (issue #13). Read once at
+            // import alongside the display fields; only used for
+            // ordering, never written back.
+            title_sort: tag
+                .and_then(|tag| tag.get_string(ItemKey::TrackTitleSortOrder))
+                .map(ToOwned::to_owned),
+            artist_sort: tag
+                .and_then(|tag| tag.get_string(ItemKey::TrackArtistSortOrder))
+                .map(ToOwned::to_owned),
+            album_sort: tag
+                .and_then(|tag| tag.get_string(ItemKey::AlbumTitleSortOrder))
+                .map(ToOwned::to_owned),
+            album_artist_sort: tag
+                .and_then(|tag| tag.get_string(ItemKey::AlbumArtistSortOrder))
+                .map(ToOwned::to_owned),
+            composer_sort: tag
+                .and_then(|tag| tag.get_string(ItemKey::ComposerSortOrder))
+                .map(ToOwned::to_owned),
             duration: Some(properties.duration()),
             bitrate_kbps: properties.audio_bitrate().or(properties.overall_bitrate()),
             sample_rate_hz: properties.sample_rate(),

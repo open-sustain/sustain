@@ -3,7 +3,7 @@
 
 use std::{path::Path, time::SystemTime};
 
-use sustain_app_runtime::{Track, TrackId};
+use sustain_app_runtime::{Track, TrackId, effective_sort_key};
 
 use crate::util::non_empty_text;
 
@@ -53,6 +53,14 @@ pub(crate) struct TrackTableRow {
     pub(crate) artist: String,
     pub(crate) album: String,
     pub(crate) genre: String,
+    /// Effective sort keys for the text columns, resolved at row-build
+    /// time from the track's "sort as" tags and the live
+    /// honor-sort-tags preference (issue #13). The column comparators
+    /// order by these so "The Beatles" files under B while still
+    /// displaying as written.
+    pub(super) track_name_sort_key: String,
+    pub(super) artist_sort_key: String,
+    pub(super) album_sort_key: String,
     pub(crate) year: Option<i32>,
     pub(crate) bpm: Option<u32>,
     pub(crate) music_key: Option<String>,
@@ -79,15 +87,36 @@ pub(crate) struct TrackTableRow {
 }
 
 impl TrackTableRow {
-    pub(crate) fn from_track(track: &Track) -> Self {
+    pub(crate) fn from_track(track: &Track, honor_sort_tags: bool) -> Self {
+        let track_name = non_empty_text(&track.metadata.title)
+            .or_else(|| file_stem_text(track.location.path()))
+            .unwrap_or_default();
+        let artist = non_empty_text(&track.metadata.artist).unwrap_or_default();
+        let album = non_empty_text(&track.metadata.album).unwrap_or_default();
+        let track_name_sort_key = sort_key(
+            track.metadata.title_sort.as_deref(),
+            &track_name,
+            honor_sort_tags,
+        );
+        let artist_sort_key = sort_key(
+            track.metadata.artist_sort.as_deref(),
+            &artist,
+            honor_sort_tags,
+        );
+        let album_sort_key = sort_key(
+            track.metadata.album_sort.as_deref(),
+            &album,
+            honor_sort_tags,
+        );
         Self {
             track_id: Some(track.id),
-            track_name: non_empty_text(&track.metadata.title)
-                .or_else(|| file_stem_text(track.location.path()))
-                .unwrap_or_default(),
-            artist: non_empty_text(&track.metadata.artist).unwrap_or_default(),
-            album: non_empty_text(&track.metadata.album).unwrap_or_default(),
+            track_name,
+            artist,
+            album,
             genre: non_empty_text(&track.metadata.genre).unwrap_or_default(),
+            track_name_sort_key,
+            artist_sort_key,
+            album_sort_key,
             year: track.metadata.year,
             bpm: track.metadata.bpm,
             music_key: non_empty_text(&track.metadata.key),
@@ -115,6 +144,17 @@ impl TrackTableRow {
         self.playlist_position = playlist_position;
         self
     }
+}
+
+/// The effective sort key for a text column: the tag-derived "sort as"
+/// value when the preference is on and one is present, otherwise the
+/// already-resolved display string. Shares
+/// [`sustain_app_runtime::effective_sort_key`] with the library store so
+/// the table headers and the store sort agree (issue #13).
+fn sort_key(sort_field: Option<&str>, display: &str, honor_sort_tags: bool) -> String {
+    effective_sort_key(sort_field, Some(display), honor_sort_tags)
+        .unwrap_or(display)
+        .to_owned()
 }
 
 fn file_stem_text(path: &Path) -> Option<String> {

@@ -49,7 +49,15 @@ CREATE TABLE IF NOT EXISTS tracks (
     -- the most recent scan. The online artwork scheduler reads this
     -- column directly in its candidate query and never re-probes the
     -- file at attempt time.
-    has_embedded_artwork INTEGER
+    has_embedded_artwork INTEGER,
+    -- Tag-derived "sort as" names (issue #13). Captured at import
+    -- alongside the display fields and used only for ordering; never
+    -- mirrored back to files. NULL when the tag carried no sort field.
+    title_sort TEXT,
+    artist_sort TEXT,
+    album_sort TEXT,
+    album_artist_sort TEXT,
+    composer_sort TEXT
 );
 
 CREATE INDEX IF NOT EXISTS tracks_content_hash_idx
@@ -325,6 +333,11 @@ const TRACK_COLUMNS: &[TrackColumn] = &[
     TrackColumn::stored_value("content_hash"),
     TrackColumn::stored_value("file_size_bytes"),
     TrackColumn::stored_value("has_embedded_artwork"),
+    TrackColumn::stored_value("title_sort"),
+    TrackColumn::stored_value("artist_sort"),
+    TrackColumn::stored_value("album_sort"),
+    TrackColumn::stored_value("album_artist_sort"),
+    TrackColumn::stored_value("composer_sort"),
 ];
 
 pub(crate) mod track_column_index {
@@ -361,6 +374,11 @@ pub(crate) mod track_column_index {
     pub(crate) const CONTENT_HASH: usize = 30;
     pub(crate) const FILE_SIZE_BYTES: usize = 31;
     pub(crate) const HAS_EMBEDDED_ARTWORK: usize = 32;
+    pub(crate) const TITLE_SORT: usize = 33;
+    pub(crate) const ARTIST_SORT: usize = 34;
+    pub(crate) const ALBUM_SORT: usize = 35;
+    pub(crate) const ALBUM_ARTIST_SORT: usize = 36;
+    pub(crate) const COMPOSER_SORT: usize = 37;
 }
 
 pub(super) static SAVE_TRACK_SQL: LazyLock<String> = LazyLock::new(|| {
@@ -704,6 +722,11 @@ mod tests {
                 track_column_index::HAS_EMBEDDED_ARTWORK,
                 "has_embedded_artwork",
             ),
+            (track_column_index::TITLE_SORT, "title_sort"),
+            (track_column_index::ARTIST_SORT, "artist_sort"),
+            (track_column_index::ALBUM_SORT, "album_sort"),
+            (track_column_index::ALBUM_ARTIST_SORT, "album_artist_sort"),
+            (track_column_index::COMPOSER_SORT, "composer_sort"),
         ];
 
         assert_eq!(TRACK_COLUMNS.len(), expected.len());

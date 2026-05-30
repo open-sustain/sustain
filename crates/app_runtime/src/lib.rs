@@ -30,7 +30,8 @@ pub use sustain_domain::{
     TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
     TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
     TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings, VolumePercent, YearCount,
-    compare_optional_text, compute_library_statistics, matching_tracks, track_matches_rule_set,
+    compare_optional_text, compute_library_statistics, effective_sort_key, matching_tracks,
+    track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
 pub use sustain_metadata::MetadataService;

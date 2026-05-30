@@ -132,11 +132,27 @@ struct SettingsDocument {
     background_jobs: BackgroundJobsSettingsDocument,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct LibrarySettingsDocument {
     path: Option<PathBuf>,
     #[serde(default)]
     management_mode: LibraryManagementModeDocument,
+    #[serde(default = "default_honor_sort_tags")]
+    honor_sort_tags: bool,
+}
+
+impl Default for LibrarySettingsDocument {
+    fn default() -> Self {
+        Self {
+            path: None,
+            management_mode: LibraryManagementModeDocument::default(),
+            honor_sort_tags: default_honor_sort_tags(),
+        }
+    }
+}
+
+fn default_honor_sort_tags() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -303,6 +319,7 @@ impl SettingsDocument {
                 management_mode: LibraryManagementModeDocument::from_domain(
                     settings.library.management_mode,
                 ),
+                honor_sort_tags: settings.library.honor_sort_tags,
             },
             playback: PlaybackSettingsDocument {
                 volume_percent: settings.playback.volume.get(),
@@ -344,6 +361,7 @@ impl SettingsDocument {
             library: LibrarySettings {
                 path: self.library.path,
                 management_mode: self.library.management_mode.into_domain(),
+                honor_sort_tags: self.library.honor_sort_tags,
             },
             playback: PlaybackSettings {
                 volume: VolumePercent::from_clamped(self.playback.volume_percent),

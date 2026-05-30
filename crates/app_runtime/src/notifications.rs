@@ -297,16 +297,14 @@ pub fn library_consolidation_running_text() -> String {
 }
 
 pub fn analysis_background_running_text(completed: u32, remaining: u32) -> String {
-    if remaining == 0 {
-        format!(
-            "Analyzing tracks ({} {} done)...",
-            completed,
-            pluralize(completed as usize, "track", "tracks"),
-        )
-    } else {
-        let total = completed.saturating_add(remaining);
-        format!("Analyzing tracks ({completed}/{total})...")
-    }
+    // Always render progress as completed/total so the analysis lane
+    // reads the same way as every other background task (device sync,
+    // online retrieval). `remaining` is the live count still needing
+    // work, so the total tracks the run even as the scheduler discovers
+    // more; when it reaches zero the final tick shows "N/N" right before
+    // the Idle summary replaces it.
+    let total = completed.saturating_add(remaining);
+    format!("Analyzing tracks ({completed}/{total})...")
 }
 
 pub fn analysis_background_outcome_text(completed: u32, failed: u32) -> String {
@@ -328,16 +326,10 @@ pub fn analysis_background_outcome_text(completed: u32, failed: u32) -> String {
 }
 
 pub fn online_background_running_text(completed: u32, remaining: u32) -> String {
-    if remaining == 0 {
-        format!(
-            "Retrieving online data ({} {} done)...",
-            completed,
-            pluralize(completed as usize, "track", "tracks"),
-        )
-    } else {
-        let total = completed.saturating_add(remaining);
-        format!("Retrieving online data ({completed}/{total})...")
-    }
+    // Mirror analysis: progress is always completed/total for a uniform
+    // read across the notification lane.
+    let total = completed.saturating_add(remaining);
+    format!("Retrieving online data ({completed}/{total})...")
 }
 
 pub fn online_background_outcome_text(completed: u32, failed: u32) -> String {

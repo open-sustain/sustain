@@ -37,3 +37,29 @@ fn runtime_error_text_maps_metadata_write_failed() {
         "The track metadata could not be updated."
     );
 }
+
+#[test]
+fn analysis_progress_always_reads_as_completed_over_total() {
+    assert_eq!(
+        analysis_background_running_text(3, 7),
+        "Analyzing tracks (3/10)..."
+    );
+    // Regression for #74: a tick whose live "remaining" count has
+    // reached zero must still read as N/N, not "(N tracks done)".
+    assert_eq!(
+        analysis_background_running_text(10, 0),
+        "Analyzing tracks (10/10)..."
+    );
+}
+
+#[test]
+fn online_progress_always_reads_as_completed_over_total() {
+    assert_eq!(
+        online_background_running_text(2, 5),
+        "Retrieving online data (2/7)..."
+    );
+    assert_eq!(
+        online_background_running_text(7, 0),
+        "Retrieving online data (7/7)..."
+    );
+}

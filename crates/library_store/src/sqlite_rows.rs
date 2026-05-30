@@ -58,6 +58,21 @@ pub(crate) fn track_from_row(row: &Row<'_>) -> StoreResult<Track> {
             sample_rate_hz: optional_u32(row, track_column::SAMPLE_RATE_HZ)?,
             channels: optional_u8(row, track_column::CHANNELS)?,
             lyrics: row.get(track_column::LYRICS).map_err(StoreError::from)?,
+            title_sort: row
+                .get(track_column::TITLE_SORT)
+                .map_err(StoreError::from)?,
+            artist_sort: row
+                .get(track_column::ARTIST_SORT)
+                .map_err(StoreError::from)?,
+            album_sort: row
+                .get(track_column::ALBUM_SORT)
+                .map_err(StoreError::from)?,
+            album_artist_sort: row
+                .get(track_column::ALBUM_ARTIST_SORT)
+                .map_err(StoreError::from)?,
+            composer_sort: row
+                .get(track_column::COMPOSER_SORT)
+                .map_err(StoreError::from)?,
         },
         rating: Rating::new(rating_value as u8).unwrap_or_else(Rating::unrated),
         statistics: PlayStatistics {
