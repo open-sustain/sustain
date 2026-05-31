@@ -243,6 +243,39 @@ CREATE TABLE IF NOT EXISTS track_online_status (
     provider_version            INTEGER NOT NULL
 );
 
+-- Durable courtesy mirror work for editable file tags. SQLite remains
+-- authoritative: every canonical edit and this compact per-track intent are
+-- committed together. The worker resolves the track's current path and writes
+-- the latest canonical row, so coalescing never replays stale snapshots.
+-- Artwork bytes live in content-addressed external blobs; only their digest
+-- and bounded length are stored here.
+CREATE TABLE IF NOT EXISTS tag_mirror_outbox (
+    track_id                   INTEGER PRIMARY KEY
+                                 REFERENCES tracks(id) ON DELETE CASCADE,
+    mirror_metadata            INTEGER NOT NULL DEFAULT 0,
+    mirror_rating              INTEGER NOT NULL DEFAULT 0,
+    artwork_action             INTEGER NOT NULL DEFAULT 0,
+    artwork_digest             TEXT,
+    artwork_size_bytes         INTEGER,
+    generation                 INTEGER NOT NULL,
+    attempt_count              INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at_unix       INTEGER NOT NULL DEFAULT 0,
+    last_error                 TEXT,
+    CHECK (mirror_metadata IN (0, 1)),
+    CHECK (mirror_rating IN (0, 1)),
+    CHECK (artwork_action IN (0, 1, 2)),
+    CHECK (mirror_metadata = 1 OR mirror_rating = 1 OR artwork_action <> 0),
+    CHECK (generation > 0),
+    CHECK (attempt_count >= 0),
+    CHECK (next_attempt_at_unix >= 0),
+    CHECK (
+        (artwork_action = 2 AND artwork_digest IS NOT NULL
+                            AND artwork_size_bytes BETWEEN 1 AND 16777216)
+        OR
+        (artwork_action <> 2 AND artwork_digest IS NULL AND artwork_size_bytes IS NULL)
+    )
+);
+
 -- Device sync (#23/#24). Sustain owns the per-device configuration and
 -- the saved playlist selection (the device only carries the files), all
 -- keyed by the stable Sustain device id stored in the device's

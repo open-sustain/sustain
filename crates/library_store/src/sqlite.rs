@@ -22,6 +22,7 @@ mod playlists;
 mod smart_playlists;
 mod smart_shuffle;
 mod synced_lyrics;
+mod tag_mirror;
 mod tracks;
 
 /// Chunk size for `IN (...)` filters that are split to stay under SQLite's
@@ -63,6 +64,15 @@ impl LibraryStore for SqliteLibraryStore {
         tracks::update_track_rating(&connection, track_id, rating)
     }
 
+    fn update_track_rating_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        rating: Rating,
+    ) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        tag_mirror::update_track_rating_and_enqueue(&mut connection, track_id, rating)
+    }
+
     fn update_track_statistics(
         &self,
         track_id: TrackId,
@@ -81,6 +91,15 @@ impl LibraryStore for SqliteLibraryStore {
         tracks::apply_track_metadata_change(&connection, track_id, change)
     }
 
+    fn apply_track_metadata_change_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        tag_mirror::apply_track_metadata_change_and_enqueue(&mut connection, track_id, change)
+    }
+
     fn fill_missing_track_metadata(
         &self,
         track_id: TrackId,
@@ -88,6 +107,15 @@ impl LibraryStore for SqliteLibraryStore {
     ) -> StoreResult<()> {
         let connection = self.connection_guard()?;
         tracks::fill_missing_track_metadata(&connection, track_id, change)
+    }
+
+    fn fill_missing_track_metadata_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<bool> {
+        let mut connection = self.connection_guard()?;
+        tag_mirror::fill_missing_track_metadata_and_enqueue(&mut connection, track_id, change)
     }
 
     fn apply_track_metadata_change_and_location(
@@ -118,6 +146,63 @@ impl LibraryStore for SqliteLibraryStore {
     fn tracks(&self) -> StoreResult<Vec<Track>> {
         let connection = self.connection_guard()?;
         tracks::tracks(&connection)
+    }
+
+    fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork> {
+        self.tag_mirror_blobs.publish(bytes)
+    }
+
+    fn enqueue_tag_mirror_artwork(
+        &self,
+        track_id: TrackId,
+        artwork: TagMirrorArtwork,
+    ) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        tag_mirror::enqueue_artwork(&connection, track_id, artwork)
+    }
+
+    fn tag_mirrors_due(&self, now_unix: i64, limit: usize) -> StoreResult<Vec<PendingTagMirror>> {
+        let connection = self.connection_guard()?;
+        tag_mirror::due(&connection, now_unix, limit)
+    }
+
+    fn next_tag_mirror_attempt_at(&self) -> StoreResult<Option<i64>> {
+        let connection = self.connection_guard()?;
+        tag_mirror::next_attempt_at(&connection)
+    }
+
+    fn complete_tag_mirror(&self, track_id: TrackId, generation: u64) -> StoreResult<bool> {
+        let connection = self.connection_guard()?;
+        tag_mirror::complete(&connection, track_id, generation)
+    }
+
+    fn record_tag_mirror_failure(
+        &self,
+        track_id: TrackId,
+        generation: u64,
+        next_attempt_at_unix: i64,
+        error: &str,
+    ) -> StoreResult<bool> {
+        let connection = self.connection_guard()?;
+        tag_mirror::record_failure(
+            &connection,
+            track_id,
+            generation,
+            next_attempt_at_unix,
+            error,
+        )
+    }
+
+    fn read_tag_mirror_artwork(&self, artwork: &StoredTagMirrorArtwork) -> StoreResult<Vec<u8>> {
+        self.tag_mirror_blobs.read(artwork)
+    }
+
+    fn garbage_collect_tag_mirror_artwork(&self) -> StoreResult<()> {
+        let referenced = {
+            let connection = self.connection_guard()?;
+            tag_mirror::referenced_artwork(&connection)?
+        };
+        self.tag_mirror_blobs.garbage_collect(&referenced)
     }
 
     fn distinct_genres(&self) -> StoreResult<Vec<String>> {

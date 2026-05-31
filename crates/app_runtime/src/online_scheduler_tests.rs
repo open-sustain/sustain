@@ -35,8 +35,12 @@ use super::{OnlineScheduler, OnlineSchedulerConfig, ProgressSink, SchedulerProgr
 /// through the same actor the production path uses. Returns the
 /// writer (which must out-live the scheduler so its actor stays
 /// alive) alongside a cloneable handle for the scheduler config.
-fn spawn_tag_writer(metadata: Arc<StubMetadata>) -> (MetadataWriter, MetadataWriteHandle) {
-    let writer = MetadataWriter::start(metadata);
+fn spawn_tag_writer(
+    metadata: Arc<StubMetadata>,
+    store: Arc<dyn LibraryStore>,
+    library_root: &Path,
+) -> (MetadataWriter, MetadataWriteHandle) {
+    let writer = MetadataWriter::start(metadata, store, Some(library_root.to_path_buf()), None);
     let handle = writer.handle();
     (writer, handle)
 }
@@ -97,6 +101,34 @@ fn wait_for(
         if predicate(&progress) {
             return progress;
         }
+    }
+}
+
+fn wait_for_artwork_write(metadata: &StubMetadata) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if !metadata.artwork_writes.lock().expect("lock").is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for artwork mirror"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_metadata_write(metadata: &StubMetadata) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if !metadata.metadata_writes.lock().expect("lock").is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for metadata mirror"
+        );
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -252,7 +284,7 @@ fn scheduler_idles_with_no_capabilities_enabled() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -291,7 +323,7 @@ fn lyrics_capability_pulls_and_persists() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -316,6 +348,7 @@ fn lyrics_capability_pulls_and_persists() {
     // Plain lyrics mirrored into tracks.lyrics and written via tag.
     let stored = store.track(track.id).expect("load").expect("present");
     assert_eq!(stored.metadata.lyrics.as_deref(), Some("Plain text"));
+    wait_for_metadata_write(&metadata);
     assert_eq!(metadata.metadata_writes.lock().expect("lock").len(), 1);
 
     // Synced parsed and persisted.
@@ -370,7 +403,7 @@ fn lyrics_skipped_when_both_plain_and_synced_already_present() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -423,7 +456,7 @@ fn artwork_capability_skips_when_embedded_present() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -480,7 +513,7 @@ fn explicit_artwork_run_skips_track_with_embedded_artwork() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -539,7 +572,7 @@ fn artwork_capability_fetches_and_writes_when_missing() {
     // still applies, so the scheduler asks the remote.
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -562,6 +595,7 @@ fn artwork_capability_fetches_and_writes_when_missing() {
     });
 
     assert_eq!(remote.artwork_calls.load(Ordering::SeqCst), 1);
+    wait_for_artwork_write(&metadata);
     let writes = metadata.artwork_writes.lock().expect("lock");
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].as_deref(), Some(expected_artwork.as_slice()));
@@ -582,7 +616,7 @@ fn artwork_capability_rejects_invalid_remote_bytes_without_writing() {
     }))));
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote,
@@ -619,7 +653,7 @@ fn remote_error_records_attempt_and_is_not_retried() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -676,7 +710,7 @@ fn toggling_capabilities_off_stops_the_running_worker() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -787,7 +821,7 @@ fn tags_fill_recording_level_fields_when_album_is_missing_but_skip_positional() 
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -883,7 +917,7 @@ fn tags_fill_positional_fields_only_when_album_matches_a_matched_release() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -951,7 +985,7 @@ fn tag_enrichment_snapshot_cannot_clobber_concurrent_rating_edit() {
     let track_updated: super::TrackUpdatedSink = Arc::new(move |id| {
         let _ = notify_tx.send(id);
     });
-    let (_writer, tag_writer) = spawn_tag_writer(metadata);
+    let (_writer, tag_writer) = spawn_tag_writer(metadata, store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote,
@@ -1047,7 +1081,7 @@ fn genre_prefers_a_candidate_already_present_in_the_library() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -1097,7 +1131,7 @@ fn track_updated_sink_fires_after_successful_lyrics_persist() {
         let _ = notify_tx.send(id);
     });
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote,
@@ -1142,7 +1176,7 @@ fn rate_limited_lyrics_does_not_stamp_attempt_so_track_stays_eligible() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -1209,7 +1243,7 @@ fn rate_limited_in_one_capability_still_stamps_other_completed_capabilities() {
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
 
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),
@@ -1273,7 +1307,8 @@ fn shutdown_returns_after_join() {
     let remote = Arc::new(StubRemote::default());
     let metadata = Arc::new(StubMetadata::default());
     let (sink, _rx) = capturing_sink();
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let _writer = MetadataWriter::start(metadata.clone(), store.clone(), None, None);
+    let tag_writer = _writer.handle();
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote,
@@ -1307,7 +1342,7 @@ fn explicit_run_processes_tracks_with_global_settings_off() {
     }))));
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
-    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
         remote_service: remote.clone(),

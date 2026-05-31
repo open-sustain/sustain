@@ -20,9 +20,10 @@ use sustain_domain::{
 };
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, InMemoryLibraryStore, LibraryStore,
-    OnlineCapabilities, OnlineContext, PlaylistFolder, SqliteLibraryStore, StoreResult,
-    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredWaveform, SyncDevice, SyncDeviceId,
-    SyncManifestEntry, SyncedLyrics, TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
+    OnlineCapabilities, OnlineContext, PendingTagMirror, PlaylistFolder, SqliteLibraryStore,
+    StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork,
+    StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork,
+    TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
 };
 use sustain_metadata::{InitialTags, MetadataChange, MetadataError, MetadataResult};
 use sustain_playback::NullPlaybackService;
@@ -1654,7 +1655,7 @@ fn runtime_set_rating_applies_optimistic_update_and_reports_tag_write_failure() 
     // immediately and SetRating returns Ok(()) synchronously, so the
     // UI never blocks on the tag write. Tag-write failure surfaces
     // through the result sink rather than as a command error — the
-    // next library scan reconciles the SQLite cache against disk.
+    // durable outbox keeps retrying the courtesy file-tag mirror.
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
     let track_path = root.join("track.flac");
@@ -1769,10 +1770,13 @@ fn runtime_update_metadata_writes_tags_and_updates_store_cache() {
         Ok(())
     );
 
-    assert_eq!(
-        metadata_service.metadata_writes(),
-        vec![(track_path.clone(), change)]
-    );
+    let writes = metadata_service.metadata_writes();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].0, track_path);
+    assert_eq!(writes[0].1.title, FieldChange::Set("New".to_owned()));
+    assert_eq!(writes[0].1.artist, FieldChange::Clear);
+    assert_eq!(writes[0].1.album, FieldChange::Clear);
+    assert_eq!(writes[0].1.year, FieldChange::Set(2001));
     assert_eq!(
         runtime.library_tracks()[0].metadata.title.as_deref(),
         Some("New")
@@ -1939,10 +1943,14 @@ fn managed_metadata_update_keeps_file_in_place_for_non_path_fields() {
     );
 
     assert!(track_path.exists());
-    assert_eq!(
-        metadata_service.metadata_writes(),
-        vec![(track_path.clone(), change)]
-    );
+    let writes = metadata_service.metadata_writes();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].0, track_path);
+    assert_eq!(writes[0].1.title, FieldChange::Set("Song".to_owned()));
+    assert_eq!(writes[0].1.artist, FieldChange::Set("Artist".to_owned()));
+    assert_eq!(writes[0].1.album, FieldChange::Set("Album".to_owned()));
+    assert_eq!(writes[0].1.genre, FieldChange::Set("Rock".to_owned()));
+    assert_eq!(writes[0].1.year, FieldChange::Set(1999));
     assert_eq!(
         runtime.library_tracks()[0].location.relative_path.as_path(),
         Path::new("Artist/Album/01 Song.flac")
@@ -1989,10 +1997,12 @@ fn runtime_update_metadata_applies_optimistic_update_and_reports_tag_write_failu
         Ok(())
     );
 
-    assert_eq!(
-        metadata_service.metadata_writes(),
-        vec![(track_path.clone(), change)]
-    );
+    let writes = metadata_service.metadata_writes();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].0, track_path);
+    assert_eq!(writes[0].1.title, FieldChange::Set("New".to_owned()));
+    assert_eq!(writes[0].1.artist, FieldChange::Clear);
+    assert_eq!(writes[0].1.album, FieldChange::Clear);
     // Optimistic state holds even though the disk tag write failed.
     assert_eq!(
         runtime.library_tracks()[0].metadata.title.as_deref(),
@@ -2013,6 +2023,31 @@ fn runtime_update_metadata_applies_optimistic_update_and_reports_tag_write_failu
     assert_eq!(posted.outcome, crate::MetadataWriteOutcome::Failed);
 
     std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn metadata_write_retry_notice_is_persistent_deduplicated_and_dismissed_on_success() {
+    let mut runtime = ApplicationRuntime::new();
+    let failed = crate::MetadataWriteResult {
+        track_id: track_id(1),
+        kind: crate::MetadataWriteKind::Metadata,
+        outcome: crate::MetadataWriteOutcome::Failed,
+    };
+
+    runtime.apply_metadata_write_result(failed);
+    runtime.apply_metadata_write_result(failed);
+    assert_eq!(runtime.notifications().persistent_stack().len(), 1);
+    assert!(
+        runtime.notifications().persistent_stack()[0]
+            .body
+            .contains("retry automatically")
+    );
+
+    runtime.apply_metadata_write_result(crate::MetadataWriteResult {
+        outcome: crate::MetadataWriteOutcome::Succeeded,
+        ..failed
+    });
+    assert!(runtime.notifications().persistent_stack().is_empty());
 }
 
 #[test]
@@ -4294,6 +4329,15 @@ impl LibraryStore for CallCountingLibraryStore {
         self.inner.update_track_rating(track_id, rating)
     }
 
+    fn update_track_rating_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        rating: Rating,
+    ) -> StoreResult<()> {
+        self.inner
+            .update_track_rating_and_enqueue_mirror(track_id, rating)
+    }
+
     fn update_track_statistics(
         &self,
         track_id: TrackId,
@@ -4310,12 +4354,30 @@ impl LibraryStore for CallCountingLibraryStore {
         self.inner.apply_track_metadata_change(track_id, change)
     }
 
+    fn apply_track_metadata_change_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<()> {
+        self.inner
+            .apply_track_metadata_change_and_enqueue_mirror(track_id, change)
+    }
+
     fn fill_missing_track_metadata(
         &self,
         track_id: TrackId,
         change: &MetadataChange,
     ) -> StoreResult<()> {
         self.inner.fill_missing_track_metadata(track_id, change)
+    }
+
+    fn fill_missing_track_metadata_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<bool> {
+        self.inner
+            .fill_missing_track_metadata_and_enqueue_mirror(track_id, change)
     }
 
     fn apply_track_metadata_change_and_location(
@@ -4344,6 +4406,49 @@ impl LibraryStore for CallCountingLibraryStore {
             .tracks
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.tracks()
+    }
+
+    fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork> {
+        self.inner.publish_tag_mirror_artwork(bytes)
+    }
+
+    fn enqueue_tag_mirror_artwork(
+        &self,
+        track_id: TrackId,
+        artwork: TagMirrorArtwork,
+    ) -> StoreResult<()> {
+        self.inner.enqueue_tag_mirror_artwork(track_id, artwork)
+    }
+
+    fn tag_mirrors_due(&self, now_unix: i64, limit: usize) -> StoreResult<Vec<PendingTagMirror>> {
+        self.inner.tag_mirrors_due(now_unix, limit)
+    }
+
+    fn next_tag_mirror_attempt_at(&self) -> StoreResult<Option<i64>> {
+        self.inner.next_tag_mirror_attempt_at()
+    }
+
+    fn complete_tag_mirror(&self, track_id: TrackId, generation: u64) -> StoreResult<bool> {
+        self.inner.complete_tag_mirror(track_id, generation)
+    }
+
+    fn record_tag_mirror_failure(
+        &self,
+        track_id: TrackId,
+        generation: u64,
+        next_attempt_at_unix: i64,
+        error: &str,
+    ) -> StoreResult<bool> {
+        self.inner
+            .record_tag_mirror_failure(track_id, generation, next_attempt_at_unix, error)
+    }
+
+    fn read_tag_mirror_artwork(&self, artwork: &StoredTagMirrorArtwork) -> StoreResult<Vec<u8>> {
+        self.inner.read_tag_mirror_artwork(artwork)
+    }
+
+    fn garbage_collect_tag_mirror_artwork(&self) -> StoreResult<()> {
+        self.inner.garbage_collect_tag_mirror_artwork()
     }
 
     fn save_playlist(&self, playlist: Playlist) -> StoreResult<()> {

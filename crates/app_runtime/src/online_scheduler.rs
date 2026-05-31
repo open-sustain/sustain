@@ -644,9 +644,9 @@ fn attempt_artwork(
         );
         return AttemptOutcome::Failed;
     }
-    if !tag_writer.write_artwork(absolute_path.to_path_buf(), Some(artwork.bytes)) {
+    if !tag_writer.enqueue_artwork(track.id, Some(artwork.bytes)) {
         eprintln!(
-            "Sustain: artwork tag write failed for {}",
+            "Sustain: artwork mirror enqueue failed for {}",
             absolute_path.display()
         );
         return AttemptOutcome::Failed;
@@ -696,25 +696,19 @@ fn attempt_lyrics(
             lyrics: FieldChange::Set(plain.clone()),
             ..MetadataChange::default()
         };
-        if !tag_writer.write_metadata(absolute_path.to_path_buf(), change.clone()) {
-            eprintln!(
-                "Sustain: lyrics tag write failed for {}",
-                absolute_path.display()
-            );
-            return AttemptOutcome::Failed;
+        // Commit SQLite authority and durable mirror intent together. A user
+        // edit that landed while the fetch was in flight wins the missing-only
+        // fill; in that case there is nothing new to mirror.
+        match tag_writer.fill_missing_metadata(track.id, &change) {
+            Ok(changed) => wrote_anything |= changed,
+            Err(error) => {
+                eprintln!(
+                    "Sustain: persist of lyrics column failed for {}: {error:?}",
+                    absolute_path.display()
+                );
+                return AttemptOutcome::Failed;
+            }
         }
-        // Mirror into the tracks.lyrics column so the next read sees the new
-        // value without another tag round-trip. The missing-only write
-        // preserves a user edit committed while the remote fetch was in
-        // flight.
-        if let Err(error) = library_store.fill_missing_track_metadata(track.id, &change) {
-            eprintln!(
-                "Sustain: persist of lyrics column failed for {}: {error:?}",
-                absolute_path.display()
-            );
-            return AttemptOutcome::Failed;
-        }
-        wrote_anything = true;
     }
 
     if !has_synced
@@ -964,26 +958,21 @@ fn attempt_tags(
         return AttemptOutcome::NoMatch;
     }
 
-    if !tag_writer.write_metadata(absolute_path.to_path_buf(), change.clone()) {
-        eprintln!(
-            "Sustain: tag enrichment write failed for {}",
-            absolute_path.display()
-        );
-        return AttemptOutcome::Failed;
+    // Commit SQLite authority and durable mirror intent together. A user may
+    // have edited the row while identification was in flight; those values
+    // win the missing-only fill and the worker mirrors the resulting latest
+    // canonical row.
+    match tag_writer.fill_missing_metadata(track.id, &change) {
+        Ok(true) => AttemptOutcome::Succeeded,
+        Ok(false) => AttemptOutcome::NoMatch,
+        Err(error) => {
+            eprintln!(
+                "Sustain: tag enrichment persist failed for {}: {error:?}",
+                absolute_path.display()
+            );
+            AttemptOutcome::Failed
+        }
     }
-
-    // Mirror only values that are still absent. A user may have edited the
-    // row while identification was in flight; those authoritative values
-    // must never be replaced by this older background result.
-    if let Err(error) = library_store.fill_missing_track_metadata(track.id, &change) {
-        eprintln!(
-            "Sustain: tag enrichment persist failed for {}: {error:?}",
-            absolute_path.display()
-        );
-        return AttemptOutcome::Failed;
-    }
-
-    AttemptOutcome::Succeeded
 }
 
 /// Choose the best single genre to write back, given the recording's

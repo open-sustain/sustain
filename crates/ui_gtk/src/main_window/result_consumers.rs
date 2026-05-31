@@ -12,18 +12,11 @@ use std::collections::HashSet;
 use super::*;
 
 /// Drains [`sustain_app_runtime::MetadataWriteResult`]s posted by the async metadata writer
-/// and surfaces failures to the user.
+/// and applies retry-state notifications.
 ///
-/// The runtime applies the optimistic in-memory + SQLite update
-/// synchronously and returns immediately; the disk-side tag write
-/// completes later on the worker thread. When it fails (read-only file,
-/// permission denied, file gone), we post a status-bar message and
-/// re-refresh the affected row so any state derived from disk (e.g. the
-/// missing icon, if a follow-up stage starts marking missing on touch
-/// failure) becomes visible. We do not roll back the in-memory state in
-/// this stage — that is a separate, careful piece of work; the next
-/// library scan reconciles the SQLite cache against what is actually on
-/// disk.
+/// SQLite is already authoritative when a result arrives. A failure retains
+/// its durable outbox row for bounded-backoff retry; the runtime owns the
+/// matching persistent notification and dismisses it only after convergence.
 pub(super) fn install_metadata_write_result_consumer(
     receiver: Option<MetadataWriteResultReceiver>,
     runtime: SharedRuntime,
@@ -34,30 +27,10 @@ pub(super) fn install_metadata_write_result_consumer(
     };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(result) = receiver.recv().await {
-            if matches!(
-                result.outcome,
-                sustain_app_runtime::MetadataWriteOutcome::Succeeded
-            ) {
-                continue;
-            }
-            let message = match result.kind {
-                sustain_app_runtime::MetadataWriteKind::Rating => {
-                    "Could not save the rating to the audio file."
-                }
-                sustain_app_runtime::MetadataWriteKind::Metadata => {
-                    "Could not save the metadata change to the audio file."
-                }
-                sustain_app_runtime::MetadataWriteKind::Artwork => {
-                    "Could not save the artwork change to the audio file."
-                }
-            };
-            runtime.borrow_mut().push_ephemeral_notification(
-                sustain_app_runtime::NotificationCategory::MetadataWrite,
-                sustain_app_runtime::NotificationSeverity::Error,
-                message.to_owned(),
-            );
+            let track_id = result.track_id;
+            runtime.borrow_mut().apply_metadata_write_result(result);
             if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-                callback(result.track_id);
+                callback(track_id);
             }
         }
     });
@@ -271,7 +244,15 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
             use sustain_app_runtime::ArtworkFetchOutcome;
             let (severity, body) = match &result.outcome {
                 ArtworkFetchOutcome::Fetched(bytes) => {
-                    if let Some(source) = artwork_source_for_track(&runtime, result.track_id) {
+                    let queued = command_controller
+                        .dispatch(sustain_app_runtime::ApplicationCommand::SetArtwork {
+                            track_id: result.track_id,
+                            artwork: Some(bytes.clone()),
+                        })
+                        .is_ok();
+                    if queued
+                        && let Some(source) = artwork_source_for_track(&runtime, result.track_id)
+                    {
                         // Drop the existing in-memory + disk-cache
                         // entry, then prime the in-memory entry with
                         // the freshly fetched bytes. The disk-cache
@@ -282,16 +263,17 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
                         artwork_loader.invalidate(&source);
                         artwork_loader.prime(source, bytes.clone());
                     }
-                    let _ = command_controller.dispatch(
-                        sustain_app_runtime::ApplicationCommand::SetArtwork {
-                            track_id: result.track_id,
-                            artwork: Some(bytes.clone()),
-                        },
-                    );
-                    (
-                        sustain_app_runtime::NotificationSeverity::Info,
-                        "Artwork updated.".to_owned(),
-                    )
+                    if queued {
+                        (
+                            sustain_app_runtime::NotificationSeverity::Info,
+                            "Artwork fetched. Saving it to the audio file.".to_owned(),
+                        )
+                    } else {
+                        (
+                            sustain_app_runtime::NotificationSeverity::Error,
+                            "The fetched artwork could not be queued for saving.".to_owned(),
+                        )
+                    }
                 }
                 ArtworkFetchOutcome::NoMatch => (
                     sustain_app_runtime::NotificationSeverity::Info,

@@ -103,6 +103,11 @@ impl ApplicationRuntime {
                 {
                     scheduler.set_library_path(self.settings.library.path.clone());
                 }
+                if self.settings.library.path != previous_library_path
+                    && let Some(writer) = self.metadata_writer()
+                {
+                    writer.set_library_path(self.settings.library.path.clone());
+                }
                 // Resource-usage flips trigger a teardown + respawn of
                 // the analysis worker pool at the new size + priority.
                 if self.settings.background_jobs.resource_usage != previous_resource_usage

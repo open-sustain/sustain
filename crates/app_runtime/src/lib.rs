@@ -7,6 +7,7 @@
 // to a small module that exposes a safe API.
 
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -298,6 +299,7 @@ pub struct ApplicationRuntime {
     library_consolidation_notification_id: Option<NotificationId>,
     metadata_writer: Option<metadata_writer::MetadataWriter>,
     metadata_write_result_sink: Option<async_channel::Sender<MetadataWriteResult>>,
+    metadata_write_notification_ids: BTreeMap<TrackId, NotificationId>,
     remote_metadata_service: Option<Arc<dyn RemoteMetadataService>>,
     artwork_fetcher: Option<artwork_fetcher::ArtworkFetcher>,
     artwork_fetch_result_sink: Option<async_channel::Sender<ArtworkFetchResult>>,
@@ -434,6 +436,7 @@ impl ApplicationRuntime {
             library_consolidation_notification_id: None,
             metadata_writer: None,
             metadata_write_result_sink: None,
+            metadata_write_notification_ids: BTreeMap::new(),
             remote_metadata_service: None,
             artwork_fetcher: None,
             artwork_fetch_result_sink: None,
@@ -495,6 +498,7 @@ impl ApplicationRuntime {
             library_consolidation_notification_id: None,
             metadata_writer: None,
             metadata_write_result_sink: None,
+            metadata_write_notification_ids: BTreeMap::new(),
             remote_metadata_service: None,
             artwork_fetcher: None,
             artwork_fetch_result_sink: None,
@@ -583,7 +587,16 @@ impl ApplicationRuntime {
             .metadata_service
             .clone()
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
-        self.metadata_writer = Some(metadata_writer::MetadataWriter::start(metadata_service));
+        let library_store = self
+            .library_store
+            .clone()
+            .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
+        self.metadata_writer = Some(metadata_writer::MetadataWriter::start(
+            metadata_service,
+            library_store,
+            self.settings.library.path.clone(),
+            self.metadata_write_result_sink.clone(),
+        ));
         Ok(())
     }
 
@@ -595,7 +608,10 @@ impl ApplicationRuntime {
         &mut self,
         sink: async_channel::Sender<MetadataWriteResult>,
     ) {
-        self.metadata_write_result_sink = Some(sink);
+        self.metadata_write_result_sink = Some(sink.clone());
+        if let Some(writer) = self.metadata_writer() {
+            writer.set_result_sink(sink);
+        }
     }
 
     /// Drains pending tag writes and joins the worker thread. Call from
@@ -604,6 +620,55 @@ impl ApplicationRuntime {
     pub fn shutdown_metadata_writer(&mut self) {
         if let Some(writer) = self.metadata_writer.take() {
             writer.shutdown();
+        }
+    }
+
+    /// Start post-launch recovery of durable tag-mirror rows. The UI calls
+    /// this from its first-idle hook so blob cleanup and restored retries do
+    /// not contend with the cold-start presentation budget. Fresh mutations
+    /// wake the same actor immediately.
+    pub fn resume_pending_metadata_writes(&self) {
+        if let Some(writer) = self.metadata_writer() {
+            writer.nudge();
+        }
+    }
+
+    /// Apply a durable tag-mirror completion on the main thread. Failures
+    /// retain their outbox row and stay visible until a later retry succeeds;
+    /// SQLite already contains the authoritative value.
+    pub fn apply_metadata_write_result(&mut self, result: MetadataWriteResult) {
+        match result.outcome {
+            MetadataWriteOutcome::Succeeded => {
+                if let Some(id) = self
+                    .metadata_write_notification_ids
+                    .remove(&result.track_id)
+                {
+                    self.dismiss_notification(id);
+                }
+                if result.kind == MetadataWriteKind::Artwork {
+                    self.push_ephemeral_notification(
+                        NotificationCategory::MetadataWrite,
+                        NotificationSeverity::Info,
+                        "Artwork updated.".to_owned(),
+                    );
+                }
+            }
+            MetadataWriteOutcome::Failed => {
+                let body = "One or more changes are saved in Sustain, but could not be mirrored to the audio file. The pending mirror will retry automatically."
+                    .to_owned();
+                if let Some(id) = self.metadata_write_notification_ids.get(&result.track_id) {
+                    self.update_notification_body(*id, body);
+                } else {
+                    let id = self.push_persistent_notification(
+                        NotificationCategory::MetadataWrite,
+                        NotificationSeverity::Error,
+                        body,
+                        false,
+                    );
+                    self.metadata_write_notification_ids
+                        .insert(result.track_id, id);
+                }
+            }
         }
     }
 
@@ -1031,12 +1096,6 @@ impl ApplicationRuntime {
 
     pub(crate) fn metadata_writer(&self) -> Option<&metadata_writer::MetadataWriter> {
         self.metadata_writer.as_ref()
-    }
-
-    pub(crate) fn metadata_write_result_sink(
-        &self,
-    ) -> Option<async_channel::Sender<MetadataWriteResult>> {
-        self.metadata_write_result_sink.clone()
     }
 
     pub fn settings(&self) -> &UserSettings {

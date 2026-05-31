@@ -140,19 +140,19 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
         .build();
     tlog!("gtk Application built");
 
-    // Start the async metadata writer before wrapping the runtime in a
-    // shared cell, so its worker thread is up before any UI mutation
-    // can submit a job. Pair it with a result sink consumed by the main
-    // loop below, so per-write failures can surface in the status bar.
+    // Install the result sink before starting the async metadata writer so a
+    // restored outbox row that fails on its first startup attempt is visible
+    // to the UI. The worker is still running before any UI mutation can
+    // enqueue new work.
+    let (write_result_tx, write_result_rx) =
+        async_channel::unbounded::<sustain_app_runtime::MetadataWriteResult>();
+    runtime.set_metadata_write_result_sink(write_result_tx);
     tlog!("about to start metadata writer");
     if let Err(error) = runtime.start_metadata_writer() {
         eprintln!(
             "Sustain: async metadata writer could not start ({error:?}); tag writes will run on the main thread."
         );
     }
-    let (write_result_tx, write_result_rx) =
-        async_channel::unbounded::<sustain_app_runtime::MetadataWriteResult>();
-    runtime.set_metadata_write_result_sink(write_result_tx);
     tlog!("metadata writer running");
 
     // Start the artwork fetcher and install its result sink. The
@@ -330,15 +330,9 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     tlog!("about to enter app.run() (gtk main loop)");
     app.run();
 
-    // Drain pending tag writes synchronously before exiting so a rating
-    // clicked moments before close is not lost. `shutdown_metadata_writer`
-    // joins the worker thread; the channel sender is dropped first so the
-    // worker's `recv` returns once the queue is empty.
-    //
-    // Order matters: every consumer that holds a `MetadataWriteHandle`
-    // (currently the online scheduler) must be joined BEFORE the
-    // writer, otherwise the writer's `join` blocks forever on a
-    // surviving sender clone.
+    // Stop producers before joining the tag-mirror actor. Canonical edits and
+    // pending file-tag intent are already durable in SQLite, so deferred
+    // retries safely resume next launch instead of extending shutdown.
     let mut runtime_guard = runtime.borrow_mut();
     runtime_guard.shutdown_analysis_scheduler();
     runtime_guard.shutdown_online_scheduler();

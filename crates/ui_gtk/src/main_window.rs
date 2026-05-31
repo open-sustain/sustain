@@ -528,10 +528,15 @@ pub(crate) fn build_main_window(
             sidebar.set_devices(&devices);
         })
     };
+    let resume_pending_metadata_writes: Box<dyn FnOnce()> = {
+        let runtime = runtime.clone();
+        Box::new(move || runtime.borrow().resume_pending_metadata_writes())
+    };
     let deferred_startup = DeferredStartup::new(
         initial_ui_settings.sidebar_selection,
         sidebar.clone(),
         device_populate,
+        resume_pending_metadata_writes,
     );
     install_search_wiring(
         &titlebar,
@@ -748,6 +753,7 @@ impl BuiltMainWindow {
 struct DeferredStartup {
     restore_selection: Option<Box<dyn FnOnce()>>,
     populate_devices: Box<dyn FnOnce()>,
+    resume_pending_metadata_writes: Box<dyn FnOnce()>,
 }
 
 impl DeferredStartup {
@@ -755,6 +761,7 @@ impl DeferredStartup {
         selection: UiSidebarSelection,
         sidebar: PlaylistSidebar,
         populate_devices: Box<dyn FnOnce()>,
+        resume_pending_metadata_writes: Box<dyn FnOnce()>,
     ) -> Self {
         let restore_selection: Option<Box<dyn FnOnce()>> = match selection {
             UiSidebarSelection::Music => None,
@@ -765,6 +772,7 @@ impl DeferredStartup {
         Self {
             restore_selection,
             populate_devices,
+            resume_pending_metadata_writes,
         }
     }
 
@@ -775,6 +783,9 @@ impl DeferredStartup {
         // Device enumeration probes the filesystem, so it runs here on
         // the first idle rather than during the cold-start window.
         (self.populate_devices)();
+        // Restored mirror retries can parse audio tags and garbage-collect
+        // external artwork blobs. Start them after the first-idle budget gate.
+        (self.resume_pending_metadata_writes)();
     }
 }
 

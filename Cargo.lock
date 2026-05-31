@@ -2151,6 +2151,8 @@ version = "0.3.0-alpha.2"
 dependencies = [
  "rusqlite",
  "serde_json",
+ "sha2",
+ "sustain-artwork",
  "sustain-domain",
 ]
 

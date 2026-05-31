@@ -2,18 +2,21 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Mutex, MutexGuard},
 };
 
+use sustain_artwork::validate_encoded_artwork;
 use sustain_domain::TrackAnalysis;
 
 use crate::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, LibraryStore, OnlineCapabilities,
-    OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating,
-    SmartPlaylist, SmartPlaylistId, StoreError, StoreResult, StoredSmartShuffleIndex,
-    StoredSyncedLyrics, StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics,
+    OnlineContext, PendingTagMirror, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId,
+    PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, StoreError, StoreResult,
+    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
+    SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, TagMirrorKinds,
     Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackLocation,
+    tag_mirror::sha256_hex,
 };
 
 #[derive(Debug, Default)]
@@ -29,6 +32,8 @@ pub struct InMemoryLibraryStore {
     waveforms: Mutex<BTreeMap<TrackId, StoredWaveform>>,
     synced_lyrics: Mutex<BTreeMap<TrackId, StoredSyncedLyrics>>,
     online_bookkeeping: Mutex<BTreeMap<TrackId, OnlineBookkeeping>>,
+    tag_mirror_outbox: Mutex<BTreeMap<TrackId, PendingTagMirror>>,
+    tag_mirror_blobs: Mutex<BTreeMap<String, Vec<u8>>>,
     smart_shuffle_index: Mutex<Option<StoredSmartShuffleIndex>>,
     acoustics: Mutex<BTreeMap<TrackId, AcousticFeatures>>,
     sync_devices: Mutex<BTreeMap<SyncDeviceId, SyncDevice>>,
@@ -87,6 +92,33 @@ impl InMemoryLibraryStore {
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)
     }
+}
+
+fn enqueue_tag_mirror(
+    outbox: &mut BTreeMap<TrackId, PendingTagMirror>,
+    track_id: TrackId,
+    kinds: TagMirrorKinds,
+    artwork: TagMirrorArtwork,
+) {
+    let pending = outbox.entry(track_id).or_insert_with(|| PendingTagMirror {
+        track_id,
+        generation: 0,
+        kinds: TagMirrorKinds::default(),
+        artwork: TagMirrorArtwork::Unchanged,
+        attempt_count: 0,
+        next_attempt_at_unix: 0,
+        last_error: None,
+    });
+    pending.generation += 1;
+    pending.kinds.metadata |= kinds.metadata;
+    pending.kinds.rating |= kinds.rating;
+    pending.kinds.artwork |= kinds.artwork;
+    if !matches!(artwork, TagMirrorArtwork::Unchanged) {
+        pending.artwork = artwork;
+    }
+    pending.attempt_count = 0;
+    pending.next_attempt_at_unix = 0;
+    pending.last_error = None;
 }
 
 impl LibraryStore for InMemoryLibraryStore {
@@ -176,6 +208,30 @@ impl LibraryStore for InMemoryLibraryStore {
         Ok(())
     }
 
+    fn update_track_rating_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        rating: Rating,
+    ) -> StoreResult<()> {
+        let mut outbox = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.rating = rating;
+            enqueue_tag_mirror(
+                &mut outbox,
+                track_id,
+                TagMirrorKinds {
+                    rating: true,
+                    ..TagMirrorKinds::default()
+                },
+                TagMirrorArtwork::Unchanged,
+            );
+        }
+        Ok(())
+    }
+
     fn update_track_statistics(
         &self,
         track_id: TrackId,
@@ -198,6 +254,30 @@ impl LibraryStore for InMemoryLibraryStore {
         Ok(())
     }
 
+    fn apply_track_metadata_change_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        change: &crate::MetadataChange,
+    ) -> StoreResult<()> {
+        let mut outbox = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.metadata.apply_change(change);
+            enqueue_tag_mirror(
+                &mut outbox,
+                track_id,
+                TagMirrorKinds {
+                    metadata: true,
+                    ..TagMirrorKinds::default()
+                },
+                TagMirrorArtwork::Unchanged,
+            );
+        }
+        Ok(())
+    }
+
     fn fill_missing_track_metadata(
         &self,
         track_id: TrackId,
@@ -207,6 +287,36 @@ impl LibraryStore for InMemoryLibraryStore {
             track.metadata.fill_missing_from_change(change);
         }
         Ok(())
+    }
+
+    fn fill_missing_track_metadata_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        change: &crate::MetadataChange,
+    ) -> StoreResult<bool> {
+        let mut outbox = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        let mut tracks = self.tracks_guard()?;
+        let Some(track) = tracks.get_mut(&track_id) else {
+            return Ok(false);
+        };
+        let before = track.metadata.clone();
+        track.metadata.fill_missing_from_change(change);
+        let changed = track.metadata != before;
+        if changed {
+            enqueue_tag_mirror(
+                &mut outbox,
+                track_id,
+                TagMirrorKinds {
+                    metadata: true,
+                    ..TagMirrorKinds::default()
+                },
+                TagMirrorArtwork::Unchanged,
+            );
+        }
+        Ok(changed)
     }
 
     fn apply_track_metadata_change_and_location(
@@ -226,6 +336,10 @@ impl LibraryStore for InMemoryLibraryStore {
         let mut tracks = self.tracks_guard()?;
         tracks.remove(&track_id);
         drop(tracks);
+        self.tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .remove(&track_id);
         for playlist in self.playlists_guard()?.values_mut() {
             playlist.entries.retain(|entry| entry.track_id != track_id);
         }
@@ -238,6 +352,134 @@ impl LibraryStore for InMemoryLibraryStore {
 
     fn tracks(&self) -> StoreResult<Vec<Track>> {
         Ok(self.tracks_guard()?.values().cloned().collect())
+    }
+
+    fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork> {
+        validate_encoded_artwork(bytes).map_err(|_| StoreError::InvalidArtworkPayload)?;
+        let digest = sha256_hex(bytes);
+        self.tag_mirror_blobs
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .insert(digest.clone(), bytes.to_vec());
+        StoredTagMirrorArtwork::from_stored_parts(digest, bytes.len() as u64)
+    }
+
+    fn enqueue_tag_mirror_artwork(
+        &self,
+        track_id: TrackId,
+        artwork: TagMirrorArtwork,
+    ) -> StoreResult<()> {
+        let mut outbox = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        if self.tracks_guard()?.contains_key(&track_id) {
+            enqueue_tag_mirror(
+                &mut outbox,
+                track_id,
+                TagMirrorKinds {
+                    artwork: true,
+                    ..TagMirrorKinds::default()
+                },
+                artwork,
+            );
+        }
+        Ok(())
+    }
+
+    fn tag_mirrors_due(&self, now_unix: i64, limit: usize) -> StoreResult<Vec<PendingTagMirror>> {
+        let mut pending = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .values()
+            .filter(|pending| pending.next_attempt_at_unix <= now_unix)
+            .cloned()
+            .collect::<Vec<_>>();
+        pending.sort_by_key(|pending| (pending.next_attempt_at_unix, pending.track_id));
+        pending.truncate(limit);
+        Ok(pending)
+    }
+
+    fn next_tag_mirror_attempt_at(&self) -> StoreResult<Option<i64>> {
+        Ok(self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .values()
+            .map(|pending| pending.next_attempt_at_unix)
+            .min())
+    }
+
+    fn complete_tag_mirror(&self, track_id: TrackId, generation: u64) -> StoreResult<bool> {
+        let mut outbox = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        if outbox
+            .get(&track_id)
+            .is_some_and(|pending| pending.generation == generation)
+        {
+            outbox.remove(&track_id);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn record_tag_mirror_failure(
+        &self,
+        track_id: TrackId,
+        generation: u64,
+        next_attempt_at_unix: i64,
+        error: &str,
+    ) -> StoreResult<bool> {
+        let mut outbox = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        let Some(pending) = outbox
+            .get_mut(&track_id)
+            .filter(|pending| pending.generation == generation)
+        else {
+            return Ok(false);
+        };
+        pending.attempt_count += 1;
+        pending.next_attempt_at_unix = next_attempt_at_unix;
+        pending.last_error = Some(error.to_owned());
+        Ok(true)
+    }
+
+    fn read_tag_mirror_artwork(&self, artwork: &StoredTagMirrorArtwork) -> StoreResult<Vec<u8>> {
+        let bytes = self
+            .tag_mirror_blobs
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .get(artwork.digest())
+            .cloned()
+            .ok_or(StoreError::InvalidStoredArtwork)?;
+        if bytes.len() as u64 != artwork.size_bytes() || sha256_hex(&bytes) != artwork.digest() {
+            return Err(StoreError::InvalidStoredArtwork);
+        }
+        validate_encoded_artwork(&bytes).map_err(|_| StoreError::InvalidStoredArtwork)?;
+        Ok(bytes)
+    }
+
+    fn garbage_collect_tag_mirror_artwork(&self) -> StoreResult<()> {
+        let referenced = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .values()
+            .filter_map(|pending| match &pending.artwork {
+                TagMirrorArtwork::Set(artwork) => Some(artwork.digest().to_owned()),
+                TagMirrorArtwork::Unchanged | TagMirrorArtwork::Clear => None,
+            })
+            .collect::<BTreeSet<_>>();
+        self.tag_mirror_blobs
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .retain(|digest, _| referenced.contains(digest));
+        Ok(())
     }
 
     fn save_playlist(&self, playlist: Playlist) -> StoreResult<()> {

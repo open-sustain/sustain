@@ -23,8 +23,10 @@ mod query;
 mod schema;
 mod sqlite;
 mod sqlite_rows;
+mod tag_mirror;
 
 pub use memory::InMemoryLibraryStore;
+pub use tag_mirror::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork, TagMirrorKinds};
 
 use query::{sort_tracks, track_matches_search};
 use schema::{
@@ -54,6 +56,8 @@ pub enum StoreError {
     InvalidStoredId(i64),
     InvalidStoredPath(String),
     InvalidStoredEnum(String),
+    InvalidStoredArtwork,
+    InvalidArtworkPayload,
     StoreUnavailable,
 }
 
@@ -227,6 +231,13 @@ pub trait LibraryStore: Send + Sync {
     }
     /// Update only the user's rating.
     fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()>;
+    /// Atomically update the authoritative rating and retain a courtesy file-tag
+    /// mirror intent until the outbox worker confirms publication.
+    fn update_track_rating_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        rating: Rating,
+    ) -> StoreResult<()>;
     /// Update only listening statistics.
     fn update_track_statistics(
         &self,
@@ -235,6 +246,13 @@ pub trait LibraryStore: Send + Sync {
     ) -> StoreResult<()>;
     /// Apply only explicitly edited metadata fields.
     fn apply_track_metadata_change(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<()>;
+    /// Atomically apply explicitly edited metadata and retain a courtesy
+    /// file-tag mirror intent.
+    fn apply_track_metadata_change_and_enqueue_mirror(
         &self,
         track_id: TrackId,
         change: &MetadataChange,
@@ -255,9 +273,47 @@ pub trait LibraryStore: Send + Sync {
         track_id: TrackId,
         change: &MetadataChange,
     ) -> StoreResult<()>;
+    /// Fill online-enriched values only while absent and enqueue a mirror
+    /// intent in the same transaction when any authoritative value changed.
+    fn fill_missing_track_metadata_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<bool>;
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()>;
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>>;
     fn tracks(&self) -> StoreResult<Vec<Track>>;
+
+    /// Durably publish bounded artwork bytes before SQLite is allowed to
+    /// reference them from [`Self::enqueue_tag_mirror_artwork`].
+    fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork>;
+    /// Retain an embedded-artwork set/clear intent. Set payloads must have
+    /// already been published through [`Self::publish_tag_mirror_artwork`].
+    fn enqueue_tag_mirror_artwork(
+        &self,
+        track_id: TrackId,
+        artwork: TagMirrorArtwork,
+    ) -> StoreResult<()>;
+    /// Return retry-eligible work ordered by its next attempt time.
+    fn tag_mirrors_due(&self, now_unix: i64, limit: usize) -> StoreResult<Vec<PendingTagMirror>>;
+    /// Earliest deferred retry, used by the actor to sleep without polling.
+    fn next_tag_mirror_attempt_at(&self) -> StoreResult<Option<i64>>;
+    /// Remove a successfully mirrored generation. A newer coalesced edit wins
+    /// the compare-and-delete race and remains pending.
+    fn complete_tag_mirror(&self, track_id: TrackId, generation: u64) -> StoreResult<bool>;
+    /// Record a failed generation with its bounded-backoff retry timestamp.
+    /// A newer coalesced edit resets retry state and wins this compare-and-set.
+    fn record_tag_mirror_failure(
+        &self,
+        track_id: TrackId,
+        generation: u64,
+        next_attempt_at_unix: i64,
+        error: &str,
+    ) -> StoreResult<bool>;
+    /// Load and verify a content-addressed artwork payload before tag writing.
+    fn read_tag_mirror_artwork(&self, artwork: &StoredTagMirrorArtwork) -> StoreResult<Vec<u8>>;
+    /// Best-effort cleanup of payloads no longer referenced by an outbox row.
+    fn garbage_collect_tag_mirror_artwork(&self) -> StoreResult<()>;
 
     /// Return the set of distinct, non-empty genre values currently
     /// stored on tracks in the library. Order is not specified; the
@@ -510,6 +566,7 @@ pub trait LibraryStore: Send + Sync {
 #[derive(Debug)]
 pub struct SqliteLibraryStore {
     connection: Mutex<Connection>,
+    tag_mirror_blobs: tag_mirror::TagMirrorBlobStore,
     freshly_created: bool,
 }
 
@@ -526,15 +583,32 @@ impl SqliteLibraryStore {
         }
         let freshly_created = !path.exists();
         let connection = Connection::open(path).map_err(StoreError::from)?;
-        Self::from_connection(connection, freshly_created)
+        let blob_root = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("tag-outbox")
+            .join("blobs");
+        Self::from_connection(
+            connection,
+            tag_mirror::TagMirrorBlobStore::new(blob_root),
+            freshly_created,
+        )
     }
 
     pub fn open_in_memory() -> StoreResult<Self> {
         let connection = Connection::open_in_memory().map_err(StoreError::from)?;
-        Self::from_connection(connection, true)
+        Self::from_connection(
+            connection,
+            tag_mirror::TagMirrorBlobStore::new_ephemeral(),
+            true,
+        )
     }
 
-    fn from_connection(connection: Connection, freshly_created: bool) -> StoreResult<Self> {
+    fn from_connection(
+        connection: Connection,
+        tag_mirror_blobs: tag_mirror::TagMirrorBlobStore,
+        freshly_created: bool,
+    ) -> StoreResult<Self> {
         // SQLite silently ignores WAL on `:memory:` databases, so tests
         // keep working without a special case here.
         connection
@@ -547,6 +621,7 @@ impl SqliteLibraryStore {
             .map_err(StoreError::from)?;
         let store = Self {
             connection: Mutex::new(connection),
+            tag_mirror_blobs,
             freshly_created,
         };
         store.migrate()?;

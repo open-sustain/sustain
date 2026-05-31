@@ -24,8 +24,8 @@ use sustain_domain::{
 use super::{
     AnalysisCapabilities, AnalysisContext, InMemoryLibraryStore, LibraryQuery, LibraryStore,
     OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId, SmartPlaylist,
-    SmartPlaylistId, SqliteLibraryStore, StoredSyncedLyrics, StoredWaveform, SyncedLyrics, Track,
-    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
+    SmartPlaylistId, SqliteLibraryStore, StoredSyncedLyrics, StoredWaveform, SyncedLyrics,
+    TagMirrorArtwork, Track, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
 };
 use crate::{PlaylistId, StoreResult, TrackId};
 use sustain_domain::SyncedLyricsLine;
@@ -2057,4 +2057,179 @@ fn in_memory_store_playlist_layout_cleared_on_playlist_delete() {
     assert_eq!(store.delete_playlist(playlist.id), Ok(()));
 
     assert_eq!(store.load_track_column_layout(scope), Ok(None));
+}
+
+#[test]
+fn sqlite_tag_mirror_outbox_coalesces_latest_canonical_projection() {
+    run_tag_mirror_outbox_coalesces_latest_canonical_projection(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_tag_mirror_outbox_coalesces_latest_canonical_projection() {
+    run_tag_mirror_outbox_coalesces_latest_canonical_projection(&InMemoryLibraryStore::new());
+}
+
+#[test]
+fn sqlite_track_delete_cascades_tag_mirror_outbox() {
+    run_track_delete_cascades_tag_mirror_outbox(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_track_delete_cascades_tag_mirror_outbox() {
+    run_track_delete_cascades_tag_mirror_outbox(&InMemoryLibraryStore::new());
+}
+
+fn run_track_delete_cascades_tag_mirror_outbox(store: &dyn LibraryStore) {
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+    store
+        .update_track_rating_and_enqueue_mirror(track.id, Rating::new(5).expect("rating"))
+        .expect("enqueue rating mirror");
+    assert_eq!(store.tag_mirrors_due(0, 10).expect("pending").len(), 1);
+    store.delete_track(track.id).expect("delete track");
+    assert!(store.tag_mirrors_due(0, 10).expect("cascade").is_empty());
+}
+
+fn run_tag_mirror_outbox_coalesces_latest_canonical_projection(store: &dyn LibraryStore) {
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+    store
+        .update_track_rating_and_enqueue_mirror(track.id, Rating::new(4).expect("rating"))
+        .expect("rating and outbox commit");
+    let change = MetadataChange {
+        title: FieldChange::Set("Canonical title".to_owned()),
+        ..MetadataChange::default()
+    };
+    store
+        .apply_track_metadata_change_and_enqueue_mirror(track.id, &change)
+        .expect("metadata and outbox commit");
+
+    let pending = store.tag_mirrors_due(0, 10).expect("load due rows");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].track_id, track.id);
+    assert_eq!(pending[0].generation, 2);
+    assert!(pending[0].kinds.metadata);
+    assert!(pending[0].kinds.rating);
+    assert!(!pending[0].kinds.artwork);
+    assert_eq!(
+        store
+            .track(track.id)
+            .expect("load canonical track")
+            .expect("track exists")
+            .metadata
+            .title
+            .as_deref(),
+        Some("Canonical title")
+    );
+
+    assert!(
+        !store
+            .complete_tag_mirror(track.id, 1)
+            .expect("stale completion rejected")
+    );
+    assert!(
+        store
+            .record_tag_mirror_failure(track.id, 2, 60, "injected failure")
+            .expect("record failure")
+    );
+    assert!(store.tag_mirrors_due(59, 10).expect("not due").is_empty());
+
+    store
+        .apply_track_metadata_change_and_enqueue_mirror(
+            track.id,
+            &MetadataChange {
+                artist: FieldChange::Set("Newer artist".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("newer generation resets retry state");
+    let pending = store.tag_mirrors_due(0, 10).expect("new generation due");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].generation, 3);
+    assert_eq!(pending[0].attempt_count, 0);
+    assert_eq!(pending[0].last_error, None);
+    assert!(
+        store
+            .complete_tag_mirror(track.id, 3)
+            .expect("complete latest generation")
+    );
+    assert!(
+        store
+            .tag_mirrors_due(i64::MAX, 10)
+            .expect("empty")
+            .is_empty()
+    );
+}
+
+#[test]
+fn sqlite_tag_mirror_artwork_survives_reopen_and_is_collected_after_completion() {
+    let dir = unique_store_test_directory("tag_outbox_artwork");
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    let database = dir.join("library.sqlite");
+    let track = track(1, "a.flac");
+    let bytes = valid_test_artwork();
+
+    let artwork = {
+        let store = SqliteLibraryStore::open(&database).expect("open store");
+        store.save_track(track.clone()).expect("save track");
+        let artwork = store
+            .publish_tag_mirror_artwork(&bytes)
+            .expect("publish artwork blob");
+        store
+            .enqueue_tag_mirror_artwork(track.id, TagMirrorArtwork::Set(artwork.clone()))
+            .expect("enqueue artwork mirror");
+        artwork
+    };
+
+    let blob_path = dir
+        .join("tag-outbox")
+        .join("blobs")
+        .join(format!("sha256-{}", artwork.digest()));
+    assert!(blob_path.is_file());
+
+    let store = SqliteLibraryStore::open(&database).expect("reopen store");
+    let pending = store.tag_mirrors_due(0, 10).expect("reload outbox");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].artwork, TagMirrorArtwork::Set(artwork.clone()));
+    assert_eq!(
+        store
+            .read_tag_mirror_artwork(&artwork)
+            .expect("reload artwork bytes"),
+        bytes
+    );
+    assert!(
+        store
+            .complete_tag_mirror(track.id, pending[0].generation)
+            .expect("complete artwork mirror")
+    );
+    store
+        .garbage_collect_tag_mirror_artwork()
+        .expect("collect unreferenced blob");
+    assert!(!blob_path.exists());
+    drop(store);
+    std::fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+fn unique_store_test_directory(label: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "sustain_{label}_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_nanos()
+    ))
+}
+
+fn valid_test_artwork() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5,
+        0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64,
+        0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]
 }
