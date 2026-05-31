@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use sustain_artwork::validate_encoded_artwork;
-use sustain_domain::{LibraryManagementMode, MetadataChange, Rating, TrackId};
+use sustain_domain::{LibraryManagementMode, MetadataChange, PlaybackCommand, Rating, TrackId};
 use sustain_library_store::TagMirrorArtwork;
 
 use crate::{
@@ -283,12 +283,12 @@ impl ApplicationRuntime {
         self.remove_track_from_library(track_id)
     }
 
-    fn stop_playback_if_playing(&self, track_id: TrackId) {
+    fn stop_playback_if_playing(&mut self, track_id: TrackId) {
         let Some(service) = self.playback_service.as_deref() else {
             return;
         };
         if playback_track_id(&service.state()) == Some(track_id) {
-            let _ = service.stop();
+            let _ = self.handle_playback_command(PlaybackCommand::Stop);
         }
     }
 

@@ -58,6 +58,7 @@ pub enum NotificationCategory {
     LibraryConsolidation,
     ArtworkFetch,
     MetadataWrite,
+    PlaybackStatistics,
     Command,
     /// Background DSP analysis (BPM / key / waveform) driven by the
     /// `AnalysisScheduler`. Pushed as a persistent notification while

@@ -29,7 +29,7 @@ mod track_column_layout;
 mod waveform;
 
 pub use acoustic::AcousticFeatures;
-pub use clock::{Clock, SystemClock};
+pub use clock::{Clock, MonotonicClock, SystemClock, SystemMonotonicClock};
 pub use command::{ApplicationCommand, ApplicationQuery};
 pub use device_sync::{
     DeviceKind, DeviceLayout, DeviceRelativePath, DeviceSelection, FilesPerFolderCap, SyncDevice,

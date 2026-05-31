@@ -12,17 +12,18 @@ use super::{
     SmartPlaylistTrackStatus,
 };
 use sustain_domain::{
-    ApplicationCommand, Clock, FieldChange, LibraryManagementMode, PlayStatistics, PlaybackCommand,
-    PlaybackOptions, PlaybackState, Playlist, PlaylistFolderId, PlaylistId, PlaylistItem, Rating,
-    RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField, SmartPlaylistId,
-    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistRule,
-    SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator, Track, TrackId,
-    TrackLocation, TrackMetadata, UiSettings, UiSidebarSelection, UserSettings, VolumePercent,
+    ApplicationCommand, Clock, FieldChange, LibraryManagementMode, MonotonicClock, PlayStatistics,
+    PlaybackCommand, PlaybackOptions, PlaybackState, Playlist, PlaylistFolderId, PlaylistId,
+    PlaylistItem, Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField,
+    SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
+    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
+    Track, TrackId, TrackLocation, TrackMetadata, UiSettings, UiSidebarSelection, UserSettings,
+    VolumePercent,
 };
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, InMemoryLibraryStore, LibraryStore,
     OnlineCapabilities, OnlineContext, PendingTagMirror, PlaylistFolder, SqliteLibraryStore,
-    StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork,
+    StoreError, StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork,
     StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork,
     TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
 };
@@ -2946,6 +2947,33 @@ impl Clock for FakeClock {
     }
 }
 
+#[derive(Debug, Default)]
+struct FakeMonotonicClock {
+    now: Mutex<std::time::Duration>,
+}
+
+impl FakeMonotonicClock {
+    fn advance(&self, elapsed: std::time::Duration) {
+        let mut now = self.now.lock().expect("fake monotonic clock lock");
+        *now = now.saturating_add(elapsed);
+    }
+}
+
+impl MonotonicClock for FakeMonotonicClock {
+    fn now(&self) -> std::time::Duration {
+        *self.now.lock().expect("fake monotonic clock lock")
+    }
+}
+
+fn advance_playback_tick(
+    runtime: &mut ApplicationRuntime,
+    clock: &FakeMonotonicClock,
+    elapsed: std::time::Duration,
+) -> super::ApplicationRuntimeResult<()> {
+    clock.advance(elapsed);
+    runtime.on_playback_tick()
+}
+
 #[test]
 fn runtime_rejects_smart_playlist_without_rules() {
     let store = Arc::new(InMemoryLibraryStore::new());
@@ -3347,6 +3375,7 @@ fn on_playback_tick_registers_play_after_threshold() {
     let mut track = test_track(id, "song.flac");
     track.metadata.duration = Some(std::time::Duration::from_secs(60));
     assert_eq!(store.save_track(track), Ok(()));
+    let monotonic_clock = Arc::new(FakeMonotonicClock::default());
 
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(root.clone())),
@@ -3354,6 +3383,7 @@ fn on_playback_tick_registers_play_after_threshold() {
     .expect("load settings")
     .with_library_services(store, Arc::new(TestMetadataService))
     .expect("library services initialize")
+    .with_monotonic_clock(monotonic_clock.clone())
     .with_playback_service(Box::new(NullPlaybackService::new()));
 
     runtime
@@ -3366,9 +3396,12 @@ fn on_playback_tick_registers_play_after_threshold() {
     // Threshold for a 60s track is 30s. 29 ticks of 1s each must
     // not be enough to register the play.
     for _ in 0..29 {
-        runtime
-            .on_playback_tick(std::time::Duration::from_secs(1))
-            .expect("tick");
+        advance_playback_tick(
+            &mut runtime,
+            monotonic_clock.as_ref(),
+            std::time::Duration::from_secs(1),
+        )
+        .expect("tick");
     }
     let track = runtime
         .library_tracks()
@@ -3380,9 +3413,12 @@ fn on_playback_tick_registers_play_after_threshold() {
         "play count must not increment before threshold cross"
     );
 
-    runtime
-        .on_playback_tick(std::time::Duration::from_secs(1))
-        .expect("tick that crosses threshold");
+    advance_playback_tick(
+        &mut runtime,
+        monotonic_clock.as_ref(),
+        std::time::Duration::from_secs(1),
+    )
+    .expect("tick that crosses threshold");
     let track = runtime
         .library_tracks()
         .iter()
@@ -3400,9 +3436,12 @@ fn on_playback_tick_registers_play_after_threshold() {
     // Further ticks past threshold must not re-increment within the
     // same listening session.
     for _ in 0..60 {
-        runtime
-            .on_playback_tick(std::time::Duration::from_secs(1))
-            .expect("post-threshold tick");
+        advance_playback_tick(
+            &mut runtime,
+            monotonic_clock.as_ref(),
+            std::time::Duration::from_secs(1),
+        )
+        .expect("post-threshold tick");
     }
     let track = runtime
         .library_tracks()
@@ -3414,6 +3453,201 @@ fn on_playback_tick_registers_play_after_threshold() {
         "play must register exactly once per session"
     );
 
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn delayed_playback_tick_accounts_real_monotonic_interval() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    std::fs::write(root.join("song.flac"), b"not real audio").expect("write fake track");
+
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let id = track_id(1);
+    let mut track = test_track(id, "song.flac");
+    track.metadata.duration = Some(std::time::Duration::from_secs(60));
+    assert_eq!(store.save_track(track), Ok(()));
+    let monotonic_clock = Arc::new(FakeMonotonicClock::default());
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(TestMetadataService))
+    .expect("library services initialize")
+    .with_monotonic_clock(monotonic_clock.clone())
+    .with_playback_service(Box::new(NullPlaybackService::new()));
+
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: id,
+            queue: PlaybackQueueRequest::Library,
+        }))
+        .expect("play track");
+    advance_playback_tick(
+        &mut runtime,
+        monotonic_clock.as_ref(),
+        std::time::Duration::from_secs(30),
+    )
+    .expect("single delayed tick");
+
+    assert_eq!(runtime.library_tracks()[0].statistics.play_count, 1);
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn pause_and_seek_forward_do_not_count_as_listening() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    std::fs::write(root.join("song.flac"), b"not real audio").expect("write fake track");
+
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let id = track_id(1);
+    let mut track = test_track(id, "song.flac");
+    track.metadata.duration = Some(std::time::Duration::from_secs(60));
+    assert_eq!(store.save_track(track), Ok(()));
+    let monotonic_clock = Arc::new(FakeMonotonicClock::default());
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(TestMetadataService))
+    .expect("library services initialize")
+    .with_monotonic_clock(monotonic_clock.clone())
+    .with_playback_service(Box::new(NullPlaybackService::new()));
+
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: id,
+            queue: PlaybackQueueRequest::Library,
+        }))
+        .expect("play track");
+    advance_playback_tick(
+        &mut runtime,
+        monotonic_clock.as_ref(),
+        std::time::Duration::from_secs(10),
+    )
+    .expect("listen before pause");
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::Pause))
+        .expect("pause");
+    monotonic_clock.advance(std::time::Duration::from_secs(100));
+    runtime.on_playback_tick().expect("paused tick");
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::Resume))
+        .expect("resume");
+    advance_playback_tick(
+        &mut runtime,
+        monotonic_clock.as_ref(),
+        std::time::Duration::from_secs(19),
+    )
+    .expect("listen after resume");
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::Seek(
+            std::time::Duration::from_secs(59),
+        )))
+        .expect("seek forward");
+    runtime
+        .on_playback_tick()
+        .expect("same-instant tick after seek");
+    assert_eq!(
+        runtime.library_tracks()[0].statistics.play_count,
+        0,
+        "paused duration and seek distance must not cross the threshold"
+    );
+
+    advance_playback_tick(
+        &mut runtime,
+        monotonic_clock.as_ref(),
+        std::time::Duration::from_secs(1),
+    )
+    .expect("one final listened second");
+    assert_eq!(runtime.library_tracks()[0].statistics.play_count, 1);
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn failed_play_registration_retries_after_stop_without_double_incrementing() {
+    use std::sync::atomic::Ordering;
+
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    std::fs::write(root.join("song.flac"), b"not real audio").expect("write fake track");
+
+    let inner = InMemoryLibraryStore::new();
+    let id = track_id(1);
+    let mut track = test_track(id, "song.flac");
+    track.metadata.duration = Some(std::time::Duration::from_secs(60));
+    inner.save_track(track).expect("seed inner store");
+    let counts = Arc::new(StoreCallCounts::default());
+    let store = Arc::new(CallCountingLibraryStore {
+        inner,
+        counts: counts.clone(),
+        statistics_failures_remaining: std::sync::atomic::AtomicUsize::new(1),
+    });
+    let monotonic_clock = Arc::new(FakeMonotonicClock::default());
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize")
+    .with_monotonic_clock(monotonic_clock.clone())
+    .with_playback_service(Box::new(NullPlaybackService::new()));
+
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: id,
+            queue: PlaybackQueueRequest::Library,
+        }))
+        .expect("play track");
+    assert_eq!(
+        advance_playback_tick(
+            &mut runtime,
+            monotonic_clock.as_ref(),
+            std::time::Duration::from_secs(30),
+        ),
+        Err(ApplicationRuntimeError::LibraryStoreFailed)
+    );
+    assert_eq!(runtime.library_tracks()[0].statistics.play_count, 0);
+    assert_eq!(
+        store
+            .track(id)
+            .expect("stored track")
+            .expect("track exists")
+            .statistics
+            .play_count,
+        0
+    );
+    assert_eq!(runtime.notifications().persistent_stack().len(), 1);
+    assert_eq!(
+        runtime.notifications().persistent_stack()[0].category,
+        NotificationCategory::PlaybackStatistics
+    );
+
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::Stop))
+        .expect("stop retries pending registration");
+    assert_eq!(runtime.library_tracks()[0].statistics.play_count, 1);
+    assert_eq!(
+        store
+            .track(id)
+            .expect("stored track")
+            .expect("track exists")
+            .statistics
+            .play_count,
+        1
+    );
+    assert!(runtime.notifications().persistent_stack().is_empty());
+    assert_eq!(counts.statistics_updates.load(Ordering::SeqCst), 2);
+
+    runtime
+        .on_playback_tick()
+        .expect("stopped retry is a no-op");
+    runtime
+        .on_playback_tick()
+        .expect("repeated retry is a no-op");
+    assert_eq!(runtime.library_tracks()[0].statistics.play_count, 1);
+    assert_eq!(counts.statistics_updates.load(Ordering::SeqCst), 2);
     std::fs::remove_dir_all(root).expect("remove test library");
 }
 
@@ -3431,6 +3665,7 @@ fn registering_a_play_fires_track_data_observer() {
     let mut track = test_track(id, "song.flac");
     track.metadata.duration = Some(std::time::Duration::from_secs(60));
     assert_eq!(store.save_track(track), Ok(()));
+    let monotonic_clock = Arc::new(FakeMonotonicClock::default());
 
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(root.clone())),
@@ -3438,6 +3673,7 @@ fn registering_a_play_fires_track_data_observer() {
     .expect("load settings")
     .with_library_services(store, Arc::new(TestMetadataService))
     .expect("library services initialize")
+    .with_monotonic_clock(monotonic_clock.clone())
     .with_playback_service(Box::new(NullPlaybackService::new()));
 
     let observed: Arc<std::sync::Mutex<Vec<TrackId>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -3456,9 +3692,12 @@ fn registering_a_play_fires_track_data_observer() {
     // Ticks below the 30s threshold mutate no statistics, so the
     // observer must stay silent.
     for _ in 0..29 {
-        runtime
-            .on_playback_tick(std::time::Duration::from_secs(1))
-            .expect("tick");
+        advance_playback_tick(
+            &mut runtime,
+            monotonic_clock.as_ref(),
+            std::time::Duration::from_secs(1),
+        )
+        .expect("tick");
     }
     assert!(
         observed.lock().expect("lock").is_empty(),
@@ -3467,9 +3706,12 @@ fn registering_a_play_fires_track_data_observer() {
 
     // The tick that crosses the threshold commits the play and must
     // notify the observer exactly once, for the played track.
-    runtime
-        .on_playback_tick(std::time::Duration::from_secs(1))
-        .expect("tick that crosses threshold");
+    advance_playback_tick(
+        &mut runtime,
+        monotonic_clock.as_ref(),
+        std::time::Duration::from_secs(1),
+    )
+    .expect("tick that crosses threshold");
     assert_eq!(
         observed.lock().expect("lock").as_slice(),
         &[id],
@@ -3493,6 +3735,7 @@ fn skip_current_track_registers_skip_before_play_threshold() {
     b.metadata.duration = Some(std::time::Duration::from_secs(60));
     assert_eq!(store.save_track(a), Ok(()));
     assert_eq!(store.save_track(b), Ok(()));
+    let monotonic_clock = Arc::new(FakeMonotonicClock::default());
 
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(root.clone())),
@@ -3500,6 +3743,7 @@ fn skip_current_track_registers_skip_before_play_threshold() {
     .expect("load settings")
     .with_library_services(store, Arc::new(TestMetadataService))
     .expect("library services initialize")
+    .with_monotonic_clock(monotonic_clock.clone())
     .with_playback_service(Box::new(NullPlaybackService::new()));
 
     runtime
@@ -3511,9 +3755,12 @@ fn skip_current_track_registers_skip_before_play_threshold() {
 
     // Listen briefly — well short of the 30s threshold — then skip.
     for _ in 0..5 {
-        runtime
-            .on_playback_tick(std::time::Duration::from_secs(1))
-            .expect("tick");
+        advance_playback_tick(
+            &mut runtime,
+            monotonic_clock.as_ref(),
+            std::time::Duration::from_secs(1),
+        )
+        .expect("tick");
     }
 
     runtime
@@ -3564,6 +3811,7 @@ fn skip_current_track_does_not_register_skip_after_play_threshold() {
     let b = test_track(track_id(2), "b.flac");
     assert_eq!(store.save_track(a), Ok(()));
     assert_eq!(store.save_track(b), Ok(()));
+    let monotonic_clock = Arc::new(FakeMonotonicClock::default());
 
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(root.clone())),
@@ -3571,6 +3819,7 @@ fn skip_current_track_does_not_register_skip_after_play_threshold() {
     .expect("load settings")
     .with_library_services(store, Arc::new(TestMetadataService))
     .expect("library services initialize")
+    .with_monotonic_clock(monotonic_clock.clone())
     .with_playback_service(Box::new(NullPlaybackService::new()));
 
     runtime
@@ -3582,9 +3831,12 @@ fn skip_current_track_does_not_register_skip_after_play_threshold() {
 
     // Cross the play threshold for the 60s track.
     for _ in 0..30 {
-        runtime
-            .on_playback_tick(std::time::Duration::from_secs(1))
-            .expect("tick");
+        advance_playback_tick(
+            &mut runtime,
+            monotonic_clock.as_ref(),
+            std::time::Duration::from_secs(1),
+        )
+        .expect("tick");
     }
 
     runtime
@@ -3623,6 +3875,7 @@ fn play_next_track_never_registers_skip() {
     let b = test_track(track_id(2), "b.flac");
     assert_eq!(store.save_track(a), Ok(()));
     assert_eq!(store.save_track(b), Ok(()));
+    let monotonic_clock = Arc::new(FakeMonotonicClock::default());
 
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(root.clone())),
@@ -3630,6 +3883,7 @@ fn play_next_track_never_registers_skip() {
     .expect("load settings")
     .with_library_services(store, Arc::new(TestMetadataService))
     .expect("library services initialize")
+    .with_monotonic_clock(monotonic_clock.clone())
     .with_playback_service(Box::new(NullPlaybackService::new()));
 
     runtime
@@ -3641,9 +3895,12 @@ fn play_next_track_never_registers_skip() {
 
     // Briefly listen — well short of the play threshold.
     for _ in 0..5 {
-        runtime
-            .on_playback_tick(std::time::Duration::from_secs(1))
-            .expect("tick");
+        advance_playback_tick(
+            &mut runtime,
+            monotonic_clock.as_ref(),
+            std::time::Duration::from_secs(1),
+        )
+        .expect("tick");
     }
 
     // EOS-style auto-advance must never affect skip statistics,
@@ -3686,7 +3943,7 @@ fn on_playback_tick_does_not_accumulate_when_stopped() {
     // No PlayTrack — runtime is in the Stopped state, no session.
     for _ in 0..100 {
         runtime
-            .on_playback_tick(std::time::Duration::from_secs(1))
+            .on_playback_tick()
             .expect("tick is a no-op while stopped");
     }
     assert!(
@@ -3938,6 +4195,7 @@ fn apply_track_updated_performs_one_keyed_lookup_and_no_full_scan() {
     let store: Arc<dyn LibraryStore> = Arc::new(CallCountingLibraryStore {
         inner,
         counts: counts.clone(),
+        statistics_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
     });
 
     let mut runtime = ApplicationRuntime::new()
@@ -4469,6 +4727,7 @@ fn online_run_is_a_force_path_that_does_not_pre_filter() {
 struct StoreCallCounts {
     track: std::sync::atomic::AtomicUsize,
     tracks: std::sync::atomic::AtomicUsize,
+    statistics_updates: std::sync::atomic::AtomicUsize,
 }
 
 /// A transparent [`LibraryStore`] decorator that counts `track` and
@@ -4479,6 +4738,7 @@ struct StoreCallCounts {
 struct CallCountingLibraryStore {
     inner: InMemoryLibraryStore,
     counts: Arc<StoreCallCounts>,
+    statistics_failures_remaining: std::sync::atomic::AtomicUsize,
 }
 
 impl LibraryStore for CallCountingLibraryStore {
@@ -4516,6 +4776,20 @@ impl LibraryStore for CallCountingLibraryStore {
         track_id: TrackId,
         statistics: &PlayStatistics,
     ) -> StoreResult<()> {
+        self.counts
+            .statistics_updates
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .statistics_failures_remaining
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |remaining| remaining.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(StoreError::StoreUnavailable);
+        }
         self.inner.update_track_statistics(track_id, statistics)
     }
 

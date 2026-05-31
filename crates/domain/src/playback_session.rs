@@ -20,7 +20,7 @@ const PLAY_THRESHOLD_CEILING: Duration = Duration::from_secs(10 * 60);
 /// cumulative listened time crosses the threshold returned by
 /// [`PlaybackSession::play_threshold`]. After that, further listening
 /// in the same session does NOT increment the play count again. A new
-/// session begins each time a different track starts playing.
+/// session begins each time playback starts for a track.
 ///
 /// Cumulative listened time is intentionally distinct from raw playback
 /// position: seeking forward does NOT count as listening, pausing and
@@ -28,20 +28,26 @@ const PLAY_THRESHOLD_CEILING: Duration = Duration::from_secs(10 * 60);
 /// the cumulative total.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackSession {
+    session_id: u64,
     track_id: TrackId,
     duration: Duration,
     listened: Duration,
+    accounting_baseline: Option<Duration>,
+    play_registration_pending: bool,
     play_registered: bool,
 }
 
 impl PlaybackSession {
     /// Begin a new session for the given track. A fresh session has
     /// zero listened time and has not yet registered a play.
-    pub const fn new(track_id: TrackId, duration: Duration) -> Self {
+    pub const fn new(session_id: u64, track_id: TrackId, duration: Duration) -> Self {
         Self {
+            session_id,
             track_id,
             duration,
             listened: Duration::ZERO,
+            accounting_baseline: None,
+            play_registration_pending: false,
             play_registered: false,
         }
     }
@@ -53,6 +59,10 @@ impl PlaybackSession {
     pub fn play_threshold(duration: Duration) -> Duration {
         let half = duration / 2;
         half.min(PLAY_THRESHOLD_CEILING)
+    }
+
+    pub fn session_id(&self) -> u64 {
+        self.session_id
     }
 
     pub fn track_id(&self) -> TrackId {
@@ -71,20 +81,39 @@ impl PlaybackSession {
         self.play_registered
     }
 
-    /// Add elapsed wall-clock listening to the session. Callers must
-    /// only call this when the track is actually playing (not paused,
-    /// not loading, not stopped). The session itself does not know the
-    /// transport state and trusts the caller to gate accumulation.
-    pub fn accumulate_listening(&mut self, elapsed: Duration) {
-        self.listened = self.listened.saturating_add(elapsed);
+    pub fn is_play_registration_pending(&self) -> bool {
+        self.play_registration_pending
+    }
+
+    /// Anchor future accounting at `now` without counting any interval
+    /// before it. Called when playback starts or resumes.
+    pub fn resume_accounting(&mut self, now: Duration) {
+        self.accounting_baseline = Some(now);
+    }
+
+    /// Account real monotonic elapsed time while playback is active.
+    /// Delayed callbacks therefore add the full interval rather than one
+    /// assumed timer period. A backwards-moving injected clock safely adds
+    /// zero while still re-anchoring the baseline.
+    pub fn account_playing_until(&mut self, now: Duration) {
+        if let Some(previous) = self.accounting_baseline.replace(now) {
+            self.listened = self.listened.saturating_add(now.saturating_sub(previous));
+        }
+    }
+
+    /// Account listening up to `now`, then stop the baseline. Paused time
+    /// cannot leak into the next resume interval.
+    pub fn freeze_accounting(&mut self, now: Duration) {
+        if self.accounting_baseline.is_some() {
+            self.account_playing_until(now);
+            self.accounting_baseline = None;
+        }
     }
 
     /// Returns true when the cumulative listened time has reached the
-    /// play threshold and a play has not yet been registered for this
-    /// session. Repeated calls return `false` after the play has been
-    /// registered via [`PlaybackSession::register_play`].
-    pub fn should_register_play(&self) -> bool {
-        if self.play_registered {
+    /// play threshold and no registration is already queued or committed.
+    pub fn should_begin_play_registration(&self) -> bool {
+        if self.play_registration_pending || self.play_registered {
             return false;
         }
         if self.duration.is_zero() {
@@ -93,9 +122,20 @@ impl PlaybackSession {
         self.listened >= Self::play_threshold(self.duration)
     }
 
-    /// Mark the play as registered. Idempotent — calling twice does
-    /// not produce two plays.
-    pub fn register_play(&mut self) {
+    /// Reserve this session's one play-registration attempt before SQLite
+    /// persistence begins. Returns false when the threshold has not been
+    /// reached or an attempt was already reserved.
+    pub fn begin_play_registration(&mut self) -> bool {
+        if !self.should_begin_play_registration() {
+            return false;
+        }
+        self.play_registration_pending = true;
+        true
+    }
+
+    /// Confirm the reserved registration after authoritative persistence.
+    pub fn confirm_play_registration(&mut self) {
+        self.play_registration_pending = false;
         self.play_registered = true;
     }
 }
@@ -137,44 +177,69 @@ mod tests {
 
     #[test]
     fn fresh_session_does_not_register_play() {
-        let session = PlaybackSession::new(track(), Duration::from_secs(180));
-        assert!(!session.should_register_play());
+        let session = PlaybackSession::new(1, track(), Duration::from_secs(180));
+        assert!(!session.should_begin_play_registration());
         assert!(!session.is_play_registered());
     }
 
     #[test]
     fn play_registers_once_threshold_crossed() {
-        let mut session = PlaybackSession::new(track(), Duration::from_secs(180));
-        session.accumulate_listening(Duration::from_secs(89));
-        assert!(!session.should_register_play());
-        session.accumulate_listening(Duration::from_secs(1));
-        assert!(session.should_register_play());
+        let mut session = PlaybackSession::new(1, track(), Duration::from_secs(180));
+        session.resume_accounting(Duration::ZERO);
+        session.account_playing_until(Duration::from_secs(89));
+        assert!(!session.should_begin_play_registration());
+        session.account_playing_until(Duration::from_secs(90));
+        assert!(session.should_begin_play_registration());
     }
 
     #[test]
     fn play_does_not_re_register_within_same_session() {
-        let mut session = PlaybackSession::new(track(), Duration::from_secs(180));
-        session.accumulate_listening(Duration::from_secs(120));
-        assert!(session.should_register_play());
-        session.register_play();
-        assert!(!session.should_register_play());
-        session.accumulate_listening(Duration::from_secs(60));
-        assert!(!session.should_register_play());
+        let mut session = PlaybackSession::new(1, track(), Duration::from_secs(180));
+        session.resume_accounting(Duration::ZERO);
+        session.account_playing_until(Duration::from_secs(120));
+        assert!(session.begin_play_registration());
+        assert!(!session.should_begin_play_registration());
+        session.confirm_play_registration();
+        assert!(!session.should_begin_play_registration());
+        session.account_playing_until(Duration::from_secs(180));
+        assert!(!session.should_begin_play_registration());
     }
 
     #[test]
     fn long_track_registers_at_ten_minute_ceiling() {
-        let mut session = PlaybackSession::new(track(), Duration::from_secs(3600));
-        session.accumulate_listening(Duration::from_secs(599));
-        assert!(!session.should_register_play());
-        session.accumulate_listening(Duration::from_secs(1));
-        assert!(session.should_register_play());
+        let mut session = PlaybackSession::new(1, track(), Duration::from_secs(3600));
+        session.resume_accounting(Duration::ZERO);
+        session.account_playing_until(Duration::from_secs(599));
+        assert!(!session.should_begin_play_registration());
+        session.account_playing_until(Duration::from_secs(600));
+        assert!(session.should_begin_play_registration());
     }
 
     #[test]
     fn zero_duration_track_never_registers_play() {
-        let mut session = PlaybackSession::new(track(), Duration::ZERO);
-        session.accumulate_listening(Duration::from_secs(60));
-        assert!(!session.should_register_play());
+        let mut session = PlaybackSession::new(1, track(), Duration::ZERO);
+        session.resume_accounting(Duration::ZERO);
+        session.account_playing_until(Duration::from_secs(60));
+        assert!(!session.should_begin_play_registration());
+    }
+
+    #[test]
+    fn delayed_accounting_uses_real_monotonic_delta() {
+        let mut session = PlaybackSession::new(1, track(), Duration::from_secs(180));
+        session.resume_accounting(Duration::from_secs(10));
+        session.account_playing_until(Duration::from_secs(75));
+
+        assert_eq!(session.listened(), Duration::from_secs(65));
+    }
+
+    #[test]
+    fn frozen_accounting_excludes_paused_time() {
+        let mut session = PlaybackSession::new(1, track(), Duration::from_secs(180));
+        session.resume_accounting(Duration::from_secs(10));
+        session.freeze_accounting(Duration::from_secs(20));
+        session.resume_accounting(Duration::from_secs(100));
+        session.account_playing_until(Duration::from_secs(105));
+
+        assert_eq!(session.listened(), Duration::from_secs(15));
     }
 }

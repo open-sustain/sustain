@@ -11,7 +11,17 @@ use sustain_domain::{
 use sustain_playback::PlaybackService;
 use sustain_smart_shuffle::{PickContext, format_debug, pick_next_track};
 
-use crate::{ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult};
+use crate::{
+    ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
+    NotificationSeverity,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PendingPlayRegistration {
+    session_id: u64,
+    track_id: TrackId,
+    registered_at: SystemTime,
+}
 
 impl ApplicationRuntime {
     pub(super) fn handle_playback_command(
@@ -52,35 +62,15 @@ impl ApplicationRuntime {
                 self.playback_queue.enqueue_at_end(&track_ids);
                 Ok(())
             }
-            PlaybackCommand::Pause => self
-                .playback_service()?
-                .pause()
-                .map_err(|_| ApplicationRuntimeError::PlaybackFailed),
-            PlaybackCommand::Resume => self
-                .playback_service()?
-                .resume()
-                .map_err(|_| ApplicationRuntimeError::PlaybackFailed),
+            PlaybackCommand::Pause => self.pause_playback(),
+            PlaybackCommand::Resume => self.resume_playback(),
             PlaybackCommand::TogglePlayPause => match self.playback_service()?.state() {
-                PlaybackState::Playing { .. } => self
-                    .playback_service()?
-                    .pause()
-                    .map_err(|_| ApplicationRuntimeError::PlaybackFailed),
-                PlaybackState::Paused { .. } => self
-                    .playback_service()?
-                    .resume()
-                    .map_err(|_| ApplicationRuntimeError::PlaybackFailed),
+                PlaybackState::Playing { .. } => self.pause_playback(),
+                PlaybackState::Paused { .. } => self.resume_playback(),
                 PlaybackState::Stopped | PlaybackState::Loading { .. } => Ok(()),
             },
-            PlaybackCommand::Stop => {
-                self.playback_session = None;
-                self.playback_service()?
-                    .stop()
-                    .map_err(|_| ApplicationRuntimeError::PlaybackFailed)
-            }
-            PlaybackCommand::Seek(position) => self
-                .playback_service()?
-                .seek(position)
-                .map_err(|_| ApplicationRuntimeError::PlaybackFailed),
+            PlaybackCommand::Stop => self.stop_playback(),
+            PlaybackCommand::Seek(position) => self.seek_playback(position),
             PlaybackCommand::SetVolume(volume) => self
                 .playback_service()?
                 .set_volume(volume)
@@ -92,6 +82,47 @@ impl ApplicationRuntime {
         self.playback_service
             .as_deref()
             .ok_or(ApplicationRuntimeError::PlaybackServiceUnavailable)
+    }
+
+    fn pause_playback(&mut self) -> ApplicationRuntimeResult<()> {
+        self.settle_current_playing_session();
+        self.playback_service()?
+            .pause()
+            .map_err(|_| ApplicationRuntimeError::PlaybackFailed)?;
+        self.freeze_current_playback_session();
+        Ok(())
+    }
+
+    fn resume_playback(&mut self) -> ApplicationRuntimeResult<()> {
+        self.playback_service()?
+            .resume()
+            .map_err(|_| ApplicationRuntimeError::PlaybackFailed)?;
+        if matches!(self.playback_state(), PlaybackState::Playing { .. }) {
+            let now = self.monotonic_clock.now();
+            if let Some(session) = self.playback_session.as_mut() {
+                session.resume_accounting(now);
+            }
+        }
+        Ok(())
+    }
+
+    fn stop_playback(&mut self) -> ApplicationRuntimeResult<()> {
+        self.settle_current_playing_session();
+        self.playback_service()?
+            .stop()
+            .map_err(|_| ApplicationRuntimeError::PlaybackFailed)?;
+        self.playback_session = None;
+        Ok(())
+    }
+
+    fn seek_playback(&mut self, position: Duration) -> ApplicationRuntimeResult<()> {
+        // Settle real listening before changing transport position. The
+        // baseline remains anchored at the seek instant, so jumping forward
+        // contributes no artificial listening time.
+        self.settle_current_playing_session();
+        self.playback_service()?
+            .seek(position)
+            .map_err(|_| ApplicationRuntimeError::PlaybackFailed)
     }
 
     fn build_playback_queue(
@@ -156,6 +187,7 @@ impl ApplicationRuntime {
             (true, true) => self.mark_track_available(track_id)?,
             (true, false) => {}
         }
+        self.settle_current_playing_session();
         self.playback_service()?
             .play_track(source)
             .map_err(|_| ApplicationRuntimeError::PlaybackFailed)?;
@@ -172,7 +204,7 @@ impl ApplicationRuntime {
             .find(|track| track.id == track_id)
             .and_then(|track| track.metadata.duration)
             .unwrap_or(Duration::ZERO);
-        self.playback_session = Some(PlaybackSession::new(track_id, duration));
+        self.start_playback_session(track_id, duration);
         Ok(())
     }
 
@@ -330,6 +362,7 @@ impl ApplicationRuntime {
             // the backend so its state stops reporting the previous track as
             // still playing — otherwise the auto-advance triggered by EOS
             // would leave the UI showing the last track at a stale position.
+            self.settle_current_playing_session();
             if let Some(service) = self.playback_service.as_deref() {
                 let _ = service.stop();
             }
@@ -343,15 +376,17 @@ impl ApplicationRuntime {
     }
 
     fn skip_current_track(&mut self) -> ApplicationRuntimeResult<()> {
+        self.settle_current_playing_session();
         // Register a skip on the current session only when one exists
         // AND the play threshold has not already been reached. After
-        // the threshold there is no skip — the play already counted.
+        // the threshold there is no skip — the play is already counted
+        // or retained for retry.
         // This is the only entry point that ever increments skip_count;
         // EOS auto-advance and Previous never do.
-        let pending_skip = self
-            .playback_session
-            .as_ref()
-            .and_then(|session| (!session.is_play_registered()).then_some(session.track_id()));
+        let pending_skip = self.playback_session.as_ref().and_then(|session| {
+            (!session.is_play_registered() && !session.is_play_registration_pending())
+                .then_some(session.track_id())
+        });
         if let Some(track_id) = pending_skip {
             let now = self.clock.now();
             self.commit_skip_increment(track_id, now)?;
@@ -359,12 +394,11 @@ impl ApplicationRuntime {
         self.play_next_track()
     }
 
-    /// Drive the play-statistics accounting forward by `elapsed` of
-    /// wall-clock time. The UI calls this on a steady cadence
-    /// (currently 1 Hz, driven by the now-playing refresh timer in the
-    /// crate root). Accumulation only happens while the playback service reports
-    /// the [`PlaybackState::Playing`] state, and only against the
-    /// track currently associated with the session.
+    /// Drive play-statistics accounting from the injected monotonic clock.
+    /// The UI calls this on a nominal cadence, but delayed or coalesced
+    /// callbacks still account the real elapsed interval. Accumulation only
+    /// happens while the playback service reports [`PlaybackState::Playing`]
+    /// and only against the track currently associated with the session.
     ///
     /// When the cumulative listened time crosses the play threshold
     /// (see [`PlaybackSession::play_threshold`]), the play count is
@@ -372,36 +406,26 @@ impl ApplicationRuntime {
     /// new statistics are flushed to SQLite. No file-tag write is
     /// emitted — listening statistics live exclusively in the
     /// library, per the persistence policy in AGENTS.md.
-    pub fn on_playback_tick(&mut self, elapsed: Duration) -> ApplicationRuntimeResult<()> {
+    pub fn on_playback_tick(&mut self) -> ApplicationRuntimeResult<()> {
+        let now = self.monotonic_clock.now();
         let state = self.playback_state();
-        let playing_track_id = match state {
-            PlaybackState::Playing { track_id, .. } => track_id,
-            _ => return Ok(()),
-        };
-
-        self.ensure_session_for_track(playing_track_id);
-
-        let crossed_threshold = match self.playback_session.as_mut() {
-            Some(session) if !session.is_play_registered() => {
-                session.accumulate_listening(elapsed);
-                if session.should_register_play() {
-                    session.register_play();
-                    true
-                } else {
-                    false
+        match state {
+            PlaybackState::Playing { track_id, .. } => {
+                self.ensure_session_for_track(track_id, now);
+                if let Some(session) = self.playback_session.as_mut() {
+                    session.account_playing_until(now);
                 }
+                self.enqueue_play_registration_if_needed();
             }
-            _ => false,
-        };
-
-        if crossed_threshold {
-            let now = self.clock.now();
-            self.commit_play_increment(playing_track_id, now)?;
+            PlaybackState::Paused { .. }
+            | PlaybackState::Stopped
+            | PlaybackState::Loading { .. } => self.freeze_current_playback_session_at(now),
         }
-        Ok(())
+
+        self.retry_pending_play_registrations()
     }
 
-    fn ensure_session_for_track(&mut self, track_id: TrackId) {
+    fn ensure_session_for_track(&mut self, track_id: TrackId, now: Duration) {
         if let Some(session) = self.playback_session.as_ref()
             && session.track_id() == track_id
         {
@@ -413,7 +437,100 @@ impl ApplicationRuntime {
             .find(|track| track.id == track_id)
             .and_then(|track| track.metadata.duration)
             .unwrap_or(Duration::ZERO);
-        self.playback_session = Some(PlaybackSession::new(track_id, duration));
+        self.start_playback_session_at(track_id, duration, now);
+    }
+
+    fn start_playback_session(&mut self, track_id: TrackId, duration: Duration) {
+        self.start_playback_session_at(track_id, duration, self.monotonic_clock.now());
+    }
+
+    fn start_playback_session_at(&mut self, track_id: TrackId, duration: Duration, now: Duration) {
+        let session_id = self.next_playback_session_id;
+        self.next_playback_session_id = self
+            .next_playback_session_id
+            .checked_add(1)
+            .expect("playback session id exhausted");
+        let mut session = PlaybackSession::new(session_id, track_id, duration);
+        session.resume_accounting(now);
+        self.playback_session = Some(session);
+    }
+
+    fn settle_current_playing_session(&mut self) {
+        if matches!(self.playback_state(), PlaybackState::Playing { .. }) {
+            let now = self.monotonic_clock.now();
+            if let Some(session) = self.playback_session.as_mut() {
+                session.account_playing_until(now);
+            }
+            self.enqueue_play_registration_if_needed();
+        }
+        let _ = self.retry_pending_play_registrations();
+    }
+
+    fn freeze_current_playback_session(&mut self) {
+        self.freeze_current_playback_session_at(self.monotonic_clock.now());
+    }
+
+    fn freeze_current_playback_session_at(&mut self, now: Duration) {
+        if let Some(session) = self.playback_session.as_mut() {
+            session.freeze_accounting(now);
+        }
+        self.enqueue_play_registration_if_needed();
+    }
+
+    fn enqueue_play_registration_if_needed(&mut self) {
+        let Some(session) = self.playback_session.as_mut() else {
+            return;
+        };
+        if !session.begin_play_registration() {
+            return;
+        }
+        self.pending_play_registrations
+            .push_back(PendingPlayRegistration {
+                session_id: session.session_id(),
+                track_id: session.track_id(),
+                registered_at: self.clock.now(),
+            });
+    }
+
+    fn retry_pending_play_registrations(&mut self) -> ApplicationRuntimeResult<()> {
+        while let Some(pending) = self.pending_play_registrations.front().copied() {
+            if let Err(error) = self.commit_play_increment(pending.track_id, pending.registered_at)
+            {
+                self.push_or_update_playback_statistics_warning();
+                return Err(error);
+            }
+            self.pending_play_registrations.pop_front();
+            if let Some(session) = self.playback_session.as_mut()
+                && session.session_id() == pending.session_id
+            {
+                session.confirm_play_registration();
+            }
+        }
+
+        self.dismiss_playback_statistics_warning();
+        Ok(())
+    }
+
+    fn push_or_update_playback_statistics_warning(&mut self) {
+        let body = "Sustain could not save listening statistics. The pending play count is retained in memory and will retry automatically."
+            .to_owned();
+        if let Some(id) = self.playback_statistics_notification_id {
+            self.update_notification_body(id, body);
+        } else {
+            let id = self.push_persistent_notification(
+                NotificationCategory::PlaybackStatistics,
+                NotificationSeverity::Error,
+                body,
+                false,
+            );
+            self.playback_statistics_notification_id = Some(id);
+        }
+    }
+
+    fn dismiss_playback_statistics_warning(&mut self) {
+        if let Some(id) = self.playback_statistics_notification_id.take() {
+            self.dismiss_notification(id);
+        }
     }
 
     fn commit_play_increment(

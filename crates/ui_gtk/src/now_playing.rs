@@ -662,13 +662,15 @@ fn install_refresh_timer(view: &NowPlayingView, runtime: SharedRuntime) {
     // The 1 Hz cadence here is doing double duty: it drives the
     // now-playing UI refresh (seek bar, time labels, MPRIS-adjacent
     // state) AND it is the heartbeat that lets the runtime accumulate
-    // listened time toward the play threshold. The two run together so
-    // that an attempt to disable one (e.g. by detaching the now-playing
-    // panel) does not silently break play-count tracking.
+    // listened time toward the play threshold. Runtime accounting reads its
+    // own monotonic clock, so a delayed/coalesced callback still records the
+    // real interval. The two run together so that an attempt to disable one
+    // (e.g. by detaching the now-playing panel) does not silently break
+    // play-count tracking.
     glib::timeout_add_seconds_local(1, move || {
         let now_playing = {
             let mut runtime = runtime.borrow_mut();
-            let _ = runtime.on_playback_tick(std::time::Duration::from_secs(1));
+            let _ = runtime.on_playback_tick();
             runtime.now_playing()
         };
         view.refresh(&now_playing);

@@ -7,7 +7,7 @@
 // to a small module that exposes a safe API.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -20,18 +20,18 @@ pub use sustain_domain::{
     BackgroundResourceUsage, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind,
     DeviceLayout, DeviceRelativePath, FieldChange, FilesPerFolderCap, GenreDistribution,
     GenrePlayCount, GenreRating, GenreShare, LazyPickContext, LibraryManagementMode,
-    LibrarySettings, LibraryStatistics, MetadataChange, OtherGenres, PlayStatistics,
-    PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueRequest, PlaybackQueueSource,
-    PlaybackSession, PlaybackSettings, PlaybackState, Playlist, PlaylistEntry, PlaylistFolder,
-    PlaylistFolderId, PlaylistId, PlaylistItem, QualityBucket, QualityDistribution, QualityRange,
-    Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField, SmartPlaylistId,
-    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
+    LibrarySettings, LibraryStatistics, MetadataChange, MonotonicClock, OtherGenres,
+    PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueRequest,
+    PlaybackQueueSource, PlaybackSession, PlaybackSettings, PlaybackState, Playlist, PlaylistEntry,
+    PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, QualityBucket, QualityDistribution,
+    QualityRange, Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField,
+    SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
     SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
     SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice,
-    SyncDeviceId, SystemClock, Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout,
-    TrackColumnLayoutScope, TrackContentHash, TrackId, TrackLocation, TrackMetadata,
-    TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings,
-    VolumePercent, YearCount, compare_optional_text, compute_library_statistics,
+    SyncDeviceId, SystemClock, SystemMonotonicClock, Track, TrackAvailability, TrackColumnEntry,
+    TrackColumnLayout, TrackColumnLayoutScope, TrackContentHash, TrackId, TrackLocation,
+    TrackMetadata, TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection,
+    UserSettings, VolumePercent, YearCount, compare_optional_text, compute_library_statistics,
     effective_sort_key, matching_tracks, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
@@ -275,8 +275,12 @@ pub struct ApplicationRuntime {
     playback_queue: PlaybackQueue,
     // Tracks how much of the currently playing track the listener has
     // actually heard, so we can decide whether to register a play or a
-    // skip when the track changes. `None` whenever nothing is playing.
+    // skip when the track changes. A paused track retains its session;
+    // `None` means no track session remains.
     pub(crate) playback_session: Option<PlaybackSession>,
+    next_playback_session_id: u64,
+    pending_play_registrations: VecDeque<playback::PendingPlayRegistration>,
+    playback_statistics_notification_id: Option<NotificationId>,
     library_tracks: Vec<Track>,
     /// Precomputed normalized search documents, kept in lockstep with
     /// `library_tracks` so per-keystroke search never re-clones or
@@ -343,6 +347,7 @@ pub struct ApplicationRuntime {
     // [`Self::track_data_observer`] so visible widgets repaint.
     track_updated_sink: Option<async_channel::Sender<TrackId>>,
     clock: Arc<dyn Clock>,
+    monotonic_clock: Arc<dyn MonotonicClock>,
     notifications: NotificationCenter,
     // Fires after every push/dismiss/expire on `notifications`. Set by
     // the UI shell once during startup; the callback is responsible for
@@ -422,6 +427,9 @@ impl ApplicationRuntime {
             playback_service: None,
             playback_queue: PlaybackQueue::default(),
             playback_session: None,
+            next_playback_session_id: 1,
+            pending_play_registrations: VecDeque::new(),
+            playback_statistics_notification_id: None,
             library_tracks: Vec::new(),
             search_index: SearchIndex::new(),
             playlists: Vec::new(),
@@ -458,6 +466,7 @@ impl ApplicationRuntime {
             smart_shuffle_metadata: None,
             track_updated_sink: None,
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(SystemMonotonicClock::new()),
             notifications: NotificationCenter::new(),
             notification_observer: None,
             track_availability_observer: None,
@@ -485,6 +494,9 @@ impl ApplicationRuntime {
             playback_service: None,
             playback_queue: initial_playback_queue,
             playback_session: None,
+            next_playback_session_id: 1,
+            pending_play_registrations: VecDeque::new(),
+            playback_statistics_notification_id: None,
             library_tracks: Vec::new(),
             search_index: SearchIndex::new(),
             playlists: Vec::new(),
@@ -521,6 +533,7 @@ impl ApplicationRuntime {
             smart_shuffle_metadata: None,
             track_updated_sink: None,
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(SystemMonotonicClock::new()),
             notifications: NotificationCenter::new(),
             notification_observer: None,
             track_availability_observer: None,
@@ -531,6 +544,11 @@ impl ApplicationRuntime {
 
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    pub fn with_monotonic_clock(mut self, clock: Arc<dyn MonotonicClock>) -> Self {
+        self.monotonic_clock = clock;
         self
     }
 
