@@ -240,7 +240,7 @@ impl ApplicationRuntime {
                 .save_track(updated.clone())
                 .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
-        self.library_tracks[index] = updated;
+        self.store_library_track(index, updated);
         self.refresh_playback_queue_track_ids();
         self.notify_track_availability_observer();
         Ok(())
@@ -467,7 +467,7 @@ impl ApplicationRuntime {
                 .save_track(updated.clone())
                 .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
-        self.library_tracks[track_index] = updated;
+        self.store_library_track(track_index, updated);
         self.fire_track_data_observer(track_id);
         Ok(())
     }

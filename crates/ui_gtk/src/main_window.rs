@@ -13,7 +13,7 @@ use sustain_app_runtime::{
     MetadataChange, PlaybackCommand, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState,
     Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
     Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, UiSettings, UiSidebarSelection,
-    track_matches_search_text,
+    normalize_query, track_matches_search_text,
 };
 
 use super::{
@@ -545,6 +545,7 @@ pub(crate) fn build_main_window(
             sidebar: sidebar.clone(),
             content_stack: content_stack.clone(),
             playlists_dirty: playlists_dirty.clone(),
+            status_bar: status_bar.clone(),
             visible_summary_refresh: visible_summary_refresh.clone(),
         },
     );
@@ -1168,10 +1169,14 @@ fn runtime_library_table_rows(
     search_text: &str,
 ) -> Vec<TrackTableRow> {
     let honor_sort_tags = runtime.settings().library.honor_sort_tags;
+    // Normalize the query once, then test each track against the runtime's
+    // precomputed search index — no per-track metadata cloning or
+    // re-lowercasing on a 10k-track keystroke.
+    let normalized = normalize_query(search_text);
     runtime
         .library_tracks()
         .iter()
-        .filter(|track| search_text.is_empty() || track_matches_search_text(track, search_text))
+        .filter(|track| normalized.is_empty() || runtime.search_matches(track.id, &normalized))
         .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
         .collect()
 }

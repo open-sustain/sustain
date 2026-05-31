@@ -42,7 +42,8 @@ pub use sustain_metadata_remote::{
 use sustain_playback::PlaybackService;
 pub use sustain_playback::TrackEndedCallback;
 pub use sustain_search::{
-    album_matches_search_text, filter_tracks_by_search_text, track_matches_search_text,
+    SearchIndex, album_matches_search_text, filter_tracks_by_search_text, normalize_query,
+    track_matches_search_text,
 };
 use sustain_settings::SettingsStore;
 
@@ -272,6 +273,12 @@ pub struct ApplicationRuntime {
     // skip when the track changes. `None` whenever nothing is playing.
     pub(crate) playback_session: Option<PlaybackSession>,
     library_tracks: Vec<Track>,
+    /// Precomputed normalized search documents, kept in lockstep with
+    /// `library_tracks` so per-keystroke search never re-clones or
+    /// re-lowercases metadata fields. Rebuilt on a wholesale library change
+    /// and updated per-track on edits; the single write path
+    /// [`Self::store_library_track`] keeps it from drifting.
+    search_index: SearchIndex,
     playlists: Vec<Playlist>,
     playlist_folders: Vec<PlaylistFolder>,
     smart_playlists: Vec<SmartPlaylist>,
@@ -409,6 +416,7 @@ impl ApplicationRuntime {
             playback_queue: PlaybackQueue::default(),
             playback_session: None,
             library_tracks: Vec::new(),
+            search_index: SearchIndex::new(),
             playlists: Vec::new(),
             playlist_folders: Vec::new(),
             smart_playlists: Vec::new(),
@@ -469,6 +477,7 @@ impl ApplicationRuntime {
             playback_queue: initial_playback_queue,
             playback_session: None,
             library_tracks: Vec::new(),
+            search_index: SearchIndex::new(),
             playlists: Vec::new(),
             playlist_folders: Vec::new(),
             smart_playlists: Vec::new(),
@@ -535,6 +544,7 @@ impl ApplicationRuntime {
             )?;
         }
         self.library_tracks = library_scan::load_library_tracks(library_store.as_ref())?;
+        self.rebuild_search_index();
         self.playlists = library_store
             .playlists()
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
@@ -1051,6 +1061,28 @@ impl ApplicationRuntime {
             .map(|index| &self.library_tracks[index])
     }
 
+    /// Test a library track against an already-normalized query (see
+    /// [`normalize_query`]) using the precomputed search index — no
+    /// per-track field cloning or re-lowercasing. The caller normalizes the
+    /// query once and reuses it across the whole library.
+    pub fn search_matches(&self, track_id: TrackId, normalized_query: &str) -> bool {
+        self.search_index.matches(track_id, normalized_query)
+    }
+
+    /// Replace one in-place library track and keep its search document in
+    /// lockstep. The single write path for per-track in-memory updates, so
+    /// the index can never silently drift from `library_tracks`.
+    fn store_library_track(&mut self, index: usize, track: Track) {
+        self.search_index.insert(&track);
+        self.library_tracks[index] = track;
+    }
+
+    /// Rebuild the whole search index after a wholesale `library_tracks`
+    /// change (scan, import, consolidation, availability reconciliation).
+    fn rebuild_search_index(&mut self) {
+        self.search_index.rebuild(&self.library_tracks);
+    }
+
     pub fn playlists(&self) -> &[Playlist] {
         &self.playlists
     }
@@ -1298,6 +1330,9 @@ impl ApplicationRuntime {
             Some(track) => track,
             None => return,
         };
+        // Keep the search document current with the reloaded metadata (an
+        // online enrichment pass can rewrite title/artist/etc).
+        self.search_index.insert(&refreshed);
         if let Some(slot) = self
             .library_tracks
             .iter_mut()

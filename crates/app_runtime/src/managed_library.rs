@@ -94,6 +94,7 @@ impl ApplicationRuntime {
         self.last_library_import_summary = Some(summary.clone());
         self.library_tracks.extend(result.tracks);
         self.library_tracks.sort_by_key(|track| track.id);
+        self.rebuild_search_index();
         self.refresh_playback_queue_track_ids();
         self.library_import_cancellation = None;
         self.background_task_status = crate::BackgroundTaskStatus::Idle;
@@ -172,6 +173,7 @@ impl ApplicationRuntime {
                 })
         });
         replace_library_tracks_by_id(&mut self.library_tracks, result.tracks);
+        self.rebuild_search_index();
         self.refresh_playback_queue_track_ids();
         if flipped_availability {
             self.notify_track_availability_observer();

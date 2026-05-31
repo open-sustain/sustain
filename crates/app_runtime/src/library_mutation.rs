@@ -45,7 +45,7 @@ impl ApplicationRuntime {
         library_store
             .save_track(track.clone())
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        self.library_tracks[track_index] = track;
+        self.store_library_track(track_index, track);
 
         self.submit_metadata_write(
             track_id,
@@ -105,7 +105,7 @@ impl ApplicationRuntime {
                 &self.library_tracks,
                 track,
             )?;
-            self.library_tracks[track_index] = track;
+            self.store_library_track(track_index, track);
             return Ok(());
         }
 
@@ -117,7 +117,7 @@ impl ApplicationRuntime {
         library_store
             .save_track(track.clone())
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        self.library_tracks[track_index] = track;
+        self.store_library_track(track_index, track);
 
         self.submit_metadata_write(
             track_id,
@@ -215,7 +215,7 @@ impl ApplicationRuntime {
         library_store
             .save_track(track.clone())
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        self.library_tracks[track_index] = track;
+        self.store_library_track(track_index, track);
 
         Ok(())
     }
@@ -234,6 +234,7 @@ impl ApplicationRuntime {
             .delete_track(track_id)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.library_tracks.retain(|track| track.id != track_id);
+        self.search_index.remove(track_id);
         self.playback_queue
             .remove_track(track_id, playback_shuffle_seed());
         Ok(())

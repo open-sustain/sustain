@@ -190,11 +190,10 @@ pub(super) fn playlist_table_rows_for(
     };
 
     let honor_sort_tags = runtime.settings().library.honor_sort_tags;
+    let normalized = normalize_query(search_text);
     candidates
         .into_iter()
-        .filter(|(track, _)| {
-            search_text.is_empty() || track_matches_search_text(track, search_text)
-        })
+        .filter(|(track, _)| normalized.is_empty() || runtime.search_matches(track.id, &normalized))
         .map(|(track, position)| {
             TrackTableRow::from_track(&track, honor_sort_tags).with_playlist_position(position)
         })

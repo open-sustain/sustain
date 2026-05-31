@@ -41,6 +41,7 @@ pub(super) struct SearchWiringContext {
     pub(super) sidebar: PlaylistSidebar,
     pub(super) content_stack: gtk::Stack,
     pub(super) playlists_dirty: Rc<Cell<bool>>,
+    pub(super) status_bar: StatusBar,
     pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
 }
 
@@ -55,6 +56,7 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
         sidebar,
         content_stack,
         playlists_dirty,
+        status_bar,
         visible_summary_refresh,
     } = context;
     let pending_rebuild: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
@@ -81,12 +83,23 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
             let sidebar = sidebar.clone();
             let content_stack = content_stack.clone();
             let playlists_dirty = playlists_dirty.clone();
+            let status_bar = status_bar.clone();
             let visible_summary_refresh = visible_summary_refresh.clone();
             let pending_rebuild_clear = pending_rebuild.clone();
             let source_id = glib::timeout_add_local_once(SEARCH_REBUILD_DEBOUNCE, move || {
                 pending_rebuild_clear.borrow_mut().take();
 
                 let songs_rows = runtime_library_table_rows(&runtime.borrow(), &new_text);
+                // Share one pass: when Songs is the visible view, summarize
+                // the rows we just built (count + duration + size) instead
+                // of re-filtering and re-materializing the whole table for
+                // the status bar. Other views fall back to the generic
+                // refresh below, which derives the right rows for them.
+                let songs_visible =
+                    content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW);
+                if songs_visible {
+                    status_bar.update_summary(&songs_rows);
+                }
                 songs_table.replace_rows(songs_rows);
 
                 albums_view.set_search_text(new_text.clone());
@@ -101,7 +114,9 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
                     &playlists_dirty,
                 );
 
-                visible_summary_refresh();
+                if !songs_visible {
+                    visible_summary_refresh();
+                }
             });
             *pending_rebuild.borrow_mut() = Some(source_id);
         }),

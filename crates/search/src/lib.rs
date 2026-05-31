@@ -4,33 +4,96 @@
 #![forbid(unsafe_code)]
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 pub use sustain_domain::{
-    LibraryQuery, SortDirection, Track, TrackSort, TrackSortColumn, compare_optional_text,
+    LibraryQuery, SortDirection, Track, TrackId, TrackSort, TrackSortColumn, compare_optional_text,
 };
 
+/// Joins a track's searchable fields in its precomputed document. Chosen
+/// because a single-line search query never contains it, so
+/// `document.contains(query)` can never span two fields — preserving the
+/// "matches some single field" semantics of the per-field scan it replaced.
+const FIELD_SEPARATOR: char = '\n';
+
+/// A precomputed, normalized search document per track, keyed by id.
+///
+/// Each track contributes one lowercased string concatenating its
+/// searchable fields, built once on insert/rebuild rather than re-cloned
+/// and re-lowercased on every query. Matching a query is then a single
+/// substring test with no per-track allocation — the index, not the query
+/// path, owns the normalization cost. The owner keeps it in sync with the
+/// library (rebuild on a wholesale change, insert on a per-track update,
+/// remove on deletion).
+#[derive(Debug, Default)]
+pub struct SearchIndex {
+    documents: HashMap<TrackId, String>,
+}
+
+impl SearchIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the whole index from `tracks` (after a scan/import/reconcile).
+    pub fn rebuild(&mut self, tracks: &[Track]) {
+        self.documents.clear();
+        self.documents.reserve(tracks.len());
+        for track in tracks {
+            self.documents.insert(track.id, build_document(track));
+        }
+    }
+
+    /// Insert or replace one track's document (after a per-track update).
+    pub fn insert(&mut self, track: &Track) {
+        self.documents.insert(track.id, build_document(track));
+    }
+
+    /// Drop a track's document (after deletion).
+    pub fn remove(&mut self, track_id: TrackId) {
+        self.documents.remove(&track_id);
+    }
+
+    pub fn len(&self) -> usize {
+        self.documents.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.documents.is_empty()
+    }
+
+    /// Test a track against an ALREADY-normalized query (see
+    /// [`normalize_query`]). A track absent from the index never matches; an
+    /// empty query is the caller's responsibility to short-circuit.
+    pub fn matches(&self, track_id: TrackId, normalized_query: &str) -> bool {
+        self.documents
+            .get(&track_id)
+            .is_some_and(|document| document.contains(normalized_query))
+    }
+}
+
+/// Normalize a raw search query once so it can be reused across many track
+/// tests. The same normalization is baked into each indexed document.
+pub fn normalize_query(query: &str) -> String {
+    query.trim().to_lowercase()
+}
+
 pub fn filter_tracks_by_search_text(tracks: &[Track], search_text: &str) -> Vec<Track> {
-    let normalized_search = normalize(search_text);
+    let normalized_search = normalize_query(search_text);
     if normalized_search.is_empty() {
         return tracks.to_vec();
     }
 
     tracks
         .iter()
-        .filter(|track| track_matches_search_text(track, &normalized_search))
+        .filter(|track| build_document(track).contains(&normalized_search))
         .cloned()
         .collect()
 }
 
 pub fn track_matches_search_text(track: &Track, search_text: &str) -> bool {
-    let normalized_search = normalize(search_text);
-    if normalized_search.is_empty() {
-        return true;
-    }
-
-    searchable_fields(track)
-        .iter()
-        .any(|field| normalize(field).contains(&normalized_search))
+    let normalized_search = normalize_query(search_text);
+    normalized_search.is_empty() || build_document(track).contains(&normalized_search)
 }
 
 /// Album-level search: matches against the album's title, artist, and year.
@@ -46,14 +109,14 @@ pub fn album_matches_search_text(
     album_year: Option<i32>,
     search_text: &str,
 ) -> bool {
-    let normalized_search = normalize(search_text);
+    let normalized_search = normalize_query(search_text);
     if normalized_search.is_empty() {
         return true;
     }
     let year_text = album_year.map(|year| year.to_string()).unwrap_or_default();
     [album_title, album_artist, year_text.as_str()]
         .iter()
-        .any(|field| normalize(field).contains(&normalized_search))
+        .any(|field| normalize_query(field).contains(&normalized_search))
 }
 
 pub fn sort_tracks(mut tracks: Vec<Track>, sort: TrackSort) -> Vec<Track> {
@@ -105,29 +168,39 @@ fn compare_tracks(left: &Track, right: &Track, sort: TrackSort) -> Ordering {
     ordering.then_with(|| left.id.cmp(&right.id))
 }
 
-fn searchable_fields(track: &Track) -> Vec<String> {
+/// Build a track's normalized search document: each non-empty searchable
+/// field, trimmed and lowercased, joined by [`FIELD_SEPARATOR`]. This is
+/// the single source of truth for "what text a track is searchable by",
+/// shared by [`SearchIndex`] and the free match functions.
+fn build_document(track: &Track) -> String {
     let metadata = &track.metadata;
-    let mut fields = Vec::new();
-
-    push_optional(&mut fields, &metadata.title);
-    push_optional(&mut fields, &metadata.artist);
-    push_optional(&mut fields, &metadata.album);
-    push_optional(&mut fields, &metadata.album_artist);
-    push_optional(&mut fields, &metadata.composer);
-    push_optional(&mut fields, &metadata.genre);
-    fields.push(track.location.path().to_string_lossy().into_owned());
-
-    fields
-}
-
-fn push_optional(fields: &mut Vec<String>, value: &Option<String>) {
-    if let Some(value) = value {
-        fields.push(value.clone());
+    let mut document = String::new();
+    for field in [
+        metadata.title.as_deref(),
+        metadata.artist.as_deref(),
+        metadata.album.as_deref(),
+        metadata.album_artist.as_deref(),
+        metadata.composer.as_deref(),
+        metadata.genre.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        push_field(&mut document, field);
     }
+    push_field(&mut document, &track.location.path().to_string_lossy());
+    document
 }
 
-fn normalize(value: &str) -> String {
-    value.trim().to_lowercase()
+fn push_field(document: &mut String, field: &str) {
+    let trimmed = field.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if !document.is_empty() {
+        document.push(FIELD_SEPARATOR);
+    }
+    document.push_str(&trimmed.to_lowercase());
 }
 
 #[cfg(test)]
@@ -139,11 +212,81 @@ mod tests {
     };
 
     use super::{
-        album_matches_search_text, filter_tracks_by_search_text, sort_tracks,
-        track_matches_search_text,
+        SearchIndex, album_matches_search_text, filter_tracks_by_search_text, normalize_query,
+        sort_tracks, track_matches_search_text,
     };
     use crate::Track;
     use crate::{SortDirection, TrackSort, TrackSortColumn};
+
+    #[test]
+    fn index_matches_the_same_fields_as_the_free_function() {
+        let mut track = track(1, "Angel", "Massive Attack");
+        track.metadata.album = Some("Mezzanine".to_owned());
+        track.metadata.genre = Some("Trip Hop".to_owned());
+        track.location = track_location("Massive Attack/track.flac");
+
+        let mut index = SearchIndex::new();
+        index.insert(&track);
+
+        for query in ["angel", "MEZZANINE", "trip hop", "massive attack"] {
+            assert!(
+                index.matches(track.id, &normalize_query(query)),
+                "index should match {query:?}"
+            );
+            // Parity with the per-track free function it replaces.
+            assert!(track_matches_search_text(&track, query));
+        }
+        assert!(!index.matches(track.id, &normalize_query("portishead")));
+    }
+
+    #[test]
+    fn index_insert_reflects_edited_metadata_immediately() {
+        let mut track = track(1, "Before", "Artist");
+        // Neutral path so the title is the only carrier of "before"/"after".
+        track.location = track_location("song.flac");
+        let mut index = SearchIndex::new();
+        index.insert(&track);
+        assert!(index.matches(track.id, &normalize_query("before")));
+
+        track.metadata.title = Some("After".to_owned());
+        index.insert(&track);
+        assert!(index.matches(track.id, &normalize_query("after")));
+        assert!(
+            !index.matches(track.id, &normalize_query("before")),
+            "the stale title must no longer match after an edit"
+        );
+    }
+
+    #[test]
+    fn index_rebuild_and_remove_track_documents() {
+        let tracks = vec![
+            track(1, "Angel", "Massive Attack"),
+            track(2, "Roads", "Portishead"),
+        ];
+        let mut index = SearchIndex::new();
+        index.rebuild(&tracks);
+        assert_eq!(index.len(), 2);
+        assert!(index.matches(track_id(2), &normalize_query("portishead")));
+
+        index.remove(track_id(2));
+        assert_eq!(index.len(), 1);
+        assert!(
+            !index.matches(track_id(2), &normalize_query("portishead")),
+            "a removed track must never match"
+        );
+    }
+
+    #[test]
+    fn index_does_not_match_a_query_spanning_two_fields() {
+        // "attack" (artist) and "mezzanine" (album) are distinct fields; a
+        // query straddling them must not match, matching the per-field
+        // semantics of the scan the index replaced.
+        let mut track = track(1, "Angel", "Massive Attack");
+        track.metadata.album = Some("Mezzanine".to_owned());
+        let mut index = SearchIndex::new();
+        index.insert(&track);
+        assert!(!index.matches(track.id, &normalize_query("attack mezzanine")));
+    }
 
     #[test]
     fn blank_search_returns_all_tracks() {

@@ -31,7 +31,7 @@ use sustain_settings::{SettingsError, SettingsResult, SettingsStore};
 use super::{
     ApplicationRuntime, ApplicationRuntimeError, LibraryConsolidationSummary, LibraryScanSummary,
     MetadataService, NotificationCategory, NotificationSeverity, PlaybackQueueRequest,
-    run_library_consolidation_task, run_library_scan_task,
+    normalize_query, run_library_consolidation_task, run_library_scan_task,
 };
 use crate::library_mutation::FilePresence;
 
@@ -1648,6 +1648,52 @@ fn runtime_update_metadata_writes_tags_and_updates_store_cache() {
     assert_eq!(stored.metadata.title.as_deref(), Some("New"));
     assert_eq!(stored.metadata.artist, None);
     assert_eq!(stored.metadata.year, Some(2001));
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn metadata_edit_updates_the_search_index_immediately() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    std::fs::write(root.join("track.flac"), b"not real audio").expect("write fake track");
+
+    let track_id = track_id(1);
+    let store = Arc::new(InMemoryLibraryStore::new());
+    // Path is neutral ("track.flac") so the title is the only carrier of
+    // "Before"/"After" in the search document.
+    let mut track = test_track(track_id, "track.flac");
+    track.metadata.title = Some("Before".to_owned());
+    assert_eq!(store.save_track(track), Ok(()));
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(RecordingMetadataService::new(false)))
+    .expect("library services initialize");
+
+    // Built during library load.
+    assert!(runtime.search_matches(track_id, &normalize_query("before")));
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateMetadata {
+            track_id,
+            change: Box::new(MetadataChange {
+                title: FieldChange::Set("After".to_owned()),
+                ..MetadataChange::default()
+            }),
+        }),
+        Ok(())
+    );
+
+    assert!(
+        runtime.search_matches(track_id, &normalize_query("after")),
+        "the edited title is searchable immediately"
+    );
+    assert!(
+        !runtime.search_matches(track_id, &normalize_query("before")),
+        "the stale title no longer matches after the edit"
+    );
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }

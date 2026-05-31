@@ -79,6 +79,7 @@ impl ApplicationRuntime {
         let summary = result.summary;
         self.last_scan_summary = Some(summary.clone());
         self.library_tracks = result.tracks;
+        self.rebuild_search_index();
         self.refresh_playback_queue_track_ids();
         self.library_scan_cancellation = None;
         self.background_task_status = crate::BackgroundTaskStatus::Idle;

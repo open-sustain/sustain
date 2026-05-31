@@ -272,6 +272,7 @@ impl ApplicationRuntime {
             reconciled.push(reconciled_track);
         }
         self.library_tracks = reconciled;
+        self.rebuild_search_index();
 
         if !changed.is_empty()
             && let Some(store) = self.library_store.as_ref()
