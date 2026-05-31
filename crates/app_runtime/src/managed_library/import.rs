@@ -179,7 +179,8 @@ impl LibraryImportContext {
                 // Roll back the files we have copied so far so a
                 // cancelled import leaves zero filesystem side
                 // effects.
-                remove_copied_files(&copied_paths);
+                remove_copied_files(&copied_paths)
+                    .map_err(|()| ApplicationRuntimeError::LibraryImportFailed)?;
                 return Ok(cancelled_import_result(discovered_files.len()));
             }
             match copy_file_verified(
@@ -189,7 +190,7 @@ impl LibraryImportContext {
             ) {
                 Ok(_) => copied_paths.push(import.destination_path.clone()),
                 Err(_) => {
-                    remove_copied_files(&copied_paths);
+                    let _ = remove_copied_files(&copied_paths);
                     return Err(ApplicationRuntimeError::LibraryImportFailed);
                 }
             }
@@ -199,7 +200,7 @@ impl LibraryImportContext {
         let mut tracks = Vec::new();
         for (next_track_id, import) in (first_track_id..).zip(imports) {
             let Some(track_id) = sustain_domain::TrackId::new(next_track_id) else {
-                remove_copied_files(&copied_paths);
+                let _ = remove_copied_files(&copied_paths);
                 return Err(ApplicationRuntimeError::LibraryStoreFailed);
             };
             tracks.push(Track {
@@ -217,7 +218,7 @@ impl LibraryImportContext {
         }
 
         if self.library_store.save_tracks(&tracks).is_err() {
-            remove_copied_files(&copied_paths);
+            let _ = remove_copied_files(&copied_paths);
             return Err(ApplicationRuntimeError::LibraryStoreFailed);
         }
 

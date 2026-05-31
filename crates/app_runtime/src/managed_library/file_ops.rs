@@ -7,7 +7,8 @@
 //! paths share.
 
 use std::{
-    fs,
+    fs::{self, File},
+    io,
     io::{BufReader, BufWriter, Write},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
@@ -22,6 +23,12 @@ pub(super) struct VerifiedFileCopy {
     pub(super) destination_path: PathBuf,
     pub(super) bytes_copied: u64,
     pub(super) content_hash: TrackContentHash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FileIdentity {
+    pub(super) device: u64,
+    pub(super) inode: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,6 +48,7 @@ pub(super) enum VerifiedFileCopyError {
         expected: TrackContentHash,
         actual: TrackContentHash,
     },
+    SyncCopiedFileFailed,
     FinalizeFailed,
 }
 
@@ -51,8 +59,11 @@ pub(super) enum FileMoveError {
     DestinationHasNoParent,
     DestinationExists,
     CreateDestinationDirectoryFailed,
+    SourceChanged,
     LinkFailed,
+    SyncDestinationDirectoryFailed,
     RemoveSourceFailed,
+    SyncSourceDirectoryFailed,
 }
 
 pub(super) fn copy_file_verified(
@@ -72,7 +83,7 @@ pub(super) fn copy_file_verified(
     let destination_parent = destination_path
         .parent()
         .ok_or(VerifiedFileCopyError::DestinationHasNoParent)?;
-    fs::create_dir_all(destination_parent)
+    ensure_directory_all(destination_parent)
         .map_err(|_| VerifiedFileCopyError::CreateDestinationDirectoryFailed)?;
 
     let temporary_path = create_temporary_copy_path(destination_path)?;
@@ -86,7 +97,7 @@ pub(super) fn copy_file_verified(
     );
 
     if result.is_err() {
-        let _ = fs::remove_file(&temporary_path);
+        let _ = remove_file_and_sync_parent(&temporary_path);
     }
 
     result
@@ -124,13 +135,25 @@ fn copy_file_verified_inner(
         return Err(VerifiedFileCopyError::DestinationExists);
     }
 
+    File::open(temporary_path)
+        .and_then(|temporary| temporary.sync_all())
+        .map_err(|_| VerifiedFileCopyError::SyncCopiedFileFailed)?;
+
     // `rename` replaces existing files on Unix. A hard link created in the same
     // directory gives us no-overwrite finalization: it fails if the destination
-    // appeared while we were copying, and removing the temp name leaves the
-    // finalized file intact.
+    // appeared while we were copying. The inode is synced before publication;
+    // syncing the directory after the link and again after removing the temp
+    // name makes the final namespace durable before SQLite can reference it.
     fs::hard_link(temporary_path, destination_path)
         .map_err(|_| VerifiedFileCopyError::FinalizeFailed)?;
-    fs::remove_file(temporary_path).map_err(|_| VerifiedFileCopyError::FinalizeFailed)?;
+    if sync_parent_directory(destination_path).is_err() {
+        cleanup_published_link(destination_path);
+        return Err(VerifiedFileCopyError::FinalizeFailed);
+    }
+    if remove_file_and_sync_parent(temporary_path).is_err() {
+        cleanup_published_link(destination_path);
+        return Err(VerifiedFileCopyError::FinalizeFailed);
+    }
 
     Ok(VerifiedFileCopy {
         destination_path: destination_path.to_path_buf(),
@@ -192,10 +215,21 @@ pub(super) fn move_file_without_copy_or_overwrite(
     source_path: &Path,
     destination_path: &Path,
 ) -> Result<(), FileMoveError> {
-    let source_metadata =
-        fs::symlink_metadata(source_path).map_err(|_| FileMoveError::SourceUnavailable)?;
-    if !source_metadata.file_type().is_file() {
-        return Err(FileMoveError::SourceIsNotFile);
+    let source_identity = regular_file_identity(source_path)?;
+    move_file_without_copy_or_overwrite_matching_identity(
+        source_path,
+        destination_path,
+        source_identity,
+    )
+}
+
+pub(super) fn move_file_without_copy_or_overwrite_matching_identity(
+    source_path: &Path,
+    destination_path: &Path,
+    expected_identity: FileIdentity,
+) -> Result<(), FileMoveError> {
+    if regular_file_identity(source_path)? != expected_identity {
+        return Err(FileMoveError::SourceChanged);
     }
     if destination_path.exists() {
         return Err(FileMoveError::DestinationExists);
@@ -204,21 +238,45 @@ pub(super) fn move_file_without_copy_or_overwrite(
     let destination_parent = destination_path
         .parent()
         .ok_or(FileMoveError::DestinationHasNoParent)?;
-    fs::create_dir_all(destination_parent)
+    ensure_directory_all(destination_parent)
         .map_err(|_| FileMoveError::CreateDestinationDirectoryFailed)?;
     if destination_path.exists() {
         return Err(FileMoveError::DestinationExists);
     }
 
     fs::hard_link(source_path, destination_path).map_err(|_| FileMoveError::LinkFailed)?;
+    if regular_file_identity(destination_path) != Ok(expected_identity) {
+        cleanup_published_link(destination_path);
+        return Err(FileMoveError::SourceChanged);
+    }
+    if sync_parent_directory(destination_path).is_err() {
+        cleanup_published_link(destination_path);
+        return Err(FileMoveError::SyncDestinationDirectoryFailed);
+    }
+    if regular_file_identity(source_path) != Ok(expected_identity) {
+        cleanup_published_link(destination_path);
+        return Err(FileMoveError::SourceChanged);
+    }
     if fs::remove_file(source_path).is_err() {
         if paths_refer_to_same_file(source_path, destination_path) {
-            let _ = fs::remove_file(destination_path);
+            cleanup_published_link(destination_path);
         }
         return Err(FileMoveError::RemoveSourceFailed);
     }
+    sync_parent_directory(source_path).map_err(|_| FileMoveError::SyncSourceDirectoryFailed)?;
 
     Ok(())
+}
+
+pub(super) fn regular_file_identity(path: &Path) -> Result<FileIdentity, FileMoveError> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| FileMoveError::SourceUnavailable)?;
+    if !metadata.file_type().is_file() {
+        return Err(FileMoveError::SourceIsNotFile);
+    }
+    Ok(FileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
 }
 
 pub(super) fn rollback_file_move(
@@ -230,7 +288,8 @@ pub(super) fn rollback_file_move(
         path_is_regular_file(destination_path),
     ) {
         (true, true) if paths_refer_to_same_file(source_path, destination_path) => {
-            fs::remove_file(destination_path).map_err(|_| FileMoveError::RemoveSourceFailed)
+            remove_file_and_sync_parent(destination_path)
+                .map_err(|_| FileMoveError::RemoveSourceFailed)
         }
         (true, false) => Ok(()),
         (false, true) => move_file_without_copy_or_overwrite(destination_path, source_path),
@@ -251,10 +310,68 @@ pub(super) fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-pub(super) fn remove_copied_files(paths: &[PathBuf]) {
+pub(super) fn remove_copied_files(paths: &[PathBuf]) -> Result<(), ()> {
+    let mut failed = false;
     for path in paths.iter().rev() {
-        let _ = fs::remove_file(path);
+        if remove_file_and_sync_parent(path).is_err() {
+            failed = true;
+        }
     }
+    (!failed).then_some(()).ok_or(())
+}
+
+pub(super) fn remove_file_and_sync_parent(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => sync_parent_directory(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn cleanup_published_link(path: &Path) {
+    let _ = remove_file_and_sync_parent(path);
+}
+
+fn ensure_directory_all(path: &Path) -> io::Result<()> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => return Ok(()),
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "managed-library destination component is not a directory",
+            ));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "managed-library destination directory has no parent",
+        )
+    })?;
+    ensure_directory_all(parent)?;
+    match fs::create_dir(path) {
+        Ok(()) => sync_directory(parent),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn sync_parent_directory(path: &Path) -> io::Result<()> {
+    path.parent()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "managed-library path has no parent directory",
+            )
+        })
+        .and_then(sync_directory)
+}
+
+pub(super) fn sync_directory(path: &Path) -> io::Result<()> {
+    File::open(path).and_then(|directory| directory.sync_all())
 }
 
 #[cfg(test)]
@@ -357,6 +474,34 @@ mod tests {
             Err(FileMoveError::DestinationExists)
         );
         assert!(second_source.exists());
+
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn managed_move_refuses_source_inode_replacement_after_planning() {
+        let root = unique_test_directory();
+        let source = root.join("source.flac");
+        let destination = root.join("Artist").join("Album").join("01 Song.flac");
+        fs::create_dir_all(&root).expect("create test directory");
+        fs::write(&source, b"original bytes").expect("write source");
+        let expected_identity = super::regular_file_identity(&source).expect("source identity");
+        fs::remove_file(&source).expect("remove original source");
+        fs::write(&source, b"replacement bytes").expect("write replacement source");
+
+        assert_eq!(
+            super::move_file_without_copy_or_overwrite_matching_identity(
+                &source,
+                &destination,
+                expected_identity,
+            ),
+            Err(FileMoveError::SourceChanged)
+        );
+        assert_eq!(
+            fs::read(&source).expect("read replacement"),
+            b"replacement bytes"
+        );
+        assert!(!destination.exists());
 
         fs::remove_dir_all(root).expect("remove test directory");
     }

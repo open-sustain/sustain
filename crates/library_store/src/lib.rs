@@ -283,6 +283,10 @@ pub trait LibraryStore: Send + Sync {
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()>;
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>>;
     fn tracks(&self) -> StoreResult<Vec<Track>>;
+    /// Force previously committed rows through the persistent-store
+    /// durability boundary. Managed-library relocation keeps its external
+    /// recovery journal until this succeeds.
+    fn flush_durable(&self) -> StoreResult<()>;
 
     /// Durably publish bounded artwork bytes before SQLite is allowed to
     /// reference them from [`Self::enqueue_tag_mirror_artwork`].

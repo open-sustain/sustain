@@ -20,6 +20,9 @@ trash = "5"
 # the same job. The unsafe surface is confined to
 # `crates/app_runtime/src/priority.rs`.
 libc = "0.2"
+# Linux no-replace rename for crash-recovery journal publication. A plain
+# `std::fs::rename` could overwrite an existing journal after a race.
+rustix = { version = "1.1.4", features = ["fs"] }
 sustain-analysis = { path = "../analysis" }
 sustain-artwork = { path = "../artwork" }
 sustain-settings = { path = "../settings" }

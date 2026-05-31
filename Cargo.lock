@@ -2094,6 +2094,7 @@ version = "0.3.0-alpha.2"
 dependencies = [
  "async-channel",
  "libc",
+ "rustix",
  "sustain-analysis",
  "sustain-artwork",
  "sustain-device-sync",

@@ -148,6 +148,31 @@ impl LibraryStore for SqliteLibraryStore {
         tracks::tracks(&connection)
     }
 
+    fn flush_durable(&self) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        // In WAL mode with synchronous=NORMAL, ordinary commits deliberately
+        // avoid fsync; a completed checkpoint is the durability boundary.
+        // FULL waits for readers/writers and the returned frame counts prove
+        // that the entire WAL was checkpointed before an external recovery
+        // journal may be removed.
+        let (busy, log_frames, checkpointed_frames) = connection
+            .query_row("PRAGMA wal_checkpoint(FULL)", [], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(StoreError::from)?;
+        if busy == 0 && log_frames == checkpointed_frames {
+            Ok(())
+        } else {
+            Err(StoreError::Database(format!(
+                "SQLite WAL durability checkpoint incomplete: busy={busy}, log={log_frames}, checkpointed={checkpointed_frames}"
+            )))
+        }
+    }
+
     fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork> {
         self.tag_mirror_blobs.publish(bytes)
     }

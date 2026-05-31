@@ -30,7 +30,7 @@ pub use import::run_library_import_task;
 pub(crate) use journal::recover_library_consolidation_journal;
 
 use consolidation::plan_managed_track_retarget;
-use file_ops::{move_file_without_copy_or_overwrite, rollback_file_move};
+use file_ops::{move_file_without_copy_or_overwrite_matching_identity, rollback_file_move};
 use journal::{remove_consolidation_journal_if_present, write_consolidation_journal};
 
 impl ApplicationRuntime {
@@ -238,9 +238,10 @@ pub(super) fn save_managed_metadata_update(
 
     write_consolidation_journal(library_path, std::slice::from_ref(&planned_move))?;
 
-    if move_file_without_copy_or_overwrite(
+    if move_file_without_copy_or_overwrite_matching_identity(
         &planned_move.source_path,
         &planned_move.destination_path,
+        planned_move.source_identity,
     )
     .is_err()
     {
@@ -256,6 +257,9 @@ pub(super) fn save_managed_metadata_update(
         return Err(ApplicationRuntimeError::LibraryStoreFailed);
     }
 
+    library_store
+        .flush_durable()
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
     remove_consolidation_journal_if_present(library_path)?;
     Ok(updated_track)
 }

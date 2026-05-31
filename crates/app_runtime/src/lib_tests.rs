@@ -2,6 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::{
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
 };
@@ -973,10 +974,13 @@ fn consolidation_journal_recovery_retargets_moved_tracks_on_startup() {
         .expect("create destination directory");
     let destination_path = library_root.join("Artist/Album/01 Song.flac");
     std::fs::write(&destination_path, b"audio bytes").expect("write moved file");
+    let destination_metadata = std::fs::metadata(&destination_path).expect("destination metadata");
     std::fs::write(
         library_root.join(".sustain-consolidation-journal"),
         format!(
-            "# sustain managed library consolidation journal v1\nmove\t23\t{}\t{}\n",
+            "# sustain managed library consolidation journal v2\nmove\t23\t{}\t{}\t{}\t{}\n",
+            destination_metadata.dev(),
+            destination_metadata.ino(),
             hex_path("loose.flac"),
             hex_path("Artist/Album/01 Song.flac")
         ),
@@ -4406,6 +4410,10 @@ impl LibraryStore for CallCountingLibraryStore {
             .tracks
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.tracks()
+    }
+
+    fn flush_durable(&self) -> StoreResult<()> {
+        self.inner.flush_durable()
     }
 
     fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork> {

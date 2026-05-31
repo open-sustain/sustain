@@ -354,6 +354,10 @@ impl LibraryStore for InMemoryLibraryStore {
         Ok(self.tracks_guard()?.values().cloned().collect())
     }
 
+    fn flush_durable(&self) -> StoreResult<()> {
+        Ok(())
+    }
+
     fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork> {
         validate_encoded_artwork(bytes).map_err(|_| StoreError::InvalidArtworkPayload)?;
         let digest = sha256_hex(bytes);
