@@ -65,6 +65,16 @@ fn fixed_clock(value: i64) -> UnixClockFn {
     Arc::new(move || value)
 }
 
+fn valid_artwork() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5,
+        0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64,
+        0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]
+}
+
 fn capturing_sink() -> (ProgressSink, std_mpsc::Receiver<SchedulerProgress>) {
     let (tx, rx) = std_mpsc::channel();
     let sink: ProgressSink = Arc::new(move |progress| {
@@ -518,8 +528,9 @@ fn artwork_capability_fetches_and_writes_when_missing() {
     let track = track_with_metadata(temp.path(), "alpha.flac");
     store.save_track(track.clone()).expect("save");
 
+    let expected_artwork = valid_artwork();
     let remote = Arc::new(StubRemote::default().with_artwork(Ok(Some(FetchedArtwork {
-        bytes: vec![1, 2, 3, 4],
+        bytes: expected_artwork.clone(),
         release_mbid: "release".to_owned(),
     }))));
     let metadata = Arc::new(StubMetadata::default());
@@ -553,7 +564,46 @@ fn artwork_capability_fetches_and_writes_when_missing() {
     assert_eq!(remote.artwork_calls.load(Ordering::SeqCst), 1);
     let writes = metadata.artwork_writes.lock().expect("lock");
     assert_eq!(writes.len(), 1);
-    assert_eq!(writes[0].as_deref(), Some(&[1u8, 2, 3, 4][..]));
+    assert_eq!(writes[0].as_deref(), Some(expected_artwork.as_slice()));
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn artwork_capability_rejects_invalid_remote_bytes_without_writing() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    store.save_track(track).expect("save");
+
+    let remote = Arc::new(StubRemote::default().with_artwork(Ok(Some(FetchedArtwork {
+        bytes: b"not an image".to_vec(),
+        release_mbid: "release".to_owned(),
+    }))));
+    let metadata = Arc::new(StubMetadata::default());
+    let (sink, rx) = capturing_sink();
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone());
+
+    let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
+        remote_service: remote,
+        tag_writer,
+        library_store: store,
+        progress: sink,
+        track_updated: None,
+        clock: fixed_clock(1),
+        initial_settings: OnlineSettings {
+            artwork: true,
+            tags: false,
+            lyrics: false,
+        },
+        library_path: Some(temp.path().to_path_buf()),
+        provider_version: 1,
+    });
+
+    let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Tick { failed: 1, .. })
+    });
+    assert!(metadata.artwork_writes.lock().expect("lock").is_empty());
 
     scheduler.shutdown();
 }
@@ -730,7 +780,7 @@ fn tags_fill_recording_level_fields_when_album_is_missing_but_skip_positional() 
         StubRemote::default()
             .with_identify(Ok(Some(track_match)))
             .with_artwork_for_match(Ok(Some(FetchedArtwork {
-                bytes: vec![0xAA, 0xBB],
+                bytes: valid_artwork(),
                 release_mbid: "rel-mbid".to_owned(),
             }))),
     );

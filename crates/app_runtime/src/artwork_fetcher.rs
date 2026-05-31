@@ -33,8 +33,9 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+use sustain_artwork::validate_encoded_artwork;
 use sustain_domain::TrackId;
-use sustain_metadata_remote::{RemoteMetadataService, TrackQuery};
+use sustain_metadata_remote::{RemoteError, RemoteMetadataService, TrackQuery};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArtworkFetchOutcome {
@@ -48,6 +49,9 @@ pub enum ArtworkFetchOutcome {
     /// looked, nothing came back") — distinguishing them would only
     /// matter for a richer diagnostic.
     NoMatch,
+    /// The provider returned bytes that violate Sustain's artwork resource
+    /// policy. Retrying the same response would not help.
+    Rejected,
     /// A network or remote-service failure. Retryable: the user may
     /// have lost connectivity, or the service may have been briefly
     /// unavailable.
@@ -121,8 +125,22 @@ fn worker_loop(
 ) {
     while let Ok(request) = receiver.recv() {
         let outcome = match service.fetch_artwork(&request.query) {
-            Ok(Some(artwork)) => ArtworkFetchOutcome::Fetched(artwork.bytes),
+            Ok(Some(artwork)) => match validate_encoded_artwork(&artwork.bytes) {
+                Ok(_) => ArtworkFetchOutcome::Fetched(artwork.bytes),
+                Err(error) => {
+                    eprintln!("Sustain: artwork fetch returned rejected bytes: {error}");
+                    ArtworkFetchOutcome::Rejected
+                }
+            },
             Ok(None) => ArtworkFetchOutcome::NoMatch,
+            Err(RemoteError::ArtworkRejected(error)) => {
+                eprintln!("Sustain: artwork fetch returned rejected bytes: {error}");
+                ArtworkFetchOutcome::Rejected
+            }
+            Err(RemoteError::PayloadTooLarge) => {
+                eprintln!("Sustain: artwork fetch returned an oversized payload");
+                ArtworkFetchOutcome::Rejected
+            }
             Err(error) => {
                 // Log so a failed click is diagnosable from a terminal
                 // run. The user-facing message stays generic; this

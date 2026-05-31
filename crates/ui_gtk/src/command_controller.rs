@@ -4,6 +4,7 @@
 use std::rc::Rc;
 
 use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
+use sustain_artwork::ArtworkReadError;
 
 use super::{ApplicationCommand, ApplicationRuntimeError, SharedRuntime};
 
@@ -41,6 +42,13 @@ impl UiCommandController {
 
     pub(crate) fn dispatch_succeeded(&self, command: ApplicationCommand) -> bool {
         self.dispatch(command).is_ok()
+    }
+
+    pub(crate) fn report_artwork_selection_error(&self, error: &ArtworkReadError) {
+        self.report_command_message(
+            NotificationSeverity::Warning,
+            format!("Could not use the selected artwork: {error}."),
+        );
     }
 
     pub(crate) fn dispatch_batch(

@@ -4,8 +4,9 @@
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use gtk::{FileDialog, FileFilter, gdk, gio};
+use gtk::{FileDialog, FileFilter, gdk, gio, glib};
 use sustain_app_runtime::{ApplicationCommand, TrackId};
+use sustain_artwork::read_artwork_file;
 
 use super::{ARTWORK_PREVIEW_SIZE, COVER_THUMB_SIZE, LibraryChangedHolder};
 use crate::command_controller::SharedCommandController;
@@ -107,7 +108,7 @@ impl ArtworkPage {
 
 pub(super) fn update_artwork_frame(frame: &gtk::Frame, bytes: Option<&[u8]>, size: i32) {
     frame.set_child(None::<&gtk::Widget>);
-    if let Some(texture) = bytes.and_then(artwork_texture_from_slice) {
+    if let Some(texture) = bytes.and_then(|bytes| artwork_texture_from_slice(bytes, size)) {
         let image = gtk::Image::from_paintable(Some(&texture));
         image.set_pixel_size(size);
         frame.set_child(Some(&image));
@@ -119,8 +120,18 @@ pub(super) fn update_artwork_frame(frame: &gtk::Frame, bytes: Option<&[u8]>, siz
     }
 }
 
-fn artwork_texture_from_slice(bytes: &[u8]) -> Option<gdk::Texture> {
-    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_read(std::io::Cursor::new(bytes.to_vec())).ok()?;
+fn artwork_texture_from_slice(bytes: &[u8], size: i32) -> Option<gdk::Texture> {
+    sustain_artwork::validate_encoded_artwork(bytes).ok()?;
+    let bytes = glib::Bytes::from_owned(bytes.to_vec());
+    let stream = gio::MemoryInputStream::from_bytes(&bytes);
+    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(
+        &stream,
+        size,
+        size,
+        true,
+        None::<&gio::Cancellable>,
+    )
+    .ok()?;
     Some(gdk::Texture::for_pixbuf(&pixbuf))
 }
 
@@ -154,9 +165,16 @@ fn open_artwork_picker(
         let Some(path) = file.path() else {
             return;
         };
-        let Ok(bytes) = std::fs::read(&path) else {
-            eprintln!("sustain: failed to read artwork file: {}", path.display());
-            return;
+        let bytes = match read_artwork_file(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!(
+                    "sustain: failed to read artwork file {}: {error}",
+                    path.display()
+                );
+                command_controller.report_artwork_selection_error(&error);
+                return;
+            }
         };
         if command_controller.dispatch_succeeded(ApplicationCommand::SetArtwork {
             track_id,

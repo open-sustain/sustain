@@ -21,6 +21,7 @@ trash = "5"
 # `crates/app_runtime/src/priority.rs`.
 libc = "0.2"
 sustain-analysis = { path = "../analysis" }
+sustain-artwork = { path = "../artwork" }
 sustain-settings = { path = "../settings" }
 sustain-device-sync = { path = "../device_sync" }
 sustain-domain = { path = "../domain" }

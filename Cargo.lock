@@ -312,6 +312,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "color_quant"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -796,6 +802,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gif"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5df2ba84018d80c213569363bdcd0c64e6933c67fe4c1d60ecf822971a3c35e"
+dependencies = [
+ "color_quant",
+ "weezl",
+]
+
+[[package]]
 name = "gio"
 version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1240,6 +1256,8 @@ checksum = "e6506c6c10786659413faa717ceebcb8f70731c0a60cbae39795fdf114519c1a"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
+ "color_quant",
+ "gif",
  "image-webp",
  "moxcms",
  "num-traits",
@@ -2077,6 +2095,7 @@ dependencies = [
  "async-channel",
  "libc",
  "sustain-analysis",
+ "sustain-artwork",
  "sustain-device-sync",
  "sustain-domain",
  "sustain-library-store",
@@ -2088,6 +2107,13 @@ dependencies = [
  "sustain-smart-shuffle",
  "tempfile",
  "trash",
+]
+
+[[package]]
+name = "sustain-artwork"
+version = "0.3.0-alpha.2"
+dependencies = [
+ "image",
 ]
 
 [[package]]
@@ -2135,6 +2161,7 @@ dependencies = [
  "lofty",
  "rustix",
  "sha2",
+ "sustain-artwork",
  "sustain-domain",
 ]
 
@@ -2143,6 +2170,7 @@ name = "sustain-metadata-remote"
 version = "0.3.0-alpha.2"
 dependencies = [
  "serde",
+ "sustain-artwork",
  "ureq",
 ]
 
@@ -2152,6 +2180,7 @@ version = "0.3.0-alpha.2"
 dependencies = [
  "image",
  "sha2",
+ "sustain-artwork",
  "sustain-domain",
 ]
 
@@ -2198,6 +2227,7 @@ dependencies = [
  "gtk4",
  "rusqlite",
  "sustain-app-runtime",
+ "sustain-artwork",
  "sustain-desktop",
 ]
 
@@ -2858,6 +2888,12 @@ checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
 dependencies = [
  "rustls-pki-types",
 ]
+
+[[package]]
+name = "weezl"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "windows"

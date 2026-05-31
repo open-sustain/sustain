@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use sustain_artwork::validate_encoded_artwork;
 use sustain_domain::{LibraryManagementMode, MetadataChange, Rating, TrackId};
 
 use crate::MetadataWriteKind;
@@ -138,6 +139,10 @@ impl ApplicationRuntime {
         artwork: Option<Vec<u8>>,
     ) -> ApplicationRuntimeResult<()> {
         self.ensure_no_background_library_task()?;
+        if let Some(bytes) = artwork.as_deref() {
+            validate_encoded_artwork(bytes)
+                .map_err(|_| ApplicationRuntimeError::ArtworkRejected)?;
+        }
         let track = self
             .library_tracks
             .iter()

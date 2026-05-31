@@ -12,6 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
+sustain-artwork = { path = "../artwork" }
 ureq = { version = "3", features = ["json"] }
 
 [lints]

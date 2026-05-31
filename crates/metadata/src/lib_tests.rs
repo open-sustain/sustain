@@ -7,11 +7,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use lofty::{
+    picture::{Picture, PictureType},
+    tag::{Tag, TagType},
+};
 use sustain_domain::TrackMetadata;
 
 use super::{
     AudioFormat, InitialTags, LibraryScanner, MetadataError, MetadataResult, MetadataService,
     Rating, atomic_write_via_rename, audio_format_from_path, hash_file_content,
+    valid_embedded_picture,
 };
 
 #[test]
@@ -51,6 +56,29 @@ fn rejects_unsupported_audio_formats() {
     assert_eq!(
         audio_format_from_path(Path::new("/music/no-extension")),
         Err(MetadataError::UnsupportedAudioFormat)
+    );
+}
+
+#[test]
+fn embedded_picture_selection_skips_invalid_front_cover() {
+    let valid = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5,
+        0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64,
+        0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+    let mut tag = Tag::new(TagType::Id3v2);
+    tag.push_picture(
+        Picture::unchecked(b"not an image".to_vec())
+            .pic_type(PictureType::CoverFront)
+            .build(),
+    );
+    tag.push_picture(Picture::unchecked(valid.clone()).build());
+
+    assert_eq!(
+        valid_embedded_picture(&tag).map(Picture::data),
+        Some(valid.as_slice())
     );
 }
 

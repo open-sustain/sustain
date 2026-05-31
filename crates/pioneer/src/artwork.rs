@@ -30,6 +30,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder};
 use sha2::{Digest, Sha256};
+use sustain_artwork::decode_static_artwork;
 
 use crate::model::PioneerArtwork;
 
@@ -100,7 +101,7 @@ impl ArtworkSet {
         if let Some(&id) = self.by_hash.get(&hash) {
             return Ok(id);
         }
-        let image = image::load_from_memory(cover).map_err(|_| ArtworkError::Decode)?;
+        let image = decode_static_artwork(cover).map_err(|_| ArtworkError::Decode)?;
         let small = encode_thumbnail(&image, SMALL_SIZE)?;
         let large = encode_thumbnail(&image, LARGE_SIZE)?;
         let id = self.processed.len() as u32 + 1;
@@ -198,6 +199,14 @@ mod tests {
     fn rejects_undecodable_bytes() {
         let mut set = ArtworkSet::new();
         assert_eq!(set.add(b"this is not an image"), Err(ArtworkError::Decode));
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn rejects_payload_over_shared_encoded_limit() {
+        let mut set = ArtworkSet::new();
+        let oversized = vec![0; sustain_artwork::MAX_ENCODED_ARTWORK_BYTES + 1];
+        assert_eq!(set.add(&oversized), Err(ArtworkError::Decode));
         assert!(set.is_empty());
     }
 

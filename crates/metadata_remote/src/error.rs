@@ -13,6 +13,8 @@
 
 use std::{fmt, time::Duration};
 
+use sustain_artwork::ArtworkPolicyError;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RemoteError {
     /// Network reachability or transport failure (DNS, TCP, TLS,
@@ -34,6 +36,12 @@ pub enum RemoteError {
     /// expected schema (truncated JSON, unexpected shape, missing
     /// fields we cannot recover from).
     InvalidResponse,
+    /// A binary provider response exceeded the caller's acquisition cap
+    /// before it could be retained in memory.
+    PayloadTooLarge,
+    /// Cover-art bytes fit the encoded cap but violate the shared artwork
+    /// policy (unsupported/corrupt encoding or excessive dimensions).
+    ArtworkRejected(ArtworkPolicyError),
     /// The remote provider is not configured (e.g. AcoustID requires
     /// an application key that was not built into the binary). The
     /// caller is expected to skip the feature gracefully.
@@ -51,6 +59,10 @@ impl fmt::Display for RemoteError {
             ),
             Self::BadStatus(code) => write!(f, "remote service returned HTTP {code}"),
             Self::InvalidResponse => f.write_str("remote service returned an unexpected payload"),
+            Self::PayloadTooLarge => f.write_str("remote service returned an oversized payload"),
+            Self::ArtworkRejected(error) => {
+                write!(f, "remote service returned rejected artwork: {error}")
+            }
             Self::NotConfigured => f.write_str("remote service not configured"),
         }
     }

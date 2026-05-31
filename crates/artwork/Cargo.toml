@@ -1,0 +1,25 @@
+[package]
+name = "sustain-artwork"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sustain_artwork"
+path = "src/lib.rs"
+
+[dependencies]
+# Header inspection and a bounded static representative-frame decode. Sustain
+# accepts the four formats exposed by the GTK picker and commonly embedded in
+# audio tags; unsupported formats degrade to the missing-artwork placeholder.
+image = { version = "0.25", default-features = false, features = [
+    "gif",
+    "jpeg",
+    "png",
+    "webp",
+] }
+
+[lints]
+workspace = true

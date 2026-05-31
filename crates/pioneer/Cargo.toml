@@ -16,6 +16,7 @@ path = "src/lib.rs"
 # heavier — no DSP, no decoding, no storage — so the Pioneer on-drive
 # format lives in isolation from the rest of the application.
 sustain-domain = { path = "../domain" }
+sustain-artwork = { path = "../artwork" }
 # Cover-art rendering for the Pioneer artwork table: decode an embedded
 # cover and re-encode the 80/240 px JPEG thumbnails the XDJ displays.
 # Lean codec set — embedded art is effectively always JPEG or PNG (WebP

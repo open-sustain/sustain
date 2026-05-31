@@ -114,6 +114,7 @@ pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApplicationRuntimeError {
     ArtworkFetchingUnavailable,
+    ArtworkRejected,
     LibraryPathUnavailable,
     LibraryConsolidationFailed,
     LibraryImportFailed,

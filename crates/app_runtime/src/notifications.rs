@@ -475,6 +475,9 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         ApplicationRuntimeError::ArtworkFetchingUnavailable => {
             "Remote artwork retrieval is not available in this build."
         }
+        ApplicationRuntimeError::ArtworkRejected => {
+            "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
+        }
         ApplicationRuntimeError::UnsupportedCommand(_) => "This action is not available yet.",
     }
 }

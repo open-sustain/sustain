@@ -189,7 +189,7 @@ impl HttpClient {
     /// to the actual image URL on archive.org). Returns `None` for 404,
     /// which the providers use to indicate "no image present" and is
     /// not an error in our model.
-    pub fn get_bytes(&self, url: &str) -> RemoteResult<Option<Vec<u8>>> {
+    pub fn get_bytes(&self, url: &str, max_bytes: usize) -> RemoteResult<Option<Vec<u8>>> {
         self.respect_rate_limit(url);
         let response = match self
             .agent
@@ -212,10 +212,19 @@ impl HttpClient {
             return Err(RemoteError::BadStatus(status));
         }
 
+        let read_limit = max_bytes
+            .checked_add(1)
+            .and_then(|limit| u64::try_from(limit).ok())
+            .ok_or(RemoteError::PayloadTooLarge)?;
         let bytes = response
             .into_body()
+            .into_with_config()
+            .limit(read_limit)
             .read_to_vec()
-            .map_err(|_| RemoteError::InvalidResponse)?;
+            .map_err(map_binary_payload_read_error)?;
+        if bytes.len() > max_bytes {
+            return Err(RemoteError::PayloadTooLarge);
+        }
         if bytes.is_empty() {
             return Ok(None);
         }
@@ -301,6 +310,13 @@ impl HttpClient {
         if !sleep_for.is_zero() {
             thread::sleep(sleep_for);
         }
+    }
+}
+
+fn map_binary_payload_read_error(error: ureq::Error) -> RemoteError {
+    match error {
+        ureq::Error::BodyExceedsLimit(_) => RemoteError::PayloadTooLarge,
+        _ => RemoteError::InvalidResponse,
     }
 }
 
@@ -401,6 +417,14 @@ mod tests {
     fn ignores_unknown_hosts() {
         assert_eq!(host_from_url("https://example.com/whatever"), None);
         assert_eq!(host_from_url("not a url"), None);
+    }
+
+    #[test]
+    fn oversized_binary_payload_maps_to_typed_error() {
+        assert_eq!(
+            map_binary_payload_read_error(ureq::Error::BodyExceedsLimit(123)),
+            RemoteError::PayloadTooLarge
+        );
     }
 
     fn headers_with_retry_after(value: &str) -> http::HeaderMap {

@@ -25,8 +25,10 @@
 
 use std::sync::Arc;
 
+use sustain_artwork::{MAX_ENCODED_ARTWORK_BYTES, validate_encoded_artwork};
+
 use crate::client::HttpClient;
-use crate::error::RemoteResult;
+use crate::error::{RemoteError, RemoteResult};
 use crate::mbid::is_well_formed;
 
 const RELEASE_FRONT_BASE: &str = "https://coverartarchive.org/release";
@@ -51,7 +53,9 @@ impl CoverArtArchiveClient {
             return Ok(None);
         }
         let url = format!("{RELEASE_FRONT_BASE}/{release_mbid}/front");
-        self.http.get_bytes(&url)
+        self.http
+            .get_bytes(&url, MAX_ENCODED_ARTWORK_BYTES)
+            .and_then(validate_artwork)
     }
 
     /// Fetch the front cover for a release-group MBID. Used as a
@@ -64,6 +68,17 @@ impl CoverArtArchiveClient {
             return Ok(None);
         }
         let url = format!("{RELEASE_GROUP_FRONT_BASE}/{release_group_mbid}/front");
-        self.http.get_bytes(&url)
+        self.http
+            .get_bytes(&url, MAX_ENCODED_ARTWORK_BYTES)
+            .and_then(validate_artwork)
     }
+}
+
+fn validate_artwork(bytes: Option<Vec<u8>>) -> RemoteResult<Option<Vec<u8>>> {
+    bytes
+        .map(|bytes| {
+            validate_encoded_artwork(&bytes).map_err(RemoteError::ArtworkRejected)?;
+            Ok(bytes)
+        })
+        .transpose()
 }

@@ -1706,6 +1706,35 @@ fn runtime_set_rating_applies_optimistic_update_and_reports_tag_write_failure() 
 }
 
 #[test]
+fn runtime_rejects_invalid_artwork_before_submitting_tag_write() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    std::fs::write(root.join("track.flac"), b"not real audio").expect("write fake track");
+
+    let track_id = track_id(1);
+    let store = Arc::new(InMemoryLibraryStore::new());
+    assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
+    let metadata_service = Arc::new(RecordingMetadataService::new(false));
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, metadata_service.clone())
+    .expect("library services initialize");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::SetArtwork {
+            track_id,
+            artwork: Some(b"not an image".to_vec()),
+        }),
+        Err(ApplicationRuntimeError::ArtworkRejected)
+    );
+    assert!(metadata_service.artwork_writes().is_empty());
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
 fn runtime_update_metadata_writes_tags_and_updates_store_cache() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
@@ -3004,6 +3033,7 @@ struct RecordingMetadataService {
     fail_metadata_writes: bool,
     rating_writes: Mutex<Vec<(PathBuf, Rating)>>,
     metadata_writes: Mutex<Vec<(PathBuf, MetadataChange)>>,
+    artwork_writes: Mutex<Vec<Option<Vec<u8>>>>,
 }
 
 impl RecordingMetadataService {
@@ -3013,6 +3043,7 @@ impl RecordingMetadataService {
             fail_metadata_writes: false,
             rating_writes: Mutex::new(Vec::new()),
             metadata_writes: Mutex::new(Vec::new()),
+            artwork_writes: Mutex::new(Vec::new()),
         }
     }
 
@@ -3022,6 +3053,7 @@ impl RecordingMetadataService {
             fail_metadata_writes: true,
             rating_writes: Mutex::new(Vec::new()),
             metadata_writes: Mutex::new(Vec::new()),
+            artwork_writes: Mutex::new(Vec::new()),
         }
     }
 
@@ -3036,6 +3068,13 @@ impl RecordingMetadataService {
         self.metadata_writes
             .lock()
             .expect("metadata writes lock is available")
+            .clone()
+    }
+
+    fn artwork_writes(&self) -> Vec<Option<Vec<u8>>> {
+        self.artwork_writes
+            .lock()
+            .expect("artwork writes lock is available")
             .clone()
     }
 }
@@ -3080,7 +3119,11 @@ impl MetadataService for RecordingMetadataService {
         Ok(None)
     }
 
-    fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+    fn write_artwork(&self, _path: &Path, artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        self.artwork_writes
+            .lock()
+            .expect("artwork writes lock is available")
+            .push(artwork);
         Ok(())
     }
 }

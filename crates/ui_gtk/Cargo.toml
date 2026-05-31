@@ -16,6 +16,7 @@ directories = "6.0.0"
 gtk.workspace = true
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 sustain-app-runtime = { path = "../app_runtime" }
+sustain-artwork = { path = "../artwork" }
 sustain-desktop = { path = "../desktop" }
 
 [lints]

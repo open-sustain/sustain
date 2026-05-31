@@ -17,7 +17,7 @@
 //! * A small pool of worker threads consumes `ArtworkSource` requests from a
 //!   shared queue and runs the **entire** decode pipeline off the main thread:
 //!   source resolution, `MetadataService::read_artwork` for embedded-track
-//!   artwork, `Pixbuf::from_read`, `ArtworkPalette::from_pixbuf`, and bounded
+//!   artwork, scaled pixbuf decode, `ArtworkPalette::from_pixbuf`, and bounded
 //!   `gdk::Texture`s for the tile and detail sizes. The pixbuf itself is
 //!   dropped on the worker; only the finished `DecodedArtwork` is handed back.
 //!   (This relies on `gdk::Texture` being `Send + Sync` in gtk-rs — it is,
@@ -44,7 +44,6 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     fs,
-    io::Cursor,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::PathBuf,
     rc::Rc,
@@ -54,9 +53,10 @@ use std::{
 };
 
 use directories::BaseDirs;
-use gtk::{gdk, gdk_pixbuf, glib};
+use gtk::{gdk, gdk_pixbuf, gio, glib};
 use rusqlite::{Connection, OptionalExtension, params};
 use sustain_app_runtime::MetadataService;
+use sustain_artwork::{ArtworkDimensions, MAX_ENCODED_ARTWORK_BYTES, validate_encoded_artwork};
 
 use crate::artwork_color::{ArtworkPalette, ArtworkPaletteComponents, RgbColorComponents};
 
@@ -521,13 +521,16 @@ impl ArtworkDiskCache {
                        AND file_size = ?3
                        AND mtime_ns = ?4
                        AND format_version = ?5
+                       AND (tile_png IS NULL OR length(tile_png) <= ?6)
+                       AND (detail_png IS NULL OR length(detail_png) <= ?6)
                     "#,
                     params![
                         source_kind,
                         source_key,
                         fingerprint.file_size,
                         fingerprint.mtime_ns,
-                        CACHE_SCHEMA_VERSION
+                        CACHE_SCHEMA_VERSION,
+                        MAX_ENCODED_ARTWORK_BYTES as i64,
                     ],
                     |row| {
                         Ok(CachedArtworkRow {
@@ -677,9 +680,17 @@ fn decode_artwork(bytes: Option<Vec<u8>>) -> DecodedArtworkRecord {
     let Some(bytes) = bytes else {
         return DecodedArtworkRecord::default();
     };
-    let pixbuf = match gdk_pixbuf::Pixbuf::from_read(Cursor::new(bytes)) {
-        Ok(pixbuf) => pixbuf,
+    let dimensions = match validate_encoded_artwork(&bytes) {
+        Ok(dimensions) => dimensions,
         Err(_) => return DecodedArtworkRecord::default(),
+    };
+    let Some((decode_width, decode_height)) =
+        scaled_dimensions(dimensions, DETAIL_TEXTURE_MAX_SIDE)
+    else {
+        return DecodedArtworkRecord::default();
+    };
+    let Some(pixbuf) = pixbuf_from_bytes_at_scale(bytes, decode_width, decode_height) else {
+        return DecodedArtworkRecord::default();
     };
 
     let tile_pixbuf = scaled_pixbuf(&pixbuf, TILE_TEXTURE_MAX_SIDE);
@@ -757,8 +768,42 @@ fn pixbuf_png_bytes(pixbuf: &gdk_pixbuf::Pixbuf) -> Option<Vec<u8>> {
 }
 
 fn texture_from_png(bytes: &[u8]) -> Option<gdk::Texture> {
-    let pixbuf = gdk_pixbuf::Pixbuf::from_read(Cursor::new(bytes.to_vec())).ok()?;
+    let dimensions = validate_encoded_artwork(bytes).ok()?;
+    let width = i32::try_from(dimensions.width).ok()?;
+    let height = i32::try_from(dimensions.height).ok()?;
+    let pixbuf = pixbuf_from_bytes_at_scale(bytes.to_vec(), width, height)?;
     Some(gdk::Texture::for_pixbuf(&pixbuf))
+}
+
+fn scaled_dimensions(dimensions: ArtworkDimensions, max_side: i32) -> Option<(i32, i32)> {
+    let width = i32::try_from(dimensions.width).ok()?;
+    let height = i32::try_from(dimensions.height).ok()?;
+    let shorter_side = width.min(height);
+    if shorter_side <= 0 || max_side <= 0 {
+        return None;
+    }
+    let scale = (f64::from(max_side) / f64::from(shorter_side)).min(1.0);
+    Some((
+        (f64::from(width) * scale).round().max(1.0) as i32,
+        (f64::from(height) * scale).round().max(1.0) as i32,
+    ))
+}
+
+fn pixbuf_from_bytes_at_scale(
+    bytes: Vec<u8>,
+    width: i32,
+    height: i32,
+) -> Option<gdk_pixbuf::Pixbuf> {
+    let bytes = glib::Bytes::from_owned(bytes);
+    let stream = gio::MemoryInputStream::from_bytes(&bytes);
+    gdk_pixbuf::Pixbuf::from_stream_at_scale(
+        &stream,
+        width,
+        height,
+        false,
+        None::<&gio::Cancellable>,
+    )
+    .ok()
 }
 
 fn palette_components_from_cache_row(
@@ -796,4 +841,14 @@ fn rgb_from_cache_columns(
         return Ok(None);
     };
     Ok(Some(RgbColorComponents { red, green, blue }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::texture_from_png;
+
+    #[test]
+    fn corrupt_cached_png_degrades_to_placeholder() {
+        assert!(texture_from_png(b"not a cached PNG").is_none());
+    }
 }

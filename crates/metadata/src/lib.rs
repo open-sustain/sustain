@@ -11,7 +11,8 @@ use std::{
 };
 
 use lofty::{
-    config::WriteOptions,
+    config::{GlobalOptions, WriteOptions, apply_global_options},
+    file::TaggedFile,
     picture::{Picture, PictureType},
     prelude::{Accessor, AudioFile, TaggedFileExt},
     tag::{
@@ -20,6 +21,7 @@ use lofty::{
     },
 };
 use sha2::{Digest, Sha256};
+use sustain_artwork::{ArtworkPolicyError, MAX_ENCODED_ARTWORK_BYTES, validate_encoded_artwork};
 
 pub use sustain_domain::{
     FieldChange, MetadataChange, Rating, TrackContentHash, TrackMetadata, TrackRelativePath,
@@ -41,6 +43,7 @@ pub enum AudioFormat {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MetadataError {
     UnsupportedAudioFormat,
+    ArtworkRejected(ArtworkPolicyError),
     WriteFailed,
     ReadFailed,
 }
@@ -243,7 +246,7 @@ pub struct LoftyMetadataService;
 impl MetadataService for LoftyMetadataService {
     fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
         audio_format_from_path(path)?;
-        let tagged_file = lofty::read_from_path(path).map_err(|_| MetadataError::ReadFailed)?;
+        let tagged_file = read_tagged_file(path)?;
         let tag = tagged_file
             .primary_tag()
             .or_else(|| tagged_file.first_tag());
@@ -312,7 +315,7 @@ impl MetadataService for LoftyMetadataService {
             .unwrap_or_else(Rating::unrated);
 
         // Captured from the already-parsed tag — no extra file open.
-        let has_embedded_artwork = tag.is_some_and(|tag| !tag.pictures().is_empty());
+        let has_embedded_artwork = tag.and_then(valid_embedded_picture).is_some();
 
         Ok(InitialTags {
             metadata,
@@ -323,7 +326,7 @@ impl MetadataService for LoftyMetadataService {
 
     fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()> {
         audio_format_from_path(path)?;
-        let mut tagged_file = lofty::read_from_path(path).map_err(|_| MetadataError::ReadFailed)?;
+        let mut tagged_file = read_tagged_file(path)?;
         ensure_primary_tag(&mut tagged_file);
         let tag = tagged_file
             .primary_tag_mut()
@@ -352,7 +355,7 @@ impl MetadataService for LoftyMetadataService {
 
     fn write_rating(&self, path: &Path, rating: Rating) -> MetadataResult<()> {
         audio_format_from_path(path)?;
-        let mut tagged_file = lofty::read_from_path(path).map_err(|_| MetadataError::ReadFailed)?;
+        let mut tagged_file = read_tagged_file(path)?;
         ensure_primary_tag(&mut tagged_file);
         let tag = tagged_file
             .primary_tag_mut()
@@ -391,7 +394,7 @@ impl MetadataService for LoftyMetadataService {
 
     fn read_artwork(&self, path: &Path) -> MetadataResult<Option<Vec<u8>>> {
         audio_format_from_path(path)?;
-        let tagged_file = lofty::read_from_path(path).map_err(|_| MetadataError::ReadFailed)?;
+        let tagged_file = read_tagged_file(path)?;
         let Some(tag) = tagged_file
             .primary_tag()
             .or_else(|| tagged_file.first_tag())
@@ -399,15 +402,15 @@ impl MetadataService for LoftyMetadataService {
             return Ok(None);
         };
 
-        let picture = tag
-            .get_picture_type(PictureType::CoverFront)
-            .or_else(|| tag.pictures().first());
-        Ok(picture.map(|picture| picture.data().to_vec()))
+        Ok(valid_embedded_picture(tag).map(|picture| picture.data().to_vec()))
     }
 
     fn write_artwork(&self, path: &Path, artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        if let Some(bytes) = artwork.as_deref() {
+            validate_encoded_artwork(bytes).map_err(MetadataError::ArtworkRejected)?;
+        }
         audio_format_from_path(path)?;
-        let mut tagged_file = lofty::read_from_path(path).map_err(|_| MetadataError::ReadFailed)?;
+        let mut tagged_file = read_tagged_file(path)?;
         ensure_primary_tag(&mut tagged_file);
         let tag = tagged_file
             .primary_tag_mut()
@@ -482,7 +485,25 @@ fn lower_hex(bytes: &[u8]) -> String {
     output
 }
 
-fn ensure_primary_tag(tagged_file: &mut lofty::file::TaggedFile) {
+fn read_tagged_file(path: &Path) -> MetadataResult<TaggedFile> {
+    // Lofty's allocation guard is thread-local. Reapply Sustain's policy at
+    // every metadata entry point so worker threads and future Lofty defaults
+    // cannot drift away from the application's encoded-artwork cap.
+    apply_global_options(GlobalOptions::new().allocation_limit(MAX_ENCODED_ARTWORK_BYTES));
+    lofty::read_from_path(path).map_err(|_| MetadataError::ReadFailed)
+}
+
+fn valid_embedded_picture(tag: &Tag) -> Option<&Picture> {
+    tag.get_picture_type(PictureType::CoverFront)
+        .filter(|picture| validate_encoded_artwork(picture.data()).is_ok())
+        .or_else(|| {
+            tag.pictures()
+                .iter()
+                .find(|picture| validate_encoded_artwork(picture.data()).is_ok())
+        })
+}
+
+fn ensure_primary_tag(tagged_file: &mut TaggedFile) {
     if tagged_file.primary_tag().is_some() {
         return;
     }

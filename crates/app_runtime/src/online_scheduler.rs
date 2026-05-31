@@ -52,6 +52,7 @@ use std::{
     time::Duration,
 };
 
+use sustain_artwork::validate_encoded_artwork;
 use sustain_domain::{FieldChange, MetadataChange, OnlineSettings, SyncedLyrics, Track, TrackId};
 use sustain_library_store::{LibraryStore, OnlineCapabilities, OnlineContext};
 use sustain_metadata_remote::{
@@ -636,6 +637,13 @@ fn attempt_artwork(
     let Some(artwork) = fetched else {
         return AttemptOutcome::NoMatch;
     };
+    if let Err(error) = validate_encoded_artwork(&artwork.bytes) {
+        eprintln!(
+            "Sustain: artwork fetch returned rejected bytes for {}: {error}",
+            absolute_path.display()
+        );
+        return AttemptOutcome::Failed;
+    }
     if !tag_writer.write_artwork(absolute_path.to_path_buf(), Some(artwork.bytes)) {
         eprintln!(
             "Sustain: artwork tag write failed for {}",

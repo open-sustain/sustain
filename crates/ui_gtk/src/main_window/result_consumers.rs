@@ -297,6 +297,11 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
                     sustain_app_runtime::NotificationSeverity::Info,
                     "No cover art found for this track.".to_owned(),
                 ),
+                ArtworkFetchOutcome::Rejected => (
+                    sustain_app_runtime::NotificationSeverity::Warning,
+                    "The fetched cover art was rejected because it is unsupported, corrupt, or too large."
+                        .to_owned(),
+                ),
                 ArtworkFetchOutcome::Failed => (
                     sustain_app_runtime::NotificationSeverity::Error,
                     "Could not fetch cover art.".to_owned(),
