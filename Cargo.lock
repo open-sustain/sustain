@@ -2133,6 +2133,7 @@ name = "sustain-metadata"
 version = "0.3.0-alpha.2"
 dependencies = [
  "lofty",
+ "rustix",
  "sha2",
  "sustain-domain",
 ]

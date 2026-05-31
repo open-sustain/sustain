@@ -25,6 +25,9 @@ pub use sustain_domain::{
     FieldChange, MetadataChange, Rating, TrackContentHash, TrackMetadata, TrackRelativePath,
 };
 
+mod atomic_file;
+use atomic_file::atomic_write_via_rename;
+
 pub type MetadataResult<T> = Result<T, MetadataError>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -488,9 +491,10 @@ fn ensure_primary_tag(tagged_file: &mut lofty::file::TaggedFile) {
 }
 
 // Persists `tagged_file` over `path` via atomic replace-by-rename: the
-// new bytes land in a sibling temp file, get fsync'd to disk, and then
-// `rename(2)` atomically swaps the temp into place. The key property
-// this buys us is that GStreamer (or any other reader holding an open
+// new bytes land in an exclusive sibling temp file, retain the source
+// filesystem metadata, get fsync'd to disk, atomically replace the
+// pathname, and are made durable by syncing the parent directory. The key
+// property this buys us is that GStreamer (or any other reader holding an open
 // file descriptor on `path`) keeps seeing the *original* inode's bytes
 // until it closes the descriptor — Linux/POSIX `rename` only swaps the
 // directory entry, the prior inode is kept alive by outstanding fds.
@@ -506,52 +510,6 @@ fn atomic_save_to_path(
             .save_to_path(temp_path, options)
             .map_err(|_| MetadataError::WriteFailed)
     })
-}
-
-// File-level atomic-replace primitive. Seeds the temp file with the
-// current contents of `path` so callers that only rewrite a small
-// section (lofty's tag chunks) keep the surrounding bytes intact, then
-// hands the temp path to the caller for in-place modification, then
-// fsyncs and renames over the destination. The temp file is removed on
-// any failure so we never leak partial state next to the user's audio.
-fn atomic_write_via_rename<F>(path: &Path, modify_temp: F) -> MetadataResult<()>
-where
-    F: FnOnce(&Path) -> MetadataResult<()>,
-{
-    let parent = path.parent().ok_or(MetadataError::WriteFailed)?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or(MetadataError::WriteFailed)?;
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or(0);
-    let temp_path = parent.join(format!(".{file_name}.sustain-{unique}.tmp"));
-
-    let staged = stage_atomic_write(path, &temp_path, modify_temp);
-    if staged.is_err() {
-        let _ = fs::remove_file(&temp_path);
-        return staged;
-    }
-
-    fs::rename(&temp_path, path).map_err(|_| {
-        let _ = fs::remove_file(&temp_path);
-        MetadataError::WriteFailed
-    })
-}
-
-fn stage_atomic_write<F>(source: &Path, temp_path: &Path, modify_temp: F) -> MetadataResult<()>
-where
-    F: FnOnce(&Path) -> MetadataResult<()>,
-{
-    fs::copy(source, temp_path).map_err(|_| MetadataError::WriteFailed)?;
-    modify_temp(temp_path)?;
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .open(temp_path)
-        .map_err(|_| MetadataError::WriteFailed)?;
-    file.sync_all().map_err(|_| MetadataError::WriteFailed)
 }
 
 fn apply_text_change(tag: &mut Tag, item_key: ItemKey, change: FieldChange<String>) {
