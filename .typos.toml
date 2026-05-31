@@ -19,3 +19,7 @@ criticals = "criticals"
 # seeked = ...`, "seeked to"); idiomatic in code even though English
 # prefers "sought".
 seeked = "seeked"
+# Past participle of the GTK verb `unparent` (`gtk_widget_unparent`): a
+# widget "must be unparented before disposal". Not the adjective
+# "parentless" that typos wants.
+unparented = "unparented"
