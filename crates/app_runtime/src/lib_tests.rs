@@ -5682,3 +5682,38 @@ impl LibraryStore for CallCountingLibraryStore {
         self.inner.device_manifest(id)
     }
 }
+
+#[test]
+fn smart_shuffle_rebuild_request_does_not_block_the_caller_on_store_reads() {
+    use std::time::{Duration, Instant};
+
+    use crate::test_store::FaultyStore;
+
+    // A track is hydrated into the runtime with the store responding
+    // instantly, so `library_tracks` is populated and the in-memory
+    // emptiness guard passes.
+    let faulty = Arc::new(FaultyStore::new(Arc::new(InMemoryLibraryStore::new())));
+    faulty
+        .save_track(test_track(track_id(1), "alpha.flac"))
+        .expect("seed track");
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    assert_eq!(runtime.library_tracks().len(), 1);
+
+    // Now make the bulk reads the rebuild needs (tracks + acoustics)
+    // expensive. Before #93 these ran on the calling thread; the request
+    // must now return promptly because that work moved to the worker.
+    faulty.set_read_delay(Duration::from_millis(400));
+
+    let start = Instant::now();
+    let scheduled = runtime.request_smart_shuffle_rebuild();
+    let elapsed = start.elapsed();
+
+    assert!(scheduled, "a non-empty library schedules a rebuild");
+    assert!(
+        elapsed < Duration::from_millis(100),
+        "request must not block on the store reads (took {elapsed:?}); they belong on the worker"
+    );
+}

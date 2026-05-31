@@ -47,10 +47,32 @@ pub struct SmartShuffleRebuildResult {
     pub built_at: SystemTime,
 }
 
+/// The inputs a rebuild needs: the library snapshot and the per-track
+/// acoustic features. Both are acquired by the worker, never on the GTK
+/// thread (#93).
+pub struct RebuildInputs {
+    pub tracks: Vec<Track>,
+    pub acoustics: Vec<(TrackId, AcousticFeatures)>,
+}
+
+/// Worker-run preparation: clones/loads the library snapshot and the
+/// acoustics. Runs on the rebuild worker thread so the O(library-size)
+/// clone and the `load_all_acoustics` SQLite sweep stay off the GTK
+/// main loop. Returns `None` to abort the rebuild without publishing —
+/// e.g. when the store read fails, so a transient error leaves the
+/// existing index untouched rather than replacing it with an empty one.
+pub type RebuildPreparation = Box<dyn FnOnce() -> Option<RebuildInputs> + Send>;
+
 pub struct SmartShuffleScheduler {
     result_sender: async_channel::Sender<SmartShuffleRebuildResult>,
     result_receiver: async_channel::Receiver<SmartShuffleRebuildResult>,
     is_rebuilding: Arc<AtomicBool>,
+    /// Set whenever a rebuild is requested while one is already in
+    /// flight. The runtime consumes it after applying a result and
+    /// re-runs, so a coalesced request never leaves the index stale
+    /// against a newer library version. Only ever set here and cleared
+    /// by the single-threaded runtime, so there is no lost-update race.
+    rerun_requested: Arc<AtomicBool>,
 }
 
 impl SmartShuffleScheduler {
@@ -60,6 +82,7 @@ impl SmartShuffleScheduler {
             result_sender: tx,
             result_receiver: rx,
             is_rebuilding: Arc::new(AtomicBool::new(false)),
+            rerun_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -74,20 +97,28 @@ impl SmartShuffleScheduler {
         self.is_rebuilding.load(Ordering::Acquire)
     }
 
+    /// Consume the "a rebuild was requested while one was in flight"
+    /// flag. The runtime calls this after applying a result; a `true`
+    /// means the library may have advanced during the rebuild, so it
+    /// re-runs to index the newer state.
+    pub fn take_rerun_requested(&self) -> bool {
+        self.rerun_requested.swap(false, Ordering::AcqRel)
+    }
+
     /// Spawn an index rebuild on a dedicated background thread.
-    /// Returns `false` when a previous rebuild is still in flight —
-    /// the request is dropped rather than queued, because two
-    /// back-to-back rebuilds on an unchanged library produce identical
-    /// indexes. `acoustics` is the store's full set of analysed tracks
-    /// (the index ignores entries for unavailable or unknown tracks).
-    /// `built_at` is captured by the caller (the runtime's clock) so the
-    /// worker thread never reads wall-clock time directly.
-    pub fn request_rebuild(
-        &self,
-        tracks: Vec<Track>,
-        acoustics: Vec<(TrackId, AcousticFeatures)>,
-        built_at: SystemTime,
-    ) -> bool {
+    ///
+    /// `prepare` acquires the library snapshot and acoustics **on the
+    /// worker** — the GTK caller only hands over a cheap closure, so the
+    /// O(library-size) clone and the `load_all_acoustics` SQLite sweep
+    /// never run on the main loop (#93). `built_at` is captured by the
+    /// caller (the runtime's clock) so the worker never reads wall-clock
+    /// time directly.
+    ///
+    /// Returns `true` when a worker was spawned. Returns `false` when a
+    /// previous rebuild is still in flight; the request is *not* dropped
+    /// — [`Self::take_rerun_requested`] then reports that a re-run is due
+    /// so the index cannot be left stale against a newer library.
+    pub fn request_rebuild(&self, prepare: RebuildPreparation, built_at: SystemTime) -> bool {
         // `compare_exchange` rather than `swap` so a running request
         // leaves the flag set and we do not bounce it.
         if self
@@ -95,6 +126,10 @@ impl SmartShuffleScheduler {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
+            // A rebuild is already running. Remember that the library may
+            // have advanced so the runtime re-runs once it completes,
+            // rather than dropping this request and leaving stale state.
+            self.rerun_requested.store(true, Ordering::Release);
             return false;
         }
         let sender = self.result_sender.clone();
@@ -104,12 +139,27 @@ impl SmartShuffleScheduler {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         std::thread::spawn(move || {
-            let index = SmartShuffleIndex::build(&tracks, &acoustics, built_at_unix);
-            flag.store(false, Ordering::Release);
-            // `send_blocking` cannot meaningfully fail on an unbounded
-            // channel whose receiver is owned by the runtime; drop the
-            // error so the worker can exit cleanly at shutdown.
-            let _ = sender.send_blocking(SmartShuffleRebuildResult { index, built_at });
+            // Snapshot + acoustics acquisition happen here, off the GTK
+            // thread. The busy flag stays set through preparation *and*
+            // the build so concurrent requests coalesce the whole time;
+            // it is released just before the result is published (or, on
+            // an aborted preparation, at the end). A `None` means
+            // preparation failed (e.g. a store read error): publish
+            // nothing so the existing index survives untouched.
+            match prepare() {
+                Some(RebuildInputs { tracks, acoustics }) => {
+                    let index = SmartShuffleIndex::build(&tracks, &acoustics, built_at_unix);
+                    flag.store(false, Ordering::Release);
+                    // `send_blocking` cannot meaningfully fail on an
+                    // unbounded channel whose receiver is owned by the
+                    // runtime; drop the error so the worker exits cleanly
+                    // at shutdown.
+                    let _ = sender.send_blocking(SmartShuffleRebuildResult { index, built_at });
+                }
+                None => {
+                    flag.store(false, Ordering::Release);
+                }
+            }
         });
         true
     }
@@ -123,13 +173,14 @@ impl Default for SmartShuffleScheduler {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant, SystemTime};
 
     use sustain_domain::{
         PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
     };
 
-    use super::SmartShuffleScheduler;
+    use super::{RebuildInputs, RebuildPreparation, SmartShuffleScheduler};
 
     fn track(id: i64, genre: &str) -> Track {
         Track {
@@ -148,31 +199,116 @@ mod tests {
         }
     }
 
-    #[test]
-    fn scheduler_rejects_concurrent_rebuilds() {
-        let scheduler = SmartShuffleScheduler::new();
-        let tracks: Vec<Track> = (0..160)
-            .map(|index| track(index + 1, if index % 2 == 0 { "Rock" } else { "Jazz" }))
-            .collect();
-
-        assert!(scheduler.request_rebuild(tracks.clone(), Vec::new(), SystemTime::UNIX_EPOCH));
-        // A second request while the first is in flight should be
-        // refused. There is an inherent race between the worker
-        // clearing `is_rebuilding` and this assertion; the first
-        // result is drained to keep the worker tidy regardless.
-        let _ = scheduler.request_rebuild(tracks, Vec::new(), SystemTime::UNIX_EPOCH);
-        let _ = scheduler.result_receiver().recv_blocking();
+    /// Preparation closure returning a fixed snapshot immediately.
+    fn ready(tracks: Vec<Track>) -> RebuildPreparation {
+        Box::new(move || {
+            Some(RebuildInputs {
+                tracks,
+                acoustics: Vec::new(),
+            })
+        })
     }
 
     #[test]
     fn rebuild_delivers_an_index() {
         let scheduler = SmartShuffleScheduler::new();
         let tracks = vec![track(1, "Rock"), track(2, "Shoegaze")];
-        assert!(scheduler.request_rebuild(tracks, Vec::new(), SystemTime::UNIX_EPOCH));
+        assert!(scheduler.request_rebuild(ready(tracks), SystemTime::UNIX_EPOCH));
         let result = scheduler
             .result_receiver()
             .recv_blocking()
             .expect("rebuild result");
         assert_eq!(result.index.indexed_track_count(), 2);
+    }
+
+    #[test]
+    fn preparation_runs_off_the_calling_thread() {
+        // The snapshot clone and acoustics sweep must happen on the
+        // worker, not block the (in production, GTK) caller (#93).
+        let scheduler = SmartShuffleScheduler::new();
+        let prepare: RebuildPreparation = Box::new(|| {
+            std::thread::sleep(Duration::from_millis(300));
+            Some(RebuildInputs {
+                tracks: vec![track(1, "Rock")],
+                acoustics: Vec::new(),
+            })
+        });
+
+        let start = Instant::now();
+        assert!(scheduler.request_rebuild(prepare, SystemTime::UNIX_EPOCH));
+        assert!(
+            start.elapsed() < Duration::from_millis(100),
+            "request_rebuild must return before preparation runs, not block on it"
+        );
+
+        let result = scheduler
+            .result_receiver()
+            .recv_blocking()
+            .expect("rebuild result lands once preparation completes");
+        assert_eq!(result.index.indexed_track_count(), 1);
+    }
+
+    #[test]
+    fn concurrent_request_is_coalesced_into_a_rerun() {
+        // A request that arrives while a rebuild is in flight must not be
+        // dropped: it is recorded so the runtime re-runs and the index
+        // never lags a newer library version.
+        let scheduler = SmartShuffleScheduler::new();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel::<()>();
+        let prepare: RebuildPreparation = Box::new(move || {
+            started_tx.send(()).expect("report barrier");
+            resume_rx.recv().expect("resume preparation");
+            Some(RebuildInputs {
+                tracks: vec![track(1, "Rock")],
+                acoustics: Vec::new(),
+            })
+        });
+
+        assert!(scheduler.request_rebuild(prepare, SystemTime::UNIX_EPOCH));
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("first rebuild reached its barrier");
+
+        // The first rebuild is deterministically in flight now.
+        assert!(scheduler.is_rebuilding());
+        assert!(
+            !scheduler.request_rebuild(ready(vec![track(2, "Jazz")]), SystemTime::UNIX_EPOCH),
+            "a concurrent request is refused a fresh worker"
+        );
+        assert!(
+            scheduler.take_rerun_requested(),
+            "the refused request is recorded as a pending re-run"
+        );
+
+        resume_tx.send(()).expect("release first rebuild");
+        let result = scheduler
+            .result_receiver()
+            .recv_blocking()
+            .expect("first rebuild result");
+        assert_eq!(result.index.indexed_track_count(), 1);
+    }
+
+    #[test]
+    fn aborted_preparation_publishes_nothing_and_clears_busy() {
+        // A `None` from preparation (e.g. a store read error) must leave
+        // the existing index in place: no result is published and the
+        // scheduler returns to idle.
+        let scheduler = SmartShuffleScheduler::new();
+        let prepare: RebuildPreparation = Box::new(|| None);
+        assert!(scheduler.request_rebuild(prepare, SystemTime::UNIX_EPOCH));
+
+        // The worker releases the busy flag without publishing. Wait for
+        // it to settle, then confirm nothing was sent.
+        let receiver = scheduler.result_receiver();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while scheduler.is_rebuilding() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!scheduler.is_rebuilding(), "busy flag released after abort");
+        assert!(
+            receiver.try_recv().is_err(),
+            "aborted preparation must publish nothing"
+        );
     }
 }

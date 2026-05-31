@@ -17,7 +17,8 @@
 //! the scheduler stopped retrying instead of spinning.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::time::Duration;
 
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, LibraryStore, MetadataChange,
@@ -30,7 +31,9 @@ use sustain_library_store::{
 };
 
 /// A [`LibraryStore`] that delegates to an inner store but can be told
-/// to reject the persistence writes the schedulers rely on.
+/// to reject the persistence writes the schedulers rely on, or to delay
+/// the bulk reads the Smart Shuffle rebuild performs (so a test can
+/// prove that work runs off the caller's thread — #93).
 pub(crate) struct FaultyStore {
     inner: Arc<dyn LibraryStore>,
     fail_record_analysis: AtomicBool,
@@ -39,6 +42,9 @@ pub(crate) struct FaultyStore {
     record_analysis_calls: AtomicU32,
     attempt_failure_calls: AtomicU32,
     online_attempt_calls: AtomicU32,
+    /// Artificial latency injected into `tracks` and `load_all_acoustics`,
+    /// in milliseconds. Zero (the default) is a no-op.
+    read_delay_millis: AtomicU64,
 }
 
 impl FaultyStore {
@@ -51,6 +57,19 @@ impl FaultyStore {
             record_analysis_calls: AtomicU32::new(0),
             attempt_failure_calls: AtomicU32::new(0),
             online_attempt_calls: AtomicU32::new(0),
+            read_delay_millis: AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn set_read_delay(&self, delay: Duration) {
+        self.read_delay_millis
+            .store(delay.as_millis() as u64, Ordering::SeqCst);
+    }
+
+    fn sleep_read_delay(&self) {
+        let millis = self.read_delay_millis.load(Ordering::SeqCst);
+        if millis > 0 {
+            std::thread::sleep(Duration::from_millis(millis));
         }
     }
 
@@ -223,6 +242,7 @@ impl LibraryStore for FaultyStore {
     }
 
     fn tracks(&self) -> StoreResult<Vec<Track>> {
+        self.sleep_read_delay();
         self.inner.tracks()
     }
 
@@ -368,6 +388,7 @@ impl LibraryStore for FaultyStore {
     }
 
     fn load_all_acoustics(&self) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
+        self.sleep_read_delay();
         self.inner.load_all_acoustics()
     }
 

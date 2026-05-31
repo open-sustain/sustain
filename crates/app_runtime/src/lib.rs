@@ -1871,24 +1871,39 @@ impl ApplicationRuntime {
     /// [`Self::smart_shuffle_rebuild_result_receiver`] and applied via
     /// [`Self::apply_smart_shuffle_rebuild_result`].
     pub fn request_smart_shuffle_rebuild(&mut self) -> bool {
+        // Cheap in-memory guard — no clone. With no library there is
+        // nothing to index.
         if self.library_tracks.is_empty() {
             return false;
         }
-        let tracks = self.library_tracks.clone();
-        // Acoustics are the enhancement layer (§13): the index caches
-        // them for the timbral terms and the loudness guard, but Smart
-        // Shuffle works without them. A missing store or a load error
-        // degrades gracefully to a zero-coverage, metadata-only index
-        // rather than blocking the rebuild.
-        let acoustics = self
-            .library_store
-            .as_ref()
-            .and_then(|store| store.load_all_acoustics().ok())
-            .unwrap_or_default();
+        let Some(store) = self.library_store.clone() else {
+            return false;
+        };
+        // The snapshot clone and the `load_all_acoustics` SQLite sweep
+        // used to run here, on the GTK thread, allocating O(library-size)
+        // and reading every acoustic row before any work left the main
+        // loop (#93). They now run inside this closure on the rebuild
+        // worker. The GTK side only clones an `Arc` and builds the
+        // closure — bounded regardless of library size.
+        let prepare: smart_shuffle_scheduler::RebuildPreparation = Box::new(move || {
+            // The library snapshot is read from the store (its source of
+            // truth) rather than cloned from the runtime, so no library
+            // vector is duplicated on the GTK thread. A failed read
+            // aborts the rebuild so a transient error never replaces a
+            // good index with an empty one.
+            let tracks = store.tracks().ok()?;
+            if tracks.is_empty() {
+                return None;
+            }
+            // Acoustics are the enhancement layer (§13): the index caches
+            // them for the timbral terms and the loudness guard, but
+            // Smart Shuffle works without them. A load error degrades
+            // gracefully to a zero-coverage, metadata-only index.
+            let acoustics = store.load_all_acoustics().unwrap_or_default();
+            Some(smart_shuffle_scheduler::RebuildInputs { tracks, acoustics })
+        });
         let now = self.clock.now();
-        let scheduled = self
-            .smart_shuffle_scheduler
-            .request_rebuild(tracks, acoustics, now);
+        let scheduled = self.smart_shuffle_scheduler.request_rebuild(prepare, now);
         if scheduled {
             self.fire_smart_shuffle_state_observer();
         }
@@ -1905,6 +1920,13 @@ impl ApplicationRuntime {
     pub fn apply_smart_shuffle_rebuild_result(&mut self, result: SmartShuffleRebuildResult) {
         self.apply_smart_shuffle_rebuild_result_inner(result);
         self.fire_smart_shuffle_state_observer();
+        // If a rebuild was requested while this one was in flight, the
+        // library may have advanced since this index was built. Re-run
+        // from the latest store state so a coalesced request never
+        // leaves the index stale against a newer library version (#93).
+        if self.smart_shuffle_scheduler.take_rerun_requested() {
+            self.request_smart_shuffle_rebuild();
+        }
     }
 
     fn apply_smart_shuffle_rebuild_result_inner(&mut self, result: SmartShuffleRebuildResult) {
