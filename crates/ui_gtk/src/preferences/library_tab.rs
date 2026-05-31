@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use gtk::prelude::*;
 use gtk::{gio, glib::Propagation};
+use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
 
 use super::super::{
     ApplicationCommand, ApplicationRuntimeError, LibraryManagementMode,
@@ -84,14 +85,6 @@ pub(super) fn build(
     folder_button.set_sensitive(!library_task_is_running);
     scan_button.set_sensitive(!library_task_is_running);
 
-    let scan_status = gtk::Label::new(None);
-    scan_status.add_css_class("preference-helper");
-    scan_status.set_xalign(0.0);
-    scan_status.set_wrap(true);
-    scan_status.set_natural_wrap_mode(gtk::NaturalWrapMode::Word);
-    scan_status.set_width_chars(HELPER_MIN_WIDTH_CHARS);
-    scan_status.set_max_width_chars(HELPER_MAX_WIDTH_CHARS);
-
     let library_path_is_valid = library_path_entry_is_valid(&path_entry);
     let management_mode = command_controller
         .runtime()
@@ -115,7 +108,6 @@ pub(super) fn build(
     let path_entry_for_organization_sensitivity = path_entry.clone();
     let folder_button_for_organization_sensitivity = folder_button.clone();
     let scan_button_for_organization_sensitivity = scan_button.clone();
-    let scan_status_for_organization = scan_status.clone();
     keep_organized_switch.connect_state_set(move |_switch, requested_state| {
         // The toggle alters two settings at once: the library path (kept
         // in sync with the entry contents) and the management mode. We
@@ -131,9 +123,12 @@ pub(super) fn build(
         let path_is_valid = library_path.as_ref().is_some_and(|path| path.is_dir());
 
         if requested_state && !path_is_valid {
-            scan_status_for_organization.set_text(scan_error_text(
-                ApplicationRuntimeError::LibraryPathUnavailable,
-            ));
+            notify_library_task(
+                &command_controller_for_organization,
+                NotificationCategory::LibraryConsolidation,
+                NotificationSeverity::Warning,
+                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable).to_owned(),
+            );
             return Propagation::Stop;
         }
 
@@ -148,6 +143,11 @@ pub(super) fn build(
         } else {
             LibraryManagementMode::ReferenceFilesInPlace
         };
+        // UpdateSettings failures are reported once by `UiCommandController`;
+        // a started/failed consolidation reports through the runtime's
+        // LibraryConsolidation notification (and the start-failure path in
+        // `consolidation_requested`). This handler only owns the form's
+        // control sensitivity and the cancellation acknowledgement.
         match command_controller_for_organization
             .dispatch(ApplicationCommand::UpdateSettings(settings))
         {
@@ -156,13 +156,13 @@ pub(super) fn build(
                     path_entry_for_organization_sensitivity.set_sensitive(false);
                     folder_button_for_organization_sensitivity.set_sensitive(false);
                     scan_button_for_organization_sensitivity.set_sensitive(false);
-                    scan_status_for_organization.set_text(
-                        "Library organization started. Progress is shown in the status bar.",
-                    );
                     Propagation::Proceed
                 }
-                Err(error) => {
-                    scan_status_for_organization.set_text(scan_error_text(error));
+                Err(_error) => {
+                    // The consolidation start failure was already reported
+                    // by `consolidation_requested`; roll the mode back so
+                    // the persisted setting matches the toggle's resting
+                    // state.
                     let mut settings = command_controller_for_organization
                         .runtime()
                         .borrow()
@@ -181,17 +181,16 @@ pub(super) fn build(
                     .background_task_status()
                     .is_library_consolidation_running()
                 {
-                    scan_status_for_organization
-                        .set_text("Library organization will stop after the current file.");
-                } else {
-                    scan_status_for_organization.set_text("");
+                    notify_library_task(
+                        &command_controller_for_organization,
+                        NotificationCategory::LibraryConsolidation,
+                        NotificationSeverity::Info,
+                        "Library organization will stop after the current file.".to_owned(),
+                    );
                 }
                 Propagation::Proceed
             }
-            Err(error) => {
-                scan_status_for_organization.set_text(scan_error_text(error));
-                Propagation::Stop
-            }
+            Err(_error) => Propagation::Stop,
         }
     });
 
@@ -229,28 +228,25 @@ pub(super) fn build(
 
     let command_controller_for_scan = command_controller.clone();
     let path_entry_for_scan = path_entry.clone();
-    let scan_status_for_scan = scan_status.clone();
     let scan_requested_for_scan = scan_requested.clone();
     scan_button.connect_clicked(move |_| {
         if path_entry_for_scan.text().trim().is_empty() {
-            scan_status_for_scan.set_text("Choose a library folder before scanning.");
+            notify_library_task(
+                &command_controller_for_scan,
+                NotificationCategory::LibraryScan,
+                NotificationSeverity::Warning,
+                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable).to_owned(),
+            );
             return;
         }
 
-        let scan_message = match save_library_path_from_entry(
-            &command_controller_for_scan,
-            &path_entry_for_scan,
-        ) {
-            Ok(()) => match request_library_scan_from_entry(
-                &path_entry_for_scan,
-                &scan_requested_for_scan,
-            ) {
-                Ok(()) => "Scan started. Progress is shown in the status bar.".to_owned(),
-                Err(error) => scan_error_text(error).to_owned(),
-            },
-            Err(error) => scan_error_text(error).to_owned(),
-        };
-        scan_status_for_scan.set_text(&scan_message);
+        // Save failures are reported by `UiCommandController`; scan
+        // start/running/outcome (and a start failure) report through the
+        // runtime's LibraryScan notifications. Nothing to render here.
+        if save_library_path_from_entry(&command_controller_for_scan, &path_entry_for_scan).is_ok()
+        {
+            let _ = request_library_scan_from_entry(&path_entry_for_scan, &scan_requested_for_scan);
+        }
     });
 
     path_row.append(&path_entry);
@@ -290,9 +286,24 @@ pub(super) fn build(
     content.append(&path_row);
     content.append(&keep_organized_row.container);
     content.append(&sort_tags_row.container);
-    content.append(&scan_status);
 
     content.upcast()
+}
+
+/// Push a library-task message onto the shared NotificationCenter lane.
+/// Preferences renders no transient operational text of its own (project
+/// policy); scan/organization lifecycle and validation all flow through
+/// the runtime's notification queue like every other status message.
+fn notify_library_task(
+    command_controller: &SharedCommandController,
+    category: NotificationCategory,
+    severity: NotificationSeverity,
+    body: String,
+) {
+    command_controller
+        .runtime()
+        .borrow_mut()
+        .push_ephemeral_notification(category, severity, body);
 }
 
 fn open_library_folder_chooser(
@@ -365,52 +376,4 @@ fn request_library_scan_from_entry(
     }
 
     scan_requested(PathBuf::from(path_text))
-}
-
-pub(super) fn scan_error_text(error: ApplicationRuntimeError) -> &'static str {
-    match error {
-        ApplicationRuntimeError::LibraryScanFailed => "The selected folder could not be scanned.",
-        ApplicationRuntimeError::LibraryConsolidationFailed => {
-            "The library could not be organized."
-        }
-        ApplicationRuntimeError::LibraryServicesUnavailable => {
-            "Library scanning is not available in this build."
-        }
-        ApplicationRuntimeError::LibraryStoreFailed => "The library database could not be updated.",
-        ApplicationRuntimeError::LibraryPathUnavailable => "Choose a library folder first.",
-        ApplicationRuntimeError::LibraryImportFailed => {
-            "The files could not be added to the library."
-        }
-        ApplicationRuntimeError::MetadataWriteFailed => "The track metadata could not be updated.",
-        ApplicationRuntimeError::InvalidPlaylistName => "The playlist name is not valid.",
-        ApplicationRuntimeError::InvalidPlaylistFolderName => "The folder name is not valid.",
-        ApplicationRuntimeError::InvalidSmartPlaylistName => {
-            "The smart playlist name is not valid."
-        }
-        ApplicationRuntimeError::InvalidSmartPlaylistRules => {
-            "A smart playlist needs at least one rule."
-        }
-        ApplicationRuntimeError::PlaylistEntryNotFound
-        | ApplicationRuntimeError::PlaylistNotFound => "The playlist could not be updated.",
-        ApplicationRuntimeError::PlaylistFolderNotFound => {
-            "The playlist folder could not be updated."
-        }
-        ApplicationRuntimeError::PlaylistFolderWouldCycle => {
-            "A folder cannot be moved inside itself."
-        }
-        ApplicationRuntimeError::SmartPlaylistNotFound => {
-            "The smart playlist could not be updated."
-        }
-        ApplicationRuntimeError::BackgroundTaskRunning => "A library scan is already running.",
-        ApplicationRuntimeError::PlaybackFailed
-        | ApplicationRuntimeError::PlaybackServiceUnavailable
-        | ApplicationRuntimeError::TrackUnavailable => "Playback is not available.",
-        ApplicationRuntimeError::SettingsLoadFailed
-        | ApplicationRuntimeError::SettingsSaveFailed => "The library path could not be saved.",
-        ApplicationRuntimeError::TrackTrashFailed => "The track could not be moved to trash.",
-        ApplicationRuntimeError::ArtworkFetchingUnavailable => {
-            "Remote artwork retrieval is not available in this build."
-        }
-        ApplicationRuntimeError::UnsupportedCommand(_) => "This action is not available yet.",
-    }
 }

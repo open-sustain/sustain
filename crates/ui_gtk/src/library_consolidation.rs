@@ -4,6 +4,7 @@
 use std::{rc::Rc, sync::mpsc, time::Duration};
 
 use gtk::glib;
+use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
 
 use super::{
     ApplicationRuntimeError, LibraryManagementMode, SharedRuntime, run_library_consolidation_task,
@@ -44,9 +45,23 @@ pub(crate) fn library_consolidation_requested_callback(
     let runtime = runtime.clone();
 
     Rc::new(move || {
+        // A consolidation that starts cleanly reports its
+        // running/outcome state through the runtime's LibraryConsolidation
+        // notifications. A *start* failure is reported here, the single
+        // entry point, so it reaches the user through the same lane.
         let task = {
             let mut runtime = runtime.borrow_mut();
-            runtime.prepare_library_consolidation()?
+            match runtime.prepare_library_consolidation() {
+                Ok(task) => task,
+                Err(error) => {
+                    runtime.push_ephemeral_notification(
+                        NotificationCategory::LibraryConsolidation,
+                        NotificationSeverity::Error,
+                        runtime_error_text(&error).to_owned(),
+                    );
+                    return Err(error);
+                }
+            }
         };
 
         let (tx, rx) = mpsc::channel();
@@ -92,4 +107,35 @@ fn poll_library_consolidation(
             glib::ControlFlow::Break
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use sustain_app_runtime::{ApplicationRuntime, NotificationCategory, NotificationSeverity};
+
+    use super::library_consolidation_requested_callback;
+
+    #[test]
+    fn consolidation_start_failure_reports_through_the_notification_center() {
+        // A fresh runtime is in the default "reference files in place" mode,
+        // so `prepare_library_consolidation` fails before any GTK work and
+        // the start-failure path is exercised here without a display.
+        let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+        let callback = library_consolidation_requested_callback(&runtime);
+
+        assert!(callback().is_err());
+
+        let runtime = runtime.borrow();
+        let notification = runtime
+            .notifications()
+            .current_ephemeral()
+            .expect("a consolidation start-failure notification");
+        assert_eq!(
+            notification.category,
+            NotificationCategory::LibraryConsolidation
+        );
+        assert_eq!(notification.severity, NotificationSeverity::Error);
+    }
 }
