@@ -205,6 +205,7 @@ pub(super) fn track_row_changed_callback(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn track_context_actions(
     runtime: &SharedRuntime,
     window: &gtk::Window,
@@ -213,6 +214,7 @@ pub(super) fn track_context_actions(
     playback_changed: PlaybackChangedCallback,
     library_changed_holder: LibraryChangedHolder,
     track_row_changed_holder: TrackRowChangedHolder,
+    artwork_loader: &ArtworkLoader,
 ) -> TrackContextActionSet {
     TrackContextActionSet::new(vec![
         TrackContextAction::play_next(
@@ -229,6 +231,7 @@ pub(super) fn track_context_actions(
             command_controller,
             &library_changed_holder,
             &track_row_changed_holder,
+            artwork_loader,
         )),
         TrackContextAction::show_album(
             show_album_callback(show_album_holder),
@@ -260,6 +263,7 @@ pub(super) fn playlist_track_context_actions(
     playback_changed: PlaybackChangedCallback,
     library_changed_holder: LibraryChangedHolder,
     track_row_changed_holder: TrackRowChangedHolder,
+    artwork_loader: &ArtworkLoader,
     sidebar: &PlaylistSidebar,
 ) -> TrackContextActionSet {
     TrackContextActionSet::new(vec![
@@ -277,6 +281,7 @@ pub(super) fn playlist_track_context_actions(
             command_controller,
             &library_changed_holder,
             &track_row_changed_holder,
+            artwork_loader,
         )),
         TrackContextAction::show_album(
             show_album_callback(show_album_holder),

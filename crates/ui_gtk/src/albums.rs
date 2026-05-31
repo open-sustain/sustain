@@ -17,7 +17,7 @@ use sustain_app_runtime::{
 use super::{
     PlaybackChangedCallback, SharedRuntime,
     artwork_color::ArtworkPalette,
-    artwork_loader::{ArtworkLoader, ArtworkSource, DecodedArtwork},
+    artwork_loader::{ArtworkLoader, ArtworkSource},
     command_controller::SharedCommandController,
     track_context::TrackRowContextMenu,
 };
@@ -68,6 +68,15 @@ pub(crate) struct AlbumsView {
     /// loader, so an Albums rebuild can't invalidate a concurrent
     /// now-playing request and vice versa.
     artwork_generation: Rc<Cell<u64>>,
+    /// Monotonic generation bumped every time the album-detail panel is
+    /// (re)built. The detail's artwork request snapshot-captures it and
+    /// the callback drops itself when a newer selection has superseded
+    /// the panel — critical because the palette provider is installed
+    /// display-wide, so a stale install would mis-tint the current
+    /// detail. Separate from `artwork_generation` (grid rebuilds) because
+    /// a plain selection change rebuilds the detail without rebuilding
+    /// the grid.
+    detail_generation: Rc<Cell<u64>>,
     /// Switches from `false` to `true` the first time `activate()` is
     /// called. Tile construction, grouping, and the width-watcher tick
     /// callback all key off this — they are skipped while the view is
@@ -165,6 +174,7 @@ impl AlbumsView {
             last_width: Rc::new(Cell::new(0)),
             artwork_loader,
             artwork_generation: Rc::new(Cell::new(0)),
+            detail_generation: Rc::new(Cell::new(0)),
             activated: Rc::new(Cell::new(false)),
             playing_track_id: Rc::new(Cell::new(None)),
         };
@@ -691,17 +701,23 @@ impl AlbumsView {
         // sync with the inter-column spacing of `lists` so the
         // right-half track column sits the same distance from the
         // artwork as the two track columns sit from each other.
+        // Bump the detail generation so any artwork request still in
+        // flight for a previously-selected album drops itself instead of
+        // installing the wrong palette over this panel (the palette
+        // provider is display-wide, so a stale install would mis-tint the
+        // current detail). Snapshot it for this build's request callback.
+        self.detail_generation
+            .set(self.detail_generation.get().wrapping_add(1));
+        let detail_generation_snapshot = self.detail_generation.get();
+
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 40);
         content.add_css_class("album-detail");
         content.set_hexpand(true);
-        let artwork = self.album_artwork_for_detail(album);
-        let palette_provider = artwork.palette.map(album_detail_palette_provider);
-        install_palette_provider(&content, palette_provider.as_ref());
-        apply_palette_style(
-            &content,
-            palette_provider.as_ref(),
-            "album-detail-dominant-color",
-        );
+        // The palette classes are added unconditionally; the
+        // artwork-derived palette provider is installed display-wide by
+        // the async callback below once the cover decodes. No blocking
+        // read happens on this (GTK) thread (#107).
+        apply_palette_class(&content, "album-detail-dominant-color");
 
         let left = gtk::Box::new(gtk::Orientation::Vertical, 6);
         left.set_hexpand(true);
@@ -715,11 +731,7 @@ impl AlbumsView {
 
         let title = gtk::Label::new(Some(&album.title));
         title.add_css_class("album-detail-title");
-        apply_palette_style(
-            &title,
-            palette_provider.as_ref(),
-            "album-detail-palette-primary",
-        );
+        apply_palette_class(&title, "album-detail-palette-primary");
         title.set_xalign(0.0);
         title.set_hexpand(false);
         title.set_wrap(true);
@@ -730,11 +742,7 @@ impl AlbumsView {
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         header.append(&title);
 
-        let play_button = detail_icon_button(
-            "media-playback-start-symbolic",
-            "Play album",
-            palette_provider.as_ref(),
-        );
+        let play_button = detail_icon_button("media-playback-start-symbolic", "Play album");
         let album_for_play = album.clone();
         let command_controller_for_play = self.command_controller.clone();
         let playback_changed_for_play = self.playback_changed.clone();
@@ -746,11 +754,7 @@ impl AlbumsView {
         });
         header.append(&play_button);
 
-        let shuffle_button = detail_icon_button(
-            "media-playlist-shuffle-symbolic",
-            "Shuffle album",
-            palette_provider.as_ref(),
-        );
+        let shuffle_button = detail_icon_button("media-playlist-shuffle-symbolic", "Shuffle album");
         let album_for_shuffle = album.clone();
         let command_controller_for_shuffle = self.command_controller.clone();
         let playback_changed_for_shuffle = self.playback_changed.clone();
@@ -778,11 +782,7 @@ impl AlbumsView {
 
         let subtitle = gtk::Label::new(Some(&album_subtitle(album)));
         subtitle.add_css_class("album-detail-subtitle");
-        apply_palette_style(
-            &subtitle,
-            palette_provider.as_ref(),
-            "album-detail-palette-secondary",
-        );
+        apply_palette_class(&subtitle, "album-detail-palette-secondary");
         subtitle.set_xalign(0.0);
         subtitle.set_width_chars(1);
         subtitle.set_max_width_chars(ALBUM_DETAIL_TEXT_CHARS);
@@ -790,23 +790,17 @@ impl AlbumsView {
         title_block.append(&subtitle);
         left.append(&title_block);
 
-        let track_lists = self.album_track_lists(album, palette_provider.as_ref());
+        let track_lists = self.album_track_lists(album);
         track_lists.set_margin_top(14);
         left.append(&track_lists);
 
         let artwork_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
         artwork_column.set_halign(gtk::Align::End);
         artwork_column.set_valign(gtk::Align::End);
-        let detail_cover = album_cover_with(
-            artwork.detail_texture,
-            ALBUM_DETAIL_ARTWORK_SIZE,
-            "album-detail-cover",
-        );
-        apply_palette_style(
-            &detail_cover,
-            palette_provider.as_ref(),
-            "album-detail-palette-surface",
-        );
+        // Starts as a placeholder; the decoded cover (and the palette
+        // derived from it) lands via the async callback below.
+        let detail_cover = album_cover_with(None, ALBUM_DETAIL_ARTWORK_SIZE, "album-detail-cover");
+        apply_palette_class(&detail_cover, "album-detail-palette-surface");
         artwork_column.append(&detail_cover);
 
         // Reserve vertical room above the panel for the arrow. The arrow
@@ -829,7 +823,7 @@ impl AlbumsView {
         shell.set_margin_bottom(ALBUM_DETAIL_ARROW_HEIGHT);
         shell.set_child(Some(&base));
 
-        let arrow_row = album_detail_arrow_row(selected_column, columns, palette_provider.as_ref());
+        let arrow_row = album_detail_arrow_row(selected_column, columns);
         arrow_row.set_valign(gtk::Align::Start);
         arrow_row.set_can_target(false);
         shell.add_overlay(&arrow_row);
@@ -837,14 +831,42 @@ impl AlbumsView {
         content.append(&left);
         content.append(&artwork_column);
 
+        // All widgets exist; request the cover off the GTK thread. The
+        // shared loader fires the callback synchronously on a cache hit
+        // (the common case — the tile already resolved this path, so the
+        // palette and cover appear with no flash) and from the worker on
+        // a cold miss. Either way the heavy tag read + decode + palette
+        // extraction never runs here.
+        if let Some(source) = self.album_artwork_source(album) {
+            let content_for_callback = content.clone();
+            let cover_for_callback = detail_cover.clone();
+            let generation_cell = self.detail_generation.clone();
+            self.artwork_loader.request(
+                source,
+                Box::new(move |decoded| {
+                    // A newer album selection has superseded this panel;
+                    // dropping here prevents a stale, display-wide palette
+                    // install from mis-tinting the current detail.
+                    if generation_cell.get() != detail_generation_snapshot {
+                        return;
+                    }
+                    if let Some(palette) = decoded.palette {
+                        let provider = album_detail_palette_provider(palette);
+                        install_palette_provider(&content_for_callback, Some(&provider));
+                    }
+                    apply_cover_texture(
+                        &cover_for_callback,
+                        decoded.detail_texture,
+                        ALBUM_DETAIL_ARTWORK_SIZE,
+                    );
+                }),
+            );
+        }
+
         shell
     }
 
-    fn album_track_lists(
-        &self,
-        album: &AlbumViewModel,
-        palette_provider: Option<&gtk::CssProvider>,
-    ) -> gtk::Box {
+    fn album_track_lists(&self, album: &AlbumViewModel) -> gtk::Box {
         let lists = gtk::Box::new(gtk::Orientation::Horizontal, 40);
         lists.add_css_class("album-track-lists");
         lists.set_hexpand(true);
@@ -854,7 +876,6 @@ impl AlbumsView {
 
         let left = AlbumTrackListView::new(
             &album.tracks[..split_index],
-            palette_provider,
             self.context_menu.clone(),
             self.command_controller.clone(),
             self.playback_changed.clone(),
@@ -862,7 +883,6 @@ impl AlbumsView {
         );
         let right = AlbumTrackListView::new(
             &album.tracks[split_index..],
-            palette_provider,
             self.context_menu.clone(),
             self.command_controller.clone(),
             self.playback_changed.clone(),
@@ -905,23 +925,6 @@ impl AlbumsView {
             relative.clone(),
             root.join(relative),
         ))
-    }
-
-    /// Decoded artwork for the album-detail panel. The panel needs both
-    /// the texture and the palette synchronously to render in one go,
-    /// so we first try the loader's cache (most clicks hit it because
-    /// the tile already requested the same path), and only fall back
-    /// to a direct synchronous read for the rare cold-cache click.
-    /// The synchronous read populates the loader's cache, so any
-    /// callbacks still queued for the same path will see the hit.
-    fn album_artwork_for_detail(&self, album: &AlbumViewModel) -> DecodedArtwork {
-        let Some(source) = self.album_artwork_source(album) else {
-            return DecodedArtwork::default();
-        };
-        if let Some(cached) = self.artwork_loader.cached(&source) {
-            return cached;
-        }
-        self.artwork_loader.ensure_cached_sync(&source)
     }
 }
 
@@ -1042,11 +1045,7 @@ fn album_cover_placeholder(size: i32) -> Option<gtk::Image> {
     Some(icon)
 }
 
-fn album_detail_arrow_row(
-    selected_column: usize,
-    columns: usize,
-    palette_provider: Option<&gtk::CssProvider>,
-) -> gtk::Box {
+fn album_detail_arrow_row(selected_column: usize, columns: usize) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, ALBUM_GRID_COLUMN_SPACING);
     row.set_homogeneous(true);
     row.set_margin_start(ALBUM_GRID_MARGIN);
@@ -1059,7 +1058,7 @@ fn album_detail_arrow_row(
         cell.set_hexpand(true);
 
         if column == selected_column {
-            cell.append(&album_detail_arrow(palette_provider));
+            cell.append(&album_detail_arrow());
         }
 
         row.append(&cell);
@@ -1068,10 +1067,10 @@ fn album_detail_arrow_row(
     row
 }
 
-fn album_detail_arrow(palette_provider: Option<&gtk::CssProvider>) -> gtk::DrawingArea {
+fn album_detail_arrow() -> gtk::DrawingArea {
     let arrow = gtk::DrawingArea::new();
     arrow.add_css_class("album-detail-arrow");
-    apply_palette_style(&arrow, palette_provider, "album-detail-palette-arrow");
+    apply_palette_class(&arrow, "album-detail-palette-arrow");
     arrow.set_content_width(ALBUM_DETAIL_ARROW_WIDTH);
     arrow.set_content_height(ALBUM_DETAIL_ARROW_HEIGHT + ALBUM_DETAIL_ARROW_BLEED);
     arrow.set_halign(gtk::Align::Center);
@@ -1114,15 +1113,13 @@ fn album_detail_palette_provider(palette: ArtworkPalette) -> gtk::CssProvider {
     provider
 }
 
-fn apply_palette_style(
-    widget: &impl IsA<gtk::Widget>,
-    provider: Option<&gtk::CssProvider>,
-    css_class: &str,
-) {
-    if provider.is_none() {
-        return;
-    }
-
+/// Tag `widget` with an album-detail palette class. The class is inert
+/// until the artwork-derived palette provider is installed display-wide
+/// (asynchronously, once the cover decodes — #107); albums without
+/// artwork never install one, so the class resolves to the default
+/// theme. Classes are therefore always added; only the provider install
+/// is conditional on a palette being available.
+fn apply_palette_class(widget: &impl IsA<gtk::Widget>, css_class: &str) {
     widget.as_ref().add_css_class(css_class);
 }
 
@@ -1198,18 +1195,14 @@ fn album_detail_palette_css(palette: ArtworkPalette) -> String {
     )
 }
 
-fn detail_icon_button(
-    icon_name: &str,
-    tooltip: &str,
-    palette_provider: Option<&gtk::CssProvider>,
-) -> gtk::Button {
+fn detail_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {
     let icon = gtk::Image::from_icon_name(icon_name);
     icon.set_pixel_size(18);
-    apply_palette_style(&icon, palette_provider, "album-detail-palette-primary");
+    apply_palette_class(&icon, "album-detail-palette-primary");
 
     let button = gtk::Button::new();
     button.add_css_class("album-detail-icon-button");
-    apply_palette_style(&button, palette_provider, "album-detail-palette-button");
+    apply_palette_class(&button, "album-detail-palette-button");
     button.set_child(Some(&icon));
     button.set_tooltip_text(Some(tooltip));
     button.set_valign(gtk::Align::Center);

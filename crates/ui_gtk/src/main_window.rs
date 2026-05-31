@@ -300,6 +300,7 @@ pub(crate) fn build_main_window(
         playback_changed.clone(),
         library_changed_holder.clone(),
         track_row_changed_holder.clone(),
+        &artwork_loader,
     );
     let add_to_playlist_provider = add_to_playlist_provider(&runtime);
     let add_to_playlist_callback =
@@ -325,6 +326,7 @@ pub(crate) fn build_main_window(
         playback_changed.clone(),
         library_changed_holder.clone(),
         track_row_changed_holder.clone(),
+        &artwork_loader,
         &sidebar,
     );
     let playlist_context_menu = TrackRowContextMenu::new(playlist_context_actions, parent_window)
@@ -680,6 +682,7 @@ pub(crate) fn build_main_window(
         content_stack: content_stack.clone(),
         library_changed_holder: library_changed_holder.clone(),
         track_row_changed_holder: track_row_changed_holder.clone(),
+        artwork_loader: artwork_loader.clone(),
     });
 
     root.append(&titlebar.widget);

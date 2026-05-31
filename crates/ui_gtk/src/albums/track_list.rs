@@ -29,7 +29,6 @@ pub(super) struct AlbumTrackListView {
 impl AlbumTrackListView {
     pub(super) fn new(
         tracks: &[AlbumTrackViewModel],
-        palette_provider: Option<&gtk::CssProvider>,
         context_menu: TrackRowContextMenu,
         command_controller: SharedCommandController,
         playback_changed: PlaybackChangedCallback,
@@ -46,11 +45,7 @@ impl AlbumTrackListView {
         let selection = gtk::NoSelection::new(Some(store));
 
         let context_menu = AlbumTrackContextMenu::new(context_menu);
-        let factory = build_row_factory(
-            palette_provider.cloned(),
-            context_menu.clone(),
-            playing_track_id,
-        );
+        let factory = build_row_factory(context_menu.clone(), playing_track_id);
 
         let list = gtk::ListView::new(Some(selection.clone()), Some(factory));
         list.add_css_class("album-track-table");
@@ -112,14 +107,16 @@ impl AlbumTrackListView {
 }
 
 fn build_row_factory(
-    palette_provider: Option<gtk::CssProvider>,
     context_menu: AlbumTrackContextMenu,
     playing_track_id: Option<TrackId>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
-    let palette_present = palette_provider.is_some();
-    drop(palette_provider);
 
+    // The album-detail palette classes are always added; they are inert
+    // until the detail panel installs the artwork-derived palette
+    // provider display-wide (which happens asynchronously once the cover
+    // decodes, #107). Albums without artwork never install a provider, so
+    // the classes simply resolve to the default theme.
     let context_for_setup = context_menu;
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
@@ -153,9 +150,7 @@ fn build_row_factory(
         number.add_css_class("album-track-number");
         number.set_xalign(1.0);
         number.set_width_chars(TRACK_NUMBER_MIN_CHARS);
-        if palette_present {
-            number.add_css_class("album-detail-palette-muted");
-        }
+        number.add_css_class("album-detail-palette-muted");
         number_or_status.append(&number);
 
         row.append(&number_or_status);
@@ -167,17 +162,13 @@ fn build_row_factory(
         title.set_width_chars(1);
         title.set_max_width_chars(TRACK_TITLE_MAX_CHARS);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        if palette_present {
-            title.add_css_class("album-detail-palette-primary");
-        }
+        title.add_css_class("album-detail-palette-primary");
         row.append(&title);
 
         let duration = gtk::Label::new(None);
         duration.add_css_class("album-track-duration");
         duration.set_xalign(1.0);
-        if palette_present {
-            duration.add_css_class("album-detail-palette-muted");
-        }
+        duration.add_css_class("album-detail-palette-muted");
         row.append(&duration);
 
         context_for_setup.register_row(list_item, &row);

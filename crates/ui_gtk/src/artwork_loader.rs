@@ -304,25 +304,6 @@ impl ArtworkLoader {
             .borrow_mut()
             .insert(source, decoded.artwork);
     }
-
-    /// Synchronously read and cache `source`. Used by the album detail
-    /// panel when the user clicks an album whose tile hasn't been
-    /// resolved yet — the panel needs the palette to render at all,
-    /// and a single tag read is fast enough that blocking the click
-    /// for one file is preferable to flashing colours in after the
-    /// fact. Subsequent loader callbacks for the same path see the
-    /// cache hit.
-    pub(crate) fn ensure_cached_sync(&self, source: &ArtworkSource) -> DecodedArtwork {
-        if let Some(cached) = self.inner.cache.borrow().get(source) {
-            return cached.clone();
-        }
-        let decoded = self.inner.repository.load(source);
-        self.inner
-            .cache
-            .borrow_mut()
-            .insert(source.clone(), decoded.clone());
-        decoded
-    }
 }
 
 fn worker_loop(

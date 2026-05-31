@@ -7,6 +7,7 @@ use sustain_app_runtime::{ApplicationCommand, MetadataChange, Track, TrackId};
 
 use super::{
     LibraryChangedHolder, SharedRuntime, TrackRowChangedHolder,
+    artwork_loader::{ArtworkLoader, ArtworkSource},
     command_controller::SharedCommandController,
 };
 
@@ -17,7 +18,7 @@ mod form;
 mod format;
 mod lyrics;
 
-use artwork::{ArtworkPage, update_artwork_frame};
+use artwork::{ArtworkPage, set_frame_texture};
 use details::DetailsPage;
 use file_page::build_file_page;
 use lyrics::LyricsPage;
@@ -30,12 +31,14 @@ const HEADER_GAP_BELOW: i32 = 14;
 const NUMBER_ENTRY_WIDTH_CHARS: i32 = 5;
 const PAIR_ENTRY_WIDTH_CHARS: i32 = 4;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn open_track_info_dialog(
     parent: &gtk::Window,
     runtime: &SharedRuntime,
     command_controller: &SharedCommandController,
     library_changed_holder: &LibraryChangedHolder,
     track_row_changed_holder: &TrackRowChangedHolder,
+    artwork_loader: &ArtworkLoader,
     track_id: TrackId,
 ) {
     let (track, absolute_path) = {
@@ -51,6 +54,16 @@ pub(crate) fn open_track_info_dialog(
         let absolute_path = runtime_borrow.absolute_track_path(&track);
         (track, absolute_path)
     };
+
+    // Resolve the embedded-artwork source the shared loader reads. The
+    // disk cache is keyed by the library-relative path (so it survives
+    // library-root moves and shares rows with Albums / now-playing); the
+    // worker needs the absolute path to read the file. No artwork bytes
+    // are read here — the loader does that off the GTK thread (#107).
+    let artwork_source = absolute_path.as_ref().map(|absolute| {
+        ArtworkSource::embedded_track(track.location.path().to_path_buf(), absolute.clone())
+    });
+    let has_embedded_artwork = track.has_embedded_artwork == Some(true);
 
     let initial_metadata = track.metadata.clone();
     let initial_rating = track.rating;
@@ -68,10 +81,7 @@ pub(crate) fn open_track_info_dialog(
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
     outer.set_margin_bottom(16);
 
-    let artwork_bytes = absolute_path
-        .as_deref()
-        .and_then(|path| runtime.borrow().read_artwork(path));
-    let header = build_header(&track, artwork_bytes.as_deref());
+    let header = build_header(&track);
     outer.append(&header.widget);
 
     let stack = gtk::Stack::new();
@@ -92,7 +102,9 @@ pub(crate) fn open_track_info_dialog(
         library_changed_holder,
         track_id,
         header.cover_frame.clone(),
-        artwork_bytes.as_deref(),
+        artwork_loader,
+        artwork_source,
+        has_embedded_artwork,
     );
     stack.add_titled(&artwork.widget, Some("artwork"), "Artwork");
 
@@ -209,7 +221,7 @@ struct Header {
     cover_frame: gtk::Frame,
 }
 
-fn build_header(track: &Track, artwork_bytes: Option<&[u8]>) -> Header {
+fn build_header(track: &Track) -> Header {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
     row.add_css_class("track-info-header");
     row.set_hexpand(true);
@@ -218,7 +230,9 @@ fn build_header(track: &Track, artwork_bytes: Option<&[u8]>) -> Header {
     cover_frame.add_css_class("track-info-cover");
     cover_frame.set_size_request(COVER_THUMB_SIZE, COVER_THUMB_SIZE);
     cover_frame.set_valign(gtk::Align::Center);
-    update_artwork_frame(&cover_frame, artwork_bytes, COVER_THUMB_SIZE);
+    // Starts as a placeholder; the decoded thumbnail is filled in by the
+    // Artwork page's shared-loader request once the cover decodes (#107).
+    set_frame_texture(&cover_frame, None, COVER_THUMB_SIZE);
     row.append(&cover_frame);
 
     let info = gtk::Box::new(gtk::Orientation::Vertical, 2);

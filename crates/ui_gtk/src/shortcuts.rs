@@ -33,6 +33,7 @@ use sustain_app_runtime::{ApplicationCommand, PlaylistId, PlaylistItem};
 
 use super::{
     LibraryChangedHolder, PLAYLISTS_VIEW, SONGS_VIEW, SharedRuntime, TrackRowChangedHolder,
+    artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
     main_window::SidebarCollapseController,
     sidebar::PlaylistSidebar,
@@ -58,6 +59,7 @@ pub(crate) struct GlobalShortcutContext {
     pub(crate) content_stack: gtk::Stack,
     pub(crate) library_changed_holder: LibraryChangedHolder,
     pub(crate) track_row_changed_holder: TrackRowChangedHolder,
+    pub(crate) artwork_loader: ArtworkLoader,
 }
 
 pub(crate) fn install_global_shortcuts(context: GlobalShortcutContext) {
@@ -135,6 +137,7 @@ fn install_get_info(context: &GlobalShortcutContext) {
         &context.command_controller,
         &context.library_changed_holder,
         &context.track_row_changed_holder,
+        &context.artwork_loader,
     );
     let songs_table = context.songs_table.clone();
     let playlists_table = context.playlists_table.clone();
