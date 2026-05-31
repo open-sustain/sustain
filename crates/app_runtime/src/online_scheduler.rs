@@ -96,7 +96,7 @@ pub type UnixClockFn = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 /// Per-track progress signal. Same shape as the analysis scheduler so
 /// the UI surface can use a shared widget treatment.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SchedulerProgress {
     Tick {
         completed: u32,
@@ -106,6 +106,15 @@ pub enum SchedulerProgress {
     Idle {
         completed: u32,
         failed: u32,
+    },
+    /// The attempt stamp (`record_online_attempt`) was rejected by
+    /// SQLite. Without it the track stays eligible in
+    /// `tracks_needing_online` and would be re-fetched over the network
+    /// every batch. The worker stops and waits for an explicit wake; this
+    /// event surfaces the failure instead of reporting a clean pass that
+    /// will silently repeat. `detail` carries the store error.
+    PersistenceError {
+        detail: String,
     },
 }
 
@@ -253,7 +262,7 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
         explicit_queue: VecDeque::new(),
     };
 
-    loop {
+    'outer: loop {
         match drain_commands(&receiver, &mut state) {
             DrainOutcome::Shutdown => return,
             DrainOutcome::Continue => {}
@@ -386,8 +395,27 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                     provider_version,
                     now_unix: (clock)(),
                 };
-                let _ =
-                    library_store.record_online_attempt(item.track_id, report.attempted, context);
+                if let Err(error) =
+                    library_store.record_online_attempt(item.track_id, report.attempted, context)
+                {
+                    // The attempt stamp was rejected by SQLite. Without
+                    // it this track stays eligible in
+                    // `tracks_needing_online` and would be re-fetched
+                    // over the network every batch. Surface the failure
+                    // and wait for an explicit wake rather than
+                    // hot-looping — the same bounded response the
+                    // store-query error path above uses. The track is
+                    // not counted as completed/failed; the
+                    // PersistenceError is the authoritative signal.
+                    (progress)(SchedulerProgress::PersistenceError {
+                        detail: format!("{error:?}"),
+                    });
+                    match receiver.recv() {
+                        Ok(SchedulerCommand::Shutdown) | Err(_) => return,
+                        Ok(command) => apply_command(command, &mut state),
+                    }
+                    continue 'outer;
+                }
             }
 
             match report.outcome {

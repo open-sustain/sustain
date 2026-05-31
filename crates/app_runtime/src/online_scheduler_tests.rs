@@ -652,6 +652,81 @@ fn artwork_capability_rejects_invalid_remote_bytes_without_writing() {
 }
 
 #[test]
+fn rejected_online_attempt_stamp_halts_the_sweep() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp");
+    let inner: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let faulty = Arc::new(FaultyStore::new(inner));
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    faulty.save_track(track).expect("save");
+    faulty.set_fail_online_attempt(true);
+
+    let remote = Arc::new(StubRemote::default());
+    let metadata = Arc::new(StubMetadata::default());
+    let (sink, rx) = capturing_sink();
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let (_writer, tag_writer) = spawn_tag_writer(metadata, store.clone(), temp.path());
+
+    let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
+        remote_service: remote,
+        tag_writer,
+        library_store: store.clone(),
+        progress: sink,
+        track_updated: None,
+        clock: fixed_clock(1),
+        initial_settings: OnlineSettings {
+            artwork: false,
+            tags: false,
+            lyrics: true,
+        },
+        library_path: Some(temp.path().to_path_buf()),
+        provider_version: 1,
+    });
+
+    // A rejected attempt stamp must surface as a PersistenceError, not a
+    // clean pass that silently repeats over the network next batch.
+    let event = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::PersistenceError { .. })
+    });
+    assert!(matches!(event, SchedulerProgress::PersistenceError { .. }));
+
+    // Bounded retry: the worker halts rather than re-fetching every
+    // batch against a store that keeps rejecting the stamp.
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        faulty.online_attempt_calls(),
+        1,
+        "a rejected attempt stamp must not hot-loop the network"
+    );
+    assert_eq!(
+        store
+            .tracks_needing_online(
+                OnlineCapabilities {
+                    artwork: false,
+                    tags: false,
+                    lyrics: true,
+                },
+                1,
+                10,
+            )
+            .expect("query")
+            .len(),
+        1,
+        "the un-stamped track is still eligible"
+    );
+
+    // Recovery: once the store accepts writes, an explicit wake resumes.
+    faulty.set_fail_online_attempt(false);
+    scheduler.wake();
+    let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Tick { completed: 1, .. })
+    });
+
+    scheduler.shutdown();
+}
+
+#[test]
 fn remote_error_records_attempt_and_is_not_retried() {
     let temp = TempDir::new().expect("temp");
     let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());

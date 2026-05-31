@@ -237,6 +237,114 @@ fn scheduler_records_failures_without_clobbering_run() {
 }
 
 #[test]
+fn rejected_record_analysis_halts_without_false_completion() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let track = touch_in(&library_root, "alpha.flac");
+
+    let inner: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let faulty = Arc::new(FaultyStore::new(inner));
+    faulty.save_track(track).expect("save");
+    faulty.set_fail_record_analysis(true);
+
+    let (sink, rx) = capturing_sink();
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        ok_analyzer(),
+        sink,
+        fixed_clock(1_700_000_000),
+        store.clone(),
+        AnalysisSettings {
+            bpm: true,
+            key: true,
+            audio: true,
+        },
+        Some(library_root),
+    ));
+
+    // The rejected write must surface as a PersistenceError, never as a
+    // completed Tick — the DSP result was lost, not landed.
+    let event = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::PersistenceError { .. })
+    });
+    assert!(matches!(event, SchedulerProgress::PersistenceError { .. }));
+
+    // Bounded retry: the scheduler halts rather than re-running DSP
+    // against a store that keeps rejecting the write. Give it time to
+    // hot-loop if it were going to; it must not.
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        faulty.record_analysis_calls(),
+        1,
+        "scheduler must not retry a rejected write in a hot loop"
+    );
+    let pending = store
+        .tracks_needing_analysis(AnalysisCapabilities::all(), 1, 10)
+        .expect("query");
+    assert_eq!(pending.len(), 1, "the unpersisted track is still pending");
+
+    // Once the store recovers, an explicit wake resumes the sweep and
+    // the track persists for real.
+    faulty.set_fail_record_analysis(false);
+    scheduler.wake();
+    let tick = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Tick { completed: 1, .. })
+    });
+    assert!(matches!(tick, SchedulerProgress::Tick { completed: 1, .. }));
+    let pending = store
+        .tracks_needing_analysis(AnalysisCapabilities::all(), 1, 10)
+        .expect("query");
+    assert!(pending.is_empty(), "track persisted after recovery");
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn rejected_failure_stamp_halts_the_sweep() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let track = touch_in(&library_root, "broken.flac");
+
+    let inner: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let faulty = Arc::new(FaultyStore::new(inner));
+    faulty.save_track(track).expect("save");
+    faulty.set_fail_attempt_failure(true);
+
+    let (sink, rx) = capturing_sink();
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        err_analyzer(),
+        sink,
+        fixed_clock(2_000),
+        store,
+        AnalysisSettings {
+            bpm: true,
+            key: false,
+            audio: false,
+        },
+        Some(library_root),
+    ));
+
+    let event = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::PersistenceError { .. })
+    });
+    assert!(matches!(event, SchedulerProgress::PersistenceError { .. }));
+
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        faulty.attempt_failure_calls(),
+        1,
+        "a rejected failure stamp must not hot-loop"
+    );
+
+    scheduler.shutdown();
+}
+
+#[test]
 fn scheduler_idles_when_settings_disabled() {
     let temp = TempDir::new().expect("temp dir");
     let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());

@@ -133,7 +133,7 @@ pub type UnixClockFn = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 /// Per-track progress signal. The widget aggregates these into the
 /// notification text without caring about the underlying ids.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SchedulerProgress {
     /// At least one track has been processed since the last summary.
     /// `completed` and `failed` are batch-running totals; `remaining`
@@ -148,6 +148,15 @@ pub enum SchedulerProgress {
     /// the persistent "analysing" notification, emit an ephemeral
     /// summary if `completed + failed > 0`.
     Idle { completed: u32, failed: u32 },
+    /// A durable store write was rejected by SQLite — either the
+    /// analysis result or the failed-attempt stamp. The completed DSP
+    /// work was *not* persisted, so the track would resurface in
+    /// `tracks_needing_analysis` and be re-analysed forever. The
+    /// supervisor stops the sweep and waits for an explicit wake; this
+    /// event lets the UI surface the failure instead of silently
+    /// reporting progress that never landed. `detail` carries the store
+    /// error for diagnosis.
+    PersistenceError { detail: String },
 }
 
 /// Bundle of dependencies the scheduler captures at start-up. Grouped
@@ -322,7 +331,23 @@ struct PendingItem {
 /// worker is still chewing on it).
 struct WorkOutcome {
     track_id: TrackId,
-    succeeded: bool,
+    kind: OutcomeKind,
+}
+
+/// What a worker actually accomplished for one track. A background task
+/// is not complete until its durable store mutation succeeds, so the
+/// distinction between "analysed and persisted" and "store rejected the
+/// write" is reported faithfully rather than collapsed into a bool.
+enum OutcomeKind {
+    /// DSP succeeded and `record_analysis` persisted the result.
+    Analyzed,
+    /// DSP failed and the failed-attempt stamp persisted, so the track
+    /// will not be retried until its analyzer version advances.
+    AnalysisFailed,
+    /// A store write was rejected by SQLite (the analysis result or the
+    /// failed-attempt stamp). Carries the rendered store error for the
+    /// notification surface.
+    PersistenceFailed(String),
 }
 
 /// Shared dependencies every worker captures so it can run the DSP
@@ -426,36 +451,41 @@ fn worker_loop(ctx: WorkerCtx) {
             Err(_) => return,
         };
 
-        let succeeded = match (ctx.analyzer)(
+        let kind = match (ctx.analyzer)(
             &item.absolute_path,
             item.capabilities,
             ctx.analysis_options,
             item.duration,
         ) {
-            Ok(analysis) => {
-                let _ = ctx.library_store.record_analysis(
-                    item.track_id,
-                    &analysis,
-                    item.capabilities,
-                    item.context,
-                );
-                if let Some(notify) = ctx.track_updated.as_deref() {
-                    notify(item.track_id);
+            Ok(analysis) => match ctx.library_store.record_analysis(
+                item.track_id,
+                &analysis,
+                item.capabilities,
+                item.context,
+            ) {
+                // Only after the result is durable do we report it as
+                // analysed and ask the UI to reload the row — a row the
+                // store rejected must not look refreshed or completed.
+                Ok(()) => {
+                    if let Some(notify) = ctx.track_updated.as_deref() {
+                        notify(item.track_id);
+                    }
+                    OutcomeKind::Analyzed
                 }
-                true
-            }
-            Err(_) => {
-                let _ = ctx.library_store.record_analysis_attempt_failure(
-                    item.track_id,
-                    item.capabilities,
-                    item.context,
-                );
-                false
-            }
+                Err(error) => OutcomeKind::PersistenceFailed(format!("{error:?}")),
+            },
+            Err(_) => match ctx.library_store.record_analysis_attempt_failure(
+                item.track_id,
+                item.capabilities,
+                item.context,
+            ) {
+                Ok(()) => OutcomeKind::AnalysisFailed,
+                Err(error) => OutcomeKind::PersistenceFailed(format!("{error:?}")),
+            },
         };
         let outcome = WorkOutcome {
             track_id: item.track_id,
-            succeeded,
+            kind,
         };
 
         // Outcome channel send only fails on a closed receiver, which
@@ -476,6 +506,12 @@ struct SupervisorState {
     /// Items here keep their own capability mask, independent of the
     /// global `AnalysisSettings`.
     explicit_queue: VecDeque<PendingItem>,
+    /// Set when a worker reports a rejected store write. The supervisor
+    /// loop drains this at its top: it tears the pool down, surfaces a
+    /// [`SchedulerProgress::PersistenceError`], and waits for an
+    /// explicit wake — never re-running expensive DSP against a store
+    /// that will reject the result again.
+    pending_persistence_error: Option<String>,
 }
 
 fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisSchedulerConfig) {
@@ -499,6 +535,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         completed: 0,
         failed: 0,
         explicit_queue: VecDeque::new(),
+        pending_persistence_error: None,
     };
 
     let (outcome_tx, outcome_rx) = mpsc::channel::<WorkOutcome>();
@@ -561,6 +598,30 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                 state.explicit_queue.push_front(item);
             }
             pending.clear();
+        }
+
+        // 1b. A worker reported a rejected store write. Persisting is
+        //     the gating step for "work complete": a rejected write
+        //     means the DSP result is lost and the track will resurface
+        //     in `tracks_needing_analysis`. Re-running expensive
+        //     analysis against a store that keeps rejecting it would be
+        //     an unbounded hot loop, so stop the sweep and wait for an
+        //     explicit wake — the same bounded response the store-query
+        //     error path below uses. `pending`/`explicit_queue` are left
+        //     intact so a later wake re-dispatches that work.
+        if let Some(detail) = state.pending_persistence_error.take() {
+            if let Some(p) = pool.take() {
+                p.shutdown();
+            }
+            // The join above guarantees no more outcomes; drop any that
+            // queued behind the failure so a later wake starts clean.
+            while outcome_rx.try_recv().is_ok() {}
+            in_flight.clear();
+            (progress)(SchedulerProgress::PersistenceError { detail });
+            if !block_for_next_command(&receiver, &mut state, &mut pool) {
+                return;
+            }
+            continue;
         }
 
         let bg_capabilities = capabilities_from(&state.settings);
@@ -862,15 +923,30 @@ fn apply_outcome(
     analyzer_version: u32,
     capabilities: AnalysisCapabilities,
 ) {
-    if outcome.succeeded {
-        state.completed = state.completed.saturating_add(1);
-    } else {
-        state.failed = state.failed.saturating_add(1);
+    let WorkOutcome { track_id, kind } = outcome;
+    match kind {
+        OutcomeKind::PersistenceFailed(detail) => {
+            // Record the failure (keeping the first of several) and
+            // leave `track_id` in `in_flight` so the supervisor never
+            // treats the pool as quiescent and blocks before the loop
+            // top surfaces the error and tears the pool down. No Tick:
+            // a rejected write is not progress.
+            if state.pending_persistence_error.is_none() {
+                state.pending_persistence_error = Some(detail);
+            }
+            return;
+        }
+        OutcomeKind::Analyzed => {
+            state.completed = state.completed.saturating_add(1);
+        }
+        OutcomeKind::AnalysisFailed => {
+            state.failed = state.failed.saturating_add(1);
+        }
     }
     // The HashSet::remove is harmless when the id isn't there — which
     // happens after a resource-usage flip drops the in-flight set
     // (the old pool's last few outcomes can still trickle in).
-    in_flight.remove(&outcome.track_id);
+    in_flight.remove(&track_id);
     let remaining = library_store
         .tracks_needing_analysis(
             capabilities,

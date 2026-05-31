@@ -358,6 +358,14 @@ pub fn online_background_outcome_text(completed: u32, failed: u32) -> String {
     }
 }
 
+pub fn analysis_background_persistence_error_text(detail: &str) -> String {
+    format!("Analysis paused: the library database rejected a write ({detail}).")
+}
+
+pub fn online_background_persistence_error_text(detail: &str) -> String {
+    format!("Online retrieval paused: the library database rejected a write ({detail}).")
+}
+
 pub fn library_scan_outcome_text(summary: &LibraryScanSummary) -> String {
     if summary.cancelled {
         return format!(

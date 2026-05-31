@@ -90,6 +90,8 @@ mod playlist_items;
 mod playlists;
 mod smart_playlists;
 pub mod smart_shuffle_scheduler;
+#[cfg(test)]
+mod test_store;
 pub use device_sync::{DeviceAnalysisReadiness, DeviceCapacity};
 pub use device_sync_scheduler::{DeviceSyncCompletion, DeviceSyncEvent, DeviceSyncScheduler};
 pub use smart_shuffle_scheduler::{SmartShuffleRebuildResult, SmartShuffleScheduler};
@@ -332,9 +334,15 @@ pub struct ApplicationRuntime {
     analysis_scheduler: Option<analysis_scheduler::AnalysisScheduler>,
     analysis_progress_sink: Option<async_channel::Sender<analysis_scheduler::SchedulerProgress>>,
     analysis_notification_id: Option<NotificationId>,
+    // Persistent error notification shown when the analysis scheduler
+    // halts on a rejected SQLite write (#92). Separate from the
+    // "analysing…" running notification so the two never overwrite each
+    // other's body/severity; cleared when analysis resumes.
+    analysis_persistence_error_id: Option<NotificationId>,
     online_scheduler: Option<online_scheduler::OnlineScheduler>,
     online_progress_sink: Option<async_channel::Sender<online_scheduler::SchedulerProgress>>,
     online_notification_id: Option<NotificationId>,
+    online_persistence_error_id: Option<NotificationId>,
     // Background worker for Smart Shuffle index rebuilds. Owns the
     // thread spawn + result channel; the index itself lives here in
     // the runtime so the picker can borrow it without crossing thread
@@ -493,9 +501,11 @@ impl ApplicationRuntime {
             analysis_scheduler: None,
             analysis_progress_sink: None,
             analysis_notification_id: None,
+            analysis_persistence_error_id: None,
             online_scheduler: None,
             online_progress_sink: None,
             online_notification_id: None,
+            online_persistence_error_id: None,
             smart_shuffle_scheduler: SmartShuffleScheduler::new(),
             device_sync_scheduler: DeviceSyncScheduler::new(),
             device_sync_notification_id: None,
@@ -565,9 +575,11 @@ impl ApplicationRuntime {
             analysis_scheduler: None,
             analysis_progress_sink: None,
             analysis_notification_id: None,
+            analysis_persistence_error_id: None,
             online_scheduler: None,
             online_progress_sink: None,
             online_notification_id: None,
+            online_persistence_error_id: None,
             smart_shuffle_scheduler: SmartShuffleScheduler::new(),
             device_sync_scheduler: DeviceSyncScheduler::new(),
             device_sync_notification_id: None,
@@ -1138,6 +1150,9 @@ impl ApplicationRuntime {
         if let Some(id) = self.analysis_notification_id.take() {
             self.dismiss_notification(id);
         }
+        if let Some(id) = self.analysis_persistence_error_id.take() {
+            self.dismiss_notification(id);
+        }
         if let Some(scheduler) = self.analysis_scheduler.take() {
             scheduler.shutdown();
         }
@@ -1155,6 +1170,11 @@ impl ApplicationRuntime {
                 failed: _,
                 remaining,
             } => {
+                // A Tick means the scheduler is making durable progress
+                // again; clear any prior persistence-error banner.
+                if let Some(id) = self.analysis_persistence_error_id.take() {
+                    self.dismiss_notification(id);
+                }
                 let body = notifications::analysis_background_running_text(completed, remaining);
                 if let Some(existing) = self.analysis_notification_id {
                     self.update_notification_body(existing, body);
@@ -1168,8 +1188,29 @@ impl ApplicationRuntime {
                     self.analysis_notification_id = Some(id);
                 }
             }
+            analysis_scheduler::SchedulerProgress::PersistenceError { detail } => {
+                // The scheduler hit a rejected SQLite write and halted.
+                // Replace the stale "analysing…" banner with a persistent,
+                // cancellable error carrying the diagnostic.
+                if let Some(id) = self.analysis_notification_id.take() {
+                    self.dismiss_notification(id);
+                }
+                if let Some(id) = self.analysis_persistence_error_id.take() {
+                    self.dismiss_notification(id);
+                }
+                let id = self.push_persistent_notification(
+                    NotificationCategory::AnalysisBackground,
+                    NotificationSeverity::Error,
+                    notifications::analysis_background_persistence_error_text(&detail),
+                    true,
+                );
+                self.analysis_persistence_error_id = Some(id);
+            }
             analysis_scheduler::SchedulerProgress::Idle { completed, failed } => {
                 if let Some(id) = self.analysis_notification_id.take() {
+                    self.dismiss_notification(id);
+                }
+                if let Some(id) = self.analysis_persistence_error_id.take() {
                     self.dismiss_notification(id);
                 }
                 // Emit an ephemeral summary only when there is something
@@ -1288,6 +1329,9 @@ impl ApplicationRuntime {
         if let Some(id) = self.online_notification_id.take() {
             self.dismiss_notification(id);
         }
+        if let Some(id) = self.online_persistence_error_id.take() {
+            self.dismiss_notification(id);
+        }
         if let Some(scheduler) = self.online_scheduler.take() {
             scheduler.shutdown();
         }
@@ -1302,6 +1346,9 @@ impl ApplicationRuntime {
                 failed: _,
                 remaining,
             } => {
+                if let Some(id) = self.online_persistence_error_id.take() {
+                    self.dismiss_notification(id);
+                }
                 let body = notifications::online_background_running_text(completed, remaining);
                 if let Some(existing) = self.online_notification_id {
                     self.update_notification_body(existing, body);
@@ -1315,8 +1362,26 @@ impl ApplicationRuntime {
                     self.online_notification_id = Some(id);
                 }
             }
+            online_scheduler::SchedulerProgress::PersistenceError { detail } => {
+                if let Some(id) = self.online_notification_id.take() {
+                    self.dismiss_notification(id);
+                }
+                if let Some(id) = self.online_persistence_error_id.take() {
+                    self.dismiss_notification(id);
+                }
+                let id = self.push_persistent_notification(
+                    NotificationCategory::OnlineBackground,
+                    NotificationSeverity::Error,
+                    notifications::online_background_persistence_error_text(&detail),
+                    true,
+                );
+                self.online_persistence_error_id = Some(id);
+            }
             online_scheduler::SchedulerProgress::Idle { completed, failed } => {
                 if let Some(id) = self.online_notification_id.take() {
+                    self.dismiss_notification(id);
+                }
+                if let Some(id) = self.online_persistence_error_id.take() {
                     self.dismiss_notification(id);
                 }
                 if completed > 0 || failed > 0 {
