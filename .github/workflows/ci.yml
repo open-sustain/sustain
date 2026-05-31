@@ -74,7 +74,13 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: xvfb-run -a cargo test --workspace --locked --no-fail-fast
+      # The sustain-ui-gtk widget-smoke tests init GTK and map widgets, which
+      # brings up GTK's default GL renderer. Under xvfb's llvmpipe GL stack
+      # that renderer SIGSEGVs during teardown at process exit, crashing the
+      # test binary *after* all tests pass. These tests exercise widget/model
+      # logic, not the GPU path, so force the software (cairo) renderer and
+      # keep GL out of the headless run entirely.
+      - run: GDK_DISABLE=gl GSK_RENDERER=cairo xvfb-run -a cargo test --workspace --locked --no-fail-fast
 
   doc:
     name: rustdoc
