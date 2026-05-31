@@ -15,6 +15,7 @@ name = "sustain"
 path = "src/main.rs"
 
 [dependencies]
+directories = "6.0.0"
 rustix = { version = "1", features = ["fs"] }
 sustain-app-runtime = { path = "../app_runtime" }
 sustain-library-store = { path = "../library_store" }

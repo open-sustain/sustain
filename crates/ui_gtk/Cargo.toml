@@ -12,7 +12,6 @@ path = "src/lib.rs"
 
 [dependencies]
 async-channel = "2"
-directories = "6.0.0"
 gtk.workspace = true
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 sustain-app-runtime = { path = "../app_runtime" }

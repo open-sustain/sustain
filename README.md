@@ -125,6 +125,30 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 ```
 
+### Running against a throwaway library
+
+By default — installed or via `cargo run` — Sustain reads and writes the
+real user locations above. To work on a branch without touching the
+installed instance's library, settings, or artwork cache, isolate the
+dev instance with CLI flags (after `--`):
+
+```sh
+# Keep config, database, and cache in the current directory
+# (sustain.toml, sustain.sqlite, sustain.cache/):
+cargo run -p sustain-app -- --local-scope
+
+# Or point at explicit files (both accept absolute or relative paths):
+cargo run -p sustain-app -- --config /tmp/dev.toml --database /tmp/dev.sqlite
+```
+
+`--local-scope` (alias `--dev`) is the recommended way to run against
+anything other than the installed user's real library. Explicit
+`--config` / `--database` win over `--local-scope`, and whenever any of
+these flags is present Sustain never falls back to the XDG locations —
+the instance is fully self-contained. The resolved paths are printed at
+startup. The single-instance lock keys off the resolved database path,
+so a dev instance and the installed one coexist.
+
 
 ### A note on the AI development
 

@@ -45,14 +45,13 @@ use std::{
     collections::HashMap,
     fs,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
 
-use directories::BaseDirs;
 use gtk::{gdk, gdk_pixbuf, gio, glib};
 use rusqlite::{Connection, OptionalExtension, params};
 use sustain_app_runtime::MetadataService;
@@ -189,8 +188,8 @@ struct WorkerResult {
 }
 
 impl ArtworkLoader {
-    pub(crate) fn new(metadata_service: Arc<dyn MetadataService>) -> Self {
-        let repository = Arc::new(ArtworkRepository::new(metadata_service));
+    pub(crate) fn new(metadata_service: Arc<dyn MetadataService>, cache_dir: PathBuf) -> Self {
+        let repository = Arc::new(ArtworkRepository::new(metadata_service, cache_dir));
         let (request_tx, request_rx) = mpsc::channel::<WorkerRequest>();
         let request_rx = Arc::new(Mutex::new(request_rx));
         let (result_tx, result_rx) = mpsc::channel::<WorkerResult>();
@@ -378,10 +377,10 @@ struct ArtworkRepository {
 }
 
 impl ArtworkRepository {
-    fn new(metadata_service: Arc<dyn MetadataService>) -> Self {
+    fn new(metadata_service: Arc<dyn MetadataService>, cache_dir: PathBuf) -> Self {
         Self {
             metadata_service,
-            disk_cache: ArtworkDiskCache::open(),
+            disk_cache: ArtworkDiskCache::open(&cache_dir),
         }
     }
 
@@ -415,13 +414,9 @@ struct ArtworkDiskCache {
 }
 
 impl ArtworkDiskCache {
-    fn open() -> Option<Self> {
-        let path = BaseDirs::new()?
-            .cache_dir()
-            .join("sustain")
-            .join("artwork-cache.sqlite");
-        fs::create_dir_all(path.parent()?).ok()?;
-        let connection = Connection::open(path).ok()?;
+    fn open(cache_dir: &Path) -> Option<Self> {
+        fs::create_dir_all(cache_dir).ok()?;
+        let connection = Connection::open(cache_dir.join("artwork-cache.sqlite")).ok()?;
         Self::initialize(&connection).ok()?;
         Some(Self {
             connection: Mutex::new(connection),

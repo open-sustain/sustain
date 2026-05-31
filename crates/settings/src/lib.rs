@@ -80,11 +80,26 @@ pub struct TomlSettingsStore {
     path: PathBuf,
 }
 
+/// Resolve the default XDG settings-file path Sustain reads from when no
+/// explicit override is supplied: `<config_dir>/sustain/settings.toml`.
+/// Returns `None` when the platform config directory cannot be derived
+/// (no `XDG_CONFIG_HOME` and no `HOME`), mirroring
+/// `sustain_library_store::default_database_path`. Exposed so the
+/// application composition root can resolve, log, and override every
+/// on-disk location in one place.
+pub fn default_settings_path() -> Option<PathBuf> {
+    Some(
+        BaseDirs::new()?
+            .config_dir()
+            .join("sustain")
+            .join("settings.toml"),
+    )
+}
+
 impl TomlSettingsStore {
     pub fn open_default() -> SettingsResult<Self> {
-        let base_dirs = BaseDirs::new().ok_or(SettingsError::ConfigDirectoryUnavailable)?;
         Ok(Self::new(
-            base_dirs.config_dir().join("sustain").join("settings.toml"),
+            default_settings_path().ok_or(SettingsError::ConfigDirectoryUnavailable)?,
         ))
     }
 

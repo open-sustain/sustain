@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -131,7 +131,7 @@ pub(crate) type LibraryHydrationResultReceiver = async_channel::Receiver<
     sustain_app_runtime::ApplicationRuntimeResult<LibraryHydrationSnapshot>,
 >;
 
-pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
+pub fn run(mut runtime: ApplicationRuntime, application_id: &str, artwork_cache_dir: PathBuf) {
     let trun = std::time::Instant::now();
     macro_rules! tlog {
         ($label:expr) => {
@@ -303,6 +303,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
                 app,
                 runtime.clone(),
                 mpris_service.clone(),
+                artwork_cache_dir.clone(),
                 crate::main_window::MainWindowAsyncReceivers {
                     mpris_command_rx,
                     metadata_writer_event_rx: writer_event_rx,

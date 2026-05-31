@@ -4,6 +4,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
+    path::PathBuf,
     rc::Rc,
 };
 
@@ -153,6 +154,7 @@ pub(crate) fn build_main_window(
     app: &gtk::Application,
     runtime: SharedRuntime,
     mpris_service: Option<SharedMprisService>,
+    artwork_cache_dir: PathBuf,
     receivers: MainWindowAsyncReceivers,
 ) -> BuiltMainWindow {
     let MainWindowAsyncReceivers {
@@ -240,7 +242,7 @@ pub(crate) fn build_main_window(
         .borrow()
         .metadata_service()
         .expect("metadata service must be installed before building the main window");
-    let artwork_loader = ArtworkLoader::new(metadata_service);
+    let artwork_loader = ArtworkLoader::new(metadata_service, artwork_cache_dir);
 
     let now_playing = NowPlayingView::new(
         runtime.clone(),

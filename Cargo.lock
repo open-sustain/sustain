@@ -2078,6 +2078,7 @@ dependencies = [
 name = "sustain-app"
 version = "0.4.0-alpha.2"
 dependencies = [
+ "directories",
  "rustix",
  "sustain-app-runtime",
  "sustain-library-store",
@@ -2227,7 +2228,6 @@ name = "sustain-ui-gtk"
 version = "0.4.0-alpha.2"
 dependencies = [
  "async-channel",
- "directories",
  "gtk4",
  "rusqlite",
  "sustain-app-runtime",

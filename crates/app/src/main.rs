@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod instance_lock;
+mod launch;
 
 use std::{process, sync::Arc};
 
@@ -35,18 +36,44 @@ fn main() {
         };
     }
     tlog!("main() entered");
-    // Resolve the on-disk library database location up front so the
-    // single-instance lock is keyed off the exact same path the library
-    // store will end up opening. See `instance_lock.rs` for the integrity
-    // rationale.
-    let Some(database_path) = sustain_library_store::default_database_path() else {
-        eprintln!(
-            "Sustain: cannot resolve the library database path (XDG_DATA_HOME and HOME are both unset)."
-        );
-        process::exit(1);
+    // Parse developer-isolation flags and resolve the config, database,
+    // and artwork-cache locations up front (issue #7). The database path
+    // is resolved before anything else so the single-instance lock is
+    // keyed off the exact same path the library store will open. See
+    // `launch.rs` for the precedence rules and `instance_lock.rs` for the
+    // integrity rationale.
+    let cli = match launch::parse_args(std::env::args().skip(1)) {
+        Ok(Some(cli)) => cli,
+        Ok(None) => {
+            println!("{}", launch::USAGE);
+            return;
+        }
+        Err(error) => {
+            eprintln!("Sustain: {error}.\n");
+            eprintln!("{}", launch::USAGE);
+            process::exit(2);
+        }
     };
+    let defaults = launch::XdgDefaults {
+        config: sustain_settings::default_settings_path(),
+        database: sustain_library_store::default_database_path(),
+        cache_dir: launch::default_cache_dir(),
+    };
+    let working_dir = std::env::current_dir().ok();
+    let paths = match launch::resolve_paths(&cli, working_dir.as_deref(), &defaults) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("Sustain: cannot resolve on-disk locations: {error}.");
+            process::exit(1);
+        }
+    };
+    // Log the resolved locations so a developer sees immediately which
+    // database, settings file, and cache the running instance is touching.
+    eprintln!("Sustain: settings {}", paths.config.display());
+    eprintln!("Sustain: database {}", paths.database.display());
+    eprintln!("Sustain: artwork  {}", paths.cache_dir.display());
 
-    let _instance_lock: InstanceLock = match instance_lock::acquire(&database_path) {
+    let _instance_lock: InstanceLock = match instance_lock::acquire(&paths.database) {
         AcquireOutcome::Acquired(lock) => lock,
         AcquireOutcome::Held { lock_path } => {
             eprintln!(
@@ -72,15 +99,7 @@ fn main() {
     };
 
     tlog!("instance lock acquired");
-    let settings_store = match sustain_settings::TomlSettingsStore::open_default() {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!(
-                "Sustain: config directory unavailable ({error:?}). Cannot persist settings."
-            );
-            process::exit(1);
-        }
-    };
+    let settings_store = sustain_settings::TomlSettingsStore::new(&paths.config);
     let settings_path = settings_store.path().to_path_buf();
     let mut runtime = match sustain_app_runtime::ApplicationRuntime::with_settings_store(Box::new(
         settings_store,
@@ -102,7 +121,7 @@ fn main() {
     };
 
     tlog!("settings store opened");
-    match sustain_library_store::SqliteLibraryStore::open(&database_path) {
+    match sustain_library_store::SqliteLibraryStore::open(&paths.database) {
         Ok(library_store) => {
             tlog!("sqlite library store opened");
             let was_freshly_created = library_store.was_freshly_created();
@@ -161,5 +180,5 @@ fn main() {
     // force `GSK_RENDERER` here. If it becomes visually broken, prefer documenting
     // `GSK_RENDERER=ngl` / `GSK_RENDERER=gl` as a user workaround before changing
     // the app default.
-    sustain_ui_gtk::run(runtime, GTK_APPLICATION_ID);
+    sustain_ui_gtk::run(runtime, GTK_APPLICATION_ID, paths.cache_dir);
 }
