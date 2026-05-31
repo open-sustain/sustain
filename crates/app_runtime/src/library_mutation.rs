@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
+use std::path::Path;
+
 use sustain_domain::{LibraryManagementMode, MetadataChange, Rating, TrackId};
 
 use crate::MetadataWriteKind;
@@ -241,6 +243,27 @@ impl ApplicationRuntime {
         &mut self,
         track_id: TrackId,
     ) -> ApplicationRuntimeResult<()> {
+        self.move_track_to_trash_with(track_id, probe_file_presence, |path| {
+            trash::delete(path).map_err(|_| ())
+        })
+    }
+
+    /// Fail-closed core of [`Self::move_track_to_trash`], parameterised over
+    /// the file-presence `probe` and the `trash` operation so the success,
+    /// confirmed-absence, probe-error, and trash-backend-failure paths can
+    /// be exercised deterministically.
+    ///
+    /// The library row is removed only after the file has entered the trash
+    /// or its absence has been *proven*. An unresolved library root or a
+    /// probe error (permission, transient I/O) leaves the row in place: the
+    /// user asked to trash the file, so deleting the record while the file
+    /// may still be live on disk would be the worst outcome.
+    pub(super) fn move_track_to_trash_with(
+        &mut self,
+        track_id: TrackId,
+        probe: impl Fn(&Path) -> FilePresence,
+        trash: impl Fn(&Path) -> Result<(), ()>,
+    ) -> ApplicationRuntimeResult<()> {
         self.ensure_no_background_library_task()?;
         let track = self
             .library_tracks
@@ -251,9 +274,24 @@ impl ApplicationRuntime {
 
         self.stop_playback_if_playing(track_id);
 
-        if let Some(path) = self.absolute_track_path(&track) {
-            if path.exists() {
-                trash::delete(&path).map_err(|_| ApplicationRuntimeError::TrackTrashFailed)?;
+        // An unresolved library root means the file cannot be located at
+        // all — fail closed rather than treating it as permission to drop
+        // the library row.
+        let path = self
+            .absolute_track_path(&track)
+            .ok_or(ApplicationRuntimeError::TrackTrashFailed)?;
+
+        match probe(&path) {
+            FilePresence::Present => {
+                trash(&path).map_err(|()| ApplicationRuntimeError::TrackTrashFailed)?;
+            }
+            // Confirmed gone: there is nothing to trash and removing the
+            // stale row is exactly what the user wanted.
+            FilePresence::Absent => {}
+            // A permission or transient I/O error means we cannot tell
+            // whether the file is still there. Fail closed.
+            FilePresence::ProbeFailed => {
+                return Err(ApplicationRuntimeError::TrackTrashFailed);
             }
         }
 
@@ -334,5 +372,32 @@ impl ApplicationRuntime {
                 completion(outcome);
             }
         }
+    }
+}
+
+/// Three-state result of probing whether a file exists, distinguishing a
+/// *proven* absence from a probe that could not answer. `Path::exists`
+/// collapses the latter two into `false`, which is unsafe for destructive
+/// actions: a permission or transient-I/O error must not read as "the file
+/// is gone, drop its record".
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FilePresence {
+    /// The path resolves to an existing file, directory, or symlink.
+    Present,
+    /// The path is confirmed not to exist (`ErrorKind::NotFound`).
+    Absent,
+    /// The presence could not be determined (permission denied, transient
+    /// I/O error). Callers must fail closed.
+    ProbeFailed,
+}
+
+/// Probe a path's presence without following symlinks, so a dangling
+/// symlink (a real on-disk entry the user may want trashed) reads as
+/// [`FilePresence::Present`] rather than as its missing target.
+pub(crate) fn probe_file_presence(path: &Path) -> FilePresence {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => FilePresence::Present,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => FilePresence::Absent,
+        Err(_) => FilePresence::ProbeFailed,
     }
 }

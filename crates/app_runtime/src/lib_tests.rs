@@ -33,6 +33,7 @@ use super::{
     MetadataService, NotificationCategory, NotificationSeverity, PlaybackQueueRequest,
     run_library_consolidation_task, run_library_scan_task,
 };
+use crate::library_mutation::FilePresence;
 
 #[test]
 fn runtime_starts_with_default_settings() {
@@ -3548,6 +3549,133 @@ fn apply_track_updated_performs_one_keyed_lookup_and_no_full_scan() {
         0,
         "applying one update must never decode the whole library via tracks()"
     );
+}
+
+fn runtime_with_one_track(library_path: Option<PathBuf>) -> ApplicationRuntime {
+    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    store
+        .save_track(test_track(track_id(1), "a.flac"))
+        .expect("seed track");
+    let settings = match library_path {
+        Some(path) => UserSettings::with_library_path(Some(path)),
+        None => UserSettings::default(),
+    };
+    ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+        .expect("load settings")
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize")
+}
+
+fn library_has_track(runtime: &ApplicationRuntime, id: TrackId) -> bool {
+    runtime.library_tracks().iter().any(|track| track.id == id)
+}
+
+#[test]
+fn move_to_trash_removes_the_row_only_after_a_successful_trash() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut runtime = runtime_with_one_track(Some(PathBuf::from("/library")));
+    let trash_calls = Arc::new(AtomicUsize::new(0));
+    let calls = trash_calls.clone();
+
+    let result = runtime.move_track_to_trash_with(
+        track_id(1),
+        |_| FilePresence::Present,
+        move |_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        },
+    );
+
+    assert_eq!(result, Ok(()));
+    assert!(!library_has_track(&runtime, track_id(1)));
+    assert_eq!(trash_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn move_to_trash_keeps_the_row_when_the_trash_backend_fails() {
+    let mut runtime = runtime_with_one_track(Some(PathBuf::from("/library")));
+
+    let result =
+        runtime.move_track_to_trash_with(track_id(1), |_| FilePresence::Present, |_| Err(()));
+
+    assert_eq!(result, Err(ApplicationRuntimeError::TrackTrashFailed));
+    assert!(
+        library_has_track(&runtime, track_id(1)),
+        "a failed trash must not delete the library record"
+    );
+}
+
+#[test]
+fn move_to_trash_removes_a_proven_absent_file_without_trashing() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut runtime = runtime_with_one_track(Some(PathBuf::from("/library")));
+    let trash_calls = Arc::new(AtomicUsize::new(0));
+    let calls = trash_calls.clone();
+
+    let result = runtime.move_track_to_trash_with(
+        track_id(1),
+        |_| FilePresence::Absent,
+        move |_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        },
+    );
+
+    assert_eq!(result, Ok(()));
+    assert!(!library_has_track(&runtime, track_id(1)));
+    assert_eq!(
+        trash_calls.load(Ordering::SeqCst),
+        0,
+        "a confirmed-absent file is removed from the library without a trash call"
+    );
+}
+
+#[test]
+fn move_to_trash_keeps_the_row_on_a_probe_error() {
+    let mut runtime = runtime_with_one_track(Some(PathBuf::from("/library")));
+
+    // A permission or transient-I/O probe failure must not read as "the
+    // file is gone".
+    let result =
+        runtime.move_track_to_trash_with(track_id(1), |_| FilePresence::ProbeFailed, |_| Ok(()));
+
+    assert_eq!(result, Err(ApplicationRuntimeError::TrackTrashFailed));
+    assert!(library_has_track(&runtime, track_id(1)));
+}
+
+#[test]
+fn move_to_trash_fails_closed_when_the_library_root_is_unresolved() {
+    let mut runtime = runtime_with_one_track(None);
+
+    // The probe would say "present", but the path cannot be resolved
+    // without a library root, so the row must be preserved.
+    let result =
+        runtime.move_track_to_trash_with(track_id(1), |_| FilePresence::Present, |_| Ok(()));
+
+    assert_eq!(result, Err(ApplicationRuntimeError::TrackTrashFailed));
+    assert!(library_has_track(&runtime, track_id(1)));
+}
+
+#[test]
+fn probe_file_presence_distinguishes_present_from_proven_absence() {
+    let dir = unique_test_directory();
+    std::fs::create_dir_all(&dir).expect("create probe directory");
+    let present = dir.join("here.flac");
+    std::fs::write(&present, b"x").expect("write present file");
+    let absent = dir.join("gone.flac");
+
+    assert_eq!(
+        crate::library_mutation::probe_file_presence(&present),
+        FilePresence::Present
+    );
+    assert_eq!(
+        crate::library_mutation::probe_file_presence(&absent),
+        FilePresence::Absent
+    );
+
+    std::fs::remove_dir_all(&dir).expect("remove probe directory");
 }
 
 fn test_track(track_id: TrackId, path: &str) -> Track {
