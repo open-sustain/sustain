@@ -367,28 +367,51 @@ pub fn online_background_persistence_error_text(detail: &str) -> String {
 }
 
 pub fn library_scan_outcome_text(summary: &LibraryScanSummary) -> String {
+    // Report what the scan *changed*, not how many tracks the library
+    // holds — the live total already shows in the status bar, so restating
+    // it here is redundant (follow-up to #71).
+    let changes = scan_change_clauses(summary);
+
     if summary.cancelled {
-        return format!(
-            "Scan stopped: {} {} indexed.",
-            summary.scanned_tracks,
-            pluralize(summary.scanned_tracks, "track", "tracks"),
-        );
+        // A cancelled scan skips the missing-file sweep, so `changes`
+        // here only ever carries additions/updates/failures.
+        return match changes {
+            Some(changes) => format!("Scan stopped: {changes}."),
+            None => "Scan stopped.".to_owned(),
+        };
     }
     if summary.missing_reconciliation_skipped {
-        return format!(
-            "Scan partial: {} {} indexed, {} failed; missing-file reconciliation skipped.",
-            summary.scanned_tracks,
-            pluralize(summary.scanned_tracks, "track", "tracks"),
-            summary.failed_files,
-        );
+        return match changes {
+            Some(changes) => {
+                format!("Scan partial: {changes}; missing-file reconciliation skipped.")
+            }
+            None => "Scan partial: missing-file reconciliation skipped.".to_owned(),
+        };
     }
-    format!(
-        "Scan complete: {} {}, {} missing, {} failed",
-        summary.scanned_tracks,
-        pluralize(summary.scanned_tracks, "track", "tracks"),
-        summary.missing_tracks,
-        summary.failed_files,
-    )
+    match changes {
+        Some(changes) => format!("Scan complete: {changes}."),
+        None => "Scan complete: no changes.".to_owned(),
+    }
+}
+
+/// Joins the non-zero change counts ("3 added, 1 updated, 2 missing,
+/// 1 failed") for the scan outcome notification, or `None` when the scan
+/// changed nothing.
+fn scan_change_clauses(summary: &LibraryScanSummary) -> Option<String> {
+    let mut clauses: Vec<String> = Vec::new();
+    if summary.added_tracks > 0 {
+        clauses.push(format!("{} added", summary.added_tracks));
+    }
+    if summary.updated_tracks > 0 {
+        clauses.push(format!("{} updated", summary.updated_tracks));
+    }
+    if summary.missing_tracks > 0 {
+        clauses.push(format!("{} missing", summary.missing_tracks));
+    }
+    if summary.failed_files > 0 {
+        clauses.push(format!("{} failed", summary.failed_files));
+    }
+    (!clauses.is_empty()).then(|| clauses.join(", "))
 }
 
 pub fn library_import_outcome_text(summary: &LibraryImportSummary) -> String {

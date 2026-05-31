@@ -169,17 +169,17 @@ pub(crate) fn normalized_name(
     }
 }
 
+/// What a library scan changed. The outcome notification reports the
+/// deltas (added / updated / missing / failed), not a library total — the
+/// live track count already lives on the status bar, so restating it here
+/// would be redundant (#78-adjacent follow-up to #71).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LibraryScanSummary {
-    /// Tracks found present on disk this pass: parsed (added + updated)
-    /// plus skipped-as-unchanged. This is the count the "Scan complete: N
-    /// tracks" notification shows, so an incremental rescan that re-parses
-    /// almost nothing still reports the full library size (#71).
-    pub scanned_tracks: usize,
     pub added_tracks: usize,
     pub updated_tracks: usize,
     /// Present files the scanner skipped because their size + mtime
     /// fingerprint was unchanged, so their tags were not re-parsed (#71).
+    /// Carried for accounting and tests; not surfaced in the notification.
     pub unchanged_tracks: usize,
     pub missing_tracks: usize,
     pub skipped_unsupported_files: usize,

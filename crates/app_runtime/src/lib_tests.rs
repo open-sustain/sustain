@@ -304,7 +304,7 @@ fn runtime_scans_library_with_services() {
     assert_eq!(
         runtime
             .last_scan_summary()
-            .map(|summary| summary.scanned_tracks),
+            .map(|summary| summary.added_tracks),
         Some(1)
     );
 
@@ -548,7 +548,6 @@ fn reconcile_keeps_unchanged_rows_present_without_reparsing() {
     assert_eq!(result.summary.added_tracks, 0);
     assert_eq!(result.summary.updated_tracks, 0);
     assert_eq!(result.summary.missing_tracks, 0);
-    assert_eq!(result.summary.scanned_tracks, 2);
 
     let present_row = result
         .tracks
@@ -644,7 +643,6 @@ fn rescan_with_no_on_disk_changes_reparses_nothing() {
     assert_eq!(summary.unchanged_tracks, 2);
     assert_eq!(summary.added_tracks, 0);
     assert_eq!(summary.updated_tracks, 0);
-    assert_eq!(summary.scanned_tracks, 2);
     assert_eq!(runtime.library_tracks().len(), 2);
 
     std::fs::remove_dir_all(root).expect("remove test library");
@@ -682,7 +680,6 @@ fn runtime_scan_preserves_existing_track_identity_for_known_location() {
     assert_eq!(
         runtime.last_scan_summary(),
         Some(&LibraryScanSummary {
-            scanned_tracks: 1,
             added_tracks: 0,
             updated_tracks: 1,
             unchanged_tracks: 0,
@@ -794,7 +791,6 @@ fn runtime_scan_preserves_existing_track_identity_after_library_root_changes() {
     assert_eq!(
         runtime.last_scan_summary(),
         Some(&LibraryScanSummary {
-            scanned_tracks: 1,
             added_tracks: 0,
             updated_tracks: 1,
             unchanged_tracks: 0,

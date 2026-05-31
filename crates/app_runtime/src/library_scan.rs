@@ -248,11 +248,6 @@ pub(crate) fn reconcile_library_scan_with_probe(
 
     Ok(LibraryScanResult {
         summary: LibraryScanSummary {
-            // "Tracks present on disk this pass": everything parsed plus
-            // everything skipped-as-unchanged, so the user-facing count
-            // stays meaningful rather than dropping to just the re-parsed
-            // subset on an incremental rescan (#71).
-            scanned_tracks: added_tracks + updated_tracks + unchanged_tracks,
             added_tracks,
             updated_tracks,
             unchanged_tracks,

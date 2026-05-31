@@ -4,43 +4,72 @@
 use super::*;
 
 #[test]
-fn scan_outcome_mentions_missing_and_failed_counts() {
+fn scan_outcome_lists_the_changes_not_the_library_total() {
     let summary = LibraryScanSummary {
-        scanned_tracks: 10,
+        added_tracks: 3,
+        updated_tracks: 1,
         missing_tracks: 2,
-        failed_files: 1,
+        // Unchanged files are the no-op baseline and must not appear.
+        unchanged_tracks: 9_995,
         ..LibraryScanSummary::default()
     };
     assert_eq!(
         library_scan_outcome_text(&summary),
-        "Scan complete: 10 tracks, 2 missing, 1 failed"
+        "Scan complete: 3 added, 1 updated, 2 missing."
     );
 }
 
 #[test]
-fn scan_outcome_reports_partial_count_after_cancellation() {
+fn scan_outcome_reports_no_changes_when_nothing_changed() {
     let summary = LibraryScanSummary {
-        scanned_tracks: 42,
+        unchanged_tracks: 10_000,
+        ..LibraryScanSummary::default()
+    };
+    assert_eq!(
+        library_scan_outcome_text(&summary),
+        "Scan complete: no changes."
+    );
+}
+
+#[test]
+fn scan_outcome_after_cancellation_reports_partial_changes() {
+    let with_changes = LibraryScanSummary {
+        added_tracks: 5,
         cancelled: true,
         ..LibraryScanSummary::default()
     };
     assert_eq!(
-        library_scan_outcome_text(&summary),
-        "Scan stopped: 42 tracks indexed."
+        library_scan_outcome_text(&with_changes),
+        "Scan stopped: 5 added."
     );
+
+    let nothing_done = LibraryScanSummary {
+        cancelled: true,
+        ..LibraryScanSummary::default()
+    };
+    assert_eq!(library_scan_outcome_text(&nothing_done), "Scan stopped.");
 }
 
 #[test]
-fn scan_outcome_warns_when_missing_reconciliation_was_skipped() {
+fn scan_outcome_partial_lists_failures_and_notes_the_skip() {
     let summary = LibraryScanSummary {
-        scanned_tracks: 7,
+        added_tracks: 2,
         failed_files: 1,
         missing_reconciliation_skipped: true,
         ..LibraryScanSummary::default()
     };
     assert_eq!(
         library_scan_outcome_text(&summary),
-        "Scan partial: 7 tracks indexed, 1 failed; missing-file reconciliation skipped."
+        "Scan partial: 2 added, 1 failed; missing-file reconciliation skipped."
+    );
+
+    let no_changes = LibraryScanSummary {
+        missing_reconciliation_skipped: true,
+        ..LibraryScanSummary::default()
+    };
+    assert_eq!(
+        library_scan_outcome_text(&no_changes),
+        "Scan partial: missing-file reconciliation skipped."
     );
 }
 
