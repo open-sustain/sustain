@@ -42,6 +42,7 @@ use std::{
     collections::HashMap,
     sync::Arc,
     thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
 
 use async_channel::Sender;
@@ -240,14 +241,17 @@ async fn apply_update(
     match update {
         MprisUpdate::PlaybackState(state) => {
             let new_status = playback_status_text(&state).to_owned();
-            let new_position = playback_position_micros(&state);
             let new_has_track = playback_track_id(&state).is_some();
             let (status_changed, capabilities_changed) = {
                 let mut iface = player_ref.get_mut().await;
                 let status_changed = iface.playback_status != new_status;
                 let capabilities_changed = iface.has_active_track != new_has_track;
                 iface.playback_status = new_status;
-                iface.position_micros = new_position;
+                // Re-anchor the position baseline to this state. While
+                // playing it advances from here without further updates;
+                // pause/seek/track-change/stop re-anchor or freeze it.
+                let now = iface.origin.elapsed();
+                iface.position.apply_state(&state, now);
                 iface.has_active_track = new_has_track;
                 (status_changed, capabilities_changed)
             };
@@ -265,9 +269,13 @@ async fn apply_update(
         }
         MprisUpdate::NowPlaying(metadata) => {
             let new_metadata = build_mpris_metadata(&metadata);
+            let duration_micros = metadata.duration.map(duration_to_micros).unwrap_or(0);
             {
                 let mut iface = player_ref.get_mut().await;
                 iface.metadata = new_metadata;
+                // Keep the clamp bound current so the advancing position
+                // never runs past the end of the track.
+                iface.position.set_duration_micros(duration_micros);
             }
             let iface = player_ref.get().await;
             iface.metadata_changed(player_ref.signal_emitter()).await?;
@@ -291,7 +299,59 @@ fn playback_position_micros(state: &PlaybackState) -> i64 {
         }
         PlaybackState::Loading { .. } | PlaybackState::Stopped => return 0,
     };
-    i64::try_from(position.as_micros()).unwrap_or(i64::MAX)
+    duration_to_micros(position)
+}
+
+fn duration_to_micros(duration: Duration) -> i64 {
+    i64::try_from(duration.as_micros()).unwrap_or(i64::MAX)
+}
+
+/// MPRIS `Position` modelled as a monotonic baseline rather than a frozen
+/// scalar. While playing, the reported position is the last sampled
+/// position plus the monotonic time elapsed since that sample; while
+/// paused, loading, or stopped it stays frozen. Computing it at read time
+/// means the property advances for polling clients (`playerctl`, GNOME)
+/// without any periodic GTK publication, and a wall-clock change cannot
+/// perturb it because the baseline is taken from a monotonic source.
+#[derive(Debug, Default)]
+struct PositionTracker {
+    /// Position sampled the last time [`Self::apply_state`] ran.
+    base_micros: i64,
+    /// Monotonic clock reading when `base_micros` was sampled, set only
+    /// while playing. `None` freezes the position at `base_micros`.
+    advancing_since: Option<Duration>,
+    /// Known track duration in micros, or `0` when unknown. Clamps the
+    /// advancing position so it can never run past the end of the track.
+    duration_micros: i64,
+}
+
+impl PositionTracker {
+    /// Adopt a playback state sampled at monotonic time `now`. Playing
+    /// starts the position advancing from its reported offset; pause and
+    /// seek re-anchor to the new offset and freeze/continue accordingly;
+    /// loading and stop reset to zero.
+    fn apply_state(&mut self, state: &PlaybackState, now: Duration) {
+        self.base_micros = playback_position_micros(state);
+        self.advancing_since = matches!(state, PlaybackState::Playing { .. }).then_some(now);
+    }
+
+    /// Update the clamp bound when now-playing metadata changes.
+    fn set_duration_micros(&mut self, duration_micros: i64) {
+        self.duration_micros = duration_micros.max(0);
+    }
+
+    /// The current position in micros at monotonic time `now`.
+    fn position_micros(&self, now: Duration) -> i64 {
+        let mut micros = self.base_micros;
+        if let Some(since) = self.advancing_since {
+            let elapsed = now.saturating_sub(since);
+            micros = micros.saturating_add(duration_to_micros(elapsed));
+        }
+        if self.duration_micros > 0 {
+            micros = micros.min(self.duration_micros);
+        }
+        micros.max(0)
+    }
 }
 
 fn playback_track_id(state: &PlaybackState) -> Option<TrackId> {
@@ -457,7 +517,11 @@ struct PlayerInterface {
     command_sink: Arc<MprisPlaybackSink>,
     playback_status: String,
     metadata: HashMap<String, OwnedValue>,
-    position_micros: i64,
+    /// Monotonic origin for the position baseline. `origin.elapsed()` is
+    /// the clock fed to [`PositionTracker`]; it never runs backward and is
+    /// immune to wall-clock adjustments.
+    origin: Instant,
+    position: PositionTracker,
     /// Tracks whether the current `PlaybackState` carries an active track,
     /// which is what `CanPlay` / `CanPause` / `CanGoNext` / `CanGoPrevious`
     /// gate on for now. The queue layer always allows next/previous to
@@ -472,7 +536,8 @@ impl PlayerInterface {
             command_sink,
             playback_status: "Stopped".to_owned(),
             metadata: HashMap::new(),
-            position_micros: 0,
+            origin: Instant::now(),
+            position: PositionTracker::default(),
             has_active_track: false,
         }
     }
@@ -530,7 +595,9 @@ impl PlayerInterface {
 
     #[zbus(property)]
     fn position(&self) -> i64 {
-        self.position_micros
+        // Computed at read time so the property advances during playback
+        // without any periodic publication; frozen while paused/stopped.
+        self.position.position_micros(self.origin.elapsed())
     }
 
     #[zbus(property)]
@@ -586,11 +653,123 @@ mod tests {
     use sustain_app_runtime::{PlaybackState, TrackId};
 
     use super::{
-        NowPlayingMetadata, build_mpris_metadata, playback_position_micros, playback_status_text,
+        NowPlayingMetadata, PositionTracker, build_mpris_metadata, playback_position_micros,
+        playback_status_text,
     };
 
     fn track_id(value: i64) -> TrackId {
         TrackId::new(value).expect("positive test track id")
+    }
+
+    /// Drives `PositionTracker` with an explicit monotonic clock so the
+    /// advancing-position logic is tested without a real bus or wall time.
+    fn at(micros: u64) -> Duration {
+        Duration::from_micros(micros)
+    }
+
+    #[test]
+    fn position_advances_while_playing_without_republication() {
+        let mut tracker = PositionTracker::default();
+        // Playback starts at 1s, sampled at monotonic t=10s.
+        tracker.apply_state(
+            &PlaybackState::Playing {
+                track_id: track_id(1),
+                position: Duration::from_secs(1),
+            },
+            at(10_000_000),
+        );
+
+        // 2.5s of monotonic time later, with no further update, the
+        // position has advanced by 2.5s.
+        assert_eq!(tracker.position_micros(at(12_500_000)), 3_500_000);
+    }
+
+    #[test]
+    fn position_freezes_while_paused_and_resumes_from_the_paused_offset() {
+        let mut tracker = PositionTracker::default();
+        tracker.apply_state(
+            &PlaybackState::Paused {
+                track_id: track_id(1),
+                position: Duration::from_secs(5),
+            },
+            at(10_000_000),
+        );
+
+        // Monotonic time keeps moving, but a paused position does not.
+        assert_eq!(tracker.position_micros(at(13_000_000)), 5_000_000);
+
+        // Resuming re-anchors at the paused offset and advances from there.
+        tracker.apply_state(
+            &PlaybackState::Playing {
+                track_id: track_id(1),
+                position: Duration::from_secs(5),
+            },
+            at(13_000_000),
+        );
+        assert_eq!(tracker.position_micros(at(14_000_000)), 6_000_000);
+    }
+
+    #[test]
+    fn seek_reanchors_the_advancing_baseline() {
+        let mut tracker = PositionTracker::default();
+        tracker.apply_state(
+            &PlaybackState::Playing {
+                track_id: track_id(1),
+                position: Duration::from_secs(1),
+            },
+            at(10_000_000),
+        );
+        // A seek republishes Playing at the new offset (e.g. 30s).
+        tracker.apply_state(
+            &PlaybackState::Playing {
+                track_id: track_id(1),
+                position: Duration::from_secs(30),
+            },
+            at(11_000_000),
+        );
+        assert_eq!(tracker.position_micros(at(11_500_000)), 30_500_000);
+    }
+
+    #[test]
+    fn stop_and_track_replacement_reset_the_baseline() {
+        let mut tracker = PositionTracker::default();
+        tracker.apply_state(
+            &PlaybackState::Playing {
+                track_id: track_id(1),
+                position: Duration::from_secs(42),
+            },
+            at(10_000_000),
+        );
+
+        tracker.apply_state(&PlaybackState::Stopped, at(11_000_000));
+        assert_eq!(tracker.position_micros(at(20_000_000)), 0);
+
+        // A new track starts near zero and advances from there.
+        tracker.apply_state(
+            &PlaybackState::Playing {
+                track_id: track_id(2),
+                position: Duration::ZERO,
+            },
+            at(12_000_000),
+        );
+        assert_eq!(tracker.position_micros(at(12_750_000)), 750_000);
+    }
+
+    #[test]
+    fn advancing_position_is_clamped_to_known_duration() {
+        let mut tracker = PositionTracker::default();
+        tracker.set_duration_micros(2_000_000);
+        tracker.apply_state(
+            &PlaybackState::Playing {
+                track_id: track_id(1),
+                position: Duration::from_secs(1),
+            },
+            at(10_000_000),
+        );
+
+        // 5s of elapsed monotonic time would put the raw position at 6s,
+        // but the 2s track duration clamps it.
+        assert_eq!(tracker.position_micros(at(15_000_000)), 2_000_000);
     }
 
     #[test]
