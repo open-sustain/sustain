@@ -71,6 +71,36 @@ fn extract_rule_number_is_empty_creates_number_is_empty_variant() {
 }
 
 #[test]
+fn file_status_rules_round_trip_through_the_editor_model() {
+    // The File field offers exactly the two availability operators, each
+    // valueless, and round-trips to and from the domain rule (#79).
+    assert_eq!(
+        operators_for_field(EditorField::FileStatus),
+        &[EditorOperator::FileMissing, EditorOperator::FilePresent]
+    );
+
+    for (operator, rule) in [
+        (
+            EditorOperator::FileMissing,
+            SmartPlaylistRule::FileIsMissing,
+        ),
+        (
+            EditorOperator::FilePresent,
+            SmartPlaylistRule::FileIsPresent,
+        ),
+    ] {
+        let extracted = extract_rule(EditorField::FileStatus, operator, &ValueInput::None)
+            .expect("file-status rule extracts without a value");
+        assert_eq!(extracted, rule);
+
+        let (field, decomposed_operator, value) = decompose_rule(&rule);
+        assert_eq!(field, EditorField::FileStatus);
+        assert_eq!(decomposed_operator, operator);
+        assert_eq!(value, ValueInput::None);
+    }
+}
+
+#[test]
 fn rating_field_does_not_offer_empty_present_operators() {
     let rating_operators = operators_for_field(EditorField::Rating);
     assert!(!rating_operators.contains(&EditorOperator::NumberIsEmpty));

@@ -529,6 +529,14 @@ pub(crate) fn rule_to_columns(rule: &SmartPlaylistRule) -> RuleColumns {
             field: Some(date_field_name(*field)),
             ..RuleColumns::default()
         },
+        SmartPlaylistRule::FileIsMissing => RuleColumns {
+            kind: "FileIsMissing",
+            ..RuleColumns::default()
+        },
+        SmartPlaylistRule::FileIsPresent => RuleColumns {
+            kind: "FileIsPresent",
+            ..RuleColumns::default()
+        },
     }
 }
 
@@ -677,6 +685,8 @@ fn rule_from_row(row: &Row<'_>) -> StoreResult<SmartPlaylistRule> {
         "DateIsPresent" => Ok(SmartPlaylistRule::DateIsPresent {
             field: date_field_from_name(rule_field_name()?)?,
         }),
+        "FileIsMissing" => Ok(SmartPlaylistRule::FileIsMissing),
+        "FileIsPresent" => Ok(SmartPlaylistRule::FileIsPresent),
         other => Err(StoreError::InvalidStoredEnum(other.to_owned())),
     }
 }

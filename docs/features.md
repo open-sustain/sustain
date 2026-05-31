@@ -206,8 +206,10 @@ moves entries between folders.
 ### Smart playlists — *iso-iTunes*
 Rule-based saved queries with iTunes-style operators: `is`,
 `contains`, `starts with`, `is in the last N days`, numeric comparisons,
-rating comparisons, and `is empty` / `is present` for text and numeric
-tag fields. Fields cover the usual tag/metadata set plus BPM
+rating comparisons, `is empty` / `is present` for text and numeric
+tag fields, and a `File` field whose `is missing` / `is present`
+operators match on whether the track's file was last found on disk.
+Fields cover the usual tag/metadata set plus BPM
 and Music Key for tempo- and harmony-aware rules. Match mode is
 `Match all` / `Match any`. An optional limit picks the top N by
 `Most Often Played`, `Random`, etc. Smart playlists are re-evaluated
@@ -216,13 +218,15 @@ live on every query.
 ### Default smart playlists — *iso-iTunes* / *Sustain-native*
 A freshly created library is seeded with five iTunes-style starter
 smart playlists — **Recently Added**, **Recently Played**,
-**Top 25 Most Played**, **4+ Stars**, **Unplayed** — plus one
-Sustain-native addition, **Missing Tags**. Missing Tags is a match-any
-list of tracks lacking any of album, artist, genre, or year, or that
-are still unrated, so it doubles as the working queue for library
-backfill and consolidation. All six are seeded once at library
-creation and not re-seeded afterwards, so the user is free to delete or
-edit them.
+**Top 25 Most Played**, **4+ Stars**, **Unplayed** — plus two
+Sustain-native additions, **Missing Tags** and **Missing Files**.
+Missing Tags is a match-any list of tracks lacking any of album, artist,
+genre, or year, or that are still unrated, so it doubles as the working
+queue for library backfill and consolidation. Missing Files lists the
+tracks whose file the last access could not find on disk — the working
+set for relocating or pruning broken links. All seven are seeded once at
+library creation and not re-seeded afterwards, so the user is free to
+delete or edit them.
 
 ### Smart playlist editor — *iso-iTunes*
 A dedicated editor dialog mirrors the iTunes 11 layout: match mode at

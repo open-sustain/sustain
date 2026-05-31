@@ -121,6 +121,15 @@ pub enum SmartPlaylistRule {
     DateIsPresent {
         field: SmartPlaylistDateField,
     },
+    /// Matches when the track's file is currently flagged missing — the
+    /// last access could not find it on disk. Backs the seeded "Missing
+    /// Files" smart playlist (#79). File availability is a whole-track
+    /// attribute, so unlike the text/number/date rules it carries no
+    /// field.
+    FileIsMissing,
+    /// Matches when the track's file is present (available) — the inverse
+    /// of [`SmartPlaylistRule::FileIsMissing`].
+    FileIsPresent,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

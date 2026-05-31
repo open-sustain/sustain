@@ -3713,6 +3713,7 @@ fn seeding_default_smart_playlists_installs_the_starter_set() {
             "4+ Stars",
             "Unplayed",
             "Missing Tags",
+            "Missing Files",
         ]
     );
 }

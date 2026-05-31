@@ -50,6 +50,35 @@ fn track(id: i64, genre: Option<&str>, play_count: u64, year: Option<i32>) -> Tr
 }
 
 #[test]
+fn file_is_missing_and_is_present_match_on_availability() {
+    let now = unix(10_000);
+    let mut missing = track(1, None, 0, None);
+    missing.location = TrackLocation::missing(relative("track-1.flac"));
+    let present = track(2, None, 0, None); // available by default
+
+    assert!(track_matches_rule(
+        &missing,
+        &SmartPlaylistRule::FileIsMissing,
+        now
+    ));
+    assert!(!track_matches_rule(
+        &present,
+        &SmartPlaylistRule::FileIsMissing,
+        now
+    ));
+    assert!(track_matches_rule(
+        &present,
+        &SmartPlaylistRule::FileIsPresent,
+        now
+    ));
+    assert!(!track_matches_rule(
+        &missing,
+        &SmartPlaylistRule::FileIsPresent,
+        now
+    ));
+}
+
+#[test]
 fn text_contains_is_case_insensitive() {
     let track = track(1, Some("Trip-Hop"), 0, None);
     let rule = SmartPlaylistRule::Text {

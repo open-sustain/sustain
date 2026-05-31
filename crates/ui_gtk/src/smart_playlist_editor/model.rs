@@ -18,6 +18,9 @@ pub(super) enum EditorField {
     Number(SmartPlaylistNumberField),
     Rating,
     Date(SmartPlaylistDateField),
+    /// The track's file availability (present / missing). Carries no
+    /// sub-field — it is a whole-track attribute (#79).
+    FileStatus,
 }
 
 pub(super) const EDITOR_FIELDS: &[(EditorField, &str)] = &[
@@ -80,6 +83,7 @@ pub(super) const EDITOR_FIELDS: &[(EditorField, &str)] = &[
         EditorField::Date(SmartPlaylistDateField::LastSkipped),
         "Last Skipped",
     ),
+    (EditorField::FileStatus, "File"),
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -106,6 +110,8 @@ pub(super) enum EditorOperator {
     DateNotInLast,
     DateIsEmpty,
     DateIsPresent,
+    FileMissing,
+    FilePresent,
 }
 
 impl EditorOperator {
@@ -133,6 +139,8 @@ impl EditorOperator {
             Self::DateNotInLast => "is not in the last",
             Self::DateIsEmpty => "is empty",
             Self::DateIsPresent => "is present",
+            Self::FileMissing => "is missing",
+            Self::FilePresent => "is present",
         }
     }
 
@@ -155,6 +163,7 @@ impl EditorOperator {
             Self::DateBefore | Self::DateAfter => ValueKind::Date,
             Self::DateInLast | Self::DateNotInLast => ValueKind::Days,
             Self::DateIsEmpty | Self::DateIsPresent => ValueKind::None,
+            Self::FileMissing | Self::FilePresent => ValueKind::None,
         }
     }
 }
@@ -212,12 +221,18 @@ const DATE_OPERATORS: &[EditorOperator] = &[
     EditorOperator::DateIsPresent,
 ];
 
+// File availability is a present/missing toggle: the two operators are the
+// only meaningful choices and neither takes a value.
+const FILE_OPERATORS: &[EditorOperator] =
+    &[EditorOperator::FileMissing, EditorOperator::FilePresent];
+
 pub(super) fn operators_for_field(field: EditorField) -> &'static [EditorOperator] {
     match field {
         EditorField::Text(_) => TEXT_OPERATORS,
         EditorField::Number(_) => NUMBER_OPERATORS,
         EditorField::Rating => RATING_OPERATORS,
         EditorField::Date(_) => DATE_OPERATORS,
+        EditorField::FileStatus => FILE_OPERATORS,
     }
 }
 
@@ -382,6 +397,12 @@ pub(super) fn extract_rule(
         }
         (EditorField::Date(date_field), EditorOperator::DateIsPresent) => {
             Ok(SmartPlaylistRule::DateIsPresent { field: date_field })
+        }
+        (EditorField::FileStatus, EditorOperator::FileMissing) => {
+            Ok(SmartPlaylistRule::FileIsMissing)
+        }
+        (EditorField::FileStatus, EditorOperator::FilePresent) => {
+            Ok(SmartPlaylistRule::FileIsPresent)
         }
         _ => Err(RuleError::FieldOperatorMismatch),
     }
@@ -552,6 +573,16 @@ pub(super) fn decompose_rule(
         SmartPlaylistRule::DateIsPresent { field } => (
             EditorField::Date(*field),
             EditorOperator::DateIsPresent,
+            ValueInput::None,
+        ),
+        SmartPlaylistRule::FileIsMissing => (
+            EditorField::FileStatus,
+            EditorOperator::FileMissing,
+            ValueInput::None,
+        ),
+        SmartPlaylistRule::FileIsPresent => (
+            EditorField::FileStatus,
+            EditorOperator::FilePresent,
             ValueInput::None,
         ),
     }

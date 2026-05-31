@@ -101,6 +101,8 @@ pub fn track_matches_rule(track: &Track, rule: &SmartPlaylistRule, now: SystemTi
         }
         SmartPlaylistRule::DateIsEmpty { field } => date_field_value(track, *field).is_none(),
         SmartPlaylistRule::DateIsPresent { field } => date_field_value(track, *field).is_some(),
+        SmartPlaylistRule::FileIsMissing => track.location.is_missing(),
+        SmartPlaylistRule::FileIsPresent => !track.location.is_missing(),
     }
 }
 

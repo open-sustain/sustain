@@ -14,13 +14,14 @@ use crate::{
 // Purchased, podcast/audiobook buckets) are deliberately omitted. "Missing
 // Tags" is a Sustain-native addition for library consolidation.
 pub fn default_smart_playlists(starting_id: i64) -> Vec<SmartPlaylist> {
-    let templates: [(&str, SmartPlaylistRuleSet); 6] = [
+    let templates: [(&str, SmartPlaylistRuleSet); 7] = [
         ("Recently Added", recently_added_rules()),
         ("Recently Played", recently_played_rules()),
         ("Top 25 Most Played", top_25_most_played_rules()),
         ("4+ Stars", four_plus_stars_rules()),
         ("Unplayed", unplayed_rules()),
         ("Missing Tags", missing_tags_rules()),
+        ("Missing Files", missing_files_rules()),
     ];
 
     templates
@@ -133,6 +134,17 @@ fn missing_tags_rules() -> SmartPlaylistRuleSet {
     }
 }
 
+/// Tracks whose file the last access could not find on disk. A single
+/// `FileIsMissing` rule, so the list is exactly the library's broken
+/// links — the working set for relocating or pruning them (#79).
+fn missing_files_rules() -> SmartPlaylistRuleSet {
+    SmartPlaylistRuleSet {
+        match_kind: SmartPlaylistMatchKind::All,
+        rules: vec![SmartPlaylistRule::FileIsMissing],
+        limit: None,
+    }
+}
+
 fn days(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).expect("default smart-playlist day window must be positive")
 }
@@ -155,11 +167,12 @@ mod tests {
                 "4+ Stars",
                 "Unplayed",
                 "Missing Tags",
+                "Missing Files",
             ]
         );
 
         let ids: Vec<i64> = playlists.iter().map(|smart| smart.id.get()).collect();
-        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6, 7]);
     }
 
     #[test]
@@ -167,7 +180,21 @@ mod tests {
         let playlists = default_smart_playlists(42);
 
         assert_eq!(playlists.first().expect("non-empty").id.get(), 42);
-        assert_eq!(playlists.last().expect("non-empty").id.get(), 47);
+        assert_eq!(playlists.last().expect("non-empty").id.get(), 48);
+    }
+
+    #[test]
+    fn missing_files_is_a_single_file_is_missing_rule() {
+        let missing_files = default_smart_playlists(1)
+            .into_iter()
+            .find(|smart| smart.name == "Missing Files")
+            .expect("Missing Files default present");
+
+        assert_eq!(
+            missing_files.rules.rules.as_slice(),
+            [crate::SmartPlaylistRule::FileIsMissing]
+        );
+        assert_eq!(missing_files.rules.limit, None);
     }
 
     #[test]

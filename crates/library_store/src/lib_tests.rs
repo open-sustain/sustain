@@ -653,6 +653,8 @@ fn sqlite_store_round_trips_every_rule_variant() {
                 SmartPlaylistRule::DateIsPresent {
                     field: SmartPlaylistDateField::DateAdded,
                 },
+                SmartPlaylistRule::FileIsMissing,
+                SmartPlaylistRule::FileIsPresent,
             ],
         },
     );
