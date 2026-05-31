@@ -396,63 +396,62 @@ mod widget_smoke {
 
     #[test]
     fn primitives_build_and_map() {
-        if gtk::init().is_err() {
-            eprintln!("SMOKE: no display, skipping");
-            return;
-        }
-        crate::app_css::install_app_css();
-
-        let donut = donut(
-            vec![
-                DonutSlice {
-                    label: "House".to_owned(),
+        let ran = crate::test_support::with_gtk(|| {
+            let donut = donut(
+                vec![
+                    DonutSlice {
+                        label: "House".to_owned(),
+                        fraction: 0.5,
+                        value: "50 (50%)".to_owned(),
+                        muted: false,
+                    },
+                    DonutSlice {
+                        label: "Techno".to_owned(),
+                        fraction: 0.3,
+                        value: "30 (30%)".to_owned(),
+                        muted: false,
+                    },
+                    DonutSlice {
+                        label: "Other (3 genres)".to_owned(),
+                        fraction: 0.2,
+                        value: "20 (20%)".to_owned(),
+                        muted: true,
+                    },
+                ],
+                Some("100\ntracks".to_owned()),
+            );
+            let bars = vertical_bars(vec![
+                VerticalBar {
+                    label: "1990s".to_owned(),
+                    fraction: 1.0,
+                    value: "40".to_owned(),
+                },
+                VerticalBar {
+                    label: "2000s".to_owned(),
                     fraction: 0.5,
-                    value: "50 (50%)".to_owned(),
-                    muted: false,
+                    value: "20".to_owned(),
                 },
-                DonutSlice {
-                    label: "Techno".to_owned(),
-                    fraction: 0.3,
-                    value: "30 (30%)".to_owned(),
-                    muted: false,
-                },
-                DonutSlice {
-                    label: "Other (3 genres)".to_owned(),
-                    fraction: 0.2,
-                    value: "20 (20%)".to_owned(),
-                    muted: true,
-                },
-            ],
-            Some("100\ntracks".to_owned()),
-        );
-        let bars = vertical_bars(vec![
-            VerticalBar {
-                label: "1990s".to_owned(),
-                fraction: 1.0,
-                value: "40".to_owned(),
-            },
-            VerticalBar {
-                label: "2000s".to_owned(),
-                fraction: 0.5,
-                value: "20".to_owned(),
-            },
-        ]);
-        let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        column.append(&donut);
-        column.append(&bars);
+            ]);
+            let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
+            column.append(&donut);
+            column.append(&bars);
 
-        let window = gtk::Window::new();
-        window.set_default_size(420, 480);
-        window.set_child(Some(&column));
-        window.set_visible(true);
+            let window = gtk::Window::new();
+            window.set_default_size(420, 480);
+            window.set_child(Some(&column));
+            window.set_visible(true);
 
-        let ctx = gtk::glib::MainContext::default();
-        let mut spins = 0;
-        while ctx.iteration(false) && spins < 200 {
-            spins += 1;
+            let ctx = gtk::glib::MainContext::default();
+            let mut spins = 0;
+            while ctx.iteration(false) && spins < 200 {
+                spins += 1;
+            }
+
+            window.set_child(None::<&gtk::Widget>);
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("SMOKE: no display, skipping");
         }
-
-        window.set_child(None::<&gtk::Widget>);
-        window.destroy();
     }
 }

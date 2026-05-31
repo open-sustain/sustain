@@ -43,6 +43,8 @@ mod sidebar_context;
 mod smart_playlist_editor;
 mod statistics;
 mod status_bar;
+#[cfg(test)]
+mod test_support;
 mod titlebar;
 mod track_context;
 mod track_context_ops;

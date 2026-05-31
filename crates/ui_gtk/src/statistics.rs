@@ -476,30 +476,29 @@ mod widget_smoke {
 
     #[test]
     fn empty_library_page_builds_and_maps() {
-        if gtk::init().is_err() {
+        let ran = crate::test_support::with_gtk(|| {
+            let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+            let view = StatisticsView::new(runtime);
+            view.refresh();
+
+            let window = gtk::Window::new();
+            window.set_child(Some(&view.widget()));
+            window.set_visible(true);
+            let ctx = gtk::glib::MainContext::default();
+            let mut spins = 0;
+            while ctx.iteration(false) && spins < 200 {
+                spins += 1;
+            }
+
+            // Mapping resolved without a panic; the scroller has realised a
+            // child (a viewport wrapping the content box).
+            assert!(view.widget().child().is_some());
+
+            window.set_child(None::<&gtk::Widget>);
+            window.destroy();
+        });
+        if !ran {
             eprintln!("SMOKE: no display, skipping");
-            return;
         }
-        crate::app_css::install_app_css();
-
-        let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
-        let view = StatisticsView::new(runtime);
-        view.refresh();
-
-        let window = gtk::Window::new();
-        window.set_child(Some(&view.widget()));
-        window.set_visible(true);
-        let ctx = gtk::glib::MainContext::default();
-        let mut spins = 0;
-        while ctx.iteration(false) && spins < 200 {
-            spins += 1;
-        }
-
-        // Mapping resolved without a panic; the scroller has realised a
-        // child (a viewport wrapping the content box).
-        assert!(view.widget().child().is_some());
-
-        window.set_child(None::<&gtk::Widget>);
-        window.destroy();
     }
 }

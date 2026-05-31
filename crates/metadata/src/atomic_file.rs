@@ -600,10 +600,19 @@ mod tests {
     }
 
     fn unique_test_directory() -> PathBuf {
-        let unique_suffix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock after unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!("sustain_atomic_metadata_test_{unique_suffix}"))
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // A wall-clock timestamp is not actually unique: two tests on
+        // parallel harness threads can read the same tick (or the clock
+        // can step backwards), landing in the same directory and racing
+        // each other's `remove_dir_all`. Mirror the production temp-name
+        // scheme (`temporary_sibling_name`) instead: a process id plus a
+        // monotonic counter is collision-free within and across runs.
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "sustain_atomic_metadata_test_{}_{id}",
+            std::process::id()
+        ))
     }
 }
