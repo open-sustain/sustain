@@ -160,6 +160,138 @@ mod tests {
         assert_eq!(a, b);
     }
 
+    fn named_track(id: i64, title: &str, artist: &str, album: &str) -> SyncInputTrack {
+        SyncInputTrack {
+            track_id: TrackId::new(id).expect("id"),
+            source_path: PathBuf::from(format!("/src/{id}.mp3")),
+            title: title.into(),
+            artist: artist.into(),
+            album: album.into(),
+            genre: None,
+            track_number: None,
+            year: None,
+            duration_ms: 1000,
+            rating: 0,
+            bpm: None,
+            key: None,
+            bitrate_kbps: None,
+            sample_rate_hz: 44_100,
+            bit_depth: 16,
+            file_size: 0,
+            date_added: None,
+            extension: "mp3".into(),
+            fingerprint: format!("fp-{id}"),
+            waveform_preview: None,
+            waveform_detail: None,
+            cover_art: None,
+        }
+    }
+
+    fn plan_request(
+        tracks: Vec<SyncInputTrack>,
+        layout: DeviceLayout,
+        playlists: Vec<SyncInputPlaylist>,
+        prev: Vec<sustain_domain::SyncManifestEntry>,
+    ) -> SyncRequest {
+        SyncRequest {
+            device: device(layout),
+            mount_path: PathBuf::from("/mnt/device"),
+            tracks,
+            playlists,
+            previous_manifest: prev,
+            remove_stale: false,
+            export_date: "2026-01-01".into(),
+        }
+    }
+
+    fn placement_paths(req: &SyncRequest) -> Vec<String> {
+        crate::layout::plan_placements(req)
+            .expect("planning succeeds")
+            .into_iter()
+            .map(|placement| placement.rel_path)
+            .collect()
+    }
+
+    fn assert_all_unique(paths: &[String]) {
+        let set: std::collections::HashSet<&str> = paths.iter().map(String::as_str).collect();
+        assert_eq!(
+            set.len(),
+            paths.len(),
+            "planned paths must be unique: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn tree_layout_disambiguates_natural_suffix_collision() {
+        // id 12 titled "Foo" disambiguates to "Foo (12)", which the track
+        // literally titled "Foo (12)" already reserved — the documented
+        // double-collision. The allocator must take a third distinct name.
+        let tracks = vec![
+            named_track(10, "Foo", "A", "B"),
+            named_track(11, "Foo (12)", "A", "B"),
+            named_track(12, "Foo", "A", "B"),
+        ];
+        let req = plan_request(tracks, DeviceLayout::M3u, Vec::new(), Vec::new());
+        let paths = placement_paths(&req);
+        assert_eq!(paths.len(), 3);
+        assert_all_unique(&paths);
+    }
+
+    #[test]
+    fn tree_layout_keeps_disambiguator_when_the_name_would_truncate() {
+        // Two tracks with the same very long title: the plain names collide
+        // and a naive append of " (id)" would be truncated off the end,
+        // re-colliding. The reserved-suffix allocator must keep them apart.
+        let long = "T".repeat(200);
+        let tracks = vec![
+            named_track(1, &long, "A", "B"),
+            named_track(2, &long, "A", "B"),
+        ];
+        let req = plan_request(tracks, DeviceLayout::Pioneer, Vec::new(), Vec::new());
+        let paths = placement_paths(&req);
+        assert_eq!(paths.len(), 2);
+        assert_all_unique(&paths);
+        assert!(
+            paths.iter().all(|p| p.len() <= "Contents/A/B/".len() + 120),
+            "leaf names stay within the cap: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn tree_layout_disambiguates_titles_that_sanitize_to_one_component() {
+        // "AC/DC" and "AC:DC" both sanitize to "AC_DC"; distinct tracks
+        // must still land on distinct files.
+        let tracks = vec![
+            named_track(1, "AC/DC", "A", "B"),
+            named_track(2, "AC:DC", "A", "B"),
+        ];
+        let req = plan_request(tracks, DeviceLayout::M3u, Vec::new(), Vec::new());
+        let paths = placement_paths(&req);
+        assert_eq!(paths.len(), 2);
+        assert_all_unique(&paths);
+    }
+
+    #[test]
+    fn folder_layout_dedups_a_repeated_playlist_entry() {
+        // The playlist lists the same track twice and the prior manifest
+        // already placed it: without dedup both entries resolve to the same
+        // recovered index and on-device filename, overwriting one copy.
+        let tracks = vec![named_track(7, "Only Track", "A", "B")];
+        let playlists = vec![SyncInputPlaylist {
+            name: "Mix".into(),
+            track_indices: vec![0, 0],
+        }];
+        let prev = vec![sustain_domain::SyncManifestEntry {
+            track_id: TrackId::new(7).expect("id"),
+            on_device_path: "Mix/001 A - Only Track.mp3".into(),
+            fingerprint: "fp-7".into(),
+        }];
+        let req = plan_request(tracks, DeviceLayout::FolderPerPlaylist, playlists, prev);
+        let paths = placement_paths(&req);
+        assert_eq!(paths.len(), 1, "a repeated entry is placed once: {paths:?}");
+        assert_all_unique(&paths);
+    }
+
     #[test]
     fn pioneer_layout_writes_pdb_and_anlz() {
         let fx = fixture(2);

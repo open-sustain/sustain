@@ -87,7 +87,7 @@ pub fn plan(req: &SyncRequest) -> Result<SyncPlan, SyncError> {
         return Err(SyncError::Empty);
     }
     let root = device_root(req);
-    let placements = layout::plan_placements(req);
+    let placements = layout::plan_placements(req)?;
     let diff = compute_diff(req, &root, &placements);
     let bytes_to_copy = diff
         .to_write
@@ -155,7 +155,7 @@ pub fn sync(
     // time (the marker always lives at the mount root, not the sub-path).
     let _ = crate::identity::write_marker(&req.mount_path, &req.device.id);
 
-    let placements = layout::plan_placements(req);
+    let placements = layout::plan_placements(req)?;
     let diff = compute_diff(req, &root, &placements);
 
     let mut outcome = SyncOutcome {

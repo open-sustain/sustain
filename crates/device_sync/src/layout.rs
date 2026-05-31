@@ -30,16 +30,84 @@ const MUSIC_DIR: &str = "Music";
 const CONTENTS_DIR: &str = "Contents";
 /// Component cap for the m3u/Pioneer trees (FAT-safe, generous).
 const TREE_COMPONENT_CAP: usize = 60;
+/// Filename cap for the m3u/Pioneer tree leaf names.
+const TREE_FILENAME_CAP: usize = 120;
 /// Component cap for the folder-per-playlist layout (car-stereo target).
 const FOLDER_COMPONENT_CAP: usize = 32;
+/// Disambiguation attempt ceiling before a layout reports a planning
+/// error. The immutable track id resolves the documented collisions in
+/// attempt zero; the extra counter covers the pathological case where even
+/// the id-tagged, length-capped name is already taken. The ceiling is far
+/// beyond any real library and only exists to guarantee the loop
+/// terminates rather than spins.
+const MAX_DISAMBIGUATION_ATTEMPTS: u32 = 10_000;
 
-/// Compute the desired placements for a request's layout.
-pub fn plan_placements(req: &SyncRequest) -> Vec<Placement> {
-    match req.device.layout {
-        DeviceLayout::M3u => tree_placements(req, MUSIC_DIR),
-        DeviceLayout::Pioneer => tree_placements(req, CONTENTS_DIR),
+/// Compute the desired placements for a request's layout. Fails closed
+/// with [`SyncError::Planning`] if a unique destination cannot be produced
+/// or the final set still holds a duplicate path — never a silent
+/// overwrite.
+pub fn plan_placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
+    let placements = match req.device.layout {
+        DeviceLayout::M3u => tree_placements(req, MUSIC_DIR)?,
+        DeviceLayout::Pioneer => tree_placements(req, CONTENTS_DIR)?,
         DeviceLayout::FolderPerPlaylist => folder_placements(req),
+    };
+    validate_unique(&placements)?;
+    Ok(placements)
+}
+
+/// Final guard before any filesystem mutation: every planned path must be
+/// unique. The allocators already guarantee this, so a duplicate here is a
+/// planner bug — fail closed with a typed error rather than letting the
+/// copy step and the manifest silently collapse two tracks onto one file.
+fn validate_unique(placements: &[Placement]) -> Result<(), SyncError> {
+    let mut seen: HashSet<&str> = HashSet::with_capacity(placements.len());
+    for placement in placements {
+        if !seen.insert(placement.rel_path.as_str()) {
+            return Err(SyncError::planning(format!(
+                "duplicate device placement path: {}",
+                placement.rel_path
+            )));
+        }
     }
+    Ok(())
+}
+
+/// Allocate a unique on-device relative path `{dir}/{name}` for a track.
+/// The plain sanitized name is tried first; on collision it disambiguates
+/// with the immutable track id, reserving room for the suffix before the
+/// length cap so truncation can never drop it. An extra counter covers the
+/// rare case where even the id-tagged name is already taken (sanitization
+/// or truncation can collapse distinct stems). Returns a planning error
+/// only if no unique name can be produced within the attempt ceiling.
+fn allocate_unique_path(
+    used: &mut HashSet<String>,
+    dir: &str,
+    stem: &str,
+    extension: &str,
+    track_id: i64,
+    name_cap: usize,
+) -> Result<String, SyncError> {
+    let name = crate::sanitize::filename(stem, extension, name_cap);
+    let rel = format!("{dir}/{name}");
+    if used.insert(rel.clone()) {
+        return Ok(rel);
+    }
+    for attempt in 0..MAX_DISAMBIGUATION_ATTEMPTS {
+        let suffix = if attempt == 0 {
+            format!(" ({track_id})")
+        } else {
+            format!(" ({track_id}-{})", attempt + 1)
+        };
+        let name = crate::sanitize::filename_with_suffix(stem, &suffix, extension, name_cap);
+        let rel = format!("{dir}/{name}");
+        if used.insert(rel.clone()) {
+            return Ok(rel);
+        }
+    }
+    Err(SyncError::planning(format!(
+        "could not allocate a unique device path for track {track_id} under {dir}"
+    )))
 }
 
 /// Write the layout's index/database files after audio is in place.
@@ -68,29 +136,29 @@ pub fn always_finalizes(layout: DeviceLayout) -> bool {
 // Deduplicated tree layouts (m3u, Pioneer)
 // ---------------------------------------------------------------------
 
-fn tree_placements(req: &SyncRequest, root_dir: &str) -> Vec<Placement> {
+fn tree_placements(req: &SyncRequest, root_dir: &str) -> Result<Vec<Placement>, SyncError> {
     let mut used: HashSet<String> = HashSet::new();
     let mut placements = Vec::with_capacity(req.tracks.len());
     for (index, track) in req.tracks.iter().enumerate() {
         let artist =
             crate::sanitize::component(&track.artist, TREE_COMPONENT_CAP, "Unknown Artist");
         let album = crate::sanitize::component(&track.album, TREE_COMPONENT_CAP, "Unknown Album");
-        let mut name = crate::sanitize::filename(&track_stem(track), &track.extension, 120);
-        let mut rel = format!("{root_dir}/{artist}/{album}/{name}");
-        if used.contains(&rel) {
-            // Stable disambiguation keyed on the immutable track id.
-            let stem = format!("{} ({})", track_stem(track), track.track_id.get());
-            name = crate::sanitize::filename(&stem, &track.extension, 120);
-            rel = format!("{root_dir}/{artist}/{album}/{name}");
-        }
-        used.insert(rel.clone());
+        let dir = format!("{root_dir}/{artist}/{album}");
+        let rel = allocate_unique_path(
+            &mut used,
+            &dir,
+            &track_stem(track),
+            &track.extension,
+            track.track_id.get(),
+            TREE_FILENAME_CAP,
+        )?;
         placements.push(Placement {
             track_index: index,
             rel_path: rel,
             fingerprint: track.fingerprint.clone(),
         });
     }
-    placements
+    Ok(placements)
 }
 
 fn track_stem(track: &crate::model::SyncInputTrack) -> String {
@@ -131,8 +199,16 @@ fn folder_placements(req: &SyncRequest) -> Vec<Placement> {
         let mut used_idx: BTreeSet<u32> = prior.values().copied().collect();
         let mut next_idx = used_idx.iter().max().copied().unwrap_or(0);
         let mut assignments: Vec<(usize, u32)> = Vec::with_capacity(playlist.track_indices.len());
+        // Place each track once per folder: a playlist listing the same
+        // track twice would otherwise resolve both entries to the same
+        // recovered index (and thus the same on-device filename), silently
+        // overwriting one copy with the other.
+        let mut placed_ids: HashSet<sustain_domain::TrackId> = HashSet::new();
         for &track_index in &playlist.track_indices {
             let track_id = req.tracks[track_index].track_id;
+            if !placed_ids.insert(track_id) {
+                continue;
+            }
             let idx = match prior.get(&track_id) {
                 Some(&existing) => existing,
                 None => {

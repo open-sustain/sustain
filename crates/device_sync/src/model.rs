@@ -164,6 +164,12 @@ pub enum SyncError {
     Pdb(sustain_pioneer::PdbError),
     /// The selection resolved to no tracks.
     Empty,
+    /// A unique on-device destination path could not be planned (the
+    /// allocator exhausted its disambiguation attempts, or the final
+    /// placement set still held a duplicate path). Planning fails closed
+    /// before any filesystem mutation rather than letting two tracks
+    /// overwrite each other on the device.
+    Planning(String),
 }
 
 impl SyncError {
@@ -173,6 +179,10 @@ impl SyncError {
             source,
         }
     }
+
+    pub(crate) fn planning(message: impl Into<String>) -> Self {
+        Self::Planning(message.into())
+    }
 }
 
 impl std::fmt::Display for SyncError {
@@ -181,6 +191,7 @@ impl std::fmt::Display for SyncError {
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Pdb(error) => write!(f, "Pioneer database: {error}"),
             Self::Empty => write!(f, "the selection contains no tracks"),
+            Self::Planning(message) => write!(f, "device path planning failed: {message}"),
         }
     }
 }
@@ -190,7 +201,7 @@ impl std::error::Error for SyncError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Pdb(error) => Some(error),
-            Self::Empty => None,
+            Self::Empty | Self::Planning(_) => None,
         }
     }
 }

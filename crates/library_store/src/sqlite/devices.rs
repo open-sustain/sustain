@@ -146,9 +146,14 @@ pub(super) fn save_device_manifest(
         )
         .map_err(StoreError::from)?;
     for entry in entries {
+        // Plain INSERT, not INSERT OR REPLACE: the device's rows were just
+        // cleared, so a primary-key conflict here can only mean two entries
+        // share one on-device path — a planner bug the sync engine now
+        // rejects before it gets here. Failing loudly beats silently
+        // collapsing the overwrite evidence (#99).
         transaction
             .execute(
-                "INSERT OR REPLACE INTO sync_manifest \
+                "INSERT INTO sync_manifest \
                  (device_id, track_id, on_device_path, fingerprint) VALUES (?1, ?2, ?3, ?4)",
                 params![
                     id.as_str(),

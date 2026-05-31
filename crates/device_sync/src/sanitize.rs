@@ -50,6 +50,29 @@ pub fn filename(stem: &str, extension: &str, max_chars: usize) -> String {
     }
 }
 
+/// Like [`filename`], but guarantees a disambiguating `suffix` survives the
+/// length cap. Room for the suffix (and extension) is reserved first and
+/// the base stem is truncated to fit, so a long title can never push the
+/// suffix off the end — which would let two distinct tracks collapse onto
+/// the same on-device name. The suffix is appended verbatim (callers build
+/// it from FAT-safe characters, e.g. a parenthesised numeric track id).
+pub fn filename_with_suffix(stem: &str, suffix: &str, extension: &str, max_chars: usize) -> String {
+    let ext = extension.trim_start_matches('.');
+    let ext_len = if ext.is_empty() { 0 } else { ext.len() + 1 };
+    let suffix_len = suffix.chars().count();
+    let stem_budget = max_chars
+        .saturating_sub(ext_len)
+        .saturating_sub(suffix_len)
+        .max(1);
+    let safe_stem = component(stem, stem_budget, "track");
+    let name = format!("{safe_stem}{suffix}");
+    if ext.is_empty() {
+        name
+    } else {
+        format!("{name}.{ext}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
