@@ -44,17 +44,15 @@ pub struct PioneerWaveforms {
     pub detail_entries: u32,
 }
 
-/// Build all five encodings. `duration_ms` fixes the detail entry count
-/// at `duration_s * 150` so the ANLZ headers' entries-per-second figure
-/// stays consistent with the data length.
+/// Build all five encodings. The detail tier's own timeline fixes the
+/// detail entry count. `duration_ms` is only a fallback when analysis
+/// data is absent and a silent waveform must still cover the track.
 pub fn build(
     preview: &WaveformSegments,
     detail: &WaveformSegments,
     duration_ms: u32,
 ) -> PioneerWaveforms {
-    let detail_entries =
-        ((duration_ms as f32 / 1000.0) * DETAIL_ENTRIES_PER_SECOND as f32).round() as usize;
-    let detail_entries = detail_entries.max(1);
+    let detail_entries = detail_entry_count(detail, duration_ms);
 
     let preview_400 = resample(&preview.segments, PWAV_COLUMNS);
     let preview_100 = resample(&preview.segments, PWV2_COLUMNS);
@@ -75,6 +73,17 @@ pub fn build(
         pwv5: encode_pwv5(&detail_n),
         detail_entries: detail_entries as u32,
     }
+}
+
+fn detail_entry_count(detail: &WaveformSegments, fallback_duration_ms: u32) -> usize {
+    let duration_ms = if detail.segments.is_empty() {
+        f64::from(fallback_duration_ms)
+    } else {
+        f64::from(detail.segment_duration_ms) * detail.segments.len() as f64
+    };
+    ((duration_ms / 1_000.0) * f64::from(DETAIL_ENTRIES_PER_SECOND))
+        .round()
+        .max(1.0) as usize
 }
 
 /// Bucket-resample a segment array to exactly `target` entries. Each
@@ -188,7 +197,7 @@ mod tests {
 
     fn tier(count: usize, amp: u8) -> WaveformSegments {
         WaveformSegments {
-            segment_duration_ms: 10.0,
+            segment_duration_ms: 1_000.0 / f32::from(DETAIL_ENTRIES_PER_SECOND),
             segments: vec![seg(amp); count],
         }
     }
@@ -216,6 +225,18 @@ mod tests {
         assert_eq!(wf.pwav.len(), 400);
         assert!(wf.pwav.iter().all(|&b| b == encode_mono(0, 5)));
         assert_eq!(wf.pwv3.len(), 300); // 2 s * 150
+    }
+
+    #[test]
+    fn analyzed_detail_timeline_wins_over_metadata_duration() {
+        let preview = tier(400, 200);
+        let detail = WaveformSegments {
+            segment_duration_ms: 1_000.0 / f32::from(DETAIL_ENTRIES_PER_SECOND),
+            segments: vec![seg(200); 900],
+        };
+        let wf = build(&preview, &detail, 8000);
+        assert_eq!(wf.detail_entries, 900);
+        assert_eq!(wf.pwv3.len(), 900);
     }
 
     #[test]

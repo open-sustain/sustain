@@ -62,11 +62,16 @@ fn empty_tiers(sample_rate: u32) -> WaveformTiers {
 }
 
 fn build_detail(samples: &[f32], sample_rate: u32) -> WaveformSegments {
-    // Samples per detail segment: sample_rate / 150. The division is
-    // integer; the residual at end-of-track ends up in the final
-    // segment without affecting the time mapping the renderer uses.
-    let samples_per_segment = (sample_rate / DETAIL_SEGMENTS_PER_SECOND).max(1) as usize;
-    let segment_count = samples.len().div_ceil(samples_per_segment);
+    // Pioneer detail waveforms use one entry per half-frame: exactly
+    // 150 entries per second. Rational boundaries preserve that
+    // timeline for sample rates that are not divisible by 150.
+    let detail_rate = DETAIL_SEGMENTS_PER_SECOND as usize;
+    let sample_rate_usize = sample_rate as usize;
+    let scaled_sample_count = samples
+        .len()
+        .checked_mul(detail_rate)
+        .expect("decoded audio is too large to segment");
+    let segment_count = scaled_sample_count.div_ceil(sample_rate_usize);
 
     // Pre-compute the peak across every segment so we can normalize in
     // a single pass below. The IIR splitter is single-pass and
@@ -78,8 +83,8 @@ fn build_detail(samples: &[f32], sample_rate: u32) -> WaveformSegments {
     let mut splitter = splitter;
 
     for segment_index in 0..segment_count {
-        let start = segment_index * samples_per_segment;
-        let end = ((segment_index + 1) * samples_per_segment).min(samples.len());
+        let start = segment_index * sample_rate_usize / detail_rate;
+        let end = ((segment_index + 1) * sample_rate_usize / detail_rate).min(samples.len());
         let chunk = &samples[start..end];
 
         let mut peak = 0.0_f32;
@@ -141,7 +146,7 @@ fn build_detail(samples: &[f32], sample_rate: u32) -> WaveformSegments {
         .collect();
 
     WaveformSegments {
-        segment_duration_ms: 1_000.0 * samples_per_segment as f32 / sample_rate as f32,
+        segment_duration_ms: 1_000.0 / DETAIL_SEGMENTS_PER_SECOND as f32,
         segments,
     }
 }
@@ -256,13 +261,26 @@ mod tests {
     fn detail_segment_count_matches_track_length() {
         let samples = sine(440.0, 2.0, 0.5);
         let tiers = build_tiers(&samples, SAMPLE_RATE);
-        let samples_per_segment = (SAMPLE_RATE / DETAIL_SEGMENTS_PER_SECOND) as usize;
-        let expected = samples.len().div_ceil(samples_per_segment);
+        let expected = samples
+            .len()
+            .checked_mul(DETAIL_SEGMENTS_PER_SECOND as usize)
+            .expect("test samples fit")
+            .div_ceil(SAMPLE_RATE as usize);
         assert_eq!(tiers.detail.segments.len(), expected);
         assert!(
-            (tiers.detail.segment_duration_ms
-                - 1_000.0 * samples_per_segment as f32 / SAMPLE_RATE as f32)
-                .abs()
+            (tiers.detail.segment_duration_ms - 1_000.0 / DETAIL_SEGMENTS_PER_SECOND as f32).abs()
+                < 1e-3
+        );
+    }
+
+    #[test]
+    fn detail_timeline_is_exact_for_non_divisible_sample_rates() {
+        let sample_rate = 32_000;
+        let samples = vec![0.0; sample_rate as usize * 2];
+        let tiers = build_tiers(&samples, sample_rate);
+        assert_eq!(tiers.detail.segments.len(), 300);
+        assert!(
+            (tiers.detail.segment_duration_ms - 1_000.0 / DETAIL_SEGMENTS_PER_SECOND as f32).abs()
                 < 1e-3
         );
     }

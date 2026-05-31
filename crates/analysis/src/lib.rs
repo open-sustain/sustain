@@ -122,7 +122,11 @@ pub use waveform::WaveformTiers;
 /// in place (it never clobbers a populated field), so an existing
 /// library only picks up the new centered BPM/key on a wipe-and-rescan
 /// — the documented pre-release workflow.
-pub const ANALYZER_VERSION: u32 = 4;
+///
+/// Version 5: waveform detail windows are laid out on the exact Pioneer
+/// half-frame timeline (150 entries per second), including for sample
+/// rates that are not divisible by 150.
+pub const ANALYZER_VERSION: u32 = 5;
 
 /// DSP tunables exposed to callers. Defaults reflect the values the
 /// rhythmbox-to-pioneer-xdj-exporter author landed on after testing on
