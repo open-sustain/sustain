@@ -4,10 +4,12 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use lofty::{
@@ -99,6 +101,44 @@ pub struct ScannedTrack {
     /// artwork retriever can filter candidates with a SQL predicate
     /// instead of re-probing every file on every cycle.
     pub has_embedded_artwork: bool,
+    /// The file's last-modified time read from the same `stat` that
+    /// produced `file_size_bytes`. Persisted (truncated to seconds) so
+    /// the next scan can fingerprint this file and skip re-parsing it
+    /// when nothing changed (#71). `None` when the platform could not
+    /// report an mtime, which simply forces a parse on the next scan.
+    pub file_modified_at: Option<SystemTime>,
+}
+
+/// The size + last-modified fingerprint recorded for a track at its
+/// previous scan. When a freshly stat'd file still matches the stored
+/// fingerprint, none of the file-derived values a rescan consumes for an
+/// already-imported track (audio-stream properties, file size, embedded-
+/// artwork bit) can have changed, so the scanner skips re-parsing it
+/// (#71).
+///
+/// The comparison is at one-second resolution because that is what the
+/// library persists (`file_modified_at_unix`, matching the other
+/// `*_at_unix` columns). [`ScanFingerprint::new`] is the single place that
+/// truncation happens, so both the live file and the stored row run
+/// through the identical conversion and compare apples to apples.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScanFingerprint {
+    pub file_size_bytes: u64,
+    pub modified_at_unix: i64,
+}
+
+impl ScanFingerprint {
+    /// Builds a fingerprint, truncating `modified_at` to whole Unix
+    /// seconds the same way the store's `system_time_to_unix` does.
+    /// Returns `None` for a pre-epoch mtime (which cannot be represented
+    /// in the persisted column and so always re-parses).
+    pub fn new(file_size_bytes: u64, modified_at: SystemTime) -> Option<Self> {
+        let modified_at_unix = modified_at.duration_since(UNIX_EPOCH).ok()?.as_secs() as i64;
+        Some(Self {
+            file_size_bytes,
+            modified_at_unix,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -110,6 +150,12 @@ pub struct ScanFailure {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LibraryScan {
     pub tracks: Vec<ScannedTrack>,
+    /// Files found present on disk whose size + mtime fingerprint matched
+    /// the stored one, so the scanner skipped re-parsing their tags
+    /// (#71). Reconciliation keeps each such row exactly as the library
+    /// already had it (only forcing availability back to Available) and
+    /// counts it present, never missing.
+    pub unchanged: Vec<TrackRelativePath>,
     pub skipped_unsupported_files: usize,
     pub failures: Vec<ScanFailure>,
     /// True only when every directory entry and supported file could be
@@ -127,6 +173,7 @@ impl Default for LibraryScan {
     fn default() -> Self {
         Self {
             tracks: Vec::new(),
+            unchanged: Vec::new(),
             skipped_unsupported_files: 0,
             failures: Vec::new(),
             complete_for_missing_reconciliation: true,
@@ -190,18 +237,29 @@ where
         Self { metadata_service }
     }
 
+    /// Walks `library_path`, parsing each supported file's tags. Files
+    /// whose `(size, mtime)` fingerprint already matches an entry in
+    /// `known_fingerprints` are reported as `unchanged` and not re-parsed
+    /// (#71); pass an empty map to parse everything (a cold scan).
     pub fn scan(
         &self,
         library_path: &Path,
         cancellation: &AtomicBool,
+        known_fingerprints: &BTreeMap<TrackRelativePath, ScanFingerprint>,
     ) -> Result<LibraryScan, LibraryScanError> {
-        self.scan_with_filesystem(library_path, cancellation, &StdScanFilesystem)
+        self.scan_with_filesystem(
+            library_path,
+            cancellation,
+            known_fingerprints,
+            &StdScanFilesystem,
+        )
     }
 
     fn scan_with_filesystem(
         &self,
         library_path: &Path,
         cancellation: &AtomicBool,
+        known_fingerprints: &BTreeMap<TrackRelativePath, ScanFingerprint>,
         filesystem: &impl ScanFilesystem,
     ) -> Result<LibraryScan, LibraryScanError> {
         if !filesystem.is_directory(library_path) {
@@ -214,12 +272,14 @@ where
             library_path,
             &mut scan,
             cancellation,
+            known_fingerprints,
             filesystem,
         );
         scan.cancelled = scan.cancelled || cancellation.load(Ordering::SeqCst);
         scan.complete_for_missing_reconciliation &= !scan.cancelled;
         scan.tracks
             .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+        scan.unchanged.sort();
         Ok(scan)
     }
 
@@ -229,6 +289,7 @@ where
         directory: &Path,
         scan: &mut LibraryScan,
         cancellation: &AtomicBool,
+        known_fingerprints: &BTreeMap<TrackRelativePath, ScanFingerprint>,
         filesystem: &impl ScanFilesystem,
     ) {
         let entries = match filesystem.read_directory(directory) {
@@ -259,12 +320,29 @@ where
                 }
             };
             if metadata.file_type().is_dir() {
-                self.scan_directory(library_path, &path, scan, cancellation, filesystem);
+                self.scan_directory(
+                    library_path,
+                    &path,
+                    scan,
+                    cancellation,
+                    known_fingerprints,
+                    filesystem,
+                );
                 if scan.cancelled {
                     return;
                 }
             } else if metadata.file_type().is_file() {
-                self.scan_file(library_path, path, metadata.len(), scan);
+                // Read the mtime from the stat we already have — no extra
+                // syscall — so an unchanged file can be fingerprinted and
+                // skipped below (#71).
+                self.scan_file(
+                    library_path,
+                    path,
+                    metadata.len(),
+                    metadata.modified().ok(),
+                    known_fingerprints,
+                    scan,
+                );
             }
         }
     }
@@ -274,6 +352,8 @@ where
         library_path: &Path,
         path: PathBuf,
         file_size_bytes: u64,
+        modified_at: Option<SystemTime>,
+        known_fingerprints: &BTreeMap<TrackRelativePath, ScanFingerprint>,
         scan: &mut LibraryScan,
     ) {
         if audio_format_from_path(&path).is_err() {
@@ -293,6 +373,21 @@ where
             }
         };
 
+        // Skip the tag parse entirely when this file is already known with
+        // an identical size + mtime fingerprint: its audio-stream
+        // properties, size, and embedded-artwork bit cannot have changed,
+        // and SQLite already owns everything else for an imported track
+        // (#71). A missing mtime (None) cannot produce a fingerprint, so
+        // such a file is always parsed and re-records its mtime.
+        let fingerprint =
+            modified_at.and_then(|modified_at| ScanFingerprint::new(file_size_bytes, modified_at));
+        if let Some(fingerprint) = fingerprint {
+            if known_fingerprints.get(&relative_path) == Some(&fingerprint) {
+                scan.unchanged.push(relative_path);
+                return;
+            }
+        }
+
         let InitialTags {
             metadata,
             rating,
@@ -310,6 +405,7 @@ where
             rating,
             file_size_bytes: Some(file_size_bytes),
             has_embedded_artwork,
+            file_modified_at: modified_at,
         });
     }
 }

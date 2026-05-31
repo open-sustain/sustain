@@ -46,6 +46,7 @@ fn touch_in(library_root: &std::path::Path, relative: &str) -> Track {
         statistics: Default::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     }
 }
 

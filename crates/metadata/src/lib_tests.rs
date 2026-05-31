@@ -15,9 +15,10 @@ use sustain_domain::TrackMetadata;
 
 use super::{
     AudioFormat, InitialTags, LibraryScanner, MetadataError, MetadataResult, MetadataService,
-    Rating, ScanFilesystem, StdScanFilesystem, atomic_write_via_rename, audio_format_from_path,
-    hash_file_content, valid_embedded_picture,
+    Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, atomic_write_via_rename,
+    audio_format_from_path, hash_file_content, valid_embedded_picture,
 };
+use sustain_domain::TrackRelativePath;
 
 #[test]
 fn detects_supported_audio_formats_case_insensitively() {
@@ -94,7 +95,11 @@ fn scanner_recurses_and_ignores_unsupported_files() {
     let metadata_service =
         FakeMetadataService::for_paths([root.join("one.mp3"), nested.join("two.flac")]);
     let scan = LibraryScanner::new(&metadata_service)
-        .scan(&root, &std::sync::atomic::AtomicBool::new(false))
+        .scan(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
+        )
         .expect("scan test directory");
 
     let scanned_paths = scan
@@ -129,7 +134,7 @@ fn scanner_returns_partial_results_when_cancellation_is_observed() {
     // tracks as missing.
     let cancellation = std::sync::atomic::AtomicBool::new(true);
     let scan = LibraryScanner::new(&metadata_service)
-        .scan(&root, &cancellation)
+        .scan(&root, &cancellation, &BTreeMap::new())
         .expect("scan test directory");
 
     assert!(scan.cancelled);
@@ -153,6 +158,7 @@ fn scanner_marks_nested_directory_read_failure_incomplete() {
         .scan_with_filesystem(
             &root,
             &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
             &filesystem,
         )
         .expect("scan test directory");
@@ -178,6 +184,7 @@ fn scanner_records_directory_iterator_errors_instead_of_flattening_them() {
         .scan_with_filesystem(
             &root,
             &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
             &filesystem,
         )
         .expect("scan test directory");
@@ -204,6 +211,7 @@ fn scanner_marks_stat_failures_incomplete() {
         .scan_with_filesystem(
             &root,
             &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
             &filesystem,
         )
         .expect("scan test directory");
@@ -300,6 +308,93 @@ fn hash_file_content_returns_sha256_hex() {
     fs::remove_dir_all(root).expect("remove test directory");
 }
 
+#[test]
+fn scanner_skips_reparsing_unchanged_files_and_reports_them_present() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let unchanged = root.join("unchanged.mp3");
+    let changed = root.join("changed.mp3");
+    fs::write(&unchanged, b"audio").expect("write unchanged");
+    fs::write(&changed, b"audio").expect("write changed");
+
+    // Build the "already known" fingerprints from the real on-disk stat.
+    // The unchanged file's fingerprint matches exactly; the changed file's
+    // recorded size is stale, so its fingerprint will not match and it must
+    // be re-parsed.
+    let unchanged_meta = fs::symlink_metadata(&unchanged).expect("stat unchanged");
+    let changed_meta = fs::symlink_metadata(&changed).expect("stat changed");
+    let unchanged_relative = TrackRelativePath::new("unchanged.mp3").expect("relative");
+    let changed_relative = TrackRelativePath::new("changed.mp3").expect("relative");
+    let mut known = BTreeMap::new();
+    known.insert(
+        unchanged_relative.clone(),
+        ScanFingerprint::new(
+            unchanged_meta.len(),
+            unchanged_meta.modified().expect("mtime"),
+        )
+        .expect("fingerprint"),
+    );
+    known.insert(
+        changed_relative.clone(),
+        ScanFingerprint::new(
+            changed_meta.len() + 1,
+            changed_meta.modified().expect("mtime"),
+        )
+        .expect("fingerprint"),
+    );
+
+    let metadata_service = RecordingMetadataService::default();
+    let scan = LibraryScanner::new(&metadata_service)
+        .scan(&root, &std::sync::atomic::AtomicBool::new(false), &known)
+        .expect("scan test directory");
+
+    // Only the changed file was opened/parsed; the unchanged one was not.
+    assert_eq!(metadata_service.parsed_paths(), vec![changed.clone()]);
+    // The unchanged file is reported present-but-skipped, never a parsed
+    // track and never a candidate for "missing".
+    assert_eq!(scan.unchanged, vec![unchanged_relative]);
+    let parsed: Vec<_> = scan
+        .tracks
+        .iter()
+        .map(|track| track.relative_path.clone())
+        .collect();
+    assert_eq!(parsed, vec![changed_relative]);
+    // The re-parsed track records a fresh mtime so the next scan can skip it.
+    assert!(scan.tracks[0].file_modified_at.is_some());
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn scanner_reparses_when_only_mtime_differs() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("song.mp3");
+    fs::write(&path, b"audio").expect("write file");
+
+    // Same size, but the recorded mtime is one second older than disk:
+    // the fingerprint must miss and the file must be re-parsed.
+    let meta = fs::symlink_metadata(&path).expect("stat");
+    let stale_mtime = meta.modified().expect("mtime") - std::time::Duration::from_secs(1);
+    let relative = TrackRelativePath::new("song.mp3").expect("relative");
+    let mut known = BTreeMap::new();
+    known.insert(
+        relative.clone(),
+        ScanFingerprint::new(meta.len(), stale_mtime).expect("fingerprint"),
+    );
+
+    let metadata_service = RecordingMetadataService::default();
+    let scan = LibraryScanner::new(&metadata_service)
+        .scan(&root, &std::sync::atomic::AtomicBool::new(false), &known)
+        .expect("scan test directory");
+
+    assert_eq!(metadata_service.parsed_paths(), vec![path]);
+    assert!(scan.unchanged.is_empty());
+    assert_eq!(scan.tracks.len(), 1);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
 #[derive(Default)]
 struct FakeMetadataService {
     tracks: BTreeMap<PathBuf, TrackMetadata>,
@@ -334,6 +429,57 @@ impl MetadataService for FakeMetadataService {
         Ok(InitialTags {
             metadata,
             rating: Rating::new(4).expect("valid test rating"),
+            has_embedded_artwork: false,
+        })
+    }
+
+    fn write_metadata(&self, _path: &Path, _change: super::MetadataChange) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn write_rating(&self, _path: &Path, _rating: Rating) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        Ok(())
+    }
+}
+
+/// A metadata service that records every path it is asked to parse, so a
+/// test can assert which files the scanner actually opened (and, by
+/// omission, which it skipped via the size+mtime fingerprint). Accepts any
+/// path and returns a fixed, valid tag set.
+#[derive(Default)]
+struct RecordingMetadataService {
+    parsed: std::sync::Mutex<Vec<PathBuf>>,
+}
+
+impl RecordingMetadataService {
+    fn parsed_paths(&self) -> Vec<PathBuf> {
+        self.parsed
+            .lock()
+            .expect("recording lock not poisoned")
+            .clone()
+    }
+}
+
+impl MetadataService for RecordingMetadataService {
+    fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
+        self.parsed
+            .lock()
+            .expect("recording lock not poisoned")
+            .push(path.to_path_buf());
+        Ok(InitialTags {
+            metadata: TrackMetadata {
+                title: Some("Test".to_owned()),
+                ..TrackMetadata::default()
+            },
+            rating: Rating::unrated(),
             has_embedded_artwork: false,
         })
     }

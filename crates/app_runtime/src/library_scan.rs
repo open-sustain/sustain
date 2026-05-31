@@ -12,7 +12,7 @@ use sustain_domain::{
     PlayStatistics, Track, TrackAvailability, TrackId, TrackLocation, TrackRelativePath,
 };
 use sustain_library_store::LibraryStore;
-use sustain_metadata::{LibraryScan, LibraryScanner, ScannedTrack};
+use sustain_metadata::{LibraryScan, LibraryScanner, ScanFingerprint, ScannedTrack};
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, LibraryScanResult,
@@ -128,8 +128,13 @@ impl ApplicationRuntime {
 }
 
 pub fn run_library_scan_task(task: LibraryScanTask) -> ApplicationRuntimeResult<LibraryScanResult> {
+    let known_fingerprints = existing_scan_fingerprints(&task.existing_tracks);
     let scan = LibraryScanner::new(task.metadata_service.as_ref())
-        .scan(&task.library_path, task.cancellation_requested.as_ref())
+        .scan(
+            &task.library_path,
+            task.cancellation_requested.as_ref(),
+            &known_fingerprints,
+        )
         .map_err(|_| ApplicationRuntimeError::LibraryScanFailed)?;
     let result = reconcile_library_scan(&task.library_path, task.existing_tracks, scan)?;
 
@@ -172,6 +177,7 @@ pub(crate) fn reconcile_library_scan_with_probe(
     let complete_for_missing_reconciliation =
         scan.complete_for_missing_reconciliation && !cancelled && scan.failures.is_empty();
     let scanned_tracks = scan.tracks;
+    let unchanged_paths = scan.unchanged;
     let mut tracks_by_path = tracks_by_path(existing_tracks.clone());
     let mut scanned_paths = BTreeSet::new();
     let mut tracks = Vec::new();
@@ -179,7 +185,6 @@ pub(crate) fn reconcile_library_scan_with_probe(
     let mut added_tracks = 0;
     let mut updated_tracks = 0;
 
-    let scanned_track_count = scanned_tracks.len();
     for scanned_track in scanned_tracks {
         scanned_paths.insert(scanned_track.relative_path.clone());
         let existing_track = tracks_by_path.remove(&scanned_track.relative_path);
@@ -190,6 +195,22 @@ pub(crate) fn reconcile_library_scan_with_probe(
         }
         let track = track_from_scanned_track(scanned_track, existing_track, &mut next_track_id)?;
         tracks.push(track);
+    }
+
+    // Files the scanner skipped because their size + mtime fingerprint was
+    // unchanged. Keep the existing row exactly as the library had it, but
+    // force availability back to Available (the file is confirmed present
+    // this pass) and record the path as seen so the missing-file
+    // reconciliation below never treats it as gone (#71).
+    let mut unchanged_tracks = 0;
+    for relative_path in unchanged_paths {
+        let Some(mut track) = tracks_by_path.remove(&relative_path) else {
+            continue;
+        };
+        track.location.availability = TrackAvailability::Available;
+        scanned_paths.insert(relative_path);
+        tracks.push(track);
+        unchanged_tracks += 1;
     }
 
     let unvisited_tracks = existing_tracks
@@ -227,9 +248,14 @@ pub(crate) fn reconcile_library_scan_with_probe(
 
     Ok(LibraryScanResult {
         summary: LibraryScanSummary {
-            scanned_tracks: scanned_track_count,
+            // "Tracks present on disk this pass": everything parsed plus
+            // everything skipped-as-unchanged, so the user-facing count
+            // stays meaningful rather than dropping to just the re-parsed
+            // subset on an incremental rescan (#71).
+            scanned_tracks: added_tracks + updated_tracks + unchanged_tracks,
             added_tracks,
             updated_tracks,
+            unchanged_tracks,
             missing_tracks,
             skipped_unsupported_files,
             failed_files,
@@ -244,6 +270,21 @@ fn tracks_by_path(tracks: Vec<Track>) -> BTreeMap<TrackRelativePath, Track> {
     tracks
         .into_iter()
         .map(|track| (track.location.relative_path.clone(), track))
+        .collect()
+}
+
+/// Build the size + mtime fingerprints the scanner uses to skip
+/// re-parsing unchanged files (#71). Only tracks that carry both a stored
+/// size and a stored mtime contribute an entry; anything else (no scan has
+/// fingerprinted it yet) is simply absent from the map and gets parsed.
+fn existing_scan_fingerprints(tracks: &[Track]) -> BTreeMap<TrackRelativePath, ScanFingerprint> {
+    tracks
+        .iter()
+        .filter_map(|track| {
+            let fingerprint =
+                ScanFingerprint::new(track.file_size_bytes?, track.file_modified_at?)?;
+            Some((track.location.relative_path.clone(), fingerprint))
+        })
         .collect()
 }
 
@@ -267,6 +308,10 @@ fn track_from_scanned_track(
                 .refresh_audio_stream_properties_from(&scanned_track.metadata);
             track.location = TrackLocation::available(scanned_track.relative_path);
             track.file_size_bytes = scanned_track.file_size_bytes;
+            // The file was re-parsed because its fingerprint differed
+            // (or it had none); record the fresh mtime so the next scan
+            // can skip it (#71).
+            track.file_modified_at = scanned_track.file_modified_at;
             // Refresh the artwork-presence bit on every scan: the
             // user may have embedded a cover externally (e.g. via
             // another tagger) since the last pass, and the online
@@ -291,6 +336,7 @@ fn track_from_scanned_track(
                 },
                 file_size_bytes: scanned_track.file_size_bytes,
                 has_embedded_artwork: Some(scanned_track.has_embedded_artwork),
+                file_modified_at: scanned_track.file_modified_at,
             })
         }
     }
@@ -305,6 +351,7 @@ fn track_with_presence(track: Track, presence: FilePresence) -> Track {
         statistics,
         file_size_bytes,
         has_embedded_artwork,
+        file_modified_at,
     } = track;
     let availability = match presence {
         FilePresence::Present => TrackAvailability::Available,
@@ -322,6 +369,7 @@ fn track_with_presence(track: Track, presence: FilePresence) -> Track {
         statistics,
         file_size_bytes,
         has_embedded_artwork,
+        file_modified_at,
     }
 }
 

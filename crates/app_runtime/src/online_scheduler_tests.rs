@@ -71,6 +71,7 @@ fn touch_in(library_root: &Path, relative: &str) -> Track {
         statistics: Default::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     }
 }
 

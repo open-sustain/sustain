@@ -518,6 +518,139 @@ fn reconciliation_probe_failure_preserves_every_unvisited_row() {
 }
 
 #[test]
+fn reconcile_keeps_unchanged_rows_present_without_reparsing() {
+    // Files the scanner skipped because their fingerprint matched: the row
+    // is kept verbatim, a previously-Missing one is restored to Available,
+    // they count as unchanged (not added/updated/missing), and they are
+    // never probed (#71).
+    let mut present = test_track(track_id(1), "present.mp3");
+    present.statistics.play_count = 9; // a library-owned value must survive untouched
+    let mut reappeared = test_track(track_id(2), "reappeared.mp3");
+    reappeared.location = missing_track_location("reappeared.mp3");
+
+    let scan = LibraryScan {
+        unchanged: vec![
+            relative_path("present.mp3"),
+            relative_path("reappeared.mp3"),
+        ],
+        ..LibraryScan::default()
+    };
+
+    let result = crate::library_scan::reconcile_library_scan_with_probe(
+        Path::new("/library"),
+        vec![present.clone(), reappeared.clone()],
+        scan,
+        |_| panic!("unchanged files are already known present; must not be probed"),
+    )
+    .expect("reconcile unchanged scan");
+
+    assert_eq!(result.summary.unchanged_tracks, 2);
+    assert_eq!(result.summary.added_tracks, 0);
+    assert_eq!(result.summary.updated_tracks, 0);
+    assert_eq!(result.summary.missing_tracks, 0);
+    assert_eq!(result.summary.scanned_tracks, 2);
+
+    let present_row = result
+        .tracks
+        .iter()
+        .find(|track| track.id == track_id(1))
+        .expect("present row survives");
+    assert_eq!(present_row, &present, "unchanged row kept verbatim");
+
+    let reappeared_row = result
+        .tracks
+        .iter()
+        .find(|track| track.id == track_id(2))
+        .expect("reappeared row survives");
+    assert!(
+        !reappeared_row.location.is_missing(),
+        "a reappeared unchanged file is restored to Available"
+    );
+}
+
+#[test]
+fn rescan_with_no_on_disk_changes_reparses_nothing() {
+    // End-to-end seam for #71: a first scan imports + records each file's
+    // mtime; a second scan with nothing changed on disk must re-parse zero
+    // files (the cold-scan cost is not paid again) yet still report every
+    // track present.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct CountingMetadataService {
+        parses: AtomicUsize,
+    }
+    impl MetadataService for CountingMetadataService {
+        fn read_initial_tags(&self, _path: &Path) -> MetadataResult<InitialTags> {
+            self.parses.fetch_add(1, Ordering::SeqCst);
+            Ok(InitialTags {
+                metadata: TrackMetadata {
+                    title: Some("Track".to_owned()),
+                    ..TrackMetadata::default()
+                },
+                rating: Rating::unrated(),
+                has_embedded_artwork: false,
+            })
+        }
+        fn write_metadata(&self, _: &Path, _: MetadataChange) -> MetadataResult<()> {
+            Ok(())
+        }
+        fn write_rating(&self, _: &Path, _: Rating) -> MetadataResult<()> {
+            Ok(())
+        }
+        fn read_artwork(&self, _: &Path) -> MetadataResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+        fn write_artwork(&self, _: &Path, _: Option<Vec<u8>>) -> MetadataResult<()> {
+            Ok(())
+        }
+    }
+
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    std::fs::write(root.join("a.mp3"), b"audio a").expect("write a");
+    std::fs::write(root.join("b.flac"), b"audio b").expect("write b");
+
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("store"));
+    let metadata = Arc::new(CountingMetadataService::default());
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), metadata.clone())
+        .expect("library services initialize");
+
+    // First scan: both files are new, so both are parsed.
+    let task = runtime
+        .prepare_library_scan(root.clone())
+        .expect("prepare scan 1");
+    let result = run_library_scan_task(task).expect("run scan 1");
+    runtime.apply_library_scan_result(result);
+    assert_eq!(metadata.parses.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        runtime.last_scan_summary().expect("summary 1").added_tracks,
+        2
+    );
+
+    // Second scan, nothing changed on disk: zero re-parses, both present.
+    let task = runtime
+        .prepare_library_scan(root.clone())
+        .expect("prepare scan 2");
+    let result = run_library_scan_task(task).expect("run scan 2");
+    runtime.apply_library_scan_result(result);
+    assert_eq!(
+        metadata.parses.load(Ordering::SeqCst),
+        2,
+        "an unchanged rescan must not re-parse any file"
+    );
+    let summary = runtime.last_scan_summary().expect("summary 2").clone();
+    assert_eq!(summary.unchanged_tracks, 2);
+    assert_eq!(summary.added_tracks, 0);
+    assert_eq!(summary.updated_tracks, 0);
+    assert_eq!(summary.scanned_tracks, 2);
+    assert_eq!(runtime.library_tracks().len(), 2);
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
 fn runtime_scan_preserves_existing_track_identity_for_known_location() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
@@ -552,6 +685,7 @@ fn runtime_scan_preserves_existing_track_identity_for_known_location() {
             scanned_tracks: 1,
             added_tracks: 0,
             updated_tracks: 1,
+            unchanged_tracks: 0,
             missing_tracks: 0,
             skipped_unsupported_files: 0,
             failed_files: 0,
@@ -663,6 +797,7 @@ fn runtime_scan_preserves_existing_track_identity_after_library_root_changes() {
             scanned_tracks: 1,
             added_tracks: 0,
             updated_tracks: 1,
+            unchanged_tracks: 0,
             missing_tracks: 0,
             skipped_unsupported_files: 0,
             failed_files: 0,
@@ -1854,6 +1989,7 @@ fn runtime_plays_tracks_through_playback_service() {
         statistics: PlayStatistics::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     };
     assert_eq!(store.save_track(track), Ok(()));
 
@@ -3297,6 +3433,7 @@ fn smart_playlist_track_status_distinguishes_included_excluded_and_unknowable() 
         statistics: PlayStatistics::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     };
     let non_matching = Track {
         id: track_id(2),
@@ -3309,6 +3446,7 @@ fn smart_playlist_track_status_distinguishes_included_excluded_and_unknowable() 
         statistics: PlayStatistics::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     };
     store.save_track(matching.clone()).expect("save matching");
     store.save_track(non_matching.clone()).expect("save other");
@@ -4903,6 +5041,7 @@ fn test_track(track_id: TrackId, path: &str) -> Track {
         statistics: PlayStatistics::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     }
 }
 
@@ -4913,6 +5052,7 @@ fn test_scanned_track(path: &str) -> ScannedTrack {
         rating: Rating::unrated(),
         file_size_bytes: None,
         has_embedded_artwork: false,
+        file_modified_at: None,
     }
 }
 
@@ -4971,6 +5111,7 @@ fn request_run_decides_per_global_setting_and_target() {
         statistics: PlayStatistics::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     };
     store.save_track(track.clone()).expect("save");
     let playlist = Playlist {
@@ -5134,6 +5275,7 @@ fn request_run_skips_tracks_whose_capability_is_already_cached() {
         statistics: PlayStatistics::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     };
     store.save_track(track.clone()).expect("save");
 
@@ -5220,6 +5362,7 @@ fn online_run_is_a_force_path_that_does_not_pre_filter() {
         statistics: PlayStatistics::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     };
     store.save_track(track.clone()).expect("save");
     store

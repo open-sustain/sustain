@@ -175,6 +175,7 @@ impl LibraryStore for InMemoryLibraryStore {
                         .refresh_audio_stream_properties_from(&scanned.metadata);
                     track.file_size_bytes = scanned.file_size_bytes;
                     track.has_embedded_artwork = scanned.has_embedded_artwork;
+                    track.file_modified_at = scanned.file_modified_at;
                 }
             }
         }

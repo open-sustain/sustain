@@ -55,6 +55,7 @@ fn execute_full_track(connection: &Connection, sql: &str, track: &Track) -> Stor
                 metadata.album_sort.as_deref(),
                 metadata.album_artist_sort.as_deref(),
                 metadata.composer_sort.as_deref(),
+                track.file_modified_at.and_then(system_time_to_unix),
             ],
         )
         .map(|_| ())

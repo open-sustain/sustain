@@ -598,6 +598,7 @@ mod tests {
                 statistics: Default::default(),
                 file_size_bytes: None,
                 has_embedded_artwork: None,
+                file_modified_at: None,
             })
             .expect("save track");
         store
@@ -671,6 +672,7 @@ mod tests {
                 statistics: Default::default(),
                 file_size_bytes: None,
                 has_embedded_artwork: None,
+                file_modified_at: None,
             })
             .expect("save track");
 
@@ -741,6 +743,7 @@ mod tests {
                 statistics: Default::default(),
                 file_size_bytes: None,
                 has_embedded_artwork: None,
+                file_modified_at: None,
             })
             .expect("save track");
         let rating = Rating::new(4).expect("rating");
@@ -859,6 +862,7 @@ mod tests {
                 statistics: Default::default(),
                 file_size_bytes: None,
                 has_embedded_artwork: None,
+                file_modified_at: None,
             })
             .expect("save track");
         std::fs::remove_file(root.join("loose.flac")).expect("remove source");

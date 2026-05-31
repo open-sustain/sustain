@@ -222,6 +222,10 @@ impl LibraryImportContext {
                 },
                 file_size_bytes: Some(import.file_size_bytes),
                 has_embedded_artwork: Some(import.has_embedded_artwork),
+                // The first scan after import fingerprints the file and
+                // records its mtime; until then it parses, which is
+                // correct and self-heals (#71).
+                file_modified_at: None,
             });
         }
 
@@ -308,6 +312,8 @@ impl LibraryImportContext {
                 },
                 file_size_bytes,
                 has_embedded_artwork: Some(has_embedded_artwork),
+                // Recorded by the first post-import scan; see above (#71).
+                file_modified_at: None,
             });
         }
 

@@ -45,6 +45,7 @@ fn track(id: i64, genre: Option<&str>, play_count: u64, year: Option<i32>) -> Tr
         },
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     }
 }
 

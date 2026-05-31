@@ -66,7 +66,13 @@ CREATE TABLE IF NOT EXISTS tracks (
     artist_sort TEXT,
     album_sort TEXT,
     album_artist_sort TEXT,
-    composer_sort TEXT
+    composer_sort TEXT,
+    -- File mtime in Unix seconds, captured at the most recent scan.
+    -- Paired with file_size_bytes as a change-detection fingerprint:
+    -- when both still match on a rescan the scanner skips re-parsing the
+    -- file's tags (#71). NULL until a scan has fingerprinted the file,
+    -- which forces a parse on the next scan and self-heals.
+    file_modified_at_unix INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS playlist_folders (
@@ -384,6 +390,7 @@ const TRACK_COLUMNS: &[TrackColumn] = &[
     TrackColumn::stored_value("album_sort"),
     TrackColumn::stored_value("album_artist_sort"),
     TrackColumn::stored_value("composer_sort"),
+    TrackColumn::stored_value("file_modified_at_unix"),
 ];
 
 pub(crate) mod track_column_index {
@@ -424,6 +431,7 @@ pub(crate) mod track_column_index {
     pub(crate) const ALBUM_SORT: usize = 34;
     pub(crate) const ALBUM_ARTIST_SORT: usize = 35;
     pub(crate) const COMPOSER_SORT: usize = 36;
+    pub(crate) const FILE_MODIFIED_AT_UNIX: usize = 37;
 }
 
 pub(super) static SAVE_TRACK_SQL: LazyLock<String> = LazyLock::new(|| {
@@ -458,7 +466,8 @@ ON CONFLICT(id) DO UPDATE SET
     sample_rate_hz = excluded.sample_rate_hz,
     channels = excluded.channels,
     file_size_bytes = excluded.file_size_bytes,
-    has_embedded_artwork = excluded.has_embedded_artwork
+    has_embedded_artwork = excluded.has_embedded_artwork,
+    file_modified_at_unix = excluded.file_modified_at_unix
 "#,
         indented_track_column_names("    "),
         indented_insert_placeholders("    "),
@@ -813,6 +822,10 @@ mod tests {
             (track_column_index::ALBUM_SORT, "album_sort"),
             (track_column_index::ALBUM_ARTIST_SORT, "album_artist_sort"),
             (track_column_index::COMPOSER_SORT, "composer_sort"),
+            (
+                track_column_index::FILE_MODIFIED_AT_UNIX,
+                "file_modified_at_unix",
+            ),
         ];
 
         assert_eq!(TRACK_COLUMNS.len(), expected.len());

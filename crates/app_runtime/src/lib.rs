@@ -171,9 +171,16 @@ pub(crate) fn normalized_name(
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LibraryScanSummary {
+    /// Tracks found present on disk this pass: parsed (added + updated)
+    /// plus skipped-as-unchanged. This is the count the "Scan complete: N
+    /// tracks" notification shows, so an incremental rescan that re-parses
+    /// almost nothing still reports the full library size (#71).
     pub scanned_tracks: usize,
     pub added_tracks: usize,
     pub updated_tracks: usize,
+    /// Present files the scanner skipped because their size + mtime
+    /// fingerprint was unchanged, so their tags were not re-parsed (#71).
+    pub unchanged_tracks: usize,
     pub missing_tracks: usize,
     pub skipped_unsupported_files: usize,
     pub failed_files: usize,

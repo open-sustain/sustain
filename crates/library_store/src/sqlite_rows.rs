@@ -90,6 +90,8 @@ pub(crate) fn track_from_row(row: &Row<'_>) -> StoreResult<Track> {
         file_size_bytes: optional_i64(row, track_column::FILE_SIZE_BYTES)?
             .map(|value| value as u64),
         has_embedded_artwork: optional_bool(row, track_column::HAS_EMBEDDED_ARTWORK)?,
+        file_modified_at: optional_i64(row, track_column::FILE_MODIFIED_AT_UNIX)?
+            .map(unix_to_system_time),
     })
 }
 

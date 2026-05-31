@@ -196,6 +196,7 @@ mod tests {
             statistics: PlayStatistics::default(),
             file_size_bytes: None,
             has_embedded_artwork: None,
+            file_modified_at: None,
         }
     }
 

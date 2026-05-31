@@ -228,6 +228,29 @@ fn sqlite_store_saves_and_loads_tracks() {
 }
 
 #[test]
+fn sqlite_store_round_trips_file_modified_at_truncated_to_seconds() {
+    // The scan fingerprint compares at one-second resolution because the
+    // column stores Unix seconds; a sub-second mtime must come back
+    // truncated so a freshly stat'd file and its stored row match (#71).
+    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory sqlite store");
+    let mut track = track(1, "fingerprinted.flac");
+    track.file_size_bytes = Some(4096);
+    track.file_modified_at = Some(std::time::UNIX_EPOCH + Duration::from_millis(1_700_000_000_750));
+
+    assert_eq!(store.save_track(track.clone()), Ok(()));
+
+    let loaded = store
+        .track(track.id)
+        .expect("query stored track")
+        .expect("track is present");
+    assert_eq!(
+        loaded.file_modified_at,
+        Some(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+    );
+    assert_eq!(loaded.file_size_bytes, Some(4096));
+}
+
+#[test]
 fn sqlite_store_rolls_back_batch_track_save_on_failure() {
     let store = SqliteLibraryStore::open_in_memory().expect("open in-memory sqlite store");
     let first = track(1, "same.flac");
@@ -1825,6 +1848,7 @@ fn track(id: i64, path: &str) -> Track {
         statistics: PlayStatistics::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+        file_modified_at: None,
     }
 }
 

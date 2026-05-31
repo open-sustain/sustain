@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::path::{Component, Path, PathBuf};
+use std::{
+    path::{Component, Path, PathBuf},
+    time::SystemTime,
+};
 
 use crate::{PlayStatistics, Rating, TrackId, TrackMetadata};
 
@@ -27,6 +30,18 @@ pub struct Track {
     /// this flag as a SQL filter so it never refetches artwork for a
     /// track that already has its own cover embedded.
     pub has_embedded_artwork: Option<bool>,
+    /// The file's last-modified time as observed by the most recent
+    /// scan, truncated to whole seconds (the resolution persisted in
+    /// `file_modified_at_unix`). Paired with `file_size_bytes` as a
+    /// cheap change-detection fingerprint: when both still match on a
+    /// rescan, the scanner skips re-parsing the file's tags because none
+    /// of the file-derived values a rescan consumes for an existing
+    /// track (audio-stream properties, size, embedded-artwork bit) can
+    /// have changed. `None` when no scan has fingerprinted the file yet
+    /// (e.g. a row imported from an external source, or one predating
+    /// the column) — such a row is always parsed on the next scan, which
+    /// then records its mtime.
+    pub file_modified_at: Option<SystemTime>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
