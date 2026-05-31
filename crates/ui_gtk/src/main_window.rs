@@ -62,8 +62,9 @@ use super::{
     track_context::{
         AddToPlaylistCallback, AddToPlaylistEntry, AddToPlaylistProvider, TrackActionCallback,
         TrackActionInvocation, TrackActionVisibility, TrackAnalyzeEnabledQuery,
-        TrackAnalyzeRunCallback, TrackContextAction, TrackContextActionSet, TrackRetrieveBusyQuery,
-        TrackRetrieveRunCallback, TrackRowContextMenu,
+        TrackAnalyzeRunCallback, TrackContextAction, TrackContextActionSet,
+        TrackContextInvocationState, TrackRetrieveBusyQuery, TrackRetrieveRunCallback,
+        TrackRowContextMenu,
     },
     track_context_ops::{
         add_to_queue_callback, copy_files_callback, get_info_callback, play_next_callback,
@@ -296,6 +297,7 @@ pub(crate) fn build_main_window(
     let track_row_changed_holder: TrackRowChangedHolder = Rc::new(RefCell::new(None));
     let parent_window = window.clone().upcast::<gtk::Window>();
     let show_album_holder: ShowAlbumHolder = Rc::new(RefCell::new(None));
+    let track_context_invocation = TrackContextInvocationState::default();
     let context_actions = track_context_actions(
         &runtime,
         &parent_window,
@@ -309,19 +311,23 @@ pub(crate) fn build_main_window(
     let add_to_playlist_provider = add_to_playlist_provider(&runtime);
     let add_to_playlist_callback =
         add_to_playlist_callback(&command_controller, &runtime, &library_changed_holder);
-    let context_menu = TrackRowContextMenu::new(context_actions, parent_window.clone())
-        .with_add_to_playlist(
-            add_to_playlist_provider.clone(),
-            add_to_playlist_callback.clone(),
-        )
-        .with_analyze_menu(
-            track_analyze_run_callback(&runtime),
-            analysis_enabled_query(&runtime),
-        )
-        .with_retrieve_menu(
-            track_retrieve_run_callback(&runtime),
-            online_busy_query(&runtime),
-        );
+    let context_menu = TrackRowContextMenu::new(
+        context_actions,
+        parent_window.clone(),
+        track_context_invocation.clone(),
+    )
+    .with_add_to_playlist(
+        add_to_playlist_provider.clone(),
+        add_to_playlist_callback.clone(),
+    )
+    .with_analyze_menu(
+        track_analyze_run_callback(&runtime),
+        analysis_enabled_query(&runtime),
+    )
+    .with_retrieve_menu(
+        track_retrieve_run_callback(&runtime),
+        online_busy_query(&runtime),
+    );
     let playlist_context_actions = playlist_track_context_actions(
         &runtime,
         &parent_window,
@@ -333,16 +339,20 @@ pub(crate) fn build_main_window(
         &artwork_loader,
         &sidebar,
     );
-    let playlist_context_menu = TrackRowContextMenu::new(playlist_context_actions, parent_window)
-        .with_add_to_playlist(add_to_playlist_provider, add_to_playlist_callback)
-        .with_analyze_menu(
-            track_analyze_run_callback(&runtime),
-            analysis_enabled_query(&runtime),
-        )
-        .with_retrieve_menu(
-            track_retrieve_run_callback(&runtime),
-            online_busy_query(&runtime),
-        );
+    let playlist_context_menu = TrackRowContextMenu::new(
+        playlist_context_actions,
+        parent_window,
+        track_context_invocation.clone(),
+    )
+    .with_add_to_playlist(add_to_playlist_provider, add_to_playlist_callback)
+    .with_analyze_menu(
+        track_analyze_run_callback(&runtime),
+        analysis_enabled_query(&runtime),
+    )
+    .with_retrieve_menu(
+        track_retrieve_run_callback(&runtime),
+        online_busy_query(&runtime),
+    );
     let rating_changed =
         rating_changed_callback(&command_controller, track_row_changed_holder.clone());
     let songs_inline_edit = inline_edit_hooks(
@@ -693,6 +703,7 @@ pub(crate) fn build_main_window(
         library_changed_holder: library_changed_holder.clone(),
         track_row_changed_holder: track_row_changed_holder.clone(),
         artwork_loader: artwork_loader.clone(),
+        track_context_invocation,
     });
 
     root.append(&titlebar.widget);

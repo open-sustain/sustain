@@ -650,7 +650,8 @@ focus rings. Changing the system accent updates Sustain immediately.
 
 Right-clicking a track (or selection) in the Music view or a playlist
 view exposes the following actions, separated into visually distinct
-groups:
+groups. Rows backed by keyboard shortcuts show the registered shortcut
+at the right edge of the menu:
 
 - **Add to Playlist** — submenu showing all playlists, nested by folder
 - **Play Next** — insert at head of the Up Next queue

@@ -4,11 +4,12 @@
 use std::{collections::HashSet, rc::Rc};
 
 use gtk::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio};
 
 pub(crate) const NEW_PLAYLIST_DEFAULT_NAME: &str = "untitled playlist";
 pub(crate) const NEW_PLAYLIST_FOLDER_DEFAULT_NAME: &str = "untitled folder";
 pub(crate) const NEW_SMART_PLAYLIST_DEFAULT_NAME: &str = "untitled smart playlist";
+const SIDEBAR_CONTEXT_ACTION_GROUP: &str = "sidebar-context";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SidebarContextAction {
@@ -26,11 +27,11 @@ impl SidebarContextAction {
         }
     }
 
-    fn css_class(self) -> &'static str {
+    fn detailed_action(self) -> &'static str {
         match self {
-            Self::Playlist => "sidebar-context-new-playlist",
-            Self::SmartPlaylist => "sidebar-context-new-smart-playlist",
-            Self::PlaylistFolder => "sidebar-context-new-playlist-folder",
+            Self::Playlist => "app.new-playlist",
+            Self::SmartPlaylist => "app.new-smart-playlist",
+            Self::PlaylistFolder => "sidebar-context.new-playlist-folder",
         }
     }
 }
@@ -68,63 +69,32 @@ impl SidebarContextMenu {
 }
 
 fn popup_menu(anchor: &gtk::Widget, on_action: SidebarActionCallback, x: f64, y: f64) {
-    let popover = gtk::Popover::new();
+    let menu = gio::Menu::new();
+    let actions = gio::SimpleActionGroup::new();
+    for action in SIDEBAR_CONTEXT_ACTIONS.iter().copied() {
+        if action == SidebarContextAction::PlaylistFolder {
+            let local = gio::SimpleAction::new("new-playlist-folder", None);
+            let on_action = on_action.clone();
+            local.connect_activate(move |_action, _parameter| on_action(action));
+            actions.add_action(&local);
+        }
+        menu.append(Some(action.label()), Some(action.detailed_action()));
+    }
+
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
     popover.set_has_arrow(false);
     popover.add_css_class("compact-context-menu");
     popover.set_parent(anchor);
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.add_css_class("sidebar-context-menu");
-
-    for action in SIDEBAR_CONTEXT_ACTIONS.iter().copied() {
-        let button = action_button(action);
-        let popover_for_button = popover.clone();
-        let on_action = on_action.clone();
-        button.connect_clicked(move |_| {
-            popover_for_button.popdown();
-            on_action(action);
-        });
-        content.append(&button);
-    }
-
-    popover.set_child(Some(&content));
+    popover.insert_action_group(SIDEBAR_CONTEXT_ACTION_GROUP, Some(&actions));
 
     let popover_for_close = popover.clone();
     popover.connect_closed(move |_| {
         popover_for_close.unparent();
     });
 
-    let key_controller = gtk::EventControllerKey::new();
-    let popover_for_escape = popover.clone();
-    key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-        if key == gdk::Key::Escape {
-            popover_for_escape.popdown();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    popover.add_controller(key_controller);
-
     let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
     popover.set_pointing_to(Some(&rect));
     popover.popup();
-}
-
-fn action_button(action: SidebarContextAction) -> gtk::Button {
-    let label = gtk::Label::new(Some(action.label()));
-    label.set_xalign(0.0);
-    label.set_halign(gtk::Align::Fill);
-    label.set_hexpand(true);
-
-    let button = gtk::Button::new();
-    button.add_css_class("flat");
-    button.add_css_class("sidebar-context-menu-item");
-    button.add_css_class(action.css_class());
-    button.set_child(Some(&label));
-    button.set_halign(gtk::Align::Fill);
-    button.set_hexpand(true);
-    button
 }
 
 pub(crate) fn unique_default_name<I, S>(existing_names: I, base: &str) -> String
@@ -188,6 +158,22 @@ mod tests {
         assert_eq!(
             SidebarContextAction::PlaylistFolder.label(),
             "New Playlist Folder"
+        );
+    }
+
+    #[test]
+    fn action_models_use_registered_application_actions_when_shortcuts_exist() {
+        assert_eq!(
+            SidebarContextAction::Playlist.detailed_action(),
+            "app.new-playlist"
+        );
+        assert_eq!(
+            SidebarContextAction::SmartPlaylist.detailed_action(),
+            "app.new-smart-playlist"
+        );
+        assert_eq!(
+            SidebarContextAction::PlaylistFolder.detailed_action(),
+            "sidebar-context.new-playlist-folder"
         );
     }
 }

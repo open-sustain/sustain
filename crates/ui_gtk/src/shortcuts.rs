@@ -42,7 +42,7 @@ use super::{
     },
     smart_playlist_editor::{SmartPlaylistEditorMode, open_smart_playlist_editor},
     titlebar::Titlebar,
-    track_context::TrackActionInvocation,
+    track_context::{TrackActionInvocation, TrackContextInvocationState},
     track_context_ops::{get_info_callback, show_in_folder_callback},
     track_table::TrackTable,
 };
@@ -61,6 +61,7 @@ pub(crate) struct GlobalShortcutContext {
     pub(crate) library_changed_holder: LibraryChangedHolder,
     pub(crate) track_row_changed_holder: TrackRowChangedHolder,
     pub(crate) artwork_loader: ArtworkLoader,
+    pub(crate) track_context_invocation: TrackContextInvocationState,
 }
 
 pub(crate) fn install_global_shortcuts(context: GlobalShortcutContext) {
@@ -143,15 +144,27 @@ fn install_get_info(context: &GlobalShortcutContext) {
     let songs_table = context.songs_table.clone();
     let playlists_table = context.playlists_table.clone();
     let content_stack = context.content_stack.clone();
+    let track_context_invocation = context.track_context_invocation.clone();
     action.connect_activate(move |_action, _parameter| {
-        let selection = current_view_selection(&content_stack, &songs_table, &playlists_table);
-        if selection.is_empty() {
+        let invocation =
+            track_context_invocation
+                .current()
+                .unwrap_or_else(|| TrackActionInvocation {
+                    selected_track_ids: current_view_selection(
+                        &content_stack,
+                        &songs_table,
+                        &playlists_table,
+                    ),
+                    displayed_track_ids: current_view_order(
+                        &content_stack,
+                        &songs_table,
+                        &playlists_table,
+                    ),
+                });
+        if invocation.selected_track_ids.is_empty() {
             return;
         }
-        callback(TrackActionInvocation {
-            selected_track_ids: selection,
-            displayed_track_ids: current_view_order(&content_stack, &songs_table, &playlists_table),
-        });
+        callback(invocation);
     });
     context.app.add_action(&action);
     context
@@ -171,19 +184,27 @@ fn install_show_in_folder(context: &GlobalShortcutContext) {
     let songs_table = context.songs_table.clone();
     let playlists_table = context.playlists_table.clone();
     let content_stack = context.content_stack.clone();
+    let track_context_invocation = context.track_context_invocation.clone();
     action.connect_activate(move |_action, _parameter| {
-        let selection = current_view_selection(&content_stack, &songs_table, &playlists_table);
-        if selection.is_empty() {
+        let invocation =
+            track_context_invocation
+                .current()
+                .unwrap_or_else(|| TrackActionInvocation {
+                    selected_track_ids: current_view_selection(
+                        &content_stack,
+                        &songs_table,
+                        &playlists_table,
+                    ),
+                    displayed_track_ids: Vec::new(),
+                });
+        if invocation.selected_track_ids.is_empty() {
             return;
         }
         // Multi-row scope: act on the first selected track. Opening one
         // file-manager window per track on a large selection would be
         // hostile; cross-folder selections still resolve to a single,
         // predictable parent directory.
-        callback(TrackActionInvocation {
-            selected_track_ids: selection,
-            displayed_track_ids: Vec::new(),
-        });
+        callback(invocation);
     });
     context.app.add_action(&action);
     context

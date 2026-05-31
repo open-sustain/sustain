@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
 use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, OnlineCapability, OnlineRunRequest, PlaylistId, TrackId,
 };
@@ -34,11 +34,52 @@ pub(crate) type TrackRetrieveBusyQuery = Rc<dyn Fn() -> bool>;
 type PendingConfirmCallback = Rc<RefCell<Option<Box<dyn FnOnce(Vec<TrackId>)>>>>;
 const ADD_TO_PLAYLIST_MAX_VISIBLE_HEIGHT: i32 = 360;
 const ADD_TO_PLAYLIST_MAX_LABEL_CHARS: i32 = 48;
+const TRACK_CONTEXT_ACTION_GROUP: &str = "track-context";
+const PLAYLIST_LIST_CUSTOM_ID: &str = "playlist-list";
 
 #[derive(Clone, Debug)]
 pub(crate) struct TrackActionInvocation {
     pub(crate) selected_track_ids: Vec<TrackId>,
     pub(crate) displayed_track_ids: Vec<TrackId>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct TrackContextInvocationState {
+    inner: Rc<RefCell<TrackContextInvocationStateInner>>,
+}
+
+#[derive(Default)]
+struct TrackContextInvocationStateInner {
+    next_serial: u64,
+    active: Option<(u64, TrackActionInvocation)>,
+}
+
+impl TrackContextInvocationState {
+    fn activate(&self, invocation: TrackActionInvocation) -> u64 {
+        let mut inner = self.inner.borrow_mut();
+        inner.next_serial = inner
+            .next_serial
+            .checked_add(1)
+            .expect("track context invocation serial exhausted");
+        let serial = inner.next_serial;
+        inner.active = Some((serial, invocation));
+        serial
+    }
+
+    fn clear_if_active(&self, serial: u64) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.active.as_ref().map(|(active, _)| *active) == Some(serial) {
+            inner.active = None;
+        }
+    }
+
+    pub(crate) fn current(&self) -> Option<TrackActionInvocation> {
+        self.inner
+            .borrow()
+            .active
+            .as_ref()
+            .map(|(_, invocation)| invocation.clone())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -79,18 +120,30 @@ pub(crate) enum TrackContextActionId {
 }
 
 impl TrackContextActionId {
-    fn css_class(self) -> &'static str {
+    fn action_name(self) -> &'static str {
         match self {
-            Self::PlayNext => "track-context-play-next",
-            Self::AddToQueue => "track-context-add-to-queue",
-            Self::GetInfo => "track-context-get-info",
-            Self::CopyFiles => "track-context-copy-files",
-            Self::ShowInFolder => "track-context-show-in-folder",
-            Self::ShowAlbum => "track-context-show-album",
-            Self::RemoveFromLibrary => "track-context-remove-from-library",
-            Self::MoveToTrash => "track-context-move-to-trash",
-            Self::RemoveFromPlaylist => "track-context-remove-from-playlist",
+            Self::PlayNext => "play-next",
+            Self::AddToQueue => "add-to-queue",
+            Self::GetInfo => "get-info",
+            Self::CopyFiles => "copy-files",
+            Self::ShowInFolder => "show-in-folder",
+            Self::ShowAlbum => "show-album",
+            Self::RemoveFromLibrary => "remove-from-library",
+            Self::MoveToTrash => "move-to-trash",
+            Self::RemoveFromPlaylist => "remove-from-playlist",
         }
+    }
+
+    fn detailed_action(self) -> String {
+        match self {
+            Self::GetInfo => "app.get-info".to_owned(),
+            Self::ShowInFolder => "app.show-in-folder".to_owned(),
+            _ => format!("{TRACK_CONTEXT_ACTION_GROUP}.{}", self.action_name()),
+        }
+    }
+
+    fn uses_application_action(self) -> bool {
+        matches!(self, Self::GetInfo | Self::ShowInFolder)
     }
 }
 
@@ -329,16 +382,22 @@ pub(crate) struct TrackRowContextMenu {
     add_to_playlist: Option<AddToPlaylistAction>,
     analyze: Option<AnalyzeMenu>,
     retrieve: Option<RetrieveMenu>,
+    invocation_state: TrackContextInvocationState,
 }
 
 impl TrackRowContextMenu {
-    pub(crate) fn new(actions: TrackContextActionSet, parent_window: gtk::Window) -> Self {
+    pub(crate) fn new(
+        actions: TrackContextActionSet,
+        parent_window: gtk::Window,
+        invocation_state: TrackContextInvocationState,
+    ) -> Self {
         Self {
             actions,
             parent_window,
             add_to_playlist: None,
             analyze: None,
             retrieve: None,
+            invocation_state,
         }
     }
 
@@ -420,18 +479,31 @@ impl TrackRowContextMenu {
             (point.x() as f64, point.y() as f64)
         };
 
-        let popover = gtk::Popover::new();
+        let invocation = TrackActionInvocation {
+            selected_track_ids: track_ids,
+            displayed_track_ids,
+        };
+        let invocation_serial = self.invocation_state.activate(invocation.clone());
+        let action_group = gio::SimpleActionGroup::new();
+        let menu = self.menu_model(&action_group, &invocation);
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
         popover.set_has_arrow(false);
         popover.add_css_class("compact-context-menu");
         popover.set_parent(popover_parent.as_ref());
-        popover.set_child(Some(&self.menu_content(
-            &popover,
-            track_ids,
-            displayed_track_ids,
-        )));
+        popover.insert_action_group(TRACK_CONTEXT_ACTION_GROUP, Some(&action_group));
+        if let Some(add) = &self.add_to_playlist {
+            let playlist_list =
+                build_add_to_playlist_custom_child(add, &popover, invocation.selected_track_ids);
+            assert!(
+                popover.add_child(&playlist_list, PLAYLIST_LIST_CUSTOM_ID),
+                "playlist-list custom menu child must match its model placeholder"
+            );
+        }
 
         let popover_for_close = popover.clone();
+        let invocation_state = self.invocation_state.clone();
         popover.connect_closed(move |_| {
+            invocation_state.clear_if_active(invocation_serial);
             popover_for_close.unparent();
         });
 
@@ -440,409 +512,231 @@ impl TrackRowContextMenu {
         popover.popup();
     }
 
-    fn menu_content(
+    fn menu_model(
         &self,
-        popover: &gtk::Popover,
-        track_ids: Vec<TrackId>,
-        displayed_track_ids: Vec<TrackId>,
-    ) -> gtk::Stack {
-        let root = gtk::Stack::new();
-        root.set_hhomogeneous(false);
-        root.set_vhomogeneous(false);
-        root.set_transition_type(gtk::StackTransitionType::None);
-        let (main_page, triggers) = self.build_main_page(popover, &track_ids, &displayed_track_ids);
-        root.add_named(&main_page, Some("main"));
-
-        if let Some(add) = &self.add_to_playlist {
-            let (playlist_page, back_button) =
-                build_add_to_playlist_page(add, popover, track_ids.clone());
-            root.add_named(&playlist_page, Some("playlist"));
-            wire_submenu(&root, triggers.add_to_playlist, "playlist", back_button);
+        action_group: &gio::SimpleActionGroup,
+        invocation: &TrackActionInvocation,
+    ) -> gio::Menu {
+        let root = gio::Menu::new();
+        if self.add_to_playlist.is_some() {
+            root.append_submenu(
+                Some("Add to Playlist\u{2026}"),
+                &add_to_playlist_submenu_model(),
+            );
         }
 
-        if let Some(analyze) = &self.analyze {
-            let (page, back_button) =
-                build_analyze_submenu_page(analyze, popover, track_ids.clone());
-            root.add_named(&page, Some("analyze"));
-            wire_submenu(&root, triggers.analyze, "analyze", back_button);
-        }
+        let available: Vec<&TrackContextAction> = self
+            .actions
+            .available_actions(&invocation.selected_track_ids)
+            .collect();
 
-        if let Some(retrieve) = &self.retrieve {
-            let (page, back_button) = build_retrieve_submenu_page(retrieve, popover, track_ids);
-            root.add_named(&page, Some("retrieve"));
-            wire_submenu(&root, triggers.retrieve, "retrieve", back_button);
+        for &section in TRACK_CONTEXT_SECTION_ORDER {
+            if section == TrackContextActionSection::Destructive
+                && (self.analyze.is_some() || self.retrieve.is_some())
+            {
+                root.append_section(
+                    None,
+                    &self.background_submenu_section(action_group, invocation),
+                );
+            }
+
+            let group = gio::Menu::new();
+            for action in available
+                .iter()
+                .copied()
+                .filter(|action| action.section == section)
+            {
+                self.append_action_item(&group, action_group, action, invocation);
+            }
+            if group.n_items() == 0 {
+                continue;
+            }
+            root.append_section(None, &group);
         }
 
         root
     }
 
-    fn build_main_page(
+    fn append_action_item(
         &self,
-        popover: &gtk::Popover,
-        track_ids: &[TrackId],
-        displayed_track_ids: &[TrackId],
-    ) -> (gtk::Box, MainPageTriggers) {
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        content.add_css_class("track-context-menu");
-
-        let mut triggers = MainPageTriggers::default();
-        let mut prior_group_rendered = false;
-        if self.add_to_playlist.is_some() {
-            let button = submenu_button("Add to Playlist\u{2026}");
-            content.append(&button);
-            triggers.add_to_playlist = Some(button);
-            prior_group_rendered = true;
-        }
-
-        let available: Vec<&TrackContextAction> =
-            self.actions.available_actions(track_ids).collect();
-
-        for &section in TRACK_CONTEXT_SECTION_ORDER {
-            // The Analyze / Retrieve submenu triggers sit between the
-            // last non-destructive section and the destructive one.
-            // Injecting them here keeps the visual order
-            // (queue → info → navigate → files → background ops →
-            // destructive) and respects the existing inter-group
-            // separator rule.
-            if section == TrackContextActionSection::Destructive
-                && (self.analyze.is_some() || self.retrieve.is_some())
-            {
-                if prior_group_rendered {
-                    let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-                    separator.add_css_class("track-context-menu-separator");
-                    content.append(&separator);
-                }
-                if self.analyze.is_some() {
-                    let button = submenu_button("Analyze\u{2026}");
-                    content.append(&button);
-                    triggers.analyze = Some(button);
-                }
-                if self.retrieve.is_some() {
-                    let button = submenu_button("Retrieve\u{2026}");
-                    content.append(&button);
-                    triggers.retrieve = Some(button);
-                }
-                prior_group_rendered = true;
-            }
-
-            let mut group_iter = available
-                .iter()
-                .copied()
-                .filter(|action| action.section == section)
-                .peekable();
-            if group_iter.peek().is_none() {
-                continue;
-            }
-
-            if prior_group_rendered {
-                let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-                separator.add_css_class("track-context-menu-separator");
-                content.append(&separator);
-            }
-
-            for action in group_iter {
-                self.append_action_button(
-                    &content,
-                    popover,
-                    action,
-                    track_ids,
-                    displayed_track_ids,
-                );
-            }
-            prior_group_rendered = true;
-        }
-
-        (content, triggers)
-    }
-
-    fn append_action_button(
-        &self,
-        content: &gtk::Box,
-        popover: &gtk::Popover,
+        menu: &gio::Menu,
+        action_group: &gio::SimpleActionGroup,
         action: &TrackContextAction,
-        track_ids: &[TrackId],
-        displayed_track_ids: &[TrackId],
+        invocation: &TrackActionInvocation,
     ) {
-        let button = context_menu_button(action);
-        let action = action.clone();
-        let parent = self.parent_window.clone();
-        let popover = popover.clone();
-        let track_ids = track_ids.to_vec();
-        let displayed_track_ids = displayed_track_ids.to_vec();
-        button.connect_clicked(move |_| {
-            popover.popdown();
-            run_context_action(
-                &action,
-                &parent,
-                TrackActionInvocation {
-                    selected_track_ids: track_ids.clone(),
-                    displayed_track_ids: displayed_track_ids.clone(),
-                },
-            );
-        });
-        content.append(&button);
-    }
-}
-
-/// Buttons on the main page that, when clicked, switch the popover
-/// to a submenu page. `None` means the matching submenu was never
-/// installed.
-#[derive(Default)]
-struct MainPageTriggers {
-    add_to_playlist: Option<gtk::Button>,
-    analyze: Option<gtk::Button>,
-    retrieve: Option<gtk::Button>,
-}
-
-/// Connect a submenu trigger to its stack page. No-op if `trigger` is
-/// `None` (the submenu was not installed).
-fn wire_submenu(
-    stack: &gtk::Stack,
-    trigger: Option<gtk::Button>,
-    submenu_name: &'static str,
-    back: gtk::Button,
-) {
-    if let Some(trigger) = trigger {
-        let stack_weak = stack.downgrade();
-        trigger.connect_clicked(move |_| {
-            if let Some(stack) = stack_weak.upgrade() {
-                stack.set_visible_child_name(submenu_name);
-            }
-        });
-    }
-    let stack_weak = stack.downgrade();
-    back.connect_clicked(move |_| {
-        if let Some(stack) = stack_weak.upgrade() {
-            stack.set_visible_child_name("main");
+        if !action.id.uses_application_action() {
+            let action_for_run = action.clone();
+            let parent = self.parent_window.clone();
+            let invocation = invocation.clone();
+            add_local_action(action_group, action.id.action_name(), true, move || {
+                run_context_action(&action_for_run, &parent, invocation.clone())
+            });
         }
-    });
+        menu.append(Some(action.label), Some(&action.id.detailed_action()));
+    }
+
+    fn background_submenu_section(
+        &self,
+        action_group: &gio::SimpleActionGroup,
+        invocation: &TrackActionInvocation,
+    ) -> gio::Menu {
+        let section = gio::Menu::new();
+        if let Some(analyze) = &self.analyze {
+            section.append_submenu(
+                Some("Analyze\u{2026}"),
+                &analyze_submenu_model(analyze, action_group, &invocation.selected_track_ids),
+            );
+        }
+        if let Some(retrieve) = &self.retrieve {
+            section.append_submenu(
+                Some("Retrieve\u{2026}"),
+                &retrieve_submenu_model(retrieve, action_group, &invocation.selected_track_ids),
+            );
+        }
+        section
+    }
 }
 
-fn build_analyze_submenu_page(
+fn add_to_playlist_submenu_model() -> gio::Menu {
+    let menu = gio::Menu::new();
+    let item = gio::MenuItem::new(None, None);
+    item.set_attribute_value("custom", Some(&PLAYLIST_LIST_CUSTOM_ID.to_variant()));
+    menu.append_item(&item);
+    menu
+}
+
+fn analyze_submenu_model(
     menu: &AnalyzeMenu,
-    popover: &gtk::Popover,
-    track_ids: Vec<TrackId>,
-) -> (gtk::Box, gtk::Button) {
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.add_css_class("track-context-menu");
-    content.add_css_class("track-context-submenu");
-
-    let back_button = submenu_back_button("Analyze");
-    content.append(&back_button);
-
-    for (label_text, capability) in [
-        ("BPM", AnalysisCapability::Bpm),
-        ("Key", AnalysisCapability::Key),
-        ("Audio", AnalysisCapability::Audio),
+    action_group: &gio::SimpleActionGroup,
+    track_ids: &[TrackId],
+) -> gio::Menu {
+    let model = gio::Menu::new();
+    for (name, label, capability) in [
+        ("analyze-bpm", "BPM", AnalysisCapability::Bpm),
+        ("analyze-key", "Key", AnalysisCapability::Key),
+        ("analyze-audio", "Audio", AnalysisCapability::Audio),
     ] {
-        let button = context_menu_button_with_label(label_text);
-        button.set_sensitive(!(menu.enabled)(capability));
-        let popover = popover.clone();
         let run = menu.run.clone();
-        let track_ids = track_ids.clone();
-        button.connect_clicked(move |_| {
-            popover.popdown();
+        let track_ids = track_ids.to_vec();
+        add_local_action(action_group, name, !(menu.enabled)(capability), move || {
             run(track_ids.clone(), AnalysisRunRequest::Single(capability));
         });
-        content.append(&button);
+        model.append(
+            Some(label),
+            Some(&format!("{TRACK_CONTEXT_ACTION_GROUP}.{name}")),
+        );
     }
-
-    let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-    separator.add_css_class("track-context-menu-separator");
-    content.append(&separator);
-
-    let all_button = context_menu_button_with_label("All");
-    let popover_for_all = popover.clone();
-    let run_for_all = menu.run.clone();
-    let track_ids_for_all = track_ids;
-    all_button.connect_clicked(move |_| {
-        popover_for_all.popdown();
-        run_for_all(track_ids_for_all.clone(), AnalysisRunRequest::All);
+    let all = gio::Menu::new();
+    let run = menu.run.clone();
+    let track_ids = track_ids.to_vec();
+    add_local_action(action_group, "analyze-all", true, move || {
+        run(track_ids.clone(), AnalysisRunRequest::All);
     });
-    content.append(&all_button);
-
-    (content, back_button)
+    all.append(
+        Some("All"),
+        Some(&format!("{TRACK_CONTEXT_ACTION_GROUP}.analyze-all")),
+    );
+    model.append_section(None, &all);
+    model
 }
 
-fn build_retrieve_submenu_page(
+fn retrieve_submenu_model(
     menu: &RetrieveMenu,
-    popover: &gtk::Popover,
-    track_ids: Vec<TrackId>,
-) -> (gtk::Box, gtk::Button) {
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.add_css_class("track-context-menu");
-    content.add_css_class("track-context-submenu");
-
-    let back_button = submenu_back_button("Retrieve");
-    content.append(&back_button);
-
-    // Every entry is offered unless a retrieval run is in flight: a
-    // manual retrieval re-contacts tracks that previously found nothing,
-    // independent of the background toggle. While the process is running
-    // the whole submenu is suppressed to avoid stacking duplicate work.
+    action_group: &gio::SimpleActionGroup,
+    track_ids: &[TrackId],
+) -> gio::Menu {
+    let model = gio::Menu::new();
     let busy = (menu.busy)();
-
-    for (label_text, capability) in [
-        ("Lyrics", OnlineCapability::Lyrics),
-        ("Tags", OnlineCapability::Tags),
-        ("Artwork", OnlineCapability::Artwork),
+    for (name, label, capability) in [
+        ("retrieve-lyrics", "Lyrics", OnlineCapability::Lyrics),
+        ("retrieve-tags", "Tags", OnlineCapability::Tags),
+        ("retrieve-artwork", "Artwork", OnlineCapability::Artwork),
     ] {
-        let button = context_menu_button_with_label(label_text);
-        button.set_sensitive(!busy);
-        let popover = popover.clone();
         let run = menu.run.clone();
-        let track_ids = track_ids.clone();
-        button.connect_clicked(move |_| {
-            popover.popdown();
+        let track_ids = track_ids.to_vec();
+        add_local_action(action_group, name, !busy, move || {
             run(track_ids.clone(), OnlineRunRequest::Single(capability));
         });
-        content.append(&button);
+        model.append(
+            Some(label),
+            Some(&format!("{TRACK_CONTEXT_ACTION_GROUP}.{name}")),
+        );
     }
-
-    let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-    separator.add_css_class("track-context-menu-separator");
-    content.append(&separator);
-
-    let all_button = context_menu_button_with_label("All");
-    all_button.set_sensitive(!busy);
-    let popover_for_all = popover.clone();
-    let run_for_all = menu.run.clone();
-    let track_ids_for_all = track_ids;
-    all_button.connect_clicked(move |_| {
-        popover_for_all.popdown();
-        run_for_all(track_ids_for_all.clone(), OnlineRunRequest::All);
+    let all = gio::Menu::new();
+    let run = menu.run.clone();
+    let track_ids = track_ids.to_vec();
+    add_local_action(action_group, "retrieve-all", !busy, move || {
+        run(track_ids.clone(), OnlineRunRequest::All);
     });
-    content.append(&all_button);
-
-    (content, back_button)
+    all.append(
+        Some("All"),
+        Some(&format!("{TRACK_CONTEXT_ACTION_GROUP}.retrieve-all")),
+    );
+    model.append_section(None, &all);
+    model
 }
 
-fn build_add_to_playlist_page(
+fn add_local_action(
+    action_group: &gio::SimpleActionGroup,
+    name: &str,
+    enabled: bool,
+    callback: impl Fn() + 'static,
+) {
+    let action = gio::SimpleAction::new(name, None);
+    action.set_enabled(enabled);
+    action.connect_activate(move |_action, _parameter| callback());
+    action_group.add_action(&action);
+}
+
+fn build_add_to_playlist_custom_child(
     action: &AddToPlaylistAction,
-    popover: &gtk::Popover,
+    popover: &gtk::PopoverMenu,
     track_ids: Vec<TrackId>,
-) -> (gtk::Box, gtk::Button) {
+) -> gtk::Widget {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.add_css_class("track-context-menu");
-    content.add_css_class("track-context-submenu");
-
-    let back_button = submenu_back_button("Back");
-    content.append(&back_button);
+    content.add_css_class("track-context-playlist-list");
 
     let entries = (action.provider)();
     if entries.is_empty() {
-        let empty_label = gtk::Label::new(Some("No playlists."));
-        empty_label.set_xalign(0.0);
-        empty_label.add_css_class("dim-label");
-        empty_label.set_margin_top(6);
-        empty_label.set_margin_bottom(6);
-        empty_label.set_margin_start(8);
-        empty_label.set_margin_end(8);
-        content.append(&empty_label);
+        let empty = gtk::Label::new(Some("No playlists."));
+        empty.add_css_class("dim-label");
+        empty.set_margin_top(6);
+        empty.set_margin_end(8);
+        empty.set_margin_bottom(6);
+        empty.set_margin_start(8);
+        content.append(&empty);
     } else {
-        let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
         for entry in entries {
-            let button = context_menu_button_with_label(&entry.display_path);
+            let button = playlist_button(&entry.display_path);
+            let popover = popover.clone();
             let callback = action.callback.clone();
-            let popover_for_pick = popover.clone();
             let track_ids = track_ids.clone();
-            let playlist_id = entry.playlist_id;
             button.connect_clicked(move |_| {
-                popover_for_pick.popdown();
-                callback(playlist_id, track_ids.clone());
+                popover.popdown();
+                callback(entry.playlist_id, track_ids.clone());
             });
-            list.append(&button);
+            content.append(&button);
         }
-
-        let scroller = gtk::ScrolledWindow::new();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_propagate_natural_height(true);
-        scroller.set_max_content_height(ADD_TO_PLAYLIST_MAX_VISIBLE_HEIGHT);
-        scroller.set_child(Some(&list));
-        content.append(&scroller);
     }
 
-    (content, back_button)
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroller.set_propagate_natural_height(true);
+    scroller.set_max_content_height(ADD_TO_PLAYLIST_MAX_VISIBLE_HEIGHT);
+    scroller.set_child(Some(&content));
+    scroller.upcast()
 }
 
-fn submenu_button(label_text: &str) -> gtk::Button {
+fn playlist_button(label_text: &str) -> gtk::Button {
     let label = gtk::Label::new(Some(label_text));
     label.set_xalign(0.0);
-    label.set_halign(gtk::Align::Start);
-    label.set_hexpand(true);
-
-    let chevron = gtk::Image::from_icon_name("go-next-symbolic");
-    chevron.set_pixel_size(12);
-    chevron.add_css_class("track-context-submenu-chevron");
-
-    let box_widget = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    box_widget.append(&label);
-    box_widget.append(&chevron);
-
-    let button = gtk::Button::new();
-    button.add_css_class("flat");
-    button.add_css_class("track-context-menu-item");
-    button.set_child(Some(&box_widget));
-    button.set_halign(gtk::Align::Fill);
-    button.set_hexpand(true);
-    button
-}
-
-fn submenu_back_button(label_text: &str) -> gtk::Button {
-    let caret = gtk::Image::from_icon_name("go-previous-symbolic");
-    caret.set_pixel_size(12);
-    caret.add_css_class("track-context-submenu-back-caret");
-
-    let label = gtk::Label::new(Some(label_text));
-    label.set_xalign(0.0);
-    label.set_halign(gtk::Align::Start);
-    label.set_hexpand(true);
-    label.set_margin_start(6);
-
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    row.append(&caret);
-    row.append(&label);
-
-    let button = gtk::Button::new();
-    button.add_css_class("flat");
-    button.add_css_class("track-context-menu-item");
-    button.add_css_class("track-context-submenu-back");
-    button.set_child(Some(&row));
-    button.set_halign(gtk::Align::Fill);
-    button.set_hexpand(true);
-    button
-}
-
-fn context_menu_button_with_label(label_text: &str) -> gtk::Button {
-    let label = gtk::Label::new(Some(label_text));
-    label.set_xalign(0.0);
-    label.set_halign(gtk::Align::Fill);
-    label.set_hexpand(true);
-    label.set_width_chars(1);
-    label.set_max_width_chars(ADD_TO_PLAYLIST_MAX_LABEL_CHARS);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-
+    label.set_max_width_chars(ADD_TO_PLAYLIST_MAX_LABEL_CHARS);
     let button = gtk::Button::new();
     button.add_css_class("flat");
     button.add_css_class("track-context-menu-item");
     button.set_child(Some(&label));
-    button.set_halign(gtk::Align::Fill);
-    button.set_hexpand(true);
-    button
-}
-
-fn context_menu_button(action: &TrackContextAction) -> gtk::Button {
-    let text = gtk::Label::new(Some(action.label));
-    text.set_xalign(0.0);
-    text.set_halign(gtk::Align::Fill);
-    text.set_hexpand(true);
-
-    let button = gtk::Button::new();
-    button.add_css_class("flat");
-    button.add_css_class("track-context-menu-item");
-    button.add_css_class(action.id.css_class());
-    button.set_child(Some(&text));
-    button.set_halign(gtk::Align::Fill);
     button.set_hexpand(true);
     button
 }
@@ -962,8 +856,9 @@ mod tests {
     use sustain_app_runtime::TrackId;
 
     use super::{
-        TrackActionCallback, TrackActionVisibility, TrackContextAction, TrackContextActionId,
-        TrackContextActionSection, TrackSelectionRequirement, trash_confirmation_detail,
+        TrackActionCallback, TrackActionInvocation, TrackActionVisibility, TrackContextAction,
+        TrackContextActionId, TrackContextActionSection, TrackContextInvocationState,
+        TrackSelectionRequirement, trash_confirmation_detail,
     };
 
     #[test]
@@ -1008,6 +903,49 @@ mod tests {
         assert_eq!(actions[6].label, "Remove from Library");
         assert_eq!(actions[7].id, TrackContextActionId::MoveToTrash);
         assert_eq!(actions[7].label, "Move to Trash");
+    }
+
+    #[test]
+    fn action_models_use_registered_application_actions_when_shortcuts_exist() {
+        assert_eq!(
+            TrackContextActionId::GetInfo.detailed_action(),
+            "app.get-info"
+        );
+        assert_eq!(
+            TrackContextActionId::ShowInFolder.detailed_action(),
+            "app.show-in-folder"
+        );
+        assert_eq!(
+            TrackContextActionId::CopyFiles.detailed_action(),
+            "track-context.copy-files"
+        );
+    }
+
+    #[test]
+    fn stale_popover_close_does_not_clear_the_newer_invocation() {
+        let state = TrackContextInvocationState::default();
+        let first = TrackActionInvocation {
+            selected_track_ids: vec![TrackId::new(1).expect("positive track id")],
+            displayed_track_ids: Vec::new(),
+        };
+        let second = TrackActionInvocation {
+            selected_track_ids: vec![TrackId::new(2).expect("positive track id")],
+            displayed_track_ids: Vec::new(),
+        };
+
+        let first_serial = state.activate(first);
+        let second_serial = state.activate(second.clone());
+        state.clear_if_active(first_serial);
+        assert_eq!(
+            state
+                .current()
+                .expect("newer invocation remains active")
+                .selected_track_ids,
+            second.selected_track_ids
+        );
+
+        state.clear_if_active(second_serial);
+        assert!(state.current().is_none());
     }
 
     #[test]
