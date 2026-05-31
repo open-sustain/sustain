@@ -127,52 +127,111 @@ impl SettingsStore for TomlSettingsStore {
 ///
 /// The bytes land in an exclusive sibling temp file that is flushed and
 /// `sync_all`'d, renamed over the destination (the atomic publish step),
-/// and finally made durable by an fsync of the containing directory. Any
-/// failure removes the temp file and leaves the prior file untouched, so a
-/// successful return means the replacement is durably on disk and a failed
-/// return means the previous file is still the one readers will see.
+/// and finally made durable by an fsync of the containing directory. A
+/// failure before rename removes the owned temp file and leaves the prior
+/// file untouched. Once rename succeeds, the new bytes are visible; a
+/// subsequent directory-sync failure means publication durability is
+/// uncertain and cannot be rolled back safely.
 fn atomic_replace(
     path: &Path,
     write_body: impl FnOnce(&mut File) -> io::Result<()>,
-) -> io::Result<()> {
+) -> Result<(), AtomicReplaceError> {
     let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
+        AtomicReplaceError::BeforePublication(io::Error::new(
             io::ErrorKind::InvalidInput,
             "settings path has no parent directory",
-        )
+        ))
     })?;
-    fs::create_dir_all(parent)?;
+    fs::create_dir_all(parent).map_err(AtomicReplaceError::BeforePublication)?;
 
-    let temp_path = temporary_sibling_path(path);
+    let (temp_path, mut file) = create_temporary_sibling_file(|| temporary_sibling_path(path))?;
     let write_result = (|| -> io::Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)?;
         write_body(&mut file)?;
         file.flush()?;
         file.sync_all()
     })();
     if let Err(error) = write_result {
         let _ = fs::remove_file(&temp_path);
-        return Err(error);
+        return Err(AtomicReplaceError::BeforePublication(error));
     }
 
     if let Err(error) = fs::rename(&temp_path, path) {
         let _ = fs::remove_file(&temp_path);
-        return Err(error);
+        return Err(AtomicReplaceError::BeforePublication(error));
     }
 
     // fsync the directory so the rename itself is durable: without it a
     // crash right after `rename` could lose the directory entry update and
     // leave neither the old nor the new inode reachable.
-    File::open(parent)?.sync_all()
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(AtomicReplaceError::PublicationDurabilityUncertain)
+}
+
+#[derive(Debug)]
+enum AtomicReplaceError {
+    /// The prior pathname is still intact. Any staging pathname created by
+    /// this process has been removed best-effort.
+    BeforePublication(io::Error),
+    /// Rename published the replacement, but syncing the containing
+    /// directory failed. The visible bytes are new while crash durability
+    /// is unknown; attempting rollback would only add another unsafe
+    /// namespace mutation.
+    PublicationDurabilityUncertain(io::Error),
+}
+
+impl std::fmt::Display for AtomicReplaceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BeforePublication(error) => write!(formatter, "before publication: {error}"),
+            Self::PublicationDurabilityUncertain(error) => {
+                write!(formatter, "publication durability uncertain: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AtomicReplaceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::BeforePublication(error) | Self::PublicationDurabilityUncertain(error) => {
+                Some(error)
+            }
+        }
+    }
+}
+
+/// Create an exclusive sibling temp file, retrying name collisions without
+/// deleting entries this process does not own.
+fn create_temporary_sibling_file(
+    mut next_path: impl FnMut() -> PathBuf,
+) -> Result<(PathBuf, File), AtomicReplaceError> {
+    const MAX_ATTEMPTS: usize = 100;
+
+    for _ in 0..MAX_ATTEMPTS {
+        let temp_path = next_path();
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(AtomicReplaceError::BeforePublication(error)),
+        }
+    }
+
+    Err(AtomicReplaceError::BeforePublication(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate an exclusive settings staging file",
+    )))
 }
 
 /// A hidden, process-unique sibling of `path` to stage an atomic write in.
 /// The pid, a monotonic-ish nanosecond stamp, and a process-local counter
-/// together make a collision effectively impossible; `create_new` in
-/// [`atomic_replace`] is the hard guard that would reject one anyway.
+/// together make collisions unlikely. `create_new` in
+/// [`create_temporary_sibling_file`] is the hard guard, and collisions are
+/// retried without deleting the pre-existing entry.
 fn temporary_sibling_path(path: &Path) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -561,7 +620,7 @@ mod tests {
         DEFAULT_PLAYBACK_VOLUME_PERCENT, InMemorySettingsStore, LibraryManagementMode,
         OnlineSettings, PlaylistId, PlaylistItem, SettingsStore, ShuffleMode, SmartShuffleEntropy,
         TomlSettingsStore, UiSettings, UiSidebarSelection, UserSettings, VolumePercent,
-        atomic_replace,
+        atomic_replace, create_temporary_sibling_file,
     };
 
     #[test]
@@ -901,6 +960,31 @@ mod tests {
         assert_eq!(store.load_settings(), Ok(good));
         assert_no_temp_litter(&path);
 
+        remove_settings_tree(&path);
+    }
+
+    #[test]
+    fn temporary_file_collision_is_retried_without_deleting_the_existing_entry() {
+        let path = unique_settings_path();
+        let parent = path.parent().expect("settings path has parent");
+        fs::create_dir_all(parent).expect("create settings directory");
+        let occupied = parent.join(".occupied.tmp");
+        let available = parent.join(".available.tmp");
+        fs::write(&occupied, b"belongs to another writer").expect("seed occupied temp path");
+        let mut candidates = [occupied.clone(), available.clone()].into_iter();
+
+        let (created_path, file) = create_temporary_sibling_file(|| {
+            candidates.next().expect("enough temp-path candidates")
+        })
+        .expect("retry occupied temp path");
+        drop(file);
+
+        assert_eq!(created_path, available);
+        assert_eq!(
+            fs::read(&occupied).expect("occupied path survives"),
+            b"belongs to another writer"
+        );
+        fs::remove_file(created_path).expect("remove created temp path");
         remove_settings_tree(&path);
     }
 
