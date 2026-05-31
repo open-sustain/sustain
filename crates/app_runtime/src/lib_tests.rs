@@ -25,7 +25,8 @@ use sustain_settings::{SettingsError, SettingsResult, SettingsStore};
 
 use super::{
     ApplicationRuntime, ApplicationRuntimeError, LibraryConsolidationSummary, LibraryScanSummary,
-    MetadataService, PlaybackQueueRequest, run_library_consolidation_task, run_library_scan_task,
+    MetadataService, NotificationCategory, NotificationSeverity, PlaybackQueueRequest,
+    run_library_consolidation_task, run_library_scan_task,
 };
 
 #[test]
@@ -1190,6 +1191,25 @@ fn runtime_saves_ui_settings_with_settings_store() {
     assert_eq!(runtime.save_ui_settings(ui.clone()), Ok(()));
 
     assert_eq!(runtime.settings().ui, ui);
+}
+
+#[test]
+fn live_settings_save_failure_surfaces_a_notification() {
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(FailingSettingsStore)).expect("load");
+
+    // A debounced volume change is a normal-operation save: a failure must
+    // reach the user through the NotificationCenter and propagate as Err,
+    // never be silently discarded.
+    let result = runtime.save_playback_volume(VolumePercent::from_clamped(42));
+    assert_eq!(result, Err(ApplicationRuntimeError::SettingsSaveFailed));
+
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("a settings-save failure notification");
+    assert_eq!(notification.category, NotificationCategory::Settings);
+    assert_eq!(notification.severity, NotificationSeverity::Warning);
 }
 
 #[test]
@@ -2767,6 +2787,21 @@ impl SettingsStore for TestSettingsStore {
     fn save_settings(&self, settings: UserSettings) -> SettingsResult<()> {
         *self.settings_guard()? = settings;
         Ok(())
+    }
+}
+
+/// Loads cleanly but rejects every save, standing in for a disk-full or
+/// read-only `settings.toml` so a live persistence failure can be observed.
+#[derive(Debug, Default)]
+struct FailingSettingsStore;
+
+impl SettingsStore for FailingSettingsStore {
+    fn load_settings(&self) -> SettingsResult<UserSettings> {
+        Ok(UserSettings::default())
+    }
+
+    fn save_settings(&self, _settings: UserSettings) -> SettingsResult<()> {
+        Err(SettingsError::SaveFailed)
     }
 }
 

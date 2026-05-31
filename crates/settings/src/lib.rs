@@ -4,9 +4,14 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    fs,
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use directories::BaseDirs;
@@ -105,14 +110,85 @@ impl SettingsStore for TomlSettingsStore {
     }
 
     fn save_settings(&self, settings: UserSettings) -> SettingsResult<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|_| SettingsError::SaveFailed)?;
-        }
-
         let document = SettingsDocument::from_settings(settings);
         let serialized =
             toml::to_string_pretty(&document).map_err(|_| SettingsError::SaveFailed)?;
-        fs::write(&self.path, serialized).map_err(|_| SettingsError::SaveFailed)
+        atomic_replace(&self.path, |file| file.write_all(serialized.as_bytes()))
+            .map_err(|_| SettingsError::SaveFailed)
+    }
+}
+
+/// Atomically replace the file at `path` with the bytes produced by
+/// `write_body`, so a crash, disk-full condition, or I/O error can never
+/// truncate or corrupt the previous file. `settings.toml` carries the
+/// library path and every preference, and a partial write would turn the
+/// next launch's load into a hard failure rather than a recoverable prior
+/// version.
+///
+/// The bytes land in an exclusive sibling temp file that is flushed and
+/// `sync_all`'d, renamed over the destination (the atomic publish step),
+/// and finally made durable by an fsync of the containing directory. Any
+/// failure removes the temp file and leaves the prior file untouched, so a
+/// successful return means the replacement is durably on disk and a failed
+/// return means the previous file is still the one readers will see.
+fn atomic_replace(
+    path: &Path,
+    write_body: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "settings path has no parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+
+    let temp_path = temporary_sibling_path(path);
+    let write_result = (|| -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        write_body(&mut file)?;
+        file.flush()?;
+        file.sync_all()
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+
+    // fsync the directory so the rename itself is durable: without it a
+    // crash right after `rename` could lose the directory entry update and
+    // leave neither the old nor the new inode reachable.
+    File::open(parent)?.sync_all()
+}
+
+/// A hidden, process-unique sibling of `path` to stage an atomic write in.
+/// The pid, a monotonic-ish nanosecond stamp, and a process-local counter
+/// together make a collision effectively impossible; `create_new` in
+/// [`atomic_replace`] is the hard guard that would reject one anyway.
+fn temporary_sibling_path(path: &Path) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "settings".to_owned());
+    let temp_name = format!(".{file_name}.{}.{nanos}.{sequence}.tmp", std::process::id());
+    match path.parent() {
+        Some(parent) => parent.join(temp_name),
+        None => PathBuf::from(temp_name),
     }
 }
 
@@ -474,13 +550,18 @@ impl UiSidebarSelectionDocument {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{
+        fs,
+        io::{self, Write},
+        path::{Path, PathBuf},
+    };
 
     use super::{
         AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage,
         DEFAULT_PLAYBACK_VOLUME_PERCENT, InMemorySettingsStore, LibraryManagementMode,
         OnlineSettings, PlaylistId, PlaylistItem, SettingsStore, ShuffleMode, SmartShuffleEntropy,
         TomlSettingsStore, UiSettings, UiSidebarSelection, UserSettings, VolumePercent,
+        atomic_replace,
     };
 
     #[test]
@@ -776,6 +857,69 @@ mod tests {
         let root = path
             .parent()
             .and_then(|parent| parent.parent())
+            .expect("test path has two parents");
+        fs::remove_dir_all(root).expect("remove test settings directory");
+    }
+
+    #[test]
+    fn toml_settings_store_save_publishes_durably_without_temp_litter() {
+        let path = unique_settings_path();
+        let store = TomlSettingsStore::new(&path);
+        let settings = UserSettings::with_library_path(Some(PathBuf::from("/music")));
+
+        assert_eq!(store.save_settings(settings.clone()), Ok(()));
+        // A successful return means the bytes are published and loadable...
+        assert_eq!(store.load_settings(), Ok(settings));
+        // ...and the staging temp file is gone, not orphaned beside it.
+        assert_no_temp_litter(&path);
+
+        remove_settings_tree(&path);
+    }
+
+    #[test]
+    fn atomic_replace_failure_preserves_previous_file() {
+        let path = unique_settings_path();
+        let store = TomlSettingsStore::new(&path);
+        let good = UserSettings::with_library_path(Some(PathBuf::from("/music")));
+        assert_eq!(store.save_settings(good.clone()), Ok(()));
+        let published = fs::read(&path).expect("read published settings");
+
+        // A write that fails midway (disk full, I/O error) must not touch
+        // the already-published file: the bytes go to the temp sibling,
+        // which is discarded before the rename ever happens.
+        let outcome = atomic_replace(&path, |file| {
+            file.write_all(b"# corrupt partial settings\n")?;
+            Err(io::Error::other("injected write failure"))
+        });
+        assert!(outcome.is_err(), "injected failure must propagate");
+
+        let after_failure = fs::read(&path).expect("read settings after failed save");
+        assert_eq!(
+            published, after_failure,
+            "a failed save must not truncate or replace the last valid file"
+        );
+        assert_eq!(store.load_settings(), Ok(good));
+        assert_no_temp_litter(&path);
+
+        remove_settings_tree(&path);
+    }
+
+    fn assert_no_temp_litter(settings_path: &Path) {
+        let dir = settings_path.parent().expect("settings path has parent");
+        for entry in fs::read_dir(dir).expect("read settings directory") {
+            let name = entry.expect("settings directory entry").file_name();
+            assert!(
+                !name.to_string_lossy().ends_with(".tmp"),
+                "atomic write left a temp file behind: {}",
+                name.to_string_lossy()
+            );
+        }
+    }
+
+    fn remove_settings_tree(path: &Path) {
+        let root = path
+            .parent()
+            .and_then(Path::parent)
             .expect("test path has two parents");
         fs::remove_dir_all(root).expect("remove test settings directory");
     }

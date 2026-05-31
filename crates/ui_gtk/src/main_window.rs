@@ -691,14 +691,23 @@ pub(crate) fn build_main_window(
         songs_table_for_close.flush_pending_layout_save();
         playlists_table_for_close.flush_pending_layout_save();
         titlebar_for_close.flush_pending_volume_save();
-        let _ = runtime_for_close
-            .borrow_mut()
-            .save_ui_settings(ui_settings_from_widgets(
-                &titlebar_for_close,
-                &sidebar_for_close,
-                collapse_controller_for_close.is_collapsed(),
-                collapse_controller_for_close.expanded_width(),
-            ));
+        // Deliberate close-time policy: the window is tearing down, so the
+        // NotificationCenter has no surface left to show a failure on.
+        // Persisting UI state is best-effort here; on failure log a clear
+        // line to stderr rather than silently dropping it, and never block
+        // the close on a settings write.
+        if let Err(error) =
+            runtime_for_close
+                .borrow_mut()
+                .save_ui_settings(ui_settings_from_widgets(
+                    &titlebar_for_close,
+                    &sidebar_for_close,
+                    collapse_controller_for_close.is_collapsed(),
+                    collapse_controller_for_close.expanded_width(),
+                ))
+        {
+            eprintln!("sustain: failed to persist UI state on close: {error:?}");
+        }
         glib::Propagation::Proceed
     });
 

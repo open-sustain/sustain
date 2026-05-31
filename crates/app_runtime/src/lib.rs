@@ -1369,10 +1369,31 @@ impl ApplicationRuntime {
             return Ok(());
         }
         self.settings.playback.volume = volume;
-        if let Some(store) = self.settings_store.as_ref() {
-            store
-                .save_settings(self.settings.clone())
-                .map_err(|_| ApplicationRuntimeError::SettingsSaveFailed)?;
+        self.persist_settings_with_visible_failure()
+    }
+
+    /// Persist the current in-memory `settings` and, on failure, surface
+    /// the problem through the NotificationCenter so a normal-operation
+    /// save error (debounced volume drag, sidebar state) is never silently
+    /// swallowed. The in-memory value already took effect; the user only
+    /// needs to know it will not survive a restart. The error is still
+    /// returned for callers that want to react.
+    ///
+    /// This is for *live* saves. The close-time UI-state save has no
+    /// visible surface left (the window is tearing down) and is handled
+    /// deliberately at its call site with a logged fallback instead.
+    fn persist_settings_with_visible_failure(&mut self) -> ApplicationRuntimeResult<()> {
+        let save_result = match self.settings_store.as_ref() {
+            Some(store) => store.save_settings(self.settings.clone()),
+            None => Ok(()),
+        };
+        if save_result.is_err() {
+            self.push_ephemeral_notification(
+                NotificationCategory::Settings,
+                NotificationSeverity::Warning,
+                runtime_error_text(&ApplicationRuntimeError::SettingsSaveFailed).to_owned(),
+            );
+            return Err(ApplicationRuntimeError::SettingsSaveFailed);
         }
         Ok(())
     }

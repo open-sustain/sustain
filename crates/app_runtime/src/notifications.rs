@@ -77,6 +77,11 @@ pub enum NotificationCategory {
     /// Device sync (#23/#24): copy/playlist/database progress while a
     /// sync runs, and the one-shot outcome summary when it finishes.
     DeviceSync,
+    /// Persisting `settings.toml` failed during normal operation (e.g. a
+    /// debounced volume change could not be written). Always ephemeral —
+    /// the in-memory preference still took effect; the user only needs to
+    /// know it will not survive a restart.
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -461,8 +466,8 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         ApplicationRuntimeError::SmartPlaylistNotFound => {
             "The smart playlist could not be updated."
         }
-        ApplicationRuntimeError::SettingsLoadFailed
-        | ApplicationRuntimeError::SettingsSaveFailed => "The library path could not be saved.",
+        ApplicationRuntimeError::SettingsLoadFailed => "Your settings could not be loaded.",
+        ApplicationRuntimeError::SettingsSaveFailed => "Your settings could not be saved.",
         ApplicationRuntimeError::PlaybackFailed
         | ApplicationRuntimeError::PlaybackServiceUnavailable => "Playback is not available.",
         ApplicationRuntimeError::TrackUnavailable => "Track file is missing.",
