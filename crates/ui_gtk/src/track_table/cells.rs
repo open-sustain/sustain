@@ -163,12 +163,12 @@ impl TrackTableContextMenu {
             let Some(popover_parent) = context.popover_parent.upgrade() else {
                 return;
             };
-            let Some(list_item) = context.cell_at(popover_parent.upcast_ref(), x, y) else {
+            let Some(hit) = context.cell_at(popover_parent.upcast_ref(), x, y) else {
                 return;
             };
 
             gesture.set_state(gtk::EventSequenceState::Claimed);
-            let position = list_item.position();
+            let position = hit.list_item.position();
             if position == gtk::INVALID_LIST_POSITION {
                 return;
             }
@@ -180,7 +180,9 @@ impl TrackTableContextMenu {
             if track_ids.is_empty() {
                 return;
             }
-            context.menu.popup_at(track_ids, &popover_parent, x, y);
+            context
+                .menu
+                .popup_at_parent(track_ids, &popover_parent, &hit.widget, x, y);
         });
         if let Some(popover_parent) = self.popover_parent.upgrade() {
             popover_parent.add_controller(gesture);
@@ -194,7 +196,7 @@ impl TrackTableContextMenu {
         });
     }
 
-    fn cell_at(&self, event_widget: &gtk::Widget, x: f64, y: f64) -> Option<gtk::ListItem> {
+    fn cell_at(&self, event_widget: &gtk::Widget, x: f64, y: f64) -> Option<TrackTableContextHit> {
         let mut current = event_widget.pick(x, y, gtk::PickFlags::DEFAULT);
         while let Some(widget) = current {
             if let Some(hit) = self.list_item_for_widget(&widget) {
@@ -205,13 +207,16 @@ impl TrackTableContextMenu {
         None
     }
 
-    fn list_item_for_widget(&self, widget: &gtk::Widget) -> Option<gtk::ListItem> {
+    fn list_item_for_widget(&self, widget: &gtk::Widget) -> Option<TrackTableContextHit> {
         let mut cells = self.cells.borrow_mut();
         cells.retain(|cell| cell.widget.upgrade().is_some() && cell.list_item.upgrade().is_some());
         cells.iter().find_map(|cell| {
             let registered = cell.widget.upgrade()?;
             if registered == *widget {
-                cell.list_item.upgrade()
+                Some(TrackTableContextHit {
+                    widget: registered,
+                    list_item: cell.list_item.upgrade()?,
+                })
             } else {
                 None
             }
@@ -223,6 +228,11 @@ impl TrackTableContextMenu {
 struct TrackTableContextCell {
     widget: glib::WeakRef<gtk::Widget>,
     list_item: glib::WeakRef<gtk::ListItem>,
+}
+
+struct TrackTableContextHit {
+    widget: gtk::Widget,
+    list_item: gtk::ListItem,
 }
 
 struct StatusBinding {

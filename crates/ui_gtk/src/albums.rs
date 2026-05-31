@@ -625,6 +625,7 @@ impl AlbumsView {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.set_width_request(cover_size);
         content.set_halign(gtk::Align::Center);
+        content.set_valign(gtk::Align::Start);
         content.set_overflow(gtk::Overflow::Hidden);
 
         // The cover starts as a placeholder. Artwork loading runs on a

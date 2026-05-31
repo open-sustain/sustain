@@ -428,37 +428,32 @@ impl TrackRowContextMenu {
         popover.popup();
     }
 
-    fn menu_content(&self, popover: &gtk::Popover, track_ids: Vec<TrackId>) -> gtk::Box {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    fn menu_content(&self, popover: &gtk::Popover, track_ids: Vec<TrackId>) -> gtk::Stack {
+        let root = gtk::Stack::new();
+        root.set_hhomogeneous(false);
+        root.set_vhomogeneous(false);
+        root.set_transition_type(gtk::StackTransitionType::None);
         let (main_page, triggers) = self.build_main_page(popover, &track_ids);
-        root.append(&main_page);
+        root.add_named(&main_page, Some("main"));
 
         if let Some(add) = &self.add_to_playlist {
             let (playlist_page, back_button) =
                 build_add_to_playlist_page(add, popover, track_ids.clone());
-            playlist_page.set_visible(false);
-            root.append(&playlist_page);
-            wire_submenu(
-                &main_page,
-                triggers.add_to_playlist,
-                &playlist_page,
-                back_button,
-            );
+            root.add_named(&playlist_page, Some("playlist"));
+            wire_submenu(&root, triggers.add_to_playlist, "playlist", back_button);
         }
 
         if let Some(analyze) = &self.analyze {
             let (page, back_button) =
                 build_analyze_submenu_page(analyze, popover, track_ids.clone());
-            page.set_visible(false);
-            root.append(&page);
-            wire_submenu(&main_page, triggers.analyze, &page, back_button);
+            root.add_named(&page, Some("analyze"));
+            wire_submenu(&root, triggers.analyze, "analyze", back_button);
         }
 
         if let Some(retrieve) = &self.retrieve {
             let (page, back_button) = build_retrieve_submenu_page(retrieve, popover, track_ids);
-            page.set_visible(false);
-            root.append(&page);
-            wire_submenu(&main_page, triggers.retrieve, &page, back_button);
+            root.add_named(&page, Some("retrieve"));
+            wire_submenu(&root, triggers.retrieve, "retrieve", back_button);
         }
 
         root
@@ -566,42 +561,26 @@ struct MainPageTriggers {
     retrieve: Option<gtk::Button>,
 }
 
-/// Connect a submenu trigger to its page: clicking the trigger hides
-/// the main page and shows the submenu; clicking the submenu's back
-/// button reverses the swap. No-op if `trigger` is `None` (the
-/// submenu was not installed).
-///
-/// Known limitation: the popover does NOT shrink when the swap
-/// surfaces a shorter page (e.g. main page → Analyze submenu).
-/// GTK4 popovers cache the surface they were popped up at and
-/// don't downsize on `queue_resize` or child re-attach. Tracked
-/// in <https://github.com/open-sustain/sustain/issues/52>.
+/// Connect a submenu trigger to its stack page. No-op if `trigger` is
+/// `None` (the submenu was not installed).
 fn wire_submenu(
-    main_page: &gtk::Box,
+    stack: &gtk::Stack,
     trigger: Option<gtk::Button>,
-    submenu: &gtk::Box,
+    submenu_name: &'static str,
     back: gtk::Button,
 ) {
     if let Some(trigger) = trigger {
-        let main_weak = main_page.downgrade();
-        let submenu_weak = submenu.downgrade();
+        let stack_weak = stack.downgrade();
         trigger.connect_clicked(move |_| {
-            if let Some(main) = main_weak.upgrade() {
-                main.set_visible(false);
-            }
-            if let Some(submenu) = submenu_weak.upgrade() {
-                submenu.set_visible(true);
+            if let Some(stack) = stack_weak.upgrade() {
+                stack.set_visible_child_name(submenu_name);
             }
         });
     }
-    let main_weak = main_page.downgrade();
-    let submenu_weak = submenu.downgrade();
+    let stack_weak = stack.downgrade();
     back.connect_clicked(move |_| {
-        if let Some(submenu) = submenu_weak.upgrade() {
-            submenu.set_visible(false);
-        }
-        if let Some(main) = main_weak.upgrade() {
-            main.set_visible(true);
+        if let Some(stack) = stack_weak.upgrade() {
+            stack.set_visible_child_name("main");
         }
     });
 }
