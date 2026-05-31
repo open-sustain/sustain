@@ -14,6 +14,7 @@ pub(super) enum AudioFileType {
     Mp4,
     Mp3,
     Ogg,
+    Wav,
     Unknown,
 }
 
@@ -25,6 +26,7 @@ impl AudioFileType {
             Self::Mp4 => "MP4",
             Self::Mp3 => "MP3",
             Self::Ogg => "OGG",
+            Self::Wav => "WAV",
             Self::Unknown => "",
         }
     }
@@ -41,6 +43,7 @@ impl AudioFileType {
             Some("mp4") => Self::Mp4,
             Some("mp3") => Self::Mp3,
             Some("ogg") | Some("oga") | Some("opus") => Self::Ogg,
+            Some("wav") => Self::Wav,
             _ => Self::Unknown,
         }
     }

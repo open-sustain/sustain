@@ -40,6 +40,7 @@ pub enum AudioFormat {
     Ogg,
     Flac,
     Mp4,
+    Wav,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -623,6 +624,11 @@ pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {
         Some("ogg") | Some("oga") | Some("opus") => Ok(AudioFormat::Ogg),
         Some("flac") => Ok(AudioFormat::Flac),
         Some("m4a") | Some("m4b") | Some("mp4") => Ok(AudioFormat::Mp4),
+        // WAV carries no native tag chunk, but lofty's primary tag for
+        // WAV is ID3v2 (the same frames as MP3), so once a track is in
+        // the library, edits — including POPM ratings, USLT lyrics, and
+        // APIC artwork — mirror back through the identical write path.
+        Some("wav") => Ok(AudioFormat::Wav),
         _ => Err(MetadataError::UnsupportedAudioFormat),
     }
 }

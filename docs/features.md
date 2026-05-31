@@ -98,8 +98,8 @@ the first frame is drawn.
 
 ### Supported audio formats — *iso-iTunes*
 Scans and imports recognize MP3, FLAC, Ogg Vorbis (`.ogg`, `.oga`),
-Opus, and the MP4 family (`.m4a`, `.m4b`, `.mp4`). Files with other
-extensions are skipped silently during library walks.
+Opus, the MP4 family (`.m4a`, `.m4b`, `.mp4`), and WAV (`.wav`). Files
+with other extensions are skipped silently during library walks.
 
 ### Duplicate detection on managed import — *iTunes-adjacent*
 When adding external files in managed mode, Sustain skips files that are
@@ -510,7 +510,7 @@ authoritative and the file tag is mirrored.
 When the user edits metadata in Sustain, the change is written to the
 file's native tag format as a courtesy to other tools:
 
-- MP3 — ID3 (including POPM for ratings)
+- MP3 / WAV — ID3 (including POPM for ratings)
 - Ogg / FLAC — Vorbis comments
 - MP4 / M4A — MP4 atoms
 

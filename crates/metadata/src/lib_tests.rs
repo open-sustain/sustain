@@ -46,12 +46,16 @@ fn detects_supported_audio_formats_case_insensitively() {
         audio_format_from_path(Path::new("/music/a.mp4")),
         Ok(AudioFormat::Mp4)
     );
+    assert_eq!(
+        audio_format_from_path(Path::new("/music/a.WAV")),
+        Ok(AudioFormat::Wav)
+    );
 }
 
 #[test]
 fn rejects_unsupported_audio_formats() {
     assert_eq!(
-        audio_format_from_path(Path::new("/music/a.wav")),
+        audio_format_from_path(Path::new("/music/a.aiff")),
         Err(MetadataError::UnsupportedAudioFormat)
     );
     assert_eq!(
