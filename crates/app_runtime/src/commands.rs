@@ -10,6 +10,18 @@ use crate::{
 
 impl ApplicationRuntime {
     pub fn handle_command(&mut self, command: ApplicationCommand) -> ApplicationRuntimeResult<()> {
+        let allowed_while_hydrating = match &command {
+            ApplicationCommand::Playback(sustain_domain::PlaybackCommand::SetVolume(_)) => true,
+            ApplicationCommand::UpdateSettings(settings) => {
+                settings.library == self.settings.library
+            }
+            _ => false,
+        };
+        if self.library_hydration_state() != crate::LibraryHydrationState::Ready
+            && !allowed_while_hydrating
+        {
+            self.ensure_library_hydrated()?;
+        }
         match command {
             ApplicationCommand::Playback(command) => {
                 self.handle_playback_command(command)?;
@@ -24,6 +36,9 @@ impl ApplicationRuntime {
                     settings.analysis = settings.analysis.normalized();
                     settings
                 };
+                if settings.library != self.settings.library {
+                    self.ensure_library_hydrated()?;
+                }
                 if (self.background_task_status.is_running()
                     || self.has_pending_managed_metadata_retarget())
                     && settings.library != self.settings.library

@@ -11,6 +11,157 @@ use std::collections::HashSet;
 
 use super::*;
 
+/// Maximum number of Songs rows appended during one idle dispatch. This keeps
+/// GTK list-model notifications bounded so a large library hydrates over
+/// multiple frames instead of monopolizing the main loop.
+const INITIAL_LIBRARY_ROWS_BATCH_SIZE: usize = 128;
+
+pub(super) struct LibraryHydrationResultConsumerContext {
+    pub(super) receiver: Option<LibraryHydrationResultReceiver>,
+    pub(super) runtime: SharedRuntime,
+    pub(super) songs_table: TrackTable,
+    pub(super) status_bar: StatusBar,
+    pub(super) titlebar: Titlebar,
+    pub(super) sidebar: PlaylistSidebar,
+    pub(super) content_stack: gtk::Stack,
+    pub(super) current_search_text: Rc<RefCell<String>>,
+    pub(super) post_hydration_startup: PostHydrationStartup,
+}
+
+struct InitialLibraryRowsPublication {
+    runtime: SharedRuntime,
+    songs_table: TrackTable,
+    status_bar: StatusBar,
+    titlebar: Titlebar,
+    sidebar: PlaylistSidebar,
+    content_stack: gtk::Stack,
+    current_search_text: Rc<RefCell<String>>,
+    post_hydration_startup: PostHydrationStartup,
+}
+
+/// Adopt the runtime snapshot loaded after first idle, then publish its Songs
+/// rows in bounded GTK idle batches. The runtime remains mutation-gated until
+/// the last batch lands, so the borrowed slice cannot change under the cursor.
+pub(super) fn install_library_hydration_result_consumer(
+    context: LibraryHydrationResultConsumerContext,
+) {
+    let LibraryHydrationResultConsumerContext {
+        receiver,
+        runtime,
+        songs_table,
+        status_bar,
+        titlebar,
+        sidebar,
+        content_stack,
+        current_search_text,
+        post_hydration_startup,
+    } = context;
+    let Some(receiver) = receiver else {
+        return;
+    };
+    glib::MainContext::default().spawn_local(async move {
+        let Ok(result) = receiver.recv().await else {
+            return;
+        };
+        if !runtime.borrow_mut().apply_library_hydration_result(result) {
+            run_once(&post_hydration_startup);
+            return;
+        }
+        eprintln!("[TIMING]   hydrate: SQLite snapshot adopted; publishing Songs rows");
+        publish_initial_library_rows(InitialLibraryRowsPublication {
+            runtime,
+            songs_table,
+            status_bar,
+            titlebar,
+            sidebar,
+            content_stack,
+            current_search_text,
+            post_hydration_startup,
+        });
+    });
+}
+
+fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
+    let InitialLibraryRowsPublication {
+        runtime,
+        songs_table,
+        status_bar,
+        titlebar,
+        sidebar,
+        content_stack,
+        current_search_text,
+        post_hydration_startup,
+    } = publication;
+    let started = std::time::Instant::now();
+    let normalized_search = normalize_query(&current_search_text.borrow());
+    let (total_tracks, honor_sort_tags) = {
+        let runtime = runtime.borrow();
+        (
+            runtime.library_tracks().len(),
+            runtime.settings().library.honor_sort_tags,
+        )
+    };
+    let generation = songs_table.begin_progressive_replace();
+    let cursor = Rc::new(Cell::new(0usize));
+    let visible_count = Rc::new(Cell::new(0usize));
+    let duration_seconds = Rc::new(Cell::new(0u64));
+    let size_bytes = Rc::new(Cell::new(0u64));
+
+    glib::idle_add_local(move || {
+        let start = cursor.get();
+        let end = (start + INITIAL_LIBRARY_ROWS_BATCH_SIZE).min(total_tracks);
+        let rows: Vec<_> = {
+            let runtime = runtime.borrow();
+            runtime.library_tracks()[start..end]
+                .iter()
+                .filter(|track| {
+                    normalized_search.is_empty()
+                        || runtime.search_matches(track.id, &normalized_search)
+                })
+                .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
+                .collect()
+        };
+        visible_count.set(visible_count.get() + rows.len());
+        duration_seconds.set(
+            duration_seconds.get() + rows.iter().map(|track| track.duration_seconds).sum::<u64>(),
+        );
+        size_bytes
+            .set(size_bytes.get() + rows.iter().map(|track| track.file_size_bytes).sum::<u64>());
+        let still_current = songs_table.append_progressive_rows(generation, rows);
+        cursor.set(end);
+        if still_current && end < total_tracks {
+            return glib::ControlFlow::Continue;
+        }
+
+        if still_current && content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW) {
+            status_bar.update_summary_values(
+                visible_count.get(),
+                duration_seconds.get(),
+                size_bytes.get(),
+            );
+        }
+        {
+            let mut runtime = runtime.borrow_mut();
+            runtime.finish_library_hydration_publication();
+            crate::start_background_schedulers(&mut runtime);
+        }
+        sidebar.refresh_silently();
+        update_play_pause_sensitivity(&titlebar, &runtime.borrow());
+        run_once(&post_hydration_startup);
+        eprintln!(
+            "[TIMING]   hydrate: Songs rows published in {:.1}ms",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        glib::ControlFlow::Break
+    });
+}
+
+fn run_once(callback: &PostHydrationStartup) {
+    if let Some(callback) = callback.borrow_mut().take() {
+        callback();
+    }
+}
+
 /// Drains [`sustain_app_runtime::MetadataWriterEvent`]s posted by the async
 /// metadata writer and applies authoritative row refreshes plus retry-state
 /// notifications.

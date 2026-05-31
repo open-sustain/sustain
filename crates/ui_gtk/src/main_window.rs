@@ -20,11 +20,12 @@ use super::{
     ALBUMS_VIEW, APP_ID, AnalysisProgressReceiver, ApplicationCommand, ApplicationRuntime,
     ArtworkFetchResultReceiver, AvailabilityChangedCallback, ConnectedDevice, DEVICES_VIEW,
     DeviceSyncEventReceiver, LibraryChangedCallback, LibraryChangedHolder,
-    MetadataWriterEventReceiver, MprisCommandReceiver, OnlineProgressReceiver, PLAYLISTS_VIEW,
-    PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
-    SONGS_VIEW, STATISTICS_VIEW, SharedMprisService, SharedRuntime, ShowAlbumAction,
-    ShowAlbumHolder, SmartPlaylistTrackStatus, SmartShuffleRebuildResultReceiver,
-    TrackRowChangedCallback, TrackRowChangedHolder, TrackUpdatedReceiver,
+    LibraryHydrationResultReceiver, MetadataWriterEventReceiver, MprisCommandReceiver,
+    OnlineProgressReceiver, PLAYLISTS_VIEW, PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH,
+    SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW, SharedMprisService,
+    SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
+    SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
+    TrackUpdatedReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
@@ -100,8 +101,9 @@ use playlists::{
     playlist_table_rows_for, refresh_playlists_view_if_visible,
 };
 use result_consumers::{
-    ArtworkFetchResultConsumerContext, install_analysis_progress_consumer,
-    install_artwork_fetch_result_consumer, install_device_sync_event_consumer,
+    ArtworkFetchResultConsumerContext, LibraryHydrationResultConsumerContext,
+    install_analysis_progress_consumer, install_artwork_fetch_result_consumer,
+    install_device_sync_event_consumer, install_library_hydration_result_consumer,
     install_metadata_writer_event_consumer, install_online_progress_consumer,
     install_smart_shuffle_launch_rebuild, install_smart_shuffle_rebuild_result_consumer,
     install_track_data_observer, install_track_updated_consumer,
@@ -123,6 +125,7 @@ use track_callbacks::{
 /// whichever view is currently visible. Fired after sidebar-driven
 /// view switches, library mutations, and search keystrokes.
 pub(crate) type VisibleSummaryRefreshCallback = Rc<dyn Fn()>;
+type PostHydrationStartup = Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
 
 /// Channel receivers the main window installs as glib consumers on
 /// the GTK main loop. Bundled into a struct rather than passed as
@@ -139,6 +142,7 @@ pub(crate) struct MainWindowAsyncReceivers {
     pub track_updated_rx: Option<TrackUpdatedReceiver>,
     pub smart_shuffle_rebuild_result_rx: Option<SmartShuffleRebuildResultReceiver>,
     pub device_sync_event_rx: Option<DeviceSyncEventReceiver>,
+    pub library_hydration_result_rx: Option<LibraryHydrationResultReceiver>,
 }
 
 pub(crate) fn build_main_window(
@@ -156,6 +160,7 @@ pub(crate) fn build_main_window(
         track_updated_rx,
         smart_shuffle_rebuild_result_rx,
         device_sync_event_rx,
+        library_hydration_result_rx,
     } = receivers;
     let tbw = std::time::Instant::now();
     macro_rules! tlog {
@@ -504,7 +509,6 @@ pub(crate) fn build_main_window(
     install_track_updated_consumer(track_updated_rx, runtime.clone());
     install_smart_shuffle_rebuild_result_consumer(smart_shuffle_rebuild_result_rx, runtime.clone());
     install_device_sync_event_consumer(device_sync_event_rx, runtime.clone());
-    install_smart_shuffle_launch_rebuild(&runtime);
     // The sidebar is now the sole navigation surface: its selection
     // chooses which content-stack page is visible (Music → SONGS_VIEW,
     // Albums → ALBUMS_VIEW, an Item → PLAYLISTS_VIEW). The non-default
@@ -532,12 +536,26 @@ pub(crate) fn build_main_window(
         let runtime = runtime.clone();
         Box::new(move || runtime.borrow().resume_pending_metadata_writes())
     };
+    let consolidation_requested = library_consolidation_requested_callback(&runtime);
     let deferred_startup = DeferredStartup::new(
         initial_ui_settings.sidebar_selection,
         sidebar.clone(),
         device_populate,
         resume_pending_metadata_writes,
+        runtime.clone(),
+        consolidation_requested.clone(),
     );
+    install_library_hydration_result_consumer(LibraryHydrationResultConsumerContext {
+        receiver: library_hydration_result_rx,
+        runtime: runtime.clone(),
+        songs_table: songs_table.clone(),
+        status_bar: status_bar.clone(),
+        titlebar: titlebar.clone(),
+        sidebar: sidebar.clone(),
+        content_stack: content_stack.clone(),
+        current_search_text: current_search_text.clone(),
+        post_hydration_startup: deferred_startup.post_hydration_startup(),
+    });
     install_search_wiring(
         &titlebar,
         SearchWiringContext {
@@ -587,7 +605,6 @@ pub(crate) fn build_main_window(
     sidebar.set_online_busy_query(sidebar_online_busy_query(&runtime));
     library_changed_holder.replace(Some(library_changed.clone()));
     let scan_requested = library_scan_requested_callback(&runtime, library_changed.clone());
-    let consolidation_requested = library_consolidation_requested_callback(&runtime);
     let import_requested = library_import_requested_callback(&runtime, library_changed.clone());
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
     install_preferences_action(
@@ -718,13 +735,6 @@ pub(crate) fn build_main_window(
     });
 
     tlog!("widgets assembled");
-    // If "Keep my library organized" is on, schedule consolidation
-    // immediately. Idempotent (empty plan when already organized) and
-    // the natural resume point for a previous run interrupted by a
-    // kill or crash.
-    maybe_auto_resume_library_consolidation(&runtime, &consolidation_requested);
-    tlog!("auto-resume kicked off");
-
     BuiltMainWindow {
         window,
         deferred_startup,
@@ -751,9 +761,8 @@ impl BuiltMainWindow {
 /// critical path — both can run on the first idle instead, after the
 /// window has had a chance to paint.
 struct DeferredStartup {
-    restore_selection: Option<Box<dyn FnOnce()>>,
-    populate_devices: Box<dyn FnOnce()>,
-    resume_pending_metadata_writes: Box<dyn FnOnce()>,
+    runtime: SharedRuntime,
+    post_hydration_startup: PostHydrationStartup,
 }
 
 impl DeferredStartup {
@@ -762,6 +771,8 @@ impl DeferredStartup {
         sidebar: PlaylistSidebar,
         populate_devices: Box<dyn FnOnce()>,
         resume_pending_metadata_writes: Box<dyn FnOnce()>,
+        runtime: SharedRuntime,
+        consolidation_requested: crate::library_consolidation::LibraryConsolidationRequestedCallback,
     ) -> Self {
         let restore_selection: Option<Box<dyn FnOnce()>> = match selection {
             UiSidebarSelection::Music => None,
@@ -769,23 +780,41 @@ impl DeferredStartup {
             UiSidebarSelection::Statistics => Some(Box::new(move || sidebar.select_statistics())),
             UiSidebarSelection::Playlist(item) => Some(Box::new(move || sidebar.select_item(item))),
         };
+        let post_hydration_startup: PostHydrationStartup = Rc::new(RefCell::new(Some(Box::new({
+            let runtime = runtime.clone();
+            move || {
+                if let Some(restore) = restore_selection {
+                    restore();
+                }
+                // Device enumeration probes the filesystem, so it runs
+                // after the first-idle gate and initial hydration.
+                populate_devices();
+                // Restored mirror retries can parse audio tags and
+                // garbage-collect external artwork blobs.
+                resume_pending_metadata_writes();
+                if runtime.borrow().library_hydration_state() == crate::LibraryHydrationState::Ready
+                {
+                    maybe_auto_resume_library_consolidation(&runtime, &consolidation_requested);
+                    install_smart_shuffle_launch_rebuild(&runtime);
+                }
+            }
+        }))));
         Self {
-            restore_selection,
-            populate_devices,
-            resume_pending_metadata_writes,
+            runtime,
+            post_hydration_startup,
         }
     }
 
+    fn post_hydration_startup(&self) -> PostHydrationStartup {
+        self.post_hydration_startup.clone()
+    }
+
     fn run(self) {
-        if let Some(restore) = self.restore_selection {
-            restore();
+        if !self.runtime.borrow_mut().start_library_hydration()
+            && let Some(callback) = self.post_hydration_startup.borrow_mut().take()
+        {
+            callback();
         }
-        // Device enumeration probes the filesystem, so it runs here on
-        // the first idle rather than during the cold-start window.
-        (self.populate_devices)();
-        // Restored mirror retries can parse audio tags and garbage-collect
-        // external artwork blobs. Start them after the first-idle budget gate.
-        (self.resume_pending_metadata_writes)();
     }
 }
 

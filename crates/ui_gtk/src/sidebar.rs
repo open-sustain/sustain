@@ -575,6 +575,18 @@ impl PlaylistSidebar {
     }
 
     pub(crate) fn refresh(&self) {
+        self.refresh_with_selection_notification(true);
+    }
+
+    /// Rebuild the tree after deferred startup hydration without firing the
+    /// Music selection callback. Songs rows and their aggregate summary are
+    /// already being published incrementally; re-running that callback would
+    /// rematerialize the full table on the GTK thread.
+    pub(crate) fn refresh_silently(&self) {
+        self.refresh_with_selection_notification(false);
+    }
+
+    fn refresh_with_selection_notification(&self, notify_selection: bool) {
         let transient_active = self.active_transient_row.borrow().is_some();
         let previous = self.current_selection();
         let tree_model = build_tree_model(&self.runtime.borrow());
@@ -607,10 +619,10 @@ impl PlaylistSidebar {
             }
         }
         *self.on_selection_changed.borrow_mut() = suspended;
-        if transient_active {
-            // A transient view (e.g. a connected device) owns the content
-            // area; keep it shown and the persistent highlight cleared,
-            // rather than firing a selection change that switches back.
+        if transient_active || !notify_selection {
+            // A transient view owns the content area, or deferred startup
+            // explicitly requested a quiet model refresh. Keep the current
+            // page shown rather than firing a selection callback.
             return;
         }
         if let Some(callback) = self.on_selection_changed.borrow().as_ref() {

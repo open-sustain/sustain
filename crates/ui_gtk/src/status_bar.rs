@@ -83,8 +83,17 @@ impl StatusBar {
             .map(|track| track.file_size_bytes)
             .sum();
 
+        self.update_summary_values(library_tracks.len(), duration_seconds, size_bytes);
+    }
+
+    pub(crate) fn update_summary_values(
+        &self,
+        track_count: usize,
+        duration_seconds: u64,
+        size_bytes: u64,
+    ) {
         self.summary.set_text(&library_status_text(
-            library_tracks.len(),
+            track_count,
             duration_seconds,
             size_bytes,
         ));

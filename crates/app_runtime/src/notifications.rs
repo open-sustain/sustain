@@ -56,6 +56,7 @@ pub enum NotificationCategory {
     LibraryScan,
     LibraryImport,
     LibraryConsolidation,
+    LibraryHydration,
     ManagedLibraryFilesystem,
     ArtworkFetch,
     MetadataWrite,
@@ -449,6 +450,7 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         ApplicationRuntimeError::LibraryImportFailed => {
             "The files could not be added to the library."
         }
+        ApplicationRuntimeError::LibraryHydrationPending => "The music library is still loading.",
         ApplicationRuntimeError::MetadataWriteFailed => "The track metadata could not be updated.",
         ApplicationRuntimeError::InvalidPlaylistName => "The playlist name is not valid.",
         ApplicationRuntimeError::InvalidPlaylistFolderName => "The folder name is not valid.",

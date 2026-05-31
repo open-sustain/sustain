@@ -310,6 +310,115 @@ fn runtime_scans_library_with_services() {
 }
 
 #[test]
+fn deferred_library_hydration_loads_after_start_and_gates_mutations_until_publication() {
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let track = test_track(track_id(1), "loaded-later.flac");
+    assert_eq!(store.save_track(track.clone()), Ok(()));
+    let mut runtime = ApplicationRuntime::new();
+    runtime
+        .set_library_services_deferred_hydration(store, Arc::new(TestMetadataService))
+        .expect("install deferred library services");
+
+    assert_eq!(
+        runtime.library_hydration_state(),
+        crate::LibraryHydrationState::Pending
+    );
+    assert!(runtime.library_tracks().is_empty());
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::CreatePlaylist {
+            name: "Too early".to_owned(),
+            parent_folder_id: None,
+        }),
+        Err(ApplicationRuntimeError::LibraryHydrationPending)
+    );
+
+    let receiver = runtime.library_hydration_result_receiver();
+    assert!(runtime.start_library_hydration());
+    assert_eq!(
+        runtime.library_hydration_state(),
+        crate::LibraryHydrationState::Loading
+    );
+    assert_eq!(
+        runtime
+            .notifications()
+            .current_persistent()
+            .map(|n| n.category),
+        Some(NotificationCategory::LibraryHydration)
+    );
+
+    let result = receiver.recv_blocking().expect("hydration result");
+    assert!(runtime.apply_library_hydration_result(result));
+    assert_eq!(
+        runtime.library_hydration_state(),
+        crate::LibraryHydrationState::Publishing
+    );
+    assert_eq!(runtime.library_tracks(), std::slice::from_ref(&track));
+    assert!(runtime.search_matches(track.id, &normalize_query("loaded-later")));
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::CreatePlaylist {
+            name: "Still too early".to_owned(),
+            parent_folder_id: None,
+        }),
+        Err(ApplicationRuntimeError::LibraryHydrationPending)
+    );
+
+    runtime.finish_library_hydration_publication();
+    assert_eq!(
+        runtime.library_hydration_state(),
+        crate::LibraryHydrationState::Ready
+    );
+    assert!(runtime.notifications().current_persistent().is_none());
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::CreatePlaylist {
+            name: "Ready".to_owned(),
+            parent_folder_id: None,
+        }),
+        Ok(())
+    );
+}
+
+#[test]
+fn deferred_library_hydration_failure_surfaces_persistent_error() {
+    use std::sync::atomic::Ordering;
+
+    let counts = Arc::new(StoreCallCounts::default());
+    let store: Arc<dyn LibraryStore> = Arc::new(CallCountingLibraryStore {
+        inner: InMemoryLibraryStore::new(),
+        counts: counts.clone(),
+        statistics_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
+        tracks_failures_remaining: std::sync::atomic::AtomicUsize::new(1),
+    });
+    let mut runtime = ApplicationRuntime::new();
+    runtime
+        .set_library_services_deferred_hydration(store, Arc::new(TestMetadataService))
+        .expect("install deferred library services");
+    assert_eq!(
+        counts.tracks.load(Ordering::SeqCst),
+        0,
+        "service installation must not decode tracks before first idle",
+    );
+
+    let receiver = runtime.library_hydration_result_receiver();
+    assert!(runtime.start_library_hydration());
+    let result = receiver.recv_blocking().expect("hydration result");
+    assert!(!runtime.apply_library_hydration_result(result));
+
+    assert_eq!(
+        runtime.library_hydration_state(),
+        crate::LibraryHydrationState::Failed
+    );
+    let notification = runtime
+        .notifications()
+        .current_persistent()
+        .expect("failure notification");
+    assert_eq!(
+        notification.category,
+        NotificationCategory::LibraryHydration
+    );
+    assert_eq!(notification.severity, NotificationSeverity::Error);
+}
+
+#[test]
 fn cancelled_scan_preserves_existing_tracks_without_marking_them_missing() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
@@ -3866,6 +3975,7 @@ fn failed_play_registration_retries_after_stop_without_double_incrementing() {
         inner,
         counts: counts.clone(),
         statistics_failures_remaining: std::sync::atomic::AtomicUsize::new(1),
+        tracks_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
     });
     let monotonic_clock = Arc::new(FakeMonotonicClock::default());
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
@@ -4479,6 +4589,7 @@ fn apply_track_updated_performs_one_keyed_lookup_and_no_full_scan() {
         inner,
         counts: counts.clone(),
         statistics_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
+        tracks_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
     });
 
     let mut runtime = ApplicationRuntime::new()
@@ -5022,6 +5133,7 @@ struct CallCountingLibraryStore {
     inner: InMemoryLibraryStore,
     counts: Arc<StoreCallCounts>,
     statistics_failures_remaining: std::sync::atomic::AtomicUsize,
+    tracks_failures_remaining: std::sync::atomic::AtomicUsize,
 }
 
 impl LibraryStore for CallCountingLibraryStore {
@@ -5135,6 +5247,17 @@ impl LibraryStore for CallCountingLibraryStore {
         self.counts
             .tracks
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .tracks_failures_remaining
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |remaining| remaining.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(StoreError::StoreUnavailable);
+        }
         self.inner.tracks()
     }
 

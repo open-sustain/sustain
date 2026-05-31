@@ -81,6 +81,7 @@ pub(crate) struct TrackTable {
     applying_layout: Rc<Cell<bool>>,
     layout_changed: Rc<RefCell<Option<LayoutChangedCallback>>>,
     pending_save: Rc<RefCell<Option<glib::SourceId>>>,
+    row_replacement_generation: Rc<Cell<u64>>,
 }
 
 /// Debounce window for coalescing column-layout changes into a single save.
@@ -99,10 +100,41 @@ impl TrackTable {
     }
 
     pub(crate) fn replace_rows(&self, rows: Vec<TrackTableRow>) {
+        self.bump_row_replacement_generation();
         self.store.remove_all();
         for row in rows {
             self.store.append(&glib::BoxedAnyObject::new(row));
         }
+    }
+
+    /// Clear the store and return a token for a bounded idle-batch rebuild.
+    /// Any later full replacement invalidates the token, allowing a search
+    /// rebuild to supersede startup publication without interleaving rows.
+    pub(crate) fn begin_progressive_replace(&self) -> u64 {
+        let generation = self.bump_row_replacement_generation();
+        self.store.remove_all();
+        generation
+    }
+
+    /// Append one idle-sized batch when no newer rebuild superseded it.
+    pub(crate) fn append_progressive_rows(
+        &self,
+        generation: u64,
+        rows: Vec<TrackTableRow>,
+    ) -> bool {
+        if self.row_replacement_generation.get() != generation {
+            return false;
+        }
+        for row in rows {
+            self.store.append(&glib::BoxedAnyObject::new(row));
+        }
+        true
+    }
+
+    fn bump_row_replacement_generation(&self) -> u64 {
+        let generation = self.row_replacement_generation.get().wrapping_add(1);
+        self.row_replacement_generation.set(generation);
+        generation
     }
 
     /// Updates the cached [`TrackTableRow`] for `track_id` in place,
@@ -624,6 +656,7 @@ pub(crate) fn build_track_table(
         applying_layout,
         layout_changed,
         pending_save,
+        row_replacement_generation: Rc::new(Cell::new(0)),
     }
 }
 

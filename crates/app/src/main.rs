@@ -106,7 +106,7 @@ fn main() {
         Ok(library_store) => {
             tlog!("sqlite library store opened");
             let was_freshly_created = library_store.was_freshly_created();
-            if let Err(error) = runtime.set_library_services(
+            if let Err(error) = runtime.set_library_services_deferred_hydration(
                 Arc::new(library_store),
                 Arc::new(sustain_metadata::LoftyMetadataService),
             ) {
@@ -125,7 +125,7 @@ fn main() {
         }
     }
 
-    tlog!("set_library_services done (tracks loaded from sqlite)");
+    tlog!("library services installed (track hydration deferred)");
     if let Ok(playback_service) = sustain_playback::GStreamerPlaybackService::new() {
         runtime = runtime.with_playback_service(Box::new(playback_service));
     }

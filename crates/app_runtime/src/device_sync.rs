@@ -327,6 +327,7 @@ impl ApplicationRuntime {
     /// the device is not connected, has no library root, or the
     /// selection is empty.
     pub fn device_sync_plan(&self, id: &SyncDeviceId) -> Option<SyncPlan> {
+        self.ensure_library_hydrated().ok()?;
         let connected = self.connected_devices().into_iter().find(|d| &d.id == id)?;
         let device = self.device_config(id)?;
         let request = self
@@ -340,6 +341,7 @@ impl ApplicationRuntime {
         id: SyncDeviceId,
         remove_stale: bool,
     ) -> ApplicationRuntimeResult<()> {
+        self.ensure_library_hydrated()?;
         if self.device_sync_scheduler.is_syncing() {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,

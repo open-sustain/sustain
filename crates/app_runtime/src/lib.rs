@@ -74,6 +74,7 @@ pub(crate) mod artwork_fetcher;
 mod commands;
 mod device_sync;
 pub mod device_sync_scheduler;
+mod library_hydration;
 mod library_mutation;
 mod library_scan;
 pub mod managed_library;
@@ -98,6 +99,7 @@ pub use sustain_smart_shuffle::{
 };
 
 pub use artwork_fetcher::{ArtworkFetchOutcome, ArtworkFetchResult};
+pub use library_hydration::LibraryHydrationSnapshot;
 pub use library_scan::run_library_scan_task;
 pub use managed_library::{
     ManagedLibraryFilesystemError, run_library_consolidation_task, run_library_import_task,
@@ -124,6 +126,7 @@ pub enum ApplicationRuntimeError {
     LibraryPathUnavailable,
     ManagedLibraryFilesystemUnsupported(ManagedLibraryFilesystemError),
     LibraryConsolidationFailed,
+    LibraryHydrationPending,
     LibraryImportFailed,
     LibraryScanFailed,
     LibraryServicesUnavailable,
@@ -293,6 +296,9 @@ pub struct ApplicationRuntime {
     /// and updated per-track on edits; the single write path
     /// [`Self::store_library_track`] keeps it from drifting.
     search_index: SearchIndex,
+    library_hydration_state: LibraryHydrationState,
+    library_hydration_worker: library_hydration::LibraryHydrationWorker,
+    library_hydration_notification_id: Option<NotificationId>,
     playlists: Vec<Playlist>,
     playlist_folders: Vec<PlaylistFolder>,
     smart_playlists: Vec<SmartPlaylist>,
@@ -413,6 +419,20 @@ pub type TrackDataObserver = Box<dyn Fn(TrackId)>;
 /// main loop (e.g. `glib::idle_add_local_once`).
 pub type SmartShuffleStateObserver = Box<dyn Fn()>;
 
+/// Lifecycle of the track-sized portion of runtime startup.
+///
+/// `Publishing` means SQLite state and the search index are authoritative in
+/// memory, but GTK is still receiving Songs rows in bounded idle batches.
+/// Structural operations stay closed until the UI acknowledges completion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LibraryHydrationState {
+    Ready,
+    Pending,
+    Loading,
+    Publishing,
+    Failed,
+}
+
 /// Cached bookkeeping for the live Smart Shuffle index, mirrored from
 /// it so the Preferences status caption can read the indexed track
 /// count, the DSP analysis coverage, and the last rebuild time without
@@ -439,6 +459,9 @@ impl ApplicationRuntime {
             playback_statistics_notification_id: None,
             library_tracks: Vec::new(),
             search_index: SearchIndex::new(),
+            library_hydration_state: LibraryHydrationState::Ready,
+            library_hydration_worker: library_hydration::LibraryHydrationWorker::new(),
+            library_hydration_notification_id: None,
             playlists: Vec::new(),
             playlist_folders: Vec::new(),
             smart_playlists: Vec::new(),
@@ -508,6 +531,9 @@ impl ApplicationRuntime {
             playback_statistics_notification_id: None,
             library_tracks: Vec::new(),
             search_index: SearchIndex::new(),
+            library_hydration_state: LibraryHydrationState::Ready,
+            library_hydration_worker: library_hydration::LibraryHydrationWorker::new(),
+            library_hydration_notification_id: None,
             playlists: Vec::new(),
             playlist_folders: Vec::new(),
             smart_playlists: Vec::new(),
@@ -606,6 +632,7 @@ impl ApplicationRuntime {
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.library_store = Some(library_store);
         self.metadata_service = Some(metadata_service);
+        self.library_hydration_state = LibraryHydrationState::Ready;
         // Restore the previously-built Smart Shuffle index (if any).
         // Sits after the library store assignment because the loader
         // reads `self.library_store`; a fresh database leaves the
@@ -613,6 +640,131 @@ impl ApplicationRuntime {
         // background rebuild.
         self.load_smart_shuffle_index_from_store()?;
         Ok(())
+    }
+
+    /// Install durable library services without decoding track-sized state.
+    ///
+    /// The desktop entry point uses this path so GTK can present a responsive
+    /// shell before the library grows expensive. Consolidation-journal recovery
+    /// deliberately remains synchronous: service consumers must never observe
+    /// a half-recovered managed-library move.
+    pub fn set_library_services_deferred_hydration(
+        &mut self,
+        library_store: Arc<dyn LibraryStore>,
+        metadata_service: Arc<dyn MetadataService>,
+    ) -> ApplicationRuntimeResult<()> {
+        if let Some(library_path) = self.settings.library_path() {
+            managed_library::recover_library_consolidation_journal(
+                library_path,
+                library_store.as_ref(),
+                &self.managed_library_filesystem_validator,
+            )?;
+        }
+        self.library_tracks.clear();
+        self.search_index = SearchIndex::new();
+        self.playlists.clear();
+        self.playlist_folders.clear();
+        self.smart_playlists.clear();
+        self.smart_shuffle_index = None;
+        self.smart_shuffle_metadata = None;
+        self.library_store = Some(library_store);
+        self.metadata_service = Some(metadata_service);
+        self.library_hydration_state = LibraryHydrationState::Pending;
+        Ok(())
+    }
+
+    pub fn library_hydration_state(&self) -> LibraryHydrationState {
+        self.library_hydration_state
+    }
+
+    pub fn library_hydration_result_receiver(
+        &self,
+    ) -> async_channel::Receiver<ApplicationRuntimeResult<LibraryHydrationSnapshot>> {
+        self.library_hydration_worker.result_receiver()
+    }
+
+    /// Start deferred track loading. Returns `false` for synchronous runtimes
+    /// and repeated calls so the first-idle hook can be idempotent.
+    pub fn start_library_hydration(&mut self) -> bool {
+        if self.library_hydration_state != LibraryHydrationState::Pending {
+            return false;
+        }
+        let Some(store) = self.library_store.clone() else {
+            self.library_hydration_state = LibraryHydrationState::Failed;
+            return false;
+        };
+        self.library_hydration_state = LibraryHydrationState::Loading;
+        let notification_id = self.push_persistent_notification(
+            NotificationCategory::LibraryHydration,
+            NotificationSeverity::Info,
+            "Loading library…".to_owned(),
+            false,
+        );
+        self.library_hydration_notification_id = Some(notification_id);
+        self.library_hydration_worker.start(store);
+        true
+    }
+
+    /// Adopt the worker's coherent SQLite snapshot. GTK row publication still
+    /// follows, so structural operations remain gated in `Publishing`.
+    pub fn apply_library_hydration_result(
+        &mut self,
+        result: ApplicationRuntimeResult<LibraryHydrationSnapshot>,
+    ) -> bool {
+        self.library_hydration_worker.join_finished();
+        match result {
+            Ok(snapshot) => {
+                self.library_tracks = snapshot.tracks;
+                self.search_index = snapshot.search_index;
+                self.playlists = snapshot.playlists;
+                self.playlist_folders = snapshot.playlist_folders;
+                self.smart_playlists = snapshot.smart_playlists;
+                self.smart_shuffle_index = snapshot.smart_shuffle_index;
+                self.smart_shuffle_metadata = self.smart_shuffle_index.as_ref().map(index_metadata);
+                self.refresh_playback_queue_track_ids();
+                self.library_hydration_state = LibraryHydrationState::Publishing;
+                true
+            }
+            Err(_) => {
+                if let Some(id) = self.library_hydration_notification_id.take() {
+                    self.dismiss_notification(id);
+                }
+                self.library_hydration_state = LibraryHydrationState::Failed;
+                self.push_persistent_notification(
+                    NotificationCategory::LibraryHydration,
+                    NotificationSeverity::Error,
+                    "The music library could not be loaded.".to_owned(),
+                    false,
+                );
+                false
+            }
+        }
+    }
+
+    /// Release the mutation gate after GTK has appended its final Songs batch.
+    pub fn finish_library_hydration_publication(&mut self) {
+        if self.library_hydration_state == LibraryHydrationState::Publishing {
+            self.library_hydration_state = LibraryHydrationState::Ready;
+            if let Some(id) = self.library_hydration_notification_id.take() {
+                self.dismiss_notification(id);
+            }
+        }
+    }
+
+    pub fn shutdown_library_hydration(&mut self) {
+        self.library_hydration_worker.shutdown();
+    }
+
+    pub(crate) fn ensure_library_hydrated(&self) -> ApplicationRuntimeResult<()> {
+        match self.library_hydration_state {
+            LibraryHydrationState::Ready => Ok(()),
+            LibraryHydrationState::Pending
+            | LibraryHydrationState::Loading
+            | LibraryHydrationState::Publishing => {
+                Err(ApplicationRuntimeError::LibraryHydrationPending)
+            }
+            LibraryHydrationState::Failed => Err(ApplicationRuntimeError::LibraryStoreFailed),
+        }
     }
 
     pub fn with_playback_service(mut self, playback_service: Box<dyn PlaybackService>) -> Self {
@@ -828,6 +980,9 @@ impl ApplicationRuntime {
     /// [`ApplicationRuntimeError::LibraryServicesUnavailable`] if no
     /// library store has been set yet.
     pub fn start_analysis_scheduler(&mut self) -> ApplicationRuntimeResult<()> {
+        if self.analysis_scheduler.is_some() {
+            return Ok(());
+        }
         let library_store = self
             .library_store
             .clone()
@@ -1050,6 +1205,9 @@ impl ApplicationRuntime {
     /// [`ApplicationRuntimeError::LibraryServicesUnavailable`] if a
     /// dependency is missing.
     pub fn start_online_scheduler(&mut self) -> ApplicationRuntimeResult<()> {
+        if self.online_scheduler.is_some() {
+            return Ok(());
+        }
         let library_store = self
             .library_store
             .clone()
@@ -1632,26 +1790,8 @@ impl ApplicationRuntime {
         let Some(store) = self.library_store.as_ref() else {
             return Ok(());
         };
-        let stored = store
-            .load_smart_shuffle_index()
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        let Some(stored) = stored else {
-            return Ok(());
-        };
-        if stored.schema_version != SMART_SHUFFLE_INDEX_SCHEMA_VERSION {
-            // Stale shape — clear so the next rebuild starts clean.
-            let _ = store.clear_smart_shuffle_index();
-            return Ok(());
-        }
-        match SmartShuffleIndex::from_blob(&stored.index_blob) {
-            Ok(index) => {
-                self.smart_shuffle_metadata = Some(index_metadata(&index));
-                self.smart_shuffle_index = Some(index);
-            }
-            Err(_) => {
-                let _ = store.clear_smart_shuffle_index();
-            }
-        }
+        self.smart_shuffle_index = library_hydration::load_smart_shuffle_index(store.as_ref())?;
+        self.smart_shuffle_metadata = self.smart_shuffle_index.as_ref().map(index_metadata);
         Ok(())
     }
 

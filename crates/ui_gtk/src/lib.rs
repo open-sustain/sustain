@@ -12,9 +12,10 @@ use main_window::build_main_window;
 pub use sustain_app_runtime::{
     ApplicationCommand, ApplicationQuery, ApplicationRuntime, ApplicationRuntimeError,
     BackgroundResourceUsage, BackgroundTaskStatus, ConnectedDevice, LibraryConsolidationResult,
-    LibraryConsolidationSummary, LibraryImportResult, LibraryImportSummary, LibraryManagementMode,
-    LibraryScanResult, LibraryScanSummary, SmartPlaylistTrackStatus, UserSettings,
-    run_library_consolidation_task, run_library_import_task, run_library_scan_task,
+    LibraryConsolidationSummary, LibraryHydrationSnapshot, LibraryHydrationState,
+    LibraryImportResult, LibraryImportSummary, LibraryManagementMode, LibraryScanResult,
+    LibraryScanSummary, SmartPlaylistTrackStatus, UserSettings, run_library_consolidation_task,
+    run_library_import_task, run_library_scan_task,
 };
 
 mod accent;
@@ -122,6 +123,9 @@ pub(crate) type SmartShuffleRebuildResultReceiver =
     async_channel::Receiver<sustain_app_runtime::SmartShuffleRebuildResult>;
 pub(crate) type DeviceSyncEventReceiver =
     async_channel::Receiver<sustain_app_runtime::DeviceSyncEvent>;
+pub(crate) type LibraryHydrationResultReceiver = async_channel::Receiver<
+    sustain_app_runtime::ApplicationRuntimeResult<LibraryHydrationSnapshot>,
+>;
 
 pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     let trun = std::time::Instant::now();
@@ -195,6 +199,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     // forever in the channel and the index would never be adopted.
     let smart_shuffle_rebuild_result_rx = runtime.smart_shuffle_rebuild_result_receiver();
     let device_sync_event_rx = runtime.device_sync_event_receiver();
+    let library_hydration_result_rx = runtime.library_hydration_result_receiver();
 
     // Start the paced background analysis scheduler. The progress sink
     // is installed before `start_analysis_scheduler` so the worker's
@@ -206,14 +211,6 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     let (analysis_progress_tx, analysis_progress_rx) =
         async_channel::unbounded::<sustain_app_runtime::AnalysisProgress>();
     runtime.set_analysis_progress_sink(analysis_progress_tx);
-    if let Err(error) = runtime.start_analysis_scheduler() {
-        // The only legitimate failure here is "no library store
-        // installed", which would be an internal misconfiguration —
-        // the runtime is set up upstream of this call. Log and
-        // continue; analysis simply does not run.
-        eprintln!("Sustain: analysis scheduler could not start ({error:?}).");
-    }
-    tlog!("analysis scheduler started");
 
     // Start the paced background online scheduler. Same shape as the
     // analysis scheduler — progress sink installed first, then the
@@ -222,12 +219,12 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     let (online_progress_tx, online_progress_rx) =
         async_channel::unbounded::<sustain_app_runtime::OnlineProgress>();
     runtime.set_online_progress_sink(online_progress_tx);
-    if let Err(error) = runtime.start_online_scheduler() {
-        eprintln!(
-            "Sustain: online scheduler disabled ({error:?}); background lyrics/artwork retrieval will not run."
-        );
+    if runtime.library_hydration_state() == LibraryHydrationState::Ready {
+        start_background_schedulers(&mut runtime);
+        tlog!("background schedulers started");
+    } else {
+        tlog!("background schedulers deferred until library hydration");
     }
-    tlog!("online scheduler started");
 
     let runtime = Rc::new(RefCell::new(runtime));
 
@@ -271,6 +268,8 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     > = Rc::new(RefCell::new(Some(smart_shuffle_rebuild_result_rx)));
     let device_sync_event_rx_holder: Rc<RefCell<Option<DeviceSyncEventReceiver>>> =
         Rc::new(RefCell::new(Some(device_sync_event_rx)));
+    let library_hydration_result_rx_holder: Rc<RefCell<Option<LibraryHydrationResultReceiver>>> =
+        Rc::new(RefCell::new(Some(library_hydration_result_rx)));
 
     tlog!("mpris done; about to connect_activate");
     app.connect_activate({
@@ -290,6 +289,8 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
             let smart_shuffle_rebuild_result_rx =
                 smart_shuffle_rebuild_result_rx_holder.borrow_mut().take();
             let device_sync_event_rx = device_sync_event_rx_holder.borrow_mut().take();
+            let library_hydration_result_rx =
+                library_hydration_result_rx_holder.borrow_mut().take();
             let main_window = build_main_window(
                 app,
                 runtime.clone(),
@@ -303,6 +304,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
                     track_updated_rx,
                     smart_shuffle_rebuild_result_rx,
                     device_sync_event_rx,
+                    library_hydration_result_rx,
                 },
             );
             eprintln!(
@@ -334,10 +336,25 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     // pending file-tag intent are already durable in SQLite, so deferred
     // retries safely resume next launch instead of extending shutdown.
     let mut runtime_guard = runtime.borrow_mut();
+    runtime_guard.shutdown_library_hydration();
     runtime_guard.shutdown_analysis_scheduler();
     runtime_guard.shutdown_online_scheduler();
     runtime_guard.shutdown_artwork_fetcher();
     runtime_guard.shutdown_metadata_writer();
+}
+
+pub(crate) fn start_background_schedulers(runtime: &mut ApplicationRuntime) {
+    if let Err(error) = runtime.start_analysis_scheduler() {
+        // The only legitimate failure here is "no library store installed",
+        // which would be an internal misconfiguration. Log and continue;
+        // analysis simply does not run.
+        eprintln!("Sustain: analysis scheduler could not start ({error:?}).");
+    }
+    if let Err(error) = runtime.start_online_scheduler() {
+        eprintln!(
+            "Sustain: online scheduler disabled ({error:?}); background lyrics/artwork retrieval will not run."
+        );
+    }
 }
 
 /// Activate the already-running Sustain primary instance that owns
