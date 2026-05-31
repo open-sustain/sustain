@@ -20,14 +20,14 @@ use std::{
 
 use rustix::{
     fs::{
-        AtFlags, FileType, Mode, OFlags, RawDir, fsync, mkdirat, open, openat, renameat, statat,
-        unlinkat,
+        AtFlags, FileType, Mode, OFlags, RawDir, fstatvfs, fsync, mkdirat, open, openat, renameat,
+        statat, unlinkat,
     },
     io::{Errno, dup},
 };
 use sustain_domain::{DeviceRelativePath, SourceFileStat};
 
-use crate::source::ensure_source_unchanged;
+use crate::{model::DeviceCapacity, source::ensure_source_unchanged};
 
 const DIRECTORY_MODE: Mode = Mode::RUSR
     .union(Mode::WUSR)
@@ -59,6 +59,14 @@ impl DeviceRoot {
 
     pub(crate) fn ensure_dir_all(&self, path: &DeviceRelativePath) -> io::Result<()> {
         self.open_dir(path, true).map(drop)
+    }
+
+    pub(crate) fn capacity(&self) -> io::Result<DeviceCapacity> {
+        let stat = fstatvfs(&self.fd).map_err(io::Error::from)?;
+        Ok(DeviceCapacity {
+            total_bytes: stat.f_blocks.saturating_mul(stat.f_frsize),
+            available_bytes: stat.f_bavail.saturating_mul(stat.f_frsize),
+        })
     }
 
     pub(crate) fn is_regular_file(&self, path: &DeviceRelativePath) -> io::Result<bool> {
@@ -464,6 +472,17 @@ mod tests {
             })
             .filter(|name| name.starts_with(".sustain-write-") && name.ends_with(".tmp"))
             .collect()
+    }
+
+    #[test]
+    fn capacity_is_probed_from_the_opened_root() {
+        let device = tempfile::tempdir().expect("device dir");
+        let root = DeviceRoot::open(device.path()).expect("root");
+
+        let capacity = root.capacity().expect("capacity");
+
+        assert!(capacity.total_bytes > 0);
+        assert!(capacity.available_bytes <= capacity.total_bytes);
     }
 
     #[cfg(unix)]

@@ -19,11 +19,11 @@ use sustain_app_runtime::{
 use super::{
     ALBUMS_VIEW, APP_ID, AnalysisProgressReceiver, ApplicationCommand, ApplicationRuntime,
     ArtworkFetchResultReceiver, AvailabilityChangedCallback, ConnectedDevice, DEVICES_VIEW,
-    DeviceSyncEventReceiver, LibraryChangedCallback, LibraryChangedHolder,
-    LibraryHydrationResultReceiver, MetadataWriterEventReceiver, MprisCommandReceiver,
-    OnlineProgressReceiver, PLAYLISTS_VIEW, PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH,
-    SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW, SharedMprisService,
-    SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
+    DevicePlanResultReceiver, DeviceSyncEventReceiver, LibraryChangedCallback,
+    LibraryChangedHolder, LibraryHydrationResultReceiver, MetadataWriterEventReceiver,
+    MprisCommandReceiver, OnlineProgressReceiver, PLAYLISTS_VIEW, PlaybackChangedCallback,
+    SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW,
+    SharedMprisService, SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
     SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
     TrackUpdatedReceiver,
     accent::install_accent_css,
@@ -104,10 +104,11 @@ use playlists::{
 use result_consumers::{
     ArtworkFetchResultConsumerContext, LibraryHydrationResultConsumerContext,
     install_analysis_progress_consumer, install_artwork_fetch_result_consumer,
-    install_device_sync_event_consumer, install_library_hydration_result_consumer,
-    install_metadata_writer_event_consumer, install_online_progress_consumer,
-    install_smart_shuffle_launch_rebuild, install_smart_shuffle_rebuild_result_consumer,
-    install_track_data_observer, install_track_updated_consumer,
+    install_device_plan_result_consumer, install_device_sync_event_consumer,
+    install_library_hydration_result_consumer, install_metadata_writer_event_consumer,
+    install_online_progress_consumer, install_smart_shuffle_launch_rebuild,
+    install_smart_shuffle_rebuild_result_consumer, install_track_data_observer,
+    install_track_updated_consumer,
 };
 use search::{SearchWiringContext, install_search_wiring};
 use sidebar_callbacks::{
@@ -143,6 +144,7 @@ pub(crate) struct MainWindowAsyncReceivers {
     pub track_updated_rx: Option<TrackUpdatedReceiver>,
     pub smart_shuffle_rebuild_result_rx: Option<SmartShuffleRebuildResultReceiver>,
     pub device_sync_event_rx: Option<DeviceSyncEventReceiver>,
+    pub device_plan_result_rx: Option<DevicePlanResultReceiver>,
     pub library_hydration_result_rx: Option<LibraryHydrationResultReceiver>,
 }
 
@@ -161,6 +163,7 @@ pub(crate) fn build_main_window(
         track_updated_rx,
         smart_shuffle_rebuild_result_rx,
         device_sync_event_rx,
+        device_plan_result_rx,
         library_hydration_result_rx,
     } = receivers;
     let tbw = std::time::Instant::now();
@@ -511,6 +514,11 @@ pub(crate) fn build_main_window(
     install_track_data_observer(&runtime, track_row_changed_holder.clone());
     install_track_updated_consumer(track_updated_rx, runtime.clone());
     install_smart_shuffle_rebuild_result_consumer(smart_shuffle_rebuild_result_rx, runtime.clone());
+    install_device_plan_result_consumer(
+        device_plan_result_rx,
+        runtime.clone(),
+        device_panel.clone(),
+    );
     install_device_sync_event_consumer(device_sync_event_rx, runtime.clone());
     // The sidebar is now the sole navigation surface: its selection
     // chooses which content-stack page is visible (Music → SONGS_VIEW,
@@ -868,8 +876,13 @@ fn install_device_sync_view(
 
     let refresh_devices: Rc<dyn Fn()> = {
         let sidebar = sidebar.clone();
+        let device_panel = device_panel.clone();
         let runtime = runtime.clone();
-        Rc::new(move || sidebar.set_devices(&runtime.borrow().connected_devices()))
+        Rc::new(move || {
+            let devices = runtime.borrow().connected_devices();
+            sidebar.set_devices(&devices);
+            device_panel.connected_devices_changed(&devices);
+        })
     };
     let volume_monitor = gio::VolumeMonitor::get();
     {

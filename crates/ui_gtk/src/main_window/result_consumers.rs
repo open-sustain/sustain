@@ -338,6 +338,23 @@ pub(super) fn install_device_sync_event_consumer(
     });
 }
 
+pub(super) fn install_device_plan_result_consumer(
+    receiver: Option<DevicePlanResultReceiver>,
+    runtime: SharedRuntime,
+    device_panel: DeviceSyncPanel,
+) {
+    let Some(receiver) = receiver else {
+        return;
+    };
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(result) = receiver.recv().await {
+            if runtime.borrow_mut().apply_device_plan_result(result) {
+                device_panel.refresh_plan();
+            }
+        }
+    });
+}
+
 /// Delay before the one-shot launch rebuild fires. A second is plenty
 /// to clear the cold-start window (the 400 ms first-idle budget plus
 /// margin) so the rebuild's main-thread prep — cloning the track list

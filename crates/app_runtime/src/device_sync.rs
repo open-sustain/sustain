@@ -13,18 +13,22 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::UNIX_EPOCH;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use sustain_device_sync::{
-    ConnectedDevice, SourceSnapshot, SyncInputPlaylist, SyncInputTrack, SyncPlan, SyncRequest,
+    ConnectedDevice, SourceSnapshot, SyncInputPlaylist, SyncInputTrack, SyncRequest, capacity,
     engine, source_file_stat,
 };
 use sustain_domain::{
-    DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MusicalKey, PlaylistItem, SyncDevice,
-    SyncDeviceId, Track,
+    DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MusicalKey, Playlist, PlaylistItem,
+    SmartPlaylist, SyncDevice, SyncDeviceId, Track, TrackId, matching_tracks,
 };
-use sustain_library_store::AnalysisCapabilities;
+use sustain_library_store::{AnalysisCapabilities, LibraryStore};
 
+use crate::device_plan_scheduler::{
+    DeviceMountIdentity, DevicePlanGeneration, DevicePlanResult, DevicePlanSnapshot,
+};
 use crate::device_sync_scheduler::{DeviceSyncEvent, DeviceSyncStartOutcome};
 use crate::{
     AnalysisRunRequest, ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult,
@@ -45,15 +49,17 @@ pub struct DeviceAnalysisReadiness {
     pub analyzable: usize,
 }
 
-/// A connected device's filesystem capacity, read from `statvfs`. Drives
-/// the panel's disk-occupation bar (how much of `total_bytes` the ticked
-/// playlists would occupy).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct DeviceCapacity {
-    /// Total size of the device's filesystem in bytes.
-    pub total_bytes: u64,
-    /// Bytes currently free for an unprivileged writer.
-    pub available_bytes: u64,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DeviceSyncPlanState {
+    Pending,
+    Ready(DevicePlanSnapshot),
+    Unavailable,
+}
+
+pub(crate) struct DevicePlanCache {
+    generation: DevicePlanGeneration,
+    mount: DeviceMountIdentity,
+    state: DeviceSyncPlanState,
 }
 
 impl ApplicationRuntime {
@@ -67,16 +73,6 @@ impl ApplicationRuntime {
             .and_then(|store| store.sync_devices().ok())
             .unwrap_or_default();
         sustain_device_sync::discover(&known)
-    }
-
-    /// Read a mounted filesystem's total and available capacity. Returns
-    /// `None` if the path cannot be `statvfs`'d (e.g. the device was
-    /// unplugged between discovery and this call).
-    pub fn mount_capacity(&self, mount_path: &std::path::Path) -> Option<DeviceCapacity> {
-        crate::mount::capacity(mount_path).map(|(total_bytes, available_bytes)| DeviceCapacity {
-            total_bytes,
-            available_bytes,
-        })
     }
 
     /// The saved configuration for a device, if Sustain has it.
@@ -143,6 +139,15 @@ impl ApplicationRuntime {
         self.device_sync_scheduler.event_receiver()
     }
 
+    pub fn device_plan_result_receiver(&self) -> async_channel::Receiver<DevicePlanResult> {
+        self.device_plan_scheduler.result_receiver()
+    }
+
+    pub fn shutdown_device_plan_scheduler(&mut self) {
+        self.device_plan_scheduler.shutdown();
+        self.device_plan_cache = None;
+    }
+
     /// Ensure a saved-config row exists for a connected device, creating
     /// one with sensible defaults (and refreshing its volume id) if not.
     /// The UI calls this when a device panel opens, so subsequent
@@ -187,47 +192,55 @@ impl ApplicationRuntime {
     // --- Configuration command handlers ---
 
     pub(crate) fn set_device_layout(
-        &self,
+        &mut self,
         id: SyncDeviceId,
         layout: DeviceLayout,
     ) -> ApplicationRuntimeResult<()> {
         let mut device = self.device_config_or_default(&id);
         device.layout = layout;
-        self.persist_device(&device)
+        self.persist_device(&device)?;
+        self.invalidate_device_sync_plan();
+        Ok(())
     }
 
     pub(crate) fn set_device_sub_path(
-        &self,
+        &mut self,
         id: SyncDeviceId,
         sub_path: DeviceRelativePath,
     ) -> ApplicationRuntimeResult<()> {
         let mut device = self.device_config_or_default(&id);
         device.sub_path = sub_path;
-        self.persist_device(&device)
+        self.persist_device(&device)?;
+        self.invalidate_device_sync_plan();
+        Ok(())
     }
 
     pub(crate) fn set_device_files_per_folder_cap(
-        &self,
+        &mut self,
         id: SyncDeviceId,
         cap: FilesPerFolderCap,
     ) -> ApplicationRuntimeResult<()> {
         let mut device = self.device_config_or_default(&id);
         device.files_per_folder_cap = cap;
-        self.persist_device(&device)
+        self.persist_device(&device)?;
+        self.invalidate_device_sync_plan();
+        Ok(())
     }
 
     pub(crate) fn rename_device(
-        &self,
+        &mut self,
         id: SyncDeviceId,
         label: String,
     ) -> ApplicationRuntimeResult<()> {
         let mut device = self.device_config_or_default(&id);
         device.label = label;
-        self.persist_device(&device)
+        self.persist_device(&device)?;
+        self.invalidate_device_sync_plan();
+        Ok(())
     }
 
     pub(crate) fn set_device_selection(
-        &self,
+        &mut self,
         id: SyncDeviceId,
         selection: Vec<PlaylistItem>,
     ) -> ApplicationRuntimeResult<()> {
@@ -237,17 +250,21 @@ impl ApplicationRuntime {
             .ok_or(ApplicationRuntimeError::LibraryStoreFailed)?;
         store
             .save_device_selection(&id, &selection)
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        self.invalidate_device_sync_plan();
+        Ok(())
     }
 
-    pub(crate) fn forget_device(&self, id: SyncDeviceId) -> ApplicationRuntimeResult<()> {
+    pub(crate) fn forget_device(&mut self, id: SyncDeviceId) -> ApplicationRuntimeResult<()> {
         let store = self
             .library_store
             .as_ref()
             .ok_or(ApplicationRuntimeError::LibraryStoreFailed)?;
         store
             .delete_sync_device(&id)
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        self.invalidate_device_sync_plan();
+        Ok(())
     }
 
     fn device_config_or_default(&self, id: &SyncDeviceId) -> SyncDevice {
@@ -331,18 +348,87 @@ impl ApplicationRuntime {
 
     // --- Plan + sync ---
 
-    /// Compute what a sync of `id` to its connected mount would do
-    /// (copies, updates, removals), without writing. Returns `None` when
-    /// the device is not connected, has no library root, or the
-    /// selection is empty.
-    pub fn device_sync_plan(&self, id: &SyncDeviceId) -> Option<SyncPlan> {
-        self.ensure_library_hydrated().ok()?;
-        let connected = self.connected_devices().into_iter().find(|d| &d.id == id)?;
-        let device = self.device_config(id)?;
-        let request = self
-            .build_sync_request(&device, connected.mount_path, false, false)
-            .ok()?;
-        engine::plan(&request).ok()
+    pub fn request_device_sync_plan(&mut self, connected: &ConnectedDevice) {
+        let generation = self.next_device_plan_generation();
+        let mount = mount_identity(connected);
+        self.device_plan_cache = Some(DevicePlanCache {
+            generation,
+            mount: mount.clone(),
+            state: DeviceSyncPlanState::Pending,
+        });
+
+        let Some(store) = self.library_store.clone() else {
+            self.mark_device_plan_unavailable(generation, &mount);
+            return;
+        };
+        let preparation = DevicePlanPreparation {
+            mount: mount.clone(),
+            store,
+            library_path: self.settings.library.path.clone(),
+            now: self.clock.now(),
+            export_date: unix_to_ymd(self.clock_unix_secs()),
+        };
+        if self
+            .device_plan_scheduler
+            .request_plan(
+                generation,
+                mount.clone(),
+                Box::new(move |cancelled| preparation.run(cancelled)),
+            )
+            .is_err()
+        {
+            self.mark_device_plan_unavailable(generation, &mount);
+        }
+    }
+
+    pub fn invalidate_device_sync_plan(&mut self) {
+        let generation = self.next_device_plan_generation();
+        self.device_plan_scheduler.cancel_before(generation);
+        self.device_plan_cache = None;
+    }
+
+    pub fn device_sync_plan_state(&self, connected: &ConnectedDevice) -> DeviceSyncPlanState {
+        let mount = mount_identity(connected);
+        self.device_plan_cache
+            .as_ref()
+            .filter(|cache| cache.mount == mount)
+            .map(|cache| cache.state.clone())
+            .unwrap_or(DeviceSyncPlanState::Unavailable)
+    }
+
+    pub fn apply_device_plan_result(&mut self, result: DevicePlanResult) -> bool {
+        let Some(cache) = self.device_plan_cache.as_mut() else {
+            return false;
+        };
+        if cache.generation != result.generation || cache.mount != result.mount {
+            return false;
+        }
+        cache.state = match result.result {
+            Ok(snapshot) => DeviceSyncPlanState::Ready(snapshot),
+            Err(_) => DeviceSyncPlanState::Unavailable,
+        };
+        true
+    }
+
+    fn next_device_plan_generation(&mut self) -> DevicePlanGeneration {
+        self.next_device_plan_generation = self
+            .next_device_plan_generation
+            .checked_add(1)
+            .expect("device-plan generation space exhausted");
+        DevicePlanGeneration::new(self.next_device_plan_generation)
+    }
+
+    fn mark_device_plan_unavailable(
+        &mut self,
+        generation: DevicePlanGeneration,
+        mount: &DeviceMountIdentity,
+    ) {
+        if let Some(cache) = self.device_plan_cache.as_mut()
+            && cache.generation == generation
+            && cache.mount == *mount
+        {
+            cache.state = DeviceSyncPlanState::Unavailable;
+        }
     }
 
     pub(crate) fn start_device_sync(
@@ -609,6 +695,221 @@ impl ApplicationRuntime {
     }
 }
 
+fn mount_identity(connected: &ConnectedDevice) -> DeviceMountIdentity {
+    DeviceMountIdentity {
+        device_id: connected.id.clone(),
+        mount_path: connected.mount_path.clone(),
+        volume_id: connected.volume_id.clone(),
+    }
+}
+
+struct DevicePlanPreparation {
+    mount: DeviceMountIdentity,
+    store: Arc<dyn LibraryStore>,
+    library_path: Option<PathBuf>,
+    now: SystemTime,
+    export_date: String,
+}
+
+impl DevicePlanPreparation {
+    fn run(self, cancelled: &dyn Fn() -> bool) -> Option<Result<DevicePlanSnapshot, String>> {
+        if cancelled() {
+            return None;
+        }
+        let capacity = match capacity(&self.mount.mount_path) {
+            Ok(capacity) => capacity,
+            Err(error) => return Some(Err(format!("device capacity probe failed: {error}"))),
+        };
+        if cancelled() {
+            return None;
+        }
+        let request = match build_plan_sync_request(
+            self.store.as_ref(),
+            &self.mount,
+            self.library_path.as_deref(),
+            self.now,
+            self.export_date,
+            cancelled,
+        ) {
+            Ok(Some(request)) => request,
+            Ok(None) => return None,
+            Err(error) => return Some(Err(error)),
+        };
+        if cancelled() {
+            return None;
+        }
+        let plan = if request.tracks.is_empty() {
+            None
+        } else {
+            match engine::plan(&request) {
+                Ok(plan) => Some(plan),
+                Err(error) => return Some(Err(error.to_string())),
+            }
+        };
+        Some(Ok(DevicePlanSnapshot { plan, capacity }))
+    }
+}
+
+fn build_plan_sync_request(
+    store: &dyn LibraryStore,
+    mount: &DeviceMountIdentity,
+    library_path: Option<&std::path::Path>,
+    now: SystemTime,
+    export_date: String,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<SyncRequest>, String> {
+    let device = store
+        .sync_device(&mount.device_id)
+        .map_err(|error| format!("could not load device configuration: {error:?}"))?
+        .ok_or_else(|| "device configuration is unavailable".to_owned())?;
+    let selection = store
+        .device_selection(&mount.device_id)
+        .map_err(|error| format!("could not load device selection: {error:?}"))?;
+    if selection.is_empty() {
+        return Ok(Some(SyncRequest {
+            device,
+            mount_path: mount.mount_path.clone(),
+            tracks: Vec::new(),
+            playlists: Vec::new(),
+            previous_manifest: Vec::new(),
+            remove_stale: false,
+            export_date,
+        }));
+    }
+    let library_tracks = store
+        .tracks()
+        .map_err(|error| format!("could not load library tracks: {error:?}"))?;
+    let playlists = store
+        .playlists()
+        .map_err(|error| format!("could not load playlists: {error:?}"))?;
+    let smart_playlists = store
+        .smart_playlists()
+        .map_err(|error| format!("could not load smart playlists: {error:?}"))?;
+    let previous_manifest = store
+        .device_manifest(&mount.device_id)
+        .map_err(|error| format!("could not load device manifest: {error:?}"))?;
+    if cancelled() {
+        return Ok(None);
+    }
+
+    let by_id: HashMap<_, _> = library_tracks
+        .iter()
+        .map(|track| (track.id, track))
+        .collect();
+    let mut index_of: HashMap<TrackId, usize> = HashMap::new();
+    let mut tracks = Vec::new();
+    let mut resolved_playlists = Vec::new();
+    for item in selection {
+        if cancelled() {
+            return Ok(None);
+        }
+        let Some(track_ids) =
+            snapshot_playlist_track_ids(item, &library_tracks, &playlists, &smart_playlists, now)
+        else {
+            continue;
+        };
+        let name = snapshot_playlist_name(item, &playlists, &smart_playlists)
+            .unwrap_or_else(|| "Playlist".to_owned());
+        let mut indices = Vec::with_capacity(track_ids.len());
+        for track_id in track_ids {
+            if cancelled() {
+                return Ok(None);
+            }
+            let index = match index_of.get(&track_id) {
+                Some(&index) => Some(index),
+                None => {
+                    let Some(track) = by_id.get(&track_id) else {
+                        continue;
+                    };
+                    if track.location.is_missing() {
+                        continue;
+                    }
+                    let Some(library_path) = library_path else {
+                        continue;
+                    };
+                    let source_path = track.location.absolute_path(library_path);
+                    let Some(source) = source_snapshot(store, track.id, &source_path)
+                        .map_err(|error| format!("could not inspect source track: {error:?}"))?
+                    else {
+                        continue;
+                    };
+                    let index = tracks.len();
+                    tracks.push(sync_input_track(track, source_path, source, None, None));
+                    index_of.insert(track_id, index);
+                    Some(index)
+                }
+            };
+            if let Some(index) = index {
+                indices.push(index);
+            }
+        }
+        resolved_playlists.push(SyncInputPlaylist {
+            name,
+            track_indices: indices,
+        });
+    }
+    Ok(Some(SyncRequest {
+        device,
+        mount_path: mount.mount_path.clone(),
+        tracks,
+        playlists: resolved_playlists,
+        previous_manifest,
+        remove_stale: false,
+        export_date,
+    }))
+}
+
+fn snapshot_playlist_track_ids(
+    item: PlaylistItem,
+    tracks: &[Track],
+    playlists: &[Playlist],
+    smart_playlists: &[SmartPlaylist],
+    now: SystemTime,
+) -> Option<Vec<TrackId>> {
+    match item {
+        PlaylistItem::Playlist(id) => {
+            playlists
+                .iter()
+                .find(|playlist| playlist.id == id)
+                .map(|playlist| {
+                    playlist
+                        .entries
+                        .iter()
+                        .map(|entry| entry.track_id)
+                        .collect()
+                })
+        }
+        PlaylistItem::SmartPlaylist(id) => smart_playlists
+            .iter()
+            .find(|playlist| playlist.id == id)
+            .map(|playlist| {
+                matching_tracks(tracks, &playlist.rules, now)
+                    .into_iter()
+                    .map(|track| track.id)
+                    .collect()
+            }),
+        PlaylistItem::Folder(_) => None,
+    }
+}
+
+fn snapshot_playlist_name(
+    item: PlaylistItem,
+    playlists: &[Playlist],
+    smart_playlists: &[SmartPlaylist],
+) -> Option<String> {
+    match item {
+        PlaylistItem::Playlist(id) => playlists
+            .iter()
+            .find(|playlist| playlist.id == id)
+            .map(|playlist| playlist.name.clone()),
+        PlaylistItem::SmartPlaylist(id) => smart_playlists
+            .iter()
+            .find(|playlist| playlist.id == id)
+            .map(|playlist| playlist.name.clone()),
+        PlaylistItem::Folder(_) => None,
+    }
+}
+
 fn sync_input_track(
     track: &Track,
     source_path: PathBuf,
@@ -700,7 +1001,26 @@ fn unix_to_ymd(secs: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::unix_to_ymd;
+    use sustain_device_sync::DeviceCapacity;
+    use sustain_domain::{DeviceKind, SyncDeviceId};
+
+    use super::{
+        ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
+        DeviceSyncPlanState, unix_to_ymd,
+    };
+    use crate::ApplicationRuntime;
+
+    fn connected(id: &str, mount_path: &str) -> ConnectedDevice {
+        ConnectedDevice {
+            id: SyncDeviceId::new(id).expect("device id"),
+            kind: DeviceKind::UsbDrive,
+            mount_path: mount_path.into(),
+            volume_id: Some(format!("{id}-volume")),
+            label: id.to_owned(),
+            is_known: true,
+            has_marker: true,
+        }
+    }
 
     #[test]
     fn formats_known_dates() {
@@ -708,5 +1028,37 @@ mod tests {
         assert_eq!(unix_to_ymd(1_700_000_000), "2023-11-14");
         // 2026-05-29 00:00:00 UTC
         assert_eq!(unix_to_ymd(1_780_012_800), "2026-05-29");
+    }
+
+    #[test]
+    fn runtime_discards_stale_plan_generation() {
+        let mut runtime = ApplicationRuntime::new();
+        let first = connected("first", "/mnt/first");
+        runtime.request_device_sync_plan(&first);
+        let generation = runtime
+            .device_plan_cache
+            .as_ref()
+            .expect("first cache")
+            .generation;
+        let mount = DeviceMountIdentity {
+            device_id: first.id.clone(),
+            mount_path: first.mount_path.clone(),
+            volume_id: first.volume_id.clone(),
+        };
+        let second = connected("second", "/mnt/second");
+        runtime.request_device_sync_plan(&second);
+
+        assert!(!runtime.apply_device_plan_result(DevicePlanResult {
+            generation,
+            mount,
+            result: Ok(DevicePlanSnapshot {
+                plan: None,
+                capacity: DeviceCapacity::default(),
+            }),
+        }));
+        assert_eq!(
+            runtime.device_sync_plan_state(&second),
+            DeviceSyncPlanState::Unavailable
+        );
     }
 }

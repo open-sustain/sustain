@@ -125,6 +125,8 @@ pub(crate) type SmartShuffleRebuildResultReceiver =
     async_channel::Receiver<sustain_app_runtime::SmartShuffleRebuildResult>;
 pub(crate) type DeviceSyncEventReceiver =
     async_channel::Receiver<sustain_app_runtime::DeviceSyncEvent>;
+pub(crate) type DevicePlanResultReceiver =
+    async_channel::Receiver<sustain_app_runtime::DevicePlanResult>;
 pub(crate) type LibraryHydrationResultReceiver = async_channel::Receiver<
     sustain_app_runtime::ApplicationRuntimeResult<LibraryHydrationSnapshot>,
 >;
@@ -200,6 +202,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     // main loop. Without a drain, completed rebuilds would queue
     // forever in the channel and the index would never be adopted.
     let smart_shuffle_rebuild_result_rx = runtime.smart_shuffle_rebuild_result_receiver();
+    let device_plan_result_rx = runtime.device_plan_result_receiver();
     let device_sync_event_rx = runtime.device_sync_event_receiver();
     let library_hydration_result_rx = runtime.library_hydration_result_receiver();
 
@@ -270,6 +273,8 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     > = Rc::new(RefCell::new(Some(smart_shuffle_rebuild_result_rx)));
     let device_sync_event_rx_holder: Rc<RefCell<Option<DeviceSyncEventReceiver>>> =
         Rc::new(RefCell::new(Some(device_sync_event_rx)));
+    let device_plan_result_rx_holder: Rc<RefCell<Option<DevicePlanResultReceiver>>> =
+        Rc::new(RefCell::new(Some(device_plan_result_rx)));
     let library_hydration_result_rx_holder: Rc<RefCell<Option<LibraryHydrationResultReceiver>>> =
         Rc::new(RefCell::new(Some(library_hydration_result_rx)));
 
@@ -291,6 +296,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
             let smart_shuffle_rebuild_result_rx =
                 smart_shuffle_rebuild_result_rx_holder.borrow_mut().take();
             let device_sync_event_rx = device_sync_event_rx_holder.borrow_mut().take();
+            let device_plan_result_rx = device_plan_result_rx_holder.borrow_mut().take();
             let library_hydration_result_rx =
                 library_hydration_result_rx_holder.borrow_mut().take();
             let main_window = build_main_window(
@@ -306,6 +312,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
                     track_updated_rx,
                     smart_shuffle_rebuild_result_rx,
                     device_sync_event_rx,
+                    device_plan_result_rx,
                     library_hydration_result_rx,
                 },
             );
@@ -339,6 +346,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     // retries safely resume next launch instead of extending shutdown.
     let mut runtime_guard = runtime.borrow_mut();
     runtime_guard.shutdown_library_hydration();
+    runtime_guard.shutdown_device_plan_scheduler();
     runtime_guard.shutdown_device_sync_scheduler();
     runtime_guard.shutdown_analysis_scheduler();
     runtime_guard.shutdown_online_scheduler();

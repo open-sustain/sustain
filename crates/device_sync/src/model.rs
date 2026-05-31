@@ -15,6 +15,13 @@ use sustain_domain::{
     SyncManifestEntry, TrackContentHash, TrackId, WaveformSegments,
 };
 
+/// Capacity of the filesystem behind an opened device mount root.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DeviceCapacity {
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+}
+
 /// One observation of a source audio file. A matching cached SHA-256 is
 /// optional during non-mutating planning; sync preparation resolves every
 /// missing hash on its worker before any destination write.

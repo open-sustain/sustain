@@ -2,9 +2,8 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 // The workspace already denies `unsafe_code`; the only audited
-// exceptions are `crate::priority` (Linux scheduling syscalls) and
-// `crate::mount` (`statvfs`), each confining a `#![allow(unsafe_code)]`
-// to a small module that exposes a safe API.
+// exception is `crate::priority` (Linux scheduling syscalls), which
+// confines a `#![allow(unsafe_code)]` to a small module exposing a safe API.
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -72,6 +71,7 @@ pub const ONLINE_PROVIDER_VERSION: u32 = 2;
 
 pub(crate) mod artwork_fetcher;
 mod commands;
+mod device_plan_scheduler;
 mod device_sync;
 pub mod device_sync_scheduler;
 mod file_presence;
@@ -80,7 +80,6 @@ mod library_mutation;
 mod library_scan;
 pub mod managed_library;
 pub(crate) mod metadata_writer;
-mod mount;
 pub mod notifications;
 pub mod online_scheduler;
 pub use online_scheduler::SchedulerProgress as OnlineProgress;
@@ -92,13 +91,17 @@ mod smart_playlists;
 pub mod smart_shuffle_scheduler;
 #[cfg(test)]
 mod test_store;
-pub use device_sync::{DeviceAnalysisReadiness, DeviceCapacity};
+pub use device_plan_scheduler::{
+    DeviceMountIdentity, DevicePlanGeneration, DevicePlanResult, DevicePlanScheduler,
+    DevicePlanSnapshot,
+};
+pub use device_sync::{DeviceAnalysisReadiness, DeviceSyncPlanState};
 pub use device_sync_scheduler::{
     DeviceSyncCompletion, DeviceSyncEvent, DeviceSyncRunId, DeviceSyncScheduler,
     DeviceSyncStartOutcome,
 };
 pub use smart_shuffle_scheduler::{SmartShuffleRebuildResult, SmartShuffleScheduler};
-pub use sustain_device_sync::{ConnectedDevice, SyncPlan, SyncProgress, SyncStage};
+pub use sustain_device_sync::{ConnectedDevice, DeviceCapacity, SyncPlan, SyncProgress, SyncStage};
 pub use sustain_smart_shuffle::{
     INDEX_SCHEMA_VERSION as SMART_SHUFFLE_INDEX_SCHEMA_VERSION, PickMode, SmartShuffleError,
     SmartShuffleIndex,
@@ -358,6 +361,11 @@ pub struct ApplicationRuntime {
     // the runtime so the picker can borrow it without crossing thread
     // boundaries.
     smart_shuffle_scheduler: SmartShuffleScheduler,
+    // Coalescing worker for dry-run device plans. The runtime retains only
+    // the newest generation's cache; obsolete results are discarded.
+    device_plan_scheduler: DevicePlanScheduler,
+    next_device_plan_generation: u64,
+    device_plan_cache: Option<device_sync::DevicePlanCache>,
     // Background worker for device syncs (issues #23/#24). Owns the
     // thread spawn + progress/result channel; the device manifest is
     // persisted by the runtime when a sync completes.
@@ -517,6 +525,9 @@ impl ApplicationRuntime {
             online_notification_id: None,
             online_persistence_error_id: None,
             smart_shuffle_scheduler: SmartShuffleScheduler::new(),
+            device_plan_scheduler: DevicePlanScheduler::new(),
+            next_device_plan_generation: 0,
+            device_plan_cache: None,
             device_sync_scheduler: DeviceSyncScheduler::new(),
             device_sync_notification_id: None,
             smart_shuffle_index: None,
@@ -591,6 +602,9 @@ impl ApplicationRuntime {
             online_notification_id: None,
             online_persistence_error_id: None,
             smart_shuffle_scheduler: SmartShuffleScheduler::new(),
+            device_plan_scheduler: DevicePlanScheduler::new(),
+            next_device_plan_generation: 0,
+            device_plan_cache: None,
             device_sync_scheduler: DeviceSyncScheduler::new(),
             device_sync_notification_id: None,
             smart_shuffle_index: None,

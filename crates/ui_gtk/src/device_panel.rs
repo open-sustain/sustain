@@ -22,8 +22,8 @@ use gtk::prelude::*;
 use gtk::{gdk, glib};
 
 use sustain_app_runtime::{
-    ApplicationCommand, ConnectedDevice, DeviceAnalysisReadiness, DeviceLayout, FilesPerFolderCap,
-    PlaylistItem, SyncPlan,
+    ApplicationCommand, ConnectedDevice, DeviceAnalysisReadiness, DeviceLayout,
+    DeviceSyncPlanState, FilesPerFolderCap, PlaylistItem, SyncPlan,
 };
 
 use crate::SharedRuntime;
@@ -44,6 +44,7 @@ pub(crate) struct DeviceSyncPanel {
     /// The device currently rendered, so the status-bar summary can be
     /// computed for it while the device view is visible.
     current_device: Rc<RefCell<Option<ConnectedDevice>>>,
+    current_device_connected: Rc<Cell<bool>>,
     /// Recomputes the status-bar track/duration/size summary. Fired on
     /// show, selection toggle, and forget so the summary tracks the
     /// device's selected content instead of a stale earlier view.
@@ -86,6 +87,7 @@ impl DeviceSyncPanel {
             body,
             bottom_bar,
             current_device: Rc::new(RefCell::new(None)),
+            current_device_connected: Rc::new(Cell::new(false)),
             on_summary_refresh: Rc::new(RefCell::new(None)),
             readiness_section: Rc::new(RefCell::new(None)),
             readiness_refresh_queued: Rc::new(Cell::new(false)),
@@ -123,9 +125,46 @@ impl DeviceSyncPanel {
     /// page, so the summary refresh resolves to the device's content.
     pub(crate) fn show_device(&self, device: ConnectedDevice) {
         let _ = self.runtime.borrow().ensure_device_config(&device);
+        self.runtime.borrow_mut().request_device_sync_plan(&device);
         self.current_device.replace(Some(device.clone()));
+        self.current_device_connected.set(true);
         self.rebuild(&device);
         self.fire_summary_refresh();
+    }
+
+    pub(crate) fn connected_devices_changed(&self, devices: &[ConnectedDevice]) {
+        let Some(current) = self.current_device.borrow().clone() else {
+            return;
+        };
+        let connected = devices.iter().find(|device| device.id == current.id);
+        match connected {
+            Some(device)
+                if !self.current_device_connected.get()
+                    || device.mount_path != current.mount_path
+                    || device.volume_id != current.volume_id =>
+            {
+                self.show_device(device.clone());
+            }
+            Some(_) => {}
+            None if self.current_device_connected.replace(false) => {
+                self.runtime.borrow_mut().invalidate_device_sync_plan();
+                self.refresh_bottom_bar(&current);
+            }
+            None => {}
+        }
+    }
+
+    pub(crate) fn refresh_plan(&self) {
+        if !self.root.is_mapped() || !self.current_device_connected.get() {
+            return;
+        }
+        if let Some(device) = self.current_device.borrow().clone() {
+            self.refresh_bottom_bar(&device);
+        }
+    }
+
+    fn request_plan(&self, device: &ConnectedDevice) {
+        self.runtime.borrow_mut().request_device_sync_plan(device);
     }
 
     fn clear(container: &gtk::Box) {
@@ -206,12 +245,14 @@ impl DeviceSyncPanel {
                     // A group emits two toggles per switch (off + on); act
                     // only on the one that became active.
                     if radio.is_active() {
-                        panel.command_controller.dispatch_succeeded(
+                        if panel.command_controller.dispatch_succeeded(
                             ApplicationCommand::SetDeviceLayout {
                                 device_id: device.id.clone(),
                                 layout,
                             },
-                        );
+                        ) {
+                            panel.request_plan(&device);
+                        }
                         panel.rebuild(&device);
                     }
                 });
@@ -263,13 +304,16 @@ impl DeviceSyncPanel {
                 radio.connect_toggled(move |radio| {
                     // A group emits two toggles per switch (off + on); act
                     // only on the one that became active.
-                    if radio.is_active() {
-                        panel.command_controller.dispatch_succeeded(
+                    if radio.is_active()
+                        && panel.command_controller.dispatch_succeeded(
                             ApplicationCommand::SetDeviceFilesPerFolderCap {
                                 device_id: device.id.clone(),
                                 cap,
                             },
-                        );
+                        )
+                    {
+                        panel.request_plan(&device);
+                        panel.refresh_selection_derived(&device);
                     }
                 });
             }
@@ -387,12 +431,14 @@ impl DeviceSyncPanel {
                     .filter(|(_, check)| check.is_active())
                     .map(|(item, _)| *item)
                     .collect();
-                panel.command_controller.dispatch_succeeded(
+                if panel.command_controller.dispatch_succeeded(
                     ApplicationCommand::SetDeviceSelection {
                         device_id: device.id.clone(),
                         selection,
                     },
-                );
+                ) {
+                    panel.request_plan(&device);
+                }
                 // The new selection changes occupation, the Sync action,
                 // the Pioneer readiness counts and the status-bar summary —
                 // refresh all of them in place, never touching this
@@ -417,8 +463,7 @@ impl DeviceSyncPanel {
         Self::clear(&self.bottom_bar);
 
         let runtime = self.runtime.borrow();
-        let plan = runtime.device_sync_plan(&device.id);
-        let capacity = runtime.mount_capacity(&device.mount_path);
+        let plan_state = runtime.device_sync_plan_state(device);
         // Pioneer hardware reads BPM/key/waveforms from the export, so warn
         // before syncing a selection that has gaps. Other layouts carry no
         // such data, so the readiness is irrelevant and left at zero.
@@ -433,13 +478,27 @@ impl DeviceSyncPanel {
         };
         drop(runtime);
 
+        let connected = self.current_device_connected.get();
+        let (plan, capacity, pending) = match plan_state {
+            DeviceSyncPlanState::Ready(snapshot) if connected => {
+                (snapshot.plan, Some(snapshot.capacity), false)
+            }
+            DeviceSyncPlanState::Pending if connected => (None, None, true),
+            DeviceSyncPlanState::Unavailable
+            | DeviceSyncPlanState::Pending
+            | DeviceSyncPlanState::Ready(_) => (None, None, false),
+        };
         let selected_bytes = plan.as_ref().map(|p| p.bytes_total).unwrap_or(0);
         let total_bytes = capacity.map(|c| c.total_bytes).unwrap_or(0);
         let available_bytes = capacity.map(|c| c.available_bytes).unwrap_or(0);
         let needed_bytes = plan.as_ref().map(|p| p.bytes_to_copy).unwrap_or(0);
         let over_capacity = total_bytes > 0 && needed_bytes > available_bytes;
 
-        let (fraction, text) = if total_bytes == 0 {
+        let (fraction, text) = if !connected {
+            (0.0, "Device disconnected".to_owned())
+        } else if pending {
+            (0.0, "Calculating device sync plan...".to_owned())
+        } else if total_bytes == 0 {
             (0.0, "Device capacity unavailable".to_owned())
         } else if over_capacity {
             (
@@ -504,6 +563,7 @@ impl DeviceSyncPanel {
                 panel.body.append(&note);
                 // The selection is gone; the summary now reads empty.
                 panel.current_device.replace(None);
+                panel.current_device_connected.set(false);
                 panel.fire_summary_refresh();
             });
         }
@@ -537,7 +597,7 @@ impl DeviceSyncPanel {
 
         let sync = gtk::Button::with_label("Sync");
         sync.add_css_class("suggested-action");
-        sync.set_sensitive(plan.is_some() && !over_capacity);
+        sync.set_sensitive(connected && !pending && plan.is_some() && !over_capacity);
         {
             let command_controller = self.command_controller.clone();
             let root = self.root.clone();

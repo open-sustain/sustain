@@ -27,10 +27,17 @@ pub use identity::{
     ConnectedDevice, MARKER_FILE, discover, generate_device_id, read_marker, write_marker,
 };
 pub use model::{
-    GenreBytes, Placement, PreparedSyncRequest, SourceSnapshot, SyncError, SyncInputPlaylist,
-    SyncInputTrack, SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage,
+    DeviceCapacity, GenreBytes, Placement, PreparedSyncRequest, SourceSnapshot, SyncError,
+    SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage,
 };
 pub use source::{resolve_source_fingerprint, source_file_stat};
+
+/// Probe a connected device's filesystem capacity through an opened root
+/// descriptor. The root is opened with `O_NOFOLLOW`, matching every other
+/// removable-media operation in this crate.
+pub fn capacity(mount_path: &std::path::Path) -> std::io::Result<DeviceCapacity> {
+    device_root::DeviceRoot::open(mount_path)?.capacity()
+}
 
 #[cfg(test)]
 mod tests {
