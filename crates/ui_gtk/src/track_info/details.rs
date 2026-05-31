@@ -36,8 +36,14 @@ pub(super) struct DetailsPage {
     bpm: gtk::Entry,
     key: gtk::Entry,
     comments: gtk::TextView,
+    rating_widget: gtk::Box,
     rating: Rc<Cell<u8>>,
     play_count_reset: Rc<Cell<bool>>,
+    play_count_label: gtk::Label,
+    reset_button: gtk::Button,
+    skip_count_label: gtk::Label,
+    last_played_label: gtk::Label,
+    last_skipped_label: gtk::Label,
 }
 
 impl DetailsPage {
@@ -215,9 +221,55 @@ impl DetailsPage {
             bpm,
             key,
             comments,
+            rating_widget,
             rating,
             play_count_reset,
+            play_count_label,
+            reset_button,
+            skip_count_label,
+            last_played_label,
+            last_skipped_label,
         }
+    }
+
+    pub(super) fn reload(
+        &self,
+        metadata: &TrackMetadata,
+        rating: Rating,
+        statistics: &PlayStatistics,
+    ) {
+        set_text(&self.title, metadata.title.as_deref());
+        set_text(&self.artist, metadata.artist.as_deref());
+        set_text(&self.album, metadata.album.as_deref());
+        set_text(&self.album_artist, metadata.album_artist.as_deref());
+        set_text(&self.composer, metadata.composer.as_deref());
+        set_text(&self.grouping, metadata.grouping.as_deref());
+        set_text(&self.genre, metadata.genre.as_deref());
+        set_optional_number(&self.year, metadata.year);
+        set_optional_number(&self.track_number, metadata.track_number);
+        set_optional_number(&self.track_total, metadata.track_total);
+        set_optional_number(&self.disc_number, metadata.disc_number);
+        set_optional_number(&self.disc_total, metadata.disc_total);
+        self.compilation
+            .set_active(metadata.compilation.unwrap_or(false));
+        set_optional_number(&self.bpm, metadata.bpm);
+        set_text(&self.key, metadata.key.as_deref());
+        self.comments
+            .buffer()
+            .set_text(metadata.comments.as_deref().unwrap_or_default());
+
+        self.rating.set(rating.stars());
+        refresh_rating_buttons(&self.rating_widget, rating.stars());
+        self.play_count_reset.set(false);
+        self.reset_button.set_sensitive(true);
+        self.play_count_label
+            .set_text(&statistics.play_count.to_string());
+        self.skip_count_label
+            .set_text(&statistics.skip_count.to_string());
+        self.last_played_label
+            .set_text(&format_stat_date(statistics.last_played_at));
+        self.last_skipped_label
+            .set_text(&format_stat_date(statistics.last_skipped_at));
     }
 
     pub(super) fn metadata_diff(&self, initial: &TrackMetadata) -> MetadataChange {
@@ -257,6 +309,14 @@ impl DetailsPage {
         let buffer = view.buffer();
         buffer.text(&buffer.start_iter(), &buffer.end_iter(), false)
     }
+}
+
+fn set_text(entry: &gtk::Entry, value: Option<&str>) {
+    entry.set_text(value.unwrap_or_default());
+}
+
+fn set_optional_number<T: ToString>(entry: &gtk::Entry, value: Option<T>) {
+    entry.set_text(&value.map(|value| value.to_string()).unwrap_or_default());
 }
 
 fn rating_star_button(star: u8) -> gtk::Button {

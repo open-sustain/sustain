@@ -14,11 +14,29 @@ use super::{
     },
 };
 
-pub(super) fn build_file_page(track: &Track, absolute_path: Option<&Path>) -> gtk::Box {
-    let page = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    page.add_css_class("track-info-file");
-    page.set_margin_top(10);
+pub(super) struct FilePage {
+    pub(super) widget: gtk::Box,
+}
 
+impl FilePage {
+    pub(super) fn new(track: &Track, absolute_path: Option<&Path>) -> Self {
+        let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        widget.add_css_class("track-info-file");
+        widget.set_margin_top(10);
+        let page = Self { widget };
+        page.reload(track, absolute_path);
+        page
+    }
+
+    pub(super) fn reload(&self, track: &Track, absolute_path: Option<&Path>) {
+        while let Some(child) = self.widget.first_child() {
+            self.widget.remove(&child);
+        }
+        self.widget.append(&build_grid(track, absolute_path));
+    }
+}
+
+fn build_grid(track: &Track, absolute_path: Option<&Path>) -> gtk::Grid {
     let grid = gtk::Grid::new();
     grid.set_row_spacing(4);
     grid.set_column_spacing(12);
@@ -82,6 +100,5 @@ pub(super) fn build_file_page(track: &Track, absolute_path: Option<&Path>) -> gt
         .unwrap_or_else(|| String::from("\u{2014}"));
     attach_readonly_field(&grid, row, "Location", &location_text);
 
-    page.append(&grid);
-    page
+    grid
 }

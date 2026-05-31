@@ -42,6 +42,7 @@ use super::{
     },
     smart_playlist_editor::{SmartPlaylistEditorMode, open_smart_playlist_editor},
     titlebar::Titlebar,
+    track_context::TrackActionInvocation,
     track_context_ops::{get_info_callback, show_in_folder_callback},
     track_table::TrackTable,
 };
@@ -151,7 +152,10 @@ fn install_get_info(context: &GlobalShortcutContext) {
         if selection.len() != 1 {
             return;
         }
-        callback(selection);
+        callback(TrackActionInvocation {
+            selected_track_ids: selection,
+            displayed_track_ids: current_view_order(&content_stack, &songs_table, &playlists_table),
+        });
     });
     context.app.add_action(&action);
     context
@@ -180,7 +184,10 @@ fn install_show_in_folder(context: &GlobalShortcutContext) {
         // file-manager window per track on a large selection would be
         // hostile; cross-folder selections still resolve to a single,
         // predictable parent directory.
-        callback(selection);
+        callback(TrackActionInvocation {
+            selected_track_ids: selection,
+            displayed_track_ids: Vec::new(),
+        });
     });
     context.app.add_action(&action);
     context
@@ -201,6 +208,18 @@ fn current_view_selection(
     match content_stack.visible_child_name().as_deref() {
         Some(SONGS_VIEW) => songs_table.selected_track_ids(),
         Some(PLAYLISTS_VIEW) => playlists_table.selected_track_ids(),
+        _ => Vec::new(),
+    }
+}
+
+fn current_view_order(
+    content_stack: &gtk::Stack,
+    songs_table: &TrackTable,
+    playlists_table: &TrackTable,
+) -> Vec<sustain_app_runtime::TrackId> {
+    match content_stack.visible_child_name().as_deref() {
+        Some(SONGS_VIEW) => songs_table.ordered_track_ids(),
+        Some(PLAYLISTS_VIEW) => playlists_table.ordered_track_ids(),
         _ => Vec::new(),
     }
 }

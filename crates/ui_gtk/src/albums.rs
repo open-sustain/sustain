@@ -874,9 +874,11 @@ impl AlbumsView {
 
         let split_index = album.tracks.len().div_ceil(2);
         let playing_track_id = self.playing_track_id.get();
+        let ordered_track_ids: Vec<TrackId> = album.tracks.iter().map(|track| track.id).collect();
 
         let left = AlbumTrackListView::new(
             &album.tracks[..split_index],
+            ordered_track_ids.clone(),
             self.context_menu.clone(),
             self.command_controller.clone(),
             self.playback_changed.clone(),
@@ -884,6 +886,7 @@ impl AlbumsView {
         );
         let right = AlbumTrackListView::new(
             &album.tracks[split_index..],
+            ordered_track_ids,
             self.context_menu.clone(),
             self.command_controller.clone(),
             self.playback_changed.clone(),

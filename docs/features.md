@@ -478,6 +478,9 @@ The Artwork tab shows the embedded cover (or a missing-art placeholder)
 with add and remove actions. The Lyrics tab shows the raw lyrics text.
 
 Opening Get Info on a track is `Ctrl+I` or the row context menu.
+Previous/Next buttons walk the displayed track order without closing the
+dialog, committing edits before navigation. `Ctrl+[` and `Ctrl+]` trigger
+the same actions.
 
 ### Inline rating — *iso-iTunes*
 The Rating column in the table accepts clicks directly: click a star to
@@ -703,6 +706,8 @@ overlay:
 | `Ctrl+Alt+N`   | New smart playlist (opens editor)     |
 | `Ctrl+F`       | Focus the search bar (select-all)     |
 | `Ctrl+I`       | Get Info on the current selection     |
+| `Ctrl+[`       | Previous track in Get Info            |
+| `Ctrl+]`       | Next track in Get Info                |
 | `Ctrl+R`       | Reveal the selected track in Files    |
 | `Ctrl+L`       | Jump to the currently playing track   |
 | `Space`        | Play / pause toggle (focus-aware)     |

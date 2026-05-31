@@ -29,6 +29,7 @@ pub(super) struct AlbumTrackListView {
 impl AlbumTrackListView {
     pub(super) fn new(
         tracks: &[AlbumTrackViewModel],
+        ordered_track_ids: Vec<TrackId>,
         context_menu: TrackRowContextMenu,
         command_controller: SharedCommandController,
         playback_changed: PlaybackChangedCallback,
@@ -44,7 +45,7 @@ impl AlbumTrackListView {
         // right-click context menus still work without a selection model.
         let selection = gtk::NoSelection::new(Some(store));
 
-        let context_menu = AlbumTrackContextMenu::new(context_menu);
+        let context_menu = AlbumTrackContextMenu::new(context_menu, ordered_track_ids);
         let factory = build_row_factory(context_menu.clone(), playing_track_id);
 
         let list = gtk::ListView::new(Some(selection.clone()), Some(factory));
@@ -244,13 +245,15 @@ fn row_track_id(item: Option<glib::Object>) -> Option<TrackId> {
 #[derive(Clone)]
 struct AlbumTrackContextMenu {
     menu: TrackRowContextMenu,
+    ordered_track_ids: Rc<Vec<TrackId>>,
     rows: Rc<RefCell<Vec<AlbumTrackContextRow>>>,
 }
 
 impl AlbumTrackContextMenu {
-    fn new(menu: TrackRowContextMenu) -> Self {
+    fn new(menu: TrackRowContextMenu, ordered_track_ids: Vec<TrackId>) -> Self {
         Self {
             menu,
+            ordered_track_ids: Rc::new(ordered_track_ids),
             rows: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -273,7 +276,13 @@ impl AlbumTrackContextMenu {
             };
 
             gesture.set_state(gtk::EventSequenceState::Claimed);
-            context.menu.popup_at(vec![track_id], &widget, x, y);
+            context.menu.popup_at(
+                vec![track_id],
+                context.ordered_track_ids.as_ref().clone(),
+                &widget,
+                x,
+                y,
+            );
         });
         widget.add_controller(gesture);
     }

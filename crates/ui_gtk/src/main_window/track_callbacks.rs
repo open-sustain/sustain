@@ -440,7 +440,8 @@ fn remove_from_playlist_callback(
     let command_controller = command_controller.clone();
     let sidebar = sidebar.clone();
 
-    Rc::new(move |track_ids: Vec<TrackId>| {
+    Rc::new(move |invocation: TrackActionInvocation| {
+        let track_ids = invocation.selected_track_ids;
         let Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id))) =
             sidebar.current_selection()
         else {
@@ -474,7 +475,8 @@ fn track_mutation_callback(
 ) -> TrackActionCallback {
     let command_controller = command_controller.clone();
 
-    Rc::new(move |track_ids: Vec<TrackId>| {
+    Rc::new(move |invocation: TrackActionInvocation| {
+        let track_ids = invocation.selected_track_ids;
         let commands = track_ids
             .into_iter()
             .map(&command_builder)

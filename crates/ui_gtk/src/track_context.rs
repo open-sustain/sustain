@@ -10,7 +10,7 @@ use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, OnlineCapability, OnlineRunRequest, PlaylistId, TrackId,
 };
 
-pub(crate) type TrackActionCallback = Rc<dyn Fn(Vec<TrackId>)>;
+pub(crate) type TrackActionCallback = Rc<dyn Fn(TrackActionInvocation)>;
 pub(crate) type TrackActionVisibility = Rc<dyn Fn(&[TrackId]) -> bool>;
 pub(crate) type AddToPlaylistProvider = Rc<dyn Fn() -> Vec<AddToPlaylistEntry>>;
 pub(crate) type AddToPlaylistCallback = Rc<dyn Fn(PlaylistId, Vec<TrackId>)>;
@@ -34,6 +34,12 @@ pub(crate) type TrackRetrieveBusyQuery = Rc<dyn Fn() -> bool>;
 type PendingConfirmCallback = Rc<RefCell<Option<Box<dyn FnOnce(Vec<TrackId>)>>>>;
 const ADD_TO_PLAYLIST_MAX_VISIBLE_HEIGHT: i32 = 360;
 const ADD_TO_PLAYLIST_MAX_LABEL_CHARS: i32 = 48;
+
+#[derive(Clone, Debug)]
+pub(crate) struct TrackActionInvocation {
+    pub(crate) selected_track_ids: Vec<TrackId>,
+    pub(crate) displayed_track_ids: Vec<TrackId>,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct AddToPlaylistEntry {
@@ -377,6 +383,7 @@ impl TrackRowContextMenu {
     pub(crate) fn popup_at(
         &self,
         track_ids: Vec<TrackId>,
+        displayed_track_ids: Vec<TrackId>,
         anchor: &impl IsA<gtk::Widget>,
         x: f64,
         y: f64,
@@ -385,12 +392,13 @@ impl TrackRowContextMenu {
             return;
         }
 
-        self.popup_at_parent(track_ids, anchor, anchor, x, y);
+        self.popup_at_parent(track_ids, displayed_track_ids, anchor, anchor, x, y);
     }
 
     pub(crate) fn popup_at_parent(
         &self,
         track_ids: Vec<TrackId>,
+        displayed_track_ids: Vec<TrackId>,
         anchor: &impl IsA<gtk::Widget>,
         popover_parent: &impl IsA<gtk::Widget>,
         x: f64,
@@ -416,7 +424,11 @@ impl TrackRowContextMenu {
         popover.set_has_arrow(false);
         popover.add_css_class("compact-context-menu");
         popover.set_parent(popover_parent.as_ref());
-        popover.set_child(Some(&self.menu_content(&popover, track_ids)));
+        popover.set_child(Some(&self.menu_content(
+            &popover,
+            track_ids,
+            displayed_track_ids,
+        )));
 
         let popover_for_close = popover.clone();
         popover.connect_closed(move |_| {
@@ -428,12 +440,17 @@ impl TrackRowContextMenu {
         popover.popup();
     }
 
-    fn menu_content(&self, popover: &gtk::Popover, track_ids: Vec<TrackId>) -> gtk::Stack {
+    fn menu_content(
+        &self,
+        popover: &gtk::Popover,
+        track_ids: Vec<TrackId>,
+        displayed_track_ids: Vec<TrackId>,
+    ) -> gtk::Stack {
         let root = gtk::Stack::new();
         root.set_hhomogeneous(false);
         root.set_vhomogeneous(false);
         root.set_transition_type(gtk::StackTransitionType::None);
-        let (main_page, triggers) = self.build_main_page(popover, &track_ids);
+        let (main_page, triggers) = self.build_main_page(popover, &track_ids, &displayed_track_ids);
         root.add_named(&main_page, Some("main"));
 
         if let Some(add) = &self.add_to_playlist {
@@ -463,6 +480,7 @@ impl TrackRowContextMenu {
         &self,
         popover: &gtk::Popover,
         track_ids: &[TrackId],
+        displayed_track_ids: &[TrackId],
     ) -> (gtk::Box, MainPageTriggers) {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.add_css_class("track-context-menu");
@@ -523,7 +541,13 @@ impl TrackRowContextMenu {
             }
 
             for action in group_iter {
-                self.append_action_button(&content, popover, action, track_ids);
+                self.append_action_button(
+                    &content,
+                    popover,
+                    action,
+                    track_ids,
+                    displayed_track_ids,
+                );
             }
             prior_group_rendered = true;
         }
@@ -537,15 +561,24 @@ impl TrackRowContextMenu {
         popover: &gtk::Popover,
         action: &TrackContextAction,
         track_ids: &[TrackId],
+        displayed_track_ids: &[TrackId],
     ) {
         let button = context_menu_button(action);
         let action = action.clone();
         let parent = self.parent_window.clone();
         let popover = popover.clone();
         let track_ids = track_ids.to_vec();
+        let displayed_track_ids = displayed_track_ids.to_vec();
         button.connect_clicked(move |_| {
             popover.popdown();
-            run_context_action(&action, &parent, track_ids.clone());
+            run_context_action(
+                &action,
+                &parent,
+                TrackActionInvocation {
+                    selected_track_ids: track_ids.clone(),
+                    displayed_track_ids: displayed_track_ids.clone(),
+                },
+            );
         });
         content.append(&button);
     }
@@ -814,16 +847,28 @@ fn context_menu_button(action: &TrackContextAction) -> gtk::Button {
     button
 }
 
-fn run_context_action(action: &TrackContextAction, parent: &gtk::Window, track_ids: Vec<TrackId>) {
+fn run_context_action(
+    action: &TrackContextAction,
+    parent: &gtk::Window,
+    invocation: TrackActionInvocation,
+) {
     match action.confirmation {
         TrackActionConfirmation::None => {
-            (action.callback)(track_ids);
+            (action.callback)(invocation);
         }
         TrackActionConfirmation::MoveToTrash => {
             let callback = action.callback.clone();
-            confirm_move_to_trash(parent, track_ids, move |confirmed_ids| {
-                callback(confirmed_ids);
-            });
+            let displayed_track_ids = invocation.displayed_track_ids;
+            confirm_move_to_trash(
+                parent,
+                invocation.selected_track_ids,
+                move |confirmed_ids| {
+                    callback(TrackActionInvocation {
+                        selected_track_ids: confirmed_ids,
+                        displayed_track_ids,
+                    });
+                },
+            );
         }
     }
 }

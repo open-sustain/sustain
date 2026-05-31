@@ -12,7 +12,7 @@ use super::{
     LibraryChangedHolder, SharedRuntime, ShowAlbumHolder, TrackRowChangedHolder,
     artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
-    track_context::{TrackActionCallback, TrackActionVisibility},
+    track_context::{TrackActionCallback, TrackActionInvocation, TrackActionVisibility},
     track_info::open_track_info_dialog,
 };
 
@@ -22,7 +22,8 @@ pub(crate) fn copy_files_callback(
 ) -> TrackActionCallback {
     let runtime = runtime.clone();
     let window = window.clone();
-    Rc::new(move |track_ids: Vec<TrackId>| {
+    Rc::new(move |invocation: TrackActionInvocation| {
+        let track_ids = invocation.selected_track_ids;
         let paths = absolute_paths_for_tracks(&runtime, &track_ids);
         if paths.is_empty() {
             return;
@@ -45,8 +46,16 @@ pub(crate) fn get_info_callback(
     let library_changed_holder = library_changed_holder.clone();
     let track_row_changed_holder = track_row_changed_holder.clone();
     let artwork_loader = artwork_loader.clone();
-    Rc::new(move |track_ids: Vec<TrackId>| {
+    Rc::new(move |invocation: TrackActionInvocation| {
+        let track_ids = invocation.selected_track_ids;
         let Some(&track_id) = track_ids.first() else {
+            return;
+        };
+        let Some(start_index) = invocation
+            .displayed_track_ids
+            .iter()
+            .position(|candidate| *candidate == track_id)
+        else {
             return;
         };
         open_track_info_dialog(
@@ -56,7 +65,8 @@ pub(crate) fn get_info_callback(
             &library_changed_holder,
             &track_row_changed_holder,
             &artwork_loader,
-            track_id,
+            invocation.displayed_track_ids,
+            start_index,
         );
     })
 }
@@ -65,7 +75,8 @@ pub(crate) fn play_next_callback(
     command_controller: &SharedCommandController,
 ) -> TrackActionCallback {
     let command_controller = command_controller.clone();
-    Rc::new(move |track_ids: Vec<TrackId>| {
+    Rc::new(move |invocation: TrackActionInvocation| {
+        let track_ids = invocation.selected_track_ids;
         if track_ids.is_empty() {
             return;
         }
@@ -79,7 +90,8 @@ pub(crate) fn add_to_queue_callback(
     command_controller: &SharedCommandController,
 ) -> TrackActionCallback {
     let command_controller = command_controller.clone();
-    Rc::new(move |track_ids: Vec<TrackId>| {
+    Rc::new(move |invocation: TrackActionInvocation| {
+        let track_ids = invocation.selected_track_ids;
         if track_ids.is_empty() {
             return;
         }
@@ -100,7 +112,8 @@ pub(crate) fn playback_has_current_track_visibility(
 
 pub(crate) fn show_album_callback(holder: &ShowAlbumHolder) -> TrackActionCallback {
     let holder = holder.clone();
-    Rc::new(move |track_ids: Vec<TrackId>| {
+    Rc::new(move |invocation: TrackActionInvocation| {
+        let track_ids = invocation.selected_track_ids;
         let Some(&track_id) = track_ids.first() else {
             return;
         };
@@ -134,7 +147,8 @@ pub(crate) fn show_in_folder_callback(
 ) -> TrackActionCallback {
     let runtime = runtime.clone();
     let window = window.clone();
-    Rc::new(move |track_ids: Vec<TrackId>| {
+    Rc::new(move |invocation: TrackActionInvocation| {
+        let track_ids = invocation.selected_track_ids;
         let Some(path) = absolute_paths_for_tracks(&runtime, &track_ids)
             .into_iter()
             .next()

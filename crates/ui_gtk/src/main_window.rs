@@ -61,8 +61,8 @@ use super::{
     },
     track_context::{
         AddToPlaylistCallback, AddToPlaylistEntry, AddToPlaylistProvider, TrackActionCallback,
-        TrackActionVisibility, TrackAnalyzeEnabledQuery, TrackAnalyzeRunCallback,
-        TrackContextAction, TrackContextActionSet, TrackRetrieveBusyQuery,
+        TrackActionInvocation, TrackActionVisibility, TrackAnalyzeEnabledQuery,
+        TrackAnalyzeRunCallback, TrackContextAction, TrackContextActionSet, TrackRetrieveBusyQuery,
         TrackRetrieveRunCallback, TrackRowContextMenu,
     },
     track_context_ops::{

@@ -282,6 +282,11 @@ impl TrackTable {
             .collect()
     }
 
+    /// Returns every displayed track id in the table's current sort order.
+    pub(crate) fn ordered_track_ids(&self) -> Vec<TrackId> {
+        ordered_track_ids(&self.selection)
+    }
+
     pub(crate) fn set_playing_track_id(&self, playing_track_id: Option<TrackId>) {
         if self.playing_track_id.get() == playing_track_id {
             return;
@@ -392,6 +397,19 @@ impl TrackTable {
         };
         callback(read_current_layout(&self.table, &self.managed_columns));
     }
+}
+
+fn ordered_track_ids(selection: &gtk::MultiSelection) -> Vec<TrackId> {
+    (0..selection.n_items())
+        .filter_map(|position| {
+            let row_object = selection
+                .item(position)?
+                .downcast::<glib::BoxedAnyObject>()
+                .ok()?;
+            let row = row_object.try_borrow::<TrackTableRow>().ok()?;
+            row.track_id
+        })
+        .collect()
 }
 
 struct ApplyLayoutGuard {

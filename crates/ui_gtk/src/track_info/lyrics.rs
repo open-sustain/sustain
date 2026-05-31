@@ -43,4 +43,10 @@ impl LyricsPage {
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
         text_diff_preserve_newlines(initial.lyrics.as_deref(), &text)
     }
+
+    pub(super) fn reload(&self, metadata: &TrackMetadata) {
+        self.view
+            .buffer()
+            .set_text(metadata.lyrics.as_deref().unwrap_or_default());
+    }
 }

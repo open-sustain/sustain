@@ -180,9 +180,14 @@ impl TrackTableContextMenu {
             if track_ids.is_empty() {
                 return;
             }
-            context
-                .menu
-                .popup_at_parent(track_ids, &popover_parent, &hit.widget, x, y);
+            context.menu.popup_at_parent(
+                track_ids,
+                context.ordered_track_ids(),
+                &popover_parent,
+                &hit.widget,
+                x,
+                y,
+            );
         });
         if let Some(popover_parent) = self.popover_parent.upgrade() {
             popover_parent.add_controller(gesture);
@@ -194,6 +199,10 @@ impl TrackTableContextMenu {
             widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
             list_item: list_item.downgrade(),
         });
+    }
+
+    fn ordered_track_ids(&self) -> Vec<TrackId> {
+        super::ordered_track_ids(&self.selection)
     }
 
     fn cell_at(&self, event_widget: &gtk::Widget, x: f64, y: f64) -> Option<TrackTableContextHit> {

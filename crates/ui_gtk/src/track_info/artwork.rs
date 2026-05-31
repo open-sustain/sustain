@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gtk::prelude::*;
 use gtk::{FileDialog, FileFilter, gdk, gio, glib};
@@ -20,6 +20,10 @@ type ArtworkRefreshCallback = Rc<dyn Fn(Option<gdk::Texture>, bool)>;
 
 pub(super) struct ArtworkPage {
     pub(super) widget: gtk::Box,
+    current_track_id: Rc<Cell<TrackId>>,
+    load_generation: Rc<Cell<u64>>,
+    refresh: ArtworkRefreshCallback,
+    artwork_loader: ArtworkLoader,
 }
 
 impl ArtworkPage {
@@ -76,35 +80,22 @@ impl ArtworkPage {
             })
         };
 
-        // Show a placeholder immediately with the note/Remove state taken
-        // from the scanner-maintained flag (known synchronously, no file
-        // read). The decoded cover lands through the shared loader: a
-        // cache hit fires the callback inline here, a cold miss repaints
-        // when the worker finishes. Either way no tag parse or pixbuf
-        // decode runs on this (GTK) thread.
-        refresh(None, has_embedded_artwork);
-        if let Some(source) = artwork_source {
-            let refresh_for_load = refresh.clone();
-            artwork_loader.request(
-                source,
-                Box::new(move |decoded| {
-                    let has_artwork = has_embedded_artwork || decoded.detail_texture.is_some();
-                    refresh_for_load(decoded.detail_texture, has_artwork);
-                }),
-            );
-        }
+        let current_track_id = Rc::new(Cell::new(track_id));
+        let load_generation = Rc::new(Cell::new(0));
 
         {
             let parent_window = parent_window.clone();
             let command_controller = command_controller.clone();
             let library_changed_holder = library_changed_holder.clone();
             let refresh = refresh.clone();
+            let current_track_id = current_track_id.clone();
             add_button.connect_clicked(move |_| {
                 open_artwork_picker(
                     &parent_window,
                     command_controller.clone(),
                     library_changed_holder.clone(),
-                    track_id,
+                    current_track_id.get(),
+                    current_track_id.clone(),
                     refresh.clone(),
                 );
             });
@@ -114,9 +105,10 @@ impl ArtworkPage {
             let command_controller = command_controller.clone();
             let library_changed_holder = library_changed_holder.clone();
             let refresh = refresh.clone();
+            let current_track_id = current_track_id.clone();
             remove_button.connect_clicked(move |_| {
                 if command_controller.dispatch_succeeded(ApplicationCommand::SetArtwork {
-                    track_id,
+                    track_id: current_track_id.get(),
                     artwork: None,
                 }) {
                     refresh(None, false);
@@ -127,7 +119,41 @@ impl ArtworkPage {
             });
         }
 
-        Self { widget: page }
+        let page = Self {
+            widget: page,
+            current_track_id,
+            load_generation,
+            refresh,
+            artwork_loader: artwork_loader.clone(),
+        };
+        page.reload(track_id, artwork_source, has_embedded_artwork);
+        page
+    }
+
+    pub(super) fn reload(
+        &self,
+        track_id: TrackId,
+        artwork_source: Option<ArtworkSource>,
+        has_embedded_artwork: bool,
+    ) {
+        self.current_track_id.set(track_id);
+        let generation = self.load_generation.get().wrapping_add(1);
+        self.load_generation.set(generation);
+        (self.refresh)(None, has_embedded_artwork);
+        if let Some(source) = artwork_source {
+            let refresh = self.refresh.clone();
+            let load_generation = self.load_generation.clone();
+            self.artwork_loader.request(
+                source,
+                Box::new(move |decoded| {
+                    if load_generation.get() != generation {
+                        return;
+                    }
+                    let has_artwork = has_embedded_artwork || decoded.detail_texture.is_some();
+                    refresh(decoded.detail_texture, has_artwork);
+                }),
+            );
+        }
     }
 }
 
@@ -184,6 +210,7 @@ fn open_artwork_picker(
     command_controller: SharedCommandController,
     library_changed_holder: LibraryChangedHolder,
     track_id: TrackId,
+    current_track_id: Rc<Cell<TrackId>>,
     refresh: ArtworkRefreshCallback,
 ) {
     let dialog = FileDialog::builder()
@@ -241,7 +268,9 @@ fn open_artwork_picker(
                         track_id,
                         artwork: Some(bytes),
                     }) {
-                        refresh(texture, true);
+                        if current_track_id.get() == track_id {
+                            refresh(texture, true);
+                        }
                         if let Some(callback) = library_changed_holder.borrow().as_ref() {
                             callback();
                         }
