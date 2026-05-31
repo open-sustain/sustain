@@ -302,8 +302,10 @@ errors that would bother for audiophiles.
 ### Now Playing display — *iso-iTunes*
 The center of the top bar shows the current track's artwork, title,
 artist/album, elapsed and remaining time, and a seekable progress bar.
-The artwork's dominant color tints the tile background. Long titles
-marquee-scroll. Clicking on the artwork zooms it.
+The artwork's dominant color tints the tile background. Overflowing
+title and artist/album lines marquee-scroll, each at a slightly
+different rate so the two never crawl in lockstep. Clicking on the
+artwork zooms it.
 
 ### Seek bar — *iso-iTunes*
 Click or drag on the progress bar to seek. The clickable hit area

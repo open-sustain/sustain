@@ -113,6 +113,9 @@ struct MarqueeLabel {
     draw_model: MarqueeDrawModel,
     x_position: Rc<Cell<f64>>,
     paused: Rc<Cell<bool>>,
+    /// Pixels advanced per animation frame; set per line so the title and
+    /// artist marquees scroll at different rates (issue #116).
+    speed: f64,
 }
 
 #[derive(Clone)]
@@ -131,7 +134,14 @@ const MARQUEE_EDGE_FADE_WIDTH: f64 = 28.0;
 const MARQUEE_FRAME_MS: u64 = 33;
 const MARQUEE_HEIGHT: i32 = 19;
 const MARQUEE_LOOP_GAP: f64 = 48.0;
-const MARQUEE_SPEED: f64 = 0.75;
+/// Per-line scroll speeds in pixels per frame. The title and the
+/// artist/album line scroll at deliberately different rates (issue #116)
+/// so two overflowing lines never crawl in lockstep — that lockstep reads
+/// as one rigid block sliding, whereas independent rates give the pair a
+/// looser, layered motion. The title (the dominant line) keeps the
+/// original pace; the secondary line trails slightly slower.
+const MARQUEE_SPEED_TITLE: f64 = 0.75;
+const MARQUEE_SPEED_ARTIST: f64 = 0.55;
 const MARQUEE_VIEWPORT_WIDTH: i32 = 400;
 
 impl NowPlayingView {
@@ -191,8 +201,16 @@ impl NowPlayingView {
         details.set_vexpand(true);
 
         let marquee_paused = Rc::new(Cell::new(false));
-        let title = MarqueeLabel::new("now-playing-title", marquee_paused.clone());
-        let artist_album = MarqueeLabel::new("now-playing-artist", marquee_paused.clone());
+        let title = MarqueeLabel::new(
+            "now-playing-title",
+            marquee_paused.clone(),
+            MARQUEE_SPEED_TITLE,
+        );
+        let artist_album = MarqueeLabel::new(
+            "now-playing-artist",
+            marquee_paused.clone(),
+            MARQUEE_SPEED_ARTIST,
+        );
         let metadata = metadata_box(&title, &artist_album);
 
         let elapsed = time_label();
@@ -705,7 +723,7 @@ fn empty_state_view() -> gtk::Box {
 }
 
 impl MarqueeLabel {
-    fn new(css_class: &str, paused: Rc<Cell<bool>>) -> Self {
+    fn new(css_class: &str, paused: Rc<Cell<bool>>, speed: f64) -> Self {
         let width = MARQUEE_VIEWPORT_WIDTH;
         let root = gtk::Overlay::new();
         root.add_css_class("marquee-label");
@@ -744,6 +762,7 @@ impl MarqueeLabel {
             draw_model,
             x_position,
             paused,
+            speed,
         };
         marquee.install_animation();
         marquee
@@ -789,7 +808,7 @@ impl MarqueeLabel {
             return;
         }
 
-        let mut x_position = self.x_position.get() - MARQUEE_SPEED;
+        let mut x_position = self.x_position.get() - self.speed;
         if x_position <= -text_width - MARQUEE_LOOP_GAP {
             x_position = 0.0;
         }
