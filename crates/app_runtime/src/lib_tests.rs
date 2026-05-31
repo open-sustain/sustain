@@ -17,8 +17,8 @@ use sustain_domain::{
     PlaylistItem, Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField,
     SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
     SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
-    Track, TrackId, TrackLocation, TrackMetadata, UiSettings, UiSidebarSelection, UserSettings,
-    VolumePercent,
+    Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath, UiSettings,
+    UiSidebarSelection, UserSettings, VolumePercent,
 };
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, InMemoryLibraryStore, LibraryStore,
@@ -27,7 +27,9 @@ use sustain_library_store::{
     StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork,
     TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
 };
-use sustain_metadata::{InitialTags, MetadataChange, MetadataError, MetadataResult};
+use sustain_metadata::{
+    InitialTags, LibraryScan, MetadataChange, MetadataError, MetadataResult, ScannedTrack,
+};
 use sustain_playback::NullPlaybackService;
 use sustain_settings::{SettingsError, SettingsResult, SettingsStore};
 
@@ -38,7 +40,7 @@ use super::{
     run_library_scan_task,
 };
 use crate::{
-    library_mutation::FilePresence,
+    file_presence::{FilePresence, probe_file_presence, probe_path_entry_presence},
     managed_library::{ManagedLibraryFilesystemError, ManagedLibraryFilesystemValidator},
 };
 
@@ -458,6 +460,64 @@ fn cancelled_scan_preserves_existing_tracks_without_marking_them_missing() {
 }
 
 #[test]
+fn incomplete_scan_keeps_unvisited_rows_unchanged_but_applies_safe_rows() {
+    let known = test_track(track_id(1), "known.mp3");
+    let unvisited = test_track(track_id(2), "unvisited.mp3");
+    let scan = LibraryScan {
+        tracks: vec![
+            test_scanned_track("known.mp3"),
+            test_scanned_track("new.mp3"),
+        ],
+        complete_for_missing_reconciliation: false,
+        ..LibraryScan::default()
+    };
+
+    let result = crate::library_scan::reconcile_library_scan_with_probe(
+        Path::new("/library"),
+        vec![known, unvisited.clone()],
+        scan,
+        |_| panic!("partial scans must not probe unvisited rows"),
+    )
+    .expect("reconcile incomplete scan");
+
+    assert_eq!(result.summary.added_tracks, 1);
+    assert_eq!(result.summary.updated_tracks, 1);
+    assert_eq!(result.summary.missing_tracks, 0);
+    assert!(result.summary.missing_reconciliation_skipped);
+    assert_eq!(
+        result
+            .tracks
+            .iter()
+            .find(|track| track.id == unvisited.id)
+            .expect("unvisited track survives"),
+        &unvisited
+    );
+}
+
+#[test]
+fn reconciliation_probe_failure_preserves_every_unvisited_row() {
+    let first = test_track(track_id(1), "first.mp3");
+    let second = test_track(track_id(2), "second.mp3");
+    let result = crate::library_scan::reconcile_library_scan_with_probe(
+        Path::new("/library"),
+        vec![first.clone(), second.clone()],
+        LibraryScan::default(),
+        |path| {
+            if path.ends_with("first.mp3") {
+                FilePresence::Absent
+            } else {
+                FilePresence::ProbeFailed
+            }
+        },
+    )
+    .expect("reconcile probe failure");
+
+    assert!(result.summary.missing_reconciliation_skipped);
+    assert_eq!(result.summary.missing_tracks, 0);
+    assert_eq!(result.tracks, vec![first, second]);
+}
+
+#[test]
 fn runtime_scan_preserves_existing_track_identity_for_known_location() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
@@ -495,6 +555,7 @@ fn runtime_scan_preserves_existing_track_identity_for_known_location() {
             missing_tracks: 0,
             skipped_unsupported_files: 0,
             failed_files: 0,
+            missing_reconciliation_skipped: false,
             cancelled: false,
         })
     );
@@ -605,6 +666,7 @@ fn runtime_scan_preserves_existing_track_identity_after_library_root_changes() {
             missing_tracks: 0,
             skipped_unsupported_files: 0,
             failed_files: 0,
+            missing_reconciliation_skipped: false,
             cancelled: false,
         })
     );
@@ -1510,6 +1572,42 @@ fn update_settings_re_stats_existing_tracks_when_library_path_changes() {
 }
 
 #[test]
+fn library_path_change_probe_failure_preserves_existing_availability() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let id = track_id(103);
+    assert_eq!(store.save_track(test_track(id, "track.flac")), Ok(()));
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+
+    runtime
+        .reconcile_track_availability_after_library_path_change_with(root.clone(), |_| {
+            FilePresence::ProbeFailed
+        })
+        .expect("preserve availability after unresolved probe");
+
+    assert!(!runtime.library_tracks()[0].location.is_missing());
+    assert!(
+        !store
+            .track(id)
+            .expect("reload track")
+            .expect("track row")
+            .location
+            .is_missing()
+    );
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("path-change warning");
+    assert_eq!(notification.severity, NotificationSeverity::Warning);
+    assert!(notification.body.contains("1 could not be checked"));
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
 fn play_track_flips_is_missing_when_file_has_vanished() {
     // Lazy availability detection: clicking a track whose file is
     // no longer on disk must (a) return TrackUnavailable so the
@@ -1609,6 +1707,37 @@ fn play_track_recovers_availability_when_file_reappears() {
         .expect("reload track")
         .expect("track row exists");
     assert!(!reloaded.location.is_missing());
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn play_track_probe_failure_does_not_create_a_missing_marker() {
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let id = track_id(35);
+    assert_eq!(store.save_track(test_track(id, "unresolved.flac")), Ok(()));
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(library_root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+
+    assert_eq!(
+        runtime.play_track_with(id, |_| FilePresence::ProbeFailed),
+        Err(ApplicationRuntimeError::TrackUnavailable)
+    );
+    assert!(!runtime.library_tracks()[0].location.is_missing());
+    assert!(
+        !store
+            .track(id)
+            .expect("reload track")
+            .expect("track row")
+            .location
+            .is_missing()
+    );
 
     std::fs::remove_dir_all(library_root).expect("remove library root");
 }
@@ -4745,20 +4874,21 @@ fn move_to_trash_fails_closed_when_the_library_root_is_unresolved() {
 }
 
 #[test]
-fn probe_file_presence_distinguishes_present_from_proven_absence() {
+fn file_presence_probes_distinguish_reachable_files_from_directory_entries() {
     let dir = unique_test_directory();
     std::fs::create_dir_all(&dir).expect("create probe directory");
     let present = dir.join("here.flac");
     std::fs::write(&present, b"x").expect("write present file");
     let absent = dir.join("gone.flac");
 
+    assert_eq!(probe_file_presence(&present), FilePresence::Present);
+    assert_eq!(probe_file_presence(&absent), FilePresence::Absent);
+    let dangling_link = dir.join("dangling");
+    std::os::unix::fs::symlink(&absent, &dangling_link).expect("create dangling symlink");
+    assert_eq!(probe_file_presence(&dangling_link), FilePresence::Absent);
     assert_eq!(
-        crate::library_mutation::probe_file_presence(&present),
+        probe_path_entry_presence(&dangling_link),
         FilePresence::Present
-    );
-    assert_eq!(
-        crate::library_mutation::probe_file_presence(&absent),
-        FilePresence::Absent
     );
 
     std::fs::remove_dir_all(&dir).expect("remove probe directory");
@@ -4773,6 +4903,16 @@ fn test_track(track_id: TrackId, path: &str) -> Track {
         statistics: PlayStatistics::default(),
         file_size_bytes: None,
         has_embedded_artwork: None,
+    }
+}
+
+fn test_scanned_track(path: &str) -> ScannedTrack {
+    ScannedTrack {
+        relative_path: TrackRelativePath::new(PathBuf::from(path)).expect("valid relative path"),
+        metadata: TrackMetadata::default(),
+        rating: Rating::unrated(),
+        file_size_bytes: None,
+        has_embedded_artwork: false,
     }
 }
 

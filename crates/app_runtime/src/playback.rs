@@ -2,6 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use sustain_domain::{
@@ -14,6 +15,7 @@ use sustain_smart_shuffle::{PickContext, format_debug, pick_next_track};
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
     NotificationSeverity,
+    file_presence::{FilePresence, probe_file_presence},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,6 +163,14 @@ impl ApplicationRuntime {
     }
 
     fn play_track(&mut self, track_id: TrackId) -> ApplicationRuntimeResult<()> {
+        self.play_track_with(track_id, probe_file_presence)
+    }
+
+    pub(super) fn play_track_with(
+        &mut self,
+        track_id: TrackId,
+        probe: impl Fn(&Path) -> FilePresence,
+    ) -> ApplicationRuntimeResult<()> {
         let source = self.track_playback_source(track_id)?;
         // Lazy availability reconciliation: every play attempt
         // re-stats the resolved path and brings the persisted
@@ -169,23 +179,27 @@ impl ApplicationRuntime {
         // last observed availability — never a gate that prevents
         // future plays. This is how a track recovers after the user
         // renames its file back into place: the click flows through
-        // here, the `Path::exists` check sees the file again, the
+        // here, the fallible filesystem probe sees the file again, the
         // flag flips back to Available, and playback proceeds.
-        let exists = source.path.exists();
         let recorded_missing = self
             .library_tracks
             .iter()
             .find(|track| track.id == track_id)
             .map(|track| track.location.is_missing())
             .unwrap_or(false);
-        match (exists, recorded_missing) {
-            (false, true) => return Err(ApplicationRuntimeError::TrackUnavailable),
-            (false, false) => {
+        match (probe(&source.path), recorded_missing) {
+            (FilePresence::Absent, true) => {
+                return Err(ApplicationRuntimeError::TrackUnavailable);
+            }
+            (FilePresence::Absent, false) => {
                 self.mark_track_missing(track_id)?;
                 return Err(ApplicationRuntimeError::TrackUnavailable);
             }
-            (true, true) => self.mark_track_available(track_id)?,
-            (true, false) => {}
+            (FilePresence::Present, true) => self.mark_track_available(track_id)?,
+            (FilePresence::Present, false) => {}
+            (FilePresence::ProbeFailed, _) => {
+                return Err(ApplicationRuntimeError::TrackUnavailable);
+            }
         }
         self.settle_current_playing_session();
         self.playback_service()?

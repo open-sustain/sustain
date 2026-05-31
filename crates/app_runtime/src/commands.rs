@@ -5,7 +5,9 @@ use sustain_domain::{ApplicationCommand, LibraryManagementMode};
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
-    NotificationSeverity, library_scan, notifications,
+    NotificationSeverity,
+    file_presence::{FilePresence, probe_file_presence},
+    notifications,
 };
 
 impl ApplicationRuntime {
@@ -285,22 +287,43 @@ impl ApplicationRuntime {
         &mut self,
         new_library_path: std::path::PathBuf,
     ) -> ApplicationRuntimeResult<()> {
+        self.reconcile_track_availability_after_library_path_change_with(
+            new_library_path,
+            probe_file_presence,
+        )
+    }
+
+    pub(super) fn reconcile_track_availability_after_library_path_change_with(
+        &mut self,
+        new_library_path: std::path::PathBuf,
+        probe: impl Fn(&std::path::Path) -> FilePresence,
+    ) -> ApplicationRuntimeResult<()> {
         let total = self.library_tracks.len();
         let mut changed = Vec::new();
         let mut newly_missing = 0usize;
+        let mut unresolved = 0usize;
         let mut reconciled = Vec::with_capacity(total);
-        for track in std::mem::take(&mut self.library_tracks) {
+        for mut track in std::mem::take(&mut self.library_tracks) {
             let was_missing = track.location.is_missing();
-            let reconciled_track =
-                library_scan::track_with_current_availability(&new_library_path, track);
-            let now_missing = reconciled_track.location.is_missing();
+            let availability = match probe(&track.location.absolute_path(&new_library_path)) {
+                FilePresence::Present => Some(sustain_domain::TrackAvailability::Available),
+                FilePresence::Absent => Some(sustain_domain::TrackAvailability::Missing),
+                FilePresence::ProbeFailed => {
+                    unresolved += 1;
+                    None
+                }
+            };
+            if let Some(availability) = availability {
+                track.location = track.location.with_availability(availability);
+            }
+            let now_missing = track.location.is_missing();
             if was_missing != now_missing {
-                changed.push((reconciled_track.id, reconciled_track.location.clone()));
+                changed.push((track.id, track.location.clone()));
                 if now_missing {
                     newly_missing += 1;
                 }
             }
-            reconciled.push(reconciled_track);
+            reconciled.push(track);
         }
         self.library_tracks = reconciled;
         self.rebuild_search_index();
@@ -318,7 +341,7 @@ impl ApplicationRuntime {
             self.notify_track_availability_observer();
         }
 
-        let severity = if newly_missing > 0 {
+        let severity = if newly_missing > 0 || unresolved > 0 {
             NotificationSeverity::Warning
         } else {
             NotificationSeverity::Info
@@ -326,7 +349,7 @@ impl ApplicationRuntime {
         self.push_ephemeral_notification(
             NotificationCategory::LibraryScan,
             severity,
-            notifications::library_path_change_outcome_text(newly_missing, total),
+            notifications::library_path_change_outcome_text(newly_missing, unresolved, total),
         );
 
         Ok(())

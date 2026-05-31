@@ -3,7 +3,7 @@
 
 use std::{
     collections::BTreeMap,
-    fs,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -15,8 +15,8 @@ use sustain_domain::TrackMetadata;
 
 use super::{
     AudioFormat, InitialTags, LibraryScanner, MetadataError, MetadataResult, MetadataService,
-    Rating, atomic_write_via_rename, audio_format_from_path, hash_file_content,
-    valid_embedded_picture,
+    Rating, ScanFilesystem, StdScanFilesystem, atomic_write_via_rename, audio_format_from_path,
+    hash_file_content, valid_embedded_picture,
 };
 
 #[test]
@@ -133,7 +133,84 @@ fn scanner_returns_partial_results_when_cancellation_is_observed() {
         .expect("scan test directory");
 
     assert!(scan.cancelled);
+    assert!(!scan.complete_for_missing_reconciliation);
     assert!(scan.tracks.is_empty());
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn scanner_marks_nested_directory_read_failure_incomplete() {
+    let root = unique_test_directory();
+    let nested = root.join("nested");
+    fs::create_dir_all(&nested).expect("create nested test directory");
+    let filesystem = FaultInjectingScanFilesystem {
+        unreadable_directory: Some(nested),
+        ..FaultInjectingScanFilesystem::default()
+    };
+
+    let scan = LibraryScanner::new(&FakeMetadataService::default())
+        .scan_with_filesystem(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &filesystem,
+        )
+        .expect("scan test directory");
+
+    assert!(!scan.complete_for_missing_reconciliation);
+    assert_eq!(scan.failures.len(), 1);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn scanner_records_directory_iterator_errors_instead_of_flattening_them() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let track_path = root.join("one.mp3");
+    fs::write(&track_path, b"audio").expect("write test file");
+    let filesystem = FaultInjectingScanFilesystem {
+        entry_error_directory: Some(root.clone()),
+        ..FaultInjectingScanFilesystem::default()
+    };
+
+    let scan = LibraryScanner::new(&FakeMetadataService::for_paths([track_path]))
+        .scan_with_filesystem(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &filesystem,
+        )
+        .expect("scan test directory");
+
+    assert_eq!(scan.tracks.len(), 1, "safe rows remain usable");
+    assert!(!scan.complete_for_missing_reconciliation);
+    assert_eq!(scan.failures.len(), 1);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn scanner_marks_stat_failures_incomplete() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let track_path = root.join("one.mp3");
+    fs::write(&track_path, b"audio").expect("write test file");
+    let filesystem = FaultInjectingScanFilesystem {
+        unreadable_path: Some(track_path),
+        ..FaultInjectingScanFilesystem::default()
+    };
+
+    let scan = LibraryScanner::new(&FakeMetadataService::default())
+        .scan_with_filesystem(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &filesystem,
+        )
+        .expect("scan test directory");
+
+    assert!(scan.tracks.is_empty());
+    assert!(!scan.complete_for_missing_reconciliation);
+    assert_eq!(scan.failures.len(), 1);
 
     fs::remove_dir_all(root).expect("remove test directory");
 }
@@ -275,6 +352,42 @@ impl MetadataService for FakeMetadataService {
 
     fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct FaultInjectingScanFilesystem {
+    unreadable_directory: Option<PathBuf>,
+    entry_error_directory: Option<PathBuf>,
+    unreadable_path: Option<PathBuf>,
+}
+
+impl ScanFilesystem for FaultInjectingScanFilesystem {
+    fn is_directory(&self, path: &Path) -> bool {
+        StdScanFilesystem.is_directory(path)
+    }
+
+    fn read_directory(
+        &self,
+        path: &Path,
+    ) -> io::Result<Box<dyn Iterator<Item = io::Result<PathBuf>>>> {
+        if self.unreadable_directory.as_deref() == Some(path) {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        let entries = StdScanFilesystem.read_directory(path)?;
+        if self.entry_error_directory.as_deref() == Some(path) {
+            return Ok(Box::new(entries.chain(std::iter::once(Err(
+                io::Error::from(io::ErrorKind::Other),
+            )))));
+        }
+        Ok(entries)
+    }
+
+    fn symlink_metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        if self.unreadable_path.as_deref() == Some(path) {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        StdScanFilesystem.symlink_metadata(path)
     }
 }
 

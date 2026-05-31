@@ -74,6 +74,7 @@ pub(crate) mod artwork_fetcher;
 mod commands;
 mod device_sync;
 pub mod device_sync_scheduler;
+mod file_presence;
 mod library_hydration;
 mod library_mutation;
 mod library_scan;
@@ -174,6 +175,10 @@ pub struct LibraryScanSummary {
     pub missing_tracks: usize,
     pub skipped_unsupported_files: usize,
     pub failed_files: usize,
+    /// True when one or more paths could not be visited or probed reliably.
+    /// Safe additions and updates still land, but no unvisited row is newly
+    /// marked Missing.
+    pub missing_reconciliation_skipped: bool,
     // True when the scan stopped because the user asked it to. The
     // numbers above reflect the partial work that completed; we do not
     // sweep the unwalked portion of the library for missing tracks.

@@ -366,6 +366,14 @@ pub fn library_scan_outcome_text(summary: &LibraryScanSummary) -> String {
             pluralize(summary.scanned_tracks, "track", "tracks"),
         );
     }
+    if summary.missing_reconciliation_skipped {
+        return format!(
+            "Scan partial: {} {} indexed, {} failed; missing-file reconciliation skipped.",
+            summary.scanned_tracks,
+            pluralize(summary.scanned_tracks, "track", "tracks"),
+            summary.failed_files,
+        );
+    }
     format!(
         "Scan complete: {} {}, {} missing, {} failed",
         summary.scanned_tracks,
@@ -410,12 +418,25 @@ pub fn library_consolidation_outcome_text(summary: &LibraryConsolidationSummary)
 }
 
 /// Outcome string emitted after the user changes their library path.
-/// `newly_missing` is the number of tracks whose file did not resolve
-/// under the new root; `total` is the size of the persisted library.
-/// Both reflect SQLite state immediately after the re-stat pass.
-pub fn library_path_change_outcome_text(newly_missing: usize, total: usize) -> String {
+/// `newly_missing` is the number of tracks whose file did not resolve under
+/// the new root; `unresolved` counts paths whose reachability could not be
+/// proven either way. `total` is the size of the persisted library.
+pub fn library_path_change_outcome_text(
+    newly_missing: usize,
+    unresolved: usize,
+    total: usize,
+) -> String {
     if total == 0 {
         return "Library folder updated.".to_owned();
+    }
+    if unresolved > 0 {
+        return format!(
+            "Library folder updated: {} of {} {} not found; {} could not be checked.",
+            newly_missing,
+            total,
+            pluralize(total, "track", "tracks"),
+            unresolved,
+        );
     }
     if newly_missing == 0 {
         return format!(

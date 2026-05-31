@@ -31,6 +31,20 @@ fn scan_outcome_reports_partial_count_after_cancellation() {
 }
 
 #[test]
+fn scan_outcome_warns_when_missing_reconciliation_was_skipped() {
+    let summary = LibraryScanSummary {
+        scanned_tracks: 7,
+        failed_files: 1,
+        missing_reconciliation_skipped: true,
+        ..LibraryScanSummary::default()
+    };
+    assert_eq!(
+        library_scan_outcome_text(&summary),
+        "Scan partial: 7 tracks indexed, 1 failed; missing-file reconciliation skipped."
+    );
+}
+
+#[test]
 fn runtime_error_text_maps_metadata_write_failed() {
     assert_eq!(
         runtime_error_text(&ApplicationRuntimeError::MetadataWriteFailed),

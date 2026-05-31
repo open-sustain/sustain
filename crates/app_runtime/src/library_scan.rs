@@ -16,7 +16,9 @@ use sustain_metadata::{LibraryScan, LibraryScanner, ScannedTrack};
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, LibraryScanResult,
-    LibraryScanSummary, LibraryScanTask, NotificationCategory, NotificationSeverity, notifications,
+    LibraryScanSummary, LibraryScanTask, NotificationCategory, NotificationSeverity,
+    file_presence::{FilePresence, probe_file_presence},
+    notifications,
 };
 
 impl ApplicationRuntime {
@@ -84,9 +86,14 @@ impl ApplicationRuntime {
         if let Some(id) = self.library_scan_notification_id.take() {
             self.dismiss_notification(id);
         }
+        let severity = if summary.missing_reconciliation_skipped {
+            NotificationSeverity::Warning
+        } else {
+            NotificationSeverity::Info
+        };
         self.push_ephemeral_notification(
             NotificationCategory::LibraryScan,
-            NotificationSeverity::Info,
+            severity,
             notifications::library_scan_outcome_text(&summary),
         );
         // New tracks may have landed; nudge the analysis scheduler so
@@ -150,9 +157,20 @@ fn reconcile_library_scan(
     existing_tracks: Vec<Track>,
     scan: LibraryScan,
 ) -> ApplicationRuntimeResult<LibraryScanResult> {
+    reconcile_library_scan_with_probe(library_path, existing_tracks, scan, probe_file_presence)
+}
+
+pub(crate) fn reconcile_library_scan_with_probe(
+    library_path: &Path,
+    existing_tracks: Vec<Track>,
+    scan: LibraryScan,
+    probe: impl Fn(&Path) -> FilePresence,
+) -> ApplicationRuntimeResult<LibraryScanResult> {
     let skipped_unsupported_files = scan.skipped_unsupported_files;
     let failed_files = scan.failures.len();
     let cancelled = scan.cancelled;
+    let complete_for_missing_reconciliation =
+        scan.complete_for_missing_reconciliation && !cancelled && scan.failures.is_empty();
     let scanned_tracks = scan.tracks;
     let mut tracks_by_path = tracks_by_path(existing_tracks.clone());
     let mut scanned_paths = BTreeSet::new();
@@ -174,24 +192,30 @@ fn reconcile_library_scan(
         tracks.push(track);
     }
 
+    let unvisited_tracks = existing_tracks
+        .into_iter()
+        .filter(|track| !scanned_paths.contains(&track.location.relative_path))
+        .collect::<Vec<_>>();
+    let probed_presence = complete_for_missing_reconciliation.then(|| {
+        unvisited_tracks
+            .iter()
+            .map(|track| probe(&track.location.absolute_path(library_path)))
+            .collect::<Vec<_>>()
+    });
+    let missing_reconciliation_skipped = probed_presence
+        .as_ref()
+        .is_none_or(|presence| presence.contains(&FilePresence::ProbeFailed));
+
     let mut missing_tracks = 0;
-    if cancelled {
-        // A cancelled scan never finished walking the library, so we
-        // cannot tell whether an unwalked track is actually missing or
-        // just unvisited. Preserve every existing track unchanged so
-        // we don't mark live tracks as missing on a partial pass.
-        for track in existing_tracks
-            .into_iter()
-            .filter(|track| !scanned_paths.contains(&track.location.relative_path))
-        {
-            tracks.push(track);
-        }
-    } else {
-        for track in existing_tracks
-            .into_iter()
-            .filter(|track| !scanned_paths.contains(&track.location.relative_path))
-        {
-            let track = track_with_current_availability(library_path, track);
+    if missing_reconciliation_skipped {
+        // Missing reconciliation is intentionally all-or-nothing. If even one
+        // unvisited path cannot be answered reliably, preserve every unvisited
+        // row exactly as it was so scan order cannot decide which rows become
+        // Missing after a transient filesystem failure.
+        tracks.extend(unvisited_tracks);
+    } else if let Some(probed_presence) = probed_presence {
+        for (track, presence) in unvisited_tracks.into_iter().zip(probed_presence) {
+            let track = track_with_presence(track, presence);
             if track.location.is_missing() {
                 missing_tracks += 1;
             }
@@ -209,6 +233,7 @@ fn reconcile_library_scan(
             missing_tracks,
             skipped_unsupported_files,
             failed_files,
+            missing_reconciliation_skipped,
             cancelled,
         },
         tracks,
@@ -271,7 +296,7 @@ fn track_from_scanned_track(
     }
 }
 
-pub(super) fn track_with_current_availability(library_path: &Path, track: Track) -> Track {
+fn track_with_presence(track: Track, presence: FilePresence) -> Track {
     let Track {
         id,
         location,
@@ -281,10 +306,12 @@ pub(super) fn track_with_current_availability(library_path: &Path, track: Track)
         file_size_bytes,
         has_embedded_artwork,
     } = track;
-    let availability = if location.absolute_path(library_path).exists() {
-        TrackAvailability::Available
-    } else {
-        TrackAvailability::Missing
+    let availability = match presence {
+        FilePresence::Present => TrackAvailability::Available,
+        FilePresence::Absent => TrackAvailability::Missing,
+        FilePresence::ProbeFailed => {
+            unreachable!("probe failures are excluded before availability reconciliation")
+        }
     };
 
     Track {

@@ -11,6 +11,7 @@ use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, ArtworkFetchResult,
     ManagedMetadataRetargetResult,
     artwork_fetcher::{ArtworkFetchRequest, query_from_metadata},
+    file_presence::{FilePresence, probe_path_entry_presence},
     managed_library::{metadata_change_affects_managed_path, retarget_managed_metadata},
     playback::{playback_shuffle_seed, playback_track_id},
 };
@@ -233,7 +234,7 @@ impl ApplicationRuntime {
         &mut self,
         track_id: TrackId,
     ) -> ApplicationRuntimeResult<()> {
-        self.move_track_to_trash_with(track_id, probe_file_presence, |path| {
+        self.move_track_to_trash_with(track_id, probe_path_entry_presence, |path| {
             trash::delete(path).map_err(|_| ())
         })
     }
@@ -335,32 +336,5 @@ impl ApplicationRuntime {
                 );
             }
         }
-    }
-}
-
-/// Three-state result of probing whether a file exists, distinguishing a
-/// *proven* absence from a probe that could not answer. `Path::exists`
-/// collapses the latter two into `false`, which is unsafe for destructive
-/// actions: a permission or transient-I/O error must not read as "the file
-/// is gone, drop its record".
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FilePresence {
-    /// The path resolves to an existing file, directory, or symlink.
-    Present,
-    /// The path is confirmed not to exist (`ErrorKind::NotFound`).
-    Absent,
-    /// The presence could not be determined (permission denied, transient
-    /// I/O error). Callers must fail closed.
-    ProbeFailed,
-}
-
-/// Probe a path's presence without following symlinks, so a dangling
-/// symlink (a real on-disk entry the user may want trashed) reads as
-/// [`FilePresence::Present`] rather than as its missing target.
-pub(crate) fn probe_file_presence(path: &Path) -> FilePresence {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => FilePresence::Present,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => FilePresence::Absent,
-        Err(_) => FilePresence::ProbeFailed,
     }
 }

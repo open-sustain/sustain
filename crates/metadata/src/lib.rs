@@ -5,7 +5,7 @@
 
 use std::{
     fs,
-    io::Read,
+    io::{self, Read},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -107,16 +107,39 @@ pub struct ScanFailure {
     pub error: MetadataError,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LibraryScan {
     pub tracks: Vec<ScannedTrack>,
     pub skipped_unsupported_files: usize,
     pub failures: Vec<ScanFailure>,
+    /// True only when every directory entry and supported file could be
+    /// inspected. Callers may create new Missing markers only after a scan
+    /// carrying this guarantee.
+    pub complete_for_missing_reconciliation: bool,
     // True when the scanner stopped because the cancellation flag was
     // observed mid-walk. Callers must not interpret an unwalked
     // subtree as "tracks missing from disk" — partial scans only ever
     // produce additions/updates, never missing markers.
     pub cancelled: bool,
+}
+
+impl Default for LibraryScan {
+    fn default() -> Self {
+        Self {
+            tracks: Vec::new(),
+            skipped_unsupported_files: 0,
+            failures: Vec::new(),
+            complete_for_missing_reconciliation: true,
+            cancelled: false,
+        }
+    }
+}
+
+impl LibraryScan {
+    fn record_failure(&mut self, path: PathBuf, error: MetadataError) {
+        self.complete_for_missing_reconciliation = false;
+        self.failures.push(ScanFailure { path, error });
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,6 +149,37 @@ pub enum LibraryScanError {
 
 pub struct LibraryScanner<'a, S: ?Sized> {
     metadata_service: &'a S,
+}
+
+trait ScanFilesystem {
+    fn is_directory(&self, path: &Path) -> bool;
+    fn read_directory(
+        &self,
+        path: &Path,
+    ) -> io::Result<Box<dyn Iterator<Item = io::Result<PathBuf>>>>;
+    fn symlink_metadata(&self, path: &Path) -> io::Result<fs::Metadata>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StdScanFilesystem;
+
+impl ScanFilesystem for StdScanFilesystem {
+    fn is_directory(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+
+    fn read_directory(
+        &self,
+        path: &Path,
+    ) -> io::Result<Box<dyn Iterator<Item = io::Result<PathBuf>>>> {
+        Ok(Box::new(
+            fs::read_dir(path)?.map(|entry| entry.map(|entry| entry.path())),
+        ))
+    }
+
+    fn symlink_metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        fs::symlink_metadata(path)
+    }
 }
 
 impl<'a, S> LibraryScanner<'a, S>
@@ -141,13 +195,29 @@ where
         library_path: &Path,
         cancellation: &AtomicBool,
     ) -> Result<LibraryScan, LibraryScanError> {
-        if !library_path.is_dir() {
+        self.scan_with_filesystem(library_path, cancellation, &StdScanFilesystem)
+    }
+
+    fn scan_with_filesystem(
+        &self,
+        library_path: &Path,
+        cancellation: &AtomicBool,
+        filesystem: &impl ScanFilesystem,
+    ) -> Result<LibraryScan, LibraryScanError> {
+        if !filesystem.is_directory(library_path) {
             return Err(LibraryScanError::LibraryPathUnavailable);
         }
 
         let mut scan = LibraryScan::default();
-        self.scan_directory(library_path, library_path, &mut scan, cancellation);
+        self.scan_directory(
+            library_path,
+            library_path,
+            &mut scan,
+            cancellation,
+            filesystem,
+        );
         scan.cancelled = scan.cancelled || cancellation.load(Ordering::SeqCst);
+        scan.complete_for_missing_reconciliation &= !scan.cancelled;
         scan.tracks
             .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
         Ok(scan)
@@ -159,30 +229,37 @@ where
         directory: &Path,
         scan: &mut LibraryScan,
         cancellation: &AtomicBool,
+        filesystem: &impl ScanFilesystem,
     ) {
-        let Ok(entries) = fs::read_dir(directory) else {
-            scan.failures.push(ScanFailure {
-                path: directory.to_path_buf(),
-                error: MetadataError::ReadFailed,
-            });
-            return;
+        let entries = match filesystem.read_directory(directory) {
+            Ok(entries) => entries,
+            Err(_) => {
+                scan.record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
+                return;
+            }
         };
 
-        for entry in entries.flatten() {
+        for entry in entries {
             if cancellation.load(Ordering::SeqCst) {
                 scan.cancelled = true;
                 return;
             }
-            let path = entry.path();
-            let Ok(metadata) = fs::symlink_metadata(&path) else {
-                scan.failures.push(ScanFailure {
-                    path,
-                    error: MetadataError::ReadFailed,
-                });
-                continue;
+            let path = match entry {
+                Ok(path) => path,
+                Err(_) => {
+                    scan.record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
+                    continue;
+                }
+            };
+            let metadata = match filesystem.symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    scan.record_failure(path, MetadataError::ReadFailed);
+                    continue;
+                }
             };
             if metadata.file_type().is_dir() {
-                self.scan_directory(library_path, &path, scan, cancellation);
+                self.scan_directory(library_path, &path, scan, cancellation, filesystem);
                 if scan.cancelled {
                     return;
                 }
@@ -211,10 +288,7 @@ where
         {
             Some(relative_path) => relative_path,
             None => {
-                scan.failures.push(ScanFailure {
-                    path,
-                    error: MetadataError::ReadFailed,
-                });
+                scan.record_failure(path, MetadataError::ReadFailed);
                 return;
             }
         };
@@ -226,7 +300,7 @@ where
         } = match self.metadata_service.read_initial_tags(&path) {
             Ok(tags) => tags,
             Err(error) => {
-                scan.failures.push(ScanFailure { path, error });
+                scan.record_failure(path, error);
                 return;
             }
         };
