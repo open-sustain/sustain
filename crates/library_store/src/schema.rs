@@ -41,7 +41,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     sample_rate_hz INTEGER,
     channels INTEGER,
     lyrics TEXT,
-    content_hash TEXT,
+    -- No content_hash column: a stored SHA-256 went stale on every
+    -- in-place tag/rating/artwork/enrichment write and was never set for
+    -- scan-imported tracks, so dedup could not trust it. Import hashes
+    -- bytes on disk transiently instead and persists nothing (#72).
     file_size_bytes INTEGER,
     -- Scan-time "does the file carry an embedded picture?" bit.
     -- NULL means the scanner has not observed this file yet (a row
@@ -326,7 +329,6 @@ const TRACK_COLUMNS: &[TrackColumn] = &[
     TrackColumn::stored_value("sample_rate_hz"),
     TrackColumn::stored_value("channels"),
     TrackColumn::stored_value("lyrics"),
-    TrackColumn::stored_value("content_hash"),
     TrackColumn::stored_value("file_size_bytes"),
     TrackColumn::stored_value("has_embedded_artwork"),
     TrackColumn::stored_value("title_sort"),
@@ -367,14 +369,13 @@ pub(crate) mod track_column_index {
     pub(crate) const SAMPLE_RATE_HZ: usize = 27;
     pub(crate) const CHANNELS: usize = 28;
     pub(crate) const LYRICS: usize = 29;
-    pub(crate) const CONTENT_HASH: usize = 30;
-    pub(crate) const FILE_SIZE_BYTES: usize = 31;
-    pub(crate) const HAS_EMBEDDED_ARTWORK: usize = 32;
-    pub(crate) const TITLE_SORT: usize = 33;
-    pub(crate) const ARTIST_SORT: usize = 34;
-    pub(crate) const ALBUM_SORT: usize = 35;
-    pub(crate) const ALBUM_ARTIST_SORT: usize = 36;
-    pub(crate) const COMPOSER_SORT: usize = 37;
+    pub(crate) const FILE_SIZE_BYTES: usize = 30;
+    pub(crate) const HAS_EMBEDDED_ARTWORK: usize = 31;
+    pub(crate) const TITLE_SORT: usize = 32;
+    pub(crate) const ARTIST_SORT: usize = 33;
+    pub(crate) const ALBUM_SORT: usize = 34;
+    pub(crate) const ALBUM_ARTIST_SORT: usize = 35;
+    pub(crate) const COMPOSER_SORT: usize = 36;
 }
 
 pub(super) static SAVE_TRACK_SQL: LazyLock<String> = LazyLock::new(|| {
@@ -698,7 +699,6 @@ mod tests {
             (track_column_index::SAMPLE_RATE_HZ, "sample_rate_hz"),
             (track_column_index::CHANNELS, "channels"),
             (track_column_index::LYRICS, "lyrics"),
-            (track_column_index::CONTENT_HASH, "content_hash"),
             (track_column_index::FILE_SIZE_BYTES, "file_size_bytes"),
             (
                 track_column_index::HAS_EMBEDDED_ARTWORK,

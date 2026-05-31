@@ -25,7 +25,6 @@ fn track(id: i64, genre: &str, bpm: u32) -> Track {
         location: TrackLocation::available(
             TrackRelativePath::new(format!("t/{id}.flac")).expect("relative path"),
         ),
-        content_hash: None,
         metadata: TrackMetadata {
             genre: Some(genre.to_owned()),
             bpm: Some(bpm),

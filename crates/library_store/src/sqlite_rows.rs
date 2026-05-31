@@ -11,8 +11,7 @@ use sustain_domain::{
     PlayStatistics, PlaylistEntry, SmartPlaylistDateField, SmartPlaylistLimit,
     SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
     SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistTextField,
-    SmartPlaylistTextOperator, TrackContentHash, TrackLocation, TrackMetadata, TrackRelativePath,
-    WaveformSegment,
+    SmartPlaylistTextOperator, TrackLocation, TrackMetadata, TrackRelativePath, WaveformSegment,
 };
 
 use crate::{
@@ -29,7 +28,6 @@ pub(crate) fn track_from_row(row: &Row<'_>) -> StoreResult<Track> {
     Ok(Track {
         id: track_id_from_db(row.get(track_column::ID).map_err(StoreError::from)?)?,
         location: track_location_from_row(row)?,
-        content_hash: optional_track_content_hash_from_row(row, track_column::CONTENT_HASH)?,
         metadata: TrackMetadata {
             title: row.get(track_column::TITLE).map_err(StoreError::from)?,
             artist: row.get(track_column::ARTIST).map_err(StoreError::from)?,
@@ -181,15 +179,6 @@ fn playlist_folder_id_from_db(value: i64) -> StoreResult<PlaylistFolderId> {
 
 pub(crate) fn smart_playlist_id_from_db(value: i64) -> StoreResult<SmartPlaylistId> {
     SmartPlaylistId::new(value).ok_or(StoreError::InvalidStoredId(value))
-}
-
-fn optional_track_content_hash_from_row(
-    row: &Row<'_>,
-    index: usize,
-) -> StoreResult<Option<TrackContentHash>> {
-    optional_string(row, index)?
-        .map(|value| TrackContentHash::new(&value).ok_or(StoreError::InvalidStoredHash(value)))
-        .transpose()
 }
 
 pub(crate) fn optional_playlist_folder_id_from_row(

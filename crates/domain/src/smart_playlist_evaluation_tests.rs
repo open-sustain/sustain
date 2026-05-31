@@ -25,7 +25,6 @@ fn track(id: i64, genre: Option<&str>, play_count: u64, year: Option<i32>) -> Tr
     Track {
         id: TrackId::new(id).expect("positive id"),
         location: TrackLocation::available(relative(&format!("track-{id}.flac"))),
-        content_hash: None,
         metadata: TrackMetadata {
             title: Some(format!("Title {id}")),
             artist: Some("Artist".to_owned()),

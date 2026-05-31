@@ -397,7 +397,6 @@ mod tests {
             location: TrackLocation::available(
                 TrackRelativePath::new(format!("{id}.mp3")).expect("valid path"),
             ),
-            content_hash: None,
             metadata: TrackMetadata {
                 genre: genre.map(str::to_owned),
                 ..TrackMetadata::default()

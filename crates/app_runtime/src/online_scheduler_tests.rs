@@ -51,7 +51,6 @@ fn touch_in(library_root: &Path, relative: &str) -> Track {
     Track {
         id: TrackId::new(1).expect("non-zero"),
         location: TrackLocation::available(relative_path),
-        content_hash: None,
         metadata: Default::default(),
         rating: Default::default(),
         statistics: Default::default(),

@@ -565,15 +565,12 @@ fn sync_input_track(
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    // Staleness fingerprint for the incremental differ. Deliberately
-    // size-based, not the stored content hash: that hash is frozen at
-    // copy-import and never refreshed after in-place edits, so keying off
-    // it would mean an edited track never re-copies to the device, and
-    // scan-imported tracks (which have no hash) would all collapse to the
-    // same key. File size changes whenever the file is re-encoded, which
-    // is the case worth re-copying for; same-size tag edits are not
-    // detected, matching the rest of the post-#72 model that treats
-    // content_hash as non-authoritative.
+    // Staleness fingerprint for the incremental differ. Size-based:
+    // Sustain persists no content hash (#72), and re-hashing every file
+    // on every diff would be needlessly expensive. File size changes
+    // whenever the file is re-encoded, which is the case worth re-copying
+    // for; same-size tag edits are not detected, matching the rest of the
+    // model.
     let fingerprint = format!("size:{}", track.file_size_bytes.unwrap_or(0));
     let (waveform_preview, waveform_detail) = match waveform {
         Some(stored) => (Some(stored.preview), Some(stored.detail)),

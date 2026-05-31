@@ -41,7 +41,6 @@ fn touch_in(library_root: &std::path::Path, relative: &str) -> Track {
     Track {
         id: TrackId::new(1).expect("non-zero"),
         location: TrackLocation::available(relative_path),
-        content_hash: None,
         metadata: Default::default(),
         rating: Default::default(),
         statistics: Default::default(),

@@ -205,7 +205,6 @@ impl LibraryImportContext {
             tracks.push(Track {
                 id: track_id,
                 location: TrackLocation::available(import.relative_path),
-                content_hash: Some(import.content_hash),
                 metadata: import.metadata,
                 rating: import.rating,
                 statistics: PlayStatistics {
@@ -292,7 +291,6 @@ impl LibraryImportContext {
             tracks.push(Track {
                 id: track_id,
                 location: TrackLocation::available(relative_path),
-                content_hash: None,
                 metadata,
                 rating,
                 statistics: PlayStatistics {

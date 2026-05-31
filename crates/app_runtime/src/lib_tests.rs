@@ -285,7 +285,6 @@ fn runtime_scans_library_with_services() {
     );
 
     assert_eq!(runtime.library_tracks().len(), 1);
-    assert_eq!(runtime.library_tracks()[0].content_hash, None);
     assert_eq!(
         runtime
             .last_scan_summary()
@@ -496,7 +495,6 @@ fn managed_import_copies_external_files_into_planned_library_path() {
         tracks[0].location.relative_path.as_path(),
         std::path::Path::new("Unknown Artist/Unknown Album/Track.flac")
     );
-    assert!(tracks[0].content_hash.is_some());
     assert_eq!(tracks[0].rating, Rating::new(3).expect("valid rating"));
     assert_eq!(store.tracks().expect("store tracks"), tracks);
 
@@ -575,65 +573,6 @@ fn managed_import_lazily_hashes_same_size_existing_tracks_for_duplicates() {
     );
 
     assert_eq!(runtime.library_tracks(), &[existing_track]);
-    assert_eq!(
-        runtime.last_library_import_summary(),
-        Some(&super::LibraryImportSummary {
-            discovered_files: 1,
-            imported_tracks: 0,
-            duplicate_files: 1,
-            cancelled: false,
-        })
-    );
-
-    std::fs::remove_dir_all(library_root).expect("remove library root");
-    std::fs::remove_dir_all(external_root).expect("remove external root");
-}
-
-#[test]
-fn managed_import_skips_strict_exact_duplicate_when_stored_hash_is_stale() {
-    // Regression: a track that was copy-imported (so it carries a content
-    // hash) and then edited or online-enriched keeps a STALE hash — the
-    // in-place rewrite never refreshes it. Re-importing the file as it now
-    // exists on disk slipped past the hash-based dedup (which trusted the
-    // stale stored hash) and, finding the canonical name occupied on disk,
-    // wrote a byte-identical " 2" copy. The disk-anchored guard compares
-    // the destination's bytes to the source and skips the import instead.
-    let library_root = unique_test_directory();
-    let external_root = unique_test_directory();
-    let canonical_dir = library_root.join("Unknown Artist").join("Unknown Album");
-    std::fs::create_dir_all(&canonical_dir).expect("create canonical dir");
-    std::fs::create_dir_all(&external_root).expect("create external root");
-    let canonical_path = canonical_dir.join("Track.flac");
-    let source_path = external_root.join("source.flac");
-    std::fs::write(&canonical_path, b"same audio").expect("write library file");
-    std::fs::write(&source_path, b"same audio").expect("write external source");
-
-    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
-    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
-    let store = Arc::new(InMemoryLibraryStore::new());
-    let stale_hash =
-        sustain_domain::TrackContentHash::new("0".repeat(64)).expect("valid stale hash");
-    let mut existing_track = test_track(track_id(7), "Unknown Artist/Unknown Album/Track.flac");
-    existing_track.content_hash = Some(stale_hash);
-    assert_eq!(store.save_track(existing_track.clone()), Ok(()));
-    let mut runtime =
-        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
-            .expect("load settings")
-            .with_library_services(store, Arc::new(TestMetadataService))
-            .expect("library services initialize");
-
-    assert_eq!(
-        runtime.handle_command(ApplicationCommand::AddExternalLibraryItems {
-            paths: vec![source_path]
-        }),
-        Ok(())
-    );
-
-    assert_eq!(runtime.library_tracks(), &[existing_track]);
-    assert!(
-        !canonical_dir.join("Track 2.flac").exists(),
-        "import must not write a byte-identical numbered copy"
-    );
     assert_eq!(
         runtime.last_library_import_summary(),
         Some(&super::LibraryImportSummary {
@@ -732,7 +671,6 @@ fn unmanaged_external_import_indexes_library_files_in_place() {
         tracks[0].location.relative_path.as_path(),
         Path::new("source.flac")
     );
-    assert_eq!(tracks[0].content_hash, None);
     assert_eq!(store.tracks().expect("store tracks"), tracks);
     assert_eq!(
         runtime.last_library_import_summary(),
@@ -1265,7 +1203,6 @@ fn runtime_plays_tracks_through_playback_service() {
     let track = Track {
         id: track_id,
         location: track_location("track.flac"),
-        content_hash: None,
         metadata: TrackMetadata::default(),
         rating: Rating::unrated(),
         statistics: PlayStatistics::default(),
@@ -2412,7 +2349,6 @@ fn smart_playlist_track_status_distinguishes_included_excluded_and_unknowable() 
     let matching = Track {
         id: track_id(1),
         location: track_location("portishead.flac"),
-        content_hash: None,
         metadata: TrackMetadata {
             artist: Some("Portishead".to_owned()),
             ..TrackMetadata::default()
@@ -2425,7 +2361,6 @@ fn smart_playlist_track_status_distinguishes_included_excluded_and_unknowable() 
     let non_matching = Track {
         id: track_id(2),
         location: track_location("other.flac"),
-        content_hash: None,
         metadata: TrackMetadata {
             artist: Some("Some Other Band".to_owned()),
             ..TrackMetadata::default()
@@ -3541,7 +3476,6 @@ fn test_track(track_id: TrackId, path: &str) -> Track {
     Track {
         id: track_id,
         location: track_location(path),
-        content_hash: None,
         metadata: TrackMetadata::default(),
         rating: Rating::unrated(),
         statistics: PlayStatistics::default(),
@@ -3600,7 +3534,6 @@ fn request_run_decides_per_global_setting_and_target() {
     let track = Track {
         id: track_id(1),
         location: track_location("t.flac"),
-        content_hash: None,
         metadata: TrackMetadata::default(),
         rating: Rating::unrated(),
         statistics: PlayStatistics::default(),
@@ -3764,7 +3697,6 @@ fn request_run_skips_tracks_whose_capability_is_already_cached() {
     let track = Track {
         id: track_id(1),
         location: track_location("t.flac"),
-        content_hash: None,
         metadata: TrackMetadata::default(),
         rating: Rating::unrated(),
         statistics: PlayStatistics::default(),
@@ -3851,7 +3783,6 @@ fn online_run_is_a_force_path_that_does_not_pre_filter() {
     let track = Track {
         id: track_id(1),
         location: track_location("t.flac"),
-        content_hash: None,
         metadata: TrackMetadata::default(),
         rating: Rating::unrated(),
         statistics: PlayStatistics::default(),

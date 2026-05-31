@@ -673,7 +673,6 @@ mod tests {
             location: TrackLocation::available(
                 TrackRelativePath::new(format!("t/{id}.flac")).expect("relative path"),
             ),
-            content_hash: None,
             metadata,
             rating: Rating::unrated(),
             statistics: PlayStatistics::default(),

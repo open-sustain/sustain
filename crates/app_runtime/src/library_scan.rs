@@ -252,7 +252,6 @@ fn track_from_scanned_track(
             Ok(Track {
                 id: track_id,
                 location: TrackLocation::available(scanned_track.relative_path),
-                content_hash: None,
                 metadata: scanned_track.metadata,
                 rating: scanned_track.rating,
                 statistics: PlayStatistics {
@@ -270,7 +269,6 @@ pub(super) fn track_with_current_availability(library_path: &Path, track: Track)
     let Track {
         id,
         location,
-        content_hash,
         metadata,
         rating,
         statistics,
@@ -286,7 +284,6 @@ pub(super) fn track_with_current_availability(library_path: &Path, track: Track)
     Track {
         id,
         location: location.with_availability(availability),
-        content_hash,
         metadata,
         rating,
         statistics,

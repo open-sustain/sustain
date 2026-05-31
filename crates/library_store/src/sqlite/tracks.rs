@@ -43,7 +43,6 @@ pub(super) fn save_track(connection: &Connection, track: &Track) -> StoreResult<
                 metadata.sample_rate_hz.map(i64::from),
                 metadata.channels.map(i64::from),
                 metadata.lyrics.as_deref(),
-                track.content_hash.as_ref().map(|hash| hash.as_str()),
                 track.file_size_bytes.map(|size| size as i64),
                 track.has_embedded_artwork.map(i64::from),
                 metadata.title_sort.as_deref(),

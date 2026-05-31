@@ -50,7 +50,6 @@ pub type StoreResult<T> = Result<T, StoreError>;
 pub enum StoreError {
     Database(String),
     InvalidStoredId(i64),
-    InvalidStoredHash(String),
     InvalidStoredPath(String),
     InvalidStoredEnum(String),
     StoreUnavailable,

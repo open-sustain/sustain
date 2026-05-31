@@ -378,7 +378,6 @@ mod tests {
             location: TrackLocation::available(
                 TrackRelativePath::new(format!("t/{id}.flac")).expect("relative path"),
             ),
-            content_hash: None,
             metadata: TrackMetadata {
                 genre: genre.map(str::to_owned),
                 ..TrackMetadata::default()

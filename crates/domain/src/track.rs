@@ -9,15 +9,12 @@ use crate::{PlayStatistics, Rating, TrackId, TrackMetadata};
 pub struct Track {
     pub id: TrackId,
     pub location: TrackLocation,
-    /// SHA-256 of the file's bytes, captured **once** when the file is
-    /// copy-imported into the managed library (it is the integrity check
-    /// `copy_file_verified` performs). It is import-time only and
-    /// **non-authoritative**: in-place tag, rating, artwork, and online
-    /// enrichment writes rewrite the file without refreshing it, and
-    /// scan-imported / referenced tracks never receive one at all. Do not
-    /// treat it as the file's current fingerprint or use it for identity
-    /// decisions — hash the bytes on disk instead (see #72).
-    pub content_hash: Option<TrackContentHash>,
+    // No stored content hash. A persisted SHA-256 went stale on every
+    // in-place tag/rating/artwork/enrichment write and was absent for
+    // scan-imported tracks, so nothing could trust it. Import now hashes
+    // bytes on disk transiently — for dedup and copy verification — and
+    // keeps no column. Reintroduce a *maintained* one only if a
+    // content-identity feature (#9/#26/#47) needs it. Removed in #72.
     pub metadata: TrackMetadata,
     pub rating: Rating,
     pub statistics: PlayStatistics,
@@ -43,10 +40,10 @@ pub struct TrackLocation {
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TrackRelativePath(PathBuf);
 
-/// A file content hash (lower-case hex SHA-256). See the caveat on
-/// [`Track::content_hash`]: a stored value is import-time only and is not
-/// kept in sync with later in-place writes, so it must not be used as a
-/// live content fingerprint.
+/// A file content hash (lower-case hex SHA-256). Computed from a file's
+/// bytes during import and used transiently to dedup against the library
+/// and to verify a managed copy matches its source; it is never persisted
+/// (see #72).
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TrackContentHash(String);
 

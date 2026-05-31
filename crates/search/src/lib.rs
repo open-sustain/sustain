@@ -316,7 +316,6 @@ mod tests {
         Track {
             id: track_id(id),
             location: track_location(&format!("{title}.flac")),
-            content_hash: None,
             metadata: TrackMetadata {
                 title: Some(title.to_owned()),
                 artist: Some(artist.to_owned()),

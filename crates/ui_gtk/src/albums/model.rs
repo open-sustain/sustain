@@ -454,7 +454,6 @@ mod tests {
         let albums = group_albums(&[Track {
             id: track_id(1),
             location: TrackLocation::available(relative_path("track.flac")),
-            content_hash: None,
             metadata: TrackMetadata::default(),
             rating: Rating::unrated(),
             statistics: PlayStatistics::default(),
@@ -547,7 +546,6 @@ mod tests {
         Track {
             id: track_id(id),
             location: TrackLocation::available(relative_path(path)),
-            content_hash: None,
             metadata: TrackMetadata {
                 title: Some(path.trim_end_matches(".flac").to_owned()),
                 artist: Some(artist.to_owned()),
