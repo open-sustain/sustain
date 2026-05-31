@@ -149,7 +149,7 @@ impl DeviceSyncPanel {
                 label: device.label.clone(),
                 kind: device.kind,
                 layout: DeviceLayout::M3u,
-                sub_path: String::new(),
+                sub_path: sustain_app_runtime::DeviceRelativePath::root(),
                 files_per_folder_cap: FilesPerFolderCap::Unlimited,
                 volume_id: device.volume_id.clone(),
             });

@@ -16,6 +16,9 @@ path = "src/lib.rs"
 sustain-domain = { path = "../domain" }
 # Pioneer on-drive writer for the Pioneer layout.
 sustain-pioneer = { path = "../pioneer" }
+# Root-confined removable-media writes: safe openat/mkdirat/renameat/unlinkat
+# wrappers let the sync engine anchor every operation to one mount-root fd.
+rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
 # Scratch device roots for the writer/diff tests.

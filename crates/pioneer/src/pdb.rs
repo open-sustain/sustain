@@ -22,9 +22,7 @@
 //! carried over verbatim as validated reference blobs.
 
 use std::collections::HashMap;
-use std::io;
 use std::ops::Range;
-use std::path::Path;
 
 use crate::device_sql::encode;
 use crate::key;
@@ -361,21 +359,6 @@ pub fn build(
     );
 
     Ok(file.into_bytes())
-}
-
-/// Build the PDB and write it to `path`.
-pub fn write_to(
-    path: &Path,
-    tracks: &[PioneerTrack],
-    playlists: &[PioneerPlaylist],
-    artworks: &[PioneerArtwork],
-    analyze_date: &str,
-) -> io::Result<()> {
-    let bytes = build(tracks, playlists, artworks, analyze_date).map_err(io::Error::other)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, bytes)
 }
 
 // ---------------------------------------------------------------------

@@ -2105,6 +2105,7 @@ dependencies = [
 name = "sustain-device-sync"
 version = "0.3.0-alpha.2"
 dependencies = [
+ "rustix",
  "sustain-domain",
  "sustain-pioneer",
  "tempfile",
@@ -2151,7 +2152,6 @@ dependencies = [
  "image",
  "sha2",
  "sustain-domain",
- "tempfile",
 ]
 
 [[package]]

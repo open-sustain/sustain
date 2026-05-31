@@ -13,9 +13,6 @@
 //! from the hardware-validated reference exporter; only the waveform
 //! payloads come from Sustain's own analysis.
 
-use std::io;
-use std::path::Path;
-
 use crate::model::AnlzInput;
 use crate::waveform::{self, DETAIL_ENTRIES_PER_SECOND};
 
@@ -258,15 +255,6 @@ pub fn ext_bytes(input: &AnlzInput) -> Vec<u8> {
 
     debug_assert_eq!(buf.len() as u32, total);
     buf
-}
-
-/// Write both `ANLZ0000.DAT` and `ANLZ0000.EXT` into `dir`, creating
-/// the directory (and parents) if needed.
-pub fn write_files(dir: &Path, input: &AnlzInput) -> io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    std::fs::write(dir.join("ANLZ0000.DAT"), dat_bytes(input))?;
-    std::fs::write(dir.join("ANLZ0000.EXT"), ext_bytes(input))?;
-    Ok(())
 }
 
 #[cfg(test)]

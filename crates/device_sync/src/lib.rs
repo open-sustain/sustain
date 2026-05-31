@@ -14,6 +14,7 @@
 //! playlists (smart playlists re-evaluated each sync) into the neutral
 //! [`model`] inputs and hands them here.
 
+mod device_root;
 pub mod engine;
 pub mod identity;
 mod layout;
@@ -34,7 +35,8 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use sustain_domain::{
-        DeviceKind, DeviceLayout, FilesPerFolderCap, SyncDevice, SyncDeviceId, TrackId,
+        DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, SyncDevice, SyncDeviceId,
+        TrackId,
     };
 
     struct Fixture {
@@ -88,7 +90,7 @@ mod tests {
             label: "Test".into(),
             kind: DeviceKind::UsbDrive,
             layout,
-            sub_path: String::new(),
+            sub_path: DeviceRelativePath::root(),
             files_per_folder_cap: FilesPerFolderCap::Unlimited,
             volume_id: None,
         }
@@ -208,7 +210,7 @@ mod tests {
         crate::layout::plan_placements(req)
             .expect("planning succeeds")
             .into_iter()
-            .map(|placement| placement.rel_path)
+            .map(|placement| placement.rel_path.as_str().to_owned())
             .collect()
     }
 
@@ -283,7 +285,8 @@ mod tests {
         }];
         let prev = vec![sustain_domain::SyncManifestEntry {
             track_id: TrackId::new(7).expect("id"),
-            on_device_path: "Mix/001 A - Only Track.mp3".into(),
+            on_device_path: DeviceRelativePath::new("Mix/001 A - Only Track.mp3")
+                .expect("safe path"),
             fingerprint: "fp-7".into(),
         }];
         let req = plan_request(tracks, DeviceLayout::FolderPerPlaylist, playlists, prev);
@@ -401,6 +404,65 @@ mod tests {
         assert_eq!(
             read_marker(fx.dest.path()).map(SyncDeviceId::into_string),
             Some("test-device".to_owned())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn marker_symlink_is_rejected_without_touching_its_host_target() {
+        use std::os::unix::fs::symlink;
+
+        let dest = tempfile::tempdir().expect("device dir");
+        let host = tempfile::NamedTempFile::new().expect("host file");
+        std::fs::write(host.path(), "host-data").expect("seed host file");
+        symlink(host.path(), dest.path().join(MARKER_FILE)).expect("marker symlink");
+
+        let id = SyncDeviceId::new("device-id").expect("id");
+        assert!(write_marker(dest.path(), &id).is_err());
+        assert_eq!(
+            std::fs::read_to_string(host.path()).expect("read host file"),
+            "host-data"
+        );
+        assert_eq!(read_marker(dest.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_rejects_symlinked_intermediate_destination_without_writing_host_files() {
+        use std::os::unix::fs::symlink;
+
+        let fx = fixture(1);
+        let host = tempfile::tempdir().expect("host dir");
+        std::fs::create_dir(fx.dest.path().join("Music")).expect("music dir");
+        symlink(host.path(), fx.dest.path().join("Music/Artist 2")).expect("artist symlink");
+
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        assert!(sync(&req, &mut |_| {}, &|| false).is_err());
+        assert_eq!(
+            std::fs::read_dir(host.path())
+                .expect("read host dir")
+                .count(),
+            0
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_rejects_symlinked_final_destination_without_touching_host_file() {
+        use std::os::unix::fs::symlink;
+
+        let fx = fixture(1);
+        let host = tempfile::NamedTempFile::new().expect("host file");
+        std::fs::write(host.path(), "host-data").expect("seed host file");
+        let album = fx.dest.path().join("Music/Artist 2/Album 2");
+        std::fs::create_dir_all(&album).expect("album dir");
+        symlink(host.path(), album.join("01 Title 1.mp3")).expect("track symlink");
+
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        assert!(sync(&req, &mut |_| {}, &|| false).is_err());
+        assert_eq!(
+            std::fs::read_to_string(host.path()).expect("read host file"),
+            "host-data"
         );
     }
 

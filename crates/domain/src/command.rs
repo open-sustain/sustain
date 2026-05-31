@@ -119,7 +119,7 @@ pub enum ApplicationCommand {
     /// Set the sub-path under the device root to sync into (empty = root).
     SetDeviceSubPath {
         device_id: SyncDeviceId,
-        sub_path: String,
+        sub_path: crate::DeviceRelativePath,
     },
     /// Set the per-folder file cap for the folder-per-playlist layout.
     SetDeviceFilesPerFolderCap {

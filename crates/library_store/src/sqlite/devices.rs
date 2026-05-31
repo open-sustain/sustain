@@ -6,8 +6,8 @@
 
 use super::*;
 use sustain_domain::{
-    DeviceKind, DeviceLayout, FilesPerFolderCap, PlaylistItem, SyncDevice, SyncDeviceId,
-    SyncManifestEntry,
+    DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PlaylistItem, SyncDevice,
+    SyncDeviceId, SyncManifestEntry,
 };
 
 pub(super) fn save_sync_device(connection: &Connection, device: &SyncDevice) -> StoreResult<()> {
@@ -30,7 +30,7 @@ pub(super) fn save_sync_device(connection: &Connection, device: &SyncDevice) -> 
                 device.label,
                 device.kind.as_db(),
                 device.layout.as_db(),
-                device.sub_path,
+                device.sub_path.as_str(),
                 device.files_per_folder_cap.as_db(),
                 device.volume_id,
             ],
@@ -158,7 +158,7 @@ pub(super) fn save_device_manifest(
                 params![
                     id.as_str(),
                     entry.track_id.get(),
-                    entry.on_device_path,
+                    entry.on_device_path.as_str(),
                     entry.fingerprint,
                 ],
             )
@@ -184,7 +184,11 @@ pub(super) fn device_manifest(
     while let Some(row) = rows.next().map_err(StoreError::from)? {
         let raw_id: i64 = row.get(0).map_err(StoreError::from)?;
         let track_id = TrackId::new(raw_id).ok_or(StoreError::InvalidStoredId(raw_id))?;
-        let on_device_path = row.get(1).map_err(StoreError::from)?;
+        let raw_on_device_path: String = row.get(1).map_err(StoreError::from)?;
+        let on_device_path =
+            DeviceRelativePath::new(raw_on_device_path.clone()).ok_or_else(|| {
+                StoreError::InvalidStoredEnum(format!("device manifest path: {raw_on_device_path}"))
+            })?;
         let fingerprint = row.get(2).map_err(StoreError::from)?;
         entries.push(SyncManifestEntry {
             track_id,
@@ -205,7 +209,9 @@ fn device_from_row(row: &rusqlite::Row<'_>) -> StoreResult<SyncDevice> {
         .ok_or_else(|| StoreError::InvalidStoredEnum("device kind".to_owned()))?;
     let layout = DeviceLayout::from_db(row.get(3).map_err(StoreError::from)?)
         .ok_or_else(|| StoreError::InvalidStoredEnum("device layout".to_owned()))?;
-    let sub_path = row.get(4).map_err(StoreError::from)?;
+    let raw_sub_path: String = row.get(4).map_err(StoreError::from)?;
+    let sub_path = DeviceRelativePath::new(raw_sub_path.clone())
+        .ok_or_else(|| StoreError::InvalidStoredEnum(format!("device sub-path: {raw_sub_path}")))?;
     let files_per_folder_cap = FilesPerFolderCap::from_db(row.get(5).map_err(StoreError::from)?)
         .ok_or_else(|| StoreError::InvalidStoredEnum("files-per-folder cap".to_owned()))?;
     let volume_id = optional_string(row, 6)?;
@@ -244,11 +250,15 @@ fn selection_from_columns(kind: i64, item_id: i64) -> StoreResult<PlaylistItem> 
 
 #[cfg(test)]
 mod tests {
-    use crate::{LibraryStore, SqliteLibraryStore};
+    use crate::{LibraryStore, SqliteLibraryStore, StoreError};
     use sustain_domain::{
-        DeviceKind, DeviceLayout, FilesPerFolderCap, PlaylistId, PlaylistItem, SmartPlaylistId,
-        SyncDevice, SyncDeviceId, SyncManifestEntry, TrackId,
+        DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PlaylistId, PlaylistItem,
+        SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, TrackId,
     };
+
+    fn device_path(path: &str) -> DeviceRelativePath {
+        DeviceRelativePath::new(path).expect("safe device-relative path")
+    }
 
     fn device(id: &str) -> SyncDevice {
         SyncDevice {
@@ -256,7 +266,7 @@ mod tests {
             label: "My USB".into(),
             kind: DeviceKind::UsbDrive,
             layout: DeviceLayout::Pioneer,
-            sub_path: String::new(),
+            sub_path: DeviceRelativePath::root(),
             files_per_folder_cap: FilesPerFolderCap::N128,
             volume_id: Some("VOL-1".into()),
         }
@@ -309,12 +319,12 @@ mod tests {
         let entries = vec![
             SyncManifestEntry {
                 track_id: TrackId::new(1).expect("id"),
-                on_device_path: "Contents/A/B/1.mp3".into(),
+                on_device_path: device_path("Contents/A/B/1.mp3"),
                 fingerprint: "fp1".into(),
             },
             SyncManifestEntry {
                 track_id: TrackId::new(2).expect("id"),
-                on_device_path: "Contents/A/B/2.mp3".into(),
+                on_device_path: device_path("Contents/A/B/2.mp3"),
                 fingerprint: "fp2".into(),
             },
         ];
@@ -340,7 +350,7 @@ mod tests {
                 &d.id,
                 &[SyncManifestEntry {
                     track_id: TrackId::new(1).expect("id"),
-                    on_device_path: "x".into(),
+                    on_device_path: device_path("x"),
                     fingerprint: "f".into(),
                 }],
             )
@@ -350,5 +360,49 @@ mod tests {
         assert_eq!(store.sync_device(&d.id).expect("load"), None);
         assert!(store.device_selection(&d.id).expect("sel").is_empty());
         assert!(store.device_manifest(&d.id).expect("manifest").is_empty());
+    }
+
+    #[test]
+    fn unsafe_persisted_device_sub_path_is_rejected() {
+        let store = SqliteLibraryStore::open_in_memory().expect("store");
+        let d = device("dev-unsafe-config");
+        store.save_sync_device(&d).expect("save");
+        store
+            .connection_guard()
+            .expect("connection")
+            .execute(
+                "UPDATE sync_devices SET sub_path = '../host' WHERE id = ?1",
+                rusqlite::params![d.id.as_str()],
+            )
+            .expect("inject unsafe sub-path");
+
+        assert!(matches!(
+            store.sync_device(&d.id),
+            Err(StoreError::InvalidStoredEnum(message))
+                if message == "device sub-path: ../host"
+        ));
+    }
+
+    #[test]
+    fn unsafe_persisted_manifest_path_is_rejected() {
+        let store = SqliteLibraryStore::open_in_memory().expect("store");
+        let d = device("dev-unsafe-manifest");
+        store.save_sync_device(&d).expect("save");
+        store
+            .connection_guard()
+            .expect("connection")
+            .execute(
+                "INSERT INTO sync_manifest \
+                 (device_id, track_id, on_device_path, fingerprint) \
+                 VALUES (?1, 1, '../../host-file', 'fp')",
+                rusqlite::params![d.id.as_str()],
+            )
+            .expect("inject unsafe manifest");
+
+        assert!(matches!(
+            store.device_manifest(&d.id),
+            Err(StoreError::InvalidStoredEnum(message))
+                if message == "device manifest path: ../../host-file"
+        ));
     }
 }

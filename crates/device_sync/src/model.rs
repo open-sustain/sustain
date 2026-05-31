@@ -10,7 +10,9 @@
 
 use std::path::PathBuf;
 
-use sustain_domain::{MusicalKey, SyncDevice, SyncManifestEntry, TrackId, WaveformSegments};
+use sustain_domain::{
+    DeviceRelativePath, MusicalKey, SyncDevice, SyncManifestEntry, TrackId, WaveformSegments,
+};
 
 /// One track in the resolved set to sync. Carries everything the
 /// writers need plus a fingerprint for staleness detection.
@@ -84,7 +86,7 @@ pub struct SyncRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Placement {
     pub track_index: usize,
-    pub rel_path: String,
+    pub rel_path: DeviceRelativePath,
     pub fingerprint: String,
 }
 
@@ -107,7 +109,7 @@ pub struct SyncPlan {
     pub to_update: usize,
     /// On-device files no longer in the selection (candidates for
     /// removal). Paths are relative to the device root.
-    pub to_remove: Vec<String>,
+    pub to_remove: Vec<DeviceRelativePath>,
     /// Files already present and current.
     pub unchanged: usize,
     /// Total bytes the copy/update step will transfer.

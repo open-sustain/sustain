@@ -13,6 +13,8 @@
 //! `sustain-device-sync` crate; this module is pure data so the storage
 //! layer can persist it without pulling in that machinery.
 
+use std::path::{Component, Path};
+
 use crate::PlaylistItem;
 
 /// Stable, transport-agnostic identifier Sustain assigns to a device on
@@ -40,6 +42,78 @@ impl SyncDeviceId {
 
     pub fn into_string(self) -> String {
         self.0
+    }
+}
+
+/// A normalized UTF-8 path beneath a connected device's mount root.
+///
+/// Removable media and persisted device state are untrusted input. Keeping
+/// device-relative paths in this type prevents absolute paths, `..`, `.`,
+/// repeated separators, and NUL bytes from reaching filesystem mutation
+/// code. The empty value deliberately represents the mount root itself.
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DeviceRelativePath(String);
+
+impl DeviceRelativePath {
+    pub fn root() -> Self {
+        Self::default()
+    }
+
+    pub fn new(value: impl Into<String>) -> Option<Self> {
+        let value = value.into();
+        if value.is_empty() {
+            return Some(Self::root());
+        }
+        if value.contains('\0') {
+            return None;
+        }
+
+        let mut normalized = Vec::new();
+        for component in Path::new(&value).components() {
+            match component {
+                Component::Normal(component) => normalized.push(component.to_str()?),
+                Component::Prefix(_)
+                | Component::RootDir
+                | Component::CurDir
+                | Component::ParentDir => return None,
+            }
+        }
+        (normalized.join("/") == value).then_some(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn components(&self) -> impl Iterator<Item = &str> {
+        self.0.split('/').filter(|component| !component.is_empty())
+    }
+
+    /// Join two already-validated relative paths. Since neither side can
+    /// carry separators at its boundaries or traversal components, the
+    /// result remains normalized and confined beneath the same root.
+    pub fn join(&self, child: &Self) -> Self {
+        match (self.is_root(), child.is_root()) {
+            (true, _) => child.clone(),
+            (_, true) => self.clone(),
+            (false, false) => Self(format!("{}/{}", self.0, child.0)),
+        }
+    }
+
+    pub fn join_component(&self, child: &str) -> Option<Self> {
+        Self::new(child)
+            .filter(|child| child.components().count() == 1)
+            .map(|child| self.join(&child))
+    }
+}
+
+impl std::fmt::Display for DeviceRelativePath {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -200,7 +274,7 @@ pub struct SyncDevice {
     pub kind: DeviceKind,
     pub layout: DeviceLayout,
     /// Sub-path under the device root to sync into. Empty = device root.
-    pub sub_path: String,
+    pub sub_path: DeviceRelativePath,
     pub files_per_folder_cap: FilesPerFolderCap,
     /// Filesystem volume id, used only to re-recognise a device whose
     /// marker file was deleted. `None` until first observed.
@@ -215,7 +289,7 @@ pub struct SyncDevice {
 pub struct SyncManifestEntry {
     pub track_id: crate::TrackId,
     /// Path on the device, relative to the device root.
-    pub on_device_path: String,
+    pub on_device_path: DeviceRelativePath,
     /// Fingerprint of the source file when it was last written (content
     /// hash when known, else a size-based token). A change means the
     /// on-device copy is stale and must be rewritten.
@@ -263,5 +337,37 @@ mod tests {
         }
         assert_eq!(DeviceKind::Android.default_sub_path(), "Music");
         assert_eq!(DeviceKind::UsbDrive.default_sub_path(), "");
+    }
+
+    #[test]
+    fn device_relative_path_accepts_only_normalized_beneath_root_paths() {
+        assert_eq!(
+            DeviceRelativePath::new(""),
+            Some(DeviceRelativePath::root())
+        );
+        assert_eq!(
+            DeviceRelativePath::new("Music/Artist/song.mp3").map(|path| path.as_str().to_owned()),
+            Some("Music/Artist/song.mp3".to_owned())
+        );
+        for invalid in [
+            "/Music/song.mp3",
+            "../host-file",
+            "Music/../host-file",
+            "./Music",
+            "Music//song.mp3",
+            "Music/",
+            "Music/\0song.mp3",
+        ] {
+            assert!(
+                DeviceRelativePath::new(invalid).is_none(),
+                "{invalid:?} must be rejected"
+            );
+        }
+        let music = DeviceRelativePath::new("Music").expect("safe path");
+        assert_eq!(
+            music.join_component("song.mp3"),
+            DeviceRelativePath::new("Music/song.mp3")
+        );
+        assert_eq!(music.join_component("Album/song.mp3"), None);
     }
 }

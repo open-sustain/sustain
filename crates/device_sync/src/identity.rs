@@ -18,7 +18,9 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use sustain_domain::{DeviceKind, SyncDevice, SyncDeviceId};
+use sustain_domain::{DeviceKind, DeviceRelativePath, SyncDevice, SyncDeviceId};
+
+use crate::device_root::DeviceRoot;
 
 /// Name of the identity marker written at a device's root.
 pub const MARKER_FILE: &str = ".sustain-device-id";
@@ -63,13 +65,21 @@ pub fn generate_device_id() -> Option<SyncDeviceId> {
 
 /// Read the identity marker at a device root, if present and valid.
 pub fn read_marker(mount: &Path) -> Option<SyncDeviceId> {
-    let contents = fs::read_to_string(mount.join(MARKER_FILE)).ok()?;
+    let root = DeviceRoot::open(mount).ok()?;
+    let marker = DeviceRelativePath::new(MARKER_FILE).expect("static marker path is safe");
+    let contents = root.read_to_string(&marker, 4096).ok()?;
     SyncDeviceId::new(contents.trim())
 }
 
 /// Write the identity marker at a device root.
 pub fn write_marker(mount: &Path, id: &SyncDeviceId) -> std::io::Result<()> {
-    fs::write(mount.join(MARKER_FILE), id.as_str())
+    let root = DeviceRoot::open(mount)?;
+    write_marker_to_root(&root, id)
+}
+
+pub(crate) fn write_marker_to_root(root: &DeviceRoot, id: &SyncDeviceId) -> std::io::Result<()> {
+    let marker = DeviceRelativePath::new(MARKER_FILE).expect("static marker path is safe");
+    root.write_file(&marker, id.as_str().as_bytes())
 }
 
 /// A mounted filesystem entry from `/proc/mounts`.

@@ -19,7 +19,8 @@ use sustain_device_sync::{
     ConnectedDevice, SyncInputPlaylist, SyncInputTrack, SyncPlan, SyncRequest, engine,
 };
 use sustain_domain::{
-    DeviceLayout, FilesPerFolderCap, MusicalKey, PlaylistItem, SyncDevice, SyncDeviceId, Track,
+    DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MusicalKey, PlaylistItem, SyncDevice,
+    SyncDeviceId, Track,
 };
 use sustain_library_store::AnalysisCapabilities;
 
@@ -163,7 +164,8 @@ impl ApplicationRuntime {
             label: connected.label.clone(),
             kind: connected.kind,
             layout: DeviceLayout::M3u,
-            sub_path: connected.kind.default_sub_path().to_owned(),
+            sub_path: DeviceRelativePath::new(connected.kind.default_sub_path())
+                .expect("static device default sub-path is safe"),
             files_per_folder_cap: FilesPerFolderCap::Unlimited,
             volume_id: connected.volume_id.clone(),
         };
@@ -188,7 +190,7 @@ impl ApplicationRuntime {
     pub(crate) fn set_device_sub_path(
         &self,
         id: SyncDeviceId,
-        sub_path: String,
+        sub_path: DeviceRelativePath,
     ) -> ApplicationRuntimeResult<()> {
         let mut device = self.device_config_or_default(&id);
         device.sub_path = sub_path;
@@ -245,7 +247,7 @@ impl ApplicationRuntime {
             label: "Device".to_owned(),
             kind: sustain_domain::DeviceKind::UsbDrive,
             layout: DeviceLayout::M3u,
-            sub_path: String::new(),
+            sub_path: DeviceRelativePath::root(),
             files_per_folder_cap: FilesPerFolderCap::Unlimited,
             volume_id: None,
         })

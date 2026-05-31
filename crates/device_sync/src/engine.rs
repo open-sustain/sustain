@@ -7,36 +7,40 @@
 //! files behind the caller's confirmation.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
 
-use sustain_domain::{DeviceLayout, SyncManifestEntry};
+use sustain_domain::{DeviceLayout, DeviceRelativePath, SyncManifestEntry};
 use sustain_pioneer::path_hash;
 
+use crate::device_root::DeviceRoot;
 use crate::layout;
 use crate::model::{
     GenreBytes, Placement, SyncError, SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage,
 };
 
-/// The on-device root to write under: the Pioneer format owns the drive
-/// root (its `PIONEER/` tree is expected there); the other layouts honor
-/// the device's configured sub-path.
-fn device_root(req: &SyncRequest) -> PathBuf {
+/// The on-device subtree to write under: the Pioneer format owns the drive
+/// root (its `PIONEER/` tree is expected there); the other layouts honor the
+/// device's validated configured sub-path.
+fn device_base(req: &SyncRequest) -> DeviceRelativePath {
     match req.device.layout {
-        DeviceLayout::Pioneer => req.mount_path.clone(),
-        _ if req.device.sub_path.is_empty() => req.mount_path.clone(),
-        _ => req.mount_path.join(&req.device.sub_path),
+        DeviceLayout::Pioneer => DeviceRelativePath::root(),
+        _ => req.device.sub_path.clone(),
     }
 }
 
 struct Diff {
     to_write: Vec<usize>,
     unchanged: Vec<usize>,
-    removals: Vec<String>,
+    removals: Vec<DeviceRelativePath>,
     copy_count: usize,
     update_count: usize,
 }
 
-fn compute_diff(req: &SyncRequest, root: &Path, placements: &[Placement]) -> Diff {
+fn compute_diff(
+    req: &SyncRequest,
+    root: &DeviceRoot,
+    base: &DeviceRelativePath,
+    placements: &[Placement],
+) -> Result<Diff, SyncError> {
     use std::collections::HashMap;
     let prev: HashMap<&str, &str> = req
         .previous_manifest
@@ -51,7 +55,10 @@ fn compute_diff(req: &SyncRequest, root: &Path, placements: &[Placement]) -> Dif
     let mut update_count = 0;
     for (index, placement) in placements.iter().enumerate() {
         let known = prev.get(placement.rel_path.as_str());
-        let present = root.join(&placement.rel_path).exists();
+        let path = base.join(&placement.rel_path);
+        let present = root
+            .is_regular_file(&path)
+            .map_err(|error| SyncError::io(path.as_str(), error))?;
         if known == Some(&placement.fingerprint.as_str()) && present {
             unchanged.push(index);
         } else {
@@ -64,20 +71,20 @@ fn compute_diff(req: &SyncRequest, root: &Path, placements: &[Placement]) -> Dif
         }
     }
 
-    let removals: Vec<String> = req
+    let removals: Vec<DeviceRelativePath> = req
         .previous_manifest
         .iter()
         .filter(|e| !desired.contains(e.on_device_path.as_str()))
         .map(|e| e.on_device_path.clone())
         .collect();
 
-    Diff {
+    Ok(Diff {
         to_write,
         unchanged,
         removals,
         copy_count,
         update_count,
-    }
+    })
 }
 
 /// Compute what a sync would do, without writing anything. The UI shows
@@ -86,9 +93,11 @@ pub fn plan(req: &SyncRequest) -> Result<SyncPlan, SyncError> {
     if req.tracks.is_empty() {
         return Err(SyncError::Empty);
     }
-    let root = device_root(req);
+    let root =
+        DeviceRoot::open(&req.mount_path).map_err(|error| SyncError::io(&req.mount_path, error))?;
+    let base = device_base(req);
     let placements = layout::plan_placements(req)?;
-    let diff = compute_diff(req, &root, &placements);
+    let diff = compute_diff(req, &root, &base, &placements)?;
     let bytes_to_copy = diff
         .to_write
         .iter()
@@ -148,15 +157,18 @@ pub fn sync(
     if req.tracks.is_empty() {
         return Err(SyncError::Empty);
     }
-    let root = device_root(req);
-    std::fs::create_dir_all(&root).map_err(|e| SyncError::io(&root, e))?;
+    let root =
+        DeviceRoot::open(&req.mount_path).map_err(|error| SyncError::io(&req.mount_path, error))?;
+    let base = device_base(req);
+    root.ensure_dir_all(&base)
+        .map_err(|error| SyncError::io(base.as_str(), error))?;
 
     // Register the device early so even a partial sync is recognised next
     // time (the marker always lives at the mount root, not the sub-path).
-    let _ = crate::identity::write_marker(&req.mount_path, &req.device.id);
+    let _ = crate::identity::write_marker_to_root(&root, &req.device.id);
 
     let placements = layout::plan_placements(req)?;
-    let diff = compute_diff(req, &root, &placements);
+    let diff = compute_diff(req, &root, &base, &placements)?;
 
     let mut outcome = SyncOutcome {
         unchanged: diff.unchanged.len(),
@@ -178,12 +190,9 @@ pub fn sync(
         }
         let placement = &placements[placement_index];
         let track = &req.tracks[placement.track_index];
-        let dest = root.join(&placement.rel_path);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| SyncError::io(parent, e))?;
-        }
-        std::fs::copy(&track.source_path, &dest)
-            .map_err(|e| SyncError::io(&track.source_path, e))?;
+        let dest = base.join(&placement.rel_path);
+        root.copy_file(&track.source_path, &dest)
+            .map_err(|error| SyncError::io(dest.as_str(), error))?;
 
         let is_update = req
             .previous_manifest
@@ -220,7 +229,7 @@ pub fn sync(
             completed: 0,
             total: 1,
         });
-        layout::finalize(req, &root, &placements, &written)?;
+        layout::finalize(req, &root, &base, &placements, &written)?;
         progress(SyncProgress {
             stage,
             completed: 1,
@@ -236,7 +245,7 @@ pub fn sync(
                 outcome.cancelled = true;
                 break;
             }
-            remove_placement(req, &root, rel);
+            remove_placement(req, &root, &base, rel);
             outcome.removed += 1;
             progress(SyncProgress {
                 stage: SyncStage::Removing,
@@ -272,10 +281,18 @@ fn manifest_entry(req: &SyncRequest, placement: &Placement) -> SyncManifestEntry
 
 /// Delete a stale file (and, for Pioneer, its orphaned ANLZ directory).
 /// Best-effort: a failed delete does not abort the sync.
-fn remove_placement(req: &SyncRequest, root: &Path, rel: &str) {
-    let _ = std::fs::remove_file(root.join(rel));
+fn remove_placement(
+    req: &SyncRequest,
+    root: &DeviceRoot,
+    base: &DeviceRelativePath,
+    rel: &DeviceRelativePath,
+) {
+    let _ = root.remove_file_if_exists(&base.join(rel));
     if req.device.layout == DeviceLayout::Pioneer {
         let anlz_dir = path_hash::anlz_dir(&format!("/{rel}"));
-        let _ = std::fs::remove_dir_all(root.join(anlz_dir.trim_start_matches('/')));
+        if let Some(anlz_dir) = DeviceRelativePath::new(anlz_dir.trim_start_matches('/').to_owned())
+        {
+            let _ = root.remove_tree_if_exists(&base.join(&anlz_dir));
+        }
     }
 }

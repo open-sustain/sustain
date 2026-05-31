@@ -17,13 +17,14 @@
 //!   `export.pdb` database and per-track ANLZ waveform files.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::Path;
 
-use sustain_domain::{DeviceLayout, WaveformSegments};
+use sustain_domain::{DeviceLayout, DeviceRelativePath, WaveformSegments};
 use sustain_pioneer::{
-    AnlzInput, ArtworkSet, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz, path_hash, pdb,
+    AnlzInput, ArtworkSet, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz,
+    artwork::ARTWORK_BUCKET, path_hash, pdb,
 };
 
+use crate::device_root::DeviceRoot;
 use crate::model::{Placement, SyncError, SyncRequest};
 
 const MUSIC_DIR: &str = "Music";
@@ -50,7 +51,7 @@ pub fn plan_placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
     let placements = match req.device.layout {
         DeviceLayout::M3u => tree_placements(req, MUSIC_DIR)?,
         DeviceLayout::Pioneer => tree_placements(req, CONTENTS_DIR)?,
-        DeviceLayout::FolderPerPlaylist => folder_placements(req),
+        DeviceLayout::FolderPerPlaylist => folder_placements(req)?,
     };
     validate_unique(&placements)?;
     Ok(placements)
@@ -113,16 +114,17 @@ fn allocate_unique_path(
 /// Write the layout's index/database files after audio is in place.
 /// `written` holds the indices (into `placements`) that were (re)copied
 /// this run, so the Pioneer writer can refresh only stale ANLZ files.
-pub fn finalize(
+pub(crate) fn finalize(
     req: &SyncRequest,
-    root: &Path,
+    root: &DeviceRoot,
+    base: &DeviceRelativePath,
     placements: &[Placement],
     written: &HashSet<usize>,
 ) -> Result<(), SyncError> {
     match req.device.layout {
-        DeviceLayout::M3u => write_m3u_playlists(req, root, placements),
+        DeviceLayout::M3u => write_m3u_playlists(req, root, base, placements),
         DeviceLayout::FolderPerPlaylist => Ok(()),
-        DeviceLayout::Pioneer => write_pioneer(req, root, placements, written),
+        DeviceLayout::Pioneer => write_pioneer(req, root, base, placements, written),
     }
 }
 
@@ -154,7 +156,8 @@ fn tree_placements(req: &SyncRequest, root_dir: &str) -> Result<Vec<Placement>, 
         )?;
         placements.push(Placement {
             track_index: index,
-            rel_path: rel,
+            rel_path: DeviceRelativePath::new(rel)
+                .ok_or_else(|| SyncError::planning("generated an unsafe tree placement"))?,
             fingerprint: track.fingerprint.clone(),
         });
     }
@@ -172,7 +175,7 @@ fn track_stem(track: &crate::model::SyncInputTrack) -> String {
 // Folder-per-playlist layout
 // ---------------------------------------------------------------------
 
-fn folder_placements(req: &SyncRequest) -> Vec<Placement> {
+fn folder_placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
     let cap = req.device.files_per_folder_cap.limit();
     let mut used_folders: HashSet<String> = HashSet::new();
     let mut placements = Vec::new();
@@ -190,7 +193,7 @@ fn folder_placements(req: &SyncRequest) -> Vec<Placement> {
             .previous_manifest
             .iter()
             .filter_map(|entry| {
-                let rest = entry.on_device_path.strip_prefix(&prefix)?;
+                let rest = entry.on_device_path.as_str().strip_prefix(&prefix)?;
                 let file = rest.rsplit('/').next()?;
                 Some((entry.track_id, leading_number(file)?))
             })
@@ -235,12 +238,14 @@ fn folder_placements(req: &SyncRequest) -> Vec<Placement> {
             };
             placements.push(Placement {
                 track_index,
-                rel_path: rel,
+                rel_path: DeviceRelativePath::new(rel).ok_or_else(|| {
+                    SyncError::planning("generated an unsafe folder-per-playlist placement")
+                })?,
                 fingerprint: track.fingerprint.clone(),
             });
         }
     }
-    placements
+    Ok(placements)
 }
 
 fn leading_number(name: &str) -> Option<u32> {
@@ -267,7 +272,8 @@ fn unique_name(used: &mut HashSet<String>, base: String) -> String {
 
 fn write_m3u_playlists(
     req: &SyncRequest,
-    root: &Path,
+    root: &DeviceRoot,
+    base: &DeviceRelativePath,
     placements: &[Placement],
 ) -> Result<(), SyncError> {
     // track index -> its on-device relative path.
@@ -294,8 +300,11 @@ fn write_m3u_playlists(
                 rel,
             ));
         }
-        let dest = root.join(&name);
-        std::fs::write(&dest, body).map_err(|e| SyncError::io(&dest, e))?;
+        let dest = base
+            .join_component(&name)
+            .ok_or_else(|| SyncError::planning("generated an unsafe playlist path"))?;
+        root.write_file(&dest, body.as_bytes())
+            .map_err(|error| SyncError::io(dest.as_str(), error))?;
     }
     Ok(())
 }
@@ -306,7 +315,8 @@ fn write_m3u_playlists(
 
 fn write_pioneer(
     req: &SyncRequest,
-    root: &Path,
+    root: &DeviceRoot,
+    base: &DeviceRelativePath,
     placements: &[Placement],
     written: &HashSet<usize>,
 ) -> Result<(), SyncError> {
@@ -329,10 +339,20 @@ fn write_pioneer(
 
         // Write ANLZ when the audio was (re)written this run or when the
         // .EXT is missing on the device (out-of-band deletion / first run).
-        let anlz_dir_rel = path_hash::anlz_dir(&audio_path);
-        let anlz_dir_abs = root.join(anlz_dir_rel.trim_start_matches('/'));
-        let needs_anlz =
-            written.contains(&placement_index) || !anlz_dir_abs.join("ANLZ0000.EXT").exists();
+        let anlz_dir_rel = DeviceRelativePath::new(
+            path_hash::anlz_dir(&audio_path)
+                .trim_start_matches('/')
+                .to_owned(),
+        )
+        .ok_or_else(|| SyncError::planning("Pioneer path hash generated an unsafe path"))?;
+        let anlz_dir = base.join(&anlz_dir_rel);
+        let anlz_ext = anlz_dir
+            .join_component("ANLZ0000.EXT")
+            .expect("static ANLZ filename is safe");
+        let needs_anlz = written.contains(&placement_index)
+            || !root
+                .is_regular_file(&anlz_ext)
+                .map_err(|error| SyncError::io(anlz_ext.as_str(), error))?;
         if needs_anlz {
             let empty = WaveformSegments {
                 segment_duration_ms: 0.0,
@@ -345,8 +365,13 @@ fn write_pioneer(
                 waveform_preview: track.waveform_preview.as_ref().unwrap_or(&empty),
                 waveform_detail: track.waveform_detail.as_ref().unwrap_or(&empty),
             };
-            anlz::write_files(&anlz_dir_abs, &input)
-                .map_err(|e| SyncError::io(&anlz_dir_abs, e))?;
+            let dat = anlz_dir
+                .join_component("ANLZ0000.DAT")
+                .expect("static ANLZ filename is safe");
+            root.write_file(&dat, &anlz::dat_bytes(&input))
+                .map_err(|error| SyncError::io(dat.as_str(), error))?;
+            root.write_file(&anlz_ext, &anlz::ext_bytes(&input))
+                .map_err(|error| SyncError::io(anlz_ext.as_str(), error))?;
         }
 
         pioneer_tracks.push(PioneerTrack {
@@ -396,12 +421,29 @@ fn write_pioneer(
     // Render the cover thumbnails onto the drive (clearing any stale set
     // from a previous, differently-numbered export) before stamping the
     // matching id↔path rows into the PDB.
-    artwork
-        .write_files(root)
-        .map_err(|e| SyncError::io(root, e))?;
+    let artwork_bucket = base.join(
+        &DeviceRelativePath::new(ARTWORK_BUCKET)
+            .expect("static Pioneer artwork bucket path is safe"),
+    );
+    root.remove_tree_if_exists(&artwork_bucket)
+        .map_err(|error| SyncError::io(artwork_bucket.as_str(), error))?;
+    if !artwork.is_empty() {
+        root.ensure_dir_all(&artwork_bucket)
+            .map_err(|error| SyncError::io(artwork_bucket.as_str(), error))?;
+        for (name, bytes) in artwork.files() {
+            let path = artwork_bucket
+                .join_component(&name)
+                .expect("generated Pioneer artwork filename is safe");
+            root.write_file(&path, bytes)
+                .map_err(|error| SyncError::io(path.as_str(), error))?;
+        }
+    }
     let artwork_rows = artwork.rows();
 
-    let pdb_path = root.join(sustain_pioneer::PDB_RELATIVE_PATH);
+    let pdb_path = base.join(
+        &DeviceRelativePath::new(sustain_pioneer::PDB_RELATIVE_PATH)
+            .expect("static Pioneer PDB path is safe"),
+    );
     let bytes = pdb::build(
         &pioneer_tracks,
         &pioneer_playlists,
@@ -409,9 +451,7 @@ fn write_pioneer(
         &req.export_date,
     )
     .map_err(SyncError::Pdb)?;
-    if let Some(parent) = pdb_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| SyncError::io(parent, e))?;
-    }
-    std::fs::write(&pdb_path, bytes).map_err(|e| SyncError::io(&pdb_path, e))?;
+    root.write_file(&pdb_path, &bytes)
+        .map_err(|error| SyncError::io(pdb_path.as_str(), error))?;
     Ok(())
 }

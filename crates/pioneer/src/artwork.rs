@@ -15,17 +15,16 @@
 //!
 //! [`ArtworkSet`] accumulates covers across a track set, de-duplicating
 //! identical images by content hash so an album's shared art is decoded,
-//! resized, and stored once. It hands the PDB writer the id↔path rows
-//! ([`crate::model::PioneerArtwork`]) and writes the JPEG files itself.
+//! resized, and stored once. It hands the caller the PDB id↔path rows
+//! ([`crate::model::PioneerArtwork`]) and rendered JPEG byte payloads. The
+//! device-sync crate owns filesystem publication so removable-media writes
+//! stay root-confined.
 //!
 //! Artwork ids are assigned from scratch on every export (1, 2, 3… in
-//! first-seen order), so [`ArtworkSet::write_files`] clears the bucket
-//! before writing — a previous, differently-numbered run leaves no
-//! orphan thumbnails behind.
+//! first-seen order), so the caller clears the bucket before writing — a
+//! previous, differently-numbered run leaves no orphan thumbnails behind.
 
 use std::collections::HashMap;
-use std::io;
-use std::path::Path;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
@@ -45,7 +44,7 @@ const JPEG_QUALITY: u8 = 90;
 /// The single bucket directory every Pioneer thumbnail lives under,
 /// relative to the drive root. Rekordbox uses a numbered-bucket scheme;
 /// one bucket is sufficient and matches the validated reference.
-const ARTWORK_BUCKET: &str = "PIONEER/Artwork/00001";
+pub const ARTWORK_BUCKET: &str = "PIONEER/Artwork/00001";
 
 /// A cover failed to render. Callers treat this as "this track has no
 /// artwork" (a non-fatal degradation) rather than aborting the export.
@@ -134,24 +133,14 @@ impl ArtworkSet {
         self.processed.len()
     }
 
-    /// Write every rendered cover under `device_root`, replacing the
-    /// bucket directory's previous contents so a smaller selection than
-    /// last time leaves no orphan thumbnails. A no-op (but still clears
-    /// stale files) when the set is empty.
-    pub fn write_files(&self, device_root: &Path) -> io::Result<()> {
-        let dir = device_root.join(ARTWORK_BUCKET);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
-        }
-        if self.processed.is_empty() {
-            return Ok(());
-        }
-        std::fs::create_dir_all(&dir)?;
-        for art in &self.processed {
-            std::fs::write(dir.join(format!("a{}.jpg", art.id)), &art.small)?;
-            std::fs::write(dir.join(format!("a{}_m.jpg", art.id)), &art.large)?;
-        }
-        Ok(())
+    /// Rendered JPEG files for root-confined publication by the sync engine.
+    pub fn files(&self) -> impl Iterator<Item = (String, &[u8])> {
+        self.processed.iter().flat_map(|art| {
+            [
+                (format!("a{}.jpg", art.id), art.small.as_slice()),
+                (format!("a{}_m.jpg", art.id), art.large.as_slice()),
+            ]
+        })
     }
 }
 
@@ -213,21 +202,10 @@ mod tests {
     }
 
     #[test]
-    fn writes_both_renditions_and_clears_orphans() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let bucket = dir.path().join("PIONEER/Artwork/00001");
-
-        // A stale thumbnail from a hypothetical earlier, larger export.
-        std::fs::create_dir_all(&bucket).expect("pre-create bucket");
-        std::fs::write(bucket.join("a9.jpg"), b"stale").expect("write stale");
-
+    fn exposes_both_rendered_renditions() {
         let mut set = ArtworkSet::new();
         set.add(&solid_png(0, 255, 0)).expect("add green");
-        set.write_files(dir.path()).expect("write files");
-
-        assert!(bucket.join("a1.jpg").exists());
-        assert!(bucket.join("a1_m.jpg").exists());
-        // The orphan from before is gone.
-        assert!(!bucket.join("a9.jpg").exists());
+        let files: Vec<_> = set.files().map(|(name, _)| name).collect();
+        assert_eq!(files, ["a1.jpg", "a1_m.jpg"]);
     }
 }
