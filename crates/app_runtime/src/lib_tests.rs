@@ -66,6 +66,35 @@ fn runtime_accepts_settings_command() {
 }
 
 #[test]
+fn device_sync_manifest_save_failure_surfaces_error_instead_of_success() {
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store.set_fail_device_manifest(true);
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+
+    runtime.apply_device_sync_event(crate::DeviceSyncEvent::Finished(
+        crate::DeviceSyncCompletion {
+            device_id: SyncDeviceId::new("device-id").expect("device id"),
+            result: Ok(sustain_device_sync::SyncOutcome {
+                copied: 1,
+                ..Default::default()
+            }),
+        },
+    ));
+
+    assert_eq!(store.device_manifest_calls(), 1);
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("manifest failure notification");
+    assert_eq!(notification.category, NotificationCategory::DeviceSync);
+    assert_eq!(notification.severity, NotificationSeverity::Error);
+    assert!(notification.body.contains("could not save"));
+}
+
+#[test]
 fn runtime_handles_every_application_command_intentionally() {
     let track_id = track_id(1);
     let playlist_id = playlist_id(1);

@@ -20,7 +20,8 @@ use std::{
 
 use rustix::{
     fs::{
-        AtFlags, FileType, Mode, OFlags, RawDir, mkdirat, open, openat, renameat, statat, unlinkat,
+        AtFlags, FileType, Mode, OFlags, RawDir, fsync, mkdirat, open, openat, renameat, statat,
+        unlinkat,
     },
     io::{Errno, dup},
 };
@@ -61,19 +62,30 @@ impl DeviceRoot {
     }
 
     pub(crate) fn is_regular_file(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+        self.regular_file_len(path).map(|len| len.is_some())
+    }
+
+    pub(crate) fn regular_file_len(&self, path: &DeviceRelativePath) -> io::Result<Option<u64>> {
         let (parent, file_name) = split_parent(path)?;
         let parent = match self.open_dir(&parent, false) {
             Ok(parent) => parent,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
         match statat(&parent, file_name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile => Ok(true),
+            Ok(stat) if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile => {
+                u64::try_from(stat.st_size).map(Some).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("device file has a negative size: {path}"),
+                    )
+                })
+            }
             Ok(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("device path is not a regular file: {path}"),
             )),
-            Err(Errno::NOENT) => Ok(false),
+            Err(Errno::NOENT) => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
@@ -109,7 +121,7 @@ impl DeviceRoot {
     }
 
     pub(crate) fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {
-        self.publish_file(path, |file| file.write_all(bytes))
+        self.publish_file(path, Some(bytes.len() as u64), |file| file.write_all(bytes))
     }
 
     pub(crate) fn copy_file(
@@ -120,7 +132,7 @@ impl DeviceRoot {
     ) -> io::Result<()> {
         let mut source = File::open(source_path)?;
         ensure_source_unchanged(source_path, &source, expected)?;
-        self.publish_file(path, |target| {
+        self.publish_file(path, Some(expected.size_bytes), |target| {
             io::copy(&mut source, target)?;
             ensure_source_unchanged(source_path, &source, expected)
         })
@@ -145,6 +157,7 @@ impl DeviceRoot {
             Err(error) => return Err(error.into()),
         }
         unlinkat(&parent, file_name, AtFlags::empty()).map_err(io::Error::from)?;
+        sync_directory(&parent)?;
         Ok(true)
     }
 
@@ -168,7 +181,19 @@ impl DeviceRoot {
         };
         clear_directory(&directory)?;
         unlinkat(&parent, file_name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
+        sync_directory(&parent)?;
         Ok(true)
+    }
+
+    pub(crate) fn cleanup_stale_temporary_files(
+        &self,
+        path: &DeviceRelativePath,
+    ) -> io::Result<()> {
+        match self.open_dir(path, false) {
+            Ok(directory) => cleanup_temporary_files(&directory, true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     fn open_dir(&self, path: &DeviceRelativePath, create: bool) -> io::Result<OwnedFd> {
@@ -178,7 +203,8 @@ impl DeviceRoot {
                 Ok(next) => next,
                 Err(Errno::NOENT) if create => {
                     match mkdirat(&directory, component, DIRECTORY_MODE) {
-                        Ok(()) | Err(Errno::EXIST) => {}
+                        Ok(()) => sync_directory(&directory)?,
+                        Err(Errno::EXIST) => {}
                         Err(error) => return Err(error.into()),
                     }
                     openat(&directory, component, DIRECTORY_FLAGS, Mode::empty())
@@ -193,15 +219,28 @@ impl DeviceRoot {
     fn publish_file(
         &self,
         path: &DeviceRelativePath,
+        expected_len: Option<u64>,
         write_body: impl FnOnce(&mut File) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.publish_file_with(path, expected_len, write_body, sync_directory)
+    }
+
+    fn publish_file_with(
+        &self,
+        path: &DeviceRelativePath,
+        expected_len: Option<u64>,
+        write_body: impl FnOnce(&mut File) -> io::Result<()>,
+        sync_parent: impl FnOnce(&OwnedFd) -> io::Result<()>,
     ) -> io::Result<()> {
         let (parent_path, file_name) = split_parent(path)?;
         let parent = self.open_dir(&parent_path, true)?;
         reject_non_regular_destination(&parent, file_name, path)?;
+        cleanup_temporary_files(&parent, false)?;
 
         let (temporary_name, mut temporary) = create_temporary_file(&parent)?;
         let write_result = write_body(&mut temporary)
             .and_then(|()| temporary.flush())
+            .and_then(|()| validate_file_len(&temporary, expected_len))
             .and_then(|()| temporary.sync_all());
         if let Err(error) = write_result {
             let _ = unlinkat(&parent, &temporary_name, AtFlags::empty());
@@ -213,7 +252,7 @@ impl DeviceRoot {
             let _ = unlinkat(&parent, &temporary_name, AtFlags::empty());
             return Err(error.into());
         }
-        Ok(())
+        sync_parent(&parent)
     }
 }
 
@@ -272,9 +311,104 @@ fn create_temporary_file(parent: &OwnedFd) -> io::Result<(CString, File)> {
     ))
 }
 
+fn validate_file_len(file: &File, expected_len: Option<u64>) -> io::Result<()> {
+    let Some(expected_len) = expected_len else {
+        return Ok(());
+    };
+    let actual_len = file.metadata()?.len();
+    if actual_len != expected_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("staged file length mismatch: expected {expected_len}, wrote {actual_len}"),
+        ));
+    }
+    Ok(())
+}
+
+fn sync_directory(directory: &OwnedFd) -> io::Result<()> {
+    fsync(directory).map_err(io::Error::from)
+}
+
+fn cleanup_temporary_files(directory: &OwnedFd, recursive: bool) -> io::Result<()> {
+    let mut buffer = [MaybeUninit::<u8>::uninit(); 8192];
+    let mut entries = RawDir::new(directory, &mut buffer);
+    let mut removed = false;
+    while let Some(entry) = entries.next() {
+        let name = entry.map_err(io::Error::from)?.file_name().to_owned();
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        let stat = statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
+        match FileType::from_raw_mode(stat.st_mode) {
+            FileType::RegularFile if is_owned_temporary_name(&name) => {
+                let fd = openat(
+                    directory,
+                    &name,
+                    OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(io::Error::from)?;
+                if !File::from(fd).metadata()?.is_file() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "refusing to remove non-regular staging entry: {}",
+                            cstr_display(&name)
+                        ),
+                    ));
+                }
+                unlinkat(directory, &name, AtFlags::empty()).map_err(io::Error::from)?;
+                removed = true;
+            }
+            FileType::Directory if recursive => {
+                let child = openat(directory, &name, DIRECTORY_FLAGS, Mode::empty())
+                    .map_err(io::Error::from)?;
+                cleanup_temporary_files(&child, true)?;
+            }
+            file_type if is_owned_temporary_name(&name) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "refusing to remove non-regular staging entry ({file_type:?}): {}",
+                        cstr_display(&name)
+                    ),
+                ));
+            }
+            _ => {}
+        }
+    }
+    if removed {
+        sync_directory(directory)?;
+    }
+    Ok(())
+}
+
+fn is_owned_temporary_name(name: &CStr) -> bool {
+    let bytes = name.to_bytes();
+    let Some(stem) = bytes
+        .strip_prefix(b".sustain-write-")
+        .and_then(|bytes| bytes.strip_suffix(b".tmp"))
+    else {
+        return false;
+    };
+    let mut parts = stem.split(|byte| *byte == b'-');
+    let Some(pid) = parts.next() else {
+        return false;
+    };
+    let Some(id) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && !pid.is_empty()
+        && pid.iter().all(u8::is_ascii_digit)
+        && !id.is_empty()
+        && id.iter().all(u8::is_ascii_digit)
+}
+
 fn clear_directory(directory: &OwnedFd) -> io::Result<()> {
     let mut buffer = [MaybeUninit::<u8>::uninit(); 8192];
     let mut entries = RawDir::new(directory, &mut buffer);
+    let mut removed = false;
     while let Some(entry) = entries.next() {
         let name = entry.map_err(io::Error::from)?.file_name().to_owned();
         if name.to_bytes() == b"." || name.to_bytes() == b".." {
@@ -284,12 +418,14 @@ fn clear_directory(directory: &OwnedFd) -> io::Result<()> {
         match FileType::from_raw_mode(stat.st_mode) {
             FileType::RegularFile => {
                 unlinkat(directory, &name, AtFlags::empty()).map_err(io::Error::from)?;
+                removed = true;
             }
             FileType::Directory => {
                 let child = openat(directory, &name, DIRECTORY_FLAGS, Mode::empty())
                     .map_err(io::Error::from)?;
                 clear_directory(&child)?;
                 unlinkat(directory, &name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
+                removed = true;
             }
             _ => {
                 return Err(io::Error::new(
@@ -302,6 +438,9 @@ fn clear_directory(directory: &OwnedFd) -> io::Result<()> {
             }
         }
     }
+    if removed {
+        sync_directory(directory)?;
+    }
     Ok(())
 }
 
@@ -312,6 +451,20 @@ fn cstr_display(name: &CStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn staging_files(path: &Path) -> Vec<String> {
+        std::fs::read_dir(path)
+            .expect("read directory")
+            .map(|entry| {
+                entry
+                    .expect("read directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name.starts_with(".sustain-write-") && name.ends_with(".tmp"))
+            .collect()
+    }
 
     #[cfg(unix)]
     #[test]
@@ -356,5 +509,106 @@ mod tests {
             !device.path().join("Music/track.mp3").exists(),
             "no partial destination is published when the source changed"
         );
+    }
+
+    #[test]
+    fn publish_cleans_only_owned_stale_temporary_files() {
+        let device = tempfile::tempdir().expect("device dir");
+        std::fs::write(
+            device.path().join(".sustain-write-123-456.tmp"),
+            b"interrupted staging bytes",
+        )
+        .expect("seed stale temporary file");
+        std::fs::write(
+            device.path().join(".sustain-write-not-ours.tmp"),
+            b"user bytes",
+        )
+        .expect("seed similarly named user file");
+
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let dest = DeviceRelativePath::new("marker").expect("safe path");
+        root.write_file(&dest, b"published").expect("publish");
+
+        assert!(!device.path().join(".sustain-write-123-456.tmp").exists());
+        assert!(device.path().join(".sustain-write-not-ours.tmp").exists());
+        assert_eq!(
+            std::fs::read(device.path().join("marker")).expect("read published file"),
+            b"published"
+        );
+    }
+
+    #[test]
+    fn failed_copy_preserves_the_previous_complete_destination() {
+        let device = tempfile::tempdir().expect("device dir");
+        let source = tempfile::NamedTempFile::new().expect("source file");
+        std::fs::write(source.path(), b"observed-bytes").expect("seed source");
+        let observed = crate::source::source_file_stat(source.path()).expect("stat source");
+
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let dest = DeviceRelativePath::new("Music/track.mp3").expect("safe path");
+        root.write_file(&dest, b"old-complete-bytes")
+            .expect("seed destination");
+
+        std::fs::write(source.path(), b"different-bytes").expect("mutate source");
+        assert!(root.copy_file(source.path(), &dest, &observed).is_err());
+        assert_eq!(
+            std::fs::read(device.path().join("Music/track.mp3")).expect("read destination"),
+            b"old-complete-bytes"
+        );
+    }
+
+    #[test]
+    fn failed_staging_write_leaves_the_previous_destination_untouched() {
+        let device = tempfile::tempdir().expect("device dir");
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let dest = DeviceRelativePath::new("track.mp3").expect("safe path");
+        root.write_file(&dest, b"old-complete-bytes")
+            .expect("seed destination");
+
+        let result = root.publish_file(&dest, None, |_temporary| {
+            Err(io::Error::other("injected staged-write failure"))
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(device.path().join("track.mp3")).expect("read destination"),
+            b"old-complete-bytes"
+        );
+        assert!(staging_files(device.path()).is_empty());
+    }
+
+    #[test]
+    fn rename_failure_removes_the_staging_file() {
+        let device = tempfile::tempdir().expect("device dir");
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let dest = DeviceRelativePath::new("track.mp3").expect("safe path");
+
+        let result = root.publish_file(&dest, None, |temporary| {
+            temporary.write_all(b"new bytes")?;
+            std::fs::create_dir(device.path().join("track.mp3"))?;
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(device.path().join("track.mp3").is_dir());
+        assert!(staging_files(device.path()).is_empty());
+    }
+
+    #[test]
+    fn directory_sync_failure_is_reported_after_atomic_publish() {
+        let device = tempfile::tempdir().expect("device dir");
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let dest = DeviceRelativePath::new("track.mp3").expect("safe path");
+
+        let result = root.publish_file_with(
+            &dest,
+            Some(10),
+            |temporary| temporary.write_all(b"new bytes!"),
+            |_parent| Err(io::Error::other("injected directory fsync failure")),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(device.path().join("track.mp3")).expect("read destination"),
+            b"new bytes!"
+        );
+        assert!(staging_files(device.path()).is_empty());
     }
 }

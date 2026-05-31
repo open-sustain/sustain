@@ -57,10 +57,11 @@ fn compute_diff(
     for (index, placement) in placements.iter().enumerate() {
         let known = prev.get(placement.rel_path.as_str());
         let path = base.join(&placement.rel_path);
+        let expected_size = req.tracks[placement.track_index].source.stat.size_bytes;
         let present = root
-            .is_regular_file(&path)
+            .regular_file_len(&path)
             .map_err(|error| SyncError::io(path.as_str(), error))?;
-        if known == Some(&placement.fingerprint.as_str()) && present {
+        if known == Some(&placement.fingerprint.as_str()) && present == Some(expected_size) {
             unchanged.push(index);
         } else {
             to_write.push(index);
@@ -161,12 +162,15 @@ pub fn sync(
     let root =
         DeviceRoot::open(&req.mount_path).map_err(|error| SyncError::io(&req.mount_path, error))?;
     let base = device_base(req);
+    root.cleanup_stale_temporary_files(&base)
+        .map_err(|error| SyncError::io(base.as_str(), error))?;
     root.ensure_dir_all(&base)
         .map_err(|error| SyncError::io(base.as_str(), error))?;
 
     // Register the device early so even a partial sync is recognised next
     // time (the marker always lives at the mount root, not the sub-path).
-    let _ = crate::identity::write_marker_to_root(&root, &req.device.id);
+    crate::identity::write_marker_to_root(&root, &req.device.id)
+        .map_err(|error| SyncError::io(crate::identity::MARKER_FILE, error))?;
 
     let placements = layout::plan_placements(req)?;
     let diff = compute_diff(req, &root, &base, &placements)?;
@@ -244,9 +248,10 @@ pub fn sync(
         for (done, rel) in diff.removals.iter().enumerate() {
             if cancel() {
                 outcome.cancelled = true;
+                retain_unremoved_manifest_entries(req, &diff.removals[done..], &mut manifest);
                 break;
             }
-            remove_placement(req, &root, &base, rel);
+            remove_placement(req, &root, &base, rel)?;
             outcome.removed += 1;
             progress(SyncProgress {
                 stage: SyncStage::Removing,
@@ -287,13 +292,33 @@ fn remove_placement(
     root: &DeviceRoot,
     base: &DeviceRelativePath,
     rel: &DeviceRelativePath,
-) {
-    let _ = root.remove_file_if_exists(&base.join(rel));
+) -> Result<(), SyncError> {
+    let audio_path = base.join(rel);
+    root.remove_file_if_exists(&audio_path)
+        .map_err(|error| SyncError::io(audio_path.as_str(), error))?;
     if req.device.layout == DeviceLayout::Pioneer {
         let anlz_dir = path_hash::anlz_dir(&format!("/{rel}"));
-        if let Some(anlz_dir) = DeviceRelativePath::new(anlz_dir.trim_start_matches('/').to_owned())
+        let anlz_dir = DeviceRelativePath::new(anlz_dir.trim_start_matches('/').to_owned())
+            .ok_or_else(|| SyncError::planning("Pioneer path hash generated an unsafe path"))?;
+        let anlz_path = base.join(&anlz_dir);
+        root.remove_tree_if_exists(&anlz_path)
+            .map_err(|error| SyncError::io(anlz_path.as_str(), error))?;
+    }
+    Ok(())
+}
+
+fn retain_unremoved_manifest_entries(
+    req: &SyncRequest,
+    removals: &[DeviceRelativePath],
+    manifest: &mut Vec<SyncManifestEntry>,
+) {
+    for rel in removals {
+        if let Some(entry) = req
+            .previous_manifest
+            .iter()
+            .find(|entry| &entry.on_device_path == rel)
         {
-            let _ = root.remove_tree_if_exists(&base.join(&anlz_dir));
+            manifest.push(entry.clone());
         }
     }
 }

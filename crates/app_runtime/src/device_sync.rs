@@ -403,9 +403,19 @@ impl ApplicationRuntime {
                 }
                 match completion.result {
                     Ok(outcome) => {
-                        if let Some(store) = self.library_store.as_ref() {
-                            let _ = store
-                                .save_device_manifest(&completion.device_id, &outcome.manifest);
+                        let manifest_saved = self.library_store.as_ref().is_some_and(|store| {
+                            store
+                                .save_device_manifest(&completion.device_id, &outcome.manifest)
+                                .is_ok()
+                        });
+                        if !manifest_saved {
+                            self.push_ephemeral_notification(
+                                NotificationCategory::DeviceSync,
+                                NotificationSeverity::Error,
+                                "Device sync failed: could not save the on-device manifest."
+                                    .to_owned(),
+                            );
+                            return;
                         }
                         let severity = if outcome.cancelled {
                             NotificationSeverity::Warning

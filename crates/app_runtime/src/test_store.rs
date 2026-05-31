@@ -11,7 +11,7 @@
 //! to fail a specific write on demand.
 //!
 //! [`FaultyStore`] wraps a real backing store (the in-memory one in
-//! tests) and delegates every method to it, overriding only the three
+//! tests) and delegates every method to it, overriding only the
 //! persistence writes the schedulers depend on. Each override consults a
 //! toggle the test flips and counts its invocations so a test can assert
 //! the scheduler stopped retrying instead of spinning.
@@ -39,9 +39,11 @@ pub(crate) struct FaultyStore {
     fail_record_analysis: AtomicBool,
     fail_attempt_failure: AtomicBool,
     fail_online_attempt: AtomicBool,
+    fail_device_manifest: AtomicBool,
     record_analysis_calls: AtomicU32,
     attempt_failure_calls: AtomicU32,
     online_attempt_calls: AtomicU32,
+    device_manifest_calls: AtomicU32,
     /// Artificial latency injected into `tracks` and `load_all_acoustics`,
     /// in milliseconds. Zero (the default) is a no-op.
     read_delay_millis: AtomicU64,
@@ -54,9 +56,11 @@ impl FaultyStore {
             fail_record_analysis: AtomicBool::new(false),
             fail_attempt_failure: AtomicBool::new(false),
             fail_online_attempt: AtomicBool::new(false),
+            fail_device_manifest: AtomicBool::new(false),
             record_analysis_calls: AtomicU32::new(0),
             attempt_failure_calls: AtomicU32::new(0),
             online_attempt_calls: AtomicU32::new(0),
+            device_manifest_calls: AtomicU32::new(0),
             read_delay_millis: AtomicU64::new(0),
         }
     }
@@ -85,6 +89,10 @@ impl FaultyStore {
         self.fail_online_attempt.store(on, Ordering::SeqCst);
     }
 
+    pub(crate) fn set_fail_device_manifest(&self, on: bool) {
+        self.fail_device_manifest.store(on, Ordering::SeqCst);
+    }
+
     pub(crate) fn record_analysis_calls(&self) -> u32 {
         self.record_analysis_calls.load(Ordering::SeqCst)
     }
@@ -95,6 +103,10 @@ impl FaultyStore {
 
     pub(crate) fn online_attempt_calls(&self) -> u32 {
         self.online_attempt_calls.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn device_manifest_calls(&self) -> u32 {
+        self.device_manifest_calls.load(Ordering::SeqCst)
     }
 }
 
@@ -490,6 +502,12 @@ impl LibraryStore for FaultyStore {
         id: &SyncDeviceId,
         entries: &[SyncManifestEntry],
     ) -> StoreResult<()> {
+        self.device_manifest_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_device_manifest.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected save_device_manifest failure".to_owned(),
+            ));
+        }
         self.inner.save_device_manifest(id, entries)
     }
 

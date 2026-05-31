@@ -383,6 +383,27 @@ mod tests {
     }
 
     #[test]
+    fn incremental_resync_replaces_a_truncated_destination() {
+        let fx = fixture(2);
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        let first = run(&req);
+        let truncated = fx
+            .dest
+            .path()
+            .join(first.manifest[0].on_device_path.as_str());
+        std::fs::write(&truncated, b"partial").expect("truncate destination");
+
+        let req2 = request(&fx, DeviceLayout::M3u, first.manifest.clone(), false);
+        let second = run(&req2);
+        assert_eq!(second.updated, 1);
+        assert_eq!(second.unchanged, 1);
+        assert_eq!(
+            std::fs::read(&truncated).expect("read repaired destination"),
+            std::fs::read(&fx.tracks[0].source_path).expect("read source"),
+        );
+    }
+
+    #[test]
     fn external_source_change_is_recopied_on_the_next_sync() {
         // #100: a source file changed after the previous sync (here without
         // any rescan of the library) must be detected and re-copied. The old
@@ -452,6 +473,65 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_before_removal_keeps_stale_manifest_rows() {
+        let fx = fixture(3);
+        let first = run(&request(&fx, DeviceLayout::M3u, Vec::new(), false));
+        let shrink = SyncRequest {
+            device: device(DeviceLayout::M3u),
+            mount_path: fx.dest.path().to_path_buf(),
+            tracks: fx.tracks[..2].to_vec(),
+            playlists: vec![SyncInputPlaylist {
+                name: "My Set".into(),
+                track_indices: vec![0, 1],
+            }],
+            previous_manifest: first.manifest.clone(),
+            remove_stale: true,
+            export_date: "2026-01-01".into(),
+        };
+
+        let outcome =
+            sync(&prepared(&shrink), &mut |_| {}, &|| true).expect("cancelled sync succeeds");
+        assert!(outcome.cancelled);
+        assert_eq!(outcome.removed, 0);
+        assert_eq!(outcome.manifest, first.manifest);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_stale_removal_aborts_the_sync() {
+        use std::os::unix::fs::symlink;
+
+        let fx = fixture(2);
+        let first = run(&request(&fx, DeviceLayout::M3u, Vec::new(), false));
+        let stale = fx
+            .dest
+            .path()
+            .join(first.manifest[1].on_device_path.as_str());
+        std::fs::remove_file(&stale).expect("remove destination");
+        let host = tempfile::NamedTempFile::new().expect("host file");
+        std::fs::write(host.path(), b"host-data").expect("seed host file");
+        symlink(host.path(), &stale).expect("replace destination with symlink");
+
+        let shrink = SyncRequest {
+            device: device(DeviceLayout::M3u),
+            mount_path: fx.dest.path().to_path_buf(),
+            tracks: fx.tracks[..1].to_vec(),
+            playlists: vec![SyncInputPlaylist {
+                name: "My Set".into(),
+                track_indices: vec![0],
+            }],
+            previous_manifest: first.manifest,
+            remove_stale: true,
+            export_date: "2026-01-01".into(),
+        };
+        assert!(sync(&prepared(&shrink), &mut |_| {}, &|| false).is_err());
+        assert_eq!(
+            std::fs::read(host.path()).expect("read host file"),
+            b"host-data"
+        );
+    }
+
+    #[test]
     fn marker_is_written_on_sync() {
         let fx = fixture(1);
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
@@ -479,6 +559,25 @@ mod tests {
             "host-data"
         );
         assert_eq!(read_marker(dest.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_aborts_when_the_marker_cannot_be_published() {
+        use std::os::unix::fs::symlink;
+
+        let fx = fixture(1);
+        let host = tempfile::NamedTempFile::new().expect("host file");
+        std::fs::write(host.path(), "host-data").expect("seed host file");
+        symlink(host.path(), fx.dest.path().join(MARKER_FILE)).expect("marker symlink");
+
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        assert!(sync(&prepared(&req), &mut |_| {}, &|| false).is_err());
+        assert_eq!(
+            std::fs::read_to_string(host.path()).expect("read host file"),
+            "host-data"
+        );
+        assert!(!fx.dest.path().join("Music").exists());
     }
 
     #[cfg(unix)]
