@@ -19,11 +19,13 @@ mod file_page;
 mod form;
 mod format;
 mod lyrics;
+mod multi;
 
 use artwork::{ArtworkPage, set_frame_texture};
 use details::DetailsPage;
 use file_page::FilePage;
 use lyrics::LyricsPage;
+pub(crate) use multi::open_multi_track_info_dialog;
 
 const DIALOG_WIDTH: i32 = 540;
 const COVER_THUMB_SIZE: i32 = 96;

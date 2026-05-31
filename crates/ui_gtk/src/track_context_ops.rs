@@ -13,7 +13,7 @@ use super::{
     artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
     track_context::{TrackActionCallback, TrackActionInvocation, TrackActionVisibility},
-    track_info::open_track_info_dialog,
+    track_info::{open_multi_track_info_dialog, open_track_info_dialog},
 };
 
 pub(crate) fn copy_files_callback(
@@ -48,6 +48,15 @@ pub(crate) fn get_info_callback(
     let artwork_loader = artwork_loader.clone();
     Rc::new(move |invocation: TrackActionInvocation| {
         let track_ids = invocation.selected_track_ids;
+        if track_ids.len() > 1 {
+            open_multi_track_info_dialog(
+                &parent_window,
+                &command_controller,
+                &library_changed_holder,
+                track_ids,
+            );
+            return;
+        }
         let Some(&track_id) = track_ids.first() else {
             return;
         };

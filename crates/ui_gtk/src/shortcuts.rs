@@ -145,11 +145,7 @@ fn install_get_info(context: &GlobalShortcutContext) {
     let content_stack = context.content_stack.clone();
     action.connect_activate(move |_action, _parameter| {
         let selection = current_view_selection(&content_stack, &songs_table, &playlists_table);
-        // Get Info is a single-track dialog; the context-menu version
-        // requires `Single` selection and we keep the same contract for
-        // the keyboard path. No-op rather than guessing which track of a
-        // multi-row selection the user meant.
-        if selection.len() != 1 {
+        if selection.is_empty() {
             return;
         }
         callback(TrackActionInvocation {

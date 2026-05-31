@@ -51,6 +51,10 @@ impl UiCommandController {
         );
     }
 
+    pub(crate) fn report_command_warning(&self, body: impl Into<String>) {
+        self.report_command_message(NotificationSeverity::Warning, body.into());
+    }
+
     pub(crate) fn dispatch_batch(
         &self,
         commands: impl IntoIterator<Item = ApplicationCommand>,

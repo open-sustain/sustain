@@ -482,6 +482,12 @@ Previous/Next buttons walk the displayed track order without closing the
 dialog, committing edits before navigation. `Ctrl+[` and `Ctrl+]` trigger
 the same actions.
 
+With multiple tracks selected, the same entry points open a conservative
+batch editor. Every editable metadata field is opt-in: unchecked fields
+preserve each track's existing value, while a checked blank deliberately
+clears that field across the selection. Per-track artwork, lyrics, ratings,
+and listening statistics remain outside the batch editor.
+
 ### Inline rating — *iso-iTunes*
 The Rating column in the table accepts clicks directly: click a star to
 set 1–5, click the current rating to clear.

@@ -199,7 +199,7 @@ impl TrackContextAction {
             id: TrackContextActionId::GetInfo,
             label: "Get Info",
             section: TrackContextActionSection::Info,
-            selection: TrackSelectionRequirement::Single,
+            selection: TrackSelectionRequirement::AtLeastOne,
             confirmation: TrackActionConfirmation::None,
             visibility: None,
             callback,
@@ -1011,14 +1011,14 @@ mod tests {
     }
 
     #[test]
-    fn get_info_requires_single_selection() {
+    fn get_info_accepts_multi_selection() {
         let action = TrackContextAction::get_info(no_op_callback());
         let one = TrackId::new(1).expect("positive track id");
         let two = TrackId::new(2).expect("positive track id");
 
         assert!(!action.is_available(&[]));
         assert!(action.is_available(&[one]));
-        assert!(!action.is_available(&[one, two]));
+        assert!(action.is_available(&[one, two]));
     }
 
     #[test]
