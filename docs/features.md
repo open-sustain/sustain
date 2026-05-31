@@ -700,6 +700,16 @@ pool and respawns it under the new preset; in-flight tracks finish
 naturally before the swap. Settings live in the
 `[background_jobs]` section of `settings.toml`.
 
+### Library-backup guidance — *Sustain-native*
+
+The About tab names the folder that holds Sustain's SQLite library
+database — the source of truth for ratings, play counts, playlists, and
+every metadata edit that never reached the audio files — and tells the
+user to back it up alongside their music. The path shown is the one
+resolved at runtime, so it stays correct under the `--database` /
+`--local-scope` developer flags, and the label is selectable for easy
+copying.
+
 ---
 
 ## Keyboard shortcuts — *iso-iTunes*

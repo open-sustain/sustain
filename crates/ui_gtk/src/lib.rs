@@ -131,7 +131,12 @@ pub(crate) type LibraryHydrationResultReceiver = async_channel::Receiver<
     sustain_app_runtime::ApplicationRuntimeResult<LibraryHydrationSnapshot>,
 >;
 
-pub fn run(mut runtime: ApplicationRuntime, application_id: &str, artwork_cache_dir: PathBuf) {
+pub fn run(
+    mut runtime: ApplicationRuntime,
+    application_id: &str,
+    artwork_cache_dir: PathBuf,
+    database_path: PathBuf,
+) {
     let trun = std::time::Instant::now();
     macro_rules! tlog {
         ($label:expr) => {
@@ -304,6 +309,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str, artwork_cache_
                 runtime.clone(),
                 mpris_service.clone(),
                 artwork_cache_dir.clone(),
+                database_path.clone(),
                 crate::main_window::MainWindowAsyncReceivers {
                     mpris_command_rx,
                     metadata_writer_event_rx: writer_event_rx,

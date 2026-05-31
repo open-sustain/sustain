@@ -180,5 +180,5 @@ fn main() {
     // force `GSK_RENDERER` here. If it becomes visually broken, prefer documenting
     // `GSK_RENDERER=ngl` / `GSK_RENDERER=gl` as a user workaround before changing
     // the app default.
-    sustain_ui_gtk::run(runtime, GTK_APPLICATION_ID, paths.cache_dir);
+    sustain_ui_gtk::run(runtime, GTK_APPLICATION_ID, paths.cache_dir, paths.database);
 }

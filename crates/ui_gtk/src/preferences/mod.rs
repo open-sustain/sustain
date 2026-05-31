@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
+use std::path::PathBuf;
+
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
@@ -58,6 +60,7 @@ pub(crate) fn install_preferences_action(
     app: &gtk::Application,
     window: &gtk::ApplicationWindow,
     command_controller: SharedCommandController,
+    database_path: PathBuf,
     scan_requested: LibraryScanRequestedCallback,
     consolidation_requested: LibraryConsolidationRequestedCallback,
 ) {
@@ -74,6 +77,7 @@ pub(crate) fn install_preferences_action(
         open_preferences_window(
             &window,
             command_controller.clone(),
+            database_path.clone(),
             scan_requested.clone(),
             consolidation_requested.clone(),
         );
@@ -92,6 +96,7 @@ pub(crate) fn install_preferences_action(
 pub(crate) fn settings_button(
     window: &gtk::ApplicationWindow,
     command_controller: SharedCommandController,
+    database_path: PathBuf,
     scan_requested: LibraryScanRequestedCallback,
     consolidation_requested: LibraryConsolidationRequestedCallback,
 ) -> gtk::Button {
@@ -128,6 +133,7 @@ pub(crate) fn settings_button(
         open_preferences_window(
             &window,
             command_controller.clone(),
+            database_path.clone(),
             scan_requested.clone(),
             consolidation_requested.clone(),
         );
@@ -139,6 +145,7 @@ pub(crate) fn settings_button(
 fn open_preferences_window(
     parent: &gtk::ApplicationWindow,
     command_controller: SharedCommandController,
+    database_path: PathBuf,
     scan_requested: LibraryScanRequestedCallback,
     consolidation_requested: LibraryConsolidationRequestedCallback,
 ) {
@@ -211,7 +218,7 @@ fn open_preferences_window(
     let shuffle_page = shuffle_tab::build(window.upcast_ref(), command_controller);
     stack.add_named(&shuffle_page, Some(TAB_SHUFFLE));
 
-    let about_page = about_tab::build(&window);
+    let about_page = about_tab::build(&window, &database_path);
     stack.add_named(&about_page, Some(TAB_ABOUT));
 
     let tab_strip = build_tab_strip(&stack, &window);

@@ -155,6 +155,7 @@ pub(crate) fn build_main_window(
     runtime: SharedRuntime,
     mpris_service: Option<SharedMprisService>,
     artwork_cache_dir: PathBuf,
+    database_path: PathBuf,
     receivers: MainWindowAsyncReceivers,
 ) -> BuiltMainWindow {
     let MainWindowAsyncReceivers {
@@ -635,6 +636,7 @@ pub(crate) fn build_main_window(
         app,
         &window,
         command_controller.clone(),
+        database_path.clone(),
         scan_requested.clone(),
         consolidation_requested.clone(),
     );
@@ -650,6 +652,7 @@ pub(crate) fn build_main_window(
     sidebar.footer().append(&settings_button(
         &window,
         command_controller,
+        database_path,
         scan_requested,
         consolidation_requested.clone(),
     ));
