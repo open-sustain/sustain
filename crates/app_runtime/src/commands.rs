@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use sustain_domain::{ApplicationCommand, LibraryManagementMode, Track};
+use sustain_domain::{ApplicationCommand, LibraryManagementMode};
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
@@ -255,7 +255,7 @@ impl ApplicationRuntime {
         new_library_path: std::path::PathBuf,
     ) -> ApplicationRuntimeResult<()> {
         let total = self.library_tracks.len();
-        let mut changed: Vec<Track> = Vec::new();
+        let mut changed = Vec::new();
         let mut newly_missing = 0usize;
         let mut reconciled = Vec::with_capacity(total);
         for track in std::mem::take(&mut self.library_tracks) {
@@ -264,7 +264,7 @@ impl ApplicationRuntime {
                 library_scan::track_with_current_availability(&new_library_path, track);
             let now_missing = reconciled_track.location.is_missing();
             if was_missing != now_missing {
-                changed.push(reconciled_track.clone());
+                changed.push((reconciled_track.id, reconciled_track.location.clone()));
                 if now_missing {
                     newly_missing += 1;
                 }
@@ -278,7 +278,7 @@ impl ApplicationRuntime {
             && let Some(store) = self.library_store.as_ref()
         {
             store
-                .save_tracks(&changed)
+                .update_track_locations(&changed)
                 .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
 

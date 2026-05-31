@@ -75,16 +75,11 @@ fn save_recovered_consolidation_track(
     library_store: &dyn sustain_library_store::LibraryStore,
     entry: &ConsolidationJournalEntry,
 ) -> ApplicationRuntimeResult<()> {
-    let Some(mut track) = library_store
-        .track(entry.track_id)
-        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
-    else {
-        return Ok(());
-    };
-
-    track.location = TrackLocation::available(entry.destination_relative_path.clone());
     library_store
-        .save_track(track)
+        .update_track_location(
+            entry.track_id,
+            &TrackLocation::available(entry.destination_relative_path.clone()),
+        )
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
 }
 

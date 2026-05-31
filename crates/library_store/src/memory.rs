@@ -10,10 +10,10 @@ use sustain_domain::TrackAnalysis;
 
 use crate::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, LibraryStore, OnlineCapabilities,
-    OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem,
+    OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating,
     SmartPlaylist, SmartPlaylistId, StoreError, StoreResult, StoredSmartShuffleIndex,
     StoredSyncedLyrics, StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics,
-    Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
+    Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackLocation,
 };
 
 #[derive(Debug, Default)]
@@ -91,14 +91,133 @@ impl InMemoryLibraryStore {
 
 impl LibraryStore for InMemoryLibraryStore {
     fn save_track(&self, track: Track) -> StoreResult<()> {
-        self.tracks_guard()?.insert(track.id, track);
+        let mut tracks = self.tracks_guard()?;
+        if tracks.contains_key(&track.id) {
+            return Err(StoreError::Database(format!(
+                "track {} already exists",
+                track.id.get()
+            )));
+        }
+        tracks.insert(track.id, track);
         Ok(())
     }
 
     fn save_tracks(&self, tracks: &[Track]) -> StoreResult<()> {
         let mut stored_tracks = self.tracks_guard()?;
+        if tracks
+            .iter()
+            .any(|track| stored_tracks.contains_key(&track.id))
+        {
+            return Err(StoreError::Database(
+                "one or more tracks already exist".to_owned(),
+            ));
+        }
+        let unique_ids = tracks
+            .iter()
+            .map(|track| track.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        if unique_ids.len() != tracks.len() {
+            return Err(StoreError::Database(
+                "track insert batch contains duplicate ids".to_owned(),
+            ));
+        }
         for track in tracks {
             stored_tracks.insert(track.id, track.clone());
+        }
+        Ok(())
+    }
+
+    fn reconcile_scanned_tracks(&self, scanned_tracks: &[Track]) -> StoreResult<()> {
+        let mut tracks = self.tracks_guard()?;
+        for scanned in scanned_tracks {
+            match tracks.entry(scanned.id) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(scanned.clone());
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    let track = entry.get_mut();
+                    track.location = scanned.location.clone();
+                    track
+                        .metadata
+                        .refresh_audio_stream_properties_from(&scanned.metadata);
+                    track.file_size_bytes = scanned.file_size_bytes;
+                    track.has_embedded_artwork = scanned.has_embedded_artwork;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn update_track_location(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+    ) -> StoreResult<()> {
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.location = location.clone();
+        }
+        Ok(())
+    }
+
+    fn update_track_locations(&self, updates: &[(TrackId, TrackLocation)]) -> StoreResult<()> {
+        let mut tracks = self.tracks_guard()?;
+        for (track_id, location) in updates {
+            if let Some(track) = tracks.get_mut(track_id) {
+                track.location = location.clone();
+            }
+        }
+        Ok(())
+    }
+
+    fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()> {
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.rating = rating;
+        }
+        Ok(())
+    }
+
+    fn update_track_statistics(
+        &self,
+        track_id: TrackId,
+        statistics: &crate::PlayStatistics,
+    ) -> StoreResult<()> {
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.statistics = statistics.clone();
+        }
+        Ok(())
+    }
+
+    fn apply_track_metadata_change(
+        &self,
+        track_id: TrackId,
+        change: &crate::MetadataChange,
+    ) -> StoreResult<()> {
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.metadata.apply_change(change);
+        }
+        Ok(())
+    }
+
+    fn fill_missing_track_metadata(
+        &self,
+        track_id: TrackId,
+        change: &crate::MetadataChange,
+    ) -> StoreResult<()> {
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.metadata.fill_missing_from_change(change);
+        }
+        Ok(())
+    }
+
+    fn apply_track_metadata_change_and_location(
+        &self,
+        track_id: TrackId,
+        change: &crate::MetadataChange,
+        location: &TrackLocation,
+    ) -> StoreResult<()> {
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.metadata.apply_change(change);
+            track.location = location.clone();
         }
         Ok(())
     }

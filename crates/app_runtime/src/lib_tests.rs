@@ -20,9 +20,9 @@ use sustain_domain::{
 };
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, InMemoryLibraryStore, LibraryStore,
-    OnlineCapabilities, OnlineContext, PlaylistFolder, StoreResult, StoredSmartShuffleIndex,
-    StoredSyncedLyrics, StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics,
-    TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
+    OnlineCapabilities, OnlineContext, PlaylistFolder, SqliteLibraryStore, StoreResult,
+    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredWaveform, SyncDevice, SyncDeviceId,
+    SyncManifestEntry, SyncedLyrics, TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
 };
 use sustain_metadata::{InitialTags, MetadataChange, MetadataError, MetadataResult};
 use sustain_playback::NullPlaybackService;
@@ -382,6 +382,52 @@ fn runtime_scan_preserves_existing_track_identity_for_known_location() {
             cancelled: false,
         })
     );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn scan_snapshot_cannot_clobber_newer_statistics_in_store_or_runtime() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    std::fs::write(root.join("track.mp3"), b"not real audio").expect("write fake track");
+
+    let track_id = track_id(8);
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("store"));
+    let existing = test_track(track_id, "track.mp3");
+    store.save_track(existing).expect("seed track");
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+
+    // `prepare` is the deterministic barrier: the task now owns its stale
+    // pre-scan snapshot. Commit newer playback statistics before allowing
+    // that task to reconcile and publish its result.
+    let task = runtime
+        .prepare_library_scan(root.clone())
+        .expect("prepare scan");
+    let newer_statistics = PlayStatistics {
+        play_count: 41,
+        ..PlayStatistics::default()
+    };
+    store
+        .update_track_statistics(track_id, &newer_statistics)
+        .expect("commit newer statistics");
+    runtime.apply_track_updated(track_id);
+
+    let result = run_library_scan_task(task).expect("run scan");
+    runtime.apply_library_scan_result(result);
+
+    assert_eq!(
+        store
+            .track(track_id)
+            .expect("load stored track")
+            .expect("stored track")
+            .statistics
+            .play_count,
+        41
+    );
+    assert_eq!(runtime.library_tracks()[0].statistics.play_count, 41);
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }
@@ -787,6 +833,69 @@ fn managed_consolidation_moves_existing_tracks_to_planned_paths() {
             .expect("load stored track")
             .map(|track| track.location.relative_path.to_path_buf()),
         Some(PathBuf::from("Artist/Album/01 Song.flac"))
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn consolidation_snapshot_cannot_clobber_newer_statistics_in_store_or_runtime() {
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::write(library_root.join("loose.flac"), b"audio bytes").expect("write source");
+
+    let track_id = track_id(24);
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("store"));
+    let mut track = test_track(track_id, "loose.flac");
+    track.metadata.artist = Some("Artist".to_owned());
+    track.metadata.album = Some("Album".to_owned());
+    track.metadata.title = Some("Song".to_owned());
+    track.metadata.track_number = Some(1);
+    store.save_track(track).expect("seed track");
+
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    // The prepared task carries the stale location-planning snapshot. Commit
+    // newer listening statistics before resuming the filesystem move.
+    let task = runtime
+        .prepare_library_consolidation()
+        .expect("prepare consolidation");
+    let newer_statistics = PlayStatistics {
+        play_count: 73,
+        ..PlayStatistics::default()
+    };
+    store
+        .update_track_statistics(track_id, &newer_statistics)
+        .expect("commit newer statistics");
+    runtime.apply_track_updated(track_id);
+
+    let result = run_library_consolidation_task(task).expect("run consolidation");
+    runtime.apply_library_consolidation_result(result);
+
+    let stored = store
+        .track(track_id)
+        .expect("load stored track")
+        .expect("stored track");
+    assert_eq!(stored.statistics.play_count, 73);
+    assert_eq!(
+        stored.location.relative_path.as_path(),
+        Path::new("Artist/Album/01 Song.flac")
+    );
+    let runtime_track = runtime
+        .library_tracks()
+        .iter()
+        .find(|track| track.id == track_id)
+        .expect("runtime track");
+    assert_eq!(runtime_track.statistics.play_count, 73);
+    assert_eq!(
+        runtime_track.location.relative_path.as_path(),
+        Path::new("Artist/Album/01 Song.flac")
     );
 
     std::fs::remove_dir_all(library_root).expect("remove library root");
@@ -3532,9 +3641,15 @@ fn apply_track_updated_reloads_from_store_and_fires_observer() {
     );
 
     // Mutate the store out-of-band (simulates a worker write).
-    let mut mutated = original.clone();
-    mutated.metadata.title = Some("After".to_owned());
-    store.save_track(mutated).expect("mutate");
+    store
+        .apply_track_metadata_change(
+            original.id,
+            &MetadataChange {
+                title: FieldChange::Set("After".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("mutate");
 
     // Hook the observer so we can prove it ran with the right id.
     let observed: Arc<std::sync::Mutex<Vec<TrackId>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -4118,6 +4233,56 @@ struct CallCountingLibraryStore {
 impl LibraryStore for CallCountingLibraryStore {
     fn save_track(&self, track: Track) -> StoreResult<()> {
         self.inner.save_track(track)
+    }
+
+    fn reconcile_scanned_tracks(&self, tracks: &[Track]) -> StoreResult<()> {
+        self.inner.reconcile_scanned_tracks(tracks)
+    }
+
+    fn update_track_location(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+    ) -> StoreResult<()> {
+        self.inner.update_track_location(track_id, location)
+    }
+
+    fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()> {
+        self.inner.update_track_rating(track_id, rating)
+    }
+
+    fn update_track_statistics(
+        &self,
+        track_id: TrackId,
+        statistics: &PlayStatistics,
+    ) -> StoreResult<()> {
+        self.inner.update_track_statistics(track_id, statistics)
+    }
+
+    fn apply_track_metadata_change(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<()> {
+        self.inner.apply_track_metadata_change(track_id, change)
+    }
+
+    fn fill_missing_track_metadata(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<()> {
+        self.inner.fill_missing_track_metadata(track_id, change)
+    }
+
+    fn apply_track_metadata_change_and_location(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+        location: &TrackLocation,
+    ) -> StoreResult<()> {
+        self.inner
+            .apply_track_metadata_change_and_location(track_id, change, location)
     }
 
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()> {

@@ -64,6 +64,30 @@ impl TrackMetadata {
         apply_field_change(&mut self.lyrics, &change.lyrics);
     }
 
+    /// Apply only `Set` values whose target field is still absent. Used by
+    /// slow background enrichment so a user edit committed while network
+    /// work was in flight always wins. Blank genre and lyrics values count as
+    /// absent because their consumers already treat them that way.
+    pub fn fill_missing_from_change(&mut self, change: &MetadataChange) {
+        fill_missing_field(&mut self.title, &change.title);
+        fill_missing_field(&mut self.artist, &change.artist);
+        fill_missing_field(&mut self.album, &change.album);
+        fill_missing_field(&mut self.album_artist, &change.album_artist);
+        fill_missing_field(&mut self.composer, &change.composer);
+        fill_missing_field(&mut self.grouping, &change.grouping);
+        fill_blank_text_field(&mut self.genre, &change.genre);
+        fill_missing_field(&mut self.track_number, &change.track_number);
+        fill_missing_field(&mut self.track_total, &change.track_total);
+        fill_missing_field(&mut self.disc_number, &change.disc_number);
+        fill_missing_field(&mut self.disc_total, &change.disc_total);
+        fill_missing_field(&mut self.year, &change.year);
+        fill_missing_field(&mut self.compilation, &change.compilation);
+        fill_missing_field(&mut self.bpm, &change.bpm);
+        fill_missing_field(&mut self.key, &change.key);
+        fill_missing_field(&mut self.comments, &change.comments);
+        fill_blank_text_field(&mut self.lyrics, &change.lyrics);
+    }
+
     /// Refresh the fields that describe the audio stream itself —
     /// duration, bitrate, sample rate, channel count — from a freshly
     /// scanned copy, leaving every tag-derived field (title, artist,
@@ -143,6 +167,24 @@ fn apply_field_change<T: Clone>(target: &mut Option<T>, change: &FieldChange<T>)
         FieldChange::Clear => {
             *target = None;
         }
+    }
+}
+
+fn fill_missing_field<T: Clone>(target: &mut Option<T>, change: &FieldChange<T>) {
+    if target.is_none()
+        && let FieldChange::Set(value) = change
+    {
+        *target = Some(value.clone());
+    }
+}
+
+fn fill_blank_text_field(target: &mut Option<String>, change: &FieldChange<String>) {
+    if target
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+        && let FieldChange::Set(value) = change
+    {
+        *target = Some(value.clone());
     }
 }
 
@@ -272,5 +314,26 @@ mod tests {
         assert_eq!(metadata.grouping, None);
         assert_eq!(metadata.compilation, None);
         assert_eq!(metadata.bpm, None);
+    }
+
+    #[test]
+    fn fill_missing_from_change_preserves_existing_values() {
+        let mut metadata = TrackMetadata {
+            title: Some("User title".to_owned()),
+            genre: Some("  ".to_owned()),
+            ..TrackMetadata::default()
+        };
+        metadata.fill_missing_from_change(&MetadataChange {
+            title: FieldChange::Set("Remote title".to_owned()),
+            artist: FieldChange::Set("Remote artist".to_owned()),
+            genre: FieldChange::Set("House".to_owned()),
+            year: FieldChange::Clear,
+            ..MetadataChange::default()
+        });
+
+        assert_eq!(metadata.title.as_deref(), Some("User title"));
+        assert_eq!(metadata.artist.as_deref(), Some("Remote artist"));
+        assert_eq!(metadata.genre.as_deref(), Some("House"));
+        assert_eq!(metadata.year, None);
     }
 }

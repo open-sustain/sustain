@@ -4,14 +4,19 @@
 //! SQLite `LibraryStore` operations for the tracks table.
 
 use super::*;
+use sustain_domain::FieldChange;
 
 pub(super) fn save_track(connection: &Connection, track: &Track) -> StoreResult<()> {
+    execute_full_track(connection, SAVE_TRACK_SQL.as_str(), track)
+}
+
+fn execute_full_track(connection: &Connection, sql: &str, track: &Track) -> StoreResult<()> {
     let metadata = &track.metadata;
     let statistics = &track.statistics;
     let relative_path = relative_path_bytes(&track.location.relative_path);
     connection
         .execute(
-            SAVE_TRACK_SQL.as_str(),
+            sql,
             params![
                 track.id.get(),
                 relative_path,
@@ -62,6 +67,231 @@ pub(super) fn save_tracks(connection: &mut Connection, tracks: &[Track]) -> Stor
         save_track(&transaction, track)?;
     }
     transaction.commit().map_err(StoreError::from)
+}
+
+pub(super) fn reconcile_scanned_tracks(
+    connection: &mut Connection,
+    tracks: &[Track],
+) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    for track in tracks {
+        execute_full_track(&transaction, RECONCILE_SCANNED_TRACK_SQL.as_str(), track)?;
+    }
+    transaction.commit().map_err(StoreError::from)
+}
+
+pub(super) fn update_track_location(
+    connection: &Connection,
+    track_id: TrackId,
+    location: &TrackLocation,
+) -> StoreResult<()> {
+    connection
+        .execute(
+            "UPDATE tracks SET relative_path = ?1, is_missing = ?2 WHERE id = ?3",
+            params![
+                relative_path_bytes(&location.relative_path),
+                location.is_missing(),
+                track_id.get(),
+            ],
+        )
+        .map(|_| ())
+        .map_err(StoreError::from)
+}
+
+pub(super) fn update_track_locations(
+    connection: &mut Connection,
+    updates: &[(TrackId, TrackLocation)],
+) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    for (track_id, location) in updates {
+        update_track_location(&transaction, *track_id, location)?;
+    }
+    transaction.commit().map_err(StoreError::from)
+}
+
+pub(super) fn update_track_rating(
+    connection: &Connection,
+    track_id: TrackId,
+    rating: Rating,
+) -> StoreResult<()> {
+    connection
+        .execute(
+            "UPDATE tracks SET rating = ?1 WHERE id = ?2",
+            params![i64::from(rating.stars()), track_id.get()],
+        )
+        .map(|_| ())
+        .map_err(StoreError::from)
+}
+
+pub(super) fn update_track_statistics(
+    connection: &Connection,
+    track_id: TrackId,
+    statistics: &PlayStatistics,
+) -> StoreResult<()> {
+    connection
+        .execute(
+            r#"
+            UPDATE tracks SET
+                play_count = ?1,
+                skip_count = ?2,
+                last_played_at_unix = ?3,
+                last_skipped_at_unix = ?4,
+                date_added_at_unix = ?5
+            WHERE id = ?6
+            "#,
+            params![
+                statistics.play_count as i64,
+                statistics.skip_count as i64,
+                statistics.last_played_at.and_then(system_time_to_unix),
+                statistics.last_skipped_at.and_then(system_time_to_unix),
+                statistics.date_added_at.and_then(system_time_to_unix),
+                track_id.get(),
+            ],
+        )
+        .map(|_| ())
+        .map_err(StoreError::from)
+}
+
+pub(super) fn apply_track_metadata_change(
+    connection: &Connection,
+    track_id: TrackId,
+    change: &MetadataChange,
+) -> StoreResult<()> {
+    let (title_action, title) = text_change_parts(&change.title);
+    let (artist_action, artist) = text_change_parts(&change.artist);
+    let (album_action, album) = text_change_parts(&change.album);
+    let (album_artist_action, album_artist) = text_change_parts(&change.album_artist);
+    let (composer_action, composer) = text_change_parts(&change.composer);
+    let (grouping_action, grouping) = text_change_parts(&change.grouping);
+    let (genre_action, genre) = text_change_parts(&change.genre);
+    let (track_number_action, track_number) = copied_change_parts(&change.track_number);
+    let (track_total_action, track_total) = copied_change_parts(&change.track_total);
+    let (disc_number_action, disc_number) = copied_change_parts(&change.disc_number);
+    let (disc_total_action, disc_total) = copied_change_parts(&change.disc_total);
+    let (year_action, year) = copied_change_parts(&change.year);
+    let (compilation_action, compilation) = copied_change_parts(&change.compilation);
+    let (bpm_action, bpm) = copied_change_parts(&change.bpm);
+    let (key_action, key) = text_change_parts(&change.key);
+    let (comments_action, comments) = text_change_parts(&change.comments);
+    let (lyrics_action, lyrics) = text_change_parts(&change.lyrics);
+    connection
+        .execute(
+            APPLY_TRACK_METADATA_CHANGE_SQL,
+            params![
+                track_id.get(),
+                title_action,
+                title,
+                artist_action,
+                artist,
+                album_action,
+                album,
+                album_artist_action,
+                album_artist,
+                composer_action,
+                composer,
+                grouping_action,
+                grouping,
+                genre_action,
+                genre,
+                track_number_action,
+                track_number.map(i64::from),
+                track_total_action,
+                track_total.map(i64::from),
+                disc_number_action,
+                disc_number.map(i64::from),
+                disc_total_action,
+                disc_total.map(i64::from),
+                year_action,
+                year.map(i64::from),
+                compilation_action,
+                compilation,
+                bpm_action,
+                bpm.map(i64::from),
+                key_action,
+                key,
+                comments_action,
+                comments,
+                lyrics_action,
+                lyrics,
+            ],
+        )
+        .map(|_| ())
+        .map_err(StoreError::from)
+}
+
+pub(super) fn fill_missing_track_metadata(
+    connection: &Connection,
+    track_id: TrackId,
+    change: &MetadataChange,
+) -> StoreResult<()> {
+    connection
+        .execute(
+            FILL_MISSING_TRACK_METADATA_SQL,
+            params![
+                track_id.get(),
+                text_fill_value(&change.title),
+                text_fill_value(&change.artist),
+                text_fill_value(&change.album),
+                text_fill_value(&change.album_artist),
+                text_fill_value(&change.composer),
+                text_fill_value(&change.grouping),
+                text_fill_value(&change.genre),
+                copied_fill_value(&change.track_number).map(i64::from),
+                copied_fill_value(&change.track_total).map(i64::from),
+                copied_fill_value(&change.disc_number).map(i64::from),
+                copied_fill_value(&change.disc_total).map(i64::from),
+                copied_fill_value(&change.year).map(i64::from),
+                copied_fill_value(&change.compilation),
+                copied_fill_value(&change.bpm).map(i64::from),
+                text_fill_value(&change.key),
+                text_fill_value(&change.comments),
+                text_fill_value(&change.lyrics),
+            ],
+        )
+        .map(|_| ())
+        .map_err(StoreError::from)
+}
+
+pub(super) fn apply_track_metadata_change_and_location(
+    connection: &mut Connection,
+    track_id: TrackId,
+    change: &MetadataChange,
+    location: &TrackLocation,
+) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    apply_track_metadata_change(&transaction, track_id, change)?;
+    update_track_location(&transaction, track_id, location)?;
+    transaction.commit().map_err(StoreError::from)
+}
+
+fn text_change_parts(change: &FieldChange<String>) -> (i64, Option<&str>) {
+    match change {
+        FieldChange::Unchanged => (0, None),
+        FieldChange::Set(value) => (1, Some(value)),
+        FieldChange::Clear => (2, None),
+    }
+}
+
+fn copied_change_parts<T: Copy>(change: &FieldChange<T>) -> (i64, Option<T>) {
+    match change {
+        FieldChange::Unchanged => (0, None),
+        FieldChange::Set(value) => (1, Some(*value)),
+        FieldChange::Clear => (2, None),
+    }
+}
+
+fn text_fill_value(change: &FieldChange<String>) -> Option<&str> {
+    match change {
+        FieldChange::Set(value) => Some(value),
+        FieldChange::Unchanged | FieldChange::Clear => None,
+    }
+}
+
+fn copied_fill_value<T: Copy>(change: &FieldChange<T>) -> Option<T> {
+    match change {
+        FieldChange::Set(value) => Some(*value),
+        FieldChange::Unchanged | FieldChange::Clear => None,
+    }
 }
 
 pub(super) fn delete_track(connection: &Connection, track_id: TrackId) -> StoreResult<()> {

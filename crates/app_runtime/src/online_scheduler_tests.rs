@@ -14,9 +14,11 @@ use std::{
 };
 
 use sustain_domain::{
-    MetadataChange, OnlineSettings, SyncedLyrics, Track, TrackLocation, TrackRelativePath,
+    MetadataChange, OnlineSettings, Rating, SyncedLyrics, Track, TrackLocation, TrackRelativePath,
 };
-use sustain_library_store::{InMemoryLibraryStore, LibraryStore, OnlineCapabilities, TrackId};
+use sustain_library_store::{
+    InMemoryLibraryStore, LibraryStore, OnlineCapabilities, SqliteLibraryStore, TrackId,
+};
 use sustain_metadata::{InitialTags, MetadataError, MetadataResult, MetadataService};
 use sustain_metadata_remote::{
     FetchedArtwork, FetchedLyrics, RemoteError, RemoteMetadataService, RemoteResult, TrackMatch,
@@ -157,6 +159,35 @@ impl RemoteMetadataService for StubRemote {
             .expect("lock")
             .clone()
             .unwrap_or(Ok(None))
+    }
+}
+
+struct BlockingIdentifyRemote {
+    matched: TrackMatch,
+    started: std_mpsc::SyncSender<()>,
+    resume: Mutex<std_mpsc::Receiver<()>>,
+}
+
+impl RemoteMetadataService for BlockingIdentifyRemote {
+    fn identify_track(&self, _query: &TrackQuery) -> RemoteResult<Option<TrackMatch>> {
+        self.started.send(()).expect("report identify barrier");
+        self.resume
+            .lock()
+            .expect("resume lock")
+            .recv()
+            .expect("resume identify");
+        Ok(Some(self.matched.clone()))
+    }
+
+    fn fetch_artwork_for_match(
+        &self,
+        _track_match: &TrackMatch,
+    ) -> RemoteResult<Option<FetchedArtwork>> {
+        Ok(None)
+    }
+
+    fn fetch_lyrics(&self, _query: &TrackQuery) -> RemoteResult<Option<FetchedLyrics>> {
+        Ok(None)
     }
 }
 
@@ -831,6 +862,95 @@ fn tags_fill_positional_fields_only_when_album_matches_a_matched_release() {
     assert_eq!(stored.metadata.track_number, Some(1));
     assert_eq!(stored.metadata.track_total, Some(11));
     assert_eq!(stored.metadata.disc_number, Some(1));
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn tag_enrichment_snapshot_cannot_clobber_concurrent_rating_edit() {
+    use sustain_metadata_remote::TrackMatchSource;
+
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("store"));
+    let mut track = track_with_metadata(temp.path(), "alpha.flac");
+    track.metadata.title = None;
+    store.save_track(track.clone()).expect("save");
+
+    let (started_tx, started_rx) = std_mpsc::sync_channel(1);
+    let (resume_tx, resume_rx) = std_mpsc::sync_channel(1);
+    let remote = Arc::new(BlockingIdentifyRemote {
+        matched: TrackMatch {
+            recording_mbid: "recording".to_owned(),
+            title: Some("Remote title".to_owned()),
+            artist: None,
+            first_release_year: None,
+            genres: Vec::new(),
+            releases: Vec::new(),
+            source: TrackMatchSource::MusicBrainzTags,
+        },
+        started: started_tx,
+        resume: Mutex::new(resume_rx),
+    });
+    let metadata = Arc::new(StubMetadata::default());
+    let (sink, rx) = capturing_sink();
+    let mut runtime = crate::ApplicationRuntime::new()
+        .with_library_services(store.clone(), metadata.clone())
+        .expect("library services");
+    let (notify_tx, notify_rx) = std_mpsc::channel::<TrackId>();
+    let track_updated: super::TrackUpdatedSink = Arc::new(move |id| {
+        let _ = notify_tx.send(id);
+    });
+    let (_writer, tag_writer) = spawn_tag_writer(metadata);
+
+    let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
+        remote_service: remote,
+        tag_writer,
+        library_store: store.clone(),
+        progress: sink,
+        track_updated: Some(track_updated),
+        clock: fixed_clock(1),
+        initial_settings: OnlineSettings {
+            artwork: false,
+            tags: true,
+            lyrics: false,
+        },
+        library_path: Some(temp.path().to_path_buf()),
+        provider_version: 1,
+    });
+
+    // The worker loaded its stale row before entering identify_track. Commit
+    // the user edit while the provider request is paused, then let enrichment
+    // finish. Its missing-only write may fill title, but rating must survive.
+    started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("identify barrier reached");
+    store
+        .update_track_rating(track.id, Rating::new(5).expect("rating"))
+        .expect("commit concurrent rating");
+    runtime.apply_track_updated(track.id);
+    resume_tx.send(()).expect("resume identify");
+    let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Tick { completed: 1, .. })
+    });
+    let observed = notify_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("track_updated sink fires after persist");
+    runtime.apply_track_updated(observed);
+
+    let stored = store.track(track.id).expect("load").expect("present");
+    assert_eq!(stored.rating, Rating::new(5).expect("rating"));
+    assert_eq!(stored.metadata.title.as_deref(), Some("Remote title"));
+    let runtime_track = runtime
+        .library_tracks()
+        .iter()
+        .find(|candidate| candidate.id == track.id)
+        .expect("runtime track");
+    assert_eq!(runtime_track.rating, Rating::new(5).expect("rating"));
+    assert_eq!(
+        runtime_track.metadata.title.as_deref(),
+        Some("Remote title")
+    );
 
     scheduler.shutdown();
 }

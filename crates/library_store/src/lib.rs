@@ -12,10 +12,10 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value as SqlValue};
 use sustain_domain::SmartPlaylistRuleSet;
 pub use sustain_domain::{
-    AcousticFeatures, LibraryQuery, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId,
-    PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, SyncDevice, SyncDeviceId,
-    SyncManifestEntry, SyncedLyrics, Track, TrackAnalysis, TrackColumnEntry, TrackColumnLayout,
-    TrackColumnLayoutScope, TrackId, WaveformSegments,
+    AcousticFeatures, LibraryQuery, MetadataChange, PlayStatistics, Playlist, PlaylistFolder,
+    PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, SyncDevice,
+    SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track, TrackAnalysis, TrackColumnEntry,
+    TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackLocation, WaveformSegments,
 };
 
 mod memory;
@@ -28,13 +28,14 @@ pub use memory::InMemoryLibraryStore;
 
 use query::{sort_tracks, track_matches_search};
 use schema::{
-    DELETE_SMART_SHUFFLE_INDEX_SQL, DELETE_TRACK_SYNCED_LYRICS_SQL, FILL_TRACK_BPM_IF_NULL_SQL,
-    FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, SAVE_TRACK_SQL, SCHEMA_SQL, SELECT_ALL_TRACK_ACOUSTICS_SQL,
-    SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL, SELECT_TRACK_BY_ID_SQL,
-    SELECT_TRACK_SYNCED_LYRICS_SQL, SELECT_TRACK_WAVEFORM_SQL, SELECT_TRACKS_NEEDING_ANALYSIS_SQL,
-    SELECT_TRACKS_NEEDING_ONLINE_SQL, UPSERT_SMART_SHUFFLE_INDEX_SQL, UPSERT_TRACK_ACOUSTICS_SQL,
-    UPSERT_TRACK_ANALYSIS_SQL, UPSERT_TRACK_ONLINE_STATUS_SQL, UPSERT_TRACK_SYNCED_LYRICS_SQL,
-    UPSERT_TRACK_WAVEFORM_SQL,
+    APPLY_TRACK_METADATA_CHANGE_SQL, DELETE_SMART_SHUFFLE_INDEX_SQL,
+    DELETE_TRACK_SYNCED_LYRICS_SQL, FILL_MISSING_TRACK_METADATA_SQL, FILL_TRACK_BPM_IF_NULL_SQL,
+    FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, RECONCILE_SCANNED_TRACK_SQL, SAVE_TRACK_SQL, SCHEMA_SQL,
+    SELECT_ALL_TRACK_ACOUSTICS_SQL, SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL,
+    SELECT_TRACK_BY_ID_SQL, SELECT_TRACK_SYNCED_LYRICS_SQL, SELECT_TRACK_WAVEFORM_SQL,
+    SELECT_TRACKS_NEEDING_ANALYSIS_SQL, SELECT_TRACKS_NEEDING_ONLINE_SQL,
+    UPSERT_SMART_SHUFFLE_INDEX_SQL, UPSERT_TRACK_ACOUSTICS_SQL, UPSERT_TRACK_ANALYSIS_SQL,
+    UPSERT_TRACK_ONLINE_STATUS_SQL, UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
 };
 use sqlite_rows::{
     blob_to_waveform_segments, build_limit, duration_to_seconds, limit_selection_name,
@@ -200,13 +201,60 @@ pub struct StoredSmartShuffleIndex {
 }
 
 pub trait LibraryStore: Send + Sync {
+    /// Insert a brand-new authoritative library row. Fails on any conflict:
+    /// existing rows are mutated only through the ownership-specific methods
+    /// below, so a stale `Track` snapshot cannot overwrite unrelated columns.
     fn save_track(&self, track: Track) -> StoreResult<()>;
+    /// Atomically insert a batch of brand-new authoritative library rows.
     fn save_tracks(&self, tracks: &[Track]) -> StoreResult<()> {
         for track in tracks {
             self.save_track(track.clone())?;
         }
         Ok(())
     }
+    /// Insert newly scanned rows and refresh only scanner-owned observations
+    /// on rows that already exist.
+    fn reconcile_scanned_tracks(&self, tracks: &[Track]) -> StoreResult<()>;
+    /// Update only path and availability, preserving every unrelated field.
+    fn update_track_location(&self, track_id: TrackId, location: &TrackLocation)
+    -> StoreResult<()>;
+    /// Atomically update path and availability for a set of tracks.
+    fn update_track_locations(&self, updates: &[(TrackId, TrackLocation)]) -> StoreResult<()> {
+        for (track_id, location) in updates {
+            self.update_track_location(*track_id, location)?;
+        }
+        Ok(())
+    }
+    /// Update only the user's rating.
+    fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()>;
+    /// Update only listening statistics.
+    fn update_track_statistics(
+        &self,
+        track_id: TrackId,
+        statistics: &PlayStatistics,
+    ) -> StoreResult<()>;
+    /// Apply only explicitly edited metadata fields.
+    fn apply_track_metadata_change(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<()>;
+    /// Atomically apply an explicit metadata edit and its managed-library
+    /// relocation. The two owned projections commit together after the
+    /// filesystem move succeeds.
+    fn apply_track_metadata_change_and_location(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+        location: &TrackLocation,
+    ) -> StoreResult<()>;
+    /// Fill metadata fields only while their stored value is still absent.
+    /// Used by slow online enrichment so a concurrent user edit always wins.
+    fn fill_missing_track_metadata(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<()>;
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()>;
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>>;
     fn tracks(&self) -> StoreResult<Vec<Track>>;

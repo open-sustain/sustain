@@ -130,14 +130,21 @@ pub fn run_library_scan_task(task: LibraryScanTask) -> ApplicationRuntimeResult<
 
     // Even on a cancelled scan, persist whatever was indexed before
     // the abort. The work has already been paid for and re-doing it
-    // on the next run would punish the user for cancelling.
-    for track in &result.tracks {
-        task.library_store
-            .save_track(track.clone())
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-    }
+    // on the next run would punish the user for cancelling. Existing rows
+    // merge scanner-owned observations only; then reload SQLite truth so
+    // playback or user edits committed during the scan survive in memory.
+    task.library_store
+        .reconcile_scanned_tracks(&result.tracks)
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+    let tracks = task
+        .library_store
+        .tracks()
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
 
-    Ok(result)
+    Ok(LibraryScanResult {
+        tracks,
+        summary: result.summary,
+    })
 }
 
 fn reconcile_library_scan(

@@ -43,7 +43,7 @@ impl ApplicationRuntime {
         let mut track = self.library_tracks[track_index].clone();
         track.rating = rating;
         library_store
-            .save_track(track.clone())
+            .update_track_rating(track_id, rating)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.store_library_track(track_index, track);
 
@@ -104,6 +104,7 @@ impl ApplicationRuntime {
                 library_store.as_ref(),
                 &self.library_tracks,
                 track,
+                &change,
             )?;
             self.store_library_track(track_index, track);
             return Ok(());
@@ -115,7 +116,7 @@ impl ApplicationRuntime {
         let mut track = self.library_tracks[track_index].clone();
         track.metadata.apply_change(&change);
         library_store
-            .save_track(track.clone())
+            .apply_track_metadata_change(track_id, &change)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.store_library_track(track_index, track);
 
@@ -213,7 +214,7 @@ impl ApplicationRuntime {
         track.statistics.last_played_at = None;
         track.statistics.last_skipped_at = None;
         library_store
-            .save_track(track.clone())
+            .update_track_statistics(track_id, &track.statistics)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.store_library_track(track_index, track);
 

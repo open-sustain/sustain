@@ -39,6 +39,72 @@ impl LibraryStore for SqliteLibraryStore {
         self::tracks::save_tracks(&mut connection, tracks)
     }
 
+    fn reconcile_scanned_tracks(&self, tracks: &[Track]) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        self::tracks::reconcile_scanned_tracks(&mut connection, tracks)
+    }
+
+    fn update_track_location(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+    ) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        tracks::update_track_location(&connection, track_id, location)
+    }
+
+    fn update_track_locations(&self, updates: &[(TrackId, TrackLocation)]) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        tracks::update_track_locations(&mut connection, updates)
+    }
+
+    fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        tracks::update_track_rating(&connection, track_id, rating)
+    }
+
+    fn update_track_statistics(
+        &self,
+        track_id: TrackId,
+        statistics: &PlayStatistics,
+    ) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        tracks::update_track_statistics(&connection, track_id, statistics)
+    }
+
+    fn apply_track_metadata_change(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        tracks::apply_track_metadata_change(&connection, track_id, change)
+    }
+
+    fn fill_missing_track_metadata(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+    ) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        tracks::fill_missing_track_metadata(&connection, track_id, change)
+    }
+
+    fn apply_track_metadata_change_and_location(
+        &self,
+        track_id: TrackId,
+        change: &MetadataChange,
+        location: &TrackLocation,
+    ) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        tracks::apply_track_metadata_change_and_location(
+            &mut connection,
+            track_id,
+            change,
+            location,
+        )
+    }
+
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()> {
         let connection = self.connection_guard()?;
         tracks::delete_track(&connection, track_id)

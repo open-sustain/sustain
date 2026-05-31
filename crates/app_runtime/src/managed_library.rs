@@ -172,7 +172,7 @@ impl ApplicationRuntime {
                     existing.location.is_missing() != incoming.location.is_missing()
                 })
         });
-        replace_library_tracks_by_id(&mut self.library_tracks, result.tracks);
+        replace_library_track_locations_by_id(&mut self.library_tracks, result.tracks);
         self.rebuild_search_index();
         self.refresh_playback_queue_track_ids();
         if flipped_availability {
@@ -224,13 +224,14 @@ pub(super) fn save_managed_metadata_update(
     library_store: &dyn sustain_library_store::LibraryStore,
     existing_tracks: &[Track],
     track: Track,
+    change: &MetadataChange,
 ) -> ApplicationRuntimeResult<Track> {
     recover_library_consolidation_journal(library_path, library_store)?;
 
     let plan = plan_managed_track_retarget(library_path, existing_tracks, track.clone())?;
     let Some(planned_move) = plan else {
         library_store
-            .save_track(track.clone())
+            .apply_track_metadata_change(track.id, change)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         return Ok(track);
     };
@@ -247,7 +248,10 @@ pub(super) fn save_managed_metadata_update(
     }
 
     let updated_track = planned_move.updated_track;
-    if library_store.save_track(updated_track.clone()).is_err() {
+    if library_store
+        .apply_track_metadata_change_and_location(updated_track.id, change, &updated_track.location)
+        .is_err()
+    {
         rollback_file_move(&planned_move.source_path, &planned_move.destination_path).ok();
         return Err(ApplicationRuntimeError::LibraryStoreFailed);
     }
@@ -256,13 +260,13 @@ pub(super) fn save_managed_metadata_update(
     Ok(updated_track)
 }
 
-fn replace_library_tracks_by_id(library_tracks: &mut [Track], updated_tracks: Vec<Track>) {
+fn replace_library_track_locations_by_id(library_tracks: &mut [Track], updated_tracks: Vec<Track>) {
     for updated_track in updated_tracks {
         if let Some(track) = library_tracks
             .iter_mut()
             .find(|track| track.id == updated_track.id)
         {
-            *track = updated_track;
+            track.location = updated_track.location;
         }
     }
     library_tracks.sort_by_key(|track| track.id);

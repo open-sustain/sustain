@@ -285,22 +285,15 @@ CREATE TABLE IF NOT EXISTS sync_manifest (
 #[derive(Clone, Copy)]
 struct TrackColumn {
     name: &'static str,
-    updatable: bool,
 }
 
 impl TrackColumn {
     const fn primary_key(name: &'static str) -> Self {
-        Self {
-            name,
-            updatable: false,
-        }
+        Self { name }
     }
 
     const fn stored_value(name: &'static str) -> Self {
-        Self {
-            name,
-            updatable: true,
-        }
+        Self { name }
     }
 }
 
@@ -393,14 +386,79 @@ INSERT INTO tracks (
 VALUES (
 {}
 )
-ON CONFLICT(id) DO UPDATE SET
-{}
 "#,
         indented_track_column_names("    "),
         indented_insert_placeholders("    "),
-        indented_track_update_assignments("    "),
     )
 });
+
+pub(super) static RECONCILE_SCANNED_TRACK_SQL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        r#"
+INSERT INTO tracks (
+{}
+)
+VALUES (
+{}
+)
+ON CONFLICT(id) DO UPDATE SET
+    relative_path = excluded.relative_path,
+    duration_seconds = excluded.duration_seconds,
+    bitrate_kbps = excluded.bitrate_kbps,
+    is_missing = excluded.is_missing,
+    sample_rate_hz = excluded.sample_rate_hz,
+    channels = excluded.channels,
+    file_size_bytes = excluded.file_size_bytes,
+    has_embedded_artwork = excluded.has_embedded_artwork
+"#,
+        indented_track_column_names("    "),
+        indented_insert_placeholders("    "),
+    )
+});
+
+pub(super) const APPLY_TRACK_METADATA_CHANGE_SQL: &str = r#"
+UPDATE tracks SET
+    title        = CASE ?2  WHEN 0 THEN title        WHEN 1 THEN ?3  ELSE NULL END,
+    artist       = CASE ?4  WHEN 0 THEN artist       WHEN 1 THEN ?5  ELSE NULL END,
+    album        = CASE ?6  WHEN 0 THEN album        WHEN 1 THEN ?7  ELSE NULL END,
+    album_artist = CASE ?8  WHEN 0 THEN album_artist WHEN 1 THEN ?9  ELSE NULL END,
+    composer     = CASE ?10 WHEN 0 THEN composer     WHEN 1 THEN ?11 ELSE NULL END,
+    grouping     = CASE ?12 WHEN 0 THEN grouping     WHEN 1 THEN ?13 ELSE NULL END,
+    genre        = CASE ?14 WHEN 0 THEN genre        WHEN 1 THEN ?15 ELSE NULL END,
+    track_number = CASE ?16 WHEN 0 THEN track_number WHEN 1 THEN ?17 ELSE NULL END,
+    track_total  = CASE ?18 WHEN 0 THEN track_total  WHEN 1 THEN ?19 ELSE NULL END,
+    disc_number  = CASE ?20 WHEN 0 THEN disc_number  WHEN 1 THEN ?21 ELSE NULL END,
+    disc_total   = CASE ?22 WHEN 0 THEN disc_total   WHEN 1 THEN ?23 ELSE NULL END,
+    year         = CASE ?24 WHEN 0 THEN year         WHEN 1 THEN ?25 ELSE NULL END,
+    compilation  = CASE ?26 WHEN 0 THEN compilation  WHEN 1 THEN ?27 ELSE NULL END,
+    bpm          = CASE ?28 WHEN 0 THEN bpm          WHEN 1 THEN ?29 ELSE NULL END,
+    musical_key  = CASE ?30 WHEN 0 THEN musical_key  WHEN 1 THEN ?31 ELSE NULL END,
+    comments     = CASE ?32 WHEN 0 THEN comments     WHEN 1 THEN ?33 ELSE NULL END,
+    lyrics       = CASE ?34 WHEN 0 THEN lyrics       WHEN 1 THEN ?35 ELSE NULL END
+WHERE id = ?1
+"#;
+
+pub(super) const FILL_MISSING_TRACK_METADATA_SQL: &str = r#"
+UPDATE tracks SET
+    title        = COALESCE(title, ?2),
+    artist       = COALESCE(artist, ?3),
+    album        = COALESCE(album, ?4),
+    album_artist = COALESCE(album_artist, ?5),
+    composer     = COALESCE(composer, ?6),
+    grouping     = COALESCE(grouping, ?7),
+    genre        = CASE WHEN genre IS NULL OR TRIM(genre) = '' THEN COALESCE(?8, genre) ELSE genre END,
+    track_number = COALESCE(track_number, ?9),
+    track_total  = COALESCE(track_total, ?10),
+    disc_number  = COALESCE(disc_number, ?11),
+    disc_total   = COALESCE(disc_total, ?12),
+    year         = COALESCE(year, ?13),
+    compilation  = COALESCE(compilation, ?14),
+    bpm          = COALESCE(bpm, ?15),
+    musical_key  = COALESCE(musical_key, ?16),
+    comments     = COALESCE(comments, ?17),
+    lyrics       = CASE WHEN lyrics IS NULL OR TRIM(lyrics) = '' THEN COALESCE(?18, lyrics) ELSE lyrics END
+WHERE id = ?1
+"#;
 
 pub(super) static SELECT_TRACK_BY_ID_SQL: LazyLock<String> = LazyLock::new(|| {
     format!(
@@ -649,15 +707,6 @@ fn indented_track_column_names(indent: &str) -> String {
 fn indented_insert_placeholders(indent: &str) -> String {
     (1..=TRACK_COLUMNS.len())
         .map(|index| format!("{indent}?{index}"))
-        .collect::<Vec<_>>()
-        .join(",\n")
-}
-
-fn indented_track_update_assignments(indent: &str) -> String {
-    TRACK_COLUMNS
-        .iter()
-        .filter(|column| column.updatable)
-        .map(|column| format!("{indent}{name} = excluded.{name}", name = column.name))
         .collect::<Vec<_>>()
         .join(",\n")
 }

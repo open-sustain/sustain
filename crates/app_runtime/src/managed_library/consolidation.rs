@@ -68,11 +68,17 @@ impl LibraryConsolidationContext {
         // planning before touching any files on disk: the flag flip
         // is durable even if a later move fails, and the result we
         // return always carries the corrected tracks so the runtime's
-        // in-memory copy matches SQLite. Done in one transaction via
-        // `save_tracks` to keep the cost bounded on a 10k library.
+        // in-memory copy matches SQLite. Done in one narrow transaction
+        // to keep the cost bounded on a 10k library without overwriting
+        // unrelated columns from the planning snapshot.
         if !plan.missing_track_updates.is_empty() {
+            let updates = plan
+                .missing_track_updates
+                .iter()
+                .map(|track| (track.id, track.location.clone()))
+                .collect::<Vec<_>>();
             self.library_store
-                .save_tracks(&plan.missing_track_updates)
+                .update_track_locations(&updates)
                 .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
 
@@ -114,7 +120,7 @@ impl LibraryConsolidationContext {
             let updated_track = planned_move.updated_track.clone();
             if self
                 .library_store
-                .save_track(updated_track.clone())
+                .update_track_location(updated_track.id, &updated_track.location)
                 .is_err()
             {
                 rollback_file_move(&planned_move.source_path, &planned_move.destination_path).ok();

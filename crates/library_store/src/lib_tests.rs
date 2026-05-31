@@ -3,14 +3,17 @@
 
 use std::path::PathBuf;
 
-use std::{num::NonZeroU32, time::SystemTime};
+use std::{
+    num::NonZeroU32,
+    time::{Duration, SystemTime},
+};
 
 use sustain_domain::{
-    PlayStatistics, PlaylistEntry, Rating, SmartPlaylistDateField, SmartPlaylistLimit,
-    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
-    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
-    SmartPlaylistTextOperator, SortDirection, TrackLocation, TrackMetadata, TrackRelativePath,
-    TrackSort, TrackSortColumn,
+    FieldChange, MetadataChange, PlayStatistics, PlaylistEntry, Rating, SmartPlaylistDateField,
+    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
+    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, SortDirection, TrackLocation, TrackMetadata,
+    TrackRelativePath, TrackSort, TrackSortColumn,
 };
 
 use sustain_domain::{
@@ -47,15 +50,112 @@ fn in_memory_store_saves_and_loads_tracks() {
 }
 
 #[test]
-fn in_memory_store_replaces_tracks_by_id() {
+fn in_memory_store_rejects_whole_row_replacement_by_id() {
     let store = InMemoryLibraryStore::new();
     let first = track(1, "old.flac");
     let replacement = track(1, "new.flac");
 
-    assert_eq!(store.save_track(first), Ok(()));
-    assert_eq!(store.save_track(replacement.clone()), Ok(()));
+    assert_eq!(store.save_track(first.clone()), Ok(()));
+    assert!(store.save_track(replacement).is_err());
 
-    assert_eq!(store.track(replacement.id), Ok(Some(replacement)));
+    assert_eq!(store.track(first.id), Ok(Some(first)));
+}
+
+#[test]
+fn sqlite_store_rejects_whole_row_replacement_by_id() {
+    let store = SqliteLibraryStore::open_in_memory().expect("store");
+    let first = track(1, "old.flac");
+    let replacement = track(1, "new.flac");
+
+    assert_eq!(store.save_track(first.clone()), Ok(()));
+    assert!(store.save_track(replacement).is_err());
+
+    assert_eq!(store.track(first.id), Ok(Some(first)));
+}
+
+#[test]
+fn sqlite_scanner_merge_preserves_authoritative_fields() {
+    run_scanner_merge_preserves_authoritative_fields(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_scanner_merge_preserves_authoritative_fields() {
+    run_scanner_merge_preserves_authoritative_fields(&InMemoryLibraryStore::new());
+}
+
+fn run_scanner_merge_preserves_authoritative_fields(store: &dyn LibraryStore) {
+    let mut authoritative = track(1, "a.flac");
+    authoritative.metadata.title = Some("User title".to_owned());
+    authoritative.metadata.duration = Some(Duration::from_secs(60));
+    authoritative.rating = Rating::new(5).expect("rating");
+    authoritative.statistics.play_count = 12;
+    store
+        .save_track(authoritative.clone())
+        .expect("seed authoritative row");
+
+    let mut scanned = authoritative.clone();
+    scanned.metadata.title = Some("Tag title".to_owned());
+    scanned.metadata.duration = Some(Duration::from_secs(90));
+    scanned.rating = Rating::unrated();
+    scanned.statistics.play_count = 0;
+    scanned.file_size_bytes = Some(1234);
+    scanned.has_embedded_artwork = Some(true);
+    store
+        .reconcile_scanned_tracks(&[scanned])
+        .expect("merge scanner observations");
+
+    let loaded = store
+        .track(authoritative.id)
+        .expect("load")
+        .expect("track exists");
+    assert_eq!(loaded.metadata.title.as_deref(), Some("User title"));
+    assert_eq!(loaded.metadata.duration, Some(Duration::from_secs(90)));
+    assert_eq!(loaded.rating, Rating::new(5).expect("rating"));
+    assert_eq!(loaded.statistics.play_count, 12);
+    assert_eq!(loaded.file_size_bytes, Some(1234));
+    assert_eq!(loaded.has_embedded_artwork, Some(true));
+}
+
+#[test]
+fn sqlite_online_fill_preserves_existing_values() {
+    run_online_fill_preserves_existing_values(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_online_fill_preserves_existing_values() {
+    run_online_fill_preserves_existing_values(&InMemoryLibraryStore::new());
+}
+
+fn run_online_fill_preserves_existing_values(store: &dyn LibraryStore) {
+    let mut authoritative = track(1, "a.flac");
+    authoritative.metadata.title = Some("User title".to_owned());
+    authoritative.rating = Rating::new(4).expect("rating");
+    store
+        .save_track(authoritative.clone())
+        .expect("seed authoritative row");
+
+    store
+        .fill_missing_track_metadata(
+            authoritative.id,
+            &MetadataChange {
+                title: FieldChange::Set("Remote title".to_owned()),
+                artist: FieldChange::Set("Remote artist".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("fill missing metadata");
+
+    let loaded = store
+        .track(authoritative.id)
+        .expect("load")
+        .expect("track exists");
+    assert_eq!(loaded.metadata.title.as_deref(), Some("User title"));
+    assert_eq!(loaded.metadata.artist.as_deref(), Some("Remote artist"));
+    assert_eq!(loaded.rating, Rating::new(4).expect("rating"));
 }
 
 #[test]

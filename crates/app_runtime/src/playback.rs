@@ -237,7 +237,7 @@ impl ApplicationRuntime {
         updated.location = updated.location.with_availability(availability);
         if let Some(store) = self.library_store.as_ref() {
             store
-                .save_track(updated.clone())
+                .update_track_location(track_id, &updated.location)
                 .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
         self.store_library_track(index, updated);
@@ -464,7 +464,7 @@ impl ApplicationRuntime {
         mutate(&mut updated.statistics);
         if let Some(store) = self.library_store.as_ref() {
             store
-                .save_track(updated.clone())
+                .update_track_statistics(track_id, &updated.statistics)
                 .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
         self.store_library_track(track_index, updated);

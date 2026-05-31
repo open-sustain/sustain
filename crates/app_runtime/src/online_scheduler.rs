@@ -688,18 +688,18 @@ fn attempt_lyrics(
             lyrics: FieldChange::Set(plain.clone()),
             ..MetadataChange::default()
         };
-        if !tag_writer.write_metadata(absolute_path.to_path_buf(), change) {
+        if !tag_writer.write_metadata(absolute_path.to_path_buf(), change.clone()) {
             eprintln!(
                 "Sustain: lyrics tag write failed for {}",
                 absolute_path.display()
             );
             return AttemptOutcome::Failed;
         }
-        // Mirror into the tracks.lyrics column so the next read sees
-        // the new value without another tag round-trip.
-        let mut updated = track.clone();
-        updated.metadata.lyrics = Some(plain);
-        if let Err(error) = library_store.save_track(updated) {
+        // Mirror into the tracks.lyrics column so the next read sees the new
+        // value without another tag round-trip. The missing-only write
+        // preserves a user edit committed while the remote fetch was in
+        // flight.
+        if let Err(error) = library_store.fill_missing_track_metadata(track.id, &change) {
             eprintln!(
                 "Sustain: persist of lyrics column failed for {}: {error:?}",
                 absolute_path.display()
@@ -964,12 +964,10 @@ fn attempt_tags(
         return AttemptOutcome::Failed;
     }
 
-    // Mirror the change into SQLite so the next read sees the new
-    // values without another tag round-trip. apply_change preserves
-    // existing fields by treating `Unchanged` as a no-op.
-    let mut updated = track.clone();
-    updated.metadata.apply_change(&change);
-    if let Err(error) = library_store.save_track(updated) {
+    // Mirror only values that are still absent. A user may have edited the
+    // row while identification was in flight; those authoritative values
+    // must never be replaced by this older background result.
+    if let Err(error) = library_store.fill_missing_track_metadata(track.id, &change) {
         eprintln!(
             "Sustain: tag enrichment persist failed for {}: {error:?}",
             absolute_path.display()
