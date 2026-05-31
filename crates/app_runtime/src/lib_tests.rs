@@ -36,7 +36,7 @@ use sustain_settings::{SettingsError, SettingsResult, SettingsStore};
 use super::{
     ApplicationRuntime, ApplicationRuntimeError, LibraryConsolidationSummary, LibraryScanSummary,
     MetadataService, NotificationCategory, NotificationSeverity, PlaybackQueueRequest,
-    normalize_query, run_library_consolidation_task, run_library_import_task,
+    PlaybackQueueSource, normalize_query, run_library_consolidation_task, run_library_import_task,
     run_library_scan_task,
 };
 use crate::{
@@ -2202,6 +2202,191 @@ fn runtime_play_next_track_skips_missing_tracks() {
             position: std::time::Duration::ZERO,
         }
     );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+/// #78: a track played from a 1-result search has a single-track queue;
+/// clearing the search must widen the queue to the full view so
+/// auto-advance continues instead of stopping.
+fn three_track_playback_runtime(root: &std::path::Path) -> ApplicationRuntime {
+    std::fs::create_dir_all(root).expect("create test library");
+    for name in ["a.flac", "b.flac", "c.flac"] {
+        std::fs::write(root.join(name), b"not real audio").expect("write track");
+    }
+    let store = Arc::new(InMemoryLibraryStore::new());
+    for (id, name) in [(1, "a.flac"), (2, "b.flac"), (3, "c.flac")] {
+        assert_eq!(store.save_track(test_track(track_id(id), name)), Ok(()));
+    }
+    ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.to_path_buf())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(TestMetadataService))
+    .expect("library services initialize")
+    .with_playback_service(Box::new(NullPlaybackService::new()))
+}
+
+#[test]
+fn repopulate_queue_widens_searched_results_so_auto_advance_continues() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+
+    // Play track 1 from a search narrowed to just that track.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: PlaybackQueueRequest::Explicit {
+                source: PlaybackQueueSource::SearchResults,
+                ordered_track_ids: vec![track_id(1)],
+            },
+        })),
+        Ok(())
+    );
+
+    // Clearing the search widens the queue to the whole library.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(
+            PlaybackCommand::RepopulateQueue(PlaybackQueueRequest::Library)
+        )),
+        Ok(())
+    );
+    // The playing track and transport are untouched — no reload.
+    assert_eq!(
+        runtime.playback_state(),
+        PlaybackState::Playing {
+            track_id: track_id(1),
+            position: std::time::Duration::ZERO,
+        }
+    );
+
+    // Auto-advance now continues through the full library instead of
+    // stopping at the end of the one-track search queue.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayNextTrack)),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.playback_state(),
+        PlaybackState::Playing {
+            track_id: track_id(2),
+            position: std::time::Duration::ZERO,
+        }
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn repopulate_queue_is_left_alone_when_playing_track_absent_from_request() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+
+    // Play track 1 from a two-track search result.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: PlaybackQueueRequest::Explicit {
+                source: PlaybackQueueSource::SearchResults,
+                ordered_track_ids: vec![track_id(1), track_id(2)],
+            },
+        })),
+        Ok(())
+    );
+
+    // A repopulate request that does not contain the playing track (the
+    // user switched views before clearing the search) must be ignored so
+    // the queue keeps its anchor.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(
+            PlaybackCommand::RepopulateQueue(PlaybackQueueRequest::Explicit {
+                source: PlaybackQueueSource::SearchResults,
+                ordered_track_ids: vec![track_id(3)],
+            })
+        )),
+        Ok(())
+    );
+
+    // The original [1, 2] queue is intact, so Next still advances to 2.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayNextTrack)),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.playback_state(),
+        PlaybackState::Playing {
+            track_id: track_id(2),
+            position: std::time::Duration::ZERO,
+        }
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn repopulate_queue_never_widens_an_album_queue() {
+    // "Playing in an album ALWAYS queues the album, nothing more, nothing
+    // less" (#78): clearing a search must not widen an album queue, even
+    // when the user has since switched to the Songs view (which would ask
+    // to repopulate from the full library).
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+
+    // Play track 1 as part of a two-track album that excludes track 3.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: PlaybackQueueRequest::Explicit {
+                source: PlaybackQueueSource::Album,
+                ordered_track_ids: vec![track_id(1), track_id(2)],
+            },
+        })),
+        Ok(())
+    );
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(
+            PlaybackCommand::RepopulateQueue(PlaybackQueueRequest::Library)
+        )),
+        Ok(())
+    );
+
+    // The album queue is intact: Next reaches the album's second track,
+    // and a further Next stops rather than spilling into track 3.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayNextTrack)),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.playback_state(),
+        PlaybackState::Playing {
+            track_id: track_id(2),
+            position: std::time::Duration::ZERO,
+        }
+    );
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayNextTrack)),
+        Ok(())
+    );
+    assert_eq!(runtime.playback_state(), PlaybackState::Stopped);
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn repopulate_queue_is_a_noop_when_nothing_is_playing() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+
+    // No track playing: there is no anchor to preserve, so the command
+    // must succeed without starting playback.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(
+            PlaybackCommand::RepopulateQueue(PlaybackQueueRequest::Library)
+        )),
+        Ok(())
+    );
+    assert_eq!(runtime.playback_state(), PlaybackState::Stopped);
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }

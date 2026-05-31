@@ -94,7 +94,8 @@ use mpris_bridge::{install_mpris_command_consumer, now_playing_to_mpris_metadata
 use playback::{
     install_playlists_header_playback, install_track_ended_callback,
     library_track_activated_callback, make_toggle_or_start_playback, playback_changed_callback,
-    playlist_track_activated_callback, update_play_pause_sensitivity,
+    playlist_track_activated_callback, repopulate_request_for_visible_view,
+    update_play_pause_sensitivity,
 };
 use playlists::{
     add_to_playlist_callback, add_to_playlist_provider, install_playlists_view_activator,
@@ -562,6 +563,7 @@ pub(crate) fn build_main_window(
         &titlebar,
         SearchWiringContext {
             current_search_text: current_search_text.clone(),
+            command_controller: command_controller.clone(),
             runtime: runtime.clone(),
             songs_table: songs_table.clone(),
             albums_view: albums_view.clone(),

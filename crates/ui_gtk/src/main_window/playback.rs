@@ -389,6 +389,32 @@ fn play_request_for_visible_view(
     }
 }
 
+/// Resolve the queue request that should re-derive the play queue when the
+/// search filter is cleared, based on the view the user is in: Songs widens
+/// to the full library, Playlists widens to the full selected playlist /
+/// smart playlist. Albums return `None` — album playback always queues the
+/// whole album and is never search-narrowed, so there is nothing to widen
+/// (#78). The runtime applies the request only while a track is playing and
+/// only when it still contains that track, so a stale view never clobbers
+/// the queue.
+pub(super) fn repopulate_request_for_visible_view(
+    runtime: &ApplicationRuntime,
+    content_stack: &gtk::Stack,
+    sidebar_selection: Option<SidebarSelection>,
+) -> Option<PlaybackQueueRequest> {
+    match content_stack.visible_child_name().as_deref() {
+        Some(ALBUMS_VIEW) => None,
+        Some(PLAYLISTS_VIEW) => Some(queue_request_for_playlist_selection(
+            runtime,
+            sidebar_selection,
+            "",
+        )),
+        // Songs view (and any unexpected state) widens to the full library,
+        // matching its play/activation behaviour.
+        _ => Some(queue_request_for_library(runtime, "")),
+    }
+}
+
 /// Enable the top-bar Play button when there is something it can act on
 /// — a track already loaded in the controller (so it pauses/resumes) or
 /// at least one track in the library (so it cold-starts the visible

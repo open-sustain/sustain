@@ -46,6 +46,16 @@ pub enum PlaybackCommand {
     /// already-queued track. Counterpart to [`Self::EnqueueNext`], which
     /// inserts at the head right after the currently playing track.
     EnqueueLast(Vec<TrackId>),
+    /// Re-derive the play queue from `request` while keeping the currently
+    /// playing track and transport state untouched. Dispatched when the
+    /// browsing context that defined the queue widens — e.g. the search
+    /// filter is cleared after the user played a track from a narrow
+    /// result set — so auto-advance continues through the full view
+    /// instead of stopping at the end of the now-stale filtered queue
+    /// (#78). No-op when nothing is playing, when the widened queue would
+    /// not contain the playing track (the browsing context changed out
+    /// from under it), or when the resolved track pool is unchanged.
+    RepopulateQueue(PlaybackQueueRequest),
     /// Advance to the next mode in the shuffle cycle
     /// (`Off → Pure → Smart → Off`). The transport's shuffle button
     /// dispatches this on every click.

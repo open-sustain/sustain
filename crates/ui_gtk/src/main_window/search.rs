@@ -33,6 +33,7 @@ use super::*;
 /// even if the last rebuild never runs.
 pub(super) struct SearchWiringContext {
     pub(super) current_search_text: Rc<RefCell<String>>,
+    pub(super) command_controller: SharedCommandController,
     pub(super) runtime: SharedRuntime,
     pub(super) songs_table: TrackTable,
     pub(super) albums_view: AlbumsView,
@@ -48,6 +49,7 @@ pub(super) struct SearchWiringContext {
 pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringContext) {
     let SearchWiringContext {
         current_search_text,
+        command_controller,
         runtime,
         songs_table,
         albums_view,
@@ -68,6 +70,25 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
                 return;
             }
             *current_search_text.borrow_mut() = new_text.clone();
+
+            // Clearing the search widens the play queue back to the current
+            // view, so auto-advance resumes through the full list instead of
+            // stopping at the end of the now-gone filtered set (#78). Done
+            // immediately — it is cheap and must not wait on the table-rebuild
+            // debounce below. The runtime no-ops when nothing is playing or
+            // the playing track is not in the widened view.
+            if new_text.trim().is_empty() {
+                let request = repopulate_request_for_visible_view(
+                    &runtime.borrow(),
+                    &content_stack,
+                    sidebar.current_selection(),
+                );
+                if let Some(request) = request {
+                    let _ = command_controller.dispatch(ApplicationCommand::Playback(
+                        PlaybackCommand::RepopulateQueue(request),
+                    ));
+                }
+            }
 
             // Cancel any pending rebuild scheduled for the previous
             // keystroke; only the most recent query should run.

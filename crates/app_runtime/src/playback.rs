@@ -64,6 +64,10 @@ impl ApplicationRuntime {
                 self.playback_queue.enqueue_at_end(&track_ids);
                 Ok(())
             }
+            PlaybackCommand::RepopulateQueue(request) => {
+                self.repopulate_queue(request);
+                Ok(())
+            }
             PlaybackCommand::Pause => self.pause_playback(),
             PlaybackCommand::Resume => self.resume_playback(),
             PlaybackCommand::TogglePlayPause => match self.playback_service()?.state() {
@@ -160,6 +164,43 @@ impl ApplicationRuntime {
             self.playback_queue.options(),
             playback_shuffle_seed(),
         ))
+    }
+
+    /// Re-derive the play queue from `request`, keeping the currently
+    /// playing track and the transport untouched (the audio is not
+    /// reloaded). Backs [`PlaybackCommand::RepopulateQueue`].
+    ///
+    /// No-op in four cases, each of which would otherwise corrupt the
+    /// queue or surprise the user:
+    /// - Nothing is playing — there is no anchor track to preserve.
+    /// - The queue is an album — album playback "always queues the album,
+    ///   nothing more, nothing less" (#78); an album is never built from a
+    ///   search filter, so there is nothing to widen and widening it would
+    ///   break that contract no matter which view the user cleared from.
+    /// - The widened request does not contain the playing track — the
+    ///   browsing context changed (e.g. the user switched views before
+    ///   clearing the search); widening to it would orphan the queue's
+    ///   current track and break auto-advance.
+    /// - The resolved track pool is identical to the current one — the
+    ///   queue was never actually narrowed, so rebuilding would needlessly
+    ///   re-roll a shuffle order.
+    fn repopulate_queue(&mut self, request: PlaybackQueueRequest) {
+        let Some(current_track_id) = self.playback_queue.current_track_id() else {
+            return;
+        };
+        if matches!(self.playback_queue.source(), PlaybackQueueSource::Album) {
+            return;
+        }
+        let Ok(new_queue) = self.build_playback_queue(current_track_id, request) else {
+            return;
+        };
+        if new_queue.current_track_id() != Some(current_track_id) {
+            return;
+        }
+        if new_queue.ordered_track_ids() == self.playback_queue.ordered_track_ids() {
+            return;
+        }
+        self.playback_queue = new_queue;
     }
 
     fn play_track(&mut self, track_id: TrackId) -> ApplicationRuntimeResult<()> {
