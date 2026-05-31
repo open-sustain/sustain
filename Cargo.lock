@@ -2133,6 +2133,7 @@ name = "sustain-device-sync"
 version = "0.3.0-alpha.2"
 dependencies = [
  "rustix",
+ "sha2",
  "sustain-domain",
  "sustain-pioneer",
  "tempfile",

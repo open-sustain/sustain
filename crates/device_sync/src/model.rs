@@ -8,14 +8,54 @@
 //! these plain structs, so the engine never reaches into the library
 //! database or the DSP pipeline.
 
-use std::path::PathBuf;
+use std::{ops::Deref, path::PathBuf};
 
 use sustain_domain::{
-    DeviceRelativePath, MusicalKey, SyncDevice, SyncManifestEntry, TrackId, WaveformSegments,
+    DeviceRelativePath, MusicalKey, SourceFileStat, SourceFingerprint, SyncDevice,
+    SyncManifestEntry, TrackContentHash, TrackId, WaveformSegments,
 };
 
-/// One track in the resolved set to sync. Carries everything the
-/// writers need plus a fingerprint for staleness detection.
+/// One observation of a source audio file. A matching cached SHA-256 is
+/// optional during non-mutating planning; sync preparation resolves every
+/// missing hash on its worker before any destination write.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceSnapshot {
+    pub stat: SourceFileStat,
+    pub content_hash: Option<TrackContentHash>,
+}
+
+impl SourceSnapshot {
+    pub const fn provisional(stat: SourceFileStat) -> Self {
+        Self {
+            stat,
+            content_hash: None,
+        }
+    }
+
+    pub fn resolved(fingerprint: SourceFingerprint) -> Self {
+        Self {
+            stat: fingerprint.stat,
+            content_hash: Some(fingerprint.content_hash),
+        }
+    }
+
+    pub fn fingerprint_token(&self) -> String {
+        match &self.content_hash {
+            Some(hash) => format!("sha256:{}", hash.as_str()),
+            None => format!(
+                "stat:{}:{}:{}:{}:{}",
+                self.stat.device,
+                self.stat.inode,
+                self.stat.size_bytes,
+                self.stat.modified_at_ns,
+                self.stat.changed_at_ns,
+            ),
+        }
+    }
+}
+
+/// One track in the resolved set to sync. Carries everything the writers need
+/// plus a live source observation for staleness detection.
 #[derive(Clone, Debug)]
 pub struct SyncInputTrack {
     pub track_id: TrackId,
@@ -35,14 +75,11 @@ pub struct SyncInputTrack {
     pub bitrate_kbps: Option<u32>,
     pub sample_rate_hz: u32,
     pub bit_depth: u16,
-    pub file_size: u64,
+    pub source: SourceSnapshot,
     /// `YYYY-MM-DD` the track entered the library, for the Pioneer PDB.
     pub date_added: Option<String>,
     /// Lower-case file extension without the dot (e.g. `mp3`).
     pub extension: String,
-    /// Source staleness fingerprint (a file-size token). A change means
-    /// the on-device copy is stale and will be re-copied on the next sync.
-    pub fingerprint: String,
     /// Preview waveform (Pioneer layout only). `None` when the track has
     /// not been waveform-analysed.
     pub waveform_preview: Option<WaveformSegments>,
@@ -78,6 +115,36 @@ pub struct SyncRequest {
     pub remove_stale: bool,
     /// `YYYY-MM-DD` stamped into the Pioneer analyze-date field.
     pub export_date: String,
+}
+
+/// A sync request whose every source observation carries a SHA-256. Only this
+/// type can reach the mutating engine, preventing provisional planning tokens
+/// from ever being persisted into a device manifest.
+#[derive(Clone, Debug)]
+pub struct PreparedSyncRequest(SyncRequest);
+
+impl PreparedSyncRequest {
+    pub fn new(request: SyncRequest) -> Result<Self, SyncError> {
+        if request
+            .tracks
+            .iter()
+            .all(|track| track.source.content_hash.is_some())
+        {
+            Ok(Self(request))
+        } else {
+            Err(SyncError::Preparation(
+                "one or more source fingerprints are unresolved".to_owned(),
+            ))
+        }
+    }
+}
+
+impl Deref for PreparedSyncRequest {
+    type Target = SyncRequest;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 /// A planned on-device file: which track, where it goes (relative to the
@@ -164,6 +231,8 @@ pub enum SyncError {
     },
     /// The Pioneer PDB could not be assembled.
     Pdb(sustain_pioneer::PdbError),
+    /// Live source preparation failed before removable-media mutation.
+    Preparation(String),
     /// The selection resolved to no tracks.
     Empty,
     /// A unique on-device destination path could not be planned (the
@@ -175,7 +244,9 @@ pub enum SyncError {
 }
 
 impl SyncError {
-    pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
+    /// Build an [`SyncError::Io`] for a path. Public so the runtime's sync
+    /// preparation can report a source-file read failure with its path.
+    pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),
             source,
@@ -192,6 +263,7 @@ impl std::fmt::Display for SyncError {
         match self {
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Pdb(error) => write!(f, "Pioneer database: {error}"),
+            Self::Preparation(message) => write!(f, "source preparation failed: {message}"),
             Self::Empty => write!(f, "the selection contains no tracks"),
             Self::Planning(message) => write!(f, "device path planning failed: {message}"),
         }
@@ -203,7 +275,7 @@ impl std::error::Error for SyncError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Pdb(error) => Some(error),
-            Self::Empty | Self::Planning(_) => None,
+            Self::Empty | Self::Planning(_) | Self::Preparation(_) => None,
         }
     }
 }

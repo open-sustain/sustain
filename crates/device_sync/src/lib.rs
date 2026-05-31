@@ -20,23 +20,25 @@ pub mod identity;
 mod layout;
 pub mod model;
 mod sanitize;
+mod source;
 
 pub use engine::{plan, sync};
 pub use identity::{
     ConnectedDevice, MARKER_FILE, discover, generate_device_id, read_marker, write_marker,
 };
 pub use model::{
-    GenreBytes, Placement, SyncError, SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncPlan,
-    SyncProgress, SyncRequest, SyncStage,
+    GenreBytes, Placement, PreparedSyncRequest, SourceSnapshot, SyncError, SyncInputPlaylist,
+    SyncInputTrack, SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage,
 };
+pub use source::{resolve_source_fingerprint, source_file_stat};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
     use sustain_domain::{
-        DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, SyncDevice, SyncDeviceId,
-        TrackId,
+        DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, SourceFileStat,
+        SyncDevice, SyncDeviceId, TrackId,
     };
 
     struct Fixture {
@@ -52,6 +54,9 @@ mod tests {
         for i in 1..=count {
             let path = src.path().join(format!("song{i}.mp3"));
             std::fs::write(&path, format!("audio-data-{i}").repeat(4)).expect("write src");
+            let source = SourceSnapshot::resolved(
+                resolve_source_fingerprint(&path, None).expect("resolve source fingerprint"),
+            );
             tracks.push(SyncInputTrack {
                 track_id: TrackId::new(i as i64).expect("id"),
                 source_path: path,
@@ -68,10 +73,9 @@ mod tests {
                 bitrate_kbps: Some(320),
                 sample_rate_hz: 44_100,
                 bit_depth: 16,
-                file_size: 0,
+                source,
                 date_added: Some("2026-01-01".into()),
                 extension: "mp3".into(),
-                fingerprint: format!("fp-{i}"),
                 waveform_preview: None,
                 waveform_detail: None,
                 cover_art: None,
@@ -116,8 +120,14 @@ mod tests {
         }
     }
 
+    /// Resolved fixtures always carry a content hash, so promoting a request
+    /// to the mutating engine cannot fail; the helper unwraps for the tests.
+    fn prepared(req: &SyncRequest) -> PreparedSyncRequest {
+        PreparedSyncRequest::new(req.clone()).expect("fixture sources are all resolved")
+    }
+
     fn run(req: &SyncRequest) -> SyncOutcome {
-        sync(req, &mut |_| {}, &|| false).expect("sync ok")
+        sync(&prepared(req), &mut |_| {}, &|| false).expect("sync ok")
     }
 
     #[test]
@@ -179,10 +189,18 @@ mod tests {
             bitrate_kbps: None,
             sample_rate_hz: 44_100,
             bit_depth: 16,
-            file_size: 0,
+            // Fake source path that is never copied — these tracks only
+            // exercise layout planning, so a provisional stat (no hash) is
+            // enough and keeps the request out of the mutating engine.
+            source: SourceSnapshot::provisional(SourceFileStat {
+                device: 1,
+                inode: id as u64,
+                size_bytes: 0,
+                modified_at_ns: 0,
+                changed_at_ns: 0,
+            }),
             date_added: None,
             extension: "mp3".into(),
-            fingerprint: format!("fp-{id}"),
             waveform_preview: None,
             waveform_detail: None,
             cover_art: None,
@@ -365,6 +383,43 @@ mod tests {
     }
 
     #[test]
+    fn external_source_change_is_recopied_on_the_next_sync() {
+        // #100: a source file changed after the previous sync (here without
+        // any rescan of the library) must be detected and re-copied. The old
+        // size-only fingerprint missed content changes; the SHA-256 catches
+        // them.
+        let fx = fixture(2);
+        let first = run(&request(&fx, DeviceLayout::M3u, Vec::new(), false));
+        assert_eq!(first.copied, 2);
+
+        // An external tool rewrites track 1's bytes. Re-observe the source so
+        // the new request carries its fresh content hash.
+        let mut tracks = fx.tracks.clone();
+        std::fs::write(&tracks[0].source_path, b"externally-rewritten-bytes").expect("rewrite");
+        tracks[0].source = SourceSnapshot::resolved(
+            resolve_source_fingerprint(&tracks[0].source_path, None).expect("re-resolve"),
+        );
+
+        let req = SyncRequest {
+            device: device(DeviceLayout::M3u),
+            mount_path: fx.dest.path().to_path_buf(),
+            tracks,
+            playlists: vec![SyncInputPlaylist {
+                name: "My Set".into(),
+                track_indices: vec![0, 1],
+            }],
+            previous_manifest: first.manifest.clone(),
+            remove_stale: false,
+            export_date: "2026-01-01".into(),
+        };
+        let second = run(&req);
+        // Only the rewritten track is re-copied; the untouched one is skipped.
+        assert_eq!(second.updated, 1);
+        assert_eq!(second.unchanged, 1);
+        assert_eq!(second.copied, 0);
+    }
+
+    #[test]
     fn removal_only_with_confirmation() {
         let fx = fixture(3);
         // First sync all three.
@@ -386,12 +441,12 @@ mod tests {
         };
 
         // Without confirmation, the third file stays and remains tracked.
-        let kept = sync(&shrink(false), &mut |_| {}, &|| false).expect("sync");
+        let kept = sync(&prepared(&shrink(false)), &mut |_| {}, &|| false).expect("sync");
         assert_eq!(kept.removed, 0);
         assert_eq!(kept.manifest.len(), 3);
 
         // With confirmation, the stale file is removed.
-        let removed = sync(&shrink(true), &mut |_| {}, &|| false).expect("sync");
+        let removed = sync(&prepared(&shrink(true)), &mut |_| {}, &|| false).expect("sync");
         assert_eq!(removed.removed, 1);
         assert_eq!(removed.manifest.len(), 2);
     }
@@ -437,7 +492,7 @@ mod tests {
         symlink(host.path(), fx.dest.path().join("Music/Artist 2")).expect("artist symlink");
 
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        assert!(sync(&req, &mut |_| {}, &|| false).is_err());
+        assert!(sync(&prepared(&req), &mut |_| {}, &|| false).is_err());
         assert_eq!(
             std::fs::read_dir(host.path())
                 .expect("read host dir")
@@ -459,7 +514,7 @@ mod tests {
         symlink(host.path(), album.join("01 Title 1.mp3")).expect("track symlink");
 
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        assert!(sync(&req, &mut |_| {}, &|| false).is_err());
+        assert!(sync(&prepared(&req), &mut |_| {}, &|| false).is_err());
         assert_eq!(
             std::fs::read_to_string(host.path()).expect("read host file"),
             "host-data"
@@ -480,7 +535,7 @@ mod tests {
         ];
         for (track, (genre, size)) in fx.tracks.iter_mut().zip(specs) {
             track.genre = genre.map(str::to_owned);
-            track.file_size = size;
+            track.source.stat.size_bytes = size;
         }
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
         let plan = plan(&req).expect("plan");
@@ -521,7 +576,7 @@ mod tests {
             export_date: "2026-01-01".into(),
         };
         assert!(matches!(
-            sync(&req, &mut |_| {}, &|| false),
+            sync(&prepared(&req), &mut |_| {}, &|| false),
             Err(SyncError::Empty)
         ));
     }

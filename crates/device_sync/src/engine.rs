@@ -14,7 +14,8 @@ use sustain_pioneer::path_hash;
 use crate::device_root::DeviceRoot;
 use crate::layout;
 use crate::model::{
-    GenreBytes, Placement, SyncError, SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage,
+    GenreBytes, Placement, PreparedSyncRequest, SyncError, SyncOutcome, SyncPlan, SyncProgress,
+    SyncRequest, SyncStage,
 };
 
 /// The on-device subtree to write under: the Pioneer format owns the drive
@@ -101,11 +102,11 @@ pub fn plan(req: &SyncRequest) -> Result<SyncPlan, SyncError> {
     let bytes_to_copy = diff
         .to_write
         .iter()
-        .map(|&i| req.tracks[placements[i].track_index].file_size)
+        .map(|&i| req.tracks[placements[i].track_index].source.stat.size_bytes)
         .sum();
     let bytes_total = placements
         .iter()
-        .map(|p| req.tracks[p.track_index].file_size)
+        .map(|p| req.tracks[p.track_index].source.stat.size_bytes)
         .sum();
     let genre_bytes = genre_breakdown(req, &placements);
     Ok(SyncPlan {
@@ -135,7 +136,7 @@ fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreByte
             .map(str::trim)
             .filter(|g| !g.is_empty())
             .map(str::to_owned);
-        *by_genre.entry(genre).or_default() += track.file_size;
+        *by_genre.entry(genre).or_default() += track.source.stat.size_bytes;
     }
     let mut breakdown: Vec<GenreBytes> = by_genre
         .into_iter()
@@ -150,7 +151,7 @@ fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreByte
 /// without corrupting the device (the manifest returned reflects exactly
 /// what is on the device at the stopping point).
 pub fn sync(
-    req: &SyncRequest,
+    req: &PreparedSyncRequest,
     progress: &mut dyn FnMut(SyncProgress),
     cancel: &dyn Fn() -> bool,
 ) -> Result<SyncOutcome, SyncError> {
@@ -191,8 +192,8 @@ pub fn sync(
         let placement = &placements[placement_index];
         let track = &req.tracks[placement.track_index];
         let dest = base.join(&placement.rel_path);
-        root.copy_file(&track.source_path, &dest)
-            .map_err(|error| SyncError::io(dest.as_str(), error))?;
+        root.copy_file(&track.source_path, &dest, &track.source.stat)
+            .map_err(|error| SyncError::io(&track.source_path, error))?;
 
         let is_update = req
             .previous_manifest
@@ -271,7 +272,7 @@ pub fn sync(
     Ok(outcome)
 }
 
-fn manifest_entry(req: &SyncRequest, placement: &Placement) -> SyncManifestEntry {
+fn manifest_entry(req: &PreparedSyncRequest, placement: &Placement) -> SyncManifestEntry {
     SyncManifestEntry {
         track_id: req.tracks[placement.track_index].track_id,
         on_device_path: placement.rel_path.clone(),

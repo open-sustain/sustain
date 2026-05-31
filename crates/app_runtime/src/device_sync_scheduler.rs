@@ -18,8 +18,12 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use sustain_device_sync::{SyncOutcome, SyncProgress, SyncRequest, engine};
+use sustain_device_sync::{
+    PreparedSyncRequest, SourceSnapshot, SyncOutcome, SyncProgress, SyncRequest, engine,
+    resolve_source_fingerprint,
+};
 use sustain_domain::SyncDeviceId;
+use sustain_library_store::LibraryStore;
 
 /// An event published by the sync worker.
 #[derive(Debug)]
@@ -85,7 +89,12 @@ impl DeviceSyncScheduler {
     /// Spawn a sync on a background thread. Returns `false` when a sync
     /// is already running (the request is dropped — only one device
     /// syncs at a time).
-    pub fn start(&self, device_id: SyncDeviceId, request: SyncRequest) -> bool {
+    pub fn start(
+        &self,
+        device_id: SyncDeviceId,
+        request: SyncRequest,
+        library_store: Arc<dyn LibraryStore>,
+    ) -> bool {
         if self
             .is_syncing
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -103,8 +112,9 @@ impl DeviceSyncScheduler {
                 let _ = progress_sender.send_blocking(DeviceSyncEvent::Progress(progress));
             };
             let cancelled = || cancel.load(Ordering::Acquire);
-            let result =
-                engine::sync(&request, &mut on_progress, &cancelled).map_err(|e| e.to_string());
+            let result = prepare_sync_request(request, library_store.as_ref())
+                .and_then(|request| engine::sync(&request, &mut on_progress, &cancelled))
+                .map_err(|e| e.to_string());
             flag.store(false, Ordering::Release);
             let _ = sender.send_blocking(DeviceSyncEvent::Finished(DeviceSyncCompletion {
                 device_id,
@@ -113,6 +123,24 @@ impl DeviceSyncScheduler {
         });
         true
     }
+}
+
+fn prepare_sync_request(
+    mut request: SyncRequest,
+    library_store: &dyn LibraryStore,
+) -> Result<PreparedSyncRequest, sustain_device_sync::SyncError> {
+    for track in &mut request.tracks {
+        let cached = library_store
+            .source_fingerprint(track.track_id)
+            .map_err(|error| sustain_device_sync::SyncError::Preparation(format!("{error:?}")))?;
+        let fingerprint = resolve_source_fingerprint(&track.source_path, cached.as_ref())
+            .map_err(|error| sustain_device_sync::SyncError::io(&track.source_path, error))?;
+        library_store
+            .save_source_fingerprint(track.track_id, &fingerprint)
+            .map_err(|error| sustain_device_sync::SyncError::Preparation(format!("{error:?}")))?;
+        track.source = SourceSnapshot::resolved(fingerprint);
+    }
+    PreparedSyncRequest::new(request)
 }
 
 impl Default for DeviceSyncScheduler {

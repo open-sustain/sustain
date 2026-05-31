@@ -21,6 +21,7 @@ mod online;
 mod playlists;
 mod smart_playlists;
 mod smart_shuffle;
+mod source_fingerprints;
 mod synced_lyrics;
 mod tag_mirror;
 mod tracks;
@@ -439,6 +440,25 @@ impl LibraryStore for SqliteLibraryStore {
     fn clear_smart_shuffle_index(&self) -> StoreResult<()> {
         let connection = self.connection_guard()?;
         smart_shuffle::clear_smart_shuffle_index(&connection)
+    }
+
+    fn source_fingerprint(&self, track_id: TrackId) -> StoreResult<Option<SourceFingerprint>> {
+        let connection = self.connection_guard()?;
+        source_fingerprints::source_fingerprint(&connection, track_id)
+    }
+
+    fn save_source_fingerprint(
+        &self,
+        track_id: TrackId,
+        fingerprint: &SourceFingerprint,
+    ) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        source_fingerprints::save_source_fingerprint(&connection, track_id, fingerprint)
+    }
+
+    fn invalidate_source_fingerprint(&self, track_id: TrackId) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        source_fingerprints::invalidate_source_fingerprint(&connection, track_id)
     }
 
     fn save_sync_device(&self, device: &SyncDevice) -> StoreResult<()> {

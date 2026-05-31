@@ -423,29 +423,44 @@ fn mirror_one(
     }
     let root = library_path.ok_or_else(|| "the library path is unavailable".to_owned())?;
     let path = root.join(track.location.relative_path.as_path());
-    if pending.kinds.metadata {
-        metadata_service
-            .write_metadata(&path, full_metadata_mirror(&track.metadata))
-            .map_err(metadata_error)?;
+    let mut replaced_file = false;
+    let outcome = (|| {
+        if pending.kinds.metadata {
+            metadata_service
+                .write_metadata(&path, full_metadata_mirror(&track.metadata))
+                .map_err(metadata_error)?;
+            replaced_file = true;
+        }
+        if pending.kinds.rating {
+            metadata_service
+                .write_rating(&path, track.rating)
+                .map_err(metadata_error)?;
+            replaced_file = true;
+        }
+        if pending.kinds.artwork {
+            let artwork = match &pending.artwork {
+                TagMirrorArtwork::Unchanged => {
+                    return Err("artwork mirror intent is incomplete".to_owned());
+                }
+                TagMirrorArtwork::Clear => None,
+                TagMirrorArtwork::Set(artwork) => Some(read_artwork(library_store, artwork)?),
+            };
+            metadata_service
+                .write_artwork(&path, artwork)
+                .map_err(metadata_error)?;
+            replaced_file = true;
+        }
+        Ok(())
+    })();
+    if replaced_file {
+        // The outbox writes replace audio-file bytes atomically. Invalidate
+        // even when a later coalesced write fails: a SHA-256 cached before the
+        // first successful replacement no longer describes the live source.
+        library_store
+            .invalidate_source_fingerprint(pending.track_id)
+            .map_err(store_error)?;
     }
-    if pending.kinds.rating {
-        metadata_service
-            .write_rating(&path, track.rating)
-            .map_err(metadata_error)?;
-    }
-    if pending.kinds.artwork {
-        let artwork = match &pending.artwork {
-            TagMirrorArtwork::Unchanged => {
-                return Err("artwork mirror intent is incomplete".to_owned());
-            }
-            TagMirrorArtwork::Clear => None,
-            TagMirrorArtwork::Set(artwork) => Some(read_artwork(library_store, artwork)?),
-        };
-        metadata_service
-            .write_artwork(&path, artwork)
-            .map_err(metadata_error)?;
-    }
-    Ok(())
+    outcome
 }
 
 fn read_artwork(
@@ -631,6 +646,76 @@ mod tests {
         drop(writes);
 
         writer.shutdown();
+        std::fs::remove_dir_all(root).expect("remove library root");
+    }
+
+    #[test]
+    fn a_successful_tag_mirror_invalidates_the_source_fingerprint_cache() {
+        use sustain_domain::TrackContentHash;
+        use sustain_library_store::{SourceFileStat, SourceFingerprint};
+
+        let root = unique_test_directory();
+        std::fs::create_dir_all(&root).expect("create library root");
+        std::fs::write(root.join("track.flac"), b"audio").expect("write track");
+
+        let track_id = TrackId::new(1).expect("track id");
+        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        store
+            .save_track(Track {
+                id: track_id,
+                location: TrackLocation::available(
+                    TrackRelativePath::new("track.flac").expect("relative path"),
+                ),
+                metadata: TrackMetadata::default(),
+                rating: Rating::new(4).expect("rating"),
+                statistics: Default::default(),
+                file_size_bytes: None,
+                has_embedded_artwork: None,
+            })
+            .expect("save track");
+
+        // A prior device sync cached this source's SHA-256.
+        let fingerprint = SourceFingerprint {
+            stat: SourceFileStat {
+                device: 1,
+                inode: 2,
+                size_bytes: 5,
+                modified_at_ns: 0,
+                changed_at_ns: 0,
+            },
+            content_hash: TrackContentHash::new("a".repeat(64)).expect("hash"),
+        };
+        store
+            .save_source_fingerprint(track_id, &fingerprint)
+            .expect("seed fingerprint cache");
+
+        // #100: mirroring a rating rewrites the file bytes, so the cached hash
+        // no longer describes the live source and must be dropped — otherwise
+        // the next sync would keep the stale on-device copy.
+        let service = RecordingMetadataService::default();
+        let pending = PendingTagMirror {
+            track_id,
+            generation: 1,
+            kinds: TagMirrorKinds {
+                metadata: false,
+                rating: true,
+                artwork: false,
+            },
+            artwork: TagMirrorArtwork::Unchanged,
+            attempt_count: 0,
+            next_attempt_at_unix: 0,
+            last_error: None,
+        };
+        mirror_one(&service, store.as_ref(), Some(&root), &pending).expect("mirror succeeds");
+
+        assert!(
+            store
+                .source_fingerprint(track_id)
+                .expect("query cache")
+                .is_none(),
+            "a tag rewrite must drop the stale source fingerprint"
+        );
+
         std::fs::remove_dir_all(root).expect("remove library root");
     }
 

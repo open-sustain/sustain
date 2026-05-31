@@ -22,10 +22,10 @@ use sustain_domain::{
 };
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, InMemoryLibraryStore, LibraryStore,
-    OnlineCapabilities, OnlineContext, PendingTagMirror, PlaylistFolder, SqliteLibraryStore,
-    StoreError, StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork,
-    StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork,
-    TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
+    OnlineCapabilities, OnlineContext, PendingTagMirror, PlaylistFolder, SourceFingerprint,
+    SqliteLibraryStore, StoreError, StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics,
+    StoredTagMirrorArtwork, StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry,
+    SyncedLyrics, TagMirrorArtwork, TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
 };
 use sustain_metadata::{
     InitialTags, LibraryScan, MetadataChange, MetadataError, MetadataResult, ScannedTrack,
@@ -5624,6 +5624,22 @@ impl LibraryStore for CallCountingLibraryStore {
 
     fn clear_smart_shuffle_index(&self) -> StoreResult<()> {
         self.inner.clear_smart_shuffle_index()
+    }
+
+    fn source_fingerprint(&self, track_id: TrackId) -> StoreResult<Option<SourceFingerprint>> {
+        self.inner.source_fingerprint(track_id)
+    }
+
+    fn save_source_fingerprint(
+        &self,
+        track_id: TrackId,
+        fingerprint: &SourceFingerprint,
+    ) -> StoreResult<()> {
+        self.inner.save_source_fingerprint(track_id, fingerprint)
+    }
+
+    fn invalidate_source_fingerprint(&self, track_id: TrackId) -> StoreResult<()> {
+        self.inner.invalidate_source_fingerprint(track_id)
     }
 
     fn save_sync_device(&self, device: &SyncDevice) -> StoreResult<()> {

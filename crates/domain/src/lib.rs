@@ -73,7 +73,10 @@ pub use smart_playlist_defaults::default_smart_playlists;
 pub use smart_playlist_evaluation::{matching_tracks, track_matches_rule, track_matches_rule_set};
 pub use statistics::PlayStatistics;
 pub use synced_lyrics::{SyncedLyrics, SyncedLyricsLine};
-pub use track::{Track, TrackAvailability, TrackContentHash, TrackLocation, TrackRelativePath};
+pub use track::{
+    SourceFileStat, SourceFingerprint, Track, TrackAvailability, TrackContentHash, TrackLocation,
+    TrackRelativePath,
+};
 pub use track_column_layout::{TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope};
 pub use waveform::{
     BeatGrid, DETAIL_SEGMENTS_PER_SECOND, PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment,

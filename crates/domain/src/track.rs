@@ -9,12 +9,10 @@ use crate::{PlayStatistics, Rating, TrackId, TrackMetadata};
 pub struct Track {
     pub id: TrackId,
     pub location: TrackLocation,
-    // No stored content hash. A persisted SHA-256 went stale on every
-    // in-place tag/rating/artwork/enrichment write and was absent for
-    // scan-imported tracks, so nothing could trust it. Import now hashes
-    // bytes on disk transiently — for dedup and copy verification — and
-    // keeps no column. Reintroduce a *maintained* one only if a
-    // content-identity feature (#9/#26/#47) needs it. Removed in #72.
+    // No authoritative stored content hash. Device sync maintains a
+    // disposable derived cache keyed by the complete live source-stat tuple;
+    // the Track row itself remains SQLite library metadata, not a filesystem
+    // cache. Import hashes bytes transiently for dedup and copy verification.
     pub metadata: TrackMetadata,
     pub rating: Rating,
     pub statistics: PlayStatistics,
@@ -40,12 +38,30 @@ pub struct TrackLocation {
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TrackRelativePath(PathBuf);
 
-/// A file content hash (lower-case hex SHA-256). Computed from a file's
-/// bytes during import and used transiently to dedup against the library
-/// and to verify a managed copy matches its source; it is never persisted
-/// (see #72).
+/// A file content hash (lower-case hex SHA-256). Import uses it transiently to
+/// dedup and verify managed copies. Device sync may persist it only inside a
+/// disposable derived cache tied to a complete [`SourceFileStat`] tuple.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TrackContentHash(String);
+
+/// Linux source-file identity and change-detection tuple captured from one
+/// `stat(2)` result. Device export reuses a cached SHA-256 only when every
+/// field still matches the live source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceFileStat {
+    pub device: u64,
+    pub inode: u64,
+    pub size_bytes: u64,
+    pub modified_at_ns: i64,
+    pub changed_at_ns: i64,
+}
+
+/// A SHA-256 proven for one exact live source-stat tuple.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceFingerprint {
+    pub stat: SourceFileStat,
+    pub content_hash: TrackContentHash,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum TrackAvailability {

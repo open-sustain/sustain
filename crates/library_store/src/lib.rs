@@ -17,6 +17,7 @@ pub use sustain_domain::{
     SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track, TrackAnalysis, TrackColumnEntry,
     TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackLocation, WaveformSegments,
 };
+pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 
 mod memory;
 mod query;
@@ -504,6 +505,19 @@ pub trait LibraryStore: Send + Sync {
     fn clear_smart_shuffle_index(&self) -> StoreResult<()>;
 
     // --- Device sync (#23 / #24) ---
+
+    /// Load the disposable SHA-256 cache entry for a source track.
+    fn source_fingerprint(&self, track_id: TrackId) -> StoreResult<Option<SourceFingerprint>>;
+
+    /// Replace the disposable SHA-256 cache entry for a source track.
+    fn save_source_fingerprint(
+        &self,
+        track_id: TrackId,
+        fingerprint: &SourceFingerprint,
+    ) -> StoreResult<()>;
+
+    /// Drop a disposable source SHA-256 after Sustain replaces file bytes.
+    fn invalidate_source_fingerprint(&self, track_id: TrackId) -> StoreResult<()>;
 
     /// Insert or update a device's saved configuration, keyed by its
     /// Sustain device id.

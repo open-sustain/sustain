@@ -16,7 +16,8 @@ use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
 use sustain_device_sync::{
-    ConnectedDevice, SyncInputPlaylist, SyncInputTrack, SyncPlan, SyncRequest, engine,
+    ConnectedDevice, SourceSnapshot, SyncInputPlaylist, SyncInputTrack, SyncPlan, SyncRequest,
+    engine, source_file_stat,
 };
 use sustain_domain::{
     DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MusicalKey, PlaylistItem, SyncDevice,
@@ -375,7 +376,11 @@ impl ApplicationRuntime {
             true,
         );
         self.device_sync_notification_id = Some(notification);
-        self.device_sync_scheduler.start(id, request);
+        let library_store = self
+            .library_store
+            .clone()
+            .ok_or(ApplicationRuntimeError::LibraryStoreFailed)?;
+        self.device_sync_scheduler.start(id, request, library_store);
         Ok(())
     }
 
@@ -499,7 +504,12 @@ impl ApplicationRuntime {
                         } else {
                             None
                         };
-                        let input = sync_input_track(track, source_path, preview_detail, cover_art);
+                        let Some(source) = source_snapshot(store.as_ref(), track.id, &source_path)?
+                        else {
+                            continue;
+                        };
+                        let input =
+                            sync_input_track(track, source_path, source, preview_detail, cover_art);
                         let position = tracks.len();
                         tracks.push(input);
                         index_of.insert(tid, position);
@@ -560,6 +570,7 @@ impl ApplicationRuntime {
 fn sync_input_track(
     track: &Track,
     source_path: PathBuf,
+    source: SourceSnapshot,
     waveform: Option<sustain_library_store::StoredWaveform>,
     cover_art: Option<Vec<u8>>,
 ) -> SyncInputTrack {
@@ -569,13 +580,6 @@ fn sync_input_track(
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    // Staleness fingerprint for the incremental differ. Size-based:
-    // Sustain persists no content hash (#72), and re-hashing every file
-    // on every diff would be needlessly expensive. File size changes
-    // whenever the file is re-encoded, which is the case worth re-copying
-    // for; same-size tag edits are not detected, matching the rest of the
-    // model.
-    let fingerprint = format!("size:{}", track.file_size_bytes.unwrap_or(0));
     let (waveform_preview, waveform_detail) = match waveform {
         Some(stored) => (Some(stored.preview), Some(stored.detail)),
         None => (None, None),
@@ -599,7 +603,7 @@ fn sync_input_track(
         bitrate_kbps: metadata.bitrate_kbps,
         sample_rate_hz: metadata.sample_rate_hz.unwrap_or(44_100),
         bit_depth: 16,
-        file_size: track.file_size_bytes.unwrap_or(0),
+        source,
         date_added: track.statistics.date_added_at.map(|t| {
             unix_to_ymd(
                 t.duration_since(UNIX_EPOCH)
@@ -608,11 +612,31 @@ fn sync_input_track(
             )
         }),
         extension,
-        fingerprint,
         waveform_preview,
         waveform_detail,
         cover_art,
     }
+}
+
+/// Observe a source for the request. `Ok(None)` means the file could not be
+/// stat'd — it vanished after the library marked it available, so the caller
+/// skips it exactly like an `is_missing()` track rather than failing the whole
+/// plan/sync. A store error is a genuine infrastructure failure and aborts.
+fn source_snapshot(
+    store: &dyn sustain_library_store::LibraryStore,
+    track_id: sustain_domain::TrackId,
+    source_path: &std::path::Path,
+) -> ApplicationRuntimeResult<Option<SourceSnapshot>> {
+    let Ok(stat) = source_file_stat(source_path) else {
+        return Ok(None);
+    };
+    let cached = store
+        .source_fingerprint(track_id)
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+    Ok(Some(match cached {
+        Some(fingerprint) if fingerprint.stat == stat => SourceSnapshot::resolved(fingerprint),
+        _ => SourceSnapshot::provisional(stat),
+    }))
 }
 
 /// Format a Unix timestamp (seconds) as `YYYY-MM-DD` in UTC, without a

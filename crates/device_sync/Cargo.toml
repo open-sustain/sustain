@@ -19,6 +19,8 @@ sustain-pioneer = { path = "../pioneer" }
 # Root-confined removable-media writes: safe openat/mkdirat/renameat/unlinkat
 # wrappers let the sync engine anchor every operation to one mount-root fd.
 rustix = { version = "1.1.4", features = ["fs"] }
+# Stable source-content fingerprints for incremental export manifests.
+sha2 = "0.11.0"
 
 [dev-dependencies]
 # Scratch device roots for the writer/diff tests.

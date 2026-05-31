@@ -24,7 +24,9 @@ use rustix::{
     },
     io::{Errno, dup},
 };
-use sustain_domain::DeviceRelativePath;
+use sustain_domain::{DeviceRelativePath, SourceFileStat};
+
+use crate::source::ensure_source_unchanged;
 
 const DIRECTORY_MODE: Mode = Mode::RUSR
     .union(Mode::WUSR)
@@ -110,9 +112,18 @@ impl DeviceRoot {
         self.publish_file(path, |file| file.write_all(bytes))
     }
 
-    pub(crate) fn copy_file(&self, source: &Path, path: &DeviceRelativePath) -> io::Result<()> {
-        let mut source = File::open(source)?;
-        self.publish_file(path, |target| io::copy(&mut source, target).map(|_| ()))
+    pub(crate) fn copy_file(
+        &self,
+        source_path: &Path,
+        path: &DeviceRelativePath,
+        expected: &SourceFileStat,
+    ) -> io::Result<()> {
+        let mut source = File::open(source_path)?;
+        ensure_source_unchanged(source_path, &source, expected)?;
+        self.publish_file(path, |target| {
+            io::copy(&mut source, target)?;
+            ensure_source_unchanged(source_path, &source, expected)
+        })
     }
 
     pub(crate) fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
@@ -322,5 +333,28 @@ mod tests {
             "host-data"
         );
         assert!(tree.join("host-link").exists());
+    }
+
+    #[test]
+    fn copy_file_rejects_a_source_that_changed_since_it_was_observed() {
+        // #100: the engine stats a source, then asks the device root to copy
+        // it. If the bytes change in between, the publish guard must refuse
+        // and leave no destination behind. This exercises the same
+        // `ensure_source_unchanged` check that also runs after the copy body
+        // to catch a mutation racing the read.
+        let device = tempfile::tempdir().expect("device dir");
+        let source = tempfile::NamedTempFile::new().expect("source file");
+        std::fs::write(source.path(), b"observed-bytes").expect("seed source");
+        let observed = crate::source::source_file_stat(source.path()).expect("stat source");
+
+        std::fs::write(source.path(), b"different-bytes-entirely").expect("mutate source");
+
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let dest = DeviceRelativePath::new("Music/track.mp3").expect("safe path");
+        assert!(root.copy_file(source.path(), &dest, &observed).is_err());
+        assert!(
+            !device.path().join("Music/track.mp3").exists(),
+            "no partial destination is published when the source changed"
+        );
     }
 }

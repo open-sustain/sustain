@@ -158,7 +158,7 @@ fn tree_placements(req: &SyncRequest, root_dir: &str) -> Result<Vec<Placement>, 
             track_index: index,
             rel_path: DeviceRelativePath::new(rel)
                 .ok_or_else(|| SyncError::planning("generated an unsafe tree placement"))?,
-            fingerprint: track.fingerprint.clone(),
+            fingerprint: track.source.fingerprint_token(),
         });
     }
     Ok(placements)
@@ -241,7 +241,7 @@ fn folder_placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
                 rel_path: DeviceRelativePath::new(rel).ok_or_else(|| {
                     SyncError::planning("generated an unsafe folder-per-playlist placement")
                 })?,
-                fingerprint: track.fingerprint.clone(),
+                fingerprint: track.source.fingerprint_token(),
             });
         }
     }
@@ -382,7 +382,7 @@ fn write_pioneer(
             bpm: track.bpm,
             key: track.key,
             duration_secs: track.duration_ms / 1000,
-            file_size: track.file_size,
+            file_size: track.source.stat.size_bytes,
             track_number: track.track_number,
             year: track.year,
             rating: track.rating,

@@ -12,10 +12,10 @@ use sustain_domain::TrackAnalysis;
 use crate::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, LibraryStore, OnlineCapabilities,
     OnlineContext, PendingTagMirror, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId,
-    PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, StoreError, StoreResult,
-    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
-    SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, TagMirrorKinds,
-    Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackLocation,
+    PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, SourceFingerprint, StoreError,
+    StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork,
+    StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork,
+    TagMirrorKinds, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackLocation,
     tag_mirror::sha256_hex,
 };
 
@@ -35,6 +35,7 @@ pub struct InMemoryLibraryStore {
     tag_mirror_outbox: Mutex<BTreeMap<TrackId, PendingTagMirror>>,
     tag_mirror_blobs: Mutex<BTreeMap<String, Vec<u8>>>,
     smart_shuffle_index: Mutex<Option<StoredSmartShuffleIndex>>,
+    source_fingerprints: Mutex<BTreeMap<TrackId, SourceFingerprint>>,
     acoustics: Mutex<BTreeMap<TrackId, AcousticFeatures>>,
     sync_devices: Mutex<BTreeMap<SyncDeviceId, SyncDevice>>,
     device_selections: Mutex<BTreeMap<SyncDeviceId, Vec<PlaylistItem>>>,
@@ -350,6 +351,10 @@ impl LibraryStore for InMemoryLibraryStore {
         tracks.remove(&track_id);
         drop(tracks);
         self.tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .remove(&track_id);
+        self.source_fingerprints
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?
             .remove(&track_id);
@@ -1074,6 +1079,35 @@ impl LibraryStore for InMemoryLibraryStore {
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?
             .insert(device.id.clone(), device.clone());
+        Ok(())
+    }
+
+    fn source_fingerprint(&self, track_id: TrackId) -> StoreResult<Option<SourceFingerprint>> {
+        Ok(self
+            .source_fingerprints
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .get(&track_id)
+            .cloned())
+    }
+
+    fn save_source_fingerprint(
+        &self,
+        track_id: TrackId,
+        fingerprint: &SourceFingerprint,
+    ) -> StoreResult<()> {
+        self.source_fingerprints
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .insert(track_id, fingerprint.clone());
+        Ok(())
+    }
+
+    fn invalidate_source_fingerprint(&self, track_id: TrackId) -> StoreResult<()> {
+        self.source_fingerprints
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .remove(&track_id);
         Ok(())
     }
 

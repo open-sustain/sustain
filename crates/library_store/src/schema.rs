@@ -276,6 +276,22 @@ CREATE TABLE IF NOT EXISTS tag_mirror_outbox (
     )
 );
 
+-- Disposable source-content hash cache for incremental device export (#100).
+-- Keyed by track, never authoritative: a cached SHA-256 is trusted only while
+-- every stat(2) field still matches the live source, and Sustain's own
+-- tag/rating/artwork rewrites drop the row so the next sync re-hashes and
+-- re-copies. Safe to wipe and rebuild at any time.
+CREATE TABLE IF NOT EXISTS source_fingerprint_cache (
+    track_id       INTEGER PRIMARY KEY,
+    device         INTEGER NOT NULL,
+    inode          INTEGER NOT NULL,
+    size_bytes     INTEGER NOT NULL,
+    modified_at_ns INTEGER NOT NULL,
+    changed_at_ns  INTEGER NOT NULL,
+    sha256         TEXT NOT NULL,
+    FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+);
+
 -- Device sync (#23/#24). Sustain owns the per-device configuration and
 -- the saved playlist selection (the device only carries the files), all
 -- keyed by the stable Sustain device id stored in the device's
