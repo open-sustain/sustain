@@ -148,10 +148,12 @@ fn wait_for_metadata_write(metadata: &StubMetadata) {
 #[derive(Default)]
 struct StubRemote {
     identify: Mutex<Option<RemoteResult<Option<TrackMatch>>>>,
+    enrich: Mutex<Option<RemoteResult<TrackMatch>>>,
     lyrics: Mutex<Option<RemoteResult<Option<FetchedLyrics>>>>,
     artwork: Mutex<Option<RemoteResult<Option<FetchedArtwork>>>>,
     artwork_for_match: Mutex<Option<RemoteResult<Option<FetchedArtwork>>>>,
     identify_calls: AtomicU32,
+    enrich_calls: AtomicU32,
     lyrics_calls: AtomicU32,
     artwork_calls: AtomicU32,
     artwork_for_match_calls: AtomicU32,
@@ -170,6 +172,10 @@ impl StubRemote {
         *self.identify.lock().expect("lock") = Some(value);
         self
     }
+    fn with_enrich(self, value: RemoteResult<TrackMatch>) -> Self {
+        *self.enrich.lock().expect("lock") = Some(value);
+        self
+    }
     fn with_artwork_for_match(self, value: RemoteResult<Option<FetchedArtwork>>) -> Self {
         *self.artwork_for_match.lock().expect("lock") = Some(value);
         self
@@ -184,6 +190,14 @@ impl RemoteMetadataService for StubRemote {
             .expect("lock")
             .clone()
             .unwrap_or(Ok(None))
+    }
+    fn enrich_match(&self, track_match: &TrackMatch) -> RemoteResult<TrackMatch> {
+        self.enrich_calls.fetch_add(1, Ordering::SeqCst);
+        self.enrich
+            .lock()
+            .expect("lock")
+            .clone()
+            .unwrap_or_else(|| Ok(track_match.clone()))
     }
     fn fetch_artwork_for_match(
         &self,
@@ -949,6 +963,147 @@ fn tags_fill_recording_level_fields_when_album_is_missing_but_skip_positional() 
     assert_eq!(remote.artwork_calls.load(Ordering::SeqCst), 0);
 
     scheduler.shutdown();
+}
+
+/// Run a single tags-only enrichment pass over `track` and return the
+/// stored row afterwards. Artwork and lyrics are off so the only network
+/// surface exercised is `identify_track` plus the lazy `enrich_match`.
+/// The caller keeps its own `Arc<StubRemote>` clone to assert on the
+/// call counters.
+fn run_single_track_tags(library_root: &Path, track: Track, remote: Arc<StubRemote>) -> Track {
+    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let track_id = track.id;
+    store.save_track(track).expect("save");
+    let (sink, rx) = capturing_sink();
+    let (_writer, tag_writer) = spawn_tag_writer(
+        Arc::new(StubMetadata::default()),
+        store.clone(),
+        library_root,
+    );
+
+    let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
+        remote_service: remote,
+        tag_writer,
+        library_store: store.clone(),
+        progress: sink,
+        track_updated: None,
+        clock: fixed_clock(1),
+        initial_settings: OnlineSettings {
+            artwork: false,
+            tags: true,
+            lyrics: false,
+        },
+        library_path: Some(library_root.to_path_buf()),
+        provider_version: 1,
+    });
+
+    let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Tick { completed: 1, .. })
+    });
+    let stored = store.track(track_id).expect("load").expect("present");
+    scheduler.shutdown();
+    stored
+}
+
+#[test]
+fn tags_skip_enrichment_when_no_lookup_only_field_is_needed() {
+    // Only the title is missing; year and genre are already present, so
+    // the expensive lookup-by-id (issue #44) must not run.
+    use sustain_metadata_remote::TrackMatchSource;
+
+    let temp = TempDir::new().expect("temp");
+    let mut track = track_with_metadata(temp.path(), "alpha.flac");
+    track.metadata.title = None;
+    track.metadata.year = Some(2001);
+    track.metadata.genre = Some("rock".to_owned());
+
+    let remote = Arc::new(StubRemote::default().with_identify(Ok(Some(TrackMatch {
+        recording_mbid: "rec".to_owned(),
+        title: Some("Matched Title".to_owned()),
+        artist: Some("Matched Artist".to_owned()),
+        first_release_year: Some(1995),
+        genres: Vec::new(),
+        releases: Vec::new(),
+        source: TrackMatchSource::MusicBrainzTags,
+    }))));
+
+    let stored = run_single_track_tags(temp.path(), track, remote.clone());
+
+    assert_eq!(stored.metadata.title.as_deref(), Some("Matched Title"));
+    assert_eq!(stored.metadata.year, Some(2001));
+    assert_eq!(stored.metadata.genre.as_deref(), Some("rock"));
+    assert_eq!(remote.identify_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(remote.enrich_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn tags_enrich_text_search_match_and_use_its_result_when_year_is_needed() {
+    // A text-search match arrives without the lookup-only year; the
+    // scheduler must call enrich_match and write the enriched value.
+    use sustain_metadata_remote::TrackMatchSource;
+
+    let temp = TempDir::new().expect("temp");
+    let mut track = track_with_metadata(temp.path(), "beta.flac");
+    track.metadata.year = None;
+    track.metadata.genre = Some("rock".to_owned());
+
+    let search_match = TrackMatch {
+        recording_mbid: "rec".to_owned(),
+        title: Some("Title".to_owned()),
+        artist: Some("Artist".to_owned()),
+        first_release_year: None,
+        genres: Vec::new(),
+        releases: Vec::new(),
+        source: TrackMatchSource::MusicBrainzTags,
+    };
+    let enriched_match = TrackMatch {
+        first_release_year: Some(1999),
+        ..search_match.clone()
+    };
+    let remote = Arc::new(
+        StubRemote::default()
+            .with_identify(Ok(Some(search_match)))
+            .with_enrich(Ok(enriched_match)),
+    );
+
+    let stored = run_single_track_tags(temp.path(), track, remote.clone());
+
+    assert_eq!(stored.metadata.year, Some(1999));
+    assert_eq!(remote.identify_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(remote.enrich_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn tags_do_not_enrich_acoustid_matches() {
+    // AcoustID matches already carry year and genre from identification's
+    // own lookup, so a second enrich_match must not run even though both
+    // fields are missing on the track.
+    use sustain_metadata_remote::{GenreCandidate, TrackMatchSource};
+
+    let temp = TempDir::new().expect("temp");
+    let mut track = track_with_metadata(temp.path(), "gamma.flac");
+    track.metadata.year = None;
+    track.metadata.genre = None;
+
+    let remote = Arc::new(StubRemote::default().with_identify(Ok(Some(TrackMatch {
+        recording_mbid: "rec".to_owned(),
+        title: Some("Title".to_owned()),
+        artist: Some("Artist".to_owned()),
+        first_release_year: Some(2005),
+        genres: vec![GenreCandidate {
+            name: "jazz".to_owned(),
+            vote_count: 5,
+        }],
+        releases: Vec::new(),
+        source: TrackMatchSource::AcoustIdFingerprint,
+    }))));
+
+    let stored = run_single_track_tags(temp.path(), track, remote.clone());
+
+    assert_eq!(stored.metadata.year, Some(2005));
+    assert_eq!(stored.metadata.genre.as_deref(), Some("jazz"));
+    assert_eq!(remote.identify_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(remote.enrich_calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]

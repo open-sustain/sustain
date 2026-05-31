@@ -188,7 +188,29 @@ pub trait RemoteMetadataService: Send + Sync {
     /// Identify the track described by `query`. Returns `Ok(None)`
     /// when no confident match exists; that is a normal outcome and
     /// the caller treats it like any other "no result".
+    ///
+    /// Identification is deliberately cheap: the text-search path runs a
+    /// single search request and the resulting match carries the title,
+    /// artist, and releases — everything artwork needs — but *not* the
+    /// lookup-only fields (`first_release_year`, `genres`). A caller that
+    /// needs those promotes the match with [`Self::enrich_match`].
     fn identify_track(&self, query: &TrackQuery) -> RemoteResult<Option<TrackMatch>>;
+
+    /// Promote a match to a full record, filling the lookup-only fields
+    /// (`first_release_year`, `genres`) that the cheap text-search path
+    /// does not carry. The default returns the match unchanged —
+    /// appropriate for any provider without a by-id lookup endpoint;
+    /// [`ComposedRemoteMetadataService`] overrides it with a MusicBrainz
+    /// `lookup_recording`.
+    ///
+    /// Callers invoke this only when they actually need those fields and
+    /// the match came from the text-search path
+    /// ([`TrackMatchSource::MusicBrainzTags`]); AcoustID matches are
+    /// already enriched during identification, so the extra request is
+    /// paid only when it pays off.
+    fn enrich_match(&self, track_match: &TrackMatch) -> RemoteResult<TrackMatch> {
+        Ok(track_match.clone())
+    }
 
     /// Fetch artwork for an already-identified match. Returns
     /// `Ok(None)` if Cover Art Archive has no front cover on file
@@ -268,20 +290,15 @@ impl ComposedRemoteMetadataService {
         let Some(best) = pick_best_musicbrainz(results, MUSICBRAINZ_CONFIDENT_SCORE) else {
             return Ok(None);
         };
-        // Search hits ship a partial record: no genres, no
-        // first-release-date. Promote the winner to a full lookup so
-        // tag enrichment sees the same complete entity it would have
-        // gotten through the AcoustID path. If the lookup happens to
-        // 404 (race against an MB merge/delete) we fall back to the
-        // search hit; the caller still gets identification, just
-        // without the lookup-only fields.
-        let detailed = self
-            .musicbrainz
-            .lookup_recording(&best.recording_mbid)?
-            .unwrap_or(best);
-        let detailed = self.enrich_genres_with_fallbacks(detailed)?;
+        // Search hits ship a partial record: title, artist, and releases
+        // (enough for artwork) but no genres and no first-release-date.
+        // We return the match as-is; the lookup-only fields are filled
+        // lazily by `enrich_match`, only when tag enrichment actually
+        // needs them (issue #44). The eager promote-to-full-lookup that
+        // used to live here roughly doubled enrichment wall time per
+        // track even when the data was never used.
         Ok(Some(recording_to_match(
-            detailed,
+            best,
             TrackMatchSource::MusicBrainzTags,
         )))
     }
@@ -397,6 +414,22 @@ impl RemoteMetadataService for ComposedRemoteMetadataService {
             return Ok(Some(track_match));
         }
         self.identify_via_acoustid(query)
+    }
+
+    fn enrich_match(&self, track_match: &TrackMatch) -> RemoteResult<TrackMatch> {
+        // The lookup-by-id endpoint returns the canonical record with the
+        // fields the text-search winner lacks (first-release-date,
+        // curated genres). If it 404s (race against an MB merge/delete)
+        // keep the search-derived match rather than dropping the fields
+        // the caller already has.
+        let Some(detailed) = self
+            .musicbrainz
+            .lookup_recording(&track_match.recording_mbid)?
+        else {
+            return Ok(track_match.clone());
+        };
+        let detailed = self.enrich_genres_with_fallbacks(detailed)?;
+        Ok(recording_to_match(detailed, track_match.source))
     }
 
     fn fetch_artwork_for_match(

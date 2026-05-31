@@ -57,7 +57,7 @@ use sustain_domain::{FieldChange, MetadataChange, OnlineSettings, SyncedLyrics, 
 use sustain_library_store::{LibraryStore, OnlineCapabilities, OnlineContext};
 use sustain_metadata_remote::{
     FetchedArtwork, FetchedLyrics, GenreCandidate, RemoteError, RemoteMetadataService, TrackMatch,
-    TrackMatchRelease, TrackQuery,
+    TrackMatchRelease, TrackMatchSource, TrackQuery,
 };
 
 use crate::artwork_fetcher::query_from_metadata;
@@ -912,6 +912,23 @@ fn attempt_tags(
             return attempt_outcome_for_remote_error(&error);
         }
     };
+
+    // The lookup-only fields (year, genre) are absent from a text-search
+    // match until enriched; promote the match only when one is actually
+    // needed (issue #44). AcoustID matches already carry these fields from
+    // identification, so they never need the second lookup.
+    let matched =
+        if (need_year || need_genre) && matched.source == TrackMatchSource::MusicBrainzTags {
+            match remote_service.enrich_match(&matched) {
+                Ok(enriched) => enriched,
+                Err(error) => {
+                    eprintln!("Sustain: track enrichment failed: {error}");
+                    return attempt_outcome_for_remote_error(&error);
+                }
+            }
+        } else {
+            matched
+        };
 
     let mut change = MetadataChange::default();
 
