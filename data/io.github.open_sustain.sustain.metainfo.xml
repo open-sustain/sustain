@@ -76,6 +76,7 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.0-alpha.3" date="2026-05-31" type="development" />
     <release version="0.3.0-alpha.2" date="2026-05-30" type="development" />
     <release version="0.3.0-alpha.1" date="2026-05-30" type="development" />
     <release version="0.2.0-alpha.1" date="2026-05-30" type="development" />
