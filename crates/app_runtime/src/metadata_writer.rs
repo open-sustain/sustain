@@ -32,6 +32,8 @@ use sustain_library_store::{
 };
 use sustain_metadata::{MetadataError, MetadataService};
 
+use crate::{ApplicationRuntimeError, managed_library::retarget_managed_metadata};
+
 const DRAIN_BATCH_SIZE: usize = 64;
 const MAX_RETRY_DELAY_SECONDS: i64 = 5 * 60;
 const IDLE_WAIT: Duration = Duration::from_secs(60);
@@ -58,18 +60,35 @@ pub struct MetadataWriteResult {
     pub outcome: MetadataWriteOutcome,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedMetadataRetargetResult {
+    pub track_id: TrackId,
+    pub outcome: Result<(), ApplicationRuntimeError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MetadataWriterEvent {
+    Mirror(MetadataWriteResult),
+    ManagedRetarget(ManagedMetadataRetargetResult),
+}
+
 enum MetadataWriterCommand {
     Nudge,
+    RetargetManagedMetadata {
+        track_id: TrackId,
+        change: Box<MetadataChange>,
+    },
     SetLibraryPath(Option<PathBuf>),
     Shutdown,
 }
 
-/// Owns the single file-tag mirror worker. The channel carries wakeups and
-/// configuration changes only; durable work lives in the library store.
+/// Owns the single file-tag mirror worker. The channel carries wakeups,
+/// configuration changes, and serialized managed-retarget requests; durable
+/// mirror work lives in the library store.
 pub(crate) struct MetadataWriter {
     sender: Sender<MetadataWriterCommand>,
     library_store: Arc<dyn LibraryStore>,
-    result_sink: Arc<Mutex<Option<async_channel::Sender<MetadataWriteResult>>>>,
+    result_sink: Arc<Mutex<Option<async_channel::Sender<MetadataWriterEvent>>>>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -78,7 +97,7 @@ impl MetadataWriter {
         metadata_service: Arc<dyn MetadataService>,
         library_store: Arc<dyn LibraryStore>,
         library_path: Option<PathBuf>,
-        result_sink: Option<async_channel::Sender<MetadataWriteResult>>,
+        result_sink: Option<async_channel::Sender<MetadataWriterEvent>>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let result_sink = Arc::new(Mutex::new(result_sink));
@@ -104,7 +123,7 @@ impl MetadataWriter {
         }
     }
 
-    pub(crate) fn set_result_sink(&self, sink: async_channel::Sender<MetadataWriteResult>) {
+    pub(crate) fn set_result_sink(&self, sink: async_channel::Sender<MetadataWriterEvent>) {
         if let Ok(mut slot) = self.result_sink.lock() {
             *slot = Some(sink);
         }
@@ -112,6 +131,19 @@ impl MetadataWriter {
 
     pub(crate) fn nudge(&self) {
         let _ = self.sender.send(MetadataWriterCommand::Nudge);
+    }
+
+    pub(crate) fn retarget_managed_metadata(
+        &self,
+        track_id: TrackId,
+        change: MetadataChange,
+    ) -> bool {
+        self.sender
+            .send(MetadataWriterCommand::RetargetManagedMetadata {
+                track_id,
+                change: Box::new(change),
+            })
+            .is_ok()
     }
 
     pub(crate) fn set_library_path(&self, path: Option<PathBuf>) {
@@ -193,7 +225,7 @@ fn worker_loop(
     metadata_service: Arc<dyn MetadataService>,
     library_store: Arc<dyn LibraryStore>,
     mut library_path: Option<PathBuf>,
-    result_sink: Arc<Mutex<Option<async_channel::Sender<MetadataWriteResult>>>>,
+    result_sink: Arc<Mutex<Option<async_channel::Sender<MetadataWriterEvent>>>>,
 ) {
     let mut active = false;
     let mut cleanup_pending = true;
@@ -219,11 +251,23 @@ fn worker_loop(
         };
         match receiver.recv_timeout(wait) {
             Ok(command) => {
-                if !apply_command(command, &mut library_path, &mut active) {
+                if !apply_command(
+                    command,
+                    library_store.as_ref(),
+                    &mut library_path,
+                    &mut active,
+                    &result_sink,
+                ) {
                     break;
                 }
                 while let Ok(command) = receiver.try_recv() {
-                    if !apply_command(command, &mut library_path, &mut active) {
+                    if !apply_command(
+                        command,
+                        library_store.as_ref(),
+                        &mut library_path,
+                        &mut active,
+                        &result_sink,
+                    ) {
                         return;
                     }
                 }
@@ -238,7 +282,7 @@ pub(crate) fn drain_due_synchronously(
     metadata_service: &dyn MetadataService,
     library_store: &dyn LibraryStore,
     library_path: Option<&PathBuf>,
-    result_sink: Option<&async_channel::Sender<MetadataWriteResult>>,
+    result_sink: Option<&async_channel::Sender<MetadataWriterEvent>>,
 ) {
     let sink = Mutex::new(result_sink.cloned());
     while drain_due_batch(metadata_service, library_store, library_path, &sink) {}
@@ -248,7 +292,7 @@ fn drain_due_batch(
     metadata_service: &dyn MetadataService,
     library_store: &dyn LibraryStore,
     library_path: Option<&PathBuf>,
-    result_sink: &Mutex<Option<async_channel::Sender<MetadataWriteResult>>>,
+    result_sink: &Mutex<Option<async_channel::Sender<MetadataWriterEvent>>>,
 ) -> bool {
     let now_unix = unix_now();
     let pending = match library_store.tag_mirrors_due(now_unix, DRAIN_BATCH_SIZE) {
@@ -314,11 +358,30 @@ fn drain_due_batch(
 
 fn apply_command(
     command: MetadataWriterCommand,
+    library_store: &dyn LibraryStore,
     library_path: &mut Option<PathBuf>,
     active: &mut bool,
+    result_sink: &Mutex<Option<async_channel::Sender<MetadataWriterEvent>>>,
 ) -> bool {
     match command {
         MetadataWriterCommand::Nudge => {
+            *active = true;
+            true
+        }
+        MetadataWriterCommand::RetargetManagedMetadata { track_id, change } => {
+            let outcome = library_path
+                .as_deref()
+                .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)
+                .and_then(|library_path| {
+                    retarget_managed_metadata(library_path, library_store, track_id, &change)
+                });
+            emit_event(
+                result_sink,
+                MetadataWriterEvent::ManagedRetarget(ManagedMetadataRetargetResult {
+                    track_id,
+                    outcome,
+                }),
+            );
             *active = true;
             true
         }
@@ -441,13 +504,20 @@ fn unix_now() -> i64 {
 }
 
 fn emit_result(
-    result_sink: &Mutex<Option<async_channel::Sender<MetadataWriteResult>>>,
+    result_sink: &Mutex<Option<async_channel::Sender<MetadataWriterEvent>>>,
     result: MetadataWriteResult,
+) {
+    emit_event(result_sink, MetadataWriterEvent::Mirror(result));
+}
+
+fn emit_event(
+    result_sink: &Mutex<Option<async_channel::Sender<MetadataWriterEvent>>>,
+    event: MetadataWriterEvent,
 ) {
     if let Ok(sink) = result_sink.lock()
         && let Some(sink) = sink.as_ref()
     {
-        let _ = sink.try_send(result);
+        let _ = sink.try_send(event);
     }
 }
 
@@ -548,16 +618,220 @@ mod tests {
         std::fs::remove_dir_all(root).expect("remove library root");
     }
 
+    #[test]
+    fn managed_retarget_coalesces_pending_mirrors_and_resolves_the_new_path() {
+        let root = unique_test_directory();
+        std::fs::create_dir_all(&root).expect("create library root");
+        std::fs::write(root.join("loose.flac"), b"audio").expect("write track");
+
+        let track_id = TrackId::new(1).expect("track id");
+        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        store
+            .save_track(Track {
+                id: track_id,
+                location: TrackLocation::available(
+                    TrackRelativePath::new("loose.flac").expect("relative path"),
+                ),
+                metadata: TrackMetadata {
+                    title: Some("Old".to_owned()),
+                    ..TrackMetadata::default()
+                },
+                rating: Rating::unrated(),
+                statistics: Default::default(),
+                file_size_bytes: None,
+                has_embedded_artwork: None,
+            })
+            .expect("save track");
+        let rating = Rating::new(4).expect("rating");
+        store
+            .update_track_rating_and_enqueue_mirror(track_id, rating)
+            .expect("queue rating");
+        let artwork = valid_artwork();
+        let published_artwork = store
+            .publish_tag_mirror_artwork(&artwork)
+            .expect("publish artwork");
+        store
+            .enqueue_tag_mirror_artwork(track_id, TagMirrorArtwork::Set(published_artwork))
+            .expect("queue artwork");
+
+        let service = Arc::new(RecordingMetadataService::default());
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let writer = MetadataWriter::start(
+            service.clone(),
+            store.clone(),
+            Some(root.clone()),
+            Some(event_tx),
+        );
+        assert!(writer.retarget_managed_metadata(
+            track_id,
+            MetadataChange {
+                title: FieldChange::Set("Song".to_owned()),
+                artist: FieldChange::Set("Artist".to_owned()),
+                album: FieldChange::Set("Album".to_owned()),
+                track_number: FieldChange::Set(1),
+                ..MetadataChange::default()
+            },
+        ));
+
+        let first = recv_event(&event_rx, Duration::from_secs(2));
+        assert_eq!(
+            first,
+            MetadataWriterEvent::ManagedRetarget(ManagedMetadataRetargetResult {
+                track_id,
+                outcome: Ok(()),
+            })
+        );
+        assert_eq!(
+            recv_event(&event_rx, Duration::from_secs(2)),
+            MetadataWriterEvent::Mirror(MetadataWriteResult {
+                track_id,
+                kind: MetadataWriteKind::Artwork,
+                outcome: MetadataWriteOutcome::Succeeded,
+            })
+        );
+
+        let destination = root.join("Artist/Album/01 Song.flac");
+        assert!(!root.join("loose.flac").exists());
+        assert!(destination.exists());
+        let stored = store.track(track_id).expect("load track").expect("track");
+        assert_eq!(
+            stored.location.relative_path.as_path(),
+            Path::new("Artist/Album/01 Song.flac")
+        );
+        assert_eq!(stored.metadata.title.as_deref(), Some("Song"));
+        assert_eq!(stored.rating, rating);
+        assert!(
+            store
+                .tag_mirrors_due(i64::MAX, 10)
+                .expect("cleared outbox")
+                .is_empty()
+        );
+        assert_eq!(
+            service
+                .metadata_paths
+                .lock()
+                .expect("metadata paths")
+                .as_slice(),
+            std::slice::from_ref(&destination)
+        );
+        assert_eq!(
+            service
+                .rating_paths
+                .lock()
+                .expect("rating paths")
+                .as_slice(),
+            std::slice::from_ref(&destination)
+        );
+        assert_eq!(
+            service
+                .artwork_paths
+                .lock()
+                .expect("artwork paths")
+                .as_slice(),
+            std::slice::from_ref(&destination)
+        );
+
+        writer.shutdown();
+        std::fs::remove_dir_all(root).expect("remove library root");
+    }
+
+    #[test]
+    fn managed_retarget_filesystem_failure_does_not_mutate_tags_or_sqlite() {
+        let root = unique_test_directory();
+        std::fs::create_dir_all(&root).expect("create library root");
+        std::fs::write(root.join("loose.flac"), b"audio").expect("write track");
+
+        let track_id = TrackId::new(1).expect("track id");
+        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        store
+            .save_track(Track {
+                id: track_id,
+                location: TrackLocation::available(
+                    TrackRelativePath::new("loose.flac").expect("relative path"),
+                ),
+                metadata: TrackMetadata {
+                    title: Some("Old".to_owned()),
+                    ..TrackMetadata::default()
+                },
+                rating: Rating::unrated(),
+                statistics: Default::default(),
+                file_size_bytes: None,
+                has_embedded_artwork: None,
+            })
+            .expect("save track");
+        std::fs::remove_file(root.join("loose.flac")).expect("remove source");
+        std::fs::create_dir(root.join("loose.flac")).expect("replace source with directory");
+
+        let service = Arc::new(RecordingMetadataService::default());
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let writer = MetadataWriter::start(
+            service.clone(),
+            store.clone(),
+            Some(root.clone()),
+            Some(event_tx),
+        );
+        assert!(writer.retarget_managed_metadata(
+            track_id,
+            MetadataChange {
+                title: FieldChange::Set("Song".to_owned()),
+                artist: FieldChange::Set("Artist".to_owned()),
+                album: FieldChange::Set("Album".to_owned()),
+                track_number: FieldChange::Set(1),
+                ..MetadataChange::default()
+            },
+        ));
+
+        assert_eq!(
+            recv_event(&event_rx, Duration::from_secs(2)),
+            MetadataWriterEvent::ManagedRetarget(ManagedMetadataRetargetResult {
+                track_id,
+                outcome: Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+            })
+        );
+        let stored = store.track(track_id).expect("load track").expect("track");
+        assert_eq!(
+            stored.location.relative_path.as_path(),
+            Path::new("loose.flac")
+        );
+        assert_eq!(stored.metadata.title.as_deref(), Some("Old"));
+        assert!(
+            service
+                .metadata_paths
+                .lock()
+                .expect("metadata paths")
+                .is_empty()
+        );
+        assert!(root.join("loose.flac").is_dir());
+        assert!(!root.join(".sustain-consolidation-journal").exists());
+
+        writer.shutdown();
+        std::fs::remove_dir_all(root).expect("remove library root");
+    }
+
     fn recv_result(
-        receiver: &async_channel::Receiver<MetadataWriteResult>,
+        receiver: &async_channel::Receiver<MetadataWriterEvent>,
         timeout: Duration,
     ) -> MetadataWriteResult {
         let deadline = Instant::now() + timeout;
         loop {
-            if let Ok(result) = receiver.try_recv() {
+            if let Ok(MetadataWriterEvent::Mirror(result)) = receiver.try_recv() {
                 return result;
             }
             assert!(Instant::now() < deadline, "timed out waiting for result");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn recv_event(
+        receiver: &async_channel::Receiver<MetadataWriterEvent>,
+        timeout: Duration,
+    ) -> MetadataWriterEvent {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Ok(event) = receiver.try_recv() {
+                return event;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for event");
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -593,6 +867,57 @@ mod tests {
         fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
             Ok(())
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingMetadataService {
+        metadata_paths: Mutex<Vec<PathBuf>>,
+        rating_paths: Mutex<Vec<PathBuf>>,
+        artwork_paths: Mutex<Vec<PathBuf>>,
+    }
+
+    impl MetadataService for RecordingMetadataService {
+        fn read_initial_tags(&self, _path: &Path) -> MetadataResult<InitialTags> {
+            Err(MetadataError::ReadFailed)
+        }
+
+        fn write_metadata(&self, path: &Path, _change: MetadataChange) -> MetadataResult<()> {
+            self.metadata_paths
+                .lock()
+                .expect("metadata paths")
+                .push(path.to_path_buf());
+            Ok(())
+        }
+
+        fn write_rating(&self, path: &Path, _rating: Rating) -> MetadataResult<()> {
+            self.rating_paths
+                .lock()
+                .expect("rating paths")
+                .push(path.to_path_buf());
+            Ok(())
+        }
+
+        fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+
+        fn write_artwork(&self, path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+            self.artwork_paths
+                .lock()
+                .expect("artwork paths")
+                .push(path.to_path_buf());
+            Ok(())
+        }
+    }
+
+    fn valid_artwork() -> Vec<u8> {
+        vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00,
+            0x00, 0xb5, 0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0xda, 0x63, 0x64, 0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ]
     }
 
     fn unique_test_directory() -> PathBuf {

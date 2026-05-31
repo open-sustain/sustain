@@ -24,7 +24,8 @@ impl ApplicationRuntime {
                     settings.analysis = settings.analysis.normalized();
                     settings
                 };
-                if self.background_task_status.is_running()
+                if (self.background_task_status.is_running()
+                    || self.has_pending_managed_metadata_retarget())
                     && settings.library != self.settings.library
                 {
                     // The only narrow exception is the management-mode
@@ -33,10 +34,8 @@ impl ApplicationRuntime {
                     // explicitly aborting the organization job they
                     // just started. Every other library change — and
                     // in particular any `library.path` change — is
-                    // rejected outright, because changing the root
-                    // mid-flight would point persisted track paths at
-                    // a different filesystem location than the one the
-                    // task is still moving files into.
+                    // rejected outright while a background task or
+                    // serialized retarget is still moving files.
                     let cancellation_allowed = self
                         .background_task_status
                         .is_library_consolidation_running()

@@ -109,8 +109,8 @@ pub(crate) type ShowAlbumAction = Rc<dyn Fn(sustain_app_runtime::TrackId)>;
 pub(crate) type ShowAlbumHolder = Rc<RefCell<Option<ShowAlbumAction>>>;
 pub(crate) type SharedMprisService = Rc<sustain_desktop::MprisService>;
 pub(crate) type MprisCommandReceiver = async_channel::Receiver<sustain_desktop::MprisCommand>;
-pub(crate) type MetadataWriteResultReceiver =
-    async_channel::Receiver<sustain_app_runtime::MetadataWriteResult>;
+pub(crate) type MetadataWriterEventReceiver =
+    async_channel::Receiver<sustain_app_runtime::MetadataWriterEvent>;
 pub(crate) type ArtworkFetchResultReceiver =
     async_channel::Receiver<sustain_app_runtime::ArtworkFetchResult>;
 pub(crate) type AnalysisProgressReceiver =
@@ -144,9 +144,9 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     // restored outbox row that fails on its first startup attempt is visible
     // to the UI. The worker is still running before any UI mutation can
     // enqueue new work.
-    let (write_result_tx, write_result_rx) =
-        async_channel::unbounded::<sustain_app_runtime::MetadataWriteResult>();
-    runtime.set_metadata_write_result_sink(write_result_tx);
+    let (writer_event_tx, writer_event_rx) =
+        async_channel::unbounded::<sustain_app_runtime::MetadataWriterEvent>();
+    runtime.set_metadata_writer_event_sink(writer_event_tx);
     tlog!("about to start metadata writer");
     if let Err(error) = runtime.start_metadata_writer() {
         eprintln!(
@@ -256,8 +256,8 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     // first activation; later activations skip the setup.
     let mpris_command_rx_holder: Rc<RefCell<Option<MprisCommandReceiver>>> =
         Rc::new(RefCell::new(Some(mpris_command_rx)));
-    let write_result_rx_holder: Rc<RefCell<Option<MetadataWriteResultReceiver>>> =
-        Rc::new(RefCell::new(Some(write_result_rx)));
+    let writer_event_rx_holder: Rc<RefCell<Option<MetadataWriterEventReceiver>>> =
+        Rc::new(RefCell::new(Some(writer_event_rx)));
     let fetch_result_rx_holder: Rc<RefCell<Option<ArtworkFetchResultReceiver>>> =
         Rc::new(RefCell::new(Some(fetch_result_rx)));
     let analysis_progress_rx_holder: Rc<RefCell<Option<AnalysisProgressReceiver>>> =
@@ -282,7 +282,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
                 trun.elapsed().as_secs_f64() * 1000.0
             );
             let mpris_command_rx = mpris_command_rx_holder.borrow_mut().take();
-            let write_result_rx = write_result_rx_holder.borrow_mut().take();
+            let writer_event_rx = writer_event_rx_holder.borrow_mut().take();
             let fetch_result_rx = fetch_result_rx_holder.borrow_mut().take();
             let analysis_progress_rx = analysis_progress_rx_holder.borrow_mut().take();
             let online_progress_rx = online_progress_rx_holder.borrow_mut().take();
@@ -296,7 +296,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
                 mpris_service.clone(),
                 crate::main_window::MainWindowAsyncReceivers {
                     mpris_command_rx,
-                    metadata_write_result_rx: write_result_rx,
+                    metadata_writer_event_rx: writer_event_rx,
                     artwork_fetch_result_rx: fetch_result_rx,
                     analysis_progress_rx,
                     online_progress_rx,

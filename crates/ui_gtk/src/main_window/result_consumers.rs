@@ -11,14 +11,15 @@ use std::collections::HashSet;
 
 use super::*;
 
-/// Drains [`sustain_app_runtime::MetadataWriteResult`]s posted by the async metadata writer
-/// and applies retry-state notifications.
+/// Drains [`sustain_app_runtime::MetadataWriterEvent`]s posted by the async
+/// metadata writer and applies authoritative row refreshes plus retry-state
+/// notifications.
 ///
-/// SQLite is already authoritative when a result arrives. A failure retains
-/// its durable outbox row for bounded-backoff retry; the runtime owns the
-/// matching persistent notification and dismisses it only after convergence.
-pub(super) fn install_metadata_write_result_consumer(
-    receiver: Option<MetadataWriteResultReceiver>,
+/// Mirror failures retain their durable outbox row for bounded-backoff retry.
+/// Managed retarget results reload SQLite because a filesystem or durability
+/// failure may have happened on either side of the atomic row commit.
+pub(super) fn install_metadata_writer_event_consumer(
+    receiver: Option<MetadataWriterEventReceiver>,
     runtime: SharedRuntime,
     track_row_changed_holder: TrackRowChangedHolder,
 ) {
@@ -26,10 +27,19 @@ pub(super) fn install_metadata_write_result_consumer(
         return;
     };
     glib::MainContext::default().spawn_local(async move {
-        while let Ok(result) = receiver.recv().await {
-            let track_id = result.track_id;
-            runtime.borrow_mut().apply_metadata_write_result(result);
-            if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
+        while let Ok(event) = receiver.recv().await {
+            let mirror_track_id = match &event {
+                sustain_app_runtime::MetadataWriterEvent::Mirror(result) => Some(result.track_id),
+                sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_) => None,
+            };
+            runtime.borrow_mut().apply_metadata_writer_event(event);
+            // Managed retarget application reloads SQLite through
+            // `apply_track_updated`, which fires the standard observer.
+            // Plain mirror completion changes no SQLite row, but artwork
+            // consumers still need a row repaint.
+            if let Some(track_id) = mirror_track_id
+                && let Some(callback) = track_row_changed_holder.borrow().as_ref()
+            {
                 callback(track_id);
             }
         }

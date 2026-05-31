@@ -2072,6 +2072,18 @@ fn in_memory_tag_mirror_outbox_coalesces_latest_canonical_projection() {
 }
 
 #[test]
+fn sqlite_managed_retarget_commits_metadata_location_and_outbox_together() {
+    run_managed_retarget_commits_metadata_location_and_outbox_together(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_managed_retarget_commits_metadata_location_and_outbox_together() {
+    run_managed_retarget_commits_metadata_location_and_outbox_together(&InMemoryLibraryStore::new());
+}
+
+#[test]
 fn sqlite_track_delete_cascades_tag_mirror_outbox() {
     run_track_delete_cascades_tag_mirror_outbox(
         &SqliteLibraryStore::open_in_memory().expect("store"),
@@ -2081,6 +2093,36 @@ fn sqlite_track_delete_cascades_tag_mirror_outbox() {
 #[test]
 fn in_memory_track_delete_cascades_tag_mirror_outbox() {
     run_track_delete_cascades_tag_mirror_outbox(&InMemoryLibraryStore::new());
+}
+
+fn run_managed_retarget_commits_metadata_location_and_outbox_together(store: &dyn LibraryStore) {
+    let track = track(1, "loose.flac");
+    store.save_track(track.clone()).expect("save track");
+    store
+        .update_track_rating_and_enqueue_mirror(track.id, Rating::new(4).expect("rating"))
+        .expect("enqueue pre-existing rating mirror");
+
+    let change = MetadataChange {
+        title: FieldChange::Set("Canonical title".to_owned()),
+        ..MetadataChange::default()
+    };
+    let location = TrackLocation::available(relative_path("Artist/Album/01 Canonical title.flac"));
+    store
+        .apply_track_metadata_change_and_location_and_enqueue_mirror(track.id, &change, &location)
+        .expect("managed retarget commit");
+
+    let stored = store
+        .track(track.id)
+        .expect("load track")
+        .expect("track exists");
+    assert_eq!(stored.location, location);
+    assert_eq!(stored.metadata.title.as_deref(), Some("Canonical title"));
+    let pending = store.tag_mirrors_due(0, 10).expect("load due rows");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].track_id, track.id);
+    assert_eq!(pending[0].generation, 2);
+    assert!(pending[0].kinds.metadata);
+    assert!(pending[0].kinds.rating);
 }
 
 fn run_track_delete_cascades_tag_mirror_outbox(store: &dyn LibraryStore) {

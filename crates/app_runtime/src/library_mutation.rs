@@ -9,8 +9,9 @@ use sustain_library_store::TagMirrorArtwork;
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, ArtworkFetchResult,
+    ManagedMetadataRetargetResult,
     artwork_fetcher::{ArtworkFetchRequest, query_from_metadata},
-    managed_library::{metadata_change_affects_managed_path, save_managed_metadata_update},
+    managed_library::{metadata_change_affects_managed_path, retarget_managed_metadata},
     playback::{playback_shuffle_seed, playback_track_id},
 };
 
@@ -58,42 +59,39 @@ impl ApplicationRuntime {
             .iter()
             .position(|track| track.id == track_id && !track.location.is_missing())
             .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
-        let path = self
-            .absolute_track_path(&self.library_tracks[track_index])
-            .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
-
         let managed_rename_needed = self.settings.library.management_mode
             == LibraryManagementMode::CopyAddedFilesIntoLibrary
             && metadata_change_affects_managed_path(&change);
 
         if managed_rename_needed {
-            // The managed-rename branch is a transactional sequence —
-            // write the tag, move the file to its new computed path,
-            // persist with the new relative path, rollback on failure —
-            // so we keep it synchronous. Async-ifying it would require
-            // moving the journal/rollback dance into the worker, which
-            // is a separate, careful piece of work.
-            let metadata_service = self
-                .metadata_service
-                .clone()
-                .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
-            metadata_service
-                .write_metadata(&path, change.clone())
-                .map_err(|_| ApplicationRuntimeError::MetadataWriteFailed)?;
-            let mut track = self.library_tracks[track_index].clone();
-            track.metadata.apply_change(&change);
+            // Serialize retargets with every courtesy tag rewrite. The actor
+            // reloads current SQLite state by id, durably moves first, then
+            // commits metadata/path plus outbox intent atomically. It never
+            // mirrors tags against an obsolete pathname.
+            if let Some(writer) = self.metadata_writer() {
+                if !writer.retarget_managed_metadata(track_id, change) {
+                    return Err(ApplicationRuntimeError::LibraryServicesUnavailable);
+                }
+                self.register_pending_managed_metadata_retarget(track_id);
+                return Ok(());
+            }
+
+            // Tests and headless callers may omit the actor. With no worker
+            // there is no concurrent tag rewrite, so run the same retarget
+            // operation synchronously and drain its durable mirror intent
+            // through the common fallback below.
             let library_path = self
                 .settings
                 .library_path()
                 .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)?;
-            let track = save_managed_metadata_update(
-                library_path,
-                library_store.as_ref(),
-                &self.library_tracks,
-                track,
-                &change,
-            )?;
-            self.store_library_track(track_index, track);
+            let outcome =
+                retarget_managed_metadata(library_path, library_store.as_ref(), track_id, &change);
+            self.apply_managed_metadata_retarget_result(ManagedMetadataRetargetResult {
+                track_id,
+                outcome: outcome.clone(),
+            });
+            outcome?;
+            self.nudge_metadata_writer();
             return Ok(());
         }
 
@@ -210,7 +208,7 @@ impl ApplicationRuntime {
         &mut self,
         track_id: TrackId,
     ) -> ApplicationRuntimeResult<()> {
-        self.ensure_no_background_library_task()?;
+        self.ensure_no_conflicting_library_mutation()?;
         self.stop_playback_if_playing(track_id);
         let library_store = self
             .library_store
@@ -251,7 +249,7 @@ impl ApplicationRuntime {
         probe: impl Fn(&Path) -> FilePresence,
         trash: impl Fn(&Path) -> Result<(), ()>,
     ) -> ApplicationRuntimeResult<()> {
-        self.ensure_no_background_library_task()?;
+        self.ensure_no_conflicting_library_mutation()?;
         let track = self
             .library_tracks
             .iter()
@@ -302,6 +300,15 @@ impl ApplicationRuntime {
         Ok(())
     }
 
+    pub(crate) fn ensure_no_conflicting_library_mutation(&self) -> ApplicationRuntimeResult<()> {
+        self.ensure_no_background_library_task()?;
+        if self.has_pending_managed_metadata_retarget() {
+            return Err(ApplicationRuntimeError::BackgroundTaskRunning);
+        }
+
+        Ok(())
+    }
+
     /// Wake the durable outbox worker. Tests and headless callers that do not
     /// install the worker drain eligible rows synchronously through the same
     /// implementation so behavior remains deterministic.
@@ -318,7 +325,7 @@ impl ApplicationRuntime {
                     metadata_service.as_ref(),
                     library_store.as_ref(),
                     self.settings.library.path.as_ref(),
-                    self.metadata_write_result_sink.as_ref(),
+                    self.metadata_writer_event_sink.as_ref(),
                 );
             }
         }

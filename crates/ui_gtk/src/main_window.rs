@@ -20,7 +20,7 @@ use super::{
     ALBUMS_VIEW, APP_ID, AnalysisProgressReceiver, ApplicationCommand, ApplicationRuntime,
     ArtworkFetchResultReceiver, AvailabilityChangedCallback, ConnectedDevice, DEVICES_VIEW,
     DeviceSyncEventReceiver, LibraryChangedCallback, LibraryChangedHolder,
-    MetadataWriteResultReceiver, MprisCommandReceiver, OnlineProgressReceiver, PLAYLISTS_VIEW,
+    MetadataWriterEventReceiver, MprisCommandReceiver, OnlineProgressReceiver, PLAYLISTS_VIEW,
     PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
     SONGS_VIEW, STATISTICS_VIEW, SharedMprisService, SharedRuntime, ShowAlbumAction,
     ShowAlbumHolder, SmartPlaylistTrackStatus, SmartShuffleRebuildResultReceiver,
@@ -102,7 +102,7 @@ use playlists::{
 use result_consumers::{
     ArtworkFetchResultConsumerContext, install_analysis_progress_consumer,
     install_artwork_fetch_result_consumer, install_device_sync_event_consumer,
-    install_metadata_write_result_consumer, install_online_progress_consumer,
+    install_metadata_writer_event_consumer, install_online_progress_consumer,
     install_smart_shuffle_launch_rebuild, install_smart_shuffle_rebuild_result_consumer,
     install_track_data_observer, install_track_updated_consumer,
 };
@@ -132,7 +132,7 @@ pub(crate) type VisibleSummaryRefreshCallback = Rc<dyn Fn()>;
 /// touching every call site.
 pub(crate) struct MainWindowAsyncReceivers {
     pub mpris_command_rx: Option<MprisCommandReceiver>,
-    pub metadata_write_result_rx: Option<MetadataWriteResultReceiver>,
+    pub metadata_writer_event_rx: Option<MetadataWriterEventReceiver>,
     pub artwork_fetch_result_rx: Option<ArtworkFetchResultReceiver>,
     pub analysis_progress_rx: Option<AnalysisProgressReceiver>,
     pub online_progress_rx: Option<OnlineProgressReceiver>,
@@ -149,7 +149,7 @@ pub(crate) fn build_main_window(
 ) -> BuiltMainWindow {
     let MainWindowAsyncReceivers {
         mpris_command_rx,
-        metadata_write_result_rx,
+        metadata_writer_event_rx,
         artwork_fetch_result_rx,
         analysis_progress_rx,
         online_progress_rx,
@@ -484,8 +484,8 @@ pub(crate) fn build_main_window(
         device_panel: &device_panel,
     });
     track_row_changed_holder.replace(Some(track_row_changed));
-    install_metadata_write_result_consumer(
-        metadata_write_result_rx,
+    install_metadata_writer_event_consumer(
+        metadata_writer_event_rx,
         runtime.clone(),
         track_row_changed_holder.clone(),
     );

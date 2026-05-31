@@ -118,14 +118,14 @@ impl LibraryStore for SqliteLibraryStore {
         tag_mirror::fill_missing_track_metadata_and_enqueue(&mut connection, track_id, change)
     }
 
-    fn apply_track_metadata_change_and_location(
+    fn apply_track_metadata_change_and_location_and_enqueue_mirror(
         &self,
         track_id: TrackId,
         change: &MetadataChange,
         location: &TrackLocation,
     ) -> StoreResult<()> {
         let mut connection = self.connection_guard()?;
-        tracks::apply_track_metadata_change_and_location(
+        tag_mirror::apply_track_metadata_change_and_location_and_enqueue(
             &mut connection,
             track_id,
             change,

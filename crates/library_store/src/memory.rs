@@ -319,15 +319,28 @@ impl LibraryStore for InMemoryLibraryStore {
         Ok(changed)
     }
 
-    fn apply_track_metadata_change_and_location(
+    fn apply_track_metadata_change_and_location_and_enqueue_mirror(
         &self,
         track_id: TrackId,
         change: &crate::MetadataChange,
         location: &TrackLocation,
     ) -> StoreResult<()> {
+        let mut outbox = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
         if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
             track.metadata.apply_change(change);
             track.location = location.clone();
+            enqueue_tag_mirror(
+                &mut outbox,
+                track_id,
+                TagMirrorKinds {
+                    metadata: true,
+                    ..TagMirrorKinds::default()
+                },
+                TagMirrorArtwork::Unchanged,
+            );
         }
         Ok(())
     }

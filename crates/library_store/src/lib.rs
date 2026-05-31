@@ -258,9 +258,9 @@ pub trait LibraryStore: Send + Sync {
         change: &MetadataChange,
     ) -> StoreResult<()>;
     /// Atomically apply an explicit metadata edit and its managed-library
-    /// relocation. The two owned projections commit together after the
-    /// filesystem move succeeds.
-    fn apply_track_metadata_change_and_location(
+    /// relocation, retaining the courtesy tag-mirror intent in the same
+    /// transaction. The filesystem move succeeds before this commits.
+    fn apply_track_metadata_change_and_location_and_enqueue_mirror(
         &self,
         track_id: TrackId,
         change: &MetadataChange,

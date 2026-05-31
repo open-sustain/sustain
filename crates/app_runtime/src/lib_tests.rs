@@ -1675,8 +1675,8 @@ fn runtime_set_rating_applies_optimistic_update_and_reports_tag_write_failure() 
     .expect("load settings")
     .with_library_services(store.clone(), metadata_service.clone())
     .expect("library services initialize");
-    let (result_tx, result_rx) = async_channel::unbounded::<crate::MetadataWriteResult>();
-    runtime.set_metadata_write_result_sink(result_tx);
+    let (result_tx, result_rx) = async_channel::unbounded::<crate::MetadataWriterEvent>();
+    runtime.set_metadata_writer_event_sink(result_tx);
     let rating = Rating::new(4).expect("valid test rating");
 
     assert_eq!(
@@ -1700,9 +1700,12 @@ fn runtime_set_rating_applies_optimistic_update_and_reports_tag_write_failure() 
     );
     // Failure is reported to the sink (UI surfaces a status-bar
     // message and refreshes the affected row).
-    let posted = result_rx
+    let crate::MetadataWriterEvent::Mirror(posted) = result_rx
         .try_recv()
-        .expect("metadata writer posts the failure");
+        .expect("metadata writer posts the failure")
+    else {
+        panic!("expected mirror result");
+    };
     assert_eq!(posted.track_id, track_id);
     assert_eq!(posted.kind, crate::MetadataWriteKind::Rating);
     assert_eq!(posted.outcome, crate::MetadataWriteOutcome::Failed);
@@ -1890,7 +1893,28 @@ fn managed_metadata_update_moves_file_when_planned_path_changes() {
     );
     assert_eq!(
         metadata_service.metadata_writes(),
-        vec![(source_path.clone(), change)]
+        vec![(
+            destination_path.clone(),
+            MetadataChange {
+                title: FieldChange::Set("Song".to_owned()),
+                artist: FieldChange::Set("Artist".to_owned()),
+                album: FieldChange::Set("Album".to_owned()),
+                track_number: FieldChange::Set(3),
+                album_artist: FieldChange::Clear,
+                composer: FieldChange::Clear,
+                grouping: FieldChange::Clear,
+                genre: FieldChange::Clear,
+                track_total: FieldChange::Clear,
+                disc_number: FieldChange::Clear,
+                disc_total: FieldChange::Clear,
+                year: FieldChange::Clear,
+                compilation: FieldChange::Clear,
+                bpm: FieldChange::Clear,
+                key: FieldChange::Clear,
+                comments: FieldChange::Clear,
+                lyrics: FieldChange::Clear,
+            }
+        )]
     );
     assert_eq!(
         runtime.library_tracks()[0].location.relative_path.as_path(),
@@ -1986,8 +2010,8 @@ fn runtime_update_metadata_applies_optimistic_update_and_reports_tag_write_failu
     .expect("load settings")
     .with_library_services(store.clone(), metadata_service.clone())
     .expect("library services initialize");
-    let (result_tx, result_rx) = async_channel::unbounded::<crate::MetadataWriteResult>();
-    runtime.set_metadata_write_result_sink(result_tx);
+    let (result_tx, result_rx) = async_channel::unbounded::<crate::MetadataWriterEvent>();
+    runtime.set_metadata_writer_event_sink(result_tx);
     let change = MetadataChange {
         title: FieldChange::Set("New".to_owned()),
         ..MetadataChange::default()
@@ -2019,9 +2043,12 @@ fn runtime_update_metadata_applies_optimistic_update_and_reports_tag_write_failu
             .and_then(|track| track.metadata.title),
         Some("New".to_owned())
     );
-    let posted = result_rx
+    let crate::MetadataWriterEvent::Mirror(posted) = result_rx
         .try_recv()
-        .expect("metadata writer posts the failure");
+        .expect("metadata writer posts the failure")
+    else {
+        panic!("expected mirror result");
+    };
     assert_eq!(posted.track_id, track_id);
     assert_eq!(posted.kind, crate::MetadataWriteKind::Metadata);
     assert_eq!(posted.outcome, crate::MetadataWriteOutcome::Failed);
@@ -2128,6 +2155,148 @@ fn runtime_moves_tracks_to_trash_and_removes_underlying_file() {
     assert!(runtime.library_tracks().is_empty());
     assert_eq!(store.track(trashed_id), Ok(None));
     assert!(!track_path.exists(), "audio file should be moved to trash");
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn managed_metadata_retarget_event_reloads_sqlite_and_surfaces_failure() {
+    let track_id = track_id(1);
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let mut track = test_track(track_id, "loose.flac");
+    track.metadata.title = Some("Old".to_owned());
+    assert_eq!(store.save_track(track), Ok(()));
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    store
+        .apply_track_metadata_change_and_location_and_enqueue_mirror(
+            track_id,
+            &MetadataChange {
+                title: FieldChange::Set("New".to_owned()),
+                ..MetadataChange::default()
+            },
+            &track_location("Artist/Album/New.flac"),
+        )
+        .expect("commit retarget");
+    runtime.apply_metadata_write_result(crate::MetadataWriteResult {
+        track_id,
+        kind: crate::MetadataWriteKind::Metadata,
+        outcome: crate::MetadataWriteOutcome::Failed,
+    });
+
+    runtime.apply_metadata_writer_event(crate::MetadataWriterEvent::ManagedRetarget(
+        crate::ManagedMetadataRetargetResult {
+            track_id,
+            outcome: Ok(()),
+        },
+    ));
+
+    assert_eq!(
+        runtime.library_tracks()[0].location.relative_path.as_path(),
+        Path::new("Artist/Album/New.flac")
+    );
+    assert_eq!(
+        runtime.library_tracks()[0].metadata.title.as_deref(),
+        Some("New")
+    );
+    assert_eq!(
+        runtime.notifications().persistent_stack().len(),
+        1,
+        "durable retarget does not prove the queued mirror converged"
+    );
+    runtime.apply_metadata_writer_event(crate::MetadataWriterEvent::Mirror(
+        crate::MetadataWriteResult {
+            track_id,
+            kind: crate::MetadataWriteKind::Metadata,
+            outcome: crate::MetadataWriteOutcome::Succeeded,
+        },
+    ));
+    assert!(runtime.notifications().persistent_stack().is_empty());
+
+    runtime.apply_metadata_writer_event(crate::MetadataWriterEvent::ManagedRetarget(
+        crate::ManagedMetadataRetargetResult {
+            track_id,
+            outcome: Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+        },
+    ));
+    assert_eq!(runtime.notifications().persistent_stack().len(), 1);
+    assert!(
+        runtime.notifications().persistent_stack()[0]
+            .body
+            .contains("could not finish safely")
+    );
+}
+
+#[test]
+fn pending_managed_metadata_retarget_blocks_structural_library_operations_only() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    let track_path = root.join("track.flac");
+    std::fs::write(&track_path, b"not real audio").expect("write fake track");
+    let track_id = track_id(1);
+    let store = Arc::new(InMemoryLibraryStore::new());
+    assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+    runtime.register_pending_managed_metadata_retarget(track_id);
+
+    assert!(matches!(
+        runtime.prepare_library_scan(root.clone()),
+        Err(ApplicationRuntimeError::BackgroundTaskRunning)
+    ));
+    assert!(matches!(
+        runtime.prepare_library_import(vec![track_path.clone()]),
+        Err(ApplicationRuntimeError::BackgroundTaskRunning)
+    ));
+    assert!(matches!(
+        runtime.prepare_library_consolidation(),
+        Err(ApplicationRuntimeError::BackgroundTaskRunning)
+    ));
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::RemoveTrackFromLibrary { track_id }),
+        Err(ApplicationRuntimeError::BackgroundTaskRunning)
+    );
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::MoveTrackToTrash { track_id }),
+        Err(ApplicationRuntimeError::BackgroundTaskRunning)
+    );
+    let mut settings = runtime.settings().clone();
+    settings.library.path = Some(root.join("other-root"));
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(settings)),
+        Err(ApplicationRuntimeError::BackgroundTaskRunning)
+    );
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::SetRating {
+            track_id,
+            rating: Rating::new(4).expect("rating"),
+        }),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateMetadata {
+            track_id,
+            change: Box::new(MetadataChange {
+                genre: FieldChange::Set("Rock".to_owned()),
+                ..MetadataChange::default()
+            }),
+        }),
+        Ok(())
+    );
+    assert_eq!(
+        store
+            .track(track_id)
+            .expect("load track")
+            .map(|track| (track.rating, track.metadata.genre)),
+        Some((Rating::new(4).expect("rating"), Some("Rock".to_owned())))
+    );
+    assert!(track_path.exists());
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }
@@ -4384,14 +4553,14 @@ impl LibraryStore for CallCountingLibraryStore {
             .fill_missing_track_metadata_and_enqueue_mirror(track_id, change)
     }
 
-    fn apply_track_metadata_change_and_location(
+    fn apply_track_metadata_change_and_location_and_enqueue_mirror(
         &self,
         track_id: TrackId,
         change: &MetadataChange,
         location: &TrackLocation,
     ) -> StoreResult<()> {
         self.inner
-            .apply_track_metadata_change_and_location(track_id, change, location)
+            .apply_track_metadata_change_and_location_and_enqueue_mirror(track_id, change, location)
     }
 
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()> {

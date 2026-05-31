@@ -100,7 +100,10 @@ pub use sustain_smart_shuffle::{
 pub use artwork_fetcher::{ArtworkFetchOutcome, ArtworkFetchResult};
 pub use library_scan::run_library_scan_task;
 pub use managed_library::{run_library_consolidation_task, run_library_import_task};
-pub use metadata_writer::{MetadataWriteKind, MetadataWriteOutcome, MetadataWriteResult};
+pub use metadata_writer::{
+    ManagedMetadataRetargetResult, MetadataWriteKind, MetadataWriteOutcome, MetadataWriteResult,
+    MetadataWriterEvent,
+};
 pub use notifications::{
     EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_QUEUE_HARD_CAP, NOTIFICATION_TRANSITION,
     Notification, NotificationCategory, NotificationCenter, NotificationId, NotificationKind,
@@ -298,8 +301,9 @@ pub struct ApplicationRuntime {
     library_import_notification_id: Option<NotificationId>,
     library_consolidation_notification_id: Option<NotificationId>,
     metadata_writer: Option<metadata_writer::MetadataWriter>,
-    metadata_write_result_sink: Option<async_channel::Sender<MetadataWriteResult>>,
+    metadata_writer_event_sink: Option<async_channel::Sender<MetadataWriterEvent>>,
     metadata_write_notification_ids: BTreeMap<TrackId, NotificationId>,
+    pending_managed_metadata_retargets: BTreeMap<TrackId, usize>,
     remote_metadata_service: Option<Arc<dyn RemoteMetadataService>>,
     artwork_fetcher: Option<artwork_fetcher::ArtworkFetcher>,
     artwork_fetch_result_sink: Option<async_channel::Sender<ArtworkFetchResult>>,
@@ -435,8 +439,9 @@ impl ApplicationRuntime {
             library_import_notification_id: None,
             library_consolidation_notification_id: None,
             metadata_writer: None,
-            metadata_write_result_sink: None,
+            metadata_writer_event_sink: None,
             metadata_write_notification_ids: BTreeMap::new(),
+            pending_managed_metadata_retargets: BTreeMap::new(),
             remote_metadata_service: None,
             artwork_fetcher: None,
             artwork_fetch_result_sink: None,
@@ -497,8 +502,9 @@ impl ApplicationRuntime {
             library_import_notification_id: None,
             library_consolidation_notification_id: None,
             metadata_writer: None,
-            metadata_write_result_sink: None,
+            metadata_writer_event_sink: None,
             metadata_write_notification_ids: BTreeMap::new(),
+            pending_managed_metadata_retargets: BTreeMap::new(),
             remote_metadata_service: None,
             artwork_fetcher: None,
             artwork_fetch_result_sink: None,
@@ -579,7 +585,7 @@ impl ApplicationRuntime {
     /// the runtime already holds. The writer owns a dedicated worker
     /// thread that drains tag writes off the GTK main loop.
     ///
-    /// Pair with [`Self::set_metadata_write_result_sink`] so failures can
+    /// Pair with [`Self::set_metadata_writer_event_sink`] so failures can
     /// be reported to the user. Without a sink, the writer still
     /// processes jobs but completions are silently consumed.
     pub fn start_metadata_writer(&mut self) -> ApplicationRuntimeResult<()> {
@@ -595,7 +601,7 @@ impl ApplicationRuntime {
             metadata_service,
             library_store,
             self.settings.library.path.clone(),
-            self.metadata_write_result_sink.clone(),
+            self.metadata_writer_event_sink.clone(),
         ));
         Ok(())
     }
@@ -604,11 +610,11 @@ impl ApplicationRuntime {
     /// of a closed channel are silently dropped — the worker keeps
     /// processing jobs regardless. UI layer typically holds the
     /// matching receiver and consumes from the GTK main loop.
-    pub fn set_metadata_write_result_sink(
+    pub fn set_metadata_writer_event_sink(
         &mut self,
-        sink: async_channel::Sender<MetadataWriteResult>,
+        sink: async_channel::Sender<MetadataWriterEvent>,
     ) {
-        self.metadata_write_result_sink = Some(sink.clone());
+        self.metadata_writer_event_sink = Some(sink.clone());
         if let Some(writer) = self.metadata_writer() {
             writer.set_result_sink(sink);
         }
@@ -639,12 +645,7 @@ impl ApplicationRuntime {
     pub fn apply_metadata_write_result(&mut self, result: MetadataWriteResult) {
         match result.outcome {
             MetadataWriteOutcome::Succeeded => {
-                if let Some(id) = self
-                    .metadata_write_notification_ids
-                    .remove(&result.track_id)
-                {
-                    self.dismiss_notification(id);
-                }
+                self.dismiss_metadata_write_warning(result.track_id);
                 if result.kind == MetadataWriteKind::Artwork {
                     self.push_ephemeral_notification(
                         NotificationCategory::MetadataWrite,
@@ -656,19 +657,74 @@ impl ApplicationRuntime {
             MetadataWriteOutcome::Failed => {
                 let body = "One or more changes are saved in Sustain, but could not be mirrored to the audio file. The pending mirror will retry automatically."
                     .to_owned();
-                if let Some(id) = self.metadata_write_notification_ids.get(&result.track_id) {
-                    self.update_notification_body(*id, body);
-                } else {
-                    let id = self.push_persistent_notification(
-                        NotificationCategory::MetadataWrite,
-                        NotificationSeverity::Error,
-                        body,
-                        false,
-                    );
-                    self.metadata_write_notification_ids
-                        .insert(result.track_id, id);
-                }
+                self.push_or_update_metadata_write_warning(result.track_id, body);
             }
+        }
+    }
+
+    pub fn apply_metadata_writer_event(&mut self, event: MetadataWriterEvent) {
+        match event {
+            MetadataWriterEvent::Mirror(result) => self.apply_metadata_write_result(result),
+            MetadataWriterEvent::ManagedRetarget(result) => {
+                self.apply_managed_metadata_retarget_result(result);
+            }
+        }
+    }
+
+    fn apply_managed_metadata_retarget_result(&mut self, result: ManagedMetadataRetargetResult) {
+        self.finish_pending_managed_metadata_retarget(result.track_id);
+        self.apply_track_updated(result.track_id);
+        match result.outcome {
+            // A successful retarget commits the durable outbox intent but
+            // does not prove file tags have converged yet. Only the later
+            // mirror-success event may dismiss an existing retry warning.
+            Ok(()) => {}
+            Err(_) => self.push_or_update_metadata_write_warning(
+                result.track_id,
+                "A managed-library metadata edit could not finish safely. Sustain retained its recovery state where needed. Resolve filesystem access and retry the edit."
+                    .to_owned(),
+            ),
+        }
+    }
+
+    pub(crate) fn register_pending_managed_metadata_retarget(&mut self, track_id: TrackId) {
+        *self
+            .pending_managed_metadata_retargets
+            .entry(track_id)
+            .or_default() += 1;
+    }
+
+    fn finish_pending_managed_metadata_retarget(&mut self, track_id: TrackId) {
+        let Some(count) = self.pending_managed_metadata_retargets.get_mut(&track_id) else {
+            return;
+        };
+        *count -= 1;
+        if *count == 0 {
+            self.pending_managed_metadata_retargets.remove(&track_id);
+        }
+    }
+
+    pub(crate) fn has_pending_managed_metadata_retarget(&self) -> bool {
+        !self.pending_managed_metadata_retargets.is_empty()
+    }
+
+    fn dismiss_metadata_write_warning(&mut self, track_id: TrackId) {
+        if let Some(id) = self.metadata_write_notification_ids.remove(&track_id) {
+            self.dismiss_notification(id);
+        }
+    }
+
+    fn push_or_update_metadata_write_warning(&mut self, track_id: TrackId, body: String) {
+        if let Some(id) = self.metadata_write_notification_ids.get(&track_id) {
+            self.update_notification_body(*id, body);
+        } else {
+            let id = self.push_persistent_notification(
+                NotificationCategory::MetadataWrite,
+                NotificationSeverity::Error,
+                body,
+                false,
+            );
+            self.metadata_write_notification_ids.insert(track_id, id);
         }
     }
 

@@ -252,18 +252,6 @@ pub(super) fn fill_missing_track_metadata(
         .map_err(StoreError::from)
 }
 
-pub(super) fn apply_track_metadata_change_and_location(
-    connection: &mut Connection,
-    track_id: TrackId,
-    change: &MetadataChange,
-    location: &TrackLocation,
-) -> StoreResult<()> {
-    let transaction = connection.transaction().map_err(StoreError::from)?;
-    apply_track_metadata_change(&transaction, track_id, change)?;
-    update_track_location(&transaction, track_id, location)?;
-    transaction.commit().map_err(StoreError::from)
-}
-
 fn text_change_parts(change: &FieldChange<String>) -> (i64, Option<&str>) {
     match change {
         FieldChange::Unchanged => (0, None),

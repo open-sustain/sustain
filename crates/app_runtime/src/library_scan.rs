@@ -41,9 +41,7 @@ impl ApplicationRuntime {
         &mut self,
         library_path: std::path::PathBuf,
     ) -> ApplicationRuntimeResult<LibraryScanTask> {
-        if self.background_task_status.is_running() {
-            return Err(ApplicationRuntimeError::BackgroundTaskRunning);
-        }
+        self.ensure_no_conflicting_library_mutation()?;
 
         self.last_scan_library_path = Some(library_path.clone());
         let library_store = self
