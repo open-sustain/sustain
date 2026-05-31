@@ -73,16 +73,22 @@ fn device_sync_manifest_save_failure_surfaces_error_instead_of_success() {
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
-
-    runtime.apply_device_sync_event(crate::DeviceSyncEvent::Finished(
-        crate::DeviceSyncCompletion {
-            device_id: SyncDeviceId::new("device-id").expect("device id"),
-            result: Ok(sustain_device_sync::SyncOutcome {
-                copied: 1,
-                ..Default::default()
-            }),
-        },
+    let device_id = SyncDeviceId::new("device-id").expect("device id");
+    let receiver = runtime.device_sync_event_receiver();
+    assert!(matches!(
+        runtime
+            .device_sync_scheduler
+            .start_test_task(device_id, |_progress, _cancel| Ok(
+                sustain_device_sync::SyncOutcome {
+                    copied: 1,
+                    ..Default::default()
+                }
+            ),),
+        crate::DeviceSyncStartOutcome::Started(_)
     ));
+
+    let event = receiver.recv_blocking().expect("device-sync completion");
+    runtime.apply_device_sync_event(event);
 
     assert_eq!(store.device_manifest_calls(), 1);
     let notification = runtime
@@ -92,6 +98,41 @@ fn device_sync_manifest_save_failure_surfaces_error_instead_of_success() {
     assert_eq!(notification.category, NotificationCategory::DeviceSync);
     assert_eq!(notification.severity, NotificationSeverity::Error);
     assert!(notification.body.contains("could not save"));
+}
+
+#[test]
+fn stale_device_sync_completion_is_ignored() {
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    let device_id = SyncDeviceId::new("device-id").expect("device id");
+    let receiver = runtime.device_sync_event_receiver();
+    let started = runtime
+        .device_sync_scheduler
+        .start_test_task(device_id, |_progress, _cancel| {
+            Ok(sustain_device_sync::SyncOutcome::default())
+        });
+    assert!(matches!(started, crate::DeviceSyncStartOutcome::Started(_)));
+    let crate::DeviceSyncStartOutcome::Started(run_id) = started else {
+        return;
+    };
+
+    runtime.apply_device_sync_event(receiver.recv_blocking().expect("completion"));
+    assert_eq!(store.device_manifest_calls(), 1);
+    runtime.apply_device_sync_event(crate::DeviceSyncEvent::Finished {
+        run_id,
+        completion: crate::DeviceSyncCompletion {
+            device_id: SyncDeviceId::new("device-id").expect("device id"),
+            result: Ok(sustain_device_sync::SyncOutcome::default()),
+        },
+    });
+    assert_eq!(
+        store.device_manifest_calls(),
+        1,
+        "a stale completion must not persist state twice"
+    );
 }
 
 #[test]

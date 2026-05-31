@@ -339,6 +339,7 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
     // retries safely resume next launch instead of extending shutdown.
     let mut runtime_guard = runtime.borrow_mut();
     runtime_guard.shutdown_library_hydration();
+    runtime_guard.shutdown_device_sync_scheduler();
     runtime_guard.shutdown_analysis_scheduler();
     runtime_guard.shutdown_online_scheduler();
     runtime_guard.shutdown_artwork_fetcher();

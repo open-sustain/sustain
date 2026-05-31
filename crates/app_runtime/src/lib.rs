@@ -93,7 +93,10 @@ pub mod smart_shuffle_scheduler;
 #[cfg(test)]
 mod test_store;
 pub use device_sync::{DeviceAnalysisReadiness, DeviceCapacity};
-pub use device_sync_scheduler::{DeviceSyncCompletion, DeviceSyncEvent, DeviceSyncScheduler};
+pub use device_sync_scheduler::{
+    DeviceSyncCompletion, DeviceSyncEvent, DeviceSyncRunId, DeviceSyncScheduler,
+    DeviceSyncStartOutcome,
+};
 pub use smart_shuffle_scheduler::{SmartShuffleRebuildResult, SmartShuffleScheduler};
 pub use sustain_device_sync::{ConnectedDevice, SyncPlan, SyncProgress, SyncStage};
 pub use sustain_smart_shuffle::{

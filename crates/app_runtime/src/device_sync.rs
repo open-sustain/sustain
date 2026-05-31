@@ -25,7 +25,7 @@ use sustain_domain::{
 };
 use sustain_library_store::AnalysisCapabilities;
 
-use crate::device_sync_scheduler::DeviceSyncEvent;
+use crate::device_sync_scheduler::{DeviceSyncEvent, DeviceSyncStartOutcome};
 use crate::{
     AnalysisRunRequest, ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult,
     NotificationCategory, NotificationSeverity, notifications,
@@ -127,6 +127,14 @@ impl ApplicationRuntime {
     pub fn request_device_sync_cancellation(&self) {
         self.device_sync_scheduler.request_cancellation();
         self.notify_notification_observer();
+    }
+
+    /// Cancel and join an in-flight sync before runtime teardown returns.
+    pub fn shutdown_device_sync_scheduler(&mut self) {
+        if let Some(id) = self.device_sync_notification_id.take() {
+            self.dismiss_notification(id);
+        }
+        self.device_sync_scheduler.shutdown();
     }
 
     /// Event channel the UI shell drains on idle, feeding each event back
@@ -369,18 +377,35 @@ impl ApplicationRuntime {
             );
             return Ok(());
         }
-        let notification = self.push_persistent_notification(
-            NotificationCategory::DeviceSync,
-            NotificationSeverity::Info,
-            notifications::device_sync_running_text(&device.label),
-            true,
-        );
-        self.device_sync_notification_id = Some(notification);
         let library_store = self
             .library_store
             .clone()
             .ok_or(ApplicationRuntimeError::LibraryStoreFailed)?;
-        self.device_sync_scheduler.start(id, request, library_store);
+        match self.device_sync_scheduler.start(id, request, library_store) {
+            DeviceSyncStartOutcome::Started(_) => {
+                let notification = self.push_persistent_notification(
+                    NotificationCategory::DeviceSync,
+                    NotificationSeverity::Info,
+                    notifications::device_sync_running_text(&device.label),
+                    true,
+                );
+                self.device_sync_notification_id = Some(notification);
+            }
+            DeviceSyncStartOutcome::AlreadyRunning => {
+                self.push_ephemeral_notification(
+                    NotificationCategory::DeviceSync,
+                    NotificationSeverity::Info,
+                    "A device sync is already running.".to_owned(),
+                );
+            }
+            DeviceSyncStartOutcome::SpawnFailed(detail) => {
+                self.push_ephemeral_notification(
+                    NotificationCategory::DeviceSync,
+                    NotificationSeverity::Error,
+                    format!("Device sync failed to start: {detail}"),
+                );
+            }
+        }
         Ok(())
     }
 
@@ -389,7 +414,10 @@ impl ApplicationRuntime {
     /// publish the outcome.
     pub fn apply_device_sync_event(&mut self, event: DeviceSyncEvent) {
         match event {
-            DeviceSyncEvent::Progress(progress) => {
+            DeviceSyncEvent::Progress { run_id, progress } => {
+                if !self.device_sync_scheduler.is_active_run(run_id) {
+                    return;
+                }
                 if let Some(id) = self.device_sync_notification_id {
                     self.update_notification_body(
                         id,
@@ -397,7 +425,10 @@ impl ApplicationRuntime {
                     );
                 }
             }
-            DeviceSyncEvent::Finished(completion) => {
+            DeviceSyncEvent::Finished { run_id, completion } => {
+                if !self.device_sync_scheduler.is_active_run(run_id) {
+                    return;
+                }
                 if let Some(id) = self.device_sync_notification_id.take() {
                     self.dismiss_notification(id);
                 }
@@ -415,18 +446,18 @@ impl ApplicationRuntime {
                                 "Device sync failed: could not save the on-device manifest."
                                     .to_owned(),
                             );
-                            return;
-                        }
-                        let severity = if outcome.cancelled {
-                            NotificationSeverity::Warning
                         } else {
-                            NotificationSeverity::Info
-                        };
-                        self.push_ephemeral_notification(
-                            NotificationCategory::DeviceSync,
-                            severity,
-                            notifications::device_sync_outcome_text(&outcome),
-                        );
+                            let severity = if outcome.cancelled {
+                                NotificationSeverity::Warning
+                            } else {
+                                NotificationSeverity::Info
+                            };
+                            self.push_ephemeral_notification(
+                                NotificationCategory::DeviceSync,
+                                severity,
+                                notifications::device_sync_outcome_text(&outcome),
+                            );
+                        }
                     }
                     Err(message) => {
                         self.push_ephemeral_notification(
@@ -436,6 +467,7 @@ impl ApplicationRuntime {
                         );
                     }
                 }
+                self.device_sync_scheduler.acknowledge_completion(run_id);
             }
         }
     }
