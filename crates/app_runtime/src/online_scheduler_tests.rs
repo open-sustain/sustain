@@ -26,7 +26,10 @@ use sustain_metadata_remote::{
 };
 use tempfile::TempDir;
 
-use crate::metadata_writer::{MetadataWriteHandle, MetadataWriter};
+use crate::{
+    managed_library::ManagedLibraryFilesystemValidator,
+    metadata_writer::{MetadataWriteHandle, MetadataWriter},
+};
 
 use super::{OnlineScheduler, OnlineSchedulerConfig, ProgressSink, SchedulerProgress, UnixClockFn};
 
@@ -40,7 +43,13 @@ fn spawn_tag_writer(
     store: Arc<dyn LibraryStore>,
     library_root: &Path,
 ) -> (MetadataWriter, MetadataWriteHandle) {
-    let writer = MetadataWriter::start(metadata, store, Some(library_root.to_path_buf()), None);
+    let writer = MetadataWriter::start(
+        metadata,
+        store,
+        Some(library_root.to_path_buf()),
+        ManagedLibraryFilesystemValidator::default(),
+        None,
+    );
     let handle = writer.handle();
     (writer, handle)
 }
@@ -1307,7 +1316,13 @@ fn shutdown_returns_after_join() {
     let remote = Arc::new(StubRemote::default());
     let metadata = Arc::new(StubMetadata::default());
     let (sink, _rx) = capturing_sink();
-    let _writer = MetadataWriter::start(metadata.clone(), store.clone(), None, None);
+    let _writer = MetadataWriter::start(
+        metadata.clone(),
+        store.clone(),
+        None,
+        ManagedLibraryFilesystemValidator::default(),
+        None,
+    );
     let tag_writer = _writer.handle();
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {

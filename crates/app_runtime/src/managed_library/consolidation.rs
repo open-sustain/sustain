@@ -27,6 +27,7 @@ use crate::{
     LibraryConsolidationSummary, LibraryConsolidationTask,
 };
 
+use super::capabilities::ManagedLibraryFilesystemValidator;
 use super::file_ops::{
     FileIdentity, move_file_without_copy_or_overwrite_matching_identity, rollback_file_move,
 };
@@ -42,6 +43,7 @@ pub fn run_library_consolidation_task(
         settings: task.settings,
         existing_tracks: task.existing_tracks,
         library_store: task.library_store,
+        managed_library_filesystem_validator: task.managed_library_filesystem_validator,
         cancellation_requested: task.cancellation_requested,
     };
 
@@ -52,6 +54,7 @@ struct LibraryConsolidationContext {
     settings: sustain_domain::UserSettings,
     existing_tracks: Vec<Track>,
     library_store: std::sync::Arc<dyn sustain_library_store::LibraryStore>,
+    managed_library_filesystem_validator: ManagedLibraryFilesystemValidator,
     cancellation_requested: Arc<AtomicBool>,
 }
 
@@ -63,7 +66,14 @@ impl LibraryConsolidationContext {
             .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)?
             .to_path_buf();
 
-        recover_library_consolidation_journal(&library_path, self.library_store.as_ref())?;
+        self.managed_library_filesystem_validator
+            .validate(&library_path)
+            .map_err(ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported)?;
+        recover_library_consolidation_journal(
+            &library_path,
+            self.library_store.as_ref(),
+            &self.managed_library_filesystem_validator,
+        )?;
 
         let plan = plan_library_consolidation(&library_path, &self.existing_tracks)?;
 

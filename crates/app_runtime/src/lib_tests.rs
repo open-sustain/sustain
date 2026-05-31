@@ -34,9 +34,13 @@ use sustain_settings::{SettingsError, SettingsResult, SettingsStore};
 use super::{
     ApplicationRuntime, ApplicationRuntimeError, LibraryConsolidationSummary, LibraryScanSummary,
     MetadataService, NotificationCategory, NotificationSeverity, PlaybackQueueRequest,
-    normalize_query, run_library_consolidation_task, run_library_scan_task,
+    normalize_query, run_library_consolidation_task, run_library_import_task,
+    run_library_scan_task,
 };
-use crate::library_mutation::FilePresence;
+use crate::{
+    library_mutation::FilePresence,
+    managed_library::{ManagedLibraryFilesystemError, ManagedLibraryFilesystemValidator},
+};
 
 #[test]
 fn runtime_starts_with_default_settings() {
@@ -559,6 +563,55 @@ fn managed_import_copies_external_files_into_planned_library_path() {
 }
 
 #[test]
+fn managed_import_revalidates_root_before_worker_filesystem_mutation() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_path = external_root.join("source.flac");
+    std::fs::write(&source_path, b"audio bytes").expect("write external source");
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let validator = ManagedLibraryFilesystemValidator::fail_after(
+        1,
+        ManagedLibraryFilesystemError::HardLinkFailed,
+    );
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_managed_library_filesystem_validator(validator)
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    let task = runtime
+        .prepare_library_import(vec![source_path.clone()])
+        .expect("preparation validates the first root state");
+    let error = run_library_import_task(task).expect_err("worker revalidation rejects remount");
+    assert_eq!(
+        error,
+        ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(
+            ManagedLibraryFilesystemError::HardLinkFailed
+        )
+    );
+    runtime.fail_library_import(error);
+
+    assert_eq!(
+        std::fs::read(&source_path).expect("source intact"),
+        b"audio bytes"
+    );
+    assert!(runtime.library_tracks().is_empty());
+    assert_eq!(store.tracks(), Ok(Vec::new()));
+    assert_eq!(
+        runtime.notifications().persistent_stack()[0].category,
+        NotificationCategory::ManagedLibraryFilesystem
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
 fn managed_import_skips_duplicate_content_hashes_in_same_batch() {
     let library_root = unique_test_directory();
     let external_root = unique_test_directory();
@@ -842,6 +895,105 @@ fn managed_consolidation_moves_existing_tracks_to_planned_paths() {
 }
 
 #[test]
+fn auto_resume_preparation_revalidates_already_configured_managed_root() {
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_managed_library_filesystem_validator(
+                ManagedLibraryFilesystemValidator::rejecting(
+                    ManagedLibraryFilesystemError::HardLinkFailed,
+                ),
+            )
+            .with_library_services(store, Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    assert!(matches!(
+        runtime.prepare_library_consolidation(),
+        Err(
+            ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(
+                ManagedLibraryFilesystemError::HardLinkFailed
+            )
+        )
+    ));
+    assert!(!runtime.background_task_status().is_running());
+    assert_eq!(
+        runtime.notifications().persistent_stack()[0].category,
+        NotificationCategory::ManagedLibraryFilesystem
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn managed_consolidation_revalidates_root_before_worker_filesystem_mutation() {
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    let source_path = library_root.join("loose.flac");
+    std::fs::write(&source_path, b"audio bytes").expect("write existing file");
+
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let mut track = test_track(track_id(25), "loose.flac");
+    track.metadata.title = Some("Song".to_owned());
+    assert_eq!(store.save_track(track), Ok(()));
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let validator = ManagedLibraryFilesystemValidator::fail_after(
+        1,
+        ManagedLibraryFilesystemError::HardLinkFailed,
+    );
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_managed_library_filesystem_validator(validator)
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    let task = runtime
+        .prepare_library_consolidation()
+        .expect("preparation validates the first root state");
+    let error =
+        run_library_consolidation_task(task).expect_err("worker revalidation rejects remount");
+    assert_eq!(
+        error,
+        ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(
+            ManagedLibraryFilesystemError::HardLinkFailed
+        )
+    );
+    runtime.fail_library_consolidation(error);
+
+    assert_eq!(
+        std::fs::read(&source_path).expect("source intact"),
+        b"audio bytes"
+    );
+    assert!(
+        !library_root
+            .join("Unknown Artist/Unknown Album/Song.flac")
+            .exists()
+    );
+    assert_eq!(
+        store
+            .track(track_id(25))
+            .expect("stored track")
+            .expect("track exists")
+            .location
+            .relative_path
+            .as_path(),
+        Path::new("loose.flac")
+    );
+    assert_eq!(
+        runtime.notifications().persistent_stack()[0].category,
+        NotificationCategory::ManagedLibraryFilesystem
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
 fn consolidation_snapshot_cannot_clobber_newer_statistics_in_store_or_runtime() {
     let library_root = unique_test_directory();
     std::fs::create_dir_all(&library_root).expect("create library root");
@@ -1014,6 +1166,121 @@ fn consolidation_journal_recovery_retargets_moved_tracks_on_startup() {
     );
 
     std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn reference_mode_accepts_a_root_that_cannot_support_managed_moves() {
+    let first_root = unique_test_directory();
+    let second_root = unique_test_directory();
+    std::fs::create_dir_all(&first_root).expect("create first root");
+    std::fs::create_dir_all(&second_root).expect("create second root");
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(first_root.clone())),
+    )))
+    .expect("load settings")
+    .with_managed_library_filesystem_validator(ManagedLibraryFilesystemValidator::rejecting(
+        ManagedLibraryFilesystemError::HardLinkFailed,
+    ));
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(
+            UserSettings::with_library_path(Some(second_root.clone()))
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.settings().library_path(),
+        Some(second_root.as_path())
+    );
+    assert!(runtime.notifications().persistent_stack().is_empty());
+
+    std::fs::remove_dir_all(first_root).expect("remove first root");
+    std::fs::remove_dir_all(second_root).expect("remove second root");
+}
+
+#[test]
+fn enabling_managed_mode_rejects_incompatible_root_before_settings_save() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create root");
+    let settings = UserSettings::with_library_path(Some(root.clone()));
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings.clone())))
+            .expect("load settings")
+            .with_managed_library_filesystem_validator(
+                ManagedLibraryFilesystemValidator::rejecting(
+                    ManagedLibraryFilesystemError::HardLinkFailed,
+                ),
+            );
+    let mut updated = settings.clone();
+    updated.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(updated)),
+        Err(
+            ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(
+                ManagedLibraryFilesystemError::HardLinkFailed
+            )
+        )
+    );
+    assert_eq!(runtime.settings(), &settings);
+    assert_eq!(
+        runtime.notifications().persistent_stack()[0].category,
+        NotificationCategory::ManagedLibraryFilesystem
+    );
+
+    std::fs::remove_dir_all(root).expect("remove root");
+}
+
+#[test]
+fn managed_path_change_rejects_incompatible_root_before_persist_or_reconciliation() {
+    let old_root = unique_test_directory();
+    let new_root = unique_test_directory();
+    std::fs::create_dir_all(&old_root).expect("create old root");
+    std::fs::create_dir_all(&new_root).expect("create new root");
+    std::fs::write(old_root.join("track.flac"), b"audio").expect("write old track");
+    let track_id = track_id(26);
+    let store = Arc::new(InMemoryLibraryStore::new());
+    assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
+    let mut settings = UserSettings::with_library_path(Some(old_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings.clone())))
+            .expect("load settings")
+            .with_managed_library_filesystem_validator(
+                ManagedLibraryFilesystemValidator::rejecting(
+                    ManagedLibraryFilesystemError::HardLinkFailed,
+                ),
+            )
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+    let mut updated = settings.clone();
+    updated.library.path = Some(new_root.clone());
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(updated)),
+        Err(
+            ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(
+                ManagedLibraryFilesystemError::HardLinkFailed
+            )
+        )
+    );
+    assert_eq!(runtime.settings(), &settings);
+    assert!(!runtime.library_tracks()[0].location.is_missing());
+    assert!(
+        !store
+            .track(track_id)
+            .expect("stored track")
+            .expect("track exists")
+            .location
+            .is_missing()
+    );
+    assert_eq!(
+        runtime.notifications().persistent_stack()[0].category,
+        NotificationCategory::ManagedLibraryFilesystem
+    );
+
+    std::fs::remove_dir_all(old_root).expect("remove old root");
+    std::fs::remove_dir_all(new_root).expect("remove new root");
 }
 
 #[test]
@@ -1710,6 +1977,22 @@ fn runtime_set_rating_applies_optimistic_update_and_reports_tag_write_failure() 
     assert_eq!(posted.track_id, track_id);
     assert_eq!(posted.kind, crate::MetadataWriteKind::Rating);
     assert_eq!(posted.outcome, crate::MetadataWriteOutcome::Failed);
+    assert_eq!(
+        std::fs::read(&track_path).expect("reference-mode audio remains readable"),
+        b"not real audio"
+    );
+    assert_eq!(
+        store
+            .tag_mirrors_due(i64::MAX, 10)
+            .expect("pending mirror")
+            .len(),
+        1
+    );
+    runtime.apply_metadata_writer_event(crate::MetadataWriterEvent::Mirror(posted));
+    assert_eq!(
+        runtime.notifications().persistent_stack()[0].category,
+        NotificationCategory::MetadataWrite
+    );
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }

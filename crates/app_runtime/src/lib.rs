@@ -99,7 +99,9 @@ pub use sustain_smart_shuffle::{
 
 pub use artwork_fetcher::{ArtworkFetchOutcome, ArtworkFetchResult};
 pub use library_scan::run_library_scan_task;
-pub use managed_library::{run_library_consolidation_task, run_library_import_task};
+pub use managed_library::{
+    ManagedLibraryFilesystemError, run_library_consolidation_task, run_library_import_task,
+};
 pub use metadata_writer::{
     ManagedMetadataRetargetResult, MetadataWriteKind, MetadataWriteOutcome, MetadataWriteResult,
     MetadataWriterEvent,
@@ -120,6 +122,7 @@ pub enum ApplicationRuntimeError {
     ArtworkFetchingUnavailable,
     ArtworkRejected,
     LibraryPathUnavailable,
+    ManagedLibraryFilesystemUnsupported(ManagedLibraryFilesystemError),
     LibraryConsolidationFailed,
     LibraryImportFailed,
     LibraryScanFailed,
@@ -218,6 +221,7 @@ pub struct LibraryImportTask {
     existing_tracks: Vec<Track>,
     library_store: Arc<dyn LibraryStore>,
     metadata_service: Arc<dyn MetadataService>,
+    managed_library_filesystem_validator: managed_library::ManagedLibraryFilesystemValidator,
     cancellation_requested: Arc<AtomicBool>,
 }
 
@@ -225,6 +229,7 @@ pub struct LibraryConsolidationTask {
     settings: UserSettings,
     existing_tracks: Vec<Track>,
     library_store: Arc<dyn LibraryStore>,
+    managed_library_filesystem_validator: managed_library::ManagedLibraryFilesystemValidator,
     cancellation_requested: Arc<AtomicBool>,
 }
 
@@ -304,6 +309,8 @@ pub struct ApplicationRuntime {
     library_scan_notification_id: Option<NotificationId>,
     library_import_notification_id: Option<NotificationId>,
     library_consolidation_notification_id: Option<NotificationId>,
+    managed_library_filesystem_notification_id: Option<NotificationId>,
+    managed_library_filesystem_validator: managed_library::ManagedLibraryFilesystemValidator,
     metadata_writer: Option<metadata_writer::MetadataWriter>,
     metadata_writer_event_sink: Option<async_channel::Sender<MetadataWriterEvent>>,
     metadata_write_notification_ids: BTreeMap<TrackId, NotificationId>,
@@ -446,6 +453,8 @@ impl ApplicationRuntime {
             library_scan_notification_id: None,
             library_import_notification_id: None,
             library_consolidation_notification_id: None,
+            managed_library_filesystem_notification_id: None,
+            managed_library_filesystem_validator: Default::default(),
             metadata_writer: None,
             metadata_writer_event_sink: None,
             metadata_write_notification_ids: BTreeMap::new(),
@@ -513,6 +522,8 @@ impl ApplicationRuntime {
             library_scan_notification_id: None,
             library_import_notification_id: None,
             library_consolidation_notification_id: None,
+            managed_library_filesystem_notification_id: None,
+            managed_library_filesystem_validator: Default::default(),
             metadata_writer: None,
             metadata_writer_event_sink: None,
             metadata_write_notification_ids: BTreeMap::new(),
@@ -552,6 +563,15 @@ impl ApplicationRuntime {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_managed_library_filesystem_validator(
+        mut self,
+        validator: managed_library::ManagedLibraryFilesystemValidator,
+    ) -> Self {
+        self.managed_library_filesystem_validator = validator;
+        self
+    }
+
     pub fn with_library_services(
         mut self,
         library_store: Arc<dyn LibraryStore>,
@@ -570,6 +590,7 @@ impl ApplicationRuntime {
             managed_library::recover_library_consolidation_journal(
                 library_path,
                 library_store.as_ref(),
+                &self.managed_library_filesystem_validator,
             )?;
         }
         self.library_tracks = library_scan::load_library_tracks(library_store.as_ref())?;
@@ -619,6 +640,7 @@ impl ApplicationRuntime {
             metadata_service,
             library_store,
             self.settings.library.path.clone(),
+            self.managed_library_filesystem_validator.clone(),
             self.metadata_writer_event_sink.clone(),
         ));
         Ok(())
@@ -693,15 +715,19 @@ impl ApplicationRuntime {
         self.finish_pending_managed_metadata_retarget(result.track_id);
         self.apply_track_updated(result.track_id);
         match result.outcome {
-            // A successful retarget commits the durable outbox intent but
-            // does not prove file tags have converged yet. Only the later
-            // mirror-success event may dismiss an existing retry warning.
-            Ok(()) => {}
-            Err(_) => self.push_or_update_metadata_write_warning(
-                result.track_id,
-                "A managed-library metadata edit could not finish safely. Sustain retained its recovery state where needed. Resolve filesystem access and retry the edit."
-                    .to_owned(),
-            ),
+            // A successful retarget revalidated the managed root before
+            // touching pathnames. It commits the durable outbox intent but
+            // does not prove file tags have converged yet: only the later
+            // mirror-success event may dismiss the per-track retry warning.
+            Ok(()) => self.dismiss_managed_library_filesystem_warning(),
+            Err(error) => {
+                self.report_managed_library_filesystem_error(&error);
+                self.push_or_update_metadata_write_warning(
+                    result.track_id,
+                    "A managed-library metadata edit could not finish safely. Sustain retained its recovery state where needed. Resolve filesystem access and retry the edit."
+                        .to_owned(),
+                );
+            }
         }
     }
 

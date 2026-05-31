@@ -84,8 +84,13 @@ impl ApplicationRuntime {
                 .settings
                 .library_path()
                 .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)?;
-            let outcome =
-                retarget_managed_metadata(library_path, library_store.as_ref(), track_id, &change);
+            let outcome = retarget_managed_metadata(
+                library_path,
+                library_store.as_ref(),
+                &self.managed_library_filesystem_validator,
+                track_id,
+                &change,
+            );
             self.apply_managed_metadata_retarget_result(ManagedMetadataRetargetResult {
                 track_id,
                 outcome: outcome.clone(),

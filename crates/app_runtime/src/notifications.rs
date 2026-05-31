@@ -56,6 +56,7 @@ pub enum NotificationCategory {
     LibraryScan,
     LibraryImport,
     LibraryConsolidation,
+    ManagedLibraryFilesystem,
     ArtworkFetch,
     MetadataWrite,
     PlaybackStatistics,
@@ -444,6 +445,7 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         }
         ApplicationRuntimeError::LibraryStoreFailed => "The library database could not be updated.",
         ApplicationRuntimeError::LibraryPathUnavailable => "Choose a library folder first.",
+        ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(error) => error.user_message(),
         ApplicationRuntimeError::LibraryImportFailed => {
             "The files could not be added to the library."
         }

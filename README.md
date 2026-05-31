@@ -46,8 +46,14 @@ Managed-library organization can depend on hard links to move files without
 copying file contents and without overwriting existing files. This is suitable
 for normal local Linux filesystems such as ext4, XFS, Btrfs, and ZFS, but it can
 fail on filesystems or mounts that do not support hard links, such as some SMB,
-FUSE, FAT/exFAT, or restricted network shares. In those cases Sustain fails the
-organization step rather than falling back to copy/delete.
+FUSE, FAT/exFAT, or restricted network shares. Sustain permits those locations
+for "Don't touch my files" indexing and playback, but refuses to enable or run
+organized-library mutations there. Metadata edits still mirror tags back to
+individual files when each target filesystem can publish the replacement
+safely; otherwise SQLite remains authoritative and Sustain retains the pending
+mirror for retry. A behavioral preflight catches incompatible organized roots,
+but no probe can prove crash durability: use a normal local Linux filesystem
+for "Keep my library organized".
 
 `*` _If you have ideas I'm open to discussion. A consolidated Sustain is probably preferable over a fork with marginal changes._
 

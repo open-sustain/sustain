@@ -19,6 +19,7 @@ use sustain_domain::{TrackId, TrackLocation, TrackRelativePath};
 
 use crate::{ApplicationRuntimeError, ApplicationRuntimeResult};
 
+use super::capabilities::ManagedLibraryFilesystemValidator;
 use super::consolidation::PlannedLibraryConsolidationMove;
 use super::file_ops::{
     FileIdentity, regular_file_identity, remove_file_and_sync_parent, sync_directory,
@@ -38,11 +39,15 @@ struct ConsolidationJournalEntry {
 pub(crate) fn recover_library_consolidation_journal(
     library_path: &Path,
     library_store: &dyn sustain_library_store::LibraryStore,
+    managed_library_filesystem_validator: &ManagedLibraryFilesystemValidator,
 ) -> ApplicationRuntimeResult<()> {
     let journal_path = consolidation_journal_path(library_path);
     if !journal_path.exists() {
         return Ok(());
     }
+    managed_library_filesystem_validator
+        .validate(library_path)
+        .map_err(ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported)?;
 
     let entries = read_consolidation_journal(library_path)?;
     for entry in &entries {
@@ -202,7 +207,7 @@ pub(super) fn write_consolidation_journal(
     result
 }
 
-fn publish_journal_without_overwrite(
+pub(super) fn publish_journal_without_overwrite(
     temporary_path: &Path,
     journal_path: &Path,
 ) -> std::io::Result<()> {
@@ -358,8 +363,9 @@ mod tests {
     use sustain_library_store::{InMemoryLibraryStore, LibraryStore};
 
     use super::{
-        CONSOLIDATION_JOURNAL_FILE_NAME, CONSOLIDATION_JOURNAL_HEADER, encode_relative_path,
-        publish_journal_without_overwrite, recover_library_consolidation_journal,
+        CONSOLIDATION_JOURNAL_FILE_NAME, CONSOLIDATION_JOURNAL_HEADER,
+        ManagedLibraryFilesystemValidator, encode_relative_path, publish_journal_without_overwrite,
+        recover_library_consolidation_journal,
     };
 
     #[derive(Clone, Copy, Debug)]
@@ -395,8 +401,12 @@ mod tests {
                 }
             }
 
-            recover_library_consolidation_journal(&fixture.root, &fixture.store)
-                .expect("recovery succeeds");
+            recover_library_consolidation_journal(
+                &fixture.root,
+                &fixture.store,
+                &ManagedLibraryFilesystemValidator::default(),
+            )
+            .expect("recovery succeeds");
 
             let recovered_path = fixture.stored_relative_path();
             match boundary {
@@ -423,7 +433,14 @@ mod tests {
         fixture.publish_journal();
         fixture.remove_source();
 
-        assert!(recover_library_consolidation_journal(&fixture.root, &fixture.store).is_err());
+        assert!(
+            recover_library_consolidation_journal(
+                &fixture.root,
+                &fixture.store,
+                &ManagedLibraryFilesystemValidator::default(),
+            )
+            .is_err()
+        );
         assert!(fixture.journal_path().exists());
         assert_eq!(fixture.stored_relative_path(), fixture.source_relative);
     }
@@ -441,7 +458,14 @@ mod tests {
         .expect("create destination directory");
         fs::write(&fixture.destination_path, b"unrelated bytes").expect("write unrelated file");
 
-        assert!(recover_library_consolidation_journal(&fixture.root, &fixture.store).is_err());
+        assert!(
+            recover_library_consolidation_journal(
+                &fixture.root,
+                &fixture.store,
+                &ManagedLibraryFilesystemValidator::default(),
+            )
+            .is_err()
+        );
         assert!(fixture.journal_path().exists());
         assert_eq!(fixture.stored_relative_path(), fixture.source_relative);
         assert_eq!(
@@ -459,7 +483,14 @@ mod tests {
             .delete_track(fixture.track_id)
             .expect("delete track row");
 
-        assert!(recover_library_consolidation_journal(&fixture.root, &fixture.store).is_err());
+        assert!(
+            recover_library_consolidation_journal(
+                &fixture.root,
+                &fixture.store,
+                &ManagedLibraryFilesystemValidator::default(),
+            )
+            .is_err()
+        );
         assert!(fixture.journal_path().exists());
         assert!(fixture.source_path.exists());
     }

@@ -27,14 +27,23 @@ never written to file tags. See `AGENTS.md` for the full persistence policy.
 A single tickbox in Preferences chooses between:
 
 - **Don't touch my files** *(default)* — Sustain indexes the configured
-  library folder in place. Files are never moved, renamed, or copied.
+  library folder in place. Files are never moved, renamed, or copied. A
+  readable folder is sufficient for indexing and playback, including
+  read-only or hard-link-incompatible roots.
 - **Keep my library organized** — Sustain owns the layout. New files are
   copied into `Artist/Album/NN Title.ext`; existing files are reorganized
-  in the background.
+  in the background. Before enabling the mode and before each managed
+  mutation, Sustain behaviorally probes the selected root for the durable
+  hard-link and recovery-journal primitives it needs.
 
 Toggling the mode starts or cancels the background organization task. There
 is no separate "Consolidate Library" button — turning the tickbox on *is*
 the consolidate action.
+
+SQLite remains authoritative in both modes. Courtesy tag mirroring is
+published safely per audio file and retained for automatic retry when a
+particular target filesystem or permission policy refuses the replacement.
+Sustain never falls back to an in-place tag rewrite.
 
 ### Library folder picker — *iso-iTunes*
 Preferences exposes a folder chooser plus a manual "Scan Library" trigger.
@@ -73,7 +82,11 @@ hard-link source → destination, then unlink the source. It refuses to
 overwrite an existing destination and fails (rather than copy/deleting)
 on cross-device moves. This is safe on ext4, XFS, Btrfs, and ZFS; it
 fails clean on SMB/FUSE/exFAT and other filesystems that don't support
-hard links.
+hard links. Sustain probes the selected root before managed mutations and
+keeps the user's organized-mode preference intact if a later remount stops
+satisfying the contract. The probe reduces avoidable failures but cannot
+prove crash durability, so organized libraries should use normal local
+Linux filesystems.
 
 ### Recovery journal — *Sustain-native*
 Managed reorganization writes a small journal at the library root before

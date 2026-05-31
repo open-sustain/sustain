@@ -21,15 +21,18 @@ use crate::{
     NotificationCategory, NotificationSeverity, notifications,
 };
 
+mod capabilities;
 mod consolidation;
 mod file_ops;
 mod import;
 mod journal;
 
+pub use capabilities::ManagedLibraryFilesystemError;
 pub use consolidation::run_library_consolidation_task;
 pub use import::run_library_import_task;
 pub(crate) use journal::recover_library_consolidation_journal;
 
+pub(crate) use capabilities::ManagedLibraryFilesystemValidator;
 use consolidation::plan_managed_track_retarget;
 use file_ops::{move_file_without_copy_or_overwrite_matching_identity, rollback_file_move};
 use journal::{remove_consolidation_journal_if_present, write_consolidation_journal};
@@ -57,6 +60,10 @@ impl ApplicationRuntime {
         paths: Vec<PathBuf>,
     ) -> ApplicationRuntimeResult<LibraryImportTask> {
         self.ensure_no_conflicting_library_mutation()?;
+        if self.settings.library.management_mode == LibraryManagementMode::CopyAddedFilesIntoLibrary
+        {
+            self.ensure_managed_library_filesystem_supported()?;
+        }
 
         let library_store = self
             .library_store
@@ -84,6 +91,7 @@ impl ApplicationRuntime {
             existing_tracks: self.library_tracks.clone(),
             library_store,
             metadata_service,
+            managed_library_filesystem_validator: self.managed_library_filesystem_validator.clone(),
             cancellation_requested,
         })
     }
@@ -113,11 +121,13 @@ impl ApplicationRuntime {
         if let Some(id) = self.library_import_notification_id.take() {
             self.dismiss_notification(id);
         }
-        self.push_ephemeral_notification(
-            NotificationCategory::LibraryImport,
-            NotificationSeverity::Error,
-            notifications::runtime_error_text(&error).to_owned(),
-        );
+        if !self.report_managed_library_filesystem_error(&error) {
+            self.push_ephemeral_notification(
+                NotificationCategory::LibraryImport,
+                NotificationSeverity::Error,
+                notifications::runtime_error_text(&error).to_owned(),
+            );
+        }
     }
 
     pub fn prepare_library_consolidation(
@@ -128,6 +138,7 @@ impl ApplicationRuntime {
         {
             return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
         }
+        self.ensure_managed_library_filesystem_supported()?;
 
         let library_store = self
             .library_store
@@ -148,6 +159,7 @@ impl ApplicationRuntime {
             settings: self.settings.clone(),
             existing_tracks: self.library_tracks.clone(),
             library_store,
+            managed_library_filesystem_validator: self.managed_library_filesystem_validator.clone(),
             cancellation_requested,
         })
     }
@@ -196,11 +208,72 @@ impl ApplicationRuntime {
         if let Some(id) = self.library_consolidation_notification_id.take() {
             self.dismiss_notification(id);
         }
-        self.push_ephemeral_notification(
-            NotificationCategory::LibraryConsolidation,
-            NotificationSeverity::Error,
-            notifications::runtime_error_text(&error).to_owned(),
-        );
+        if !self.report_managed_library_filesystem_error(&error) {
+            self.push_ephemeral_notification(
+                NotificationCategory::LibraryConsolidation,
+                NotificationSeverity::Error,
+                notifications::runtime_error_text(&error).to_owned(),
+            );
+        }
+    }
+
+    pub(crate) fn ensure_managed_library_filesystem_supported(
+        &mut self,
+    ) -> ApplicationRuntimeResult<()> {
+        let library_path = self
+            .settings
+            .library_path()
+            .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)?
+            .to_path_buf();
+        self.ensure_managed_library_filesystem_supported_at(&library_path)
+    }
+
+    pub(crate) fn ensure_managed_library_filesystem_supported_at(
+        &mut self,
+        library_path: &Path,
+    ) -> ApplicationRuntimeResult<()> {
+        match self
+            .managed_library_filesystem_validator
+            .validate(library_path)
+        {
+            Ok(()) => {
+                self.dismiss_managed_library_filesystem_warning();
+                Ok(())
+            }
+            Err(error) => {
+                let error = ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(error);
+                self.report_managed_library_filesystem_error(&error);
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn report_managed_library_filesystem_error(
+        &mut self,
+        error: &ApplicationRuntimeError,
+    ) -> bool {
+        let ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(error) = error else {
+            return false;
+        };
+        let body = error.user_message().to_owned();
+        if let Some(id) = self.managed_library_filesystem_notification_id {
+            self.update_notification_body(id, body);
+        } else {
+            let id = self.push_persistent_notification(
+                NotificationCategory::ManagedLibraryFilesystem,
+                NotificationSeverity::Error,
+                body,
+                false,
+            );
+            self.managed_library_filesystem_notification_id = Some(id);
+        }
+        true
+    }
+
+    pub(crate) fn dismiss_managed_library_filesystem_warning(&mut self) {
+        if let Some(id) = self.managed_library_filesystem_notification_id.take() {
+            self.dismiss_notification(id);
+        }
     }
 }
 
@@ -219,12 +292,14 @@ pub(super) fn metadata_change_affects_managed_path(change: &MetadataChange) -> b
 pub(crate) fn retarget_managed_metadata(
     library_path: &Path,
     library_store: &dyn sustain_library_store::LibraryStore,
+    managed_library_filesystem_validator: &ManagedLibraryFilesystemValidator,
     track_id: TrackId,
     change: &MetadataChange,
 ) -> ApplicationRuntimeResult<()> {
     retarget_managed_metadata_with_persist(
         library_path,
         library_store,
+        managed_library_filesystem_validator,
         track_id,
         change,
         |updated_track| {
@@ -240,11 +315,19 @@ pub(crate) fn retarget_managed_metadata(
 fn retarget_managed_metadata_with_persist(
     library_path: &Path,
     library_store: &dyn sustain_library_store::LibraryStore,
+    managed_library_filesystem_validator: &ManagedLibraryFilesystemValidator,
     track_id: TrackId,
     change: &MetadataChange,
     persist_moved_track: impl FnOnce(&Track) -> StoreResult<()>,
 ) -> ApplicationRuntimeResult<()> {
-    recover_library_consolidation_journal(library_path, library_store)?;
+    managed_library_filesystem_validator
+        .validate(library_path)
+        .map_err(ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported)?;
+    recover_library_consolidation_journal(
+        library_path,
+        library_store,
+        managed_library_filesystem_validator,
+    )?;
 
     let existing_tracks = library_store
         .tracks()
@@ -319,8 +402,8 @@ mod tests {
     use sustain_library_store::{InMemoryLibraryStore, LibraryStore, StoreError};
 
     use super::{
-        ApplicationRuntimeError, recover_library_consolidation_journal,
-        retarget_managed_metadata_with_persist,
+        ApplicationRuntimeError, ManagedLibraryFilesystemValidator,
+        recover_library_consolidation_journal, retarget_managed_metadata_with_persist,
     };
 
     #[test]
@@ -354,11 +437,18 @@ mod tests {
             ..MetadataChange::default()
         };
         let destination_path = RefCell::new(None);
-        let outcome =
-            retarget_managed_metadata_with_persist(&root, &store, track.id, &change, |updated| {
+        let validator = ManagedLibraryFilesystemValidator::default();
+        let outcome = retarget_managed_metadata_with_persist(
+            &root,
+            &store,
+            &validator,
+            track.id,
+            &change,
+            |updated| {
                 destination_path.replace(Some(updated.location.absolute_path(&root)));
                 Err(StoreError::StoreUnavailable)
-            });
+            },
+        );
 
         assert_eq!(outcome, Err(ApplicationRuntimeError::LibraryStoreFailed));
         assert!(
@@ -380,7 +470,8 @@ mod tests {
         );
         assert!(store.tag_mirrors_due(0, 10).expect("outbox").is_empty());
 
-        recover_library_consolidation_journal(&root, &store).expect("recover retained journal");
+        recover_library_consolidation_journal(&root, &store, &validator)
+            .expect("recover retained journal");
         assert!(!root.join(".sustain-consolidation-journal").exists());
         fs::remove_dir_all(root).expect("remove fixture root");
     }

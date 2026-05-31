@@ -54,11 +54,16 @@ pub(crate) fn library_consolidation_requested_callback(
             match runtime.prepare_library_consolidation() {
                 Ok(task) => task,
                 Err(error) => {
-                    runtime.push_ephemeral_notification(
-                        NotificationCategory::LibraryConsolidation,
-                        NotificationSeverity::Error,
-                        runtime_error_text(&error).to_owned(),
-                    );
+                    if !matches!(
+                        error,
+                        ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(_)
+                    ) {
+                        runtime.push_ephemeral_notification(
+                            NotificationCategory::LibraryConsolidation,
+                            NotificationSeverity::Error,
+                            runtime_error_text(&error).to_owned(),
+                        );
+                    }
                     return Err(error);
                 }
             }

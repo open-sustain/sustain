@@ -32,7 +32,10 @@ use sustain_library_store::{
 };
 use sustain_metadata::{MetadataError, MetadataService};
 
-use crate::{ApplicationRuntimeError, managed_library::retarget_managed_metadata};
+use crate::{
+    ApplicationRuntimeError,
+    managed_library::{ManagedLibraryFilesystemValidator, retarget_managed_metadata},
+};
 
 const DRAIN_BATCH_SIZE: usize = 64;
 const MAX_RETRY_DELAY_SECONDS: i64 = 5 * 60;
@@ -97,6 +100,7 @@ impl MetadataWriter {
         metadata_service: Arc<dyn MetadataService>,
         library_store: Arc<dyn LibraryStore>,
         library_path: Option<PathBuf>,
+        managed_library_filesystem_validator: ManagedLibraryFilesystemValidator,
         result_sink: Option<async_channel::Sender<MetadataWriterEvent>>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
@@ -111,6 +115,7 @@ impl MetadataWriter {
                     metadata_service,
                     worker_library_store,
                     library_path,
+                    managed_library_filesystem_validator,
                     worker_result_sink,
                 );
             })
@@ -225,6 +230,7 @@ fn worker_loop(
     metadata_service: Arc<dyn MetadataService>,
     library_store: Arc<dyn LibraryStore>,
     mut library_path: Option<PathBuf>,
+    managed_library_filesystem_validator: ManagedLibraryFilesystemValidator,
     result_sink: Arc<Mutex<Option<async_channel::Sender<MetadataWriterEvent>>>>,
 ) {
     let mut active = false;
@@ -255,6 +261,7 @@ fn worker_loop(
                     command,
                     library_store.as_ref(),
                     &mut library_path,
+                    &managed_library_filesystem_validator,
                     &mut active,
                     &result_sink,
                 ) {
@@ -265,6 +272,7 @@ fn worker_loop(
                         command,
                         library_store.as_ref(),
                         &mut library_path,
+                        &managed_library_filesystem_validator,
                         &mut active,
                         &result_sink,
                     ) {
@@ -360,6 +368,7 @@ fn apply_command(
     command: MetadataWriterCommand,
     library_store: &dyn LibraryStore,
     library_path: &mut Option<PathBuf>,
+    managed_library_filesystem_validator: &ManagedLibraryFilesystemValidator,
     active: &mut bool,
     result_sink: &Mutex<Option<async_channel::Sender<MetadataWriterEvent>>>,
 ) -> bool {
@@ -373,7 +382,13 @@ fn apply_command(
                 .as_deref()
                 .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)
                 .and_then(|library_path| {
-                    retarget_managed_metadata(library_path, library_store, track_id, &change)
+                    retarget_managed_metadata(
+                        library_path,
+                        library_store,
+                        managed_library_filesystem_validator,
+                        track_id,
+                        &change,
+                    )
                 });
             emit_event(
                 result_sink,
@@ -586,6 +601,7 @@ mod tests {
             service.clone(),
             store.clone(),
             Some(root.clone()),
+            ManagedLibraryFilesystemValidator::default(),
             Some(result_tx),
         );
         writer.nudge();
@@ -660,6 +676,7 @@ mod tests {
             service.clone(),
             store.clone(),
             Some(root.clone()),
+            ManagedLibraryFilesystemValidator::default(),
             Some(event_tx),
         );
         assert!(writer.retarget_managed_metadata(
@@ -768,6 +785,7 @@ mod tests {
             service.clone(),
             store.clone(),
             Some(root.clone()),
+            ManagedLibraryFilesystemValidator::default(),
             Some(event_tx),
         );
         assert!(writer.retarget_managed_metadata(

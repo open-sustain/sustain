@@ -89,6 +89,15 @@ impl UiCommandController {
     }
 
     fn report_command_error(&self, error: &ApplicationRuntimeError) {
+        if matches!(
+            error,
+            ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(_)
+        ) {
+            // The runtime owns a persistent, typed warning for this
+            // condition so it remains visible until a managed-root probe
+            // succeeds. Do not stack a transient command error above it.
+            return;
+        }
         self.report_command_message(
             NotificationSeverity::Error,
             runtime_error_text(error).to_owned(),

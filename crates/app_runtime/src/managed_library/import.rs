@@ -28,7 +28,10 @@ use crate::{
     LibraryImportTask, library_scan,
 };
 
-use super::file_ops::{copy_file_verified, remove_copied_files};
+use super::{
+    capabilities::ManagedLibraryFilesystemValidator,
+    file_ops::{copy_file_verified, remove_copied_files},
+};
 
 pub fn run_library_import_task(
     task: LibraryImportTask,
@@ -38,6 +41,7 @@ pub fn run_library_import_task(
         existing_tracks: task.existing_tracks,
         library_store: task.library_store,
         metadata_service: task.metadata_service,
+        managed_library_filesystem_validator: task.managed_library_filesystem_validator,
         cancellation_requested: task.cancellation_requested,
     };
 
@@ -49,6 +53,7 @@ struct LibraryImportContext {
     existing_tracks: Vec<Track>,
     library_store: std::sync::Arc<dyn sustain_library_store::LibraryStore>,
     metadata_service: std::sync::Arc<dyn sustain_metadata::MetadataService>,
+    managed_library_filesystem_validator: ManagedLibraryFilesystemValidator,
     cancellation_requested: Arc<AtomicBool>,
 }
 
@@ -83,6 +88,9 @@ impl LibraryImportContext {
             .library_path()
             .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)?
             .to_path_buf();
+        self.managed_library_filesystem_validator
+            .validate(&library_path)
+            .map_err(ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported)?;
         let canonical_library_path = fs::canonicalize(&library_path).ok();
 
         let discovered_files =

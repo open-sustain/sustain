@@ -51,6 +51,18 @@ impl ApplicationRuntime {
                         return Err(ApplicationRuntimeError::BackgroundTaskRunning);
                     }
                 }
+                let organized_library_contract_changed = settings.library.management_mode
+                    == LibraryManagementMode::CopyAddedFilesIntoLibrary
+                    && (self.settings.library.management_mode
+                        != LibraryManagementMode::CopyAddedFilesIntoLibrary
+                        || settings.library.path != self.settings.library.path);
+                if organized_library_contract_changed {
+                    let library_path = settings
+                        .library_path()
+                        .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)?
+                        .to_path_buf();
+                    self.ensure_managed_library_filesystem_supported_at(&library_path)?;
+                }
                 let previous_library_path = self.settings.library.path.clone();
                 let previous_analysis = self.settings.analysis;
                 let previous_online = self.settings.online;
