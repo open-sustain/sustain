@@ -154,6 +154,75 @@ fn sqlite_store_preserves_missing_track_location_state() {
 }
 
 #[test]
+fn sqlite_store_round_trips_non_utf8_relative_paths_byte_for_byte() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::{ffi::OsString, time::SystemTime};
+
+    // Two distinct Linux filenames differing only by an invalid UTF-8
+    // byte (0xFF vs 0xFE). Both render lossily to the same "track�.mp3",
+    // so a `to_string_lossy` round-trip would collapse them onto one
+    // UNIQUE row and resolve the wrong file after restart. We require
+    // byte-exact storage and two distinct rows.
+    let first_bytes = b"artist/track\xFF.mp3".to_vec();
+    let second_bytes = b"artist/track\xFE.mp3".to_vec();
+    let first_path = TrackRelativePath::new(PathBuf::from(OsString::from_vec(first_bytes.clone())))
+        .expect("first non-utf8 path is a valid relative path");
+    let second_path =
+        TrackRelativePath::new(PathBuf::from(OsString::from_vec(second_bytes.clone())))
+            .expect("second non-utf8 path is a valid relative path");
+
+    // A real library root with both files on disk, so the reloaded paths
+    // can be proven to resolve to the actual files after a restart.
+    let root = std::env::temp_dir().join(format!(
+        "sustain_nonutf8_paths_{}",
+        SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("artist")).expect("create library artist directory");
+    std::fs::write(first_path.resolve(&root), b"one").expect("write first file");
+    std::fs::write(second_path.resolve(&root), b"two").expect("write second file");
+    let db_path = root.join("library.sqlite");
+
+    let first_track = Track {
+        location: TrackLocation::available(first_path),
+        ..track(1, "ignored.mp3")
+    };
+    let second_track = Track {
+        location: TrackLocation::available(second_path),
+        ..track(2, "ignored.mp3")
+    };
+
+    {
+        let store = SqliteLibraryStore::open(&db_path).expect("open library database");
+        assert_eq!(store.save_track(first_track.clone()), Ok(()));
+        // Distinct bytes must not collide on the UNIQUE constraint.
+        assert_eq!(store.save_track(second_track.clone()), Ok(()));
+    }
+
+    // Restart: reopen the database and reload from disk.
+    let store = SqliteLibraryStore::open(&db_path).expect("reopen library database");
+    let loaded = store.tracks().expect("reload tracks");
+    assert_eq!(loaded.len(), 2, "two distinct non-utf8 paths stay two rows");
+    assert_eq!(loaded, vec![first_track, second_track]);
+
+    // Byte-exact round trip, and each reloaded path resolves to its file.
+    assert_eq!(
+        loaded[0].location.path().as_os_str().as_bytes(),
+        first_bytes.as_slice()
+    );
+    assert_eq!(
+        loaded[1].location.path().as_os_str().as_bytes(),
+        second_bytes.as_slice()
+    );
+    assert!(loaded[0].location.absolute_path(&root).exists());
+    assert!(loaded[1].location.absolute_path(&root).exists());
+
+    std::fs::remove_dir_all(&root).expect("clean up test library");
+}
+
+#[test]
 fn in_memory_store_deletes_tracks_and_clears_playlist_entries() {
     let store = InMemoryLibraryStore::new();
     let first_track = track(1, "a.flac");

@@ -40,8 +40,9 @@ use sqlite_rows::{
     blob_to_waveform_segments, build_limit, duration_to_seconds, limit_selection_name,
     load_smart_playlist_rules, match_kind_from_name, match_kind_name, optional_i64,
     optional_playlist_folder_id_from_row, optional_string, playlist_entries,
-    playlist_folder_from_row, playlist_id_from_db, rule_to_columns, smart_playlist_id_from_db,
-    system_time_to_unix, track_from_row, u32_from_row, waveform_segments_to_blob,
+    playlist_folder_from_row, playlist_id_from_db, relative_path_bytes, rule_to_columns,
+    smart_playlist_id_from_db, system_time_to_unix, track_from_row, u32_from_row,
+    waveform_segments_to_blob,
 };
 
 pub type StoreResult<T> = Result<T, StoreError>;

@@ -12,7 +12,13 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY,
-    relative_path TEXT NOT NULL UNIQUE,
+    -- Stored as the raw bytes of the Unix `OsStr`, not TEXT. Linux
+    -- filenames are arbitrary byte sequences and need not be UTF-8;
+    -- coercing them through `to_string_lossy` would replace invalid
+    -- bytes with U+FFFD, making the file unreachable after restart and
+    -- letting two distinct byte paths collapse onto one UNIQUE row. The
+    -- store-layer codec round-trips this BLOB to a `PathBuf` exactly.
+    relative_path BLOB NOT NULL UNIQUE,
     title TEXT,
     artist TEXT,
     album TEXT,

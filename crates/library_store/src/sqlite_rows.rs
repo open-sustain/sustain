@@ -98,20 +98,43 @@ fn optional_bool(row: &Row<'_>, index: usize) -> StoreResult<Option<bool>> {
 }
 
 fn track_location_from_row(row: &Row<'_>) -> StoreResult<TrackLocation> {
-    let path = row
-        .get::<_, String>(track_column::RELATIVE_PATH)
+    let path_bytes = row
+        .get::<_, Vec<u8>>(track_column::RELATIVE_PATH)
         .map_err(StoreError::from)?;
     let is_missing = row
         .get::<_, bool>(track_column::IS_MISSING)
         .map_err(StoreError::from)?;
-    let relative_path =
-        TrackRelativePath::new(path.clone()).ok_or(StoreError::InvalidStoredPath(path))?;
+    let relative_path = relative_path_from_bytes(path_bytes)?;
 
     if is_missing {
         Ok(TrackLocation::missing(relative_path))
     } else {
         Ok(TrackLocation::available(relative_path))
     }
+}
+
+/// The raw `OsStr` bytes of a track's relative path, for the
+/// `tracks.relative_path` BLOB column. Linux filenames are arbitrary
+/// byte sequences, so the path is stored and compared by exact bytes —
+/// never coerced through `to_string_lossy`, which would replace invalid
+/// UTF-8 with U+FFFD and could both lose the real file and collapse two
+/// distinct paths onto one UNIQUE row.
+pub(crate) fn relative_path_bytes(relative_path: &TrackRelativePath) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+
+    relative_path.as_path().as_os_str().as_bytes()
+}
+
+/// Rebuild a [`TrackRelativePath`] from the stored `OsStr` bytes,
+/// byte-for-byte. Fails only when the bytes do not form a valid relative
+/// path (absolute, parent-traversal, or empty) — which would mean the row
+/// was written by something other than [`relative_path_bytes`].
+pub(crate) fn relative_path_from_bytes(bytes: Vec<u8>) -> StoreResult<TrackRelativePath> {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
+
+    let path = PathBuf::from(OsString::from_vec(bytes));
+    TrackRelativePath::new(path.clone())
+        .ok_or_else(|| StoreError::InvalidStoredPath(path.to_string_lossy().into_owned()))
 }
 
 pub(crate) fn playlist_entries(

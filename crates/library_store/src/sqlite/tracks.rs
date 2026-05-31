@@ -8,7 +8,7 @@ use super::*;
 pub(super) fn save_track(connection: &Connection, track: &Track) -> StoreResult<()> {
     let metadata = &track.metadata;
     let statistics = &track.statistics;
-    let relative_path = track.location.relative_path.as_path().to_string_lossy();
+    let relative_path = relative_path_bytes(&track.location.relative_path);
     connection
         .execute(
             SAVE_TRACK_SQL.as_str(),
