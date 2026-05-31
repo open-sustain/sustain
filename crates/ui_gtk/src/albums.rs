@@ -11,7 +11,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sustain_app_runtime::{
     ApplicationCommand, PlaybackCommand, PlaybackQueueRequest, PlaybackQueueSource, ShuffleMode,
-    Track, TrackId, album_matches_search_text,
+    TrackId, album_matches_search_text,
 };
 
 use super::{
@@ -38,11 +38,6 @@ pub(crate) struct AlbumsView {
     command_controller: SharedCommandController,
     playback_changed: PlaybackChangedCallback,
     context_menu: TrackRowContextMenu,
-    /// Most recent library track list handed to the view. Always kept up
-    /// to date so the deferred first activation reflects whatever the
-    /// rest of the app has dispatched since startup. Source of truth for
-    /// the grouped `all_albums` once the view actually builds.
-    pending_tracks: Rc<RefCell<Vec<Track>>>,
     /// All grouped albums from the most recent group pass, unfiltered.
     /// `albums` (below) is derived from this by `apply_search`. Empty
     /// until the view is activated.
@@ -147,8 +142,11 @@ impl AlbumsView {
         // future zoom modal). Its worker pool sits idle until a view
         // queues its first request, and shuts down when the last `Rc`
         // is dropped at app teardown.
-        let initial_tracks = runtime.borrow().library_tracks().to_vec();
-
+        //
+        // The view keeps no track snapshot of its own: the runtime owns the
+        // authoritative `library_tracks`, and the deferred first activate()
+        // groups straight from it, so cold-start construction does no
+        // O(library-size) clone (#102).
         let view = Self {
             scroller,
             list_view,
@@ -157,7 +155,6 @@ impl AlbumsView {
             command_controller,
             playback_changed,
             context_menu,
-            pending_tracks: Rc::new(RefCell::new(initial_tracks)),
             all_albums: Rc::new(RefCell::new(Vec::new())),
             albums: Rc::new(RefCell::new(Vec::new())),
             search_text: Rc::new(RefCell::new(String::new())),
@@ -193,8 +190,12 @@ impl AlbumsView {
         self.regroup_and_apply_search();
     }
 
-    pub(crate) fn replace_tracks(&self, tracks: Vec<Track>) {
-        *self.pending_tracks.borrow_mut() = tracks;
+    /// Re-derive the album grid from the runtime's current library after a
+    /// full library change (scan/import/removal). While the view is dormant
+    /// this is a no-op — there is no snapshot to refresh and the first
+    /// activate() reads the runtime fresh — so a library change does not pay
+    /// for an off-screen regroup or any track clone.
+    pub(crate) fn replace_tracks(&self) {
         if !self.activated.get() {
             return;
         }
@@ -214,33 +215,23 @@ impl AlbumsView {
     /// time a background lyrics/tags/artwork/BPM/key/waveform job
     /// finished a single track.
     pub(crate) fn update_track(&self, track_id: TrackId) {
-        let refreshed = {
-            let runtime = self.runtime.borrow();
-            runtime
-                .library_tracks()
-                .iter()
-                .find(|track| track.id == track_id)
-                .cloned()
-        };
-        let Some(refreshed) = refreshed else {
-            return;
-        };
-
-        // Keep the dormant snapshot in sync so a later first
-        // activate() still sees the new value.
-        {
-            let mut pending = self.pending_tracks.borrow_mut();
-            let Some(slot) = pending.iter_mut().find(|track| track.id == track_id) else {
-                return;
-            };
-            *slot = refreshed.clone();
-        }
-
+        // While dormant there is no grouped state to patch: the runtime
+        // owns the authoritative track and the first activate() reads it
+        // fresh, so a background per-track update costs nothing here and a
+        // full sweep no longer scans an off-screen snapshot per track.
         if !self.activated.get() {
             return;
         }
 
-        let new_track_vm = album_track(&refreshed);
+        // Keyed O(log n) lookup of the refreshed track, not a linear scan
+        // of the whole library.
+        let new_track_vm = {
+            let runtime = self.runtime.borrow();
+            let Some(track) = runtime.library_track(track_id) else {
+                return;
+            };
+            album_track(track)
+        };
 
         let Some(affected_album_key) =
             replace_track_in_album(&mut self.all_albums.borrow_mut(), track_id, &new_track_vm)
@@ -301,7 +292,10 @@ impl AlbumsView {
     /// the column count consistent with whatever size the scroller
     /// happened to reach before activation.
     fn regroup_and_apply_search(&self) {
-        *self.all_albums.borrow_mut() = group_albums(&self.pending_tracks.borrow());
+        {
+            let runtime = self.runtime.borrow();
+            *self.all_albums.borrow_mut() = group_albums(runtime.library_tracks());
+        }
         self.visible_columns
             .set(columns_for_width(self.scroller.width()));
         self.apply_search();

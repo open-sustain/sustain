@@ -3551,6 +3551,28 @@ fn apply_track_updated_performs_one_keyed_lookup_and_no_full_scan() {
     );
 }
 
+#[test]
+fn library_track_keyed_lookup_finds_by_id_and_reports_absence() {
+    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    for id in [1, 2, 3] {
+        store
+            .save_track(test_track(track_id(id), &format!("track-{id}.flac")))
+            .expect("seed track");
+    }
+    let runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::default(),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(TestMetadataService))
+    .expect("install library services");
+
+    assert_eq!(
+        runtime.library_track(track_id(2)).map(|track| track.id),
+        Some(track_id(2))
+    );
+    assert!(runtime.library_track(track_id(99)).is_none());
+}
+
 fn runtime_with_one_track(library_path: Option<PathBuf>) -> ApplicationRuntime {
     let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
     store

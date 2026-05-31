@@ -1040,6 +1040,17 @@ impl ApplicationRuntime {
         &self.library_tracks
     }
 
+    /// Look up a single in-memory library track by id. `library_tracks` is
+    /// maintained sorted by id, so this is an O(log n) binary search — the
+    /// keyed path for per-track UI refreshes that must not rescan the whole
+    /// library.
+    pub fn library_track(&self, track_id: TrackId) -> Option<&Track> {
+        self.library_tracks
+            .binary_search_by_key(&track_id, |track| track.id)
+            .ok()
+            .map(|index| &self.library_tracks[index])
+    }
+
     pub fn playlists(&self) -> &[Playlist] {
         &self.playlists
     }

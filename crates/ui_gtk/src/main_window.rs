@@ -921,10 +921,10 @@ fn library_changed_callback(
         let search_text = current_search_text.borrow().clone();
         let rows = runtime_library_table_rows(&runtime.borrow(), &search_text);
         songs_table.replace_rows(rows);
-        // AlbumsView's internal apply_search() re-derives the visible album
-        // set from the new track list using the search text it already
-        // holds, so we don't need to call set_search_text here.
-        albums_view.replace_tracks(runtime.borrow().library_tracks().to_vec());
+        // AlbumsView re-derives the visible album set from the runtime's
+        // current library using the search text it already holds, so we
+        // pass no track snapshot and need not call set_search_text here.
+        albums_view.replace_tracks();
         // The Statistics page is library-wide; rebuild it only when it is
         // the visible view (otherwise its activator refreshes it on the
         // next visit), so a scan/import does not pay for an off-screen
