@@ -30,22 +30,33 @@
 //!   worker thread through an internal unbounded channel; the worker
 //!   mutates the interface state and emits `PropertiesChanged`.
 //!
-//! ## Shutdown
+//! ## Startup and shutdown
 //!
-//! [`MprisService`] holds the only sender for the outbound channel.
-//! Dropping the service closes the channel, which makes the worker's
-//! `recv().await` return `Err`, which exits the loop, which drops the
-//! zbus connection — releasing the bus name. The drop also joins the
-//! worker thread so the bus name is gone by the time the call returns.
+//! [`MprisService::start`] returns immediately: the bus connection and
+//! name acquisition happen on the worker thread, off the cold-start
+//! critical path, so window launch never waits on D-Bus. A hung or
+//! unavailable bus is bounded by a timeout and disables MPRIS rather than
+//! hanging anything.
+//!
+//! [`MprisService`] holds the only senders for the outbound update channel
+//! and a shutdown channel. Dropping the service closes both: closing the
+//! update channel makes a connected worker's `recv().await` return `Err`
+//! and exit its drain loop (dropping the zbus connection releases the bus
+//! name); closing the shutdown channel cancels a worker still racing the
+//! bus connection. Either way the drop joins the worker thread, so the bus
+//! name is gone by the time the call returns.
 
 use std::{
     collections::HashMap,
+    future::Future,
     sync::Arc,
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 use async_channel::Sender;
+use async_io::Timer;
+use futures_lite::FutureExt;
 use sustain_app_runtime::{PlaybackState, TrackId};
 use zbus::{
     connection, interface,
@@ -114,33 +125,86 @@ pub struct MprisStartConfig {
     pub command_sink: MprisPlaybackSink,
 }
 
+/// How long the background worker waits for the session bus before
+/// giving up and disabling MPRIS. It bounds resource use and shutdown
+/// latency on a hung or unhealthy bus; it never gates window
+/// presentation, which has already happened by the time it matters.
+const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct MprisService {
     update_tx: Sender<MprisUpdate>,
+    /// Closed on drop to cancel a worker still racing the bus connection
+    /// (the update channel only wakes a worker that already reached its
+    /// drain loop).
+    shutdown_tx: Sender<()>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl MprisService {
+    /// Spawn the MPRIS worker and return immediately. Connecting to the
+    /// session bus, acquiring the well-known name, and publishing the
+    /// objects all happen on the worker thread, *off* the cold-start
+    /// critical path — `start` never blocks on D-Bus, so window
+    /// presentation and the 400 ms first-idle budget never wait on it.
+    ///
+    /// State published before the bus is ready queues on the unbounded
+    /// update channel and is applied once bootstrap completes; a hung or
+    /// unavailable bus is bounded by a fixed `BOOTSTRAP_TIMEOUT` and
+    /// surfaces as a logged "disabled" rather than as a launch hang.
+    /// `start` itself only fails if the worker thread cannot be spawned.
     pub fn start(config: MprisStartConfig) -> DesktopResult<Self> {
+        Self::start_with_connector(config, BOOTSTRAP_TIMEOUT, build_connection)
+    }
+
+    /// Bootstrap seam shared by [`Self::start`] and the tests: `connect`
+    /// produces the bus-connection future. Tests substitute connectors
+    /// that delay, fail, or never resolve to exercise the bounded-timeout
+    /// and shutdown-cancellation paths without a live session bus.
+    fn start_with_connector<C, F>(
+        config: MprisStartConfig,
+        bootstrap_timeout: Duration,
+        connect: C,
+    ) -> DesktopResult<Self>
+    where
+        C: FnOnce(Arc<MprisPlaybackSink>) -> F + Send + 'static,
+        F: Future<Output = zbus::Result<zbus::Connection>>,
+    {
         let (update_tx, update_rx) = async_channel::unbounded::<MprisUpdate>();
-        let (startup_tx, startup_rx) = async_channel::bounded::<DesktopResult<()>>(1);
+        let (shutdown_tx, shutdown_rx) = async_channel::bounded::<()>(1);
         let command_sink = Arc::new(config.command_sink);
+        let started = Instant::now();
 
         let worker = thread::Builder::new()
             .name("sustain-mpris".to_owned())
             .spawn(move || {
                 async_io::block_on(async move {
-                    let connection = match build_connection(command_sink).await {
-                        Ok(connection) => {
-                            let _ = startup_tx.send(Ok(())).await;
-                            connection
-                        }
+                    // Race the connection against a bounded timeout and the
+                    // shutdown signal so neither a hung bus nor an early
+                    // drop can wedge the worker — launch already returned
+                    // and never waits on any of these.
+                    let timeout = async {
+                        Timer::after(bootstrap_timeout).await;
+                        Err::<zbus::Connection, _>(zbus::Error::Failure(
+                            "MPRIS session bus connection timed out".to_owned(),
+                        ))
+                    };
+                    let cancelled = async {
+                        let _ = shutdown_rx.recv().await;
+                        Err::<zbus::Connection, _>(zbus::Error::Failure(
+                            "MPRIS bootstrap cancelled".to_owned(),
+                        ))
+                    };
+                    let connection = match connect(command_sink).or(timeout).or(cancelled).await {
+                        Ok(connection) => connection,
                         Err(error) => {
-                            let _ = startup_tx
-                                .send(Err(DesktopError::BusConnectionFailed(error)))
-                                .await;
+                            eprintln!("Sustain: MPRIS (media key) integration disabled: {error}");
                             return;
                         }
                     };
+                    eprintln!(
+                        "[TIMING]     mpris: ready at {:.1}ms (off the cold-start path)",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
 
                     let player_ref: InterfaceRef<PlayerInterface> =
                         match connection.object_server().interface(OBJECT_PATH).await {
@@ -164,29 +228,11 @@ impl MprisService {
             })
             .map_err(DesktopError::ThreadSpawnFailed)?;
 
-        // Wait for the worker to finish its bootstrap so a startup error
-        // (bus unavailable, name taken) surfaces as a failed `start()`
-        // call rather than as a silent never-fires service. The channel
-        // is bounded(1), so this blocks at most one round-trip on the
-        // worker thread.
-        match async_io::block_on(startup_rx.recv()) {
-            Ok(Ok(())) => Ok(Self {
-                update_tx,
-                worker: Some(worker),
-            }),
-            Ok(Err(error)) => {
-                let _ = worker.join();
-                Err(error)
-            }
-            Err(_) => {
-                // The worker exited before reporting startup status.
-                // Treat as a generic bus failure.
-                let _ = worker.join();
-                Err(DesktopError::BusConnectionFailed(zbus::Error::Failure(
-                    "MPRIS worker exited during startup".to_owned(),
-                )))
-            }
-        }
+        Ok(Self {
+            update_tx,
+            shutdown_tx,
+            worker: Some(worker),
+        })
     }
 
     pub fn publish_playback_state(&self, state: PlaybackState) {
@@ -205,10 +251,13 @@ impl MprisService {
 
 impl Drop for MprisService {
     fn drop(&mut self) {
-        // Closing the sender wakes the worker's `recv().await` with Err,
-        // exits the loop, drops the connection (releasing the bus name),
-        // and lets `block_on` return.
+        // Close both channels so the worker exits promptly whatever phase
+        // it is in: the update channel wakes a connected worker's drain
+        // loop (dropping the connection releases the bus name); the
+        // shutdown channel cancels a worker still racing the bus
+        // connection. The join then returns without waiting on the bus.
         self.update_tx.close();
+        self.shutdown_tx.close();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -648,17 +697,105 @@ impl PlayerInterface {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use sustain_app_runtime::{PlaybackState, TrackId};
 
     use super::{
-        NowPlayingMetadata, PositionTracker, build_mpris_metadata, playback_position_micros,
-        playback_status_text,
+        MprisPlaybackSink, MprisService, MprisStartConfig, NowPlayingMetadata, PositionTracker,
+        build_mpris_metadata, playback_position_micros, playback_status_text,
     };
 
     fn track_id(value: i64) -> TrackId {
         TrackId::new(value).expect("positive test track id")
+    }
+
+    fn silent_config() -> MprisStartConfig {
+        MprisStartConfig {
+            command_sink: MprisPlaybackSink::new(|_command| {}),
+        }
+    }
+
+    #[test]
+    fn start_does_not_block_on_the_bus_and_drops_cleanly() {
+        // Uses the real connector. In the test environment the session bus
+        // is typically absent, so the connection fails fast on the worker
+        // thread — but either way `start` must return promptly (it never
+        // waits on D-Bus) and publishing before the bus is ready must be
+        // safe, queueing rather than panicking.
+        let started = Instant::now();
+        let service = MprisService::start(silent_config()).expect("spawn worker");
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "start must not block on the session bus"
+        );
+
+        service.publish_playback_state(PlaybackState::Stopped);
+        service.publish_now_playing(NowPlayingMetadata::default());
+
+        drop(service);
+    }
+
+    #[test]
+    fn bootstrap_is_bounded_by_the_timeout() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        struct DropFlag(Arc<AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let connect_future_dropped = Arc::new(AtomicBool::new(false));
+        let flag = connect_future_dropped.clone();
+        // A connector that never resolves stands in for a hung session bus.
+        let service = MprisService::start_with_connector(
+            silent_config(),
+            Duration::from_millis(50),
+            move |_sink| {
+                let guard = DropFlag(flag);
+                async move {
+                    // Held inside the future so it drops only when the
+                    // bootstrap is abandoned — i.e. when the timeout wins.
+                    let _guard = guard;
+                    std::future::pending::<zbus::Result<zbus::Connection>>().await
+                }
+            },
+        )
+        .expect("spawn worker");
+
+        // Without ever dropping the service, the timeout alone must end the
+        // bootstrap and abandon the connect future.
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(
+            connect_future_dropped.load(Ordering::SeqCst),
+            "a hung bus connection must be bounded by the bootstrap timeout"
+        );
+
+        drop(service);
+    }
+
+    #[test]
+    fn dropping_the_service_cancels_an_in_flight_bootstrap() {
+        // Never-resolving connector + effectively-infinite timeout: only
+        // the shutdown signal from drop can end the bootstrap.
+        let service = MprisService::start_with_connector(
+            silent_config(),
+            Duration::from_secs(3600),
+            |_sink| std::future::pending::<zbus::Result<zbus::Connection>>(),
+        )
+        .expect("spawn worker");
+
+        let started = Instant::now();
+        drop(service);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "drop must cancel an in-flight bootstrap and join promptly"
+        );
     }
 
     /// Drives `PositionTracker` with an explicit monotonic clock so the

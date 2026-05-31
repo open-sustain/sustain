@@ -2096,6 +2096,7 @@ version = "0.3.0-alpha.2"
 dependencies = [
  "async-channel",
  "async-io",
+ "futures-lite",
  "sustain-app-runtime",
  "zbus",
 ]

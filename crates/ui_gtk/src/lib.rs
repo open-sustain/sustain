@@ -231,10 +231,14 @@ pub fn run(mut runtime: ApplicationRuntime, application_id: &str) {
 
     let runtime = Rc::new(RefCell::new(runtime));
 
-    // Start the MPRIS server before any window is built so the bus name
-    // is claimed (or refused) deterministically at startup. The inbound
-    // channel carries method calls from the MPRIS worker thread to the
-    // GTK main thread, where they can safely touch the runtime.
+    // Spawn the MPRIS worker. `start` returns immediately: the session-bus
+    // connection and name acquisition run on the worker thread, off the
+    // cold-start critical path, so this never delays window presentation or
+    // the 400 ms first-idle budget (#98). State published before the bus is
+    // ready queues and is applied once it connects; a hung or unavailable
+    // bus is bounded and surfaces as a logged "disabled". The inbound
+    // channel carries method calls from the MPRIS worker thread to the GTK
+    // main thread, where they can safely touch the runtime.
     let (mpris_command_tx, mpris_command_rx) =
         async_channel::unbounded::<sustain_desktop::MprisCommand>();
     tlog!("about to start mpris");
