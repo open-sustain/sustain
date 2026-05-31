@@ -7,6 +7,8 @@
 //! `async_channel` receiver (or installs a runtime observer) and applies the
 //! result on the GTK main thread.
 
+use std::collections::HashSet;
+
 use super::*;
 
 /// Drains [`sustain_app_runtime::MetadataWriteResult`]s posted by the async metadata writer
@@ -139,8 +141,21 @@ pub(super) fn install_track_updated_consumer(
         return;
     };
     glib::MainContext::default().spawn_local(async move {
-        while let Ok(track_id) = receiver.recv().await {
-            runtime.borrow_mut().apply_track_updated(track_id);
+        while let Ok(first) = receiver.recv().await {
+            // Coalesce a burst before touching the store: a full analysis
+            // or online sweep posts ids faster than the main loop drains
+            // them, and one track commonly emits several in quick
+            // succession (bpm, then key, then audio). Refresh each row at
+            // most once per drain so repeated events for the same track do
+            // not each pay for a keyed query and a repaint.
+            let mut pending: HashSet<TrackId> = HashSet::from([first]);
+            while let Ok(next) = receiver.try_recv() {
+                pending.insert(next);
+            }
+            let mut runtime = runtime.borrow_mut();
+            for track_id in pending {
+                runtime.apply_track_updated(track_id);
+            }
         }
     });
 }

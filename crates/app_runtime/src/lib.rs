@@ -1279,11 +1279,11 @@ impl ApplicationRuntime {
         let Some(store) = self.library_store.as_deref() else {
             return;
         };
-        let refreshed = match store
-            .tracks()
-            .ok()
-            .and_then(|tracks| tracks.into_iter().find(|track| track.id == track_id))
-        {
+        // One keyed SQLite lookup, not a full-library decode. A 10k-track
+        // analysis sweep emits one event per persisted per-track update;
+        // re-reading and scanning every row here would be ~O(n^2) decodes
+        // on the GTK thread.
+        let refreshed = match store.track(track_id).ok().flatten() {
             Some(track) => track,
             None => return,
         };

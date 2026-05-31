@@ -18,7 +18,12 @@ use sustain_domain::{
     SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator, Track, TrackId,
     TrackLocation, TrackMetadata, UiSettings, UiSidebarSelection, UserSettings, VolumePercent,
 };
-use sustain_library_store::{InMemoryLibraryStore, LibraryStore, StoreResult};
+use sustain_library_store::{
+    AcousticFeatures, AnalysisCapabilities, AnalysisContext, InMemoryLibraryStore, LibraryStore,
+    OnlineCapabilities, OnlineContext, PlaylistFolder, StoreResult, StoredSmartShuffleIndex,
+    StoredSyncedLyrics, StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics,
+    TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
+};
 use sustain_metadata::{InitialTags, MetadataChange, MetadataError, MetadataResult};
 use sustain_playback::NullPlaybackService;
 use sustain_settings::{SettingsError, SettingsResult, SettingsStore};
@@ -3507,6 +3512,44 @@ fn apply_track_updated_reloads_from_store_and_fires_observer() {
     std::fs::remove_dir_all(root).expect("remove test library");
 }
 
+#[test]
+fn apply_track_updated_performs_one_keyed_lookup_and_no_full_scan() {
+    use std::sync::atomic::Ordering;
+
+    let inner = InMemoryLibraryStore::new();
+    inner
+        .save_track(test_track(track_id(7), "a.flac"))
+        .expect("seed inner store");
+
+    let counts = Arc::new(StoreCallCounts::default());
+    let store: Arc<dyn LibraryStore> = Arc::new(CallCountingLibraryStore {
+        inner,
+        counts: counts.clone(),
+    });
+
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("install library services");
+
+    // Setup (load_library_tracks) legitimately calls tracks() once; reset
+    // so the assertion measures only the per-track refresh.
+    counts.track.store(0, Ordering::SeqCst);
+    counts.tracks.store(0, Ordering::SeqCst);
+
+    runtime.apply_track_updated(track_id(7));
+
+    assert_eq!(
+        counts.track.load(Ordering::SeqCst),
+        1,
+        "applying one update must perform exactly one keyed track(id) lookup"
+    );
+    assert_eq!(
+        counts.tracks.load(Ordering::SeqCst),
+        0,
+        "applying one update must never decode the whole library via tracks()"
+    );
+}
+
 fn test_track(track_id: TrackId, path: &str) -> Track {
     Track {
         id: track_id,
@@ -3857,4 +3900,263 @@ fn online_run_is_a_force_path_that_does_not_pre_filter() {
         ),
         RunDecision::SchedulerUnavailable
     );
+}
+
+/// Counts the two read paths whose amplification #95 fixed.
+#[derive(Default)]
+struct StoreCallCounts {
+    track: std::sync::atomic::AtomicUsize,
+    tracks: std::sync::atomic::AtomicUsize,
+}
+
+/// A transparent [`LibraryStore`] decorator that counts `track` and
+/// `tracks` calls and delegates everything else to an inner
+/// [`InMemoryLibraryStore`]. It lets a test prove `apply_track_updated`
+/// reloads a single row by keyed id rather than decoding the whole
+/// library.
+struct CallCountingLibraryStore {
+    inner: InMemoryLibraryStore,
+    counts: Arc<StoreCallCounts>,
+}
+
+impl LibraryStore for CallCountingLibraryStore {
+    fn save_track(&self, track: Track) -> StoreResult<()> {
+        self.inner.save_track(track)
+    }
+
+    fn delete_track(&self, track_id: TrackId) -> StoreResult<()> {
+        self.inner.delete_track(track_id)
+    }
+
+    fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>> {
+        self.counts
+            .track
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.track(track_id)
+    }
+
+    fn tracks(&self) -> StoreResult<Vec<Track>> {
+        self.counts
+            .tracks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.tracks()
+    }
+
+    fn save_playlist(&self, playlist: Playlist) -> StoreResult<()> {
+        self.inner.save_playlist(playlist)
+    }
+
+    fn playlist(&self, playlist_id: PlaylistId) -> StoreResult<Option<Playlist>> {
+        self.inner.playlist(playlist_id)
+    }
+
+    fn playlists(&self) -> StoreResult<Vec<Playlist>> {
+        self.inner.playlists()
+    }
+
+    fn delete_playlist(&self, playlist_id: PlaylistId) -> StoreResult<()> {
+        self.inner.delete_playlist(playlist_id)
+    }
+
+    fn save_playlist_folder(&self, folder: PlaylistFolder) -> StoreResult<()> {
+        self.inner.save_playlist_folder(folder)
+    }
+
+    fn playlist_folder(&self, folder_id: PlaylistFolderId) -> StoreResult<Option<PlaylistFolder>> {
+        self.inner.playlist_folder(folder_id)
+    }
+
+    fn playlist_folders(&self) -> StoreResult<Vec<PlaylistFolder>> {
+        self.inner.playlist_folders()
+    }
+
+    fn delete_playlist_folder(&self, folder_id: PlaylistFolderId) -> StoreResult<()> {
+        self.inner.delete_playlist_folder(folder_id)
+    }
+
+    fn save_smart_playlist(&self, smart_playlist: SmartPlaylist) -> StoreResult<()> {
+        self.inner.save_smart_playlist(smart_playlist)
+    }
+
+    fn smart_playlist(
+        &self,
+        smart_playlist_id: SmartPlaylistId,
+    ) -> StoreResult<Option<SmartPlaylist>> {
+        self.inner.smart_playlist(smart_playlist_id)
+    }
+
+    fn smart_playlists(&self) -> StoreResult<Vec<SmartPlaylist>> {
+        self.inner.smart_playlists()
+    }
+
+    fn delete_smart_playlist(&self, smart_playlist_id: SmartPlaylistId) -> StoreResult<()> {
+        self.inner.delete_smart_playlist(smart_playlist_id)
+    }
+
+    fn load_track_column_layout(
+        &self,
+        scope: TrackColumnLayoutScope,
+    ) -> StoreResult<Option<TrackColumnLayout>> {
+        self.inner.load_track_column_layout(scope)
+    }
+
+    fn save_track_column_layout(
+        &self,
+        scope: TrackColumnLayoutScope,
+        layout: &TrackColumnLayout,
+    ) -> StoreResult<()> {
+        self.inner.save_track_column_layout(scope, layout)
+    }
+
+    fn delete_track_column_layout(&self, scope: TrackColumnLayoutScope) -> StoreResult<()> {
+        self.inner.delete_track_column_layout(scope)
+    }
+
+    fn record_analysis(
+        &self,
+        track_id: TrackId,
+        analysis: &TrackAnalysis,
+        capabilities: AnalysisCapabilities,
+        context: AnalysisContext,
+    ) -> StoreResult<()> {
+        self.inner
+            .record_analysis(track_id, analysis, capabilities, context)
+    }
+
+    fn record_analysis_attempt_failure(
+        &self,
+        track_id: TrackId,
+        capabilities: AnalysisCapabilities,
+        context: AnalysisContext,
+    ) -> StoreResult<()> {
+        self.inner
+            .record_analysis_attempt_failure(track_id, capabilities, context)
+    }
+
+    fn tracks_needing_analysis(
+        &self,
+        capabilities: AnalysisCapabilities,
+        analyzer_version: u32,
+        limit: usize,
+    ) -> StoreResult<Vec<TrackId>> {
+        self.inner
+            .tracks_needing_analysis(capabilities, analyzer_version, limit)
+    }
+
+    fn filter_tracks_needing_analysis(
+        &self,
+        track_ids: &[TrackId],
+        capabilities: AnalysisCapabilities,
+        analyzer_version: u32,
+    ) -> StoreResult<Vec<TrackId>> {
+        self.inner
+            .filter_tracks_needing_analysis(track_ids, capabilities, analyzer_version)
+    }
+
+    fn load_waveform(&self, track_id: TrackId) -> StoreResult<Option<StoredWaveform>> {
+        self.inner.load_waveform(track_id)
+    }
+
+    fn load_all_acoustics(&self) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
+        self.inner.load_all_acoustics()
+    }
+
+    fn record_synced_lyrics(
+        &self,
+        track_id: TrackId,
+        lyrics: &SyncedLyrics,
+        source: &str,
+    ) -> StoreResult<()> {
+        self.inner.record_synced_lyrics(track_id, lyrics, source)
+    }
+
+    fn load_synced_lyrics(&self, track_id: TrackId) -> StoreResult<Option<StoredSyncedLyrics>> {
+        self.inner.load_synced_lyrics(track_id)
+    }
+
+    fn clear_synced_lyrics(&self, track_id: TrackId) -> StoreResult<()> {
+        self.inner.clear_synced_lyrics(track_id)
+    }
+
+    fn record_online_attempt(
+        &self,
+        track_id: TrackId,
+        capabilities: OnlineCapabilities,
+        context: OnlineContext,
+    ) -> StoreResult<()> {
+        self.inner
+            .record_online_attempt(track_id, capabilities, context)
+    }
+
+    fn tracks_needing_online(
+        &self,
+        capabilities: OnlineCapabilities,
+        provider_version: u32,
+        limit: usize,
+    ) -> StoreResult<Vec<TrackId>> {
+        self.inner
+            .tracks_needing_online(capabilities, provider_version, limit)
+    }
+
+    fn filter_tracks_needing_online(
+        &self,
+        track_ids: &[TrackId],
+        capabilities: OnlineCapabilities,
+        provider_version: u32,
+    ) -> StoreResult<Vec<TrackId>> {
+        self.inner
+            .filter_tracks_needing_online(track_ids, capabilities, provider_version)
+    }
+
+    fn save_smart_shuffle_index(&self, index: &StoredSmartShuffleIndex) -> StoreResult<()> {
+        self.inner.save_smart_shuffle_index(index)
+    }
+
+    fn load_smart_shuffle_index(&self) -> StoreResult<Option<StoredSmartShuffleIndex>> {
+        self.inner.load_smart_shuffle_index()
+    }
+
+    fn clear_smart_shuffle_index(&self) -> StoreResult<()> {
+        self.inner.clear_smart_shuffle_index()
+    }
+
+    fn save_sync_device(&self, device: &SyncDevice) -> StoreResult<()> {
+        self.inner.save_sync_device(device)
+    }
+
+    fn sync_device(&self, id: &SyncDeviceId) -> StoreResult<Option<SyncDevice>> {
+        self.inner.sync_device(id)
+    }
+
+    fn sync_devices(&self) -> StoreResult<Vec<SyncDevice>> {
+        self.inner.sync_devices()
+    }
+
+    fn delete_sync_device(&self, id: &SyncDeviceId) -> StoreResult<()> {
+        self.inner.delete_sync_device(id)
+    }
+
+    fn save_device_selection(
+        &self,
+        id: &SyncDeviceId,
+        selection: &[PlaylistItem],
+    ) -> StoreResult<()> {
+        self.inner.save_device_selection(id, selection)
+    }
+
+    fn device_selection(&self, id: &SyncDeviceId) -> StoreResult<Vec<PlaylistItem>> {
+        self.inner.device_selection(id)
+    }
+
+    fn save_device_manifest(
+        &self,
+        id: &SyncDeviceId,
+        entries: &[SyncManifestEntry],
+    ) -> StoreResult<()> {
+        self.inner.save_device_manifest(id, entries)
+    }
+
+    fn device_manifest(&self, id: &SyncDeviceId) -> StoreResult<Vec<SyncManifestEntry>> {
+        self.inner.device_manifest(id)
+    }
 }
