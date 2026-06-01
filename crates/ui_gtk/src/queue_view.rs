@@ -4,24 +4,20 @@
 //! The play-queue popover (issue #80).
 //!
 //! Rather than carrying a dedicated button or growing the LIBRARY
-//! section, the queue hangs off the transport Next control: resting the
-//! pointer on Next for a beat opens an arrow popover listing what plays
-//! after the current track. The list is a virtualised `gtk::ListView` so
-//! the common case — the entire library queued from the Songs view —
-//! stays cheap; only the handful of visible rows are ever realised.
+//! section, the queue hangs off the transport Next control: a right-click
+//! on Next opens an arrow popover listing what plays after the current
+//! track. The list is a virtualised `gtk::ListView`, so even a long queue
+//! stays cheap — only the handful of visible rows are ever realised.
 //!
 //! Each row is a two-line cell (title over artist) with the track's
 //! artwork on the left and an evict control that fades in on hover. Rows
 //! reorder by drag-and-drop and evict on click; both flow through
 //! [`PlaybackCommand`] so the runtime's `PlaybackQueue` stays the single
-//! source of truth. The popover opens after a short hover (so a quick
-//! fly-over does not trigger it) and closes once the pointer leaves both
-//! the button and the popover, with a small grace window so crossing the
-//! arrow gap between them does not flicker it shut.
+//! source of truth. A secondary (right) click on the Next button opens
+//! the popover; being autohide, it dismisses on click-outside or Escape.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Duration;
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -53,19 +49,9 @@ const QUEUE_VISIBLE_ROWS: i32 = 11;
 /// a long title never stretches the popover.
 const QUEUE_CONTENT_WIDTH: i32 = 380;
 
-/// Hover dwell before the popover opens. Long enough to reject a quick
-/// fly-over of the Next button, short enough to feel immediate.
-const QUEUE_HOVER_OPEN_DELAY: Duration = Duration::from_millis(50);
-
-/// Grace window after the pointer leaves the button or popover before the
-/// popover closes. Covers the brief moment when the pointer is crossing
-/// the arrow gap between the two and momentarily inside neither.
-const QUEUE_HOVER_CLOSE_GRACE: Duration = Duration::from_millis(150);
-
 const QUEUE_PAGE_LIST: &str = "list";
 const QUEUE_PAGE_EMPTY: &str = "empty";
 const QUEUE_EVICT_ICON: &str = "window-close-symbolic";
-const NEXT_BUTTON_TOOLTIP: &str = "Next";
 
 /// Per-row context shared with the list factory: everything a row's
 /// handlers need to render, reorder, or evict without reaching back into
@@ -78,12 +64,6 @@ struct QueueRowContext {
     /// Rebuilds the model and refreshes now-playing/MPRIS after an evict
     /// or reorder changes the queue.
     on_mutated: Rc<dyn Fn()>,
-    /// Set while a row drag is in flight so the hover bridge never closes
-    /// the popover mid-reorder.
-    drag_active: Rc<Cell<bool>>,
-    /// Re-arms the close check when a drag ends, in case it finished with
-    /// the pointer already outside the popover.
-    schedule_close: Rc<dyn Fn()>,
 }
 
 #[derive(Clone)]
@@ -108,27 +88,14 @@ impl QueueView {
 
         let popover = gtk::Popover::new();
         popover.add_css_class("queue-popover");
-        // Hover-driven, not click-driven: autohide would grab input and
-        // close on the first outside click. We own show/hide via motion.
-        popover.set_autohide(false);
+        // Click-driven: a secondary-click on Next opens it, and autohide
+        // gives click-outside / Escape dismissal for free — far simpler and
+        // more robust than a hover bridge, and what the maintainer asked
+        // for. Drag-to-reorder is initiated by a press inside the popover,
+        // which does not trip the autohide dismissal.
+        popover.set_autohide(true);
         popover.set_position(gtk::PositionType::Bottom);
         popover.set_has_arrow(true);
-
-        // Hover-bridge state shared between the button and popover motion
-        // controllers and the open/close timers.
-        let pointer_in_button = Rc::new(Cell::new(false));
-        let pointer_in_popover = Rc::new(Cell::new(false));
-        let drag_active = Rc::new(Cell::new(false));
-        let open_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
-        let close_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
-
-        let schedule_close = build_schedule_close(
-            &popover,
-            &pointer_in_button,
-            &pointer_in_popover,
-            &drag_active,
-            &close_timer,
-        );
 
         let on_mutated: Rc<dyn Fn()> = {
             let runtime = runtime.clone();
@@ -145,8 +112,6 @@ impl QueueView {
             artwork_loader,
             command_controller,
             on_mutated,
-            drag_active: drag_active.clone(),
-            schedule_close: schedule_close.clone(),
         });
 
         let selection = gtk::NoSelection::new(Some(store.clone()));
@@ -183,29 +148,15 @@ impl QueueView {
         popover.set_child(Some(&content));
         popover.set_parent(next_button);
 
-        install_button_hover(
-            next_button,
-            &popover,
-            &runtime,
-            &store,
-            &stack,
-            &is_open,
-            &pointer_in_button,
-            &open_timer,
-            &close_timer,
-            &schedule_close,
-        );
-        install_popover_hover(&content, &pointer_in_popover, &close_timer, &schedule_close);
+        install_right_click_open(next_button, &popover, &runtime, &store, &stack, &is_open);
 
         {
             let store = store.clone();
             let is_open = is_open.clone();
-            let next_button = next_button.clone();
             popover.connect_closed(move |_| {
                 is_open.set(false);
-                next_button.set_tooltip_text(Some(NEXT_BUTTON_TOOLTIP));
-                // Release the (potentially library-sized) model while the
-                // popover is down; the next open rebuilds it.
+                // Release the (potentially large) model while the popover is
+                // down; the next open rebuilds it.
                 store.remove_all();
             });
         }
@@ -258,152 +209,35 @@ fn rebuild_queue_model(runtime: &SharedRuntime, store: &gio::ListStore, stack: &
     stack.set_visible_child_name(QUEUE_PAGE_LIST);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn install_button_hover(
+/// Open the queue on a secondary (right) click of the Next button. The
+/// popover is autohide, so click-outside and Escape dismiss it; we only
+/// have to build the model and pop it up. The model is rebuilt on each
+/// open so the queue is always current.
+fn install_right_click_open(
     next_button: &gtk::Button,
     popover: &gtk::Popover,
     runtime: &SharedRuntime,
     store: &gio::ListStore,
     stack: &gtk::Stack,
     is_open: &Rc<Cell<bool>>,
-    pointer_in_button: &Rc<Cell<bool>>,
-    open_timer: &Rc<RefCell<Option<glib::SourceId>>>,
-    close_timer: &Rc<RefCell<Option<glib::SourceId>>>,
-    schedule_close: &Rc<dyn Fn()>,
 ) {
-    let motion = gtk::EventControllerMotion::new();
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_SECONDARY);
 
-    {
-        let popover = popover.clone();
-        let runtime = runtime.clone();
-        let store = store.clone();
-        let stack = stack.clone();
-        let is_open = is_open.clone();
-        let pointer_in_button = pointer_in_button.clone();
-        let open_timer = open_timer.clone();
-        let close_timer = close_timer.clone();
-        let next_button = next_button.clone();
-        motion.connect_enter(move |_, _, _| {
-            pointer_in_button.set(true);
-            cancel_timer(&close_timer);
-            if is_open.get() || open_timer.borrow().is_some() {
-                return;
-            }
-            let popover = popover.clone();
-            let runtime = runtime.clone();
-            let store = store.clone();
-            let stack = stack.clone();
-            let is_open = is_open.clone();
-            let pointer_in_button = pointer_in_button.clone();
-            let open_timer_inner = open_timer.clone();
-            let next_button = next_button.clone();
-            let id = glib::timeout_add_local_once(QUEUE_HOVER_OPEN_DELAY, move || {
-                open_timer_inner.borrow_mut().take();
-                // The dwell guard rejected a fly-over unless the pointer is
-                // still resting on the button.
-                if !pointer_in_button.get() {
-                    return;
-                }
-                // Nothing playing → the queue has no anchor and Next is a
-                // no-op, so an empty popover would be pure noise.
-                if runtime.borrow().playback_queue_current_track_id().is_none() {
-                    return;
-                }
-                rebuild_queue_model(&runtime, &store, &stack);
-                is_open.set(true);
-                // Suppress the redundant "Next" tooltip while the richer
-                // queue surface is open; restored on close.
-                next_button.set_tooltip_text(None);
-                popover.popup();
-            });
-            *open_timer.borrow_mut() = Some(id);
-        });
-    }
-
-    {
-        // The leave handler defers to the shared close scheduler, which
-        // re-checks both pointer cells and the drag flag when it fires —
-        // so a pointer that left the button only to enter the popover
-        // keeps it open without the button controller needing to know.
-        let pointer_in_button = pointer_in_button.clone();
-        let open_timer = open_timer.clone();
-        let schedule_close = schedule_close.clone();
-        motion.connect_leave(move |_| {
-            pointer_in_button.set(false);
-            cancel_timer(&open_timer);
-            schedule_close();
-        });
-    }
-
-    next_button.add_controller(motion);
-}
-
-fn install_popover_hover(
-    content: &gtk::Box,
-    pointer_in_popover: &Rc<Cell<bool>>,
-    close_timer: &Rc<RefCell<Option<glib::SourceId>>>,
-    schedule_close: &Rc<dyn Fn()>,
-) {
-    let motion = gtk::EventControllerMotion::new();
-    {
-        let pointer_in_popover = pointer_in_popover.clone();
-        let close_timer = close_timer.clone();
-        motion.connect_enter(move |_, _, _| {
-            pointer_in_popover.set(true);
-            cancel_timer(&close_timer);
-        });
-    }
-    {
-        let pointer_in_popover = pointer_in_popover.clone();
-        let schedule_close = schedule_close.clone();
-        motion.connect_leave(move |_| {
-            pointer_in_popover.set(false);
-            schedule_close();
-        });
-    }
-    content.add_controller(motion);
-}
-
-/// The shared close scheduler captured by row drags and the popover's own
-/// leave handler. Closes only when the pointer rests in neither the
-/// button nor the popover and no drag is in flight.
-fn build_schedule_close(
-    popover: &gtk::Popover,
-    pointer_in_button: &Rc<Cell<bool>>,
-    pointer_in_popover: &Rc<Cell<bool>>,
-    drag_active: &Rc<Cell<bool>>,
-    close_timer: &Rc<RefCell<Option<glib::SourceId>>>,
-) -> Rc<dyn Fn()> {
     let popover = popover.clone();
-    let pointer_in_button = pointer_in_button.clone();
-    let pointer_in_popover = pointer_in_popover.clone();
-    let drag_active = drag_active.clone();
-    let close_timer = close_timer.clone();
-    Rc::new(move || {
-        cancel_timer(&close_timer);
-        let popover = popover.clone();
-        let pointer_in_button = pointer_in_button.clone();
-        let pointer_in_popover = pointer_in_popover.clone();
-        let drag_active = drag_active.clone();
-        let close_timer_inner = close_timer.clone();
-        let id = glib::timeout_add_local_once(QUEUE_HOVER_CLOSE_GRACE, move || {
-            close_timer_inner.borrow_mut().take();
-            if drag_active.get() {
-                return;
-            }
-            if pointer_in_button.get() || pointer_in_popover.get() {
-                return;
-            }
-            popover.popdown();
-        });
-        *close_timer.borrow_mut() = Some(id);
-    })
-}
-
-fn cancel_timer(timer: &Rc<RefCell<Option<glib::SourceId>>>) {
-    if let Some(existing) = timer.borrow_mut().take() {
-        existing.remove();
-    }
+    let runtime = runtime.clone();
+    let store = store.clone();
+    let stack = stack.clone();
+    let is_open = is_open.clone();
+    gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
+        // Claim the press so it does not also reach the window-drag handler
+        // on the titlebar handle behind the button.
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        rebuild_queue_model(&runtime, &store, &stack);
+        is_open.set(true);
+        popover.popup();
+    });
+    next_button.add_controller(gesture);
 }
 
 fn build_queue_row_factory(ctx: QueueRowContext) -> gtk::SignalListItemFactory {
@@ -523,11 +357,11 @@ fn install_queue_row_handlers(row: &gtk::Box, list_item: &gtk::ListItem, ctx: &Q
         row.add_controller(motion);
     }
 
-    install_queue_row_drag(row, list_item, ctx);
+    install_queue_row_drag(row, list_item);
     install_queue_row_drop(row, list_item, ctx);
 }
 
-fn install_queue_row_drag(row: &gtk::Box, list_item: &gtk::ListItem, ctx: &QueueRowContext) {
+fn install_queue_row_drag(row: &gtk::Box, list_item: &gtk::ListItem) {
     let drag_source = gtk::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE);
 
@@ -541,18 +375,9 @@ fn install_queue_row_drag(row: &gtk::Box, list_item: &gtk::ListItem, ctx: &Queue
     });
 
     let row_for_icon = row.clone();
-    let drag_active = ctx.drag_active.clone();
     drag_source.connect_drag_begin(move |source, _| {
-        drag_active.set(true);
         let paintable = gtk::WidgetPaintable::new(Some(&row_for_icon));
         source.set_icon(Some(&paintable), 0, 0);
-    });
-
-    let drag_active = ctx.drag_active.clone();
-    let schedule_close = ctx.schedule_close.clone();
-    drag_source.connect_drag_end(move |_, _, _| {
-        drag_active.set(false);
-        schedule_close();
     });
 
     row.add_controller(drag_source);
