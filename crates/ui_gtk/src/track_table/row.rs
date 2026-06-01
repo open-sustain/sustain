@@ -56,6 +56,7 @@ pub(crate) struct TrackTableRow {
     pub(crate) artist: String,
     pub(crate) album: String,
     pub(crate) genre: String,
+    pub(crate) has_lyrics: bool,
     /// Effective sort keys for the text columns, resolved at row-build
     /// time from the track's "sort as" tags and the live
     /// honor-sort-tags preference (issue #13). The column comparators
@@ -120,6 +121,7 @@ impl TrackTableRow {
             artist,
             album,
             genre: non_empty_text(&track.metadata.genre).unwrap_or_default(),
+            has_lyrics: track.has_lyrics(),
             track_name_sort_key,
             artist_sort_key,
             album_sort_key,

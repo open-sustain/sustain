@@ -24,15 +24,16 @@ pub use sustain_domain::{
     PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
     PlaybackSession, PlaybackSettings, PlaybackState, Playlist, PlaylistEntry, PlaylistFolder,
     PlaylistFolderId, PlaylistId, PlaylistItem, QualityBucket, QualityDistribution, QualityRange,
-    Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField, SmartPlaylistId,
-    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice,
-    SyncDeviceId, SystemClock, SystemMonotonicClock, Track, TrackAvailability, TrackColumnEntry,
-    TrackColumnLayout, TrackColumnLayoutScope, TrackContentHash, TrackId, TrackLocation,
-    TrackMetadata, TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection,
-    UserSettings, VolumePercent, YearCount, compare_optional_text, compute_library_statistics,
-    effective_sort_key, matching_tracks, track_matches_rule_set,
+    Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule,
+    SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection,
+    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
+    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
+    SmartShuffleEntropy, SyncDevice, SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock,
+    Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
+    TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
+    TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings, VolumePercent, YearCount,
+    compare_optional_text, compute_library_statistics, effective_sort_key, matching_tracks,
+    track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
 pub use sustain_metadata::MetadataService;
@@ -1878,6 +1879,22 @@ impl ApplicationRuntime {
             state,
             options: self.playback_queue.options(),
         }
+    }
+
+    /// Load optional time-coded lyrics for a display surface. Plain lyrics on
+    /// [`TrackMetadata`] remain authoritative for whether a track has lyrics;
+    /// synced lines only enrich rendering after that predicate is already true.
+    pub fn load_synced_lyrics(
+        &self,
+        track_id: TrackId,
+    ) -> ApplicationRuntimeResult<Option<SyncedLyrics>> {
+        let Some(store) = self.library_store.as_deref() else {
+            return Err(ApplicationRuntimeError::LibraryServicesUnavailable);
+        };
+        store
+            .load_synced_lyrics(track_id)
+            .map(|stored| stored.map(|stored| stored.lyrics))
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
     }
 
     pub fn read_artwork(&self, path: &Path) -> Option<Vec<u8>> {

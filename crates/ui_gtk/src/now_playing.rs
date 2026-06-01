@@ -28,8 +28,11 @@ use sustain_app_runtime::{
     PlaybackCommand, ShuffleMode, Track, TrackId,
 };
 
+mod lyrics_overlay;
 mod model;
 mod progress_hit_area;
+
+use lyrics_overlay::LyricsOverlayFace;
 
 /// CSS class added to the artwork box while a dominant-color background
 /// is active. Defining it as a sibling of `now-playing-artwork` (rather
@@ -54,10 +57,12 @@ const ARTWORK_INNER_STACK_FETCHING: &str = "fetching";
 const ARTWORK_MISSING_ICON_NAME: &str = "image-missing-symbolic";
 
 const ARTWORK_MISSING_TOOLTIP: &str = "Fetch artwork";
+const ARTWORK_PRESENT_TOOLTIP: &str = "Zoom artwork";
 
 #[derive(Clone)]
 pub(crate) struct NowPlayingView {
     runtime: SharedRuntime,
+    parent_window: glib::WeakRef<gtk::ApplicationWindow>,
     area: gtk::Box,
     stack: gtk::Stack,
     title: MarqueeLabel,
@@ -69,7 +74,7 @@ pub(crate) struct NowPlayingView {
     shuffle_button: gtk::Button,
     repeat_icon: gtk::Image,
     repeat_button: gtk::Button,
-    artwork_box: gtk::Box,
+    artwork_box: gtk::Overlay,
     /// Inner stack of three pages — `present` (the artwork itself),
     /// `missing` (the click-to-fetch icon), `fetching` (the spinner).
     /// Switching pages keeps the tile geometry stable even while the
@@ -77,6 +82,7 @@ pub(crate) struct NowPlayingView {
     artwork_inner_stack: gtk::Stack,
     artwork_image: gtk::Image,
     artwork_spinner: gtk::Spinner,
+    lyrics_button: gtk::Button,
     artwork_loader: ArtworkLoader,
     /// Last absolute path passed to the artwork loader, used to avoid
     /// re-issuing a request when `refresh()` runs on the same track
@@ -146,6 +152,7 @@ const MARQUEE_VIEWPORT_WIDTH: i32 = 400;
 
 impl NowPlayingView {
     pub(crate) fn new(
+        parent_window: &gtk::ApplicationWindow,
         runtime: SharedRuntime,
         command_controller: SharedCommandController,
         artwork_loader: ArtworkLoader,
@@ -159,7 +166,7 @@ impl NowPlayingView {
         area.set_margin_end(super::NOW_PLAYING_HORIZONTAL_MARGIN);
         area.set_valign(gtk::Align::Fill);
 
-        let artwork_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let artwork_box = gtk::Overlay::new();
         artwork_box.add_css_class("now-playing-artwork");
         artwork_box.set_size_request(TITLEBAR_HEIGHT, TITLEBAR_HEIGHT);
         artwork_box.set_overflow(gtk::Overflow::Hidden);
@@ -187,7 +194,16 @@ impl NowPlayingView {
         artwork_inner_stack.add_named(&artwork_missing_icon, Some(ARTWORK_INNER_STACK_MISSING));
         artwork_inner_stack.add_named(&artwork_spinner, Some(ARTWORK_INNER_STACK_FETCHING));
         artwork_inner_stack.set_visible_child_name(ARTWORK_INNER_STACK_MISSING);
-        artwork_box.append(&artwork_inner_stack);
+        artwork_box.set_child(Some(&artwork_inner_stack));
+
+        let lyrics_button = gtk::Button::with_label("L");
+        lyrics_button.add_css_class("now-playing-lyrics-badge");
+        lyrics_button.set_tooltip_text(Some("Show lyrics"));
+        lyrics_button.set_halign(gtk::Align::End);
+        lyrics_button.set_valign(gtk::Align::End);
+        lyrics_button.set_visible(false);
+        artwork_box.add_overlay(&lyrics_button);
+        artwork_box.set_measure_overlay(&lyrics_button, false);
 
         let artwork_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
         let prefetched_artwork_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
@@ -264,6 +280,7 @@ impl NowPlayingView {
 
         let view = Self {
             runtime: runtime.clone(),
+            parent_window: parent_window.downgrade(),
             area,
             stack,
             title,
@@ -279,6 +296,7 @@ impl NowPlayingView {
             artwork_inner_stack,
             artwork_image,
             artwork_spinner,
+            lyrics_button,
             artwork_loader,
             artwork_path,
             prefetched_artwork_path,
@@ -290,6 +308,7 @@ impl NowPlayingView {
         };
         install_playback_option_controls(&view, command_controller.clone());
         install_artwork_click_handler(&view, command_controller);
+        install_lyrics_button_handler(&view);
         view.refresh(&runtime.borrow().now_playing());
         install_refresh_timer(&view, runtime);
         view
@@ -414,10 +433,14 @@ impl NowPlayingView {
         self.artwork_inner_stack.set_visible_child_name(name);
         self.artwork_spinner
             .set_spinning(name == ARTWORK_INNER_STACK_FETCHING);
-        if name == ARTWORK_INNER_STACK_MISSING {
+        if name == ARTWORK_INNER_STACK_MISSING || name == ARTWORK_INNER_STACK_PRESENT {
             self.artwork_box.add_css_class(ARTWORK_CLICKABLE_CLASS);
-            self.artwork_box
-                .set_tooltip_text(Some(ARTWORK_MISSING_TOOLTIP));
+            let tooltip = if name == ARTWORK_INNER_STACK_MISSING {
+                ARTWORK_MISSING_TOOLTIP
+            } else {
+                ARTWORK_PRESENT_TOOLTIP
+            };
+            self.artwork_box.set_tooltip_text(Some(tooltip));
             // GTK4's CSS `cursor` property is honoured inconsistently
             // across distributions, so set the cursor on the widget
             // directly. Falls back to the parent's cursor when the
@@ -437,13 +460,12 @@ impl NowPlayingView {
     /// fetch path, or another fetch already in flight for this
     /// track).
     fn handle_artwork_click(&self, command_controller: &SharedCommandController) -> bool {
-        // We only act when the missing-state icon is visible. Any
-        // other state means there is artwork to display or a fetch
-        // is already running — clicks become no-ops in both cases.
-        if self.artwork_inner_stack.visible_child_name().as_deref()
-            != Some(ARTWORK_INNER_STACK_MISSING)
-        {
-            return false;
+        match self.artwork_inner_stack.visible_child_name().as_deref() {
+            Some(ARTWORK_INNER_STACK_PRESENT) => {
+                return self.open_artwork_lyrics_overlay(LyricsOverlayFace::Artwork);
+            }
+            Some(ARTWORK_INNER_STACK_MISSING) => {}
+            _ => return false,
         }
         let Some(track_id) = self.runtime.borrow().playback_queue_current_track_id() else {
             return false;
@@ -477,6 +499,63 @@ impl NowPlayingView {
         );
         self.pending_fetch_notification_id
             .set(Some(notification_id));
+        true
+    }
+
+    fn open_artwork_lyrics_overlay(&self, initial_face: LyricsOverlayFace) -> bool {
+        let Some(parent) = self.parent_window.upgrade() else {
+            return false;
+        };
+        let Some(track) = self.runtime.borrow().now_playing().track else {
+            return false;
+        };
+        if initial_face == LyricsOverlayFace::Lyrics && !track.has_lyrics() {
+            return false;
+        }
+
+        let decoded = self
+            .artwork_source(&track)
+            .as_ref()
+            .and_then(|source| self.artwork_loader.cached(source));
+        let texture = decoded.as_ref().and_then(|decoded| {
+            decoded
+                .detail_texture
+                .as_ref()
+                .or(decoded.tile_texture.as_ref())
+        });
+        if initial_face == LyricsOverlayFace::Artwork && texture.is_none() {
+            return false;
+        }
+
+        let synced_lyrics = if track.has_lyrics() {
+            match self.runtime.borrow().load_synced_lyrics(track.id) {
+                Ok(lyrics) => lyrics,
+                Err(error) => {
+                    eprintln!("sustain: could not load synced lyrics for overlay: {error:?}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let lyrics_text = synced_lyrics
+            .as_ref()
+            .map(synced_lyrics_text)
+            .filter(|text| !text.trim().is_empty())
+            .or_else(|| {
+                track
+                    .metadata
+                    .lyrics
+                    .clone()
+                    .filter(|lyrics| !lyrics.trim().is_empty())
+            });
+        lyrics_overlay::open(
+            &parent,
+            texture,
+            decoded.as_ref().and_then(|decoded| decoded.palette),
+            lyrics_text.as_deref(),
+            initial_face,
+        );
         true
     }
 
@@ -569,12 +648,14 @@ impl NowPlayingView {
             self.remaining.set_text("");
             self.hit_area.set_position(0.0, false);
             self.duration.set(Duration::ZERO);
+            self.lyrics_button.set_visible(false);
             sync_shuffle_icon(&self.shuffle_icon, now_playing.options.shuffle_mode);
             sync_playback_option_icon(&self.repeat_icon, now_playing.options.repeat_enabled());
             return;
         };
 
         self.stack.set_visible_child_name(LOADED_STACK_NAME);
+        self.lyrics_button.set_visible(track.has_lyrics());
 
         let duration = track.metadata.duration.unwrap_or_default();
         self.duration.set(duration);
@@ -591,6 +672,15 @@ impl NowPlayingView {
         sync_playback_option_icon(&self.repeat_icon, now_playing.options.repeat_enabled());
         self.prefetch_next_artwork();
     }
+}
+
+fn synced_lyrics_text(lyrics: &sustain_app_runtime::SyncedLyrics) -> String {
+    lyrics
+        .lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn install_artwork_color_provider() -> gtk::CssProvider {
@@ -672,7 +762,14 @@ fn install_artwork_click_handler(
         gesture.set_state(gtk::EventSequenceState::Claimed);
         let _ = view_for_click.handle_artwork_click(&command_controller);
     });
-    view.artwork_box.add_controller(click);
+    view.artwork_inner_stack.add_controller(click);
+}
+
+fn install_lyrics_button_handler(view: &NowPlayingView) {
+    let view = view.clone();
+    view.lyrics_button.clone().connect_clicked(move |_| {
+        let _ = view.open_artwork_lyrics_overlay(LyricsOverlayFace::Lyrics);
+    });
 }
 
 fn install_refresh_timer(view: &NowPlayingView, runtime: SharedRuntime) {
@@ -1030,4 +1127,18 @@ fn time_label() -> gtk::Label {
     label.set_halign(gtk::Align::Center);
     label.set_xalign(0.5);
     label
+}
+
+#[cfg(test)]
+mod tests {
+    use super::synced_lyrics_text;
+
+    #[test]
+    fn synced_lyrics_are_rendered_as_readable_plain_lines() {
+        let lyrics =
+            sustain_app_runtime::SyncedLyrics::parse_lrc("[00:01.50]Hello\n[00:03.00]World")
+                .expect("parse synced lyrics");
+
+        assert_eq!(synced_lyrics_text(&lyrics), "Hello\nWorld");
+    }
 }

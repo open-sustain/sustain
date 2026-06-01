@@ -240,7 +240,9 @@ rating comparisons, `is empty` / `is present` for text and numeric
 tag fields, and a `File` field whose `is missing` / `is present`
 operators match on whether the track's file was last found on disk.
 Fields cover the usual tag/metadata set plus BPM
-and Music Key for tempo- and harmony-aware rules. Match mode is
+and Music Key for tempo- and harmony-aware rules. The boolean Lyrics field
+matches tracks with non-blank plain lyrics; optional synced lines enrich
+display but do not independently make a track match. Match mode is
 `Match all` / `Match any`. An optional limit picks the top N by
 `Most Often Played`, `Random`, etc. Smart playlists are re-evaluated
 live on every query.
@@ -336,7 +338,12 @@ artist/album, elapsed and remaining time, and a seekable progress bar.
 The artwork's dominant color tints the tile background. Overflowing
 title and artist/album lines marquee-scroll, each at a slightly
 different rate so the two never crawl in lockstep. Clicking on the
-artwork zooms it.
+artwork opens a centered artwork overlay. Tracks with non-blank plain
+lyrics carry an **L** badge on the artwork; clicking it opens the same
+overlay directly on a read-only lyrics face. Clicking enlarged artwork
+flips between the artwork and lyrics faces when both are available.
+Optional synced lyrics enrich the displayed text, while plain lyrics
+remain the source of truth for whether the lyrics surface appears.
 
 ### Seek bar — *iso-iTunes*
 Click or drag on the progress bar to seek. The clickable hit area
@@ -652,7 +659,9 @@ not sort by columns.
 ### Column customization — *iso-iTunes*
 Column visibility, order, and width are user-customizable via the
 column header menu and the resize handles. Layout is persisted in
-SQLite. Skips, Last Skipped, and Music Key ship hidden by default.
+SQLite. Skips, Last Skipped, Music Key, and Lyrics ship hidden by default.
+The sortable Lyrics column displays **Yes** or **No** according to whether
+the track has non-blank plain lyrics.
 
 ### Context-sensitive search scope — *iso-iTunes*
 The search bar filters whatever is currently visible: full library in

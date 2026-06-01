@@ -44,6 +44,12 @@ pub struct Track {
     pub file_modified_at: Option<SystemTime>,
 }
 
+impl Track {
+    pub fn has_lyrics(&self) -> bool {
+        self.metadata.has_lyrics()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackLocation {
     pub relative_path: TrackRelativePath,

@@ -7,10 +7,10 @@ use std::{
 };
 
 use crate::{
-    SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
-    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
-    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
-    Track,
+    SmartPlaylistBoolField, SmartPlaylistDateField, SmartPlaylistLimit,
+    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
+    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
+    SmartPlaylistTextOperator, Track,
 };
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -101,8 +101,15 @@ pub fn track_matches_rule(track: &Track, rule: &SmartPlaylistRule, now: SystemTi
         }
         SmartPlaylistRule::DateIsEmpty { field } => date_field_value(track, *field).is_none(),
         SmartPlaylistRule::DateIsPresent { field } => date_field_value(track, *field).is_some(),
+        SmartPlaylistRule::Bool(rule) => bool_field_value(track, rule.field) == rule.equals,
         SmartPlaylistRule::FileIsMissing => track.location.is_missing(),
         SmartPlaylistRule::FileIsPresent => !track.location.is_missing(),
+    }
+}
+
+fn bool_field_value(track: &Track, field: SmartPlaylistBoolField) -> bool {
+    match field {
+        SmartPlaylistBoolField::HasLyrics => track.has_lyrics(),
     }
 }
 

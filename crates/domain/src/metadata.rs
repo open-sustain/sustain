@@ -44,6 +44,18 @@ pub struct TrackMetadata {
 }
 
 impl TrackMetadata {
+    /// Whether this track has user-readable plain lyrics.
+    ///
+    /// Synced lyrics are optional display enrichment stored separately;
+    /// they never make an otherwise lyric-less track count as having
+    /// lyrics. Keeping this predicate here gives table columns, smart
+    /// playlists, and Now Playing one definition of the feature.
+    pub fn has_lyrics(&self) -> bool {
+        self.lyrics
+            .as_deref()
+            .is_some_and(|lyrics| !lyrics.trim().is_empty())
+    }
+
     pub fn apply_change(&mut self, change: &MetadataChange) {
         apply_field_change(&mut self.title, &change.title);
         apply_field_change(&mut self.artist, &change.artist);
@@ -234,6 +246,25 @@ mod tests {
         metadata.ensure_title_from_filename(Path::new("/"));
 
         assert_eq!(metadata.title, None);
+    }
+
+    #[test]
+    fn has_lyrics_requires_non_blank_plain_text() {
+        assert!(!TrackMetadata::default().has_lyrics());
+        assert!(
+            !TrackMetadata {
+                lyrics: Some(" \n\t".to_owned()),
+                ..TrackMetadata::default()
+            }
+            .has_lyrics()
+        );
+        assert!(
+            TrackMetadata {
+                lyrics: Some("A lyric line".to_owned()),
+                ..TrackMetadata::default()
+            }
+            .has_lyrics()
+        );
     }
 
     #[test]

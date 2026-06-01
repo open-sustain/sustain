@@ -8,10 +8,11 @@ use std::{
 
 use rusqlite::{Connection, Row, params};
 use sustain_domain::{
-    PlayStatistics, PlaylistEntry, SmartPlaylistDateField, SmartPlaylistLimit,
-    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
-    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistTextField,
-    SmartPlaylistTextOperator, TrackLocation, TrackMetadata, TrackRelativePath, WaveformSegment,
+    PlayStatistics, PlaylistEntry, SmartPlaylistBoolField, SmartPlaylistBoolRule,
+    SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
+    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
+    SmartPlaylistRule, SmartPlaylistTextField, SmartPlaylistTextOperator, TrackLocation,
+    TrackMetadata, TrackRelativePath, WaveformSegment,
 };
 
 use crate::{
@@ -432,6 +433,19 @@ fn date_field_from_name(name: &str) -> StoreResult<SmartPlaylistDateField> {
     }
 }
 
+fn bool_field_name(field: SmartPlaylistBoolField) -> &'static str {
+    match field {
+        SmartPlaylistBoolField::HasLyrics => "HasLyrics",
+    }
+}
+
+fn bool_field_from_name(name: &str) -> StoreResult<SmartPlaylistBoolField> {
+    match name {
+        "HasLyrics" => Ok(SmartPlaylistBoolField::HasLyrics),
+        other => Err(StoreError::InvalidStoredEnum(other.to_owned())),
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct RuleColumns {
     pub(crate) kind: &'static str,
@@ -443,6 +457,7 @@ pub(crate) struct RuleColumns {
     pub(crate) rating_stars: Option<i64>,
     pub(crate) date_unix: Option<i64>,
     pub(crate) days_value: Option<i64>,
+    pub(crate) bool_value: Option<bool>,
 }
 
 pub(crate) fn rule_to_columns(rule: &SmartPlaylistRule) -> RuleColumns {
@@ -529,6 +544,12 @@ pub(crate) fn rule_to_columns(rule: &SmartPlaylistRule) -> RuleColumns {
             field: Some(date_field_name(*field)),
             ..RuleColumns::default()
         },
+        SmartPlaylistRule::Bool(rule) => RuleColumns {
+            kind: "Bool",
+            field: Some(bool_field_name(rule.field)),
+            bool_value: Some(rule.equals),
+            ..RuleColumns::default()
+        },
         SmartPlaylistRule::FileIsMissing => RuleColumns {
             kind: "FileIsMissing",
             ..RuleColumns::default()
@@ -548,7 +569,7 @@ pub(crate) fn load_smart_playlist_rules(
         .prepare(
             r#"
             SELECT kind, field, text_operator, text_value, number_operator, number_value,
-                   rating_stars, date_unix, days_value
+                   rating_stars, date_unix, days_value, bool_value
             FROM smart_playlist_rules
             WHERE smart_playlist_id = ?1
             ORDER BY position
@@ -577,6 +598,7 @@ fn rule_from_row(row: &Row<'_>) -> StoreResult<SmartPlaylistRule> {
     let rating_stars = optional_i64(row, 6)?;
     let date_unix = optional_i64(row, 7)?;
     let days_value = optional_i64(row, 8)?;
+    let bool_value = optional_i64(row, 9)?;
 
     let rule_field_name = || -> StoreResult<&str> {
         field_name
@@ -635,6 +657,18 @@ fn rule_from_row(row: &Row<'_>) -> StoreResult<SmartPlaylistRule> {
             .ok_or_else(|| StoreError::InvalidStoredEnum(format!("Rating rule stars={stars}")))?;
         Ok(stars)
     };
+    let require_bool_value = || -> StoreResult<bool> {
+        match bool_value {
+            Some(0) => Ok(false),
+            Some(1) => Ok(true),
+            Some(value) => Err(StoreError::InvalidStoredEnum(format!(
+                "{kind} rule bool_value={value}"
+            ))),
+            None => Err(StoreError::InvalidStoredEnum(format!(
+                "{kind} rule missing bool_value"
+            ))),
+        }
+    };
 
     match kind.as_str() {
         "Text" => Ok(SmartPlaylistRule::Text {
@@ -685,6 +719,10 @@ fn rule_from_row(row: &Row<'_>) -> StoreResult<SmartPlaylistRule> {
         "DateIsPresent" => Ok(SmartPlaylistRule::DateIsPresent {
             field: date_field_from_name(rule_field_name()?)?,
         }),
+        "Bool" => Ok(SmartPlaylistRule::Bool(SmartPlaylistBoolRule {
+            field: bool_field_from_name(rule_field_name()?)?,
+            equals: require_bool_value()?,
+        })),
         "FileIsMissing" => Ok(SmartPlaylistRule::FileIsMissing),
         "FileIsPresent" => Ok(SmartPlaylistRule::FileIsPresent),
         other => Err(StoreError::InvalidStoredEnum(other.to_owned())),

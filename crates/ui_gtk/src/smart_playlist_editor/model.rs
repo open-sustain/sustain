@@ -7,9 +7,10 @@ use std::{
 };
 
 use sustain_app_runtime::{
-    Rating, SmartPlaylistDateField, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator,
+    Rating, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
+    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
+    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
+    SmartPlaylistTextOperator,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,6 +19,7 @@ pub(super) enum EditorField {
     Number(SmartPlaylistNumberField),
     Rating,
     Date(SmartPlaylistDateField),
+    Bool(SmartPlaylistBoolField),
     /// The track's file availability (present / missing). Carries no
     /// sub-field — it is a whole-track attribute (#79).
     FileStatus,
@@ -83,6 +85,10 @@ pub(super) const EDITOR_FIELDS: &[(EditorField, &str)] = &[
         EditorField::Date(SmartPlaylistDateField::LastSkipped),
         "Last Skipped",
     ),
+    (
+        EditorField::Bool(SmartPlaylistBoolField::HasLyrics),
+        "Lyrics",
+    ),
     (EditorField::FileStatus, "File"),
 ];
 
@@ -110,6 +116,7 @@ pub(super) enum EditorOperator {
     DateNotInLast,
     DateIsEmpty,
     DateIsPresent,
+    BoolEqual,
     FileMissing,
     FilePresent,
 }
@@ -139,6 +146,7 @@ impl EditorOperator {
             Self::DateNotInLast => "is not in the last",
             Self::DateIsEmpty => "is empty",
             Self::DateIsPresent => "is present",
+            Self::BoolEqual => "is",
             Self::FileMissing => "is missing",
             Self::FilePresent => "is present",
         }
@@ -163,6 +171,7 @@ impl EditorOperator {
             Self::DateBefore | Self::DateAfter => ValueKind::Date,
             Self::DateInLast | Self::DateNotInLast => ValueKind::Days,
             Self::DateIsEmpty | Self::DateIsPresent => ValueKind::None,
+            Self::BoolEqual => ValueKind::Bool,
             Self::FileMissing | Self::FilePresent => ValueKind::None,
         }
     }
@@ -175,6 +184,7 @@ pub(super) enum ValueKind {
     Rating,
     Date,
     Days,
+    Bool,
     None,
 }
 
@@ -225,6 +235,7 @@ const DATE_OPERATORS: &[EditorOperator] = &[
 // only meaningful choices and neither takes a value.
 const FILE_OPERATORS: &[EditorOperator] =
     &[EditorOperator::FileMissing, EditorOperator::FilePresent];
+const BOOL_OPERATORS: &[EditorOperator] = &[EditorOperator::BoolEqual];
 
 pub(super) fn operators_for_field(field: EditorField) -> &'static [EditorOperator] {
     match field {
@@ -232,6 +243,7 @@ pub(super) fn operators_for_field(field: EditorField) -> &'static [EditorOperato
         EditorField::Number(_) => NUMBER_OPERATORS,
         EditorField::Rating => RATING_OPERATORS,
         EditorField::Date(_) => DATE_OPERATORS,
+        EditorField::Bool(_) => BOOL_OPERATORS,
         EditorField::FileStatus => FILE_OPERATORS,
     }
 }
@@ -282,6 +294,7 @@ pub(super) enum ValueInput {
     Rating(u32),
     Date(String),
     Days(u32),
+    Bool(bool),
     None,
 }
 
@@ -398,6 +411,12 @@ pub(super) fn extract_rule(
         (EditorField::Date(date_field), EditorOperator::DateIsPresent) => {
             Ok(SmartPlaylistRule::DateIsPresent { field: date_field })
         }
+        (EditorField::Bool(bool_field), EditorOperator::BoolEqual) => {
+            Ok(SmartPlaylistRule::Bool(SmartPlaylistBoolRule {
+                field: bool_field,
+                equals: read_bool(value)?,
+            }))
+        }
         (EditorField::FileStatus, EditorOperator::FileMissing) => {
             Ok(SmartPlaylistRule::FileIsMissing)
         }
@@ -448,6 +467,13 @@ fn read_date(value: &ValueInput) -> Result<SystemTime, RuleError> {
 fn read_days(value: &ValueInput) -> Result<NonZeroU32, RuleError> {
     match value {
         ValueInput::Days(raw) => NonZeroU32::new(*raw).ok_or(RuleError::InvalidDays),
+        _ => Err(RuleError::FieldOperatorMismatch),
+    }
+}
+
+fn read_bool(value: &ValueInput) -> Result<bool, RuleError> {
+    match value {
+        ValueInput::Bool(value) => Ok(*value),
         _ => Err(RuleError::FieldOperatorMismatch),
     }
 }
@@ -574,6 +600,11 @@ pub(super) fn decompose_rule(
             EditorField::Date(*field),
             EditorOperator::DateIsPresent,
             ValueInput::None,
+        ),
+        SmartPlaylistRule::Bool(rule) => (
+            EditorField::Bool(rule.field),
+            EditorOperator::BoolEqual,
+            ValueInput::Bool(rule.equals),
         ),
         SmartPlaylistRule::FileIsMissing => (
             EditorField::FileStatus,

@@ -16,6 +16,7 @@ pub(super) enum TrackTableColumn {
     Artist,
     Album,
     Genre,
+    Lyrics,
     Year,
     Bpm,
     MusicKey,
@@ -36,6 +37,7 @@ pub(super) const TRACK_TABLE_COLUMNS: &[TrackTableColumn] = &[
     TrackTableColumn::Artist,
     TrackTableColumn::Album,
     TrackTableColumn::Genre,
+    TrackTableColumn::Lyrics,
     TrackTableColumn::Year,
     TrackTableColumn::Bpm,
     TrackTableColumn::MusicKey,
@@ -58,6 +60,7 @@ impl TrackTableColumn {
             Self::Artist => "Artist",
             Self::Album => "Album",
             Self::Genre => "Genre",
+            Self::Lyrics => "Lyrics",
             Self::Year => "Year",
             Self::Bpm => "BPM",
             Self::MusicKey => "Key",
@@ -80,6 +83,7 @@ impl TrackTableColumn {
             Self::Artist => "artist",
             Self::Album => "album",
             Self::Genre => "genre",
+            Self::Lyrics => "lyrics",
             Self::Year => "year",
             Self::Bpm => "bpm",
             Self::MusicKey => "music_key",
@@ -102,6 +106,7 @@ impl TrackTableColumn {
             Self::Artist => 150,
             Self::Album => 170,
             Self::Genre => 120,
+            Self::Lyrics => 72,
             Self::Year => 72,
             Self::Bpm => 72,
             Self::MusicKey => 64,
@@ -129,7 +134,10 @@ impl TrackTableColumn {
         // selector menu like any other optional column. Music Key is
         // a niche analysis output most listeners don't think in terms
         // of, so it ships off by default too.
-        !matches!(self, Self::Skips | Self::LastSkipped | Self::MusicKey)
+        !matches!(
+            self,
+            Self::Skips | Self::LastSkipped | Self::MusicKey | Self::Lyrics
+        )
     }
 
     /// The metadata field this column edits inline, or `None` for columns
@@ -148,6 +156,7 @@ impl TrackTableColumn {
             Self::TrackNumber => Some(EditableField::TrackNumber),
             Self::Bitrate
             | Self::FileType
+            | Self::Lyrics
             | Self::Duration
             | Self::Rating
             | Self::Plays
@@ -164,6 +173,7 @@ impl TrackTableColumn {
             | Self::Artist
             | Self::Album
             | Self::Genre
+            | Self::Lyrics
             | Self::FileType
             | Self::LastPlayed
             | Self::LastSkipped
@@ -186,6 +196,7 @@ impl TrackTableColumn {
             Self::Artist => row.artist.clone(),
             Self::Album => row.album.clone(),
             Self::Genre => row.genre.clone(),
+            Self::Lyrics => yes_no_text(row.has_lyrics).to_owned(),
             Self::Year => optional_number_text(row.year),
             Self::Bpm => optional_number_text(row.bpm),
             Self::MusicKey => row.music_key.clone().unwrap_or_default(),
@@ -221,6 +232,7 @@ impl TrackTableColumn {
                 compare_optional_text(Some(&left.album_sort_key), Some(&right.album_sort_key))
             }
             Self::Genre => compare_optional_text(Some(&left.genre), Some(&right.genre)),
+            Self::Lyrics => left.has_lyrics.cmp(&right.has_lyrics),
             Self::Year => left.year.cmp(&right.year),
             Self::Bpm => left.bpm.cmp(&right.bpm),
             Self::MusicKey => {
@@ -242,6 +254,10 @@ impl TrackTableColumn {
 
 fn optional_number_text<T: std::fmt::Display>(value: Option<T>) -> String {
     value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn yes_no_text(value: bool) -> &'static str {
+    if value { "Yes" } else { "No" }
 }
 
 fn optional_date_text(value: Option<SystemTime>) -> String {
@@ -278,6 +294,7 @@ mod tests {
                 "Artist",
                 "Album",
                 "Genre",
+                "Lyrics",
                 "Year",
                 "BPM",
                 "Key",
@@ -309,6 +326,7 @@ mod tests {
                 "artist",
                 "album",
                 "genre",
+                "lyrics",
                 "year",
                 "bpm",
                 "music_key",
@@ -334,5 +352,12 @@ mod tests {
     #[test]
     fn track_duration_text_uses_hours_when_needed() {
         assert_eq!(track_duration_text(3_904), "1:05:04");
+    }
+
+    #[test]
+    fn lyrics_column_is_hidden_by_default_and_uses_yes_no_text() {
+        assert!(!TrackTableColumn::Lyrics.default_visible());
+        assert_eq!(yes_no_text(true), "Yes");
+        assert_eq!(yes_no_text(false), "No");
     }
 }

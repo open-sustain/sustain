@@ -58,9 +58,10 @@ pub(super) fn save_smart_playlist(
                 r#"
                     INSERT INTO smart_playlist_rules (
                         smart_playlist_id, position, kind, field, text_operator, text_value,
-                        number_operator, number_value, rating_stars, date_unix, days_value
+                        number_operator, number_value, rating_stars, date_unix, days_value,
+                        bool_value
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                     "#,
                 params![
                     smart_playlist.id.get(),
@@ -74,6 +75,7 @@ pub(super) fn save_smart_playlist(
                     row.rating_stars,
                     row.date_unix,
                     row.days_value,
+                    row.bool_value,
                 ],
             )
             .map_err(StoreError::from)?;

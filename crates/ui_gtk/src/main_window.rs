@@ -256,6 +256,7 @@ pub(crate) fn build_main_window(
     let artwork_loader = ArtworkLoader::new(metadata_service, artwork_cache_dir);
 
     let now_playing = NowPlayingView::new(
+        &window,
         runtime.clone(),
         command_controller.clone(),
         artwork_loader.clone(),

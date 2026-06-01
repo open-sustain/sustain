@@ -9,12 +9,12 @@ use std::{
 };
 
 use sustain_domain::{
-    FieldChange, MetadataChange, PlayStatistics, PlaylistEntry, Rating, SmartPlaylistDateField,
-    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SortDirection, SourceFileStat,
-    SourceFingerprint, TrackContentHash, TrackLocation, TrackMetadata, TrackRelativePath,
-    TrackSort, TrackSortColumn,
+    FieldChange, MetadataChange, PlayStatistics, PlaylistEntry, Rating, SmartPlaylistBoolField,
+    SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
+    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
+    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
+    SortDirection, SourceFileStat, SourceFingerprint, TrackContentHash, TrackLocation,
+    TrackMetadata, TrackRelativePath, TrackSort, TrackSortColumn,
 };
 
 use sustain_domain::{
@@ -669,6 +669,10 @@ fn sqlite_store_round_trips_every_rule_variant() {
                 SmartPlaylistRule::DateIsPresent {
                     field: SmartPlaylistDateField::DateAdded,
                 },
+                SmartPlaylistRule::Bool(SmartPlaylistBoolRule {
+                    field: SmartPlaylistBoolField::HasLyrics,
+                    equals: true,
+                }),
                 SmartPlaylistRule::FileIsMissing,
                 SmartPlaylistRule::FileIsPresent,
             ],

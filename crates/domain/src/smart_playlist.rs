@@ -121,6 +121,7 @@ pub enum SmartPlaylistRule {
     DateIsPresent {
         field: SmartPlaylistDateField,
     },
+    Bool(SmartPlaylistBoolRule),
     /// Matches when the track's file is currently flagged missing — the
     /// last access could not find it on disk. Backs the seeded "Missing
     /// Files" smart playlist (#79). File availability is a whole-track
@@ -181,6 +182,17 @@ pub enum SmartPlaylistDateField {
     DateAdded,
     LastPlayed,
     LastSkipped,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SmartPlaylistBoolRule {
+    pub field: SmartPlaylistBoolField,
+    pub equals: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SmartPlaylistBoolField {
+    HasLyrics,
 }
 
 #[cfg(test)]

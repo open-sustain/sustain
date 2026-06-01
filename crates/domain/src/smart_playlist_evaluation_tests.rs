@@ -5,10 +5,11 @@ use std::num::NonZeroU32;
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    PlayStatistics, Rating, SmartPlaylistDateField, SmartPlaylistLimit,
-    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
-    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
-    SmartPlaylistTextOperator, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
+    PlayStatistics, Rating, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
+    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
+    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, Track, TrackId, TrackLocation,
+    TrackMetadata, TrackRelativePath,
 };
 
 use super::{matching_tracks, track_matches_rule, track_matches_rule_set};
@@ -76,6 +77,23 @@ fn file_is_missing_and_is_present_match_on_availability() {
         &SmartPlaylistRule::FileIsPresent,
         now
     ));
+}
+
+#[test]
+fn has_lyrics_bool_rule_uses_non_blank_plain_lyrics() {
+    let now = unix(10_000);
+    let mut with_lyrics = track(1, None, 0, None);
+    with_lyrics.metadata.lyrics = Some("A lyric line".to_owned());
+    let mut blank_lyrics = track(2, None, 0, None);
+    blank_lyrics.metadata.lyrics = Some(" \n".to_owned());
+    let rule = SmartPlaylistRule::Bool(SmartPlaylistBoolRule {
+        field: SmartPlaylistBoolField::HasLyrics,
+        equals: true,
+    });
+
+    assert!(track_matches_rule(&with_lyrics, &rule, now));
+    assert!(!track_matches_rule(&blank_lyrics, &rule, now));
+    assert!(!track_matches_rule(&track(3, None, 0, None), &rule, now));
 }
 
 #[test]

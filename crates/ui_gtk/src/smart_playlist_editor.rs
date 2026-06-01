@@ -36,6 +36,7 @@ enum ValueWidget {
     Rating(gtk::SpinButton),
     Date(gtk::Entry),
     Days(gtk::SpinButton),
+    Bool(gtk::DropDown),
     None,
 }
 
@@ -47,6 +48,7 @@ impl ValueWidget {
             Self::Rating(spin) => Some(spin.clone().upcast()),
             Self::Date(entry) => Some(entry.clone().upcast()),
             Self::Days(spin) => Some(spin.clone().upcast()),
+            Self::Bool(dropdown) => Some(dropdown.clone().upcast()),
             Self::None => None,
         }
     }
@@ -84,6 +86,7 @@ impl ValueWidget {
                 spin.set_digits(0);
                 Self::Days(spin)
             }
+            ValueKind::Bool => Self::Bool(gtk::DropDown::from_strings(&["Yes", "No"])),
             ValueKind::None => Self::None,
         }
     }
@@ -222,6 +225,7 @@ fn value_input_from_widget(value: &ValueWidget) -> ValueInput {
         ValueWidget::Rating(spin) => ValueInput::Rating(spin.value_as_int().max(0) as u32),
         ValueWidget::Date(entry) => ValueInput::Date(entry.text().to_string()),
         ValueWidget::Days(spin) => ValueInput::Days(spin.value_as_int().max(0) as u32),
+        ValueWidget::Bool(dropdown) => ValueInput::Bool(dropdown.selected() == 0),
         ValueWidget::None => ValueInput::None,
     }
 }
@@ -261,6 +265,9 @@ fn apply_initial_value(widget: &ValueWidget, input: &ValueInput) {
         (ValueWidget::Rating(spin), ValueInput::Rating(stars)) => spin.set_value(*stars as f64),
         (ValueWidget::Date(entry), ValueInput::Date(text)) => entry.set_text(text),
         (ValueWidget::Days(spin), ValueInput::Days(days)) => spin.set_value(*days as f64),
+        (ValueWidget::Bool(dropdown), ValueInput::Bool(value)) => {
+            dropdown.set_selected(u32::from(!value));
+        }
         _ => {}
     }
 }

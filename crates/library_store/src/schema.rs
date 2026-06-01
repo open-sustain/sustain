@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS smart_playlist_rules (
     rating_stars INTEGER,
     date_unix INTEGER,
     days_value INTEGER,
+    bool_value INTEGER,
     PRIMARY KEY (smart_playlist_id, position),
     FOREIGN KEY (smart_playlist_id) REFERENCES smart_playlists(id) ON DELETE CASCADE
 );

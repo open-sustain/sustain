@@ -101,6 +101,27 @@ fn file_status_rules_round_trip_through_the_editor_model() {
 }
 
 #[test]
+fn lyrics_bool_rule_round_trips_through_the_editor_model() {
+    let field = EditorField::Bool(SmartPlaylistBoolField::HasLyrics);
+    assert_eq!(operators_for_field(field), &[EditorOperator::BoolEqual]);
+
+    for equals in [true, false] {
+        let rule = SmartPlaylistRule::Bool(SmartPlaylistBoolRule {
+            field: SmartPlaylistBoolField::HasLyrics,
+            equals,
+        });
+        assert_eq!(
+            extract_rule(field, EditorOperator::BoolEqual, &ValueInput::Bool(equals)),
+            Ok(rule.clone())
+        );
+        assert_eq!(
+            decompose_rule(&rule),
+            (field, EditorOperator::BoolEqual, ValueInput::Bool(equals))
+        );
+    }
+}
+
+#[test]
 fn rating_field_does_not_offer_empty_present_operators() {
     let rating_operators = operators_for_field(EditorField::Rating);
     assert!(!rating_operators.contains(&EditorOperator::NumberIsEmpty));
