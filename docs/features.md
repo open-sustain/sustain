@@ -156,17 +156,21 @@ and visually banded.
 
 Selecting two or more rows in Songs or Duplicates exposes **Consolidate
 to single track**. Double-clicking a Duplicates row plays it normally,
-so candidate versions can be compared by ear first. The dialog forces
-the highest-bitrate audio file to survive, preferring a lossless format
-when bitrate ties; only strictly equal audio-quality candidates remain
-user-selectable. Metadata defaults to a field-by-field cherry-pick of
-populated values, with controls to override individual fields or take
-every editable field from one track. Embedded artwork is previewed
-asynchronously and presets the highest-resolution available image.
-Consolidation sums listening counts, keeps the most recent last-played
-and last-skipped dates, the oldest date-added value, and the highest
-rating. Playlist membership is rewritten in place while preserving
-order and collapsing consecutive repetitions introduced by the merge.
+so candidate versions can be compared by ear first. The dialog lays the
+duplicates out as one column per track — each column headed by that
+track's artwork preview and details (path, codec, bitrate, duration,
+size, rating, plays, date added) — with grouped radio rows below for the
+survivor decisions. The audio file defaults to the highest quality
+(highest bitrate, lossless breaking a tie) but stays overridable, so a
+16-bit FLAC can be kept over a larger 24-bit one. Each editable metadata
+field is its own radio row, defaulting to a cherry-pick of populated
+values; a per-column "Track N" heading takes every field from one track
+at once. Embedded artwork is previewed asynchronously and presets the
+highest-resolution available image. Consolidation sums listening counts,
+keeps the most recent last-played and last-skipped dates, the oldest
+date-added value, and the highest rating. Playlist membership is
+rewritten in place while preserving order and collapsing consecutive
+repetitions introduced by the merge.
 
 Before deleting any duplicate pathname, Sustain writes and verifies a
 staged survivor, keeps hard-linked recovery copies, commits SQLite and

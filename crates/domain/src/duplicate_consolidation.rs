@@ -113,7 +113,6 @@ pub enum DuplicateConsolidationError {
     TrackUnavailable,
     ReferenceNotSelected,
     InvalidMetadataSelection,
-    AudioTrackIsNotHighestQuality,
     CountOverflow,
 }
 
@@ -211,18 +210,14 @@ pub fn plan_duplicate_consolidation(
     {
         return Err(DuplicateConsolidationError::TrackUnavailable);
     }
+    // The audio survivor is whichever file the user picked. Highest quality is
+    // preselected in the UI (see `highest_quality_duplicate_audio_track_ids`),
+    // but the choice is deliberately overridable — e.g. keeping a 16-bit FLAC
+    // over a larger 24-bit one — so the planner does not enforce it.
     let audio_track = selected_tracks
         .iter()
         .find(|track| track.id == request.audio_track_id)
         .expect("validated audio reference");
-    let highest_audio_quality = selected_tracks
-        .iter()
-        .map(|track| duplicate_audio_quality(track))
-        .max()
-        .expect("validated non-empty selection");
-    if duplicate_audio_quality(audio_track) != highest_audio_quality {
-        return Err(DuplicateConsolidationError::AudioTrackIsNotHighestQuality);
-    }
 
     let mut survivor = (*audio_track).clone();
     copy_selected_editable_metadata(&mut survivor.metadata, &selected_tracks, &request.metadata)?;
@@ -586,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn audio_choice_requires_highest_bitrate_then_prefers_lossless_on_tie() {
+    fn highest_quality_audio_prefers_bitrate_then_lossless_on_tie() {
         let mut lower_lossless = track(1, "Artist", "Song", "Album", 200);
         lower_lossless.metadata.bitrate_kbps = Some(256);
         let mut higher_lossy = track(2, "Artist", "Song", "Album", 200);
@@ -612,27 +607,29 @@ mod tests {
     }
 
     #[test]
-    fn planner_rejects_lower_quality_audio_survivor() {
+    fn planner_accepts_a_user_overridden_lower_quality_audio_survivor() {
         let mut lower = track(1, "Artist", "Song", "Album", 200);
         lower.metadata.bitrate_kbps = Some(128);
         let mut higher = track(2, "Artist", "Song", "Album", 200);
         higher.metadata.bitrate_kbps = Some(320);
 
-        assert_eq!(
-            plan_duplicate_consolidation(
-                &[lower, higher],
-                &[],
-                &DuplicateConsolidationRequest {
-                    track_ids: vec![track_id(1), track_id(2)],
-                    audio_track_id: track_id(1),
-                    metadata: DuplicateMetadataSelection::from_track(track_id(1)),
-                    artwork_track_id: track_id(1),
-                },
-                100,
-                false,
-            ),
-            Err(DuplicateConsolidationError::AudioTrackIsNotHighestQuality)
-        );
+        // The highest-quality file is only a preselection, not a hard rule, so
+        // deliberately keeping the lower-bitrate file is allowed.
+        let plan = plan_duplicate_consolidation(
+            &[lower, higher],
+            &[],
+            &DuplicateConsolidationRequest {
+                track_ids: vec![track_id(1), track_id(2)],
+                audio_track_id: track_id(1),
+                metadata: DuplicateMetadataSelection::from_track(track_id(1)),
+                artwork_track_id: track_id(1),
+            },
+            100,
+            false,
+        )
+        .expect("lower-quality audio survivor is permitted");
+        assert_eq!(plan.survivor.id, track_id(1));
+        assert_eq!(plan.removed_track_ids, vec![track_id(2)]);
     }
 
     fn track(id: i64, artist: &str, title: &str, album: &str, duration: u64) -> Track {
