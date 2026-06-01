@@ -55,12 +55,9 @@ pub(super) fn build(
 /// your own machine).
 fn build_intro_paragraph() -> gtk::Widget {
     let label = gtk::Label::new(Some(
-        "Smart Shuffle picks each next track as a continuation of the one playing now \
-         — matching its genre, tempo, key, era and the discovery period it belongs to, \
-         to follow the mood or flow you are already in instead of jumping at random. \
-         It compares tracks with a fixed, transparent musical metric; there is no \
-         learning and nothing leaves your computer. Turning on audio analysis (in the \
-         Analysis tab) lets it also match loudness and timbre for smoother transitions.",
+        "Smart Shuffle tries to follow your mood by using the current track's \
+         genre, tempo, key, era and discovery period to choose the next track. \
+         Turning on audio analysis allows for even better picks.",
     ));
     label.add_css_class("preference-helper");
     label.set_xalign(0.0);
