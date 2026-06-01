@@ -546,6 +546,12 @@ pub fn device_sync_running_text(label: &str) -> String {
 pub fn device_sync_progress_text(progress: sustain_device_sync::SyncProgress) -> String {
     use sustain_device_sync::SyncStage;
     match progress.stage {
+        SyncStage::Preparing => {
+            format!(
+                "Preparing tracks ({}/{})…",
+                progress.completed, progress.total
+            )
+        }
         SyncStage::Copying => {
             format!(
                 "Copying tracks ({}/{})…",

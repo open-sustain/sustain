@@ -16,12 +16,8 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 
-use sustain_device_sync::{
-    PreparedSyncRequest, SourceSnapshot, SyncOutcome, SyncProgress, SyncRequest, engine,
-    resolve_source_fingerprint,
-};
+use sustain_device_sync::{SyncOutcome, SyncProgress};
 use sustain_domain::SyncDeviceId;
-use sustain_library_store::LibraryStore;
 
 /// Monotonically increasing identity for one accepted device-sync run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,17 +126,14 @@ impl DeviceSyncScheduler {
     pub fn start(
         &self,
         device_id: SyncDeviceId,
-        request: SyncRequest,
-        library_store: Arc<dyn LibraryStore>,
+        task: impl FnOnce(
+            &mut dyn FnMut(SyncProgress),
+            &dyn Fn() -> bool,
+        ) -> Result<SyncOutcome, String>
+        + Send
+        + 'static,
     ) -> DeviceSyncStartOutcome {
-        self.start_task(
-            device_id,
-            Box::new(move |progress, cancel| {
-                prepare_sync_request(request, library_store.as_ref())
-                    .and_then(|request| engine::sync(&request, progress, cancel))
-                    .map_err(|error| error.to_string())
-            }),
-        )
+        self.start_task(device_id, Box::new(task))
     }
 
     fn start_task(&self, device_id: SyncDeviceId, task: SyncTask) -> DeviceSyncStartOutcome {
@@ -252,24 +245,6 @@ impl DeviceSyncScheduler {
     }
 }
 
-fn prepare_sync_request(
-    mut request: SyncRequest,
-    library_store: &dyn LibraryStore,
-) -> Result<PreparedSyncRequest, sustain_device_sync::SyncError> {
-    for track in &mut request.tracks {
-        let cached = library_store
-            .source_fingerprint(track.track_id)
-            .map_err(|error| sustain_device_sync::SyncError::Preparation(format!("{error:?}")))?;
-        let fingerprint = resolve_source_fingerprint(&track.source_path, cached.as_ref())
-            .map_err(|error| sustain_device_sync::SyncError::io(&track.source_path, error))?;
-        library_store
-            .save_source_fingerprint(track.track_id, &fingerprint)
-            .map_err(|error| sustain_device_sync::SyncError::Preparation(format!("{error:?}")))?;
-        track.source = SourceSnapshot::resolved(fingerprint);
-    }
-    PreparedSyncRequest::new(request)
-}
-
 impl Default for DeviceSyncScheduler {
     fn default() -> Self {
         Self::new()
@@ -362,6 +337,36 @@ mod tests {
                 progress: _
             }) if event_run_id == run_id
         ));
+        assert!(matches!(
+            scheduler.event_receiver().recv_blocking(),
+            Ok(DeviceSyncEvent::Finished {
+                run_id: event_run_id,
+                completion: _
+            }) if event_run_id == run_id
+        ));
+        assert!(scheduler.acknowledge_completion(run_id));
+    }
+
+    #[test]
+    fn start_returns_while_worker_preparation_is_still_blocked() {
+        let scheduler = DeviceSyncScheduler::new();
+        let (worker_started_tx, worker_started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let started = scheduler.start(device_id(), move |_progress, _cancel| {
+            worker_started_tx.send(()).expect("signal worker start");
+            release_rx.recv().expect("release worker");
+            Ok(SyncOutcome::default())
+        });
+        assert!(matches!(started, DeviceSyncStartOutcome::Started(_)));
+        let DeviceSyncStartOutcome::Started(run_id) = started else {
+            return;
+        };
+        worker_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker reached blocked preparation");
+        assert!(scheduler.is_syncing());
+
+        release_tx.send(()).expect("release worker");
         assert!(matches!(
             scheduler.event_receiver().recv_blocking(),
             Ok(DeviceSyncEvent::Finished {

@@ -14,6 +14,7 @@ use sustain_domain::{
     DeviceRelativePath, MusicalKey, SourceFileStat, SourceFingerprint, SyncDevice,
     SyncManifestEntry, TrackContentHash, TrackId, WaveformSegments,
 };
+use sustain_pioneer::ArtworkSet;
 
 /// Capacity of the filesystem behind an opened device mount root.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -87,15 +88,6 @@ pub struct SyncInputTrack {
     pub date_added: Option<String>,
     /// Lower-case file extension without the dot (e.g. `mp3`).
     pub extension: String,
-    /// Preview waveform (Pioneer layout only). `None` when the track has
-    /// not been waveform-analysed.
-    pub waveform_preview: Option<WaveformSegments>,
-    /// Detail waveform (Pioneer layout only).
-    pub waveform_detail: Option<WaveformSegments>,
-    /// Embedded cover-art bytes (Pioneer layout only), rendered into the
-    /// drive's artwork thumbnails. `None` when the file has no cover or
-    /// the layout does not use artwork.
-    pub cover_art: Option<Vec<u8>>,
 }
 
 /// One resolved playlist: a name and the indices (into the request's
@@ -124,25 +116,103 @@ pub struct SyncRequest {
     pub export_date: String,
 }
 
+/// Worker-hydrated assets for one Pioneer track.
+pub struct PreparedPioneerTrackAssets {
+    pub(crate) waveform_preview: Option<WaveformSegments>,
+    pub(crate) waveform_detail: Option<WaveformSegments>,
+    pub(crate) artwork_id: u32,
+}
+
+/// Worker-hydrated assets for one Pioneer export.
+///
+/// Source cover bytes are processed and discarded as each track is hydrated.
+/// [`ArtworkSet`] retains only one pair of rendered thumbnails per distinct
+/// cover, while each track retains its compact PDB artwork id.
+#[derive(Default)]
+pub struct PreparedPioneerAssets {
+    pub(crate) tracks: Vec<PreparedPioneerTrackAssets>,
+    pub(crate) artwork: ArtworkSet,
+}
+
+impl PreparedPioneerAssets {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push_track(
+        &mut self,
+        waveform_preview: Option<WaveformSegments>,
+        waveform_detail: Option<WaveformSegments>,
+        cover_art: Option<&[u8]>,
+    ) {
+        let artwork_id = cover_art
+            .and_then(|bytes| self.artwork.add(bytes).ok())
+            .unwrap_or(0);
+        self.tracks.push(PreparedPioneerTrackAssets {
+            waveform_preview,
+            waveform_detail,
+            artwork_id,
+        });
+    }
+
+    pub fn track_count(&self) -> usize {
+        self.tracks.len()
+    }
+
+    pub fn artwork_count(&self) -> usize {
+        self.artwork.len()
+    }
+}
+
 /// A sync request whose every source observation carries a SHA-256. Only this
 /// type can reach the mutating engine, preventing provisional planning tokens
-/// from ever being persisted into a device manifest.
-#[derive(Clone, Debug)]
-pub struct PreparedSyncRequest(SyncRequest);
+/// from ever being persisted into a device manifest. Pioneer requests also
+/// carry worker-hydrated assets so database/audio parsing is complete before
+/// removable-media mutation begins.
+pub struct PreparedSyncRequest {
+    request: SyncRequest,
+    pioneer_assets: Option<PreparedPioneerAssets>,
+}
 
 impl PreparedSyncRequest {
-    pub fn new(request: SyncRequest) -> Result<Self, SyncError> {
-        if request
+    pub fn new(
+        request: SyncRequest,
+        pioneer_assets: Option<PreparedPioneerAssets>,
+    ) -> Result<Self, SyncError> {
+        if !request
             .tracks
             .iter()
             .all(|track| track.source.content_hash.is_some())
         {
-            Ok(Self(request))
-        } else {
-            Err(SyncError::Preparation(
+            return Err(SyncError::Preparation(
                 "one or more source fingerprints are unresolved".to_owned(),
-            ))
+            ));
         }
+        match (&request.device.layout, pioneer_assets.as_ref()) {
+            (sustain_domain::DeviceLayout::Pioneer, Some(assets))
+                if assets.tracks.len() == request.tracks.len() => {}
+            (sustain_domain::DeviceLayout::Pioneer, _) => {
+                return Err(SyncError::Preparation(
+                    "Pioneer assets are missing or do not match the resolved track set".to_owned(),
+                ));
+            }
+            (_, Some(_)) => {
+                return Err(SyncError::Preparation(
+                    "Pioneer assets were supplied for a non-Pioneer layout".to_owned(),
+                ));
+            }
+            (_, None) => {}
+        }
+        Ok(Self {
+            request,
+            pioneer_assets,
+        })
+    }
+
+    pub(crate) fn pioneer_assets(&self) -> Result<&PreparedPioneerAssets, SyncError> {
+        self.pioneer_assets
+            .as_ref()
+            .ok_or_else(|| SyncError::Preparation("Pioneer assets were not prepared".to_owned()))
     }
 }
 
@@ -150,7 +220,7 @@ impl Deref for PreparedSyncRequest {
     type Target = SyncRequest;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.request
     }
 }
 
@@ -201,6 +271,7 @@ pub struct SyncPlan {
 /// Stage the engine is in, for progress reporting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SyncStage {
+    Preparing,
     Copying,
     WritingPlaylists,
     WritingDatabase,
@@ -224,6 +295,11 @@ pub struct SyncOutcome {
     pub unchanged: usize,
     /// The new manifest to persist.
     pub manifest: Vec<SyncManifestEntry>,
+    /// True once the engine has assembled a manifest representing the
+    /// on-device state. Worker-preparation cancellation happens before any
+    /// removable-media mutation and leaves this false, so callers preserve
+    /// the previously stored manifest.
+    pub manifest_is_authoritative: bool,
     /// True if the run stopped early because cancellation was requested.
     pub cancelled: bool,
 }

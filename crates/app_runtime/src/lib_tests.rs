@@ -81,6 +81,7 @@ fn device_sync_manifest_save_failure_surfaces_error_instead_of_success() {
             .start_test_task(device_id, |_progress, _cancel| Ok(
                 sustain_device_sync::SyncOutcome {
                     copied: 1,
+                    manifest_is_authoritative: true,
                     ..Default::default()
                 }
             ),),
@@ -101,6 +102,40 @@ fn device_sync_manifest_save_failure_surfaces_error_instead_of_success() {
 }
 
 #[test]
+fn device_sync_preparation_cancellation_preserves_saved_manifest() {
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    let device_id = SyncDeviceId::new("device-id").expect("device id");
+    let receiver = runtime.device_sync_event_receiver();
+    assert!(matches!(
+        runtime
+            .device_sync_scheduler
+            .start_test_task(device_id, |_progress, _cancel| Ok(
+                sustain_device_sync::SyncOutcome {
+                    cancelled: true,
+                    ..Default::default()
+                }
+            ),),
+        crate::DeviceSyncStartOutcome::Started(_)
+    ));
+
+    let event = receiver.recv_blocking().expect("device-sync completion");
+    runtime.apply_device_sync_event(event);
+
+    assert_eq!(store.device_manifest_calls(), 0);
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("cancellation notification");
+    assert_eq!(notification.category, NotificationCategory::DeviceSync);
+    assert_eq!(notification.severity, NotificationSeverity::Warning);
+    assert!(notification.body.contains("Sync stopped"));
+}
+
+#[test]
 fn stale_device_sync_completion_is_ignored() {
     let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
@@ -112,7 +147,10 @@ fn stale_device_sync_completion_is_ignored() {
     let started = runtime
         .device_sync_scheduler
         .start_test_task(device_id, |_progress, _cancel| {
-            Ok(sustain_device_sync::SyncOutcome::default())
+            Ok(sustain_device_sync::SyncOutcome {
+                manifest_is_authoritative: true,
+                ..Default::default()
+            })
         });
     assert!(matches!(started, crate::DeviceSyncStartOutcome::Started(_)));
     let crate::DeviceSyncStartOutcome::Started(run_id) = started else {

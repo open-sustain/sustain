@@ -27,8 +27,9 @@ pub use identity::{
     ConnectedDevice, MARKER_FILE, discover, generate_device_id, read_marker, write_marker,
 };
 pub use model::{
-    DeviceCapacity, GenreBytes, Placement, PreparedSyncRequest, SourceSnapshot, SyncError,
-    SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage,
+    DeviceCapacity, GenreBytes, Placement, PreparedPioneerAssets, PreparedSyncRequest,
+    SourceSnapshot, SyncError, SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncPlan,
+    SyncProgress, SyncRequest, SyncStage,
 };
 pub use source::{resolve_source_fingerprint, source_file_stat};
 
@@ -83,9 +84,6 @@ mod tests {
                 source,
                 date_added: Some("2026-01-01".into()),
                 extension: "mp3".into(),
-                waveform_preview: None,
-                waveform_detail: None,
-                cover_art: None,
             });
         }
         Fixture {
@@ -130,7 +128,17 @@ mod tests {
     /// Resolved fixtures always carry a content hash, so promoting a request
     /// to the mutating engine cannot fail; the helper unwraps for the tests.
     fn prepared(req: &SyncRequest) -> PreparedSyncRequest {
-        PreparedSyncRequest::new(req.clone()).expect("fixture sources are all resolved")
+        let pioneer_assets = if req.device.layout == DeviceLayout::Pioneer {
+            let mut assets = PreparedPioneerAssets::new();
+            for _ in &req.tracks {
+                assets.push_track(None, None, None);
+            }
+            Some(assets)
+        } else {
+            None
+        };
+        PreparedSyncRequest::new(req.clone(), pioneer_assets)
+            .expect("fixture sources are all resolved")
     }
 
     fn run(req: &SyncRequest) -> SyncOutcome {
@@ -208,9 +216,6 @@ mod tests {
             }),
             date_added: None,
             extension: "mp3".into(),
-            waveform_preview: None,
-            waveform_detail: None,
-            cover_art: None,
         }
     }
 
@@ -345,22 +350,24 @@ mod tests {
             0xd4, 0x2f, 0x04, 0x80, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42,
             0x60, 0x82,
         ];
+        let mut repeated_assets = PreparedPioneerAssets::new();
+        for _ in 0..10_000 {
+            repeated_assets.push_track(None, None, Some(COVER_PNG));
+        }
+        assert_eq!(repeated_assets.track_count(), 10_000);
+        assert_eq!(
+            repeated_assets.artwork_count(),
+            1,
+            "repeated source artwork must retain one rendered thumbnail set"
+        );
+
         let fx = fixture(2);
         // Both tracks carry the same cover, so de-duplication collapses
         // them to a single artwork id.
-        let tracks: Vec<SyncInputTrack> = fx
-            .tracks
-            .iter()
-            .cloned()
-            .map(|mut t| {
-                t.cover_art = Some(COVER_PNG.to_vec());
-                t
-            })
-            .collect();
         let req = SyncRequest {
             device: device(DeviceLayout::Pioneer),
             mount_path: fx.dest.path().to_path_buf(),
-            tracks,
+            tracks: fx.tracks.clone(),
             playlists: vec![SyncInputPlaylist {
                 name: "My Set".into(),
                 track_indices: vec![0, 1],
@@ -369,7 +376,17 @@ mod tests {
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };
-        run(&req);
+        let mut assets = PreparedPioneerAssets::new();
+        for _ in &req.tracks {
+            assets.push_track(None, None, Some(COVER_PNG));
+        }
+        assert_eq!(assets.artwork_count(), 1);
+        sync(
+            &PreparedSyncRequest::new(req, Some(assets)).expect("prepared Pioneer request"),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("sync ok");
 
         let art = fx.dest.path().join("PIONEER/Artwork/00001");
         assert!(art.join("a1.jpg").exists(), "small thumbnail written");

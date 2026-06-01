@@ -219,6 +219,7 @@ pub fn sync(
 
     if outcome.cancelled {
         outcome.manifest = manifest;
+        outcome.manifest_is_authoritative = true;
         return Ok(outcome);
     }
 
@@ -274,6 +275,7 @@ pub fn sync(
     }
 
     outcome.manifest = manifest;
+    outcome.manifest_is_authoritative = true;
     Ok(outcome)
 }
 

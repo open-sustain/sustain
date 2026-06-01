@@ -106,3 +106,15 @@ fn online_progress_always_reads_as_completed_over_total() {
         "Retrieving online data (7/7)..."
     );
 }
+
+#[test]
+fn device_sync_preparation_progress_is_user_visible() {
+    assert_eq!(
+        device_sync_progress_text(sustain_device_sync::SyncProgress {
+            stage: sustain_device_sync::SyncStage::Preparing,
+            completed: 4,
+            total: 10,
+        }),
+        "Preparing tracks (4/10)…"
+    );
+}

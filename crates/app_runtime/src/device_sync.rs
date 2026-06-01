@@ -17,14 +17,16 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sustain_device_sync::{
-    ConnectedDevice, SourceSnapshot, SyncInputPlaylist, SyncInputTrack, SyncRequest, capacity,
-    engine, source_file_stat,
+    ConnectedDevice, PreparedPioneerAssets, PreparedSyncRequest, SourceSnapshot, SyncInputPlaylist,
+    SyncInputTrack, SyncOutcome, SyncProgress, SyncRequest, SyncStage, capacity, engine,
+    resolve_source_fingerprint, source_file_stat,
 };
 use sustain_domain::{
     DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MusicalKey, Playlist, PlaylistItem,
     SmartPlaylist, SyncDevice, SyncDeviceId, Track, TrackId, matching_tracks,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore};
+use sustain_metadata::MetadataService;
 
 use crate::device_plan_scheduler::{
     DeviceMountIdentity, DevicePlanGeneration, DevicePlanResult, DevicePlanSnapshot,
@@ -454,8 +456,7 @@ impl ApplicationRuntime {
             return Ok(());
         };
         let device = self.ensure_device_config(&connected)?;
-        let request = self.build_sync_request(&device, connected.mount_path, remove_stale, true)?;
-        if request.tracks.is_empty() {
+        if self.device_selection(&id).is_empty() {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Info,
@@ -463,11 +464,28 @@ impl ApplicationRuntime {
             );
             return Ok(());
         }
-        let library_store = self
+        let store = self
             .library_store
             .clone()
             .ok_or(ApplicationRuntimeError::LibraryStoreFailed)?;
-        match self.device_sync_scheduler.start(id, request, library_store) {
+        let metadata_service = self
+            .metadata_service
+            .clone()
+            .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
+        let preparation = DeviceSyncPreparation {
+            mount: mount_identity(&connected),
+            store,
+            metadata_service,
+            library_path: self.settings.library.path.clone(),
+            now: self.clock.now(),
+            export_date: unix_to_ymd(self.clock_unix_secs()),
+            remove_stale,
+        };
+        match self
+            .device_sync_scheduler
+            .start(id, move |progress, cancel| {
+                preparation.run(progress, cancel)
+            }) {
             DeviceSyncStartOutcome::Started(_) => {
                 let notification = self.push_persistent_notification(
                     NotificationCategory::DeviceSync,
@@ -520,11 +538,12 @@ impl ApplicationRuntime {
                 }
                 match completion.result {
                     Ok(outcome) => {
-                        let manifest_saved = self.library_store.as_ref().is_some_and(|store| {
-                            store
-                                .save_device_manifest(&completion.device_id, &outcome.manifest)
-                                .is_ok()
-                        });
+                        let manifest_saved = !outcome.manifest_is_authoritative
+                            || self.library_store.as_ref().is_some_and(|store| {
+                                store
+                                    .save_device_manifest(&completion.device_id, &outcome.manifest)
+                                    .is_ok()
+                            });
                         if !manifest_saved {
                             self.push_ephemeral_notification(
                                 NotificationCategory::DeviceSync,
@@ -578,114 +597,6 @@ impl ApplicationRuntime {
         ids
     }
 
-    fn build_sync_request(
-        &self,
-        device: &SyncDevice,
-        mount_path: PathBuf,
-        remove_stale: bool,
-        load_pioneer_assets: bool,
-    ) -> ApplicationRuntimeResult<SyncRequest> {
-        let store = self
-            .library_store
-            .as_ref()
-            .ok_or(ApplicationRuntimeError::LibraryStoreFailed)?;
-        // Waveforms (from SQLite) and cover art (read from each file) are
-        // only consumed when actually writing the Pioneer ANLZ/artwork
-        // files; planning (the occupation bar, the diff) never reads
-        // them, so skip those per-track loads on that path — it runs on
-        // every playlist toggle.
-        let want_pioneer_assets = load_pioneer_assets && device.layout == DeviceLayout::Pioneer;
-        let by_id: HashMap<_, _> = self.library_tracks.iter().map(|t| (t.id, t)).collect();
-
-        let mut index_of: HashMap<sustain_domain::TrackId, usize> = HashMap::new();
-        let mut tracks: Vec<SyncInputTrack> = Vec::new();
-        let mut playlists: Vec<SyncInputPlaylist> = Vec::new();
-
-        for item in self.device_selection(&device.id) {
-            let Some(track_ids) = self.playlist_item_track_ids(item) else {
-                continue;
-            };
-            let name = self
-                .playlist_item_name(item)
-                .unwrap_or_else(|| "Playlist".to_owned());
-            let mut indices = Vec::with_capacity(track_ids.len());
-            for tid in track_ids {
-                let resolved = match index_of.get(&tid) {
-                    Some(&existing) => Some(existing),
-                    None => {
-                        let Some(track) = by_id.get(&tid) else {
-                            continue;
-                        };
-                        if track.location.is_missing() {
-                            continue;
-                        }
-                        let Some(source_path) = self.absolute_track_path(track) else {
-                            continue;
-                        };
-                        let preview_detail = if want_pioneer_assets {
-                            store.load_waveform(tid).ok().flatten()
-                        } else {
-                            None
-                        };
-                        let cover_art = if want_pioneer_assets {
-                            self.read_artwork(&source_path)
-                        } else {
-                            None
-                        };
-                        let Some(source) = source_snapshot(store.as_ref(), track.id, &source_path)?
-                        else {
-                            continue;
-                        };
-                        let input =
-                            sync_input_track(track, source_path, source, preview_detail, cover_art);
-                        let position = tracks.len();
-                        tracks.push(input);
-                        index_of.insert(tid, position);
-                        Some(position)
-                    }
-                };
-                if let Some(position) = resolved {
-                    indices.push(position);
-                }
-            }
-            playlists.push(SyncInputPlaylist {
-                name,
-                track_indices: indices,
-            });
-        }
-
-        let previous_manifest = store
-            .device_manifest(&device.id)
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        let export_date = unix_to_ymd(self.clock_unix_secs());
-
-        Ok(SyncRequest {
-            device: device.clone(),
-            mount_path,
-            tracks,
-            playlists,
-            previous_manifest,
-            remove_stale,
-            export_date,
-        })
-    }
-
-    fn playlist_item_name(&self, item: PlaylistItem) -> Option<String> {
-        match item {
-            PlaylistItem::Playlist(id) => self
-                .playlists
-                .iter()
-                .find(|p| p.id == id)
-                .map(|p| p.name.clone()),
-            PlaylistItem::SmartPlaylist(id) => self
-                .smart_playlists
-                .iter()
-                .find(|p| p.id == id)
-                .map(|p| p.name.clone()),
-            PlaylistItem::Folder(_) => None,
-        }
-    }
-
     fn clock_unix_secs(&self) -> i64 {
         self.clock
             .now()
@@ -711,6 +622,60 @@ struct DevicePlanPreparation {
     export_date: String,
 }
 
+struct DeviceSyncPreparation {
+    mount: DeviceMountIdentity,
+    store: Arc<dyn LibraryStore>,
+    metadata_service: Arc<dyn MetadataService>,
+    library_path: Option<PathBuf>,
+    now: SystemTime,
+    export_date: String,
+    remove_stale: bool,
+}
+
+impl DeviceSyncPreparation {
+    fn run(
+        self,
+        progress: &mut dyn FnMut(SyncProgress),
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<SyncOutcome, String> {
+        let request = match build_worker_sync_request(
+            self.store.as_ref(),
+            &self.mount,
+            self.library_path.as_deref(),
+            self.now,
+            self.export_date,
+            self.remove_stale,
+            cancelled,
+        ) {
+            Ok(Some(request)) => request,
+            Ok(None) => return Ok(cancelled_outcome()),
+            Err(error) => return Err(error),
+        };
+        if request.tracks.is_empty() {
+            return Err(sustain_device_sync::SyncError::Empty.to_string());
+        }
+        let prepared = match prepare_sync_request(
+            request,
+            self.store.as_ref(),
+            self.metadata_service.as_ref(),
+            progress,
+            cancelled,
+        ) {
+            Ok(Some(request)) => request,
+            Ok(None) => return Ok(cancelled_outcome()),
+            Err(error) => return Err(error.to_string()),
+        };
+        engine::sync(&prepared, progress, cancelled).map_err(|error| error.to_string())
+    }
+}
+
+fn cancelled_outcome() -> SyncOutcome {
+    SyncOutcome {
+        cancelled: true,
+        ..SyncOutcome::default()
+    }
+}
+
 impl DevicePlanPreparation {
     fn run(self, cancelled: &dyn Fn() -> bool) -> Option<Result<DevicePlanSnapshot, String>> {
         if cancelled() {
@@ -723,12 +688,13 @@ impl DevicePlanPreparation {
         if cancelled() {
             return None;
         }
-        let request = match build_plan_sync_request(
+        let request = match build_worker_sync_request(
             self.store.as_ref(),
             &self.mount,
             self.library_path.as_deref(),
             self.now,
             self.export_date,
+            false,
             cancelled,
         ) {
             Ok(Some(request)) => request,
@@ -750,12 +716,13 @@ impl DevicePlanPreparation {
     }
 }
 
-fn build_plan_sync_request(
+fn build_worker_sync_request(
     store: &dyn LibraryStore,
     mount: &DeviceMountIdentity,
     library_path: Option<&std::path::Path>,
     now: SystemTime,
     export_date: String,
+    remove_stale: bool,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<SyncRequest>, String> {
     let device = store
@@ -772,7 +739,7 @@ fn build_plan_sync_request(
             tracks: Vec::new(),
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
-            remove_stale: false,
+            remove_stale,
             export_date,
         }));
     }
@@ -834,7 +801,7 @@ fn build_plan_sync_request(
                         continue;
                     };
                     let index = tracks.len();
-                    tracks.push(sync_input_track(track, source_path, source, None, None));
+                    tracks.push(sync_input_track(track, source_path, source));
                     index_of.insert(track_id, index);
                     Some(index)
                 }
@@ -854,9 +821,62 @@ fn build_plan_sync_request(
         tracks,
         playlists: resolved_playlists,
         previous_manifest,
-        remove_stale: false,
+        remove_stale,
         export_date,
     }))
+}
+
+fn prepare_sync_request(
+    mut request: SyncRequest,
+    store: &dyn LibraryStore,
+    metadata_service: &dyn MetadataService,
+    progress: &mut dyn FnMut(SyncProgress),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<PreparedSyncRequest>, sustain_device_sync::SyncError> {
+    let mut pioneer_assets =
+        (request.device.layout == DeviceLayout::Pioneer).then(PreparedPioneerAssets::new);
+    let total = request.tracks.len();
+    for (index, track) in request.tracks.iter_mut().enumerate() {
+        if cancelled() {
+            return Ok(None);
+        }
+        let cached = store
+            .source_fingerprint(track.track_id)
+            .map_err(|error| sustain_device_sync::SyncError::Preparation(format!("{error:?}")))?;
+        let fingerprint = resolve_source_fingerprint(&track.source_path, cached.as_ref())
+            .map_err(|error| sustain_device_sync::SyncError::io(&track.source_path, error))?;
+        store
+            .save_source_fingerprint(track.track_id, &fingerprint)
+            .map_err(|error| sustain_device_sync::SyncError::Preparation(format!("{error:?}")))?;
+        track.source = SourceSnapshot::resolved(fingerprint);
+
+        if let Some(assets) = pioneer_assets.as_mut() {
+            let waveform = store.load_waveform(track.track_id).map_err(|error| {
+                sustain_device_sync::SyncError::Preparation(format!("{error:?}"))
+            })?;
+            if cancelled() {
+                return Ok(None);
+            }
+            let cover_art = metadata_service
+                .read_artwork(&track.source_path)
+                .ok()
+                .flatten();
+            if cancelled() {
+                return Ok(None);
+            }
+            let (waveform_preview, waveform_detail) = match waveform {
+                Some(waveform) => (Some(waveform.preview), Some(waveform.detail)),
+                None => (None, None),
+            };
+            assets.push_track(waveform_preview, waveform_detail, cover_art.as_deref());
+        }
+        progress(SyncProgress {
+            stage: SyncStage::Preparing,
+            completed: index + 1,
+            total,
+        });
+    }
+    PreparedSyncRequest::new(request, pioneer_assets).map(Some)
 }
 
 fn snapshot_playlist_track_ids(
@@ -910,23 +930,13 @@ fn snapshot_playlist_name(
     }
 }
 
-fn sync_input_track(
-    track: &Track,
-    source_path: PathBuf,
-    source: SourceSnapshot,
-    waveform: Option<sustain_library_store::StoredWaveform>,
-    cover_art: Option<Vec<u8>>,
-) -> SyncInputTrack {
+fn sync_input_track(track: &Track, source_path: PathBuf, source: SourceSnapshot) -> SyncInputTrack {
     let metadata = &track.metadata;
     let extension = source_path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    let (waveform_preview, waveform_detail) = match waveform {
-        Some(stored) => (Some(stored.preview), Some(stored.detail)),
-        None => (None, None),
-    };
     SyncInputTrack {
         track_id: track.id,
         source_path,
@@ -955,9 +965,6 @@ fn sync_input_track(
             )
         }),
         extension,
-        waveform_preview,
-        waveform_detail,
-        cover_art,
     }
 }
 
@@ -1001,12 +1008,23 @@ fn unix_to_ymd(secs: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use sustain_device_sync::DeviceCapacity;
-    use sustain_domain::{DeviceKind, SyncDeviceId};
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use sustain_device_sync::{
+        DeviceCapacity, SourceSnapshot, SyncInputTrack, SyncProgress, SyncRequest, SyncStage,
+        source_file_stat,
+    };
+    use sustain_domain::{
+        DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MetadataChange, Rating,
+        SyncDevice, SyncDeviceId, TrackId, TrackMetadata,
+    };
+    use sustain_library_store::InMemoryLibraryStore;
+    use sustain_metadata::{InitialTags, MetadataResult, MetadataService};
 
     use super::{
         ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
-        DeviceSyncPlanState, unix_to_ymd,
+        DeviceSyncPlanState, prepare_sync_request, unix_to_ymd,
     };
     use crate::ApplicationRuntime;
 
@@ -1019,6 +1037,89 @@ mod tests {
             label: id.to_owned(),
             is_known: true,
             has_marker: true,
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingMetadataService {
+        artwork_reads: AtomicUsize,
+    }
+
+    impl CountingMetadataService {
+        fn artwork_reads(&self) -> usize {
+            self.artwork_reads.load(Ordering::Acquire)
+        }
+    }
+
+    impl MetadataService for CountingMetadataService {
+        fn read_initial_tags(&self, _path: &Path) -> MetadataResult<InitialTags> {
+            Ok(InitialTags {
+                metadata: TrackMetadata::default(),
+                rating: Rating::unrated(),
+                has_embedded_artwork: false,
+            })
+        }
+
+        fn write_metadata(&self, _path: &Path, _change: MetadataChange) -> MetadataResult<()> {
+            Ok(())
+        }
+
+        fn write_rating(&self, _path: &Path, _rating: Rating) -> MetadataResult<()> {
+            Ok(())
+        }
+
+        fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+            self.artwork_reads.fetch_add(1, Ordering::AcqRel);
+            Ok(None)
+        }
+
+        fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+            Ok(())
+        }
+    }
+
+    fn pioneer_request(source_paths: &[&Path]) -> SyncRequest {
+        SyncRequest {
+            device: SyncDevice {
+                id: SyncDeviceId::new("pioneer-device").expect("device id"),
+                label: "Pioneer".to_owned(),
+                kind: DeviceKind::UsbDrive,
+                layout: DeviceLayout::Pioneer,
+                sub_path: DeviceRelativePath::root(),
+                files_per_folder_cap: FilesPerFolderCap::Unlimited,
+                volume_id: None,
+            },
+            mount_path: "/mnt/device".into(),
+            tracks: source_paths
+                .iter()
+                .enumerate()
+                .map(|(index, path)| SyncInputTrack {
+                    track_id: TrackId::new(index as i64 + 1).expect("track id"),
+                    source_path: (*path).to_path_buf(),
+                    title: format!("Track {}", index + 1),
+                    artist: "Artist".to_owned(),
+                    album: "Album".to_owned(),
+                    genre: None,
+                    track_number: None,
+                    year: None,
+                    duration_ms: 1_000,
+                    rating: 0,
+                    bpm: None,
+                    key: None,
+                    bitrate_kbps: None,
+                    sample_rate_hz: 44_100,
+                    bit_depth: 16,
+                    source: SourceSnapshot::provisional(
+                        source_file_stat(path).expect("source stat"),
+                    ),
+                    date_added: None,
+                    extension: "mp3".to_owned(),
+                })
+                .collect(),
+            playlists: Vec::new(),
+            previous_manifest: Vec::new(),
+            remove_stale: false,
+            export_date: "2026-06-01".to_owned(),
         }
     }
 
@@ -1060,5 +1161,77 @@ mod tests {
             runtime.device_sync_plan_state(&second),
             DeviceSyncPlanState::Unavailable
         );
+    }
+
+    #[test]
+    fn pioneer_preparation_reads_assets_and_reports_progress() {
+        let sources = tempfile::tempdir().expect("source directory");
+        let first = sources.path().join("first.mp3");
+        let second = sources.path().join("second.mp3");
+        std::fs::write(&first, b"first source").expect("write first source");
+        std::fs::write(&second, b"second source").expect("write second source");
+        let request = pioneer_request(&[&first, &second]);
+        let store = InMemoryLibraryStore::new();
+        let metadata = CountingMetadataService::default();
+        let mut ticks = Vec::new();
+
+        let prepared = prepare_sync_request(
+            request,
+            &store,
+            &metadata,
+            &mut |tick| ticks.push(tick),
+            &|| false,
+        )
+        .expect("preparation succeeds")
+        .expect("preparation is not cancelled");
+
+        assert_eq!(metadata.artwork_reads(), 2);
+        assert_eq!(
+            ticks,
+            vec![
+                SyncProgress {
+                    stage: SyncStage::Preparing,
+                    completed: 1,
+                    total: 2,
+                },
+                SyncProgress {
+                    stage: SyncStage::Preparing,
+                    completed: 2,
+                    total: 2,
+                },
+            ]
+        );
+        assert!(
+            prepared
+                .tracks
+                .iter()
+                .all(|track| track.source.content_hash.is_some())
+        );
+    }
+
+    #[test]
+    fn pioneer_preparation_observes_cancellation_after_artwork_read() {
+        let sources = tempfile::tempdir().expect("source directory");
+        let first = sources.path().join("first.mp3");
+        let second = sources.path().join("second.mp3");
+        std::fs::write(&first, b"first source").expect("write first source");
+        std::fs::write(&second, b"second source").expect("write second source");
+        let request = pioneer_request(&[&first, &second]);
+        let store = InMemoryLibraryStore::new();
+        let metadata = CountingMetadataService::default();
+        let mut ticks = Vec::new();
+
+        let prepared = prepare_sync_request(
+            request,
+            &store,
+            &metadata,
+            &mut |tick| ticks.push(tick),
+            &|| metadata.artwork_reads() >= 1,
+        )
+        .expect("cancellation is not an error");
+
+        assert!(prepared.is_none());
+        assert_eq!(metadata.artwork_reads(), 1);
+        assert!(ticks.is_empty());
     }
 }

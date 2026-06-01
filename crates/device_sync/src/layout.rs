@@ -20,12 +20,12 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use sustain_domain::{DeviceLayout, DeviceRelativePath, WaveformSegments};
 use sustain_pioneer::{
-    AnlzInput, ArtworkSet, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz,
-    artwork::ARTWORK_BUCKET, path_hash, pdb,
+    AnlzInput, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz, artwork::ARTWORK_BUCKET,
+    path_hash, pdb,
 };
 
 use crate::device_root::DeviceRoot;
-use crate::model::{Placement, SyncError, SyncRequest};
+use crate::model::{Placement, PreparedSyncRequest, SyncError, SyncRequest};
 
 const MUSIC_DIR: &str = "Music";
 const CONTENTS_DIR: &str = "Contents";
@@ -115,7 +115,7 @@ fn allocate_unique_path(
 /// `written` holds the indices (into `placements`) that were (re)copied
 /// this run, so the Pioneer writer can refresh only stale ANLZ files.
 pub(crate) fn finalize(
-    req: &SyncRequest,
+    req: &PreparedSyncRequest,
     root: &DeviceRoot,
     base: &DeviceRelativePath,
     placements: &[Placement],
@@ -314,28 +314,21 @@ fn write_m3u_playlists(
 // ---------------------------------------------------------------------
 
 fn write_pioneer(
-    req: &SyncRequest,
+    req: &PreparedSyncRequest,
     root: &DeviceRoot,
     base: &DeviceRelativePath,
     placements: &[Placement],
     written: &HashSet<usize>,
 ) -> Result<(), SyncError> {
+    let assets = req.pioneer_assets()?;
     // One placement per track, in `req.tracks` order, so a track's index
     // is its PDB row index.
     let mut pioneer_tracks = Vec::with_capacity(placements.len());
-    // Covers are de-duplicated across the whole set: an album's shared
-    // art is rendered and stored once, and each track records the id it
-    // resolves to. A cover that fails to decode degrades to "no
-    // artwork" (id 0) rather than failing the sync.
-    let mut artwork = ArtworkSet::new();
     for (placement_index, placement) in placements.iter().enumerate() {
         let track = &req.tracks[placement.track_index];
+        let track_assets = &assets.tracks[placement.track_index];
         let audio_path = format!("/{}", placement.rel_path);
         let anlz_dat = path_hash::anlz_file(&audio_path, "DAT");
-        let artwork_id = match &track.cover_art {
-            Some(bytes) => artwork.add(bytes).unwrap_or(0),
-            None => 0,
-        };
 
         // Write ANLZ when the audio was (re)written this run or when the
         // .EXT is missing on the device (out-of-band deletion / first run).
@@ -362,8 +355,8 @@ fn write_pioneer(
                 device_audio_path: &audio_path,
                 bpm: track.bpm,
                 duration_ms: track.duration_ms,
-                waveform_preview: track.waveform_preview.as_ref().unwrap_or(&empty),
-                waveform_detail: track.waveform_detail.as_ref().unwrap_or(&empty),
+                waveform_preview: track_assets.waveform_preview.as_ref().unwrap_or(&empty),
+                waveform_detail: track_assets.waveform_detail.as_ref().unwrap_or(&empty),
             };
             let dat = anlz_dir
                 .join_component("ANLZ0000.DAT")
@@ -390,7 +383,7 @@ fn write_pioneer(
             sample_rate_hz: track.sample_rate_hz,
             bit_depth: track.bit_depth,
             file_type: PioneerFileType::from_extension(&track.extension),
-            artwork_id,
+            artwork_id: track_assets.artwork_id,
             date_added: track.date_added.clone(),
             device_audio_path: audio_path,
             device_anlz_path: anlz_dat,
@@ -427,10 +420,10 @@ fn write_pioneer(
     );
     root.remove_tree_if_exists(&artwork_bucket)
         .map_err(|error| SyncError::io(artwork_bucket.as_str(), error))?;
-    if !artwork.is_empty() {
+    if !assets.artwork.is_empty() {
         root.ensure_dir_all(&artwork_bucket)
             .map_err(|error| SyncError::io(artwork_bucket.as_str(), error))?;
-        for (name, bytes) in artwork.files() {
+        for (name, bytes) in assets.artwork.files() {
             let path = artwork_bucket
                 .join_component(&name)
                 .expect("generated Pioneer artwork filename is safe");
@@ -438,7 +431,7 @@ fn write_pioneer(
                 .map_err(|error| SyncError::io(path.as_str(), error))?;
         }
     }
-    let artwork_rows = artwork.rows();
+    let artwork_rows = assets.artwork.rows();
 
     let pdb_path = base.join(
         &DeviceRelativePath::new(sustain_pioneer::PDB_RELATIVE_PATH)
