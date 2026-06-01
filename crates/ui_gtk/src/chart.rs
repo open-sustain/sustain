@@ -31,9 +31,8 @@ use gtk::prelude::*;
 /// `area.color()`. Carried by the donut ring and its legend swatches.
 const CHART_ACCENT_CLASS: &str = "statistics-chart";
 
-/// Opacity of the single-accent fill on the bar charts, painted over
-/// their CSS trough — solid enough to read crisply while letting the
-/// trough show through at zero length.
+/// Opacity of the single-accent fill on the bar charts — solid enough to
+/// read crisply while staying a touch soft against the card behind it.
 const BAR_FILL_ALPHA: f64 = 0.85;
 
 /// Corner radius of a histogram bar's fill, in pixels, applied to all
@@ -324,10 +323,10 @@ pub(crate) fn vertical_bars(bars: Vec<VerticalBar>) -> gtk::Widget {
     grid.upcast()
 }
 
-/// A single histogram bar: the CSS-painted `.statistics-vbar` background
-/// is the full-height trough, and the draw-func fills `fraction` of the
-/// height from the bottom up with the live theme accent. The fill is a
-/// rounded capsule — all four corners swept — floating in the trough.
+/// A single histogram bar: the draw-func paints `fraction` of the height
+/// from the bottom up with the live theme accent as a rounded capsule —
+/// all four corners swept. The widget has no trough background; the bar
+/// floats directly on the card.
 fn vertical_bar(fraction: f64) -> gtk::DrawingArea {
     let fraction = fraction.clamp(0.0, 1.0);
     let area = gtk::DrawingArea::new();
