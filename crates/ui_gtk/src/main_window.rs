@@ -26,7 +26,7 @@ use super::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW,
     SharedMprisService, SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
     SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
-    TrackUpdatedReceiver,
+    TrackUpdatedReceiver, YoutubeAudioDownloadResultReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
@@ -84,6 +84,9 @@ use super::{
         RowReorderDrop, TrackActivatedCallback, TrackTable, TrackTableRow, build_track_table,
     },
     window_chrome::{install_resize_handles, install_window_state_chrome},
+    youtube_audio_replacement::{
+        youtube_audio_replacement_callback, youtube_audio_replacement_visibility,
+    },
 };
 
 mod mpris_bridge;
@@ -115,7 +118,7 @@ use result_consumers::{
     install_library_hydration_result_consumer, install_metadata_writer_event_consumer,
     install_online_progress_consumer, install_smart_shuffle_launch_rebuild,
     install_smart_shuffle_rebuild_result_consumer, install_track_data_observer,
-    install_track_updated_consumer,
+    install_track_updated_consumer, install_youtube_audio_download_result_consumer,
 };
 use search::{SearchWiringContext, install_search_wiring};
 use sidebar_callbacks::{
@@ -146,6 +149,7 @@ pub(crate) struct MainWindowAsyncReceivers {
     pub mpris_command_rx: Option<MprisCommandReceiver>,
     pub metadata_writer_event_rx: Option<MetadataWriterEventReceiver>,
     pub artwork_fetch_result_rx: Option<ArtworkFetchResultReceiver>,
+    pub youtube_audio_download_result_rx: Option<YoutubeAudioDownloadResultReceiver>,
     pub analysis_progress_rx: Option<AnalysisProgressReceiver>,
     pub online_progress_rx: Option<OnlineProgressReceiver>,
     pub track_updated_rx: Option<TrackUpdatedReceiver>,
@@ -167,6 +171,7 @@ pub(crate) fn build_main_window(
         mpris_command_rx,
         metadata_writer_event_rx,
         artwork_fetch_result_rx,
+        youtube_audio_download_result_rx,
         analysis_progress_rx,
         online_progress_rx,
         track_updated_rx,
@@ -368,6 +373,8 @@ pub(crate) fn build_main_window(
     .with_retrieve_menu(
         track_retrieve_run_callback(&runtime),
         online_busy_query(&runtime),
+        youtube_audio_replacement_callback(&parent_window, &command_controller),
+        youtube_audio_replacement_visibility(&runtime),
     );
     let playlist_context_actions = playlist_track_context_actions(
         &runtime,
@@ -382,7 +389,7 @@ pub(crate) fn build_main_window(
     );
     let playlist_context_menu = TrackRowContextMenu::new(
         playlist_context_actions,
-        parent_window,
+        parent_window.clone(),
         track_context_invocation.clone(),
     )
     .with_add_to_playlist(add_to_playlist_provider, add_to_playlist_callback)
@@ -393,6 +400,8 @@ pub(crate) fn build_main_window(
     .with_retrieve_menu(
         track_retrieve_run_callback(&runtime),
         online_busy_query(&runtime),
+        youtube_audio_replacement_callback(&parent_window, &command_controller),
+        youtube_audio_replacement_visibility(&runtime),
     );
     let rating_changed =
         rating_changed_callback(&command_controller, track_row_changed_holder.clone());
@@ -573,6 +582,10 @@ pub(crate) fn build_main_window(
         playback_changed: playback_changed.clone(),
         track_row_changed_holder: track_row_changed_holder.clone(),
     });
+    install_youtube_audio_download_result_consumer(
+        youtube_audio_download_result_rx,
+        runtime.clone(),
+    );
     install_analysis_progress_consumer(analysis_progress_rx, runtime.clone());
     install_online_progress_consumer(online_progress_rx, runtime.clone());
     install_track_data_observer(&runtime, track_row_changed_holder.clone());

@@ -40,6 +40,8 @@ use crate::{
     duplicate_consolidation::{DuplicateConsolidationResult, consolidate_duplicate_tracks},
     library_mutation::relocate_missing_track_with_store,
     managed_library::{ManagedLibraryFilesystemValidator, retarget_managed_metadata},
+    youtube_audio_downloader::StagedYoutubeAudio,
+    youtube_audio_replacement::replace_track_audio_from_youtube,
 };
 
 const DRAIN_BATCH_SIZE: usize = 64;
@@ -88,11 +90,19 @@ pub struct DuplicateConsolidationWriterResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct YoutubeAudioReplacementResult {
+    pub track_id: TrackId,
+    pub outcome: Result<(), ApplicationRuntimeError>,
+    pub original_retained: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MetadataWriterEvent {
     Mirror(MetadataWriteResult),
     ManagedRetarget(ManagedMetadataRetargetResult),
     MissingTrackRelocation(MissingTrackRelocationResult),
     DuplicateConsolidation(DuplicateConsolidationWriterResult),
+    YoutubeAudioReplacement(YoutubeAudioReplacementResult),
 }
 
 enum MetadataWriterCommand {
@@ -108,6 +118,11 @@ enum MetadataWriterCommand {
     },
     ConsolidateDuplicateTracks {
         request: DuplicateConsolidationRequest,
+    },
+    ReplaceTrackAudioFromYoutube {
+        track_id: TrackId,
+        staged: StagedYoutubeAudio,
+        management_mode: LibraryManagementMode,
     },
     SetLibraryPath(Option<PathBuf>),
     Shutdown,
@@ -200,6 +215,21 @@ impl MetadataWriter {
     ) -> bool {
         self.sender
             .send(MetadataWriterCommand::ConsolidateDuplicateTracks { request })
+            .is_ok()
+    }
+
+    pub(crate) fn replace_track_audio_from_youtube(
+        &self,
+        track_id: TrackId,
+        staged: StagedYoutubeAudio,
+        management_mode: LibraryManagementMode,
+    ) -> bool {
+        self.sender
+            .send(MetadataWriterCommand::ReplaceTrackAudioFromYoutube {
+                track_id,
+                staged,
+                management_mode,
+            })
             .is_ok()
     }
 
@@ -508,6 +538,38 @@ fn apply_command(
                 result_sink,
                 MetadataWriterEvent::DuplicateConsolidation(DuplicateConsolidationWriterResult {
                     outcome,
+                }),
+            );
+            *active = true;
+            true
+        }
+        MetadataWriterCommand::ReplaceTrackAudioFromYoutube {
+            track_id,
+            staged,
+            management_mode,
+        } => {
+            let outcome = library_path
+                .as_deref()
+                .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)
+                .and_then(|library_path| {
+                    replace_track_audio_from_youtube(
+                        library_path,
+                        management_mode,
+                        library_store,
+                        metadata_service,
+                        track_id,
+                        staged,
+                    )
+                });
+            let original_retained = outcome
+                .as_ref()
+                .is_ok_and(|outcome| outcome.original_retained);
+            emit_event(
+                result_sink,
+                MetadataWriterEvent::YoutubeAudioReplacement(YoutubeAudioReplacementResult {
+                    track_id,
+                    outcome: outcome.map(|_| ()),
+                    original_retained,
                 }),
             );
             *active = true;

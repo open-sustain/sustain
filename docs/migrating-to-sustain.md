@@ -116,8 +116,8 @@ Field-by-field specs for individual source libraries:
 
 ## Schema reference
 
-The authoritative schema is in
-`crates/library_store/src/lib.rs` under the `CREATE TABLE` statements.
+The authoritative schema baseline is in
+`crates/library_store/src/schema.rs` under the `CREATE TABLE` statements.
 Read it directly rather than relying on documentation; the schema is the
 single source of truth.
 
@@ -137,8 +137,8 @@ best left to be recreated by the user inside Sustain.
 
 ## Pre-release caveat
 
-Sustain is pre-release. The on-disk schema is not stable. A backfill script
-written today against the current schema may need to be re-run or adjusted
-when the schema changes between development versions. Schema versioning and
-migrations begin at the first public release; before that, the maintainer's
-expectation is "wipe and re-scan" rather than incremental migration.
+Sustain is pre-release, but SQLite schema versioning is active. A backfill
+script written today against the current schema may need to be adjusted when
+the schema changes between development versions. SQLite changes advance
+`PRAGMA user_version` through ordered migrations that preserve existing
+libraries; applied migrations are never flattened or rewritten.

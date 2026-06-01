@@ -2109,6 +2109,7 @@ dependencies = [
  "sustain-smart-shuffle",
  "tempfile",
  "trash",
+ "url",
 ]
 
 [[package]]

@@ -428,6 +428,7 @@ impl ApplicationRuntime {
         self.ensure_no_background_library_task()?;
         if self.has_pending_managed_metadata_retarget()
             || self.has_pending_missing_track_relocation()
+            || self.has_pending_youtube_audio_replacement()
         {
             return Err(ApplicationRuntimeError::BackgroundTaskRunning);
         }

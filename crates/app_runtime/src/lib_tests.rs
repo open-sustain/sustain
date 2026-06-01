@@ -6034,6 +6034,23 @@ impl LibraryStore for CallCountingLibraryStore {
             .relocate_track_and_enqueue_mirror(track_id, location, file_size_bytes)
     }
 
+    fn replace_track_audio(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+        audio_properties: sustain_library_store::TrackAudioProperties,
+        file_size_bytes: u64,
+        has_embedded_artwork: bool,
+    ) -> StoreResult<()> {
+        self.inner.replace_track_audio(
+            track_id,
+            location,
+            audio_properties,
+            file_size_bytes,
+            has_embedded_artwork,
+        )
+    }
+
     fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()> {
         self.inner.update_track_rating(track_id, rating)
     }

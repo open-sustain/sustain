@@ -3,10 +3,9 @@
 
 use std::sync::LazyLock;
 
-// Sustain is in pre-release development: the SQLite schema is not yet stable.
-// Schema changes are made by editing these CREATE TABLE statements; any
-// existing local database is expected to be wiped and rebuilt from a library
-// re-scan, not migrated. Do not add migration code for in-development schemas.
+// Migration 1 is the complete alpha baseline. The migration runner rejects
+// pre-versioning databases that already contain application tables; those
+// development databases must be deleted and rebuilt by scanning the library.
 pub(super) const SCHEMA_SQL: &str = r#"
 PRAGMA foreign_keys = ON;
 

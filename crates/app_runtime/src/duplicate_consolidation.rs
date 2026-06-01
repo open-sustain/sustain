@@ -620,7 +620,7 @@ fn verify_staged_tags(
     Ok(())
 }
 
-fn editable_metadata_matches(
+pub(crate) fn editable_metadata_matches(
     left: &sustain_domain::TrackMetadata,
     right: &sustain_domain::TrackMetadata,
 ) -> bool {

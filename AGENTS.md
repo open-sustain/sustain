@@ -137,27 +137,24 @@ launches the app.
 
 ## Development Phase
 
-Sustain is in pre-release development. It has never been published and has no
-external users; the only databases, settings files, or on-disk artefacts that
-exist are the maintainer's local working copies.
+Sustain is in pre-release development, but SQLite schema versioning is active.
+Treat every existing user library as precious state: structural changes must
+preserve it through explicit migrations.
 
-Practical consequences for anything stored on disk (SQLite schemas, settings
-files, cached artwork, exported data, etc.):
+Practical consequences for anything stored on disk:
 
-- The on-disk format is **not** stable. Change the schema by editing the
-  authoritative definition (e.g. the `CREATE TABLE` statements) directly.
-- Do **not** add migration code, compatibility shims, column renames,
-  `IF EXISTS` fallbacks, or "legacy path" normalisers. There is no legacy.
-- New features may freely change the on-disk format. The expectation is that
-  the maintainer wipes the local database and re-scans the library; that
-  is cheaper and safer than carrying migration code for schemas that never
-  shipped.
-- Code that exists only to read or convert from a previous in-development
-  schema must be removed, not kept "just in case".
-
-A stable, migration-friendly schema lifecycle starts at the first public
-release, not before. Until then, prefer deleting and recreating over
-migrating.
+- SQLite schema edits append an ordered migration and advance
+  `PRAGMA user_version`. Never mutate, delete, reorder, or flatten an
+  already-applied migration.
+- Backwards compatibility matters for every structural SQLite change. A
+  migration must preserve the user's library data; requiring a wipe and rescan
+  is not an acceptable substitute.
+- Verify both a fresh database and upgrades from every previously supported
+  schema version.
+- Settings files, cached artwork, exported data, and other non-SQLite formats
+  remain unstable unless their owner explicitly adds versioning.
+- Remove obsolete development-only compatibility code only when it cannot
+  affect an existing versioned library.
 
 ## Architecture Preference
 

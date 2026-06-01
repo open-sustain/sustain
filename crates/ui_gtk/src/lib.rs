@@ -56,6 +56,7 @@ mod track_info;
 mod track_table;
 mod util;
 mod window_chrome;
+mod youtube_audio_replacement;
 
 const TITLEBAR_HEIGHT: i32 = 72;
 const TITLEBAR_LEFT_PADDING: i32 = 48;
@@ -121,6 +122,8 @@ pub(crate) type MetadataWriterEventReceiver =
     async_channel::Receiver<sustain_app_runtime::MetadataWriterEvent>;
 pub(crate) type ArtworkFetchResultReceiver =
     async_channel::Receiver<sustain_app_runtime::ArtworkFetchResult>;
+pub(crate) type YoutubeAudioDownloadResultReceiver =
+    async_channel::Receiver<sustain_app_runtime::YoutubeAudioDownloadResult>;
 pub(crate) type AnalysisProgressReceiver =
     async_channel::Receiver<sustain_app_runtime::AnalysisProgress>;
 pub(crate) type OnlineProgressReceiver =
@@ -195,6 +198,15 @@ pub fn run(
     }
 
     tlog!("artwork fetcher started");
+
+    let (youtube_audio_result_tx, youtube_audio_result_rx) =
+        async_channel::unbounded::<sustain_app_runtime::YoutubeAudioDownloadResult>();
+    runtime.set_youtube_audio_download_result_sink(youtube_audio_result_tx);
+    tlog!("about to start YouTube audio downloader");
+    if let Err(error) = runtime.start_youtube_audio_downloader() {
+        eprintln!("Sustain: YouTube audio replacement disabled ({error:?}).");
+    }
+    tlog!("YouTube audio downloader started");
 
     // Install the shared track-updated channel BEFORE either scheduler
     // is started so each captures a live sender. The UI shell drains
@@ -272,6 +284,8 @@ pub fn run(
         Rc::new(RefCell::new(Some(writer_event_rx)));
     let fetch_result_rx_holder: Rc<RefCell<Option<ArtworkFetchResultReceiver>>> =
         Rc::new(RefCell::new(Some(fetch_result_rx)));
+    let youtube_audio_result_rx_holder: Rc<RefCell<Option<YoutubeAudioDownloadResultReceiver>>> =
+        Rc::new(RefCell::new(Some(youtube_audio_result_rx)));
     let analysis_progress_rx_holder: Rc<RefCell<Option<AnalysisProgressReceiver>>> =
         Rc::new(RefCell::new(Some(analysis_progress_rx)));
     let online_progress_rx_holder: Rc<RefCell<Option<OnlineProgressReceiver>>> =
@@ -300,6 +314,7 @@ pub fn run(
             let mpris_command_rx = mpris_command_rx_holder.borrow_mut().take();
             let writer_event_rx = writer_event_rx_holder.borrow_mut().take();
             let fetch_result_rx = fetch_result_rx_holder.borrow_mut().take();
+            let youtube_audio_result_rx = youtube_audio_result_rx_holder.borrow_mut().take();
             let analysis_progress_rx = analysis_progress_rx_holder.borrow_mut().take();
             let online_progress_rx = online_progress_rx_holder.borrow_mut().take();
             let track_updated_rx = track_updated_rx_holder.borrow_mut().take();
@@ -319,6 +334,7 @@ pub fn run(
                     mpris_command_rx,
                     metadata_writer_event_rx: writer_event_rx,
                     artwork_fetch_result_rx: fetch_result_rx,
+                    youtube_audio_download_result_rx: youtube_audio_result_rx,
                     analysis_progress_rx,
                     online_progress_rx,
                     track_updated_rx,
@@ -363,6 +379,7 @@ pub fn run(
     runtime_guard.shutdown_analysis_scheduler();
     runtime_guard.shutdown_online_scheduler();
     runtime_guard.shutdown_artwork_fetcher();
+    runtime_guard.shutdown_youtube_audio_downloader();
     runtime_guard.shutdown_metadata_writer();
 }
 

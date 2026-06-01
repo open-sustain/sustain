@@ -267,6 +267,44 @@ impl LibraryStore for InMemoryLibraryStore {
         Ok(())
     }
 
+    fn replace_track_audio(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+        audio_properties: crate::TrackAudioProperties,
+        file_size_bytes: u64,
+        has_embedded_artwork: bool,
+    ) -> StoreResult<()> {
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.location = location.clone();
+            track.metadata.replace_audio_properties(audio_properties);
+            track.file_size_bytes = Some(file_size_bytes);
+            track.has_embedded_artwork = Some(has_embedded_artwork);
+            track.file_modified_at = None;
+        }
+        self.analysis_bookkeeping
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .remove(&track_id);
+        self.acoustics
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .remove(&track_id);
+        self.waveforms
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .remove(&track_id);
+        self.source_fingerprints
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .remove(&track_id);
+        *self
+            .smart_shuffle_index
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)? = None;
+        Ok(())
+    }
+
     fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()> {
         if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
             track.rating = rating;

@@ -192,7 +192,8 @@ pub(super) fn install_metadata_writer_event_consumer(
                 sustain_app_runtime::MetadataWriterEvent::Mirror(result) => Some(result.track_id),
                 sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_)
                 | sustain_app_runtime::MetadataWriterEvent::MissingTrackRelocation(_)
-                | sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(_) => None,
+                | sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(_)
+                | sustain_app_runtime::MetadataWriterEvent::YoutubeAudioReplacement(_) => None,
             };
             let library_changed = matches!(
                 &event,
@@ -231,6 +232,22 @@ pub(super) fn install_metadata_writer_event_consumer(
             if library_changed && let Some(callback) = library_changed_holder.borrow().as_ref() {
                 callback();
             }
+        }
+    });
+}
+
+pub(super) fn install_youtube_audio_download_result_consumer(
+    receiver: Option<YoutubeAudioDownloadResultReceiver>,
+    runtime: SharedRuntime,
+) {
+    let Some(receiver) = receiver else {
+        return;
+    };
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(result) = receiver.recv().await {
+            runtime
+                .borrow_mut()
+                .apply_youtube_audio_download_result(result);
         }
     });
 }

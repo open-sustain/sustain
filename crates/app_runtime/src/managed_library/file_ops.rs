@@ -24,10 +24,10 @@ use sustain_domain::TrackContentHash;
 use sustain_metadata::hash_file_content;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct VerifiedFileCopy {
-    pub(super) destination_path: PathBuf,
-    pub(super) bytes_copied: u64,
-    pub(super) content_hash: TrackContentHash,
+pub(crate) struct VerifiedFileCopy {
+    pub(crate) destination_path: PathBuf,
+    pub(crate) bytes_copied: u64,
+    pub(crate) content_hash: TrackContentHash,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,7 +51,7 @@ pub(super) enum EmptyDirectoryPruneError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum VerifiedFileCopyError {
+pub(crate) enum VerifiedFileCopyError {
     SourceUnavailable,
     SourceIsNotFile,
     DestinationHasNoParent,
@@ -85,7 +85,7 @@ pub(crate) enum FileMoveError {
     SyncSourceDirectoryFailed,
 }
 
-pub(super) fn copy_file_verified(
+pub(crate) fn copy_file_verified(
     source_path: &Path,
     destination_path: &Path,
     expected_hash: &TrackContentHash,
@@ -329,7 +329,7 @@ pub(super) fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-pub(super) fn remove_copied_files(paths: &[PathBuf]) -> Result<(), ()> {
+pub(crate) fn remove_copied_files(paths: &[PathBuf]) -> Result<(), ()> {
     let mut failed = false;
     for path in paths.iter().rev() {
         if remove_file_and_sync_parent(path).is_err() {

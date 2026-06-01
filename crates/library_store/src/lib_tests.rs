@@ -9,12 +9,13 @@ use std::{
 };
 
 use sustain_domain::{
-    FieldChange, MetadataChange, PlayStatistics, PlaylistEntry, Rating, SmartPlaylistBoolField,
-    SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
-    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
-    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
-    SortDirection, SourceFileStat, SourceFingerprint, TrackContentHash, TrackLocation,
-    TrackMetadata, TrackRelativePath, TrackSort, TrackSortColumn,
+    AcousticFeatures, FieldChange, MetadataChange, PlayStatistics, PlaylistEntry, Rating,
+    SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistLimit,
+    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
+    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
+    SmartPlaylistTextOperator, SortDirection, SourceFileStat, SourceFingerprint,
+    TrackAudioProperties, TrackContentHash, TrackLocation, TrackMetadata, TrackRelativePath,
+    TrackSort, TrackSortColumn,
 };
 
 use sustain_domain::{
@@ -25,9 +26,9 @@ use sustain_domain::{
 use super::{
     AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan, InMemoryLibraryStore,
     LibraryQuery, LibraryStore, OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder,
-    PlaylistFolderId, SmartPlaylist, SmartPlaylistId, SqliteLibraryStore, StoredSyncedLyrics,
-    StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry, TrackColumnLayout,
-    TrackColumnLayoutScope,
+    PlaylistFolderId, SmartPlaylist, SmartPlaylistId, SqliteLibraryStore, StoredSmartShuffleIndex,
+    StoredSyncedLyrics, StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry,
+    TrackColumnLayout, TrackColumnLayoutScope,
 };
 use crate::{PlaylistId, StoreResult, TrackId};
 use sustain_domain::SyncedLyricsLine;
@@ -2144,6 +2145,20 @@ fn in_memory_relocation_resets_source_observations_and_queues_canonical_mirrors(
 }
 
 #[test]
+fn sqlite_audio_replacement_preserves_library_fields_and_invalidates_derived_state() {
+    run_audio_replacement_preserves_library_fields_and_invalidates_derived_state(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_audio_replacement_preserves_library_fields_and_invalidates_derived_state() {
+    run_audio_replacement_preserves_library_fields_and_invalidates_derived_state(
+        &InMemoryLibraryStore::new(),
+    );
+}
+
+#[test]
 fn sqlite_track_delete_cascades_tag_mirror_outbox() {
     run_track_delete_cascades_tag_mirror_outbox(
         &SqliteLibraryStore::open_in_memory().expect("store"),
@@ -2304,6 +2319,97 @@ fn run_relocation_resets_source_observations_and_queues_canonical_mirrors(
     assert_eq!(mirrors.len(), 1);
     assert!(mirrors[0].kinds.metadata);
     assert!(mirrors[0].kinds.rating);
+}
+
+fn run_audio_replacement_preserves_library_fields_and_invalidates_derived_state(
+    store: &dyn LibraryStore,
+) {
+    let mut track = track(1, "old.mp3");
+    track.metadata.title = Some("Precious title".to_owned());
+    track.metadata.duration = Some(Duration::from_secs(180));
+    track.metadata.bitrate_kbps = Some(96);
+    track.rating = Rating::new(5).expect("rating");
+    track.statistics.play_count = 42;
+    track.file_modified_at = Some(SystemTime::UNIX_EPOCH);
+    store.save_track(track.clone()).expect("save track");
+
+    let mut analysis = sample_analysis(Some(120.0), Some(MusicalKey::AMinor));
+    analysis.acoustics = Some(AcousticFeatures {
+        integrated_lufs: -14.0,
+        short_term_lufs_max: -10.0,
+        loudness_range_lu: 5.0,
+        onset_rate_hz: 2.0,
+        low_band_ratio: 0.4,
+        mid_band_ratio: 0.4,
+        high_band_ratio: 0.2,
+        low_band_variation: 0.5,
+        tonalness: 0.8,
+    });
+    store
+        .record_analysis(
+            track.id,
+            &analysis,
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_000),
+        )
+        .expect("record analysis");
+    store
+        .save_source_fingerprint(
+            track.id,
+            &SourceFingerprint {
+                stat: SourceFileStat {
+                    device: 1,
+                    inode: 2,
+                    size_bytes: 9,
+                    modified_at_ns: 3,
+                    changed_at_ns: 4,
+                },
+                content_hash: TrackContentHash::new("a".repeat(64)).expect("hash"),
+            },
+        )
+        .expect("save source fingerprint");
+    store
+        .save_smart_shuffle_index(&StoredSmartShuffleIndex {
+            index_blob: vec![1, 2, 3],
+            schema_version: 1,
+        })
+        .expect("save shuffle index");
+
+    let replacement = TrackLocation::available(relative_path("old (YouTube).opus"));
+    let properties = TrackAudioProperties {
+        duration: Some(Duration::from_secs(181)),
+        bitrate_kbps: Some(128),
+        sample_rate_hz: Some(48_000),
+        channels: Some(2),
+    };
+    store
+        .replace_track_audio(track.id, &replacement, properties, 27, true)
+        .expect("replace audio");
+
+    let stored = store.track(track.id).expect("load").expect("track exists");
+    assert_eq!(stored.location, replacement);
+    assert_eq!(stored.metadata.title.as_deref(), Some("Precious title"));
+    assert_eq!(stored.metadata.audio_properties(), properties);
+    assert_eq!(stored.rating, track.rating);
+    assert_eq!(stored.statistics, track.statistics);
+    assert_eq!(stored.file_size_bytes, Some(27));
+    assert_eq!(stored.has_embedded_artwork, Some(true));
+    assert_eq!(stored.file_modified_at, None);
+    assert_eq!(store.load_waveform(track.id), Ok(None));
+    assert!(
+        store
+            .load_all_acoustics()
+            .expect("load acoustics")
+            .is_empty()
+    );
+    assert_eq!(store.source_fingerprint(track.id), Ok(None));
+    assert_eq!(store.load_smart_shuffle_index(), Ok(None));
+    assert_eq!(
+        store
+            .tracks_needing_analysis(AnalysisCapabilities::all(), 1, 10)
+            .expect("tracks needing analysis"),
+        vec![track.id]
+    );
 }
 
 fn run_track_delete_cascades_tag_mirror_outbox(store: &dyn LibraryStore) {

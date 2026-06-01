@@ -15,12 +15,13 @@ pub use sustain_domain::{
     AcousticFeatures, DuplicateConsolidationPlan, LibraryQuery, MetadataChange, PlayStatistics,
     Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist,
     SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track,
-    TrackAnalysis, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
-    TrackLocation, WaveformSegments,
+    TrackAnalysis, TrackAudioProperties, TrackColumnEntry, TrackColumnLayout,
+    TrackColumnLayoutScope, TrackId, TrackLocation, WaveformSegments,
 };
 pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 
 mod memory;
+mod migrations;
 mod query;
 mod schema;
 mod sqlite;
@@ -34,7 +35,7 @@ use query::{sort_tracks, track_matches_search};
 use schema::{
     APPLY_TRACK_METADATA_CHANGE_SQL, DELETE_SMART_SHUFFLE_INDEX_SQL,
     DELETE_TRACK_SYNCED_LYRICS_SQL, FILL_MISSING_TRACK_METADATA_SQL, FILL_TRACK_BPM_IF_NULL_SQL,
-    FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, RECONCILE_SCANNED_TRACK_SQL, SAVE_TRACK_SQL, SCHEMA_SQL,
+    FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, RECONCILE_SCANNED_TRACK_SQL, SAVE_TRACK_SQL,
     SELECT_ALL_TRACK_ACOUSTICS_SQL, SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL,
     SELECT_TRACK_BY_ID_SQL, SELECT_TRACK_SYNCED_LYRICS_SQL, SELECT_TRACK_WAVEFORM_SQL,
     SELECT_TRACKS_NEEDING_ANALYSIS_SQL, SELECT_TRACKS_NEEDING_ONLINE_SQL,
@@ -55,6 +56,16 @@ pub type StoreResult<T> = Result<T, StoreError>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StoreError {
     Database(String),
+    DatabaseAhead {
+        current: u32,
+        supported: u32,
+    },
+    UnversionedDatabaseNotEmpty,
+    MigrationFailed {
+        version: u32,
+        description: &'static str,
+        detail: String,
+    },
     InvalidStoredId(i64),
     InvalidStoredPath(String),
     InvalidStoredEnum(String),
@@ -239,6 +250,17 @@ pub trait LibraryStore: Send + Sync {
         track_id: TrackId,
         location: &TrackLocation,
         file_size_bytes: u64,
+    ) -> StoreResult<()>;
+    /// Rebind a row to deliberately replaced audio bytes. User-owned
+    /// metadata and listening history stay authoritative; file-derived stream
+    /// observations and disposable analysis products follow the new file.
+    fn replace_track_audio(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+        audio_properties: TrackAudioProperties,
+        file_size_bytes: u64,
+        has_embedded_artwork: bool,
     ) -> StoreResult<()>;
     /// Update only the user's rating.
     fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()>;
@@ -678,9 +700,8 @@ impl SqliteLibraryStore {
     }
 
     fn migrate(&self) -> StoreResult<()> {
-        self.connection_guard()?
-            .execute_batch(SCHEMA_SQL)
-            .map_err(StoreError::from)
+        let connection = self.connection_guard()?;
+        migrations::apply_pending(&connection)
     }
 }
 

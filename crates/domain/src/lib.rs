@@ -52,7 +52,7 @@ pub use library_statistics::{
 pub use managed_library::{
     ManagedTrackPathError, ManagedTrackPathInput, ManagedTrackPathPlan, ManagedTrackPathPlanner,
 };
-pub use metadata::{FieldChange, MetadataChange, TrackMetadata};
+pub use metadata::{FieldChange, MetadataChange, TrackAudioProperties, TrackMetadata};
 pub use musical_key::MusicalKey;
 pub use playback::{
     LazyPickContext, PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueEntry,

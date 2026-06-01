@@ -43,7 +43,31 @@ pub struct TrackMetadata {
     pub channels: Option<u8>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TrackAudioProperties {
+    pub duration: Option<Duration>,
+    pub bitrate_kbps: Option<u32>,
+    pub sample_rate_hz: Option<u32>,
+    pub channels: Option<u8>,
+}
+
 impl TrackMetadata {
+    pub fn audio_properties(&self) -> TrackAudioProperties {
+        TrackAudioProperties {
+            duration: self.duration,
+            bitrate_kbps: self.bitrate_kbps,
+            sample_rate_hz: self.sample_rate_hz,
+            channels: self.channels,
+        }
+    }
+
+    pub fn replace_audio_properties(&mut self, properties: TrackAudioProperties) {
+        self.duration = properties.duration;
+        self.bitrate_kbps = properties.bitrate_kbps;
+        self.sample_rate_hz = properties.sample_rate_hz;
+        self.channels = properties.channels;
+    }
+
     /// Whether this track has user-readable plain lyrics.
     ///
     /// Synced lyrics are optional display enrichment stored separately;

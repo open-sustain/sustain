@@ -96,6 +96,8 @@ mod smart_playlists;
 pub mod smart_shuffle_scheduler;
 #[cfg(test)]
 mod test_store;
+mod youtube_audio_downloader;
+mod youtube_audio_replacement;
 pub use device_plan_scheduler::{
     DeviceMountIdentity, DevicePlanGeneration, DevicePlanResult, DevicePlanScheduler,
     DevicePlanSnapshot,
@@ -125,6 +127,7 @@ pub use managed_library::{
 pub use metadata_writer::{
     DuplicateConsolidationWriterResult, ManagedMetadataRetargetResult, MetadataWriteKind,
     MetadataWriteOutcome, MetadataWriteResult, MetadataWriterEvent, MissingTrackRelocationResult,
+    YoutubeAudioReplacementResult,
 };
 pub use notifications::{
     EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_QUEUE_HARD_CAP, NOTIFICATION_TRANSITION,
@@ -166,6 +169,9 @@ pub enum ApplicationRuntimeError {
     SmartPlaylistNotFound,
     SettingsLoadFailed,
     SettingsSaveFailed,
+    YoutubeAudioDownloadUnavailable,
+    YoutubeAudioReplacementFailed,
+    YoutubeAudioReplacementNotEligible,
     TrackRelocationFailed,
     TrackReplacementAlreadyInLibrary,
     TrackReplacementOutsideLibrary,
@@ -174,6 +180,8 @@ pub enum ApplicationRuntimeError {
     TrackTrashFailed,
     UnsupportedCommand(ApplicationCommand),
 }
+
+pub use youtube_audio_downloader::YoutubeAudioDownloadResult;
 
 /// Trims a user-supplied name and rejects it when blank once trimmed. The three
 /// playlist kinds (playlists, folders, smart playlists) share this rule but
@@ -360,6 +368,10 @@ pub struct ApplicationRuntime {
     metadata_write_notification_ids: BTreeMap<TrackId, NotificationId>,
     pending_managed_metadata_retargets: BTreeMap<TrackId, usize>,
     pending_missing_track_relocations: BTreeMap<TrackId, usize>,
+    youtube_audio_downloader: Option<youtube_audio_downloader::YoutubeAudioDownloader>,
+    youtube_audio_download_result_sink: Option<async_channel::Sender<YoutubeAudioDownloadResult>>,
+    youtube_audio_replacement_notification_ids: BTreeMap<TrackId, NotificationId>,
+    pending_youtube_audio_replacements: BTreeMap<TrackId, usize>,
     remote_metadata_service: Option<Arc<dyn RemoteMetadataService>>,
     artwork_fetcher: Option<artwork_fetcher::ArtworkFetcher>,
     artwork_fetch_result_sink: Option<async_channel::Sender<ArtworkFetchResult>>,
@@ -534,6 +546,10 @@ impl ApplicationRuntime {
             metadata_write_notification_ids: BTreeMap::new(),
             pending_managed_metadata_retargets: BTreeMap::new(),
             pending_missing_track_relocations: BTreeMap::new(),
+            youtube_audio_downloader: None,
+            youtube_audio_download_result_sink: None,
+            youtube_audio_replacement_notification_ids: BTreeMap::new(),
+            pending_youtube_audio_replacements: BTreeMap::new(),
             remote_metadata_service: None,
             artwork_fetcher: None,
             artwork_fetch_result_sink: None,
@@ -613,6 +629,10 @@ impl ApplicationRuntime {
             metadata_write_notification_ids: BTreeMap::new(),
             pending_managed_metadata_retargets: BTreeMap::new(),
             pending_missing_track_relocations: BTreeMap::new(),
+            youtube_audio_downloader: None,
+            youtube_audio_download_result_sink: None,
+            youtube_audio_replacement_notification_ids: BTreeMap::new(),
+            pending_youtube_audio_replacements: BTreeMap::new(),
             remote_metadata_service: None,
             artwork_fetcher: None,
             artwork_fetch_result_sink: None,
@@ -937,6 +957,9 @@ impl ApplicationRuntime {
             }
             MetadataWriterEvent::DuplicateConsolidation(result) => {
                 self.apply_duplicate_consolidation_result(result);
+            }
+            MetadataWriterEvent::YoutubeAudioReplacement(result) => {
+                self.apply_youtube_audio_replacement_result(result);
             }
         }
     }

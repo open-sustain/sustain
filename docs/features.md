@@ -124,6 +124,21 @@ including playlist membership, rating, metadata, and listening statistics.
 Reference mode accepts replacements inside the configured library folder;
 managed mode copies external replacements into its canonical owned layout.
 
+### Replace low-bitrate audio from YouTube — *Sustain-native*
+For a present track at or below 192 kbps, the row context menu exposes
+**Fetch... → Audio from YouTube**. Paste one YouTube video URL and Sustain
+asks the separately-installed `yt-dlp` and FFmpeg tools for the best available
+audio. Before publishing anything, Sustain rejects unsupported output,
+material duration mismatches, unknown or junk-level bitrate, and downloads
+worse than the current file. A successful swap preserves the track's SQLite
+identity, editable metadata, rating, listening statistics, and playlist
+membership; the previous file moves to the system trash only after the new
+file and SQLite row are durable.
+
+This optional integration is available in the Debian package when `yt-dlp`
+and FFmpeg are installed. It is not available inside the current Flatpak
+sandbox, which cannot execute host-installed tools.
+
 ---
 
 ## Views

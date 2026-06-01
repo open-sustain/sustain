@@ -61,6 +61,7 @@ pub enum NotificationCategory {
     ManagedLibraryFilesystem,
     ArtworkFetch,
     MetadataWrite,
+    YoutubeAudioReplacement,
     PlaybackStatistics,
     Command,
     /// Background DSP analysis (BPM / key / waveform) driven by the
@@ -541,6 +542,15 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         }
         ApplicationRuntimeError::SettingsLoadFailed => "Your settings could not be loaded.",
         ApplicationRuntimeError::SettingsSaveFailed => "Your settings could not be saved.",
+        ApplicationRuntimeError::YoutubeAudioDownloadUnavailable => {
+            "YouTube audio replacement is not available."
+        }
+        ApplicationRuntimeError::YoutubeAudioReplacementFailed => {
+            "The downloaded audio could not safely replace this track."
+        }
+        ApplicationRuntimeError::YoutubeAudioReplacementNotEligible => {
+            "YouTube replacement is available only for present tracks at or below 192 kbps."
+        }
         ApplicationRuntimeError::TrackRelocationFailed => {
             "The replacement track file could not be used."
         }

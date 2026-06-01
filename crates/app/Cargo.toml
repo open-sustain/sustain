@@ -34,6 +34,7 @@ maintainer = "Sustain contributors <https://github.com/open-sustain/sustain>"
 section = "sound"
 priority = "optional"
 depends = "$auto, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad"
+recommends = "yt-dlp, ffmpeg"
 extended-description = """
 Sustain is a Linux desktop music player in the lineage of 2010s iTunes.
 The product target is the dense, predictable library workflow of that

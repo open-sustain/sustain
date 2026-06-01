@@ -138,6 +138,23 @@ fn main() {
                 }
             }
         }
+        Err(sustain_library_store::StoreError::DatabaseAhead { current, supported }) => {
+            eprintln!(
+                "Sustain: library database schema version {current} is newer than this build supports ({supported})."
+            );
+            eprintln!("Install a newer Sustain build before opening this library.");
+            process::exit(1);
+        }
+        Err(sustain_library_store::StoreError::UnversionedDatabaseNotEmpty) => {
+            eprintln!(
+                "Sustain: the library database predates schema versioning and cannot be upgraded safely."
+            );
+            eprintln!(
+                "Delete {} and restart Sustain to rebuild it by scanning your library.",
+                paths.database.display()
+            );
+            process::exit(1);
+        }
         Err(error) => {
             eprintln!("Sustain: library database is unavailable ({error:?}).");
             process::exit(1);

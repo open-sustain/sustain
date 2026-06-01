@@ -109,6 +109,13 @@ pub enum ApplicationCommand {
         track_id: TrackId,
         replacement_path: PathBuf,
     },
+    /// Download the best available audio for one YouTube video through the
+    /// user's installed `yt-dlp`, validate it, and replace this row's source
+    /// file without changing its library identity.
+    ReplaceTrackAudioFromYoutube {
+        track_id: TrackId,
+        url: String,
+    },
     ConsolidateDuplicateTracks(DuplicateConsolidationRequest),
     AddExternalLibraryItems {
         paths: Vec<PathBuf>,

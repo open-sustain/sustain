@@ -18,7 +18,7 @@ pub(crate) type AddToPlaylistCallback = Rc<dyn Fn(PlaylistId, Vec<TrackId>)>;
 /// submenu of the track context menu. The request carries either
 /// a single capability or the `All` bundle.
 pub(crate) type TrackAnalyzeRunCallback = Rc<dyn Fn(Vec<TrackId>, AnalysisRunRequest)>;
-/// Invoked when the user picks any entry inside the "Retrieve"
+/// Invoked when the user picks any entry inside the "Fetch"
 /// submenu of the track context menu.
 pub(crate) type TrackRetrieveRunCallback = Rc<dyn Fn(Vec<TrackId>, OnlineRunRequest)>;
 /// Queries whether an analysis capability is globally enabled (i.e.
@@ -26,11 +26,12 @@ pub(crate) type TrackRetrieveRunCallback = Rc<dyn Fn(Vec<TrackId>, OnlineRunRequ
 /// capability returns `true` here are rendered insensitive.
 pub(crate) type TrackAnalyzeEnabledQuery = Rc<dyn Fn(AnalysisCapability) -> bool>;
 /// Queries whether the online retrieval process is running right now.
-/// When it returns `true` the Retrieve submenu entries are rendered
+/// When it returns `true` the Fetch submenu entries are rendered
 /// insensitive — a manual retrieval is offered whenever the process is
 /// idle (regardless of the background toggle) and suppressed only while
 /// a run is in flight (issue #61).
 pub(crate) type TrackRetrieveBusyQuery = Rc<dyn Fn() -> bool>;
+pub(crate) type YoutubeAudioReplacementCallback = Rc<dyn Fn(TrackId)>;
 type PendingConfirmCallback = Rc<RefCell<Option<Box<dyn FnOnce(Vec<TrackId>)>>>>;
 const ADD_TO_PLAYLIST_MAX_VISIBLE_HEIGHT: i32 = 360;
 const ADD_TO_PLAYLIST_MAX_LABEL_CHARS: i32 = 48;
@@ -104,6 +105,8 @@ struct AnalyzeMenu {
 struct RetrieveMenu {
     run: TrackRetrieveRunCallback,
     busy: TrackRetrieveBusyQuery,
+    replace_audio_from_youtube: YoutubeAudioReplacementCallback,
+    youtube_replacement_visibility: TrackActionVisibility,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -441,7 +444,7 @@ impl TrackRowContextMenu {
         self
     }
 
-    /// Install the "Retrieve\u{2026}" submenu. Counterpart of
+    /// Install the "Fetch\u{2026}" submenu. Counterpart of
     /// [`Self::with_analyze_menu`] for the online scheduler. Unlike
     /// Analyze, the entries are insensitive only while the retrieval
     /// process is running (`busy`), not when the background toggle is
@@ -451,8 +454,15 @@ impl TrackRowContextMenu {
         mut self,
         run: TrackRetrieveRunCallback,
         busy: TrackRetrieveBusyQuery,
+        replace_audio_from_youtube: YoutubeAudioReplacementCallback,
+        youtube_replacement_visibility: TrackActionVisibility,
     ) -> Self {
-        self.retrieve = Some(RetrieveMenu { run, busy });
+        self.retrieve = Some(RetrieveMenu {
+            run,
+            busy,
+            replace_audio_from_youtube,
+            youtube_replacement_visibility,
+        });
         self
     }
 
@@ -648,7 +658,7 @@ impl TrackRowContextMenu {
         }
         if let Some(retrieve) = &self.retrieve {
             section.append_submenu(
-                Some("Retrieve\u{2026}"),
+                Some("Fetch\u{2026}"),
                 &retrieve_submenu_model(
                     retrieve,
                     action_group,
@@ -724,15 +734,28 @@ fn retrieve_submenu_model(
     }
     let all = gio::Menu::new();
     let run = menu.run.clone();
-    let track_ids = track_ids.to_vec();
+    let all_track_ids = track_ids.to_vec();
     add_local_action(action_group, "retrieve-all", !busy, move || {
-        run(track_ids.clone(), OnlineRunRequest::All);
+        run(all_track_ids.clone(), OnlineRunRequest::All);
     });
     all.append(
         Some("All"),
         Some(&format!("{local_action_group}.retrieve-all")),
     );
     model.append_section(None, &all);
+    if (menu.youtube_replacement_visibility)(track_ids) {
+        let youtube = gio::Menu::new();
+        let replace_audio_from_youtube = menu.replace_audio_from_youtube.clone();
+        let track_id = track_ids[0];
+        add_local_action(action_group, "fetch-youtube-audio", true, move || {
+            replace_audio_from_youtube(track_id)
+        });
+        youtube.append(
+            Some("Audio from YouTube"),
+            Some(&format!("{local_action_group}.fetch-youtube-audio")),
+        );
+        model.append_section(None, &youtube);
+    }
     model
 }
 

@@ -12,7 +12,9 @@ path = "src/lib.rs"
 
 [dependencies]
 async-channel = "2"
+tempfile = "3"
 trash = "5"
+url = "2"
 # Linux syscall wrappers for `setpriority` and `ioprio_set` used by the
 # background-job scheduler. `ioprio_set` has no glibc/nix/rustix safe
 # wrapper, so we reach it via `libc::syscall`. Once libc is a required
@@ -36,7 +38,6 @@ sustain-search = { path = "../search" }
 sustain-smart-shuffle = { path = "../smart_shuffle" }
 
 [dev-dependencies]
-tempfile = "3"
 # Same crate as the runtime dep — pulled in here so the integration
 # test in `tests/priority.rs` can read back nice/ioprio values to
 # confirm the wrappers actually wrote them.

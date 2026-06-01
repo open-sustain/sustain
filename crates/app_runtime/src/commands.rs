@@ -160,6 +160,9 @@ impl ApplicationRuntime {
             } => {
                 self.relocate_missing_track(track_id, &replacement_path)?;
             }
+            ApplicationCommand::ReplaceTrackAudioFromYoutube { track_id, url } => {
+                self.request_youtube_audio_replacement(track_id, url)?;
+            }
             ApplicationCommand::ConsolidateDuplicateTracks(request) => {
                 self.consolidate_duplicate_tracks(request)?;
             }

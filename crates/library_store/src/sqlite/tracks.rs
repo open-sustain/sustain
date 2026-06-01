@@ -139,6 +139,66 @@ pub(super) fn relocate_track(
         .map_err(StoreError::from)
 }
 
+pub(super) fn replace_audio(
+    connection: &mut Connection,
+    track_id: TrackId,
+    location: &TrackLocation,
+    audio_properties: TrackAudioProperties,
+    file_size_bytes: u64,
+    has_embedded_artwork: bool,
+) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    let changed = transaction
+        .execute(
+            r#"
+            UPDATE tracks SET
+                relative_path = ?1,
+                is_missing = ?2,
+                duration_seconds = ?3,
+                bitrate_kbps = ?4,
+                sample_rate_hz = ?5,
+                channels = ?6,
+                file_size_bytes = ?7,
+                has_embedded_artwork = ?8,
+                file_modified_at_unix = NULL
+            WHERE id = ?9
+            "#,
+            params![
+                relative_path_bytes(&location.relative_path),
+                location.is_missing(),
+                audio_properties.duration.map(duration_to_seconds),
+                audio_properties.bitrate_kbps.map(i64::from),
+                audio_properties.sample_rate_hz.map(i64::from),
+                audio_properties.channels.map(i64::from),
+                i64::try_from(file_size_bytes)
+                    .map_err(|_| StoreError::Database("file size exceeds SQLite INTEGER".into()))?,
+                has_embedded_artwork,
+                track_id.get(),
+            ],
+        )
+        .map_err(StoreError::from)?;
+    if changed == 0 {
+        return Err(StoreError::Database(format!(
+            "track {} does not exist",
+            track_id.get()
+        )));
+    }
+    for sql in [
+        "DELETE FROM track_analysis WHERE track_id = ?1",
+        "DELETE FROM track_acoustics WHERE track_id = ?1",
+        "DELETE FROM track_waveform WHERE track_id = ?1",
+        "DELETE FROM source_fingerprint_cache WHERE track_id = ?1",
+    ] {
+        transaction
+            .execute(sql, params![track_id.get()])
+            .map_err(StoreError::from)?;
+    }
+    transaction
+        .execute("DELETE FROM smart_shuffle_index", [])
+        .map_err(StoreError::from)?;
+    transaction.commit().map_err(StoreError::from)
+}
+
 pub(super) fn update_track_rating(
     connection: &Connection,
     track_id: TrackId,
