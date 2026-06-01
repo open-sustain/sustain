@@ -49,7 +49,7 @@ pub enum PlaybackQueueRequest {
 /// Snapshot of the queue's internal layout — Eager precomputes the
 /// full play order at construction (pure shuffle's Fisher-Yates, or
 /// the identity ordering when shuffle is off); Lazy keeps an
-/// append-only `played_history` stack with a cursor, with new tracks
+/// `played_history` stack with a cursor, with new continuation tracks
 /// chosen on demand by an externally-supplied Smart Shuffle picker.
 ///
 /// Both variants share `ordered_track_ids` (the source-of-truth pool)
@@ -60,13 +60,13 @@ pub enum PlaybackQueueRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum PlaybackQueueLayout {
     Eager {
-        play_order_track_ids: Vec<TrackId>,
+        play_order: Vec<PlaybackQueueEntry>,
     },
     Lazy {
-        /// Tracks chosen so far by the smart-shuffle picker (or
-        /// seeded by an explicit play, or spliced in by Enqueue
-        /// Next / Last), in the order they will be played.
-        played_history: Vec<TrackId>,
+        /// Tracks chosen so far by the smart-shuffle picker, seeded by
+        /// an explicit play, or spliced in by Enqueue Next / Last, in
+        /// the order they will be played.
+        played_history: Vec<PlaybackQueueEntry>,
         /// Index into `played_history` of the currently-playing
         /// track. Stepping back via Previous decrements `cursor`
         /// (no new pick); stepping past the tail triggers a new
@@ -84,6 +84,52 @@ pub struct PlaybackQueue {
     options: PlaybackOptions,
 }
 
+/// Why a realised queue entry will play. Curated entries were explicitly
+/// requested through Play Next / Add to Queue; continuation entries come
+/// from the source playthrough (library, album, playlist, ...).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlaybackQueueEntryKind {
+    Curated,
+    Continuation,
+}
+
+/// One track in the realised play order. The origin is part of the queue
+/// model rather than a UI guess: Add to Queue, bounded continuation previews,
+/// drag-to-reorder and eviction all need the same distinction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlaybackQueueEntry {
+    track_id: TrackId,
+    kind: PlaybackQueueEntryKind,
+}
+
+impl PlaybackQueueEntry {
+    fn continuation(track_id: TrackId) -> Self {
+        Self {
+            track_id,
+            kind: PlaybackQueueEntryKind::Continuation,
+        }
+    }
+
+    fn curated(track_id: TrackId) -> Self {
+        Self {
+            track_id,
+            kind: PlaybackQueueEntryKind::Curated,
+        }
+    }
+
+    pub fn track_id(self) -> TrackId {
+        self.track_id
+    }
+
+    pub fn kind(self) -> PlaybackQueueEntryKind {
+        self.kind
+    }
+
+    pub fn is_curated(self) -> bool {
+        self.kind == PlaybackQueueEntryKind::Curated
+    }
+}
+
 /// Read-only view onto a Lazy queue's pick context. Returned by
 /// [`PlaybackQueue::lazy_pick_context`]; the caller (the runtime)
 /// hands this to its Smart Shuffle picker, which scores the
@@ -94,7 +140,7 @@ pub struct PlaybackQueue {
 pub struct LazyPickContext<'a> {
     pub seed_track_id: TrackId,
     pub candidate_pool: &'a [TrackId],
-    pub played_history: &'a [TrackId],
+    pub played_history: Vec<TrackId>,
 }
 
 impl PlaybackQueue {
@@ -111,6 +157,7 @@ impl PlaybackQueue {
         let layout = build_layout(
             &ordered_track_ids,
             current_track_id,
+            &[],
             effective_shuffle_mode(options.shuffle_mode, &source),
             shuffle_seed,
         );
@@ -129,7 +176,7 @@ impl PlaybackQueue {
             source: PlaybackQueueSource::Library,
             ordered_track_ids: Vec::new(),
             layout: PlaybackQueueLayout::Eager {
-                play_order_track_ids: Vec::new(),
+                play_order: Vec::new(),
             },
             current_track_id: None,
             options,
@@ -149,12 +196,19 @@ impl PlaybackQueue {
     /// shuffle is off); for Lazy layouts it is the prefix of tracks the
     /// smart-shuffle picker has selected so far (`played_history`),
     /// which grows as the user advances.
-    pub fn play_order_track_ids(&self) -> &[TrackId] {
+    ///
+    /// This allocates because the internal sequence also records whether
+    /// each entry is curated or source continuation. It is intended for
+    /// diagnostics and tests; UI code should use [`Self::upcoming_preview`]
+    /// so a library-scale continuation never becomes a widget model.
+    pub fn play_order_track_ids(&self) -> Vec<TrackId> {
         match &self.layout {
-            PlaybackQueueLayout::Eager {
-                play_order_track_ids,
-            } => play_order_track_ids,
-            PlaybackQueueLayout::Lazy { played_history, .. } => played_history,
+            PlaybackQueueLayout::Eager { play_order } => {
+                play_order.iter().map(|entry| entry.track_id).collect()
+            }
+            PlaybackQueueLayout::Lazy { played_history, .. } => {
+                played_history.iter().map(|entry| entry.track_id).collect()
+            }
         }
     }
 
@@ -210,6 +264,15 @@ impl PlaybackQueue {
         self.adjacent_track_id(TrackStep::Previous)
     }
 
+    /// Whether continuation tracks are selected on demand by Smart Shuffle
+    /// rather than materialised ahead of time. UI surfaces use this semantic
+    /// query instead of inspecting the saved shuffle preference: ad-hoc
+    /// sources can preserve `ShuffleMode::Smart` while intentionally using
+    /// an eager Pure layout.
+    pub fn uses_lazy_continuation(&self) -> bool {
+        matches!(&self.layout, PlaybackQueueLayout::Lazy { .. })
+    }
+
     /// True when the queue is in Lazy layout, has no already-picked
     /// successor for the current track, and has at least one
     /// candidate to pick from. Eager layouts always return `false`.
@@ -242,7 +305,7 @@ impl PlaybackQueue {
         Some(LazyPickContext {
             seed_track_id,
             candidate_pool: &self.ordered_track_ids,
-            played_history,
+            played_history: played_history.iter().map(|entry| entry.track_id).collect(),
         })
     }
 
@@ -264,16 +327,15 @@ impl PlaybackQueue {
         else {
             return false;
         };
-        // Splice immediately after the cursor — Enqueue Next / Last
-        // may have pushed tracks past it; the picker's choice always
-        // takes the cursor+1 slot.
+        // The runtime only asks for a lazy pick at the realised tail:
+        // explicitly queued tracks always drain first.
         let insertion = (*cursor).saturating_add(1).min(played_history.len());
-        played_history.insert(insertion, track_id);
+        played_history.insert(insertion, PlaybackQueueEntry::continuation(track_id));
         true
     }
 
     pub fn move_to_track(&mut self, track_id: TrackId) -> bool {
-        if !self.ordered_track_ids.contains(&track_id) {
+        if !self.ordered_track_ids.contains(&track_id) && !self.contains_realised_track(track_id) {
             return false;
         }
 
@@ -290,11 +352,24 @@ impl PlaybackQueue {
                 // sequence (explicit library activation); fold it in by
                 // truncating any speculative future picks and pushing
                 // the new selection as the head of a fresh sub-sequence.
-                if let Some(index) = played_history.iter().position(|id| *id == track_id) {
+                let adjacent = played_history
+                    .get(cursor.saturating_add(1))
+                    .filter(|entry| entry.track_id == track_id)
+                    .map(|_| cursor.saturating_add(1))
+                    .or_else(|| {
+                        cursor
+                            .checked_sub(1)
+                            .filter(|index| played_history[*index].track_id == track_id)
+                    });
+                if let Some(index) = adjacent.or_else(|| {
+                    played_history
+                        .iter()
+                        .rposition(|entry| entry.track_id == track_id)
+                }) {
                     *cursor = index;
                 } else {
                     played_history.truncate(cursor.saturating_add(1));
-                    played_history.push(track_id);
+                    played_history.push(PlaybackQueueEntry::continuation(track_id));
                     *cursor = played_history.len() - 1;
                 }
             }
@@ -305,136 +380,127 @@ impl PlaybackQueue {
     pub fn replace_ordered_track_ids(
         &mut self,
         ordered_track_ids: Vec<TrackId>,
+        available_track_ids: &[TrackId],
         shuffle_seed: u64,
     ) {
         let current_track_id = self
             .current_track_id
-            .filter(|track_id| ordered_track_ids.contains(track_id));
-
+            .filter(|track_id| available_track_ids.contains(track_id));
+        let curated = self
+            .upcoming_entries()
+            .iter()
+            .filter(|entry| entry.is_curated() && available_track_ids.contains(&entry.track_id))
+            .map(|entry| entry.track_id)
+            .collect::<Vec<_>>();
         self.ordered_track_ids = ordered_track_ids;
         self.current_track_id = current_track_id;
-        self.rebuild_layout(shuffle_seed);
+        self.layout = build_layout(
+            &self.ordered_track_ids,
+            self.current_track_id,
+            &curated,
+            effective_shuffle_mode(self.options.shuffle_mode, &self.source),
+            shuffle_seed,
+        );
     }
 
-    pub fn remove_track(&mut self, track_id: TrackId, shuffle_seed: u64) {
-        let ordered_track_ids = self
-            .ordered_track_ids
-            .iter()
-            .copied()
-            .filter(|candidate| *candidate != track_id)
-            .collect();
-        self.replace_ordered_track_ids(ordered_track_ids, shuffle_seed);
+    /// Replace the source playthrough while preserving still-playable
+    /// curated Up Next entries. Used when a browsing context widens, such
+    /// as clearing a search filter during playback.
+    pub fn replace_source(
+        &mut self,
+        source: PlaybackQueueSource,
+        ordered_track_ids: Vec<TrackId>,
+        available_track_ids: &[TrackId],
+        shuffle_seed: u64,
+    ) {
+        self.source = source;
+        self.replace_ordered_track_ids(ordered_track_ids, available_track_ids, shuffle_seed);
     }
 
-    /// Inserts the given tracks so they play immediately after the currently
-    /// playing track, in both the ordered queue and the realised play order.
-    /// Tracks already present elsewhere in the queue are moved to the new
-    /// position; the currently playing track is left in place and skipped if
-    /// present in `track_ids`. Returns `false` when there is no current track
-    /// to anchor against or when the candidate list reduces to nothing.
-    pub fn enqueue_after_current(&mut self, track_ids: &[TrackId]) -> bool {
-        let Some(current_track_id) = self.current_track_id else {
-            return false;
-        };
-
-        let mut to_insert: Vec<TrackId> = Vec::with_capacity(track_ids.len());
-        for candidate in track_ids {
-            if *candidate != current_track_id && !to_insert.contains(candidate) {
-                to_insert.push(*candidate);
-            }
+    pub fn remove_track(&mut self, track_id: TrackId) {
+        self.ordered_track_ids
+            .retain(|candidate| *candidate != track_id);
+        if self.current_track_id == Some(track_id) {
+            self.current_track_id = None;
         }
-        if to_insert.is_empty() {
-            return false;
-        }
-
-        self.ordered_track_ids.retain(|id| !to_insert.contains(id));
-
-        if let Some(index) = self
-            .ordered_track_ids
-            .iter()
-            .position(|id| *id == current_track_id)
-        {
-            for (offset, track_id) in to_insert.iter().enumerate() {
-                self.ordered_track_ids.insert(index + 1 + offset, *track_id);
-            }
-        }
-
         match &mut self.layout {
-            PlaybackQueueLayout::Eager {
-                play_order_track_ids,
-            } => {
-                play_order_track_ids.retain(|id| !to_insert.contains(id));
-                if let Some(index) = play_order_track_ids
-                    .iter()
-                    .position(|id| *id == current_track_id)
-                {
-                    for (offset, track_id) in to_insert.iter().enumerate() {
-                        play_order_track_ids.insert(index + 1 + offset, *track_id);
-                    }
-                }
+            PlaybackQueueLayout::Eager { play_order } => {
+                play_order.retain(|entry| entry.track_id != track_id);
             }
             PlaybackQueueLayout::Lazy {
                 played_history,
                 cursor,
             } => {
-                // Lazy semantics: forcing tracks after current means
-                // splicing them between cursor and the next picked
-                // track. The user's queued-up order wins over the
-                // picker's tentative successor (which, if present at
-                // cursor+1, gets pushed back).
-                played_history.retain(|id| !to_insert.contains(id));
-                // Truncate stale references that no longer make sense after
-                // the retain above may have shifted cursor's position.
-                let safe_cursor = (*cursor).min(played_history.len().saturating_sub(1));
-                let insertion = safe_cursor.saturating_add(1).min(played_history.len());
-                for (offset, track_id) in to_insert.iter().enumerate() {
-                    played_history.insert(insertion + offset, *track_id);
-                }
-                *cursor = safe_cursor;
+                remove_entries_and_reanchor_cursor(played_history, cursor, &[track_id]);
+            }
+        }
+    }
+
+    /// Inserts the given tracks at the head of the curated Up Next region:
+    /// immediately after the currently playing track and before every
+    /// previously curated or source-continuation entry. Existing occurrences
+    /// are moved rather than duplicated. The source pool remains intact.
+    pub fn enqueue_after_current(&mut self, track_ids: &[TrackId]) -> bool {
+        let Some(current_track_id) = self.current_track_id else {
+            return false;
+        };
+
+        let to_insert = queue_candidates(track_ids, current_track_id);
+        if to_insert.is_empty() {
+            return false;
+        }
+
+        match &mut self.layout {
+            PlaybackQueueLayout::Eager { play_order } => {
+                remove_entries(play_order, &to_insert);
+                let Some(index) = entry_position(play_order, current_track_id) else {
+                    return false;
+                };
+                insert_curated(play_order, index + 1, &to_insert);
+            }
+            PlaybackQueueLayout::Lazy {
+                played_history,
+                cursor,
+            } => {
+                remove_entries_and_reanchor_cursor(played_history, cursor, &to_insert);
+                let insertion = cursor.saturating_add(1).min(played_history.len());
+                insert_curated(played_history, insertion, &to_insert);
             }
         }
 
         true
     }
 
-    /// Appends the given tracks at the tail of the play queue, behind every
-    /// already-queued track in both the ordered queue and the realised play
-    /// order. Tracks already present elsewhere in the queue are moved to the
-    /// new position; the currently playing track is left in place and skipped
-    /// if present in `track_ids`. Returns `false` when there is no current
-    /// track to anchor against or when the candidate list reduces to nothing.
+    /// Appends the given tracks to the curated Up Next region: after every
+    /// explicitly queued track, but before source continuation. Existing
+    /// occurrences are moved rather than duplicated. The source pool remains
+    /// intact, so a library-scale continuation never swallows Add to Queue.
     pub fn enqueue_at_end(&mut self, track_ids: &[TrackId]) -> bool {
         let Some(current_track_id) = self.current_track_id else {
             return false;
         };
 
-        let mut to_append: Vec<TrackId> = Vec::with_capacity(track_ids.len());
-        for candidate in track_ids {
-            if *candidate != current_track_id && !to_append.contains(candidate) {
-                to_append.push(*candidate);
-            }
-        }
+        let to_append = queue_candidates(track_ids, current_track_id);
         if to_append.is_empty() {
             return false;
         }
 
-        self.ordered_track_ids.retain(|id| !to_append.contains(id));
-        self.ordered_track_ids.extend(to_append.iter().copied());
-
         match &mut self.layout {
-            PlaybackQueueLayout::Eager {
-                play_order_track_ids,
-            } => {
-                play_order_track_ids.retain(|id| !to_append.contains(id));
-                play_order_track_ids.extend(to_append.iter().copied());
+            PlaybackQueueLayout::Eager { play_order } => {
+                remove_entries(play_order, &to_append);
+                let Some(current) = entry_position(play_order, current_track_id) else {
+                    return false;
+                };
+                let insertion = curated_tail(play_order, current + 1);
+                insert_curated(play_order, insertion, &to_append);
             }
             PlaybackQueueLayout::Lazy {
                 played_history,
                 cursor,
             } => {
-                played_history.retain(|id| !to_append.contains(id));
-                *cursor = (*cursor).min(played_history.len().saturating_sub(1));
-                played_history.extend(to_append.iter().copied());
+                remove_entries_and_reanchor_cursor(played_history, cursor, &to_append);
+                let insertion = curated_tail(played_history, cursor.saturating_add(1));
+                insert_curated(played_history, insertion, &to_append);
             }
         }
 
@@ -447,59 +513,63 @@ impl PlaybackQueue {
     /// current track's position; for Lazy (Smart Shuffle) layouts it is
     /// the already-picked / explicitly-enqueued tail after the cursor,
     /// which is usually empty because Smart Shuffle decides successors on
-    /// demand. Empty when nothing is playing. The slice is the queue's
+    /// demand. Empty when nothing is playing. The returned list is the queue's
     /// *content* — repeat-mode wrapping is a playback behaviour layered on
     /// top by [`Self::next_track_id`], not part of the upcoming list.
-    pub fn upcoming_track_ids(&self) -> &[TrackId] {
-        let Some(current_track_id) = self.current_track_id else {
-            return &[];
-        };
-        match &self.layout {
-            PlaybackQueueLayout::Eager {
-                play_order_track_ids,
-            } => match play_order_track_ids
-                .iter()
-                .position(|id| *id == current_track_id)
-            {
-                Some(index) => &play_order_track_ids[index + 1..],
-                None => &[],
-            },
-            PlaybackQueueLayout::Lazy {
-                played_history,
-                cursor,
-            } => {
-                let start = cursor.saturating_add(1).min(played_history.len());
-                &played_history[start..]
-            }
-        }
+    pub fn upcoming_track_ids(&self) -> Vec<TrackId> {
+        self.upcoming_entries()
+            .iter()
+            .map(|entry| entry.track_id)
+            .collect()
     }
 
-    /// Remove a single upcoming track from the queue entirely — both the
-    /// source pool and the realised play order — preserving every other
-    /// track's position. Unlike [`Self::remove_track`] (which rebuilds the
-    /// layout from the pool, re-rolling the shuffle, and is used when a
-    /// track leaves the library), this is a surgical excision with no
-    /// shuffle re-roll: the semantics the queue view's per-track evict
-    /// needs.
+    /// Whether `track_id` is currently scheduled after the playing track.
+    /// Used by queue-popover activation to reject stale row clicks without
+    /// rebuilding or otherwise mutating the queue.
+    pub fn contains_upcoming_track(&self, track_id: TrackId) -> bool {
+        self.upcoming_entries()
+            .iter()
+            .any(|entry| entry.track_id == track_id)
+    }
+
+    /// Bounded UI projection: every explicit Up Next entry followed by at
+    /// most `continuation_limit` source-playthrough entries. The internal
+    /// playback order may contain the whole library; popovers never need it.
+    pub fn upcoming_preview(&self, continuation_limit: usize) -> Vec<PlaybackQueueEntry> {
+        let mut remaining_continuation = continuation_limit;
+        self.upcoming_entries()
+            .iter()
+            .copied()
+            .filter(|entry| {
+                if entry.is_curated() {
+                    return true;
+                }
+                let include = remaining_continuation > 0;
+                remaining_continuation = remaining_continuation.saturating_sub(1);
+                include
+            })
+            .collect()
+    }
+
+    /// Remove a single explicitly queued Up Next track from the realised
+    /// play order, preserving source continuation and the shuffle seed.
     ///
     /// Refuses to remove the currently playing track, and only acts on a
     /// track that is actually upcoming (not already-played history, not
     /// absent), so it can never corrupt the cursor or the played prefix.
     /// Returns `true` when a track was removed.
     pub fn remove_from_queue(&mut self, track_id: TrackId) -> bool {
-        if self.current_track_id == Some(track_id) {
-            return false;
-        }
-        if !self.upcoming_track_ids().contains(&track_id) {
+        if !self
+            .upcoming_entries()
+            .iter()
+            .any(|entry| entry.track_id == track_id && entry.is_curated())
+        {
             return false;
         }
 
-        self.ordered_track_ids.retain(|id| *id != track_id);
         match &mut self.layout {
-            PlaybackQueueLayout::Eager {
-                play_order_track_ids,
-            } => {
-                play_order_track_ids.retain(|id| *id != track_id);
+            PlaybackQueueLayout::Eager { play_order } => {
+                play_order.retain(|entry| entry.track_id != track_id);
             }
             PlaybackQueueLayout::Lazy {
                 played_history,
@@ -508,23 +578,21 @@ impl PlaybackQueue {
                 // The track is strictly after the cursor (it was upcoming),
                 // so removing it never shifts the cursor's target; the
                 // clamp below only defends the in-range invariant.
-                played_history.retain(|id| *id != track_id);
-                *cursor = (*cursor).min(played_history.len().saturating_sub(1));
+                remove_entries_and_reanchor_cursor(played_history, cursor, &[track_id]);
             }
         }
         true
     }
 
-    /// Reorder one upcoming track within the queue, moving it so it plays
+    /// Reorder one curated Up Next track within the queue, moving it so it plays
     /// immediately before (`place_after == false`) or after
     /// (`place_after == true`) another upcoming track. Edits only the
     /// realised play order — the source pool's membership is unchanged —
-    /// so no shuffle re-roll happens and the set held by
-    /// `ordered_track_ids` stays equal to the play order's set.
+    /// so no shuffle re-roll happens.
     ///
     /// No-op (returns `false`) when the two tracks are the same, when
-    /// either is the currently playing track, or when either is not
-    /// currently upcoming. Backs the queue view's drag-to-reorder.
+    /// either is not a curated upcoming entry. Backs the queue view's
+    /// drag-to-reorder.
     pub fn move_within_queue(
         &mut self,
         track_id: TrackId,
@@ -534,21 +602,18 @@ impl PlaybackQueue {
         if track_id == target_track_id {
             return false;
         }
-        if self.current_track_id == Some(track_id) || self.current_track_id == Some(target_track_id)
         {
-            return false;
-        }
-        {
-            let upcoming = self.upcoming_track_ids();
-            if !upcoming.contains(&track_id) || !upcoming.contains(&target_track_id) {
+            let upcoming = self.upcoming_entries();
+            if !contains_curated(upcoming, track_id) || !contains_curated(upcoming, target_track_id)
+            {
                 return false;
             }
         }
 
         match &mut self.layout {
-            PlaybackQueueLayout::Eager {
-                play_order_track_ids,
-            } => reposition_track(play_order_track_ids, track_id, target_track_id, place_after),
+            PlaybackQueueLayout::Eager { play_order } => {
+                reposition_track(play_order, track_id, target_track_id, place_after)
+            }
             PlaybackQueueLayout::Lazy { played_history, .. } => {
                 reposition_track(played_history, track_id, target_track_id, place_after)
             }
@@ -562,22 +627,20 @@ impl PlaybackQueue {
         }
 
         match &self.layout {
-            PlaybackQueueLayout::Eager {
-                play_order_track_ids,
-            } => {
-                let current_index = play_order_track_ids
+            PlaybackQueueLayout::Eager { play_order } => {
+                let current_index = play_order
                     .iter()
-                    .position(|track_id| *track_id == current_track_id)?;
+                    .position(|entry| entry.track_id == current_track_id)?;
                 let adjacent_index = match step {
                     TrackStep::Previous => current_index.checked_sub(1),
                     TrackStep::Next => current_index.checked_add(1),
                 };
 
-                match adjacent_index.and_then(|index| play_order_track_ids.get(index).copied()) {
-                    Some(track_id) => Some(track_id),
+                match adjacent_index.and_then(|index| play_order.get(index).copied()) {
+                    Some(entry) => Some(entry.track_id),
                     None if self.options.repeat_mode == RepeatMode::All => match step {
-                        TrackStep::Previous => play_order_track_ids.last().copied(),
-                        TrackStep::Next => play_order_track_ids.first().copied(),
+                        TrackStep::Previous => play_order.last().map(|entry| entry.track_id),
+                        TrackStep::Next => play_order.first().map(|entry| entry.track_id),
                     },
                     None => None,
                 }
@@ -591,7 +654,7 @@ impl PlaybackQueue {
                     TrackStep::Next => cursor.checked_add(1),
                 };
                 match adjacent_index.and_then(|index| played_history.get(index).copied()) {
-                    Some(track_id) => Some(track_id),
+                    Some(entry) => Some(entry.track_id),
                     None if self.options.repeat_mode == RepeatMode::All => match step {
                         // Lazy + RepeatAll wraps to the ends of the
                         // *already-played* history. A fresh forward
@@ -600,8 +663,8 @@ impl PlaybackQueue {
                         // All is only reached here when no candidate
                         // remains to pick, which is the natural wrap
                         // condition.
-                        TrackStep::Previous => played_history.last().copied(),
-                        TrackStep::Next => played_history.first().copied(),
+                        TrackStep::Previous => played_history.last().map(|entry| entry.track_id),
+                        TrackStep::Next => played_history.first().map(|entry| entry.track_id),
                     },
                     None => None,
                 }
@@ -610,12 +673,52 @@ impl PlaybackQueue {
     }
 
     fn rebuild_layout(&mut self, shuffle_seed: u64) {
+        let curated = self
+            .upcoming_entries()
+            .iter()
+            .filter(|entry| entry.is_curated())
+            .map(|entry| entry.track_id)
+            .collect::<Vec<_>>();
         self.layout = build_layout(
             &self.ordered_track_ids,
             self.current_track_id,
+            &curated,
             effective_shuffle_mode(self.options.shuffle_mode, &self.source),
             shuffle_seed,
         );
+    }
+
+    fn contains_realised_track(&self, track_id: TrackId) -> bool {
+        match &self.layout {
+            PlaybackQueueLayout::Eager { play_order } => {
+                play_order.iter().any(|entry| entry.track_id == track_id)
+            }
+            PlaybackQueueLayout::Lazy { played_history, .. } => played_history
+                .iter()
+                .any(|entry| entry.track_id == track_id),
+        }
+    }
+
+    fn upcoming_entries(&self) -> &[PlaybackQueueEntry] {
+        let Some(current_track_id) = self.current_track_id else {
+            return &[];
+        };
+        match &self.layout {
+            PlaybackQueueLayout::Eager { play_order } => match play_order
+                .iter()
+                .position(|entry| entry.track_id == current_track_id)
+            {
+                Some(index) => &play_order[index + 1..],
+                None => &[],
+            },
+            PlaybackQueueLayout::Lazy {
+                played_history,
+                cursor,
+            } => {
+                let start = cursor.saturating_add(1).min(played_history.len());
+                &played_history[start..]
+            }
+        }
     }
 }
 
@@ -647,25 +750,119 @@ fn effective_shuffle_mode(mode: ShuffleMode, source: &PlaybackQueueSource) -> Sh
 fn build_layout(
     ordered_track_ids: &[TrackId],
     current_track_id: Option<TrackId>,
+    curated_track_ids: &[TrackId],
     effective_mode: ShuffleMode,
     shuffle_seed: u64,
 ) -> PlaybackQueueLayout {
     match effective_mode {
         ShuffleMode::Off => PlaybackQueueLayout::Eager {
-            play_order_track_ids: ordered_track_ids.to_vec(),
+            play_order: eager_play_order(
+                ordered_track_ids.to_vec(),
+                current_track_id,
+                curated_track_ids,
+            ),
         },
         ShuffleMode::Pure => PlaybackQueueLayout::Eager {
-            play_order_track_ids: build_pure_play_order(
-                ordered_track_ids,
+            play_order: eager_play_order(
+                build_pure_play_order(ordered_track_ids, current_track_id, shuffle_seed),
                 current_track_id,
-                shuffle_seed,
+                curated_track_ids,
             ),
         },
         ShuffleMode::Smart => PlaybackQueueLayout::Lazy {
-            played_history: current_track_id.map(|id| vec![id]).unwrap_or_default(),
+            played_history: current_track_id
+                .map(PlaybackQueueEntry::continuation)
+                .into_iter()
+                .chain(
+                    curated_track_ids
+                        .iter()
+                        .copied()
+                        .filter(|id| Some(*id) != current_track_id)
+                        .map(PlaybackQueueEntry::curated),
+                )
+                .collect(),
             cursor: 0,
         },
     }
+}
+
+fn eager_play_order(
+    mut continuation_track_ids: Vec<TrackId>,
+    current_track_id: Option<TrackId>,
+    curated_track_ids: &[TrackId],
+) -> Vec<PlaybackQueueEntry> {
+    continuation_track_ids
+        .retain(|id| Some(*id) == current_track_id || !curated_track_ids.contains(id));
+    let mut play_order: Vec<_> = continuation_track_ids
+        .into_iter()
+        .map(PlaybackQueueEntry::continuation)
+        .collect();
+    if let Some(current_track_id) = current_track_id {
+        let current = match entry_position(&play_order, current_track_id) {
+            Some(index) => index,
+            None => {
+                play_order.insert(0, PlaybackQueueEntry::continuation(current_track_id));
+                0
+            }
+        };
+        insert_curated(&mut play_order, current + 1, curated_track_ids);
+    }
+    play_order
+}
+
+fn queue_candidates(track_ids: &[TrackId], current_track_id: TrackId) -> Vec<TrackId> {
+    let mut candidates = Vec::with_capacity(track_ids.len());
+    for track_id in track_ids {
+        if *track_id != current_track_id && !candidates.contains(track_id) {
+            candidates.push(*track_id);
+        }
+    }
+    candidates
+}
+
+fn insert_curated(order: &mut Vec<PlaybackQueueEntry>, insertion: usize, track_ids: &[TrackId]) {
+    for (offset, track_id) in track_ids.iter().enumerate() {
+        order.insert(insertion + offset, PlaybackQueueEntry::curated(*track_id));
+    }
+}
+
+fn remove_entries(order: &mut Vec<PlaybackQueueEntry>, track_ids: &[TrackId]) {
+    order.retain(|entry| !track_ids.contains(&entry.track_id));
+}
+
+fn remove_entries_and_reanchor_cursor(
+    order: &mut Vec<PlaybackQueueEntry>,
+    cursor: &mut usize,
+    track_ids: &[TrackId],
+) {
+    let removed_before_cursor = order
+        .iter()
+        .take(*cursor)
+        .filter(|entry| track_ids.contains(&entry.track_id))
+        .count();
+    remove_entries(order, track_ids);
+    *cursor = cursor
+        .saturating_sub(removed_before_cursor)
+        .min(order.len().saturating_sub(1));
+}
+
+fn entry_position(order: &[PlaybackQueueEntry], track_id: TrackId) -> Option<usize> {
+    order.iter().position(|entry| entry.track_id == track_id)
+}
+
+fn curated_tail(order: &[PlaybackQueueEntry], start: usize) -> usize {
+    order
+        .iter()
+        .skip(start)
+        .take_while(|entry| entry.is_curated())
+        .count()
+        + start
+}
+
+fn contains_curated(entries: &[PlaybackQueueEntry], track_id: TrackId) -> bool {
+    entries
+        .iter()
+        .any(|entry| entry.track_id == track_id && entry.is_curated())
 }
 
 /// Move `moved` within `order` so it sits immediately before or after
@@ -673,17 +870,17 @@ fn build_layout(
 /// against the upcoming slice); if `target` somehow vanished after the
 /// removal the move is rolled back and `false` returned.
 fn reposition_track(
-    order: &mut Vec<TrackId>,
+    order: &mut Vec<PlaybackQueueEntry>,
     moved: TrackId,
     target: TrackId,
     place_after: bool,
 ) -> bool {
-    let Some(from) = order.iter().position(|id| *id == moved) else {
+    let Some(from) = entry_position(order, moved) else {
         return false;
     };
-    order.remove(from);
-    let Some(target_index) = order.iter().position(|id| *id == target) else {
-        order.insert(from, moved);
+    let entry = order.remove(from);
+    let Some(target_index) = entry_position(order, target) else {
+        order.insert(from, entry);
         return false;
     };
     let insert_at = if place_after {
@@ -691,7 +888,7 @@ fn reposition_track(
     } else {
         target_index
     };
-    order.insert(insert_at, moved);
+    order.insert(insert_at, entry);
     true
 }
 

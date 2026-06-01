@@ -361,9 +361,20 @@ pub(super) fn make_toggle_or_start_playback(
                 )
             };
             match request {
-                Some((track_id, queue)) => command_controller.dispatch_succeeded(
-                    ApplicationCommand::Playback(PlaybackCommand::PlayTrack { track_id, queue }),
-                ),
+                Some((track_id, queue)) => {
+                    if matches!(
+                        &queue,
+                        PlaybackQueueRequest::Explicit {
+                            source: PlaybackQueueSource::Album,
+                            ..
+                        }
+                    ) {
+                        crate::albums::ensure_shuffle_disabled(&command_controller);
+                    }
+                    command_controller.dispatch_succeeded(ApplicationCommand::Playback(
+                        PlaybackCommand::PlayTrack { track_id, queue },
+                    ))
+                }
                 None => false,
             }
         } else {

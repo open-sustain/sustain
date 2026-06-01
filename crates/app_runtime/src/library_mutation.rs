@@ -23,7 +23,7 @@ use crate::{
         metadata_change_affects_managed_path, prune_empty_ancestor_directories_for_sources,
         relocate_managed_missing_track, retarget_managed_metadata,
     },
-    playback::{playback_shuffle_seed, playback_track_id},
+    playback::playback_track_id,
 };
 
 impl ApplicationRuntime {
@@ -331,8 +331,7 @@ impl ApplicationRuntime {
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.library_tracks.retain(|track| track.id != track_id);
         self.search_index.remove(track_id);
-        self.playback_queue
-            .remove_track(track_id, playback_shuffle_seed());
+        self.playback_queue.remove_track(track_id);
         Ok(())
     }
 

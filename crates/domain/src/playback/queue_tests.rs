@@ -4,8 +4,8 @@
 use crate::TrackId;
 
 use super::{
-    PlaybackOptions, PlaybackQueue, PlaybackQueueSource, RepeatMode, ShuffleMode,
-    effective_shuffle_mode,
+    PlaybackOptions, PlaybackQueue, PlaybackQueueEntryKind, PlaybackQueueSource, RepeatMode,
+    ShuffleMode, effective_shuffle_mode,
 };
 
 #[test]
@@ -74,11 +74,60 @@ fn playback_queue_uses_pure_shuffle_order_with_current_track_first() {
 fn playback_queue_drops_missing_track_ids_when_order_is_replaced() {
     let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
 
-    queue.replace_ordered_track_ids(vec![track_id(1), track_id(3)], 10);
+    queue.replace_ordered_track_ids(
+        vec![track_id(1), track_id(3)],
+        &[track_id(1), track_id(3)],
+        10,
+    );
 
     assert_eq!(queue.current_track_id(), None);
     assert_eq!(queue.next_track_id(), None);
     assert_eq!(queue.ordered_track_ids(), &[track_id(1), track_id(3)]);
+}
+
+#[test]
+fn replacing_source_preserves_playable_curated_tracks_outside_the_source() {
+    let mut queue = PlaybackQueue::new(
+        PlaybackQueueSource::Album,
+        vec![track_id(1), track_id(2)],
+        track_id(1),
+        PlaybackOptions::default(),
+        10,
+    );
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+
+    queue.replace_source(
+        PlaybackQueueSource::Album,
+        vec![track_id(1), track_id(2)],
+        &[track_id(1), track_id(2), track_id(9)],
+        10,
+    );
+
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[track_id(1), track_id(9), track_id(2)]
+    );
+}
+
+#[test]
+fn replacing_source_drops_curated_tracks_that_are_no_longer_playable() {
+    let mut queue = PlaybackQueue::new(
+        PlaybackQueueSource::Album,
+        vec![track_id(1), track_id(2)],
+        track_id(1),
+        PlaybackOptions::default(),
+        10,
+    );
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+
+    queue.replace_source(
+        PlaybackQueueSource::Album,
+        vec![track_id(1), track_id(2)],
+        &[track_id(1), track_id(2)],
+        10,
+    );
+
+    assert_eq!(queue.play_order_track_ids(), &[track_id(1), track_id(2)]);
 }
 
 #[test]
@@ -89,6 +138,10 @@ fn enqueue_after_current_inserts_at_current_plus_one() {
 
     assert_eq!(
         queue.ordered_track_ids(),
+        &[track_id(1), track_id(2), track_id(3)]
+    );
+    assert_eq!(
+        queue.play_order_track_ids(),
         &[track_id(1), track_id(2), track_id(9), track_id(3)]
     );
     assert_eq!(queue.next_track_id(), Some(track_id(9)));
@@ -102,6 +155,10 @@ fn enqueue_after_current_moves_track_already_later_in_queue() {
 
     assert_eq!(
         queue.ordered_track_ids(),
+        &[track_id(1), track_id(2), track_id(3)]
+    );
+    assert_eq!(
+        queue.play_order_track_ids(),
         &[track_id(1), track_id(3), track_id(2)]
     );
     assert_eq!(queue.next_track_id(), Some(track_id(3)));
@@ -114,7 +171,7 @@ fn enqueue_after_current_inserts_multiple_in_order() {
     assert!(queue.enqueue_after_current(&[track_id(9), track_id(8)]));
 
     assert_eq!(
-        queue.ordered_track_ids(),
+        queue.play_order_track_ids(),
         &[
             track_id(1),
             track_id(9),
@@ -132,7 +189,7 @@ fn enqueue_after_current_dedupes_repeated_candidates() {
     assert!(queue.enqueue_after_current(&[track_id(9), track_id(9), track_id(8)]));
 
     assert_eq!(
-        queue.ordered_track_ids(),
+        queue.play_order_track_ids(),
         &[
             track_id(1),
             track_id(9),
@@ -163,29 +220,37 @@ fn enqueue_after_current_returns_false_with_no_current_track() {
 }
 
 #[test]
-fn enqueue_at_end_appends_after_every_queued_track() {
+fn enqueue_at_end_appends_to_curated_region_before_continuation() {
     let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
 
     assert!(queue.enqueue_at_end(&[track_id(9)]));
 
     assert_eq!(
         queue.ordered_track_ids(),
-        &[track_id(1), track_id(2), track_id(3), track_id(9)]
+        &[track_id(1), track_id(2), track_id(3)]
     );
-    assert_eq!(queue.next_track_id(), Some(track_id(3)));
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[track_id(1), track_id(2), track_id(9), track_id(3)]
+    );
+    assert_eq!(queue.next_track_id(), Some(track_id(9)));
 }
 
 #[test]
-fn enqueue_at_end_moves_track_already_in_queue_to_the_tail() {
+fn enqueue_at_end_moves_source_track_into_curated_region() {
     let mut queue = queue_with_options(track_id(1), PlaybackOptions::default());
 
     assert!(queue.enqueue_at_end(&[track_id(2)]));
 
     assert_eq!(
         queue.ordered_track_ids(),
-        &[track_id(1), track_id(3), track_id(2)]
+        &[track_id(1), track_id(2), track_id(3)]
     );
-    assert_eq!(queue.next_track_id(), Some(track_id(3)));
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[track_id(1), track_id(2), track_id(3)]
+    );
+    assert_eq!(queue.next_track_id(), Some(track_id(2)));
 }
 
 #[test]
@@ -195,13 +260,13 @@ fn enqueue_at_end_appends_multiple_in_order() {
     assert!(queue.enqueue_at_end(&[track_id(9), track_id(8)]));
 
     assert_eq!(
-        queue.ordered_track_ids(),
+        queue.play_order_track_ids(),
         &[
             track_id(1),
-            track_id(2),
-            track_id(3),
             track_id(9),
             track_id(8),
+            track_id(2),
+            track_id(3),
         ]
     );
 }
@@ -213,13 +278,13 @@ fn enqueue_at_end_dedupes_repeated_candidates() {
     assert!(queue.enqueue_at_end(&[track_id(9), track_id(9), track_id(8)]));
 
     assert_eq!(
-        queue.ordered_track_ids(),
+        queue.play_order_track_ids(),
         &[
             track_id(1),
-            track_id(2),
-            track_id(3),
             track_id(9),
             track_id(8),
+            track_id(2),
+            track_id(3),
         ]
     );
 }
@@ -244,7 +309,51 @@ fn enqueue_at_end_returns_false_with_no_current_track() {
 }
 
 #[test]
-fn enqueue_at_end_appends_in_pure_shuffle_play_order_too() {
+fn enqueue_at_end_follows_existing_curated_entries_not_source_continuation() {
+    let mut queue = PlaybackQueue::new(
+        PlaybackQueueSource::Library,
+        vec![track_id(1), track_id(2), track_id(3), track_id(4)],
+        track_id(1),
+        PlaybackOptions::default(),
+        10,
+    );
+
+    assert!(queue.enqueue_after_current(&[track_id(4)]));
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[
+            track_id(1),
+            track_id(4),
+            track_id(9),
+            track_id(2),
+            track_id(3)
+        ]
+    );
+}
+
+#[test]
+fn enqueue_after_current_precedes_existing_curated_entries() {
+    let mut queue = queue_with_options(track_id(1), PlaybackOptions::default());
+
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+    assert!(queue.enqueue_after_current(&[track_id(8)]));
+
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[
+            track_id(1),
+            track_id(8),
+            track_id(9),
+            track_id(2),
+            track_id(3)
+        ]
+    );
+}
+
+#[test]
+fn enqueue_at_end_precedes_pure_shuffle_continuation_too() {
     let mut queue = queue_with_options(
         track_id(2),
         PlaybackOptions {
@@ -257,7 +366,8 @@ fn enqueue_at_end_appends_in_pure_shuffle_play_order_too() {
 
     let play_order = queue.play_order_track_ids();
     assert_eq!(play_order.first().copied(), Some(track_id(2)));
-    assert_eq!(play_order.last().copied(), Some(track_id(9)));
+    assert_eq!(play_order.get(1).copied(), Some(track_id(9)));
+    assert_eq!(queue.next_track_id(), Some(track_id(9)));
 }
 
 #[test]
@@ -276,6 +386,18 @@ fn enqueue_after_current_inserts_in_pure_shuffle_play_order_too() {
     assert_eq!(play_order.first().copied(), Some(track_id(2)));
     assert_eq!(play_order.get(1).copied(), Some(track_id(9)));
     assert_eq!(queue.next_track_id(), Some(track_id(9)));
+}
+
+#[test]
+fn shuffle_rebuild_preserves_curated_up_next_before_continuation() {
+    let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+
+    queue.cycle_shuffle_mode(10);
+
+    assert_eq!(queue.options().shuffle_mode, ShuffleMode::Pure);
+    assert_eq!(queue.next_track_id(), Some(track_id(9)));
+    assert_eq!(queue.play_order_track_ids().get(1), Some(&track_id(9)));
 }
 
 #[test]
@@ -402,6 +524,27 @@ fn smart_shuffle_downgrades_to_pure_for_ad_hoc_sources() {
 }
 
 #[test]
+fn only_effective_smart_shuffle_uses_lazy_continuation() {
+    let smart_options = PlaybackOptions {
+        shuffle_mode: ShuffleMode::Smart,
+        repeat_mode: RepeatMode::Off,
+    };
+
+    assert!(queue_with_options(track_id(1), smart_options).uses_lazy_continuation());
+    assert!(
+        !PlaybackQueue::new(
+            PlaybackQueueSource::Album,
+            vec![track_id(1), track_id(2), track_id(3)],
+            track_id(1),
+            smart_options,
+            10,
+        )
+        .uses_lazy_continuation()
+    );
+    assert!(!queue_with_options(track_id(1), PlaybackOptions::default()).uses_lazy_continuation());
+}
+
+#[test]
 fn lazy_enqueue_after_current_inserts_between_cursor_and_picked_next() {
     let mut queue = queue_with_options(
         track_id(1),
@@ -419,6 +562,24 @@ fn lazy_enqueue_after_current_inserts_between_cursor_and_picked_next() {
         &[track_id(1), track_id(2), track_id(3)]
     );
     assert_eq!(queue.next_track_id(), Some(track_id(2)));
+}
+
+#[test]
+fn lazy_enqueue_at_end_drains_before_picker_is_consulted() {
+    let mut queue = queue_with_options(
+        track_id(1),
+        PlaybackOptions {
+            shuffle_mode: ShuffleMode::Smart,
+            repeat_mode: RepeatMode::Off,
+        },
+    );
+
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+    assert_eq!(queue.next_track_id(), Some(track_id(9)));
+    assert!(!queue.needs_lazy_pick());
+
+    assert!(queue.move_to_track(track_id(9)));
+    assert!(queue.needs_lazy_pick());
 }
 
 #[test]
@@ -469,12 +630,64 @@ fn upcoming_track_ids_follows_pure_shuffle_order() {
 }
 
 #[test]
+fn contains_upcoming_track_excludes_current_and_played_entries() {
+    let queue = queue_with_options(track_id(2), PlaybackOptions::default());
+
+    assert!(!queue.contains_upcoming_track(track_id(1)));
+    assert!(!queue.contains_upcoming_track(track_id(2)));
+    assert!(queue.contains_upcoming_track(track_id(3)));
+}
+
+#[test]
+fn upcoming_preview_includes_all_curated_entries_and_caps_continuation() {
+    let mut queue = PlaybackQueue::new(
+        PlaybackQueueSource::Library,
+        (1..=20).map(track_id).collect(),
+        track_id(1),
+        PlaybackOptions::default(),
+        10,
+    );
+    assert!(queue.enqueue_at_end(&[track_id(19), track_id(20), track_id(99)]));
+
+    let preview = queue.upcoming_preview(3);
+    assert_eq!(
+        preview
+            .iter()
+            .map(|entry| entry.track_id())
+            .collect::<Vec<_>>(),
+        &[
+            track_id(19),
+            track_id(20),
+            track_id(99),
+            track_id(2),
+            track_id(3),
+            track_id(4),
+        ]
+    );
+    assert_eq!(
+        preview.iter().map(|entry| entry.kind()).collect::<Vec<_>>(),
+        &[
+            PlaybackQueueEntryKind::Curated,
+            PlaybackQueueEntryKind::Curated,
+            PlaybackQueueEntryKind::Curated,
+            PlaybackQueueEntryKind::Continuation,
+            PlaybackQueueEntryKind::Continuation,
+            PlaybackQueueEntryKind::Continuation,
+        ]
+    );
+}
+
+#[test]
 fn remove_from_queue_excises_upcoming_track_without_reshuffle() {
     let mut queue = queue_with_options(track_id(1), PlaybackOptions::default());
+    assert!(queue.enqueue_after_current(&[track_id(3)]));
 
     assert!(queue.remove_from_queue(track_id(3)));
 
-    assert_eq!(queue.ordered_track_ids(), &[track_id(1), track_id(2)]);
+    assert_eq!(
+        queue.ordered_track_ids(),
+        &[track_id(1), track_id(2), track_id(3)]
+    );
     assert_eq!(queue.play_order_track_ids(), &[track_id(1), track_id(2)]);
     assert_eq!(queue.upcoming_track_ids(), &[track_id(2)]);
 }
@@ -504,6 +717,17 @@ fn remove_from_queue_refuses_already_played_track() {
 }
 
 #[test]
+fn remove_from_queue_refuses_source_continuation() {
+    let mut queue = queue_with_options(track_id(1), PlaybackOptions::default());
+
+    assert!(!queue.remove_from_queue(track_id(3)));
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[track_id(1), track_id(2), track_id(3)]
+    );
+}
+
+#[test]
 fn remove_from_queue_keeps_pure_shuffle_order_intact() {
     let mut queue = queue_with_options(
         track_id(2),
@@ -513,6 +737,7 @@ fn remove_from_queue_keeps_pure_shuffle_order_intact() {
         },
     );
     let evicted = queue.upcoming_track_ids()[0];
+    assert!(queue.enqueue_after_current(&[evicted]));
     let expected: Vec<TrackId> = queue
         .play_order_track_ids()
         .iter()
@@ -523,7 +748,7 @@ fn remove_from_queue_keeps_pure_shuffle_order_intact() {
     assert!(queue.remove_from_queue(evicted));
 
     assert_eq!(queue.play_order_track_ids(), expected.as_slice());
-    assert!(!queue.ordered_track_ids().contains(&evicted));
+    assert!(queue.ordered_track_ids().contains(&evicted));
 }
 
 #[test]
@@ -535,6 +760,7 @@ fn move_within_queue_places_track_after_target() {
         PlaybackOptions::default(),
         10,
     );
+    assert!(queue.enqueue_after_current(&[track_id(2), track_id(3), track_id(4)]));
 
     // Upcoming is [2, 3, 4]; move 2 to immediately after 4.
     assert!(queue.move_within_queue(track_id(2), track_id(4), true));
@@ -555,6 +781,7 @@ fn move_within_queue_places_track_before_target() {
         PlaybackOptions::default(),
         10,
     );
+    assert!(queue.enqueue_after_current(&[track_id(2), track_id(3), track_id(4)]));
 
     // Upcoming is [2, 3, 4]; move 4 to immediately before 2.
     assert!(queue.move_within_queue(track_id(4), track_id(2), false));
@@ -574,6 +801,7 @@ fn move_within_queue_leaves_source_pool_membership_unchanged() {
         PlaybackOptions::default(),
         10,
     );
+    assert!(queue.enqueue_after_current(&[track_id(2), track_id(3), track_id(4)]));
 
     assert!(queue.move_within_queue(track_id(2), track_id(4), true));
 
@@ -589,8 +817,8 @@ fn move_within_queue_leaves_source_pool_membership_unchanged() {
 fn move_within_queue_refuses_current_or_non_upcoming_tracks() {
     let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
 
-    // Current track cannot be moved, nor can an already-played track be a
-    // participant — both leave the order untouched.
+    // Continuation is a read-only preview. Neither current nor source
+    // playthrough tracks can participate in an Up Next reorder.
     assert!(!queue.move_within_queue(track_id(2), track_id(3), true));
     assert!(!queue.move_within_queue(track_id(3), track_id(1), false));
     assert!(!queue.move_within_queue(track_id(3), track_id(3), true));

@@ -76,7 +76,7 @@ Implemented:
 - Dense, keyboard-friendly Music and playlist track tables, full-width album grid (*iso-iTunes*)
 - Playlists, smart playlists, and playlist folders (*iso-iTunes*)
 - 5-star ratings, play count, skip count, last played, last skipped (*iso-iTunes*)
-- Up Next queue with `Play Next` and `Add to Queue` (*iso-iTunes*), surfaced as a hover popover on the Next button with two-line artwork rows, drag-to-reorder and evict (*Sustain-native*)
+- Up Next queue with `Play Next` and `Add to Queue` (*iso-iTunes*), surfaced as a right-click Next-button popover with two-line artwork rows, drag-to-reorder, evict, and a bounded continuation peek (*Sustain-native*)
 - Real-time search, sortable and customizable columns (*iso-iTunes*)
 - Library-wide Statistics screen — genre and bitrate distributions, most-played and most-liked genres, release-year and year-added histograms (*Sustain-native*)
 - Deferred duplicate detection and journaled consolidation with independent audio, metadata, and artwork choices (*iTunes-adjacent*)

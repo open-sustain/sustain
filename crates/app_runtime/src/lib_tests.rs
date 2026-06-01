@@ -4,7 +4,10 @@
 use std::{
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use super::{
@@ -36,9 +39,9 @@ use sustain_settings::{SettingsError, SettingsResult, SettingsStore};
 
 use super::{
     ApplicationRuntime, ApplicationRuntimeError, LibraryConsolidationSummary, LibraryScanSummary,
-    MetadataService, NotificationCategory, NotificationSeverity, PlaybackQueueRequest,
-    PlaybackQueueSource, normalize_query, run_library_consolidation_task, run_library_import_task,
-    run_library_scan_task,
+    MetadataService, NotificationCategory, NotificationSeverity, PlaybackQueueEntryKind,
+    PlaybackQueueRequest, PlaybackQueueSource, normalize_query, run_library_consolidation_task,
+    run_library_import_task, run_library_scan_task,
 };
 use crate::{
     file_presence::{FilePresence, probe_file_presence, probe_path_entry_presence},
@@ -192,6 +195,10 @@ fn runtime_handles_every_application_command_intentionally() {
         ),
         (
             ApplicationCommand::Playback(PlaybackCommand::PlayPreviousTrack),
+            Ok(()),
+        ),
+        (
+            ApplicationCommand::Playback(PlaybackCommand::PlayQueueTrack(track_id)),
             Ok(()),
         ),
         (
@@ -2532,6 +2539,98 @@ fn repopulate_queue_widens_searched_results_so_auto_advance_continues() {
             track_id: track_id(2),
             position: std::time::Duration::ZERO,
         }
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn play_queue_track_starts_upcoming_entry_without_rebuilding_the_queue() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: PlaybackQueueRequest::Library,
+        })),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(
+            PlaybackCommand::PlayQueueTrack(track_id(2))
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.playback_state(),
+        PlaybackState::Playing {
+            track_id: track_id(2),
+            position: std::time::Duration::ZERO,
+        }
+    );
+    assert_eq!(
+        runtime
+            .playback_queue_upcoming_preview(10)
+            .iter()
+            .map(|entry| entry.track_id())
+            .collect::<Vec<_>>(),
+        &[track_id(3)]
+    );
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayNextTrack)),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.playback_state(),
+        PlaybackState::Playing {
+            track_id: track_id(3),
+            position: std::time::Duration::ZERO,
+        }
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn repopulate_queue_preserves_curated_up_next_before_widened_continuation() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: PlaybackQueueRequest::Explicit {
+                source: PlaybackQueueSource::SearchResults,
+                ordered_track_ids: vec![track_id(1)],
+            },
+        })),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::EnqueueLast(
+            vec![track_id(3)]
+        ))),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(
+            PlaybackCommand::RepopulateQueue(PlaybackQueueRequest::Library)
+        )),
+        Ok(())
+    );
+
+    let preview = runtime.playback_queue_upcoming_preview(10);
+    assert_eq!(
+        preview
+            .iter()
+            .map(|entry| (entry.track_id(), entry.kind()))
+            .collect::<Vec<_>>(),
+        &[
+            (track_id(3), PlaybackQueueEntryKind::Curated),
+            (track_id(2), PlaybackQueueEntryKind::Continuation),
+        ]
     );
 
     std::fs::remove_dir_all(root).expect("remove test library");
@@ -5176,11 +5275,14 @@ fn rapid_double_skip_does_not_double_count() {
 }
 
 fn unique_test_directory() -> PathBuf {
+    static NEXT_SUFFIX: AtomicU64 = AtomicU64::new(0);
+
     let unique_suffix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock after unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("sustain_runtime_test_{unique_suffix}"))
+    let sequence = NEXT_SUFFIX.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("sustain_runtime_test_{unique_suffix}_{sequence}"))
 }
 
 fn positive_track_id() -> TrackId {

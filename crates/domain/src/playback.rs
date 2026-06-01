@@ -12,7 +12,10 @@ mod source;
 mod volume;
 
 pub use options::{PlaybackOptions, RepeatMode, ShuffleMode};
-pub use queue::{LazyPickContext, PlaybackQueue, PlaybackQueueRequest, PlaybackQueueSource};
+pub use queue::{
+    LazyPickContext, PlaybackQueue, PlaybackQueueEntry, PlaybackQueueEntryKind,
+    PlaybackQueueRequest, PlaybackQueueSource,
+};
 pub use source::TrackPlaybackSource;
 pub use volume::VolumePercent;
 
@@ -29,6 +32,12 @@ pub enum PlaybackCommand {
         track_id: TrackId,
         queue: PlaybackQueueRequest,
     },
+    /// Start playback at an already-upcoming queue entry without rebuilding
+    /// the queue. Dispatched by double-clicking a row in the queue popover so
+    /// the existing curated region and source continuation remain intact.
+    /// No-op when `track_id` is no longer upcoming by the time the command is
+    /// handled.
+    PlayQueueTrack(TrackId),
     PlayPreviousTrack,
     /// Auto-advance to the next track. Used by the GStreamer EOS callback
     /// when the current track ends naturally. NOT a user-initiated skip;
@@ -41,21 +50,19 @@ pub enum PlaybackCommand {
     /// surface where the user is explicitly choosing to abandon the
     /// current track in favor of the next one (e.g. media-key Next).
     SkipCurrentTrack,
+    /// Insert explicitly requested tracks at the head of the curated Up
+    /// Next region, immediately after the current track.
     EnqueueNext(Vec<TrackId>),
-    /// Append the given tracks to the tail of the play queue, behind every
-    /// already-queued track. Counterpart to [`Self::EnqueueNext`], which
-    /// inserts at the head right after the currently playing track.
+    /// Append explicitly requested tracks to the tail of the curated Up
+    /// Next region, before the source playthrough continuation.
     EnqueueLast(Vec<TrackId>),
-    /// Remove a single upcoming track from the play queue without
-    /// disturbing the current track, the rest of the order, or the
-    /// shuffle seed. Dispatched by the queue popover's per-track evict
-    /// control. No-op when the track is the currently playing track or is
-    /// not currently upcoming.
+    /// Remove a single curated Up Next track without disturbing source
+    /// continuation or the shuffle seed. Dispatched by the queue popover's
+    /// per-track evict control. No-op for read-only continuation rows.
     RemoveFromQueue(TrackId),
-    /// Reorder one upcoming track within the play queue, moving it
-    /// immediately before or after another upcoming track. Dispatched by
-    /// the queue popover's drag-to-reorder. No-op when either track is the
-    /// currently playing track or is not currently upcoming.
+    /// Reorder one curated Up Next track immediately before or after
+    /// another. Dispatched by the queue popover's drag-to-reorder. No-op
+    /// for read-only continuation rows.
     ReorderQueue {
         track_id: TrackId,
         target_track_id: TrackId,

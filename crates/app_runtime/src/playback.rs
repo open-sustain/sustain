@@ -53,6 +53,7 @@ impl ApplicationRuntime {
                 self.playback_queue = new_queue;
                 Ok(())
             }
+            PlaybackCommand::PlayQueueTrack(track_id) => self.play_queue_track(track_id),
             PlaybackCommand::PlayPreviousTrack => self.play_previous_track(),
             PlaybackCommand::PlayNextTrack => self.play_next_track(),
             PlaybackCommand::SkipCurrentTrack => self.skip_current_track(),
@@ -154,6 +155,20 @@ impl ApplicationRuntime {
         // `library_playback_queue` played before. If it fails we never get
         // to play_track.
         let _source = self.track_playback_source(track_id)?;
+        let (source, ordered_track_ids) = self.resolve_playback_queue_request(request);
+        Ok(PlaybackQueue::new(
+            source,
+            ordered_track_ids,
+            track_id,
+            self.playback_queue.options(),
+            playback_shuffle_seed(),
+        ))
+    }
+
+    fn resolve_playback_queue_request(
+        &self,
+        request: PlaybackQueueRequest,
+    ) -> (PlaybackQueueSource, Vec<TrackId>) {
         let (source, ordered_track_ids) = match request {
             PlaybackQueueRequest::Library => {
                 (PlaybackQueueSource::Library, self.playable_track_ids())
@@ -170,13 +185,7 @@ impl ApplicationRuntime {
                 (source, filtered)
             }
         };
-        Ok(PlaybackQueue::new(
-            source,
-            ordered_track_ids,
-            track_id,
-            self.playback_queue.options(),
-            playback_shuffle_seed(),
-        ))
+        (source, ordered_track_ids)
     }
 
     /// Re-derive the play queue from `request`, keeping the currently
@@ -204,16 +213,22 @@ impl ApplicationRuntime {
         if matches!(self.playback_queue.source(), PlaybackQueueSource::Album) {
             return;
         }
-        let Ok(new_queue) = self.build_playback_queue(current_track_id, request) else {
-            return;
-        };
-        if new_queue.current_track_id() != Some(current_track_id) {
+        let (source, ordered_track_ids) = self.resolve_playback_queue_request(request);
+        if !ordered_track_ids.contains(&current_track_id) {
             return;
         }
-        if new_queue.ordered_track_ids() == self.playback_queue.ordered_track_ids() {
+        if self.playback_queue.source() == &source
+            && ordered_track_ids == self.playback_queue.ordered_track_ids()
+        {
             return;
         }
-        self.playback_queue = new_queue;
+        let available_track_ids = self.playable_track_ids();
+        self.playback_queue.replace_source(
+            source,
+            ordered_track_ids,
+            &available_track_ids,
+            playback_shuffle_seed(),
+        );
     }
 
     fn play_track(&mut self, track_id: TrackId) -> ApplicationRuntimeResult<()> {
@@ -348,6 +363,24 @@ impl ApplicationRuntime {
 
     fn play_previous_track(&mut self) -> ApplicationRuntimeResult<()> {
         self.play_adjacent_track(self.playback_queue.previous_track_id())
+    }
+
+    /// Start an upcoming queue entry while preserving the existing play
+    /// order. The row may be stale if playback advanced between rendering
+    /// and activation; treating that case as a no-op keeps the UI command
+    /// race-free without letting this path become an arbitrary track
+    /// activation surface.
+    fn play_queue_track(&mut self, track_id: TrackId) -> ApplicationRuntimeResult<()> {
+        if !self.playback_queue.contains_upcoming_track(track_id) {
+            return Ok(());
+        }
+        self.play_track(track_id)?;
+        let moved = self.playback_queue.move_to_track(track_id);
+        debug_assert!(
+            moved,
+            "an upcoming queue track must remain movable after playback"
+        );
+        Ok(())
     }
 
     fn play_next_track(&mut self) -> ApplicationRuntimeResult<()> {
@@ -680,9 +713,10 @@ impl ApplicationRuntime {
     /// the same filter against the queue's existing ids so missing
     /// tracks fall out, leaving everything else untouched.
     pub(super) fn refresh_playback_queue_track_ids(&mut self) {
-        let playable: HashSet<TrackId> = self.playable_track_ids().into_iter().collect();
+        let playable_track_ids = self.playable_track_ids();
+        let playable: HashSet<TrackId> = playable_track_ids.iter().copied().collect();
         let refreshed: Vec<TrackId> = match self.playback_queue.source().clone() {
-            PlaybackQueueSource::Library => self.playable_track_ids(),
+            PlaybackQueueSource::Library => playable_track_ids.clone(),
             PlaybackQueueSource::Playlist(playlist_id) => {
                 match self.playlists().iter().find(|p| p.id == playlist_id) {
                     Some(playlist) => {
@@ -707,8 +741,11 @@ impl ApplicationRuntime {
                 .filter(|id| playable.contains(id))
                 .collect(),
         };
-        self.playback_queue
-            .replace_ordered_track_ids(refreshed, playback_shuffle_seed());
+        self.playback_queue.replace_ordered_track_ids(
+            refreshed,
+            &playable_track_ids,
+            playback_shuffle_seed(),
+        );
     }
 }
 

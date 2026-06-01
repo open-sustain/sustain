@@ -6,7 +6,10 @@ use gtk::{gdk, gio, glib};
 use std::{cell::RefCell, rc::Rc};
 use sustain_app_runtime::{PlaybackQueueRequest, PlaybackQueueSource, TrackId};
 
-use super::model::{AlbumTrackViewModel, duration_text, track_number_text};
+use super::{
+    ensure_shuffle_disabled,
+    model::{AlbumTrackViewModel, duration_text, track_number_text},
+};
 use crate::{
     PlaybackChangedCallback,
     command_controller::SharedCommandController,
@@ -46,6 +49,7 @@ impl AlbumTrackListView {
         // right-click context menus still work without a selection model.
         let selection = gtk::NoSelection::new(Some(store));
 
+        let album_track_ids = ordered_track_ids.clone();
         let context_menu = AlbumTrackContextMenu::new(context_menu, ordered_track_ids);
         let factory = build_row_factory(context_menu.clone(), playing_track_id);
 
@@ -65,15 +69,11 @@ impl AlbumTrackListView {
         // library. Captured once at view construction; the album-detail
         // panel is rebuilt when the album changes, so this list stays in
         // sync with what the user sees.
-        let album_track_ids: Vec<TrackId> = tracks
-            .iter()
-            .filter(|track| !track.is_missing)
-            .map(|track| track.id)
-            .collect();
         list.connect_activate(move |_list, position| {
             let Some(track_id) = row_track_id(selection.item(position)) else {
                 return;
             };
+            ensure_shuffle_disabled(&command_controller_for_activate);
             play_track_or_offer_locate(
                 &command_controller_for_activate,
                 track_id,

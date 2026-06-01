@@ -888,11 +888,21 @@ popover.queue-popover > contents {
     background-color: transparent;
 }
 
+/* Source-playthrough rows are a bounded, read-only peek below explicit
+   Up Next entries. Keep them legible but visually secondary. */
+.queue-row-continuation {
+    color: alpha(@theme_fg_color, 0.72);
+}
+
 /* Neutral tile shown behind the cover while it decodes (or when a track
    has no artwork), matching the now-playing artwork's empty state. */
 .queue-row-artwork {
     background-color: alpha(@theme_fg_color, 0.12);
     border-radius: 3px;
+}
+
+.queue-row-artwork-missing-icon {
+    color: alpha(@theme_fg_color, 0.48);
 }
 
 .queue-row-title {
@@ -929,8 +939,17 @@ popover.queue-popover > contents {
 }
 
 .queue-empty {
-    color: alpha(@theme_fg_color, 0.55);
     padding: 24px 12px;
+}
+
+.queue-empty-title {
+    color: alpha(@theme_fg_color, 0.82);
+    font-size: 1.1em;
+}
+
+.queue-empty-helper {
+    color: alpha(@theme_fg_color, 0.55);
+    font-size: 0.9em;
 }
 
 .rating-stars {

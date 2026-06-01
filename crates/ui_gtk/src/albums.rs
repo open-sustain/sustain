@@ -1541,7 +1541,7 @@ fn play_album(command_controller: &SharedCommandController, album: &AlbumViewMod
     ))
 }
 
-fn ensure_shuffle_disabled(command_controller: &SharedCommandController) {
+pub(crate) fn ensure_shuffle_disabled(command_controller: &SharedCommandController) {
     set_shuffle_mode(command_controller, ShuffleMode::Off);
 }
 

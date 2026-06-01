@@ -21,17 +21,17 @@ pub use sustain_domain::{
     FieldChange, FilesPerFolderCap, GenreDistribution, GenrePlayCount, GenreRating, GenreShare,
     LazyPickContext, LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange,
     MonotonicClock, OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
-    PlaybackQueueRequest, PlaybackQueueSource, PlaybackSession, PlaybackSettings, PlaybackState,
-    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem,
-    QualityBucket, QualityDistribution, QualityRange, Rating, RepeatMode, ShuffleMode,
-    SmartPlaylist, SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistLimit,
-    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
-    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
-    SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice, SyncDeviceId, SystemClock,
-    SystemMonotonicClock, Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout,
-    TrackColumnLayoutScope, TrackContentHash, TrackId, TrackLocation, TrackMetadata,
-    TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings,
-    VolumePercent, YearCount, compare_optional_text, compute_library_statistics,
+    PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
+    PlaybackSession, PlaybackSettings, PlaybackState, Playlist, PlaylistEntry, PlaylistFolder,
+    PlaylistFolderId, PlaylistId, PlaylistItem, QualityBucket, QualityDistribution, QualityRange,
+    Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField, SmartPlaylistId,
+    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
+    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice,
+    SyncDeviceId, SystemClock, SystemMonotonicClock, Track, TrackAvailability, TrackColumnEntry,
+    TrackColumnLayout, TrackColumnLayoutScope, TrackContentHash, TrackId, TrackLocation,
+    TrackMetadata, TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection,
+    UserSettings, VolumePercent, YearCount, compare_optional_text, compute_library_statistics,
     effective_sort_key, matching_tracks, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
@@ -1848,14 +1848,19 @@ impl ApplicationRuntime {
         self.playback_queue.next_track_id()
     }
 
-    /// The ordered track ids queued to play after the current track —
-    /// the queue's upcoming tail in play order. Empty when nothing is
-    /// playing or the queue is exhausted. Backs the queue popover; the
-    /// caller resolves each id to a track via [`Self::library_track`] so
-    /// only the rows it actually renders pay a lookup, instead of cloning
-    /// the whole tail.
-    pub fn playback_queue_upcoming_track_ids(&self) -> Vec<TrackId> {
-        self.playback_queue.upcoming_track_ids().to_vec()
+    pub fn playback_queue_uses_lazy_continuation(&self) -> bool {
+        self.playback_queue.uses_lazy_continuation()
+    }
+
+    /// Bounded projection for the queue popover: every explicitly curated
+    /// Up Next entry, followed by at most `continuation_limit` tracks from
+    /// the source playthrough. A library queue may hold 10,000 tracks
+    /// internally without ever becoming a 10,000-row GTK model.
+    pub fn playback_queue_upcoming_preview(
+        &self,
+        continuation_limit: usize,
+    ) -> Vec<PlaybackQueueEntry> {
+        self.playback_queue.upcoming_preview(continuation_limit)
     }
 
     pub fn now_playing(&self) -> NowPlaying {
