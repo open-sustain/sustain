@@ -180,6 +180,16 @@ impl LibraryStore for FaultyStore {
         self.inner.update_track_location(track_id, location)
     }
 
+    fn relocate_track_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+        file_size_bytes: u64,
+    ) -> StoreResult<()> {
+        self.inner
+            .relocate_track_and_enqueue_mirror(track_id, location, file_size_bytes)
+    }
+
     fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()> {
         self.inner.update_track_rating(track_id, rating)
     }

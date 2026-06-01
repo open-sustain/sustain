@@ -4,13 +4,13 @@
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use std::{cell::RefCell, rc::Rc};
-use sustain_app_runtime::{
-    ApplicationCommand, PlaybackCommand, PlaybackQueueRequest, PlaybackQueueSource, TrackId,
-};
+use sustain_app_runtime::{PlaybackQueueRequest, PlaybackQueueSource, TrackId};
 
 use super::model::{AlbumTrackViewModel, duration_text, track_number_text};
 use crate::{
-    PlaybackChangedCallback, command_controller::SharedCommandController,
+    PlaybackChangedCallback,
+    command_controller::SharedCommandController,
+    missing_track::{LocateMissingTrackCallback, play_track_or_offer_locate},
     track_context::TrackRowContextMenu,
 };
 
@@ -33,6 +33,7 @@ impl AlbumTrackListView {
         context_menu: TrackRowContextMenu,
         command_controller: SharedCommandController,
         playback_changed: PlaybackChangedCallback,
+        locate_missing_track: LocateMissingTrackCallback,
         playing_track_id: Option<TrackId>,
     ) -> Self {
         let store = gio::ListStore::new::<glib::BoxedAnyObject>();
@@ -73,17 +74,16 @@ impl AlbumTrackListView {
             let Some(track_id) = row_track_id(selection.item(position)) else {
                 return;
             };
-            if command_controller_for_activate.dispatch_succeeded(ApplicationCommand::Playback(
-                PlaybackCommand::PlayTrack {
-                    track_id,
-                    queue: PlaybackQueueRequest::Explicit {
-                        source: PlaybackQueueSource::Album,
-                        ordered_track_ids: album_track_ids.clone(),
-                    },
+            play_track_or_offer_locate(
+                &command_controller_for_activate,
+                track_id,
+                PlaybackQueueRequest::Explicit {
+                    source: PlaybackQueueSource::Album,
+                    ordered_track_ids: album_track_ids.clone(),
                 },
-            )) {
-                playback_changed_for_activate();
-            }
+                &playback_changed_for_activate,
+                &locate_missing_track,
+            );
         });
 
         // `GtkListView` implements `GtkScrollable` and expects to live inside a

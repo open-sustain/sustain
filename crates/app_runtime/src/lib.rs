@@ -115,7 +115,7 @@ pub use managed_library::{
 };
 pub use metadata_writer::{
     ManagedMetadataRetargetResult, MetadataWriteKind, MetadataWriteOutcome, MetadataWriteResult,
-    MetadataWriterEvent,
+    MetadataWriterEvent, MissingTrackRelocationResult,
 };
 pub use notifications::{
     EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_QUEUE_HARD_CAP, NOTIFICATION_TRANSITION,
@@ -155,6 +155,10 @@ pub enum ApplicationRuntimeError {
     SmartPlaylistNotFound,
     SettingsLoadFailed,
     SettingsSaveFailed,
+    TrackRelocationFailed,
+    TrackReplacementAlreadyInLibrary,
+    TrackReplacementOutsideLibrary,
+    TrackReplacementUnsupported,
     TrackUnavailable,
     TrackTrashFailed,
     UnsupportedCommand(ApplicationCommand),
@@ -342,6 +346,7 @@ pub struct ApplicationRuntime {
     metadata_writer_event_sink: Option<async_channel::Sender<MetadataWriterEvent>>,
     metadata_write_notification_ids: BTreeMap<TrackId, NotificationId>,
     pending_managed_metadata_retargets: BTreeMap<TrackId, usize>,
+    pending_missing_track_relocations: BTreeMap<TrackId, usize>,
     remote_metadata_service: Option<Arc<dyn RemoteMetadataService>>,
     artwork_fetcher: Option<artwork_fetcher::ArtworkFetcher>,
     artwork_fetch_result_sink: Option<async_channel::Sender<ArtworkFetchResult>>,
@@ -514,6 +519,7 @@ impl ApplicationRuntime {
             metadata_writer_event_sink: None,
             metadata_write_notification_ids: BTreeMap::new(),
             pending_managed_metadata_retargets: BTreeMap::new(),
+            pending_missing_track_relocations: BTreeMap::new(),
             remote_metadata_service: None,
             artwork_fetcher: None,
             artwork_fetch_result_sink: None,
@@ -591,6 +597,7 @@ impl ApplicationRuntime {
             metadata_writer_event_sink: None,
             metadata_write_notification_ids: BTreeMap::new(),
             pending_managed_metadata_retargets: BTreeMap::new(),
+            pending_missing_track_relocations: BTreeMap::new(),
             remote_metadata_service: None,
             artwork_fetcher: None,
             artwork_fetch_result_sink: None,
@@ -902,6 +909,9 @@ impl ApplicationRuntime {
             MetadataWriterEvent::ManagedRetarget(result) => {
                 self.apply_managed_metadata_retarget_result(result);
             }
+            MetadataWriterEvent::MissingTrackRelocation(result) => {
+                self.apply_missing_track_relocation_result(result);
+            }
         }
     }
 
@@ -949,6 +959,27 @@ impl ApplicationRuntime {
 
     pub(crate) fn has_pending_managed_metadata_retarget(&self) -> bool {
         !self.pending_managed_metadata_retargets.is_empty()
+    }
+
+    pub(crate) fn register_pending_missing_track_relocation(&mut self, track_id: TrackId) {
+        *self
+            .pending_missing_track_relocations
+            .entry(track_id)
+            .or_default() += 1;
+    }
+
+    fn finish_pending_missing_track_relocation(&mut self, track_id: TrackId) {
+        let Some(count) = self.pending_missing_track_relocations.get_mut(&track_id) else {
+            return;
+        };
+        *count -= 1;
+        if *count == 0 {
+            self.pending_missing_track_relocations.remove(&track_id);
+        }
+    }
+
+    pub(crate) fn has_pending_missing_track_relocation(&self) -> bool {
+        !self.pending_missing_track_relocations.is_empty()
     }
 
     fn dismiss_metadata_write_warning(&mut self, track_id: TrackId) {

@@ -69,6 +69,28 @@ pub(super) fn apply_track_metadata_change_and_location_and_enqueue(
     transaction.commit().map_err(StoreError::from)
 }
 
+pub(super) fn relocate_track_and_enqueue(
+    connection: &mut Connection,
+    track_id: TrackId,
+    location: &TrackLocation,
+    file_size_bytes: u64,
+) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    tracks::relocate_track(&transaction, track_id, location, file_size_bytes)?;
+    source_fingerprints::invalidate_source_fingerprint(&transaction, track_id)?;
+    enqueue(
+        &transaction,
+        track_id,
+        TagMirrorKinds {
+            metadata: true,
+            rating: true,
+            ..TagMirrorKinds::default()
+        },
+        TagMirrorArtwork::Unchanged,
+    )?;
+    transaction.commit().map_err(StoreError::from)
+}
+
 pub(super) fn fill_missing_track_metadata_and_enqueue(
     connection: &mut Connection,
     track_id: TrackId,

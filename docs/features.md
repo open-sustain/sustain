@@ -118,7 +118,11 @@ folder that still contains sidecars, artwork, or hidden files.
 ### Missing files stay visible — *iso-iTunes*
 When a file recorded in the library disappears from disk, the row stays
 in the table with a warning marker. The row is not silently dropped on
-the next rescan.
+the next rescan. Activating a missing row opens a **Locate Missing Track**
+chooser. Picking a replacement preserves the existing library identity,
+including playlist membership, rating, metadata, and listening statistics.
+Reference mode accepts replacements inside the configured library folder;
+managed mode copies external replacements into its canonical owned layout.
 
 ---
 

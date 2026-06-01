@@ -19,6 +19,7 @@ use super::{
     artwork_color::ArtworkPalette,
     artwork_loader::{ArtworkLoader, ArtworkSource},
     command_controller::SharedCommandController,
+    missing_track::LocateMissingTrackCallback,
     track_context::TrackRowContextMenu,
 };
 use model::{
@@ -38,6 +39,7 @@ pub(crate) struct AlbumsView {
     command_controller: SharedCommandController,
     playback_changed: PlaybackChangedCallback,
     context_menu: TrackRowContextMenu,
+    locate_missing_track: LocateMissingTrackCallback,
     /// All grouped albums from the most recent group pass, unfiltered.
     /// `albums` (below) is derived from this by `apply_search`. Empty
     /// until the view is activated.
@@ -118,6 +120,7 @@ impl AlbumsView {
         command_controller: SharedCommandController,
         playback_changed: PlaybackChangedCallback,
         context_menu: TrackRowContextMenu,
+        locate_missing_track: LocateMissingTrackCallback,
         artwork_loader: ArtworkLoader,
     ) -> Self {
         let row_store = gio::ListStore::new::<glib::BoxedAnyObject>();
@@ -157,6 +160,7 @@ impl AlbumsView {
             command_controller,
             playback_changed,
             context_menu,
+            locate_missing_track,
             all_albums: Rc::new(RefCell::new(Vec::new())),
             albums: Rc::new(RefCell::new(Vec::new())),
             search_text: Rc::new(RefCell::new(String::new())),
@@ -831,6 +835,7 @@ impl AlbumsView {
             self.context_menu.clone(),
             self.command_controller.clone(),
             self.playback_changed.clone(),
+            self.locate_missing_track.clone(),
             playing_track_id,
         );
         let right = AlbumTrackListView::new(
@@ -839,6 +844,7 @@ impl AlbumsView {
             self.context_menu.clone(),
             self.command_controller.clone(),
             self.playback_changed.clone(),
+            self.locate_missing_track.clone(),
             playing_track_id,
         );
 

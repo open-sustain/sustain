@@ -8,12 +8,16 @@
 //! `file_ops` (verified copies and no-overwrite moves).
 
 use std::{
+    fs,
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
 
-use sustain_domain::{FieldChange, LibraryManagementMode, MetadataChange, Track, TrackId};
+use sustain_domain::{
+    FieldChange, LibraryManagementMode, MetadataChange, Track, TrackId, TrackRelativePath,
+};
 use sustain_library_store::StoreResult;
+use sustain_metadata::hash_file_content;
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult,
@@ -33,9 +37,12 @@ pub use import::run_library_import_task;
 pub(crate) use journal::recover_library_consolidation_journal;
 
 pub(crate) use capabilities::ManagedLibraryFilesystemValidator;
-use consolidation::plan_managed_track_retarget;
+use consolidation::{plan_managed_missing_track_relocation, plan_managed_track_retarget};
 pub(crate) use file_ops::prune_empty_ancestor_directories_for_sources;
-use file_ops::{move_file_without_copy_or_overwrite_matching_identity, rollback_file_move};
+use file_ops::{
+    copy_file_verified, move_file_without_copy_or_overwrite_matching_identity, remove_copied_files,
+    rollback_file_move,
+};
 use journal::{remove_consolidation_journal_if_present, write_consolidation_journal};
 
 impl ApplicationRuntime {
@@ -403,6 +410,139 @@ fn retarget_managed_metadata_with_persist(
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ManagedMetadataRetargetOutcome {
+    pub(crate) empty_directory_cleanup_failed: bool,
+}
+
+pub(crate) fn relocate_managed_missing_track(
+    library_path: &Path,
+    library_store: &dyn sustain_library_store::LibraryStore,
+    managed_library_filesystem_validator: &ManagedLibraryFilesystemValidator,
+    track_id: TrackId,
+    replacement_path: &Path,
+    replacement_file_size_bytes: u64,
+) -> ApplicationRuntimeResult<ManagedMissingTrackRelocationOutcome> {
+    managed_library_filesystem_validator
+        .validate(library_path)
+        .map_err(ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported)?;
+    recover_library_consolidation_journal(
+        library_path,
+        library_store,
+        managed_library_filesystem_validator,
+    )?;
+
+    let canonical_library_path = fs::canonicalize(library_path)
+        .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+    let existing_tracks = library_store
+        .tracks()
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+    let track = library_store
+        .track(track_id)
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
+        .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
+    if !track.location.is_missing() {
+        return Err(ApplicationRuntimeError::TrackUnavailable);
+    }
+
+    let source_relative_path = replacement_path
+        .strip_prefix(&canonical_library_path)
+        .ok()
+        .and_then(|relative| TrackRelativePath::new(relative.to_path_buf()));
+    if source_relative_path.as_ref().is_some_and(|relative_path| {
+        existing_tracks.iter().any(|existing_track| {
+            existing_track.id != track_id && existing_track.location.relative_path == *relative_path
+        })
+    }) {
+        return Err(ApplicationRuntimeError::TrackReplacementAlreadyInLibrary);
+    }
+
+    let (updated_track, planned_move) = plan_managed_missing_track_relocation(
+        &canonical_library_path,
+        &existing_tracks,
+        track,
+        replacement_path,
+        source_relative_path.as_ref(),
+    )?;
+    let destination_path = updated_track
+        .location
+        .absolute_path(&canonical_library_path);
+
+    let empty_directory_cleanup_failed = if let Some(planned_move) = planned_move {
+        write_consolidation_journal(&canonical_library_path, std::slice::from_ref(&planned_move))?;
+        if move_file_without_copy_or_overwrite_matching_identity(
+            &planned_move.source_path,
+            &planned_move.destination_path,
+            planned_move.source_identity,
+        )
+        .is_err()
+        {
+            prune_empty_ancestor_directories_for_sources(
+                &canonical_library_path,
+                std::slice::from_ref(&planned_move.destination_path),
+            );
+            return Err(ApplicationRuntimeError::TrackRelocationFailed);
+        }
+        if library_store
+            .relocate_track_and_enqueue_mirror(
+                track_id,
+                &updated_track.location,
+                replacement_file_size_bytes,
+            )
+            .is_err()
+        {
+            rollback_file_move(&planned_move.source_path, &planned_move.destination_path).ok();
+            prune_empty_ancestor_directories_for_sources(
+                &canonical_library_path,
+                std::slice::from_ref(&planned_move.destination_path),
+            );
+            return Err(ApplicationRuntimeError::LibraryStoreFailed);
+        }
+        library_store
+            .flush_durable()
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        remove_consolidation_journal_if_present(&canonical_library_path)?;
+        prune_empty_ancestor_directories_for_sources(
+            &canonical_library_path,
+            std::slice::from_ref(&planned_move.source_path),
+        )
+        .failed
+    } else if source_relative_path.is_some() {
+        library_store
+            .relocate_track_and_enqueue_mirror(
+                track_id,
+                &updated_track.location,
+                replacement_file_size_bytes,
+            )
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        false
+    } else {
+        let content_hash = hash_file_content(replacement_path)
+            .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+        copy_file_verified(replacement_path, &destination_path, &content_hash)
+            .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+        if library_store
+            .relocate_track_and_enqueue_mirror(
+                track_id,
+                &updated_track.location,
+                replacement_file_size_bytes,
+            )
+            .is_err()
+        {
+            let _ = remove_copied_files(std::slice::from_ref(&destination_path));
+            prune_empty_ancestor_directories_for_sources(
+                &canonical_library_path,
+                std::slice::from_ref(&destination_path),
+            );
+            return Err(ApplicationRuntimeError::LibraryStoreFailed);
+        }
+        false
+    };
+
+    Ok(ManagedMissingTrackRelocationOutcome {
+        empty_directory_cleanup_failed,
+    })
+}
+
+pub(crate) struct ManagedMissingTrackRelocationOutcome {
     pub(crate) empty_directory_cleanup_failed: bool,
 }
 

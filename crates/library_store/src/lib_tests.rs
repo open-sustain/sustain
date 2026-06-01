@@ -12,8 +12,9 @@ use sustain_domain::{
     FieldChange, MetadataChange, PlayStatistics, PlaylistEntry, Rating, SmartPlaylistDateField,
     SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
     SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SortDirection, TrackLocation, TrackMetadata,
-    TrackRelativePath, TrackSort, TrackSortColumn,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, SortDirection, SourceFileStat,
+    SourceFingerprint, TrackContentHash, TrackLocation, TrackMetadata, TrackRelativePath,
+    TrackSort, TrackSortColumn,
 };
 
 use sustain_domain::{
@@ -2110,6 +2111,20 @@ fn in_memory_managed_retarget_commits_metadata_location_and_outbox_together() {
 }
 
 #[test]
+fn sqlite_relocation_resets_source_observations_and_queues_canonical_mirrors() {
+    run_relocation_resets_source_observations_and_queues_canonical_mirrors(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_relocation_resets_source_observations_and_queues_canonical_mirrors() {
+    run_relocation_resets_source_observations_and_queues_canonical_mirrors(
+        &InMemoryLibraryStore::new(),
+    );
+}
+
+#[test]
 fn sqlite_track_delete_cascades_tag_mirror_outbox() {
     run_track_delete_cascades_tag_mirror_outbox(
         &SqliteLibraryStore::open_in_memory().expect("store"),
@@ -2149,6 +2164,48 @@ fn run_managed_retarget_commits_metadata_location_and_outbox_together(store: &dy
     assert_eq!(pending[0].generation, 2);
     assert!(pending[0].kinds.metadata);
     assert!(pending[0].kinds.rating);
+}
+
+fn run_relocation_resets_source_observations_and_queues_canonical_mirrors(
+    store: &dyn LibraryStore,
+) {
+    let mut track = track(1, "missing.flac");
+    track.location = TrackLocation::missing(relative_path("missing.flac"));
+    track.file_size_bytes = Some(9);
+    track.has_embedded_artwork = Some(true);
+    track.file_modified_at = Some(SystemTime::UNIX_EPOCH);
+    store.save_track(track.clone()).expect("save track");
+    store
+        .save_source_fingerprint(
+            track.id,
+            &SourceFingerprint {
+                stat: SourceFileStat {
+                    device: 1,
+                    inode: 2,
+                    size_bytes: 9,
+                    modified_at_ns: 3,
+                    changed_at_ns: 4,
+                },
+                content_hash: TrackContentHash::new("a".repeat(64)).expect("hash"),
+            },
+        )
+        .expect("save source fingerprint");
+    let location = TrackLocation::available(relative_path("replacement.flac"));
+
+    store
+        .relocate_track_and_enqueue_mirror(track.id, &location, 27)
+        .expect("relocate");
+
+    let stored = store.track(track.id).expect("load").expect("track exists");
+    assert_eq!(stored.location, location);
+    assert_eq!(stored.file_size_bytes, Some(27));
+    assert_eq!(stored.has_embedded_artwork, None);
+    assert_eq!(stored.file_modified_at, None);
+    assert_eq!(store.source_fingerprint(track.id), Ok(None));
+    let mirrors = store.tag_mirrors_due(0, 10).expect("load mirrors");
+    assert_eq!(mirrors.len(), 1);
+    assert!(mirrors[0].kinds.metadata);
+    assert!(mirrors[0].kinds.rating);
 }
 
 fn run_track_delete_cascades_tag_mirror_outbox(store: &dyn LibraryStore) {

@@ -1,25 +1,123 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::path::Path;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use sustain_artwork::validate_encoded_artwork;
-use sustain_domain::{LibraryManagementMode, MetadataChange, PlaybackCommand, Rating, TrackId};
+use sustain_domain::{
+    LibraryManagementMode, MetadataChange, PlaybackCommand, Rating, TrackId, TrackLocation,
+    TrackRelativePath,
+};
 use sustain_library_store::TagMirrorArtwork;
+use sustain_metadata::audio_format_from_path;
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, ArtworkFetchResult,
-    ManagedMetadataRetargetResult,
+    ManagedMetadataRetargetResult, MissingTrackRelocationResult,
     artwork_fetcher::{ArtworkFetchRequest, query_from_metadata},
     file_presence::{FilePresence, probe_path_entry_presence},
     managed_library::{
         metadata_change_affects_managed_path, prune_empty_ancestor_directories_for_sources,
-        retarget_managed_metadata,
+        relocate_managed_missing_track, retarget_managed_metadata,
     },
     playback::{playback_shuffle_seed, playback_track_id},
 };
 
 impl ApplicationRuntime {
+    pub(super) fn relocate_missing_track(
+        &mut self,
+        track_id: TrackId,
+        replacement_path: &Path,
+    ) -> ApplicationRuntimeResult<()> {
+        self.ensure_no_conflicting_library_mutation()?;
+        if !self
+            .library_tracks
+            .iter()
+            .any(|track| track.id == track_id && track.location.is_missing())
+        {
+            return Err(ApplicationRuntimeError::TrackUnavailable);
+        }
+        if let Some(writer) = self.metadata_writer() {
+            if !writer.relocate_missing_track(
+                track_id,
+                replacement_path.to_path_buf(),
+                self.settings.library.management_mode,
+            ) {
+                return Err(ApplicationRuntimeError::LibraryServicesUnavailable);
+            }
+            self.register_pending_missing_track_relocation(track_id);
+            return Ok(());
+        }
+
+        let library_path = self
+            .settings
+            .library_path()
+            .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)?
+            .to_path_buf();
+        let library_store = self
+            .library_store
+            .clone()
+            .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
+        let outcome = relocate_missing_track_with_store(
+            &library_path,
+            self.settings.library.management_mode,
+            library_store.as_ref(),
+            &self.managed_library_filesystem_validator,
+            track_id,
+            replacement_path,
+        )?;
+        self.apply_missing_track_relocation(track_id, outcome.empty_directory_cleanup_failed);
+        Ok(())
+    }
+
+    pub(crate) fn apply_missing_track_relocation_result(
+        &mut self,
+        result: MissingTrackRelocationResult,
+    ) {
+        self.finish_pending_missing_track_relocation(result.track_id);
+        match result.outcome {
+            Ok(()) => {
+                self.apply_missing_track_relocation(
+                    result.track_id,
+                    result.empty_directory_cleanup_failed,
+                );
+            }
+            Err(error) => {
+                if !self.report_managed_library_filesystem_error(&error) {
+                    self.push_ephemeral_notification(
+                        crate::NotificationCategory::Command,
+                        crate::NotificationSeverity::Error,
+                        crate::runtime_error_text(&error).to_owned(),
+                    );
+                }
+            }
+        }
+    }
+
+    fn apply_missing_track_relocation(
+        &mut self,
+        track_id: TrackId,
+        empty_directory_cleanup_failed: bool,
+    ) {
+        // The actor may have run concurrently with optimistic rating or
+        // metadata edits. Reload SQLite by id rather than applying the
+        // relocation planner's older snapshot over newer authoritative data.
+        self.apply_track_updated(track_id);
+        self.refresh_playback_queue_track_ids();
+        self.notify_track_availability_observer();
+        self.nudge_metadata_writer();
+        if empty_directory_cleanup_failed {
+            self.push_ephemeral_notification(
+                crate::NotificationCategory::LibraryImport,
+                crate::NotificationSeverity::Warning,
+                "The track was located, but empty library folders could not be removed.".to_owned(),
+            );
+        }
+    }
+
     pub(super) fn set_rating(
         &mut self,
         track_id: TrackId,
@@ -329,7 +427,9 @@ impl ApplicationRuntime {
 
     pub(crate) fn ensure_no_conflicting_library_mutation(&self) -> ApplicationRuntimeResult<()> {
         self.ensure_no_background_library_task()?;
-        if self.has_pending_managed_metadata_retarget() {
+        if self.has_pending_managed_metadata_retarget()
+            || self.has_pending_missing_track_relocation()
+        {
             return Err(ApplicationRuntimeError::BackgroundTaskRunning);
         }
 
@@ -357,4 +457,94 @@ impl ApplicationRuntime {
             }
         }
     }
+}
+
+pub(crate) struct MissingTrackRelocationOutcome {
+    pub(crate) empty_directory_cleanup_failed: bool,
+}
+
+pub(crate) fn relocate_missing_track_with_store(
+    library_path: &Path,
+    management_mode: LibraryManagementMode,
+    library_store: &dyn sustain_library_store::LibraryStore,
+    managed_library_filesystem_validator: &crate::managed_library::ManagedLibraryFilesystemValidator,
+    track_id: TrackId,
+    replacement_path: &Path,
+) -> ApplicationRuntimeResult<MissingTrackRelocationOutcome> {
+    let (replacement_path, replacement_file_size_bytes) =
+        validate_missing_track_replacement(replacement_path)?;
+    let existing_tracks = library_store
+        .tracks()
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+    let track = existing_tracks
+        .iter()
+        .find(|track| track.id == track_id && track.location.is_missing())
+        .cloned()
+        .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
+
+    match management_mode {
+        LibraryManagementMode::ReferenceFilesInPlace => {
+            let relative_path = relative_replacement_path(&replacement_path, library_path)?;
+            if existing_tracks.iter().any(|existing_track| {
+                existing_track.id != track_id
+                    && existing_track.location.relative_path == relative_path
+            }) {
+                return Err(ApplicationRuntimeError::TrackReplacementAlreadyInLibrary);
+            }
+            let mut updated_track = track;
+            updated_track.location = TrackLocation::available(relative_path);
+            updated_track.file_size_bytes = Some(replacement_file_size_bytes);
+            updated_track.has_embedded_artwork = None;
+            updated_track.file_modified_at = None;
+            library_store
+                .relocate_track_and_enqueue_mirror(
+                    track_id,
+                    &updated_track.location,
+                    replacement_file_size_bytes,
+                )
+                .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+            Ok(MissingTrackRelocationOutcome {
+                empty_directory_cleanup_failed: false,
+            })
+        }
+        LibraryManagementMode::CopyAddedFilesIntoLibrary => {
+            let outcome = relocate_managed_missing_track(
+                library_path,
+                library_store,
+                managed_library_filesystem_validator,
+                track_id,
+                &replacement_path,
+                replacement_file_size_bytes,
+            )?;
+            Ok(MissingTrackRelocationOutcome {
+                empty_directory_cleanup_failed: outcome.empty_directory_cleanup_failed,
+            })
+        }
+    }
+}
+
+fn validate_missing_track_replacement(path: &Path) -> ApplicationRuntimeResult<(PathBuf, u64)> {
+    let canonical_path =
+        fs::canonicalize(path).map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+    let metadata = fs::metadata(&canonical_path)
+        .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+    if !metadata.is_file() {
+        return Err(ApplicationRuntimeError::TrackRelocationFailed);
+    }
+    audio_format_from_path(&canonical_path)
+        .map_err(|_| ApplicationRuntimeError::TrackReplacementUnsupported)?;
+    Ok((canonical_path, metadata.len()))
+}
+
+fn relative_replacement_path(
+    replacement_path: &Path,
+    library_path: &Path,
+) -> ApplicationRuntimeResult<TrackRelativePath> {
+    let canonical_library_path = fs::canonicalize(library_path)
+        .map_err(|_| ApplicationRuntimeError::LibraryPathUnavailable)?;
+    replacement_path
+        .strip_prefix(canonical_library_path)
+        .ok()
+        .and_then(|relative_path| TrackRelativePath::new(relative_path.to_path_buf()))
+        .ok_or(ApplicationRuntimeError::TrackReplacementOutsideLibrary)
 }

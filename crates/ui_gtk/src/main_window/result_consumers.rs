@@ -173,15 +173,23 @@ pub(super) fn install_metadata_writer_event_consumer(
     receiver: Option<MetadataWriterEventReceiver>,
     runtime: SharedRuntime,
     track_row_changed_holder: TrackRowChangedHolder,
+    relocation_completed: crate::missing_track::MissingTrackRelocationCompletedCallback,
 ) {
     let Some(receiver) = receiver else {
         return;
     };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(event) = receiver.recv().await {
+            let relocation = match &event {
+                sustain_app_runtime::MetadataWriterEvent::MissingTrackRelocation(result) => {
+                    Some((result.track_id, result.outcome.is_ok()))
+                }
+                _ => None,
+            };
             let mirror_track_id = match &event {
                 sustain_app_runtime::MetadataWriterEvent::Mirror(result) => Some(result.track_id),
-                sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_) => None,
+                sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_)
+                | sustain_app_runtime::MetadataWriterEvent::MissingTrackRelocation(_) => None,
             };
             runtime.borrow_mut().apply_metadata_writer_event(event);
             // Managed retarget application reloads SQLite through
@@ -192,6 +200,9 @@ pub(super) fn install_metadata_writer_event_consumer(
                 && let Some(callback) = track_row_changed_holder.borrow().as_ref()
             {
                 callback(track_id);
+            }
+            if let Some((track_id, succeeded)) = relocation {
+                relocation_completed(track_id, succeeded);
             }
         }
     });

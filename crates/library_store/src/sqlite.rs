@@ -60,6 +60,16 @@ impl LibraryStore for SqliteLibraryStore {
         tracks::update_track_locations(&mut connection, updates)
     }
 
+    fn relocate_track_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+        file_size_bytes: u64,
+    ) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        tag_mirror::relocate_track_and_enqueue(&mut connection, track_id, location, file_size_bytes)
+    }
+
     fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()> {
         let connection = self.connection_guard()?;
         tracks::update_track_rating(&connection, track_id, rating)

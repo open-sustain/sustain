@@ -33,11 +33,18 @@ impl UiCommandController {
         &self,
         command: ApplicationCommand,
     ) -> Result<(), ApplicationRuntimeError> {
-        let result = self.runtime.borrow_mut().handle_command(command);
+        let result = self.dispatch_unreported(command);
         if let Err(error) = &result {
             self.report_command_error(error);
         }
         result
+    }
+
+    pub(crate) fn dispatch_unreported(
+        &self,
+        command: ApplicationCommand,
+    ) -> Result<(), ApplicationRuntimeError> {
+        self.runtime.borrow_mut().handle_command(command)
     }
 
     pub(crate) fn dispatch_succeeded(&self, command: ApplicationCommand) -> bool {
@@ -92,7 +99,7 @@ impl UiCommandController {
         result
     }
 
-    fn report_command_error(&self, error: &ApplicationRuntimeError) {
+    pub(crate) fn report_command_error(&self, error: &ApplicationRuntimeError) {
         if matches!(
             error,
             ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(_)

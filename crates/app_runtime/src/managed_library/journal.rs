@@ -20,14 +20,14 @@ use sustain_domain::{TrackId, TrackLocation, TrackRelativePath};
 use crate::{ApplicationRuntimeError, ApplicationRuntimeResult};
 
 use super::capabilities::ManagedLibraryFilesystemValidator;
-use super::consolidation::PlannedLibraryConsolidationMove;
+use super::consolidation::{JournalTrackPersistence, PlannedLibraryConsolidationMove};
 use super::file_ops::{
     FileIdentity, prune_empty_ancestor_directories_for_sources, regular_file_identity,
     remove_file_and_sync_parent, sync_directory,
 };
 
 const CONSOLIDATION_JOURNAL_FILE_NAME: &str = ".sustain-consolidation-journal";
-const CONSOLIDATION_JOURNAL_HEADER: &str = "# sustain managed library consolidation journal v2";
+const CONSOLIDATION_JOURNAL_HEADER: &str = "# sustain managed library consolidation journal v3";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ConsolidationJournalEntry {
@@ -35,6 +35,7 @@ struct ConsolidationJournalEntry {
     source_identity: FileIdentity,
     source_relative_path: TrackRelativePath,
     destination_relative_path: TrackRelativePath,
+    persistence: JournalTrackPersistence,
 }
 
 pub(crate) fn recover_library_consolidation_journal(
@@ -95,6 +96,7 @@ fn recover_consolidation_journal_entry(
             remove_file_and_sync_parent(&source_path)
                 .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
             save_recovered_consolidation_track(
+                library_path,
                 library_store,
                 entry,
                 &entry.destination_relative_path,
@@ -102,6 +104,7 @@ fn recover_consolidation_journal_entry(
         }
         (JournalPathState::Missing | JournalPathState::Unexpected, JournalPathState::Expected) => {
             save_recovered_consolidation_track(
+                library_path,
                 library_store,
                 entry,
                 &entry.destination_relative_path,
@@ -110,7 +113,12 @@ fn recover_consolidation_journal_entry(
         // The old filesystem state is also a valid recovery endpoint. Persist
         // it explicitly in case an interrupted rollback left SQLite uncertain.
         (JournalPathState::Expected, JournalPathState::Missing) => {
-            save_recovered_consolidation_track(library_store, entry, &entry.source_relative_path)?;
+            save_recovered_consolidation_track(
+                library_path,
+                library_store,
+                entry,
+                &entry.source_relative_path,
+            )?;
         }
         // Neither pathname can prove where the managed inode lives. Preserve
         // the journal so startup reports an actionable failure instead of
@@ -147,6 +155,7 @@ fn inspect_journal_path(
 }
 
 fn save_recovered_consolidation_track(
+    library_path: &Path,
     library_store: &dyn sustain_library_store::LibraryStore,
     entry: &ConsolidationJournalEntry,
     relative_path: &TrackRelativePath,
@@ -158,12 +167,20 @@ fn save_recovered_consolidation_track(
     {
         return Err(ApplicationRuntimeError::LibraryStoreFailed);
     }
-    library_store
-        .update_track_location(
-            entry.track_id,
-            &TrackLocation::available(relative_path.clone()),
-        )
-        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
+    let location = TrackLocation::available(relative_path.clone());
+    match entry.persistence {
+        JournalTrackPersistence::LocationOnly => library_store
+            .update_track_location(entry.track_id, &location)
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed),
+        JournalTrackPersistence::Relocation => {
+            let file_size_bytes = fs::metadata(relative_path.resolve(library_path))
+                .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?
+                .len();
+            library_store
+                .relocate_track_and_enqueue_mirror(entry.track_id, &location, file_size_bytes)
+                .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
+        }
+    }
 }
 
 pub(super) fn write_consolidation_journal(
@@ -194,10 +211,11 @@ pub(super) fn write_consolidation_journal(
             let destination = encode_relative_path(&planned_move.destination_relative_path);
             writeln!(
                 file,
-                "move\t{}\t{}\t{}\t{}\t{}",
+                "move\t{}\t{}\t{}\t{}\t{}\t{}",
                 planned_move.track_id.get(),
                 planned_move.source_identity.device,
                 planned_move.source_identity.inode,
+                persistence_name(planned_move.persistence),
                 source,
                 destination
             )
@@ -266,6 +284,10 @@ fn read_consolidation_journal(
             .next()
             .and_then(|value| value.parse::<u64>().ok())
             .ok_or(ApplicationRuntimeError::LibraryConsolidationFailed)?;
+        let persistence = parts
+            .next()
+            .and_then(persistence_from_name)
+            .ok_or(ApplicationRuntimeError::LibraryConsolidationFailed)?;
         let source_relative_path = parts
             .next()
             .and_then(decode_relative_path)
@@ -286,10 +308,26 @@ fn read_consolidation_journal(
             },
             source_relative_path,
             destination_relative_path,
+            persistence,
         });
     }
 
     Ok(entries)
+}
+
+fn persistence_name(persistence: JournalTrackPersistence) -> &'static str {
+    match persistence {
+        JournalTrackPersistence::LocationOnly => "location",
+        JournalTrackPersistence::Relocation => "relocation",
+    }
+}
+
+fn persistence_from_name(value: &str) -> Option<JournalTrackPersistence> {
+    match value {
+        "location" => Some(JournalTrackPersistence::LocationOnly),
+        "relocation" => Some(JournalTrackPersistence::Relocation),
+        _ => None,
+    }
 }
 
 pub(super) fn remove_consolidation_journal_if_present(
@@ -508,6 +546,43 @@ mod tests {
     }
 
     #[test]
+    fn relocation_recovery_resets_source_observations_and_queues_canonical_mirrors() {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .update_track_location(
+                fixture.track_id,
+                &TrackLocation::missing(fixture.source_relative.clone()),
+            )
+            .expect("mark missing");
+        fixture.publish_relocation_journal();
+
+        recover_library_consolidation_journal(
+            &fixture.root,
+            &fixture.store,
+            &ManagedLibraryFilesystemValidator::default(),
+        )
+        .expect("recover relocation");
+
+        let stored = fixture
+            .store
+            .track(fixture.track_id)
+            .expect("load relocated track")
+            .expect("track exists");
+        assert_eq!(
+            stored.location,
+            TrackLocation::available(fixture.source_relative.clone())
+        );
+        assert_eq!(stored.file_size_bytes, Some(b"audio bytes".len() as u64));
+        assert_eq!(stored.has_embedded_artwork, None);
+        assert_eq!(stored.file_modified_at, None);
+        let mirrors = fixture.store.tag_mirrors_due(0, 10).expect("load mirrors");
+        assert_eq!(mirrors.len(), 1);
+        assert!(mirrors[0].kinds.metadata);
+        assert!(mirrors[0].kinds.rating);
+    }
+
+    #[test]
     fn journal_publication_refuses_to_overwrite_existing_recovery_record() {
         let root = unique_test_directory();
         fs::create_dir_all(&root).expect("create root");
@@ -570,13 +645,22 @@ mod tests {
         }
 
         fn publish_journal(&self) {
+            self.publish_journal_with_persistence("location");
+        }
+
+        fn publish_relocation_journal(&self) {
+            self.publish_journal_with_persistence("relocation");
+        }
+
+        fn publish_journal_with_persistence(&self, persistence: &str) {
             fs::write(
                 self.journal_path(),
                 format!(
-                    "{CONSOLIDATION_JOURNAL_HEADER}\nmove\t{}\t{}\t{}\t{}\t{}\n",
+                    "{CONSOLIDATION_JOURNAL_HEADER}\nmove\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     self.track_id.get(),
                     self.source_device,
                     self.source_inode,
+                    persistence,
                     encode_relative_path(&self.source_relative),
                     encode_relative_path(&self.destination_relative),
                 ),

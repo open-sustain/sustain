@@ -41,6 +41,10 @@ use super::{
         LIBRARY_DROP_INDICATOR_CLASS, install_file_drop_target, library_import_requested_callback,
     },
     library_scan::library_scan_requested_callback,
+    missing_track::{
+        LocateMissingTrackCallback, PendingLocatedPlaybacks, locate_missing_track_callback,
+        missing_track_relocation_completed_callback, play_track_or_offer_locate,
+    },
     now_playing::NowPlayingView,
     playlists_header::{PlaylistsHeader, PlaylistsHeaderState},
     preferences::{install_preferences_action, settings_button},
@@ -288,15 +292,30 @@ pub(crate) fn build_main_window(
     );
     let sidebar_widget = sidebar.widget();
 
+    let library_changed_holder: LibraryChangedHolder = Rc::new(RefCell::new(None));
+    let track_row_changed_holder: TrackRowChangedHolder = Rc::new(RefCell::new(None));
+    let parent_window = window.clone().upcast::<gtk::Window>();
+    let pending_located_playbacks: PendingLocatedPlaybacks = Rc::new(RefCell::new(HashMap::new()));
+    let missing_track_relocation_completed = missing_track_relocation_completed_callback(
+        &command_controller,
+        &pending_located_playbacks,
+        playback_changed.clone(),
+        &artwork_loader,
+    );
+    let locate_missing_track = locate_missing_track_callback(
+        &parent_window,
+        &command_controller,
+        &pending_located_playbacks,
+        &missing_track_relocation_completed,
+        &artwork_loader,
+    );
     let library_track_activated = library_track_activated_callback(
         &command_controller,
         &runtime,
         playback_changed.clone(),
         &current_search_text,
+        &locate_missing_track,
     );
-    let library_changed_holder: LibraryChangedHolder = Rc::new(RefCell::new(None));
-    let track_row_changed_holder: TrackRowChangedHolder = Rc::new(RefCell::new(None));
-    let parent_window = window.clone().upcast::<gtk::Window>();
     let show_album_holder: ShowAlbumHolder = Rc::new(RefCell::new(None));
     let track_context_invocation = TrackContextInvocationState::default();
     let context_actions = track_context_actions(
@@ -376,6 +395,7 @@ pub(crate) fn build_main_window(
         command_controller.clone(),
         playback_changed.clone(),
         context_menu,
+        locate_missing_track.clone(),
         artwork_loader.clone(),
     );
     albums_view_holder.replace(Some(albums_view.clone()));
@@ -392,6 +412,7 @@ pub(crate) fn build_main_window(
         &sidebar,
         playback_changed.clone(),
         &current_search_text,
+        &locate_missing_track,
     );
     let playlists_table = build_track_table(
         Vec::new(),
@@ -510,6 +531,7 @@ pub(crate) fn build_main_window(
         metadata_writer_event_rx,
         runtime.clone(),
         track_row_changed_holder.clone(),
+        missing_track_relocation_completed,
     );
     install_artwork_fetch_result_consumer(ArtworkFetchResultConsumerContext {
         receiver: artwork_fetch_result_rx,

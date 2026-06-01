@@ -53,21 +53,25 @@ pub(super) fn library_track_activated_callback(
     runtime: &SharedRuntime,
     playback_changed: PlaybackChangedCallback,
     current_search_text: &Rc<RefCell<String>>,
+    locate_missing_track: &LocateMissingTrackCallback,
 ) -> TrackActivatedCallback {
     let command_controller = command_controller.clone();
     let runtime = runtime.clone();
     let current_search_text = current_search_text.clone();
+    let locate_missing_track = locate_missing_track.clone();
 
     Rc::new(move |track_id: TrackId| {
         let queue = {
             let search_text = current_search_text.borrow().clone();
             queue_request_for_library(&runtime.borrow(), &search_text)
         };
-        if command_controller.dispatch_succeeded(ApplicationCommand::Playback(
-            PlaybackCommand::PlayTrack { track_id, queue },
-        )) {
-            playback_changed();
-        }
+        play_track_or_offer_locate(
+            &command_controller,
+            track_id,
+            queue,
+            &playback_changed,
+            &locate_missing_track,
+        );
     })
 }
 
@@ -94,11 +98,13 @@ pub(super) fn playlist_track_activated_callback(
     sidebar: &PlaylistSidebar,
     playback_changed: PlaybackChangedCallback,
     current_search_text: &Rc<RefCell<String>>,
+    locate_missing_track: &LocateMissingTrackCallback,
 ) -> TrackActivatedCallback {
     let command_controller = command_controller.clone();
     let runtime = runtime.clone();
     let sidebar = sidebar.clone();
     let current_search_text = current_search_text.clone();
+    let locate_missing_track = locate_missing_track.clone();
 
     Rc::new(move |track_id: TrackId| {
         let queue = {
@@ -110,11 +116,13 @@ pub(super) fn playlist_track_activated_callback(
                 &search_text,
             )
         };
-        if command_controller.dispatch_succeeded(ApplicationCommand::Playback(
-            PlaybackCommand::PlayTrack { track_id, queue },
-        )) {
-            playback_changed();
-        }
+        play_track_or_offer_locate(
+            &command_controller,
+            track_id,
+            queue,
+            &playback_changed,
+            &locate_missing_track,
+        );
     })
 }
 

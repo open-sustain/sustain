@@ -25,7 +25,7 @@ use std::{
     time::Duration,
 };
 
-use sustain_domain::{FieldChange, MetadataChange, TrackMetadata};
+use sustain_domain::{FieldChange, LibraryManagementMode, MetadataChange, TrackMetadata};
 use sustain_library_store::{
     LibraryStore, PendingTagMirror, StoreError, StoredTagMirrorArtwork, TagMirrorArtwork,
     TagMirrorKinds, TrackId,
@@ -34,6 +34,7 @@ use sustain_metadata::{MetadataError, MetadataService};
 
 use crate::{
     ApplicationRuntimeError,
+    library_mutation::relocate_missing_track_with_store,
     managed_library::{ManagedLibraryFilesystemValidator, retarget_managed_metadata},
 };
 
@@ -71,9 +72,17 @@ pub struct ManagedMetadataRetargetResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MissingTrackRelocationResult {
+    pub track_id: TrackId,
+    pub outcome: Result<(), ApplicationRuntimeError>,
+    pub empty_directory_cleanup_failed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MetadataWriterEvent {
     Mirror(MetadataWriteResult),
     ManagedRetarget(ManagedMetadataRetargetResult),
+    MissingTrackRelocation(MissingTrackRelocationResult),
 }
 
 enum MetadataWriterCommand {
@@ -81,6 +90,11 @@ enum MetadataWriterCommand {
     RetargetManagedMetadata {
         track_id: TrackId,
         change: Box<MetadataChange>,
+    },
+    RelocateMissingTrack {
+        track_id: TrackId,
+        replacement_path: PathBuf,
+        management_mode: LibraryManagementMode,
     },
     SetLibraryPath(Option<PathBuf>),
     Shutdown,
@@ -148,6 +162,21 @@ impl MetadataWriter {
             .send(MetadataWriterCommand::RetargetManagedMetadata {
                 track_id,
                 change: Box::new(change),
+            })
+            .is_ok()
+    }
+
+    pub(crate) fn relocate_missing_track(
+        &self,
+        track_id: TrackId,
+        replacement_path: PathBuf,
+        management_mode: LibraryManagementMode,
+    ) -> bool {
+        self.sender
+            .send(MetadataWriterCommand::RelocateMissingTrack {
+                track_id,
+                replacement_path,
+                management_mode,
             })
             .is_ok()
     }
@@ -397,6 +426,38 @@ fn apply_command(
             emit_event(
                 result_sink,
                 MetadataWriterEvent::ManagedRetarget(ManagedMetadataRetargetResult {
+                    track_id,
+                    outcome: outcome.map(|_| ()),
+                    empty_directory_cleanup_failed,
+                }),
+            );
+            *active = true;
+            true
+        }
+        MetadataWriterCommand::RelocateMissingTrack {
+            track_id,
+            replacement_path,
+            management_mode,
+        } => {
+            let outcome = library_path
+                .as_deref()
+                .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)
+                .and_then(|library_path| {
+                    relocate_missing_track_with_store(
+                        library_path,
+                        management_mode,
+                        library_store,
+                        managed_library_filesystem_validator,
+                        track_id,
+                        &replacement_path,
+                    )
+                });
+            let empty_directory_cleanup_failed = outcome
+                .as_ref()
+                .is_ok_and(|outcome| outcome.empty_directory_cleanup_failed);
+            emit_event(
+                result_sink,
+                MetadataWriterEvent::MissingTrackRelocation(MissingTrackRelocationResult {
                     track_id,
                     outcome: outcome.map(|_| ()),
                     empty_directory_cleanup_failed,
@@ -840,6 +901,85 @@ mod tests {
                 .expect("artwork paths")
                 .as_slice(),
             std::slice::from_ref(&destination)
+        );
+
+        writer.shutdown();
+        std::fs::remove_dir_all(root).expect("remove library root");
+    }
+
+    #[test]
+    fn missing_track_relocation_runs_on_writer_and_mirrors_the_replacement_path() {
+        let root = unique_test_directory();
+        std::fs::create_dir_all(&root).expect("create library root");
+        let replacement = root.join("replacement.flac");
+        std::fs::write(&replacement, b"replacement audio").expect("write replacement");
+
+        let track_id = TrackId::new(1).expect("track id");
+        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        store
+            .save_track(Track {
+                id: track_id,
+                location: TrackLocation::missing(
+                    TrackRelativePath::new("missing.flac").expect("relative path"),
+                ),
+                metadata: TrackMetadata {
+                    title: Some("Canonical title".to_owned()),
+                    ..TrackMetadata::default()
+                },
+                rating: Rating::new(4).expect("rating"),
+                statistics: Default::default(),
+                file_size_bytes: None,
+                has_embedded_artwork: None,
+                file_modified_at: None,
+            })
+            .expect("save track");
+
+        let service = Arc::new(RecordingMetadataService::default());
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let writer = MetadataWriter::start(
+            service.clone(),
+            store.clone(),
+            Some(root.clone()),
+            ManagedLibraryFilesystemValidator::default(),
+            Some(event_tx),
+        );
+        assert!(writer.relocate_missing_track(
+            track_id,
+            replacement.clone(),
+            LibraryManagementMode::ReferenceFilesInPlace,
+        ));
+
+        assert_eq!(
+            recv_event(&event_rx, Duration::from_secs(2)),
+            MetadataWriterEvent::MissingTrackRelocation(MissingTrackRelocationResult {
+                track_id,
+                outcome: Ok(()),
+                empty_directory_cleanup_failed: false,
+            })
+        );
+        assert_eq!(
+            recv_event(&event_rx, Duration::from_secs(2)),
+            MetadataWriterEvent::Mirror(MetadataWriteResult {
+                track_id,
+                kind: MetadataWriteKind::Metadata,
+                outcome: MetadataWriteOutcome::Succeeded,
+            })
+        );
+        assert_eq!(
+            service
+                .metadata_paths
+                .lock()
+                .expect("metadata paths")
+                .as_slice(),
+            std::slice::from_ref(&replacement)
+        );
+        assert_eq!(
+            service
+                .rating_paths
+                .lock()
+                .expect("rating paths")
+                .as_slice(),
+            std::slice::from_ref(&replacement)
         );
 
         writer.shutdown();

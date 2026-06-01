@@ -203,6 +203,39 @@ impl LibraryStore for InMemoryLibraryStore {
         Ok(())
     }
 
+    fn relocate_track_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+        file_size_bytes: u64,
+    ) -> StoreResult<()> {
+        let mut outbox = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
+            track.location = location.clone();
+            track.file_size_bytes = Some(file_size_bytes);
+            track.has_embedded_artwork = None;
+            track.file_modified_at = None;
+            self.source_fingerprints
+                .lock()
+                .map_err(|_| StoreError::StoreUnavailable)?
+                .remove(&track_id);
+            enqueue_tag_mirror(
+                &mut outbox,
+                track_id,
+                TagMirrorKinds {
+                    metadata: true,
+                    rating: true,
+                    ..TagMirrorKinds::default()
+                },
+                TagMirrorArtwork::Unchanged,
+            );
+        }
+        Ok(())
+    }
+
     fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()> {
         if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
             track.rating = rating;

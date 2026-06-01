@@ -110,6 +110,35 @@ pub(super) fn update_track_locations(
     transaction.commit().map_err(StoreError::from)
 }
 
+pub(super) fn relocate_track(
+    connection: &Connection,
+    track_id: TrackId,
+    location: &TrackLocation,
+    file_size_bytes: u64,
+) -> StoreResult<()> {
+    connection
+        .execute(
+            r#"
+            UPDATE tracks SET
+                relative_path = ?1,
+                is_missing = ?2,
+                file_size_bytes = ?3,
+                has_embedded_artwork = NULL,
+                file_modified_at_unix = NULL
+            WHERE id = ?4
+            "#,
+            params![
+                relative_path_bytes(&location.relative_path),
+                location.is_missing(),
+                i64::try_from(file_size_bytes)
+                    .map_err(|_| StoreError::Database("file size exceeds SQLite INTEGER".into()))?,
+                track_id.get(),
+            ],
+        )
+        .map(|_| ())
+        .map_err(StoreError::from)
+}
+
 pub(super) fn update_track_rating(
     connection: &Connection,
     track_id: TrackId,

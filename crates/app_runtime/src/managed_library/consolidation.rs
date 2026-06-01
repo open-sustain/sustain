@@ -216,6 +216,13 @@ pub(super) struct PlannedLibraryConsolidationMove {
     pub(super) source_relative_path: TrackRelativePath,
     pub(super) destination_relative_path: TrackRelativePath,
     pub(super) updated_track: Track,
+    pub(super) persistence: JournalTrackPersistence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum JournalTrackPersistence {
+    LocationOnly,
+    Relocation,
 }
 
 fn plan_library_consolidation(
@@ -290,6 +297,7 @@ fn plan_library_consolidation(
             source_relative_path,
             destination_relative_path: plan.relative_path,
             updated_track,
+            persistence: JournalTrackPersistence::LocationOnly,
         });
     }
 
@@ -348,7 +356,62 @@ pub(super) fn plan_managed_track_retarget(
         source_relative_path,
         destination_relative_path: plan.relative_path,
         updated_track,
+        persistence: JournalTrackPersistence::LocationOnly,
     }))
+}
+
+pub(super) fn plan_managed_missing_track_relocation(
+    library_path: &Path,
+    existing_tracks: &[Track],
+    mut track: Track,
+    source_path: &Path,
+    source_relative_path: Option<&TrackRelativePath>,
+) -> ApplicationRuntimeResult<(Track, Option<PlannedLibraryConsolidationMove>)> {
+    let source_metadata = fs::symlink_metadata(source_path)
+        .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+    if !source_metadata.file_type().is_file() {
+        return Err(ApplicationRuntimeError::TrackRelocationFailed);
+    }
+
+    let planner = ManagedTrackPathPlanner::default();
+    let mut occupied_paths = existing_tracks
+        .iter()
+        .filter(|existing_track| existing_track.id != track.id)
+        .map(|existing_track| existing_track.location.relative_path.clone())
+        .collect::<BTreeSet<_>>();
+
+    let plan = plan_missing_track_destination(
+        &planner,
+        &mut occupied_paths,
+        library_path,
+        source_path,
+        &track.metadata,
+        source_relative_path,
+    )?;
+    track.location = TrackLocation::available(plan.relative_path.clone());
+    let Some(source_relative_path) = source_relative_path else {
+        return Ok((track, None));
+    };
+    if &plan.relative_path == source_relative_path {
+        return Ok((track, None));
+    }
+
+    Ok((
+        track.clone(),
+        Some(PlannedLibraryConsolidationMove {
+            track_id: track.id,
+            source_path: source_path.to_path_buf(),
+            destination_path: library_path.join(plan.relative_path.as_path()),
+            source_identity: FileIdentity {
+                device: source_metadata.dev(),
+                inode: source_metadata.ino(),
+            },
+            source_relative_path: source_relative_path.clone(),
+            destination_relative_path: plan.relative_path,
+            updated_track: track,
+            persistence: JournalTrackPersistence::Relocation,
+        }),
+    ))
 }
 
 fn plan_consolidation_destination(
@@ -382,4 +445,34 @@ fn plan_consolidation_destination(
     }
 
     Err(ApplicationRuntimeError::LibraryConsolidationFailed)
+}
+
+fn plan_missing_track_destination(
+    planner: &ManagedTrackPathPlanner,
+    occupied_paths: &mut BTreeSet<TrackRelativePath>,
+    library_path: &Path,
+    source_path: &Path,
+    metadata: &sustain_domain::TrackMetadata,
+    source_relative_path: Option<&TrackRelativePath>,
+) -> ApplicationRuntimeResult<sustain_domain::ManagedTrackPathPlan> {
+    for _attempt in 0..10_000 {
+        let plan = planner
+            .plan(
+                ManagedTrackPathInput {
+                    metadata,
+                    source_path,
+                },
+                occupied_paths,
+            )
+            .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+        if source_relative_path == Some(&plan.relative_path)
+            || !library_path.join(plan.relative_path.as_path()).exists()
+        {
+            occupied_paths.insert(plan.relative_path.clone());
+            return Ok(plan);
+        }
+        occupied_paths.insert(plan.relative_path);
+    }
+
+    Err(ApplicationRuntimeError::TrackRelocationFailed)
 }

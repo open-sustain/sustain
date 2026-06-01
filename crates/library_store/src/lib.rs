@@ -230,6 +230,15 @@ pub trait LibraryStore: Send + Sync {
         }
         Ok(())
     }
+    /// Atomically attach an existing row to a replacement source file,
+    /// invalidate disposable source observations, and retain metadata +
+    /// rating courtesy-mirror intents for the replacement file.
+    fn relocate_track_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+        file_size_bytes: u64,
+    ) -> StoreResult<()>;
     /// Update only the user's rating.
     fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()>;
     /// Atomically update the authoritative rating and retain a courtesy file-tag

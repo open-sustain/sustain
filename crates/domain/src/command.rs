@@ -101,6 +101,14 @@ pub enum ApplicationCommand {
     MoveTrackToTrash {
         track_id: TrackId,
     },
+    /// Attach an existing missing library row to a replacement audio file.
+    /// The runtime preserves the row id and all authoritative library data;
+    /// only the source location and disposable file-derived observations
+    /// change.
+    RelocateMissingTrack {
+        track_id: TrackId,
+        replacement_path: PathBuf,
+    },
     AddExternalLibraryItems {
         paths: Vec<PathBuf>,
     },

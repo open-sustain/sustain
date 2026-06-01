@@ -345,6 +345,13 @@ fn runtime_handles_every_application_command_intentionally() {
             Err(ApplicationRuntimeError::TrackUnavailable),
         ),
         (
+            ApplicationCommand::RelocateMissingTrack {
+                track_id,
+                replacement_path: PathBuf::from("/music/replacement.flac"),
+            },
+            Err(ApplicationRuntimeError::TrackUnavailable),
+        ),
+        (
             ApplicationCommand::FetchArtwork { track_id },
             Err(ApplicationRuntimeError::TrackUnavailable),
         ),
@@ -1547,7 +1554,7 @@ fn consolidation_journal_recovery_retargets_moved_tracks_on_startup() {
     std::fs::write(
         library_root.join(".sustain-consolidation-journal"),
         format!(
-            "# sustain managed library consolidation journal v2\nmove\t23\t{}\t{}\t{}\t{}\n",
+            "# sustain managed library consolidation journal v3\nmove\t23\t{}\t{}\tlocation\t{}\t{}\n",
             destination_metadata.dev(),
             destination_metadata.ino(),
             hex_path("Loose/Album/loose.flac"),
@@ -1989,6 +1996,144 @@ fn play_track_probe_failure_does_not_create_a_missing_marker() {
     );
 
     std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn reference_relocation_preserves_authoritative_track_identity_and_library_data() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create library root");
+    let replacement_path = root.join("replacement.flac");
+    std::fs::write(&replacement_path, b"replacement audio").expect("write replacement");
+
+    let id = track_id(36);
+    let mut missing = test_track(id, "missing.flac");
+    missing.location = missing_track_location("missing.flac");
+    missing.metadata.title = Some("Canonical title".to_owned());
+    missing.rating = Rating::new(4).expect("rating");
+    missing.statistics = PlayStatistics {
+        play_count: 7,
+        skip_count: 3,
+        last_played_at: Some(std::time::SystemTime::UNIX_EPOCH),
+        ..PlayStatistics::default()
+    };
+    missing.file_size_bytes = Some(12);
+    missing.has_embedded_artwork = Some(true);
+    missing.file_modified_at = Some(std::time::SystemTime::UNIX_EPOCH);
+    let store = Arc::new(InMemoryLibraryStore::new());
+    store.save_track(missing.clone()).expect("seed missing row");
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::RelocateMissingTrack {
+            track_id: id,
+            replacement_path: replacement_path.clone(),
+        }),
+        Ok(())
+    );
+
+    let relocated = store.track(id).expect("load row").expect("track exists");
+    assert_eq!(relocated.id, id);
+    assert_eq!(relocated.location, track_location("replacement.flac"));
+    assert_eq!(relocated.metadata, missing.metadata);
+    assert_eq!(relocated.rating, missing.rating);
+    assert_eq!(relocated.statistics, missing.statistics);
+    assert_eq!(
+        relocated.file_size_bytes,
+        Some(b"replacement audio".len() as u64)
+    );
+    assert_eq!(relocated.has_embedded_artwork, None);
+    assert_eq!(relocated.file_modified_at, None);
+    assert_eq!(runtime.library_track(id), Some(&relocated));
+
+    std::fs::remove_dir_all(root).expect("remove library root");
+}
+
+#[test]
+fn reference_relocation_rejects_a_path_attached_to_another_track() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create library root");
+    let replacement_path = root.join("existing.flac");
+    std::fs::write(&replacement_path, b"audio").expect("write replacement");
+
+    let missing_id = track_id(37);
+    let mut missing = test_track(missing_id, "missing.flac");
+    missing.location = missing_track_location("missing.flac");
+    let store = Arc::new(InMemoryLibraryStore::new());
+    store.save_track(missing).expect("seed missing row");
+    store
+        .save_track(test_track(track_id(38), "existing.flac"))
+        .expect("seed existing row");
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(TestMetadataService))
+    .expect("library services initialize");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::RelocateMissingTrack {
+            track_id: missing_id,
+            replacement_path,
+        }),
+        Err(ApplicationRuntimeError::TrackReplacementAlreadyInLibrary)
+    );
+
+    std::fs::remove_dir_all(root).expect("remove library root");
+}
+
+#[test]
+fn managed_relocation_copies_external_replacement_into_owned_layout() {
+    let root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let replacement_path = external_root.join("replacement.flac");
+    std::fs::write(&replacement_path, b"replacement audio").expect("write replacement");
+
+    let id = track_id(39);
+    let mut missing = test_track(id, "missing.flac");
+    missing.location = missing_track_location("missing.flac");
+    missing.metadata.artist = Some("Artist".to_owned());
+    missing.metadata.album = Some("Album".to_owned());
+    missing.metadata.title = Some("Title".to_owned());
+    missing.metadata.track_number = Some(1);
+    let store = Arc::new(InMemoryLibraryStore::new());
+    store.save_track(missing).expect("seed missing row");
+    let mut settings = UserSettings::with_library_path(Some(root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::RelocateMissingTrack {
+            track_id: id,
+            replacement_path: replacement_path.clone(),
+        }),
+        Ok(())
+    );
+
+    let relocated = store.track(id).expect("load row").expect("track exists");
+    let owned_path = relocated.location.absolute_path(&root);
+    assert!(!relocated.location.is_missing());
+    assert_eq!(
+        std::fs::read(&owned_path).expect("read owned copy"),
+        b"replacement audio"
+    );
+    assert_eq!(
+        std::fs::read(&replacement_path).expect("read original"),
+        b"replacement audio"
+    );
+
+    std::fs::remove_dir_all(root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
 }
 
 #[test]
@@ -5772,6 +5917,16 @@ impl LibraryStore for CallCountingLibraryStore {
         location: &TrackLocation,
     ) -> StoreResult<()> {
         self.inner.update_track_location(track_id, location)
+    }
+
+    fn relocate_track_and_enqueue_mirror(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+        file_size_bytes: u64,
+    ) -> StoreResult<()> {
+        self.inner
+            .relocate_track_and_enqueue_mirror(track_id, location, file_size_bytes)
     }
 
     fn update_track_rating(&self, track_id: TrackId, rating: Rating) -> StoreResult<()> {

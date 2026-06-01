@@ -42,7 +42,8 @@ impl ApplicationRuntime {
                     self.ensure_library_hydrated()?;
                 }
                 if (self.background_task_status.is_running()
-                    || self.has_pending_managed_metadata_retarget())
+                    || self.has_pending_managed_metadata_retarget()
+                    || self.has_pending_missing_track_relocation())
                     && settings.library != self.settings.library
                 {
                     // The only narrow exception is the management-mode
@@ -152,6 +153,12 @@ impl ApplicationRuntime {
             }
             ApplicationCommand::MoveTrackToTrash { track_id } => {
                 self.move_track_to_trash(track_id)?;
+            }
+            ApplicationCommand::RelocateMissingTrack {
+                track_id,
+                replacement_path,
+            } => {
+                self.relocate_missing_track(track_id, &replacement_path)?;
             }
             ApplicationCommand::SetRating { track_id, rating } => {
                 self.set_rating(track_id, rating)?;

@@ -534,6 +534,16 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         }
         ApplicationRuntimeError::SettingsLoadFailed => "Your settings could not be loaded.",
         ApplicationRuntimeError::SettingsSaveFailed => "Your settings could not be saved.",
+        ApplicationRuntimeError::TrackRelocationFailed => {
+            "The replacement track file could not be used."
+        }
+        ApplicationRuntimeError::TrackReplacementAlreadyInLibrary => {
+            "That file is already attached to another library track."
+        }
+        ApplicationRuntimeError::TrackReplacementOutsideLibrary => {
+            "Choose a replacement inside the configured library folder."
+        }
+        ApplicationRuntimeError::TrackReplacementUnsupported => "Choose a supported audio file.",
         ApplicationRuntimeError::PlaybackFailed
         | ApplicationRuntimeError::PlaybackServiceUnavailable => "Playback is not available.",
         ApplicationRuntimeError::TrackUnavailable => "Track file is missing.",
