@@ -36,11 +36,12 @@ const CHART_ACCENT_CLASS: &str = "statistics-chart";
 /// trough show through at zero length.
 const BAR_FILL_ALPHA: f64 = 0.85;
 
-/// Corner radius of a histogram bar's top edge, in pixels, so each bar
-/// reads as a rounded column instead of a flat-topped block. Clamped
-/// per-bar to half the bar width and to the fill height, so narrow
-/// columns and stub bars never over-round.
-const BAR_FILL_RADIUS: f64 = 3.0;
+/// Corner radius of a histogram bar's fill, in pixels, applied to all
+/// four corners so each bar reads as a rounded capsule rather than a
+/// flat-edged block. Clamped per-bar to half the bar width and half the
+/// fill height, so narrow columns and stub bars round into a stadium
+/// shape instead of over-rounding.
+const BAR_FILL_RADIUS: f64 = 6.0;
 
 /// Diameter of a donut ring, in pixels.
 const DONUT_DIAMETER: i32 = 260;
@@ -325,9 +326,8 @@ pub(crate) fn vertical_bars(bars: Vec<VerticalBar>) -> gtk::Widget {
 
 /// A single histogram bar: the CSS-painted `.statistics-vbar` background
 /// is the full-height trough, and the draw-func fills `fraction` of the
-/// height from the bottom up with the live theme accent. The fill carries
-/// rounded top corners; its bottom runs to the trough floor, where the
-/// widget's overflow clip rounds it to the CSS radius.
+/// height from the bottom up with the live theme accent. The fill is a
+/// rounded capsule — all four corners swept — floating in the trough.
 fn vertical_bar(fraction: f64) -> gtk::DrawingArea {
     let fraction = fraction.clamp(0.0, 1.0);
     let area = gtk::DrawingArea::new();
@@ -354,16 +354,16 @@ fn vertical_bar(fraction: f64) -> gtk::DrawingArea {
             BAR_FILL_ALPHA,
         );
         let top = h - fill_height;
-        let radius = BAR_FILL_RADIUS.min(w / 2.0).min(fill_height);
-        // Trace the fill clockwise from the top-left corner: round the two
-        // top corners with quarter arcs, then run straight down to the
-        // trough floor and back. PI..1.5PI sweeps the top-left corner,
-        // 1.5PI..2PI the top-right.
+        let radius = BAR_FILL_RADIUS.min(w / 2.0).min(fill_height / 2.0);
+        // Trace the fill clockwise as a rounded rectangle, every corner
+        // swept by a quarter arc: top-left (PI..1.5PI), top-right
+        // (1.5PI..2PI), bottom-right (0..0.5PI), bottom-left (0.5PI..PI).
+        // Cairo links consecutive arcs with the straight edges between them.
         cr.new_sub_path();
         cr.arc(radius, top + radius, radius, PI, 1.5 * PI);
         cr.arc(w - radius, top + radius, radius, 1.5 * PI, 2.0 * PI);
-        cr.line_to(w, h);
-        cr.line_to(0.0, h);
+        cr.arc(w - radius, h - radius, radius, 0.0, 0.5 * PI);
+        cr.arc(radius, h - radius, radius, 0.5 * PI, PI);
         cr.close_path();
         let _ = cr.fill();
     });

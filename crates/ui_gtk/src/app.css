@@ -1215,10 +1215,12 @@ columnview.track-table listview row:selected .track-table-status-missing,
     font-variant-numeric: tabular-nums;
 }
 
-/* A histogram bar: full-height trough plus the accent fill (Cairo). */
+/* A histogram bar: full-height trough plus the accent fill (Cairo).
+   Keep border-radius in step with BAR_FILL_RADIUS in chart.rs so the
+   trough's corners match the rounded capsule that floats inside it. */
 .statistics-vbar {
     background-color: alpha(@theme_fg_color, 0.08);
-    border-radius: 2px;
+    border-radius: 6px;
     color: @theme_selected_bg_color;
 }
 
