@@ -53,29 +53,23 @@ pub(crate) struct AlbumsView {
     /// in place so a plain album click does not emit model changes that can
     /// make GtkListView choose a new scroll anchor.
     realized_rows: Rc<RefCell<HashMap<usize, gtk::Box>>>,
+    /// Reusable widget pools owned by GtkListView's realized row shells.
+    /// Scrolling and width breakpoints rebind these slots in place instead of
+    /// destroying and reconstructing every visible album tile.
+    row_widgets: Rc<RefCell<HashMap<usize, AlbumRowWidgets>>>,
     /// Explicit scroll requested by "Show Album" actions. It is consumed from
     /// the width watcher after the Albums page has a visible allocation, so
-    /// row-position math uses the final column count.
-    pending_scroll_album: Rc<RefCell<Option<AlbumKey>>>,
+    /// row-position math uses the final column count and live row geometry.
+    pending_scroll_album: Rc<RefCell<Option<PendingAlbumScroll>>>,
     visible_columns: Rc<Cell<usize>>,
     last_width: Rc<Cell<i32>>,
     artwork_loader: ArtworkLoader,
-    /// Monotonic generation bumped at the start of every full grid
-    /// rebuild. Each artwork request snapshot-captures the current value
-    /// and the callback drops itself when the view has moved on, so
-    /// late-arriving decodes can't touch tiles that have been torn
-    /// down. Staleness lives here (per view) instead of in the shared
-    /// loader, so an Albums rebuild can't invalidate a concurrent
-    /// now-playing request and vice versa.
-    artwork_generation: Rc<Cell<u64>>,
     /// Monotonic generation bumped every time the album-detail panel is
     /// (re)built. The detail's artwork request snapshot-captures it and
     /// the callback drops itself when a newer selection has superseded
     /// the panel — critical because the palette provider is installed
     /// display-wide, so a stale install would mis-tint the current
-    /// detail. Separate from `artwork_generation` (grid rebuilds) because
-    /// a plain selection change rebuilds the detail without rebuilding
-    /// the grid.
+    /// detail.
     detail_generation: Rc<Cell<u64>>,
     /// Switches from `false` to `true` the first time `activate()` is
     /// called. Tile construction, grouping, and the width-watcher tick
@@ -85,10 +79,9 @@ pub(crate) struct AlbumsView {
     playing_track_id: Rc<Cell<Option<TrackId>>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct AlbumRowViewModel {
-    albums: Vec<AlbumViewModel>,
-    columns: usize,
+struct PendingAlbumScroll {
+    album_key: AlbumKey,
+    visibility_requested: bool,
 }
 
 const ALBUM_TILE_WIDTH: i32 = 150;
@@ -169,11 +162,11 @@ impl AlbumsView {
             search_text: Rc::new(RefCell::new(String::new())),
             selected_album: Rc::new(RefCell::new(None)),
             realized_rows: Rc::new(RefCell::new(HashMap::new())),
+            row_widgets: Rc::new(RefCell::new(HashMap::new())),
             pending_scroll_album: Rc::new(RefCell::new(None)),
             visible_columns: Rc::new(Cell::new(1)),
             last_width: Rc::new(Cell::new(0)),
             artwork_loader,
-            artwork_generation: Rc::new(Cell::new(0)),
             detail_generation: Rc::new(Cell::new(0)),
             activated: Rc::new(Cell::new(false)),
             playing_track_id: Rc::new(Cell::new(None)),
@@ -261,7 +254,7 @@ impl AlbumsView {
         }
 
         if let Some(row_position) = self.row_position_for_album(&affected_album_key) {
-            self.refresh_row_widget(row_position);
+            self.refresh_row_widget(row_position, Some(&affected_album_key));
         }
     }
 
@@ -382,12 +375,12 @@ impl AlbumsView {
 
         let selected_row = self.row_position_for_album(&album_key);
         if let Some(row_position) = previous_row {
-            self.refresh_row_widget(row_position);
+            self.refresh_row_widget(row_position, None);
         }
         if let Some(row_position) = selected_row
             && selected_row != previous_row
         {
-            self.refresh_row_widget(row_position);
+            self.refresh_row_widget(row_position, None);
         }
     }
 
@@ -398,34 +391,62 @@ impl AlbumsView {
             .as_ref()
             .and_then(|album_key| self.row_position_for_album(album_key));
         if let Some(row_position) = selected_row {
-            self.refresh_row_widget(row_position);
+            self.refresh_row_widget(row_position, None);
         }
     }
 
     fn request_scroll_to_album(&self, album_key: AlbumKey) {
-        self.pending_scroll_album.borrow_mut().replace(album_key);
+        self.pending_scroll_album
+            .borrow_mut()
+            .replace(PendingAlbumScroll {
+                album_key,
+                visibility_requested: false,
+            });
     }
 
     fn scroll_pending_album_if_ready(&self) {
         if self.scroller.width() <= 0 || self.row_store.n_items() == 0 {
             return;
         }
-        let Some(album_key) = self.pending_scroll_album.borrow().clone() else {
+        let Some(album_key) = self
+            .pending_scroll_album
+            .borrow()
+            .as_ref()
+            .map(|pending| pending.album_key.clone())
+        else {
             return;
         };
         let Some(row_position) = self.row_position_for_album(&album_key) else {
             self.pending_scroll_album.borrow_mut().take();
             return;
         };
-        let scroll_info = gtk::ScrollInfo::new();
-        scroll_info.set_enable_horizontal(false);
-        scroll_info.set_enable_vertical(true);
-        self.list_view.scroll_to(
-            row_position as u32,
-            gtk::ListScrollFlags::FOCUS,
-            Some(scroll_info),
-        );
-        self.pending_scroll_album.borrow_mut().take();
+
+        let visibility_requested = self
+            .pending_scroll_album
+            .borrow()
+            .as_ref()
+            .is_some_and(|pending| pending.visibility_requested);
+        if !visibility_requested {
+            let scroll_info = gtk::ScrollInfo::new();
+            scroll_info.set_enable_horizontal(false);
+            scroll_info.set_enable_vertical(true);
+            self.list_view.scroll_to(
+                row_position as u32,
+                gtk::ListScrollFlags::NONE,
+                Some(scroll_info),
+            );
+            if let Some(pending) = self.pending_scroll_album.borrow_mut().as_mut() {
+                pending.visibility_requested = true;
+            }
+            return;
+        }
+
+        let Some(row_shell) = self.realized_rows.borrow().get(&row_position).cloned() else {
+            return;
+        };
+        if align_widget_to_viewport_top(&row_shell, &self.list_view, &self.scroller.vadjustment()) {
+            self.pending_scroll_album.borrow_mut().take();
+        }
     }
 
     fn install_width_watcher(&self) {
@@ -448,57 +469,30 @@ impl AlbumsView {
         if !self.activated.get() {
             return;
         }
-        self.artwork_generation
-            .set(self.artwork_generation.get().wrapping_add(1));
-        self.realized_rows.borrow_mut().clear();
-        let old_len = self.row_store.n_items();
-
         let columns = self.visible_columns.get().max(1);
-        let albums = self.albums.borrow();
-        let mut rows = Vec::new();
-        if albums.is_empty() {
-            rows.push(glib::BoxedAnyObject::new(AlbumRowViewModel {
-                albums: Vec::new(),
-                columns,
-            }));
-        } else {
-            let mut album_index = 0;
-            while album_index < albums.len() {
-                let row_start = album_index;
-                let row_end = (row_start + columns).min(albums.len());
-                rows.push(glib::BoxedAnyObject::new(AlbumRowViewModel {
-                    albums: albums[row_start..row_end].to_vec(),
-                    columns,
-                }));
-                album_index = row_end;
-            }
-        }
+        let row_count = album_row_count(self.albums.borrow().len(), columns);
+        resize_row_store(&self.row_store, row_count);
 
-        self.row_store.splice(0, old_len, &rows);
+        // Tokens that survive the tail resize keep their list positions but
+        // resolve to a different album slice when the column count changes.
+        // Re-render only the virtual rows GTK currently has realized.
+        let realized_rows: Vec<_> = self
+            .realized_rows
+            .borrow()
+            .iter()
+            .filter(|(position, _)| **position < row_count)
+            .map(|(&position, shell)| (position, shell.clone()))
+            .collect();
+        for (position, shell) in realized_rows {
+            self.render_row_position(&shell, position, None);
+        }
     }
 
-    fn refresh_row_widget(&self, row_position: usize) {
-        let Some(row) = self.row_model(row_position) else {
-            return;
-        };
+    fn refresh_row_widget(&self, row_position: usize, refresh_artwork_for: Option<&AlbumKey>) {
         let Some(row_shell) = self.realized_rows.borrow().get(&row_position).cloned() else {
             return;
         };
-        self.render_row_shell(&row_shell, &row);
-    }
-
-    fn row_model(&self, row_position: usize) -> Option<AlbumRowViewModel> {
-        let columns = self.visible_columns.get().max(1);
-        let start = row_position.checked_mul(columns)?;
-        let albums = self.albums.borrow();
-        if start >= albums.len() {
-            return None;
-        }
-        let end = (start + columns).min(albums.len());
-        Some(AlbumRowViewModel {
-            albums: albums[start..end].to_vec(),
-            columns,
-        })
+        self.render_row_position(&row_shell, row_position, refresh_artwork_for);
     }
 
     fn row_position_for_album(&self, album_key: &AlbumKey) -> Option<usize> {
@@ -512,14 +506,16 @@ impl AlbumsView {
 
     fn build_album_row_factory(&self) -> gtk::SignalListItemFactory {
         let factory = gtk::SignalListItemFactory::new();
+        let row_widgets_for_setup = self.row_widgets.clone();
         factory.connect_setup(move |_factory, item| {
             let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
-            let row = gtk::Box::new(gtk::Orientation::Vertical, ALBUM_GRID_ROW_SPACING);
-            row.add_css_class("album-row");
-            row.set_hexpand(true);
-            list_item.set_child(Some(&row));
+            let row = AlbumRowWidgets::new();
+            list_item.set_child(Some(&row.shell));
+            row_widgets_for_setup
+                .borrow_mut()
+                .insert(widget_id(&row.shell), row);
         });
 
         let view_for_bind = self.clone();
@@ -533,23 +529,16 @@ impl AlbumsView {
             else {
                 return;
             };
-            clear_container(&row_shell);
 
-            let Some(row_object) = list_item
-                .item()
-                .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
-            else {
+            if list_item.position() == gtk::INVALID_LIST_POSITION {
                 return;
-            };
-            let Ok(row) = row_object.try_borrow::<AlbumRowViewModel>() else {
-                return;
-            };
-            if list_item.position() != gtk::INVALID_LIST_POSITION {
-                let mut realized_rows = view_for_bind.realized_rows.borrow_mut();
-                realized_rows.retain(|_, shell| shell != &row_shell);
-                realized_rows.insert(list_item.position() as usize, row_shell.clone());
             }
-            view_for_bind.render_row_shell(&row_shell, &row);
+            let position = list_item.position() as usize;
+            let mut realized_rows = view_for_bind.realized_rows.borrow_mut();
+            realized_rows.retain(|_, shell| shell != &row_shell);
+            realized_rows.insert(position, row_shell.clone());
+            drop(realized_rows);
+            view_for_bind.render_row_position(&row_shell, position, None);
         });
 
         let view_for_unbind = self.clone();
@@ -565,130 +554,90 @@ impl AlbumsView {
                     .realized_rows
                     .borrow_mut()
                     .retain(|_, shell| shell != &row_shell);
-                clear_container(&row_shell);
             }
+        });
+
+        let row_widgets_for_teardown = self.row_widgets.clone();
+        factory.connect_teardown(move |_factory, item| {
+            let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            let Some(row_shell) = list_item
+                .child()
+                .and_then(|child| child.downcast::<gtk::Box>().ok())
+            else {
+                return;
+            };
+            row_widgets_for_teardown
+                .borrow_mut()
+                .remove(&widget_id(&row_shell));
         });
 
         factory
     }
 
-    fn render_row_shell(&self, row_shell: &gtk::Box, row: &AlbumRowViewModel) {
-        clear_container(row_shell);
-        if row.albums.is_empty() {
-            row_shell.append(&empty_albums_label());
+    fn render_row_position(
+        &self,
+        row_shell: &gtk::Box,
+        row_position: usize,
+        refresh_artwork_for: Option<&AlbumKey>,
+    ) {
+        let row_id = widget_id(row_shell);
+        let mut row_widgets = self.row_widgets.borrow_mut();
+        let Some(row) = row_widgets.get_mut(&row_id) else {
+            return;
+        };
+        let columns = self.visible_columns.get().max(1);
+        let Some(start) = row_position.checked_mul(columns) else {
+            return;
+        };
+        let albums = self.albums.borrow();
+        if albums.is_empty() {
+            if row_position == 0 {
+                row.show_empty_state();
+            }
             return;
         }
+        if start >= albums.len() {
+            return;
+        }
+        let end = (start + columns).min(albums.len());
+        self.render_row_shell(row, &albums[start..end], columns, refresh_artwork_for);
+    }
 
-        let tile_row = self.build_tile_row(row);
-        row_shell.append(&tile_row);
+    fn render_row_shell(
+        &self,
+        row: &mut AlbumRowWidgets,
+        albums: &[AlbumViewModel],
+        columns: usize,
+        refresh_artwork_for: Option<&AlbumKey>,
+    ) {
+        row.show_tiles();
+        row.ensure_slot_count(columns, self);
+        let selected_album = self.selected_album.borrow().clone();
+        for (offset, slot) in row.slots.iter_mut().enumerate() {
+            slot.container.set_visible(offset < columns);
+            let Some(album) = albums.get(offset) else {
+                if offset < columns {
+                    slot.show_placeholder();
+                }
+                continue;
+            };
+            let is_selected = selected_album
+                .as_ref()
+                .is_some_and(|selected| selected == &album.key);
+            let refresh_artwork = refresh_artwork_for == Some(&album.key);
+            slot.bind(self, album, is_selected, refresh_artwork);
+        }
 
         if let Some((selected_column, selected_album)) =
-            selected_album_in_row(row, self.selected_album.borrow().as_ref())
+            selected_album_in_row(albums, self.selected_album.borrow().as_ref())
         {
-            let detail = self.album_detail(selected_album, selected_column, row.columns);
-            row_shell.append(&detail);
-        }
-    }
-
-    fn build_tile_row(&self, row_model: &AlbumRowViewModel) -> gtk::Box {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, ALBUM_GRID_COLUMN_SPACING);
-        row.set_homogeneous(true);
-        row.set_margin_start(ALBUM_GRID_MARGIN);
-        row.set_margin_end(ALBUM_GRID_MARGIN);
-        let selected_album = self.selected_album.borrow().clone();
-
-        for offset in 0..row_model.columns {
-            if let Some(album) = row_model.albums.get(offset) {
-                let is_selected = selected_album
-                    .as_ref()
-                    .is_some_and(|selected| selected == &album.key);
-                let tile = self.album_tile(album, is_selected);
-                row.append(&tile);
-            } else {
-                // Empty placeholder keeps later rows aligned with full-width rows.
-                row.append(&empty_tile_placeholder());
-            }
-        }
-
-        row
-    }
-
-    fn album_tile(&self, album: &AlbumViewModel, is_selected: bool) -> gtk::Button {
-        let cover_size = if is_selected {
-            ALBUM_TILE_COVER_SIZE_EXPANDED
+            let detail = self.album_detail(selected_album, selected_column, columns);
+            row.set_detail(Some(detail));
         } else {
-            ALBUM_TILE_COVER_SIZE
-        };
-
-        // Per-label margins instead of a uniform box spacing so the
-        // title→artist gap can be tighter than the cover→title gap.
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        content.set_width_request(cover_size);
-        content.set_halign(gtk::Align::Center);
-        content.set_valign(gtk::Align::Start);
-        content.set_overflow(gtk::Overflow::Hidden);
-
-        // The cover starts as a placeholder. Artwork loading runs on a
-        // background thread; when the result arrives the loader fires
-        // the callback below and swaps the placeholder for the decoded
-        // image. If the album's representative track can't be resolved
-        // (no library root yet, or every track missing), the placeholder
-        // stays — which is what the synchronous path used to show too.
-        let cover = build_cover_widget(cover_size, "album-cover");
-        cover.set_halign(gtk::Align::Start);
-        content.append(&cover);
-        if let Some(source) = self.album_artwork_source(album) {
-            let cover_for_callback = cover.clone();
-            let generation_snapshot = self.artwork_generation.get();
-            let generation_cell = self.artwork_generation.clone();
-            self.artwork_loader.request(
-                source,
-                Box::new(move |decoded| {
-                    if generation_cell.get() != generation_snapshot {
-                        return;
-                    }
-                    apply_cover_texture(&cover_for_callback, decoded.tile_texture, cover_size);
-                }),
-            );
+            row.set_detail(None);
         }
-
-        let title = gtk::Label::new(Some(&album.title));
-        title.add_css_class("album-tile-title");
-        title.set_size_request(cover_size, -1);
-        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        title.set_xalign(0.0);
-        title.set_halign(gtk::Align::Start);
-        title.set_margin_top(6);
-        content.append(&title);
-
-        let artist = gtk::Label::new(Some(&album.artist));
-        artist.add_css_class("album-tile-artist");
-        artist.set_size_request(cover_size, -1);
-        artist.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        artist.set_xalign(0.0);
-        artist.set_halign(gtk::Align::Start);
-        artist.set_margin_top(1);
-        content.append(&artist);
-
-        let button = gtk::Button::new();
-        button.add_css_class("album-tile");
-        if is_selected {
-            button.add_css_class("selected");
-        }
-        button.set_child(Some(&content));
-        button.set_can_shrink(true);
-        button.set_width_request(ALBUM_TILE_WIDTH);
-        button.set_halign(gtk::Align::Fill);
-        button.set_valign(gtk::Align::Start);
-        button.set_overflow(gtk::Overflow::Hidden);
-
-        let album_key = album.key.clone();
-        let view = self.clone();
-        button.connect_clicked(move |_| {
-            view.select_album(album_key.clone());
-        });
-
-        button
     }
 
     fn album_detail(
@@ -932,10 +881,247 @@ impl AlbumsView {
     }
 }
 
-fn clear_container(container: &gtk::Box) {
-    while let Some(child) = container.first_child() {
-        container.remove(&child);
+struct AlbumRowWidgets {
+    shell: gtk::Box,
+    tile_row: gtk::Box,
+    empty_state: gtk::Label,
+    slots: Vec<AlbumTileSlot>,
+    detail: Option<gtk::Overlay>,
+}
+
+impl AlbumRowWidgets {
+    fn new() -> Self {
+        let shell = gtk::Box::new(gtk::Orientation::Vertical, ALBUM_GRID_ROW_SPACING);
+        shell.add_css_class("album-row");
+        shell.set_hexpand(true);
+
+        let tile_row = gtk::Box::new(gtk::Orientation::Horizontal, ALBUM_GRID_COLUMN_SPACING);
+        tile_row.set_homogeneous(true);
+        tile_row.set_margin_start(ALBUM_GRID_MARGIN);
+        tile_row.set_margin_end(ALBUM_GRID_MARGIN);
+        shell.append(&tile_row);
+
+        let empty_state = empty_albums_label();
+        empty_state.set_visible(false);
+        shell.append(&empty_state);
+
+        Self {
+            shell,
+            tile_row,
+            empty_state,
+            slots: Vec::new(),
+            detail: None,
+        }
     }
+
+    fn ensure_slot_count(&mut self, count: usize, view: &AlbumsView) {
+        while self.slots.len() < count {
+            let slot = AlbumTileSlot::new(view);
+            self.tile_row.append(&slot.container);
+            self.slots.push(slot);
+        }
+    }
+
+    fn show_empty_state(&mut self) {
+        self.tile_row.set_visible(false);
+        self.empty_state.set_visible(true);
+        self.set_detail(None);
+    }
+
+    fn show_tiles(&self) {
+        self.empty_state.set_visible(false);
+        self.tile_row.set_visible(true);
+    }
+
+    fn set_detail(&mut self, detail: Option<gtk::Overlay>) {
+        if let Some(previous) = self.detail.take() {
+            self.shell.remove(&previous);
+        }
+        if let Some(detail) = detail {
+            self.shell.append(&detail);
+            self.detail = Some(detail);
+        }
+    }
+}
+
+struct AlbumTileSlot {
+    container: gtk::Box,
+    button: gtk::Button,
+    content: AlbumTileContent,
+    bound_album_key: Rc<RefCell<Option<AlbumKey>>>,
+    bound_artwork_source: Option<ArtworkSource>,
+    artwork_binding_generation: Rc<Cell<u64>>,
+    cover_size: Rc<Cell<i32>>,
+    is_selected: bool,
+}
+
+impl AlbumTileSlot {
+    fn new(view: &AlbumsView) -> Self {
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        container.set_width_request(ALBUM_TILE_MIN_WIDTH);
+        container.set_hexpand(true);
+
+        let content = build_album_tile_content("", "", ALBUM_TILE_COVER_SIZE);
+        let button = gtk::Button::new();
+        button.add_css_class("album-tile");
+        button.set_child(Some(&content.root));
+        button.set_can_shrink(true);
+        button.set_width_request(ALBUM_TILE_WIDTH);
+        button.set_halign(gtk::Align::Fill);
+        button.set_valign(gtk::Align::Start);
+        button.set_hexpand(true);
+        button.set_overflow(gtk::Overflow::Hidden);
+        button.set_visible(false);
+        container.append(&button);
+
+        let bound_album_key = Rc::new(RefCell::new(None::<AlbumKey>));
+        let bound_album_key_for_click = bound_album_key.clone();
+        let view_for_click = view.clone();
+        button.connect_clicked(move |_| {
+            let Some(album_key) = bound_album_key_for_click.borrow().clone() else {
+                return;
+            };
+            view_for_click.select_album(album_key);
+        });
+
+        Self {
+            container,
+            button,
+            content,
+            bound_album_key,
+            bound_artwork_source: None,
+            artwork_binding_generation: Rc::new(Cell::new(0)),
+            cover_size: Rc::new(Cell::new(ALBUM_TILE_COVER_SIZE)),
+            is_selected: false,
+        }
+    }
+
+    fn bind(
+        &mut self,
+        view: &AlbumsView,
+        album: &AlbumViewModel,
+        is_selected: bool,
+        refresh_artwork: bool,
+    ) {
+        self.button.set_visible(true);
+        if self.content.title.text() != album.title {
+            self.content.title.set_text(&album.title);
+        }
+        if self.content.artist.text() != album.artist {
+            self.content.artist.set_text(&album.artist);
+        }
+        if self.bound_album_key.borrow().as_ref() != Some(&album.key) {
+            self.bound_album_key.borrow_mut().replace(album.key.clone());
+        }
+        self.set_selected(is_selected);
+        self.bind_artwork(
+            &view.artwork_loader,
+            view.album_artwork_source(album),
+            refresh_artwork,
+        );
+    }
+
+    fn show_placeholder(&mut self) {
+        self.button.set_visible(false);
+        self.bound_album_key.borrow_mut().take();
+        self.set_selected(false);
+        if self.bound_artwork_source.take().is_some() {
+            self.bump_artwork_generation();
+            apply_cover_texture(&self.content.cover, None, self.cover_size.get());
+        }
+    }
+
+    fn set_selected(&mut self, is_selected: bool) {
+        if self.is_selected == is_selected {
+            return;
+        }
+        self.is_selected = is_selected;
+        if is_selected {
+            self.button.add_css_class("selected");
+        } else {
+            self.button.remove_css_class("selected");
+        }
+        let cover_size = if is_selected {
+            ALBUM_TILE_COVER_SIZE_EXPANDED
+        } else {
+            ALBUM_TILE_COVER_SIZE
+        };
+        self.cover_size.set(cover_size);
+        resize_album_tile_content(&self.content, cover_size);
+    }
+
+    fn bind_artwork(
+        &mut self,
+        loader: &ArtworkLoader,
+        source: Option<ArtworkSource>,
+        refresh: bool,
+    ) {
+        if self.bound_artwork_source == source && !refresh {
+            return;
+        }
+        self.bound_artwork_source = source.clone();
+        let generation_snapshot = self.bump_artwork_generation();
+        let Some(source) = source else {
+            apply_cover_texture(&self.content.cover, None, self.cover_size.get());
+            return;
+        };
+
+        if let Some(decoded) = loader.cached(&source) {
+            apply_cover_texture(
+                &self.content.cover,
+                decoded.tile_texture,
+                self.cover_size.get(),
+            );
+            return;
+        }
+
+        apply_cover_texture(&self.content.cover, None, self.cover_size.get());
+        let cover = self.content.cover.clone();
+        let cover_size = self.cover_size.clone();
+        let generation = self.artwork_binding_generation.clone();
+        loader.request(
+            source,
+            Box::new(move |decoded| {
+                if generation.get() != generation_snapshot {
+                    return;
+                }
+                apply_cover_texture(&cover, decoded.tile_texture, cover_size.get());
+            }),
+        );
+    }
+
+    fn bump_artwork_generation(&self) -> u64 {
+        let generation = self.artwork_binding_generation.get().wrapping_add(1);
+        self.artwork_binding_generation.set(generation);
+        generation
+    }
+}
+
+fn widget_id(widget: &gtk::Box) -> usize {
+    widget.as_ptr() as usize
+}
+
+fn align_widget_to_viewport_top(
+    widget: &impl IsA<gtk::Widget>,
+    viewport: &impl IsA<gtk::Widget>,
+    adjustment: &gtk::Adjustment,
+) -> bool {
+    let Some(point) = widget
+        .as_ref()
+        .compute_point(viewport.as_ref(), &gtk::graphene::Point::new(0.0, 0.0))
+    else {
+        return false;
+    };
+    let offset = f64::from(point.y());
+    if offset.abs() <= 0.5 {
+        return true;
+    }
+
+    let previous = adjustment.value();
+    adjustment.set_value(previous + offset);
+    // A clamped adjustment means the row is as close to the top as the
+    // remaining content permits, which is the correct result near list end.
+    (adjustment.value() - previous).abs() <= f64::EPSILON
 }
 
 fn columns_for_width(width: i32) -> usize {
@@ -947,12 +1133,36 @@ fn columns_for_width(width: i32) -> usize {
         .max(1) as usize
 }
 
+fn album_row_count(album_count: usize, columns: usize) -> usize {
+    album_count.div_ceil(columns.max(1)).max(1)
+}
+
+fn resize_row_store(store: &gio::ListStore, row_count: usize) {
+    let current = store.n_items() as usize;
+    match row_count.cmp(&current) {
+        std::cmp::Ordering::Less => {
+            store.splice(
+                row_count as u32,
+                (current - row_count) as u32,
+                &[] as &[glib::BoxedAnyObject],
+            );
+        }
+        std::cmp::Ordering::Equal => {}
+        std::cmp::Ordering::Greater => {
+            let additions: Vec<_> = (current..row_count)
+                .map(|_| glib::BoxedAnyObject::new(()))
+                .collect();
+            store.splice(current as u32, 0, &additions);
+        }
+    }
+}
+
 fn selected_album_in_row<'a>(
-    row: &'a AlbumRowViewModel,
+    albums: &'a [AlbumViewModel],
     selected_album: Option<&AlbumKey>,
 ) -> Option<(usize, &'a AlbumViewModel)> {
     let selected_album = selected_album?;
-    row.albums
+    albums
         .iter()
         .enumerate()
         .find(|(_, album)| &album.key == selected_album)
@@ -968,15 +1178,65 @@ fn empty_albums_label() -> gtk::Label {
     label
 }
 
-fn empty_tile_placeholder() -> gtk::Box {
-    let placeholder = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    placeholder.set_width_request(ALBUM_TILE_MIN_WIDTH);
-    placeholder.set_hexpand(true);
-    placeholder
+struct AlbumTileContent {
+    root: gtk::Box,
+    cover: gtk::Overlay,
+    title: gtk::Label,
+    artist: gtk::Label,
 }
 
-fn build_cover_widget(size: i32, css_class: &str) -> gtk::Box {
-    let cover = gtk::Box::new(gtk::Orientation::Vertical, 0);
+fn build_album_tile_content(
+    title_text: &str,
+    artist_text: &str,
+    cover_size: i32,
+) -> AlbumTileContent {
+    // Per-label margins instead of a uniform box spacing so the
+    // title→artist gap can be tighter than the cover→title gap.
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.set_width_request(cover_size);
+    root.set_halign(gtk::Align::Center);
+    root.set_valign(gtk::Align::Start);
+    root.set_overflow(gtk::Overflow::Hidden);
+
+    let cover = build_cover_widget(cover_size, "album-cover");
+    cover.set_halign(gtk::Align::Start);
+    root.append(&cover);
+
+    let title = gtk::Label::new(Some(title_text));
+    title.add_css_class("album-tile-title");
+    title.set_size_request(cover_size, -1);
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title.set_xalign(0.0);
+    title.set_halign(gtk::Align::Start);
+    title.set_margin_top(6);
+    root.append(&title);
+
+    let artist = gtk::Label::new(Some(artist_text));
+    artist.add_css_class("album-tile-artist");
+    artist.set_size_request(cover_size, -1);
+    artist.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    artist.set_xalign(0.0);
+    artist.set_halign(gtk::Align::Start);
+    artist.set_margin_top(1);
+    root.append(&artist);
+
+    AlbumTileContent {
+        root,
+        cover,
+        title,
+        artist,
+    }
+}
+
+fn resize_album_tile_content(content: &AlbumTileContent, size: i32) {
+    content.root.set_width_request(size);
+    content.title.set_size_request(size, -1);
+    content.artist.set_size_request(size, -1);
+    resize_cover_widget(&content.cover, size);
+}
+
+fn build_cover_widget(size: i32, css_class: &str) -> gtk::Overlay {
+    let cover = gtk::Overlay::new();
     cover.add_css_class(css_class);
     cover.set_size_request(size, size);
     cover.set_halign(gtk::Align::Center);
@@ -984,7 +1244,30 @@ fn build_cover_widget(size: i32, css_class: &str) -> gtk::Box {
     cover.set_hexpand(false);
     cover.set_vexpand(false);
     cover.set_overflow(gtk::Overflow::Hidden);
-    apply_cover_texture(&cover, None, size);
+
+    // GtkWidget::set_size_request is a minimum, not a fixed size. Keep
+    // placeholder/picture requisitions out of the cover's measurement so an
+    // asynchronously loaded texture can never grow the cover and push the
+    // tile labels down. With no main child, this explicit square request is
+    // the overlay's only geometry source.
+    let picture = gtk::Picture::new();
+    picture.set_content_fit(gtk::ContentFit::Contain);
+    picture.set_can_shrink(true);
+    picture.set_size_request(size, size);
+    picture.set_halign(gtk::Align::Fill);
+    picture.set_valign(gtk::Align::Fill);
+    picture.set_hexpand(false);
+    picture.set_vexpand(false);
+    picture.set_visible(false);
+    cover.add_overlay(&picture);
+    cover.set_clip_overlay(&picture, true);
+    cover.set_measure_overlay(&picture, false);
+
+    if let Some(icon) = album_cover_placeholder(size) {
+        cover.add_overlay(&icon);
+        cover.set_clip_overlay(&icon, true);
+        cover.set_measure_overlay(&icon, false);
+    }
     cover
 }
 
@@ -992,29 +1275,43 @@ fn build_cover_widget(size: i32, css_class: &str) -> gtk::Box {
 /// image or the placeholder icon. Used both at construction time (called
 /// with `None` to install the placeholder) and from the artwork loader
 /// callback (called with the decoded texture once it arrives).
-fn apply_cover_texture(cover: &gtk::Box, texture: Option<gdk::Texture>, size: i32) {
-    while let Some(child) = cover.first_child() {
-        cover.remove(&child);
+fn apply_cover_texture(cover: &gtk::Overlay, texture: Option<gdk::Texture>, size: i32) {
+    resize_cover_widget(cover, size);
+    let Some(picture) = cover
+        .first_child()
+        .and_then(|child| child.downcast::<gtk::Picture>().ok())
+    else {
+        return;
+    };
+    picture.set_paintable(texture.as_ref());
+    picture.set_visible(texture.is_some());
+    if let Some(icon) = picture
+        .next_sibling()
+        .and_then(|child| child.downcast::<gtk::Image>().ok())
+    {
+        icon.set_visible(texture.is_none());
     }
 
-    match texture {
-        Some(texture) => {
-            cover.add_css_class("has-artwork");
-            let picture = gtk::Picture::for_paintable(&texture);
-            picture.set_content_fit(gtk::ContentFit::Contain);
-            picture.set_can_shrink(true);
-            picture.set_size_request(size, size);
-            picture.set_halign(gtk::Align::Fill);
-            picture.set_valign(gtk::Align::Fill);
-            picture.set_hexpand(false);
-            picture.set_vexpand(false);
-            cover.append(&picture);
-        }
-        None => {
-            cover.remove_css_class("has-artwork");
-            if let Some(icon) = album_cover_placeholder(size) {
-                cover.append(&icon);
-            }
+    if texture.is_some() {
+        cover.add_css_class("has-artwork");
+    } else {
+        cover.remove_css_class("has-artwork");
+    }
+}
+
+fn resize_cover_widget(cover: &gtk::Overlay, size: i32) {
+    cover.set_size_request(size, size);
+    if let Some(picture) = cover
+        .first_child()
+        .and_then(|child| child.downcast::<gtk::Picture>().ok())
+    {
+        picture.set_size_request(size, size);
+        if let Some(icon) = picture
+            .next_sibling()
+            .and_then(|child| child.downcast::<gtk::Image>().ok())
+        {
+            icon.set_pixel_size((size / 3).max(32));
+            icon.set_size_request(size, size);
         }
     }
 }
@@ -1023,7 +1320,7 @@ fn apply_cover_texture(cover: &gtk::Box, texture: Option<gdk::Texture>, size: i3
 /// the album detail panel, which resolves artwork synchronously via
 /// the loader's cache (or a one-off sync read) and has the texture in
 /// hand at construction time.
-fn album_cover_with(texture: Option<gdk::Texture>, size: i32, css_class: &str) -> gtk::Box {
+fn album_cover_with(texture: Option<gdk::Texture>, size: i32, css_class: &str) -> gtk::Overlay {
     let cover = build_cover_widget(size, css_class);
     if texture.is_some() {
         apply_cover_texture(&cover, texture, size);
@@ -1250,8 +1547,15 @@ fn set_shuffle_mode(command_controller: &SharedCommandController, mode: ShuffleM
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
+
+    use gtk::prelude::*;
+
     use super::{
-        ALBUM_GRID_COLUMN_SPACING, ALBUM_GRID_MARGIN, ALBUM_TILE_MIN_WIDTH, columns_for_width,
+        ALBUM_GRID_COLUMN_SPACING, ALBUM_GRID_MARGIN, ALBUM_TILE_COVER_SIZE,
+        ALBUM_TILE_COVER_SIZE_EXPANDED, ALBUM_TILE_MIN_WIDTH, ALBUM_TILE_WIDTH, album_row_count,
+        align_widget_to_viewport_top, apply_cover_texture, build_album_tile_content,
+        build_cover_widget, columns_for_width, resize_row_store,
     };
 
     #[test]
@@ -1269,5 +1573,245 @@ mod tests {
 
         assert_eq!(columns_for_width(two_column_width - 1), 1);
         assert_eq!(columns_for_width(two_column_width), 2);
+    }
+
+    #[test]
+    fn row_count_never_drops_the_empty_state_row() {
+        assert_eq!(album_row_count(0, 6), 1);
+        assert_eq!(album_row_count(1, 6), 1);
+        assert_eq!(album_row_count(6, 6), 1);
+        assert_eq!(album_row_count(7, 6), 2);
+    }
+
+    #[test]
+    fn resizing_row_store_preserves_surviving_tokens() {
+        let store = gtk::gio::ListStore::new::<gtk::glib::BoxedAnyObject>();
+        resize_row_store(&store, 10);
+        let first = store.item(0).expect("first row token");
+
+        resize_row_store(&store, 7);
+        assert_eq!(store.n_items(), 7);
+        assert_eq!(store.item(0).as_ref(), Some(&first));
+
+        resize_row_store(&store, 12);
+        assert_eq!(store.n_items(), 12);
+        assert_eq!(store.item(0).as_ref(), Some(&first));
+    }
+
+    #[test]
+    fn realized_row_can_be_aligned_to_viewport_top() {
+        let ran = crate::test_support::with_gtk(|| {
+            let store = gtk::gio::ListStore::new::<gtk::glib::BoxedAnyObject>();
+            resize_row_store(&store, 40);
+            let selection = gtk::NoSelection::new(Some(store));
+            let rows = Rc::new(RefCell::new(HashMap::<u32, gtk::Box>::new()));
+            let factory = gtk::SignalListItemFactory::new();
+            factory.connect_setup(move |_factory, item| {
+                let item = item
+                    .downcast_ref::<gtk::ListItem>()
+                    .expect("list item setup");
+                let row = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                row.set_height_request(48);
+                item.set_child(Some(&row));
+            });
+            let rows_for_bind = rows.clone();
+            factory.connect_bind(move |_factory, item| {
+                let item = item
+                    .downcast_ref::<gtk::ListItem>()
+                    .expect("list item bind");
+                let row = item
+                    .child()
+                    .and_then(|child| child.downcast::<gtk::Box>().ok())
+                    .expect("row shell");
+                rows_for_bind
+                    .borrow_mut()
+                    .retain(|_, bound_row| bound_row != &row);
+                rows_for_bind.borrow_mut().insert(item.position(), row);
+            });
+
+            let list = gtk::ListView::new(Some(selection), Some(factory));
+            let scroller = gtk::ScrolledWindow::new();
+            scroller.set_child(Some(&list));
+            let window = gtk::Window::new();
+            window.set_default_size(320, 220);
+            window.set_child(Some(&scroller));
+            window.present();
+            pump_gtk();
+
+            let scroll_info = gtk::ScrollInfo::new();
+            scroll_info.set_enable_horizontal(false);
+            scroll_info.set_enable_vertical(true);
+            list.scroll_to(12, gtk::ListScrollFlags::NONE, Some(scroll_info));
+            let target = wait_for_row(&rows, 12);
+            for _ in 0..20 {
+                if align_widget_to_viewport_top(&target, &list, &scroller.vadjustment()) {
+                    break;
+                }
+                pump_gtk();
+            }
+            pump_gtk();
+
+            assert!(
+                widget_y_in_widget(&target, &list).abs() <= 0.5,
+                "target row should be aligned to the viewport top"
+            );
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
+    fn loaded_artwork_cannot_change_cover_requisition() {
+        let ran = crate::test_support::with_gtk(|| {
+            let cover = build_cover_widget(ALBUM_TILE_COVER_SIZE, "album-cover");
+            let before = cover_requisition(&cover);
+            let initial_visual = cover.first_child().expect("stable picture overlay");
+
+            apply_cover_texture(&cover, Some(oversized_texture()), ALBUM_TILE_COVER_SIZE);
+
+            assert_eq!(cover_requisition(&cover), before);
+            assert!(cover.child().is_none());
+            let visual = cover.first_child().expect("artwork overlay");
+            assert_eq!(visual, initial_visual);
+            assert!(!cover.is_measure_overlay(&visual));
+
+            apply_cover_texture(&cover, None, ALBUM_TILE_COVER_SIZE);
+            assert_eq!(
+                cover.first_child().as_ref(),
+                Some(&initial_visual),
+                "texture changes reuse the existing picture widget"
+            );
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
+    fn album_tile_title_offset_is_stable_across_artwork_and_selection_states() {
+        let ran = crate::test_support::with_gtk(|| {
+            let (placeholder, placeholder_title) = album_tile_for_alignment_test(false, None);
+            let (loaded, loaded_title) =
+                album_tile_for_alignment_test(false, Some(oversized_texture()));
+            let (selected_placeholder, selected_placeholder_title) =
+                album_tile_for_alignment_test(true, None);
+            let (selected, selected_title) =
+                album_tile_for_alignment_test(true, Some(oversized_texture()));
+
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, ALBUM_GRID_COLUMN_SPACING);
+            row.set_homogeneous(true);
+            row.append(&placeholder);
+            row.append(&loaded);
+            row.append(&selected_placeholder);
+            row.append(&selected);
+
+            let window = gtk::Window::new();
+            window.set_default_size(
+                ALBUM_TILE_MIN_WIDTH * 4 + ALBUM_GRID_COLUMN_SPACING * 3,
+                260,
+            );
+            window.set_child(Some(&row));
+            window.present();
+            let ctx = gtk::glib::MainContext::default();
+            for _ in 0..200 {
+                while ctx.iteration(false) {}
+                if placeholder_title.width() > 0 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(placeholder_title.width() > 0, "title was not allocated");
+
+            let placeholder_y = widget_y_in_widget(&placeholder_title, &row);
+            assert_eq!(placeholder_y, 146.0);
+            assert_eq!(widget_y_in_widget(&loaded_title, &row), placeholder_y);
+            assert_eq!(
+                widget_y_in_widget(&selected_placeholder_title, &row),
+                placeholder_y
+            );
+            assert_eq!(widget_y_in_widget(&selected_title, &row), placeholder_y);
+
+            window.set_child(None::<&gtk::Widget>);
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    fn cover_requisition(cover: &gtk::Overlay) -> ((i32, i32), (i32, i32)) {
+        let horizontal = cover.measure(gtk::Orientation::Horizontal, -1);
+        let vertical = cover.measure(gtk::Orientation::Vertical, ALBUM_TILE_COVER_SIZE);
+        ((horizontal.0, horizontal.1), (vertical.0, vertical.1))
+    }
+
+    fn oversized_texture() -> gtk::gdk::Texture {
+        let width = ALBUM_TILE_COVER_SIZE * 3;
+        let height = ALBUM_TILE_COVER_SIZE * 4;
+        let stride = width as usize * 4;
+        let bytes = gtk::glib::Bytes::from_owned(vec![0xff; stride * height as usize]);
+        gtk::gdk::MemoryTexture::new(
+            width,
+            height,
+            gtk::gdk::MemoryFormat::R8g8b8a8,
+            &bytes,
+            stride,
+        )
+        .upcast()
+    }
+
+    fn album_tile_for_alignment_test(
+        is_selected: bool,
+        texture: Option<gtk::gdk::Texture>,
+    ) -> (gtk::Button, gtk::Label) {
+        let cover_size = if is_selected {
+            ALBUM_TILE_COVER_SIZE_EXPANDED
+        } else {
+            ALBUM_TILE_COVER_SIZE
+        };
+        let tile = build_album_tile_content("Album", "Artist", cover_size);
+        if let Some(texture) = texture {
+            apply_cover_texture(&tile.cover, Some(texture), cover_size);
+        }
+        let button = gtk::Button::new();
+        button.add_css_class("album-tile");
+        if is_selected {
+            button.add_css_class("selected");
+        }
+        button.set_child(Some(&tile.root));
+        button.set_can_shrink(true);
+        button.set_width_request(ALBUM_TILE_WIDTH);
+        button.set_halign(gtk::Align::Fill);
+        button.set_valign(gtk::Align::Start);
+        button.set_overflow(gtk::Overflow::Hidden);
+        (button, tile.title)
+    }
+
+    fn widget_y_in_widget(widget: &impl IsA<gtk::Widget>, target: &impl IsA<gtk::Widget>) -> f32 {
+        widget
+            .compute_point(target, &gtk::graphene::Point::new(0.0, 0.0))
+            .expect("widgets share a root")
+            .y()
+    }
+
+    fn pump_gtk() {
+        let ctx = gtk::glib::MainContext::default();
+        while ctx.iteration(false) {}
+    }
+
+    fn wait_for_row(rows: &RefCell<HashMap<u32, gtk::Box>>, position: u32) -> gtk::Box {
+        for _ in 0..200 {
+            pump_gtk();
+            if let Some(row) = rows.borrow().get(&position).cloned() {
+                return row;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        rows.borrow()
+            .get(&position)
+            .cloned()
+            .expect("target row was realized")
     }
 }
