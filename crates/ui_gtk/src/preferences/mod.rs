@@ -9,7 +9,7 @@ use gtk::{gdk, gio, glib};
 use super::{
     PREFERENCES_WIDTH, WINDOW_SHADOW_MARGIN, command_controller::SharedCommandController,
     library_consolidation::LibraryConsolidationRequestedCallback,
-    library_scan::LibraryScanRequestedCallback,
+    library_scan::LibraryScanRequestedCallback, shortcuts::PREFERENCES_ACCELERATOR,
 };
 
 mod about_tab;
@@ -83,7 +83,7 @@ pub(crate) fn install_preferences_action(
         );
     });
     app.add_action(&preferences);
-    app.set_accels_for_action("app.preferences", &["<Primary>comma"]);
+    app.set_accels_for_action("app.preferences", &[PREFERENCES_ACCELERATOR]);
 }
 
 /// Build the sidebar footer's "cog + Settings" entry.

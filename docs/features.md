@@ -294,7 +294,8 @@ always reports the queued run.
 ### Transport controls — *iso-iTunes*
 Previous, Play/Pause, and Next buttons live in the integrated top bar.
 Spacebar toggles play/pause (focus-aware: it does not intercept while a
-text entry has focus).
+text entry has focus). `Ctrl+Left` and `Ctrl+Right` provide the matching
+previous / next keyboard controls and likewise yield to text editing.
 
 ### Volume slider — *iso-iTunes*
 A volume slider in the top bar persists its value to `settings.toml`,
@@ -719,20 +720,29 @@ copying.
 
 ## Keyboard shortcuts — *iso-iTunes*
 
-Wired as application actions so they show up in the GNOME shortcuts
-overlay:
+Global shortcuts are wired as GTK application actions and listed in the
+in-app shortcuts overlay (`Ctrl+?`). Shortcuts that overlap text editing
+yield while a text entry has focus.
 
-| Shortcut       | Action                                |
-| -------------- | ------------------------------------- |
-| `Ctrl+N`       | New playlist                          |
-| `Ctrl+Alt+N`   | New smart playlist (opens editor)     |
-| `Ctrl+F`       | Focus the search bar (select-all)     |
-| `Ctrl+I`       | Get Info on the current selection     |
-| `Ctrl+[`       | Previous track in Get Info            |
-| `Ctrl+]`       | Next track in Get Info                |
-| `Ctrl+R`       | Reveal the selected track in Files    |
-| `Ctrl+L`       | Jump to the currently playing track   |
-| `Space`        | Play / pause toggle (focus-aware)     |
+| Shortcut         | Action                                |
+| ---------------- | ------------------------------------- |
+| `Space`          | Play / pause toggle                   |
+| `Ctrl+Left`      | Previous track                        |
+| `Ctrl+Right`     | Next track                            |
+| `Ctrl+L`         | Jump to the currently playing track   |
+| `Ctrl+N`         | New playlist                          |
+| `Ctrl+Alt+N`     | New smart playlist (opens editor)     |
+| `Ctrl+F`         | Focus the search bar (select-all)     |
+| `Ctrl+A`         | Select all tracks in the visible list |
+| `Ctrl+I`         | Get Info on the current selection     |
+| `Ctrl+R`         | Reveal the selected track in Files    |
+| `Ctrl+,`         | Preferences                           |
+| `Ctrl+?`         | Keyboard shortcuts overlay            |
+| `Ctrl+W`         | Close window                          |
+| `Ctrl+Q`         | Quit Sustain                          |
+
+Inside Get Info, `Ctrl+[` and `Ctrl+]` navigate to the previous / next
+track in the active list while committing pending edits.
 
 System media keys (Play, Pause, Next, Previous) are routed through
 MPRIS and work globally without focus.

@@ -282,6 +282,13 @@ impl TrackTable {
             .collect()
     }
 
+    /// Select every displayed row through the model's bitset-backed bulk
+    /// operation. Avoid walking rows in the UI layer: GTK can update the
+    /// selection compactly and repaint only the list items it has realized.
+    pub(crate) fn select_all(&self) {
+        self.selection.select_all();
+    }
+
     /// Returns every displayed track id in the table's current sort order.
     pub(crate) fn ordered_track_ids(&self) -> Vec<TrackId> {
         ordered_track_ids(&self.selection)

@@ -9,7 +9,7 @@ use std::{
 };
 
 use gtk::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gio, glib};
 use sustain_app_runtime::{
     MetadataChange, PlaybackCommand, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState,
     Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
@@ -79,7 +79,6 @@ use super::{
     window_chrome::{install_resize_handles, install_window_state_chrome},
 };
 
-mod keyboard;
 mod mpris_bridge;
 mod playback;
 mod playlists;
@@ -91,7 +90,6 @@ mod track_callbacks;
 
 pub(crate) use sidebar_collapse::SidebarCollapseController;
 
-use keyboard::{KeyboardShortcutContext, install_keyboard_shortcuts};
 use mpris_bridge::{install_mpris_command_consumer, now_playing_to_mpris_metadata};
 use playback::{
     install_playlists_header_playback, install_track_ended_callback,
@@ -682,18 +680,6 @@ pub(crate) fn build_main_window(
         albums_view_for_reveal.reveal_album_for_track(track_id);
     });
     show_album_holder.replace(Some(show_album_action));
-    install_keyboard_shortcuts(
-        &window,
-        KeyboardShortcutContext {
-            toggle_or_start_playback: toggle_or_start_playback.clone(),
-            runtime: runtime.clone(),
-            songs_table: songs_table.clone(),
-            playlists_table: playlists_table.clone(),
-            albums_view: albums_view.clone(),
-            content_stack: content_stack.clone(),
-            sidebar: sidebar.clone(),
-        },
-    );
     install_global_shortcuts(GlobalShortcutContext {
         app: app.clone(),
         window: window.clone(),
@@ -704,7 +690,10 @@ pub(crate) fn build_main_window(
         titlebar: titlebar.clone(),
         songs_table: songs_table.clone(),
         playlists_table: playlists_table.clone(),
+        albums_view: albums_view.clone(),
         content_stack: content_stack.clone(),
+        toggle_or_start_playback: toggle_or_start_playback.clone(),
+        playback_changed: playback_changed.clone(),
         library_changed_holder: library_changed_holder.clone(),
         track_row_changed_holder: track_row_changed_holder.clone(),
         artwork_loader: artwork_loader.clone(),
