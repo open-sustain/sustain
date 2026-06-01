@@ -87,6 +87,9 @@ pub(crate) struct TrackTableRow {
     /// sorts by this field, so its non-None value defines the "play order"
     /// the user can click back to after sorting by another column.
     pub(crate) playlist_position: Option<u32>,
+    /// Optional stable band for derived grouped views such as Duplicates.
+    /// `None` keeps ordinary alternating row striping.
+    pub(crate) group_band: Option<bool>,
 }
 
 impl TrackTableRow {
@@ -140,11 +143,17 @@ impl TrackTableRow {
             file_size_bytes: track.file_size_bytes.unwrap_or(0),
             is_missing: track.location.is_missing(),
             playlist_position: None,
+            group_band: None,
         }
     }
 
     pub(crate) fn with_playlist_position(mut self, playlist_position: Option<u32>) -> Self {
         self.playlist_position = playlist_position;
+        self
+    }
+
+    pub(crate) fn with_group_band(mut self, group_band: bool) -> Self {
+        self.group_band = Some(group_band);
         self
     }
 }

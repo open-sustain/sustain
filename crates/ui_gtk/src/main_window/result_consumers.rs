@@ -173,7 +173,9 @@ pub(super) fn install_metadata_writer_event_consumer(
     receiver: Option<MetadataWriterEventReceiver>,
     runtime: SharedRuntime,
     track_row_changed_holder: TrackRowChangedHolder,
+    library_changed_holder: LibraryChangedHolder,
     relocation_completed: crate::missing_track::MissingTrackRelocationCompletedCallback,
+    artwork_loader: ArtworkLoader,
 ) {
     let Some(receiver) = receiver else {
         return;
@@ -189,7 +191,24 @@ pub(super) fn install_metadata_writer_event_consumer(
             let mirror_track_id = match &event {
                 sustain_app_runtime::MetadataWriterEvent::Mirror(result) => Some(result.track_id),
                 sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_)
-                | sustain_app_runtime::MetadataWriterEvent::MissingTrackRelocation(_) => None,
+                | sustain_app_runtime::MetadataWriterEvent::MissingTrackRelocation(_)
+                | sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(_) => None,
+            };
+            let library_changed = matches!(
+                &event,
+                sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(result)
+                    if result.outcome.is_ok()
+            );
+            let duplicate_artwork_sources = match &event {
+                sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(result) => {
+                    result.outcome.as_ref().ok().map(|result| {
+                        std::iter::once(result.survivor_id)
+                            .chain(result.removed_track_ids.iter().copied())
+                            .filter_map(|track_id| artwork_source_for_track(&runtime, track_id))
+                            .collect::<Vec<_>>()
+                    })
+                }
+                _ => None,
             };
             runtime.borrow_mut().apply_metadata_writer_event(event);
             // Managed retarget application reloads SQLite through
@@ -203,6 +222,14 @@ pub(super) fn install_metadata_writer_event_consumer(
             }
             if let Some((track_id, succeeded)) = relocation {
                 relocation_completed(track_id, succeeded);
+            }
+            if let Some(sources) = duplicate_artwork_sources {
+                for source in sources {
+                    artwork_loader.invalidate(&source);
+                }
+            }
+            if library_changed && let Some(callback) = library_changed_holder.borrow().as_ref() {
+                callback();
             }
         }
     });

@@ -377,6 +377,23 @@ impl TrackTable {
         *self.layout_changed.borrow_mut() = Some(callback);
     }
 
+    /// Keep a derived grouped view in its caller-provided order. Duplicates
+    /// rows must stay adjacent by candidate group, so header sorting and
+    /// column reordering are intentionally disabled there.
+    pub(crate) fn disable_sorting_and_column_reordering(&self) {
+        self.table.set_reorderable(false);
+        let columns = self.table.columns();
+        for index in 0..columns.n_items() {
+            let Some(column) = columns
+                .item(index)
+                .and_then(|item| item.downcast::<gtk::ColumnViewColumn>().ok())
+            else {
+                continue;
+            };
+            column.set_sorter(None::<&gtk::Sorter>);
+        }
+    }
+
     /// Activate the play-order sort on the status column.
     ///
     /// Per iTunes 11 semantics, a regular playlist is always sorted by some

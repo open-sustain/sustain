@@ -12,10 +12,11 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value as SqlValue};
 use sustain_domain::SmartPlaylistRuleSet;
 pub use sustain_domain::{
-    AcousticFeatures, LibraryQuery, MetadataChange, PlayStatistics, Playlist, PlaylistFolder,
-    PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, SyncDevice,
-    SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track, TrackAnalysis, TrackColumnEntry,
-    TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackLocation, WaveformSegments,
+    AcousticFeatures, DuplicateConsolidationPlan, LibraryQuery, MetadataChange, PlayStatistics,
+    Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist,
+    SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track,
+    TrackAnalysis, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
+    TrackLocation, WaveformSegments,
 };
 pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 
@@ -290,6 +291,13 @@ pub trait LibraryStore: Send + Sync {
         track_id: TrackId,
         change: &MetadataChange,
     ) -> StoreResult<bool>;
+    /// Commit a user-confirmed duplicate merge as one SQLite-owned unit.
+    ///
+    /// Filesystem publication is staged and verified by the runtime before
+    /// this call. The store adopts the resulting survivor, rewrites affected
+    /// playlists, drops obsolete derived state, and removes duplicate rows
+    /// atomically.
+    fn commit_duplicate_consolidation(&self, plan: &DuplicateConsolidationPlan) -> StoreResult<()>;
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()>;
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>>;
     fn tracks(&self) -> StoreResult<Vec<Track>>;

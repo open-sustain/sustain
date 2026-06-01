@@ -72,13 +72,14 @@ See [docs/features.md](docs/features.md) for the full reference.
 
 Implemented:
 - Library management with two modes — "Don't touch my files" or "Keep my library organized" (*iso-iTunes*)
-- Sidebar-driven navigation — LIBRARY (Music, Albums, Statistics) and PLAYLISTS — with a collapsible left column (*Sustain-native*)
+- Sidebar-driven navigation — LIBRARY (Music, Albums, Duplicates, Statistics) and PLAYLISTS — with a collapsible left column (*Sustain-native*)
 - Dense, keyboard-friendly Music and playlist track tables, full-width album grid (*iso-iTunes*)
 - Playlists, smart playlists, and playlist folders (*iso-iTunes*)
 - 5-star ratings, play count, skip count, last played, last skipped (*iso-iTunes*)
 - Up Next queue with `Play Next` and `Add to Queue` (*iso-iTunes*)
 - Real-time search, sortable and customizable columns (*iso-iTunes*)
 - Library-wide Statistics screen — genre and bitrate distributions, most-played and most-liked genres, release-year and year-added histograms (*Sustain-native*)
+- Deferred duplicate detection and journaled consolidation with independent audio, metadata, and artwork choices (*iTunes-adjacent*)
 - Background BPM and musical-key detection, with a tempo/harmony-aware smart-playlist rule engine (*Sustain-native*)
 - Background backfill of artwork, ID3 tags, and lyrics via MusicBrainz, Cover Art Archive, AcoustID, and LRClib (*iTunes-adjacent*)
 - Smart Shuffle that picks each next track as a continuation of the one playing — a local, transparent perceptual match, no cloud, no learning (*Sustain-native*)
@@ -88,7 +89,6 @@ Implemented:
 
 ## Roadmap
 
-- Duplicates consolidation (preserve the best audio version, aggregate tags)
 - Sync to Android phones over MTP (USB/SD-card sync and Pioneer Rekordbox export already ship)
 
 ## Install

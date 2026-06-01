@@ -27,7 +27,7 @@ use crate::{
 
 mod capabilities;
 mod consolidation;
-mod file_ops;
+pub(crate) mod file_ops;
 mod import;
 mod journal;
 

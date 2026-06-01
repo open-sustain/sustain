@@ -56,6 +56,7 @@ pub enum NotificationCategory {
     LibraryScan,
     LibraryImport,
     LibraryConsolidation,
+    DuplicateConsolidation,
     LibraryHydration,
     ManagedLibraryFilesystem,
     ArtworkFetch,
@@ -501,6 +502,9 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         ApplicationRuntimeError::LibraryScanFailed => "The selected folder could not be scanned.",
         ApplicationRuntimeError::LibraryConsolidationFailed => {
             "The library could not be organized."
+        }
+        ApplicationRuntimeError::DuplicateConsolidationFailed => {
+            "The duplicate tracks could not be consolidated safely."
         }
         ApplicationRuntimeError::LibraryServicesUnavailable => {
             "Library scanning is not available in this build."

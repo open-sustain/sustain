@@ -7,6 +7,7 @@ mod acoustic;
 mod clock;
 mod command;
 mod device_sync;
+mod duplicate_consolidation;
 mod id;
 mod library_statistics;
 mod managed_library;
@@ -34,6 +35,10 @@ pub use command::{ApplicationCommand, ApplicationQuery};
 pub use device_sync::{
     DeviceKind, DeviceLayout, DeviceRelativePath, DeviceSelection, FilesPerFolderCap, SyncDevice,
     SyncDeviceId, SyncManifestEntry,
+};
+pub use duplicate_consolidation::{
+    DuplicateConsolidationError, DuplicateConsolidationPlan, DuplicateConsolidationRequest,
+    DuplicateMatchMode, duplicate_groups, plan_duplicate_consolidation,
 };
 pub use id::{PlaylistFolderId, PlaylistId, SmartPlaylistId, TrackId};
 pub use library_statistics::{

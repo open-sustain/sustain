@@ -17,20 +17,21 @@ use std::{
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, ApplicationQuery, BackgroundJobsSettings,
     BackgroundResourceUsage, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind,
-    DeviceLayout, DeviceRelativePath, FieldChange, FilesPerFolderCap, GenreDistribution,
-    GenrePlayCount, GenreRating, GenreShare, LazyPickContext, LibraryManagementMode,
-    LibrarySettings, LibraryStatistics, MetadataChange, MonotonicClock, OtherGenres,
-    PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueRequest,
-    PlaybackQueueSource, PlaybackSession, PlaybackSettings, PlaybackState, Playlist, PlaylistEntry,
-    PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, QualityBucket, QualityDistribution,
-    QualityRange, Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField,
-    SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice,
-    SyncDeviceId, SystemClock, SystemMonotonicClock, Track, TrackAvailability, TrackColumnEntry,
-    TrackColumnLayout, TrackColumnLayoutScope, TrackContentHash, TrackId, TrackLocation,
-    TrackMetadata, TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection,
-    UserSettings, VolumePercent, YearCount, compare_optional_text, compute_library_statistics,
+    DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest, DuplicateMatchMode,
+    FieldChange, FilesPerFolderCap, GenreDistribution, GenrePlayCount, GenreRating, GenreShare,
+    LazyPickContext, LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange,
+    MonotonicClock, OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
+    PlaybackQueueRequest, PlaybackQueueSource, PlaybackSession, PlaybackSettings, PlaybackState,
+    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem,
+    QualityBucket, QualityDistribution, QualityRange, Rating, RepeatMode, ShuffleMode,
+    SmartPlaylist, SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistLimit,
+    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
+    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
+    SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice, SyncDeviceId, SystemClock,
+    SystemMonotonicClock, Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout,
+    TrackColumnLayoutScope, TrackContentHash, TrackId, TrackLocation, TrackMetadata,
+    TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings,
+    VolumePercent, YearCount, compare_optional_text, compute_library_statistics,
     effective_sort_key, matching_tracks, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
@@ -74,6 +75,7 @@ mod commands;
 mod device_plan_scheduler;
 mod device_sync;
 pub mod device_sync_scheduler;
+mod duplicate_consolidation;
 mod file_presence;
 mod library_hydration;
 mod library_mutation;
@@ -100,6 +102,10 @@ pub use device_sync_scheduler::{
     DeviceSyncCompletion, DeviceSyncEvent, DeviceSyncRunId, DeviceSyncScheduler,
     DeviceSyncStartOutcome,
 };
+pub use duplicate_consolidation::{
+    DuplicateConsolidationResult, DuplicateConsolidationSummary, DuplicateGroupsTask,
+    recover_duplicate_consolidation_journal,
+};
 pub use smart_shuffle_scheduler::{SmartShuffleRebuildResult, SmartShuffleScheduler};
 pub use sustain_device_sync::{ConnectedDevice, DeviceCapacity, SyncPlan, SyncProgress, SyncStage};
 pub use sustain_smart_shuffle::{
@@ -114,8 +120,8 @@ pub use managed_library::{
     ManagedLibraryFilesystemError, run_library_consolidation_task, run_library_import_task,
 };
 pub use metadata_writer::{
-    ManagedMetadataRetargetResult, MetadataWriteKind, MetadataWriteOutcome, MetadataWriteResult,
-    MetadataWriterEvent, MissingTrackRelocationResult,
+    DuplicateConsolidationWriterResult, ManagedMetadataRetargetResult, MetadataWriteKind,
+    MetadataWriteOutcome, MetadataWriteResult, MetadataWriterEvent, MissingTrackRelocationResult,
 };
 pub use notifications::{
     EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_QUEUE_HARD_CAP, NOTIFICATION_TRANSITION,
@@ -132,6 +138,7 @@ pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;
 pub enum ApplicationRuntimeError {
     ArtworkFetchingUnavailable,
     ArtworkRejected,
+    DuplicateConsolidationFailed,
     LibraryPathUnavailable,
     ManagedLibraryFilesystemUnsupported(ManagedLibraryFilesystemError),
     LibraryConsolidationFailed,
@@ -215,6 +222,7 @@ pub enum BackgroundTaskStatus {
     LibraryScanRunning,
     LibraryImportRunning,
     LibraryConsolidationRunning,
+    DuplicateConsolidationRunning,
 }
 
 impl BackgroundTaskStatus {
@@ -340,6 +348,7 @@ pub struct ApplicationRuntime {
     library_scan_notification_id: Option<NotificationId>,
     library_import_notification_id: Option<NotificationId>,
     library_consolidation_notification_id: Option<NotificationId>,
+    duplicate_consolidation_notification_id: Option<NotificationId>,
     managed_library_filesystem_notification_id: Option<NotificationId>,
     managed_library_filesystem_validator: managed_library::ManagedLibraryFilesystemValidator,
     metadata_writer: Option<metadata_writer::MetadataWriter>,
@@ -513,6 +522,7 @@ impl ApplicationRuntime {
             library_scan_notification_id: None,
             library_import_notification_id: None,
             library_consolidation_notification_id: None,
+            duplicate_consolidation_notification_id: None,
             managed_library_filesystem_notification_id: None,
             managed_library_filesystem_validator: Default::default(),
             metadata_writer: None,
@@ -591,6 +601,7 @@ impl ApplicationRuntime {
             library_scan_notification_id: None,
             library_import_notification_id: None,
             library_consolidation_notification_id: None,
+            duplicate_consolidation_notification_id: None,
             managed_library_filesystem_notification_id: None,
             managed_library_filesystem_validator: Default::default(),
             metadata_writer: None,
@@ -662,6 +673,10 @@ impl ApplicationRuntime {
         metadata_service: Arc<dyn MetadataService>,
     ) -> ApplicationRuntimeResult<()> {
         if let Some(library_path) = self.settings.library_path() {
+            duplicate_consolidation::recover_duplicate_consolidation_journal(
+                library_path,
+                library_store.as_ref(),
+            )?;
             managed_library::recover_library_consolidation_journal(
                 library_path,
                 library_store.as_ref(),
@@ -703,6 +718,10 @@ impl ApplicationRuntime {
         metadata_service: Arc<dyn MetadataService>,
     ) -> ApplicationRuntimeResult<()> {
         if let Some(library_path) = self.settings.library_path() {
+            duplicate_consolidation::recover_duplicate_consolidation_journal(
+                library_path,
+                library_store.as_ref(),
+            )?;
             managed_library::recover_library_consolidation_journal(
                 library_path,
                 library_store.as_ref(),
@@ -911,6 +930,9 @@ impl ApplicationRuntime {
             }
             MetadataWriterEvent::MissingTrackRelocation(result) => {
                 self.apply_missing_track_relocation_result(result);
+            }
+            MetadataWriterEvent::DuplicateConsolidation(result) => {
+                self.apply_duplicate_consolidation_result(result);
             }
         }
     }

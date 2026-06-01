@@ -28,6 +28,8 @@ mod command_controller;
 mod content_stack;
 mod date_format;
 mod device_panel;
+mod duplicate_consolidation;
+mod duplicates;
 mod library_consolidation;
 mod library_import;
 mod library_scan;
@@ -92,6 +94,7 @@ const ALBUMS_VIEW: &str = "albums";
 const STATISTICS_VIEW: &str = "statistics";
 const PLAYLISTS_VIEW: &str = "playlists";
 const DEVICES_VIEW: &str = "devices";
+const DUPLICATES_VIEW: &str = "duplicates";
 
 pub(crate) type SharedRuntime = Rc<RefCell<ApplicationRuntime>>;
 pub(crate) type LibraryChangedCallback = Rc<dyn Fn()>;

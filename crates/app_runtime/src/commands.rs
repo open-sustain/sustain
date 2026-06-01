@@ -160,6 +160,9 @@ impl ApplicationRuntime {
             } => {
                 self.relocate_missing_track(track_id, &replacement_path)?;
             }
+            ApplicationCommand::ConsolidateDuplicateTracks(request) => {
+                self.consolidate_duplicate_tracks(request)?;
+            }
             ApplicationCommand::SetRating { track_id, rating } => {
                 self.set_rating(track_id, rating)?;
             }

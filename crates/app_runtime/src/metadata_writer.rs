@@ -25,7 +25,10 @@ use std::{
     time::Duration,
 };
 
-use sustain_domain::{FieldChange, LibraryManagementMode, MetadataChange, TrackMetadata};
+use sustain_domain::{
+    DuplicateConsolidationRequest, FieldChange, LibraryManagementMode, MetadataChange,
+    TrackMetadata,
+};
 use sustain_library_store::{
     LibraryStore, PendingTagMirror, StoreError, StoredTagMirrorArtwork, TagMirrorArtwork,
     TagMirrorKinds, TrackId,
@@ -34,6 +37,7 @@ use sustain_metadata::{MetadataError, MetadataService};
 
 use crate::{
     ApplicationRuntimeError,
+    duplicate_consolidation::{DuplicateConsolidationResult, consolidate_duplicate_tracks},
     library_mutation::relocate_missing_track_with_store,
     managed_library::{ManagedLibraryFilesystemValidator, retarget_managed_metadata},
 };
@@ -79,10 +83,16 @@ pub struct MissingTrackRelocationResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DuplicateConsolidationWriterResult {
+    pub outcome: Result<DuplicateConsolidationResult, ApplicationRuntimeError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MetadataWriterEvent {
     Mirror(MetadataWriteResult),
     ManagedRetarget(ManagedMetadataRetargetResult),
     MissingTrackRelocation(MissingTrackRelocationResult),
+    DuplicateConsolidation(DuplicateConsolidationWriterResult),
 }
 
 enum MetadataWriterCommand {
@@ -95,6 +105,9 @@ enum MetadataWriterCommand {
         track_id: TrackId,
         replacement_path: PathBuf,
         management_mode: LibraryManagementMode,
+    },
+    ConsolidateDuplicateTracks {
+        request: DuplicateConsolidationRequest,
     },
     SetLibraryPath(Option<PathBuf>),
     Shutdown,
@@ -178,6 +191,15 @@ impl MetadataWriter {
                 replacement_path,
                 management_mode,
             })
+            .is_ok()
+    }
+
+    pub(crate) fn consolidate_duplicate_tracks(
+        &self,
+        request: DuplicateConsolidationRequest,
+    ) -> bool {
+        self.sender
+            .send(MetadataWriterCommand::ConsolidateDuplicateTracks { request })
             .is_ok()
     }
 
@@ -289,6 +311,7 @@ fn worker_loop(
             Ok(command) => {
                 if !apply_command(
                     command,
+                    metadata_service.as_ref(),
                     library_store.as_ref(),
                     &mut library_path,
                     &managed_library_filesystem_validator,
@@ -300,6 +323,7 @@ fn worker_loop(
                 while let Ok(command) = receiver.try_recv() {
                     if !apply_command(
                         command,
+                        metadata_service.as_ref(),
                         library_store.as_ref(),
                         &mut library_path,
                         &managed_library_filesystem_validator,
@@ -396,6 +420,7 @@ fn drain_due_batch(
 
 fn apply_command(
     command: MetadataWriterCommand,
+    metadata_service: &dyn MetadataService,
     library_store: &dyn LibraryStore,
     library_path: &mut Option<PathBuf>,
     managed_library_filesystem_validator: &ManagedLibraryFilesystemValidator,
@@ -461,6 +486,28 @@ fn apply_command(
                     track_id,
                     outcome: outcome.map(|_| ()),
                     empty_directory_cleanup_failed,
+                }),
+            );
+            *active = true;
+            true
+        }
+        MetadataWriterCommand::ConsolidateDuplicateTracks { request } => {
+            let outcome = library_path
+                .as_deref()
+                .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)
+                .and_then(|library_path| {
+                    consolidate_duplicate_tracks(
+                        library_path,
+                        library_store,
+                        metadata_service,
+                        managed_library_filesystem_validator,
+                        &request,
+                    )
+                });
+            emit_event(
+                result_sink,
+                MetadataWriterEvent::DuplicateConsolidation(DuplicateConsolidationWriterResult {
+                    outcome,
                 }),
             );
             *active = true;
@@ -538,7 +585,7 @@ fn read_artwork(
         .map_err(store_error)
 }
 
-fn full_metadata_mirror(metadata: &TrackMetadata) -> MetadataChange {
+pub(crate) fn full_metadata_mirror(metadata: &TrackMetadata) -> MetadataChange {
     MetadataChange {
         title: mirror_field(&metadata.title),
         artist: mirror_field(&metadata.artist),

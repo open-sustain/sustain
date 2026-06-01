@@ -70,6 +70,17 @@ pub trait MetadataService: Send + Sync {
     /// [`TrackMetadata`].
     fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags>;
 
+    /// Reads the persisted tag values exactly as written, without the
+    /// filename-title fallback used during import. The duplicate
+    /// consolidation verifier needs this distinction: it verifies a staged
+    /// rewrite before publishing that file into the library namespace.
+    ///
+    /// Test doubles predating staged verification may rely on the default;
+    /// the production implementation overrides it with an exact read.
+    fn read_persisted_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
+        self.read_initial_tags(path)
+    }
+
     fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()>;
     fn write_rating(&self, path: &Path, rating: Rating) -> MetadataResult<()>;
     fn read_artwork(&self, path: &Path) -> MetadataResult<Option<Vec<u8>>>;
@@ -416,83 +427,11 @@ pub struct LoftyMetadataService;
 
 impl MetadataService for LoftyMetadataService {
     fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
-        audio_format_from_path(path)?;
-        let tagged_file = read_tagged_file(path)?;
-        let tag = tagged_file
-            .primary_tag()
-            .or_else(|| tagged_file.first_tag());
-        let properties = tagged_file.properties();
+        read_tags(path, true)
+    }
 
-        let mut metadata = TrackMetadata {
-            title: tag.and_then(|tag| tag.title().map(|value| value.into_owned())),
-            artist: tag.and_then(|tag| tag.artist().map(|value| value.into_owned())),
-            album: tag.and_then(|tag| tag.album().map(|value| value.into_owned())),
-            album_artist: tag
-                .and_then(|tag| tag.get_string(ItemKey::AlbumArtist))
-                .map(ToOwned::to_owned),
-            composer: tag
-                .and_then(|tag| tag.get_string(ItemKey::Composer))
-                .map(ToOwned::to_owned),
-            grouping: tag
-                .and_then(|tag| tag.get_string(ItemKey::ContentGroup))
-                .map(ToOwned::to_owned),
-            genre: tag.and_then(|tag| tag.genre().map(|value| value.into_owned())),
-            track_number: tag.and_then(Accessor::track),
-            track_total: tag.and_then(Accessor::track_total),
-            disc_number: tag.and_then(Accessor::disk),
-            disc_total: tag.and_then(Accessor::disk_total),
-            year: tag.and_then(|tag| tag.date().map(|date| i32::from(date.year))),
-            compilation: tag
-                .and_then(|tag| tag.get_string(ItemKey::FlagCompilation))
-                .and_then(parse_flag),
-            bpm: tag
-                .and_then(|tag| tag.get_string(ItemKey::Bpm))
-                .and_then(|value| value.trim().parse::<u32>().ok()),
-            key: tag
-                .and_then(|tag| tag.get_string(ItemKey::InitialKey))
-                .map(ToOwned::to_owned),
-            comments: tag.and_then(|tag| tag.comment().map(|value| value.into_owned())),
-            lyrics: tag
-                .and_then(|tag| tag.get_string(ItemKey::Lyrics))
-                .map(ToOwned::to_owned),
-            // Tag-derived "sort as" names (issue #13). Read once at
-            // import alongside the display fields; only used for
-            // ordering, never written back.
-            title_sort: tag
-                .and_then(|tag| tag.get_string(ItemKey::TrackTitleSortOrder))
-                .map(ToOwned::to_owned),
-            artist_sort: tag
-                .and_then(|tag| tag.get_string(ItemKey::TrackArtistSortOrder))
-                .map(ToOwned::to_owned),
-            album_sort: tag
-                .and_then(|tag| tag.get_string(ItemKey::AlbumTitleSortOrder))
-                .map(ToOwned::to_owned),
-            album_artist_sort: tag
-                .and_then(|tag| tag.get_string(ItemKey::AlbumArtistSortOrder))
-                .map(ToOwned::to_owned),
-            composer_sort: tag
-                .and_then(|tag| tag.get_string(ItemKey::ComposerSortOrder))
-                .map(ToOwned::to_owned),
-            duration: Some(properties.duration()),
-            bitrate_kbps: properties.audio_bitrate().or(properties.overall_bitrate()),
-            sample_rate_hz: properties.sample_rate(),
-            channels: properties.channels(),
-        };
-        metadata.ensure_title_from_filename(path);
-
-        let rating = tag
-            .and_then(|tag| tag.ratings().next())
-            .and_then(|rating| Rating::new(star_rating_value(rating.rating())))
-            .unwrap_or_else(Rating::unrated);
-
-        // Captured from the already-parsed tag — no extra file open.
-        let has_embedded_artwork = tag.and_then(valid_embedded_picture).is_some();
-
-        Ok(InitialTags {
-            metadata,
-            rating,
-            has_embedded_artwork,
-        })
+    fn read_persisted_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
+        read_tags(path, false)
     }
 
     fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()> {
@@ -611,6 +550,86 @@ impl MetadataService for LoftyMetadataService {
 
         atomic_save_to_path(&tagged_file, path, WriteOptions::default())
     }
+}
+
+fn read_tags(path: &Path, backfill_title_from_filename: bool) -> MetadataResult<InitialTags> {
+    audio_format_from_path(path)?;
+    let tagged_file = read_tagged_file(path)?;
+    let tag = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag());
+    let properties = tagged_file.properties();
+
+    let mut metadata = TrackMetadata {
+        title: tag.and_then(|tag| tag.title().map(|value| value.into_owned())),
+        artist: tag.and_then(|tag| tag.artist().map(|value| value.into_owned())),
+        album: tag.and_then(|tag| tag.album().map(|value| value.into_owned())),
+        album_artist: tag
+            .and_then(|tag| tag.get_string(ItemKey::AlbumArtist))
+            .map(ToOwned::to_owned),
+        composer: tag
+            .and_then(|tag| tag.get_string(ItemKey::Composer))
+            .map(ToOwned::to_owned),
+        grouping: tag
+            .and_then(|tag| tag.get_string(ItemKey::ContentGroup))
+            .map(ToOwned::to_owned),
+        genre: tag.and_then(|tag| tag.genre().map(|value| value.into_owned())),
+        track_number: tag.and_then(Accessor::track),
+        track_total: tag.and_then(Accessor::track_total),
+        disc_number: tag.and_then(Accessor::disk),
+        disc_total: tag.and_then(Accessor::disk_total),
+        year: tag.and_then(|tag| tag.date().map(|date| i32::from(date.year))),
+        compilation: tag
+            .and_then(|tag| tag.get_string(ItemKey::FlagCompilation))
+            .and_then(parse_flag),
+        bpm: tag
+            .and_then(|tag| tag.get_string(ItemKey::Bpm))
+            .and_then(|value| value.trim().parse::<u32>().ok()),
+        key: tag
+            .and_then(|tag| tag.get_string(ItemKey::InitialKey))
+            .map(ToOwned::to_owned),
+        comments: tag.and_then(|tag| tag.comment().map(|value| value.into_owned())),
+        lyrics: tag
+            .and_then(|tag| tag.get_string(ItemKey::Lyrics))
+            .map(ToOwned::to_owned),
+        // Tag-derived "sort as" names (issue #13). Read once at import
+        // alongside the display fields; only used for ordering, never
+        // written back.
+        title_sort: tag
+            .and_then(|tag| tag.get_string(ItemKey::TrackTitleSortOrder))
+            .map(ToOwned::to_owned),
+        artist_sort: tag
+            .and_then(|tag| tag.get_string(ItemKey::TrackArtistSortOrder))
+            .map(ToOwned::to_owned),
+        album_sort: tag
+            .and_then(|tag| tag.get_string(ItemKey::AlbumTitleSortOrder))
+            .map(ToOwned::to_owned),
+        album_artist_sort: tag
+            .and_then(|tag| tag.get_string(ItemKey::AlbumArtistSortOrder))
+            .map(ToOwned::to_owned),
+        composer_sort: tag
+            .and_then(|tag| tag.get_string(ItemKey::ComposerSortOrder))
+            .map(ToOwned::to_owned),
+        duration: Some(properties.duration()),
+        bitrate_kbps: properties.audio_bitrate().or(properties.overall_bitrate()),
+        sample_rate_hz: properties.sample_rate(),
+        channels: properties.channels(),
+    };
+    if backfill_title_from_filename {
+        metadata.ensure_title_from_filename(path);
+    }
+
+    let rating = tag
+        .and_then(|tag| tag.ratings().next())
+        .and_then(|rating| Rating::new(star_rating_value(rating.rating())))
+        .unwrap_or_else(Rating::unrated);
+    let has_embedded_artwork = tag.and_then(valid_embedded_picture).is_some();
+
+    Ok(InitialTags {
+        metadata,
+        rating,
+        has_embedded_artwork,
+    })
 }
 
 pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {

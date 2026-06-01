@@ -4,9 +4,9 @@
 use std::{path::PathBuf, time::Duration};
 
 use crate::{
-    DeviceLayout, FilesPerFolderCap, LibraryQuery, MetadataChange, PlaybackCommand,
-    PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylistId, SmartPlaylistRuleSet,
-    SyncDeviceId, TrackId, UserSettings,
+    DeviceLayout, DuplicateConsolidationRequest, FilesPerFolderCap, LibraryQuery, MetadataChange,
+    PlaybackCommand, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylistId,
+    SmartPlaylistRuleSet, SyncDeviceId, TrackId, UserSettings,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -109,6 +109,7 @@ pub enum ApplicationCommand {
         track_id: TrackId,
         replacement_path: PathBuf,
     },
+    ConsolidateDuplicateTracks(DuplicateConsolidationRequest),
     AddExternalLibraryItems {
         paths: Vec<PathBuf>,
     },

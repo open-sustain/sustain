@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS playlist_entries (
     playlist_id INTEGER NOT NULL,
     track_id INTEGER NOT NULL,
     position INTEGER NOT NULL,
-    PRIMARY KEY (playlist_id, track_id),
+    PRIMARY KEY (playlist_id, position),
     FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
     FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 );

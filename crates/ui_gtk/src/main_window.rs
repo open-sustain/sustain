@@ -20,7 +20,7 @@ use sustain_app_runtime::{
 use super::{
     ALBUMS_VIEW, APP_ID, AnalysisProgressReceiver, ApplicationCommand, ApplicationRuntime,
     ArtworkFetchResultReceiver, AvailabilityChangedCallback, ConnectedDevice, DEVICES_VIEW,
-    DevicePlanResultReceiver, DeviceSyncEventReceiver, LibraryChangedCallback,
+    DUPLICATES_VIEW, DevicePlanResultReceiver, DeviceSyncEventReceiver, LibraryChangedCallback,
     LibraryChangedHolder, LibraryHydrationResultReceiver, MetadataWriterEventReceiver,
     MprisCommandReceiver, OnlineProgressReceiver, PLAYLISTS_VIEW, PlaybackChangedCallback,
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW,
@@ -34,6 +34,8 @@ use super::{
     command_controller::{SharedCommandController, UiCommandController},
     content_stack::build_content_stack,
     device_panel::DeviceSyncPanel,
+    duplicate_consolidation::consolidate_duplicates_callback,
+    duplicates::DuplicatesView,
     library_consolidation::{
         library_consolidation_requested_callback, maybe_auto_resume_library_consolidation,
     },
@@ -394,11 +396,12 @@ pub(crate) fn build_main_window(
         runtime.clone(),
         command_controller.clone(),
         playback_changed.clone(),
-        context_menu,
+        context_menu.clone(),
         locate_missing_track.clone(),
         artwork_loader.clone(),
     );
     albums_view_holder.replace(Some(albums_view.clone()));
+    let duplicates_view = DuplicatesView::new(runtime.clone(), context_menu);
     let playlist_row_reorder = playlist_row_reorder_callback(
         &command_controller,
         &runtime,
@@ -457,11 +460,13 @@ pub(crate) fn build_main_window(
     let content_stack = build_content_stack(
         &songs_drop_overlay,
         &albums_view.widget(),
+        &duplicates_view.widget(),
         &statistics_view.widget(),
         &playlists_view,
         device_panel.widget(),
     );
     install_albums_view_activator(&content_stack, &albums_view);
+    install_duplicates_view(&content_stack, &sidebar, &duplicates_view);
     install_statistics_view_activator(&content_stack, &statistics_view);
     install_device_sync_view(&content_stack, &sidebar, &device_panel, &runtime);
     // The playlists table is built empty. It only needs to be populated
@@ -506,6 +511,7 @@ pub(crate) fn build_main_window(
         &runtime,
         &songs_table,
         &albums_view,
+        &duplicates_view,
         &statistics_view,
         &sidebar,
         &titlebar,
@@ -531,7 +537,9 @@ pub(crate) fn build_main_window(
         metadata_writer_event_rx,
         runtime.clone(),
         track_row_changed_holder.clone(),
+        library_changed_holder.clone(),
         missing_track_relocation_completed,
+        artwork_loader.clone(),
     );
     install_artwork_fetch_result_consumer(ArtworkFetchResultConsumerContext {
         receiver: artwork_fetch_result_rx,
@@ -929,9 +937,27 @@ fn install_device_sync_view(
         let _keep_monitor_alive = &volume_monitor;
         // Leaving a transient view's page (the device panel today) drops
         // its sidebar highlight so the persistent selection shows through.
-        if stack.visible_child_name().as_deref() != Some(DEVICES_VIEW) {
+        if !matches!(
+            stack.visible_child_name().as_deref(),
+            Some(DEVICES_VIEW) | Some(DUPLICATES_VIEW)
+        ) {
             sidebar.clear_transient_highlight();
         }
+    });
+}
+
+fn install_duplicates_view(
+    content_stack: &gtk::Stack,
+    sidebar: &PlaylistSidebar,
+    duplicates_view: &DuplicatesView,
+) {
+    let content_stack_for_sidebar = content_stack.clone();
+    sidebar.set_duplicates_selected_callback(Rc::new(move || {
+        content_stack_for_sidebar.set_visible_child_name(DUPLICATES_VIEW);
+    }));
+    let duplicates_view = duplicates_view.clone();
+    content_stack.connect_visible_child_name_notify(move |stack| {
+        duplicates_view.set_active(stack.visible_child_name().as_deref() == Some(DUPLICATES_VIEW));
     });
 }
 
@@ -989,6 +1015,7 @@ fn library_changed_callback(
     runtime: &SharedRuntime,
     songs_table: &TrackTable,
     albums_view: &AlbumsView,
+    duplicates_view: &DuplicatesView,
     statistics_view: &StatisticsView,
     sidebar: &PlaylistSidebar,
     titlebar: &Titlebar,
@@ -998,6 +1025,7 @@ fn library_changed_callback(
     let runtime = runtime.clone();
     let songs_table = songs_table.clone();
     let albums_view = albums_view.clone();
+    let duplicates_view = duplicates_view.clone();
     let statistics_view = statistics_view.clone();
     let sidebar = sidebar.clone();
     let titlebar = titlebar.clone();
@@ -1011,6 +1039,7 @@ fn library_changed_callback(
         // current library using the search text it already holds, so we
         // pass no track snapshot and need not call set_search_text here.
         albums_view.replace_tracks();
+        duplicates_view.refresh_if_active();
         // The Statistics page is library-wide; rebuild it only when it is
         // the visible view (otherwise its activator refreshes it on the
         // next visit), so a scan/import does not pay for an off-screen

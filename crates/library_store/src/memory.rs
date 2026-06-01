@@ -93,6 +93,37 @@ impl InMemoryLibraryStore {
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)
     }
+
+    fn remove_track_ancillary_rows(&self, track_ids: &[TrackId]) -> StoreResult<()> {
+        let mut analysis = self
+            .analysis_bookkeeping
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        let mut waveforms = self
+            .waveforms
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        let mut synced_lyrics = self
+            .synced_lyrics
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        let mut online = self
+            .online_bookkeeping
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        let mut acoustics = self
+            .acoustics
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        for track_id in track_ids {
+            analysis.remove(track_id);
+            waveforms.remove(track_id);
+            synced_lyrics.remove(track_id);
+            online.remove(track_id);
+            acoustics.remove(track_id);
+        }
+        Ok(())
+    }
 }
 
 fn enqueue_tag_mirror(
@@ -354,6 +385,50 @@ impl LibraryStore for InMemoryLibraryStore {
         Ok(changed)
     }
 
+    fn commit_duplicate_consolidation(
+        &self,
+        plan: &crate::DuplicateConsolidationPlan,
+    ) -> StoreResult<()> {
+        let mut tracks = self.tracks_guard()?;
+        if !tracks.contains_key(&plan.survivor.id) {
+            return Err(StoreError::Database(
+                "duplicate consolidation survivor does not exist".to_owned(),
+            ));
+        }
+        tracks.insert(plan.survivor.id, plan.survivor.clone());
+        for removed_track_id in &plan.removed_track_ids {
+            tracks.remove(removed_track_id);
+        }
+        drop(tracks);
+
+        let mut playlists = self.playlists_guard()?;
+        for playlist in &plan.rewritten_playlists {
+            playlists.insert(playlist.id, playlist.clone());
+        }
+        drop(playlists);
+
+        let mut outbox = self
+            .tag_mirror_outbox
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        outbox.remove(&plan.survivor.id);
+        for removed_track_id in &plan.removed_track_ids {
+            outbox.remove(removed_track_id);
+        }
+        drop(outbox);
+
+        let mut fingerprints = self
+            .source_fingerprints
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        fingerprints.remove(&plan.survivor.id);
+        for removed_track_id in &plan.removed_track_ids {
+            fingerprints.remove(removed_track_id);
+        }
+        drop(fingerprints);
+        self.remove_track_ancillary_rows(&plan.removed_track_ids)
+    }
+
     fn apply_track_metadata_change_and_location_and_enqueue_mirror(
         &self,
         track_id: TrackId,
@@ -395,7 +470,7 @@ impl LibraryStore for InMemoryLibraryStore {
         for playlist in self.playlists_guard()?.values_mut() {
             playlist.entries.retain(|entry| entry.track_id != track_id);
         }
-        Ok(())
+        self.remove_track_ancillary_rows(&[track_id])
     }
 
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>> {

@@ -180,10 +180,12 @@ struct LoaderInner {
 
 struct WorkerRequest {
     source: ArtworkSource,
+    generation: u64,
 }
 
 struct WorkerResult {
     source: ArtworkSource,
+    generation: u64,
     decoded: DecodedArtwork,
 }
 
@@ -252,7 +254,11 @@ impl ArtworkLoader {
             // Send only fails if every worker has exited, which happens
             // exclusively at shutdown. Drop the callback silently in
             // that case — there is no view left to update.
-            let _ = self.inner.request_tx.send(WorkerRequest { source });
+            let generation = self.inner.repository.source_generation(&source);
+            let _ = self
+                .inner
+                .request_tx
+                .send(WorkerRequest { source, generation });
         }
     }
 
@@ -270,16 +276,14 @@ impl ArtworkLoader {
     /// That keeps the invalidation hook narrowly responsible and
     /// avoids reaching across the UI tree from a model-layer cache.
     pub(crate) fn invalidate(&self, source: &ArtworkSource) {
-        // Forget the decoded value, drop any callbacks queued against
-        // it, and tell the on-disk cache to evict the matching row.
-        // The order matters: invalidate the in-memory entry first so
-        // a callback fired between the disk-cache drop and the
-        // in-memory drop cannot reinstate the stale entry.
+        // Forget the decoded value and callbacks before advancing the source
+        // generation. Results already in flight are discarded by the poller;
+        // advancing the repository generation also prevents those workers
+        // from repopulating the on-disk cache after its matching row is
+        // evicted.
         self.inner.cache.borrow_mut().remove(source);
         let _ = self.inner.pending.borrow_mut().remove(source);
-        if let Some(disk_cache) = self.inner.repository.disk_cache() {
-            disk_cache.delete(source);
-        }
+        self.inner.repository.invalidate(source);
     }
 
     /// Insert decoded artwork built from already-in-memory bytes.
@@ -323,10 +327,11 @@ fn worker_loop(
                 Err(_) => return,
             }
         };
-        let decoded = repository.load(&request.source);
+        let decoded = repository.load(&request.source, request.generation);
         if result_tx
             .send(WorkerResult {
                 source: request.source,
+                generation: request.generation,
                 decoded,
             })
             .is_err()
@@ -350,6 +355,10 @@ fn install_result_poller(inner: Rc<LoaderInner>, rx: mpsc::Receiver<WorkerResult
             }
             match rx.try_recv() {
                 Ok(result) => {
+                    if inner.repository.source_generation(&result.source) != result.generation {
+                        processed += 1;
+                        continue;
+                    }
                     inner
                         .cache
                         .borrow_mut()
@@ -374,6 +383,7 @@ fn install_result_poller(inner: Rc<LoaderInner>, rx: mpsc::Receiver<WorkerResult
 struct ArtworkRepository {
     metadata_service: Arc<dyn MetadataService>,
     disk_cache: Option<ArtworkDiskCache>,
+    source_generations: Mutex<HashMap<ArtworkSource, u64>>,
 }
 
 impl ArtworkRepository {
@@ -381,14 +391,30 @@ impl ArtworkRepository {
         Self {
             metadata_service,
             disk_cache: ArtworkDiskCache::open(&cache_dir),
+            source_generations: Mutex::new(HashMap::new()),
         }
     }
 
-    fn disk_cache(&self) -> Option<&ArtworkDiskCache> {
-        self.disk_cache.as_ref()
+    fn source_generation(&self, source: &ArtworkSource) -> u64 {
+        self.source_generations
+            .lock()
+            .ok()
+            .and_then(|generations| generations.get(source).copied())
+            .unwrap_or_default()
     }
 
-    fn load(&self, source: &ArtworkSource) -> DecodedArtwork {
+    fn invalidate(&self, source: &ArtworkSource) {
+        let Ok(mut generations) = self.source_generations.lock() else {
+            return;
+        };
+        let generation = generations.entry(source.clone()).or_default();
+        *generation = generation.saturating_add(1);
+        if let Some(disk_cache) = &self.disk_cache {
+            disk_cache.delete(source);
+        }
+    }
+
+    fn load(&self, source: &ArtworkSource, generation: u64) -> DecodedArtwork {
         let fingerprint = source.file_fingerprint();
         if let (Some(cache), Some(fingerprint)) = (&self.disk_cache, fingerprint)
             && let Some(decoded) = cache.load(source, fingerprint)
@@ -400,7 +426,11 @@ impl ArtworkRepository {
             ArtworkSource::EmbeddedTrack { file_path, .. } => {
                 let bytes = self.metadata_service.read_artwork(file_path).ok().flatten();
                 let decoded = decode_artwork(bytes);
-                if let (Some(cache), Some(fingerprint)) = (&self.disk_cache, fingerprint) {
+                let generations = self.source_generations.lock().ok();
+                if generations.as_ref().is_some_and(|generations| {
+                    generations.get(source).copied().unwrap_or_default() == generation
+                }) && let (Some(cache), Some(fingerprint)) = (&self.disk_cache, fingerprint)
+                {
                     cache.store(source, fingerprint, &decoded.cache_entry);
                 }
                 decoded.artwork

@@ -114,6 +114,7 @@ pub(crate) enum TrackContextActionId {
     CopyFiles,
     ShowInFolder,
     ShowAlbum,
+    ConsolidateDuplicates,
     RemoveFromLibrary,
     MoveToTrash,
     RemoveFromPlaylist,
@@ -128,6 +129,7 @@ impl TrackContextActionId {
             Self::CopyFiles => "copy-files",
             Self::ShowInFolder => "show-in-folder",
             Self::ShowAlbum => "show-album",
+            Self::ConsolidateDuplicates => "consolidate-duplicates",
             Self::RemoveFromLibrary => "remove-from-library",
             Self::MoveToTrash => "move-to-trash",
             Self::RemoveFromPlaylist => "remove-from-playlist",
@@ -178,11 +180,13 @@ const TRACK_CONTEXT_SECTION_ORDER: &[TrackContextActionSection] = &[
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrackSelectionRequirement {
     AtLeastOne,
+    AtLeastTwo,
     Single,
 }
 
 const TRACK_SELECTION_REQUIREMENTS: &[TrackSelectionRequirement] = &[
     TrackSelectionRequirement::AtLeastOne,
+    TrackSelectionRequirement::AtLeastTwo,
     TrackSelectionRequirement::Single,
 ];
 
@@ -190,6 +194,7 @@ impl TrackSelectionRequirement {
     fn accepts(self, selected_count: usize) -> bool {
         match self {
             Self::AtLeastOne => selected_count > 0,
+            Self::AtLeastTwo => selected_count > 1,
             Self::Single => selected_count == 1,
         }
     }
@@ -304,6 +309,18 @@ impl TrackContextAction {
             label: "Remove from Library",
             section: TrackContextActionSection::Destructive,
             selection: TrackSelectionRequirement::AtLeastOne,
+            confirmation: TrackActionConfirmation::None,
+            visibility: None,
+            callback,
+        }
+    }
+
+    pub(crate) fn consolidate_duplicates(callback: TrackActionCallback) -> Self {
+        Self {
+            id: TrackContextActionId::ConsolidateDuplicates,
+            label: "Consolidate to single track",
+            section: TrackContextActionSection::Destructive,
+            selection: TrackSelectionRequirement::AtLeastTwo,
             confirmation: TrackActionConfirmation::None,
             visibility: None,
             callback,
@@ -1055,6 +1072,17 @@ mod tests {
 
         assert!(!action.is_available(&[]));
         assert!(action.is_available(&[one]));
+        assert!(action.is_available(&[one, two]));
+    }
+
+    #[test]
+    fn duplicate_consolidation_requires_multiple_tracks() {
+        let action = TrackContextAction::consolidate_duplicates(no_op_callback());
+        let one = TrackId::new(1).expect("positive track id");
+        let two = TrackId::new(2).expect("positive track id");
+
+        assert!(!action.is_available(&[]));
+        assert!(!action.is_available(&[one]));
         assert!(action.is_available(&[one, two]));
     }
 

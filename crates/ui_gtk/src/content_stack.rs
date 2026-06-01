@@ -3,11 +3,14 @@
 
 use gtk::prelude::*;
 
-use super::{ALBUMS_VIEW, DEVICES_VIEW, PLAYLISTS_VIEW, SONGS_VIEW, STATISTICS_VIEW};
+use super::{
+    ALBUMS_VIEW, DEVICES_VIEW, DUPLICATES_VIEW, PLAYLISTS_VIEW, SONGS_VIEW, STATISTICS_VIEW,
+};
 
 pub(crate) fn build_content_stack(
     songs_view: &impl IsA<gtk::Widget>,
     albums_view: &impl IsA<gtk::Widget>,
+    duplicates_view: &impl IsA<gtk::Widget>,
     statistics_view: &impl IsA<gtk::Widget>,
     playlists_view: &impl IsA<gtk::Widget>,
     devices_view: &impl IsA<gtk::Widget>,
@@ -23,6 +26,7 @@ pub(crate) fn build_content_stack(
 
     stack.add_named(songs_view, Some(SONGS_VIEW));
     stack.add_named(albums_view, Some(ALBUMS_VIEW));
+    stack.add_named(duplicates_view, Some(DUPLICATES_VIEW));
     stack.add_named(statistics_view, Some(STATISTICS_VIEW));
     stack.add_named(playlists_view, Some(PLAYLISTS_VIEW));
     stack.add_named(devices_view, Some(DEVICES_VIEW));

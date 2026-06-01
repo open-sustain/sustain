@@ -21,11 +21,12 @@ use sustain_domain::{
     UiSidebarSelection, UserSettings, VolumePercent,
 };
 use sustain_library_store::{
-    AcousticFeatures, AnalysisCapabilities, AnalysisContext, InMemoryLibraryStore, LibraryStore,
-    OnlineCapabilities, OnlineContext, PendingTagMirror, PlaylistFolder, SourceFingerprint,
-    SqliteLibraryStore, StoreError, StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics,
-    StoredTagMirrorArtwork, StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry,
-    SyncedLyrics, TagMirrorArtwork, TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope,
+    AcousticFeatures, AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan,
+    InMemoryLibraryStore, LibraryStore, OnlineCapabilities, OnlineContext, PendingTagMirror,
+    PlaylistFolder, SourceFingerprint, SqliteLibraryStore, StoreError, StoreResult,
+    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
+    SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, TrackAnalysis,
+    TrackColumnLayout, TrackColumnLayoutScope,
 };
 use sustain_metadata::{
     InitialTags, LibraryScan, MetadataChange, MetadataError, MetadataResult, ScannedTrack,
@@ -6010,6 +6011,10 @@ impl LibraryStore for CallCountingLibraryStore {
 
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()> {
         self.inner.delete_track(track_id)
+    }
+
+    fn commit_duplicate_consolidation(&self, plan: &DuplicateConsolidationPlan) -> StoreResult<()> {
+        self.inner.commit_duplicate_consolidation(plan)
     }
 
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>> {

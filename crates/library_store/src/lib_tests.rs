@@ -23,10 +23,11 @@ use sustain_domain::{
 };
 
 use super::{
-    AnalysisCapabilities, AnalysisContext, InMemoryLibraryStore, LibraryQuery, LibraryStore,
-    OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId, SmartPlaylist,
-    SmartPlaylistId, SqliteLibraryStore, StoredSyncedLyrics, StoredWaveform, SyncedLyrics,
-    TagMirrorArtwork, Track, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
+    AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan, InMemoryLibraryStore,
+    LibraryQuery, LibraryStore, OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder,
+    PlaylistFolderId, SmartPlaylist, SmartPlaylistId, SqliteLibraryStore, StoredSyncedLyrics,
+    StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry, TrackColumnLayout,
+    TrackColumnLayoutScope,
 };
 use crate::{PlaylistId, StoreResult, TrackId};
 use sustain_domain::SyncedLyricsLine;
@@ -180,6 +181,20 @@ fn in_memory_store_deletes_playlists() {
 
     assert_eq!(store.playlist(playlist.id), Ok(None));
     assert_eq!(store.playlists(), Ok(Vec::new()));
+}
+
+#[test]
+fn sqlite_store_round_trips_repeated_playlist_entries() {
+    let store = SqliteLibraryStore::open_in_memory().expect("store");
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+    let playlist = playlist(1, "Repeat", vec![entry(1, 1, 0), entry(1, 1, 1)]);
+
+    store
+        .save_playlist(playlist.clone())
+        .expect("save repeated entries");
+
+    assert_eq!(store.playlist(playlist.id), Ok(Some(playlist)));
 }
 
 #[test]
@@ -2134,6 +2149,85 @@ fn sqlite_track_delete_cascades_tag_mirror_outbox() {
 #[test]
 fn in_memory_track_delete_cascades_tag_mirror_outbox() {
     run_track_delete_cascades_tag_mirror_outbox(&InMemoryLibraryStore::new());
+}
+
+#[test]
+fn sqlite_duplicate_consolidation_commits_survivor_playlist_and_cache_changes() {
+    run_duplicate_consolidation_commits_survivor_playlist_and_cache_changes(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_duplicate_consolidation_commits_survivor_playlist_and_cache_changes() {
+    run_duplicate_consolidation_commits_survivor_playlist_and_cache_changes(
+        &InMemoryLibraryStore::new(),
+    );
+}
+
+fn run_duplicate_consolidation_commits_survivor_playlist_and_cache_changes(
+    store: &dyn LibraryStore,
+) {
+    let mut survivor = track(1, "keep.flac");
+    survivor.metadata.title = Some("Old".to_owned());
+    let removed = track(2, "remove.flac");
+    store.save_track(survivor.clone()).expect("save survivor");
+    store.save_track(removed.clone()).expect("save removed");
+    let original_playlist = playlist(
+        1,
+        "Mix",
+        vec![entry(1, 2, 0), entry(1, 1, 1), entry(1, 2, 2)],
+    );
+    store
+        .save_playlist(original_playlist)
+        .expect("save playlist");
+    store
+        .update_track_rating_and_enqueue_mirror(survivor.id, Rating::new(3).expect("rating"))
+        .expect("enqueue survivor mirror");
+    store
+        .update_track_rating_and_enqueue_mirror(removed.id, Rating::new(4).expect("rating"))
+        .expect("enqueue removed mirror");
+    for track_id in [survivor.id, removed.id] {
+        store
+            .save_source_fingerprint(
+                track_id,
+                &SourceFingerprint {
+                    stat: SourceFileStat {
+                        device: 1,
+                        inode: track_id.get() as u64,
+                        size_bytes: 9,
+                        modified_at_ns: 3,
+                        changed_at_ns: 4,
+                    },
+                    content_hash: TrackContentHash::new("a".repeat(64)).expect("hash"),
+                },
+            )
+            .expect("save source fingerprint");
+    }
+
+    survivor.metadata.title = Some("Chosen".to_owned());
+    survivor.rating = Rating::new(5).expect("rating");
+    survivor.statistics.play_count = 12;
+    survivor.file_size_bytes = Some(42);
+    survivor.has_embedded_artwork = Some(true);
+    let rewritten_playlist = playlist(1, "Mix", vec![entry(1, 1, 0)]);
+    store
+        .commit_duplicate_consolidation(&DuplicateConsolidationPlan {
+            survivor: survivor.clone(),
+            removed_track_ids: vec![removed.id],
+            rewritten_playlists: vec![rewritten_playlist.clone()],
+        })
+        .expect("commit consolidation");
+
+    assert_eq!(store.track(survivor.id), Ok(Some(survivor)));
+    assert_eq!(store.track(removed.id), Ok(None));
+    assert_eq!(
+        store.playlist(rewritten_playlist.id),
+        Ok(Some(rewritten_playlist))
+    );
+    assert!(store.tag_mirrors_due(0, 10).expect("outbox").is_empty());
+    assert_eq!(store.source_fingerprint(track_id(1)), Ok(None));
+    assert_eq!(store.source_fingerprint(track_id(2)), Ok(None));
 }
 
 fn run_managed_retarget_commits_metadata_location_and_outbox_together(store: &dyn LibraryStore) {

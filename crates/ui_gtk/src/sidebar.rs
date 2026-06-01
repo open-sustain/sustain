@@ -47,6 +47,7 @@ pub(crate) type SidebarOnlineRunCallback = Rc<dyn Fn(PlaylistItem, OnlineRunRequ
 /// Invoked when the user clicks a row under the DEVICES section. Carries
 /// the connected device so the panel can render and sync it.
 pub(crate) type SidebarDeviceSelectedCallback = Rc<dyn Fn(ConnectedDevice)>;
+pub(crate) type SidebarDuplicatesSelectedCallback = Rc<dyn Fn()>;
 /// Queries whether a given analysis capability is enabled globally
 /// (i.e. covered by the background sweep). The sidebar renders the
 /// matching submenu item insensitive whenever this returns `true`.
@@ -127,6 +128,7 @@ pub(crate) struct PlaylistSidebar {
     /// Container holding the dynamically-rebuilt DEVICES rows.
     devices_body: gtk::Box,
     on_device_selected: Rc<RefCell<Option<SidebarDeviceSelectedCallback>>>,
+    on_duplicates_selected: Rc<RefCell<Option<SidebarDuplicatesSelectedCallback>>>,
     /// The currently highlighted *transient* row (a device today, the
     /// future Duplicates scan), for single-selection CSS. Mutually
     /// exclusive with the persistent highlight.
@@ -154,9 +156,11 @@ impl PlaylistSidebar {
 
         let music_row = build_library_row("Music", "audio-x-generic-symbolic");
         let albums_row = build_library_row("Albums", "media-optical-symbolic");
+        let duplicates_row = build_library_row("Duplicates", "edit-copy-symbolic");
         let statistics_row = build_library_row("Statistics", "sustain-statistics-symbolic");
         root.append(&music_row);
         root.append(&albums_row);
+        root.append(&duplicates_row);
         root.append(&statistics_row);
 
         // DEVICES section: connected USB sticks / SD cards. Sits between
@@ -179,6 +183,8 @@ impl PlaylistSidebar {
             vec![devices_body.clone().upcast::<gtk::Widget>()],
         );
         let on_device_selected: Rc<RefCell<Option<SidebarDeviceSelectedCallback>>> =
+            Rc::new(RefCell::new(None));
+        let on_duplicates_selected: Rc<RefCell<Option<SidebarDuplicatesSelectedCallback>>> =
             Rc::new(RefCell::new(None));
         let active_transient_row: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
         let persistent_selection = Rc::new(Cell::new(SidebarSelection::Music));
@@ -246,6 +252,7 @@ impl PlaylistSidebar {
             vec![
                 music_row.clone().upcast::<gtk::Widget>(),
                 albums_row.clone().upcast::<gtk::Widget>(),
+                duplicates_row.clone().upcast::<gtk::Widget>(),
                 statistics_row.clone().upcast::<gtk::Widget>(),
             ],
         );
@@ -318,6 +325,37 @@ impl PlaylistSidebar {
         music_row.add_css_class("selected");
         selection.set_selected(gtk::INVALID_LIST_POSITION);
 
+        let duplicates_gesture = gtk::GestureClick::new();
+        duplicates_gesture.set_button(gdk::BUTTON_PRIMARY);
+        let duplicates_sidebar_row = duplicates_row.clone().upcast::<gtk::Widget>();
+        let sidebar_active_transient_row = active_transient_row.clone();
+        let persistent_selection_for_duplicates = persistent_selection.clone();
+        let library_state_for_duplicates = library_state.clone();
+        let selection_for_duplicates = selection.clone();
+        let music_row_for_duplicates = music_row.clone();
+        let albums_row_for_duplicates = albums_row.clone();
+        let statistics_row_for_duplicates = statistics_row.clone();
+        let on_selection_changed_for_duplicates = on_selection_changed.clone();
+        let on_duplicates_selected_for_gesture = on_duplicates_selected.clone();
+        duplicates_gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            activate_transient_view_state(
+                &duplicates_sidebar_row,
+                &sidebar_active_transient_row,
+                &persistent_selection_for_duplicates,
+                &library_state_for_duplicates,
+                &selection_for_duplicates,
+                &on_selection_changed_for_duplicates,
+                &music_row_for_duplicates,
+                &albums_row_for_duplicates,
+                &statistics_row_for_duplicates,
+            );
+            if let Some(callback) = on_duplicates_selected_for_gesture.borrow().as_ref() {
+                callback();
+            }
+        });
+        duplicates_row.add_controller(duplicates_gesture);
+
         Self {
             root,
             footer,
@@ -342,6 +380,7 @@ impl PlaylistSidebar {
             playlists_section_collapsed,
             devices_body,
             on_device_selected,
+            on_duplicates_selected,
             active_transient_row,
             persistent_selection,
         }
@@ -417,6 +456,13 @@ impl PlaylistSidebar {
         self.on_device_selected.replace(Some(callback));
     }
 
+    pub(crate) fn set_duplicates_selected_callback(
+        &self,
+        callback: SidebarDuplicatesSelectedCallback,
+    ) {
+        self.on_duplicates_selected.replace(Some(callback));
+    }
+
     /// Rebuild the DEVICES section from the current set of connected
     /// devices. Clears the previous rows and any highlight.
     pub(crate) fn set_devices(&self, devices: &[ConnectedDevice]) {
@@ -460,35 +506,25 @@ impl PlaylistSidebar {
     }
 
     /// Make `row` the sidebar's sole active highlight on behalf of a
-    /// *transient* view — a connected device today, the upcoming
-    /// compute-heavy Duplicates scan tomorrow. The persistent selection
+    /// *transient* view — a connected device or the deferred Duplicates
+    /// scan. The persistent selection
     /// (Music / Albums / a playlist) that was live is visually
     /// deactivated but remembered, so it — not this transient view — is
     /// what [`Self::persisted_selection`] reports and what is restored on
     /// the next launch. Transient views are never persisted: re-opening
     /// one at startup could fail (the device is gone) or be expensive.
     pub(crate) fn activate_transient_view(&self, row: &gtk::Widget) {
-        // Entering the transient state from a persistent one: snapshot
-        // the persistent selection. Switching transient→transient keeps
-        // the original snapshot.
-        let already_transient = self.active_transient_row.borrow().is_some();
-        if !already_transient && let Some(selection) = self.current_selection() {
-            self.persistent_selection.set(selection);
-        }
-        if let Some(previous) = self.active_transient_row.borrow_mut().take() {
-            previous.remove_css_class("selected");
-        }
-        // Clear the persistent highlight without firing the selection
-        // callback — that would switch the content area back to a library
-        // or playlist view, fighting the transient view being shown.
-        let suspended = self.on_selection_changed.borrow_mut().take();
-        self.library_state.set(LibraryRowState::None);
-        self.paint_library_rows();
-        self.selection.set_selected(gtk::INVALID_LIST_POSITION);
-        *self.on_selection_changed.borrow_mut() = suspended;
-
-        row.add_css_class("selected");
-        self.active_transient_row.replace(Some(row.clone()));
+        activate_transient_view_state(
+            row,
+            &self.active_transient_row,
+            &self.persistent_selection,
+            &self.library_state,
+            &self.selection,
+            &self.on_selection_changed,
+            &self.music_row,
+            &self.albums_row,
+            &self.statistics_row,
+        );
     }
 
     /// Drop the transient-view highlight — called when a persistent
@@ -520,12 +556,7 @@ impl PlaylistSidebar {
     }
 
     pub(crate) fn current_selection(&self) -> Option<SidebarSelection> {
-        match self.library_state.get() {
-            LibraryRowState::Music => Some(SidebarSelection::Music),
-            LibraryRowState::Albums => Some(SidebarSelection::Albums),
-            LibraryRowState::Statistics => Some(SidebarSelection::Statistics),
-            LibraryRowState::None => selected_item(&self.selection).map(SidebarSelection::Item),
-        }
+        current_selection(self.library_state.get(), &self.selection)
     }
 
     pub(crate) fn select_music(&self) {
@@ -825,6 +856,49 @@ fn library_row_selection(state: LibraryRowState) -> Option<SidebarSelection> {
         LibraryRowState::Statistics => Some(SidebarSelection::Statistics),
         LibraryRowState::None => None,
     }
+}
+
+fn current_selection(
+    library_state: LibraryRowState,
+    selection: &gtk::SingleSelection,
+) -> Option<SidebarSelection> {
+    library_row_selection(library_state)
+        .or_else(|| selected_item(selection).map(SidebarSelection::Item))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn activate_transient_view_state(
+    row: &gtk::Widget,
+    active_transient_row: &Rc<RefCell<Option<gtk::Widget>>>,
+    persistent_selection: &Rc<Cell<SidebarSelection>>,
+    library_state: &Rc<Cell<LibraryRowState>>,
+    selection: &gtk::SingleSelection,
+    on_selection_changed: &Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
+    music_row: &gtk::TreeExpander,
+    albums_row: &gtk::TreeExpander,
+    statistics_row: &gtk::TreeExpander,
+) {
+    // Entering the transient state from a persistent one: snapshot the
+    // persistent selection. Switching transient-to-transient keeps the
+    // original snapshot.
+    if active_transient_row.borrow().is_none()
+        && let Some(selection) = current_selection(library_state.get(), selection)
+    {
+        persistent_selection.set(selection);
+    }
+    if let Some(previous) = active_transient_row.borrow_mut().take() {
+        previous.remove_css_class("selected");
+    }
+    // Clear the persistent highlight without firing the selection callback:
+    // that would switch the content area back to a library or playlist view.
+    let suspended = on_selection_changed.borrow_mut().take();
+    library_state.set(LibraryRowState::None);
+    paint_library_rows(LibraryRowState::None, music_row, albums_row, statistics_row);
+    selection.set_selected(gtk::INVALID_LIST_POSITION);
+    *on_selection_changed.borrow_mut() = suspended;
+
+    row.add_css_class("selected");
+    active_transient_row.replace(Some(row.clone()));
 }
 
 #[allow(clippy::too_many_arguments)]

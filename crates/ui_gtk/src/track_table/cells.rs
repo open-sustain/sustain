@@ -416,7 +416,7 @@ pub(super) fn build_text_cell_factory(
         else {
             return;
         };
-        apply_row_tint(&cell, list_item.position());
+        apply_bound_row_tint(&cell, list_item);
         sync_row_selection_class(&cell, list_item.is_selected());
 
         let Some(label) = cell
@@ -493,7 +493,7 @@ pub(super) fn build_rating_cell_factory(
         else {
             return;
         };
-        apply_row_tint(&cell, list_item.position());
+        apply_bound_row_tint(&cell, list_item);
         sync_row_selection_class(&cell, list_item.is_selected());
         clear_box_children(&cell);
 
@@ -636,7 +636,7 @@ fn build_status_cell_factory(
         else {
             return;
         };
-        apply_row_tint(&cell, list_item.position());
+        apply_bound_row_tint(&cell, list_item);
         sync_row_selection_class(&cell, list_item.is_selected());
 
         let Some(icon) = cell
@@ -688,7 +688,7 @@ fn build_filler_factory(
         else {
             return;
         };
-        apply_row_tint(&cell, list_item.position());
+        apply_bound_row_tint(&cell, list_item);
         sync_row_selection_class(&cell, list_item.is_selected());
     });
 
@@ -1132,10 +1132,18 @@ fn clear_status_icon(icon: &gtk::Image) {
     icon.set_visible(false);
 }
 
-fn apply_row_tint(cell: &gtk::Box, row_position: u32) {
+fn apply_bound_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
     cell.remove_css_class("track-table-row-even");
     cell.remove_css_class("track-table-row-odd");
-    if row_position % 2 == 0 {
+    let group_band = list_item
+        .item()
+        .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+        .and_then(|row| {
+            row.try_borrow::<TrackTableRow>()
+                .ok()
+                .and_then(|row| row.group_band)
+        });
+    if group_band.unwrap_or_else(|| list_item.position() % 2 == 0) {
         cell.add_css_class("track-table-row-even");
     } else {
         cell.add_css_class("track-table-row-odd");

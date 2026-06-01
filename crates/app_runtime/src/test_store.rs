@@ -21,13 +21,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use sustain_library_store::{
-    AcousticFeatures, AnalysisCapabilities, AnalysisContext, LibraryStore, MetadataChange,
-    OnlineCapabilities, OnlineContext, PendingTagMirror, PlayStatistics, Playlist, PlaylistFolder,
-    PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId,
-    SourceFingerprint, StoreError, StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics,
-    StoredTagMirrorArtwork, StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry,
-    SyncedLyrics, TagMirrorArtwork, Track, TrackAnalysis, TrackColumnLayout,
-    TrackColumnLayoutScope, TrackId, TrackLocation,
+    AcousticFeatures, AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan,
+    LibraryStore, MetadataChange, OnlineCapabilities, OnlineContext, PendingTagMirror,
+    PlayStatistics, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating,
+    SmartPlaylist, SmartPlaylistId, SourceFingerprint, StoreError, StoreResult,
+    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
+    SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, Track,
+    TrackAnalysis, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackLocation,
 };
 
 /// A [`LibraryStore`] that delegates to an inner store but can be told
@@ -257,6 +257,10 @@ impl LibraryStore for FaultyStore {
 
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()> {
         self.inner.delete_track(track_id)
+    }
+
+    fn commit_duplicate_consolidation(&self, plan: &DuplicateConsolidationPlan) -> StoreResult<()> {
+        self.inner.commit_duplicate_consolidation(plan)
     }
 
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>> {

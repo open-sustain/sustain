@@ -25,15 +25,24 @@ pub(super) fn save_playlist(connection: &mut Connection, playlist: Playlist) -> 
             ],
         )
         .map_err(StoreError::from)?;
-    transaction
+    replace_playlist_entries(&transaction, &playlist)?;
+
+    transaction.commit().map_err(StoreError::from)
+}
+
+pub(super) fn replace_playlist_entries(
+    connection: &Connection,
+    playlist: &Playlist,
+) -> StoreResult<()> {
+    connection
         .execute(
             "DELETE FROM playlist_entries WHERE playlist_id = ?1",
             params![playlist.id.get()],
         )
         .map_err(StoreError::from)?;
 
-    for entry in playlist.entries {
-        transaction
+    for entry in &playlist.entries {
+        connection
             .execute(
                 r#"
                     INSERT INTO playlist_entries (playlist_id, track_id, position)
@@ -47,8 +56,7 @@ pub(super) fn save_playlist(connection: &mut Connection, playlist: Playlist) -> 
             )
             .map_err(StoreError::from)?;
     }
-
-    transaction.commit().map_err(StoreError::from)
+    Ok(())
 }
 
 pub(super) fn playlist(

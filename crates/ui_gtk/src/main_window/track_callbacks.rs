@@ -239,6 +239,11 @@ pub(super) fn track_context_actions(
         ),
         TrackContextAction::copy_files(copy_files_callback(runtime, window)),
         TrackContextAction::show_in_folder(show_in_folder_callback(runtime, window)),
+        TrackContextAction::consolidate_duplicates(consolidate_duplicates_callback(
+            window,
+            runtime,
+            command_controller,
+        )),
         TrackContextAction::remove_from_library(track_mutation_callback(
             command_controller,
             playback_changed.clone(),

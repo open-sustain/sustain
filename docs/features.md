@@ -130,7 +130,7 @@ managed mode copies external replacements into its canonical owned layout.
 
 Sustain has a single navigation surface: a sidebar to the left of the
 main content. The sidebar's LIBRARY section lists **Music**, **Albums**,
-and **Statistics**; the PLAYLISTS section lists every playlist, smart
+**Duplicates**, and **Statistics**; the PLAYLISTS section lists every playlist, smart
 playlist, and folder. Clicking any entry swaps the right-hand content.
 There is no separate horizontal mode switcher.
 
@@ -146,6 +146,28 @@ Tiles group by album (title + album artist + year). Clicking the
 cover button on a tile plays the album in isolation. The grid
 intentionally searches album-level fields only (title, artist, year),
 not individual track titles.
+
+### Duplicates — *iTunes-adjacent*
+The Duplicates entry under LIBRARY runs a deferred, off-thread scan and
+shows only candidate groups. Loose matching folds case, diacritics, and
+whitespace for artist + title. A **Strict matching** toggle also requires
+the same album and a duration within two seconds. Groups stay adjacent
+and visually banded.
+
+Selecting two or more rows in Songs or Duplicates exposes **Consolidate
+to single track**. Its dialog independently chooses the surviving audio
+file, metadata source, and artwork source, then previews the result.
+Consolidation sums listening counts, keeps the most recent last-played
+and last-skipped dates, the oldest date-added value, and the highest
+rating. Playlist membership is rewritten in place while preserving
+order and collapsing consecutive repetitions introduced by the merge.
+
+Before deleting any duplicate pathname, Sustain writes and verifies a
+staged survivor, keeps hard-linked recovery copies, commits SQLite and
+playlist rewrites atomically, and crosses the durable database barrier.
+An interrupted merge is recovered before library hydration on the next
+launch. The view is transient: it is never restored or scanned at
+startup, so it does not affect cold-start time.
 
 ### Statistics — *Sustain-native*
 The third entry under LIBRARY opens a single scrollable page of
@@ -192,9 +214,10 @@ independently. With a header focused, **Left** folds it and **Right**
 unfolds it. Each section's fold state is persisted across launches.
 
 ### Selection persistence — *Sustain-native*
-The sidebar's active row (Music, Albums, or a specific playlist), its
+The sidebar's active row (Music, Albums, Statistics, or a specific playlist), its
 collapsed state, and the fold state of the LIBRARY and PLAYLISTS
-sections are restored on next launch.
+sections are restored on next launch. Transient views such as Duplicates
+and connected devices are deliberately not restored.
 
 ---
 

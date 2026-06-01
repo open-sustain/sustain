@@ -31,9 +31,9 @@ pub(super) struct VerifiedFileCopy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct FileIdentity {
-    pub(super) device: u64,
-    pub(super) inode: u64,
+pub(crate) struct FileIdentity {
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -72,7 +72,7 @@ pub(super) enum VerifiedFileCopyError {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum FileMoveError {
+pub(crate) enum FileMoveError {
     SourceUnavailable,
     SourceIsNotFile,
     DestinationHasNoParent,
@@ -287,7 +287,7 @@ pub(super) fn move_file_without_copy_or_overwrite_matching_identity(
     Ok(())
 }
 
-pub(super) fn regular_file_identity(path: &Path) -> Result<FileIdentity, FileMoveError> {
+pub(crate) fn regular_file_identity(path: &Path) -> Result<FileIdentity, FileMoveError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| FileMoveError::SourceUnavailable)?;
     if !metadata.file_type().is_file() {
         return Err(FileMoveError::SourceIsNotFile);
@@ -339,7 +339,7 @@ pub(super) fn remove_copied_files(paths: &[PathBuf]) -> Result<(), ()> {
     (!failed).then_some(()).ok_or(())
 }
 
-pub(super) fn remove_file_and_sync_parent(path: &Path) -> io::Result<()> {
+pub(crate) fn remove_file_and_sync_parent(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => sync_parent_directory(path),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -486,7 +486,7 @@ fn cleanup_published_link(path: &Path) {
     let _ = remove_file_and_sync_parent(path);
 }
 
-fn ensure_directory_all(path: &Path) -> io::Result<()> {
+pub(crate) fn ensure_directory_all(path: &Path) -> io::Result<()> {
     match fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => return Ok(()),
         Ok(_) => {
@@ -513,7 +513,7 @@ fn ensure_directory_all(path: &Path) -> io::Result<()> {
     }
 }
 
-fn sync_parent_directory(path: &Path) -> io::Result<()> {
+pub(crate) fn sync_parent_directory(path: &Path) -> io::Result<()> {
     path.parent()
         .ok_or_else(|| {
             io::Error::new(
@@ -524,7 +524,7 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
         .and_then(sync_directory)
 }
 
-pub(super) fn sync_directory(path: &Path) -> io::Result<()> {
+pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
     File::open(path).and_then(|directory| directory.sync_all())
 }
 

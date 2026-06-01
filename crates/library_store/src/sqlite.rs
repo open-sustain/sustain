@@ -17,6 +17,7 @@ use super::*;
 mod analysis;
 mod column_layouts;
 mod devices;
+mod duplicate_consolidation;
 mod online;
 mod playlists;
 mod smart_playlists;
@@ -142,6 +143,11 @@ impl LibraryStore for SqliteLibraryStore {
             change,
             location,
         )
+    }
+
+    fn commit_duplicate_consolidation(&self, plan: &DuplicateConsolidationPlan) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        duplicate_consolidation::commit(&mut connection, plan)
     }
 
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()> {

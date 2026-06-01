@@ -407,7 +407,7 @@ impl ApplicationRuntime {
         self.remove_track_from_library(track_id)
     }
 
-    fn stop_playback_if_playing(&mut self, track_id: TrackId) {
+    pub(crate) fn stop_playback_if_playing(&mut self, track_id: TrackId) {
         let Some(service) = self.playback_service.as_deref() else {
             return;
         };
