@@ -371,14 +371,17 @@ fn build_queue_row() -> gtk::Box {
     let artwork = gtk::Box::new(gtk::Orientation::Vertical, 0);
     artwork.add_css_class("queue-row-artwork");
     artwork.set_size_request(QUEUE_ROW_ARTWORK_SIZE, QUEUE_ROW_ARTWORK_SIZE);
+    artwork.set_hexpand(false);
+    artwork.set_vexpand(false);
     artwork.set_overflow(gtk::Overflow::Hidden);
     artwork.set_valign(gtk::Align::Center);
 
     let image = gtk::Image::from_icon_name(QUEUE_ARTWORK_MISSING_ICON);
     image.add_css_class("queue-row-artwork-missing-icon");
     image.set_pixel_size(QUEUE_ARTWORK_MISSING_ICON_SIZE);
-    image.set_hexpand(true);
-    image.set_vexpand(true);
+    image.set_size_request(QUEUE_ROW_ARTWORK_SIZE, QUEUE_ROW_ARTWORK_SIZE);
+    image.set_hexpand(false);
+    image.set_vexpand(false);
     image.set_halign(gtk::Align::Fill);
     image.set_valign(gtk::Align::Fill);
     artwork.append(&image);
