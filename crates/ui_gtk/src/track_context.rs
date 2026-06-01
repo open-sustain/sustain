@@ -134,11 +134,11 @@ impl TrackContextActionId {
         }
     }
 
-    fn detailed_action(self) -> String {
+    fn detailed_action(self, local_action_group: &str) -> String {
         match self {
             Self::GetInfo => "app.get-info".to_owned(),
             Self::ShowInFolder => "app.show-in-folder".to_owned(),
-            _ => format!("{TRACK_CONTEXT_ACTION_GROUP}.{}", self.action_name()),
+            _ => format!("{local_action_group}.{}", self.action_name()),
         }
     }
 
@@ -484,13 +484,19 @@ impl TrackRowContextMenu {
             displayed_track_ids,
         };
         let invocation_serial = self.invocation_state.activate(invocation.clone());
+        let local_action_group = format!("{TRACK_CONTEXT_ACTION_GROUP}-{invocation_serial}");
         let action_group = gio::SimpleActionGroup::new();
-        let menu = self.menu_model(&action_group, &invocation);
+        let menu = self.menu_model(&action_group, &local_action_group, &invocation);
+        // GtkPopoverMenu resolves model-backed actions from its attach widget
+        // and that widget's ancestors. Keep each popup's local namespace
+        // distinct so deferred cleanup cannot remove a newer popup's actions.
+        popover_parent
+            .as_ref()
+            .insert_action_group(&local_action_group, Some(&action_group));
         let popover = gtk::PopoverMenu::from_model(Some(&menu));
         popover.set_has_arrow(false);
         popover.add_css_class("compact-context-menu");
         popover.set_parent(popover_parent.as_ref());
-        popover.insert_action_group(TRACK_CONTEXT_ACTION_GROUP, Some(&action_group));
         if let Some(add) = &self.add_to_playlist {
             let playlist_list =
                 build_add_to_playlist_custom_child(add, &popover, invocation.selected_track_ids);
@@ -502,9 +508,19 @@ impl TrackRowContextMenu {
 
         let popover_for_close = popover.clone();
         let invocation_state = self.invocation_state.clone();
+        let action_scope = popover_parent.as_ref().downgrade();
         popover.connect_closed(move |_| {
-            invocation_state.clear_if_active(invocation_serial);
             popover_for_close.unparent();
+            let invocation_state = invocation_state.clone();
+            let action_scope = action_scope.clone();
+            let local_action_group = local_action_group.clone();
+            glib::idle_add_local_once(move || {
+                invocation_state.clear_if_active(invocation_serial);
+                if let Some(action_scope) = action_scope.upgrade() {
+                    action_scope
+                        .insert_action_group(&local_action_group, None::<&gio::SimpleActionGroup>);
+                }
+            });
         });
 
         let rect = gdk::Rectangle::new(parent_x as i32, parent_y as i32, 1, 1);
@@ -515,6 +531,7 @@ impl TrackRowContextMenu {
     fn menu_model(
         &self,
         action_group: &gio::SimpleActionGroup,
+        local_action_group: &str,
         invocation: &TrackActionInvocation,
     ) -> gio::Menu {
         let root = gio::Menu::new();
@@ -536,7 +553,7 @@ impl TrackRowContextMenu {
             {
                 root.append_section(
                     None,
-                    &self.background_submenu_section(action_group, invocation),
+                    &self.background_submenu_section(action_group, local_action_group, invocation),
                 );
             }
 
@@ -546,7 +563,13 @@ impl TrackRowContextMenu {
                 .copied()
                 .filter(|action| action.section == section)
             {
-                self.append_action_item(&group, action_group, action, invocation);
+                self.append_action_item(
+                    &group,
+                    action_group,
+                    local_action_group,
+                    action,
+                    invocation,
+                );
             }
             if group.n_items() == 0 {
                 continue;
@@ -561,6 +584,7 @@ impl TrackRowContextMenu {
         &self,
         menu: &gio::Menu,
         action_group: &gio::SimpleActionGroup,
+        local_action_group: &str,
         action: &TrackContextAction,
         invocation: &TrackActionInvocation,
     ) {
@@ -572,25 +596,39 @@ impl TrackRowContextMenu {
                 run_context_action(&action_for_run, &parent, invocation.clone())
             });
         }
-        menu.append(Some(action.label), Some(&action.id.detailed_action()));
+        menu.append(
+            Some(action.label),
+            Some(&action.id.detailed_action(local_action_group)),
+        );
     }
 
     fn background_submenu_section(
         &self,
         action_group: &gio::SimpleActionGroup,
+        local_action_group: &str,
         invocation: &TrackActionInvocation,
     ) -> gio::Menu {
         let section = gio::Menu::new();
         if let Some(analyze) = &self.analyze {
             section.append_submenu(
                 Some("Analyze\u{2026}"),
-                &analyze_submenu_model(analyze, action_group, &invocation.selected_track_ids),
+                &analyze_submenu_model(
+                    analyze,
+                    action_group,
+                    local_action_group,
+                    &invocation.selected_track_ids,
+                ),
             );
         }
         if let Some(retrieve) = &self.retrieve {
             section.append_submenu(
                 Some("Retrieve\u{2026}"),
-                &retrieve_submenu_model(retrieve, action_group, &invocation.selected_track_ids),
+                &retrieve_submenu_model(
+                    retrieve,
+                    action_group,
+                    local_action_group,
+                    &invocation.selected_track_ids,
+                ),
             );
         }
         section
@@ -608,6 +646,7 @@ fn add_to_playlist_submenu_model() -> gio::Menu {
 fn analyze_submenu_model(
     menu: &AnalyzeMenu,
     action_group: &gio::SimpleActionGroup,
+    local_action_group: &str,
     track_ids: &[TrackId],
 ) -> gio::Menu {
     let model = gio::Menu::new();
@@ -621,10 +660,7 @@ fn analyze_submenu_model(
         add_local_action(action_group, name, !(menu.enabled)(capability), move || {
             run(track_ids.clone(), AnalysisRunRequest::Single(capability));
         });
-        model.append(
-            Some(label),
-            Some(&format!("{TRACK_CONTEXT_ACTION_GROUP}.{name}")),
-        );
+        model.append(Some(label), Some(&format!("{local_action_group}.{name}")));
     }
     let all = gio::Menu::new();
     let run = menu.run.clone();
@@ -634,7 +670,7 @@ fn analyze_submenu_model(
     });
     all.append(
         Some("All"),
-        Some(&format!("{TRACK_CONTEXT_ACTION_GROUP}.analyze-all")),
+        Some(&format!("{local_action_group}.analyze-all")),
     );
     model.append_section(None, &all);
     model
@@ -643,6 +679,7 @@ fn analyze_submenu_model(
 fn retrieve_submenu_model(
     menu: &RetrieveMenu,
     action_group: &gio::SimpleActionGroup,
+    local_action_group: &str,
     track_ids: &[TrackId],
 ) -> gio::Menu {
     let model = gio::Menu::new();
@@ -657,10 +694,7 @@ fn retrieve_submenu_model(
         add_local_action(action_group, name, !busy, move || {
             run(track_ids.clone(), OnlineRunRequest::Single(capability));
         });
-        model.append(
-            Some(label),
-            Some(&format!("{TRACK_CONTEXT_ACTION_GROUP}.{name}")),
-        );
+        model.append(Some(label), Some(&format!("{local_action_group}.{name}")));
     }
     let all = gio::Menu::new();
     let run = menu.run.clone();
@@ -670,7 +704,7 @@ fn retrieve_submenu_model(
     });
     all.append(
         Some("All"),
-        Some(&format!("{TRACK_CONTEXT_ACTION_GROUP}.retrieve-all")),
+        Some(&format!("{local_action_group}.retrieve-all")),
     );
     model.append_section(None, &all);
     model
@@ -908,16 +942,16 @@ mod tests {
     #[test]
     fn action_models_use_registered_application_actions_when_shortcuts_exist() {
         assert_eq!(
-            TrackContextActionId::GetInfo.detailed_action(),
+            TrackContextActionId::GetInfo.detailed_action("track-context-17"),
             "app.get-info"
         );
         assert_eq!(
-            TrackContextActionId::ShowInFolder.detailed_action(),
+            TrackContextActionId::ShowInFolder.detailed_action("track-context-17"),
             "app.show-in-folder"
         );
         assert_eq!(
-            TrackContextActionId::CopyFiles.detailed_action(),
-            "track-context.copy-files"
+            TrackContextActionId::CopyFiles.detailed_action("track-context-17"),
+            "track-context-17.copy-files"
         );
     }
 

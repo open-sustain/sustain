@@ -58,26 +58,35 @@ impl SidebarContextMenu {
         let gesture = gtk::GestureClick::new();
         gesture.set_button(gdk::BUTTON_SECONDARY);
 
-        let on_action = self.on_action.clone();
+        // GtkPopoverMenu resolves model-backed actions from its attach widget
+        // and that widget's ancestors. Application actions are inherited from
+        // the window; this sidebar-specific action lives on the anchor.
+        anchor.insert_action_group(
+            SIDEBAR_CONTEXT_ACTION_GROUP,
+            Some(&sidebar_context_action_group(self.on_action.clone())),
+        );
         let anchor_widget = anchor.clone();
         gesture.connect_pressed(move |gesture, _n_press, x, y| {
             gesture.set_state(gtk::EventSequenceState::Claimed);
-            popup_menu(&anchor_widget, on_action.clone(), x, y);
+            popup_menu(&anchor_widget, x, y);
         });
         anchor.add_controller(gesture);
     }
 }
 
-fn popup_menu(anchor: &gtk::Widget, on_action: SidebarActionCallback, x: f64, y: f64) {
-    let menu = gio::Menu::new();
+fn sidebar_context_action_group(on_action: SidebarActionCallback) -> gio::SimpleActionGroup {
     let actions = gio::SimpleActionGroup::new();
+    let action = gio::SimpleAction::new("new-playlist-folder", None);
+    action.connect_activate(move |_action, _parameter| {
+        on_action(SidebarContextAction::PlaylistFolder)
+    });
+    actions.add_action(&action);
+    actions
+}
+
+fn popup_menu(anchor: &gtk::Widget, x: f64, y: f64) {
+    let menu = gio::Menu::new();
     for action in SIDEBAR_CONTEXT_ACTIONS.iter().copied() {
-        if action == SidebarContextAction::PlaylistFolder {
-            let local = gio::SimpleAction::new("new-playlist-folder", None);
-            let on_action = on_action.clone();
-            local.connect_activate(move |_action, _parameter| on_action(action));
-            actions.add_action(&local);
-        }
         menu.append(Some(action.label()), Some(action.detailed_action()));
     }
 
@@ -85,7 +94,6 @@ fn popup_menu(anchor: &gtk::Widget, on_action: SidebarActionCallback, x: f64, y:
     popover.set_has_arrow(false);
     popover.add_css_class("compact-context-menu");
     popover.set_parent(anchor);
-    popover.insert_action_group(SIDEBAR_CONTEXT_ACTION_GROUP, Some(&actions));
 
     let popover_for_close = popover.clone();
     popover.connect_closed(move |_| {
