@@ -38,9 +38,9 @@ const BAR_FILL_ALPHA: f64 = 0.85;
 /// Corner radius of a histogram bar's fill, in pixels, applied to all
 /// four corners so each bar reads as a rounded capsule rather than a
 /// flat-edged block. Clamped per-bar to half the bar width and half the
-/// fill height, so narrow columns and stub bars round into a stadium
+/// bar height, so narrow columns and stub bars round into a stadium
 /// shape instead of over-rounding.
-const BAR_FILL_RADIUS: f64 = 6.0;
+const BAR_FILL_RADIUS: f64 = 10.0;
 
 /// Diameter of a donut ring, in pixels.
 const DONUT_DIAMETER: i32 = 260;
@@ -285,7 +285,7 @@ fn swatch(role: Option<f64>) -> gtk::DrawingArea {
 }
 
 /// One bar of a [`vertical_bars`] histogram: its x-axis label, its height
-/// as a fraction of the tallest bar, and the value shown above it.
+/// as a fraction of the tallest bar, and the value shown inside it.
 pub(crate) struct VerticalBar {
     pub label: String,
     pub fraction: f64,
@@ -293,8 +293,9 @@ pub(crate) struct VerticalBar {
 }
 
 /// A vertical-bar histogram over an ordered axis. Each bar is one column
-/// of a homogeneous grid — value above, bar in the middle, axis label
-/// below — so the three line up exactly without any per-pixel alignment.
+/// of a homogeneous grid — the bar with its value laid over the foot of
+/// the fill, the axis label below — so the columns line up exactly
+/// without any per-pixel alignment.
 pub(crate) fn vertical_bars(bars: Vec<VerticalBar>) -> gtk::Widget {
     let grid = gtk::Grid::new();
     grid.set_column_homogeneous(true);
@@ -305,44 +306,51 @@ pub(crate) fn vertical_bars(bars: Vec<VerticalBar>) -> gtk::Widget {
     for (index, bar) in bars.iter().enumerate() {
         let col = index as i32;
 
+        // The overlay wraps the bar (which is sized to its own height), so
+        // sitting it at the foot of the row keeps the bars on a common
+        // baseline while the value, centred in the overlay, lands on the
+        // vertical centre of the coloured bar.
+        let overlay = gtk::Overlay::new();
+        overlay.set_valign(gtk::Align::End);
+        overlay.set_child(Some(&vertical_bar(bar.fraction)));
+
         let value = gtk::Label::new(Some(&bar.value));
         value.add_css_class("statistics-bar-value");
         value.set_halign(gtk::Align::Center);
-        grid.attach(&value, col, 0, 1, 1);
-
-        grid.attach(&vertical_bar(bar.fraction), col, 1, 1, 1);
+        value.set_valign(gtk::Align::Center);
+        overlay.add_overlay(&value);
+        grid.attach(&overlay, col, 0, 1, 1);
 
         let label = gtk::Label::new(Some(&bar.label));
         label.add_css_class("statistics-axis-label");
         label.set_halign(gtk::Align::Center);
         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
         label.set_max_width_chars(8);
-        grid.attach(&label, col, 2, 1, 1);
+        grid.attach(&label, col, 1, 1, 1);
     }
 
     grid.upcast()
 }
 
-/// A single histogram bar: the draw-func paints `fraction` of the height
-/// from the bottom up with the live theme accent as a rounded capsule —
-/// all four corners swept. The widget has no trough background; the bar
-/// floats directly on the card.
+/// A single histogram bar: the widget is sized to the bar's own height —
+/// `fraction` of [`VBAR_HEIGHT`] — and sat at the foot of the column, so
+/// the tallest bar defines the row height and the rest share a baseline.
+/// The draw-func fills the whole allocation with the live theme accent as
+/// a rounded capsule, all four corners swept; sizing the widget to the
+/// bar (rather than the full column) lets an overlaid value centre on the
+/// bar instead of on the empty space above it. The bar floats directly on
+/// the card — there is no trough background.
 fn vertical_bar(fraction: f64) -> gtk::DrawingArea {
     let fraction = fraction.clamp(0.0, 1.0);
     let area = gtk::DrawingArea::new();
     area.add_css_class("statistics-vbar");
-    area.set_content_height(VBAR_HEIGHT);
+    area.set_content_height((fraction * f64::from(VBAR_HEIGHT)).round() as i32);
     area.set_hexpand(true);
-    area.set_valign(gtk::Align::Fill);
-    area.set_overflow(gtk::Overflow::Hidden);
+    area.set_valign(gtk::Align::End);
     area.set_draw_func(move |area, cr, width, height| {
         let w = width as f64;
         let h = height as f64;
         if w <= 0.0 || h <= 0.0 {
-            return;
-        }
-        let fill_height = fraction * h;
-        if fill_height <= 0.0 {
             return;
         }
         let accent = area.color();
@@ -352,15 +360,14 @@ fn vertical_bar(fraction: f64) -> gtk::DrawingArea {
             accent.blue() as f64,
             BAR_FILL_ALPHA,
         );
-        let top = h - fill_height;
-        let radius = BAR_FILL_RADIUS.min(w / 2.0).min(fill_height / 2.0);
-        // Trace the fill clockwise as a rounded rectangle, every corner
-        // swept by a quarter arc: top-left (PI..1.5PI), top-right
+        let radius = BAR_FILL_RADIUS.min(w / 2.0).min(h / 2.0);
+        // Trace the allocation clockwise as a rounded rectangle, every
+        // corner swept by a quarter arc: top-left (PI..1.5PI), top-right
         // (1.5PI..2PI), bottom-right (0..0.5PI), bottom-left (0.5PI..PI).
         // Cairo links consecutive arcs with the straight edges between them.
         cr.new_sub_path();
-        cr.arc(radius, top + radius, radius, PI, 1.5 * PI);
-        cr.arc(w - radius, top + radius, radius, 1.5 * PI, 2.0 * PI);
+        cr.arc(radius, radius, radius, PI, 1.5 * PI);
+        cr.arc(w - radius, radius, radius, 1.5 * PI, 2.0 * PI);
         cr.arc(w - radius, h - radius, radius, 0.0, 0.5 * PI);
         cr.arc(radius, h - radius, radius, 0.5 * PI, PI);
         cr.close_path();
