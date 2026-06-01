@@ -18,6 +18,13 @@ mod library_tab;
 mod online_tab;
 mod shuffle_tab;
 mod switch_row;
+mod views_tab;
+
+/// Re-applies the Views preferences to the live UI (sidebar rows, Now
+/// Playing chips) the moment a toggle changes, so the user doesn't have
+/// to relaunch. Created in the main window where those widgets live and
+/// threaded down to the Views tab.
+pub(crate) type ViewSettingsChangedCallback = std::rc::Rc<dyn Fn()>;
 
 /// Pixel size of the icon stacked above each tab label. The strip is
 /// intentionally taller than the GTK default chrome — matching the
@@ -54,6 +61,7 @@ const TAB_LIBRARY: &str = "library";
 const TAB_ANALYSIS: &str = "analysis";
 const TAB_ONLINE: &str = "online";
 const TAB_SHUFFLE: &str = "shuffle";
+const TAB_VIEWS: &str = "views";
 const TAB_ABOUT: &str = "about";
 
 pub(crate) fn install_preferences_action(
@@ -63,6 +71,7 @@ pub(crate) fn install_preferences_action(
     database_path: PathBuf,
     scan_requested: LibraryScanRequestedCallback,
     consolidation_requested: LibraryConsolidationRequestedCallback,
+    view_settings_changed: ViewSettingsChangedCallback,
 ) {
     if app.lookup_action("preferences").is_some() {
         return;
@@ -80,6 +89,7 @@ pub(crate) fn install_preferences_action(
             database_path.clone(),
             scan_requested.clone(),
             consolidation_requested.clone(),
+            view_settings_changed.clone(),
         );
     });
     app.add_action(&preferences);
@@ -99,6 +109,7 @@ pub(crate) fn settings_button(
     database_path: PathBuf,
     scan_requested: LibraryScanRequestedCallback,
     consolidation_requested: LibraryConsolidationRequestedCallback,
+    view_settings_changed: ViewSettingsChangedCallback,
 ) -> gtk::Button {
     let icon = gtk::Image::from_icon_name("preferences-system-symbolic");
     icon.set_pixel_size(16);
@@ -136,6 +147,7 @@ pub(crate) fn settings_button(
             database_path.clone(),
             scan_requested.clone(),
             consolidation_requested.clone(),
+            view_settings_changed.clone(),
         );
     });
 
@@ -148,6 +160,7 @@ fn open_preferences_window(
     database_path: PathBuf,
     scan_requested: LibraryScanRequestedCallback,
     consolidation_requested: LibraryConsolidationRequestedCallback,
+    view_settings_changed: ViewSettingsChangedCallback,
 ) {
     let window = gtk::Window::builder()
         .title("Preferences")
@@ -215,8 +228,11 @@ fn open_preferences_window(
     let online_page = online_tab::build(command_controller.clone());
     stack.add_named(&online_page, Some(TAB_ONLINE));
 
-    let shuffle_page = shuffle_tab::build(window.upcast_ref(), command_controller);
+    let shuffle_page = shuffle_tab::build(window.upcast_ref(), command_controller.clone());
     stack.add_named(&shuffle_page, Some(TAB_SHUFFLE));
+
+    let views_page = views_tab::build(command_controller, view_settings_changed);
+    stack.add_named(&views_page, Some(TAB_VIEWS));
 
     let about_page = about_tab::build(&window, &database_path);
     stack.add_named(&about_page, Some(TAB_ABOUT));
@@ -250,13 +266,15 @@ fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window) -> gtk::Widget {
     let analysis_button = build_tab_button("applications-science-symbolic", "Analysis");
     let online_button = build_tab_button("network-transmit-receive-symbolic", "Online");
     let shuffle_button = build_tab_button("media-playlist-shuffle-symbolic", "Shuffle");
+    let views_button = build_tab_button("view-list-symbolic", "Views");
     let about_button = build_tab_button("help-about-symbolic", "About");
 
-    // Group all five so exactly one is active at a time. The Library tab
+    // Group them all so exactly one is active at a time. The Library tab
     // is the default landing.
     analysis_button.set_group(Some(&library_button));
     online_button.set_group(Some(&library_button));
     shuffle_button.set_group(Some(&library_button));
+    views_button.set_group(Some(&library_button));
     about_button.set_group(Some(&library_button));
     library_button.set_active(true);
 
@@ -264,6 +282,7 @@ fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window) -> gtk::Widget {
     wire_tab_button(&analysis_button, stack, TAB_ANALYSIS);
     wire_tab_button(&online_button, stack, TAB_ONLINE);
     wire_tab_button(&shuffle_button, stack, TAB_SHUFFLE);
+    wire_tab_button(&views_button, stack, TAB_VIEWS);
     wire_tab_button(&about_button, stack, TAB_ABOUT);
 
     let tab_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -273,6 +292,7 @@ fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window) -> gtk::Widget {
     tab_box.append(&analysis_button);
     tab_box.append(&online_button);
     tab_box.append(&shuffle_button);
+    tab_box.append(&views_button);
     tab_box.append(&about_button);
 
     let close_icon = gtk::Image::from_icon_name("window-close-symbolic");

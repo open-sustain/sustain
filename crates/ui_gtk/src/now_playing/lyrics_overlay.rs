@@ -45,11 +45,14 @@ fn build(
     let surface = gtk::Overlay::new();
     surface.add_css_class("now-playing-overlay-surface");
     surface.set_size_request(OVERLAY_SIZE, OVERLAY_SIZE);
+    // Clip the artwork/lyrics faces to the surface's rounded corners, the
+    // same way the main window's shell rounds its content.
+    surface.set_overflow(gtk::Overflow::Hidden);
 
     let stack = gtk::Stack::new();
     stack.set_hhomogeneous(true);
     stack.set_vhomogeneous(true);
-    stack.set_transition_type(gtk::StackTransitionType::RotateLeftRight);
+    stack.set_transition_type(gtk::StackTransitionType::Crossfade);
     stack.set_transition_duration(260);
     let artwork_face = artwork_face(artwork);
     let (lyrics_face, lyrics_view) = lyrics_face(lyrics);
@@ -126,10 +129,16 @@ fn lyrics_face(lyrics: Option<&str>) -> (gtk::ScrolledWindow, gtk::TextView) {
     view.set_editable(false);
     view.set_cursor_visible(false);
     view.set_wrap_mode(gtk::WrapMode::WordChar);
-    view.set_top_margin(42);
+    view.set_justification(gtk::Justification::Center);
+    // Reclaim the top line the previous 42px margin sacrificed to the
+    // floating close button: the centred text clears the top-right
+    // corner on its own, so a balanced top/bottom margin is enough.
+    view.set_top_margin(24);
     view.set_bottom_margin(24);
     view.set_left_margin(28);
     view.set_right_margin(28);
+    view.set_pixels_below_lines(7);
+    view.set_pixels_inside_wrap(2);
     view.buffer().set_text(lyrics.unwrap_or_default());
 
     let scroller = gtk::ScrolledWindow::new();

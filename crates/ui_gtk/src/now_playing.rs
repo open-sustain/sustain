@@ -82,7 +82,7 @@ pub(crate) struct NowPlayingView {
     artwork_inner_stack: gtk::Stack,
     artwork_image: gtk::Image,
     artwork_spinner: gtk::Spinner,
-    lyrics_button: gtk::Button,
+    lyrics_chip: gtk::Button,
     artwork_loader: ArtworkLoader,
     /// Last absolute path passed to the artwork loader, used to avoid
     /// re-issuing a request when `refresh()` runs on the same track
@@ -122,6 +122,29 @@ struct MarqueeLabel {
     /// Pixels advanced per animation frame; set per line so the title and
     /// artist marquees scroll at different rates (issue #116).
     speed: f64,
+    /// Upper bound on the viewport width. The marquee sizes itself to hug
+    /// its text up to this width; longer text keeps this width and
+    /// scrolls. Shared (`Rc`) so the title line can shrink the cap while
+    /// the Lyrics chip shares its row and restore it when it doesn't.
+    max_width: Rc<Cell<i32>>,
+    /// How overflowing text behaves. Shared (`Rc`) with the draw model so
+    /// a flip takes effect on the next frame. The title line switches to
+    /// [`MarqueeOverflow::Truncate`] while the inline Lyrics chip shares
+    /// it, so the chip is pinned to a title that holds still.
+    overflow: Rc<Cell<MarqueeOverflow>>,
+}
+
+/// How a marquee reacts when its text is wider than the viewport.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarqueeOverflow {
+    /// Loop the text leftward, redrawing a seamless second copy and
+    /// fading both edges — the default for the title and artist lines.
+    Scroll,
+    /// Hold the text still, anchored to the left, fading only the right
+    /// edge where it meets the inline Lyrics chip. No seamless second
+    /// copy. Used for the title line while it shares its row with the
+    /// chip, so the chip never has to chase a moving title.
+    Truncate,
 }
 
 #[derive(Clone)]
@@ -130,6 +153,7 @@ struct MarqueeDrawModel {
     text_width: Rc<Cell<f64>>,
     x_position: Rc<Cell<f64>>,
     fade_active: Rc<Cell<bool>>,
+    overflow: Rc<Cell<MarqueeOverflow>>,
     style: MarqueeTextStyle,
 }
 
@@ -149,6 +173,14 @@ const MARQUEE_LOOP_GAP: f64 = 48.0;
 const MARQUEE_SPEED_TITLE: f64 = 0.75;
 const MARQUEE_SPEED_ARTIST: f64 = 0.55;
 const MARQUEE_VIEWPORT_WIDTH: i32 = 400;
+/// Reduced title-viewport cap used while the LCD chips share the title's
+/// line. The chips sit inline immediately after the title, so the title
+/// gives up width to keep the combined row from overflowing into the
+/// shuffle/repeat side controls; longer titles scroll within this width.
+/// Restored to [`MARQUEE_VIEWPORT_WIDTH`] when the track has no chips.
+const MARQUEE_TITLE_CHIP_WIDTH: i32 = 240;
+/// Gap, in pixels, between the title and the inline LCD chip strip.
+const MARQUEE_CHIP_GAP: i32 = 6;
 
 impl NowPlayingView {
     pub(crate) fn new(
@@ -170,9 +202,23 @@ impl NowPlayingView {
         artwork_box.add_css_class("now-playing-artwork");
         artwork_box.set_size_request(TITLEBAR_HEIGHT, TITLEBAR_HEIGHT);
         artwork_box.set_overflow(gtk::Overflow::Hidden);
+        // Pin the tile to its square `size_request`: never claim extra
+        // space on either axis (so the horizontal `loaded_view` doesn't
+        // widen it past the square) and centre it vertically rather than
+        // filling the bar's height. Same square enforcement the queue
+        // rows use.
+        artwork_box.set_hexpand(false);
+        artwork_box.set_vexpand(false);
+        artwork_box.set_valign(gtk::Align::Center);
 
         let artwork_image = gtk::Image::new();
         artwork_image.set_pixel_size(TITLEBAR_HEIGHT);
+        // Pin the image to a square so a non-square cover letterboxes
+        // inside the tile instead of stretching the container's aspect —
+        // the same square enforcement the queue rows use.
+        artwork_image.set_size_request(TITLEBAR_HEIGHT, TITLEBAR_HEIGHT);
+        artwork_image.set_hexpand(false);
+        artwork_image.set_vexpand(false);
         artwork_image.set_halign(gtk::Align::Fill);
         artwork_image.set_valign(gtk::Align::Fill);
 
@@ -188,22 +234,16 @@ impl NowPlayingView {
         artwork_spinner.set_valign(gtk::Align::Center);
 
         let artwork_inner_stack = gtk::Stack::new();
-        artwork_inner_stack.set_hexpand(true);
-        artwork_inner_stack.set_vexpand(true);
+        // Fill the square tile via alignment, never via expand — an
+        // expanding child would propagate up and stretch the tile wider
+        // than tall inside the horizontal now-playing row.
+        artwork_inner_stack.set_hexpand(false);
+        artwork_inner_stack.set_vexpand(false);
         artwork_inner_stack.add_named(&artwork_image, Some(ARTWORK_INNER_STACK_PRESENT));
         artwork_inner_stack.add_named(&artwork_missing_icon, Some(ARTWORK_INNER_STACK_MISSING));
         artwork_inner_stack.add_named(&artwork_spinner, Some(ARTWORK_INNER_STACK_FETCHING));
         artwork_inner_stack.set_visible_child_name(ARTWORK_INNER_STACK_MISSING);
         artwork_box.set_child(Some(&artwork_inner_stack));
-
-        let lyrics_button = gtk::Button::with_label("L");
-        lyrics_button.add_css_class("now-playing-lyrics-badge");
-        lyrics_button.set_tooltip_text(Some("Show lyrics"));
-        lyrics_button.set_halign(gtk::Align::End);
-        lyrics_button.set_valign(gtk::Align::End);
-        lyrics_button.set_visible(false);
-        artwork_box.add_overlay(&lyrics_button);
-        artwork_box.set_measure_overlay(&lyrics_button, false);
 
         let artwork_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
         let prefetched_artwork_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
@@ -221,13 +261,28 @@ impl NowPlayingView {
             "now-playing-title",
             marquee_paused.clone(),
             MARQUEE_SPEED_TITLE,
+            MARQUEE_VIEWPORT_WIDTH,
         );
         let artist_album = MarqueeLabel::new(
             "now-playing-artist",
             marquee_paused.clone(),
             MARQUEE_SPEED_ARTIST,
+            MARQUEE_VIEWPORT_WIDTH,
         );
-        let metadata = metadata_box(&title, &artist_album);
+
+        // Vintage-LCD readout chip that sits inline after the title. This
+        // is where the lyrics affordance lives now — moved off the artwork
+        // cover, which was cramped and visually noisy. Shown only when the
+        // track has lyrics; while shown, the title truncates instead of
+        // scrolling so the chip stays pinned to its trailing edge.
+        let lyrics_chip = gtk::Button::with_label("Lyrics");
+        lyrics_chip.add_css_class("now-playing-lcd-chip");
+        lyrics_chip.set_tooltip_text(Some("Show lyrics"));
+        lyrics_chip.set_cursor_from_name(Some("pointer"));
+        lyrics_chip.set_valign(gtk::Align::Center);
+        lyrics_chip.set_visible(false);
+
+        let metadata = metadata_box(&title, &artist_album, &lyrics_chip);
 
         let elapsed = time_label();
         let remaining = time_label();
@@ -296,7 +351,7 @@ impl NowPlayingView {
             artwork_inner_stack,
             artwork_image,
             artwork_spinner,
-            lyrics_button,
+            lyrics_chip,
             artwork_loader,
             artwork_path,
             prefetched_artwork_path,
@@ -308,7 +363,7 @@ impl NowPlayingView {
         };
         install_playback_option_controls(&view, command_controller.clone());
         install_artwork_click_handler(&view, command_controller);
-        install_lyrics_button_handler(&view);
+        install_lyrics_chip_handler(&view);
         view.refresh(&runtime.borrow().now_playing());
         install_refresh_timer(&view, runtime);
         view
@@ -637,6 +692,24 @@ impl NowPlayingView {
         }
     }
 
+    /// Refresh the inline Lyrics chip for the current track. The chip is
+    /// shown only when the track carries lyrics. While it is shown the
+    /// title gives up width and truncates (holding still, fading its right
+    /// edge) instead of scrolling, so the chip stays pinned to the title's
+    /// trailing edge; without lyrics the title reclaims the full viewport
+    /// and scrolls as usual.
+    fn update_lyrics_chip(&self, track: &Track) {
+        let has_lyrics = track.has_lyrics();
+        self.lyrics_chip.set_visible(has_lyrics);
+        if has_lyrics {
+            self.title.set_max_width(MARQUEE_TITLE_CHIP_WIDTH);
+            self.title.set_overflow_behavior(MarqueeOverflow::Truncate);
+        } else {
+            self.title.set_max_width(MARQUEE_VIEWPORT_WIDTH);
+            self.title.set_overflow_behavior(MarqueeOverflow::Scroll);
+        }
+    }
+
     pub(crate) fn refresh(&self, now_playing: &NowPlaying) {
         self.sync_artwork(now_playing.track.as_ref());
 
@@ -648,14 +721,14 @@ impl NowPlayingView {
             self.remaining.set_text("");
             self.hit_area.set_position(0.0, false);
             self.duration.set(Duration::ZERO);
-            self.lyrics_button.set_visible(false);
+            self.lyrics_chip.set_visible(false);
             sync_shuffle_icon(&self.shuffle_icon, now_playing.options.shuffle_mode);
             sync_playback_option_icon(&self.repeat_icon, now_playing.options.repeat_enabled());
             return;
         };
 
         self.stack.set_visible_child_name(LOADED_STACK_NAME);
-        self.lyrics_button.set_visible(track.has_lyrics());
+        self.update_lyrics_chip(track);
 
         let duration = track.metadata.duration.unwrap_or_default();
         self.duration.set(duration);
@@ -765,9 +838,9 @@ fn install_artwork_click_handler(
     view.artwork_inner_stack.add_controller(click);
 }
 
-fn install_lyrics_button_handler(view: &NowPlayingView) {
+fn install_lyrics_chip_handler(view: &NowPlayingView) {
     let view = view.clone();
-    view.lyrics_button.clone().connect_clicked(move |_| {
+    view.lyrics_chip.clone().connect_clicked(move |_| {
         let _ = view.open_artwork_lyrics_overlay(LyricsOverlayFace::Lyrics);
     });
 }
@@ -793,12 +866,27 @@ fn install_refresh_timer(view: &NowPlayingView, runtime: SharedRuntime) {
     });
 }
 
-fn metadata_box(title: &MarqueeLabel, artist_album: &MarqueeLabel) -> gtk::Box {
+fn metadata_box(
+    title: &MarqueeLabel,
+    artist_album: &MarqueeLabel,
+    lyrics_chip: &gtk::Button,
+) -> gtk::Box {
     let metadata = gtk::Box::new(gtk::Orientation::Vertical, 0);
     metadata.set_halign(gtk::Align::Center);
     metadata.set_valign(gtk::Align::Center);
     metadata.set_hexpand(true);
-    metadata.append(&title.widget());
+
+    // Title line with the Lyrics chip inline, immediately after the title.
+    // The pair is centred as one unit; because the title marquee hugs its
+    // text, the chip sits right at the title's trailing edge rather than
+    // floating off at a fixed offset.
+    let title_row = gtk::Box::new(gtk::Orientation::Horizontal, MARQUEE_CHIP_GAP);
+    title_row.set_halign(gtk::Align::Center);
+    title_row.set_valign(gtk::Align::Center);
+    title_row.append(&title.widget());
+    title_row.append(lyrics_chip);
+
+    metadata.append(&title_row);
     metadata.append(&artist_album.widget());
     metadata
 }
@@ -820,20 +908,23 @@ fn empty_state_view() -> gtk::Box {
 }
 
 impl MarqueeLabel {
-    fn new(css_class: &str, paused: Rc<Cell<bool>>, speed: f64) -> Self {
-        let width = MARQUEE_VIEWPORT_WIDTH;
+    fn new(css_class: &str, paused: Rc<Cell<bool>>, speed: f64, max_width: i32) -> Self {
+        // Width starts at zero and is sized to the text on every
+        // `set_text`; the marquee hugs its content so an inline neighbour
+        // (the LCD chip strip) can sit right at the title's trailing edge.
         let root = gtk::Overlay::new();
         root.add_css_class("marquee-label");
-        root.set_size_request(width, MARQUEE_HEIGHT);
+        root.set_size_request(0, MARQUEE_HEIGHT);
         root.set_hexpand(false);
         root.set_halign(gtk::Align::Center);
+        root.set_valign(gtk::Align::Center);
         root.set_overflow(gtk::Overflow::Hidden);
 
         let canvas = gtk::DrawingArea::new();
         canvas.add_css_class(css_class);
-        canvas.set_content_width(width);
+        canvas.set_content_width(0);
         canvas.set_content_height(MARQUEE_HEIGHT);
-        canvas.set_size_request(width, MARQUEE_HEIGHT);
+        canvas.set_size_request(0, MARQUEE_HEIGHT);
         canvas.set_hexpand(false);
         canvas.set_halign(gtk::Align::Center);
         canvas.set_overflow(gtk::Overflow::Hidden);
@@ -842,11 +933,13 @@ impl MarqueeLabel {
         let text_width = Rc::new(Cell::new(0.0));
         let x_position = Rc::new(Cell::new(0.0));
         let fade_active = Rc::new(Cell::new(false));
+        let overflow = Rc::new(Cell::new(MarqueeOverflow::Scroll));
         let draw_model = MarqueeDrawModel {
             text,
             text_width,
             x_position: x_position.clone(),
             fade_active,
+            overflow: overflow.clone(),
             style: MarqueeTextStyle::from_css_class(css_class),
         };
         install_marquee_draw_func(&canvas, &draw_model);
@@ -860,6 +953,8 @@ impl MarqueeLabel {
             x_position,
             paused,
             speed,
+            max_width: Rc::new(Cell::new(max_width)),
+            overflow,
         };
         marquee.install_animation();
         marquee
@@ -875,8 +970,44 @@ impl MarqueeLabel {
         }
 
         self.draw_model.text.replace(text.to_owned());
+        self.resize_to_text(text);
         self.reset_to_start();
         self.canvas.queue_draw();
+    }
+
+    /// Adjust the viewport cap (e.g. shrink the title to make room for the
+    /// inline chip, or restore full width when there is none) and re-size
+    /// to the current text under the new cap.
+    fn set_max_width(&self, max_width: i32) {
+        if self.max_width.get() == max_width {
+            return;
+        }
+        self.max_width.set(max_width);
+        let text = self.draw_model.text.borrow().clone();
+        self.resize_to_text(&text);
+    }
+
+    /// Switch how overflowing text behaves. The title line truncates while
+    /// the Lyrics chip shares its row and scrolls otherwise; resetting to
+    /// the start makes the change visible on the next frame.
+    fn set_overflow_behavior(&self, overflow: MarqueeOverflow) {
+        if self.overflow.get() == overflow {
+            return;
+        }
+        self.overflow.set(overflow);
+        self.reset_to_start();
+    }
+
+    /// Size the viewport to hug `text` up to the current `max_width`.
+    /// Text wider than the cap keeps the capped width and scrolls; the
+    /// stored `text_width` drives the overflow decision in [`Self::advance`].
+    fn resize_to_text(&self, text: &str) {
+        let measured = measure_marquee_text_width(text, self.draw_model.style);
+        self.draw_model.text_width.set(measured);
+        let viewport = (measured.ceil() as i32).clamp(0, self.max_width.get());
+        self.canvas.set_content_width(viewport);
+        self.canvas.set_size_request(viewport, MARQUEE_HEIGHT);
+        self.root.set_size_request(viewport, MARQUEE_HEIGHT);
     }
 
     fn reset_to_start(&self) {
@@ -896,6 +1027,15 @@ impl MarqueeLabel {
         let viewport_width = self.canvas.width();
         let text_width = self.draw_model.text_width.get();
         let overflows = viewport_width > 0 && text_width > f64::from(viewport_width) + 1.0;
+
+        if self.overflow.get() == MarqueeOverflow::Truncate {
+            // Hold the text still; fade its right edge when it overflows so
+            // the cut-off against the inline chip is soft rather than hard.
+            self.draw_model.fade_active.set(overflows);
+            self.reset_to_start();
+            return;
+        }
+
         let should_scroll = overflows && !self.paused.get();
 
         self.draw_model.fade_active.set(should_scroll);
@@ -921,6 +1061,28 @@ fn install_marquee_draw_func(canvas: &gtk::DrawingArea, draw_model: &MarqueeDraw
     canvas.set_draw_func(move |canvas, context, width, height| {
         draw_marquee_text(canvas, context, width, height, &draw_model);
     });
+}
+
+/// Measure the rendered advance width of `text` using the same cairo
+/// toy-font settings the draw function applies, so the marquee can size
+/// its viewport to hug the text. Returns 0 for empty text or when a
+/// measuring surface cannot be created.
+fn measure_marquee_text_width(text: &str, style: MarqueeTextStyle) -> f64 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let Ok(surface) = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1) else {
+        return 0.0;
+    };
+    let Ok(context) = cairo::Context::new(&surface) else {
+        return 0.0;
+    };
+    context.select_font_face("Sans", cairo::FontSlant::Normal, style.font_weight());
+    context.set_font_size(style.font_size());
+    context
+        .text_extents(text)
+        .map(|extents| extents.x_advance().max(0.0))
+        .unwrap_or(0.0)
 }
 
 #[derive(Clone, Copy)]
@@ -982,12 +1144,14 @@ fn draw_marquee_text(
         draw_model.style.font_weight(),
     );
     context.set_font_size(draw_model.style.font_size());
+    let overflow = draw_model.overflow.get();
     set_text_source(
         context,
         &canvas.color(),
         draw_model.style.alpha(),
         f64::from(width),
         draw_model.fade_active.get(),
+        overflow,
     );
 
     let Ok(extents) = context.text_extents(&text) else {
@@ -997,7 +1161,10 @@ fn draw_marquee_text(
     let measured_width = extents.x_advance().max(0.0);
     draw_model.text_width.set(measured_width);
 
-    let x = if measured_width > f64::from(width) + 1.0 {
+    let overflows = measured_width > f64::from(width) + 1.0;
+    // An overflowing line anchors to its scroll position (0 when
+    // truncating, since `advance` holds it there); a fitting line centres.
+    let x = if overflows {
         draw_model.x_position.get()
     } else {
         (f64::from(width) - measured_width) / 2.0
@@ -1005,7 +1172,9 @@ fn draw_marquee_text(
     let y = (f64::from(height) - extents.height()) / 2.0 - extents.y_bearing();
     draw_text_at(context, &text, x, y);
 
-    if measured_width > f64::from(width) + 1.0 {
+    // The seamless second copy only exists for the scrolling marquee; the
+    // truncating one shows a single static copy that fades at the edge.
+    if overflows && overflow == MarqueeOverflow::Scroll {
         draw_text_at(context, &text, x + measured_width + MARQUEE_LOOP_GAP, y);
     }
 
@@ -1027,6 +1196,7 @@ fn set_text_source(
     alpha: f64,
     width: f64,
     fade_active: bool,
+    overflow: MarqueeOverflow,
 ) {
     if !fade_active || width <= 0.0 {
         set_context_color(context, color, alpha);
@@ -1040,8 +1210,19 @@ fn set_text_source(
     let alpha = f64::from(color.alpha()) * alpha;
     let fade_stop = (MARQUEE_EDGE_FADE_WIDTH / width).clamp(0.0, 0.5);
 
-    gradient.add_color_stop_rgba(0.0, red, green, blue, 0.0);
-    gradient.add_color_stop_rgba(fade_stop, red, green, blue, alpha);
+    // The scrolling marquee fades both edges, as text enters and leaves on
+    // either side. The truncating one is anchored at the left, so its
+    // first character must stay fully opaque — only the right edge fades,
+    // softening the cut-off into the inline chip.
+    match overflow {
+        MarqueeOverflow::Scroll => {
+            gradient.add_color_stop_rgba(0.0, red, green, blue, 0.0);
+            gradient.add_color_stop_rgba(fade_stop, red, green, blue, alpha);
+        }
+        MarqueeOverflow::Truncate => {
+            gradient.add_color_stop_rgba(0.0, red, green, blue, alpha);
+        }
+    }
     gradient.add_color_stop_rgba(1.0 - fade_stop, red, green, blue, alpha);
     gradient.add_color_stop_rgba(1.0, red, green, blue, 0.0);
     let _result = context.set_source(&gradient);

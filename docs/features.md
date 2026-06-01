@@ -355,13 +355,18 @@ The center of the top bar shows the current track's artwork, title,
 artist/album, elapsed and remaining time, and a seekable progress bar.
 The artwork's dominant color tints the tile background. Overflowing
 title and artist/album lines marquee-scroll, each at a slightly
-different rate so the two never crawl in lockstep. Clicking on the
-artwork opens a centered artwork overlay. Tracks with non-blank plain
-lyrics carry an **L** badge on the artwork; clicking it opens the same
-overlay directly on a read-only lyrics face. Clicking enlarged artwork
-flips between the artwork and lyrics faces when both are available.
-Optional synced lyrics enrich the displayed text, while plain lyrics
-remain the source of truth for whether the lyrics surface appears.
+different rate so the two never crawl in lockstep. When the track
+carries lyrics, a small rounded vintage-LCD **Lyrics** chip sits inline
+just after the title; while it is shown the title holds still and fades
+out at its right edge instead of scrolling, so the chip stays pinned to
+the title rather than chasing a moving target. Clicking on the artwork
+opens a centered, round-cornered artwork overlay; clicking the
+**Lyrics** chip opens that same overlay directly on a read-only lyrics
+face. Inside the overlay the artwork and lyrics faces cross-fade into
+each other when both are available, and the lyrics are set large,
+light, and centered. Optional
+synced lyrics enrich the displayed text, while plain lyrics remain the
+source of truth for whether the lyrics surface appears.
 
 ### Seek bar — *iso-iTunes*
 Click or drag on the progress bar to seek. The clickable hit area
@@ -767,6 +772,8 @@ The Preferences window currently exposes:
 - Manual library scan trigger
 - Analysis tab: BPM / Key / Audio background toggles
 - Online tab: Artwork / Tags / Lyrics background toggles
+- Views tab: show/hide the sidebar's Duplicates and Statistics rows
+  (both on by default), applied live
 
 Settings persist to `~/.config/sustain/settings.toml`.
 

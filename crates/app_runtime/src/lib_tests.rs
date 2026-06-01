@@ -2214,6 +2214,8 @@ fn runtime_saves_ui_settings_with_settings_store() {
         sidebar_width: Some(212),
         library_section_collapsed: true,
         playlists_section_collapsed: false,
+        sidebar_show_duplicates: false,
+        sidebar_show_statistics: true,
     };
 
     assert_eq!(runtime.save_ui_settings(ui.clone()), Ok(()));

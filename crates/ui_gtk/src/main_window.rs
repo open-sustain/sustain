@@ -49,7 +49,7 @@ use super::{
     },
     now_playing::NowPlayingView,
     playlists_header::{PlaylistsHeader, PlaylistsHeaderState},
-    preferences::{install_preferences_action, settings_button},
+    preferences::{ViewSettingsChangedCallback, install_preferences_action, settings_button},
     queue_view::QueueView,
     shortcuts::{
         GlobalShortcutContext, create_new_playlist, install_global_shortcuts,
@@ -683,6 +683,18 @@ pub(crate) fn build_main_window(
     let scan_requested = library_scan_requested_callback(&runtime, library_changed.clone());
     let import_requested = library_import_requested_callback(&runtime, library_changed.clone());
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
+    // Re-applies the Views toggles to the live UI the instant they
+    // change: the sidebar's Duplicates/Statistics rows.
+    let view_settings_changed: ViewSettingsChangedCallback = {
+        let sidebar = sidebar.clone();
+        let runtime = runtime.clone();
+        std::rc::Rc::new(move || {
+            let runtime = runtime.borrow();
+            let ui = &runtime.settings().ui;
+            sidebar.set_view_row_visibility(ui.sidebar_show_duplicates, ui.sidebar_show_statistics);
+        })
+    };
+
     install_preferences_action(
         app,
         &window,
@@ -690,6 +702,7 @@ pub(crate) fn build_main_window(
         database_path.clone(),
         scan_requested.clone(),
         consolidation_requested.clone(),
+        view_settings_changed.clone(),
     );
 
     let main_content = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -706,6 +719,7 @@ pub(crate) fn build_main_window(
         database_path,
         scan_requested,
         consolidation_requested.clone(),
+        view_settings_changed,
     ));
 
     main_content.append(&content_stack);
@@ -790,16 +804,15 @@ pub(crate) fn build_main_window(
         // Persisting UI state is best-effort here; on failure log a clear
         // line to stderr rather than silently dropping it, and never block
         // the close on a settings write.
-        if let Err(error) =
-            runtime_for_close
-                .borrow_mut()
-                .save_ui_settings(ui_settings_from_widgets(
-                    &titlebar_for_close,
-                    &sidebar_for_close,
-                    collapse_controller_for_close.is_collapsed(),
-                    collapse_controller_for_close.expanded_width(),
-                ))
-        {
+        let current_ui = runtime_for_close.borrow().settings().ui.clone();
+        let ui_to_save = ui_settings_from_widgets(
+            &titlebar_for_close,
+            &sidebar_for_close,
+            collapse_controller_for_close.is_collapsed(),
+            collapse_controller_for_close.expanded_width(),
+            &current_ui,
+        );
+        if let Err(error) = runtime_for_close.borrow_mut().save_ui_settings(ui_to_save) {
             eprintln!("sustain: failed to persist UI state on close: {error:?}");
         }
         glib::Propagation::Proceed
@@ -1012,6 +1025,7 @@ fn ui_settings_from_widgets(
     sidebar: &PlaylistSidebar,
     sidebar_collapsed: bool,
     sidebar_width: u32,
+    current: &UiSettings,
 ) -> UiSettings {
     UiSettings {
         search_text: titlebar.search_text(),
@@ -1030,6 +1044,11 @@ fn ui_settings_from_widgets(
         sidebar_width: Some(sidebar_width),
         library_section_collapsed: sidebar.library_section_collapsed(),
         playlists_section_collapsed: sidebar.playlists_section_collapsed(),
+        // View-preference toggles are set in the Views tab, not derived
+        // from any widget here, so carry the current values forward
+        // unchanged — otherwise this close-time save would reset them.
+        sidebar_show_duplicates: current.sidebar_show_duplicates,
+        sidebar_show_statistics: current.sidebar_show_statistics,
     }
 }
 

@@ -372,7 +372,7 @@ impl SmartShuffleEntropyDocument {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct UiSettingsDocument {
     #[serde(default)]
     search_text: String,
@@ -386,6 +386,29 @@ struct UiSettingsDocument {
     library_section_collapsed: bool,
     #[serde(default)]
     playlists_section_collapsed: bool,
+    #[serde(default = "default_view_visible")]
+    sidebar_show_duplicates: bool,
+    #[serde(default = "default_view_visible")]
+    sidebar_show_statistics: bool,
+}
+
+impl Default for UiSettingsDocument {
+    fn default() -> Self {
+        Self {
+            search_text: String::new(),
+            sidebar_selection: UiSidebarSelectionDocument::default(),
+            sidebar_collapsed: false,
+            sidebar_width: None,
+            library_section_collapsed: false,
+            playlists_section_collapsed: false,
+            sidebar_show_duplicates: default_view_visible(),
+            sidebar_show_statistics: default_view_visible(),
+        }
+    }
+}
+
+fn default_view_visible() -> bool {
+    true
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -487,6 +510,8 @@ impl SettingsDocument {
                 sidebar_width: settings.ui.sidebar_width,
                 library_section_collapsed: settings.ui.library_section_collapsed,
                 playlists_section_collapsed: settings.ui.playlists_section_collapsed,
+                sidebar_show_duplicates: settings.ui.sidebar_show_duplicates,
+                sidebar_show_statistics: settings.ui.sidebar_show_statistics,
             },
             analysis: AnalysisSettingsDocument {
                 bpm: settings.analysis.bpm,
@@ -525,6 +550,8 @@ impl SettingsDocument {
                 sidebar_width: self.ui.sidebar_width,
                 library_section_collapsed: self.ui.library_section_collapsed,
                 playlists_section_collapsed: self.ui.playlists_section_collapsed,
+                sidebar_show_duplicates: self.ui.sidebar_show_duplicates,
+                sidebar_show_statistics: self.ui.sidebar_show_statistics,
             },
             // Normalize on load so a hand-edited config with
             // `audio = true, bpm = false` reaches the runtime as the
@@ -752,6 +779,10 @@ mod tests {
                 sidebar_width: Some(248),
                 library_section_collapsed: false,
                 playlists_section_collapsed: true,
+                // Non-default values so the round-trip proves these
+                // persist rather than silently falling back to defaults.
+                sidebar_show_duplicates: false,
+                sidebar_show_statistics: false,
             },
             ..UserSettings::default()
         };

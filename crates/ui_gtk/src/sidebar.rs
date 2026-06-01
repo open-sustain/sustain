@@ -106,6 +106,7 @@ pub(crate) struct PlaylistSidebar {
     selection: gtk::SingleSelection,
     music_row: gtk::TreeExpander,
     albums_row: gtk::TreeExpander,
+    duplicates_row: gtk::TreeExpander,
     statistics_row: gtk::TreeExpander,
     library_state: Rc<Cell<LibraryRowState>>,
     runtime: SharedRuntime,
@@ -158,6 +159,14 @@ impl PlaylistSidebar {
         let albums_row = build_library_row("Albums", "media-optical-symbolic");
         let duplicates_row = build_library_row("Duplicates", "edit-copy-symbolic");
         let statistics_row = build_library_row("Statistics", "sustain-statistics-symbolic");
+        // Duplicates and Statistics are optional library rows, toggled in
+        // the Views preferences (both shown by default).
+        {
+            let runtime_ref = runtime.borrow();
+            let ui = &runtime_ref.settings().ui;
+            duplicates_row.set_visible(ui.sidebar_show_duplicates);
+            statistics_row.set_visible(ui.sidebar_show_statistics);
+        }
         root.append(&music_row);
         root.append(&albums_row);
         root.append(&duplicates_row);
@@ -362,6 +371,7 @@ impl PlaylistSidebar {
             selection,
             music_row,
             albums_row,
+            duplicates_row,
             statistics_row,
             library_state,
             runtime,
@@ -399,6 +409,14 @@ impl PlaylistSidebar {
 
     pub(crate) fn widget(&self) -> gtk::Box {
         self.root.clone()
+    }
+
+    /// Show or hide the optional LIBRARY rows per the Views preferences.
+    /// Called live when the toggles change so the sidebar updates without
+    /// a relaunch.
+    pub(crate) fn set_view_row_visibility(&self, show_duplicates: bool, show_statistics: bool) {
+        self.duplicates_row.set_visible(show_duplicates);
+        self.statistics_row.set_visible(show_statistics);
     }
 
     /// The empty container at the bottom of the sidebar where chrome

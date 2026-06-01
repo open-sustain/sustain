@@ -94,7 +94,7 @@ impl SmartShuffleEntropy {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UiSettings {
     pub search_text: String,
     /// What the sidebar currently has selected — i.e. which view the
@@ -120,6 +120,27 @@ pub struct UiSettings {
     /// Whether the PLAYLISTS disclosure section (the playlist tree) is
     /// folded shut. Independent of [`Self::library_section_collapsed`].
     pub playlists_section_collapsed: bool,
+    /// Whether the sidebar's LIBRARY → Duplicates row is shown. On by
+    /// default.
+    pub sidebar_show_duplicates: bool,
+    /// Whether the sidebar's LIBRARY → Statistics row is shown. On by
+    /// default.
+    pub sidebar_show_statistics: bool,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            search_text: String::new(),
+            sidebar_selection: UiSidebarSelection::default(),
+            sidebar_collapsed: false,
+            sidebar_width: None,
+            library_section_collapsed: false,
+            playlists_section_collapsed: false,
+            sidebar_show_duplicates: true,
+            sidebar_show_statistics: true,
+        }
+    }
 }
 
 /// The persisted sidebar entry the user had selected when the session
