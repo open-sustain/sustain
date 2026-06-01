@@ -243,6 +243,7 @@ pub(super) fn track_context_actions(
             window,
             runtime,
             command_controller,
+            artwork_loader,
         )),
         TrackContextAction::remove_from_library(track_mutation_callback(
             command_controller,

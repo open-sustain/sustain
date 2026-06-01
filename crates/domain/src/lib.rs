@@ -37,8 +37,11 @@ pub use device_sync::{
     SyncDeviceId, SyncManifestEntry,
 };
 pub use duplicate_consolidation::{
-    DuplicateConsolidationError, DuplicateConsolidationPlan, DuplicateConsolidationRequest,
-    DuplicateMatchMode, duplicate_groups, plan_duplicate_consolidation,
+    DuplicateAudioQuality, DuplicateConsolidationError, DuplicateConsolidationPlan,
+    DuplicateConsolidationRequest, DuplicateMatchMode, DuplicateMetadataField,
+    DuplicateMetadataFieldSelection, DuplicateMetadataSelection,
+    default_duplicate_metadata_selection, duplicate_audio_quality, duplicate_groups,
+    highest_quality_duplicate_audio_track_ids, plan_duplicate_consolidation,
 };
 pub use id::{PlaylistFolderId, PlaylistId, SmartPlaylistId, TrackId};
 pub use library_statistics::{

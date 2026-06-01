@@ -23,8 +23,79 @@ pub enum DuplicateMatchMode {
 pub struct DuplicateConsolidationRequest {
     pub track_ids: Vec<TrackId>,
     pub audio_track_id: TrackId,
-    pub metadata_track_id: TrackId,
+    pub metadata: DuplicateMetadataSelection,
     pub artwork_track_id: TrackId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum DuplicateMetadataField {
+    Title,
+    Artist,
+    Album,
+    AlbumArtist,
+    Composer,
+    Grouping,
+    Genre,
+    TrackNumber,
+    TrackTotal,
+    DiscNumber,
+    DiscTotal,
+    Year,
+    Compilation,
+    Bpm,
+    Key,
+    Comments,
+    Lyrics,
+}
+
+impl DuplicateMetadataField {
+    pub const ALL: [Self; 17] = [
+        Self::Title,
+        Self::Artist,
+        Self::Album,
+        Self::AlbumArtist,
+        Self::Composer,
+        Self::Grouping,
+        Self::Genre,
+        Self::TrackNumber,
+        Self::TrackTotal,
+        Self::DiscNumber,
+        Self::DiscTotal,
+        Self::Year,
+        Self::Compilation,
+        Self::Bpm,
+        Self::Key,
+        Self::Comments,
+        Self::Lyrics,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DuplicateMetadataFieldSelection {
+    pub field: DuplicateMetadataField,
+    pub track_id: TrackId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DuplicateMetadataSelection {
+    pub fields: Vec<DuplicateMetadataFieldSelection>,
+}
+
+impl DuplicateMetadataSelection {
+    pub fn from_track(track_id: TrackId) -> Self {
+        Self {
+            fields: DuplicateMetadataField::ALL
+                .into_iter()
+                .map(|field| DuplicateMetadataFieldSelection { field, track_id })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct DuplicateAudioQuality {
+    pub bitrate_kbps: Option<u32>,
+    pub lossless: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,7 +112,46 @@ pub enum DuplicateConsolidationError {
     TrackNotFound,
     TrackUnavailable,
     ReferenceNotSelected,
+    InvalidMetadataSelection,
+    AudioTrackIsNotHighestQuality,
     CountOverflow,
+}
+
+pub fn default_duplicate_metadata_selection(
+    tracks: &[Track],
+) -> Option<DuplicateMetadataSelection> {
+    let fallback = tracks.first()?.id;
+    Some(DuplicateMetadataSelection {
+        fields: DuplicateMetadataField::ALL
+            .into_iter()
+            .map(|field| DuplicateMetadataFieldSelection {
+                field,
+                track_id: tracks
+                    .iter()
+                    .find(|track| metadata_field_is_populated(&track.metadata, field))
+                    .map(|track| track.id)
+                    .unwrap_or(fallback),
+            })
+            .collect(),
+    })
+}
+
+pub fn duplicate_audio_quality(track: &Track) -> DuplicateAudioQuality {
+    DuplicateAudioQuality {
+        bitrate_kbps: track.metadata.bitrate_kbps,
+        lossless: is_lossless_extension(track),
+    }
+}
+
+pub fn highest_quality_duplicate_audio_track_ids(tracks: &[Track]) -> Vec<TrackId> {
+    let Some(highest) = tracks.iter().map(duplicate_audio_quality).max() else {
+        return Vec::new();
+    };
+    tracks
+        .iter()
+        .filter(|track| duplicate_audio_quality(track) == highest)
+        .map(|track| track.id)
+        .collect()
 }
 
 pub fn duplicate_groups(tracks: &[Track], mode: DuplicateMatchMode) -> Vec<Vec<TrackId>> {
@@ -80,11 +190,7 @@ pub fn plan_duplicate_consolidation(
     if selected_ids.len() != request.track_ids.len() {
         return Err(DuplicateConsolidationError::RepeatedTrack);
     }
-    for reference in [
-        request.audio_track_id,
-        request.metadata_track_id,
-        request.artwork_track_id,
-    ] {
+    for reference in [request.audio_track_id, request.artwork_track_id] {
         if !selected_ids.contains(&reference) {
             return Err(DuplicateConsolidationError::ReferenceNotSelected);
         }
@@ -109,13 +215,17 @@ pub fn plan_duplicate_consolidation(
         .iter()
         .find(|track| track.id == request.audio_track_id)
         .expect("validated audio reference");
-    let metadata_track = selected_tracks
+    let highest_audio_quality = selected_tracks
         .iter()
-        .find(|track| track.id == request.metadata_track_id)
-        .expect("validated metadata reference");
+        .map(|track| duplicate_audio_quality(track))
+        .max()
+        .expect("validated non-empty selection");
+    if duplicate_audio_quality(audio_track) != highest_audio_quality {
+        return Err(DuplicateConsolidationError::AudioTrackIsNotHighestQuality);
+    }
 
     let mut survivor = (*audio_track).clone();
-    copy_editable_metadata(&mut survivor.metadata, &metadata_track.metadata);
+    copy_selected_editable_metadata(&mut survivor.metadata, &selected_tracks, &request.metadata)?;
     survivor.rating = selected_tracks
         .iter()
         .map(|track| track.rating)
@@ -217,24 +327,96 @@ fn normalized_duplicate_text(value: &str) -> String {
         .join(" ")
 }
 
-fn copy_editable_metadata(target: &mut TrackMetadata, source: &TrackMetadata) {
-    target.title.clone_from(&source.title);
-    target.artist.clone_from(&source.artist);
-    target.album.clone_from(&source.album);
-    target.album_artist.clone_from(&source.album_artist);
-    target.composer.clone_from(&source.composer);
-    target.grouping.clone_from(&source.grouping);
-    target.genre.clone_from(&source.genre);
-    target.track_number = source.track_number;
-    target.track_total = source.track_total;
-    target.disc_number = source.disc_number;
-    target.disc_total = source.disc_total;
-    target.year = source.year;
-    target.compilation = source.compilation;
-    target.bpm = source.bpm;
-    target.key.clone_from(&source.key);
-    target.comments.clone_from(&source.comments);
-    target.lyrics.clone_from(&source.lyrics);
+fn metadata_field_is_populated(metadata: &TrackMetadata, field: DuplicateMetadataField) -> bool {
+    match field {
+        DuplicateMetadataField::Title => populated_text(&metadata.title),
+        DuplicateMetadataField::Artist => populated_text(&metadata.artist),
+        DuplicateMetadataField::Album => populated_text(&metadata.album),
+        DuplicateMetadataField::AlbumArtist => populated_text(&metadata.album_artist),
+        DuplicateMetadataField::Composer => populated_text(&metadata.composer),
+        DuplicateMetadataField::Grouping => populated_text(&metadata.grouping),
+        DuplicateMetadataField::Genre => populated_text(&metadata.genre),
+        DuplicateMetadataField::TrackNumber => metadata.track_number.is_some(),
+        DuplicateMetadataField::TrackTotal => metadata.track_total.is_some(),
+        DuplicateMetadataField::DiscNumber => metadata.disc_number.is_some(),
+        DuplicateMetadataField::DiscTotal => metadata.disc_total.is_some(),
+        DuplicateMetadataField::Year => metadata.year.is_some(),
+        DuplicateMetadataField::Compilation => metadata.compilation.is_some(),
+        DuplicateMetadataField::Bpm => metadata.bpm.is_some(),
+        DuplicateMetadataField::Key => populated_text(&metadata.key),
+        DuplicateMetadataField::Comments => populated_text(&metadata.comments),
+        DuplicateMetadataField::Lyrics => populated_text(&metadata.lyrics),
+    }
+}
+
+fn populated_text(value: &Option<String>) -> bool {
+    value
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn copy_selected_editable_metadata(
+    target: &mut TrackMetadata,
+    tracks: &[&Track],
+    selection: &DuplicateMetadataSelection,
+) -> Result<(), DuplicateConsolidationError> {
+    let mut seen = BTreeSet::new();
+    for selection in &selection.fields {
+        if !seen.insert(selection.field) {
+            return Err(DuplicateConsolidationError::InvalidMetadataSelection);
+        }
+        let source = tracks
+            .iter()
+            .find(|track| track.id == selection.track_id)
+            .ok_or(DuplicateConsolidationError::ReferenceNotSelected)?;
+        copy_metadata_field(target, &source.metadata, selection.field);
+    }
+    if seen.len() != DuplicateMetadataField::ALL.len() {
+        return Err(DuplicateConsolidationError::InvalidMetadataSelection);
+    }
+    Ok(())
+}
+
+fn copy_metadata_field(
+    target: &mut TrackMetadata,
+    source: &TrackMetadata,
+    field: DuplicateMetadataField,
+) {
+    match field {
+        DuplicateMetadataField::Title => target.title.clone_from(&source.title),
+        DuplicateMetadataField::Artist => target.artist.clone_from(&source.artist),
+        DuplicateMetadataField::Album => target.album.clone_from(&source.album),
+        DuplicateMetadataField::AlbumArtist => {
+            target.album_artist.clone_from(&source.album_artist);
+        }
+        DuplicateMetadataField::Composer => target.composer.clone_from(&source.composer),
+        DuplicateMetadataField::Grouping => target.grouping.clone_from(&source.grouping),
+        DuplicateMetadataField::Genre => target.genre.clone_from(&source.genre),
+        DuplicateMetadataField::TrackNumber => target.track_number = source.track_number,
+        DuplicateMetadataField::TrackTotal => target.track_total = source.track_total,
+        DuplicateMetadataField::DiscNumber => target.disc_number = source.disc_number,
+        DuplicateMetadataField::DiscTotal => target.disc_total = source.disc_total,
+        DuplicateMetadataField::Year => target.year = source.year,
+        DuplicateMetadataField::Compilation => target.compilation = source.compilation,
+        DuplicateMetadataField::Bpm => target.bpm = source.bpm,
+        DuplicateMetadataField::Key => target.key.clone_from(&source.key),
+        DuplicateMetadataField::Comments => target.comments.clone_from(&source.comments),
+        DuplicateMetadataField::Lyrics => target.lyrics.clone_from(&source.lyrics),
+    }
+}
+
+fn is_lossless_extension(track: &Track) -> bool {
+    track
+        .location
+        .path()
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "aif" | "aiff" | "alac" | "flac" | "wav" | "wave"
+            )
+        })
 }
 
 fn rewrite_playlist(playlist: &Playlist, removed_ids: &[TrackId]) -> bool {
@@ -340,7 +522,7 @@ mod tests {
             &DuplicateConsolidationRequest {
                 track_ids: vec![track_id(1), track_id(2)],
                 audio_track_id: track_id(1),
-                metadata_track_id: track_id(2),
+                metadata: DuplicateMetadataSelection::from_track(track_id(2)),
                 artwork_track_id: track_id(2),
             },
             1234,
@@ -373,6 +555,83 @@ mod tests {
                 .map(|entry| entry.track_id)
                 .collect::<Vec<_>>(),
             vec![track_id(1), track_id(3)]
+        );
+    }
+
+    #[test]
+    fn default_metadata_selection_cherry_picks_populated_fields() {
+        let mut sparse = track(1, "Artist", "Song", "Album", 200);
+        sparse.metadata.year = None;
+        sparse.metadata.genre = Some(" ".to_owned());
+        let mut enriched = track(2, "", "Song", "Album", 200);
+        enriched.metadata.year = Some(1998);
+        enriched.metadata.genre = Some("Trip Hop".to_owned());
+
+        let selection =
+            default_duplicate_metadata_selection(&[sparse, enriched]).expect("selection");
+        let source_for = |field| {
+            selection
+                .fields
+                .iter()
+                .find(|selection| selection.field == field)
+                .map(|selection| selection.track_id)
+        };
+
+        assert_eq!(
+            source_for(DuplicateMetadataField::Artist),
+            Some(track_id(1))
+        );
+        assert_eq!(source_for(DuplicateMetadataField::Year), Some(track_id(2)));
+        assert_eq!(source_for(DuplicateMetadataField::Genre), Some(track_id(2)));
+    }
+
+    #[test]
+    fn audio_choice_requires_highest_bitrate_then_prefers_lossless_on_tie() {
+        let mut lower_lossless = track(1, "Artist", "Song", "Album", 200);
+        lower_lossless.metadata.bitrate_kbps = Some(256);
+        let mut higher_lossy = track(2, "Artist", "Song", "Album", 200);
+        higher_lossy.location =
+            TrackLocation::available(TrackRelativePath::new("2.mp3").expect("path"));
+        higher_lossy.metadata.bitrate_kbps = Some(320);
+
+        assert_eq!(
+            highest_quality_duplicate_audio_track_ids(&[lower_lossless.clone(), higher_lossy]),
+            vec![track_id(2)],
+            "bitrate wins before the codec tiebreaker"
+        );
+
+        let mut tied_lossy = track(2, "Artist", "Song", "Album", 200);
+        tied_lossy.location =
+            TrackLocation::available(TrackRelativePath::new("2.mp3").expect("path"));
+        tied_lossy.metadata.bitrate_kbps = Some(256);
+        assert_eq!(
+            highest_quality_duplicate_audio_track_ids(&[lower_lossless, tied_lossy]),
+            vec![track_id(1)],
+            "a lossless file wins when bitrate ties"
+        );
+    }
+
+    #[test]
+    fn planner_rejects_lower_quality_audio_survivor() {
+        let mut lower = track(1, "Artist", "Song", "Album", 200);
+        lower.metadata.bitrate_kbps = Some(128);
+        let mut higher = track(2, "Artist", "Song", "Album", 200);
+        higher.metadata.bitrate_kbps = Some(320);
+
+        assert_eq!(
+            plan_duplicate_consolidation(
+                &[lower, higher],
+                &[],
+                &DuplicateConsolidationRequest {
+                    track_ids: vec![track_id(1), track_id(2)],
+                    audio_track_id: track_id(1),
+                    metadata: DuplicateMetadataSelection::from_track(track_id(1)),
+                    artwork_track_id: track_id(1),
+                },
+                100,
+                false,
+            ),
+            Err(DuplicateConsolidationError::AudioTrackIsNotHighestQuality)
         );
     }
 

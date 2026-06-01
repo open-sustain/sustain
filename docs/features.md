@@ -155,8 +155,14 @@ the same album and a duration within two seconds. Groups stay adjacent
 and visually banded.
 
 Selecting two or more rows in Songs or Duplicates exposes **Consolidate
-to single track**. Its dialog independently chooses the surviving audio
-file, metadata source, and artwork source, then previews the result.
+to single track**. Double-clicking a Duplicates row plays it normally,
+so candidate versions can be compared by ear first. The dialog forces
+the highest-bitrate audio file to survive, preferring a lossless format
+when bitrate ties; only strictly equal audio-quality candidates remain
+user-selectable. Metadata defaults to a field-by-field cherry-pick of
+populated values, with controls to override individual fields or take
+every editable field from one track. Embedded artwork is previewed
+asynchronously and presets the highest-resolution available image.
 Consolidation sums listening counts, keeps the most recent last-played
 and last-skipped dates, the oldest date-added value, and the highest
 rating. Playlist membership is rewritten in place while preserving
@@ -508,7 +514,9 @@ single toggle governs the whole pass.
 The Analysis tab in Preferences exposes three toggles — BPM / Key /
 Audio — that gate which capabilities the background sweep requests.
 Because the Audio pass yields BPM and key off the same decode, turning
-it on forces the BPM and Key toggles on and locks them. With any toggle
+it on forces the BPM and Key toggles on and locks them. Turning Audio
+off stops all three background capabilities together, so cancelling the
+heavy pass cannot accidentally start BPM and Key queues. With any toggle
 on, a paced multi-worker pool walks `tracks_needing_analysis` and runs
 only the missing capabilities per track; tracks whose value is already
 populated (whether from prior analysis or from a file tag at import) are
@@ -648,7 +656,7 @@ Sustain stores both so smart-playlist rules can use it.
 ### Search bar — *iso-iTunes*
 Top-bar search filters the active view in real time across title,
 artist, album, album artist, composer, genre, and file path. Search is
-case-insensitive and whitespace-normalized. The current search string
+case- and accent-insensitive and whitespace-normalized. The current search string
 is persisted across restarts.
 
 ### Column sorting — *iso-iTunes*

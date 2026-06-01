@@ -12,7 +12,7 @@ use sustain_app_runtime::{
 use crate::{
     SharedRuntime,
     track_context::TrackRowContextMenu,
-    track_table::{TrackTable, TrackTableRow, build_track_table},
+    track_table::{TrackActivatedCallback, TrackTable, TrackTableRow, build_track_table},
 };
 
 #[derive(Clone)]
@@ -27,7 +27,11 @@ pub(crate) struct DuplicatesView {
 }
 
 impl DuplicatesView {
-    pub(crate) fn new(runtime: SharedRuntime, context_menu: TrackRowContextMenu) -> Self {
+    pub(crate) fn new(
+        runtime: SharedRuntime,
+        context_menu: TrackRowContextMenu,
+        track_activated: TrackActivatedCallback,
+    ) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.set_hexpand(true);
         root.set_vexpand(true);
@@ -48,7 +52,14 @@ impl DuplicatesView {
         header.append(&strict);
         root.append(&header);
 
-        let table = build_track_table(Vec::new(), None, Some(context_menu), None, None, None);
+        let table = build_track_table(
+            Vec::new(),
+            Some(track_activated),
+            Some(context_menu),
+            None,
+            None,
+            None,
+        );
         table.disable_sorting_and_column_reordering();
         root.append(&table.widget());
 

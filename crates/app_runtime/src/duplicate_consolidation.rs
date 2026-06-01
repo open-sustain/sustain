@@ -235,6 +235,10 @@ pub(crate) fn consolidate_duplicate_tracks(
     let playlists = store
         .playlists()
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+    // Validate every user-controlled reference and the enforced audio-quality
+    // policy before publishing a journal or touching any pathname.
+    plan_duplicate_consolidation(&tracks, &playlists, request, 0, false)
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     let selected = selected_tracks(&tracks, request)?;
     let journal = plan_journal(library_root, request.audio_track_id, &selected)?;
     let artwork_reference = selected
@@ -411,11 +415,7 @@ fn selected_tracks<'a>(
                 .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    for reference in [
-        request.audio_track_id,
-        request.metadata_track_id,
-        request.artwork_track_id,
-    ] {
+    for reference in [request.audio_track_id, request.artwork_track_id] {
         if !selected.iter().any(|track| track.id == reference) {
             return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
         }
@@ -972,7 +972,7 @@ mod tests {
             &DuplicateConsolidationRequest {
                 track_ids: vec![track_id(1), track_id(2)],
                 audio_track_id: track_id(1),
-                metadata_track_id: track_id(2),
+                metadata: sustain_domain::DuplicateMetadataSelection::from_track(track_id(2)),
                 artwork_track_id: track_id(2),
             },
         )
@@ -1071,7 +1071,7 @@ mod tests {
                 &DuplicateConsolidationRequest {
                     track_ids: vec![track_id(1), track_id(2)],
                     audio_track_id: track_id(1),
-                    metadata_track_id: track_id(2),
+                    metadata: sustain_domain::DuplicateMetadataSelection::from_track(track_id(2)),
                     artwork_track_id: track_id(2),
                 },
             ),

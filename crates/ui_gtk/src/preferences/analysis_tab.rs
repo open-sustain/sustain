@@ -158,10 +158,12 @@ fn wire_capability_switch(
 }
 
 /// Wire the Audio analysis switch. Toggling it dispatches the new
-/// `audio` flag (normalized in the runtime, so `audio` on forces BPM +
-/// key on), then drives the BPM/Key switches to match and locks them
-/// while audio is on. The `syncing` guard keeps the programmatic
-/// `set_active` calls from re-entering the BPM/Key handlers.
+/// `audio` flag, then drives the BPM/Key switches to match and locks them
+/// while audio is on. Audio is the umbrella background job: enabling it
+/// forces BPM + key on, and disabling it disables all three capabilities
+/// so stopping the expensive pass cannot accidentally start two cheaper
+/// queues. The `syncing` guard keeps the programmatic `set_active` calls
+/// from re-entering the BPM/Key handlers.
 fn wire_audio_switch(
     audio_switch: &gtk::Switch,
     bpm_switch: &gtk::Switch,
@@ -173,10 +175,7 @@ fn wire_audio_switch(
     let key_switch = key_switch.clone();
     audio_switch.connect_state_set(move |_switch, audio_on| {
         let mut settings = command_controller.runtime().borrow().settings().clone();
-        settings.analysis.audio = audio_on;
-        // `audio` on implies BPM + key on; turning it off leaves them
-        // wherever they were (the user can then opt out individually).
-        settings.analysis = settings.analysis.normalized();
+        settings.analysis = audio_switch_settings(settings.analysis, audio_on);
         let bpm_state = bpm_switch_state(settings.analysis);
         let key_state = key_switch_state(settings.analysis);
         let dispatched = command_controller
@@ -196,6 +195,18 @@ fn wire_audio_switch(
             Propagation::Stop
         }
     });
+}
+
+fn audio_switch_settings(current: AnalysisSettings, audio_on: bool) -> AnalysisSettings {
+    if audio_on {
+        AnalysisSettings {
+            audio: true,
+            ..current
+        }
+        .normalized()
+    } else {
+        AnalysisSettings::default()
+    }
 }
 
 /// Slider with three discrete stops (Innocuous / Balanced /
@@ -333,8 +344,8 @@ fn caption_text(usage: BackgroundResourceUsage) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisSettings, BackgroundResourceUsage, SwitchState, bpm_switch_state, key_switch_state,
-        usage_to_value, value_to_usage,
+        AnalysisSettings, BackgroundResourceUsage, SwitchState, audio_switch_settings,
+        bpm_switch_state, key_switch_state, usage_to_value, value_to_usage,
     };
 
     #[test]
@@ -380,6 +391,29 @@ mod tests {
             SwitchState {
                 active: true,
                 locked: true
+            }
+        );
+    }
+
+    #[test]
+    fn disabling_audio_disables_all_background_analysis_capabilities() {
+        assert_eq!(
+            audio_switch_settings(
+                AnalysisSettings {
+                    bpm: true,
+                    key: true,
+                    audio: true,
+                },
+                false,
+            ),
+            AnalysisSettings::default()
+        );
+        assert_eq!(
+            audio_switch_settings(AnalysisSettings::default(), true),
+            AnalysisSettings {
+                bpm: true,
+                key: true,
+                audio: true,
             }
         );
     }

@@ -5,6 +5,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 pub use sustain_domain::{
     LibraryQuery, SortDirection, Track, TrackId, TrackSort, TrackSortColumn, compare_optional_text,
@@ -75,7 +76,7 @@ impl SearchIndex {
 /// Normalize a raw search query once so it can be reused across many track
 /// tests. The same normalization is baked into each indexed document.
 pub fn normalize_query(query: &str) -> String {
-    query.trim().to_lowercase()
+    normalize_search_text(query)
 }
 
 pub fn filter_tracks_by_search_text(tracks: &[Track], search_text: &str) -> Vec<Track> {
@@ -200,7 +201,15 @@ fn push_field(document: &mut String, field: &str) {
     if !document.is_empty() {
         document.push(FIELD_SEPARATOR);
     }
-    document.push_str(&trimmed.to_lowercase());
+    document.push_str(&normalize_search_text(trimmed));
+}
+
+fn normalize_search_text(text: &str) -> String {
+    text.trim()
+        .nfkd()
+        .filter(|character| !is_combining_mark(*character))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 #[cfg(test)]
@@ -304,6 +313,18 @@ mod tests {
     }
 
     #[test]
+    fn search_folds_accents_in_queries_and_indexed_fields() {
+        let track = track(1, "Déjà Vu", "Beyoncé");
+        let mut index = SearchIndex::new();
+        index.insert(&track);
+
+        for query in ["deja vu", "déjà vu", "beyonce", "BEYONCÉ"] {
+            assert!(track_matches_search_text(&track, query));
+            assert!(index.matches(track.id, &normalize_query(query)));
+        }
+    }
+
+    #[test]
     fn search_matches_artist_album_genre_and_path() {
         let mut track = track(1, "Untitled", "Unknown");
         track.metadata.album = Some("Mezzanine".to_owned());
@@ -355,6 +376,16 @@ mod tests {
             "Massive Attack",
             Some(1998),
             "massive",
+        ));
+    }
+
+    #[test]
+    fn album_search_folds_accents() {
+        assert!(album_matches_search_text(
+            "Déjà Vu",
+            "Beyoncé",
+            Some(2006),
+            "beyonce",
         ));
     }
 

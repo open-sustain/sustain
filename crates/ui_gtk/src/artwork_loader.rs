@@ -55,7 +55,9 @@ use std::{
 use gtk::{gdk, gdk_pixbuf, gio, glib};
 use rusqlite::{Connection, OptionalExtension, params};
 use sustain_app_runtime::MetadataService;
-use sustain_artwork::{ArtworkDimensions, MAX_ENCODED_ARTWORK_BYTES, validate_encoded_artwork};
+use sustain_artwork::{
+    ArtworkDimensions, MAX_ENCODED_ARTWORK_BYTES, validate_dimensions, validate_encoded_artwork,
+};
 
 use crate::artwork_color::{ArtworkPalette, ArtworkPaletteComponents, RgbColorComponents};
 
@@ -98,7 +100,7 @@ const TILE_TEXTURE_MAX_SIDE: i32 = 132;
 /// payloads at this size; views downscale further at paint time.
 const DETAIL_TEXTURE_MAX_SIDE: i32 = TILE_TEXTURE_MAX_SIDE * 3;
 
-const CACHE_SCHEMA_VERSION: i64 = 1;
+const CACHE_SCHEMA_VERSION: i64 = 2;
 const CACHE_SOURCE_KIND_EMBEDDED_TRACK: &str = "embedded-track";
 
 /// Decoded artwork shared between tile rendering (needs only the
@@ -110,6 +112,8 @@ pub(crate) struct DecodedArtwork {
     pub(crate) tile_texture: Option<gdk::Texture>,
     pub(crate) detail_texture: Option<gdk::Texture>,
     pub(crate) palette: Option<ArtworkPalette>,
+    pub(crate) dimensions: Option<ArtworkDimensions>,
+    pub(crate) encoded_bytes_len: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -477,6 +481,9 @@ impl ArtworkDiskCache {
                     file_size        INTEGER NOT NULL,
                     mtime_ns         INTEGER NOT NULL,
                     format_version   INTEGER NOT NULL,
+                    original_width   INTEGER,
+                    original_height  INTEGER,
+                    encoded_bytes    INTEGER,
                     tile_png         BLOB,
                     detail_png       BLOB,
                     background_red   INTEGER,
@@ -510,7 +517,10 @@ impl ArtworkDiskCache {
             connection
                 .query_row(
                     r#"
-                    SELECT tile_png,
+                    SELECT original_width,
+                           original_height,
+                           encoded_bytes,
+                           tile_png,
                            detail_png,
                            background_red,
                            background_green,
@@ -540,8 +550,11 @@ impl ArtworkDiskCache {
                     ],
                     |row| {
                         Ok(CachedArtworkRow {
-                            tile_png: row.get(0)?,
-                            detail_png: row.get(1)?,
+                            original_width: row.get(0)?,
+                            original_height: row.get(1)?,
+                            encoded_bytes_len: row.get(2)?,
+                            tile_png: row.get(3)?,
+                            detail_png: row.get(4)?,
                             palette: palette_components_from_cache_row(row)?,
                         })
                     },
@@ -591,6 +604,9 @@ impl ArtworkDiskCache {
                 file_size,
                 mtime_ns,
                 format_version,
+                original_width,
+                original_height,
+                encoded_bytes,
                 tile_png,
                 detail_png,
                 background_red,
@@ -606,12 +622,16 @@ impl ArtworkDiskCache {
             )
             VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                ?17, ?18, ?19,
                 unixepoch()
             )
             ON CONFLICT(source_kind, source_key) DO UPDATE SET
                 file_size = excluded.file_size,
                 mtime_ns = excluded.mtime_ns,
                 format_version = excluded.format_version,
+                original_width = excluded.original_width,
+                original_height = excluded.original_height,
+                encoded_bytes = excluded.encoded_bytes,
                 tile_png = excluded.tile_png,
                 detail_png = excluded.detail_png,
                 background_red = excluded.background_red,
@@ -631,6 +651,15 @@ impl ArtworkDiskCache {
                 fingerprint.file_size,
                 fingerprint.mtime_ns,
                 CACHE_SCHEMA_VERSION,
+                cached
+                    .dimensions
+                    .map(|dimensions| i64::from(dimensions.width)),
+                cached
+                    .dimensions
+                    .map(|dimensions| i64::from(dimensions.height)),
+                cached
+                    .encoded_bytes_len
+                    .and_then(|bytes| i64::try_from(bytes).ok()),
                 cached.tile_png.as_deref(),
                 cached.detail_png.as_deref(),
                 background.map(|color| i64::from(color.red)),
@@ -655,12 +684,17 @@ struct DecodedArtworkRecord {
 
 #[derive(Default)]
 struct CachedArtwork {
+    dimensions: Option<ArtworkDimensions>,
+    encoded_bytes_len: Option<usize>,
     tile_png: Option<Vec<u8>>,
     detail_png: Option<Vec<u8>>,
     palette: Option<ArtworkPaletteComponents>,
 }
 
 struct CachedArtworkRow {
+    original_width: Option<i64>,
+    original_height: Option<i64>,
+    encoded_bytes_len: Option<i64>,
     tile_png: Option<Vec<u8>>,
     detail_png: Option<Vec<u8>>,
     palette: Option<ArtworkPaletteComponents>,
@@ -668,7 +702,24 @@ struct CachedArtworkRow {
 
 impl CachedArtworkRow {
     fn decode(self) -> Option<DecodedArtwork> {
-        if self.tile_png.is_none() && self.detail_png.is_none() && self.palette.is_none() {
+        let dimensions = match (self.original_width, self.original_height) {
+            (Some(width), Some(height)) => Some(
+                validate_dimensions(u64::try_from(width).ok()?, u64::try_from(height).ok()?)
+                    .ok()?,
+            ),
+            (None, None) => None,
+            _ => return None,
+        };
+        let encoded_bytes_len = self
+            .encoded_bytes_len
+            .map(usize::try_from)
+            .transpose()
+            .ok()?;
+        if self.tile_png.is_none()
+            && self.detail_png.is_none()
+            && self.palette.is_none()
+            && dimensions.is_none()
+        {
             return Some(DecodedArtwork::default());
         }
 
@@ -678,6 +729,8 @@ impl CachedArtworkRow {
             tile_texture: Some(tile_texture),
             detail_texture: Some(detail_texture),
             palette: self.palette.map(ArtworkPalette::from_components),
+            dimensions,
+            encoded_bytes_len,
         })
     }
 }
@@ -686,6 +739,7 @@ fn decode_artwork(bytes: Option<Vec<u8>>) -> DecodedArtworkRecord {
     let Some(bytes) = bytes else {
         return DecodedArtworkRecord::default();
     };
+    let encoded_bytes_len = bytes.len();
     let dimensions = match validate_encoded_artwork(&bytes) {
         Ok(dimensions) => dimensions,
         Err(_) => return DecodedArtworkRecord::default(),
@@ -703,6 +757,8 @@ fn decode_artwork(bytes: Option<Vec<u8>>) -> DecodedArtworkRecord {
     let detail_pixbuf = scaled_pixbuf(&pixbuf, DETAIL_TEXTURE_MAX_SIDE);
     let palette = ArtworkPalette::from_pixbuf(&pixbuf);
     let cache_entry = CachedArtwork {
+        dimensions: Some(dimensions),
+        encoded_bytes_len: Some(encoded_bytes_len),
         tile_png: tile_pixbuf.as_ref().and_then(pixbuf_png_bytes),
         detail_png: detail_pixbuf.as_ref().and_then(pixbuf_png_bytes),
         palette: palette.map(ArtworkPalette::components),
@@ -711,6 +767,8 @@ fn decode_artwork(bytes: Option<Vec<u8>>) -> DecodedArtworkRecord {
         tile_texture: tile_pixbuf.as_ref().map(gdk::Texture::for_pixbuf),
         detail_texture: detail_pixbuf.as_ref().map(gdk::Texture::for_pixbuf),
         palette,
+        dimensions: Some(dimensions),
+        encoded_bytes_len: Some(encoded_bytes_len),
     };
 
     DecodedArtworkRecord {
@@ -815,13 +873,13 @@ fn pixbuf_from_bytes_at_scale(
 fn palette_components_from_cache_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<Option<ArtworkPaletteComponents>> {
-    let Some(background) = rgb_from_cache_columns(row, 2)? else {
+    let Some(background) = rgb_from_cache_columns(row, 5)? else {
         return Ok(None);
     };
-    let Some(foreground) = rgb_from_cache_columns(row, 5)? else {
+    let Some(foreground) = rgb_from_cache_columns(row, 8)? else {
         return Ok(None);
     };
-    let Some(secondary) = rgb_from_cache_columns(row, 8)? else {
+    let Some(secondary) = rgb_from_cache_columns(row, 11)? else {
         return Ok(None);
     };
     Ok(Some(ArtworkPaletteComponents {

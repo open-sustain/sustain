@@ -18,6 +18,7 @@ pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, ApplicationQuery, BackgroundJobsSettings,
     BackgroundResourceUsage, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind,
     DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest, DuplicateMatchMode,
+    DuplicateMetadataField, DuplicateMetadataFieldSelection, DuplicateMetadataSelection,
     FieldChange, FilesPerFolderCap, GenreDistribution, GenrePlayCount, GenreRating, GenreShare,
     LazyPickContext, LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange,
     MonotonicClock, OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
@@ -32,8 +33,9 @@ pub use sustain_domain::{
     Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
     TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
     TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings, VolumePercent, YearCount,
-    compare_optional_text, compute_library_statistics, effective_sort_key, matching_tracks,
-    track_matches_rule_set,
+    compare_optional_text, compute_library_statistics, default_duplicate_metadata_selection,
+    duplicate_audio_quality, effective_sort_key, highest_quality_duplicate_audio_track_ids,
+    matching_tracks, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
 pub use sustain_metadata::MetadataService;

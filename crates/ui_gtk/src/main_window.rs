@@ -420,7 +420,11 @@ pub(crate) fn build_main_window(
         artwork_loader.clone(),
     );
     albums_view_holder.replace(Some(albums_view.clone()));
-    let duplicates_view = DuplicatesView::new(runtime.clone(), context_menu);
+    let duplicates_view = DuplicatesView::new(
+        runtime.clone(),
+        context_menu,
+        library_track_activated.clone(),
+    );
     let playlist_row_reorder = playlist_row_reorder_callback(
         &command_controller,
         &runtime,
