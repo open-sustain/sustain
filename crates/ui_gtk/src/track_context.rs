@@ -493,10 +493,14 @@ impl TrackRowContextMenu {
         popover_parent
             .as_ref()
             .insert_action_group(&local_action_group, Some(&action_group));
-        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        let popover = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
         popover.set_has_arrow(false);
         popover.add_css_class("compact-context-menu");
         popover.set_parent(popover_parent.as_ref());
+        // GtkPopoverMenu builds its tracker when the model is installed. Do
+        // that only after parenting so the tracker sees the popup-local group
+        // and inherited application actions from the anchor hierarchy.
+        popover.set_menu_model(Some(&menu));
         if let Some(add) = &self.add_to_playlist {
             let playlist_list =
                 build_add_to_playlist_custom_child(add, &popover, invocation.selected_track_ids);
@@ -510,11 +514,16 @@ impl TrackRowContextMenu {
         let invocation_state = self.invocation_state.clone();
         let action_scope = popover_parent.as_ref().downgrade();
         popover.connect_closed(move |_| {
-            popover_for_close.unparent();
             let invocation_state = invocation_state.clone();
             let action_scope = action_scope.clone();
             let local_action_group = local_action_group.clone();
+            let popover_for_close = popover_for_close.clone();
+            // GtkModelButton pops its containing popover down before asking
+            // GtkActionHelper to activate the model-backed action. Preserve
+            // the widget ancestry until the current event has completed so
+            // the helper can still resolve this popup's action scope.
             glib::idle_add_local_once(move || {
+                popover_for_close.unparent();
                 invocation_state.clear_if_active(invocation_serial);
                 if let Some(action_scope) = action_scope.upgrade() {
                     action_scope
@@ -885,8 +894,12 @@ fn trash_confirmation_detail(count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
+    use gtk::prelude::*;
     use sustain_app_runtime::TrackId;
 
     use super::{
@@ -980,6 +993,58 @@ mod tests {
 
         state.clear_if_active(second_serial);
         assert!(state.current().is_none());
+    }
+
+    #[test]
+    fn model_button_activates_anchor_scoped_action_after_popdown() {
+        let ran = crate::test_support::with_gtk(|| {
+            let calls = Rc::new(Cell::new(0));
+            let calls_for_action = calls.clone();
+            let actions = gtk::gio::SimpleActionGroup::new();
+            let action = gtk::gio::SimpleAction::new("show-album", None);
+            action.connect_activate(move |_action, _parameter| {
+                calls_for_action.set(calls_for_action.get() + 1);
+            });
+            actions.add_action(&action);
+
+            let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            anchor.insert_action_group("track-context-1", Some(&actions));
+            let menu = gtk::gio::Menu::new();
+            menu.append(Some("Show Album"), Some("track-context-1.show-album"));
+            let popover = gtk::PopoverMenu::from_model(None::<&gtk::gio::Menu>);
+
+            let window = gtk::Window::new();
+            window.set_child(Some(&anchor));
+            popover.set_parent(&anchor);
+            popover.set_menu_model(Some(&menu));
+            let popover_for_close = popover.clone();
+            popover.connect_closed(move |_| {
+                let popover_for_close = popover_for_close.clone();
+                gtk::glib::idle_add_local_once(move || popover_for_close.unparent());
+            });
+            window.present();
+            popover.popup();
+
+            let model_button = descendant_of_type(popover.upcast_ref(), "GtkModelButton")
+                .expect("generated model button");
+            assert!(model_button.activate(), "model button accepted activation");
+            assert_eq!(
+                calls.get(),
+                1,
+                "popover ancestry survived until GtkActionHelper activation"
+            );
+
+            let ctx = gtk::glib::MainContext::default();
+            while ctx.iteration(false) {}
+            assert!(
+                popover.parent().is_none(),
+                "idle cleanup unparented popover"
+            );
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
     }
 
     #[test]
@@ -1104,5 +1169,19 @@ mod tests {
 
     fn never_visible() -> TrackActionVisibility {
         Rc::new(|_track_ids| false)
+    }
+
+    fn descendant_of_type(widget: &gtk::Widget, type_name: &str) -> Option<gtk::Widget> {
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            if widget.type_().name() == type_name {
+                return Some(widget);
+            }
+            if let Some(found) = descendant_of_type(&widget, type_name) {
+                return Some(found);
+            }
+            child = widget.next_sibling();
+        }
+        None
     }
 }

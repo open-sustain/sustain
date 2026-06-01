@@ -90,14 +90,20 @@ fn popup_menu(anchor: &gtk::Widget, x: f64, y: f64) {
         menu.append(Some(action.label()), Some(action.detailed_action()));
     }
 
-    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    let popover = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
     popover.set_has_arrow(false);
     popover.add_css_class("compact-context-menu");
     popover.set_parent(anchor);
+    // Install the model after attaching so its tracker inherits application
+    // actions from the window and this anchor's sidebar-local action group.
+    popover.set_menu_model(Some(&menu));
 
     let popover_for_close = popover.clone();
     popover.connect_closed(move |_| {
-        popover_for_close.unparent();
+        let popover_for_close = popover_for_close.clone();
+        // GtkModelButton activates its GAction after popping down. Keep the
+        // anchor ancestry alive until that activation has resolved.
+        gtk::glib::idle_add_local_once(move || popover_for_close.unparent());
     });
 
     let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
