@@ -240,6 +240,10 @@ pub(crate) fn consolidate_duplicate_tracks(
     plan_duplicate_consolidation(&tracks, &playlists, request, 0, false)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     let selected = selected_tracks(&tracks, request)?;
+    // Every selected file is hard-linked, rewritten, and removed, so a single
+    // file missing on disk would leave the merge half-done. Reject up front
+    // with a distinct error (#126) rather than failing opaquely mid-journal.
+    ensure_selected_files_present(library_root, &selected)?;
     let journal = plan_journal(library_root, request.audio_track_id, &selected)?;
     let artwork_reference = selected
         .iter()
@@ -415,12 +419,32 @@ fn selected_tracks<'a>(
                 .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    for reference in [request.audio_track_id, request.artwork_track_id] {
+    for reference in [
+        request.audio_track_id,
+        request.artwork_track_id,
+        request.rating_track_id,
+    ] {
         if !selected.iter().any(|track| track.id == reference) {
             return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
         }
     }
     Ok(selected)
+}
+
+/// Reject the merge before it touches any pathname if a selected file is not a
+/// readable regular file on disk (#126). The selection already screened the
+/// stale `is_missing` flag; this catches a file deleted out from under a track
+/// whose flag was never updated.
+fn ensure_selected_files_present(
+    library_root: &Path,
+    selected: &[&Track],
+) -> ApplicationRuntimeResult<()> {
+    for track in selected {
+        if regular_file_identity(&track.location.absolute_path(library_root)).is_err() {
+            return Err(ApplicationRuntimeError::DuplicateConsolidationSourceMissing);
+        }
+    }
+    Ok(())
 }
 
 fn plan_journal(
@@ -974,6 +998,7 @@ mod tests {
                 audio_track_id: track_id(1),
                 metadata: sustain_domain::DuplicateMetadataSelection::from_track(track_id(2)),
                 artwork_track_id: track_id(2),
+                rating_track_id: track_id(1),
             },
         )
         .expect("consolidate");
@@ -1073,6 +1098,7 @@ mod tests {
                     audio_track_id: track_id(1),
                     metadata: sustain_domain::DuplicateMetadataSelection::from_track(track_id(2)),
                     artwork_track_id: track_id(2),
+                    rating_track_id: track_id(1),
                 },
             ),
             Err(ApplicationRuntimeError::DuplicateConsolidationFailed)
@@ -1086,6 +1112,50 @@ mod tests {
             fs::read(root.join("remove.flac")).expect("duplicate"),
             b"duplicate"
         );
+        assert!(!journal_path(&root).exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_selected_file_missing_on_disk_is_rejected_before_any_change() {
+        let root = test_root("missing-on-disk");
+        fs::create_dir_all(&root).expect("create root");
+        // The survivor exists; the duplicate's row claims it is present
+        // (`is_missing` was never set) but its file is gone from disk (#126).
+        fs::write(root.join("keep.flac"), b"audio").expect("write survivor");
+        let store = InMemoryLibraryStore::new();
+        store
+            .save_track(track(1, "keep.flac", "Old"))
+            .expect("save survivor");
+        store
+            .save_track(track(2, "gone.flac", "Chosen"))
+            .expect("save vanished duplicate");
+
+        assert_eq!(
+            consolidate_duplicate_tracks(
+                &root,
+                &store,
+                &FailingMetadata,
+                &ManagedLibraryFilesystemValidator::default(),
+                &DuplicateConsolidationRequest {
+                    track_ids: vec![track_id(1), track_id(2)],
+                    audio_track_id: track_id(1),
+                    metadata: sustain_domain::DuplicateMetadataSelection::from_track(track_id(1)),
+                    artwork_track_id: track_id(1),
+                    rating_track_id: track_id(1),
+                },
+            ),
+            Err(ApplicationRuntimeError::DuplicateConsolidationSourceMissing)
+        );
+
+        // Nothing was staged, linked, or committed: the survivor is untouched,
+        // both rows remain, and no journal was published.
+        assert_eq!(
+            fs::read(root.join("keep.flac")).expect("survivor"),
+            b"audio"
+        );
+        assert!(store.track(track_id(1)).expect("load survivor").is_some());
+        assert!(store.track(track_id(2)).expect("load duplicate").is_some());
         assert!(!journal_path(&root).exists());
         fs::remove_dir_all(root).expect("cleanup");
     }

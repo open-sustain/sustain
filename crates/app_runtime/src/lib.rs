@@ -142,6 +142,7 @@ pub enum ApplicationRuntimeError {
     ArtworkFetchingUnavailable,
     ArtworkRejected,
     DuplicateConsolidationFailed,
+    DuplicateConsolidationSourceMissing,
     LibraryPathUnavailable,
     ManagedLibraryFilesystemUnsupported(ManagedLibraryFilesystemError),
     LibraryConsolidationFailed,
@@ -1909,6 +1910,29 @@ impl ApplicationRuntime {
         self.settings
             .library_path()
             .map(|library_path| track.location.absolute_path(library_path))
+    }
+
+    /// Ids of the given tracks whose audio file is not a readable regular file
+    /// on disk right now. Duplicate consolidation hard-links, rewrites, and
+    /// removes every selected file, so a single missing one would strand the
+    /// merge half-done (#126). The `is_missing` flag only reflects the last
+    /// playback/scan, so a file the user never touched can be gone without it
+    /// being set; this probes the filesystem directly. With no library folder
+    /// configured every track counts as unreachable.
+    pub fn duplicate_consolidation_missing_files(&self, tracks: &[Track]) -> Vec<TrackId> {
+        let Some(library_path) = self.settings.library_path() else {
+            return tracks.iter().map(|track| track.id).collect();
+        };
+        tracks
+            .iter()
+            .filter(|track| {
+                managed_library::file_ops::regular_file_identity(
+                    &track.location.absolute_path(library_path),
+                )
+                .is_err()
+            })
+            .map(|track| track.id)
+            .collect()
     }
 
     /// Persist the playback volume preference. The audio path is updated

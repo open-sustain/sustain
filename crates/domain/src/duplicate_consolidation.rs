@@ -25,6 +25,7 @@ pub struct DuplicateConsolidationRequest {
     pub audio_track_id: TrackId,
     pub metadata: DuplicateMetadataSelection,
     pub artwork_track_id: TrackId,
+    pub rating_track_id: TrackId,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -189,7 +190,11 @@ pub fn plan_duplicate_consolidation(
     if selected_ids.len() != request.track_ids.len() {
         return Err(DuplicateConsolidationError::RepeatedTrack);
     }
-    for reference in [request.audio_track_id, request.artwork_track_id] {
+    for reference in [
+        request.audio_track_id,
+        request.artwork_track_id,
+        request.rating_track_id,
+    ] {
         if !selected_ids.contains(&reference) {
             return Err(DuplicateConsolidationError::ReferenceNotSelected);
         }
@@ -221,11 +226,14 @@ pub fn plan_duplicate_consolidation(
 
     let mut survivor = (*audio_track).clone();
     copy_selected_editable_metadata(&mut survivor.metadata, &selected_tracks, &request.metadata)?;
+    // The rating, like each metadata field, is whichever track the user picked
+    // (highest is preselected in the UI but stays overridable). Listening
+    // statistics below are not choices: counts cumulate, dates take the extreme.
     survivor.rating = selected_tracks
         .iter()
-        .map(|track| track.rating)
-        .max()
-        .expect("validated non-empty selection");
+        .find(|track| track.id == request.rating_track_id)
+        .expect("validated rating reference")
+        .rating;
     survivor.statistics.play_count = selected_tracks
         .iter()
         .try_fold(0_u64, |total, track| {
@@ -498,6 +506,7 @@ mod tests {
         let mut second = track(2, "Artist", "Chosen", "Album", 220);
         second.rating = Rating::new(5).expect("rating");
         second.statistics = statistics(7, 4, 300, 150);
+        let first_id = first.id;
         let playlist_id = PlaylistId::new(1).expect("playlist");
         let playlists = vec![Playlist {
             id: playlist_id,
@@ -519,6 +528,9 @@ mod tests {
                 audio_track_id: track_id(1),
                 metadata: DuplicateMetadataSelection::from_track(track_id(2)),
                 artwork_track_id: track_id(2),
+                // Deliberately pick the lower-rated track to prove the rating
+                // follows the selection rather than the highest available.
+                rating_track_id: first_id,
             },
             1234,
             true,
@@ -531,7 +543,7 @@ mod tests {
             plan.survivor.metadata.duration,
             Some(Duration::from_secs(200))
         );
-        assert_eq!(plan.survivor.rating, Rating::new(5).expect("rating"));
+        assert_eq!(plan.survivor.rating, Rating::new(3).expect("rating"));
         assert_eq!(plan.survivor.statistics.play_count, 9);
         assert_eq!(plan.survivor.statistics.skip_count, 5);
         assert_eq!(
@@ -623,6 +635,7 @@ mod tests {
                 audio_track_id: track_id(1),
                 metadata: DuplicateMetadataSelection::from_track(track_id(1)),
                 artwork_track_id: track_id(1),
+                rating_track_id: track_id(1),
             },
             100,
             false,

@@ -157,27 +157,35 @@ and visually banded.
 Selecting two or more rows in Songs or Duplicates exposes **Consolidate
 to single track**. Double-clicking a Duplicates row plays it normally,
 so candidate versions can be compared by ear first. The dialog lays the
-duplicates out as one column per track — each column headed by that
-track's artwork preview and details (path, codec, bitrate, duration,
-size, rating, plays, date added) — with grouped radio rows below for the
-survivor decisions. The audio file defaults to the highest quality
-(highest bitrate, lossless breaking a tie) but stays overridable, so a
-16-bit FLAC can be kept over a larger 24-bit one. Each editable metadata
-field is its own radio row, defaulting to a cherry-pick of populated
-values; a per-column "Track N" heading takes every field from one track
-at once. Embedded artwork is previewed asynchronously and presets the
-highest-resolution available image. Consolidation sums listening counts,
-keeps the most recent last-played and last-skipped dates, the oldest
-date-added value, and the highest rating. Playlist membership is
+duplicates out as one column per track, headed by that track's identity
+and path. Every survivor decision below is a self-labelling box — the
+field name in bold over its value — that draws an accent border when it
+holds the value that will be kept, so the window shows at a glance what
+is preserved from what. The audio file (codec, bitrate, duration, size),
+artwork, rating, and each editable metadata field are all selectable
+this way. The audio file defaults to the highest quality (highest
+bitrate, lossless breaking a tie) but stays overridable, so a 16-bit
+FLAC can be kept over a larger 24-bit one; metadata fields default to a
+cherry-pick of populated values, the rating to the highest available,
+and a per-column "Track N" button takes every tag and the rating from
+one track at once. Embedded artwork is previewed asynchronously and
+presets the highest-resolution available image. Play count, skips, and
+date added are not choices — counts are summed and the oldest date is
+kept — so they appear as plain non-selectable cells; last-played and
+last-skipped keep their most recent values. Playlist membership is
 rewritten in place while preserving order and collapsing consecutive
 repetitions introduced by the merge.
 
-Before deleting any duplicate pathname, Sustain writes and verifies a
-staged survivor, keeps hard-linked recovery copies, commits SQLite and
-playlist rewrites atomically, and crosses the durable database barrier.
-An interrupted merge is recovered before library hydration on the next
-launch. The view is transient: it is never restored or scanned at
-startup, so it does not affect cold-start time.
+If any selected file is missing from disk — even one whose row was never
+flagged because it was never played — the dialog refuses to open and
+explains which track to restore or remove first, rather than stranding
+the merge in a half-written state. Before deleting any duplicate
+pathname, Sustain writes and verifies a staged survivor, keeps
+hard-linked recovery copies, commits SQLite and playlist rewrites
+atomically, and crosses the durable database barrier. An interrupted
+merge is recovered before library hydration on the next launch. The view
+is transient: it is never restored or scanned at startup, so it does not
+affect cold-start time.
 
 ### Statistics — *Sustain-native*
 The third entry under LIBRARY opens a single scrollable page of

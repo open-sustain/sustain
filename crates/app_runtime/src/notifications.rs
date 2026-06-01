@@ -506,6 +506,9 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         ApplicationRuntimeError::DuplicateConsolidationFailed => {
             "The duplicate tracks could not be consolidated safely."
         }
+        ApplicationRuntimeError::DuplicateConsolidationSourceMissing => {
+            "One or more of the selected files is missing from disk. Restore or remove it, then consolidate again."
+        }
         ApplicationRuntimeError::LibraryServicesUnavailable => {
             "Library scanning is not available in this build."
         }

@@ -1222,3 +1222,34 @@ columnview.track-table listview row:selected .track-table-status-missing,
     border-radius: 6px;
     padding: 14px;
 }
+
+/* Duplicate consolidation dialog: every survivor decision is a self-labelling
+   box (field name in bold over its value). Selectable cells are radios that
+   draw a 2px accent border with a gentle radius when they hold the value that
+   will be kept, so the box itself shows what is preserved from what. The
+   transparent border on the resting and info states reserves the same space,
+   so selecting a cell never nudges the grid. Accent comes from
+   @theme_selected_bg_color, tracking the system accent in light and dark. */
+.consolidation-cell,
+.consolidation-info-cell {
+    margin: 4px;
+    padding: 6px;
+    border: 2px solid transparent;
+    border-radius: 8px;
+}
+
+.consolidation-cell:checked {
+    border-color: @theme_selected_bg_color;
+    background-color: alpha(@theme_selected_bg_color, 0.08);
+}
+
+/* Breathing room on both sides of the radio indicator: clear of the box edge
+   on the left, well separated from the field name/value on the right. */
+.consolidation-cell > check {
+    margin-left: 4px;
+    margin-right: 8px;
+}
+
+.consolidation-field-name {
+    font-weight: 700;
+}

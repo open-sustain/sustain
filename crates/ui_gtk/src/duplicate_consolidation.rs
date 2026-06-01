@@ -9,8 +9,9 @@ use std::{
 use gtk::prelude::*;
 use sustain_app_runtime::{
     ApplicationCommand, DuplicateConsolidationRequest, DuplicateMetadataField,
-    DuplicateMetadataFieldSelection, DuplicateMetadataSelection, Track, TrackMetadata,
-    default_duplicate_metadata_selection, highest_quality_duplicate_audio_track_ids,
+    DuplicateMetadataFieldSelection, DuplicateMetadataSelection, NotificationCategory,
+    NotificationSeverity, Track, TrackMetadata, default_duplicate_metadata_selection,
+    highest_quality_duplicate_audio_track_ids,
 };
 
 use crate::{
@@ -61,6 +62,21 @@ pub(crate) fn consolidate_duplicates_callback(
         if tracks.len() != invocation.selected_track_ids.len() || tracks.len() < 2 {
             return;
         }
+        // Refuse to open the dialog when a selected file is gone from disk:
+        // consolidation rewrites and removes every selected file, so one
+        // missing file would strand the merge in a stuck state (#126).
+        let missing = runtime
+            .borrow()
+            .duplicate_consolidation_missing_files(&tracks);
+        if !missing.is_empty() {
+            let body = missing_files_message(&tracks, &missing);
+            runtime.borrow_mut().push_ephemeral_notification(
+                NotificationCategory::DuplicateConsolidation,
+                NotificationSeverity::Error,
+                body,
+            );
+            return;
+        }
         open_dialog(
             &parent,
             &runtime,
@@ -69,6 +85,26 @@ pub(crate) fn consolidate_duplicates_callback(
             tracks,
         );
     })
+}
+
+/// User-facing reason the dialog refused to open: one or more selected files
+/// are gone from disk and can't be consolidated (#126).
+fn missing_files_message(tracks: &[Track], missing: &[sustain_app_runtime::TrackId]) -> String {
+    let mut names = missing
+        .iter()
+        .filter_map(|id| tracks.iter().find(|track| track.id == *id))
+        .map(display_title)
+        .collect::<Vec<_>>();
+    if names.len() > 1 {
+        return format!(
+            "{} of the selected files are missing from disk, so these duplicates can't be consolidated. Restore or remove them, then try again.",
+            names.len()
+        );
+    }
+    let name = names.pop().unwrap_or_default();
+    format!(
+        "\u{201c}{name}\u{201d} is missing from disk, so these duplicates can't be consolidated. Restore or remove it, then try again."
+    )
 }
 
 fn open_dialog(
@@ -93,7 +129,7 @@ fn open_dialog(
     content.set_margin_start(18);
 
     let intro = gtk::Label::new(Some(
-        "Each duplicate is a column. Pick the survivor's audio file (highest quality is preselected, but overridable), its artwork, and each metadata field from whichever track has the best value — populated tags are cherry-picked by default. Click a \"Track N\" heading to take every field from that track. The other files are removed only after the survivor has been written and verified.",
+        "Each duplicate is a column. Pick the survivor's audio file (highest quality is preselected, but overridable), its artwork, its rating, and each metadata field — the highlighted box in every row marks the value that will be kept, and populated tags are cherry-picked by default. Click a \"Track N\" button to take every tag and the rating from that track. Play counts and skips are summed and the oldest date added is kept, so those rows are shown for reference only. The other files are removed only after the survivor has been written and verified.",
     ));
     intro.set_xalign(0.0);
     intro.set_wrap(true);
@@ -105,11 +141,15 @@ fn open_dialog(
     // Artwork starts on the first track and is repointed at the highest-
     // resolution image once the asynchronous previews finish loading.
     let artwork_buttons = build_selection_radios(tracks.len(), 0);
+    // Rating preselects the highest available, matching the prior auto-merge,
+    // but is now a per-track choice like every metadata field.
+    let rating_buttons = build_selection_radios(tracks.len(), highest_rated_index(&tracks));
 
     let (table, artwork_frames) = build_consolidation_table(
         &tracks,
         &audio_buttons,
         &artwork_buttons,
+        &rating_buttons,
         &metadata_selectors,
     );
     content.append(&table);
@@ -129,6 +169,7 @@ fn open_dialog(
     let metadata_selectors_for_confirm = metadata_selectors.clone();
     let audio_buttons_for_confirm = audio_buttons.clone();
     let artwork_buttons_for_confirm = artwork_buttons.clone();
+    let rating_buttons_for_confirm = rating_buttons.clone();
     consolidate.connect_clicked(move |_| {
         let Some(audio_track_id) =
             selected_track_id(&tracks_for_confirm, &audio_buttons_for_confirm)
@@ -137,6 +178,11 @@ fn open_dialog(
         };
         let Some(artwork_track_id) =
             selected_track_id(&tracks_for_confirm, &artwork_buttons_for_confirm)
+        else {
+            return;
+        };
+        let Some(rating_track_id) =
+            selected_track_id(&tracks_for_confirm, &rating_buttons_for_confirm)
         else {
             return;
         };
@@ -150,6 +196,7 @@ fn open_dialog(
             audio_track_id,
             metadata,
             artwork_track_id,
+            rating_track_id,
         };
         if command_controller
             .dispatch_succeeded(ApplicationCommand::ConsolidateDuplicateTracks(request))
@@ -175,41 +222,118 @@ fn open_dialog(
     window.present();
 }
 
-/// Build the single comparison table: one column per duplicate track. Each
-/// column header carries that track's artwork and descriptive details; the rows
-/// below are the survivor decisions — audio file, artwork, then every editable
-/// metadata field — each a grouped radio so exactly one track wins per row.
+/// Build the comparison table: one self-describing column per duplicate. The
+/// top cell identifies the track (its "Track N" bulk button, identity, path);
+/// each cell below is one survivor decision — artwork, audio file, rating, then
+/// every editable metadata field — rendered as a labelled box that draws an
+/// accent border when it holds the value that will be kept. The three trailing
+/// rows (play count, skips, date added) are not choices: they are summed or
+/// reduced automatically, so they render as plain non-selectable cells.
 fn build_consolidation_table(
     tracks: &[Track],
     audio_buttons: &[gtk::CheckButton],
     artwork_buttons: &[gtk::CheckButton],
+    rating_buttons: &[gtk::CheckButton],
     metadata_selectors: &[MetadataSelector],
 ) -> (gtk::ScrolledWindow, Vec<gtk::Frame>) {
     let grid = gtk::Grid::new();
-    grid.set_row_spacing(6);
-    grid.set_column_spacing(18);
+    // Each cell carries its own 4px margin, so the grid adds no spacing itself.
+    grid.set_row_spacing(0);
+    grid.set_column_spacing(0);
+
+    let mut row = 0;
+    for (index, track) in tracks.iter().enumerate() {
+        grid.attach(
+            &build_track_header(index, track, rating_buttons, metadata_selectors),
+            column_index(index),
+            row,
+            1,
+            1,
+        );
+    }
+    row += 1;
 
     let mut artwork_frames = Vec::with_capacity(tracks.len());
-    for (index, track) in tracks.iter().enumerate() {
-        let column = i32::try_from(index + 1).unwrap_or(i32::MAX);
-        let (header, frame) = build_track_header(index, track, metadata_selectors);
-        grid.attach(&header, column, 0, 1, 1);
+    for (index, button) in artwork_buttons.iter().enumerate() {
+        let frame = artwork_frame();
+        attach_artwork_cell(&grid, column_index(index), row, button, &frame);
         artwork_frames.push(frame);
     }
+    row += 1;
 
-    let mut row = 1;
-    attach_radio_row(&grid, row, "Audio file:", audio_buttons);
-    row += 1;
-    attach_radio_row(&grid, row, "Artwork:", artwork_buttons);
-    row += 1;
-    for selector in metadata_selectors {
-        attach_radio_row(
+    for (index, (track, button)) in tracks.iter().zip(audio_buttons).enumerate() {
+        attach_selectable_cell(
             &grid,
+            column_index(index),
             row,
-            metadata_field_label(selector.field),
-            &selector.buttons,
+            button,
+            "Audio file",
+            &cell_value_label(&audio_summary(track), false),
         );
+    }
+    row += 1;
+
+    for (index, (track, button)) in tracks.iter().zip(rating_buttons).enumerate() {
+        attach_selectable_cell(
+            &grid,
+            column_index(index),
+            row,
+            button,
+            "Rating",
+            &cell_value_label(&rating_stars(track.rating.stars()), false),
+        );
+    }
+    row += 1;
+
+    for selector in metadata_selectors {
+        for (index, (track, button)) in tracks.iter().zip(&selector.buttons).enumerate() {
+            attach_selectable_cell(
+                &grid,
+                column_index(index),
+                row,
+                button,
+                metadata_field_name(selector.field),
+                &metadata_cell_value(&track.metadata, selector.field),
+            );
+        }
         row += 1;
+    }
+
+    // Non-selectable, automatically-merged statistics. Shown per column so the
+    // contributing values stay visible even though the merge is not a choice.
+    for (index, track) in tracks.iter().enumerate() {
+        grid.attach(
+            &info_cell("Play count", &track.statistics.play_count.to_string()),
+            column_index(index),
+            row,
+            1,
+            1,
+        );
+    }
+    row += 1;
+    for (index, track) in tracks.iter().enumerate() {
+        grid.attach(
+            &info_cell("Skips", &track.statistics.skip_count.to_string()),
+            column_index(index),
+            row,
+            1,
+            1,
+        );
+    }
+    row += 1;
+    for (index, track) in tracks.iter().enumerate() {
+        let added = track
+            .statistics
+            .date_added_at
+            .and_then(format_system_time_short)
+            .unwrap_or_else(|| "—".to_owned());
+        grid.attach(
+            &info_cell("Date added", &added),
+            column_index(index),
+            row,
+            1,
+            1,
+        );
     }
 
     let scroller = gtk::ScrolledWindow::new();
@@ -219,39 +343,45 @@ fn build_consolidation_table(
     (scroller, artwork_frames)
 }
 
-/// Per-column header: the "Track N" bulk-select button, the artwork preview
-/// frame, and the track's descriptive details (identity, path, audio quality,
-/// size, rating, plays, date added). Returns the frame so the caller can fill
-/// in the artwork once it decodes.
+/// Grid column for a track at `index`: one column per track, no legend column.
+fn column_index(index: usize) -> i32 {
+    i32::try_from(index).unwrap_or(i32::MAX)
+}
+
+/// Per-column header: the "Track N" bulk-select button plus the track's
+/// identity and path. "Track N" takes every metadata field *and* the rating
+/// from this column at once (issue #122's "all tags from one track" mode); the
+/// audio and artwork rows keep their own quality presets.
 fn build_track_header(
     index: usize,
     track: &Track,
+    rating_buttons: &[gtk::CheckButton],
     metadata_selectors: &[MetadataSelector],
-) -> (gtk::Box, gtk::Frame) {
+) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
     column.set_hexpand(true);
     column.set_valign(gtk::Align::Start);
+    column.set_margin_start(4);
+    column.set_margin_end(4);
+    column.set_margin_bottom(2);
 
-    // "Track N" doubles as the bulk action: take every metadata field from this
-    // column at once (issue #122's "all tags from one track" mode). It does not
-    // touch the audio/artwork rows, which follow their own quality presets.
     let select_all = gtk::Button::with_label(&format!("Track {}", index + 1));
-    select_all.set_tooltip_text(Some("Take every metadata field from this track"));
+    select_all.set_tooltip_text(Some("Take every tag and the rating from this track"));
     {
         let selectors = metadata_selectors.to_vec();
+        let rating_buttons = rating_buttons.to_vec();
         select_all.connect_clicked(move |_| {
             for selector in &selectors {
                 if let Some(button) = selector.buttons.get(index) {
                     button.set_active(true);
                 }
             }
+            if let Some(button) = rating_buttons.get(index) {
+                button.set_active(true);
+            }
         });
     }
     column.append(&select_all);
-
-    let frame = artwork_frame();
-    frame.set_halign(gtk::Align::Center);
-    column.append(&frame);
 
     let identity = header_label(
         &format!(
@@ -272,29 +402,8 @@ fn build_track_header(
         true,
         gtk::pango::EllipsizeMode::Start,
     ));
-    column.append(&header_label(
-        &audio_details(track),
-        true,
-        gtk::pango::EllipsizeMode::End,
-    ));
-    column.append(&header_label(
-        &size_and_stats(track),
-        true,
-        gtk::pango::EllipsizeMode::End,
-    ));
-    if let Some(added) = track
-        .statistics
-        .date_added_at
-        .and_then(format_system_time_short)
-    {
-        column.append(&header_label(
-            &format!("Added {added}"),
-            true,
-            gtk::pango::EllipsizeMode::End,
-        ));
-    }
 
-    (column, frame)
+    column
 }
 
 fn header_label(text: &str, dim: bool, ellipsize: gtk::pango::EllipsizeMode) -> gtk::Label {
@@ -308,8 +417,9 @@ fn header_label(text: &str, dim: bool, ellipsize: gtk::pango::EllipsizeMode) -> 
     label
 }
 
-/// Codec, bitrate, and duration on one compact line, e.g. "FLAC · 1411 kbps · 3:45".
-fn audio_details(track: &Track) -> String {
+/// Codec, bitrate, duration, and file size on one compact line, e.g.
+/// "FLAC · 1411 kbps · 3:45 · 28.4 MiB".
+fn audio_summary(track: &Track) -> String {
     let mut parts = Vec::new();
     let format = file_format(track);
     if !format.is_empty() {
@@ -319,17 +429,8 @@ fn audio_details(track: &Track) -> String {
         parts.push(format!("{bitrate} kbps"));
     }
     parts.push(format_duration(track));
+    parts.push(format_file_size(track.file_size_bytes.unwrap_or_default()));
     parts.join(" · ")
-}
-
-/// File size, rating, and play count on one compact line.
-fn size_and_stats(track: &Track) -> String {
-    format!(
-        "{} · {} · {} plays",
-        format_file_size(track.file_size_bytes.unwrap_or_default()),
-        rating_stars(track.rating.stars()),
-        track.statistics.play_count,
-    )
 }
 
 /// A five-glyph rating display: `stars` filled then the rest empty.
@@ -338,27 +439,89 @@ fn rating_stars(stars: u8) -> String {
     format!("{}{}", "★".repeat(filled), "☆".repeat(5 - filled))
 }
 
-/// Attach a decision row: a right-aligned label in column 0 and one radio per
-/// track across the remaining columns, aligned under their headers.
-fn attach_radio_row(grid: &gtk::Grid, row: i32, label_text: &str, buttons: &[gtk::CheckButton]) {
-    let label = gtk::Label::new(Some(label_text));
-    label.set_xalign(1.0);
-    grid.attach(&label, 0, row, 1, 1);
-    for (index, button) in buttons.iter().enumerate() {
-        let column = i32::try_from(index + 1).unwrap_or(i32::MAX);
-        grid.attach(button, column, row, 1, 1);
+/// Attach one self-describing decision cell: a grouped radio whose child stacks
+/// the field name (bold) over its value (normal weight). The `.consolidation-cell`
+/// class draws the accent border when the radio is active, so the box itself
+/// shows which value is kept. `button` already carries the group and default.
+fn attach_selectable_cell(
+    grid: &gtk::Grid,
+    column: i32,
+    row: i32,
+    button: &gtk::CheckButton,
+    name: &str,
+    value: &impl IsA<gtk::Widget>,
+) {
+    button.set_child(Some(&cell_body(name, value)));
+    button.set_hexpand(true);
+    button.set_halign(gtk::Align::Fill);
+    button.set_valign(gtk::Align::Start);
+    button.add_css_class("consolidation-cell");
+    grid.attach(button, column, row, 1, 1);
+}
+
+/// The artwork decision cell: like [`attach_selectable_cell`], but its value is
+/// the preview frame, filled asynchronously once the image decodes.
+fn attach_artwork_cell(
+    grid: &gtk::Grid,
+    column: i32,
+    row: i32,
+    button: &gtk::CheckButton,
+    frame: &gtk::Frame,
+) {
+    frame.set_halign(gtk::Align::Start);
+    attach_selectable_cell(grid, column, row, button, "Artwork", frame);
+}
+
+/// A non-selectable info cell: field name (bold) over an automatically-merged
+/// value (dimmed). It mirrors the selectable cells' footprint without a radio,
+/// signalling that play count, skips, and date added are not a choice.
+fn info_cell(name: &str, value: &str) -> gtk::Box {
+    let cell = cell_body(name, &cell_value_label(value, true));
+    cell.set_hexpand(true);
+    cell.set_valign(gtk::Align::Start);
+    cell.add_css_class("consolidation-info-cell");
+    cell
+}
+
+/// The stacked field-name / value body shared by every cell, tightly spaced.
+fn cell_body(name: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let name_label = gtk::Label::new(Some(name));
+    name_label.set_xalign(0.0);
+    name_label.add_css_class("consolidation-field-name");
+    body.append(&name_label);
+    body.append(value);
+    body
+}
+
+fn cell_value_label(text: &str, dim: bool) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.set_xalign(0.0);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_max_width_chars(COLUMN_TEXT_MAX_WIDTH_CHARS);
+    label.add_css_class("consolidation-field-value");
+    if dim {
+        label.add_css_class("dim-label");
+    }
+    label
+}
+
+/// A metadata field's value, or a dimmed em dash when it is unpopulated.
+fn metadata_cell_value(metadata: &TrackMetadata, field: DuplicateMetadataField) -> gtk::Label {
+    match metadata_field_display(metadata, field) {
+        Some(value) => cell_value_label(&value, false),
+        None => cell_value_label("—", true),
     }
 }
 
 /// A grouped radio set with `count` members, the member at `default_index`
-/// active. Used for the audio and artwork rows, where the column header already
-/// names the track so the radios carry no label of their own.
+/// active. Each radio's label (the field name and value) is set later when its
+/// cell is built, so the bare buttons here only carry group and default state.
 fn build_selection_radios(count: usize, default_index: usize) -> Vec<gtk::CheckButton> {
     let mut buttons = Vec::with_capacity(count);
     let mut anchor: Option<gtk::CheckButton> = None;
     for index in 0..count {
         let button = gtk::CheckButton::new();
-        button.set_halign(gtk::Align::Center);
         match &anchor {
             Some(first) => button.set_group(Some(first)),
             None => anchor = Some(button.clone()),
@@ -375,6 +538,18 @@ fn highest_quality_audio_index(tracks: &[Track]) -> usize {
     highest_quality_duplicate_audio_track_ids(tracks)
         .first()
         .and_then(|id| tracks.iter().position(|track| track.id == *id))
+        .unwrap_or(0)
+}
+
+/// Index of the highest-rated track to preselect for the rating, preserving the
+/// previous auto-merge default of keeping the best rating. Ties pick the first.
+fn highest_rated_index(tracks: &[Track]) -> usize {
+    tracks
+        .iter()
+        .enumerate()
+        .rev()
+        .max_by_key(|(_, track)| track.rating)
+        .map(|(index, _)| index)
         .unwrap_or(0)
 }
 
@@ -521,45 +696,14 @@ fn build_metadata_selectors(
                         .position(|track| track.id == selection.track_id)
                 })
                 .unwrap_or(0);
-            let mut buttons = Vec::with_capacity(tracks.len());
-            let mut anchor: Option<gtk::CheckButton> = None;
-            for (index, track) in tracks.iter().enumerate() {
-                let button = metadata_value_radio(&track.metadata, field);
-                match &anchor {
-                    Some(first) => button.set_group(Some(first)),
-                    None => anchor = Some(button.clone()),
-                }
-                // Set the default before any toggled handler is wired so this
-                // construction-time activation does not refresh the preview.
-                button.set_active(index == default_index);
-                buttons.push(button);
-            }
+            // Bare grouped buttons; each cell's name/value label is attached
+            // later by `attach_selectable_cell`. Defaults are set before any
+            // toggled handler is wired, so this construction-time activation
+            // does not refresh the preview.
+            let buttons = build_selection_radios(tracks.len(), default_index);
             MetadataSelector { field, buttons }
         })
         .collect()
-}
-
-/// A single metadata cell: a radio button whose label is the field's value for
-/// one track, ellipsized so a long tag cannot widen the column. Unpopulated
-/// values render dimmed as an em dash so gaps are obvious at a glance.
-fn metadata_value_radio(
-    metadata: &TrackMetadata,
-    field: DuplicateMetadataField,
-) -> gtk::CheckButton {
-    let label = gtk::Label::new(None);
-    label.set_xalign(0.0);
-    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    label.set_max_width_chars(COLUMN_TEXT_MAX_WIDTH_CHARS);
-    match metadata_field_display(metadata, field) {
-        Some(value) => label.set_text(&value),
-        None => {
-            label.set_text("—");
-            label.add_css_class("dim-label");
-        }
-    }
-    let button = gtk::CheckButton::new();
-    button.set_child(Some(&label));
-    button
 }
 
 /// Index, into the dialog's `tracks` slice, of the active radio in a group.
@@ -594,25 +738,25 @@ fn selected_metadata(
         .map(|fields| DuplicateMetadataSelection { fields })
 }
 
-fn metadata_field_label(field: DuplicateMetadataField) -> &'static str {
+fn metadata_field_name(field: DuplicateMetadataField) -> &'static str {
     match field {
-        DuplicateMetadataField::Title => "Title:",
-        DuplicateMetadataField::Artist => "Artist:",
-        DuplicateMetadataField::Album => "Album:",
-        DuplicateMetadataField::AlbumArtist => "Album Artist:",
-        DuplicateMetadataField::Composer => "Composer:",
-        DuplicateMetadataField::Grouping => "Grouping:",
-        DuplicateMetadataField::Genre => "Genre:",
-        DuplicateMetadataField::TrackNumber => "Track Number:",
-        DuplicateMetadataField::TrackTotal => "Track Total:",
-        DuplicateMetadataField::DiscNumber => "Disc Number:",
-        DuplicateMetadataField::DiscTotal => "Disc Total:",
-        DuplicateMetadataField::Year => "Year:",
-        DuplicateMetadataField::Compilation => "Compilation:",
-        DuplicateMetadataField::Bpm => "BPM:",
-        DuplicateMetadataField::Key => "Key:",
-        DuplicateMetadataField::Comments => "Comments:",
-        DuplicateMetadataField::Lyrics => "Lyrics:",
+        DuplicateMetadataField::Title => "Title",
+        DuplicateMetadataField::Artist => "Artist",
+        DuplicateMetadataField::Album => "Album",
+        DuplicateMetadataField::AlbumArtist => "Album Artist",
+        DuplicateMetadataField::Composer => "Composer",
+        DuplicateMetadataField::Grouping => "Grouping",
+        DuplicateMetadataField::Genre => "Genre",
+        DuplicateMetadataField::TrackNumber => "Track Number",
+        DuplicateMetadataField::TrackTotal => "Track Total",
+        DuplicateMetadataField::DiscNumber => "Disc Number",
+        DuplicateMetadataField::DiscTotal => "Disc Total",
+        DuplicateMetadataField::Year => "Year",
+        DuplicateMetadataField::Compilation => "Compilation",
+        DuplicateMetadataField::Bpm => "BPM",
+        DuplicateMetadataField::Key => "Key",
+        DuplicateMetadataField::Comments => "Comments",
+        DuplicateMetadataField::Lyrics => "Lyrics",
     }
 }
 
