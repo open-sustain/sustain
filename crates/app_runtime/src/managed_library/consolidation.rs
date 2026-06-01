@@ -29,7 +29,8 @@ use crate::{
 
 use super::capabilities::ManagedLibraryFilesystemValidator;
 use super::file_ops::{
-    FileIdentity, move_file_without_copy_or_overwrite_matching_identity, rollback_file_move,
+    FileIdentity, move_file_without_copy_or_overwrite_matching_identity,
+    prune_empty_ancestor_directories_for_sources, rollback_file_move,
 };
 use super::journal::{
     recover_library_consolidation_journal, remove_consolidation_journal_if_present,
@@ -104,6 +105,7 @@ impl LibraryConsolidationContext {
                     moved_tracks: 0,
                     already_organized_tracks: plan.already_organized_tracks,
                     missing_tracks: plan.missing_tracks,
+                    empty_directory_cleanup_failed: false,
                     cancelled: self.cancellation_requested.load(Ordering::SeqCst),
                 },
             });
@@ -128,6 +130,10 @@ impl LibraryConsolidationContext {
             )
             .is_err()
             {
+                prune_empty_ancestor_directories_for_sources(
+                    &library_path,
+                    std::slice::from_ref(&planned_move.destination_path),
+                );
                 return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
             }
 
@@ -138,6 +144,10 @@ impl LibraryConsolidationContext {
                 .is_err()
             {
                 rollback_file_move(&planned_move.source_path, &planned_move.destination_path).ok();
+                prune_empty_ancestor_directories_for_sources(
+                    &library_path,
+                    std::slice::from_ref(&planned_move.destination_path),
+                );
                 return Err(ApplicationRuntimeError::LibraryStoreFailed);
             }
 
@@ -156,6 +166,14 @@ impl LibraryConsolidationContext {
             .flush_durable()
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         remove_consolidation_journal_if_present(&library_path)?;
+        let moved_source_paths = plan
+            .moves
+            .iter()
+            .take(moved_tracks)
+            .map(|planned_move| planned_move.source_path.clone())
+            .collect::<Vec<_>>();
+        let prune_outcome =
+            prune_empty_ancestor_directories_for_sources(&library_path, &moved_source_paths);
 
         Ok(LibraryConsolidationResult {
             tracks: updated_tracks,
@@ -164,6 +182,7 @@ impl LibraryConsolidationContext {
                 moved_tracks,
                 already_organized_tracks: plan.already_organized_tracks,
                 missing_tracks: plan.missing_tracks,
+                empty_directory_cleanup_failed: prune_outcome.failed,
                 cancelled,
             },
         })

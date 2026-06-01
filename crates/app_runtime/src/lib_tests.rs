@@ -1237,12 +1237,14 @@ fn unmanaged_external_import_rejects_files_outside_library_path() {
 fn managed_consolidation_moves_existing_tracks_to_planned_paths() {
     let library_root = unique_test_directory();
     std::fs::create_dir_all(&library_root).expect("create library root");
-    let source_path = library_root.join("loose.flac");
+    let source_path = library_root.join("Loose/Album/loose.flac");
+    std::fs::create_dir_all(source_path.parent().expect("source parent"))
+        .expect("create source parent");
     std::fs::write(&source_path, b"audio bytes").expect("write existing file");
 
     let track_id = track_id(21);
     let store = Arc::new(InMemoryLibraryStore::new());
-    let mut track = test_track(track_id, "loose.flac");
+    let mut track = test_track(track_id, "Loose/Album/loose.flac");
     track.metadata.artist = Some("Artist".to_owned());
     track.metadata.album = Some("Album".to_owned());
     track.metadata.title = Some("Song".to_owned());
@@ -1278,9 +1280,11 @@ fn managed_consolidation_moves_existing_tracks_to_planned_paths() {
             moved_tracks: 1,
             already_organized_tracks: 0,
             missing_tracks: 0,
+            empty_directory_cleanup_failed: false,
             cancelled: false,
         })
     );
+    assert!(!library_root.join("Loose").exists());
 
     let runtime_track = runtime
         .library_tracks()
@@ -1519,6 +1523,7 @@ fn disabling_managed_mode_requests_consolidation_cancellation() {
             moved_tracks: 0,
             already_organized_tracks: 0,
             missing_tracks: 0,
+            empty_directory_cleanup_failed: false,
             cancelled: true,
         })
     );
@@ -1535,6 +1540,7 @@ fn consolidation_journal_recovery_retargets_moved_tracks_on_startup() {
     let library_root = unique_test_directory();
     std::fs::create_dir_all(library_root.join("Artist/Album"))
         .expect("create destination directory");
+    std::fs::create_dir_all(library_root.join("Loose/Album")).expect("create old source directory");
     let destination_path = library_root.join("Artist/Album/01 Song.flac");
     std::fs::write(&destination_path, b"audio bytes").expect("write moved file");
     let destination_metadata = std::fs::metadata(&destination_path).expect("destination metadata");
@@ -1544,7 +1550,7 @@ fn consolidation_journal_recovery_retargets_moved_tracks_on_startup() {
             "# sustain managed library consolidation journal v2\nmove\t23\t{}\t{}\t{}\t{}\n",
             destination_metadata.dev(),
             destination_metadata.ino(),
-            hex_path("loose.flac"),
+            hex_path("Loose/Album/loose.flac"),
             hex_path("Artist/Album/01 Song.flac")
         ),
     )
@@ -1552,7 +1558,10 @@ fn consolidation_journal_recovery_retargets_moved_tracks_on_startup() {
 
     let store = Arc::new(InMemoryLibraryStore::new());
     let track_id = track_id(23);
-    assert_eq!(store.save_track(test_track(track_id, "loose.flac")), Ok(()));
+    assert_eq!(
+        store.save_track(test_track(track_id, "Loose/Album/loose.flac")),
+        Ok(())
+    );
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
 
@@ -1567,6 +1576,7 @@ fn consolidation_journal_recovery_retargets_moved_tracks_on_startup() {
         Path::new("Artist/Album/01 Song.flac")
     );
     assert!(!library_root.join(".sustain-consolidation-journal").exists());
+    assert!(!library_root.join("Loose").exists());
     assert_eq!(
         store
             .track(track_id)
@@ -3136,6 +3146,7 @@ fn managed_metadata_retarget_event_reloads_sqlite_and_surfaces_failure() {
         crate::ManagedMetadataRetargetResult {
             track_id,
             outcome: Ok(()),
+            empty_directory_cleanup_failed: false,
         },
     ));
 
@@ -3165,6 +3176,7 @@ fn managed_metadata_retarget_event_reloads_sqlite_and_surfaces_failure() {
         crate::ManagedMetadataRetargetResult {
             track_id,
             outcome: Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+            empty_directory_cleanup_failed: false,
         },
     ));
     assert_eq!(runtime.notifications().persistent_stack().len(), 1);
@@ -5233,6 +5245,42 @@ fn move_to_trash_removes_the_row_only_after_a_successful_trash() {
     assert_eq!(result, Ok(()));
     assert!(!library_has_track(&runtime, track_id(1)));
     assert_eq!(trash_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn move_to_trash_prunes_empty_folders_only_in_managed_mode() {
+    let root = unique_test_directory();
+    let track_path = root.join("Loose/Album/song.flac");
+    std::fs::create_dir_all(track_path.parent().expect("track parent"))
+        .expect("create track parent");
+    std::fs::write(&track_path, b"audio").expect("write track");
+    let track_id = track_id(1);
+    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    store
+        .save_track(test_track(track_id, "Loose/Album/song.flac"))
+        .expect("seed track");
+    let mut settings = UserSettings::with_library_path(Some(root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store, Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    assert_eq!(
+        runtime.move_track_to_trash_with(
+            track_id,
+            |_| FilePresence::Present,
+            |path| std::fs::remove_file(path).map_err(|_| ()),
+        ),
+        Ok(())
+    );
+
+    assert!(root.exists());
+    assert!(!root.join("Loose").exists());
+    assert!(!library_has_track(&runtime, track_id));
+
+    std::fs::remove_dir_all(root).expect("remove test root");
 }
 
 #[test]

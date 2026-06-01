@@ -22,7 +22,8 @@ use crate::{ApplicationRuntimeError, ApplicationRuntimeResult};
 use super::capabilities::ManagedLibraryFilesystemValidator;
 use super::consolidation::PlannedLibraryConsolidationMove;
 use super::file_ops::{
-    FileIdentity, regular_file_identity, remove_file_and_sync_parent, sync_directory,
+    FileIdentity, prune_empty_ancestor_directories_for_sources, regular_file_identity,
+    remove_file_and_sync_parent, sync_directory,
 };
 
 const CONSOLIDATION_JOURNAL_FILE_NAME: &str = ".sustain-consolidation-journal";
@@ -61,7 +62,18 @@ pub(crate) fn recover_library_consolidation_journal(
     library_store
         .flush_durable()
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-    remove_consolidation_journal_if_present(library_path)
+    remove_consolidation_journal_if_present(library_path)?;
+    let source_paths = entries
+        .iter()
+        .flat_map(|entry| {
+            [
+                entry.source_relative_path.resolve(library_path),
+                entry.destination_relative_path.resolve(library_path),
+            ]
+        })
+        .collect::<Vec<_>>();
+    prune_empty_ancestor_directories_for_sources(library_path, &source_paths);
+    Ok(())
 }
 
 fn recover_consolidation_journal_entry(

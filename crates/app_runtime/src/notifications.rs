@@ -435,17 +435,26 @@ pub fn library_import_outcome_text(summary: &LibraryImportSummary) -> String {
 }
 
 pub fn library_consolidation_outcome_text(summary: &LibraryConsolidationSummary) -> String {
-    if summary.cancelled {
-        return format!(
+    let mut outcome = if summary.cancelled {
+        format!(
             "Library organization stopped: {} moved, {} pending.",
             summary.moved_tracks,
             summary.planned_tracks.saturating_sub(summary.moved_tracks)
-        );
+        )
+    } else {
+        format!(
+            "Library organized: {} moved, {} already organized, {} missing.",
+            summary.moved_tracks, summary.already_organized_tracks, summary.missing_tracks
+        )
+    };
+    if summary.empty_directory_cleanup_failed {
+        outcome.push_str(" Some empty folders could not be removed.");
     }
-    format!(
-        "Library organized: {} moved, {} already organized, {} missing.",
-        summary.moved_tracks, summary.already_organized_tracks, summary.missing_tracks
-    )
+    outcome
+}
+
+pub fn managed_library_cleanup_failed_text() -> &'static str {
+    "Some empty managed-library folders could not be removed."
 }
 
 /// Outcome string emitted after the user changes their library path.

@@ -110,7 +110,10 @@ cheap pre-filter. Plain in-place scans do **not** hash file contents.
 Editing artist, album artist, composer, album, title, track number, disc
 number, disc total, or compilation status while managed mode is active
 re-plans the managed path and moves the file accordingly. iTunes did the
-same on its managed library.
+same on its managed library. After an organized-mode move or deletion,
+Sustain removes empty ancestor folders below the library root. It never
+removes the root itself, follows symlinks out of the library, or removes a
+folder that still contains sidecars, artwork, or hidden files.
 
 ### Missing files stay visible — *iso-iTunes*
 When a file recorded in the library disappears from disk, the row stays

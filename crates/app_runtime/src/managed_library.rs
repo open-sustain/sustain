@@ -34,6 +34,7 @@ pub(crate) use journal::recover_library_consolidation_journal;
 
 pub(crate) use capabilities::ManagedLibraryFilesystemValidator;
 use consolidation::plan_managed_track_retarget;
+pub(crate) use file_ops::prune_empty_ancestor_directories_for_sources;
 use file_ops::{move_file_without_copy_or_overwrite_matching_identity, rollback_file_move};
 use journal::{remove_consolidation_journal_if_present, write_consolidation_journal};
 
@@ -197,7 +198,11 @@ impl ApplicationRuntime {
         // ephemeral — no special "boring success" branch needed.
         self.push_ephemeral_notification(
             NotificationCategory::LibraryConsolidation,
-            NotificationSeverity::Info,
+            if summary.empty_directory_cleanup_failed {
+                NotificationSeverity::Warning
+            } else {
+                NotificationSeverity::Info
+            },
             notifications::library_consolidation_outcome_text(&summary),
         );
     }
@@ -275,6 +280,14 @@ impl ApplicationRuntime {
             self.dismiss_notification(id);
         }
     }
+
+    pub(crate) fn push_managed_library_cleanup_warning(&mut self) {
+        self.push_ephemeral_notification(
+            NotificationCategory::ManagedLibraryFilesystem,
+            NotificationSeverity::Warning,
+            notifications::managed_library_cleanup_failed_text().to_owned(),
+        );
+    }
 }
 
 pub(super) fn metadata_change_affects_managed_path(change: &MetadataChange) -> bool {
@@ -295,7 +308,7 @@ pub(crate) fn retarget_managed_metadata(
     managed_library_filesystem_validator: &ManagedLibraryFilesystemValidator,
     track_id: TrackId,
     change: &MetadataChange,
-) -> ApplicationRuntimeResult<()> {
+) -> ApplicationRuntimeResult<ManagedMetadataRetargetOutcome> {
     retarget_managed_metadata_with_persist(
         library_path,
         library_store,
@@ -319,7 +332,7 @@ fn retarget_managed_metadata_with_persist(
     track_id: TrackId,
     change: &MetadataChange,
     persist_moved_track: impl FnOnce(&Track) -> StoreResult<()>,
-) -> ApplicationRuntimeResult<()> {
+) -> ApplicationRuntimeResult<ManagedMetadataRetargetOutcome> {
     managed_library_filesystem_validator
         .validate(library_path)
         .map_err(ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported)?;
@@ -346,7 +359,7 @@ fn retarget_managed_metadata_with_persist(
         library_store
             .apply_track_metadata_change_and_enqueue_mirror(track_id, change)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        return Ok(());
+        return Ok(ManagedMetadataRetargetOutcome::default());
     };
 
     write_consolidation_journal(library_path, std::slice::from_ref(&planned_move))?;
@@ -358,12 +371,20 @@ fn retarget_managed_metadata_with_persist(
     )
     .is_err()
     {
+        prune_empty_ancestor_directories_for_sources(
+            library_path,
+            std::slice::from_ref(&planned_move.destination_path),
+        );
         return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
     }
 
     let updated_track = planned_move.updated_track;
     if persist_moved_track(&updated_track).is_err() {
         rollback_file_move(&planned_move.source_path, &planned_move.destination_path).ok();
+        prune_empty_ancestor_directories_for_sources(
+            library_path,
+            std::slice::from_ref(&planned_move.destination_path),
+        );
         return Err(ApplicationRuntimeError::LibraryStoreFailed);
     }
 
@@ -371,7 +392,18 @@ fn retarget_managed_metadata_with_persist(
         .flush_durable()
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
     remove_consolidation_journal_if_present(library_path)?;
-    Ok(())
+    let prune_outcome = prune_empty_ancestor_directories_for_sources(
+        library_path,
+        std::slice::from_ref(&planned_move.source_path),
+    );
+    Ok(ManagedMetadataRetargetOutcome {
+        empty_directory_cleanup_failed: prune_outcome.failed,
+    })
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ManagedMetadataRetargetOutcome {
+    pub(crate) empty_directory_cleanup_failed: bool,
 }
 
 fn replace_library_track_locations_by_id(library_tracks: &mut [Track], updated_tracks: Vec<Track>) {
@@ -463,6 +495,16 @@ mod tests {
                 .expect("planned destination")
                 .exists(),
             "rollback removes the proposed canonical pathname"
+        );
+        assert!(
+            !destination_path
+                .borrow()
+                .as_ref()
+                .expect("planned destination")
+                .parent()
+                .expect("planned destination parent")
+                .exists(),
+            "rollback removes abandoned destination folders"
         );
         assert_eq!(store.track(track.id).expect("reload track"), Some(track));
         assert!(

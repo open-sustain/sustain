@@ -291,6 +291,7 @@ pub struct LibraryConsolidationSummary {
     pub moved_tracks: usize,
     pub already_organized_tracks: usize,
     pub missing_tracks: usize,
+    pub empty_directory_cleanup_failed: bool,
     pub cancelled: bool,
 }
 
@@ -912,7 +913,12 @@ impl ApplicationRuntime {
             // touching pathnames. It commits the durable outbox intent but
             // does not prove file tags have converged yet: only the later
             // mirror-success event may dismiss the per-track retry warning.
-            Ok(()) => self.dismiss_managed_library_filesystem_warning(),
+            Ok(()) => {
+                self.dismiss_managed_library_filesystem_warning();
+                if result.empty_directory_cleanup_failed {
+                    self.push_managed_library_cleanup_warning();
+                }
+            }
             Err(error) => {
                 self.report_managed_library_filesystem_error(&error);
                 self.push_or_update_metadata_write_warning(

@@ -30,7 +30,9 @@ use crate::{
 
 use super::{
     capabilities::ManagedLibraryFilesystemValidator,
-    file_ops::{copy_file_verified, remove_copied_files},
+    file_ops::{
+        copy_file_verified, prune_empty_ancestor_directories_for_sources, remove_copied_files,
+    },
 };
 
 pub fn run_library_import_task(
@@ -187,7 +189,7 @@ impl LibraryImportContext {
                 // Roll back the files we have copied so far so a
                 // cancelled import leaves zero filesystem side
                 // effects.
-                remove_copied_files(&copied_paths)
+                rollback_managed_import_files(&library_path, &copied_paths, None)
                     .map_err(|()| ApplicationRuntimeError::LibraryImportFailed)?;
                 return Ok(cancelled_import_result(discovered_files.len()));
             }
@@ -198,7 +200,11 @@ impl LibraryImportContext {
             ) {
                 Ok(_) => copied_paths.push(import.destination_path.clone()),
                 Err(_) => {
-                    let _ = remove_copied_files(&copied_paths);
+                    let _ = rollback_managed_import_files(
+                        &library_path,
+                        &copied_paths,
+                        Some(&import.destination_path),
+                    );
                     return Err(ApplicationRuntimeError::LibraryImportFailed);
                 }
             }
@@ -208,7 +214,7 @@ impl LibraryImportContext {
         let mut tracks = Vec::new();
         for (next_track_id, import) in (first_track_id..).zip(imports) {
             let Some(track_id) = sustain_domain::TrackId::new(next_track_id) else {
-                let _ = remove_copied_files(&copied_paths);
+                let _ = rollback_managed_import_files(&library_path, &copied_paths, None);
                 return Err(ApplicationRuntimeError::LibraryStoreFailed);
             };
             tracks.push(Track {
@@ -230,7 +236,7 @@ impl LibraryImportContext {
         }
 
         if self.library_store.save_tracks(&tracks).is_err() {
-            let _ = remove_copied_files(&copied_paths);
+            let _ = rollback_managed_import_files(&library_path, &copied_paths, None);
             return Err(ApplicationRuntimeError::LibraryStoreFailed);
         }
 
@@ -365,6 +371,20 @@ impl LibraryImportContext {
 
         Ok(false)
     }
+}
+
+fn rollback_managed_import_files(
+    library_path: &Path,
+    copied_paths: &[PathBuf],
+    additional_cleanup_path: Option<&Path>,
+) -> Result<(), ()> {
+    let remove_result = remove_copied_files(copied_paths);
+    let mut cleanup_paths = copied_paths.to_vec();
+    if let Some(path) = additional_cleanup_path {
+        cleanup_paths.push(path.to_path_buf());
+    }
+    prune_empty_ancestor_directories_for_sources(library_path, &cleanup_paths);
+    remove_result
 }
 
 struct PlannedManagedImport {
@@ -526,4 +546,41 @@ fn source_relative_path_inside_library(
         .and_then(|relative_path| {
             sustain_domain::TrackRelativePath::new(relative_path.to_path_buf())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use super::rollback_managed_import_files;
+
+    #[test]
+    fn managed_import_rollback_prunes_copied_and_unpublished_destination_folders() {
+        let root = unique_test_directory();
+        let copied = root.join("Artist/Album/song.flac");
+        let unpublished = root.join("Other/Album/song.flac");
+        fs::create_dir_all(copied.parent().expect("copied parent")).expect("create copied parent");
+        fs::create_dir_all(unpublished.parent().expect("unpublished parent"))
+            .expect("create unpublished parent");
+        fs::write(&copied, b"audio").expect("write copied file");
+
+        assert_eq!(
+            rollback_managed_import_files(&root, std::slice::from_ref(&copied), Some(&unpublished),),
+            Ok(())
+        );
+
+        assert!(root.exists());
+        assert!(!root.join("Artist").exists());
+        assert!(!root.join("Other").exists());
+
+        fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    fn unique_test_directory() -> PathBuf {
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("sustain_managed_import_test_{unique_suffix}"))
+    }
 }

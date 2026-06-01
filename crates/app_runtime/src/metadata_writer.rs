@@ -67,6 +67,7 @@ pub struct MetadataWriteResult {
 pub struct ManagedMetadataRetargetResult {
     pub track_id: TrackId,
     pub outcome: Result<(), ApplicationRuntimeError>,
+    pub empty_directory_cleanup_failed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -390,11 +391,15 @@ fn apply_command(
                         &change,
                     )
                 });
+            let empty_directory_cleanup_failed = outcome
+                .as_ref()
+                .is_ok_and(|outcome| outcome.empty_directory_cleanup_failed);
             emit_event(
                 result_sink,
                 MetadataWriterEvent::ManagedRetarget(ManagedMetadataRetargetResult {
                     track_id,
-                    outcome,
+                    outcome: outcome.map(|_| ()),
+                    empty_directory_cleanup_failed,
                 }),
             );
             *active = true;
@@ -724,8 +729,8 @@ mod tests {
     #[test]
     fn managed_retarget_coalesces_pending_mirrors_and_resolves_the_new_path() {
         let root = unique_test_directory();
-        std::fs::create_dir_all(&root).expect("create library root");
-        std::fs::write(root.join("loose.flac"), b"audio").expect("write track");
+        std::fs::create_dir_all(root.join("Loose/Album")).expect("create source folder");
+        std::fs::write(root.join("Loose/Album/loose.flac"), b"audio").expect("write track");
 
         let track_id = TrackId::new(1).expect("track id");
         let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
@@ -733,7 +738,7 @@ mod tests {
             .save_track(Track {
                 id: track_id,
                 location: TrackLocation::available(
-                    TrackRelativePath::new("loose.flac").expect("relative path"),
+                    TrackRelativePath::new("Loose/Album/loose.flac").expect("relative path"),
                 ),
                 metadata: TrackMetadata {
                     title: Some("Old".to_owned()),
@@ -784,6 +789,7 @@ mod tests {
             MetadataWriterEvent::ManagedRetarget(ManagedMetadataRetargetResult {
                 track_id,
                 outcome: Ok(()),
+                empty_directory_cleanup_failed: false,
             })
         );
         assert_eq!(
@@ -796,7 +802,7 @@ mod tests {
         );
 
         let destination = root.join("Artist/Album/01 Song.flac");
-        assert!(!root.join("loose.flac").exists());
+        assert!(!root.join("Loose").exists());
         assert!(destination.exists());
         let stored = store.track(track_id).expect("load track").expect("track");
         assert_eq!(
@@ -893,6 +899,7 @@ mod tests {
             MetadataWriterEvent::ManagedRetarget(ManagedMetadataRetargetResult {
                 track_id,
                 outcome: Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+                empty_directory_cleanup_failed: false,
             })
         );
         let stored = store.track(track_id).expect("load track").expect("track");

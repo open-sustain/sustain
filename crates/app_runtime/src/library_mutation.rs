@@ -12,7 +12,10 @@ use crate::{
     ManagedMetadataRetargetResult,
     artwork_fetcher::{ArtworkFetchRequest, query_from_metadata},
     file_presence::{FilePresence, probe_path_entry_presence},
-    managed_library::{metadata_change_affects_managed_path, retarget_managed_metadata},
+    managed_library::{
+        metadata_change_affects_managed_path, prune_empty_ancestor_directories_for_sources,
+        retarget_managed_metadata,
+    },
     playback::{playback_shuffle_seed, playback_track_id},
 };
 
@@ -92,9 +95,14 @@ impl ApplicationRuntime {
                 track_id,
                 &change,
             );
+            let empty_directory_cleanup_failed = outcome
+                .as_ref()
+                .is_ok_and(|outcome| outcome.empty_directory_cleanup_failed);
+            let outcome = outcome.map(|_| ());
             self.apply_managed_metadata_retarget_result(ManagedMetadataRetargetResult {
                 track_id,
                 outcome: outcome.clone(),
+                empty_directory_cleanup_failed,
             });
             outcome?;
             self.nudge_metadata_writer();
@@ -283,6 +291,18 @@ impl ApplicationRuntime {
             // whether the file is still there. Fail closed.
             FilePresence::ProbeFailed => {
                 return Err(ApplicationRuntimeError::TrackTrashFailed);
+            }
+        }
+
+        if self.settings.library.management_mode == LibraryManagementMode::CopyAddedFilesIntoLibrary
+            && let Some(library_root) = self.settings.library_path()
+        {
+            let prune_outcome = prune_empty_ancestor_directories_for_sources(
+                library_root,
+                std::slice::from_ref(&path),
+            );
+            if prune_outcome.failed {
+                self.push_managed_library_cleanup_warning();
             }
         }
 

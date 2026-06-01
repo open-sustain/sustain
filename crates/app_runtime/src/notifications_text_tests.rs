@@ -74,6 +74,20 @@ fn scan_outcome_partial_lists_failures_and_notes_the_skip() {
 }
 
 #[test]
+fn library_organization_outcome_reports_empty_folder_cleanup_failure() {
+    let summary = LibraryConsolidationSummary {
+        moved_tracks: 1,
+        empty_directory_cleanup_failed: true,
+        ..LibraryConsolidationSummary::default()
+    };
+
+    assert_eq!(
+        library_consolidation_outcome_text(&summary),
+        "Library organized: 1 moved, 0 already organized, 0 missing. Some empty folders could not be removed."
+    );
+}
+
+#[test]
 fn runtime_error_text_maps_metadata_write_failed() {
     assert_eq!(
         runtime_error_text(&ApplicationRuntimeError::MetadataWriteFailed),

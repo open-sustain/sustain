@@ -11,10 +11,15 @@ use std::{
     io,
     io::{BufReader, BufWriter, Write},
     os::unix::fs::MetadataExt,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use rustix::{
+    fd::OwnedFd,
+    fs::{AtFlags, Mode, OFlags, openat, unlinkat},
+    io::Errno,
+};
 use sustain_domain::TrackContentHash;
 use sustain_metadata::hash_file_content;
 
@@ -29,6 +34,20 @@ pub(super) struct VerifiedFileCopy {
 pub(super) struct FileIdentity {
     pub(super) device: u64,
     pub(super) inode: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct EmptyDirectoryPruneOutcome {
+    pub(crate) failed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EmptyDirectoryPruneError {
+    RootUnavailable,
+    SourceOutsideManagedRoot,
+    InspectDirectoryFailed,
+    RemoveDirectoryFailed,
+    SyncParentDirectoryFailed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -328,6 +347,141 @@ pub(super) fn remove_file_and_sync_parent(path: &Path) -> io::Result<()> {
     }
 }
 
+pub(crate) fn prune_empty_ancestor_directories_for_sources(
+    library_root: &Path,
+    source_paths: &[PathBuf],
+) -> EmptyDirectoryPruneOutcome {
+    let mut outcome = EmptyDirectoryPruneOutcome::default();
+    for source_path in source_paths {
+        match prune_empty_ancestor_directories(library_root, source_path) {
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!(
+                    "Sustain: could not prune empty managed-library folders above {}: {error:?}",
+                    source_path.display()
+                );
+                outcome.failed = true;
+            }
+        }
+    }
+    outcome
+}
+
+fn prune_empty_ancestor_directories(
+    library_root: &Path,
+    source_path: &Path,
+) -> Result<usize, EmptyDirectoryPruneError> {
+    if source_path.strip_prefix(library_root).is_err() {
+        return Err(EmptyDirectoryPruneError::SourceOutsideManagedRoot);
+    }
+    let root = File::open(library_root).map_err(|_| EmptyDirectoryPruneError::RootUnavailable)?;
+    if !root
+        .metadata()
+        .map_err(|_| EmptyDirectoryPruneError::RootUnavailable)?
+        .is_dir()
+    {
+        return Err(EmptyDirectoryPruneError::RootUnavailable);
+    }
+    let mut removed_directories = 0;
+    let mut directory = source_path.parent();
+
+    while let Some(candidate) = directory {
+        if candidate == library_root {
+            break;
+        }
+        if candidate.strip_prefix(library_root).is_err() {
+            return Err(EmptyDirectoryPruneError::SourceOutsideManagedRoot);
+        }
+        let relative_candidate = candidate
+            .strip_prefix(library_root)
+            .map_err(|_| EmptyDirectoryPruneError::SourceOutsideManagedRoot)?;
+        match remove_empty_descendant_directory(&root, relative_candidate)? {
+            EmptyDirectoryRemoveOutcome::Removed => {
+                removed_directories += 1;
+            }
+            EmptyDirectoryRemoveOutcome::Missing => {}
+            EmptyDirectoryRemoveOutcome::Stop => break,
+        }
+
+        directory = candidate.parent();
+    }
+
+    Ok(removed_directories)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EmptyDirectoryRemoveOutcome {
+    Removed,
+    Missing,
+    Stop,
+}
+
+fn remove_empty_descendant_directory(
+    root: &File,
+    relative_directory: &Path,
+) -> Result<EmptyDirectoryRemoveOutcome, EmptyDirectoryPruneError> {
+    let mut components = relative_directory.components().collect::<Vec<_>>();
+    let Some(Component::Normal(directory_name)) = components.pop() else {
+        return Err(EmptyDirectoryPruneError::SourceOutsideManagedRoot);
+    };
+    let parent = match open_descendant_directory(root, &components) {
+        Ok(parent) => parent,
+        Err(DescendantDirectoryOpenError::Missing) => {
+            return Ok(EmptyDirectoryRemoveOutcome::Missing);
+        }
+        Err(DescendantDirectoryOpenError::Unsafe) => {
+            return Ok(EmptyDirectoryRemoveOutcome::Stop);
+        }
+        Err(DescendantDirectoryOpenError::Failed) => {
+            return Err(EmptyDirectoryPruneError::InspectDirectoryFailed);
+        }
+    };
+
+    match unlinkat(&parent, directory_name, AtFlags::REMOVEDIR) {
+        Ok(()) => {
+            File::from(parent)
+                .sync_all()
+                .map_err(|_| EmptyDirectoryPruneError::SyncParentDirectoryFailed)?;
+            Ok(EmptyDirectoryRemoveOutcome::Removed)
+        }
+        Err(Errno::NOENT) => Ok(EmptyDirectoryRemoveOutcome::Missing),
+        Err(Errno::LOOP | Errno::NOTDIR | Errno::NOTEMPTY) => Ok(EmptyDirectoryRemoveOutcome::Stop),
+        Err(_) => Err(EmptyDirectoryPruneError::RemoveDirectoryFailed),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DescendantDirectoryOpenError {
+    Missing,
+    Unsafe,
+    Failed,
+}
+
+fn open_descendant_directory(
+    root: &File,
+    components: &[Component<'_>],
+) -> Result<OwnedFd, DescendantDirectoryOpenError> {
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut directory =
+        openat(root, ".", flags, Mode::empty()).map_err(map_descendant_directory_open_error)?;
+    for component in components {
+        let Component::Normal(name) = component else {
+            return Err(DescendantDirectoryOpenError::Unsafe);
+        };
+        directory = openat(&directory, *name, flags, Mode::empty())
+            .map_err(map_descendant_directory_open_error)?;
+    }
+    Ok(directory)
+}
+
+fn map_descendant_directory_open_error(error: Errno) -> DescendantDirectoryOpenError {
+    match error {
+        Errno::NOENT => DescendantDirectoryOpenError::Missing,
+        Errno::LOOP | Errno::NOTDIR => DescendantDirectoryOpenError::Unsafe,
+        _ => DescendantDirectoryOpenError::Failed,
+    }
+}
+
 fn cleanup_published_link(path: &Path) {
     let _ = remove_file_and_sync_parent(path);
 }
@@ -380,7 +534,10 @@ mod tests {
 
     use sustain_metadata::hash_file_content;
 
-    use super::{FileMoveError, VerifiedFileCopyError, copy_file_verified};
+    use super::{
+        EmptyDirectoryPruneError, FileMoveError, VerifiedFileCopyError, copy_file_verified,
+        prune_empty_ancestor_directories,
+    };
 
     #[test]
     fn verified_copy_copies_and_verifies_file_before_finalizing() {
@@ -504,6 +661,69 @@ mod tests {
         assert!(!destination.exists());
 
         fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn empty_directory_prune_removes_empty_ancestors_but_not_library_root() {
+        let root = unique_test_directory();
+        let source = root.join("Loose").join("Album").join("song.flac");
+        fs::create_dir_all(source.parent().expect("source parent")).expect("create source parent");
+
+        assert_eq!(prune_empty_ancestor_directories(&root, &source), Ok(2));
+        assert!(root.exists());
+        assert!(!root.join("Loose").exists());
+
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn empty_directory_prune_stops_at_sidecar_file() {
+        let root = unique_test_directory();
+        let album = root.join("Loose").join("Album");
+        let source = album.join("song.flac");
+        fs::create_dir_all(&album).expect("create album");
+        fs::write(album.join(".keep"), b"sidecar").expect("write sidecar");
+
+        assert_eq!(prune_empty_ancestor_directories(&root, &source), Ok(0));
+        assert!(album.exists());
+
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn empty_directory_prune_refuses_paths_outside_library_root() {
+        let root = unique_test_directory();
+        let outside = unique_test_directory();
+        fs::create_dir_all(&root).expect("create root");
+        fs::create_dir_all(&outside).expect("create outside");
+
+        assert_eq!(
+            prune_empty_ancestor_directories(&root, &outside.join("song.flac")),
+            Err(EmptyDirectoryPruneError::SourceOutsideManagedRoot)
+        );
+        assert!(outside.exists());
+
+        fs::remove_dir_all(root).expect("remove test root");
+        fs::remove_dir_all(outside).expect("remove test outside");
+    }
+
+    #[test]
+    fn empty_directory_prune_never_follows_symlink_out_of_library_root() {
+        let root = unique_test_directory();
+        let outside = unique_test_directory();
+        fs::create_dir_all(&root).expect("create root");
+        fs::create_dir_all(outside.join("Album")).expect("create outside album");
+        std::os::unix::fs::symlink(&outside, root.join("linked")).expect("create symlink");
+
+        assert_eq!(
+            prune_empty_ancestor_directories(&root, &root.join("linked/Album/song.flac")),
+            Ok(0)
+        );
+        assert!(outside.join("Album").exists());
+        assert!(root.join("linked").exists());
+
+        fs::remove_dir_all(root).expect("remove test root");
+        fs::remove_dir_all(outside).expect("remove test outside");
     }
 
     fn assert_no_temporary_files(root: &std::path::Path) {
