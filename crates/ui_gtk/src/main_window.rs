@@ -50,6 +50,7 @@ use super::{
     now_playing::NowPlayingView,
     playlists_header::{PlaylistsHeader, PlaylistsHeaderState},
     preferences::{install_preferences_action, settings_button},
+    queue_view::QueueView,
     shortcuts::{
         GlobalShortcutContext, create_new_playlist, install_global_shortcuts,
         open_new_smart_playlist_editor,
@@ -236,6 +237,11 @@ pub(crate) fn build_main_window(
     let songs_table_holder: Rc<RefCell<Option<TrackTable>>> = Rc::new(RefCell::new(None));
     let albums_view_holder: Rc<RefCell<Option<AlbumsView>>> = Rc::new(RefCell::new(None));
     let playlists_table_holder: Rc<RefCell<Option<TrackTable>>> = Rc::new(RefCell::new(None));
+    // The queue popover is built after the titlebar (it parents itself to
+    // the Next button), but the playback-changed callback is built before
+    // it; the holder lets that callback reach the queue once it exists so
+    // skipping a track refreshes an open queue live.
+    let queue_view_holder: Rc<RefCell<Option<QueueView>>> = Rc::new(RefCell::new(None));
 
     // One artwork loader for the whole window. Sharing it across views
     // means the on-disk cache, in-memory cache, and worker pool are all
@@ -264,8 +270,20 @@ pub(crate) fn build_main_window(
         songs_table_holder.clone(),
         albums_view_holder.clone(),
         playlists_table_holder.clone(),
+        queue_view_holder.clone(),
         mpris_service.clone(),
     );
+    // The queue popover parents itself to the Next button and drives its
+    // evict/reorder edits through the same command controller and
+    // playback-changed refresh as the rest of the transport.
+    let queue_view = QueueView::new(
+        runtime.clone(),
+        command_controller.clone(),
+        artwork_loader.clone(),
+        playback_changed.clone(),
+        &titlebar.next_button(),
+    );
+    queue_view_holder.replace(Some(queue_view));
     connect_titlebar_playback_controls(
         &titlebar,
         &runtime,

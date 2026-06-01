@@ -8,6 +8,7 @@
 
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn playback_changed_callback(
     runtime: &SharedRuntime,
     now_playing: &NowPlayingView,
@@ -15,6 +16,7 @@ pub(super) fn playback_changed_callback(
     songs_table_holder: Rc<RefCell<Option<TrackTable>>>,
     albums_view_holder: Rc<RefCell<Option<AlbumsView>>>,
     playlists_table_holder: Rc<RefCell<Option<TrackTable>>>,
+    queue_view_holder: Rc<RefCell<Option<QueueView>>>,
     mpris_service: Option<SharedMprisService>,
 ) -> PlaybackChangedCallback {
     let runtime = runtime.clone();
@@ -38,6 +40,11 @@ pub(super) fn playback_changed_callback(
             playlists_table.set_playing_track_id(playing_track_id);
         }
         now_playing.refresh(&now_playing_state);
+        // Advancing the current track shifts the queue tail; keep an open
+        // queue popover in sync (a no-op when it is closed).
+        if let Some(queue_view) = queue_view_holder.borrow().as_ref() {
+            queue_view.refresh_if_visible();
+        }
         if let Some(service) = mpris_service.as_deref() {
             service.publish_playback_state(now_playing_state.state.clone());
             service.publish_now_playing(now_playing_to_mpris_metadata(&now_playing_state));

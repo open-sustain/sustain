@@ -415,8 +415,22 @@ already chosen.
 A `Play Next` action inserts selected tracks at the head of the queue
 (play immediately after the current track). A separate `Add to Queue`
 action appends to the tail. The queue takes precedence over the
-implicit play order. A visible "Up Next" panel is not yet shipped — the
-queue is currently operated entirely through the context menu.
+implicit play order.
+
+### Queue popover — *Sustain-native*
+Resting the pointer on the transport **Next** button opens an arrow
+popover anchored to it that lists what plays after the current track.
+Each row is a two-line cell — title over artist — with the track's
+artwork on the left and striped backgrounds matching the library tables.
+Rows reorder by drag-and-drop and evict via a cross that fades in on
+hover; both edits update the live play queue immediately. The list
+scrolls inside the popover once the queue runs past about a dozen
+tracks, and the popover closes as soon as the pointer leaves it. Under
+Smart Shuffle the upcoming list shows only tracks already chosen or
+explicitly enqueued, since successors are decided on demand. Sustain
+opts for this Next-anchored popover over a sidebar "Queue" item so the
+queue sits next to the playback it controls without growing the LIBRARY
+section.
 
 ### Album-scoped play — *iTunes-adjacent*
 Triggering Play or Shuffle Play from an album (cover button, context

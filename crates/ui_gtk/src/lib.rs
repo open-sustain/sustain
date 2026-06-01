@@ -39,6 +39,7 @@ mod missing_track;
 mod now_playing;
 mod playlists_header;
 mod preferences;
+mod queue_view;
 mod shortcuts;
 mod shuffle_icon;
 mod sidebar;

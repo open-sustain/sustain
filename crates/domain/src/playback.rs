@@ -46,6 +46,21 @@ pub enum PlaybackCommand {
     /// already-queued track. Counterpart to [`Self::EnqueueNext`], which
     /// inserts at the head right after the currently playing track.
     EnqueueLast(Vec<TrackId>),
+    /// Remove a single upcoming track from the play queue without
+    /// disturbing the current track, the rest of the order, or the
+    /// shuffle seed. Dispatched by the queue popover's per-track evict
+    /// control. No-op when the track is the currently playing track or is
+    /// not currently upcoming.
+    RemoveFromQueue(TrackId),
+    /// Reorder one upcoming track within the play queue, moving it
+    /// immediately before or after another upcoming track. Dispatched by
+    /// the queue popover's drag-to-reorder. No-op when either track is the
+    /// currently playing track or is not currently upcoming.
+    ReorderQueue {
+        track_id: TrackId,
+        target_track_id: TrackId,
+        place_after: bool,
+    },
     /// Re-derive the play queue from `request` while keeping the currently
     /// playing track and transport state untouched. Dispatched when the
     /// browsing context that defined the queue widens — e.g. the search

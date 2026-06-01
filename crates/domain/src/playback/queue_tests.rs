@@ -421,6 +421,185 @@ fn lazy_enqueue_after_current_inserts_between_cursor_and_picked_next() {
     assert_eq!(queue.next_track_id(), Some(track_id(2)));
 }
 
+#[test]
+fn upcoming_track_ids_returns_play_order_after_current() {
+    let queue = queue_with_options(track_id(2), PlaybackOptions::default());
+
+    assert_eq!(queue.upcoming_track_ids(), &[track_id(3)]);
+}
+
+#[test]
+fn upcoming_track_ids_is_empty_at_the_tail() {
+    let queue = queue_with_options(track_id(3), PlaybackOptions::default());
+
+    assert!(queue.upcoming_track_ids().is_empty());
+}
+
+#[test]
+fn upcoming_track_ids_does_not_wrap_under_repeat_all() {
+    // Repeat-all wrapping is a navigation behaviour, not queue content:
+    // the upcoming list is still the positional tail after the current
+    // track, even though `next_track_id` wraps to the head.
+    let queue = queue_with_options(
+        track_id(3),
+        PlaybackOptions {
+            shuffle_mode: ShuffleMode::Off,
+            repeat_mode: RepeatMode::All,
+        },
+    );
+
+    assert!(queue.upcoming_track_ids().is_empty());
+    assert_eq!(queue.next_track_id(), Some(track_id(1)));
+}
+
+#[test]
+fn upcoming_track_ids_follows_pure_shuffle_order() {
+    let queue = queue_with_options(
+        track_id(3),
+        PlaybackOptions {
+            shuffle_mode: ShuffleMode::Pure,
+            repeat_mode: RepeatMode::Off,
+        },
+    );
+
+    assert_eq!(
+        queue.upcoming_track_ids(),
+        &queue.play_order_track_ids()[1..]
+    );
+}
+
+#[test]
+fn remove_from_queue_excises_upcoming_track_without_reshuffle() {
+    let mut queue = queue_with_options(track_id(1), PlaybackOptions::default());
+
+    assert!(queue.remove_from_queue(track_id(3)));
+
+    assert_eq!(queue.ordered_track_ids(), &[track_id(1), track_id(2)]);
+    assert_eq!(queue.play_order_track_ids(), &[track_id(1), track_id(2)]);
+    assert_eq!(queue.upcoming_track_ids(), &[track_id(2)]);
+}
+
+#[test]
+fn remove_from_queue_refuses_current_track() {
+    let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
+
+    assert!(!queue.remove_from_queue(track_id(2)));
+    assert_eq!(
+        queue.ordered_track_ids(),
+        &[track_id(1), track_id(2), track_id(3)]
+    );
+}
+
+#[test]
+fn remove_from_queue_refuses_already_played_track() {
+    // Track 1 sits before the current track (already played); it is not
+    // part of the upcoming queue, so the per-track evict leaves it alone.
+    let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
+
+    assert!(!queue.remove_from_queue(track_id(1)));
+    assert_eq!(
+        queue.ordered_track_ids(),
+        &[track_id(1), track_id(2), track_id(3)]
+    );
+}
+
+#[test]
+fn remove_from_queue_keeps_pure_shuffle_order_intact() {
+    let mut queue = queue_with_options(
+        track_id(2),
+        PlaybackOptions {
+            shuffle_mode: ShuffleMode::Pure,
+            repeat_mode: RepeatMode::Off,
+        },
+    );
+    let evicted = queue.upcoming_track_ids()[0];
+    let expected: Vec<TrackId> = queue
+        .play_order_track_ids()
+        .iter()
+        .copied()
+        .filter(|id| *id != evicted)
+        .collect();
+
+    assert!(queue.remove_from_queue(evicted));
+
+    assert_eq!(queue.play_order_track_ids(), expected.as_slice());
+    assert!(!queue.ordered_track_ids().contains(&evicted));
+}
+
+#[test]
+fn move_within_queue_places_track_after_target() {
+    let mut queue = PlaybackQueue::new(
+        PlaybackQueueSource::Library,
+        vec![track_id(1), track_id(2), track_id(3), track_id(4)],
+        track_id(1),
+        PlaybackOptions::default(),
+        10,
+    );
+
+    // Upcoming is [2, 3, 4]; move 2 to immediately after 4.
+    assert!(queue.move_within_queue(track_id(2), track_id(4), true));
+
+    assert_eq!(
+        queue.upcoming_track_ids(),
+        &[track_id(3), track_id(4), track_id(2)]
+    );
+    assert_eq!(queue.next_track_id(), Some(track_id(3)));
+}
+
+#[test]
+fn move_within_queue_places_track_before_target() {
+    let mut queue = PlaybackQueue::new(
+        PlaybackQueueSource::Library,
+        vec![track_id(1), track_id(2), track_id(3), track_id(4)],
+        track_id(1),
+        PlaybackOptions::default(),
+        10,
+    );
+
+    // Upcoming is [2, 3, 4]; move 4 to immediately before 2.
+    assert!(queue.move_within_queue(track_id(4), track_id(2), false));
+
+    assert_eq!(
+        queue.upcoming_track_ids(),
+        &[track_id(4), track_id(2), track_id(3)]
+    );
+}
+
+#[test]
+fn move_within_queue_leaves_source_pool_membership_unchanged() {
+    let mut queue = PlaybackQueue::new(
+        PlaybackQueueSource::Library,
+        vec![track_id(1), track_id(2), track_id(3), track_id(4)],
+        track_id(1),
+        PlaybackOptions::default(),
+        10,
+    );
+
+    assert!(queue.move_within_queue(track_id(2), track_id(4), true));
+
+    let mut pool = queue.ordered_track_ids().to_vec();
+    pool.sort_unstable();
+    assert_eq!(
+        pool,
+        vec![track_id(1), track_id(2), track_id(3), track_id(4)]
+    );
+}
+
+#[test]
+fn move_within_queue_refuses_current_or_non_upcoming_tracks() {
+    let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
+
+    // Current track cannot be moved, nor can an already-played track be a
+    // participant — both leave the order untouched.
+    assert!(!queue.move_within_queue(track_id(2), track_id(3), true));
+    assert!(!queue.move_within_queue(track_id(3), track_id(1), false));
+    assert!(!queue.move_within_queue(track_id(3), track_id(3), true));
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[track_id(1), track_id(2), track_id(3)]
+    );
+}
+
 fn queue_with_options(current_track_id: TrackId, options: PlaybackOptions) -> PlaybackQueue {
     PlaybackQueue::new(
         PlaybackQueueSource::Library,

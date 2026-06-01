@@ -274,6 +274,14 @@ impl Titlebar {
         self.search.text().trim().to_owned()
     }
 
+    /// The transport Next button. Exposed so the play-queue popover can
+    /// parent itself to it and anchor its arrow there — the queue is
+    /// hierarchically the "what plays after Next" surface, so it hangs off
+    /// the Next control rather than carrying a dedicated button.
+    pub(crate) fn next_button(&self) -> gtk::Button {
+        self.next.clone()
+    }
+
     pub(crate) fn set_search_text(&self, text: &str) {
         self.search.set_text(text);
     }

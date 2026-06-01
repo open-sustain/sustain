@@ -8,18 +8,7 @@ use sustain_app_runtime::{PlaybackState, Track, TrackMetadata};
 use crate::util::non_empty_text;
 
 pub(super) fn track_title(track: &Track) -> String {
-    non_empty_text(&track.metadata.title)
-        .or_else(|| {
-            track
-                .location
-                .path()
-                .file_stem()
-                .and_then(|file_stem| file_stem.to_str())
-                .map(str::trim)
-                .filter(|file_stem| !file_stem.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_default()
+    crate::util::display_title(track)
 }
 
 pub(super) fn artist_album_text(metadata: &TrackMetadata) -> String {

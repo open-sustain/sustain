@@ -441,6 +441,120 @@ impl PlaybackQueue {
         true
     }
 
+    /// The tracks queued to play after the current one, in play order.
+    ///
+    /// For Eager layouts this is the realised play order after the
+    /// current track's position; for Lazy (Smart Shuffle) layouts it is
+    /// the already-picked / explicitly-enqueued tail after the cursor,
+    /// which is usually empty because Smart Shuffle decides successors on
+    /// demand. Empty when nothing is playing. The slice is the queue's
+    /// *content* — repeat-mode wrapping is a playback behaviour layered on
+    /// top by [`Self::next_track_id`], not part of the upcoming list.
+    pub fn upcoming_track_ids(&self) -> &[TrackId] {
+        let Some(current_track_id) = self.current_track_id else {
+            return &[];
+        };
+        match &self.layout {
+            PlaybackQueueLayout::Eager {
+                play_order_track_ids,
+            } => match play_order_track_ids
+                .iter()
+                .position(|id| *id == current_track_id)
+            {
+                Some(index) => &play_order_track_ids[index + 1..],
+                None => &[],
+            },
+            PlaybackQueueLayout::Lazy {
+                played_history,
+                cursor,
+            } => {
+                let start = cursor.saturating_add(1).min(played_history.len());
+                &played_history[start..]
+            }
+        }
+    }
+
+    /// Remove a single upcoming track from the queue entirely — both the
+    /// source pool and the realised play order — preserving every other
+    /// track's position. Unlike [`Self::remove_track`] (which rebuilds the
+    /// layout from the pool, re-rolling the shuffle, and is used when a
+    /// track leaves the library), this is a surgical excision with no
+    /// shuffle re-roll: the semantics the queue view's per-track evict
+    /// needs.
+    ///
+    /// Refuses to remove the currently playing track, and only acts on a
+    /// track that is actually upcoming (not already-played history, not
+    /// absent), so it can never corrupt the cursor or the played prefix.
+    /// Returns `true` when a track was removed.
+    pub fn remove_from_queue(&mut self, track_id: TrackId) -> bool {
+        if self.current_track_id == Some(track_id) {
+            return false;
+        }
+        if !self.upcoming_track_ids().contains(&track_id) {
+            return false;
+        }
+
+        self.ordered_track_ids.retain(|id| *id != track_id);
+        match &mut self.layout {
+            PlaybackQueueLayout::Eager {
+                play_order_track_ids,
+            } => {
+                play_order_track_ids.retain(|id| *id != track_id);
+            }
+            PlaybackQueueLayout::Lazy {
+                played_history,
+                cursor,
+            } => {
+                // The track is strictly after the cursor (it was upcoming),
+                // so removing it never shifts the cursor's target; the
+                // clamp below only defends the in-range invariant.
+                played_history.retain(|id| *id != track_id);
+                *cursor = (*cursor).min(played_history.len().saturating_sub(1));
+            }
+        }
+        true
+    }
+
+    /// Reorder one upcoming track within the queue, moving it so it plays
+    /// immediately before (`place_after == false`) or after
+    /// (`place_after == true`) another upcoming track. Edits only the
+    /// realised play order — the source pool's membership is unchanged —
+    /// so no shuffle re-roll happens and the set held by
+    /// `ordered_track_ids` stays equal to the play order's set.
+    ///
+    /// No-op (returns `false`) when the two tracks are the same, when
+    /// either is the currently playing track, or when either is not
+    /// currently upcoming. Backs the queue view's drag-to-reorder.
+    pub fn move_within_queue(
+        &mut self,
+        track_id: TrackId,
+        target_track_id: TrackId,
+        place_after: bool,
+    ) -> bool {
+        if track_id == target_track_id {
+            return false;
+        }
+        if self.current_track_id == Some(track_id) || self.current_track_id == Some(target_track_id)
+        {
+            return false;
+        }
+        {
+            let upcoming = self.upcoming_track_ids();
+            if !upcoming.contains(&track_id) || !upcoming.contains(&target_track_id) {
+                return false;
+            }
+        }
+
+        match &mut self.layout {
+            PlaybackQueueLayout::Eager {
+                play_order_track_ids,
+            } => reposition_track(play_order_track_ids, track_id, target_track_id, place_after),
+            PlaybackQueueLayout::Lazy { played_history, .. } => {
+                reposition_track(played_history, track_id, target_track_id, place_after)
+            }
+        }
+    }
+
     fn adjacent_track_id(&self, step: TrackStep) -> Option<TrackId> {
         let current_track_id = self.current_track_id?;
         if self.options.repeat_mode == RepeatMode::One {
@@ -552,6 +666,33 @@ fn build_layout(
             cursor: 0,
         },
     }
+}
+
+/// Move `moved` within `order` so it sits immediately before or after
+/// `target`. Both ids are expected to be present (the caller validates
+/// against the upcoming slice); if `target` somehow vanished after the
+/// removal the move is rolled back and `false` returned.
+fn reposition_track(
+    order: &mut Vec<TrackId>,
+    moved: TrackId,
+    target: TrackId,
+    place_after: bool,
+) -> bool {
+    let Some(from) = order.iter().position(|id| *id == moved) else {
+        return false;
+    };
+    order.remove(from);
+    let Some(target_index) = order.iter().position(|id| *id == target) else {
+        order.insert(from, moved);
+        return false;
+    };
+    let insert_at = if place_after {
+        target_index + 1
+    } else {
+        target_index
+    };
+    order.insert(insert_at, moved);
+    true
 }
 
 fn build_pure_play_order(

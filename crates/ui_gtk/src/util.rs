@@ -4,6 +4,7 @@
 //! Small leaf helpers shared across the GTK view models.
 
 use gtk::prelude::*;
+use sustain_app_runtime::{Track, TrackMetadata};
 
 /// Unicode glyph for an unfilled rating star.
 const EMPTY_STAR: &str = "☆";
@@ -19,6 +20,32 @@ pub(crate) fn non_empty_text(value: &Option<String>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Display title for a track: its tag title, falling back to the file
+/// stem when the title tag is blank. Shared by the now-playing tile and
+/// the play-queue popover so both render identical titles.
+pub(crate) fn display_title(track: &Track) -> String {
+    non_empty_text(&track.metadata.title)
+        .or_else(|| {
+            track
+                .location
+                .path()
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::trim)
+                .filter(|stem| !stem.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_default()
+}
+
+/// Display artist for a track's metadata, falling back to a neutral
+/// placeholder when the artist tag is blank. Used where a row always
+/// needs a populated second line (the play-queue popover), unlike the
+/// now-playing tile which leaves the line empty.
+pub(crate) fn display_artist(metadata: &TrackMetadata) -> String {
+    non_empty_text(&metadata.artist).unwrap_or_else(|| "Unknown Artist".to_owned())
 }
 
 /// Renders one rating-star button at position `star` against the current

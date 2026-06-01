@@ -864,6 +864,75 @@ columnview.track-table listview row:not(:selected):focus .track-table-row-odd {
     box-shadow: inset 0 -2px 0 0 @theme_selected_bg_color;
 }
 
+/* Play-queue popover (issue #80). The queue hangs off the Next button as
+   an arrow popover. Strip Adwaita's inner `contents` padding so the
+   striped rows reach the popover edges (the rows carry their own
+   breathing room), and lean on a slightly heavier shadow than the default
+   popover so the surface clearly floats above the content beneath it. */
+popover.queue-popover > contents {
+    padding: 0;
+    box-shadow:
+        0 6px 18px 0 alpha(black, 0.32),
+        0 1px 6px 0 alpha(black, 0.22);
+}
+
+.queue-row {
+    padding: 6px 8px;
+}
+
+.queue-row-even {
+    background-color: alpha(@theme_fg_color, 0.025);
+}
+
+.queue-row-odd {
+    background-color: transparent;
+}
+
+/* Neutral tile shown behind the cover while it decodes (or when a track
+   has no artwork), matching the now-playing artwork's empty state. */
+.queue-row-artwork {
+    background-color: alpha(@theme_fg_color, 0.12);
+    border-radius: 3px;
+}
+
+.queue-row-title {
+    font-weight: bold;
+}
+
+.queue-row-artist {
+    color: alpha(@theme_fg_color, 0.58);
+    font-size: 0.9em;
+}
+
+/* The evict control fades in on row hover (opacity is toggled in code so
+   the reveal never reflows the title); keep it visually quiet until then
+   and let it pick up the accent on its own hover. */
+.queue-row-evict {
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px;
+    color: alpha(@theme_fg_color, 0.65);
+}
+
+.queue-row-evict:hover {
+    color: @theme_fg_color;
+}
+
+/* Drag-to-reorder drop indicator: a 2px accent stripe above or below the
+   target row, mirroring the track table's reorder affordance. */
+.queue-row.queue-row-drop-above {
+    box-shadow: inset 0 2px 0 0 @theme_selected_bg_color;
+}
+
+.queue-row.queue-row-drop-below {
+    box-shadow: inset 0 -2px 0 0 @theme_selected_bg_color;
+}
+
+.queue-empty {
+    color: alpha(@theme_fg_color, 0.55);
+    padding: 24px 12px;
+}
+
 .rating-stars {
     min-height: 28px;
 }

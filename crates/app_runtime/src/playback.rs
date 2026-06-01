@@ -64,6 +64,19 @@ impl ApplicationRuntime {
                 self.playback_queue.enqueue_at_end(&track_ids);
                 Ok(())
             }
+            PlaybackCommand::RemoveFromQueue(track_id) => {
+                self.playback_queue.remove_from_queue(track_id);
+                Ok(())
+            }
+            PlaybackCommand::ReorderQueue {
+                track_id,
+                target_track_id,
+                place_after,
+            } => {
+                self.playback_queue
+                    .move_within_queue(track_id, target_track_id, place_after);
+                Ok(())
+            }
             PlaybackCommand::RepopulateQueue(request) => {
                 self.repopulate_queue(request);
                 Ok(())

@@ -1848,6 +1848,16 @@ impl ApplicationRuntime {
         self.playback_queue.next_track_id()
     }
 
+    /// The ordered track ids queued to play after the current track —
+    /// the queue's upcoming tail in play order. Empty when nothing is
+    /// playing or the queue is exhausted. Backs the queue popover; the
+    /// caller resolves each id to a track via [`Self::library_track`] so
+    /// only the rows it actually renders pay a lookup, instead of cloning
+    /// the whole tail.
+    pub fn playback_queue_upcoming_track_ids(&self) -> Vec<TrackId> {
+        self.playback_queue.upcoming_track_ids().to_vec()
+    }
+
     pub fn now_playing(&self) -> NowPlaying {
         let state = self.playback_state();
         let track = playback::playback_track_id(&state)
