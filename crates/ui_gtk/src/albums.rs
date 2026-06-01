@@ -1191,6 +1191,24 @@ struct AlbumTileContent {
     artist: gtk::Label,
 }
 
+/// A tile caption (title or artist), pinned to the cover width and ellipsized
+/// within it. `set_size_request` floors both the minimum and natural width to
+/// the cover; capping `max-width-chars` keeps a long value's own natural-width
+/// request from inflating the centered tile past the cover and misaligning the
+/// grid (issue #125). The pixel width — not the character cap — governs the
+/// rendered size, so the cap is just a small sentinel.
+fn album_tile_label(text: &str, css_class: &str, cover_size: i32, margin_top: i32) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class(css_class);
+    label.set_size_request(cover_size, -1);
+    label.set_max_width_chars(1);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_xalign(0.0);
+    label.set_halign(gtk::Align::Start);
+    label.set_margin_top(margin_top);
+    label
+}
+
 fn build_album_tile_content(
     title_text: &str,
     artist_text: &str,
@@ -1208,22 +1226,10 @@ fn build_album_tile_content(
     cover.set_halign(gtk::Align::Start);
     root.append(&cover);
 
-    let title = gtk::Label::new(Some(title_text));
-    title.add_css_class("album-tile-title");
-    title.set_size_request(cover_size, -1);
-    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    title.set_xalign(0.0);
-    title.set_halign(gtk::Align::Start);
-    title.set_margin_top(6);
+    let title = album_tile_label(title_text, "album-tile-title", cover_size, 6);
     root.append(&title);
 
-    let artist = gtk::Label::new(Some(artist_text));
-    artist.add_css_class("album-tile-artist");
-    artist.set_size_request(cover_size, -1);
-    artist.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    artist.set_xalign(0.0);
-    artist.set_halign(gtk::Align::Start);
-    artist.set_margin_top(1);
+    let artist = album_tile_label(artist_text, "album-tile-artist", cover_size, 1);
     root.append(&artist);
 
     AlbumTileContent {
@@ -1741,6 +1747,29 @@ mod tests {
 
             window.set_child(None::<&gtk::Widget>);
             window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
+    fn album_tile_captions_never_widen_the_tile_past_the_cover() {
+        let ran = crate::test_support::with_gtk(|| {
+            let long = "A ludicrously long album title that would overflow the tile column";
+            for cover_size in [ALBUM_TILE_COVER_SIZE, ALBUM_TILE_COVER_SIZE_EXPANDED] {
+                let tile = build_album_tile_content(long, long, cover_size);
+                let title_natural = tile.title.measure(gtk::Orientation::Horizontal, -1).1;
+                let artist_natural = tile.artist.measure(gtk::Orientation::Horizontal, -1).1;
+                assert_eq!(
+                    title_natural, cover_size,
+                    "long title should stay pinned to the {cover_size}px cover, not grow to fit",
+                );
+                assert_eq!(
+                    artist_natural, cover_size,
+                    "long artist should stay pinned to the {cover_size}px cover, not grow to fit",
+                );
+            }
         });
         if !ran {
             eprintln!("skipped GTK widget test: no display available");
