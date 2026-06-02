@@ -18,10 +18,11 @@ use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, ArtworkFetchResult,
     ManagedMetadataRetargetResult, MissingTrackRelocationResult,
     artwork_fetcher::{ArtworkFetchRequest, query_from_metadata},
+    freedesktop_trash,
     managed_library::{
-        file_ops::{open_regular_file_if_present, trash_regular_file_matching_capability},
-        metadata_change_affects_managed_path, prune_empty_ancestor_directories_for_sources,
-        relocate_managed_missing_track, retarget_managed_metadata,
+        file_ops::open_regular_file_if_present, metadata_change_affects_managed_path,
+        prune_empty_ancestor_directories_for_sources, relocate_managed_missing_track,
+        retarget_managed_metadata,
     },
     playback::playback_track_id,
 };
@@ -342,12 +343,7 @@ impl ApplicationRuntime {
         self.move_track_to_trash_with_token(
             track_id,
             |path| open_regular_file_if_present(path).map_err(|_| ()),
-            |path, source| {
-                trash_regular_file_matching_capability(path, &source, |handoff_path| {
-                    trash::delete(handoff_path).map_err(|_| ())
-                })
-                .map_err(|_| ())
-            },
+            |path, source| freedesktop_trash::trash_regular_file(path, &source).map_err(|_| ()),
         )
     }
 

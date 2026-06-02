@@ -80,6 +80,7 @@ mod device_sync;
 pub mod device_sync_scheduler;
 mod duplicate_consolidation;
 mod file_presence;
+mod freedesktop_trash;
 mod library_hydration;
 mod library_mutation;
 mod library_scan;

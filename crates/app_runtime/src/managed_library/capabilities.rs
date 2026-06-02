@@ -11,9 +11,9 @@
 //! primitives in a private scratch directory.
 
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{self, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt},
+    fs::{self, File},
+    io::{self, Read, Write},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -22,7 +22,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use super::file_ops::{link_file_capability, open_regular_file};
+use super::file_ops::{
+    PRIVATE_DIRECTORY_MODE, PinnedFilePath, link_file_capability, open_directory_path,
+    open_regular_file,
+};
 use super::journal::publish_journal_without_overwrite;
 
 const PROBE_DIRECTORY_PREFIX: &str = ".sustain-managed-root-probe";
@@ -196,11 +199,11 @@ struct SystemProbeFilesystem;
 
 impl ProbeFilesystem for SystemProbeFilesystem {
     fn create_private_directory(&self, path: &Path) -> io::Result<()> {
-        fs::DirBuilder::new().mode(0o700).create(path)
+        PinnedFilePath::existing_parent(path)?.create_directory(PRIVATE_DIRECTORY_MODE)
     }
 
     fn create_new_file(&self, path: &Path) -> io::Result<File> {
-        OpenOptions::new().write(true).create_new(true).open(path)
+        PinnedFilePath::existing_parent(path)?.create_new_file()
     }
 
     fn sync_file(&self, file: &File) -> io::Result<()> {
@@ -224,11 +227,16 @@ impl ProbeFilesystem for SystemProbeFilesystem {
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
-        fs::remove_file(path)
+        PinnedFilePath::existing_parent(path)?.unlink()
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
-        fs::read(path)
+        let mut bytes = Vec::new();
+        open_regular_file(path)
+            .map_err(|error| io::Error::other(format!("{error:?}")))?
+            .try_clone_file()?
+            .read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
 
     fn publish_without_overwrite(&self, source: &Path, destination: &Path) -> io::Result<()> {
@@ -240,11 +248,11 @@ impl ProbeFilesystem for SystemProbeFilesystem {
     }
 
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
-        File::open(path).and_then(|directory| directory.sync_all())
+        open_directory_path(path)?.sync_all()
     }
 
     fn remove_directory(&self, path: &Path) -> io::Result<()> {
-        fs::remove_dir(path)
+        PinnedFilePath::existing_parent(path)?.remove_directory()
     }
 }
 
@@ -257,6 +265,8 @@ fn validate_managed_library_root(
         Ok(_) => return Err(ManagedLibraryFilesystemError::RootIsNotDirectory),
         Err(_) => return Err(ManagedLibraryFilesystemError::RootUnavailable),
     }
+    open_directory_path(library_root)
+        .map_err(|_| ManagedLibraryFilesystemError::RootUnavailable)?;
 
     let paths = ProbePaths::new(library_root)?;
     let result = run_probe(filesystem, library_root, &paths);

@@ -80,8 +80,9 @@ already finished copying and records those completed tracks in the library.
 
 ### Hard-link move primitive — *Sustain-native*
 Managed-mode organization uses a same-filesystem metadata move: retain an
-open source descriptor, hard-link that exact file to the destination, then
-unlink the source through a verified handoff. It refuses to
+open source descriptor, resolve destination directories through retained
+no-symlink directory handles, hard-link that exact file to the destination,
+then unlink the source through a verified handoff. It refuses to
 overwrite an existing destination and fails (rather than copy/deleting)
 on cross-device moves. This is safe on ext4, XFS, Btrfs, and ZFS; it
 fails clean on SMB/FUSE/exFAT and other filesystems that don't support
@@ -780,7 +781,9 @@ at the right edge of the menu:
 - **Remove from library** — delete the library record only, leave the
   file on disk
 - **Move to Trash** — delete the library record and send the file to
-  the system trash
+  the system trash. On Linux, Sustain publishes regular audio files directly
+  into the Freedesktop desktop trash through retained directory and file
+  handles before deleting the library record.
 
 ---
 

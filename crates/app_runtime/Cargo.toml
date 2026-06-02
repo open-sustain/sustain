@@ -12,8 +12,8 @@ path = "src/lib.rs"
 
 [dependencies]
 async-channel = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tempfile = "3"
-trash = "5"
 url = "2"
 # Linux syscall wrappers for `setpriority` and `ioprio_set` used by the
 # background-job scheduler. `ioprio_set` has no glibc/nix/rustix safe
@@ -22,8 +22,8 @@ url = "2"
 # the same job. The unsafe surface is confined to
 # `crates/app_runtime/src/priority.rs`.
 libc = "0.2"
-# Linux no-replace rename for crash-recovery journal publication. A plain
-# `std::fs::rename` could overwrite an existing journal after a race.
+# Linux descriptor-relative filesystem primitives for local-library
+# publication, recovery cleanup, and no-overwrite journal handling.
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 sustain-analysis = { path = "../analysis" }
 sustain-artwork = { path = "../artwork" }

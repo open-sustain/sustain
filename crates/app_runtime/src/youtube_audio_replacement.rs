@@ -12,11 +12,10 @@ use sustain_domain::{
 use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, audio_format_from_path, hash_file_content};
 
-use crate::managed_library::file_ops::{open_regular_file, trash_regular_file_matching_capability};
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
-    NotificationSeverity, YoutubeAudioDownloadResult,
-    managed_library::file_ops::copy_file_verified,
+    NotificationSeverity, YoutubeAudioDownloadResult, freedesktop_trash,
+    managed_library::file_ops::{copy_file_verified, open_regular_file},
     metadata_writer::full_metadata_mirror,
     youtube_audio_downloader::{
         MAX_YOUTUBE_REPLACEMENT_DURATION, StagedYoutubeAudio, YoutubeAudioDownloadError,
@@ -342,10 +341,7 @@ pub(crate) fn replace_track_audio_from_youtube(
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
 
     let original_retained =
-        trash_regular_file_matching_capability(&original_path, &original, |handoff| {
-            trash::delete(handoff).map_err(|_| ())
-        })
-        .is_err();
+        freedesktop_trash::trash_regular_file(&original_path, &original).is_err();
     remove_youtube_replacement_journal_if_present(&canonical_root)?;
     Ok(YoutubeAudioReplacementOutcome { original_retained })
 }

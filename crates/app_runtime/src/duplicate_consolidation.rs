@@ -6,12 +6,12 @@
 use std::{
     collections::BTreeSet,
     fs,
-    io::{self, Seek, SeekFrom, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use rustix::fs::{CWD, RenameFlags, renameat_with};
 use sustain_domain::{
     DuplicateConsolidationRequest, DuplicateMatchMode, Track, TrackId, TrackRelativePath,
     duplicate_groups, plan_duplicate_consolidation,
@@ -25,10 +25,12 @@ use crate::{
     managed_library::{
         ManagedLibraryFilesystemValidator,
         file_ops::{
-            FileIdentity, RegularFileCapability, ensure_directory_all, link_file_capability,
-            open_regular_file, path_refers_to_capability, regular_file_capability_from_file,
+            FileIdentity, PinnedFilePath, RegularFileCapability, open_regular_file,
+            path_refers_to_capability, publish_file_capability,
+            publish_pinned_file_without_overwrite, regular_file_capability_from_file,
             regular_file_identity, remove_file_and_sync_parent,
-            remove_regular_file_matching_capability, sync_directory, sync_parent_directory,
+            remove_pinned_regular_file_matching_capability,
+            remove_regular_file_matching_capability,
         },
     },
     metadata_writer::full_metadata_mirror,
@@ -520,42 +522,25 @@ fn survivor_entry(journal: &Journal) -> &JournalEntry {
 }
 
 fn create_link(source: &RegularFileCapability, destination: &Path) -> ApplicationRuntimeResult<()> {
-    if destination.exists() {
-        return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
-    }
-    let parent = destination
-        .parent()
-        .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    ensure_directory_all(parent)
-        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    link_file_capability(source, destination)
-        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    if !path_refers_to_capability(destination, source).unwrap_or(false)
-        || sync_parent_directory(destination).is_err()
-    {
-        let _ = remove_regular_file_matching_capability(destination, source);
-        return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
-    }
-    Ok(())
+    publish_file_capability(source, destination)
+        .map(drop)
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)
 }
 
 fn copy_to_stage(
     source: &RegularFileCapability,
     destination: &Path,
 ) -> ApplicationRuntimeResult<()> {
-    if fs::symlink_metadata(destination).is_ok() {
+    let destination = PinnedFilePath::creating_parent(destination)
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    if destination
+        .exists()
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?
+    {
         return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
     }
-    let parent = destination
-        .parent()
-        .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    ensure_directory_all(parent)
-        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    let mut destination_file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .open(destination)
+    let mut destination_file = destination
+        .create_new_file()
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     let destination_capability = regular_file_capability_from_file(
         destination_file
@@ -596,15 +581,18 @@ fn copy_to_stage(
         let destination_hash = hash_reader_content(&mut destination_file)
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
         if source_hash != destination_hash
-            || !path_refers_to_capability(destination, &destination_capability).unwrap_or(false)
-            || sync_parent_directory(destination).is_err()
+            || !destination
+                .refers_to(&destination_capability)
+                .unwrap_or(false)
+            || destination.sync_parent().is_err()
         {
             return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
         }
         Ok(())
     })();
     if result.is_err() {
-        let _ = remove_regular_file_matching_capability(destination, &destination_capability);
+        let _ =
+            remove_pinned_regular_file_matching_capability(&destination, &destination_capability);
     }
     result
 }
@@ -732,37 +720,73 @@ fn cleanup_committed(library_root: &Path, journal: &Journal) -> ApplicationRunti
 }
 
 fn cleanup_recovery_files(library_root: &Path, journal: &Journal) -> ApplicationRuntimeResult<()> {
-    let stage = journal.stage.resolve(library_root);
-    match open_regular_file(&stage) {
-        Ok(stage_capability) => {
-            remove_matching_file(&stage, &stage_capability)?;
-        }
-        Err(_) if path_is_missing(&stage) => {}
-        Err(_) => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
-    }
-    for entry in &journal.entries {
-        let backup = entry.backup.resolve(library_root);
-        match open_regular_file(&backup) {
-            Ok(backup_capability) if backup_capability.identity() == entry.source_identity => {
-                remove_matching_file(&backup, &backup_capability)?;
-            }
-            Err(_) if path_is_missing(&backup) => {}
-            _ => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
-        }
-    }
-    let recovery_directory = journal
-        .stage
-        .resolve(library_root)
+    let stage_path = journal.stage.resolve(library_root);
+    let recovery_directory = stage_path
         .parent()
         .map(Path::to_path_buf)
         .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    if recovery_directory.exists() {
-        fs::remove_dir(&recovery_directory)
-            .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-        sync_directory(library_root)
-            .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    let recovery_directory_path = PinnedFilePath::existing_parent(&recovery_directory)
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    let recovery_directory_capability = match recovery_directory_path.open_directory() {
+        Ok(directory) => Arc::new(directory),
+        Err(_) if path_is_missing(&recovery_directory) => return Ok(()),
+        Err(_) => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
+    };
+
+    let stage = pinned_recovery_child(
+        &recovery_directory,
+        recovery_directory_capability.clone(),
+        &stage_path,
+    )?;
+    match stage.open_regular_file() {
+        Ok(stage_capability) => {
+            remove_pinned_regular_file_matching_capability(&stage, &stage_capability)
+                .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+        }
+        Err(_) if !stage.exists().unwrap_or(true) => {}
+        Err(_) => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
     }
-    Ok(())
+    for entry in &journal.entries {
+        let backup = pinned_recovery_child(
+            &recovery_directory,
+            recovery_directory_capability.clone(),
+            &entry.backup.resolve(library_root),
+        )?;
+        match backup.open_regular_file() {
+            Ok(backup_capability) if backup_capability.identity() == entry.source_identity => {
+                remove_pinned_regular_file_matching_capability(&backup, &backup_capability)
+                    .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+            }
+            Err(_) if !backup.exists().unwrap_or(true) => {}
+            _ => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
+        }
+    }
+    if !recovery_directory_path
+        .refers_to_directory(recovery_directory_capability.as_ref())
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?
+    {
+        return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
+    }
+    recovery_directory_path
+        .remove_directory()
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)
+}
+
+fn pinned_recovery_child(
+    recovery_directory: &Path,
+    recovery_directory_capability: Arc<fs::File>,
+    path: &Path,
+) -> ApplicationRuntimeResult<PinnedFilePath> {
+    if path.parent() != Some(recovery_directory) {
+        return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
+    }
+    PinnedFilePath::in_open_parent(
+        recovery_directory,
+        recovery_directory_capability,
+        path.file_name()
+            .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?,
+    )
+    .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)
 }
 
 fn path_is_missing(path: &Path) -> bool {
@@ -792,11 +816,16 @@ fn write_journal(library_root: &Path, journal: &Journal) -> ApplicationRuntimeRe
         std::process::id()
     ));
     let result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
+        let temporary = PinnedFilePath::existing_parent(&temporary)
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+        let mut file = temporary
+            .create_new_file()
+            .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+        let temporary_capability = regular_file_capability_from_file(
+            file.try_clone()
+                .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?,
+        )
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
         writeln!(file, "{JOURNAL_HEADER}")
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
         writeln!(
@@ -821,9 +850,9 @@ fn write_journal(library_root: &Path, journal: &Journal) -> ApplicationRuntimeRe
         file.flush()
             .and_then(|()| file.sync_all())
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-        renameat_with(CWD, &temporary, CWD, &destination, RenameFlags::NOREPLACE)
+        let destination = PinnedFilePath::existing_parent(&destination)
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-        sync_directory(library_root)
+        publish_pinned_file_without_overwrite(&temporary, &destination, &temporary_capability)
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)
     })();
     if result.is_err() {
@@ -839,7 +868,12 @@ fn write_journal(library_root: &Path, journal: &Journal) -> ApplicationRuntimeRe
  */
 
 fn read_journal(library_root: &Path) -> ApplicationRuntimeResult<Journal> {
-    let contents = fs::read_to_string(journal_path(library_root))
+    let journal = open_regular_file(&journal_path(library_root))
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    let mut contents = String::new();
+    journal
+        .try_clone_file()
+        .and_then(|mut journal| journal.read_to_string(&mut contents))
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     let mut lines = contents.lines();
     if lines.next() != Some(JOURNAL_HEADER) {

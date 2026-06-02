@@ -11,25 +11,26 @@
 //! Publication is integrity-first: a sibling staging file is created
 //! exclusively, populated from a no-follow source fd, modified by the caller,
 //! assigned the source uid/gid and mode, given every readable source xattr
-//! (including POSIX ACL xattrs), synced, renamed into place, and followed by a
-//! containing-directory fsync. Any failure before rename leaves the original
-//! pathname untouched. A directory-sync failure after rename is reported as a
-//! failure because crash durability is uncertain; rolling back would add a
-//! second unsafe namespace mutation.
+//! (including POSIX ACL xattrs), synced, exchanged into place, and followed by
+//! removal of the old alias and a containing-directory fsync. Any failure
+//! before exchange leaves the original pathname untouched. A directory-sync
+//! failure after exchange is reported as a failure because crash durability is
+//! uncertain; rolling back would add a second unsafe namespace mutation.
 
 use std::{
     ffi::{CStr, CString, OsStr, OsString},
     fs::File,
     io::{self, Write},
-    os::fd::OwnedFd,
+    os::fd::{AsRawFd, OwnedFd},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use rustix::{
     fs::{
-        AtFlags, FileType, Mode, OFlags, Stat, XattrFlags, fchmod, fchown, fgetxattr, flistxattr,
-        fremovexattr, fsetxattr, fstat, fsync, open, openat, renameat, statat, unlinkat,
+        AtFlags, CWD, FileType, Mode, OFlags, RenameFlags, Stat, XattrFlags, fchmod, fchown,
+        fgetxattr, flistxattr, fremovexattr, fsetxattr, fstat, fsync, openat, renameat_with,
+        statat, unlinkat,
     },
     io::Errno,
 };
@@ -38,6 +39,7 @@ use crate::{MetadataError, MetadataResult};
 
 const DIRECTORY_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
+    .union(OFlags::NOFOLLOW)
     .union(OFlags::CLOEXEC);
 const SOURCE_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::NOFOLLOW)
@@ -78,15 +80,14 @@ where
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let parent = open(parent_path, DIRECTORY_FLAGS, Mode::empty())
-        .map_err(|_| MetadataError::WriteFailed)?;
+    let parent = open_directory_path(parent_path)?;
     let source_fd = openat(&parent, file_name, SOURCE_FLAGS, Mode::empty())
         .map_err(|_| MetadataError::WriteFailed)?;
     let mut source = File::from(source_fd);
     let source_stat = regular_file_stat(&source)?;
 
     let (temporary_name, temporary_path, mut temporary) =
-        create_temporary_sibling(&parent, parent_path, file_name, &mut next_temporary_name)?;
+        create_temporary_sibling(&parent, file_name, &mut next_temporary_name)?;
     let temporary_stat = match regular_file_stat(&temporary) {
         Ok(stat) => stat,
         Err(error) => {
@@ -118,16 +119,64 @@ where
         return staged;
     }
 
-    if renameat(&parent, &temporary_name, &parent, file_name).is_err() {
+    if renameat_with(
+        &parent,
+        &temporary_name,
+        &parent,
+        file_name,
+        RenameFlags::EXCHANGE,
+    )
+    .is_err()
+    {
         remove_temporary_if_owned(&parent, &temporary_name, &temporary);
         return Err(MetadataError::WriteFailed);
     }
-    sync_parent(&parent).map_err(|_| MetadataError::WriteFailed)
+    if !pathname_refers_to_open_file(&parent, file_name, &temporary, &temporary_stat)?
+        || !pathname_refers_to_open_file(&parent, &temporary_name, &source, &source_stat)?
+    {
+        if renameat_with(
+            &parent,
+            &temporary_name,
+            &parent,
+            file_name,
+            RenameFlags::EXCHANGE,
+        )
+        .is_ok()
+        {
+            remove_temporary_if_owned(&parent, &temporary_name, &temporary);
+        }
+        return Err(MetadataError::WriteFailed);
+    }
+    let remove_old_source = unlink_temporary_if_owned(&parent, &temporary_name, &source);
+    let sync_result = sync_parent(&parent).map_err(|_| MetadataError::WriteFailed);
+    remove_old_source?;
+    sync_result
+}
+
+fn open_directory_path(path: &Path) -> MetadataResult<OwnedFd> {
+    let mut directory =
+        openat(CWD, ".", DIRECTORY_FLAGS, Mode::empty()).map_err(|_| MetadataError::WriteFailed)?;
+    for component in path.components() {
+        match component {
+            Component::RootDir => {
+                directory = openat(CWD, "/", DIRECTORY_FLAGS, Mode::empty())
+                    .map_err(|_| MetadataError::WriteFailed)?;
+            }
+            Component::CurDir => {}
+            Component::Normal(name) => {
+                directory = openat(&directory, name, DIRECTORY_FLAGS, Mode::empty())
+                    .map_err(|_| MetadataError::WriteFailed)?;
+            }
+            Component::ParentDir | Component::Prefix(_) => {
+                return Err(MetadataError::WriteFailed);
+            }
+        }
+    }
+    Ok(directory)
 }
 
 fn create_temporary_sibling<N>(
     parent: &OwnedFd,
-    parent_path: &Path,
     file_name: &OsStr,
     next_temporary_name: &mut N,
 ) -> MetadataResult<(OsString, PathBuf, File)>
@@ -141,7 +190,7 @@ where
         }
         match openat(parent, &temporary_name, TEMPORARY_FLAGS, TEMPORARY_MODE) {
             Ok(fd) => {
-                let temporary_path = parent_path.join(&temporary_name);
+                let temporary_path = proc_self_fd_path(parent.as_raw_fd()).join(&temporary_name);
                 return Ok((temporary_name, temporary_path, File::from(fd)));
             }
             Err(Errno::EXIST) => continue,
@@ -149,6 +198,10 @@ where
         }
     }
     Err(MetadataError::WriteFailed)
+}
+
+fn proc_self_fd_path(fd: std::os::fd::RawFd) -> PathBuf {
+    PathBuf::from(format!("/proc/self/fd/{fd}"))
 }
 
 fn is_single_normal_component(name: &OsStr) -> bool {
@@ -173,13 +226,23 @@ fn temporary_sibling_name(file_name: &OsStr) -> OsString {
 }
 
 fn remove_temporary_if_owned(parent: &OwnedFd, temporary_name: &OsStr, temporary: &File) {
+    let _ = unlink_temporary_if_owned(parent, temporary_name, temporary);
+}
+
+fn unlink_temporary_if_owned(
+    parent: &OwnedFd,
+    temporary_name: &OsStr,
+    temporary: &File,
+) -> MetadataResult<()> {
     let Ok(temporary_stat) = regular_file_stat(temporary) else {
-        return;
+        return Err(MetadataError::WriteFailed);
     };
     if pathname_refers_to_open_file(parent, temporary_name, temporary, &temporary_stat)
         .unwrap_or(false)
     {
-        let _ = unlinkat(parent, temporary_name, AtFlags::empty());
+        unlinkat(parent, temporary_name, AtFlags::empty()).map_err(|_| MetadataError::WriteFailed)
+    } else {
+        Err(MetadataError::WriteFailed)
     }
 }
 
@@ -564,6 +627,54 @@ mod tests {
         assert_eq!(fs::read(&target).expect("read target"), b"target bytes");
         assert!(path.is_symlink());
 
+        fs::remove_dir_all(root).expect("remove root");
+    }
+
+    #[test]
+    fn rejects_symlinked_parent_without_touching_audio_outside_that_namespace() {
+        let root = unique_test_directory();
+        let outside = root.join("Outside");
+        fs::create_dir_all(&outside).expect("create outside");
+        let target = outside.join("audio.bin");
+        fs::write(&target, b"target bytes").expect("seed target");
+        symlink(&outside, root.join("Linked")).expect("seed parent symlink");
+
+        let result = atomic_write_via_rename(&root.join("Linked/audio.bin"), |temporary| {
+            fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
+        });
+
+        assert_eq!(result, Err(MetadataError::WriteFailed));
+        assert_eq!(fs::read(&target).expect("read target"), b"target bytes");
+        fs::remove_dir_all(root).expect("remove root");
+    }
+
+    #[test]
+    fn parent_directory_replacement_does_not_redirect_tag_publication() {
+        let root = unique_test_directory();
+        let album = root.join("Album");
+        let displaced = root.join("Displaced");
+        let outside = root.join("Outside");
+        fs::create_dir_all(&album).expect("create album");
+        fs::create_dir(&outside).expect("create outside");
+        let path = album.join("audio.bin");
+        fs::write(&path, b"original").expect("seed audio");
+        fs::write(outside.join("audio.bin"), b"unrelated").expect("seed unrelated audio");
+
+        atomic_write_via_rename(&path, |temporary| {
+            fs::rename(&album, &displaced).map_err(|_| MetadataError::WriteFailed)?;
+            symlink(&outside, &album).map_err(|_| MetadataError::WriteFailed)?;
+            fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
+        })
+        .expect("replace through pinned parent");
+
+        assert_eq!(
+            fs::read(displaced.join("audio.bin")).expect("read replaced audio"),
+            b"replacement"
+        );
+        assert_eq!(
+            fs::read(outside.join("audio.bin")).expect("read unrelated audio"),
+            b"unrelated"
+        );
         fs::remove_dir_all(root).expect("remove root");
     }
 
