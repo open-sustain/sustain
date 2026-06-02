@@ -45,7 +45,9 @@ use super::{
 };
 use crate::{
     file_presence::{FilePresence, probe_file_presence, probe_path_entry_presence},
-    managed_library::{ManagedLibraryFilesystemError, ManagedLibraryFilesystemValidator},
+    managed_library::{
+        ManagedLibraryFilesystemError, ManagedLibraryFilesystemValidator, file_ops::FileIdentity,
+    },
 };
 
 #[test]
@@ -5475,6 +5477,13 @@ fn library_has_track(runtime: &ApplicationRuntime, id: TrackId) -> bool {
     runtime.library_tracks().iter().any(|track| track.id == id)
 }
 
+fn dummy_file_identity() -> FileIdentity {
+    FileIdentity {
+        device: 1,
+        inode: 1,
+    }
+}
+
 #[test]
 fn move_to_trash_removes_the_row_only_after_a_successful_trash() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -5485,8 +5494,8 @@ fn move_to_trash_removes_the_row_only_after_a_successful_trash() {
 
     let result = runtime.move_track_to_trash_with(
         track_id(1),
-        |_| FilePresence::Present,
-        move |_| {
+        |_| Ok(Some(dummy_file_identity())),
+        move |_, _| {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         },
@@ -5520,8 +5529,8 @@ fn move_to_trash_prunes_empty_folders_only_in_managed_mode() {
     assert_eq!(
         runtime.move_track_to_trash_with(
             track_id,
-            |_| FilePresence::Present,
-            |path| std::fs::remove_file(path).map_err(|_| ()),
+            |_| Ok(Some(dummy_file_identity())),
+            |path, _| std::fs::remove_file(path).map_err(|_| ()),
         ),
         Ok(())
     );
@@ -5537,8 +5546,11 @@ fn move_to_trash_prunes_empty_folders_only_in_managed_mode() {
 fn move_to_trash_keeps_the_row_when_the_trash_backend_fails() {
     let mut runtime = runtime_with_one_track(Some(PathBuf::from("/library")));
 
-    let result =
-        runtime.move_track_to_trash_with(track_id(1), |_| FilePresence::Present, |_| Err(()));
+    let result = runtime.move_track_to_trash_with(
+        track_id(1),
+        |_| Ok(Some(dummy_file_identity())),
+        |_, _| Err(()),
+    );
 
     assert_eq!(result, Err(ApplicationRuntimeError::TrackTrashFailed));
     assert!(
@@ -5557,8 +5569,8 @@ fn move_to_trash_removes_a_proven_absent_file_without_trashing() {
 
     let result = runtime.move_track_to_trash_with(
         track_id(1),
-        |_| FilePresence::Absent,
-        move |_| {
+        |_| Ok(None),
+        move |_, _| {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         },
@@ -5579,8 +5591,7 @@ fn move_to_trash_keeps_the_row_on_a_probe_error() {
 
     // A permission or transient-I/O probe failure must not read as "the
     // file is gone".
-    let result =
-        runtime.move_track_to_trash_with(track_id(1), |_| FilePresence::ProbeFailed, |_| Ok(()));
+    let result = runtime.move_track_to_trash_with(track_id(1), |_| Err(()), |_, _| Ok(()));
 
     assert_eq!(result, Err(ApplicationRuntimeError::TrackTrashFailed));
     assert!(library_has_track(&runtime, track_id(1)));
@@ -5592,8 +5603,11 @@ fn move_to_trash_fails_closed_when_the_library_root_is_unresolved() {
 
     // The probe would say "present", but the path cannot be resolved
     // without a library root, so the row must be preserved.
-    let result =
-        runtime.move_track_to_trash_with(track_id(1), |_| FilePresence::Present, |_| Ok(()));
+    let result = runtime.move_track_to_trash_with(
+        track_id(1),
+        |_| Ok(Some(dummy_file_identity())),
+        |_, _| Ok(()),
+    );
 
     assert_eq!(result, Err(ApplicationRuntimeError::TrackTrashFailed));
     assert!(library_has_track(&runtime, track_id(1)));

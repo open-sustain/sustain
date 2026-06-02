@@ -97,6 +97,7 @@ pub mod smart_shuffle_scheduler;
 #[cfg(test)]
 mod test_store;
 mod youtube_audio_downloader;
+mod youtube_audio_journal;
 mod youtube_audio_replacement;
 pub use device_plan_scheduler::{
     DeviceMountIdentity, DevicePlanGeneration, DevicePlanResult, DevicePlanScheduler,
@@ -706,6 +707,11 @@ impl ApplicationRuntime {
                 library_store.as_ref(),
                 &self.managed_library_filesystem_validator,
             )?;
+            let outcome = youtube_audio_journal::recover_youtube_replacement_journal(
+                library_path,
+                library_store.as_ref(),
+            )?;
+            self.report_youtube_replacement_recovery(outcome);
         }
         self.library_tracks = library_scan::load_library_tracks(library_store.as_ref())?;
         self.rebuild_search_index();
@@ -751,6 +757,11 @@ impl ApplicationRuntime {
                 library_store.as_ref(),
                 &self.managed_library_filesystem_validator,
             )?;
+            let outcome = youtube_audio_journal::recover_youtube_replacement_journal(
+                library_path,
+                library_store.as_ref(),
+            )?;
+            self.report_youtube_replacement_recovery(outcome);
         }
         self.library_tracks.clear();
         self.search_index = SearchIndex::new();
@@ -1277,15 +1288,18 @@ impl ApplicationRuntime {
         match progress {
             analysis_scheduler::SchedulerProgress::Tick {
                 completed,
-                failed: _,
-                remaining,
+                failed,
+                total,
             } => {
                 // A Tick means the scheduler is making durable progress
                 // again; clear any prior persistence-error banner.
                 if let Some(id) = self.analysis_persistence_error_id.take() {
                     self.dismiss_notification(id);
                 }
-                let body = notifications::analysis_background_running_text(completed, remaining);
+                let body = notifications::analysis_background_running_text(
+                    completed.saturating_add(failed),
+                    total,
+                );
                 if let Some(existing) = self.analysis_notification_id {
                     self.update_notification_body(existing, body);
                 } else {

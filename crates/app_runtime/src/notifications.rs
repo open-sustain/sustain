@@ -306,15 +306,12 @@ pub fn library_consolidation_running_text() -> String {
     "Organizing library...".to_owned()
 }
 
-pub fn analysis_background_running_text(completed: u32, remaining: u32) -> String {
+pub fn analysis_background_running_text(processed: u32, total: u32) -> String {
     // Always render progress as completed/total so the analysis lane
     // reads the same way as every other background task (device sync,
-    // online retrieval). `remaining` is the live count still needing
-    // work, so the total tracks the run even as the scheduler discovers
-    // more; when it reaches zero the final tick shows "N/N" right before
-    // the Idle summary replaces it.
-    let total = completed.saturating_add(remaining);
-    format!("Analyzing tracks ({completed}/{total})...")
+    // online retrieval). The scheduler snapshots `total` once when the run
+    // starts so the denominator stays meaningful while its queue refills.
+    format!("Analyzing tracks ({processed}/{total})...")
 }
 
 pub fn analysis_background_outcome_text(completed: u32, failed: u32) -> String {

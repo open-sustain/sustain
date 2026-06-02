@@ -52,6 +52,15 @@ pub(crate) struct Cli {
     pub(crate) local_scope: bool,
 }
 
+/// Parsed Sustain flags plus the deliberately minimal argv forwarded to GTK.
+/// GApplication must see `argv[0]`, but developer-isolation flags belong to
+/// Sustain and would otherwise be rejected as unknown GTK options.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ParsedProcessArgs {
+    pub(crate) cli: Cli,
+    pub(crate) gtk_arguments: Vec<String>,
+}
+
 /// An argument the parser could not accept.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum CliError {
@@ -94,6 +103,22 @@ where
         }
     }
     Ok(Some(cli))
+}
+
+/// Parse a process argument vector including `argv[0]`, retaining only `argv[0]`
+/// for GTK after Sustain has consumed its own options.
+pub(crate) fn parse_process_args<I>(arguments: I) -> Result<Option<ParsedProcessArgs>, CliError>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut arguments = arguments.into_iter();
+    let program_name = arguments.next().unwrap_or_else(|| "sustain".to_owned());
+    parse_args(arguments).map(|parsed| {
+        parsed.map(|cli| ParsedProcessArgs {
+            cli,
+            gtk_arguments: vec![program_name],
+        })
+    })
 }
 
 /// Resolve a value-taking flag's path from either its inline `=value`
@@ -261,6 +286,29 @@ mod tests {
     #[test]
     fn parses_no_arguments_as_empty_cli() {
         assert_eq!(parse_args(args(&[])), Ok(Some(Cli::default())));
+    }
+
+    #[test]
+    fn process_parser_consumes_sustain_flags_before_gtk_argument_forwarding() {
+        let parsed = parse_process_args(args(&[
+            "sustain",
+            "--config",
+            "a.toml",
+            "--database=b.sqlite",
+            "--local-scope",
+        ]))
+        .expect("valid")
+        .expect("not help");
+
+        assert_eq!(parsed.gtk_arguments, vec!["sustain"]);
+        assert_eq!(
+            parsed.cli,
+            Cli {
+                config: Some(PathBuf::from("a.toml")),
+                database: Some(PathBuf::from("b.sqlite")),
+                local_scope: true,
+            }
+        );
     }
 
     #[test]

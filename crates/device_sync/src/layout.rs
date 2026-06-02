@@ -120,11 +120,12 @@ pub(crate) fn finalize(
     base: &DeviceRelativePath,
     placements: &[Placement],
     written: &HashSet<usize>,
+    cancel: &dyn Fn() -> bool,
 ) -> Result<(), SyncError> {
     match req.device.layout {
         DeviceLayout::M3u => write_m3u_playlists(req, root, base, placements),
         DeviceLayout::FolderPerPlaylist => Ok(()),
-        DeviceLayout::Pioneer => write_pioneer(req, root, base, placements, written),
+        DeviceLayout::Pioneer => write_pioneer(req, root, base, placements, written, cancel),
     }
 }
 
@@ -319,6 +320,7 @@ fn write_pioneer(
     base: &DeviceRelativePath,
     placements: &[Placement],
     written: &HashSet<usize>,
+    cancel: &dyn Fn() -> bool,
 ) -> Result<(), SyncError> {
     let assets = req.pioneer_assets()?;
     // One placement per track, in `req.tracks` order, so a track's index
@@ -418,7 +420,7 @@ fn write_pioneer(
         &DeviceRelativePath::new(ARTWORK_BUCKET)
             .expect("static Pioneer artwork bucket path is safe"),
     );
-    root.remove_tree_if_exists(&artwork_bucket)
+    root.remove_tree_if_exists(&artwork_bucket, cancel)
         .map_err(|error| SyncError::io(artwork_bucket.as_str(), error))?;
     if !assets.artwork.is_empty() {
         root.ensure_dir_all(&artwork_bucket)

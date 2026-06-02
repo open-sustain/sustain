@@ -238,6 +238,61 @@ fn scheduler_records_failures_without_clobbering_run() {
 }
 
 #[test]
+fn scheduler_progress_denominator_does_not_slide_when_pool_grows_mid_run() {
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    for (id, relative) in [(1, "first.flac"), (2, "second.flac")] {
+        let mut track = touch_in(&library_root, relative);
+        track.id = TrackId::new(id).expect("track id");
+        store.save_track(track).expect("save track");
+    }
+    let analyzer: AnalyzerFn = Arc::new(|path, caps, options, duration| {
+        std::thread::sleep(Duration::from_millis(80));
+        ok_analyzer()(path, caps, options, duration)
+    });
+    let (sink, rx) = capturing_sink();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        analyzer,
+        sink,
+        fixed_clock(1),
+        store.clone(),
+        AnalysisSettings {
+            bpm: true,
+            key: false,
+            audio: false,
+        },
+        Some(library_root.clone()),
+    ));
+
+    let first = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(
+            progress,
+            SchedulerProgress::Tick {
+                completed: 1,
+                total: 2,
+                ..
+            }
+        )
+    });
+    assert!(matches!(first, SchedulerProgress::Tick { total: 2, .. }));
+
+    let mut added = touch_in(&library_root, "third.flac");
+    added.id = TrackId::new(3).expect("track id");
+    store.save_track(added).expect("save added track");
+
+    let second = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Tick { completed: 2, .. })
+    });
+    assert!(
+        matches!(second, SchedulerProgress::Tick { total: 2, .. }),
+        "the denominator is a run-start snapshot, not a live pool size"
+    );
+
+    scheduler.shutdown();
+}
+
+#[test]
 fn rejected_record_analysis_halts_without_false_completion() {
     use crate::test_store::FaultyStore;
 

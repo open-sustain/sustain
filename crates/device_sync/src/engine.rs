@@ -159,10 +159,18 @@ pub fn sync(
     if req.tracks.is_empty() {
         return Err(SyncError::Empty);
     }
+    if cancel() {
+        return Ok(SyncOutcome {
+            cancelled: true,
+            manifest: req.previous_manifest.clone(),
+            manifest_is_authoritative: true,
+            ..SyncOutcome::default()
+        });
+    }
     let root =
         DeviceRoot::open(&req.mount_path).map_err(|error| SyncError::io(&req.mount_path, error))?;
     let base = device_base(req);
-    root.cleanup_stale_temporary_files(&base)
+    root.cleanup_stale_temporary_files(&base, cancel)
         .map_err(|error| SyncError::io(base.as_str(), error))?;
     root.ensure_dir_all(&base)
         .map_err(|error| SyncError::io(base.as_str(), error))?;
@@ -235,7 +243,7 @@ pub fn sync(
             completed: 0,
             total: 1,
         });
-        layout::finalize(req, &root, &base, &placements, &written)?;
+        layout::finalize(req, &root, &base, &placements, &written, cancel)?;
         progress(SyncProgress {
             stage,
             completed: 1,
@@ -252,7 +260,7 @@ pub fn sync(
                 retain_unremoved_manifest_entries(req, &diff.removals[done..], &mut manifest);
                 break;
             }
-            remove_placement(req, &root, &base, rel)?;
+            remove_placement(req, &root, &base, rel, cancel)?;
             outcome.removed += 1;
             progress(SyncProgress {
                 stage: SyncStage::Removing,
@@ -294,6 +302,7 @@ fn remove_placement(
     root: &DeviceRoot,
     base: &DeviceRelativePath,
     rel: &DeviceRelativePath,
+    cancel: &dyn Fn() -> bool,
 ) -> Result<(), SyncError> {
     let audio_path = base.join(rel);
     root.remove_file_if_exists(&audio_path)
@@ -303,7 +312,7 @@ fn remove_placement(
         let anlz_dir = DeviceRelativePath::new(anlz_dir.trim_start_matches('/').to_owned())
             .ok_or_else(|| SyncError::planning("Pioneer path hash generated an unsafe path"))?;
         let anlz_path = base.join(&anlz_dir);
-        root.remove_tree_if_exists(&anlz_path)
+        root.remove_tree_if_exists(&anlz_path, cancel)
             .map_err(|error| SyncError::io(anlz_path.as_str(), error))?;
     }
     Ok(())

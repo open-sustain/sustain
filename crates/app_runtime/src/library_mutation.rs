@@ -18,8 +18,10 @@ use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, ArtworkFetchResult,
     ManagedMetadataRetargetResult, MissingTrackRelocationResult,
     artwork_fetcher::{ArtworkFetchRequest, query_from_metadata},
-    file_presence::{FilePresence, probe_path_entry_presence},
     managed_library::{
+        file_ops::{
+            FileIdentity, regular_file_identity_if_present, trash_regular_file_matching_identity,
+        },
         metadata_change_affects_managed_path, prune_empty_ancestor_directories_for_sources,
         relocate_managed_missing_track, retarget_managed_metadata,
     },
@@ -339,13 +341,20 @@ impl ApplicationRuntime {
         &mut self,
         track_id: TrackId,
     ) -> ApplicationRuntimeResult<()> {
-        self.move_track_to_trash_with(track_id, probe_path_entry_presence, |path| {
-            trash::delete(path).map_err(|_| ())
-        })
+        self.move_track_to_trash_with(
+            track_id,
+            |path| regular_file_identity_if_present(path).map_err(|_| ()),
+            |path, identity| {
+                trash_regular_file_matching_identity(path, identity, |handoff_path| {
+                    trash::delete(handoff_path).map_err(|_| ())
+                })
+                .map_err(|_| ())
+            },
+        )
     }
 
     /// Fail-closed core of [`Self::move_track_to_trash`], parameterised over
-    /// the file-presence `probe` and the `trash` operation so the success,
+    /// the file-identity `probe` and the `trash` operation so the success,
     /// confirmed-absence, probe-error, and trash-backend-failure paths can
     /// be exercised deterministically.
     ///
@@ -357,8 +366,8 @@ impl ApplicationRuntime {
     pub(super) fn move_track_to_trash_with(
         &mut self,
         track_id: TrackId,
-        probe: impl Fn(&Path) -> FilePresence,
-        trash: impl Fn(&Path) -> Result<(), ()>,
+        probe: impl Fn(&Path) -> Result<Option<FileIdentity>, ()>,
+        trash: impl Fn(&Path, FileIdentity) -> Result<(), ()>,
     ) -> ApplicationRuntimeResult<()> {
         self.ensure_no_conflicting_library_mutation()?;
         let track = self
@@ -378,15 +387,15 @@ impl ApplicationRuntime {
             .ok_or(ApplicationRuntimeError::TrackTrashFailed)?;
 
         match probe(&path) {
-            FilePresence::Present => {
-                trash(&path).map_err(|()| ApplicationRuntimeError::TrackTrashFailed)?;
+            Ok(Some(identity)) => {
+                trash(&path, identity).map_err(|()| ApplicationRuntimeError::TrackTrashFailed)?;
             }
             // Confirmed gone: there is nothing to trash and removing the
             // stale row is exactly what the user wanted.
-            FilePresence::Absent => {}
+            Ok(None) => {}
             // A permission or transient I/O error means we cannot tell
             // whether the file is still there. Fail closed.
-            FilePresence::ProbeFailed => {
+            Err(()) => {
                 return Err(ApplicationRuntimeError::TrackTrashFailed);
             }
         }

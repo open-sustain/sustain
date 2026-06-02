@@ -25,8 +25,9 @@ pub(crate) fn probe_file_presence(path: &Path) -> FilePresence {
 }
 
 /// Probe whether a directory entry exists without following symlinks. This is
-/// used by Move to Trash: a dangling symlink is still a real entry that the
-/// user asked Sustain to remove.
+/// retained as a regression helper for the semantic distinction between a
+/// reachable file and a pathname entry.
+#[cfg(test)]
 pub(crate) fn probe_path_entry_presence(path: &Path) -> FilePresence {
     classify_probe(std::fs::symlink_metadata(path))
 }

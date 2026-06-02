@@ -98,13 +98,13 @@ fn runtime_error_text_maps_metadata_write_failed() {
 #[test]
 fn analysis_progress_always_reads_as_completed_over_total() {
     assert_eq!(
-        analysis_background_running_text(3, 7),
+        analysis_background_running_text(3, 10),
         "Analyzing tracks (3/10)..."
     );
-    // Regression for #74: a tick whose live "remaining" count has
-    // reached zero must still read as N/N, not "(N tracks done)".
+    // Regression for #74: a final tick must still read as N/N, not
+    // "(N tracks done)".
     assert_eq!(
-        analysis_background_running_text(10, 0),
+        analysis_background_running_text(10, 10),
         "Analyzing tracks (10/10)..."
     );
 }

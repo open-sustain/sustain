@@ -2177,6 +2177,7 @@ name = "sustain-metadata-remote"
 version = "0.6.0-alpha.3"
 dependencies = [
  "serde",
+ "serde_json",
  "sustain-artwork",
  "ureq",
 ]

@@ -69,6 +69,11 @@ pub const MAX_RATE_LIMITED_COOL_DOWN: Duration = Duration::from_secs(15 * 60);
 /// keeps the UI's spinner from staring at a hung socket.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Maximum accepted JSON response body. Provider metadata replies are small;
+/// one MiB leaves ample room for legitimate search results while preventing a
+/// hostile or broken endpoint from allocating without bound before serde runs.
+const MAX_JSON_RESPONSE_BYTES: usize = 1024 * 1024;
+
 /// Standard `Accept` header for JSON endpoints across all three
 /// providers. MusicBrainz and AcoustID return JSON when asked; Cover
 /// Art Archive's `/release/{mbid}` endpoint also returns JSON for the
@@ -178,10 +183,20 @@ impl HttpClient {
             return Err(RemoteError::BadStatus(status));
         }
 
-        response
+        let read_limit = MAX_JSON_RESPONSE_BYTES
+            .checked_add(1)
+            .and_then(|limit| u64::try_from(limit).ok())
+            .ok_or(RemoteError::PayloadTooLarge)?;
+        let bytes = response
             .into_body()
-            .read_json::<T>()
-            .map_err(|_| RemoteError::InvalidResponse)
+            .into_with_config()
+            .limit(read_limit)
+            .read_to_vec()
+            .map_err(map_json_payload_read_error)?;
+        if bytes.len() > MAX_JSON_RESPONSE_BYTES {
+            return Err(RemoteError::PayloadTooLarge);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| RemoteError::InvalidResponse)
     }
 
     /// Issues a GET that returns a raw byte payload, following
@@ -320,6 +335,13 @@ fn map_binary_payload_read_error(error: ureq::Error) -> RemoteError {
     }
 }
 
+fn map_json_payload_read_error(error: ureq::Error) -> RemoteError {
+    match error {
+        ureq::Error::BodyExceedsLimit(_) => RemoteError::PayloadTooLarge,
+        _ => RemoteError::InvalidResponse,
+    }
+}
+
 /// Parse the value of an HTTP `Retry-After` header into a duration.
 /// Per RFC 7231 the header is either a non-negative delta-seconds
 /// integer or an HTTP-date. We honour the delta-seconds form (by far
@@ -395,6 +417,14 @@ fn recover_poisoned<T>(poisoned: std::sync::PoisonError<MutexGuard<'_, T>>) -> M
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    use serde::Deserialize;
+
     use super::*;
 
     #[test]
@@ -425,6 +455,57 @@ mod tests {
             map_binary_payload_read_error(ureq::Error::BodyExceedsLimit(123)),
             RemoteError::PayloadTooLarge
         );
+    }
+
+    #[derive(Debug, Deserialize, Eq, PartialEq)]
+    struct TestPayload {
+        value: String,
+    }
+
+    #[test]
+    fn json_payload_is_deserialized_within_the_acquisition_cap() {
+        let url = serve_once(br#"{"value":"ok"}"#.to_vec());
+        let client = HttpClient::new(HttpClientConfig {
+            user_agent: "Sustain-test/0".to_owned(),
+        });
+
+        assert_eq!(
+            client.get_json::<TestPayload>(&url),
+            Ok(TestPayload {
+                value: "ok".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn oversized_json_payload_maps_to_typed_error() {
+        let url = serve_once(vec![b' '; MAX_JSON_RESPONSE_BYTES + 1]);
+        let client = HttpClient::new(HttpClientConfig {
+            user_agent: "Sustain-test/0".to_owned(),
+        });
+
+        assert_eq!(
+            client.get_json::<TestPayload>(&url),
+            Err(RemoteError::PayloadTooLarge)
+        );
+    }
+
+    fn serve_once(body: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP fixture");
+        let address = listener.local_addr().expect("fixture address");
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept HTTP request");
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("write HTTP fixture headers");
+            stream.write_all(&body).expect("write HTTP fixture body");
+        });
+        format!("http://{address}/payload")
     }
 
     fn headers_with_retry_after(value: &str) -> http::HeaderMap {

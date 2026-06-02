@@ -14,8 +14,9 @@
 //! into widgets.
 //!
 //! Layout: each chart sits in its own card (a contrasting surface). The
-//! four genre/bitrate charts — all donuts, drawn by [`crate::chart`] with
-//! an accent-derived palette and a legend — flow into a responsive
+//! the three part-of-a-whole charts use donuts drawn by [`crate::chart`] with
+//! an accent-derived palette and a legend; the weighted most-liked ranking is
+//! a bar chart. These four cards flow into a responsive
 //! two-up grid that reflows to one column when the window is narrow; the
 //! two distributions over time (release decade, year added) run full
 //! width below as vertical-bar histograms. Every chart is drawn with
@@ -97,7 +98,7 @@ impl StatisticsView {
             return;
         }
 
-        // The four donut cards reflow into a two-up grid (one column when
+        // The four compact cards reflow into a two-up grid (one column when
         // narrow); the homogeneous sizing keeps the tiles aligned.
         let grid = gtk::FlowBox::new();
         grid.set_orientation(gtk::Orientation::Horizontal);
@@ -273,30 +274,25 @@ fn most_played_section(genres: &[GenrePlayCount]) -> gtk::Widget {
 }
 
 fn most_liked_section(genres: &[GenreRating]) -> gtk::Widget {
-    // Average rating is not a part of a whole, so this donut sizes each
-    // slice by the genre's average relative to the others — a comparison
-    // ring. The legend carries the absolute star value; no percentage is
-    // shown, since a share of summed averages would be meaningless.
-    let total: f64 = genres.iter().map(|genre| genre.average_stars).sum();
-    let slices: Vec<DonutSlice> = genres
+    let max = genres
         .iter()
-        .map(|genre| DonutSlice {
+        .map(|genre| genre.total_stars)
+        .max()
+        .unwrap_or(0);
+    let bars: Vec<VerticalBar> = genres
+        .iter()
+        .map(|genre| VerticalBar {
             label: genre_label(&genre.genre),
-            fraction: if total > 0.0 {
-                genre.average_stars / total
-            } else {
-                0.0
-            },
-            value: format!("{:.1}★ ({})", genre.average_stars, genre.rated_track_count),
-            muted: false,
+            fraction: fraction_u64(genre.total_stars, max),
+            value: format!("{}★", genre.total_stars),
         })
         .collect();
-    let content = (total > 0.0).then(|| chart::donut(slices, None));
+    let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
     section(
         "Most liked genres",
-        Some("Top 5 by average rating; genres with at least 5 rated tracks."),
+        Some("Top 5 by total rating points across rated tracks."),
         content,
-        "Not enough rated tracks yet.",
+        "No ratings recorded yet.",
     )
 }
 

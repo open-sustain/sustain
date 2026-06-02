@@ -237,6 +237,13 @@ mod tests {
     }
 
     #[test]
+    fn marker_directory_is_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(dir.path().join(MARKER_FILE)).expect("create marker directory");
+        assert_eq!(read_marker(dir.path()), None);
+    }
+
+    #[test]
     fn decodes_mount_escapes() {
         assert_eq!(decode_mount_escapes("/media/My\\040Disk"), "/media/My Disk");
         assert_eq!(decode_mount_escapes("/mnt/plain"), "/mnt/plain");

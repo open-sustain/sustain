@@ -144,6 +144,7 @@ pub fn run(
     application_id: &str,
     artwork_cache_dir: PathBuf,
     database_path: PathBuf,
+    gtk_arguments: Vec<String>,
 ) {
     let trun = std::time::Instant::now();
     macro_rules! tlog {
@@ -367,7 +368,7 @@ pub fn run(
     });
 
     tlog!("about to enter app.run() (gtk main loop)");
-    app.run();
+    app.run_with_args(&gtk_arguments);
 
     // Stop producers before joining the tag-mirror actor. Canonical edits and
     // pending file-tag intent are already durable in SQLite, so deferred
@@ -422,7 +423,7 @@ pub fn forward_activate(application_id: &str) -> glib::ExitCode {
     // nothing (and exit), because spinning up a second main loop here
     // would defeat the single-instance guarantee.
     app.connect_activate(|_app| {});
-    app.run()
+    app.run_with_args(&["sustain"])
 }
 
 fn start_mpris(

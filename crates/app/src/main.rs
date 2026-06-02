@@ -42,8 +42,8 @@ fn main() {
     // keyed off the exact same path the library store will open. See
     // `launch.rs` for the precedence rules and `instance_lock.rs` for the
     // integrity rationale.
-    let cli = match launch::parse_args(std::env::args().skip(1)) {
-        Ok(Some(cli)) => cli,
+    let parsed_args = match launch::parse_process_args(std::env::args()) {
+        Ok(Some(parsed_args)) => parsed_args,
         Ok(None) => {
             println!("{}", launch::USAGE);
             return;
@@ -54,6 +54,7 @@ fn main() {
             process::exit(2);
         }
     };
+    let cli = parsed_args.cli;
     let defaults = launch::XdgDefaults {
         config: sustain_settings::default_settings_path(),
         database: sustain_library_store::default_database_path(),
@@ -197,5 +198,11 @@ fn main() {
     // force `GSK_RENDERER` here. If it becomes visually broken, prefer documenting
     // `GSK_RENDERER=ngl` / `GSK_RENDERER=gl` as a user workaround before changing
     // the app default.
-    sustain_ui_gtk::run(runtime, GTK_APPLICATION_ID, paths.cache_dir, paths.database);
+    sustain_ui_gtk::run(
+        runtime,
+        GTK_APPLICATION_ID,
+        paths.cache_dir,
+        paths.database,
+        parsed_args.gtk_arguments,
+    );
 }

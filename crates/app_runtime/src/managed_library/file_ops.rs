@@ -12,12 +12,13 @@ use std::{
     io::{BufReader, BufWriter, Write},
     os::unix::fs::MetadataExt,
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use rustix::{
     fd::OwnedFd,
-    fs::{AtFlags, Mode, OFlags, openat, unlinkat},
+    fs::{AtFlags, CWD, Mode, OFlags, RenameFlags, openat, renameat_with, unlinkat},
     io::Errno,
 };
 use sustain_domain::TrackContentHash;
@@ -83,6 +84,17 @@ pub(crate) enum FileMoveError {
     SyncDestinationDirectoryFailed,
     RemoveSourceFailed,
     SyncSourceDirectoryFailed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FileTrashError {
+    SourceUnavailable,
+    SourceIsNotFile,
+    SourceChanged,
+    StageFailed,
+    SyncParentDirectoryFailed,
+    TrashBackendFailed,
+    RestoreFailed,
 }
 
 pub(crate) fn copy_file_verified(
@@ -296,6 +308,71 @@ pub(crate) fn regular_file_identity(path: &Path) -> Result<FileIdentity, FileMov
         device: metadata.dev(),
         inode: metadata.ino(),
     })
+}
+
+pub(crate) fn regular_file_identity_if_present(
+    path: &Path,
+) -> Result<Option<FileIdentity>, FileTrashError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(Some(FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })),
+        Ok(_) => Err(FileTrashError::SourceIsNotFile),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(FileTrashError::SourceUnavailable),
+    }
+}
+
+/// Move the expected regular file to an unpredictable sibling name before
+/// handing a pathname to a trash backend. The rename is atomic and the staged
+/// inode is verified before the backend runs: if another process replaced the
+/// source pathname, that unrelated entry is restored and retained.
+pub(crate) fn trash_regular_file_matching_identity(
+    path: &Path,
+    expected_identity: FileIdentity,
+    trash_backend: impl FnOnce(&Path) -> Result<(), ()>,
+) -> Result<(), FileTrashError> {
+    let handoff_path = temporary_trash_handoff_path(path)?;
+    renameat_with(CWD, path, CWD, &handoff_path, RenameFlags::NOREPLACE)
+        .map_err(|_| FileTrashError::StageFailed)?;
+    if sync_parent_directory(path).is_err() {
+        rollback_trash_handoff(&handoff_path, path)?;
+        return Err(FileTrashError::SyncParentDirectoryFailed);
+    }
+
+    if regular_file_identity(&handoff_path) != Ok(expected_identity) {
+        rollback_trash_handoff(&handoff_path, path)?;
+        return Err(FileTrashError::SourceChanged);
+    }
+
+    if trash_backend(&handoff_path).is_err() {
+        rollback_trash_handoff(&handoff_path, path)?;
+        return Err(FileTrashError::TrashBackendFailed);
+    }
+    Ok(())
+}
+
+fn temporary_trash_handoff_path(path: &Path) -> Result<PathBuf, FileTrashError> {
+    static NEXT_HANDOFF_ID: AtomicU64 = AtomicU64::new(0);
+    let parent = path.parent().ok_or(FileTrashError::StageFailed)?;
+    let file_name = path.file_name().ok_or(FileTrashError::StageFailed)?;
+    for _ in 0..100 {
+        let id = NEXT_HANDOFF_ID.fetch_add(1, Ordering::Relaxed);
+        let mut handoff_name = file_name.to_os_string();
+        handoff_name.push(format!(".sustain-trash-{}-{id}.tmp", std::process::id()));
+        let candidate = parent.join(handoff_name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(FileTrashError::StageFailed)
+}
+
+fn rollback_trash_handoff(handoff_path: &Path, source_path: &Path) -> Result<(), FileTrashError> {
+    renameat_with(CWD, handoff_path, CWD, source_path, RenameFlags::NOREPLACE)
+        .map_err(|_| FileTrashError::RestoreFailed)?;
+    sync_parent_directory(source_path).map_err(|_| FileTrashError::RestoreFailed)
 }
 
 pub(super) fn rollback_file_move(
@@ -535,8 +612,9 @@ mod tests {
     use sustain_metadata::hash_file_content;
 
     use super::{
-        EmptyDirectoryPruneError, FileMoveError, VerifiedFileCopyError, copy_file_verified,
-        prune_empty_ancestor_directories,
+        EmptyDirectoryPruneError, FileMoveError, FileTrashError, VerifiedFileCopyError,
+        copy_file_verified, prune_empty_ancestor_directories, regular_file_identity,
+        trash_regular_file_matching_identity,
     };
 
     #[test]
@@ -660,6 +738,49 @@ mod tests {
         );
         assert!(!destination.exists());
 
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn trash_handoff_refuses_to_delete_a_replaced_source_path() {
+        let root = unique_test_directory();
+        let source = root.join("song.flac");
+        fs::create_dir_all(&root).expect("create test directory");
+        fs::write(&source, b"original bytes").expect("write source");
+        let expected = regular_file_identity(&source).expect("source identity");
+        fs::remove_file(&source).expect("remove original");
+        fs::write(&source, b"unrelated replacement").expect("write replacement");
+        let mut backend_called = false;
+
+        let result = trash_regular_file_matching_identity(&source, expected, |_| {
+            backend_called = true;
+            Ok(())
+        });
+
+        assert_eq!(result, Err(FileTrashError::SourceChanged));
+        assert!(!backend_called);
+        assert_eq!(
+            fs::read(&source).expect("read replacement"),
+            b"unrelated replacement"
+        );
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn trash_handoff_restores_source_when_backend_fails() {
+        let root = unique_test_directory();
+        let source = root.join("song.flac");
+        fs::create_dir_all(&root).expect("create test directory");
+        fs::write(&source, b"audio bytes").expect("write source");
+        let expected = regular_file_identity(&source).expect("source identity");
+
+        let result = trash_regular_file_matching_identity(&source, expected, |_| Err(()));
+
+        assert_eq!(result, Err(FileTrashError::TrashBackendFailed));
+        assert_eq!(
+            fs::read(&source).expect("read restored source"),
+            b"audio bytes"
+        );
         fs::remove_dir_all(root).expect("remove test directory");
     }
 

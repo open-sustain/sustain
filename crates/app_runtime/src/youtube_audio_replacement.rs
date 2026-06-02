@@ -12,12 +12,21 @@ use sustain_domain::{
 use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, audio_format_from_path, hash_file_content};
 
+use crate::managed_library::file_ops::{
+    regular_file_identity, trash_regular_file_matching_identity,
+};
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
     NotificationSeverity, YoutubeAudioDownloadResult,
-    managed_library::file_ops::{copy_file_verified, remove_copied_files},
+    managed_library::file_ops::copy_file_verified,
     metadata_writer::full_metadata_mirror,
-    youtube_audio_downloader::{StagedYoutubeAudio, YoutubeAudioDownloadError},
+    youtube_audio_downloader::{
+        MAX_YOUTUBE_REPLACEMENT_DURATION, StagedYoutubeAudio, YoutubeAudioDownloadError,
+    },
+    youtube_audio_journal::{
+        YoutubeReplacementJournalEntry, remove_youtube_replacement_journal_if_present,
+        write_youtube_replacement_journal,
+    },
 };
 
 pub const MAX_YOUTUBE_REPLACEMENT_SOURCE_BITRATE_KBPS: u32 = 192;
@@ -30,6 +39,20 @@ pub(crate) struct YoutubeAudioReplacementOutcome {
 }
 
 impl ApplicationRuntime {
+    pub(crate) fn report_youtube_replacement_recovery(
+        &mut self,
+        outcome: crate::youtube_audio_journal::YoutubeReplacementRecoveryOutcome,
+    ) {
+        if outcome.original_retained {
+            self.push_ephemeral_notification(
+                NotificationCategory::YoutubeAudioReplacement,
+                NotificationSeverity::Warning,
+                "Recovered an interrupted YouTube audio replacement, but retained the previous pathname because its identity could not be proven."
+                    .to_owned(),
+            );
+        }
+    }
+
     pub fn youtube_audio_replacement_is_eligible(&self, track_id: sustain_domain::TrackId) -> bool {
         self.library_track(track_id).is_some_and(track_is_eligible)
     }
@@ -205,6 +228,12 @@ fn youtube_audio_download_error_text(error: YoutubeAudioDownloadError) -> &'stat
         YoutubeAudioDownloadError::OutputRejected => {
             "yt-dlp returned an unsupported or unsafe audio file."
         }
+        YoutubeAudioDownloadError::PayloadTooLarge => {
+            "The downloaded YouTube replacement exceeded Sustain's size limit."
+        }
+        YoutubeAudioDownloadError::TimedOut => {
+            "The YouTube audio download exceeded Sustain's time limit."
+        }
         YoutubeAudioDownloadError::Cancelled => "The YouTube audio download was cancelled.",
     }
 }
@@ -229,12 +258,8 @@ pub(crate) fn replace_track_audio_from_youtube(
         .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
     ensure_track_is_eligible(&track)?;
     let original_path = track.location.absolute_path(&canonical_root);
-    if !fs::metadata(&original_path)
-        .map(|metadata| metadata.is_file())
-        .unwrap_or(false)
-    {
-        return Err(ApplicationRuntimeError::TrackUnavailable);
-    }
+    let original_identity = regular_file_identity(&original_path)
+        .map_err(|_| ApplicationRuntimeError::TrackUnavailable)?;
 
     audio_format_from_path(&staged.path)
         .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
@@ -276,8 +301,31 @@ pub(crate) fn replace_track_audio_from_youtube(
     let destination_path = destination_relative_path.resolve(&canonical_root);
     let content_hash = hash_file_content(&staged.path)
         .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
-    let copy = copy_file_verified(&staged.path, &destination_path, &content_hash)
-        .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
+    let replacement_size_bytes = fs::metadata(&staged.path)
+        .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?
+        .len();
+    write_youtube_replacement_journal(
+        &canonical_root,
+        &YoutubeReplacementJournalEntry {
+            track_id: track.id,
+            original_identity,
+            original_relative_path: track.location.relative_path.clone(),
+            replacement_content_hash: content_hash.clone(),
+            replacement_size_bytes,
+            replacement_relative_path: destination_relative_path.clone(),
+        },
+    )?;
+    let copy = match copy_file_verified(&staged.path, &destination_path, &content_hash) {
+        Ok(copy) => copy,
+        Err(_) => {
+            if fs::symlink_metadata(&destination_path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            {
+                let _ = remove_youtube_replacement_journal_if_present(&canonical_root);
+            }
+            return Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed);
+        }
+    };
     let location = TrackLocation::available(destination_relative_path);
     if store
         .replace_track_audio(
@@ -289,16 +337,18 @@ pub(crate) fn replace_track_audio_from_youtube(
         )
         .is_err()
     {
-        let _ = remove_copied_files(std::slice::from_ref(&destination_path));
         return Err(ApplicationRuntimeError::LibraryStoreFailed);
     }
-    if store.flush_durable().is_err() {
-        return Ok(YoutubeAudioReplacementOutcome {
-            original_retained: true,
-        });
-    }
+    store
+        .flush_durable()
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
 
-    let original_retained = trash::delete(&original_path).is_err();
+    let original_retained =
+        trash_regular_file_matching_identity(&original_path, original_identity, |handoff| {
+            trash::delete(handoff).map_err(|_| ())
+        })
+        .is_err();
+    remove_youtube_replacement_journal_if_present(&canonical_root)?;
     Ok(YoutubeAudioReplacementOutcome { original_retained })
 }
 
@@ -308,6 +358,10 @@ fn track_is_eligible(track: &Track) -> bool {
             .metadata
             .bitrate_kbps
             .is_some_and(|bitrate| bitrate <= MAX_YOUTUBE_REPLACEMENT_SOURCE_BITRATE_KBPS)
+        && track
+            .metadata
+            .duration
+            .is_some_and(|duration| duration <= MAX_YOUTUBE_REPLACEMENT_DURATION)
 }
 
 fn ensure_track_is_eligible(track: &Track) -> ApplicationRuntimeResult<()> {
@@ -327,7 +381,9 @@ fn validate_downloaded_audio(
     let downloaded_duration = downloaded
         .duration
         .ok_or(ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
-    if original_duration.abs_diff(downloaded_duration) > MAX_DURATION_DIFFERENCE {
+    if downloaded_duration > MAX_YOUTUBE_REPLACEMENT_DURATION
+        || original_duration.abs_diff(downloaded_duration) > MAX_DURATION_DIFFERENCE
+    {
         return Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed);
     }
     let original_bitrate = track
@@ -449,6 +505,10 @@ mod tests {
         assert!(!track_is_eligible(&track));
 
         track.metadata.bitrate_kbps = Some(96);
+        track.metadata.duration = Some(MAX_YOUTUBE_REPLACEMENT_DURATION + Duration::from_secs(1));
+        assert!(!track_is_eligible(&track));
+
+        track.metadata.duration = Some(Duration::from_secs(180));
         track.location = TrackLocation::missing(relative_path("old.mp3"));
         assert!(!track_is_eligible(&track));
     }
@@ -471,6 +531,13 @@ mod tests {
 
         downloaded.duration = Some(Duration::from_secs(180));
         downloaded.bitrate_kbps = Some(95);
+        assert_eq!(
+            validate_downloaded_audio(&track, &downloaded),
+            Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed)
+        );
+
+        downloaded.duration = Some(MAX_YOUTUBE_REPLACEMENT_DURATION + Duration::from_secs(1));
+        downloaded.bitrate_kbps = Some(128);
         assert_eq!(
             validate_downloaded_audio(&track, &downloaded),
             Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed)

@@ -214,8 +214,9 @@ the system accent colour:
 - **Quality distribution** — share of tracks per bitrate range
   (≤ 128, 129–255, 256–320, > 320 kbps).
 - **Most played genres** — the top five by total play count.
-- **Most liked genres** — the top five by average rating, over genres
-  with at least five rated tracks; zero-star tracks are excluded, per the
+- **Most liked genres** — a bar chart of the top five by total rating
+  points across rated tracks, so broad library support carries weight instead
+  of letting marginal genres dominate; zero-star tracks are excluded, per the
   rating-as-exclusion convention.
 - **Release years** — track counts per release decade.
 - **Year added** — track counts per calendar year a track entered the

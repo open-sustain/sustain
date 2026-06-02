@@ -136,12 +136,13 @@ pub type UnixClockFn = Arc<dyn Fn() -> i64 + Send + Sync>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SchedulerProgress {
     /// At least one track has been processed since the last summary.
-    /// `completed` and `failed` are batch-running totals; `remaining`
-    /// is the most-recent "still pending" estimate from the store.
+    /// `completed` and `failed` are batch-running totals; `total` is a
+    /// snapshot taken once when the run starts so the notification denominator
+    /// does not slide as the scheduler refills its streaming queue.
     Tick {
         completed: u32,
         failed: u32,
-        remaining: u32,
+        total: u32,
     },
     /// The pool has caught up: either the queue is empty or every
     /// requested capability is currently disabled. UI side: dismiss
@@ -502,6 +503,8 @@ struct SupervisorState {
     library_path: Option<PathBuf>,
     completed: u32,
     failed: u32,
+    /// Stable denominator for the active run. Reset only after `Idle`.
+    total: Option<u32>,
     /// User-initiated work, drained ahead of the background sweep.
     /// Items here keep their own capability mask, independent of the
     /// global `AnalysisSettings`.
@@ -534,6 +537,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         library_path,
         completed: 0,
         failed: 0,
+        total: None,
         explicit_queue: VecDeque::new(),
         pending_persistence_error: None,
     };
@@ -636,15 +640,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                 // No library path, or both work sources empty. Drain
                 // outcomes so running totals stay honest, then either
                 // go idle (nothing in flight) or wait for the tail.
-                drain_outcomes_nonblocking(
-                    &outcome_rx,
-                    &mut state,
-                    &mut in_flight,
-                    &library_store,
-                    &progress,
-                    analyzer_version,
-                    bg_capabilities,
-                );
+                drain_outcomes_nonblocking(&outcome_rx, &mut state, &mut in_flight, &progress);
                 if in_flight.is_empty() {
                     pending.clear();
                     if let Some(p) = pool.take() {
@@ -663,15 +659,27 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                         &outcome_rx,
                         &mut state,
                         &mut in_flight,
-                        &library_store,
                         &progress,
-                        analyzer_version,
-                        bg_capabilities,
                     );
                 }
                 continue;
             }
         };
+
+        if state.total.is_none() {
+            match snapshot_run_total(&state, &library_store, bg_capabilities, analyzer_version) {
+                Ok(total) => state.total = Some(total),
+                Err(_) => {
+                    if let Some(p) = pool.take() {
+                        p.shutdown();
+                    }
+                    if !block_for_next_command(&receiver, &mut state, &mut pool) {
+                        return;
+                    }
+                    continue;
+                }
+            }
+        }
 
         // 2. Make sure a pool is alive and sized to the current preset.
         if pool.is_none() {
@@ -850,15 +858,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                 return;
             }
         } else {
-            wait_for_outcome_with_timeout(
-                &outcome_rx,
-                &mut state,
-                &mut in_flight,
-                &library_store,
-                &progress,
-                analyzer_version,
-                bg_capabilities,
-            );
+            wait_for_outcome_with_timeout(&outcome_rx, &mut state, &mut in_flight, &progress);
         }
     }
 }
@@ -870,22 +870,11 @@ fn wait_for_outcome_with_timeout(
     outcome_rx: &mpsc::Receiver<WorkOutcome>,
     state: &mut SupervisorState,
     in_flight: &mut HashSet<TrackId>,
-    library_store: &Arc<dyn LibraryStore>,
     progress: &ProgressSink,
-    analyzer_version: u32,
-    capabilities: AnalysisCapabilities,
 ) {
     match outcome_rx.recv_timeout(Duration::from_millis(50)) {
         Ok(outcome) => {
-            apply_outcome(
-                outcome,
-                state,
-                in_flight,
-                library_store,
-                progress,
-                analyzer_version,
-                capabilities,
-            );
+            apply_outcome(outcome, state, in_flight, progress);
         }
         Err(mpsc::RecvTimeoutError::Timeout) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
     }
@@ -918,10 +907,7 @@ fn apply_outcome(
     outcome: WorkOutcome,
     state: &mut SupervisorState,
     in_flight: &mut HashSet<TrackId>,
-    library_store: &Arc<dyn LibraryStore>,
     progress: &ProgressSink,
-    analyzer_version: u32,
-    capabilities: AnalysisCapabilities,
 ) {
     let WorkOutcome { track_id, kind } = outcome;
     match kind {
@@ -947,18 +933,12 @@ fn apply_outcome(
     // happens after a resource-usage flip drops the in-flight set
     // (the old pool's last few outcomes can still trickle in).
     in_flight.remove(&track_id);
-    let remaining = library_store
-        .tracks_needing_analysis(
-            capabilities,
-            analyzer_version,
-            BATCH_SIZE.saturating_mul(64),
-        )
-        .map(|ids| ids.len() as u32)
-        .unwrap_or(0);
+    let processed = state.completed.saturating_add(state.failed);
+    let total = state.total.unwrap_or(processed).max(processed);
     (progress)(SchedulerProgress::Tick {
         completed: state.completed,
         failed: state.failed,
-        remaining,
+        total,
     });
 }
 
@@ -969,21 +949,10 @@ fn drain_outcomes_nonblocking(
     outcome_rx: &mpsc::Receiver<WorkOutcome>,
     state: &mut SupervisorState,
     in_flight: &mut HashSet<TrackId>,
-    library_store: &Arc<dyn LibraryStore>,
     progress: &ProgressSink,
-    analyzer_version: u32,
-    capabilities: AnalysisCapabilities,
 ) {
     while let Ok(outcome) = outcome_rx.try_recv() {
-        apply_outcome(
-            outcome,
-            state,
-            in_flight,
-            library_store,
-            progress,
-            analyzer_version,
-            capabilities,
-        );
+        apply_outcome(outcome, state, in_flight, progress);
     }
 }
 
@@ -994,6 +963,28 @@ fn emit_idle(progress: &ProgressSink, state: &mut SupervisorState) {
     });
     state.completed = 0;
     state.failed = 0;
+    state.total = None;
+}
+
+fn snapshot_run_total(
+    state: &SupervisorState,
+    library_store: &Arc<dyn LibraryStore>,
+    capabilities: AnalysisCapabilities,
+    analyzer_version: u32,
+) -> sustain_library_store::StoreResult<u32> {
+    let mut track_ids: HashSet<TrackId> = state
+        .explicit_queue
+        .iter()
+        .map(|item| item.track_id)
+        .collect();
+    if !capabilities.is_empty() {
+        track_ids.extend(library_store.tracks_needing_analysis(
+            capabilities,
+            analyzer_version,
+            i64::MAX as usize,
+        )?);
+    }
+    Ok(u32::try_from(track_ids.len()).unwrap_or(u32::MAX))
 }
 
 /// Wait on the next command, then apply it. Returns `false` if

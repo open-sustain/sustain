@@ -207,6 +207,17 @@ fn accent_css(palette: AccentPalette) -> String {
             color: {foreground};
         }}
 
+        /* A playlist popover is parented below its anchor row, so the broad
+           selected-row label rule above also reaches into the menu. Restore
+           theme foreground inside the popover: selected-row contrast belongs
+           to the row, not to the separate popover surface. */
+        .playlist-sidebar-row.selected popover.compact-context-menu,
+        .playlist-sidebar-row.selected popover.compact-context-menu label,
+        listview.playlist-sidebar-list > row:selected popover.compact-context-menu,
+        listview.playlist-sidebar-list > row:selected popover.compact-context-menu label {{
+            color: @theme_fg_color;
+        }}
+
         .playlist-sidebar-row:drop(active) {{
             background-color: transparent;
             background-image: none;
@@ -279,6 +290,16 @@ mod tests {
         assert!(css.contains("listview.playlist-sidebar-list > row:selected"));
         assert!(css.contains("#3a944a"));
         assert!(css.contains("#ffffff"));
+    }
+
+    #[test]
+    fn accent_css_restores_theme_text_inside_selected_sidebar_popovers() {
+        let css = accent_css(accent_palette("green"));
+
+        assert!(css.contains(
+            "listview.playlist-sidebar-list > row:selected popover.compact-context-menu label"
+        ));
+        assert!(css.contains("color: @theme_fg_color"));
     }
 
     #[test]

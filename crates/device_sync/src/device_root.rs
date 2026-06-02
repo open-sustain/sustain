@@ -20,8 +20,8 @@ use std::{
 
 use rustix::{
     fs::{
-        AtFlags, FileType, Mode, OFlags, RawDir, fstatvfs, fsync, mkdirat, open, openat, renameat,
-        statat, unlinkat,
+        AtFlags, FileType, Mode, OFlags, RawDir, fstat, fstatvfs, fsync, mkdirat, open, openat,
+        renameat, statat, unlinkat,
     },
     io::{Errno, dup},
 };
@@ -44,6 +44,16 @@ const DIRECTORY_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
     .union(OFlags::NOFOLLOW)
     .union(OFlags::CLOEXEC);
+/// A removable device is untrusted storage. Recursive removal and stale-file
+/// cleanup stop after this much directory work instead of walking an
+/// arbitrarily large crafted tree.
+#[cfg(not(test))]
+const MAX_DIRECTORY_WORK_ENTRIES: usize = 20_000;
+// Keep the adversarial breadth regression quick while exercising the same
+// production branch.
+#[cfg(test)]
+const MAX_DIRECTORY_WORK_ENTRIES: usize = 128;
+const MAX_DIRECTORY_DEPTH: usize = 128;
 
 /// One opened device mount root. All descendant operations are relative to
 /// `fd`; no caller receives an ambient joined path for mutation.
@@ -108,10 +118,17 @@ impl DeviceRoot {
         let fd = openat(
             &parent,
             file_name,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         )
         .map_err(io::Error::from)?;
+        let stat = fstat(&fd).map_err(io::Error::from)?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("device path is not a regular file: {path}"),
+            ));
+        }
         let mut bytes = Vec::new();
         File::from(fd).take(limit + 1).read_to_end(&mut bytes)?;
         if bytes.len() as u64 > limit {
@@ -169,7 +186,11 @@ impl DeviceRoot {
         Ok(true)
     }
 
-    pub(crate) fn remove_tree_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+    pub(crate) fn remove_tree_if_exists(
+        &self,
+        path: &DeviceRelativePath,
+        cancel: &dyn Fn() -> bool,
+    ) -> io::Result<bool> {
         if path.is_root() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -187,7 +208,7 @@ impl DeviceRoot {
             Err(Errno::NOENT) => return Ok(false),
             Err(error) => return Err(error.into()),
         };
-        clear_directory(&directory)?;
+        clear_directory(&directory, &mut DirectoryWorkBudget::new(), 0, cancel)?;
         unlinkat(&parent, file_name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
         sync_directory(&parent)?;
         Ok(true)
@@ -196,9 +217,14 @@ impl DeviceRoot {
     pub(crate) fn cleanup_stale_temporary_files(
         &self,
         path: &DeviceRelativePath,
+        cancel: &dyn Fn() -> bool,
     ) -> io::Result<()> {
         match self.open_dir(path, false) {
-            Ok(directory) => cleanup_temporary_files(&directory, true),
+            // Publishing already cleans each target parent before writing.
+            // This startup pass is intentionally scoped to `path` itself:
+            // recursively exploring a Pioneer drive root would hand an
+            // untrusted device control over sync latency.
+            Ok(directory) => cleanup_temporary_files(&directory, cancel),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
         }
@@ -243,7 +269,7 @@ impl DeviceRoot {
         let (parent_path, file_name) = split_parent(path)?;
         let parent = self.open_dir(&parent_path, true)?;
         reject_non_regular_destination(&parent, file_name, path)?;
-        cleanup_temporary_files(&parent, false)?;
+        cleanup_temporary_files(&parent, &|| false)?;
 
         let (temporary_name, mut temporary) = create_temporary_file(&parent)?;
         let write_result = write_body(&mut temporary)
@@ -337,15 +363,18 @@ fn sync_directory(directory: &OwnedFd) -> io::Result<()> {
     fsync(directory).map_err(io::Error::from)
 }
 
-fn cleanup_temporary_files(directory: &OwnedFd, recursive: bool) -> io::Result<()> {
+fn cleanup_temporary_files(directory: &OwnedFd, cancel: &dyn Fn() -> bool) -> io::Result<()> {
+    let mut budget = DirectoryWorkBudget::new();
     let mut buffer = [MaybeUninit::<u8>::uninit(); 8192];
     let mut entries = RawDir::new(directory, &mut buffer);
     let mut removed = false;
     while let Some(entry) = entries.next() {
+        ensure_cleanup_not_cancelled(cancel)?;
         let name = entry.map_err(io::Error::from)?.file_name().to_owned();
         if name.to_bytes() == b"." || name.to_bytes() == b".." {
             continue;
         }
+        budget.consume_entry()?;
         let stat = statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
         match FileType::from_raw_mode(stat.st_mode) {
             FileType::RegularFile if is_owned_temporary_name(&name) => {
@@ -367,11 +396,6 @@ fn cleanup_temporary_files(directory: &OwnedFd, recursive: bool) -> io::Result<(
                 }
                 unlinkat(directory, &name, AtFlags::empty()).map_err(io::Error::from)?;
                 removed = true;
-            }
-            FileType::Directory if recursive => {
-                let child = openat(directory, &name, DIRECTORY_FLAGS, Mode::empty())
-                    .map_err(io::Error::from)?;
-                cleanup_temporary_files(&child, true)?;
             }
             file_type if is_owned_temporary_name(&name) => {
                 return Err(io::Error::new(
@@ -413,15 +437,23 @@ fn is_owned_temporary_name(name: &CStr) -> bool {
         && id.iter().all(u8::is_ascii_digit)
 }
 
-fn clear_directory(directory: &OwnedFd) -> io::Result<()> {
+fn clear_directory(
+    directory: &OwnedFd,
+    budget: &mut DirectoryWorkBudget,
+    depth: usize,
+    cancel: &dyn Fn() -> bool,
+) -> io::Result<()> {
+    budget.enter_directory(depth)?;
     let mut buffer = [MaybeUninit::<u8>::uninit(); 8192];
     let mut entries = RawDir::new(directory, &mut buffer);
     let mut removed = false;
     while let Some(entry) = entries.next() {
+        ensure_cleanup_not_cancelled(cancel)?;
         let name = entry.map_err(io::Error::from)?.file_name().to_owned();
         if name.to_bytes() == b"." || name.to_bytes() == b".." {
             continue;
         }
+        budget.consume_entry()?;
         let stat = statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
         match FileType::from_raw_mode(stat.st_mode) {
             FileType::RegularFile => {
@@ -431,7 +463,7 @@ fn clear_directory(directory: &OwnedFd) -> io::Result<()> {
             FileType::Directory => {
                 let child = openat(directory, &name, DIRECTORY_FLAGS, Mode::empty())
                     .map_err(io::Error::from)?;
-                clear_directory(&child)?;
+                clear_directory(&child, budget, depth + 1, cancel)?;
                 unlinkat(directory, &name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
                 removed = true;
             }
@@ -450,6 +482,50 @@ fn clear_directory(directory: &OwnedFd) -> io::Result<()> {
         sync_directory(directory)?;
     }
     Ok(())
+}
+
+fn ensure_cleanup_not_cancelled(cancel: &dyn Fn() -> bool) -> io::Result<()> {
+    if cancel() {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "device cleanup was cancelled",
+        ));
+    }
+    Ok(())
+}
+
+struct DirectoryWorkBudget {
+    remaining_entries: usize,
+}
+
+impl DirectoryWorkBudget {
+    fn new() -> Self {
+        Self {
+            remaining_entries: MAX_DIRECTORY_WORK_ENTRIES,
+        }
+    }
+
+    fn enter_directory(&self, depth: usize) -> io::Result<()> {
+        if depth > MAX_DIRECTORY_DEPTH {
+            return Err(cleanup_budget_exceeded());
+        }
+        Ok(())
+    }
+
+    fn consume_entry(&mut self) -> io::Result<()> {
+        self.remaining_entries = self
+            .remaining_entries
+            .checked_sub(1)
+            .ok_or_else(cleanup_budget_exceeded)?;
+        Ok(())
+    }
+}
+
+fn cleanup_budget_exceeded() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "device cleanup exceeded its bounded directory-work budget",
+    )
 }
 
 fn cstr_display(name: &CStr) -> String {
@@ -499,12 +575,69 @@ mod tests {
 
         let root = DeviceRoot::open(device.path()).expect("root");
         let relative = DeviceRelativePath::new("PIONEER/Artwork/00001").expect("safe path");
-        assert!(root.remove_tree_if_exists(&relative).is_err());
+        assert!(root.remove_tree_if_exists(&relative, &|| false).is_err());
         assert_eq!(
             std::fs::read_to_string(host.path()).expect("read host file"),
             "host-data"
         );
         assert!(tree.join("host-link").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_marker_read_rejects_fifo_without_blocking() {
+        use rustix::fs::{CWD, Mode, mkfifoat};
+
+        let device = tempfile::tempdir().expect("device dir");
+        mkfifoat(CWD, device.path().join("marker"), Mode::RUSR | Mode::WUSR).expect("create FIFO");
+
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let marker = DeviceRelativePath::new("marker").expect("safe path");
+        assert!(root.read_to_string(&marker, 4096).is_err());
+    }
+
+    #[test]
+    fn recursive_removal_rejects_trees_beyond_the_depth_budget() {
+        let device = tempfile::tempdir().expect("device dir");
+        let mut deepest = device.path().join("tree");
+        std::fs::create_dir(&deepest).expect("create tree root");
+        for index in 0..=MAX_DIRECTORY_DEPTH {
+            deepest = deepest.join(format!("level-{index}"));
+            std::fs::create_dir(&deepest).expect("create nested directory");
+        }
+
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let relative = DeviceRelativePath::new("tree").expect("safe path");
+        assert!(root.remove_tree_if_exists(&relative, &|| false).is_err());
+        assert!(device.path().join("tree").exists());
+    }
+
+    #[test]
+    fn recursive_removal_rejects_trees_beyond_the_entry_budget() {
+        let device = tempfile::tempdir().expect("device dir");
+        let tree = device.path().join("tree");
+        std::fs::create_dir(&tree).expect("create tree root");
+        for index in 0..=MAX_DIRECTORY_WORK_ENTRIES {
+            std::fs::write(tree.join(format!("entry-{index}")), b"x").expect("write entry");
+        }
+
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let relative = DeviceRelativePath::new("tree").expect("safe path");
+        assert!(root.remove_tree_if_exists(&relative, &|| false).is_err());
+        assert!(device.path().join("tree").exists());
+    }
+
+    #[test]
+    fn recursive_removal_observes_cancellation_before_deleting_entries() {
+        let device = tempfile::tempdir().expect("device dir");
+        let tree = device.path().join("tree");
+        std::fs::create_dir(&tree).expect("create tree root");
+        std::fs::write(tree.join("entry"), b"x").expect("write entry");
+
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let relative = DeviceRelativePath::new("tree").expect("safe path");
+        assert!(root.remove_tree_if_exists(&relative, &|| true).is_err());
+        assert!(tree.join("entry").exists());
     }
 
     #[test]

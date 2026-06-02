@@ -6,8 +6,8 @@
 //! Pure aggregation over the in-memory track list — which is the
 //! authoritative SQLite copy the rest of the app already holds, so these
 //! figures never re-read file tags. The presentation layer renders the
-//! returned struct; every selection rule (top-N folding, the
-//! "most liked" minimum-sample threshold, zero-star exclusion, decade
+//! returned struct; every selection rule (top-N folding, weighted
+//! "most liked" ranking, zero-star exclusion, decade
 //! bucketing) lives here so it can be tested without a UI.
 //!
 //! Two time domains appear: a track's *release year*
@@ -30,11 +30,6 @@ const GENRE_DISTRIBUTION_TOP_N: usize = 12;
 
 /// Length of the "most played" / "most liked" genre rankings.
 const TOP_GENRE_RANK: usize = 5;
-
-/// A genre needs at least this many rated tracks before it can appear in
-/// the "most liked" ranking, so a lone five-star track in a tiny genre
-/// can't top the chart.
-const MIN_RATED_TRACKS_FOR_LIKED: usize = 5;
 
 /// The whole-library statistics shown on the Statistics screen.
 #[derive(Clone, Debug, PartialEq)]
@@ -142,10 +137,14 @@ pub struct GenrePlayCount {
     pub total_play_count: u64,
 }
 
-/// A genre ranked by how highly its rated tracks are rated.
+/// A genre ranked by its total rating points across rated tracks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GenreRating {
     pub genre: Option<String>,
+    /// Weighted score used for ranking: the sum of stars across every rated
+    /// track in the genre. This naturally gives a genre with broad library
+    /// support more weight than a one-track marginal genre.
+    pub total_stars: u64,
     /// Mean star rating across the genre's rated (one-star-or-better)
     /// tracks.
     pub average_stars: f64,
@@ -314,18 +313,23 @@ fn most_liked_genres(tracks: &[Track]) -> Vec<GenreRating> {
 
     let mut ranked: Vec<GenreRating> = sums
         .into_iter()
-        .filter(|(_, (_, rated_track_count))| *rated_track_count >= MIN_RATED_TRACKS_FOR_LIKED)
         .map(|(genre, (star_sum, rated_track_count))| GenreRating {
             genre,
+            total_stars: star_sum,
             average_stars: star_sum as f64 / rated_track_count as f64,
             rated_track_count,
         })
         .collect();
     ranked.sort_by(|left, right| {
         right
-            .average_stars
-            .partial_cmp(&left.average_stars)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_stars
+            .cmp(&left.total_stars)
+            .then_with(|| {
+                right
+                    .average_stars
+                    .partial_cmp(&left.average_stars)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .then_with(|| right.rated_track_count.cmp(&left.rated_track_count))
             .then_with(|| genre_tiebreak(&left.genre, &right.genre))
     });
@@ -557,15 +561,16 @@ mod tests {
     }
 
     #[test]
-    fn most_liked_genres_need_the_minimum_rated_sample() {
+    fn most_liked_genres_weight_rating_points_without_a_sample_cutoff() {
         let mut tracks = Vec::new();
         let mut id = 1;
-        // "Soul": five rated tracks averaging 4 stars — qualifies.
+        // "Soul": five rated tracks averaging 4 stars.
         for stars in [5, 5, 4, 3, 3] {
             tracks.push(rated(track(id, Some("Soul")), stars));
             id += 1;
         }
-        // "Jazz": a single five-star track — below the threshold.
+        // "Jazz": a single five-star track remains visible but ranks below
+        // the broadly liked genre.
         tracks.push(rated(track(id, Some("Jazz")), 5));
         id += 1;
         // "Soul" also has a zero-star track that must not drag the mean.
@@ -573,31 +578,35 @@ mod tests {
 
         let ranked = compute(&tracks).most_liked_genres;
 
-        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked.len(), 2);
         assert_eq!(ranked[0].genre.as_deref(), Some("Soul"));
+        assert_eq!(ranked[0].total_stars, 20);
         assert_eq!(ranked[0].rated_track_count, 5);
         assert!((ranked[0].average_stars - 4.0).abs() < f64::EPSILON);
+        assert_eq!(ranked[1].genre.as_deref(), Some("Jazz"));
+        assert_eq!(ranked[1].total_stars, 5);
     }
 
     #[test]
-    fn most_liked_genres_rank_by_average_then_sample_size() {
+    fn most_liked_genres_rank_by_total_rating_points() {
         let mut tracks = Vec::new();
         let mut id = 1;
-        // "A": five tracks averaging 5.0.
+        // "A": five tracks averaging 5.0, 25 total rating points.
         for _ in 0..5 {
             tracks.push(rated(track(id, Some("A")), 5));
             id += 1;
         }
-        // "B": six tracks averaging 4.0 — lower average, ranks below A.
-        for _ in 0..6 {
+        // "B": seven tracks averaging 4.0, 28 total rating points. Its
+        // broader support wins despite the lower average.
+        for _ in 0..7 {
             tracks.push(rated(track(id, Some("B")), 4));
             id += 1;
         }
         let ranked = compute(&tracks).most_liked_genres;
 
         assert_eq!(ranked.len(), 2);
-        assert_eq!(ranked[0].genre.as_deref(), Some("A"));
-        assert_eq!(ranked[1].genre.as_deref(), Some("B"));
+        assert_eq!(ranked[0].genre.as_deref(), Some("B"));
+        assert_eq!(ranked[1].genre.as_deref(), Some("A"));
     }
 
     #[test]
