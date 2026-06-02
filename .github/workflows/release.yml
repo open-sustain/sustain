@@ -23,6 +23,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Full CI-equivalent verification of the exact ref being released
+  # (fmt, clippy, tests, rustdoc, cargo-deny, cargo-machete, typos).
+  # `publish-release` depends on this, so artifacts can never be attached
+  # for a ref whose CI is red — the gap that let v0.6.0-alpha.3 publish
+  # while CI on the same commit failed. The recovery/manual-dispatch path
+  # is covered too: the `ref` input is threaded into the called workflow.
+  verify:
+    name: Verify (CI-equivalent)
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.ref || github.ref }}
+
   # Build inside debian:trixie-slim so the .deb links against Debian's
   # GTK 4.18 / glibc, matching the target platform. Ubuntu 24.04 ships
   # GTK 4.14 which is too old for the workspace's `v4_18` feature.
@@ -46,14 +60,16 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@6887963ccf37a9ddcd8c5fa4baeb3e1e5fd61fa1 # v2
         with:
           tool: cargo-deb
 
@@ -68,7 +84,7 @@ jobs:
           echo "name=$(basename "${DEB}")" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact (workflow)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ steps.artifact.outputs.path }}
@@ -89,14 +105,16 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@6887963ccf37a9ddcd8c5fa4baeb3e1e5fd61fa1 # v2
         with:
           tool: cargo-deb
 
@@ -111,7 +129,7 @@ jobs:
           echo "name=$(basename "${DEB}")" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact (workflow)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ steps.artifact.outputs.path }}
@@ -148,7 +166,7 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates
 
       - name: Download .deb artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           path: artifacts
 
@@ -188,32 +206,31 @@ jobs:
     container:
       # The flatpak-builder container moved from Docker Hub
       # (bilelmoussaoui/flatpak-github-actions) to the flathub-infra
-      # org on ghcr.io; the old Docker Hub path now returns
-      # `manifest unknown`. ghcr.io is also more reliable than
-      # Docker Hub for GitHub-hosted runners.
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      # org on ghcr.io. Pinned by immutable digest (tag: gnome-48) so a
+      # mutated upstream tag cannot alter release artifacts; bump the
+      # digest deliberately when adopting a newer runtime. The image
+      # already bundles the generator's Python deps (aiohttp, tomlkit,
+      # PyYAML), so no mutable `pip install` runs at release time.
+      image: ghcr.io/flathub-infra/flatpak-github-actions@sha256:50fea670968fd3ec4aeeb3a91d9d807d0af6eab3c3b44c33d4c40c311832c8fa # gnome-48
       options: --privileged
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ inputs.ref || github.ref }}
 
-      - name: Install cargo-sources generator dependencies
+      - name: Fetch and verify flatpak-cargo-generator
         run: |
-          # The image is the Freedesktop SDK 25.08 Flatpak runtime, so
-          # there is no `dnf` or `apt-get` — only `pip`. The runtime
-          # already bundles aiohttp and PyYAML, but install all three
-          # deps explicitly so this step doesn't silently break if the
-          # image trims its pre-installed Python set later.
-          # `--break-system-packages` opts past PEP 668 in the ephemeral
-          # CI container, which is fine because nothing persists.
-          pip install --break-system-packages aiohttp pyyaml toml
-
-      - name: Fetch flatpak-cargo-generator
-        run: |
-          curl --proto '=https' --tlsv1.2 -fL \
-            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py \
+          set -euo pipefail
+          # Pin the generator to a reviewed commit of flatpak-builder-tools
+          # and verify its SHA-256 before it is ever executed: a moved
+          # branch or tampered upstream file fails the release here instead
+          # of running with publish credentials in scope.
+          GEN_COMMIT=96e2fe8bf7d2e5791ca1bdce2dba373f1e27c425
+          GEN_SHA256=b373c8ab1a05378ec5d8ed0645c7b127bcec7d2f7a1798694fbc627d570d856c
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            "https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/${GEN_COMMIT}/cargo/flatpak-cargo-generator.py" \
             -o /tmp/flatpak-cargo-generator.py
+          echo "${GEN_SHA256}  /tmp/flatpak-cargo-generator.py" | sha256sum -c -
 
       - name: Generate cargo-sources.json
         run: |
@@ -221,7 +238,7 @@ jobs:
             Cargo.lock \
             -o packaging/flatpak/cargo-sources.json
 
-      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@933e9e8ca36e85046ebca8e211f0785c6becac40 # master
         with:
           bundle: sustain.flatpak
           manifest-path: packaging/flatpak/io.github.open_sustain.sustain.yml
@@ -230,9 +247,10 @@ jobs:
 
   # Single point of release attachment. Builders publish workflow
   # artifacts only; this job downloads them and attaches the lot once
-  # both verification and the Flatpak build have passed. That way a
-  # broken .deb or a failed install verification cannot land an
-  # artifact on a published release.
+  # CI-equivalent verification, install verification, and the Flatpak
+  # build have all passed. A broken .deb, a failed install check, or a
+  # red CI on the released commit therefore cannot land an artifact on a
+  # published release.
   #
   # Fires on either a tag push (normal path) or a workflow_dispatch
   # whose `inputs.ref` is a tag name (recovery path — when a prior
@@ -242,12 +260,30 @@ jobs:
   # skipped so the workflow can't accidentally create a release.
   publish-release:
     name: Attach artifacts to GitHub Release
-    needs: [verify-ubuntu, flatpak]
+    needs: [verify, verify-ubuntu, flatpak]
     if: startsWith(github.ref, 'refs/tags/v') || startsWith(inputs.ref, 'v')
     runs-on: ubuntu-24.04
     steps:
+      - name: Check out the verified ref
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - name: Record verified commit
+        run: |
+          set -euo pipefail
+          VERIFIED_SHA=$(git rev-parse HEAD)
+          {
+            echo "## Release verification"
+            echo
+            echo "Attaching artifacts for ref \`${{ inputs.ref || github.ref_name }}\` at commit \`${VERIFIED_SHA}\`."
+            echo
+            echo "This commit passed the full CI-equivalent suite (fmt, clippy, tests, rustdoc, cargo-deny, cargo-machete, typos) plus per-package install verification before any artifact was attached."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           path: artifacts
 
@@ -261,7 +297,7 @@ jobs:
           ls -la release/
 
       - name: Attach to GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           files: release/*
           generate_release_notes: true

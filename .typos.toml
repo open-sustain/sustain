@@ -23,3 +23,7 @@ seeked = "seeked"
 # widget "must be unparented before disposal". Not the adjective
 # "parentless" that typos wants.
 unparented = "unparented"
+# `rustix`'s open-flag constant `OFlags::WRONLY` (write-only) in the
+# atomic-write and device-sync paths: a verbatim kernel/libc identifier,
+# not a misspelling of the adverb "wrongly".
+WRONLY = "WRONLY"
