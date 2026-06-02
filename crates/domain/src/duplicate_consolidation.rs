@@ -126,14 +126,24 @@ pub fn default_duplicate_metadata_selection(
             .into_iter()
             .map(|field| DuplicateMetadataFieldSelection {
                 field,
-                track_id: tracks
-                    .iter()
-                    .find(|track| metadata_field_is_populated(&track.metadata, field))
-                    .map(|track| track.id)
-                    .unwrap_or(fallback),
+                track_id: default_metadata_track_id(tracks, field).unwrap_or(fallback),
             })
             .collect(),
     })
+}
+
+fn default_metadata_track_id(tracks: &[Track], field: DuplicateMetadataField) -> Option<TrackId> {
+    if field == DuplicateMetadataField::Year {
+        return tracks
+            .iter()
+            .filter_map(|track| track.metadata.year.map(|year| (year, track.id)))
+            .min_by_key(|(year, _)| *year)
+            .map(|(_, track_id)| track_id);
+    }
+    tracks
+        .iter()
+        .find(|track| metadata_field_is_populated(&track.metadata, field))
+        .map(|track| track.id)
 }
 
 pub fn duplicate_audio_quality(track: &Track) -> DuplicateAudioQuality {
@@ -573,9 +583,11 @@ mod tests {
         let mut enriched = track(2, "", "Song", "Album", 200);
         enriched.metadata.year = Some(1998);
         enriched.metadata.genre = Some("Trip Hop".to_owned());
+        let mut oldest = track(3, "", "Song", "Album", 200);
+        oldest.metadata.year = Some(1993);
 
         let selection =
-            default_duplicate_metadata_selection(&[sparse, enriched]).expect("selection");
+            default_duplicate_metadata_selection(&[sparse, enriched, oldest]).expect("selection");
         let source_for = |field| {
             selection
                 .fields
@@ -588,7 +600,7 @@ mod tests {
             source_for(DuplicateMetadataField::Artist),
             Some(track_id(1))
         );
-        assert_eq!(source_for(DuplicateMetadataField::Year), Some(track_id(2)));
+        assert_eq!(source_for(DuplicateMetadataField::Year), Some(track_id(3)));
         assert_eq!(source_for(DuplicateMetadataField::Genre), Some(track_id(2)));
     }
 

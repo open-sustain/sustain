@@ -9,14 +9,15 @@ use std::{
 
 use lofty::{
     picture::{Picture, PictureType},
-    tag::{Tag, TagType},
+    prelude::Accessor,
+    tag::{ItemKey, Tag, TagType},
 };
-use sustain_domain::TrackMetadata;
+use sustain_domain::{FieldChange, TrackMetadata};
 
 use super::{
     AudioFormat, InitialTags, LibraryScanner, MetadataError, MetadataResult, MetadataService,
-    Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, atomic_write_via_rename,
-    audio_format_from_path, hash_file_content, valid_embedded_picture,
+    Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, apply_year_change,
+    atomic_write_via_rename, audio_format_from_path, hash_file_content, valid_embedded_picture,
 };
 use sustain_domain::TrackRelativePath;
 
@@ -62,6 +63,41 @@ fn rejects_unsupported_audio_formats() {
         audio_format_from_path(Path::new("/music/no-extension")),
         Err(MetadataError::UnsupportedAudioFormat)
     );
+}
+
+#[test]
+fn year_update_replaces_the_higher_priority_recording_date() {
+    let mut tag = Tag::new(TagType::VorbisComments);
+    tag.insert_text(ItemKey::RecordingDate, "1998-09-30".to_owned());
+
+    apply_year_change(&mut tag, FieldChange::Set(2015));
+
+    assert_eq!(tag.date().map(|date| date.year), Some(2015));
+    assert_eq!(tag.get_string(ItemKey::RecordingDate), Some("2015-09-30"));
+    assert_eq!(tag.get_string(ItemKey::Year), None);
+}
+
+#[test]
+fn year_clear_removes_recording_date_and_year_items() {
+    let mut tag = Tag::new(TagType::VorbisComments);
+    tag.insert_text(ItemKey::RecordingDate, "1998-09-30".to_owned());
+    tag.insert_text(ItemKey::Year, "1998".to_owned());
+
+    apply_year_change(&mut tag, FieldChange::Clear);
+
+    assert_eq!(tag.get_string(ItemKey::RecordingDate), None);
+    assert_eq!(tag.get_string(ItemKey::Year), None);
+}
+
+#[test]
+fn year_update_outside_loftys_timestamp_range_keeps_a_textual_year() {
+    let mut tag = Tag::new(TagType::VorbisComments);
+    tag.insert_text(ItemKey::RecordingDate, "1998-09-30".to_owned());
+
+    apply_year_change(&mut tag, FieldChange::Set(10_000));
+
+    assert_eq!(tag.get_string(ItemKey::RecordingDate), None);
+    assert_eq!(tag.get_string(ItemKey::Year), Some("10000"));
 }
 
 #[test]

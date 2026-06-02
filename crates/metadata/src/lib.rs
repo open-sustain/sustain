@@ -453,7 +453,7 @@ impl MetadataService for LoftyMetadataService {
         apply_number_change(tag, ItemKey::TrackTotal, change.track_total);
         apply_number_change(tag, ItemKey::DiscNumber, change.disc_number);
         apply_number_change(tag, ItemKey::DiscTotal, change.disc_total);
-        apply_number_change(tag, ItemKey::Year, change.year);
+        apply_year_change(tag, change.year);
         apply_bool_change(tag, ItemKey::FlagCompilation, change.compilation);
         apply_number_change(tag, ItemKey::Bpm, change.bpm);
         apply_text_change(tag, ItemKey::InitialKey, change.key);
@@ -752,6 +752,26 @@ where
         FieldChange::Clear => {
             let _removed = tag.take(item_key).count();
         }
+    }
+}
+
+fn apply_year_change(tag: &mut Tag, change: FieldChange<i32>) {
+    match change {
+        FieldChange::Unchanged => {}
+        FieldChange::Set(year) => {
+            if let Some(year) = u16::try_from(year).ok().filter(|year| *year <= 9999) {
+                let mut date = tag.date().unwrap_or_default();
+                date.year = year;
+                tag.set_date(date);
+            } else {
+                // Lofty's timestamp representation is unsigned. Retain the
+                // prior textual behavior for values outside that range while
+                // still removing any higher-priority recording date.
+                tag.remove_date();
+                tag.insert_text(ItemKey::Year, year.to_string());
+            }
+        }
+        FieldChange::Clear => tag.remove_date(),
     }
 }
 

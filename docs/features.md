@@ -181,9 +181,10 @@ artwork, rating, and each editable metadata field are all selectable
 this way. The audio file defaults to the highest quality (highest
 bitrate, lossless breaking a tie) but stays overridable, so a 16-bit
 FLAC can be kept over a larger 24-bit one; metadata fields default to a
-cherry-pick of populated values, the rating to the highest available,
-and a per-column "Track N" button takes every tag and the rating from
-one track at once. Embedded artwork is previewed asynchronously and
+cherry-pick of populated values, with the oldest populated year
+preferred; the rating defaults to the highest available; and a per-column
+"Track N" button takes every tag and the rating from one track at once.
+Embedded artwork is previewed asynchronously and
 presets the highest-resolution available image. Play count, skips, and
 date added are not choices — counts are summed and the oldest date is
 kept — so they appear as plain non-selectable cells; last-played and

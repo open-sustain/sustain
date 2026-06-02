@@ -129,7 +129,7 @@ fn open_dialog(
     content.set_margin_start(18);
 
     let intro = gtk::Label::new(Some(
-        "Each duplicate is a column. Pick the survivor's audio file (highest quality is preselected, but overridable), its artwork, its rating, and each metadata field — the highlighted box in every row marks the value that will be kept, and populated tags are cherry-picked by default. Click a \"Track N\" button to take every tag and the rating from that track. Play counts and skips are summed and the oldest date added is kept, so those rows are shown for reference only. The other files are removed only after the survivor has been written and verified.",
+        "Each duplicate is a column. Pick the survivor's audio file (highest quality is preselected, but overridable), its artwork, its rating, and each metadata field — the highlighted box in every row marks the value that will be kept. Populated tags are cherry-picked by default, with the oldest year preferred. Click a \"Track N\" button to take every tag and the rating from that track. Play counts and skips are summed and the oldest date added is kept, so those rows are shown for reference only. The other files are removed only after the survivor has been written and verified.",
     ));
     intro.set_xalign(0.0);
     intro.set_wrap(true);
