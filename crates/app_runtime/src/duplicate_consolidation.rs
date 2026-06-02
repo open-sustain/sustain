@@ -6,7 +6,7 @@
 use std::{
     collections::BTreeSet,
     fs,
-    io::{self, Write},
+    io::{self, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -17,7 +17,7 @@ use sustain_domain::{
     duplicate_groups, plan_duplicate_consolidation,
 };
 use sustain_library_store::LibraryStore;
-use sustain_metadata::{MetadataService, hash_file_content};
+use sustain_metadata::{MetadataService, hash_reader_content};
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, BackgroundTaskStatus,
@@ -25,8 +25,10 @@ use crate::{
     managed_library::{
         ManagedLibraryFilesystemValidator,
         file_ops::{
-            FileIdentity, ensure_directory_all, regular_file_identity, remove_file_and_sync_parent,
-            sync_directory, sync_parent_directory,
+            FileIdentity, RegularFileCapability, ensure_directory_all, link_file_capability,
+            open_regular_file, path_refers_to_capability, regular_file_capability_from_file,
+            regular_file_identity, remove_file_and_sync_parent,
+            remove_regular_file_matching_capability, sync_directory, sync_parent_directory,
         },
     },
     metadata_writer::full_metadata_mirror,
@@ -202,15 +204,16 @@ impl ApplicationRuntime {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 struct JournalEntry {
     track_id: TrackId,
     source_identity: FileIdentity,
+    source_capability: Option<RegularFileCapability>,
     source: TrackRelativePath,
     backup: TrackRelativePath,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 struct Journal {
     survivor_id: TrackId,
     stage: TrackRelativePath,
@@ -298,19 +301,25 @@ fn run_pre_commit(
     artwork: &Option<Vec<u8>>,
 ) -> ApplicationRuntimeResult<sustain_domain::DuplicateConsolidationPlan> {
     for entry in &journal.entries {
-        create_link(
-            &entry.source.resolve(library_root),
-            &entry.backup.resolve(library_root),
-            entry.source_identity,
-        )?;
+        let source = entry
+            .source_capability
+            .as_ref()
+            .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+        if !path_refers_to_capability(&entry.source.resolve(library_root), source).unwrap_or(false)
+        {
+            return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
+        }
+        create_link(source, &entry.backup.resolve(library_root))?;
     }
     let survivor_entry = survivor_entry(journal);
     let survivor_source = survivor_entry.source.resolve(library_root);
     let stage_path = journal.stage.resolve(library_root);
     copy_to_stage(
-        &survivor_source,
+        survivor_entry
+            .source_capability
+            .as_ref()
+            .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?,
         &stage_path,
-        survivor_entry.source_identity,
     )?;
 
     let preliminary = plan_duplicate_consolidation(
@@ -336,20 +345,28 @@ fn run_pre_commit(
         artwork,
     )?;
 
-    let stage_identity = regular_file_identity(&stage_path)
+    let stage = open_regular_file(&stage_path)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     replace_original_with_stage(
         &survivor_source,
-        survivor_entry.source_identity,
-        &stage_path,
-        stage_identity,
+        survivor_entry
+            .source_capability
+            .as_ref()
+            .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?,
+        &stage,
     )?;
     for entry in journal
         .entries
         .iter()
         .filter(|entry| entry.track_id != journal.survivor_id)
     {
-        remove_matching_file(&entry.source.resolve(library_root), entry.source_identity)?;
+        remove_matching_file(
+            &entry.source.resolve(library_root),
+            entry
+                .source_capability
+                .as_ref()
+                .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?,
+        )?;
     }
 
     let plan = plan_duplicate_consolidation(
@@ -476,11 +493,12 @@ fn plan_journal(
         .enumerate()
         .map(|(index, track)| {
             let source = track.location.relative_path.clone();
-            let source_identity = regular_file_identity(&source.resolve(library_root))
+            let source_capability = open_regular_file(&source.resolve(library_root))
                 .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
             Ok(JournalEntry {
                 track_id: track.id,
-                source_identity,
+                source_identity: source_capability.identity(),
+                source_capability: Some(source_capability),
                 source,
                 backup: relative_path(format!("{recovery_directory}/backup-{index}"))?,
             })
@@ -501,12 +519,8 @@ fn survivor_entry(journal: &Journal) -> &JournalEntry {
         .expect("journal survivor entry")
 }
 
-fn create_link(
-    source: &Path,
-    destination: &Path,
-    expected_identity: FileIdentity,
-) -> ApplicationRuntimeResult<()> {
-    if regular_file_identity(source) != Ok(expected_identity) || destination.exists() {
+fn create_link(source: &RegularFileCapability, destination: &Path) -> ApplicationRuntimeResult<()> {
+    if destination.exists() {
         return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
     }
     let parent = destination
@@ -514,26 +528,22 @@ fn create_link(
         .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     ensure_directory_all(parent)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    fs::hard_link(source, destination)
+    link_file_capability(source, destination)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    if regular_file_identity(source) != Ok(expected_identity)
-        || regular_file_identity(destination) != Ok(expected_identity)
+    if !path_refers_to_capability(destination, source).unwrap_or(false)
         || sync_parent_directory(destination).is_err()
     {
-        let _ = remove_file_and_sync_parent(destination);
+        let _ = remove_regular_file_matching_capability(destination, source);
         return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
     }
     Ok(())
 }
 
 fn copy_to_stage(
-    source: &Path,
+    source: &RegularFileCapability,
     destination: &Path,
-    expected_identity: FileIdentity,
 ) -> ApplicationRuntimeResult<()> {
-    if regular_file_identity(source) != Ok(expected_identity)
-        || fs::symlink_metadata(destination).is_ok()
-    {
+    if fs::symlink_metadata(destination).is_ok() {
         return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
     }
     let parent = destination
@@ -541,34 +551,52 @@ fn copy_to_stage(
         .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     ensure_directory_all(parent)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    let mut destination_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    let destination_capability = regular_file_capability_from_file(
+        destination_file
+            .try_clone()
+            .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?,
+    )
+    .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     let result = (|| {
-        let source_metadata = fs::metadata(source)
+        let mut source_file = source
+            .try_clone_file()
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-        let mut source_file = fs::File::open(source)
+        source_file
+            .seek(SeekFrom::Start(0))
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-        let mut destination_file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(destination)
+        let source_metadata = source_file
+            .metadata()
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
         let copied = io::copy(&mut source_file, &mut destination_file)
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
         if copied != source_metadata.len() {
             return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
         }
-        fs::set_permissions(destination, source_metadata.permissions())
+        destination_file
+            .set_permissions(source_metadata.permissions())
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
         destination_file
             .flush()
             .and_then(|()| destination_file.sync_all())
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-        let source_hash = hash_file_content(source)
+        source_file
+            .seek(SeekFrom::Start(0))
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-        let destination_hash = hash_file_content(destination)
+        destination_file
+            .seek(SeekFrom::Start(0))
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-        if regular_file_identity(source) != Ok(expected_identity)
-            || regular_file_identity(destination).is_err()
-            || source_hash != destination_hash
+        let source_hash = hash_reader_content(&mut source_file)
+            .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+        let destination_hash = hash_reader_content(&mut destination_file)
+            .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+        if source_hash != destination_hash
+            || !path_refers_to_capability(destination, &destination_capability).unwrap_or(false)
             || sync_parent_directory(destination).is_err()
         {
             return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
@@ -576,27 +604,26 @@ fn copy_to_stage(
         Ok(())
     })();
     if result.is_err() {
-        let _ = remove_file_and_sync_parent(destination);
+        let _ = remove_regular_file_matching_capability(destination, &destination_capability);
     }
     result
 }
 
-fn remove_matching_file(path: &Path, expected: FileIdentity) -> ApplicationRuntimeResult<()> {
-    if regular_file_identity(path) != Ok(expected) {
-        return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
-    }
-    remove_file_and_sync_parent(path)
+fn remove_matching_file(
+    path: &Path,
+    expected: &RegularFileCapability,
+) -> ApplicationRuntimeResult<()> {
+    remove_regular_file_matching_capability(path, expected)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)
 }
 
 fn replace_original_with_stage(
     original: &Path,
-    original_identity: FileIdentity,
-    stage: &Path,
-    stage_identity: FileIdentity,
+    original_capability: &RegularFileCapability,
+    stage: &RegularFileCapability,
 ) -> ApplicationRuntimeResult<()> {
-    remove_matching_file(original, original_identity)?;
-    create_link(stage, original, stage_identity)
+    remove_matching_file(original, original_capability)?;
+    create_link(stage, original)
 }
 
 fn verify_staged_tags(
@@ -644,23 +671,38 @@ pub(crate) fn editable_metadata_matches(
 }
 
 fn rollback_pre_commit(library_root: &Path, journal: &Journal) -> ApplicationRuntimeResult<()> {
-    let stage_identity = regular_file_identity(&journal.stage.resolve(library_root)).ok();
+    let stage = open_regular_file(&journal.stage.resolve(library_root)).ok();
     for entry in &journal.entries {
         let source = entry.source.resolve(library_root);
         let backup = entry.backup.resolve(library_root);
-        match regular_file_identity(&source) {
-            Ok(identity) if identity == entry.source_identity => {}
-            Ok(identity)
-                if entry.track_id == journal.survivor_id && Some(identity) == stage_identity =>
-            {
-                remove_matching_file(&source, identity)?;
-                create_link(&backup, &source, entry.source_identity)?;
-            }
-            Err(_) if path_is_missing(&source) => {
-                create_link(&backup, &source, entry.source_identity)?;
+        let backup = match open_regular_file(&backup) {
+            Ok(backup) => backup,
+            Err(_) if path_is_missing(&backup) => {
+                if regular_file_identity(&source).is_err() {
+                    return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
+                }
+                continue;
             }
             Err(_) => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
-            Ok(_) => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
+        };
+        match path_refers_to_capability(&source, &backup) {
+            Ok(true) => {}
+            Err(_) if path_is_missing(&source) => create_link(&backup, &source)?,
+            Ok(false)
+                if entry.track_id == journal.survivor_id
+                    && stage.as_ref().is_some_and(|stage| {
+                        path_refers_to_capability(&source, stage).unwrap_or(false)
+                    }) =>
+            {
+                remove_matching_file(
+                    &source,
+                    stage
+                        .as_ref()
+                        .expect("stage capability checked in match guard"),
+                )?;
+                create_link(&backup, &source)?;
+            }
+            _ => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
         }
     }
     cleanup_recovery_files(library_root, journal)?;
@@ -677,10 +719,10 @@ fn cleanup_committed(library_root: &Path, journal: &Journal) -> ApplicationRunti
         .filter(|entry| entry.track_id != journal.survivor_id)
     {
         let source = entry.source.resolve(library_root);
-        match regular_file_identity(&source) {
-            Ok(identity) if identity == entry.source_identity => {
-                remove_matching_file(&source, identity)?;
-            }
+        let backup = open_regular_file(&entry.backup.resolve(library_root))
+            .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+        match path_refers_to_capability(&source, &backup) {
+            Ok(true) => remove_matching_file(&source, &backup)?,
             Err(_) if path_is_missing(&source) => {}
             _ => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
         }
@@ -691,20 +733,18 @@ fn cleanup_committed(library_root: &Path, journal: &Journal) -> ApplicationRunti
 
 fn cleanup_recovery_files(library_root: &Path, journal: &Journal) -> ApplicationRuntimeResult<()> {
     let stage = journal.stage.resolve(library_root);
-    match regular_file_identity(&stage) {
-        Ok(_) => {
-            remove_file_and_sync_parent(&stage)
-                .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    match open_regular_file(&stage) {
+        Ok(stage_capability) => {
+            remove_matching_file(&stage, &stage_capability)?;
         }
         Err(_) if path_is_missing(&stage) => {}
         Err(_) => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
     }
     for entry in &journal.entries {
         let backup = entry.backup.resolve(library_root);
-        match regular_file_identity(&backup) {
-            Ok(identity) if identity == entry.source_identity => {
-                remove_file_and_sync_parent(&backup)
-                    .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+        match open_regular_file(&backup) {
+            Ok(backup_capability) if backup_capability.identity() == entry.source_identity => {
+                remove_matching_file(&backup, &backup_capability)?;
             }
             Err(_) if path_is_missing(&backup) => {}
             _ => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
@@ -731,10 +771,9 @@ fn path_is_missing(path: &Path) -> bool {
 
 fn remove_journal(library_root: &Path) -> ApplicationRuntimeResult<()> {
     let path = journal_path(library_root);
-    if regular_file_identity(&path).is_err() {
-        return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
-    }
-    remove_file_and_sync_parent(&path)
+    let journal = open_regular_file(&path)
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    remove_regular_file_matching_capability(&path, &journal)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)
 }
 
@@ -834,6 +873,7 @@ fn read_journal(library_root: &Path) -> ApplicationRuntimeResult<Journal> {
                 device: parse_u64(parts.next())?,
                 inode: parse_u64(parts.next())?,
             },
+            source_capability: None,
             source: decode_path(
                 parts
                     .next()
@@ -1038,22 +1078,26 @@ mod tests {
         write_journal(&root, &journal).expect("write journal");
         for entry in &journal.entries {
             create_link(
-                &entry.source.resolve(&root),
+                entry.source_capability.as_ref().expect("source capability"),
                 &entry.backup.resolve(&root),
-                entry.source_identity,
             )
             .expect("backup");
         }
         let survivor_entry = survivor_entry(&journal);
         copy_to_stage(
-            &survivor_entry.source.resolve(&root),
+            survivor_entry
+                .source_capability
+                .as_ref()
+                .expect("source capability"),
             &journal.stage.resolve(&root),
-            survivor_entry.source_identity,
         )
         .expect("stage");
         remove_matching_file(
             &survivor_entry.source.resolve(&root),
-            survivor_entry.source_identity,
+            survivor_entry
+                .source_capability
+                .as_ref()
+                .expect("source capability"),
         )
         .expect("remove original");
         fs::write(root.join("keep.flac"), b"external replacement").expect("replace externally");
@@ -1172,6 +1216,7 @@ mod tests {
                         device: 1,
                         inode: 1,
                     },
+                    source_capability: None,
                     source: relative_path("keep.flac").expect("source"),
                     backup: relative_path(".sustain-duplicate-consolidation-1/backup-0")
                         .expect("backup"),
@@ -1182,6 +1227,7 @@ mod tests {
                         device: 1,
                         inode: 2,
                     },
+                    source_capability: None,
                     source: relative_path("remove.flac").expect("source"),
                     backup: relative_path(".sustain-duplicate-consolidation-1/backup-1")
                         .expect("backup"),

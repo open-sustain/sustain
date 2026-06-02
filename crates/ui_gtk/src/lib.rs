@@ -13,9 +13,10 @@ pub use sustain_app_runtime::{
     ApplicationCommand, ApplicationQuery, ApplicationRuntime, ApplicationRuntimeError,
     BackgroundResourceUsage, BackgroundTaskStatus, ConnectedDevice, LibraryConsolidationResult,
     LibraryConsolidationSummary, LibraryHydrationSnapshot, LibraryHydrationState,
-    LibraryImportResult, LibraryImportSummary, LibraryManagementMode, LibraryScanResult,
-    LibraryScanSummary, SmartPlaylistTrackStatus, UserSettings, run_library_consolidation_task,
-    run_library_import_task, run_library_scan_task,
+    LibraryImportProgress, LibraryImportResult, LibraryImportSummary, LibraryManagementMode,
+    LibraryScanResult, LibraryScanSummary, SmartPlaylistTrackStatus, UserSettings,
+    run_library_consolidation_task, run_library_import_task, run_library_import_task_with_progress,
+    run_library_scan_task,
 };
 
 mod accent;

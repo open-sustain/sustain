@@ -42,7 +42,6 @@ const DIRECTORY_FLAGS: OFlags = OFlags::RDONLY
 const SOURCE_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::NOFOLLOW)
     .union(OFlags::CLOEXEC);
-const STAGED_FLAGS: OFlags = OFlags::RDWR.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
 const TEMPORARY_FLAGS: OFlags = OFlags::WRONLY
     .union(OFlags::CREATE)
     .union(OFlags::EXCL)
@@ -91,36 +90,36 @@ where
     let temporary_stat = match regular_file_stat(&temporary) {
         Ok(stat) => stat,
         Err(error) => {
-            remove_temporary(&parent, &temporary_name);
+            remove_temporary_if_owned(&parent, &temporary_name, &temporary);
             return Err(error);
         }
     };
     let staged = (|| {
         io::copy(&mut source, &mut temporary).map_err(|_| MetadataError::WriteFailed)?;
         temporary.flush().map_err(|_| MetadataError::WriteFailed)?;
-        drop(temporary);
 
         modify_temp(&temporary_path)?;
 
-        let staged_fd = openat(&parent, &temporary_name, STAGED_FLAGS, Mode::empty())
-            .map_err(|_| MetadataError::WriteFailed)?;
-        let staged = File::from(staged_fd);
-        let staged_stat = regular_file_stat(&staged)?;
-        if !same_inode(&temporary_stat, &staged_stat) {
+        if !pathname_refers_to_open_file(&parent, &temporary_name, &temporary, &temporary_stat)? {
             return Err(MetadataError::WriteFailed);
         }
-        preserve_filesystem_metadata(&source, &source_stat, &staged)?;
-        staged.sync_all().map_err(|_| MetadataError::WriteFailed)?;
+        preserve_filesystem_metadata(&source, &source_stat, &temporary)?;
+        temporary
+            .sync_all()
+            .map_err(|_| MetadataError::WriteFailed)?;
         ensure_source_unchanged(&parent, file_name, &source, &source_stat)?;
+        if !pathname_refers_to_open_file(&parent, &temporary_name, &temporary, &temporary_stat)? {
+            return Err(MetadataError::WriteFailed);
+        }
         Ok(())
     })();
     if staged.is_err() {
-        remove_temporary(&parent, &temporary_name);
+        remove_temporary_if_owned(&parent, &temporary_name, &temporary);
         return staged;
     }
 
     if renameat(&parent, &temporary_name, &parent, file_name).is_err() {
-        remove_temporary(&parent, &temporary_name);
+        remove_temporary_if_owned(&parent, &temporary_name, &temporary);
         return Err(MetadataError::WriteFailed);
     }
     sync_parent(&parent).map_err(|_| MetadataError::WriteFailed)
@@ -173,8 +172,31 @@ fn temporary_sibling_name(file_name: &OsStr) -> OsString {
     name
 }
 
-fn remove_temporary(parent: &OwnedFd, temporary_name: &OsStr) {
-    let _ = unlinkat(parent, temporary_name, AtFlags::empty());
+fn remove_temporary_if_owned(parent: &OwnedFd, temporary_name: &OsStr, temporary: &File) {
+    let Ok(temporary_stat) = regular_file_stat(temporary) else {
+        return;
+    };
+    if pathname_refers_to_open_file(parent, temporary_name, temporary, &temporary_stat)
+        .unwrap_or(false)
+    {
+        let _ = unlinkat(parent, temporary_name, AtFlags::empty());
+    }
+}
+
+fn pathname_refers_to_open_file(
+    parent: &OwnedFd,
+    name: &OsStr,
+    file: &File,
+    original: &Stat,
+) -> MetadataResult<bool> {
+    let open_file = regular_file_stat(file)?;
+    let pathname =
+        statat(parent, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|_| MetadataError::WriteFailed)?;
+    Ok(
+        FileType::from_raw_mode(pathname.st_mode) == FileType::RegularFile
+            && same_inode(original, &open_file)
+            && same_inode(original, &pathname),
+    )
 }
 
 fn regular_file_stat(file: &File) -> MetadataResult<Stat> {
@@ -581,22 +603,31 @@ mod tests {
 
         assert_eq!(result, Err(MetadataError::WriteFailed));
         assert_eq!(fs::read(&path).expect("read audio"), b"original");
-        assert_no_temporary_files(&root);
+        let leftovers = temporary_files(&root);
+        assert_eq!(leftovers.len(), 1);
+        assert_eq!(
+            fs::read(root.join(&leftovers[0])).expect("read unowned replacement"),
+            b"unowned replacement"
+        );
 
         fs::remove_dir_all(root).expect("remove root");
     }
 
     fn assert_no_temporary_files(root: &Path) {
-        let leftovers = fs::read_dir(root)
-            .expect("list root")
-            .filter_map(Result::ok)
-            .map(|entry| entry.file_name())
-            .filter(|name| name.to_string_lossy().contains(".sustain-tag-write-"))
-            .collect::<Vec<_>>();
+        let leftovers = temporary_files(root);
         assert!(
             leftovers.is_empty(),
             "temporary files remain: {leftovers:?}"
         );
+    }
+
+    fn temporary_files(root: &Path) -> Vec<OsString> {
+        fs::read_dir(root)
+            .expect("list root")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().contains(".sustain-tag-write-"))
+            .collect()
     }
 
     fn unique_test_directory() -> PathBuf {

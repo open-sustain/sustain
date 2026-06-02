@@ -22,6 +22,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use super::file_ops::{link_file_capability, open_regular_file};
 use super::journal::publish_journal_without_overwrite;
 
 const PROBE_DIRECTORY_PREFIX: &str = ".sustain-managed-root-probe";
@@ -207,7 +208,9 @@ impl ProbeFilesystem for SystemProbeFilesystem {
     }
 
     fn hard_link(&self, source: &Path, destination: &Path) -> io::Result<()> {
-        fs::hard_link(source, destination)
+        let source =
+            open_regular_file(source).map_err(|error| io::Error::other(format!("{error:?}")))?;
+        link_file_capability(&source, destination)
     }
 
     fn verify_hard_link_refuses_overwrite(
@@ -215,7 +218,9 @@ impl ProbeFilesystem for SystemProbeFilesystem {
         source: &Path,
         destination: &Path,
     ) -> io::Result<()> {
-        expect_already_exists(fs::hard_link(source, destination))
+        let source =
+            open_regular_file(source).map_err(|error| io::Error::other(format!("{error:?}")))?;
+        expect_already_exists(link_file_capability(&source, destination))
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
@@ -247,8 +252,8 @@ fn validate_managed_library_root(
     filesystem: &dyn ProbeFilesystem,
     library_root: &Path,
 ) -> Result<(), ManagedLibraryFilesystemError> {
-    match fs::metadata(library_root) {
-        Ok(metadata) if metadata.is_dir() => {}
+    match fs::symlink_metadata(library_root) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
         Ok(_) => return Err(ManagedLibraryFilesystemError::RootIsNotDirectory),
         Err(_) => return Err(ManagedLibraryFilesystemError::RootUnavailable),
     }
@@ -593,6 +598,22 @@ mod tests {
         );
         assert_no_probe_artifacts(&root);
         fs::remove_dir_all(root).expect("remove root");
+    }
+
+    #[test]
+    fn validator_rejects_a_symlinked_library_root() {
+        let target = unique_test_directory();
+        let root = unique_test_directory();
+        fs::create_dir_all(&target).expect("create target");
+        std::os::unix::fs::symlink(&target, &root).expect("create root symlink");
+
+        assert_eq!(
+            ManagedLibraryFilesystemValidator::default().validate(&root),
+            Err(ManagedLibraryFilesystemError::RootIsNotDirectory)
+        );
+
+        fs::remove_file(root).expect("remove symlink");
+        fs::remove_dir_all(target).expect("remove target");
     }
 
     #[test]

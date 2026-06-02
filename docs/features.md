@@ -74,11 +74,14 @@ Behavior follows the active library mode:
   since reference mode never moves or copies.
 
 Drops while another library task (scan, import, or organize) is running
-are rejected by the runtime rather than racing.
+are rejected by the runtime rather than racing. Managed copies report
+completed/total progress in the status bar. Cancelling keeps files that have
+already finished copying and records those completed tracks in the library.
 
 ### Hard-link move primitive — *Sustain-native*
-Managed-mode organization uses a same-filesystem metadata move:
-hard-link source → destination, then unlink the source. It refuses to
+Managed-mode organization uses a same-filesystem metadata move: retain an
+open source descriptor, hard-link that exact file to the destination, then
+unlink the source through a verified handoff. It refuses to
 overwrite an existing destination and fails (rather than copy/deleting)
 on cross-device moves. This is safe on ext4, XFS, Btrfs, and ZFS; it
 fails clean on SMB/FUSE/exFAT and other filesystems that don't support
@@ -90,7 +93,8 @@ Linux filesystems.
 
 ### Recovery journal — *Sustain-native*
 Managed reorganization writes a small journal at the library root before
-moving files. On the next startup Sustain reconciles the journal so a
+moving files, with hidden hard-link recovery handles for the exact files being
+moved. On the next startup Sustain reconciles the journal so a
 crash mid-batch can't desync SQLite from the filesystem. Reconciliation
 runs unconditionally during library-service initialization, before any
 tracks reach the UI, so an interrupted batch is rolled forward before

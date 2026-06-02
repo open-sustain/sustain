@@ -9,32 +9,62 @@
 use std::{
     fs::{self, File},
     io,
-    io::{BufReader, BufWriter, Write},
-    os::unix::fs::MetadataExt,
+    io::{BufReader, BufWriter, Seek, SeekFrom, Write},
+    os::{
+        fd::{AsRawFd, RawFd},
+        unix::fs::{MetadataExt, OpenOptionsExt},
+    },
     path::{Component, Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use rustix::{
     fd::OwnedFd,
-    fs::{AtFlags, CWD, Mode, OFlags, RenameFlags, openat, renameat_with, unlinkat},
+    fs::{AtFlags, CWD, Mode, OFlags, RenameFlags, linkat, openat, renameat_with, unlinkat},
     io::Errno,
 };
 use sustain_domain::TrackContentHash;
-use sustain_metadata::hash_file_content;
+use sustain_metadata::{copy_and_hash_reader_content, hash_reader_content};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct VerifiedFileCopy {
     pub(crate) destination_path: PathBuf,
     pub(crate) bytes_copied: u64,
+    capability: RegularFileCapability,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct VerifiedFileStaging {
+    temporary_path: PathBuf,
+    pub(crate) bytes_copied: u64,
     pub(crate) content_hash: TrackContentHash,
+    capability: RegularFileCapability,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FileIdentity {
     pub(crate) device: u64,
     pub(crate) inode: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RegularFileCapability {
+    file: Arc<File>,
+    identity: FileIdentity,
+}
+
+impl RegularFileCapability {
+    pub(crate) fn identity(&self) -> FileIdentity {
+        self.identity
+    }
+
+    pub(crate) fn try_clone_file(&self) -> io::Result<File> {
+        self.file.try_clone()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -83,7 +113,6 @@ pub(crate) enum FileMoveError {
     LinkFailed,
     SyncDestinationDirectoryFailed,
     RemoveSourceFailed,
-    SyncSourceDirectoryFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,11 +131,6 @@ pub(crate) fn copy_file_verified(
     destination_path: &Path,
     expected_hash: &TrackContentHash,
 ) -> Result<VerifiedFileCopy, VerifiedFileCopyError> {
-    let source_metadata =
-        fs::metadata(source_path).map_err(|_| VerifiedFileCopyError::SourceUnavailable)?;
-    if !source_metadata.is_file() {
-        return Err(VerifiedFileCopyError::SourceIsNotFile);
-    }
     if destination_path.exists() {
         return Err(VerifiedFileCopyError::DestinationExists);
     }
@@ -116,33 +140,81 @@ pub(crate) fn copy_file_verified(
         .ok_or(VerifiedFileCopyError::DestinationHasNoParent)?;
     ensure_directory_all(destination_parent)
         .map_err(|_| VerifiedFileCopyError::CreateDestinationDirectoryFailed)?;
-
-    let temporary_path = create_temporary_copy_path(destination_path)?;
-    let result = copy_file_verified_inner(
-        source_path,
-        destination_path,
-        &temporary_path,
-        source_metadata.len(),
-        source_metadata.permissions(),
-        expected_hash,
-    );
-
-    if result.is_err() {
-        let _ = remove_file_and_sync_parent(&temporary_path);
+    let staging = copy_file_to_staging_verified(source_path, destination_parent)?;
+    if &staging.content_hash != expected_hash {
+        let actual = staging.content_hash.clone();
+        remove_staged_file(staging);
+        return Err(VerifiedFileCopyError::HashMismatch {
+            expected: expected_hash.clone(),
+            actual,
+        });
     }
-
-    result
+    publish_staged_file(staging, destination_path)
 }
 
-fn copy_file_verified_inner(
+pub(crate) fn copy_file_to_staging_verified(
     source_path: &Path,
-    destination_path: &Path,
-    temporary_path: &Path,
+    staging_directory: &Path,
+) -> Result<VerifiedFileStaging, VerifiedFileCopyError> {
+    let source = open_regular_file(source_path).map_err(map_source_copy_error)?;
+    let source_metadata = source
+        .file
+        .metadata()
+        .map_err(|_| VerifiedFileCopyError::SourceUnavailable)?;
+    ensure_directory_all(staging_directory)
+        .map_err(|_| VerifiedFileCopyError::CreateDestinationDirectoryFailed)?;
+    let temporary_path = create_temporary_copy_path(staging_directory)?;
+    let temporary = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&temporary_path)
+        .map_err(|_| VerifiedFileCopyError::CreateTemporaryFileFailed)?;
+    let capability = regular_file_capability_from_file(temporary)
+        .map_err(|_| VerifiedFileCopyError::CreateTemporaryFileFailed)?;
+    let result = copy_file_to_staging_verified_inner(
+        &source,
+        &capability,
+        source_metadata.len(),
+        source_metadata.permissions(),
+    );
+    match result {
+        Ok((bytes_copied, content_hash)) => Ok(VerifiedFileStaging {
+            temporary_path,
+            bytes_copied,
+            content_hash,
+            capability,
+        }),
+        Err(error) => {
+            let _ = remove_regular_file_matching_capability(&temporary_path, &capability);
+            Err(error)
+        }
+    }
+}
+
+fn copy_file_to_staging_verified_inner(
+    source: &RegularFileCapability,
+    temporary: &RegularFileCapability,
     expected_size: u64,
     source_permissions: fs::Permissions,
-    expected_hash: &TrackContentHash,
-) -> Result<VerifiedFileCopy, VerifiedFileCopyError> {
-    let bytes_copied = copy_to_temporary_file(source_path, temporary_path)?;
+) -> Result<(u64, TrackContentHash), VerifiedFileCopyError> {
+    let mut reader = BufReader::new(
+        source
+            .file
+            .try_clone()
+            .map_err(|_| VerifiedFileCopyError::CopyFailed)?,
+    );
+    let mut writer = BufWriter::new(
+        temporary
+            .file
+            .try_clone()
+            .map_err(|_| VerifiedFileCopyError::CopyFailed)?,
+    );
+    let (bytes_copied, content_hash) = copy_and_hash_reader_content(&mut reader, &mut writer)
+        .map_err(|_| VerifiedFileCopyError::CopyFailed)?;
+    writer
+        .flush()
+        .map_err(|_| VerifiedFileCopyError::CopyFailed)?;
     if bytes_copied != expected_size {
         return Err(VerifiedFileCopyError::SizeMismatch {
             expected: expected_size,
@@ -150,79 +222,79 @@ fn copy_file_verified_inner(
         });
     }
 
-    fs::set_permissions(temporary_path, source_permissions)
+    temporary
+        .file
+        .set_permissions(source_permissions)
         .map_err(|_| VerifiedFileCopyError::CopyFailed)?;
-
+    temporary
+        .file
+        .sync_all()
+        .map_err(|_| VerifiedFileCopyError::SyncCopiedFileFailed)?;
+    let mut staged_reader = temporary
+        .file
+        .try_clone()
+        .map_err(|_| VerifiedFileCopyError::CopyFailed)?;
+    staged_reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| VerifiedFileCopyError::CopyFailed)?;
     let actual_hash =
-        hash_file_content(temporary_path).map_err(|_| VerifiedFileCopyError::CopyFailed)?;
-    if &actual_hash != expected_hash {
+        hash_reader_content(&mut staged_reader).map_err(|_| VerifiedFileCopyError::CopyFailed)?;
+    if actual_hash != content_hash {
         return Err(VerifiedFileCopyError::HashMismatch {
-            expected: expected_hash.clone(),
+            expected: content_hash,
             actual: actual_hash,
         });
     }
+    Ok((bytes_copied, actual_hash))
+}
 
+pub(crate) fn publish_staged_file(
+    staging: VerifiedFileStaging,
+    destination_path: &Path,
+) -> Result<VerifiedFileCopy, VerifiedFileCopyError> {
     if destination_path.exists() {
+        remove_staged_file(staging);
         return Err(VerifiedFileCopyError::DestinationExists);
     }
-
-    File::open(temporary_path)
-        .and_then(|temporary| temporary.sync_all())
-        .map_err(|_| VerifiedFileCopyError::SyncCopiedFileFailed)?;
+    let destination_parent = destination_path
+        .parent()
+        .ok_or(VerifiedFileCopyError::DestinationHasNoParent)?;
+    ensure_directory_all(destination_parent)
+        .map_err(|_| VerifiedFileCopyError::CreateDestinationDirectoryFailed)?;
 
     // `rename` replaces existing files on Unix. A hard link created in the same
     // directory gives us no-overwrite finalization: it fails if the destination
     // appeared while we were copying. The inode is synced before publication;
     // syncing the directory after the link and again after removing the temp
     // name makes the final namespace durable before SQLite can reference it.
-    fs::hard_link(temporary_path, destination_path)
-        .map_err(|_| VerifiedFileCopyError::FinalizeFailed)?;
+    link_file_capability(&staging.capability, destination_path).map_err(|_| {
+        remove_staged_file(staging.clone());
+        VerifiedFileCopyError::FinalizeFailed
+    })?;
     if sync_parent_directory(destination_path).is_err() {
-        cleanup_published_link(destination_path);
+        let _ = remove_regular_file_matching_capability(destination_path, &staging.capability);
+        remove_staged_file(staging);
         return Err(VerifiedFileCopyError::FinalizeFailed);
     }
-    if remove_file_and_sync_parent(temporary_path).is_err() {
-        cleanup_published_link(destination_path);
+    if remove_regular_file_matching_capability(&staging.temporary_path, &staging.capability)
+        .is_err()
+    {
+        let _ = remove_regular_file_matching_capability(destination_path, &staging.capability);
         return Err(VerifiedFileCopyError::FinalizeFailed);
     }
 
     Ok(VerifiedFileCopy {
         destination_path: destination_path.to_path_buf(),
-        bytes_copied,
-        content_hash: expected_hash.clone(),
+        bytes_copied: staging.bytes_copied,
+        capability: staging.capability,
     })
 }
 
-fn copy_to_temporary_file(
-    source_path: &Path,
-    temporary_path: &Path,
-) -> Result<u64, VerifiedFileCopyError> {
-    let source =
-        fs::File::open(source_path).map_err(|_| VerifiedFileCopyError::SourceUnavailable)?;
-    let temporary = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(temporary_path)
-        .map_err(|_| VerifiedFileCopyError::CreateTemporaryFileFailed)?;
-
-    let mut reader = BufReader::new(source);
-    let mut writer = BufWriter::new(temporary);
-    let bytes_copied =
-        std::io::copy(&mut reader, &mut writer).map_err(|_| VerifiedFileCopyError::CopyFailed)?;
-    writer
-        .flush()
-        .map_err(|_| VerifiedFileCopyError::CopyFailed)?;
-    Ok(bytes_copied)
+pub(crate) fn remove_staged_file(staging: VerifiedFileStaging) {
+    let _ = remove_regular_file_matching_capability(&staging.temporary_path, &staging.capability);
 }
 
-fn create_temporary_copy_path(destination_path: &Path) -> Result<PathBuf, VerifiedFileCopyError> {
-    let parent = destination_path
-        .parent()
-        .ok_or(VerifiedFileCopyError::DestinationHasNoParent)?;
-    let file_name = destination_path
-        .file_name()
-        .and_then(|file_name| file_name.to_str())
-        .ok_or(VerifiedFileCopyError::DestinationHasNoParent)?;
+fn create_temporary_copy_path(parent: &Path) -> Result<PathBuf, VerifiedFileCopyError> {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
@@ -230,7 +302,7 @@ fn create_temporary_copy_path(destination_path: &Path) -> Result<PathBuf, Verifi
 
     for attempt in 0..100u32 {
         let temporary_name = format!(
-            ".{file_name}.sustain-copy-{}-{unique}-{attempt}.tmp",
+            ".sustain-copy-{}-{unique}-{attempt}.tmp",
             std::process::id()
         );
         let temporary_path = parent.join(temporary_name);
@@ -246,20 +318,16 @@ pub(super) fn move_file_without_copy_or_overwrite(
     source_path: &Path,
     destination_path: &Path,
 ) -> Result<(), FileMoveError> {
-    let source_identity = regular_file_identity(source_path)?;
-    move_file_without_copy_or_overwrite_matching_identity(
-        source_path,
-        destination_path,
-        source_identity,
-    )
+    let source = open_regular_file(source_path)?;
+    move_file_without_copy_or_overwrite_matching_capability(source_path, destination_path, &source)
 }
 
-pub(super) fn move_file_without_copy_or_overwrite_matching_identity(
+pub(super) fn move_file_without_copy_or_overwrite_matching_capability(
     source_path: &Path,
     destination_path: &Path,
-    expected_identity: FileIdentity,
+    source: &RegularFileCapability,
 ) -> Result<(), FileMoveError> {
-    if regular_file_identity(source_path)? != expected_identity {
+    if !path_refers_to_capability(source_path, source)? {
         return Err(FileMoveError::SourceChanged);
     }
     if destination_path.exists() {
@@ -275,28 +343,81 @@ pub(super) fn move_file_without_copy_or_overwrite_matching_identity(
         return Err(FileMoveError::DestinationExists);
     }
 
-    fs::hard_link(source_path, destination_path).map_err(|_| FileMoveError::LinkFailed)?;
-    if regular_file_identity(destination_path) != Ok(expected_identity) {
-        cleanup_published_link(destination_path);
+    link_file_capability(source, destination_path).map_err(|_| FileMoveError::LinkFailed)?;
+    if !path_refers_to_capability(destination_path, source).unwrap_or(false) {
+        let _ = remove_regular_file_matching_capability(destination_path, source);
         return Err(FileMoveError::SourceChanged);
     }
     if sync_parent_directory(destination_path).is_err() {
-        cleanup_published_link(destination_path);
+        let _ = remove_regular_file_matching_capability(destination_path, source);
         return Err(FileMoveError::SyncDestinationDirectoryFailed);
     }
-    if regular_file_identity(source_path) != Ok(expected_identity) {
-        cleanup_published_link(destination_path);
-        return Err(FileMoveError::SourceChanged);
-    }
-    if fs::remove_file(source_path).is_err() {
-        if paths_refer_to_same_file(source_path, destination_path) {
-            cleanup_published_link(destination_path);
-        }
+    if remove_regular_file_matching_capability(source_path, source).is_err() {
+        let _ = remove_regular_file_matching_capability(destination_path, source);
         return Err(FileMoveError::RemoveSourceFailed);
     }
-    sync_parent_directory(source_path).map_err(|_| FileMoveError::SyncSourceDirectoryFailed)?;
 
     Ok(())
+}
+
+pub(crate) fn open_regular_file(path: &Path) -> Result<RegularFileCapability, FileMoveError> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| FileMoveError::SourceUnavailable)?;
+    regular_file_capability_from_file(file)
+}
+
+pub(crate) fn regular_file_capability_from_file(
+    file: File,
+) -> Result<RegularFileCapability, FileMoveError> {
+    let metadata = file
+        .metadata()
+        .map_err(|_| FileMoveError::SourceUnavailable)?;
+    if !metadata.file_type().is_file() {
+        return Err(FileMoveError::SourceIsNotFile);
+    }
+    Ok(RegularFileCapability {
+        identity: FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        },
+        file: Arc::new(file),
+    })
+}
+
+fn map_source_copy_error(error: FileMoveError) -> VerifiedFileCopyError {
+    match error {
+        FileMoveError::SourceIsNotFile => VerifiedFileCopyError::SourceIsNotFile,
+        _ => VerifiedFileCopyError::SourceUnavailable,
+    }
+}
+
+pub(crate) fn path_refers_to_capability(
+    path: &Path,
+    capability: &RegularFileCapability,
+) -> Result<bool, FileMoveError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        } == capability.identity),
+        Ok(_) => Err(FileMoveError::SourceIsNotFile),
+        Err(_) => Err(FileMoveError::SourceUnavailable),
+    }
+}
+
+pub(crate) fn link_file_capability(
+    capability: &RegularFileCapability,
+    destination_path: &Path,
+) -> io::Result<()> {
+    let source = proc_self_fd_path(capability.file.as_raw_fd());
+    linkat(CWD, &source, CWD, destination_path, AtFlags::SYMLINK_FOLLOW).map_err(io::Error::from)
+}
+
+fn proc_self_fd_path(fd: RawFd) -> PathBuf {
+    PathBuf::from(format!("/proc/self/fd/{fd}"))
 }
 
 pub(crate) fn regular_file_identity(path: &Path) -> Result<FileIdentity, FileMoveError> {
@@ -310,27 +431,30 @@ pub(crate) fn regular_file_identity(path: &Path) -> Result<FileIdentity, FileMov
     })
 }
 
-pub(crate) fn regular_file_identity_if_present(
+pub(crate) fn open_regular_file_if_present(
     path: &Path,
-) -> Result<Option<FileIdentity>, FileTrashError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_file() => Ok(Some(FileIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        })),
-        Ok(_) => Err(FileTrashError::SourceIsNotFile),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+) -> Result<Option<RegularFileCapability>, FileTrashError> {
+    match open_regular_file(path) {
+        Ok(source) => Ok(Some(source)),
+        Err(FileMoveError::SourceUnavailable)
+            if fs::symlink_metadata(path)
+                .is_err_and(|error| error.kind() == io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(FileMoveError::SourceIsNotFile) => Err(FileTrashError::SourceIsNotFile),
         Err(_) => Err(FileTrashError::SourceUnavailable),
     }
 }
 
-/// Move the expected regular file to an unpredictable sibling name before
-/// handing a pathname to a trash backend. The rename is atomic and the staged
-/// inode is verified before the backend runs: if another process replaced the
-/// source pathname, that unrelated entry is restored and retained.
-pub(crate) fn trash_regular_file_matching_identity(
+/// Move the open regular file to an unpredictable sibling name before handing
+/// a pathname to a trash backend. The retained descriptor pins the inode, so a
+/// replacement pathname cannot pass verification through immediate inode
+/// reuse. If the source changes before the rename, the unrelated entry is
+/// restored and retained.
+pub(crate) fn trash_regular_file_matching_capability(
     path: &Path,
-    expected_identity: FileIdentity,
+    source: &RegularFileCapability,
     trash_backend: impl FnOnce(&Path) -> Result<(), ()>,
 ) -> Result<(), FileTrashError> {
     let handoff_path = temporary_trash_handoff_path(path)?;
@@ -341,7 +465,7 @@ pub(crate) fn trash_regular_file_matching_identity(
         return Err(FileTrashError::SyncParentDirectoryFailed);
     }
 
-    if regular_file_identity(&handoff_path) != Ok(expected_identity) {
+    if !path_refers_to_capability(&handoff_path, source).unwrap_or(false) {
         rollback_trash_handoff(&handoff_path, path)?;
         return Err(FileTrashError::SourceChanged);
     }
@@ -351,6 +475,15 @@ pub(crate) fn trash_regular_file_matching_identity(
         return Err(FileTrashError::TrashBackendFailed);
     }
     Ok(())
+}
+
+pub(crate) fn remove_regular_file_matching_capability(
+    path: &Path,
+    source: &RegularFileCapability,
+) -> Result<(), FileTrashError> {
+    trash_regular_file_matching_capability(path, source, |handoff| {
+        fs::remove_file(handoff).map_err(|_| ())
+    })
 }
 
 fn temporary_trash_handoff_path(path: &Path) -> Result<PathBuf, FileTrashError> {
@@ -384,7 +517,8 @@ pub(super) fn rollback_file_move(
         path_is_regular_file(destination_path),
     ) {
         (true, true) if paths_refer_to_same_file(source_path, destination_path) => {
-            remove_file_and_sync_parent(destination_path)
+            let source = open_regular_file(source_path)?;
+            remove_regular_file_matching_capability(destination_path, &source)
                 .map_err(|_| FileMoveError::RemoveSourceFailed)
         }
         (true, false) => Ok(()),
@@ -406,10 +540,12 @@ pub(super) fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-pub(crate) fn remove_copied_files(paths: &[PathBuf]) -> Result<(), ()> {
+pub(crate) fn remove_copied_files(copies: &[VerifiedFileCopy]) -> Result<(), ()> {
     let mut failed = false;
-    for path in paths.iter().rev() {
-        if remove_file_and_sync_parent(path).is_err() {
+    for copy in copies.iter().rev() {
+        if remove_regular_file_matching_capability(&copy.destination_path, &copy.capability)
+            .is_err()
+        {
             failed = true;
         }
     }
@@ -559,13 +695,9 @@ fn map_descendant_directory_open_error(error: Errno) -> DescendantDirectoryOpenE
     }
 }
 
-fn cleanup_published_link(path: &Path) {
-    let _ = remove_file_and_sync_parent(path);
-}
-
 pub(crate) fn ensure_directory_all(path: &Path) -> io::Result<()> {
-    match fs::metadata(path) {
-        Ok(metadata) if metadata.is_dir() => return Ok(()),
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => return Ok(()),
         Ok(_) => {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -585,7 +717,13 @@ pub(crate) fn ensure_directory_all(path: &Path) -> io::Result<()> {
     ensure_directory_all(parent)?;
     match fs::create_dir(path) {
         Ok(()) => sync_directory(parent),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        Err(error)
+            if error.kind() == io::ErrorKind::AlreadyExists
+                && fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.file_type().is_dir()) =>
+        {
+            Ok(())
+        }
         Err(error) => Err(error),
     }
 }
@@ -613,8 +751,8 @@ mod tests {
 
     use super::{
         EmptyDirectoryPruneError, FileMoveError, FileTrashError, VerifiedFileCopyError,
-        copy_file_verified, prune_empty_ancestor_directories, regular_file_identity,
-        trash_regular_file_matching_identity,
+        copy_file_verified, open_regular_file, prune_empty_ancestor_directories,
+        trash_regular_file_matching_capability,
     };
 
     #[test]
@@ -630,7 +768,6 @@ mod tests {
 
         assert_eq!(copy.destination_path, destination);
         assert_eq!(copy.bytes_copied, 11);
-        assert_eq!(copy.content_hash, hash);
         assert_eq!(
             fs::read(&copy.destination_path).expect("read dest"),
             b"audio bytes"
@@ -652,7 +789,10 @@ mod tests {
 
         let result = copy_file_verified(&source, &destination, &hash);
 
-        assert_eq!(result, Err(VerifiedFileCopyError::DestinationExists));
+        assert!(matches!(
+            result,
+            Err(VerifiedFileCopyError::DestinationExists)
+        ));
         assert_eq!(
             fs::read(&destination).expect("read destination"),
             b"existing bytes"
@@ -720,15 +860,15 @@ mod tests {
         let destination = root.join("Artist").join("Album").join("01 Song.flac");
         fs::create_dir_all(&root).expect("create test directory");
         fs::write(&source, b"original bytes").expect("write source");
-        let expected_identity = super::regular_file_identity(&source).expect("source identity");
+        let source_capability = open_regular_file(&source).expect("open source");
         fs::remove_file(&source).expect("remove original source");
         fs::write(&source, b"replacement bytes").expect("write replacement source");
 
         assert_eq!(
-            super::move_file_without_copy_or_overwrite_matching_identity(
+            super::move_file_without_copy_or_overwrite_matching_capability(
                 &source,
                 &destination,
-                expected_identity,
+                &source_capability,
             ),
             Err(FileMoveError::SourceChanged)
         );
@@ -747,12 +887,12 @@ mod tests {
         let source = root.join("song.flac");
         fs::create_dir_all(&root).expect("create test directory");
         fs::write(&source, b"original bytes").expect("write source");
-        let expected = regular_file_identity(&source).expect("source identity");
+        let source_capability = open_regular_file(&source).expect("open source");
         fs::remove_file(&source).expect("remove original");
         fs::write(&source, b"unrelated replacement").expect("write replacement");
         let mut backend_called = false;
 
-        let result = trash_regular_file_matching_identity(&source, expected, |_| {
+        let result = trash_regular_file_matching_capability(&source, &source_capability, |_| {
             backend_called = true;
             Ok(())
         });
@@ -772,9 +912,10 @@ mod tests {
         let source = root.join("song.flac");
         fs::create_dir_all(&root).expect("create test directory");
         fs::write(&source, b"audio bytes").expect("write source");
-        let expected = regular_file_identity(&source).expect("source identity");
+        let source_capability = open_regular_file(&source).expect("open source");
 
-        let result = trash_regular_file_matching_identity(&source, expected, |_| Err(()));
+        let result =
+            trash_regular_file_matching_capability(&source, &source_capability, |_| Err(()));
 
         assert_eq!(result, Err(FileTrashError::TrashBackendFailed));
         assert_eq!(
@@ -842,6 +983,21 @@ mod tests {
         );
         assert!(outside.join("Album").exists());
         assert!(root.join("linked").exists());
+
+        fs::remove_dir_all(root).expect("remove test root");
+        fs::remove_dir_all(outside).expect("remove test outside");
+    }
+
+    #[test]
+    fn managed_directory_creation_refuses_symlink_components() {
+        let root = unique_test_directory();
+        let outside = unique_test_directory();
+        fs::create_dir_all(&root).expect("create root");
+        fs::create_dir_all(&outside).expect("create outside");
+        std::os::unix::fs::symlink(&outside, root.join("linked")).expect("create symlink");
+
+        assert!(super::ensure_directory_all(&root.join("linked/Album")).is_err());
+        assert!(!outside.join("Album").exists());
 
         fs::remove_dir_all(root).expect("remove test root");
         fs::remove_dir_all(outside).expect("remove test outside");

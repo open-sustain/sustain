@@ -41,7 +41,7 @@ use super::{
     ApplicationRuntime, ApplicationRuntimeError, LibraryConsolidationSummary, LibraryScanSummary,
     MetadataService, NotificationCategory, NotificationSeverity, PlaybackQueueEntryKind,
     PlaybackQueueRequest, PlaybackQueueSource, normalize_query, run_library_consolidation_task,
-    run_library_import_task, run_library_scan_task,
+    run_library_import_task, run_library_import_task_with_progress, run_library_scan_task,
 };
 use crate::{
     file_presence::{FilePresence, probe_file_presence, probe_path_entry_presence},
@@ -1072,6 +1072,57 @@ fn managed_import_skips_duplicate_content_hashes_in_same_batch() {
             imported_tracks: 1,
             duplicate_files: 1,
             cancelled: false,
+        })
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn cancelling_managed_import_keeps_completed_tracks_and_reports_progress() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let first_source = external_root.join("first.flac");
+    let second_source = external_root.join("second.flac");
+    std::fs::write(&first_source, b"first audio").expect("write first source");
+    std::fs::write(&second_source, b"second audio").expect("write second source");
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+    let task = runtime
+        .prepare_library_import(vec![first_source, second_source])
+        .expect("prepare import");
+    let mut progress = Vec::new();
+
+    let result = run_library_import_task_with_progress(task, |update| {
+        progress.push(update);
+        if update.processed_files == 1 {
+            runtime.request_library_import_cancellation();
+        }
+    })
+    .expect("cancelled import completes");
+    runtime.apply_library_import_result(result);
+
+    assert_eq!(progress.len(), 1);
+    assert_eq!(progress[0].processed_files, 1);
+    assert_eq!(progress[0].total_files, 2);
+    assert_eq!(runtime.library_tracks().len(), 1);
+    assert_eq!(store.tracks().expect("load tracks").len(), 1);
+    assert_eq!(
+        runtime.last_library_import_summary(),
+        Some(&super::LibraryImportSummary {
+            discovered_files: 2,
+            imported_tracks: 1,
+            duplicate_files: 0,
+            cancelled: true,
         })
     );
 

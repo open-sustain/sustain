@@ -8,8 +8,14 @@ use gtk::prelude::*;
 use gtk::{gdk, gio};
 
 use super::{
-    ApplicationRuntimeError, LibraryChangedCallback, SharedRuntime, run_library_import_task,
+    ApplicationRuntimeError, LibraryChangedCallback, LibraryImportProgress, LibraryImportResult,
+    SharedRuntime, run_library_import_task_with_progress,
 };
+
+enum LibraryImportWorkerEvent {
+    Progress(LibraryImportProgress),
+    Finished(Result<LibraryImportResult, ApplicationRuntimeError>),
+}
 
 pub(crate) type LibraryImportRequestedCallback =
     Rc<dyn Fn(Vec<PathBuf>) -> Result<(), ApplicationRuntimeError>>;
@@ -28,7 +34,10 @@ pub(crate) fn library_import_requested_callback(
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _sent = tx.send(run_library_import_task(task));
+            let outcome = run_library_import_task_with_progress(task, |progress| {
+                let _sent = tx.send(LibraryImportWorkerEvent::Progress(progress));
+            });
+            let _sent = tx.send(LibraryImportWorkerEvent::Finished(outcome));
         });
 
         poll_library_import(rx, runtime.clone(), library_changed.clone());
@@ -70,26 +79,45 @@ pub(crate) const LIBRARY_DROP_INDICATOR_CLASS: &str = "library-drop-indicator";
 const LIBRARY_DROP_ACTIVE_CLASS: &str = "library-drop-active";
 
 fn poll_library_import(
-    rx: mpsc::Receiver<Result<super::LibraryImportResult, ApplicationRuntimeError>>,
+    rx: mpsc::Receiver<LibraryImportWorkerEvent>,
     runtime: SharedRuntime,
     library_changed: LibraryChangedCallback,
 ) {
-    glib::timeout_add_local(Duration::from_millis(100), move || match rx.try_recv() {
-        Ok(Ok(result)) => {
-            runtime.borrow_mut().apply_library_import_result(result);
-            library_changed();
-            glib::ControlFlow::Break
+    glib::timeout_add_local(Duration::from_millis(100), move || {
+        let mut latest_progress = None;
+        let mut finished = None;
+        loop {
+            match rx.try_recv() {
+                Ok(LibraryImportWorkerEvent::Progress(progress)) => {
+                    latest_progress = Some(progress);
+                }
+                Ok(LibraryImportWorkerEvent::Finished(outcome)) => {
+                    finished = Some(outcome);
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    finished = Some(Err(ApplicationRuntimeError::LibraryImportFailed));
+                    break;
+                }
+            }
         }
-        Ok(Err(error)) => {
-            runtime.borrow_mut().fail_library_import(error);
-            glib::ControlFlow::Break
-        }
-        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-        Err(mpsc::TryRecvError::Disconnected) => {
+        if let Some(progress) = latest_progress {
             runtime
                 .borrow_mut()
-                .fail_library_import(ApplicationRuntimeError::LibraryImportFailed);
-            glib::ControlFlow::Break
+                .update_library_import_progress(progress.processed_files, progress.total_files);
+        }
+        match finished {
+            Some(Ok(result)) => {
+                runtime.borrow_mut().apply_library_import_result(result);
+                library_changed();
+                glib::ControlFlow::Break
+            }
+            Some(Err(error)) => {
+                runtime.borrow_mut().fail_library_import(error);
+                glib::ControlFlow::Break
+            }
+            None => glib::ControlFlow::Continue,
         }
     });
 }

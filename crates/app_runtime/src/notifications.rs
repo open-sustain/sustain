@@ -302,6 +302,10 @@ pub fn library_import_running_text() -> String {
     "Adding tracks...".to_owned()
 }
 
+pub fn library_import_progress_text(processed: usize, total: usize) -> String {
+    format!("Adding tracks ({processed}/{total})...")
+}
+
 pub fn library_consolidation_running_text() -> String {
     "Organizing library...".to_owned()
 }

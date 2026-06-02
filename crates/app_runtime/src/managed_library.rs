@@ -33,15 +33,15 @@ mod journal;
 
 pub use capabilities::ManagedLibraryFilesystemError;
 pub use consolidation::run_library_consolidation_task;
-pub use import::run_library_import_task;
+pub use import::{run_library_import_task, run_library_import_task_with_progress};
 pub(crate) use journal::recover_library_consolidation_journal;
 
 pub(crate) use capabilities::ManagedLibraryFilesystemValidator;
 use consolidation::{plan_managed_missing_track_relocation, plan_managed_track_retarget};
 pub(crate) use file_ops::prune_empty_ancestor_directories_for_sources;
 use file_ops::{
-    copy_file_verified, move_file_without_copy_or_overwrite_matching_identity, remove_copied_files,
-    rollback_file_move,
+    copy_file_verified, move_file_without_copy_or_overwrite_matching_capability,
+    remove_copied_files, rollback_file_move,
 };
 use journal::{remove_consolidation_journal_if_present, write_consolidation_journal};
 
@@ -121,6 +121,15 @@ impl ApplicationRuntime {
             NotificationSeverity::Info,
             notifications::library_import_outcome_text(&summary),
         );
+    }
+
+    pub fn update_library_import_progress(&mut self, processed_files: usize, total_files: usize) {
+        if let Some(id) = self.library_import_notification_id {
+            self.update_notification_body(
+                id,
+                notifications::library_import_progress_text(processed_files, total_files),
+            );
+        }
     }
 
     pub fn fail_library_import(&mut self, error: ApplicationRuntimeError) {
@@ -371,10 +380,10 @@ fn retarget_managed_metadata_with_persist(
 
     write_consolidation_journal(library_path, std::slice::from_ref(&planned_move))?;
 
-    if move_file_without_copy_or_overwrite_matching_identity(
+    if move_file_without_copy_or_overwrite_matching_capability(
         &planned_move.source_path,
         &planned_move.destination_path,
-        planned_move.source_identity,
+        &planned_move.source,
     )
     .is_err()
     {
@@ -468,10 +477,10 @@ pub(crate) fn relocate_managed_missing_track(
 
     let empty_directory_cleanup_failed = if let Some(planned_move) = planned_move {
         write_consolidation_journal(&canonical_library_path, std::slice::from_ref(&planned_move))?;
-        if move_file_without_copy_or_overwrite_matching_identity(
+        if move_file_without_copy_or_overwrite_matching_capability(
             &planned_move.source_path,
             &planned_move.destination_path,
-            planned_move.source_identity,
+            &planned_move.source,
         )
         .is_err()
         {
@@ -517,7 +526,7 @@ pub(crate) fn relocate_managed_missing_track(
     } else {
         let content_hash = hash_file_content(replacement_path)
             .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
-        copy_file_verified(replacement_path, &destination_path, &content_hash)
+        let copy = copy_file_verified(replacement_path, &destination_path, &content_hash)
             .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
         if library_store
             .relocate_track_and_enqueue_mirror(
@@ -527,7 +536,7 @@ pub(crate) fn relocate_managed_missing_track(
             )
             .is_err()
         {
-            let _ = remove_copied_files(std::slice::from_ref(&destination_path));
+            let _ = remove_copied_files(std::slice::from_ref(&copy));
             prune_empty_ancestor_directories_for_sources(
                 &canonical_library_path,
                 std::slice::from_ref(&destination_path),

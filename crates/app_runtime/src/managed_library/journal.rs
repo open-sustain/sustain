@@ -7,6 +7,7 @@
 //! replays an interrupted batch so SQLite and the on-disk layout agree.
 
 use std::{
+    ffi::OsStr,
     fs,
     io::Write,
     os::unix::fs::MetadataExt,
@@ -22,12 +23,14 @@ use crate::{ApplicationRuntimeError, ApplicationRuntimeResult};
 use super::capabilities::ManagedLibraryFilesystemValidator;
 use super::consolidation::{JournalTrackPersistence, PlannedLibraryConsolidationMove};
 use super::file_ops::{
-    FileIdentity, prune_empty_ancestor_directories_for_sources, regular_file_identity,
-    remove_file_and_sync_parent, sync_directory,
+    FileIdentity, link_file_capability, open_regular_file, path_refers_to_capability,
+    prune_empty_ancestor_directories_for_sources, remove_file_and_sync_parent,
+    remove_regular_file_matching_capability, sync_directory, sync_parent_directory,
 };
 
 const CONSOLIDATION_JOURNAL_FILE_NAME: &str = ".sustain-consolidation-journal";
 const CONSOLIDATION_JOURNAL_HEADER: &str = "# sustain managed library consolidation journal v3";
+const CONSOLIDATION_RECOVERY_DIRECTORY_NAME: &str = ".sustain-consolidation-recovery";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ConsolidationJournalEntry {
@@ -45,7 +48,7 @@ pub(crate) fn recover_library_consolidation_journal(
 ) -> ApplicationRuntimeResult<()> {
     let journal_path = consolidation_journal_path(library_path);
     if !journal_path.exists() {
-        return Ok(());
+        return cleanup_orphaned_consolidation_recovery_directory(library_path);
     }
     managed_library_filesystem_validator
         .validate(library_path)
@@ -84,6 +87,23 @@ fn recover_consolidation_journal_entry(
 ) -> ApplicationRuntimeResult<()> {
     let source_path = entry.source_relative_path.resolve(library_path);
     let destination_path = entry.destination_relative_path.resolve(library_path);
+    let backup_path = consolidation_recovery_backup_path(library_path, entry.track_id);
+    if let Ok(backup) = open_regular_file(&backup_path) {
+        let source = inspect_journal_path_against_capability(&source_path, &backup)?;
+        let destination = inspect_journal_path_against_capability(&destination_path, &backup)?;
+        return recover_consolidation_journal_entry_with_capability(
+            library_path,
+            library_store,
+            entry,
+            &source_path,
+            &backup,
+            source,
+            destination,
+        );
+    }
+
+    // Compatibility with journals written before descriptor-backed recovery
+    // links existed. New writes always create a backup hard link first.
     let source = inspect_journal_path(&source_path, entry)?;
     let destination = inspect_journal_path(&destination_path, entry)?;
 
@@ -93,7 +113,9 @@ fn recover_consolidation_journal_entry(
         // source pathname is left untouched because it belongs to neither the
         // journal nor Sustain.
         (JournalPathState::Expected, JournalPathState::Expected) => {
-            remove_file_and_sync_parent(&source_path)
+            let destination = open_regular_file(&destination_path)
+                .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+            remove_regular_file_matching_capability(&source_path, &destination)
                 .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
             save_recovered_consolidation_track(
                 library_path,
@@ -129,6 +151,46 @@ fn recover_consolidation_journal_entry(
     Ok(())
 }
 
+fn recover_consolidation_journal_entry_with_capability(
+    library_path: &Path,
+    library_store: &dyn sustain_library_store::LibraryStore,
+    entry: &ConsolidationJournalEntry,
+    source_path: &Path,
+    backup: &super::file_ops::RegularFileCapability,
+    source: JournalPathState,
+    destination: JournalPathState,
+) -> ApplicationRuntimeResult<()> {
+    match (source, destination) {
+        (JournalPathState::Expected, JournalPathState::Expected) => {
+            remove_regular_file_matching_capability(source_path, backup)
+                .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+            save_recovered_consolidation_track(
+                library_path,
+                library_store,
+                entry,
+                &entry.destination_relative_path,
+            )
+        }
+        (JournalPathState::Missing | JournalPathState::Unexpected, JournalPathState::Expected) => {
+            save_recovered_consolidation_track(
+                library_path,
+                library_store,
+                entry,
+                &entry.destination_relative_path,
+            )
+        }
+        (JournalPathState::Expected, JournalPathState::Missing) => {
+            save_recovered_consolidation_track(
+                library_path,
+                library_store,
+                entry,
+                &entry.source_relative_path,
+            )
+        }
+        _ => Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum JournalPathState {
     Missing,
@@ -150,6 +212,25 @@ fn inspect_journal_path(
         }
         Ok(_) => Ok(JournalPathState::Unexpected),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(JournalPathState::Missing),
+        Err(_) => Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+    }
+}
+
+fn inspect_journal_path_against_capability(
+    path: &Path,
+    expected: &super::file_ops::RegularFileCapability,
+) -> ApplicationRuntimeResult<JournalPathState> {
+    match path_refers_to_capability(path, expected) {
+        Ok(true) => Ok(JournalPathState::Expected),
+        Ok(false) | Err(super::file_ops::FileMoveError::SourceIsNotFile) => {
+            Ok(JournalPathState::Unexpected)
+        }
+        Err(super::file_ops::FileMoveError::SourceUnavailable)
+            if fs::symlink_metadata(path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(JournalPathState::Missing)
+        }
         Err(_) => Err(ApplicationRuntimeError::LibraryConsolidationFailed),
     }
 }
@@ -191,8 +272,10 @@ pub(super) fn write_consolidation_journal(
     if journal_path.exists() {
         return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
     }
+    cleanup_orphaned_consolidation_recovery_directory(library_path)?;
 
     let temporary_path = temporary_consolidation_journal_path(library_path);
+    create_consolidation_recovery_links(library_path, moves)?;
     let result = (|| {
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -203,18 +286,20 @@ pub(super) fn write_consolidation_journal(
         writeln!(file, "{CONSOLIDATION_JOURNAL_HEADER}")
             .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
         for planned_move in moves {
-            if regular_file_identity(&planned_move.source_path) != Ok(planned_move.source_identity)
+            if !path_refers_to_capability(&planned_move.source_path, &planned_move.source)
+                .unwrap_or(false)
             {
                 return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
             }
+            let source_identity = planned_move.source.identity();
             let source = encode_relative_path(&planned_move.source_relative_path);
             let destination = encode_relative_path(&planned_move.destination_relative_path);
             writeln!(
                 file,
                 "move\t{}\t{}\t{}\t{}\t{}\t{}",
                 planned_move.track_id.get(),
-                planned_move.source_identity.device,
-                planned_move.source_identity.inode,
+                source_identity.device,
+                source_identity.inode,
                 persistence_name(planned_move.persistence),
                 source,
                 destination
@@ -233,8 +318,39 @@ pub(super) fn write_consolidation_journal(
 
     if result.is_err() {
         let _ = remove_file_and_sync_parent(&temporary_path);
+        if fs::symlink_metadata(&journal_path).is_err() {
+            cleanup_consolidation_recovery_links(
+                library_path,
+                moves.iter().map(|entry| entry.track_id),
+            );
+        }
     }
     result
+}
+
+fn create_consolidation_recovery_links(
+    library_path: &Path,
+    moves: &[PlannedLibraryConsolidationMove],
+) -> ApplicationRuntimeResult<()> {
+    let directory = consolidation_recovery_directory(library_path);
+    fs::create_dir(&directory).map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    if sync_directory(library_path).is_err() {
+        cleanup_consolidation_recovery_links(library_path, std::iter::empty());
+        return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+    }
+    for planned_move in moves {
+        let backup = consolidation_recovery_backup_path(library_path, planned_move.track_id);
+        if link_file_capability(&planned_move.source, &backup).is_err()
+            || sync_parent_directory(&backup).is_err()
+        {
+            cleanup_consolidation_recovery_links(
+                library_path,
+                moves.iter().map(|entry| entry.track_id),
+            );
+            return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn publish_journal_without_overwrite(
@@ -335,11 +451,77 @@ pub(super) fn remove_consolidation_journal_if_present(
 ) -> ApplicationRuntimeResult<()> {
     let journal_path = consolidation_journal_path(library_path);
     if !journal_path.exists() {
-        return Ok(());
+        return cleanup_orphaned_consolidation_recovery_directory(library_path);
     }
 
-    remove_file_and_sync_parent(&journal_path)
-        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)
+    let entries = read_consolidation_journal(library_path)?;
+    let journal = open_regular_file(&journal_path)
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    remove_regular_file_matching_capability(&journal_path, &journal)
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    cleanup_consolidation_recovery_links(library_path, entries.iter().map(|entry| entry.track_id));
+    Ok(())
+}
+
+fn cleanup_orphaned_consolidation_recovery_directory(
+    library_path: &Path,
+) -> ApplicationRuntimeResult<()> {
+    let directory = consolidation_recovery_directory(library_path);
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => return Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+    }
+
+    let entries = fs::read_dir(&directory)
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    for entry in entries {
+        let entry = entry.map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+        if !is_consolidation_recovery_backup_name(&entry.file_name()) {
+            return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+        }
+        let path = entry.path();
+        let backup = open_regular_file(&path)
+            .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+        remove_regular_file_matching_capability(&path, &backup)
+            .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    }
+    fs::remove_dir(&directory).map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    sync_directory(library_path).map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)
+}
+
+fn is_consolidation_recovery_backup_name(name: &OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_prefix("track-"))
+        .and_then(|name| name.strip_suffix(".backup"))
+        .and_then(|id| id.parse::<i64>().ok())
+        .and_then(TrackId::new)
+        .is_some()
+}
+
+fn cleanup_consolidation_recovery_links(
+    library_path: &Path,
+    track_ids: impl Iterator<Item = TrackId>,
+) {
+    for track_id in track_ids {
+        let path = consolidation_recovery_backup_path(library_path, track_id);
+        if let Ok(backup) = open_regular_file(&path) {
+            let _ = remove_regular_file_matching_capability(&path, &backup);
+        }
+    }
+    let directory = consolidation_recovery_directory(library_path);
+    if fs::remove_dir(&directory).is_ok() {
+        let _ = sync_directory(library_path);
+    }
+}
+
+fn consolidation_recovery_directory(library_path: &Path) -> PathBuf {
+    library_path.join(CONSOLIDATION_RECOVERY_DIRECTORY_NAME)
+}
+
+fn consolidation_recovery_backup_path(library_path: &Path, track_id: TrackId) -> PathBuf {
+    consolidation_recovery_directory(library_path).join(format!("track-{}.backup", track_id.get()))
 }
 
 fn consolidation_journal_path(library_path: &Path) -> PathBuf {
@@ -414,8 +596,9 @@ mod tests {
 
     use super::{
         CONSOLIDATION_JOURNAL_FILE_NAME, CONSOLIDATION_JOURNAL_HEADER,
-        ManagedLibraryFilesystemValidator, encode_relative_path, publish_journal_without_overwrite,
-        recover_library_consolidation_journal,
+        CONSOLIDATION_RECOVERY_DIRECTORY_NAME, ManagedLibraryFilesystemValidator,
+        encode_relative_path, publish_journal_without_overwrite,
+        recover_library_consolidation_journal, remove_consolidation_journal_if_present,
     };
 
     #[derive(Clone, Copy, Debug)]
@@ -601,6 +784,35 @@ mod tests {
             b"new journal"
         );
 
+        fs::remove_dir_all(root).expect("remove root");
+    }
+
+    #[test]
+    fn absent_journal_cleans_prepublication_recovery_links() {
+        let root = unique_test_directory();
+        fs::create_dir_all(&root).expect("create root");
+        let source = root.join("source.flac");
+        fs::write(&source, b"audio bytes").expect("write source");
+        let recovery = root.join(CONSOLIDATION_RECOVERY_DIRECTORY_NAME);
+        fs::create_dir(&recovery).expect("create recovery directory");
+        fs::hard_link(&source, recovery.join("track-1.backup")).expect("create recovery link");
+
+        remove_consolidation_journal_if_present(&root).expect("clean orphan recovery links");
+
+        assert!(source.exists());
+        assert!(!recovery.exists());
+        fs::remove_dir_all(root).expect("remove root");
+    }
+
+    #[test]
+    fn absent_journal_refuses_unknown_recovery_entries() {
+        let root = unique_test_directory();
+        let recovery = root.join(CONSOLIDATION_RECOVERY_DIRECTORY_NAME);
+        fs::create_dir_all(&recovery).expect("create recovery directory");
+        fs::write(recovery.join("unknown"), b"unexpected bytes").expect("write unknown entry");
+
+        assert!(remove_consolidation_journal_if_present(&root).is_err());
+        assert!(recovery.join("unknown").exists());
         fs::remove_dir_all(root).expect("remove root");
     }
 

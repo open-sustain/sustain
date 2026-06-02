@@ -124,6 +124,7 @@ pub use library_hydration::LibraryHydrationSnapshot;
 pub use library_scan::run_library_scan_task;
 pub use managed_library::{
     ManagedLibraryFilesystemError, run_library_consolidation_task, run_library_import_task,
+    run_library_import_task_with_progress,
 };
 pub use metadata_writer::{
     DuplicateConsolidationWriterResult, ManagedMetadataRetargetResult, MetadataWriteKind,
@@ -135,8 +136,9 @@ pub use notifications::{
     Notification, NotificationCategory, NotificationCenter, NotificationId, NotificationKind,
     NotificationSeverity, analysis_background_outcome_text, analysis_background_running_text,
     library_consolidation_outcome_text, library_consolidation_running_text,
-    library_import_outcome_text, library_import_running_text, library_path_change_outcome_text,
-    library_scan_outcome_text, library_scan_running_text, runtime_error_text,
+    library_import_outcome_text, library_import_progress_text, library_import_running_text,
+    library_path_change_outcome_text, library_scan_outcome_text, library_scan_running_text,
+    runtime_error_text,
 };
 
 pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;
@@ -293,6 +295,12 @@ pub struct LibraryImportResult {
     pub summary: LibraryImportSummary,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LibraryImportProgress {
+    pub processed_files: usize,
+    pub total_files: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LibraryConsolidationResult {
     pub tracks: Vec<Track>,
@@ -304,9 +312,8 @@ pub struct LibraryImportSummary {
     pub discovered_files: usize,
     pub imported_tracks: usize,
     pub duplicate_files: usize,
-    // True when the import stopped because the user asked it to. The
-    // import is all-or-nothing: a cancelled run rolls back any files
-    // already copied and never partially populates the library.
+    // True when the import stopped because the user asked it to. Completed
+    // managed copies are retained and committed before the worker returns.
     pub cancelled: bool,
 }
 

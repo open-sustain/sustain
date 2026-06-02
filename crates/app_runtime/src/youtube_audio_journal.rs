@@ -22,8 +22,8 @@ use sustain_metadata::hash_file_content;
 use crate::{
     ApplicationRuntimeError, ApplicationRuntimeResult,
     managed_library::file_ops::{
-        FileIdentity, regular_file_identity, remove_file_and_sync_parent, sync_directory,
-        trash_regular_file_matching_identity,
+        FileIdentity, open_regular_file, regular_file_identity, remove_file_and_sync_parent,
+        remove_regular_file_matching_capability, sync_directory,
     },
 };
 
@@ -106,8 +106,17 @@ pub(crate) fn write_youtube_replacement_journal(
 pub(crate) fn remove_youtube_replacement_journal_if_present(
     library_root: &Path,
 ) -> ApplicationRuntimeResult<()> {
-    remove_file_and_sync_parent(&journal_path(library_root))
-        .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)
+    let path = journal_path(library_root);
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => {
+            let journal = open_regular_file(&path)
+                .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
+            remove_regular_file_matching_capability(&path, &journal)
+                .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)
+        }
+        Err(_) => Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed),
+    }
 }
 
 pub(crate) fn recover_youtube_replacement_journal(
@@ -122,7 +131,7 @@ pub(crate) fn recover_youtube_replacement_journal(
 fn recover_youtube_replacement_journal_with(
     library_root: &Path,
     store: &dyn LibraryStore,
-    trash_backend: &mut dyn FnMut(&Path) -> Result<(), ()>,
+    _trash_backend: &mut dyn FnMut(&Path) -> Result<(), ()>,
 ) -> ApplicationRuntimeResult<YoutubeReplacementRecoveryOutcome> {
     let path = journal_path(library_root);
     match fs::symlink_metadata(&path) {
@@ -178,10 +187,10 @@ fn recover_youtube_replacement_journal_with(
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         match original {
             JournalPathState::Missing => false,
-            JournalPathState::Expected(identity) => {
-                trash_regular_file_matching_identity(&original_path, identity, trash_backend)
-                    .is_err()
-            }
+            // Recovery has no live descriptor from the original publication
+            // attempt. Retain any surviving old pathname rather than deleting
+            // a file based on a historical `(device, inode)` pair.
+            JournalPathState::Expected(_) => true,
             JournalPathState::Unexpected => true,
         }
     } else {
@@ -193,10 +202,13 @@ fn recover_youtube_replacement_journal_with(
 }
 
 fn remove_matching_file(path: &Path, identity: FileIdentity) -> ApplicationRuntimeResult<()> {
-    trash_regular_file_matching_identity(path, identity, |handoff| {
-        fs::remove_file(handoff).map_err(|_| ())
-    })
-    .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)
+    let source = open_regular_file(path)
+        .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
+    if source.identity() != identity {
+        return Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed);
+    }
+    remove_regular_file_matching_capability(path, &source)
+        .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -448,19 +460,24 @@ mod tests {
     }
 
     #[test]
-    fn recovery_finishes_old_source_trash_after_sqlite_rebind() {
+    fn recovery_retains_old_source_after_sqlite_rebind_without_a_live_capability() {
         let fixture = Fixture::new();
         fixture.rebind_to_replacement();
+        let mut trash_called = false;
 
         let outcome = recover_youtube_replacement_journal_with(
             fixture.root.path(),
             &fixture.store,
-            &mut |handoff| fs::remove_file(handoff).map_err(|_| ()),
+            &mut |_| {
+                trash_called = true;
+                Ok(())
+            },
         )
         .expect("recover");
 
-        assert_eq!(outcome, YoutubeReplacementRecoveryOutcome::default());
-        assert!(!fixture.original_path.exists());
+        assert!(outcome.original_retained);
+        assert!(!trash_called);
+        assert!(fixture.original_path.exists());
         assert!(fixture.replacement_path.exists());
         assert!(!journal_path(fixture.root.path()).exists());
     }

@@ -8,8 +8,6 @@
 
 use std::{
     collections::BTreeSet,
-    fs,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -29,8 +27,8 @@ use crate::{
 
 use super::capabilities::ManagedLibraryFilesystemValidator;
 use super::file_ops::{
-    FileIdentity, move_file_without_copy_or_overwrite_matching_identity,
-    prune_empty_ancestor_directories_for_sources, rollback_file_move,
+    RegularFileCapability, move_file_without_copy_or_overwrite_matching_capability,
+    open_regular_file, prune_empty_ancestor_directories_for_sources, rollback_file_move,
 };
 use super::journal::{
     recover_library_consolidation_journal, remove_consolidation_journal_if_present,
@@ -123,10 +121,10 @@ impl LibraryConsolidationContext {
                 break;
             }
 
-            if move_file_without_copy_or_overwrite_matching_identity(
+            if move_file_without_copy_or_overwrite_matching_capability(
                 &planned_move.source_path,
                 &planned_move.destination_path,
-                planned_move.source_identity,
+                &planned_move.source,
             )
             .is_err()
             {
@@ -189,7 +187,7 @@ impl LibraryConsolidationContext {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 struct LibraryConsolidationPlan {
     moves: Vec<PlannedLibraryConsolidationMove>,
     already_organized_tracks: usize,
@@ -207,12 +205,12 @@ struct LibraryConsolidationPlan {
     missing_track_updates: Vec<Track>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(super) struct PlannedLibraryConsolidationMove {
     pub(super) track_id: TrackId,
     pub(super) source_path: PathBuf,
     pub(super) destination_path: PathBuf,
-    pub(super) source_identity: FileIdentity,
+    pub(super) source: RegularFileCapability,
     pub(super) source_relative_path: TrackRelativePath,
     pub(super) destination_relative_path: TrackRelativePath,
     pub(super) updated_track: Track,
@@ -257,14 +255,10 @@ fn plan_library_consolidation(
     for track in existing_tracks {
         let source_relative_path = track.location.relative_path.clone();
         let source_path = track.location.absolute_path(library_path);
-        let Ok(source_metadata) = fs::symlink_metadata(&source_path) else {
+        let Ok(source) = open_regular_file(&source_path) else {
             record_missing_track(track);
             continue;
         };
-        if !source_metadata.file_type().is_file() {
-            record_missing_track(track);
-            continue;
-        }
 
         occupied_paths.remove(&source_relative_path);
         let plan = plan_consolidation_destination(
@@ -290,10 +284,7 @@ fn plan_library_consolidation(
             track_id: track.id,
             source_path,
             destination_path,
-            source_identity: FileIdentity {
-                device: source_metadata.dev(),
-                inode: source_metadata.ino(),
-            },
+            source,
             source_relative_path,
             destination_relative_path: plan.relative_path,
             updated_track,
@@ -316,11 +307,8 @@ pub(super) fn plan_managed_track_retarget(
 ) -> ApplicationRuntimeResult<Option<PlannedLibraryConsolidationMove>> {
     let source_relative_path = track.location.relative_path.clone();
     let source_path = track.location.absolute_path(library_path);
-    let source_metadata = fs::symlink_metadata(&source_path)
+    let source = open_regular_file(&source_path)
         .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
-    if !source_metadata.file_type().is_file() {
-        return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
-    }
 
     let planner = ManagedTrackPathPlanner::default();
     let mut occupied_paths = existing_tracks
@@ -349,10 +337,7 @@ pub(super) fn plan_managed_track_retarget(
         track_id: updated_track.id,
         source_path,
         destination_path,
-        source_identity: FileIdentity {
-            device: source_metadata.dev(),
-            inode: source_metadata.ino(),
-        },
+        source,
         source_relative_path,
         destination_relative_path: plan.relative_path,
         updated_track,
@@ -367,11 +352,8 @@ pub(super) fn plan_managed_missing_track_relocation(
     source_path: &Path,
     source_relative_path: Option<&TrackRelativePath>,
 ) -> ApplicationRuntimeResult<(Track, Option<PlannedLibraryConsolidationMove>)> {
-    let source_metadata = fs::symlink_metadata(source_path)
+    let source = open_regular_file(source_path)
         .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
-    if !source_metadata.file_type().is_file() {
-        return Err(ApplicationRuntimeError::TrackRelocationFailed);
-    }
 
     let planner = ManagedTrackPathPlanner::default();
     let mut occupied_paths = existing_tracks
@@ -402,10 +384,7 @@ pub(super) fn plan_managed_missing_track_relocation(
             track_id: track.id,
             source_path: source_path.to_path_buf(),
             destination_path: library_path.join(plan.relative_path.as_path()),
-            source_identity: FileIdentity {
-                device: source_metadata.dev(),
-                inode: source_metadata.ino(),
-            },
+            source,
             source_relative_path: source_relative_path.clone(),
             destination_relative_path: plan.relative_path,
             updated_track: track,

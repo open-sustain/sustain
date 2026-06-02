@@ -19,9 +19,7 @@ use crate::{
     ManagedMetadataRetargetResult, MissingTrackRelocationResult,
     artwork_fetcher::{ArtworkFetchRequest, query_from_metadata},
     managed_library::{
-        file_ops::{
-            FileIdentity, regular_file_identity_if_present, trash_regular_file_matching_identity,
-        },
+        file_ops::{open_regular_file_if_present, trash_regular_file_matching_capability},
         metadata_change_affects_managed_path, prune_empty_ancestor_directories_for_sources,
         relocate_managed_missing_track, retarget_managed_metadata,
     },
@@ -341,11 +339,11 @@ impl ApplicationRuntime {
         &mut self,
         track_id: TrackId,
     ) -> ApplicationRuntimeResult<()> {
-        self.move_track_to_trash_with(
+        self.move_track_to_trash_with_token(
             track_id,
-            |path| regular_file_identity_if_present(path).map_err(|_| ()),
-            |path, identity| {
-                trash_regular_file_matching_identity(path, identity, |handoff_path| {
+            |path| open_regular_file_if_present(path).map_err(|_| ()),
+            |path, source| {
+                trash_regular_file_matching_capability(path, &source, |handoff_path| {
                     trash::delete(handoff_path).map_err(|_| ())
                 })
                 .map_err(|_| ())
@@ -363,11 +361,21 @@ impl ApplicationRuntime {
     /// probe error (permission, transient I/O) leaves the row in place: the
     /// user asked to trash the file, so deleting the record while the file
     /// may still be live on disk would be the worst outcome.
+    #[cfg(test)]
     pub(super) fn move_track_to_trash_with(
         &mut self,
         track_id: TrackId,
-        probe: impl Fn(&Path) -> Result<Option<FileIdentity>, ()>,
-        trash: impl Fn(&Path, FileIdentity) -> Result<(), ()>,
+        probe: impl Fn(&Path) -> Result<Option<crate::managed_library::file_ops::FileIdentity>, ()>,
+        trash: impl Fn(&Path, crate::managed_library::file_ops::FileIdentity) -> Result<(), ()>,
+    ) -> ApplicationRuntimeResult<()> {
+        self.move_track_to_trash_with_token(track_id, probe, trash)
+    }
+
+    fn move_track_to_trash_with_token<T>(
+        &mut self,
+        track_id: TrackId,
+        probe: impl Fn(&Path) -> Result<Option<T>, ()>,
+        trash: impl Fn(&Path, T) -> Result<(), ()>,
     ) -> ApplicationRuntimeResult<()> {
         self.ensure_no_conflicting_library_mutation()?;
         let track = self
@@ -387,8 +395,8 @@ impl ApplicationRuntime {
             .ok_or(ApplicationRuntimeError::TrackTrashFailed)?;
 
         match probe(&path) {
-            Ok(Some(identity)) => {
-                trash(&path, identity).map_err(|()| ApplicationRuntimeError::TrackTrashFailed)?;
+            Ok(Some(source)) => {
+                trash(&path, source).map_err(|()| ApplicationRuntimeError::TrackTrashFailed)?;
             }
             // Confirmed gone: there is nothing to trash and removing the
             // stale row is exactly what the user wanted.

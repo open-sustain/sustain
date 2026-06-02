@@ -656,11 +656,15 @@ pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {
 
 pub fn hash_file_content(path: &Path) -> MetadataResult<TrackContentHash> {
     let mut file = fs::File::open(path).map_err(|_| MetadataError::ReadFailed)?;
+    hash_reader_content(&mut file)
+}
+
+pub fn hash_reader_content(reader: &mut impl Read) -> MetadataResult<TrackContentHash> {
     let mut hasher = Sha256::new();
     let mut buffer = [0; 64 * 1024];
 
     loop {
-        let bytes_read = file
+        let bytes_read = reader
             .read(&mut buffer)
             .map_err(|_| MetadataError::ReadFailed)?;
         if bytes_read == 0 {
@@ -670,6 +674,33 @@ pub fn hash_file_content(path: &Path) -> MetadataResult<TrackContentHash> {
     }
 
     TrackContentHash::new(lower_hex(&hasher.finalize())).ok_or(MetadataError::ReadFailed)
+}
+
+pub fn copy_and_hash_reader_content(
+    reader: &mut impl Read,
+    writer: &mut impl io::Write,
+) -> MetadataResult<(u64, TrackContentHash)> {
+    let mut hasher = Sha256::new();
+    let mut bytes_copied = 0;
+    let mut buffer = [0; 64 * 1024];
+
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|_| MetadataError::ReadFailed)?;
+        if bytes_read == 0 {
+            break;
+        }
+        writer
+            .write_all(&buffer[..bytes_read])
+            .map_err(|_| MetadataError::ReadFailed)?;
+        hasher.update(&buffer[..bytes_read]);
+        bytes_copied += bytes_read as u64;
+    }
+
+    let content_hash =
+        TrackContentHash::new(lower_hex(&hasher.finalize())).ok_or(MetadataError::ReadFailed)?;
+    Ok((bytes_copied, content_hash))
 }
 
 fn lower_hex(bytes: &[u8]) -> String {

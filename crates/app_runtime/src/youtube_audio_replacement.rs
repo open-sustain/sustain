@@ -12,9 +12,7 @@ use sustain_domain::{
 use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, audio_format_from_path, hash_file_content};
 
-use crate::managed_library::file_ops::{
-    regular_file_identity, trash_regular_file_matching_identity,
-};
+use crate::managed_library::file_ops::{open_regular_file, trash_regular_file_matching_capability};
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
     NotificationSeverity, YoutubeAudioDownloadResult,
@@ -258,8 +256,8 @@ pub(crate) fn replace_track_audio_from_youtube(
         .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
     ensure_track_is_eligible(&track)?;
     let original_path = track.location.absolute_path(&canonical_root);
-    let original_identity = regular_file_identity(&original_path)
-        .map_err(|_| ApplicationRuntimeError::TrackUnavailable)?;
+    let original =
+        open_regular_file(&original_path).map_err(|_| ApplicationRuntimeError::TrackUnavailable)?;
 
     audio_format_from_path(&staged.path)
         .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
@@ -308,7 +306,7 @@ pub(crate) fn replace_track_audio_from_youtube(
         &canonical_root,
         &YoutubeReplacementJournalEntry {
             track_id: track.id,
-            original_identity,
+            original_identity: original.identity(),
             original_relative_path: track.location.relative_path.clone(),
             replacement_content_hash: content_hash.clone(),
             replacement_size_bytes,
@@ -344,7 +342,7 @@ pub(crate) fn replace_track_audio_from_youtube(
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
 
     let original_retained =
-        trash_regular_file_matching_identity(&original_path, original_identity, |handoff| {
+        trash_regular_file_matching_capability(&original_path, &original, |handoff| {
             trash::delete(handoff).map_err(|_| ())
         })
         .is_err();

@@ -110,6 +110,14 @@ fn analysis_progress_always_reads_as_completed_over_total() {
 }
 
 #[test]
+fn library_import_progress_reads_as_processed_over_total() {
+    assert_eq!(
+        library_import_progress_text(37, 120),
+        "Adding tracks (37/120)..."
+    );
+}
+
+#[test]
 fn online_progress_always_reads_as_completed_over_total() {
     assert_eq!(
         online_background_running_text(2, 5),
