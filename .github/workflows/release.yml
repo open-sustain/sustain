@@ -291,15 +291,18 @@ jobs:
         id: collect
         run: |
           set -euo pipefail
-          mkdir -p release
+          # Stage into a name that can't collide with a repo path: the
+          # repo root tracks a `release` helper script, so `mkdir -p
+          # release` here fails with "File exists" on the checked-out file.
+          mkdir -p release-artifacts
           find artifacts -type f \( -name '*.deb' -o -name '*.flatpak' \) \
-            -exec cp -v {} release/ \;
-          ls -la release/
+            -exec cp -v {} release-artifacts/ \;
+          ls -la release-artifacts/
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
-          files: release/*
+          files: release-artifacts/*
           generate_release_notes: true
           fail_on_unmatched_files: true
           # On tag push, `github.ref_name` is the tag (e.g. v0.1.0). On
