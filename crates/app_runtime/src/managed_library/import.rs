@@ -7,7 +7,7 @@
 //! filesystem side effects when cancelled or on failure.
 
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -108,10 +108,17 @@ impl LibraryImportContext {
             .collect::<BTreeSet<_>>();
         // Within-batch dedup only: catch two byte-identical source files
         // dropped in the same import. Cross-existing dedup is decided
-        // against ground truth on disk by `library_contains_matching_content`,
-        // never against the stored content hash, which is import-time only
-        // and may be stale or absent (see #72).
+        // against ground truth on disk by `LibraryContentIndex`, never
+        // against the stored content hash, which is import-time only and
+        // may be stale or absent (see #72).
         let mut seen_hashes: HashSet<String> = HashSet::new();
+
+        // Decide existing-library duplicates against a size-bucketed,
+        // hash-cached index built once from disk. The per-file linear scan
+        // this replaces was O(new × existing) and re-hashed existing files on
+        // every size collision, which dominated import time on a large
+        // library (#146).
+        let mut content_index = LibraryContentIndex::build(&self.existing_tracks, &library_path);
 
         let planner = ManagedTrackPathPlanner::default();
         let mut imports = Vec::new();
@@ -137,11 +144,7 @@ impl LibraryImportContext {
             let content_hash = hash_file_content(&source_path)
                 .map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
             if seen_hashes.contains(content_hash.as_str())
-                || self.library_contains_matching_content(
-                    &library_path,
-                    source_size,
-                    &content_hash,
-                )?
+                || content_index.contains_matching(source_size, &content_hash)
             {
                 duplicate_files += 1;
                 continue;
@@ -338,38 +341,72 @@ impl LibraryImportContext {
             },
         })
     }
+}
 
-    /// Whether a file with the given size and freshly computed content
-    /// hash is already in the library, decided against ground truth on
-    /// disk. The stored `content_hash` column is import-time only and is
-    /// not refreshed after in-place tag / rating / artwork / enrichment
-    /// writes (and is absent for scan-imported tracks), so it is never
-    /// consulted here — an existing track whose on-disk size matches is
-    /// hashed fresh and compared byte-for-byte. The size pre-filter keeps
-    /// this from hashing the whole library on every import (see #72).
-    fn library_contains_matching_content(
-        &self,
-        library_path: &Path,
-        source_size: u64,
-        content_hash: &TrackContentHash,
-    ) -> ApplicationRuntimeResult<bool> {
-        for track in &self.existing_tracks {
-            let track_path = track.location.absolute_path(library_path);
-            let Ok(metadata) = fs::metadata(&track_path) else {
+/// Disk-truth duplicate index for one managed-import batch.
+///
+/// Deciding whether an imported file already exists means comparing content
+/// hashes, but hashing every existing track for every imported file is
+/// O(new × existing) and re-reads colliding files repeatedly — it dominated
+/// import wall time on a large library (#146). This narrows the comparison to
+/// existing files of the *same byte size*, gathered once, and hashes each
+/// existing file at most once across the whole batch.
+///
+/// Sizes and hashes come from disk, never from the stored `file_size_bytes`
+/// or the (import-time-only, possibly stale or absent) content-hash column —
+/// the dedup stays grounded in current ground truth, exactly as before (#72).
+struct LibraryContentIndex {
+    paths_by_size: HashMap<u64, Vec<PathBuf>>,
+    hashes: HashMap<PathBuf, TrackContentHash>,
+}
+
+impl LibraryContentIndex {
+    fn build(existing_tracks: &[Track], library_path: &Path) -> Self {
+        let mut paths_by_size: HashMap<u64, Vec<PathBuf>> = HashMap::new();
+        for track in existing_tracks {
+            let path = track.location.absolute_path(library_path);
+            let Ok(metadata) = fs::metadata(&path) else {
                 continue;
             };
-            if !metadata.is_file() || metadata.len() != source_size {
-                continue;
-            }
-            let Ok(existing_hash) = hash_file_content(&track_path) else {
-                continue;
-            };
-            if &existing_hash == content_hash {
-                return Ok(true);
+            if metadata.is_file() {
+                paths_by_size.entry(metadata.len()).or_default().push(path);
             }
         }
+        Self {
+            paths_by_size,
+            hashes: HashMap::new(),
+        }
+    }
 
-        Ok(false)
+    /// Whether a file with this size and freshly computed content hash is
+    /// already in the library. Only existing files of a matching size are
+    /// hashed, and each is hashed at most once — its hash is memoized for the
+    /// rest of the batch.
+    fn contains_matching(&mut self, source_size: u64, content_hash: &TrackContentHash) -> bool {
+        let Self {
+            paths_by_size,
+            hashes,
+        } = self;
+        let Some(candidates) = paths_by_size.get(&source_size) else {
+            return false;
+        };
+        for candidate in candidates {
+            if let Some(existing_hash) = hashes.get(candidate) {
+                if existing_hash == content_hash {
+                    return true;
+                }
+                continue;
+            }
+            let Ok(existing_hash) = hash_file_content(candidate) else {
+                continue;
+            };
+            let matches = &existing_hash == content_hash;
+            hashes.insert(candidate.clone(), existing_hash);
+            if matches {
+                return true;
+            }
+        }
+        false
     }
 }
 

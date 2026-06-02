@@ -18,7 +18,7 @@ use lofty::{
     picture::{Picture, PictureType},
     prelude::{Accessor, AudioFile, TaggedFileExt},
     tag::{
-        ItemKey, Tag,
+        ItemKey, Tag, TagType,
         items::popularimeter::{Popularimeter, StarRating},
     },
 };
@@ -455,10 +455,12 @@ impl MetadataService for LoftyMetadataService {
         apply_number_change(tag, ItemKey::DiscTotal, change.disc_total);
         apply_year_change(tag, change.year);
         apply_bool_change(tag, ItemKey::FlagCompilation, change.compilation);
-        apply_number_change(tag, ItemKey::Bpm, change.bpm);
+        let bpm_key = bpm_item_key(tag.tag_type());
+        apply_number_change(tag, bpm_key, change.bpm);
         apply_text_change(tag, ItemKey::InitialKey, change.key);
         apply_text_change(tag, ItemKey::Comment, change.comments);
-        apply_text_change(tag, ItemKey::Lyrics, change.lyrics);
+        let lyrics_key = lyrics_item_key(tag.tag_type());
+        apply_text_change(tag, lyrics_key, change.lyrics);
 
         atomic_save_to_path(&tagged_file, path, WriteOptions::default())
     }
@@ -583,14 +585,14 @@ fn read_tags(path: &Path, backfill_title_from_filename: bool) -> MetadataResult<
             .and_then(|tag| tag.get_string(ItemKey::FlagCompilation))
             .and_then(parse_flag),
         bpm: tag
-            .and_then(|tag| tag.get_string(ItemKey::Bpm))
+            .and_then(|tag| tag.get_string(bpm_item_key(tag.tag_type())))
             .and_then(|value| value.trim().parse::<u32>().ok()),
         key: tag
             .and_then(|tag| tag.get_string(ItemKey::InitialKey))
             .map(ToOwned::to_owned),
         comments: tag.and_then(|tag| tag.comment().map(|value| value.into_owned())),
         lyrics: tag
-            .and_then(|tag| tag.get_string(ItemKey::Lyrics))
+            .and_then(|tag| tag.get_string(lyrics_item_key(tag.tag_type())))
             .map(ToOwned::to_owned),
         // Tag-derived "sort as" names (issue #13). Read once at import
         // alongside the display fields; only used for ordering, never
@@ -737,6 +739,41 @@ fn apply_text_change(tag: &mut Tag, item_key: ItemKey, change: FieldChange<Strin
         FieldChange::Clear => {
             let _removed = tag.take(item_key).count();
         }
+    }
+}
+
+/// The tag item that carries beats-per-minute in `tag_type`.
+///
+/// Lofty models BPM as two distinct keys: the decimal [`ItemKey::Bpm`]
+/// and the integer [`ItemKey::IntegerBpm`]. They map to different
+/// container fields, and not every format defines both. ID3v2 only has
+/// the integer `TBPM` frame and MP4 the integer `tmpo` atom — neither
+/// maps [`ItemKey::Bpm`], so writing it there silently drops the value.
+/// Vorbis comments conversely only define a decimal `BPM` field. Sustain
+/// stores BPM as an integer, so prefer the integer key wherever the
+/// format maps it and fall back to the decimal key otherwise. Used for
+/// both reading and writing so the value round-trips on every format.
+fn bpm_item_key(tag_type: TagType) -> ItemKey {
+    if ItemKey::IntegerBpm.map_key(tag_type).is_some() {
+        ItemKey::IntegerBpm
+    } else {
+        ItemKey::Bpm
+    }
+}
+
+/// The tag item that carries unsynchronized lyrics in `tag_type`.
+///
+/// ID3v2 exposes lyrics only through the `USLT` frame
+/// ([`ItemKey::UnsyncLyrics`]) and deliberately leaves [`ItemKey::Lyrics`]
+/// unmapped, so writing the plain key to an MP3 silently drops the text.
+/// MP4 (`©lyr`) and Vorbis (`LYRICS`) accept [`ItemKey::Lyrics`]. Prefer
+/// the plain key where the format maps it and fall back to the
+/// unsynchronized key otherwise, symmetrically for read and write.
+fn lyrics_item_key(tag_type: TagType) -> ItemKey {
+    if ItemKey::Lyrics.map_key(tag_type).is_some() {
+        ItemKey::Lyrics
+    } else {
+        ItemKey::UnsyncLyrics
     }
 }
 

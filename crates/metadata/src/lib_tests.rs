@@ -8,6 +8,9 @@ use std::{
 };
 
 use lofty::{
+    id3::v2::Id3v2Tag,
+    mp4::Ilst,
+    ogg::VorbisComments,
     picture::{Picture, PictureType},
     prelude::Accessor,
     tag::{ItemKey, Tag, TagType},
@@ -16,8 +19,9 @@ use sustain_domain::{FieldChange, TrackMetadata};
 
 use super::{
     AudioFormat, InitialTags, LibraryScanner, MetadataError, MetadataResult, MetadataService,
-    Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, apply_year_change,
-    atomic_write_via_rename, audio_format_from_path, hash_file_content, valid_embedded_picture,
+    Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, apply_number_change,
+    apply_text_change, apply_year_change, atomic_write_via_rename, audio_format_from_path,
+    bpm_item_key, hash_file_content, lyrics_item_key, valid_embedded_picture,
 };
 use sustain_domain::TrackRelativePath;
 
@@ -98,6 +102,78 @@ fn year_update_outside_loftys_timestamp_range_keeps_a_textual_year() {
 
     assert_eq!(tag.get_string(ItemKey::RecordingDate), None);
     assert_eq!(tag.get_string(ItemKey::Year), Some("10000"));
+}
+
+#[test]
+fn bpm_and_lyrics_keys_follow_the_container_format() {
+    // ID3v2 and MP4 only define an integer BPM (`TBPM` / `tmpo`); Vorbis
+    // only a decimal `BPM`. ID3v2 only defines unsynchronized lyrics
+    // (`USLT`); MP4 and Vorbis accept the plain lyrics key.
+    assert_eq!(bpm_item_key(TagType::Id3v2), ItemKey::IntegerBpm);
+    assert_eq!(bpm_item_key(TagType::Mp4Ilst), ItemKey::IntegerBpm);
+    assert_eq!(bpm_item_key(TagType::VorbisComments), ItemKey::Bpm);
+
+    assert_eq!(lyrics_item_key(TagType::Id3v2), ItemKey::UnsyncLyrics);
+    assert_eq!(lyrics_item_key(TagType::Mp4Ilst), ItemKey::Lyrics);
+    assert_eq!(lyrics_item_key(TagType::VorbisComments), ItemKey::Lyrics);
+}
+
+/// Write BPM and lyrics into a fresh `tag_type` tag exactly as
+/// `write_metadata` does, round-trip it through the container-specific
+/// representation — the lossy boundary lofty crosses on save + re-read,
+/// supplied by `to_container_and_back` — then assert both survive.
+fn assert_bpm_and_lyrics_round_trip(tag_type: TagType, to_container_and_back: impl Fn(Tag) -> Tag) {
+    let mut tag = Tag::new(tag_type);
+    apply_number_change(&mut tag, bpm_item_key(tag_type), FieldChange::Set(127_u32));
+    apply_text_change(
+        &mut tag,
+        lyrics_item_key(tag_type),
+        FieldChange::Set("first line\nsecond line".to_owned()),
+    );
+
+    let back = to_container_and_back(tag);
+
+    assert_eq!(
+        back.get_string(bpm_item_key(tag_type))
+            .and_then(|value| value.trim().parse::<u32>().ok()),
+        Some(127),
+        "bpm lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(lyrics_item_key(tag_type)),
+        Some("first line\nsecond line"),
+        "lyrics lost for {tag_type:?}"
+    );
+}
+
+#[test]
+fn bpm_and_lyrics_survive_a_container_round_trip_on_every_format() {
+    // Regression for #148: a survivor whose BPM/lyrics came from SQLite was
+    // written with `ItemKey::Bpm`/`ItemKey::Lyrics`, which ID3v2 maps to no
+    // frame at all, so the value vanished on save and consolidation's
+    // read-back verification could never match. Writing the key the format
+    // actually defines makes both fields round-trip everywhere.
+    assert_bpm_and_lyrics_round_trip(TagType::Id3v2, |tag| Tag::from(Id3v2Tag::from(tag)));
+    assert_bpm_and_lyrics_round_trip(TagType::Mp4Ilst, |tag| Tag::from(Ilst::from(tag)));
+    assert_bpm_and_lyrics_round_trip(TagType::VorbisComments, |tag| {
+        Tag::from(VorbisComments::from(tag))
+    });
+}
+
+#[test]
+fn id3v2_drops_the_plain_bpm_and_lyrics_keys() {
+    // Documents why the fix was needed: ID3v2 maps neither `ItemKey::Bpm`
+    // nor `ItemKey::Lyrics`, so the old write path lost both on save.
+    let mut tag = Tag::new(TagType::Id3v2);
+    tag.insert_text(ItemKey::Bpm, "127".to_owned());
+    tag.insert_text(ItemKey::Lyrics, "a line".to_owned());
+
+    let back = Tag::from(Id3v2Tag::from(tag));
+
+    assert_eq!(back.get_string(ItemKey::Bpm), None);
+    assert_eq!(back.get_string(ItemKey::IntegerBpm), None);
+    assert_eq!(back.get_string(ItemKey::Lyrics), None);
+    assert_eq!(back.get_string(ItemKey::UnsyncLyrics), None);
 }
 
 #[test]
