@@ -143,7 +143,7 @@ impl ArtworkPage {
         if let Some(source) = artwork_source {
             let refresh = self.refresh.clone();
             let load_generation = self.load_generation.clone();
-            self.artwork_loader.request(
+            self.artwork_loader.request_detail(
                 source,
                 Box::new(move |decoded| {
                     if load_generation.get() != generation {

@@ -14,19 +14,25 @@
 //! that needs an artwork texture or palette (Albums grid, album-detail
 //! panel, integrated top bar's now-playing tile, future zoom modal).
 //!
-//! * A small pool of worker threads consumes `ArtworkSource` requests from a
-//!   shared queue and runs the **entire** decode pipeline off the main thread:
-//!   source resolution, `MetadataService::read_artwork` for embedded-track
-//!   artwork, scaled pixbuf decode, `ArtworkPalette::from_pixbuf`, and bounded
-//!   `gdk::Texture`s for the tile and detail sizes. The pixbuf itself is
-//!   dropped on the worker; only the finished `DecodedArtwork` is handed back.
-//!   (This relies on `gdk::Texture` being `Send + Sync` in gtk-rs — it is,
-//!   because GdkTexture is documented as immutable after construction.)
+//! * A small pool of worker threads consumes requests from a shared queue
+//!   and runs the **entire** decode pipeline off the main thread: source
+//!   resolution, `MetadataService::read_artwork` for embedded-track artwork,
+//!   scaled pixbuf decode, `ArtworkPalette::from_pixbuf`, and a bounded
+//!   `gdk::Texture` for the *one* size the request asked for (tile or
+//!   detail). The pixbuf itself is dropped on the worker; only the finished
+//!   `DecodedArtwork` is handed back. (This relies on `gdk::Texture` being
+//!   `Send + Sync` in gtk-rs — it is, because GdkTexture is documented as
+//!   immutable after construction.)
+//! * The two sizes live in separate bounded caches: tiles (the cheap grid
+//!   cover) are retained generously so scrollback never thrashes, while the
+//!   far heavier detail texture is kept to a small window so it cannot
+//!   exhaust the GPU's device-local memory. See `MAX_CACHED_TILE_ARTWORKS`
+//!   and `MAX_CACHED_DETAIL_ARTWORKS`.
 //! * A GTK main-loop poller drains the result channel under a strict
 //!   per-tick budget (small max batch + short wall-clock cap) so even a
 //!   burst of completions can't monopolise the main thread, places each
-//!   result in the source-keyed cache, and fires every callback that was
-//!   waiting for that source.
+//!   result in the cache for its size, and fires every callback that was
+//!   waiting on that (source, size).
 //! * Staleness — discarding callbacks whose target widget is no longer
 //!   relevant (Albums grid rebuilt, now-playing track changed) — is the
 //!   caller's concern. Each view tracks its own per-view generation
@@ -49,7 +55,7 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use gtk::{gdk, gdk_pixbuf, gio, glib};
@@ -61,44 +67,89 @@ use sustain_artwork::{
 
 use crate::artwork_color::{ArtworkPalette, ArtworkPaletteComponents, RgbColorComponents};
 
-/// Number of worker threads pulling from the request queue. Artwork
-/// extraction is dominated by file I/O, tag parsing, and pixbuf decode;
-/// a small fixed pool keeps the disk busy and uses a couple of cores
-/// for decode without making us a noticeable burden on other processes.
-/// Not user-configurable: the right value lives in a narrow band and
-/// the wrong one is unlikely to surprise anyone.
-const WORKER_COUNT: usize = 4;
+/// Lower and upper bounds on the artwork worker pool (see [`worker_count`]).
+const WORKER_COUNT_MIN: usize = 4;
+const WORKER_COUNT_MAX: usize = 8;
 
-/// Poll interval for delivering completed loads back to the main loop.
-/// 50ms is fast enough that artwork pops in smoothly while keeping the
-/// idle GTK loop quiet when nothing is being decoded.
-const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// Number of worker threads pulling from the request queue, scaled to the
+/// machine.
+///
+/// Each request is a quick SQLite cache read followed — for the common warm
+/// load — by a CPU-bound PNG/pixbuf decode. That decode runs *outside* the
+/// cache's connection lock, so it parallelises: with more threads, a burst
+/// of newly-visible covers during a fast Albums scroll fills in proportionally
+/// fewer rounds, which is what keeps the grid feeling fluid.
+///
+/// Bounded at both ends. The floor keeps low-core machines on a usable pool
+/// (and matches the previous fixed size). The ceiling reflects diminishing
+/// returns — a viewport row is only a handful of covers, so past a small pool
+/// extra threads stop helping while still holding transient decode buffers;
+/// detail loads happen one at a time and don't benefit from width at all.
+/// Not user-configurable: the useful range is narrow and self-tuning.
+fn worker_count() -> usize {
+    // `available_parallelism` only errs in exotic sandboxes; fall back to the
+    // floor there rather than guessing high.
+    thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(WORKER_COUNT_MIN)
+        .clamp(WORKER_COUNT_MIN, WORKER_COUNT_MAX)
+}
 
-/// Hard cap on the number of completed results the poller hands to
-/// widget callbacks in a single tick. Even when each callback is cheap
-/// (texture swap on a single image widget), the cumulative GTK redraw
-/// cost can stall the frame if a flood of results lands at once. The
-/// cap and the time budget below act together: whichever fires first
-/// returns control to the main loop and lets GTK paint a frame before
-/// the next batch is delivered.
-const RESULT_BATCH_MAX: usize = 8;
+/// Wall-clock budget for one slice of result delivery on the main loop.
+///
+/// Decoded covers are drained the instant they arrive (see
+/// [`spawn_result_drainer`]), not on a fixed poll; this only bounds how long
+/// a *single* drain slice runs before yielding, so a flood of completions
+/// can't stall a frame. Each delivery is a cheap texture swap, so 4 ms clears
+/// dozens of covers — far more than a viewport — before the breather below.
+const RESULT_DELIVERY_BUDGET: Duration = Duration::from_millis(4);
 
-/// Wall-clock budget for a single poller tick. Backstops the batch cap
-/// against pathological per-callback work — if a single callback ends
-/// up doing more than expected, we still relinquish the main thread on
-/// schedule rather than running through the whole batch.
-const RESULT_TICK_BUDGET: Duration = Duration::from_millis(4);
+/// Breather awaited after a drain slice exhausts [`RESULT_DELIVERY_BUDGET`],
+/// letting GTK paint the just-delivered covers before the next slice. Only
+/// reached under a sustained flood (e.g. warming thousands of tiles); the
+/// common viewport-sized burst drains in one slice and never waits.
+const RESULT_DELIVERY_PACING: Duration = Duration::from_millis(8);
 
 /// Maximum side length of the smaller cached texture. Sized to cover
 /// the Albums grid tile (132px) and the now-playing tile (72px) without
 /// either having to upscale. Bigger consumers (album-detail panel,
-/// zoom modal) use the detail texture below.
+/// lyrics/artwork overlay) use the detail texture below.
 const TILE_TEXTURE_MAX_SIDE: i32 = 132;
 
 /// Maximum side length of the larger cached texture. Sized to cover
 /// the album-detail panel (3× the grid tile). The cache stores PNG
 /// payloads at this size; views downscale further at paint time.
 const DETAIL_TEXTURE_MAX_SIDE: i32 = TILE_TEXTURE_MAX_SIDE * 3;
+
+/// Upper bound on resident *tile* textures.
+///
+/// A tile is the small grid / now-playing cover — at 132px RGBA roughly
+/// 70 KB of texture memory. Tiles are what the Albums grid paints, so they
+/// must stay resident generously: evicting a cover the user can still
+/// scroll back to is exactly the thrash that makes the grid feel broken.
+/// This ceiling holds several thousand tiles — far more than any viewport
+/// and enough to keep a typical library's covers resident for a whole
+/// session — while staying bounded so a pathological library can't grow it
+/// without limit. At ~70 KB each the worst case is on the order of a few
+/// hundred MB of readily-evictable texture memory, which the GPU keeps in
+/// the large GTT/host heap rather than the small device-local VRAM heap.
+const MAX_CACHED_TILE_ARTWORKS: usize = 4096;
+
+/// Upper bound on resident *detail* textures.
+///
+/// A detail texture is the 396px panel/overlay cover — at RGBA roughly
+/// 610 KB, nearly 9× a tile, and the dominant pressure on the device-local
+/// VRAM heap the Vulkan renderer allocates swapchain and active textures
+/// from. On the maintainer's iGPU that heap is only 512 MB, most of it
+/// already spent on dual-4K scanout, so an unbounded detail set exhausted
+/// it and aborted the renderer with `VK_ERROR_OUT_OF_DEVICE_MEMORY` (#170).
+/// Only one detail cover is on screen at a time (the album-detail panel,
+/// Get Info, or the lyrics/artwork overlay); this small window keeps recent
+/// navigation instant while bounding detail-texture memory to a low, fixed
+/// fraction of the heap (~32 × 610 KB ≈ 20 MB). An evicted detail reloads
+/// from the on-disk PNG cache on the worker pool — at most a brief
+/// re-decode, never a re-read of the audio file.
+const MAX_CACHED_DETAIL_ARTWORKS: usize = 32;
 
 const CACHE_SCHEMA_VERSION: i64 = 2;
 const CACHE_SOURCE_KIND_EMBEDDED_TRACK: &str = "embedded-track";
@@ -114,6 +165,22 @@ pub(crate) struct DecodedArtwork {
     pub(crate) palette: Option<ArtworkPalette>,
     pub(crate) dimensions: Option<ArtworkDimensions>,
     pub(crate) encoded_bytes_len: Option<usize>,
+}
+
+/// Which cached texture size a request wants.
+///
+/// The two sizes have very different memory profiles, so they live in
+/// separate bounded caches (see [`MAX_CACHED_TILE_ARTWORKS`] and
+/// [`MAX_CACHED_DETAIL_ARTWORKS`]) and a worker only uploads the texture for
+/// the size that was actually asked for. The on-disk cache always holds both
+/// PNG payloads, so the *other* size, when later requested, is produced from
+/// disk without re-reading the audio file.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ArtworkVariant {
+    /// Small grid / now-playing cover ([`TILE_TEXTURE_MAX_SIDE`]).
+    Tile,
+    /// Large panel / overlay cover ([`DETAIL_TEXTURE_MAX_SIDE`]).
+    Detail,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -168,6 +235,95 @@ struct ArtworkFileFingerprint {
     mtime_ns: i64,
 }
 
+/// Bounded least-recently-used map.
+///
+/// Inserting a new key while at capacity evicts the least-recently-used
+/// entry; both `get` and `insert` count as a use. Single-threaded — the
+/// loader holds it behind a `RefCell` and only touches it from the GTK main
+/// thread, so no locking is needed.
+struct LruCache<K, V> {
+    capacity: usize,
+    entries: HashMap<K, LruEntry<V>>,
+    clock: u64,
+}
+
+struct LruEntry<V> {
+    value: V,
+    used_at: u64,
+}
+
+impl<K, V> LruCache<K, V>
+where
+    K: Clone + Eq + std::hash::Hash,
+{
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            entries: HashMap::new(),
+            clock: 0,
+        }
+    }
+
+    /// Monotonic recency stamp. `wrapping_add` only matters after 2^64
+    /// accesses (unreachable in any real session); it keeps the counter
+    /// total rather than risking a panic on the theoretical overflow.
+    fn next_tick(&mut self) -> u64 {
+        self.clock = self.clock.wrapping_add(1);
+        self.clock
+    }
+
+    fn get(&mut self, key: &K) -> Option<&V> {
+        let tick = self.next_tick();
+        let entry = self.entries.get_mut(key)?;
+        entry.used_at = tick;
+        Some(&entry.value)
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        let tick = self.next_tick();
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.value = value;
+            entry.used_at = tick;
+            return;
+        }
+        if self.entries.len() >= self.capacity {
+            self.evict_least_recently_used();
+        }
+        self.entries.insert(
+            key,
+            LruEntry {
+                value,
+                used_at: tick,
+            },
+        );
+    }
+
+    fn remove(&mut self, key: &K) -> Option<V> {
+        self.entries.remove(key).map(|entry| entry.value)
+    }
+
+    fn evict_least_recently_used(&mut self) {
+        let oldest = self
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.used_at)
+            .map(|(key, _)| key.clone());
+        if let Some(key) = oldest {
+            self.entries.remove(&key);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    fn contains(&self, key: &K) -> bool {
+        self.entries.contains_key(key)
+    }
+}
+
 pub(crate) type ArtworkCallback = Box<dyn FnOnce(DecodedArtwork) + 'static>;
 
 #[derive(Clone)]
@@ -178,18 +334,35 @@ pub(crate) struct ArtworkLoader {
 struct LoaderInner {
     repository: Arc<ArtworkRepository>,
     request_tx: mpsc::Sender<WorkerRequest>,
-    cache: RefCell<HashMap<ArtworkSource, DecodedArtwork>>,
-    pending: RefCell<HashMap<ArtworkSource, Vec<ArtworkCallback>>>,
+    tiles: RefCell<LruCache<ArtworkSource, DecodedArtwork>>,
+    details: RefCell<LruCache<ArtworkSource, DecodedArtwork>>,
+    pending: RefCell<HashMap<(ArtworkSource, ArtworkVariant), Vec<ArtworkCallback>>>,
+}
+
+impl LoaderInner {
+    /// The resident cache backing a given size. Single source of truth for
+    /// the variant→cache mapping, shared by the public API and the poller.
+    fn cache_for(
+        &self,
+        variant: ArtworkVariant,
+    ) -> &RefCell<LruCache<ArtworkSource, DecodedArtwork>> {
+        match variant {
+            ArtworkVariant::Tile => &self.tiles,
+            ArtworkVariant::Detail => &self.details,
+        }
+    }
 }
 
 struct WorkerRequest {
     source: ArtworkSource,
     generation: u64,
+    variant: ArtworkVariant,
 }
 
 struct WorkerResult {
     source: ArtworkSource,
     generation: u64,
+    variant: ArtworkVariant,
     decoded: DecodedArtwork,
 }
 
@@ -198,9 +371,9 @@ impl ArtworkLoader {
         let repository = Arc::new(ArtworkRepository::new(metadata_service, cache_dir));
         let (request_tx, request_rx) = mpsc::channel::<WorkerRequest>();
         let request_rx = Arc::new(Mutex::new(request_rx));
-        let (result_tx, result_rx) = mpsc::channel::<WorkerResult>();
+        let (result_tx, result_rx) = async_channel::unbounded::<WorkerResult>();
 
-        for index in 0..WORKER_COUNT {
+        for index in 0..worker_count() {
             let request_rx = Arc::clone(&request_rx);
             let result_tx = result_tx.clone();
             let repository = Arc::clone(&repository);
@@ -210,34 +383,35 @@ impl ArtworkLoader {
                 .expect("spawn artwork worker thread");
         }
         // Workers each keep their own clone of the result sender; drop
-        // the original so the poller's `Disconnected` actually fires
-        // when every worker has exited.
+        // the original so the drainer's `recv` reports the channel closed
+        // once every worker has exited.
         drop(result_tx);
 
         let inner = Rc::new(LoaderInner {
             repository,
             request_tx,
-            cache: RefCell::new(HashMap::new()),
+            tiles: RefCell::new(LruCache::new(MAX_CACHED_TILE_ARTWORKS)),
+            details: RefCell::new(LruCache::new(MAX_CACHED_DETAIL_ARTWORKS)),
             pending: RefCell::new(HashMap::new()),
         });
 
-        install_result_poller(Rc::clone(&inner), result_rx);
+        spawn_result_drainer(Rc::clone(&inner), result_rx);
 
         Self { inner }
     }
 
-    /// Returns the decoded entry for `source`, if any. Lets a view
-    /// reuse what another view already produced rather than reading the
+    /// Returns the decoded *tile* entry for `source`, if resident. Lets a
+    /// view reuse what another view already produced rather than reading the
     /// file a second time.
     pub(crate) fn cached(&self, source: &ArtworkSource) -> Option<DecodedArtwork> {
-        self.inner.cache.borrow().get(source).cloned()
+        self.cached_variant(source, ArtworkVariant::Tile)
     }
 
-    /// Request the decoded artwork for `source`. The callback fires on
-    /// the main thread when the artwork becomes available, or
-    /// synchronously when the in-memory cache already holds the entry —
-    /// so a tile whose neighbour just resolved the same file never
-    /// schedules redundant disk work.
+    /// Request the decoded *tile* artwork for `source`. The callback fires on
+    /// the main thread when the artwork becomes available, or synchronously
+    /// when the in-memory cache already holds the entry — so a tile whose
+    /// neighbour just resolved the same file never schedules redundant disk
+    /// work.
     ///
     /// The loader has no notion of staleness; callbacks always fire.
     /// Each caller is responsible for checking, inside its closure,
@@ -247,22 +421,70 @@ impl ArtworkLoader {
     /// independent views without their rebuilds invalidating each
     /// other's in-flight requests.
     pub(crate) fn request(&self, source: ArtworkSource, callback: ArtworkCallback) {
-        if let Some(cached) = self.inner.cache.borrow().get(&source) {
-            callback(cached.clone());
+        self.request_variant(source, ArtworkVariant::Tile, callback);
+    }
+
+    /// Returns the decoded *detail* entry for `source`, if resident.
+    ///
+    /// The detail texture is the larger panel/overlay cover; it lives in its
+    /// own small bounded cache, separate from the tiles, so the heavy detail
+    /// textures cannot crowd the grid's tiles out of memory.
+    pub(crate) fn cached_detail(&self, source: &ArtworkSource) -> Option<DecodedArtwork> {
+        self.cached_variant(source, ArtworkVariant::Detail)
+    }
+
+    /// Request the decoded *detail* artwork for `source`. Same delivery
+    /// semantics as [`Self::request`], but resolves the larger detail texture
+    /// and caches it separately.
+    pub(crate) fn request_detail(&self, source: ArtworkSource, callback: ArtworkCallback) {
+        self.request_variant(source, ArtworkVariant::Detail, callback);
+    }
+
+    fn cached_variant(
+        &self,
+        source: &ArtworkSource,
+        variant: ArtworkVariant,
+    ) -> Option<DecodedArtwork> {
+        self.inner
+            .cache_for(variant)
+            .borrow_mut()
+            .get(source)
+            .cloned()
+    }
+
+    fn request_variant(
+        &self,
+        source: ArtworkSource,
+        variant: ArtworkVariant,
+        callback: ArtworkCallback,
+    ) {
+        // Clone the hit out and release the cache borrow before invoking the
+        // callback: `get` mutates the LRU recency, so holding the borrow
+        // across a callback that re-enters (`cached`/`request`) would panic.
+        let cached = self
+            .inner
+            .cache_for(variant)
+            .borrow_mut()
+            .get(&source)
+            .cloned();
+        if let Some(decoded) = cached {
+            callback(decoded);
             return;
         }
+        let key = (source.clone(), variant);
         let mut pending = self.inner.pending.borrow_mut();
-        let needs_queue = !pending.contains_key(&source);
-        pending.entry(source.clone()).or_default().push(callback);
+        let needs_queue = !pending.contains_key(&key);
+        pending.entry(key).or_default().push(callback);
         if needs_queue {
             // Send only fails if every worker has exited, which happens
             // exclusively at shutdown. Drop the callback silently in
             // that case — there is no view left to update.
             let generation = self.inner.repository.source_generation(&source);
-            let _ = self
-                .inner
-                .request_tx
-                .send(WorkerRequest { source, generation });
+            let _ = self.inner.request_tx.send(WorkerRequest {
+                source,
+                generation,
+                variant,
+            });
         }
     }
 
@@ -280,13 +502,18 @@ impl ArtworkLoader {
     /// That keeps the invalidation hook narrowly responsible and
     /// avoids reaching across the UI tree from a model-layer cache.
     pub(crate) fn invalidate(&self, source: &ArtworkSource) {
-        // Forget the decoded value and callbacks before advancing the source
-        // generation. Results already in flight are discarded by the poller;
-        // advancing the repository generation also prevents those workers
-        // from repopulating the on-disk cache after its matching row is
-        // evicted.
-        self.inner.cache.borrow_mut().remove(source);
-        let _ = self.inner.pending.borrow_mut().remove(source);
+        // Forget the decoded values (both sizes) and any queued callbacks
+        // before advancing the source generation. Results already in flight
+        // are discarded by the drainer; advancing the repository generation
+        // also prevents those workers from repopulating the on-disk cache
+        // after its matching row is evicted.
+        self.inner.tiles.borrow_mut().remove(source);
+        self.inner.details.borrow_mut().remove(source);
+        {
+            let mut pending = self.inner.pending.borrow_mut();
+            pending.remove(&(source.clone(), ArtworkVariant::Tile));
+            pending.remove(&(source.clone(), ArtworkVariant::Detail));
+        }
         self.inner.repository.invalidate(source);
     }
 
@@ -305,17 +532,26 @@ impl ArtworkLoader {
     /// the next miss-driven worker load once the tag write has
     /// landed and the file fingerprint has updated.
     pub(crate) fn prime(&self, source: ArtworkSource, bytes: Vec<u8>) {
-        let decoded = decode_artwork(Some(bytes));
+        // Populate both caches so the new cover is visible whether the next
+        // reader asks for the tile (now-playing tile) or the detail
+        // (lyrics/artwork overlay). Decoding twice is acceptable: priming
+        // happens once, on a manual cover accept, not on a hot path.
+        let tile = decode_artwork(Some(bytes.clone()), ArtworkVariant::Tile);
+        let detail = decode_artwork(Some(bytes), ArtworkVariant::Detail);
         self.inner
-            .cache
+            .tiles
             .borrow_mut()
-            .insert(source, decoded.artwork);
+            .insert(source.clone(), tile.artwork);
+        self.inner
+            .details
+            .borrow_mut()
+            .insert(source, detail.artwork);
     }
 }
 
 fn worker_loop(
     request_rx: Arc<Mutex<mpsc::Receiver<WorkerRequest>>>,
-    result_tx: mpsc::Sender<WorkerResult>,
+    result_tx: async_channel::Sender<WorkerResult>,
     repository: Arc<ArtworkRepository>,
 ) {
     loop {
@@ -331,11 +567,15 @@ fn worker_loop(
                 Err(_) => return,
             }
         };
-        let decoded = repository.load(&request.source, request.generation);
+        let decoded = repository.load(&request.source, request.generation, request.variant);
+        // The channel is unbounded, so `send_blocking` never actually
+        // blocks; it only errs once every receiver is gone — i.e. at
+        // shutdown — at which point the worker stops.
         if result_tx
-            .send(WorkerResult {
+            .send_blocking(WorkerResult {
                 source: request.source,
                 generation: request.generation,
+                variant: request.variant,
                 decoded,
             })
             .is_err()
@@ -345,43 +585,61 @@ fn worker_loop(
     }
 }
 
-fn install_result_poller(inner: Rc<LoaderInner>, rx: mpsc::Receiver<WorkerResult>) {
-    glib::timeout_add_local(RESULT_POLL_INTERVAL, move || {
-        // Bound per-tick work so a burst of completed loads doesn't
-        // monopolise the main thread. Stop on whichever fires first:
-        // the batch cap, the wall-clock budget, an empty queue, or all
-        // workers having exited.
-        let started = std::time::Instant::now();
-        let mut processed = 0;
+/// Drive result delivery from the worker pool onto the GTK main loop.
+///
+/// Event-driven rather than polled: the task parks on `recv().await` with
+/// zero idle cost until a worker finishes a decode, then drains every cover
+/// that is already ready in one go, so a viewport-sized burst lands within a
+/// single frame instead of trickling in at a fixed poll rate. A wall-clock
+/// budget caps each drain slice and yields a breather under a sustained flood
+/// so painting never starves.
+fn spawn_result_drainer(inner: Rc<LoaderInner>, rx: async_channel::Receiver<WorkerResult>) {
+    glib::MainContext::default().spawn_local(async move {
         loop {
-            if processed >= RESULT_BATCH_MAX || started.elapsed() >= RESULT_TICK_BUDGET {
-                return glib::ControlFlow::Continue;
+            // Park (no idle wakeups) until at least one result is ready.
+            match rx.recv().await {
+                Ok(result) => deliver_result(&inner, result),
+                // Every worker has exited: shutdown. Stop the task.
+                Err(_) => return,
             }
-            match rx.try_recv() {
-                Ok(result) => {
-                    if inner.repository.source_generation(&result.source) != result.generation {
-                        processed += 1;
-                        continue;
-                    }
-                    inner
-                        .cache
-                        .borrow_mut()
-                        .insert(result.source.clone(), result.decoded.clone());
-                    let callbacks = inner
-                        .pending
-                        .borrow_mut()
-                        .remove(&result.source)
-                        .unwrap_or_default();
-                    for callback in callbacks {
-                        callback(result.decoded.clone());
-                    }
-                    processed += 1;
+            // Drain whatever else already completed without re-awaiting, so
+            // a burst lands together; bound the slice so a flood can't hog
+            // the frame, yielding a breather to let GTK paint between slices.
+            let mut slice_started = Instant::now();
+            loop {
+                if slice_started.elapsed() >= RESULT_DELIVERY_BUDGET {
+                    glib::timeout_future(RESULT_DELIVERY_PACING).await;
+                    slice_started = Instant::now();
                 }
-                Err(mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
-                Err(mpsc::TryRecvError::Disconnected) => return glib::ControlFlow::Break,
+                match rx.try_recv() {
+                    Ok(result) => deliver_result(&inner, result),
+                    Err(async_channel::TryRecvError::Empty) => break,
+                    Err(async_channel::TryRecvError::Closed) => return,
+                }
             }
         }
     });
+}
+
+/// Place one finished decode into its size's cache and fire the callbacks
+/// waiting on it — unless a newer invalidation has superseded the source, in
+/// which case the stale result is dropped.
+fn deliver_result(inner: &LoaderInner, result: WorkerResult) {
+    if inner.repository.source_generation(&result.source) != result.generation {
+        return;
+    }
+    inner
+        .cache_for(result.variant)
+        .borrow_mut()
+        .insert(result.source.clone(), result.decoded.clone());
+    let callbacks = inner
+        .pending
+        .borrow_mut()
+        .remove(&(result.source.clone(), result.variant))
+        .unwrap_or_default();
+    for callback in callbacks {
+        callback(result.decoded.clone());
+    }
 }
 
 struct ArtworkRepository {
@@ -418,10 +676,15 @@ impl ArtworkRepository {
         }
     }
 
-    fn load(&self, source: &ArtworkSource, generation: u64) -> DecodedArtwork {
+    fn load(
+        &self,
+        source: &ArtworkSource,
+        generation: u64,
+        variant: ArtworkVariant,
+    ) -> DecodedArtwork {
         let fingerprint = source.file_fingerprint();
         if let (Some(cache), Some(fingerprint)) = (&self.disk_cache, fingerprint)
-            && let Some(decoded) = cache.load(source, fingerprint)
+            && let Some(decoded) = cache.load(source, fingerprint, variant)
         {
             return decoded;
         }
@@ -429,7 +692,7 @@ impl ArtworkRepository {
         match source {
             ArtworkSource::EmbeddedTrack { file_path, .. } => {
                 let bytes = self.metadata_service.read_artwork(file_path).ok().flatten();
-                let decoded = decode_artwork(bytes);
+                let decoded = decode_artwork(bytes, variant);
                 let generations = self.source_generations.lock().ok();
                 if generations.as_ref().is_some_and(|generations| {
                     generations.get(source).copied().unwrap_or_default() == generation
@@ -510,6 +773,7 @@ impl ArtworkDiskCache {
         &self,
         source: &ArtworkSource,
         fingerprint: ArtworkFileFingerprint,
+        variant: ArtworkVariant,
     ) -> Option<DecodedArtwork> {
         let (source_kind, source_key) = source.cache_key();
         let cached = {
@@ -563,7 +827,7 @@ impl ArtworkDiskCache {
                 .ok()
                 .flatten()?
         };
-        cached.decode()
+        cached.decode(variant)
     }
 
     fn delete(&self, source: &ArtworkSource) {
@@ -701,7 +965,13 @@ struct CachedArtworkRow {
 }
 
 impl CachedArtworkRow {
-    fn decode(self) -> Option<DecodedArtwork> {
+    /// Reconstruct the in-memory artwork for one requested size.
+    ///
+    /// Only the requested variant's PNG is decoded into a `gdk::Texture`;
+    /// the other size's payload stays on disk untouched. This is what keeps
+    /// a tile load from materialising the much larger detail texture, so the
+    /// disk path preserves the same memory discipline as a fresh decode.
+    fn decode(self, variant: ArtworkVariant) -> Option<DecodedArtwork> {
         let dimensions = match (self.original_width, self.original_height) {
             (Some(width), Some(height)) => Some(
                 validate_dimensions(u64::try_from(width).ok()?, u64::try_from(height).ok()?)
@@ -723,11 +993,19 @@ impl CachedArtworkRow {
             return Some(DecodedArtwork::default());
         }
 
-        let tile_texture = self.tile_png.as_deref().and_then(texture_from_png)?;
-        let detail_texture = self.detail_png.as_deref().and_then(texture_from_png)?;
+        let (tile_texture, detail_texture) = match variant {
+            ArtworkVariant::Tile => (
+                Some(self.tile_png.as_deref().and_then(texture_from_png)?),
+                None,
+            ),
+            ArtworkVariant::Detail => (
+                None,
+                Some(self.detail_png.as_deref().and_then(texture_from_png)?),
+            ),
+        };
         Some(DecodedArtwork {
-            tile_texture: Some(tile_texture),
-            detail_texture: Some(detail_texture),
+            tile_texture,
+            detail_texture,
             palette: self.palette.map(ArtworkPalette::from_components),
             dimensions,
             encoded_bytes_len,
@@ -735,7 +1013,7 @@ impl CachedArtworkRow {
     }
 }
 
-fn decode_artwork(bytes: Option<Vec<u8>>) -> DecodedArtworkRecord {
+fn decode_artwork(bytes: Option<Vec<u8>>, variant: ArtworkVariant) -> DecodedArtworkRecord {
     let Some(bytes) = bytes else {
         return DecodedArtworkRecord::default();
     };
@@ -753,6 +1031,9 @@ fn decode_artwork(bytes: Option<Vec<u8>>) -> DecodedArtworkRecord {
         return DecodedArtworkRecord::default();
     };
 
+    // Both sizes are always scaled and PNG-encoded for the on-disk cache, so
+    // the *other* size can later be served from disk without re-reading the
+    // audio file. Only the requested size is uploaded to a GPU texture.
     let tile_pixbuf = scaled_pixbuf(&pixbuf, TILE_TEXTURE_MAX_SIDE);
     let detail_pixbuf = scaled_pixbuf(&pixbuf, DETAIL_TEXTURE_MAX_SIDE);
     let palette = ArtworkPalette::from_pixbuf(&pixbuf);
@@ -763,17 +1044,47 @@ fn decode_artwork(bytes: Option<Vec<u8>>) -> DecodedArtworkRecord {
         detail_png: detail_pixbuf.as_ref().and_then(pixbuf_png_bytes),
         palette: palette.map(ArtworkPalette::components),
     };
-    let artwork = DecodedArtwork {
-        tile_texture: tile_pixbuf.as_ref().map(gdk::Texture::for_pixbuf),
-        detail_texture: detail_pixbuf.as_ref().map(gdk::Texture::for_pixbuf),
+    let artwork = artwork_for_variant(
+        variant,
+        tile_pixbuf.as_ref(),
+        detail_pixbuf.as_ref(),
         palette,
-        dimensions: Some(dimensions),
-        encoded_bytes_len: Some(encoded_bytes_len),
-    };
+        Some(dimensions),
+        Some(encoded_bytes_len),
+    );
 
     DecodedArtworkRecord {
         artwork,
         cache_entry,
+    }
+}
+
+/// Assemble the in-memory [`DecodedArtwork`] for a single requested size.
+///
+/// Only the requested variant's `gdk::Texture` is uploaded; the other stays
+/// `None`. This is the crux of the tile/detail split — a grid tile request
+/// never materialises the ~9×-larger detail texture, so scrolling the Albums
+/// grid cannot accumulate detail textures in the small device-local VRAM
+/// heap. The palette and dimensions are size-independent and travel with
+/// either variant.
+fn artwork_for_variant(
+    variant: ArtworkVariant,
+    tile_pixbuf: Option<&gdk_pixbuf::Pixbuf>,
+    detail_pixbuf: Option<&gdk_pixbuf::Pixbuf>,
+    palette: Option<ArtworkPalette>,
+    dimensions: Option<ArtworkDimensions>,
+    encoded_bytes_len: Option<usize>,
+) -> DecodedArtwork {
+    let (tile_texture, detail_texture) = match variant {
+        ArtworkVariant::Tile => (tile_pixbuf.map(gdk::Texture::for_pixbuf), None),
+        ArtworkVariant::Detail => (None, detail_pixbuf.map(gdk::Texture::for_pixbuf)),
+    };
+    DecodedArtwork {
+        tile_texture,
+        detail_texture,
+        palette,
+        dimensions,
+        encoded_bytes_len,
     }
 }
 
@@ -909,10 +1220,57 @@ fn rgb_from_cache_columns(
 
 #[cfg(test)]
 mod tests {
-    use super::texture_from_png;
+    use super::{LruCache, texture_from_png};
 
     #[test]
     fn corrupt_cached_png_degrades_to_placeholder() {
         assert!(texture_from_png(b"not a cached PNG").is_none());
+    }
+
+    #[test]
+    fn lru_evicts_least_recently_used_when_full() {
+        let mut cache = LruCache::new(2);
+        cache.insert(1, "a");
+        cache.insert(2, "b");
+        // Touch 1 so 2 becomes the least-recently-used entry.
+        assert_eq!(cache.get(&1), Some(&"a"));
+        cache.insert(3, "c");
+        assert_eq!(cache.len(), 2);
+        assert!(cache.contains(&1));
+        assert!(cache.contains(&3));
+        assert!(!cache.contains(&2));
+    }
+
+    #[test]
+    fn lru_reinsert_refreshes_without_growing_or_evicting() {
+        let mut cache = LruCache::new(2);
+        cache.insert(1, "a");
+        cache.insert(2, "b");
+        cache.insert(1, "a2");
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get(&1), Some(&"a2"));
+        // 1 was just refreshed, so the next new key evicts 2, not 1.
+        cache.insert(3, "c");
+        assert!(cache.contains(&1));
+        assert!(!cache.contains(&2));
+    }
+
+    #[test]
+    fn lru_get_miss_and_remove() {
+        let mut cache: LruCache<i32, &str> = LruCache::new(2);
+        assert_eq!(cache.get(&1), None);
+        cache.insert(1, "a");
+        assert_eq!(cache.remove(&1), Some("a"));
+        assert!(!cache.contains(&1));
+        assert_eq!(cache.remove(&1), None);
+    }
+
+    #[test]
+    fn lru_capacity_is_clamped_to_at_least_one() {
+        let mut cache = LruCache::new(0);
+        cache.insert(1, "a");
+        cache.insert(2, "b");
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains(&2));
     }
 }

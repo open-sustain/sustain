@@ -422,6 +422,15 @@ impl NowPlayingView {
             return;
         };
 
+        // Warm the larger detail cover off the main thread. The tile path
+        // below only resolves the small texture, but clicking the tile opens
+        // the lyrics/artwork overlay, which wants the full-resolution detail.
+        // Loading it now means that click is instant and crisp instead of
+        // falling back to the upscaled tile; the detail cache is bounded, so
+        // this pins at most the current track's cover.
+        self.artwork_loader
+            .request_detail(source.clone(), Box::new(|_| {}));
+
         // Synchronous cache hit (in-memory) — apply immediately to
         // avoid a one-tick gap where the previous artwork's color
         // would still be visible. Cold cache requests fall through to
@@ -568,10 +577,14 @@ impl NowPlayingView {
             return false;
         }
 
-        let decoded = self
-            .artwork_source(&track)
-            .as_ref()
-            .and_then(|source| self.artwork_loader.cached(source));
+        // Prefer the prewarmed detail cover; fall back to the tile only for
+        // the brief window before the detail decode lands, so the overlay
+        // still opens (a touch softer) rather than refusing to.
+        let decoded = self.artwork_source(&track).as_ref().and_then(|source| {
+            self.artwork_loader
+                .cached_detail(source)
+                .or_else(|| self.artwork_loader.cached(source))
+        });
         let texture = decoded.as_ref().and_then(|decoded| {
             decoded
                 .detail_texture

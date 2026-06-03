@@ -795,7 +795,7 @@ impl AlbumsView {
             let content_for_callback = content.clone();
             let cover_for_callback = detail_cover.clone();
             let generation_cell = self.detail_generation.clone();
-            self.artwork_loader.request(
+            self.artwork_loader.request_detail(
                 source,
                 Box::new(move |decoded| {
                     // A newer album selection has superseded this panel;
