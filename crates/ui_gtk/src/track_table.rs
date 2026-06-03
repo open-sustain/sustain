@@ -12,11 +12,11 @@ use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackId};
 
 use super::track_context::TrackRowContextMenu;
 use cells::{
-    RatingBindings, RowDropCellRegistry, RowReorderHooks, StatusBindings, TextBindings,
-    TrackTableContextMenu, build_filler_column, build_rating_cell_factory, build_status_column,
-    build_text_cell_factory,
+    RatingBindings, StatusBindings, TextBindings, TrackTableContextMenu, build_filler_column,
+    build_rating_cell_factory, build_status_column, build_text_cell_factory,
 };
 use columns::{TRACK_TABLE_COLUMNS, TrackTableColumn};
+use drag_drop::{RowDropCellRegistry, RowReorderHooks};
 use empty_row_painter::EmptyRowPainter;
 use inline_edit::InlineEditController;
 pub(crate) use inline_edit::{EditableField, InlineEditHooks};
@@ -24,6 +24,7 @@ pub(crate) use row::TrackTableRow;
 
 mod cells;
 mod columns;
+mod drag_drop;
 mod empty_row_painter;
 mod inline_edit;
 mod row;
