@@ -140,6 +140,38 @@ jobs:
           tool: cargo-deny
       - run: cargo deny --all-features check
 
+  # Where cargo-deny gates the inbound SPDX expressions, this job gates the
+  # shipped attribution file: it regenerates THIRD-PARTY-LICENSES.md from the
+  # locked graph and fails if it differs from the committed copy, so a
+  # dependency change that alters the third-party license set cannot land
+  # without its regenerated inventory in the same change. cargo-about is not
+  # in taiki-e/install-action's catalogue, so it is built from crates.io,
+  # pinned to the version the committed file was generated with for a stable,
+  # reproducible diff. No GTK/GStreamer dev packages are needed: cargo-about
+  # only reads cargo metadata and the crates' own license files.
+  licenses:
+    name: cargo-about
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Install cargo-about
+        run: cargo install cargo-about --version 0.9.0 --locked --features cli
+      - name: Regenerate third-party license inventory
+        run: cargo about generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES.md
+      - name: Fail on drift
+        run: |
+          git diff --exit-code -- THIRD-PARTY-LICENSES.md || {
+            echo "::error::THIRD-PARTY-LICENSES.md is out of date. Regenerate with:"
+            echo "::error::  cargo about generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES.md"
+            exit 1
+          }
+
   machete:
     name: cargo-machete
     runs-on: ubuntu-24.04

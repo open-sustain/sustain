@@ -1,0 +1,62 @@
+# cargo-about configuration — third-party attribution inventory.
+#
+# Sustain's release binaries statically link the Rust crates in the locked
+# dependency graph. Those crates' licenses (MIT, BSD, Apache-2.0, …) require
+# their notices to travel with the binary. This config drives `cargo about`,
+# which harvests each crate's actual LICENSE/NOTICE text — not just its SPDX
+# metadata string — and renders THIRD-PARTY-LICENSES.md.
+#
+# Regenerate (and what CI enforces):
+#
+#   cargo about generate --frozen --fail about.hbs -o THIRD-PARTY-LICENSES.md
+#
+# `--frozen` keeps harvesting fully local (no clearlydefined.io network
+# lookups) so the output is byte-for-byte reproducible; `--fail` rejects any
+# crate whose license text could not be resolved.
+#
+# Docs: https://embarkstudios.github.io/cargo-about/
+
+# Only the crates that actually ship in a Sustain binary. Release builds
+# target Linux on amd64 and arm64 (Debian .deb + GNOME Flatpak), so
+# dependencies gated to other operating systems are correctly excluded.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+# The workspace's own sustain-* crates are first-party GPL-3.0-or-later code
+# (publish = false); they are not third parties and must not be listed.
+private = { ignore = true }
+
+# Test- and benchmark-only dependencies are never linked into a shipped
+# binary, so they carry no redistribution obligation.
+ignore-dev-dependencies = true
+
+# Inbound licenses accepted in the binary distribution. Kept in lock-step
+# with deny.toml's [licenses].allow set: deny.toml gates the SPDX expression,
+# cargo-about gates the presence of real, reproducible license text.
+accepted = [
+    "0BSD",
+    "AGPL-3.0",
+    "AGPL-3.0-or-later",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "GPL-2.0-or-later",
+    "GPL-3.0",
+    "GPL-3.0-or-later",
+    "ISC",
+    "LGPL-2.1",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0",
+    "LGPL-3.0-or-later",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]

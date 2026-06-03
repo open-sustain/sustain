@@ -1,0 +1,52 @@
+# Third-party licenses
+
+Sustain (`sustain`) is licensed GPL-3.0-or-later. Its release binaries
+statically link the Rust crates listed below, so each crate's license and
+required copyright notices are reproduced here in full, as their terms
+oblige.
+
+**This file is generated — do not edit it by hand.** It is produced from the
+locked dependency graph (`Cargo.lock`) by [`cargo about`], which reads each
+crate's actual `LICENSE`/`NOTICE` files rather than trusting its SPDX
+metadata string. CI regenerates it and fails on any drift, so a dependency
+change that alters the attribution set surfaces as a diff in the same change.
+Regenerate with:
+
+```sh
+cargo about generate --frozen --fail about.hbs -o THIRD-PARTY-LICENSES.md
+```
+
+The dynamically linked platform stack — GTK 4, GStreamer, GLib, Cairo, Pango,
+and the rest of GNOME — is **not** redistributed by Sustain: the Debian
+package depends on the distribution's own packages for it, and the Flatpak
+draws it from the `org.gnome.Platform` runtime. Those components ship their
+own notices, so they are intentionally absent here.
+
+This file is installed at `/usr/share/doc/sustain/THIRD-PARTY-LICENSES.md` in
+the Debian package and at
+`/app/share/licenses/io.github.open_sustain.sustain/THIRD-PARTY-LICENSES.md`
+in the Flatpak.
+
+[`cargo about`]: https://github.com/EmbarkStudios/cargo-about
+
+## Summary
+
+{{#each overview}}
+- **{{{name}}}** (`{{{id}}}`) — {{count}} crate(s)
+{{/each}}
+{{#each licenses}}
+
+---
+
+## {{{name}}} (`{{{id}}}`)
+
+Applies to:
+
+{{#each used_by}}
+- [{{{crate.name}}} {{{crate.version}}}]({{{crate.repository}}})
+{{/each}}
+
+```text
+{{{text}}}
+```
+{{/each}}

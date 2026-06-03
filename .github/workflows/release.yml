@@ -191,6 +191,7 @@ jobs:
           test -f /usr/share/applications/io.github.open_sustain.sustain.desktop
           test -f /usr/share/metainfo/io.github.open_sustain.sustain.metainfo.xml
           test -f /usr/share/icons/hicolor/128x128/apps/io.github.open_sustain.sustain.png
+          test -f /usr/share/doc/sustain/THIRD-PARTY-LICENSES.md
           dpkg -s sustain | grep -E '^(Package|Version|Architecture|Status):'
 
   # Distro-agnostic build for users on Elementary / Zorin / Mint /
