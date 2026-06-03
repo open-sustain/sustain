@@ -29,7 +29,7 @@
       <span>Sustain</span>
     </a>
     <nav class="site-nav">
-      <a href="#why">No catch</a>
+      <!-- <a href="#why">No catch</a> -->
       <a href="#features">Features</a>
       <a href="#screenshots">Screenshots</a>
       <a href="#install">Install</a>
@@ -79,6 +79,10 @@
     </section>
 
     <!-- ─────────────────────── No catch ─────────────────────── -->
+    <!-- Hidden for now: a wall of "No ___" reads as defensive without an
+         ad-driven discovery context. Restore this section (and the #why nav
+         link in the header) if we ever run ads. -->
+    <!--
     <section id="why" class="why">
       <h2>No catch.</h2>
 
@@ -111,26 +115,7 @@
         <footer>Julien - author</footer>
       </blockquote>
     </section>
-
-    <!-- ─────────────────── Switching from iTunes ────────────── -->
-    <section id="migrate" class="migrate">
-      <h2>Switching from iTunes (or macOS)?</h2>
-      <p class="section-lede">
-        Trying to bolt iTunes onto Linux with Wine, or hunting for something
-        that finally feels right? Point Sustain at your
-        music folder and your library, playlists and ratings come along.
-      </p>
-      <div class="migrate-links">
-        <a class="card-link" href="https://github.com/open-sustain/sustain/blob/main/docs/migrating-from-itunes.md">
-          <strong>Migrating from iTunes / Apple Music →</strong>
-          <span>Bring your library and playlists across.</span>
-        </a>
-        <a class="card-link" href="https://github.com/open-sustain/sustain/blob/main/docs/migrating-to-sustain.md">
-          <strong>Coming from another Linux player →</strong>
-          <span>Rhythmbox, Clementine, and friends.</span>
-        </a>
-      </div>
-    </section>
+    -->
 
     <!-- ─────────────────────── Features ─────────────────────── -->
     <section id="features" class="features">
@@ -281,6 +266,29 @@
           </picture>
           <figcaption>About</figcaption>
         </figure>
+      </div>
+    </section>
+
+    <!-- ─────────────────── Switching from iTunes ────────────── -->
+    <section id="migrate" class="migrate">
+      <h2>Switching from iTunes (or macOS)?</h2>
+      <p class="section-lede">
+        Trying to bolt iTunes onto Linux with Wine, or hunting for something
+        that finally feels right? Point Sustain at your music folder and your
+        collection is indexed in place. It doesn't auto-import playlists,
+        ratings or play history — but the guides below double as a spec you
+        can hand to an LLM to convert your iTunes export and bring the rest
+        across.
+      </p>
+      <div class="migrate-links">
+        <a class="card-link" href="https://github.com/open-sustain/sustain/blob/main/docs/migrating-from-itunes.md">
+          <strong>Migrating from iTunes / Apple Music →</strong>
+          <span>Convert an iTunes XML export into ratings, plays and playlists — with an LLM.</span>
+        </a>
+        <a class="card-link" href="https://github.com/open-sustain/sustain/blob/main/docs/migrating-to-sustain.md">
+          <strong>Coming from another Linux player →</strong>
+          <span>Rhythmbox, Clementine, and friends.</span>
+        </a>
       </div>
     </section>
 
