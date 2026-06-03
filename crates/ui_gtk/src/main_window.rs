@@ -40,7 +40,8 @@ use super::{
         library_consolidation_requested_callback, maybe_auto_resume_library_consolidation,
     },
     library_import::{
-        LIBRARY_DROP_INDICATOR_CLASS, install_file_drop_target, library_import_requested_callback,
+        LIBRARY_DROP_INDICATOR_CLASS, LibraryImportCompletedCallback, install_file_drop_target,
+        library_import_requested_callback,
     },
     library_scan::library_scan_requested_callback,
     missing_track::{
@@ -707,7 +708,18 @@ pub(crate) fn build_main_window(
     sidebar.set_online_busy_query(sidebar_online_busy_query(&runtime));
     library_changed_holder.replace(Some(library_changed.clone()));
     let scan_requested = library_scan_requested_callback(&runtime, library_changed.clone());
-    let import_requested = library_import_requested_callback(&runtime, library_changed.clone());
+    let import_completed = library_import_completed_callback(
+        &runtime,
+        &songs_table,
+        &albums_view,
+        &duplicates_view,
+        &statistics_view,
+        &sidebar,
+        &titlebar,
+        visible_summary_refresh.clone(),
+        &current_search_text,
+    );
+    let import_requested = library_import_requested_callback(&runtime, import_completed);
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
     // Re-applies the Views toggles to the live UI the instant they
     // change: the sidebar's Duplicates/Statistics rows.
@@ -1129,6 +1141,46 @@ fn library_changed_callback(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn library_import_completed_callback(
+    runtime: &SharedRuntime,
+    songs_table: &TrackTable,
+    albums_view: &AlbumsView,
+    duplicates_view: &DuplicatesView,
+    statistics_view: &StatisticsView,
+    sidebar: &PlaylistSidebar,
+    titlebar: &Titlebar,
+    visible_summary_refresh: VisibleSummaryRefreshCallback,
+    current_search_text: &Rc<RefCell<String>>,
+) -> LibraryImportCompletedCallback {
+    let runtime = runtime.clone();
+    let songs_table = songs_table.clone();
+    let albums_view = albums_view.clone();
+    let duplicates_view = duplicates_view.clone();
+    let statistics_view = statistics_view.clone();
+    let sidebar = sidebar.clone();
+    let titlebar = titlebar.clone();
+    let current_search_text = current_search_text.clone();
+
+    Rc::new(move |imported_tracks| {
+        if imported_tracks.is_empty() {
+            return;
+        }
+        let search_text = current_search_text.borrow().clone();
+        let rows = {
+            let runtime = runtime.borrow();
+            imported_library_table_rows(&runtime, imported_tracks, &search_text)
+        };
+        songs_table.append_rows(rows);
+        albums_view.replace_tracks();
+        duplicates_view.refresh_if_active();
+        statistics_view.refresh_if_visible();
+        sidebar.refresh();
+        update_play_pause_sensitivity(&titlebar, &runtime.borrow());
+        visible_summary_refresh();
+    })
+}
+
 /// Wires the runtime's `track_availability_observer` to a narrow
 /// per-row refresh on both track tables. The runtime fires this
 /// observer after every lazy `is_missing` flip (failed-play
@@ -1359,6 +1411,20 @@ fn runtime_library_table_rows(
     let normalized = normalize_query(search_text);
     runtime
         .library_tracks()
+        .iter()
+        .filter(|track| normalized.is_empty() || runtime.search_matches(track.id, &normalized))
+        .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
+        .collect()
+}
+
+fn imported_library_table_rows(
+    runtime: &ApplicationRuntime,
+    imported_tracks: &[Track],
+    search_text: &str,
+) -> Vec<TrackTableRow> {
+    let honor_sort_tags = runtime.settings().library.honor_sort_tags;
+    let normalized = normalize_query(search_text);
+    imported_tracks
         .iter()
         .filter(|track| normalized.is_empty() || runtime.search_matches(track.id, &normalized))
         .map(|track| TrackTableRow::from_track(track, honor_sort_tags))

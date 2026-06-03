@@ -8,8 +8,8 @@ use gtk::prelude::*;
 use gtk::{gdk, gio};
 
 use super::{
-    ApplicationRuntimeError, LibraryChangedCallback, LibraryImportProgress, LibraryImportResult,
-    SharedRuntime, run_library_import_task_with_progress,
+    ApplicationRuntimeError, LibraryImportProgress, LibraryImportResult, SharedRuntime,
+    run_library_import_task_with_progress,
 };
 
 enum LibraryImportWorkerEvent {
@@ -19,10 +19,11 @@ enum LibraryImportWorkerEvent {
 
 pub(crate) type LibraryImportRequestedCallback =
     Rc<dyn Fn(Vec<PathBuf>) -> Result<(), ApplicationRuntimeError>>;
+pub(crate) type LibraryImportCompletedCallback = Rc<dyn Fn(&[sustain_app_runtime::Track])>;
 
 pub(crate) fn library_import_requested_callback(
     runtime: &SharedRuntime,
-    library_changed: LibraryChangedCallback,
+    import_completed: LibraryImportCompletedCallback,
 ) -> LibraryImportRequestedCallback {
     let runtime = runtime.clone();
 
@@ -40,7 +41,7 @@ pub(crate) fn library_import_requested_callback(
             let _sent = tx.send(LibraryImportWorkerEvent::Finished(outcome));
         });
 
-        poll_library_import(rx, runtime.clone(), library_changed.clone());
+        poll_library_import(rx, runtime.clone(), import_completed.clone());
         Ok(())
     })
 }
@@ -81,7 +82,7 @@ const LIBRARY_DROP_ACTIVE_CLASS: &str = "library-drop-active";
 fn poll_library_import(
     rx: mpsc::Receiver<LibraryImportWorkerEvent>,
     runtime: SharedRuntime,
-    library_changed: LibraryChangedCallback,
+    import_completed: LibraryImportCompletedCallback,
 ) {
     glib::timeout_add_local(Duration::from_millis(100), move || {
         let mut latest_progress = None;
@@ -109,8 +110,9 @@ fn poll_library_import(
         }
         match finished {
             Some(Ok(result)) => {
+                let imported_tracks = result.tracks.clone();
                 runtime.borrow_mut().apply_library_import_result(result);
-                library_changed();
+                import_completed(&imported_tracks);
                 glib::ControlFlow::Break
             }
             Some(Err(error)) => {

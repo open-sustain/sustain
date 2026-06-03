@@ -115,6 +115,22 @@ impl TrackTable {
         self.store.splice(0, self.store.n_items(), &additions);
     }
 
+    /// Append structurally new rows without replacing the existing model.
+    ///
+    /// Import completion uses this path so freshly-added tracks can appear in
+    /// Songs while the current scroll/focus/selection state survives. The
+    /// wrapping `SortListModel` still places the new source rows according to
+    /// the active column sort, but GTK receives an insertion event instead of
+    /// a full remove-and-readd cycle.
+    pub(crate) fn append_rows(&self, rows: Vec<TrackTableRow>) {
+        if rows.is_empty() {
+            return;
+        }
+        let additions: Vec<glib::BoxedAnyObject> =
+            rows.into_iter().map(glib::BoxedAnyObject::new).collect();
+        self.store.splice(self.store.n_items(), 0, &additions);
+    }
+
     /// Clear the store and return a token for a bounded idle-batch rebuild.
     /// Any later full replacement invalidates the token, allowing a search
     /// rebuild to supersede startup publication without interleaving rows.
@@ -875,4 +891,56 @@ fn playlist_position_from_object(object: &glib::Object) -> Option<u32> {
     let row_object = object.downcast_ref::<glib::BoxedAnyObject>()?;
     let row = row_object.try_borrow::<TrackTableRow>().ok()?;
     row.playlist_position
+}
+
+#[cfg(test)]
+mod tests {
+    use sustain_app_runtime::TrackId;
+
+    use super::*;
+
+    #[test]
+    fn append_rows_adds_to_existing_store_without_replacement() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(Vec::new(), None, None, None, None, None);
+            table.replace_rows(vec![row(1)]);
+            let first_object = table.store.item(0);
+
+            table.append_rows(vec![row(2), row(3)]);
+
+            assert_eq!(table.store.n_items(), 3);
+            assert_eq!(table.store.item(0), first_object);
+        });
+    }
+
+    fn row(id: i64) -> TrackTableRow {
+        TrackTableRow {
+            track_id: TrackId::new(id),
+            track_name: format!("Track {id}"),
+            artist: String::new(),
+            album: String::new(),
+            genre: String::new(),
+            has_lyrics: false,
+            track_name_sort_key: format!("Track {id}"),
+            artist_sort_key: String::new(),
+            album_sort_key: String::new(),
+            year: None,
+            bpm: None,
+            music_key: None,
+            bitrate_kbps: None,
+            file_type: row::AudioFileType::Unknown,
+            duration_seconds: 0,
+            rating: 0,
+            plays: 0,
+            skips: 0,
+            last_played: None,
+            last_skipped: None,
+            date_added: None,
+            track_number: None,
+            file_size_bytes: 0,
+            is_missing: false,
+            playlist_position: None,
+            group_band: None,
+        }
+    }
 }
