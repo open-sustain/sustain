@@ -12,12 +12,12 @@
 //!
 //! [`FaultyStore`] wraps a real backing store (the in-memory one in
 //! tests) and delegates every method to it, overriding only the
-//! persistence writes the schedulers depend on. Each override consults a
+//! persistence writes tests need to observe. Each override consults a
 //! toggle the test flips and counts its invocations so a test can assert
-//! the scheduler stopped retrying instead of spinning.
+//! the expected failure or ordering contract.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sustain_library_store::{
@@ -41,10 +41,15 @@ pub(crate) struct FaultyStore {
     fail_attempt_failure: AtomicBool,
     fail_online_attempt: AtomicBool,
     fail_device_manifest: AtomicBool,
+    fail_save_tracks: AtomicBool,
+    fail_flush_durable: AtomicBool,
     record_analysis_calls: AtomicU32,
     attempt_failure_calls: AtomicU32,
     online_attempt_calls: AtomicU32,
     device_manifest_calls: AtomicU32,
+    save_tracks_calls: AtomicU32,
+    flush_durable_calls: AtomicU32,
+    operation_log: Mutex<Vec<&'static str>>,
     /// Artificial latency injected into `tracks` and `load_all_acoustics`,
     /// in milliseconds. Zero (the default) is a no-op.
     read_delay_millis: AtomicU64,
@@ -58,10 +63,15 @@ impl FaultyStore {
             fail_attempt_failure: AtomicBool::new(false),
             fail_online_attempt: AtomicBool::new(false),
             fail_device_manifest: AtomicBool::new(false),
+            fail_save_tracks: AtomicBool::new(false),
+            fail_flush_durable: AtomicBool::new(false),
             record_analysis_calls: AtomicU32::new(0),
             attempt_failure_calls: AtomicU32::new(0),
             online_attempt_calls: AtomicU32::new(0),
             device_manifest_calls: AtomicU32::new(0),
+            save_tracks_calls: AtomicU32::new(0),
+            flush_durable_calls: AtomicU32::new(0),
+            operation_log: Mutex::new(Vec::new()),
             read_delay_millis: AtomicU64::new(0),
         }
     }
@@ -94,6 +104,14 @@ impl FaultyStore {
         self.fail_device_manifest.store(on, Ordering::SeqCst);
     }
 
+    pub(crate) fn set_fail_save_tracks(&self, on: bool) {
+        self.fail_save_tracks.store(on, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_fail_flush_durable(&self, on: bool) {
+        self.fail_flush_durable.store(on, Ordering::SeqCst);
+    }
+
     pub(crate) fn record_analysis_calls(&self) -> u32 {
         self.record_analysis_calls.load(Ordering::SeqCst)
     }
@@ -108,6 +126,28 @@ impl FaultyStore {
 
     pub(crate) fn device_manifest_calls(&self) -> u32 {
         self.device_manifest_calls.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn save_tracks_calls(&self) -> u32 {
+        self.save_tracks_calls.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn flush_durable_calls(&self) -> u32 {
+        self.flush_durable_calls.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn operation_log(&self) -> Vec<&'static str> {
+        self.operation_log
+            .lock()
+            .expect("faulty-store operation log lock is available")
+            .clone()
+    }
+
+    fn record_operation(&self, operation: &'static str) {
+        self.operation_log
+            .lock()
+            .expect("faulty-store operation log lock is available")
+            .push(operation);
     }
 }
 
@@ -167,6 +207,17 @@ impl LibraryStore for FaultyStore {
 
     fn save_track(&self, track: Track) -> StoreResult<()> {
         self.inner.save_track(track)
+    }
+
+    fn save_tracks(&self, tracks: &[Track]) -> StoreResult<()> {
+        self.record_operation("save_tracks");
+        self.save_tracks_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_save_tracks.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected save_tracks failure".to_owned(),
+            ));
+        }
+        self.inner.save_tracks(tracks)
     }
 
     fn reconcile_scanned_tracks(&self, tracks: &[Track]) -> StoreResult<()> {
@@ -291,6 +342,13 @@ impl LibraryStore for FaultyStore {
     }
 
     fn flush_durable(&self) -> StoreResult<()> {
+        self.record_operation("flush_durable");
+        self.flush_durable_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_flush_durable.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected flush_durable failure".to_owned(),
+            ));
+        }
         self.inner.flush_durable()
     }
 

@@ -938,7 +938,8 @@ fn managed_import_copies_external_files_into_planned_library_path() {
     std::fs::create_dir_all(&external_root).expect("create external root");
     let source_path = external_root.join("source.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write external source");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
     let mut runtime =
@@ -984,6 +985,96 @@ fn managed_import_copies_external_files_into_planned_library_path() {
     );
     assert_eq!(tracks[0].rating, Rating::new(3).expect("valid rating"));
     assert_eq!(store.tracks().expect("store tracks"), tracks);
+    assert_eq!(store.operation_log(), vec!["save_tracks", "flush_durable"]);
+    assert_eq!(store.save_tracks_calls(), 1);
+    assert_eq!(store.flush_durable_calls(), 1);
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn managed_import_save_tracks_failure_rolls_back_copied_files() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_path = external_root.join("source.flac");
+    std::fs::write(&source_path, b"audio bytes").expect("write external source");
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store.set_fail_save_tracks(true);
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    let task = runtime
+        .prepare_library_import(vec![source_path.clone()])
+        .expect("prepare import");
+    let error = run_library_import_task(task).expect_err("save_tracks failure surfaces");
+
+    assert_eq!(error, ApplicationRuntimeError::LibraryStoreFailed);
+    assert_eq!(store.operation_log(), vec!["save_tracks"]);
+    assert_eq!(store.save_tracks_calls(), 1);
+    assert_eq!(store.flush_durable_calls(), 0);
+    assert!(store.tracks().expect("store tracks").is_empty());
+    assert!(
+        !library_root
+            .join("Unknown Artist/Unknown Album/Track.flac")
+            .exists(),
+        "copied file is rolled back when save_tracks fails"
+    );
+    assert!(
+        !library_root.join("Unknown Artist").exists(),
+        "rollback prunes directories created only for the failed import"
+    );
+    assert_eq!(
+        std::fs::read(&source_path).expect("source remains intact"),
+        b"audio bytes"
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn managed_import_flush_durable_failure_keeps_copied_files() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_path = external_root.join("source.flac");
+    std::fs::write(&source_path, b"audio bytes").expect("write external source");
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store.set_fail_flush_durable(true);
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    let task = runtime
+        .prepare_library_import(vec![source_path])
+        .expect("prepare import");
+    let error = run_library_import_task(task).expect_err("flush_durable failure surfaces");
+
+    assert_eq!(error, ApplicationRuntimeError::LibraryStoreFailed);
+    assert_eq!(store.operation_log(), vec!["save_tracks", "flush_durable"]);
+    assert_eq!(store.save_tracks_calls(), 1);
+    assert_eq!(store.flush_durable_calls(), 1);
+    assert_eq!(store.tracks().expect("store tracks").len(), 1);
+    assert_eq!(
+        std::fs::read(library_root.join("Unknown Artist/Unknown Album/Track.flac"))
+            .expect("copied file remains after flush failure"),
+        b"audio bytes"
+    );
 
     std::fs::remove_dir_all(library_root).expect("remove library root");
     std::fs::remove_dir_all(external_root).expect("remove external root");
@@ -1091,7 +1182,8 @@ fn cancelling_managed_import_keeps_completed_tracks_and_reports_progress() {
     std::fs::write(&second_source, b"second audio").expect("write second source");
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     let mut runtime =
         ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
             .expect("load settings")
@@ -1116,6 +1208,9 @@ fn cancelling_managed_import_keeps_completed_tracks_and_reports_progress() {
     assert_eq!(progress[0].total_files, 2);
     assert_eq!(runtime.library_tracks().len(), 1);
     assert_eq!(store.tracks().expect("load tracks").len(), 1);
+    assert_eq!(store.operation_log(), vec!["save_tracks", "flush_durable"]);
+    assert_eq!(store.save_tracks_calls(), 1);
+    assert_eq!(store.flush_durable_calls(), 1);
     assert_eq!(
         runtime.last_library_import_summary(),
         Some(&super::LibraryImportSummary {
@@ -1237,7 +1332,8 @@ fn unmanaged_external_import_indexes_library_files_in_place() {
     std::fs::create_dir_all(&library_root).expect("create library root");
     let source_path = library_root.join("source.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write source");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(library_root.clone())),
     )))
@@ -1259,6 +1355,9 @@ fn unmanaged_external_import_indexes_library_files_in_place() {
         Path::new("source.flac")
     );
     assert_eq!(store.tracks().expect("store tracks"), tracks);
+    assert_eq!(store.operation_log(), vec!["save_tracks"]);
+    assert_eq!(store.save_tracks_calls(), 1);
+    assert_eq!(store.flush_durable_calls(), 0);
     assert_eq!(
         runtime.last_library_import_summary(),
         Some(&super::LibraryImportSummary {

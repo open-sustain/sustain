@@ -273,6 +273,11 @@ impl LibraryImportContext<'_> {
             let _ = rollback_managed_import_files(&library_path, &copied_files, None);
             return Err(ApplicationRuntimeError::LibraryStoreFailed);
         }
+        if !tracks.is_empty() {
+            self.library_store
+                .flush_durable()
+                .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        }
 
         Ok(LibraryImportResult {
             tracks,
@@ -301,6 +306,11 @@ impl LibraryImportContext<'_> {
                 None,
             );
             return Err(ApplicationRuntimeError::LibraryStoreFailed);
+        }
+        if !tracks.is_empty() {
+            self.library_store
+                .flush_durable()
+                .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
         Ok(LibraryImportResult {
             summary: LibraryImportSummary {
