@@ -187,12 +187,29 @@ jobs:
       - name: Verify install layout
         run: |
           set -euo pipefail
+          # Runtime layout: the files the desktop environment consumes must
+          # land on the live filesystem after install.
           test -x /usr/bin/sustain
           test -f /usr/share/applications/io.github.open_sustain.sustain.desktop
           test -f /usr/share/metainfo/io.github.open_sustain.sustain.metainfo.xml
           test -f /usr/share/icons/hicolor/128x128/apps/io.github.open_sustain.sustain.png
-          test -f /usr/share/doc/sustain/THIRD-PARTY-LICENSES.md
           dpkg -s sustain | grep -E '^(Package|Version|Architecture|Status):'
+
+          # THIRD-PARTY-LICENSES.md installs under /usr/share/doc, which the
+          # minimal ubuntu:/debian: container images used here deliberately
+          # strip at unpack time via /etc/dpkg/dpkg.cfg.d/excludes
+          # (`path-exclude=/usr/share/doc/*`, keeping only copyright and
+          # changelogs). A real Debian/Ubuntu desktop carries no such
+          # exclusion and does receive the file, so testing the installed
+          # filesystem here would assert the container's doc policy, not the
+          # package. The property we actually ship is that the .deb *contains*
+          # the third-party license inventory — verify that against the
+          # package contents, immune to the host's doc-stripping policy.
+          # `grep -q` on a file (not a pipe from dpkg-deb) avoids the
+          # SIGPIPE-kills-dpkg-deb / `set -o pipefail` failure mode.
+          DEB=$(find artifacts -type f -name "sustain_*_${{ matrix.arch }}.deb" -print -quit)
+          dpkg-deb --contents "${DEB}" > /tmp/deb-contents.txt
+          grep -qE '/usr/share/doc/sustain/THIRD-PARTY-LICENSES\.md$' /tmp/deb-contents.txt
 
   # Distro-agnostic build for users on Elementary / Zorin / Mint /
   # Fedora / openSUSE / etc. Targets the org.gnome.Platform//48
