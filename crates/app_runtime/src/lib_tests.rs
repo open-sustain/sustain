@@ -4626,6 +4626,107 @@ impl MetadataService for RecordingMetadataService {
 }
 
 #[test]
+fn force_backfill_rewrites_present_tracks_and_skips_missing() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    let store = Arc::new(InMemoryLibraryStore::new());
+    let mut present_a = test_track(track_id(1), "a.flac");
+    present_a.rating = Rating::new(4).expect("valid rating");
+    let present_b = test_track(track_id(2), "b.flac");
+    let mut missing = test_track(track_id(3), "gone.flac");
+    missing.location = TrackLocation::missing(
+        TrackRelativePath::new(PathBuf::from("gone.flac")).expect("valid relative path"),
+    );
+    for track in [present_a, present_b, missing] {
+        assert_eq!(store.save_track(track), Ok(()));
+    }
+
+    let metadata = Arc::new(RecordingMetadataService::new(false));
+    let runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, metadata.clone())
+    .expect("library services initialize");
+
+    let mut reported = Vec::new();
+    let summary = runtime
+        .force_backfill_tags(|progress| reported.push(progress.done))
+        .expect("backfill runs");
+
+    assert_eq!(summary.total, 3);
+    assert_eq!(summary.written, 2);
+    assert_eq!(summary.skipped_missing, 1);
+    assert_eq!(summary.failed, 0);
+    // Every track is reported exactly once, numbered over the whole pass.
+    assert_eq!(reported, vec![1, 2, 3]);
+
+    // Both present tracks are rewritten at their absolute library path; the
+    // missing one is never touched. Order is store-defined, so assert as a set.
+    let metadata_paths: Vec<PathBuf> = metadata
+        .metadata_writes()
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    assert_eq!(metadata_paths.len(), 2);
+    assert!(metadata_paths.contains(&root.join("a.flac")));
+    assert!(metadata_paths.contains(&root.join("b.flac")));
+    assert!(!metadata_paths.contains(&root.join("gone.flac")));
+    // A rating is mirrored alongside the metadata for every present track.
+    assert_eq!(metadata.rating_writes().len(), 2);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn force_backfill_records_failures_without_aborting() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    let store = Arc::new(InMemoryLibraryStore::new());
+    for id in [1, 2] {
+        assert_eq!(
+            store.save_track(test_track(track_id(id), &format!("track{id}.flac"))),
+            Ok(())
+        );
+    }
+
+    let metadata = Arc::new(RecordingMetadataService::with_metadata_write_failure());
+    let runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, metadata.clone())
+    .expect("library services initialize");
+
+    let summary = runtime.force_backfill_tags(|_| {}).expect("backfill runs");
+    assert_eq!(summary.total, 2);
+    assert_eq!(summary.written, 0);
+    assert_eq!(summary.skipped_missing, 0);
+    // A write failure is recorded and the pass keeps going to the next track.
+    assert_eq!(summary.failed, 2);
+    assert_eq!(metadata.metadata_writes().len(), 2);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn force_backfill_requires_a_configured_library_path() {
+    let store = Arc::new(InMemoryLibraryStore::new());
+    assert_eq!(store.save_track(test_track(track_id(1), "a.flac")), Ok(()));
+    let runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(None),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(RecordingMetadataService::new(false)))
+    .expect("library services initialize");
+
+    assert_eq!(
+        runtime.force_backfill_tags(|_| {}),
+        Err(ApplicationRuntimeError::LibraryPathUnavailable)
+    );
+}
+
+#[test]
 fn on_playback_tick_registers_play_after_threshold() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");

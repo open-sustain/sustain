@@ -394,7 +394,12 @@ opens a centered, round-cornered artwork overlay; clicking the
 **Lyrics** chip opens that same overlay directly on a read-only lyrics
 face. Inside the overlay the artwork and lyrics faces cross-fade into
 each other when both are available, and the lyrics are set large,
-light, and centered. Optional
+light, and centered. Both overlay colours come from the artwork: the
+dominant tone tints the surface and the artwork's secondary accent
+colours the lyrics, so they read as part of the cover instead of flat
+black-on-dark. The overlay has no close button:
+clicking anywhere outside it (or pressing **Escape**) dismisses it,
+while clicks inside flip between the artwork and lyrics faces. Optional
 synced lyrics enrich the displayed text, while plain lyrics remain the
 source of truth for whether the lyrics surface appears.
 
@@ -588,6 +593,10 @@ A multi-tab editor (Details, Artwork, Lyrics, File). The Details tab
 edits title, artist, album, album artist, composer, grouping, genre,
 year, track number/total, disc number/total, compilation flag, BPM,
 key, and comments, plus the 5-star rating and a play-count reset button.
+The Genre field autocompletes against the genres already in the library
+(type to filter, Down/Up to highlight, Enter or click to accept) so a
+track is tagged with an existing spelling rather than a near-duplicate
+that would splinter listening stats and smart-playlist membership.
 The File tab shows path, duration, bitrate, sample rate, and channels.
 The Artwork tab shows the embedded cover (or a missing-art placeholder)
 with add and remove actions. The Lyrics tab shows the raw lyrics text.
@@ -608,7 +617,8 @@ The Rating column in the table accepts clicks directly: click a star to
 set 1–5, click the current rating to clear.
 
 ### Inline cell editing — *iso-iTunes*
-In the Songs table, a single click on an editable cell of the
+In the Songs table and in the Playlists view (both regular and smart
+playlists), a single click on an editable cell of the
 **already-selected** row opens an inline editor seeded with that field's
 current value. A click on an unselected row just selects it (a second,
 deliberate click then edits), and a double-click still plays — the edit
@@ -619,7 +629,10 @@ Rating keeps its own star widget. **Enter** commits, **Escape** cancels,
 and **Tab** / **Shift+Tab** commit and move to the next / previous
 editable cell in the row; clicking away commits. Edits travel the same
 `UpdateMetadata` write path as the Get Info dialog, so SQLite stays
-authoritative and the file tag is mirrored.
+authoritative and the file tag is mirrored. When an edit in a smart
+playlist changes whether the track still matches the playlist's rules,
+the view reflows to add or drop it; the drag-to-reorder handle on a
+regular playlist's leading column is independent of the edit gesture.
 
 ### Tag mirroring — *iso-iTunes*
 When the user edits metadata in Sustain, the change is written to the
@@ -796,6 +809,10 @@ at the right edge of the menu:
 ---
 
 ## Preferences
+
+Open Preferences from the **Settings** entry in the status bar's
+bottom-left, just to the right of the sidebar collapse toggle (flat
+chrome — no button outline until hovered or pressed), or with `Ctrl+,`.
 
 The Preferences window currently exposes:
 

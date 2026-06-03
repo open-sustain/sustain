@@ -7,6 +7,7 @@ use std::{
 };
 
 use gtk::prelude::*;
+use gtk::{gdk, glib};
 use sustain_app_runtime::{
     ApplicationCommand, DuplicateConsolidationRequest, DuplicateMetadataField,
     DuplicateMetadataFieldSelection, DuplicateMetadataSelection, NotificationCategory,
@@ -219,6 +220,19 @@ fn open_dialog(
 
     window.set_child(Some(&content));
     window.set_default_widget(Some(&cancel));
+
+    let key_controller = gtk::EventControllerKey::new();
+    let window_for_escape = window.clone();
+    key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
+        if key == gdk::Key::Escape {
+            window_for_escape.close();
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    window.add_controller(key_controller);
+
     window.present();
 }
 

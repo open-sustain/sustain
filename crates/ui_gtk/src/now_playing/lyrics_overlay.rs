@@ -33,11 +33,16 @@ fn build(
     lyrics: Option<&str>,
     initial_face: LyricsOverlayFace,
 ) -> gtk::Window {
+    // Non-modal so a click anywhere outside the overlay defocuses it; the
+    // focus-out handler below then closes it. A modal grab would swallow
+    // those outside clicks, and a scrim window can't reliably cover the
+    // parent on Wayland — focus-out is the Wayland-safe "click elsewhere
+    // closes" (#163).
     let window = gtk::Window::builder()
         .title("Now Playing")
         .decorated(false)
         .transient_for(parent)
-        .modal(true)
+        .modal(false)
         .resizable(false)
         .build();
     window.add_css_class("now-playing-overlay-window");
@@ -61,21 +66,27 @@ fn build(
     stack.set_visible_child_name(stack_name(initial_face));
     surface.set_child(Some(&stack));
 
-    let close = gtk::Button::from_icon_name("window-close-symbolic");
-    close.add_css_class("now-playing-overlay-close");
-    close.set_tooltip_text(Some("Close"));
-    close.set_halign(gtk::Align::End);
-    close.set_valign(gtk::Align::Start);
-    close.set_margin_top(8);
-    close.set_margin_end(8);
-    surface.add_overlay(&close);
-    surface.set_measure_overlay(&close, false);
-
     window.set_child(Some(&surface));
     install_palette_provider(&surface, palette);
+    // Paint the lyrics with the artwork's secondary accent via a buffer tag
+    // (authoritative over the inherited CSS colour), so they take an
+    // artwork-derived colour instead of the computed black/white that left
+    // them black (#165). `ArtworkPalette` is `Copy`, so the provider above
+    // still got its own copy.
+    if let Some(palette) = palette {
+        apply_lyrics_palette(&lyrics_view, palette);
+    }
 
-    let window_for_close = window.clone();
-    close.connect_clicked(move |_| window_for_close.close());
+    // Clicking anywhere outside the overlay defocuses it; close as soon as
+    // the window goes inactive. Clicks inside the overlay (which flip
+    // artwork↔lyrics) keep it focused, so only an "elsewhere" click closes
+    // it (#163). present() activates the window first, so the initial
+    // notification reports active and is ignored.
+    window.connect_is_active_notify(move |window| {
+        if !window.is_active() {
+            window.close();
+        }
+    });
 
     let key = gtk::EventControllerKey::new();
     let window_for_escape = window.clone();
@@ -189,16 +200,38 @@ fn install_palette_provider(widget: &impl IsA<gtk::Widget>, palette: Option<Artw
 }
 
 fn palette_css(palette: ArtworkPalette) -> String {
+    // Both colours come straight from the artwork (#165): the dominant tone
+    // tints the surface, and the artwork-derived secondary accent is the text
+    // colour — never the stark computed black/white `foreground`, which is
+    // what left the lyrics black. The lyrics text is also painted by a buffer
+    // tag in `apply_lyrics_palette` (authoritative); this `color` is the
+    // inherited fallback for the rest of the surface.
     let background = palette.background_css();
-    let foreground = palette.foreground_css();
+    let secondary = palette.secondary_css();
     format!(
-        ".now-playing-overlay-surface {{ background-color: {background}; color: {foreground}; }}"
+        ".now-playing-overlay-surface {{ background-color: {background}; color: {secondary}; }}"
     )
+}
+
+/// Paint the lyrics text with the artwork's secondary accent colour using a
+/// buffer-wide [`gtk::TextTag`]. A tag's foreground takes precedence over the
+/// inherited CSS `color` for the tagged range, so the lyrics take the artwork
+/// colour regardless of how the `GtkTextView` text node resolves its CSS —
+/// the inheritance ambiguity that previously left them black (#165).
+fn apply_lyrics_palette(view: &gtk::TextView, palette: ArtworkPalette) {
+    let buffer = view.buffer();
+    let secondary = palette.secondary_css();
+    let Some(tag) = buffer.create_tag(None, &[("foreground", &secondary as &dyn ToValue)]) else {
+        return;
+    };
+    let (start, end) = buffer.bounds();
+    buffer.apply_tag(&tag, &start, &end);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{LyricsOverlayFace, build, stack_name};
+    use super::{LyricsOverlayFace, apply_lyrics_palette, build, stack_name};
+    use crate::artwork_color::{ArtworkPalette, ArtworkPaletteComponents, RgbColorComponents};
     use gtk::prelude::*;
 
     #[test]
@@ -208,7 +241,56 @@ mod tests {
     }
 
     #[test]
-    fn overlay_builds_as_a_modal_transient_window() {
+    fn lyrics_take_the_artwork_secondary_colour_not_black_or_white() {
+        if !crate::test_support::with_gtk(|| {
+            // A near-black dominant cover: the computed `foreground` would be
+            // white, so if the lyrics came out as the secondary accent below
+            // (a warm orange) we know we used the artwork colour, not the
+            // black/white contrast neutral that caused the bug (#165).
+            let palette = ArtworkPalette::from_components(ArtworkPaletteComponents {
+                background: RgbColorComponents {
+                    red: 10,
+                    green: 12,
+                    blue: 16,
+                },
+                foreground: RgbColorComponents {
+                    red: 255,
+                    green: 255,
+                    blue: 255,
+                },
+                secondary: RgbColorComponents {
+                    red: 200,
+                    green: 120,
+                    blue: 60,
+                },
+            });
+
+            let view = gtk::TextView::new();
+            view.buffer().set_text("a lyric line");
+            apply_lyrics_palette(&view, palette);
+
+            let buffer = view.buffer();
+            let tags = buffer.start_iter().tags();
+            assert_eq!(tags.len(), 1, "one colour tag covers the lyrics");
+            let rgba = tags[0]
+                .foreground_rgba()
+                .expect("the tag carries a foreground colour");
+            assert!((rgba.red() - 200.0 / 255.0).abs() < 0.01, "red = secondary");
+            assert!(
+                (rgba.green() - 120.0 / 255.0).abs() < 0.01,
+                "green = secondary"
+            );
+            assert!(
+                (rgba.blue() - 60.0 / 255.0).abs() < 0.01,
+                "blue = secondary"
+            );
+        }) {
+            eprintln!("SMOKE: no display, skipping");
+        }
+    }
+
+    #[test]
+    fn overlay_builds_as_a_non_modal_transient_window() {
         if !crate::test_support::with_gtk(|| {
             let parent = gtk::ApplicationWindow::default();
             let overlay = build(
@@ -219,7 +301,8 @@ mod tests {
                 LyricsOverlayFace::Lyrics,
             );
 
-            assert!(overlay.is_modal());
+            // Non-modal so an outside click can defocus and dismiss it (#163).
+            assert!(!overlay.is_modal());
             assert_eq!(overlay.transient_for().as_ref(), Some(parent.upcast_ref()));
             assert!(overlay.child().is_some());
             overlay.close();

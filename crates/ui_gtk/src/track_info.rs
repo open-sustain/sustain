@@ -86,6 +86,7 @@ pub(crate) fn open_track_info_dialog(
         &initial.track.metadata,
         initial.track.rating,
         &initial.track.statistics,
+        runtime.borrow().distinct_genres(),
     );
     stack.add_titled(&details.widget, Some("details"), "Details");
 

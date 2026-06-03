@@ -449,13 +449,26 @@ pub(crate) fn build_main_window(
         &current_search_text,
         &locate_missing_track,
     );
+    // Inline editing in the Playlists view (regular and smart playlists
+    // share this table). A separate hooks instance from the Songs table's
+    // because each `InlineEditController` owns its table's open-edit state.
+    // Edits route through the same `UpdateMetadata` + `track_row_changed`
+    // path: for a smart playlist whose membership the edit changes, the
+    // callback reflows the view; otherwise it refreshes the row in place.
+    // The drag-to-reorder handle lives on the status column, so it does not
+    // contend with the text columns' edit gesture (#158).
+    let playlists_inline_edit = inline_edit_hooks(
+        &runtime,
+        &command_controller,
+        track_row_changed_holder.clone(),
+    );
     let playlists_table = build_track_table(
         Vec::new(),
         Some(playlist_track_activated),
         Some(playlist_context_menu),
         Some(rating_changed),
         Some(playlist_row_reorder),
-        None,
+        Some(playlists_inline_edit),
     );
     playlists_table_holder.replace(Some(playlists_table.clone()));
     install_track_column_layout_persistence(&runtime, &songs_table, &playlists_table, &sidebar);
@@ -723,17 +736,18 @@ pub(crate) fn build_main_window(
     main_content.set_vexpand(true);
     let command_controller_for_global_shortcuts = command_controller.clone();
 
-    // Sidebar footer: the [cog] Settings button is the visual
-    // entry-point to Preferences (the Ctrl+, accelerator is the power-
-    // user path, registered separately by `install_preferences_action`).
-    sidebar.footer().append(&settings_button(
+    // The [cog] Settings button is the visual entry-point to Preferences
+    // (the Ctrl+, accelerator is the power-user path, registered separately
+    // by `install_preferences_action`). It is mounted in the status bar's
+    // bottom-left cluster below, beside the sidebar collapse toggle (#164).
+    let settings_button = settings_button(
         &window,
         command_controller,
         database_path,
         scan_requested,
         consolidation_requested.clone(),
         view_settings_changed,
-    ));
+    );
 
     main_content.append(&content_stack);
 
@@ -752,6 +766,7 @@ pub(crate) fn build_main_window(
         initial_ui_settings.sidebar_width,
     );
     status_bar.install_sidebar_collapse_toggle(collapse_controller.toggle_widget());
+    status_bar.install_settings_button(settings_button);
 
     let albums_view_for_reveal = albums_view.clone();
     let sidebar_for_show_album = sidebar.clone();

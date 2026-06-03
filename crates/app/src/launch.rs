@@ -50,6 +50,13 @@ pub(crate) struct Cli {
     pub(crate) config: Option<PathBuf>,
     pub(crate) database: Option<PathBuf>,
     pub(crate) local_scope: bool,
+    /// Hidden maintenance command: rewrite every library track's file
+    /// tags from the authoritative SQLite values, then exit without
+    /// launching the UI (#143). Deliberately absent from [`USAGE`] — it
+    /// is only useful after a bulk external import (Rhythmbox / iTunes
+    /// XML) left SQLite and the files out of sync; a normal Sustain user
+    /// never drifts, so the command stays undocumented.
+    pub(crate) force_backfill: bool,
 }
 
 /// Parsed Sustain flags plus the deliberately minimal argv forwarded to GTK.
@@ -97,6 +104,7 @@ where
         match name.as_str() {
             "--help" | "-h" if inline.is_none() => return Ok(None),
             "--local-scope" | "--dev" if inline.is_none() => cli.local_scope = true,
+            "--force-backfill" if inline.is_none() => cli.force_backfill = true,
             "--config" => cli.config = Some(take_value("--config", inline, &mut arguments)?),
             "--database" => cli.database = Some(take_value("--database", inline, &mut arguments)?),
             _ => return Err(CliError::Unknown(argument)),
@@ -307,6 +315,7 @@ mod tests {
                 config: Some(PathBuf::from("a.toml")),
                 database: Some(PathBuf::from("b.sqlite")),
                 local_scope: true,
+                force_backfill: false,
             }
         );
     }
@@ -323,6 +332,7 @@ mod tests {
             config: Some(PathBuf::from("a.toml")),
             database: Some(PathBuf::from("b.sqlite")),
             local_scope: false,
+            force_backfill: false,
         };
         assert_eq!(spaced, expected);
         assert_eq!(inlined, expected);
@@ -334,6 +344,19 @@ mod tests {
             let cli = parse_args(args(&[flag])).expect("valid").expect("not help");
             assert!(cli.local_scope);
         }
+    }
+
+    #[test]
+    fn parses_hidden_force_backfill_flag() {
+        let cli = parse_args(args(&["--force-backfill"]))
+            .expect("valid")
+            .expect("not help");
+        assert!(cli.force_backfill);
+        // A value appended to the boolean flag is rejected, not accepted.
+        assert_eq!(
+            parse_args(args(&["--force-backfill=1"])),
+            Err(CliError::Unknown("--force-backfill=1".to_owned()))
+        );
     }
 
     #[test]
@@ -412,6 +435,7 @@ mod tests {
             config: Some(PathBuf::from("/etc/custom.toml")),
             database: Some(PathBuf::from("/data/custom.sqlite")),
             local_scope: true,
+            force_backfill: false,
         };
         let resolved = resolve_paths(&cli, Some(Path::new("/work")), &xdg_defaults())
             .expect("working dir present");
@@ -431,6 +455,7 @@ mod tests {
             config: Some(PathBuf::from("/etc/custom.toml")),
             database: Some(PathBuf::from("/data/custom.sqlite")),
             local_scope: false,
+            force_backfill: false,
         };
         let resolved = resolve_paths(&cli, Some(Path::new("/work")), &xdg_defaults())
             .expect("anchored on the database directory");

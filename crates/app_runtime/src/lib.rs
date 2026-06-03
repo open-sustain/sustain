@@ -80,6 +80,7 @@ mod device_sync;
 pub mod device_sync_scheduler;
 mod duplicate_consolidation;
 mod file_presence;
+mod force_backfill;
 mod freedesktop_trash;
 mod library_hydration;
 mod library_mutation;
@@ -121,6 +122,7 @@ pub use sustain_smart_shuffle::{
 };
 
 pub use artwork_fetcher::{ArtworkFetchOutcome, ArtworkFetchResult};
+pub use force_backfill::{ForceBackfillOutcome, ForceBackfillProgress, ForceBackfillSummary};
 pub use library_hydration::LibraryHydrationSnapshot;
 pub use library_scan::run_library_scan_task;
 pub use managed_library::{
@@ -1568,6 +1570,27 @@ impl ApplicationRuntime {
 
     pub fn library_tracks(&self) -> &[Track] {
         &self.library_tracks
+    }
+
+    /// Every distinct, non-empty genre currently in the library, sorted
+    /// case-insensitively. Feeds the Get Info genre field's autocomplete so
+    /// the user reuses an existing spelling instead of coining a near-
+    /// duplicate ("Hip-Hop" vs "Hip Hop") that would split listening stats
+    /// and smart-playlist membership (#160). Derived from the in-memory
+    /// library so it reflects edits made this session without a DB round-trip.
+    pub fn distinct_genres(&self) -> Vec<String> {
+        let mut unique = std::collections::BTreeSet::<String>::new();
+        for track in &self.library_tracks {
+            if let Some(genre) = track.metadata.genre.as_deref() {
+                let genre = genre.trim();
+                if !genre.is_empty() {
+                    unique.insert(genre.to_owned());
+                }
+            }
+        }
+        let mut genres: Vec<String> = unique.into_iter().collect();
+        genres.sort_by_key(|genre| genre.to_lowercase());
+        genres
     }
 
     /// Look up a single in-memory library track by id. `library_tracks` is

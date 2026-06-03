@@ -101,10 +101,17 @@ impl TrackTable {
 
     pub(crate) fn replace_rows(&self, rows: Vec<TrackTableRow>) {
         self.bump_row_replacement_generation();
-        self.store.remove_all();
-        for row in rows {
-            self.store.append(&glib::BoxedAnyObject::new(row));
-        }
+        // One `splice` instead of `remove_all` + N `append`s. Each append
+        // fires its own `items-changed`, which the wrapping `SortListModel`
+        // answers with a binary-insert-and-shift (O(n)) and the
+        // `MultiSelection` with its own bookkeeping — so a per-row rebuild is
+        // O(n²) and visibly stalls for seconds on a 10k library or a large
+        // playlist (#157). `splice` removes every old row and inserts every
+        // new one under a single `items-changed`, so the sorter re-sorts and
+        // the selection reconciles exactly once.
+        let additions: Vec<glib::BoxedAnyObject> =
+            rows.into_iter().map(glib::BoxedAnyObject::new).collect();
+        self.store.splice(0, self.store.n_items(), &additions);
     }
 
     /// Clear the store and return a token for a bounded idle-batch rebuild.

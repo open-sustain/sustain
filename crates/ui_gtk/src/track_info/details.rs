@@ -51,6 +51,7 @@ impl DetailsPage {
         initial: &TrackMetadata,
         initial_rating: Rating,
         initial_statistics: &PlayStatistics,
+        genre_suggestions: Vec<String>,
     ) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 8);
         widget.add_css_class("track-info-details");
@@ -81,6 +82,10 @@ impl DetailsPage {
         attach_field(&grid, row, "Grouping", &grouping);
         row += 1;
         let genre = text_entry(initial.genre.as_deref());
+        // Offer the library's existing genres as autocomplete so the user
+        // reuses a spelling instead of splintering one ("Hip-Hop" vs "Hip
+        // Hop") across stats and smart playlists (#160).
+        crate::suggestion_entry::attach_suggestions(&genre, genre_suggestions);
         attach_field(&grid, row, "Genre", &genre);
         row += 1;
 

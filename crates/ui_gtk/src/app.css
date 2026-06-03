@@ -103,21 +103,6 @@ textview.now-playing-overlay-lyrics text {
     font-weight: 300;
 }
 
-button.now-playing-overlay-close {
-    background-color: alpha(@theme_fg_color, 0.10);
-    border: none;
-    border-radius: 999px;
-    box-shadow: none;
-    color: inherit;
-    min-height: 28px;
-    min-width: 28px;
-    padding: 0;
-}
-
-button.now-playing-overlay-close:hover {
-    background-color: alpha(@theme_fg_color, 0.18);
-}
-
 .now-playing-title {
     font-weight: bold;
 }
@@ -746,28 +731,29 @@ listview.playlist-sidebar-list > row:focus {
     padding-bottom: 0;
 }
 
-/* Sidebar footer strip. Full-width container at the bottom of the
-   sidebar; the [cog] Settings button currently fills it, and the
-   layout leaves room for a second button beside it later. A subtle
-   top hairline marks the footer as separate chrome from the
-   playlists list above. */
-.playlist-sidebar-footer {
-    padding: 4px 6px;
-    border-top: 1px solid alpha(@theme_fg_color, 0.08);
+/* Status-bar Settings entry. Sits in the bottom-left cluster, to the
+   right of the sidebar collapse toggle (#164). Flat chrome: no border
+   or background until :hover / :active, so it matches the collapse
+   toggle and reads as status-bar furniture rather than a button. */
+.status-bar-settings-button {
+    margin: 0 2px;
+    padding: 0 6px;
+    min-height: 14px;
+    border-radius: 8px;
+    color: alpha(@theme_fg_color, 0.7);
 }
 
-.sidebar-settings-button {
-    padding: 4px 8px;
-    border-radius: 4px;
-    color: alpha(@theme_fg_color, 0.78);
-}
-
-.sidebar-settings-button:hover {
-    background-color: alpha(@theme_fg_color, 0.06);
+.status-bar-settings-button:hover {
+    background-color: alpha(@theme_fg_color, 0.08);
     color: @theme_fg_color;
 }
 
-.sidebar-settings-icon {
+.status-bar-settings-button:active {
+    background-color: alpha(@theme_fg_color, 0.12);
+    color: @theme_fg_color;
+}
+
+.status-bar-settings-icon {
     opacity: 0.7;
 }
 
@@ -1076,6 +1062,23 @@ columnview.track-table listview row:selected .track-table-status-missing,
     background: none;
     border: none;
     box-shadow: none;
+}
+
+/* Get Info genre autocomplete (#160): a compact suggestion list anchored
+   under the genre entry. Sized to a sensible minimum so short genre names
+   don't render a sliver-width popover; rows follow the theme's selection
+   colour for the keyboard-highlighted entry. */
+.suggestion-popover > contents {
+    padding: 4px;
+}
+
+.suggestion-list {
+    min-width: 180px;
+}
+
+.suggestion-list row {
+    padding: 4px 8px;
+    border-radius: 4px;
 }
 
 /* DEVICES section + device-sync panel (#23/#24). Theme-aware: derived

@@ -77,6 +77,16 @@ fn main() {
     let _instance_lock: InstanceLock = match instance_lock::acquire(&paths.database) {
         AcquireOutcome::Acquired(lock) => lock,
         AcquireOutcome::Held { lock_path } => {
+            if cli.force_backfill {
+                // The backfill rewrites audio files; a second writer on the
+                // same library could clobber a concurrent tag write. There is
+                // no window to raise for a headless command — refuse instead.
+                eprintln!(
+                    "Sustain: another instance is running for this library ({}). Close it before running --force-backfill.",
+                    lock_path.display()
+                );
+                process::exit(1);
+            }
             eprintln!(
                 "Sustain: another instance is already running for this library ({}). Raising its window.",
                 lock_path.display()
@@ -126,10 +136,21 @@ fn main() {
         Ok(library_store) => {
             tlog!("sqlite library store opened");
             let was_freshly_created = library_store.was_freshly_created();
-            if let Err(error) = runtime.set_library_services_deferred_hydration(
-                Arc::new(library_store),
-                Arc::new(sustain_metadata::LoftyMetadataService),
-            ) {
+            // The force-backfill command iterates every track immediately, so
+            // it needs the library hydrated synchronously; the UI prefers the
+            // deferred path for a responsive cold start.
+            let services_result = if cli.force_backfill {
+                runtime.set_library_services(
+                    Arc::new(library_store),
+                    Arc::new(sustain_metadata::LoftyMetadataService),
+                )
+            } else {
+                runtime.set_library_services_deferred_hydration(
+                    Arc::new(library_store),
+                    Arc::new(sustain_metadata::LoftyMetadataService),
+                )
+            };
+            if let Err(error) = services_result {
                 eprintln!("Sustain: library services failed to initialize ({error:?}).");
                 process::exit(1);
             }
@@ -163,6 +184,14 @@ fn main() {
     }
 
     tlog!("library services installed (track hydration deferred)");
+
+    // Hidden maintenance command (#143): rewrite every track's file tags
+    // from the authoritative SQLite values, then exit without ever building
+    // the UI, playback, or networked-metadata services.
+    if cli.force_backfill {
+        run_force_backfill(&runtime);
+    }
+
     if let Ok(playback_service) = sustain_playback::GStreamerPlaybackService::new() {
         runtime = runtime.with_playback_service(Box::new(playback_service));
     }
@@ -205,4 +234,66 @@ fn main() {
         paths.database,
         parsed_args.gtk_arguments,
     );
+}
+
+/// Drive the hidden `--force-backfill` command to completion and exit.
+///
+/// Streams one line per track to stderr (so progress is visible while a
+/// large library is rewritten) and prints a final tally. Exits non-zero if
+/// any track failed or the pass could not run at all, so the command is
+/// usable from a script.
+fn run_force_backfill(runtime: &sustain_app_runtime::ApplicationRuntime) -> ! {
+    use sustain_app_runtime::ForceBackfillOutcome;
+
+    eprintln!("Sustain: force-backfill — rewriting file tags from the library database.");
+    let summary = runtime.force_backfill_tags(|progress| {
+        let label = track_label(progress.track);
+        match &progress.outcome {
+            ForceBackfillOutcome::Written => {
+                eprintln!("[{}/{}] {label}", progress.done, progress.total);
+            }
+            ForceBackfillOutcome::SkippedMissing => {
+                eprintln!(
+                    "[{}/{}] {label} — skipped (file missing)",
+                    progress.done, progress.total
+                );
+            }
+            ForceBackfillOutcome::Failed(reason) => {
+                eprintln!(
+                    "[{}/{}] {label} — FAILED: {reason}",
+                    progress.done, progress.total
+                );
+            }
+        }
+    });
+    match summary {
+        Ok(summary) => {
+            eprintln!(
+                "Sustain: force-backfill complete — {} written, {} skipped (missing), {} failed, {} total.",
+                summary.written, summary.skipped_missing, summary.failed, summary.total
+            );
+            process::exit(i32::from(summary.failed > 0));
+        }
+        Err(error) => {
+            eprintln!("Sustain: force-backfill could not run ({error:?}).");
+            process::exit(1);
+        }
+    }
+}
+
+/// A human-readable one-line identifier for a track in backfill progress
+/// output: "Artist — Title", the title alone, or the library-relative path
+/// when neither tag is populated.
+fn track_label(track: &sustain_app_runtime::Track) -> String {
+    let nonempty = |value: &str| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    };
+    let title = track.metadata.title.as_deref().and_then(nonempty);
+    let artist = track.metadata.artist.as_deref().and_then(nonempty);
+    match (artist, title) {
+        (Some(artist), Some(title)) => format!("{artist} — {title}"),
+        (None, Some(title)) => title,
+        _ => track.location.relative_path.as_path().display().to_string(),
+    }
 }

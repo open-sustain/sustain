@@ -29,6 +29,9 @@ struct NotificationLaneInput {
 #[derive(Clone)]
 pub(crate) struct StatusBar {
     root: gtk::CenterBox,
+    /// Bottom-left control cluster. Holds the sidebar collapse toggle and,
+    /// to its right, the Settings entry — both always-visible chrome.
+    start_cluster: gtk::Box,
     summary: gtk::Label,
     lane: NotificationLane,
 }
@@ -48,11 +51,16 @@ impl StatusBar {
 
         let lane = NotificationLane::new(on_cancel_background_task);
 
+        let start_cluster = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        start_cluster.set_valign(gtk::Align::Center);
+
+        root.set_start_widget(Some(&start_cluster));
         root.set_center_widget(Some(&summary));
         root.set_end_widget(Some(&lane.widget()));
 
         let status_bar = Self {
             root,
+            start_cluster,
             summary,
             lane,
         };
@@ -64,13 +72,22 @@ impl StatusBar {
         self.root.clone()
     }
 
-    /// Mount the sidebar collapse / expand toggle on the status bar's
-    /// left side. The toggle is the only control that brings the
-    /// sidebar back once collapsed, so it lives in always-visible
-    /// chrome instead of inside the sidebar itself.
+    /// Mount the sidebar collapse / expand toggle as the leftmost item of
+    /// the status bar's bottom-left cluster. The toggle is the only
+    /// control that brings the sidebar back once collapsed, so it lives
+    /// in always-visible chrome instead of inside the sidebar itself.
+    /// Call before [`Self::install_settings_button`] so Settings sits to
+    /// its right.
     pub(crate) fn install_sidebar_collapse_toggle(&self, button: gtk::Button) {
         button.set_valign(gtk::Align::Center);
-        self.root.set_start_widget(Some(&button));
+        self.start_cluster.append(&button);
+    }
+
+    /// Mount the Settings entry to the right of the sidebar collapse
+    /// toggle in the bottom-left cluster (#164).
+    pub(crate) fn install_settings_button(&self, button: gtk::Button) {
+        button.set_valign(gtk::Align::Center);
+        self.start_cluster.append(&button);
     }
 
     pub(crate) fn update_summary(&self, library_tracks: &[TrackTableRow]) {

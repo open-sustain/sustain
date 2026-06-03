@@ -102,7 +102,6 @@ enum LibraryRowState {
 #[derive(Clone)]
 pub(crate) struct PlaylistSidebar {
     root: gtk::Box,
-    footer: gtk::Box,
     selection: gtk::SingleSelection,
     music_row: gtk::TreeExpander,
     albums_row: gtk::TreeExpander,
@@ -250,8 +249,8 @@ impl PlaylistSidebar {
         // LIBRARY folds away its two fixed-height rows, so collapsing it
         // lets PLAYLISTS rise to fill the freed space. PLAYLISTS folds the
         // list view itself rather than the enclosing scroller: the scroller
-        // keeps `vexpand`, so the now-empty area still pins the footer to
-        // the bottom edge instead of letting it float up under the header.
+        // keeps `vexpand`, so the now-empty area is held by the scroller
+        // instead of letting the list float up under the header.
         let library_section_collapsed = Rc::new(Cell::new(library_collapsed));
         let playlists_section_collapsed = Rc::new(Cell::new(playlists_collapsed));
         connect_section_toggle(
@@ -271,15 +270,6 @@ impl PlaylistSidebar {
             playlists_section_collapsed.clone(),
             vec![list_view.clone().upcast::<gtk::Widget>()],
         );
-
-        // Sidebar footer. Built empty here; the main window appends the
-        // [cog] Settings button after construction. The footer is a
-        // full-width horizontal Box so a second button can sit beside
-        // Settings later without re-layout.
-        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        footer.add_css_class("playlist-sidebar-footer");
-        footer.set_hexpand(true);
-        root.append(&footer);
 
         let library_state = Rc::new(Cell::new(LibraryRowState::Music));
         let on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>> =
@@ -367,7 +357,6 @@ impl PlaylistSidebar {
 
         Self {
             root,
-            footer,
             selection,
             music_row,
             albums_row,
@@ -417,12 +406,6 @@ impl PlaylistSidebar {
     pub(crate) fn set_view_row_visibility(&self, show_duplicates: bool, show_statistics: bool) {
         self.duplicates_row.set_visible(show_duplicates);
         self.statistics_row.set_visible(show_statistics);
-    }
-
-    /// The empty container at the bottom of the sidebar where chrome
-    /// like the Settings button is appended after construction.
-    pub(crate) fn footer(&self) -> gtk::Box {
-        self.footer.clone()
     }
 
     pub(crate) fn set_selection_changed(&self, callback: SidebarSelectionChangedCallback) {
