@@ -72,6 +72,11 @@ pre code { background: none; padding: 0; }
 
 .muted { color: var(--muted); font-weight: 400; }
 
+/* <picture> is only a webp/png format-switching wrapper; collapse its box so
+   the inner <img> lays out exactly as it would unwrapped — width:100% keeps
+   resolving against the figure, and the brand logo stays a flex item. */
+picture { display: contents; }
+
 /* ───────────────── Header ───────────────── */
 .site-header {
   position: sticky;
@@ -192,6 +197,7 @@ h2 { font-size: clamp(1.7rem, 3.5vw, 2.3rem); margin: 0 0 0.4rem; }
 .btn-ghost:hover { border-color: var(--accent); }
 
 .hero-shot { margin: 0; }
+.hero-shots { display: grid; gap: 1rem; }
 .hero-shot img {
   width: 100%;
   height: auto;
@@ -294,6 +300,9 @@ h2 { font-size: clamp(1.7rem, 3.5vw, 2.3rem); margin: 0 0 0.4rem; }
   gap: 1rem;
 }
 .shot--small { margin-bottom: 0; }
+/* A modal-dialog screenshot (e.g. Consolidate): not a full window, so cap its
+   width and centre it rather than blowing it up across the column. */
+.shot--dialog img { max-width: 720px; margin-left: auto; margin-right: auto; }
 
 /* ───────────────── Install ───────────────── */
 .install-block { margin-bottom: 2rem; }

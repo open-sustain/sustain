@@ -22,7 +22,10 @@
 
   <header class="site-header">
     <a class="brand" href="#top">
-      <img src="assets/logo.png" alt="" width="36" height="36" />
+      <picture>
+        <source srcset="assets/logo.webp" type="image/webp" />
+        <img src="assets/logo.png" alt="" width="36" height="36" />
+      </picture>
       <span>Sustain</span>
     </a>
     <nav class="site-nav">
@@ -57,10 +60,22 @@
         <a class="btn btn-ghost" href="https://github.com/open-sustain/sustain">Read the source on GitHub</a>
       </div>
 
-      <figure class="hero-shot">
-        <img src="assets/screenshot-light-songs.png"
-             alt="Sustain's main library view: a dense, sortable track table with ratings, BPM, key and play counts." />
-      </figure>
+      <div class="hero-shots">
+        <figure class="hero-shot">
+          <picture>
+            <source srcset="assets/screenshot-light-songs.webp" type="image/webp" />
+            <img src="assets/screenshot-light-songs.png"
+                 alt="Sustain's Songs view: a dense, sortable track table with star ratings, BPM, key and play counts." />
+          </picture>
+        </figure>
+        <figure class="hero-shot">
+          <picture>
+            <source srcset="assets/screenshot-dark-albums.webp" type="image/webp" />
+            <img src="assets/screenshot-dark-albums.png"
+                 alt="Sustain's Albums grid in dark mode: a wall of cover art with an expanded album track list." />
+          </picture>
+        </figure>
+      </div>
     </section>
 
     <!-- ─────────────────────── No catch ─────────────────────── -->
@@ -138,6 +153,10 @@
           <p>Index your folder in place and never move a file, or let Sustain keep it tidied by artist and album. Your call.</p>
         </article>
         <article>
+          <h3>Consolidate duplicates</h3>
+          <p>Merge duplicate copies of a track into one keeper, with the best of each field preselected — highest-quality audio, available artwork, present tags over blanks, the earliest release date — every choice overridable. Play counts and skips are summed, and the extra files are removed only once the survivor is written and verified.</p>
+        </article>
+        <article>
           <h3>Playlists &amp; smart playlists</h3>
           <p>Ordinary playlists, iTunes-style rule-based smart playlists, and folders to nest them. Queue tracks on the fly with <em>Play Next</em> and <em>Add to Queue</em>.</p>
         </article>
@@ -190,41 +209,77 @@
       <p class="section-lede">Native on both light and dark, with your system accent color.</p>
 
       <figure class="shot">
-        <img src="assets/screenshot-dark-albums.png"
-             alt="Sustain's album grid in dark mode with an expanded album track list and large cover art." />
-        <figcaption>Album grid · dark</figcaption>
-      </figure>
-
-      <figure class="shot">
-        <img src="assets/screenshot-light-albums.png"
-             alt="Sustain's album grid in light mode." />
-        <figcaption>Album grid · light</figcaption>
-      </figure>
-
-      <figure class="shot">
-        <img src="assets/screenshot-dark-smart-shuffle.png"
-             alt="Sustain's Smart Shuffle settings: a 'Smart Shuffle ready' status with the indexed-track count, and a Focused / Balanced / Adventurous exploration slider." />
-        <figcaption>Smart Shuffle</figcaption>
-      </figure>
-
-      <figure class="shot">
-        <img src="assets/screenshot-dark-sync-pioneer-rekordbox.png"
-             alt="Sustain's device sync panel: a USB stick with playlists ticked to sync, the Pioneer (Rekordbox / XDJ) on-drive format selected, per-metric analysis readiness, and a genre-stacked disk-occupation bar." />
+        <picture>
+          <source srcset="assets/screenshot-dark-sync-pioneer-rekordbox.webp" type="image/webp" />
+          <img src="assets/screenshot-dark-sync-pioneer-rekordbox.png"
+               alt="Sustain's device sync panel: a USB stick with playlists ticked to sync, the Pioneer (Rekordbox / XDJ) on-drive format selected, per-metric analysis readiness, and a genre-stacked disk-occupation bar." />
+        </picture>
         <figcaption>Device sync · Pioneer / Rekordbox export</figcaption>
+      </figure>
+
+      <figure class="shot">
+        <picture>
+          <source srcset="assets/screenshot-statistics.webp" type="image/webp" />
+          <img src="assets/screenshot-statistics.png"
+               alt="Sustain's Statistics view in dark mode: donut charts breaking the library down by genre, audio quality and most-played genres, with most-liked-genres, release-year and date-added histograms below." />
+        </picture>
+        <figcaption>Library statistics</figcaption>
+      </figure>
+
+      <figure class="shot shot--dialog">
+        <picture>
+          <source srcset="assets/screenshot-dark-consolidate.webp" type="image/webp" />
+          <img src="assets/screenshot-dark-consolidate.png"
+               alt="Sustain's Consolidate Duplicate Tracks dialog: two duplicate copies side by side, each metadata field individually selectable so the best value from either copy is kept before the extra files are removed." />
+        </picture>
+        <figcaption>Duplicate consolidation</figcaption>
       </figure>
 
       <div class="shot-row">
         <figure class="shot shot--small">
-          <img src="assets/settings-library.png" alt="Sustain library settings." />
+          <picture>
+            <source srcset="assets/settings-library.webp" type="image/webp" />
+            <img src="assets/settings-library.png" alt="Sustain library settings." />
+          </picture>
           <figcaption>Library settings</figcaption>
         </figure>
         <figure class="shot shot--small">
-          <img src="assets/settings-analysis.png" alt="Sustain analysis settings." />
+          <picture>
+            <source srcset="assets/settings-analysis.webp" type="image/webp" />
+            <img src="assets/settings-analysis.png" alt="Sustain analysis settings." />
+          </picture>
           <figcaption>Analysis settings</figcaption>
         </figure>
         <figure class="shot shot--small">
-          <img src="assets/settings-online.png" alt="Sustain online-services settings." />
+          <picture>
+            <source srcset="assets/settings-online.webp" type="image/webp" />
+            <img src="assets/settings-online.png" alt="Sustain online-services settings." />
+          </picture>
           <figcaption>Online settings</figcaption>
+        </figure>
+        <figure class="shot shot--small">
+          <picture>
+            <source srcset="assets/settings-shuffle.webp" type="image/webp" />
+            <img src="assets/settings-shuffle.png"
+                 alt="Sustain's Smart Shuffle settings: a 'Smart Shuffle ready' status with the indexed-track count, and a Focused / Balanced / Adventurous exploration slider." />
+          </picture>
+          <figcaption>Smart Shuffle settings</figcaption>
+        </figure>
+        <figure class="shot shot--small">
+          <picture>
+            <source srcset="assets/settings-views.webp" type="image/webp" />
+            <img src="assets/settings-views.png"
+                 alt="Sustain's Views settings: toggles to show the Duplicates and Statistics views in the sidebar." />
+          </picture>
+          <figcaption>Views settings</figcaption>
+        </figure>
+        <figure class="shot shot--small">
+          <picture>
+            <source srcset="assets/settings-about.webp" type="image/webp" />
+            <img src="assets/settings-about.png"
+                 alt="Sustain's About panel: version, GPL-3.0 license, and the on-disk library data location." />
+          </picture>
+          <figcaption>About</figcaption>
         </figure>
       </div>
     </section>

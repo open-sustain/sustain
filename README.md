@@ -4,15 +4,12 @@
 </h1>
 
 
-![Sustain interface screenshot light](.github/assets/screenshot-light-albums.png)
+![Sustain interface screenshot dark albums](.github/assets/screenshot-dark-albums.png)
+
+![Sustain interface screenshot light songs](.github/assets/screenshot-light-songs.png)
 
 <p align="center">
-	<img src=".github/assets/screenshot-dark-albums.png" alt="Sustain interface screenshot album view dark" width="49%" />
-	<img src=".github/assets/screenshot-light-songs.png" alt="Sustain interface screenshot songs view light" width="49%" />
-</p>
-
-<p align="center">
-	<img src=".github/assets/screenshot-dark-smart-shuffle.png" alt="Sustain interface screenshot Smart Shuffle settings" width="49%" />
+	<img src=".github/assets/screenshot-dark-consolidate.png" alt="Sustain interface screenshot duplicates consolidation" width="49%" />
 	<img src=".github/assets/screenshot-dark-sync-pioneer-rekordbox.png" alt="Sustain interface screenshot device sync with Pioneer Rekordbox export" width="49%" />
 </p>
 
@@ -20,6 +17,9 @@
   <img src=".github/assets/settings-library.png" alt="Sustain interface screenshot settings library" width="32%" />
   <img src=".github/assets/settings-analysis.png" alt="Sustain interface screenshot settings analysis" width="32%" />
   <img src=".github/assets/settings-online.png" alt="Sustain interface screenshot settings online" width="32%" />
+  <img src=".github/assets/settings-shuffle.png" alt="Sustain interface screenshot settings online" width="32%" />
+  <img src=".github/assets/settings-views.png" alt="Sustain interface screenshot settings online" width="32%" />
+  <img src=".github/assets/settings-about.png" alt="Sustain interface screenshot settings online" width="32%" />
 </p>
 
 Sustain (`open-sustain/sustain`) is a Linux music player heavily inspired by old iTunes builds.
