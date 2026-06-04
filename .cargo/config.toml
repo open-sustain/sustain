@@ -1,0 +1,9 @@
+# `cargo xtask <command>` runs the workspace automation crate. The localization
+# tooling (i18n-extract / i18n-check / i18n-compile) lives there.
+#
+# NOTE: the Flatpak build overwrites this file to point cargo at its vendored
+# crate sources, which discards this alias. Build steps that need the xtask
+# inside that sandbox must invoke it directly as
+# `cargo run --locked -p xtask -- <command>`, not `cargo xtask <command>`.
+[alias]
+xtask = "run --quiet --package xtask --"

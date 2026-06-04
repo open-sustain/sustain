@@ -18,6 +18,7 @@ path = "src/main.rs"
 directories = "6.0.0"
 rustix = { version = "1", features = ["fs"] }
 sustain-app-runtime = { path = "../app_runtime" }
+sustain-i18n = { path = "../i18n" }
 sustain-library-store = { path = "../library_store" }
 sustain-metadata = { path = "../metadata" }
 sustain-metadata-remote = { path = "../metadata_remote" }

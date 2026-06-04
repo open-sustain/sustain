@@ -1,0 +1,19 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Sustain workspace automation: localization catalog tooling"
+license.workspace = true
+publish.workspace = true
+
+# Build tooling, not a shipped `sustain-*` crate and not linked into any
+# binary. Depends only on the standard library and orchestrates the installed
+# GNU gettext tools; it never parses PO/POT itself beyond trivial line work.
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[lints]
+workspace = true

@@ -36,6 +36,13 @@ fn main() {
         };
     }
     tlog!("main() entered");
+    // Bind the process locale and gettext catalogs before anything else: this
+    // is the one and only locale mutation, it must precede GTK initialization
+    // and thread creation, and `setlocale(LC_ALL, "")` here also lets GTK
+    // localize its own stock strings. The calls are O(1); the (kilobyte-sized)
+    // catalog is mmapped lazily on first lookup during UI construction.
+    sustain_i18n::init();
+    tlog!("locale bound");
     // Parse developer-isolation flags and resolve the config, database,
     // and artwork-cache locations up front (issue #7). The database path
     // is resolved before anything else so the single-instance lock is

@@ -7,6 +7,7 @@ members = [
   "crates/desktop",
   "crates/device_sync",
   "crates/domain",
+  "crates/i18n",
   "crates/library_store",
   "crates/metadata",
   "crates/metadata_remote",
@@ -16,6 +17,7 @@ members = [
   "crates/settings",
   "crates/smart_shuffle",
   "crates/ui_gtk",
+  "xtask",
 ]
 resolver = "3"
 

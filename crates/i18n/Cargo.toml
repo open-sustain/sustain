@@ -1,0 +1,29 @@
+[package]
+name = "sustain-i18n"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Sustain's localization boundary: the only crate that links gettext"
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The system GNU gettext runtime (glibc's libintl on Debian/Flatpak), not a
+# vendored copy: the `gettext-system` feature links the platform's libintl so
+# nothing extra ships in the package and lookups go through the same catalogs
+# the rest of the desktop uses.
+gettext-rs = { version = "0.7.7", features = ["gettext-system"] }
+# Named-placeholder substitution over the looked-up translation. The translated
+# format string is data, so the standard `format!` macro cannot consume it;
+# `formatx!` applies `{name}` substitution at runtime against a `Display` value.
+formatx = "0.2.4"
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-machete]
+# `gettext-rs` exposes its library as `gettextrs` (no hyphen). cargo-machete
+# matches the package name against the source and cannot see the renamed
+# `pub use gettextrs::...` re-exports, so it reports a false positive. The crate
+# is genuinely used — it is this crate's entire reason to exist.
+ignored = ["gettext-rs"]

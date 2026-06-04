@@ -1,0 +1,7 @@
+# Locales with a complete, reviewed Sustain catalog. One or more
+# whitespace-separated locale codes per line; blank lines and lines beginning
+# with `#` are ignored. `cargo xtask i18n-check` requires a matching
+# `po/<lang>.po` for every entry here, with zero fuzzy or untranslated strings.
+#
+# Empty for now: Phase 1 ships the infrastructure only, so Sustain stays
+# English while the catalogs are produced and reviewed.
