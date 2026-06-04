@@ -14,7 +14,7 @@ path = "src/lib.rs"
 # Audio decoding. Format features cover the spread Sustain claims to
 # import — MP3, M4A/AAC, FLAC, Ogg/Vorbis, WAV. We do not enable
 # `isomp4` features that would bring in additional non-music codecs.
-symphonia = { version = "0.5", features = ["mp3", "aac", "flac", "wav", "ogg", "vorbis"] }
+symphonia = { version = "0.6", features = ["mp3", "aac", "flac", "wav", "ogg", "vorbis"] }
 # BPM + key detection. Chroma-based; takes mono f32 samples and a
 # sample rate; returns BPM + a key string we map onto sustain_domain::MusicalKey.
 stratum-dsp = "1.0"
