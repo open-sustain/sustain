@@ -69,15 +69,13 @@ here:
 - **GStreamer plugin packages** (`gstreamer1.0-plugins-good`,
   `gstreamer1.0-plugins-bad`) are likewise runtime Debian dependencies, not
   bundled content.
-- **Embedded Pioneer database pages** —
-  `crates/pioneer/src/reference/{columns,history,history_entries,history_playlists}.bin`.
-  These are four 4096-byte structural pages required for CDJ/XDJ hardware to
-  accept a drive. They are format fixtures (content-free table scaffolding),
-  not third-party copyrighted creative works, so they carry no attribution
-  obligation. Their factual origin and the interoperability basis for the
-  exporter are covered separately by the Pioneer-export provenance work; see
-  the footer disclaimer on the website and the in-code documentation in
-  `crates/pioneer/src/pdb.rs` and `crates/pioneer/src/path_hash.rs`.
+- **Pioneer database interoperability constants** — the exporter generates
+  every `export.pdb` page from typed first-party Rust code. Its fixed columns,
+  browse-menu/table-18 rows, page-header values, and path-hash vectors are factual
+  format information derived for interoperability, not embedded third-party
+  binary content. See the footer disclaimer on the website and the in-code
+  documentation in `crates/pioneer/src/pdb.rs` and
+  `crates/pioneer/src/path_hash.rs`.
 - **Sustain's own assets** — application icons, the `.desktop` entry, the
   AppStream metainfo, and `crates/ui_gtk/src/app.css` — are first-party content
   under Sustain's GPL-3.0-or-later license.
