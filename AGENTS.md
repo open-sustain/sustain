@@ -21,7 +21,6 @@ Project and application naming:
 - Database: SQLite
 - Metadata reading/writing: start with `lofty`; use TagLib bindings only if
   needed for real compatibility gaps
-- Filesystem watching: `notify`
 - Desktop integration: D-Bus/MPRIS via `zbus`
 - Target platform: Linux on Debian, Wayland-first
 - Packaging: Debian package as the primary distribution format
