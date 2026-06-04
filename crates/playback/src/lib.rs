@@ -274,6 +274,12 @@ impl GStreamerPlaybackService {
     }
 }
 
+impl Drop for GStreamerPlaybackService {
+    fn drop(&mut self) {
+        let _ = self.playbin.set_state(gst::State::Null);
+    }
+}
+
 fn clock_time_from_duration(duration: Duration) -> gst::ClockTime {
     gst::ClockTime::from_nseconds(duration.as_nanos().min(u128::from(u64::MAX)) as u64)
 }

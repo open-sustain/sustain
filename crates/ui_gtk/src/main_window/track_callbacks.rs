@@ -173,15 +173,14 @@ pub(super) fn track_row_changed_callback(
                         | (SmartPlaylistTrackStatus::RequiresFullRebuild, _)
                 );
                 if membership_changed {
-                    let search_text = current_search_text.borrow().clone();
-                    refresh_playlists_view_if_visible(
-                        &runtime.borrow(),
-                        &content_stack,
-                        &playlists_table,
-                        &playlists_header,
-                        sidebar.current_selection(),
-                        &search_text,
-                        &playlists_dirty,
+                    schedule_playlists_structural_refresh(
+                        runtime.clone(),
+                        content_stack.clone(),
+                        playlists_table.clone(),
+                        playlists_header.clone(),
+                        sidebar.clone(),
+                        current_search_text.clone(),
+                        playlists_dirty.clone(),
                     );
                 } else if was_in_table {
                     // Membership unchanged and the row is visible —
@@ -203,6 +202,36 @@ pub(super) fn track_row_changed_callback(
         // export readiness; refresh it when that view is on screen.
         device_panel.refresh_readiness();
     })
+}
+
+fn schedule_playlists_structural_refresh(
+    runtime: SharedRuntime,
+    content_stack: gtk::Stack,
+    playlists_table: TrackTable,
+    playlists_header: PlaylistsHeader,
+    sidebar: PlaylistSidebar,
+    current_search_text: Rc<RefCell<String>>,
+    playlists_dirty: Rc<Cell<bool>>,
+) {
+    if content_stack.visible_child_name().as_deref() != Some(PLAYLISTS_VIEW) {
+        playlists_dirty.set(true);
+        return;
+    }
+    if playlists_dirty.replace(true) {
+        return;
+    }
+    glib::idle_add_local_once(move || {
+        let search_text = current_search_text.borrow().clone();
+        refresh_playlists_view_if_visible(
+            &runtime.borrow(),
+            &content_stack,
+            &playlists_table,
+            &playlists_header,
+            sidebar.current_selection(),
+            &search_text,
+            &playlists_dirty,
+        );
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
