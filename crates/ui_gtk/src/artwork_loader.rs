@@ -25,8 +25,9 @@
 //!   immutable after construction.)
 //! * The two sizes live in separate bounded caches: tiles (the cheap grid
 //!   cover) are retained generously so scrollback never thrashes, while the
-//!   far heavier detail texture is kept to a small window so neither tier can
-//!   exhaust the renderer's texture-memory budget. See
+//!   far heavier detail texture is kept to a small window. This prevents
+//!   unbounded texture growth without reducing the tile cache to the realized
+//!   viewport and making long Albums-grid scrolls churn. See
 //!   `MAX_CACHED_TILE_ARTWORKS` and `MAX_CACHED_DETAIL_ARTWORKS`.
 //! * A bounded result channel applies backpressure to workers if GTK cannot
 //!   keep up, so completed textures cannot accumulate outside those caches.

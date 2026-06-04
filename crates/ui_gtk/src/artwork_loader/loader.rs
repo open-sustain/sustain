@@ -62,13 +62,20 @@ const RESULT_DELIVERY_PACING: Duration = Duration::from_millis(8);
 /// Upper bound on resident *tile* textures.
 ///
 /// A tile is the small grid / now-playing cover — at 132px RGBA roughly
-/// 70 KB of pixel payload before renderer-specific allocation overhead.
-/// The Albums grid virtualizes rows, so 512 entries comfortably exceed the
-/// largest realized viewport while bounding the cache payload near 36 MB.
-/// Do not assume the renderer places these textures in host-visible memory:
-/// GTK's Vulkan backend may allocate them from the same constrained budget
-/// needed for swapchain images (#176).
-const MAX_CACHED_TILE_ARTWORKS: usize = 512;
+/// 70 KB of pixel payload before renderer-specific allocation overhead. The
+/// Albums grid virtualizes its widgets, not its artwork working set: after a
+/// tile leaves the LRU, scrolling back must read its PNG from SQLite and
+/// decode/upload it again. A viewport-sized cache therefore makes long,
+/// fast scrolls and scrollback visibly churn.
+///
+/// Keep several thousand tiles resident so a typical library's album covers
+/// warm once per session. The 4,096-entry ceiling still bounds the pixel
+/// payload near 285 MB while avoiding that steady-state decode churn. Do not
+/// lower it merely to fit the realized viewport; change it only with album-
+/// grid scroll profiling and renderer-memory measurements on the affected
+/// hardware. The separately bounded worker-result channel prevents completed
+/// textures from accumulating outside this LRU (#176).
+const MAX_CACHED_TILE_ARTWORKS: usize = 4096;
 
 /// Upper bound on resident *detail* textures.
 ///
