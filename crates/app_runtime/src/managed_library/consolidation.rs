@@ -2,9 +2,10 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 //! Library consolidation: relocating already-imported tracks to the canonical
-//! managed layout. Planning is pure (`plan_library_consolidation`,
-//! `plan_managed_track_retarget`); the runner journals its intent, performs
-//! no-overwrite moves, and persists `is_missing` corrections it discovers.
+//! managed layout. Planning captures source identities one file at a time and
+//! never retains source descriptors in the returned plan; the runner journals
+//! its intent, performs no-overwrite moves, and persists `is_missing`
+//! corrections it discovers.
 
 use std::{
     collections::BTreeSet,
@@ -27,12 +28,13 @@ use crate::{
 
 use super::capabilities::ManagedLibraryFilesystemValidator;
 use super::file_ops::{
-    RegularFileCapability, move_file_without_copy_or_overwrite_matching_capability,
-    open_regular_file, prune_empty_ancestor_directories_for_sources, rollback_file_move,
+    FileIdentity, RegularFileProbe, move_file_without_copy_or_overwrite_matching_capability,
+    open_regular_file, probe_regular_file, prune_empty_ancestor_directories_for_sources,
+    rollback_file_move,
 };
 use super::journal::{
-    recover_library_consolidation_journal, remove_consolidation_journal_if_present,
-    write_consolidation_journal,
+    open_consolidation_recovery_source, recover_library_consolidation_journal,
+    remove_consolidation_journal_if_present, write_consolidation_journal,
 };
 
 pub fn run_library_consolidation_task(
@@ -121,10 +123,11 @@ impl LibraryConsolidationContext {
                 break;
             }
 
+            let source = open_consolidation_recovery_source(&library_path, planned_move)?;
             if move_file_without_copy_or_overwrite_matching_capability(
                 &planned_move.source_path,
                 &planned_move.destination_path,
-                &planned_move.source,
+                &source,
             )
             .is_err()
             {
@@ -210,7 +213,9 @@ pub(super) struct PlannedLibraryConsolidationMove {
     pub(super) track_id: TrackId,
     pub(super) source_path: PathBuf,
     pub(super) destination_path: PathBuf,
-    pub(super) source: RegularFileCapability,
+    /// Identity captured while planning. The journal creates and later
+    /// reopens a durable recovery link for this inode one move at a time.
+    pub(super) source_identity: FileIdentity,
     pub(super) source_relative_path: TrackRelativePath,
     pub(super) destination_relative_path: TrackRelativePath,
     pub(super) updated_track: Track,
@@ -255,9 +260,13 @@ fn plan_library_consolidation(
     for track in existing_tracks {
         let source_relative_path = track.location.relative_path.clone();
         let source_path = track.location.absolute_path(library_path);
-        let Ok(source) = open_regular_file(&source_path) else {
-            record_missing_track(track);
-            continue;
+        let source_identity = match probe_regular_file(&source_path) {
+            Ok(RegularFileProbe::Present(source)) => source.identity(),
+            Ok(RegularFileProbe::MissingOrNonRegular) => {
+                record_missing_track(track);
+                continue;
+            }
+            Err(_) => return Err(ApplicationRuntimeError::LibraryConsolidationFailed),
         };
 
         occupied_paths.remove(&source_relative_path);
@@ -284,7 +293,7 @@ fn plan_library_consolidation(
             track_id: track.id,
             source_path,
             destination_path,
-            source,
+            source_identity,
             source_relative_path,
             destination_relative_path: plan.relative_path,
             updated_track,
@@ -309,6 +318,7 @@ pub(super) fn plan_managed_track_retarget(
     let source_path = track.location.absolute_path(library_path);
     let source = open_regular_file(&source_path)
         .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    let source_identity = source.identity();
 
     let planner = ManagedTrackPathPlanner::default();
     let mut occupied_paths = existing_tracks
@@ -337,7 +347,7 @@ pub(super) fn plan_managed_track_retarget(
         track_id: updated_track.id,
         source_path,
         destination_path,
-        source,
+        source_identity,
         source_relative_path,
         destination_relative_path: plan.relative_path,
         updated_track,
@@ -354,6 +364,7 @@ pub(super) fn plan_managed_missing_track_relocation(
 ) -> ApplicationRuntimeResult<(Track, Option<PlannedLibraryConsolidationMove>)> {
     let source = open_regular_file(source_path)
         .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+    let source_identity = source.identity();
 
     let planner = ManagedTrackPathPlanner::default();
     let mut occupied_paths = existing_tracks
@@ -384,7 +395,7 @@ pub(super) fn plan_managed_missing_track_relocation(
             track_id: track.id,
             source_path: source_path.to_path_buf(),
             destination_path: library_path.join(plan.relative_path.as_path()),
-            source,
+            source_identity,
             source_relative_path: source_relative_path.clone(),
             destination_relative_path: plan.relative_path,
             updated_track: track,
@@ -454,4 +465,113 @@ fn plan_missing_track_destination(
     }
 
     Err(ApplicationRuntimeError::TrackRelocationFailed)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, os::unix::fs::symlink, path::PathBuf};
+
+    use sustain_domain::{PlayStatistics, Rating, TrackMetadata};
+
+    use super::*;
+
+    #[test]
+    fn planning_does_not_retain_source_file_descriptors() {
+        let root = tempfile::tempdir().expect("create test root");
+        fs::create_dir(root.path().join("loose")).expect("create source directory");
+        let tracks = (1..=256)
+            .map(|id| {
+                let relative_path = format!("loose/{id}.flac");
+                fs::write(root.path().join(&relative_path), b"audio").expect("write source");
+                track(id, &relative_path)
+            })
+            .collect::<Vec<_>>();
+
+        let plan = plan_library_consolidation(root.path(), &tracks).expect("plan consolidation");
+
+        assert_eq!(plan.moves.len(), tracks.len());
+        assert_eq!(
+            open_file_descriptors_beneath(root.path()),
+            Vec::<PathBuf>::new(),
+            "a live consolidation plan must not pin one descriptor per source"
+        );
+    }
+
+    #[test]
+    fn planning_marks_only_missing_or_non_regular_sources_missing() {
+        let root = tempfile::tempdir().expect("create test root");
+        let missing = track(1, "missing.flac");
+
+        let plan =
+            plan_library_consolidation(root.path(), std::slice::from_ref(&missing)).expect("plan");
+
+        assert_eq!(plan.missing_tracks, 1);
+        assert_eq!(plan.missing_track_updates.len(), 1);
+        assert!(plan.missing_track_updates[0].location.is_missing());
+
+        let unprobeable_name = format!("{}.flac", "x".repeat(256));
+        let unprobeable = track(2, &unprobeable_name);
+        assert!(
+            matches!(
+                plan_library_consolidation(root.path(), &[unprobeable]),
+                Err(ApplicationRuntimeError::LibraryConsolidationFailed)
+            ),
+            "resource and pathname errors must abort instead of becoming missing rows"
+        );
+
+        let outside = tempfile::tempdir().expect("create outside root");
+        fs::write(outside.path().join("song.flac"), b"audio").expect("write outside source");
+        symlink(outside.path(), root.path().join("redirect")).expect("create parent symlink");
+        let redirected = track(3, "redirect/song.flac");
+        assert!(
+            matches!(
+                plan_library_consolidation(root.path(), &[redirected]),
+                Err(ApplicationRuntimeError::LibraryConsolidationFailed)
+            ),
+            "unsafe source-parent resolution must abort instead of becoming a missing row"
+        );
+    }
+
+    #[test]
+    fn journal_publication_rejects_source_replacement_after_planning() {
+        let root = tempfile::tempdir().expect("create test root");
+        let source = root.path().join("loose.flac");
+        fs::write(&source, b"original").expect("write source");
+        let plan = plan_library_consolidation(root.path(), &[track(1, "loose.flac")])
+            .expect("plan consolidation");
+        fs::remove_file(&source).expect("remove planned source");
+        fs::write(&source, b"replacement").expect("write replacement");
+
+        assert!(write_consolidation_journal(root.path(), &plan.moves).is_err());
+        assert_eq!(fs::read(&source).expect("read replacement"), b"replacement");
+        assert!(!root.path().join(".sustain-consolidation-journal").exists());
+        assert!(!root.path().join(".sustain-consolidation-recovery").exists());
+    }
+
+    fn track(id: i64, relative_path: &str) -> Track {
+        Track {
+            id: TrackId::new(id).expect("positive track id"),
+            location: TrackLocation::available(
+                TrackRelativePath::new(relative_path).expect("valid relative path"),
+            ),
+            metadata: TrackMetadata {
+                title: Some(format!("Song {id}")),
+                ..TrackMetadata::default()
+            },
+            rating: Rating::unrated(),
+            statistics: PlayStatistics::default(),
+            file_size_bytes: None,
+            has_embedded_artwork: None,
+            file_modified_at: None,
+        }
+    }
+
+    fn open_file_descriptors_beneath(root: &Path) -> Vec<PathBuf> {
+        fs::read_dir("/proc/self/fd")
+            .expect("read process fd directory")
+            .filter_map(Result::ok)
+            .filter_map(|entry| fs::read_link(entry.path()).ok())
+            .filter(|path| path.starts_with(root))
+            .collect()
+    }
 }

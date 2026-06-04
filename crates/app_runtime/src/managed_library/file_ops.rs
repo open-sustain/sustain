@@ -63,6 +63,12 @@ pub(crate) struct RegularFileCapability {
 }
 
 #[derive(Clone, Debug)]
+pub(super) enum RegularFileProbe {
+    Present(RegularFileCapability),
+    MissingOrNonRegular,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct PinnedFilePath {
     path: PathBuf,
     parent: Arc<File>,
@@ -608,6 +614,45 @@ pub(crate) fn open_regular_file(path: &Path) -> Result<RegularFileCapability, Fi
     PinnedFilePath::existing_parent(path)
         .map_err(|_| FileMoveError::SourceUnavailable)?
         .open_regular_file()
+}
+
+/// Probe one consolidation source without collapsing resource, permission, or
+/// unsafe-parent errors into a missing-file result.
+pub(super) fn probe_regular_file(path: &Path) -> io::Result<RegularFileProbe> {
+    let pinned = match PinnedFilePath::existing_parent(path) {
+        Ok(pinned) => pinned,
+        Err(error) if is_missing_or_non_regular_path_error(&error) => {
+            return Ok(RegularFileProbe::MissingOrNonRegular);
+        }
+        Err(error) => return Err(error),
+    };
+    let file = match openat(
+        pinned.parent.as_ref(),
+        &pinned.file_name,
+        REGULAR_FILE_OPEN_FLAGS,
+        Mode::empty(),
+    ) {
+        Ok(file) => File::from(file),
+        Err(Errno::NOENT | Errno::NOTDIR | Errno::LOOP) => {
+            return Ok(RegularFileProbe::MissingOrNonRegular);
+        }
+        Err(error) => return Err(io::Error::from(error)),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() {
+        return Ok(RegularFileProbe::MissingOrNonRegular);
+    }
+    Ok(RegularFileProbe::Present(RegularFileCapability {
+        identity: FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        },
+        file: Arc::new(file),
+    }))
+}
+
+fn is_missing_or_non_regular_path_error(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ENOENT)
 }
 
 pub(crate) fn regular_file_capability_from_file(

@@ -24,7 +24,7 @@ use crate::{ApplicationRuntimeError, ApplicationRuntimeResult};
 use super::capabilities::ManagedLibraryFilesystemValidator;
 use super::consolidation::{JournalTrackPersistence, PlannedLibraryConsolidationMove};
 use super::file_ops::{
-    FileIdentity, PRIVATE_DIRECTORY_MODE, PinnedFilePath, open_regular_file,
+    FileIdentity, PRIVATE_DIRECTORY_MODE, PinnedFilePath, RegularFileCapability, open_regular_file,
     path_refers_to_capability, prune_empty_ancestor_directories_for_sources,
     publish_file_capability, publish_pinned_file_without_overwrite,
     regular_file_capability_from_file, remove_file_and_sync_parent,
@@ -295,20 +295,18 @@ pub(super) fn write_consolidation_journal(
         writeln!(file, "{CONSOLIDATION_JOURNAL_HEADER}")
             .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
         for planned_move in moves {
-            if !path_refers_to_capability(&planned_move.source_path, &planned_move.source)
-                .unwrap_or(false)
-            {
+            let source = open_consolidation_recovery_source(library_path, planned_move)?;
+            if !path_refers_to_capability(&planned_move.source_path, &source).unwrap_or(false) {
                 return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
             }
-            let source_identity = planned_move.source.identity();
             let source = encode_relative_path(&planned_move.source_relative_path);
             let destination = encode_relative_path(&planned_move.destination_relative_path);
             writeln!(
                 file,
                 "move\t{}\t{}\t{}\t{}\t{}\t{}",
                 planned_move.track_id.get(),
-                source_identity.device,
-                source_identity.inode,
+                planned_move.source_identity.device,
+                planned_move.source_identity.inode,
                 persistence_name(planned_move.persistence),
                 source,
                 destination
@@ -354,7 +352,15 @@ fn create_consolidation_recovery_links(
     }
     for planned_move in moves {
         let backup = consolidation_recovery_backup_path(library_path, planned_move.track_id);
-        if publish_file_capability(&planned_move.source, &backup).is_err() {
+        let source = open_planned_source(planned_move);
+        if source
+            .and_then(|source| {
+                publish_file_capability(&source, &backup)
+                    .map(drop)
+                    .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)
+            })
+            .is_err()
+        {
             cleanup_consolidation_recovery_links(
                 library_path,
                 moves.iter().map(|entry| entry.track_id),
@@ -363,6 +369,30 @@ fn create_consolidation_recovery_links(
         }
     }
     Ok(())
+}
+
+fn open_planned_source(
+    planned_move: &PlannedLibraryConsolidationMove,
+) -> ApplicationRuntimeResult<RegularFileCapability> {
+    let source = open_regular_file(&planned_move.source_path)
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    if source.identity() != planned_move.source_identity {
+        return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+    }
+    Ok(source)
+}
+
+pub(super) fn open_consolidation_recovery_source(
+    library_path: &Path,
+    planned_move: &PlannedLibraryConsolidationMove,
+) -> ApplicationRuntimeResult<RegularFileCapability> {
+    let backup = consolidation_recovery_backup_path(library_path, planned_move.track_id);
+    let source = open_regular_file(&backup)
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    if source.identity() != planned_move.source_identity {
+        return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+    }
+    Ok(source)
 }
 
 pub(super) fn publish_journal_without_overwrite(

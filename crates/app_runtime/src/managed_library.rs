@@ -43,6 +43,7 @@ use file_ops::{
     copy_file_verified, move_file_without_copy_or_overwrite_matching_capability,
     remove_copied_files, rollback_file_move,
 };
+use journal::open_consolidation_recovery_source;
 use journal::{remove_consolidation_journal_if_present, write_consolidation_journal};
 
 impl ApplicationRuntime {
@@ -380,10 +381,11 @@ fn retarget_managed_metadata_with_persist(
 
     write_consolidation_journal(library_path, std::slice::from_ref(&planned_move))?;
 
+    let source = open_consolidation_recovery_source(library_path, &planned_move)?;
     if move_file_without_copy_or_overwrite_matching_capability(
         &planned_move.source_path,
         &planned_move.destination_path,
-        &planned_move.source,
+        &source,
     )
     .is_err()
     {
@@ -477,10 +479,12 @@ pub(crate) fn relocate_managed_missing_track(
 
     let empty_directory_cleanup_failed = if let Some(planned_move) = planned_move {
         write_consolidation_journal(&canonical_library_path, std::slice::from_ref(&planned_move))?;
+        let source = open_consolidation_recovery_source(&canonical_library_path, &planned_move)
+            .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
         if move_file_without_copy_or_overwrite_matching_capability(
             &planned_move.source_path,
             &planned_move.destination_path,
-            &planned_move.source,
+            &source,
         )
         .is_err()
         {
