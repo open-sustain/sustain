@@ -12,6 +12,11 @@ pub use sustain_domain::{PlaybackCommand, PlaybackState, TrackPlaybackSource, Vo
 
 pub type PlaybackResult<T> = Result<T, PlaybackError>;
 
+const APPLICATION_ID: &str = "io.github.open_sustain.sustain";
+const APPLICATION_NAME: &str = "Sustain";
+const PULSE_SINK_FACTORY: &str = "pulsesink";
+const PULSE_STREAM_PROPERTIES_NAME: &str = "props";
+
 /// Invoked when the currently playing track finishes naturally (end-of-stream).
 /// Not invoked for manual stops, pauses, seeks, or `play_track` replacements —
 /// only when the audio runs to its end.
@@ -132,6 +137,9 @@ impl GStreamerPlaybackService {
         let playbin = gst::ElementFactory::make("playbin")
             .build()
             .map_err(|_| PlaybackError::BackendUnavailable)?;
+        if let Some(audio_sink) = pulse_audio_sink() {
+            playbin.set_property("audio-sink", &audio_sink);
+        }
 
         let on_track_ended: Rc<RefCell<Option<TrackEndedCallback>>> = Rc::new(RefCell::new(None));
 
@@ -288,14 +296,31 @@ fn duration_from_clock_time(clock_time: gst::ClockTime) -> Duration {
     Duration::from_nanos(clock_time.nseconds())
 }
 
+fn pulse_audio_sink() -> Option<gst::Element> {
+    let sink = gst::ElementFactory::make(PULSE_SINK_FACTORY).build().ok()?;
+    sink.set_property("client-name", APPLICATION_NAME);
+    sink.set_property("stream-properties", pulse_stream_properties());
+    Some(sink)
+}
+
+fn pulse_stream_properties() -> gst::Structure {
+    gst::Structure::builder(PULSE_STREAM_PROPERTIES_NAME)
+        .field("application.id", APPLICATION_ID)
+        .field("application.name", APPLICATION_NAME)
+        .field("media.role", "music")
+        .build()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
+    use gstreamer as gst;
     use sustain_domain::TrackId;
 
     use super::{
-        NullPlaybackService, PlaybackError, PlaybackService, PlaybackState, VolumePercent,
+        APPLICATION_ID, APPLICATION_NAME, NullPlaybackService, PULSE_STREAM_PROPERTIES_NAME,
+        PlaybackError, PlaybackService, PlaybackState, VolumePercent, pulse_stream_properties,
     };
     use crate::TrackPlaybackSource;
 
@@ -378,6 +403,32 @@ mod tests {
         assert_eq!(playback.set_volume(volume), Ok(()));
 
         assert_eq!(playback.volume(), volume);
+    }
+
+    #[test]
+    fn pulse_stream_properties_identify_sustain_as_music() {
+        gst::init().expect("GStreamer init");
+        let properties = pulse_stream_properties();
+
+        assert_eq!(properties.name().as_str(), PULSE_STREAM_PROPERTIES_NAME);
+        assert_eq!(
+            properties
+                .get::<String>("application.id")
+                .expect("application id property"),
+            APPLICATION_ID
+        );
+        assert_eq!(
+            properties
+                .get::<String>("application.name")
+                .expect("application name property"),
+            APPLICATION_NAME
+        );
+        assert_eq!(
+            properties
+                .get::<String>("media.role")
+                .expect("media role property"),
+            "music"
+        );
     }
 
     fn positive_track_id() -> TrackId {
