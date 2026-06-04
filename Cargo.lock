@@ -2332,6 +2332,7 @@ version = "0.6.0-alpha.9"
 dependencies = [
  "async-channel",
  "gtk4",
+ "hashlink",
  "rusqlite",
  "sustain-app-runtime",
  "sustain-artwork",

@@ -12,6 +12,7 @@ use std::{
 };
 
 use gtk::glib;
+use hashlink::LinkedHashMap;
 use sustain_app_runtime::MetadataService;
 
 use super::decode::{ArtworkVariant, DecodedArtwork, decode_artwork};
@@ -96,79 +97,47 @@ const MAX_CACHED_DETAIL_ARTWORKS: usize = 32;
 /// Bounded least-recently-used map.
 ///
 /// Inserting a new key while at capacity evicts the least-recently-used
-/// entry; both `get` and `insert` count as a use. Single-threaded — the
-/// loader holds it behind a `RefCell` and only touches it from the GTK main
-/// thread, so no locking is needed.
+/// entry; both `get` and `insert` count as a use. Lookup, refresh, insertion,
+/// and eviction are all constant-time: eviction happens on the GTK main
+/// thread as artwork results arrive, so scanning the full 4,096-tile cache
+/// for every newly visible cover would produce a main-loop stall at each
+/// album-row boundary. Single-threaded — the loader holds it behind a
+/// `RefCell` and only touches it from the GTK main thread, so no locking is
+/// needed.
 pub(super) struct LruCache<K, V> {
     capacity: usize,
-    entries: HashMap<K, LruEntry<V>>,
-    clock: u64,
-}
-
-struct LruEntry<V> {
-    value: V,
-    used_at: u64,
+    /// Oldest entry at the front, most-recently-used entry at the back.
+    entries: LinkedHashMap<K, V>,
 }
 
 impl<K, V> LruCache<K, V>
 where
-    K: Clone + Eq + std::hash::Hash,
+    K: Eq + std::hash::Hash,
 {
     pub(super) fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
         Self {
-            capacity: capacity.max(1),
-            entries: HashMap::new(),
-            clock: 0,
+            capacity,
+            entries: LinkedHashMap::with_capacity(capacity),
         }
-    }
-
-    /// Monotonic recency stamp. `wrapping_add` only matters after 2^64
-    /// accesses (unreachable in any real session); it keeps the counter
-    /// total rather than risking a panic on the theoretical overflow.
-    fn next_tick(&mut self) -> u64 {
-        self.clock = self.clock.wrapping_add(1);
-        self.clock
     }
 
     pub(super) fn get(&mut self, key: &K) -> Option<&V> {
-        let tick = self.next_tick();
-        let entry = self.entries.get_mut(key)?;
-        entry.used_at = tick;
-        Some(&entry.value)
+        self.entries.to_back(key).map(|value| &*value)
     }
 
     pub(super) fn insert(&mut self, key: K, value: V) {
-        let tick = self.next_tick();
-        if let Some(entry) = self.entries.get_mut(&key) {
-            entry.value = value;
-            entry.used_at = tick;
-            return;
+        // Evict before inserting so the backing hash table never needs to
+        // grow beyond the configured cache capacity. Existing entries are
+        // replaced in place and moved to the MRU end by `insert`.
+        if self.entries.len() >= self.capacity && !self.entries.contains_key(&key) {
+            self.entries.pop_front();
         }
-        if self.entries.len() >= self.capacity {
-            self.evict_least_recently_used();
-        }
-        self.entries.insert(
-            key,
-            LruEntry {
-                value,
-                used_at: tick,
-            },
-        );
+        self.entries.insert(key, value);
     }
 
     pub(super) fn remove(&mut self, key: &K) -> Option<V> {
-        self.entries.remove(key).map(|entry| entry.value)
-    }
-
-    fn evict_least_recently_used(&mut self) {
-        let oldest = self
-            .entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.used_at)
-            .map(|(key, _)| key.clone());
-        if let Some(key) = oldest {
-            self.entries.remove(&key);
-        }
+        self.entries.remove(key)
     }
 
     #[cfg(test)]
@@ -557,5 +526,33 @@ mod tests {
         cache.insert(2, "b");
         assert_eq!(cache.len(), 1);
         assert!(cache.contains(&2));
+    }
+
+    #[test]
+    fn lru_sustained_eviction_stays_bounded_and_preserves_recency() {
+        const CAPACITY: usize = 4_096;
+        let mut cache = LruCache::new(CAPACITY);
+        for key in 0..CAPACITY {
+            cache.insert(key, key);
+        }
+
+        // Exercise the full tile-cache steady state. This used to scan all
+        // 4,096 resident entries on every insertion, which put the repeated
+        // eviction work on the GTK main thread while scrolling Albums.
+        for key in CAPACITY..CAPACITY * 9 {
+            cache.insert(key, key);
+        }
+
+        assert_eq!(cache.len(), CAPACITY);
+        assert!(!cache.contains(&(CAPACITY * 8 - 1)));
+        assert!(cache.contains(&(CAPACITY * 8)));
+        assert!(cache.contains(&(CAPACITY * 9 - 1)));
+
+        // A hit refreshes recency, so the touched oldest entry survives the
+        // next insertion and the next-oldest entry is evicted instead.
+        assert_eq!(cache.get(&(CAPACITY * 8)), Some(&(CAPACITY * 8)));
+        cache.insert(CAPACITY * 9, CAPACITY * 9);
+        assert!(cache.contains(&(CAPACITY * 8)));
+        assert!(!cache.contains(&(CAPACITY * 8 + 1)));
     }
 }
