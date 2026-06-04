@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-06-04 15:54+0200\n"
+"POT-Creation-Date: 2026-06-04 16:18+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -19,10 +19,6 @@ msgstr ""
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:30
 msgid "5-star ratings, play count, skip count, last played, last skipped"
-msgstr ""
-
-#: data/io.github.open_sustain.sustain.metainfo.xml:15
-msgid "AnnoyingTechnology"
 msgstr ""
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:25
@@ -95,34 +91,6 @@ msgstr ""
 msgid "Up Next queue with Play Next and Add to Queue"
 msgstr ""
 
-#: data/io.github.open_sustain.sustain.metainfo.xml:51
-msgid "audio"
-msgstr ""
-
-#: data/io.github.open_sustain.sustain.metainfo.xml:54
-msgid "flac"
-msgstr ""
-
-#: data/io.github.open_sustain.sustain.metainfo.xml:52
-msgid "itunes"
-msgstr ""
-
-#: data/io.github.open_sustain.sustain.metainfo.xml:50
-msgid "library"
-msgstr ""
-
-#: data/io.github.open_sustain.sustain.metainfo.xml:53
-msgid "mp3"
-msgstr ""
-
-#: data/io.github.open_sustain.sustain.metainfo.xml:48
-msgid "music"
-msgstr ""
-
 #: data/io.github.open_sustain.sustain.desktop:9
 msgid "music;player;library;audio;"
-msgstr ""
-
-#: data/io.github.open_sustain.sustain.metainfo.xml:49
-msgid "player"
 msgstr ""

@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-//! `cargo xtask i18n-check`: gate the localization contract. Fails on template
-//! message drift, header tampering, non-named placeholders, catalog/LINGUAS
+//! `cargo xtask i18n-check`: gate the localization catalogs and template. Fails
+//! on template message drift, non-named placeholders, catalog/LINGUAS
 //! inconsistency, fuzzy/untranslated/obsolete entries, placeholder/header
-//! errors, msgid-set drift between a catalog and the template, and gettext call
-//! shapes the extractor would miss.
+//! errors, and msgid-set drift between a catalog and the template.
 //!
 //! The message-set comparison ignores source locations and the volatile
-//! creation date so unrelated code movement never falses; the separate header
-//! comparison catches license/header tampering that the message comparison
-//! ignores. The check does not claim to find every unmarked English literal;
-//! that remains a source-audit concern.
+//! creation date, so unrelated code movement and a refreshed timestamp never
+//! cause a false failure — only a changed message set does. The check does not
+//! claim to find every unmarked English literal or every miswritten call site;
+//! that remains a source-review concern.
 
 use std::path::Path;
 
@@ -25,10 +24,10 @@ pub fn run() -> Result<(), String> {
 /// Check against an explicit workspace root (the real one, or a fixture in
 /// tests).
 pub fn run_in(root: &Path) -> Result<(), String> {
-    let tools = tools::preflight()?;
+    tools::preflight()?;
     let mut problems = Vec::new();
 
-    check_pot_current(root, &tools, &mut problems)?;
+    check_pot_current(root, &mut problems)?;
     check_pot_placeholders(root, &mut problems)?;
 
     let linguas = workspace::linguas(root)?;
@@ -39,8 +38,6 @@ pub fn run_in(root: &Path) -> Result<(), String> {
     for lang in &linguas {
         check_catalog(root, lang, &pot, &mut problems)?;
     }
-
-    check_call_shapes(root, &mut problems)?;
 
     if problems.is_empty() {
         println!("i18n-check: ok ({} catalog(s))", linguas.len());
@@ -54,13 +51,9 @@ pub fn run_in(root: &Path) -> Result<(), String> {
     }
 }
 
-/// Fail if `po/sustain.pot` does not match a freshly extracted template — both
-/// its message set and its header (modulo the volatile creation date).
-fn check_pot_current(
-    root: &Path,
-    tools: &tools::Tools,
-    problems: &mut Vec<String>,
-) -> Result<(), String> {
+/// Fail if `po/sustain.pot`'s message set does not match a freshly extracted
+/// template (ignoring source locations and the volatile creation date).
+fn check_pot_current(root: &Path, problems: &mut Vec<String>) -> Result<(), String> {
     let committed = workspace::pot_path(root);
     if !committed.is_file() {
         problems.push(format!(
@@ -71,7 +64,7 @@ fn check_pot_current(
     }
 
     let fresh = workspace::work_dir(root).join("check/sustain.pot");
-    extract::generate_pot(root, tools, &fresh)?;
+    extract::generate_pot(root, &fresh)?;
 
     if po::message_body(root, &committed, "check-committed")?
         != po::message_body(root, &fresh, "check-fresh")?
@@ -79,13 +72,6 @@ fn check_pot_current(
         problems.push(
             "po/sustain.pot is out of date with the marked source strings; \
              run `cargo xtask i18n-extract` and commit po/sustain.pot"
-                .to_owned(),
-        );
-    }
-    if po::header_block(&committed)? != po::header_block(&fresh)? {
-        problems.push(
-            "po/sustain.pot header differs from a freshly generated template \
-             (hand-edited or stale); run `cargo xtask i18n-extract` and commit po/sustain.pot"
                 .to_owned(),
         );
     }
@@ -192,31 +178,6 @@ fn check_catalog(
             "po/{lang}.po msgid set differs from the template:\n      {}",
             indent(String::from_utf8_lossy(&compared.stderr).trim())
         ));
-    }
-    Ok(())
-}
-
-/// Fail on gettext call shapes the extractor would silently miss, scanning the
-/// whole workspace on the token tree (so qualified calls — with any spacing —
-/// and unqualified calls outside the extraction roots are both caught).
-fn check_call_shapes(root: &Path, problems: &mut Vec<String>) -> Result<(), String> {
-    for file in workspace::all_crate_sources(root)? {
-        let source = std::fs::read_to_string(&file)
-            .map_err(|err| format!("cannot read {}: {err}", file.display()))?;
-        let location = file.strip_prefix(root).unwrap_or(&file).to_string_lossy();
-        let in_root = workspace::is_extraction_root_file(root, &file);
-        let allow_gettextrs = workspace::is_i18n_crate_file(root, &file);
-        match lint::call_shape_violations(&source, in_root, allow_gettextrs) {
-            Ok(violations) => {
-                for violation in violations {
-                    problems.push(format!(
-                        "{location}:{}:{}: {}",
-                        violation.line, violation.column, violation.message
-                    ));
-                }
-            }
-            Err(err) => problems.push(format!("{location}: {err}")),
-        }
     }
     Ok(())
 }

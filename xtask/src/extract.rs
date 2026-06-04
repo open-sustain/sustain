@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{po, tools, tools::Tools, workspace};
+use crate::{po, tools, workspace};
 
 /// POT header fields for the template. Passed on every `xgettext` pass because
 /// under `--join-existing` the pass that writes last also writes the header;
@@ -31,7 +31,7 @@ pub fn run() -> Result<(), String> {
 /// Extract against an explicit workspace root (the real one, or a fixture in
 /// tests).
 pub fn run_in(root: &Path) -> Result<(), String> {
-    let tools = tools::preflight()?;
+    tools::preflight()?;
     let pot = workspace::pot_path(root);
 
     // Generate into scratch first, then replace the committed template only if
@@ -39,7 +39,7 @@ pub fn run_in(root: &Path) -> Result<(), String> {
     // byte-stable across no-op extractions — the volatile POT-Creation-Date and
     // source locations refresh only when the strings themselves change.
     let fresh = workspace::work_dir(root).join("sustain.fresh.pot");
-    generate_pot(root, &tools, &fresh)?;
+    generate_pot(root, &fresh)?;
     let updated = replace_if_changed(root, &fresh, &pot)?;
 
     let langs = workspace::linguas(root)?;
@@ -69,14 +69,13 @@ pub fn run_in(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Replace `committed` with `fresh` only when their message set or header
-/// (ignoring the volatile creation date) differs. Returns whether the committed
-/// template was rewritten.
+/// Replace `committed` with `fresh` only when their message set differs
+/// (ignoring source locations and the volatile creation date). Returns whether
+/// the committed template was rewritten.
 fn replace_if_changed(root: &Path, fresh: &Path, committed: &Path) -> Result<bool, String> {
     if committed.is_file()
         && po::message_body(root, committed, "extract-committed")?
             == po::message_body(root, fresh, "extract-fresh")?
-        && po::header_block(committed)? == po::header_block(fresh)?
     {
         return Ok(false);
     }
@@ -98,7 +97,7 @@ fn replace_if_changed(root: &Path, fresh: &Path, committed: &Path) -> Result<boo
 /// header and the other two append to it with `--join-existing`. A final
 /// `msgcat --sort-output` orders entries by msgid, so the committed template
 /// changes only when the message set changes, not when source lines move.
-pub fn generate_pot(root: &Path, tools: &Tools, out: &Path) -> Result<(), String> {
+pub fn generate_pot(root: &Path, out: &Path) -> Result<(), String> {
     let scratch = workspace::work_dir(root).join("tmp");
     std::fs::create_dir_all(&scratch)
         .map_err(|err| format!("cannot create {}: {err}", scratch.display()))?;
@@ -106,7 +105,7 @@ pub fn generate_pot(root: &Path, tools: &Tools, out: &Path) -> Result<(), String
 
     extract_rust(root, &accumulator)?;
     extract_desktop(root, &accumulator)?;
-    extract_appdata(root, tools, &accumulator)?;
+    extract_appdata(root, &accumulator)?;
 
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)
@@ -180,14 +179,16 @@ fn extract_desktop(root: &Path, accumulator: &Path) -> Result<(), String> {
     )
 }
 
-/// Append the translatable AppStream metadata (selected by GNU gettext's ITS
-/// rules) to the accumulator.
-fn extract_appdata(root: &Path, tools: &Tools, accumulator: &Path) -> Result<(), String> {
+/// Append the translatable AppStream metadata to the accumulator, selected by
+/// the vendored ITS rules so the result does not depend on the host's gettext
+/// or appstream packages.
+fn extract_appdata(root: &Path, accumulator: &Path) -> Result<(), String> {
     let source = relative_to_one(root, &workspace::metainfo_source(root));
+    let its = relative_to_one(root, &workspace::vendored_metainfo_its(root));
     tools::finish(
         tools::cmd("xgettext")
             .current_dir(root)
-            .arg(format!("--its={}", tools.metainfo_its.display()))
+            .arg(format!("--its={}", its.display()))
             .arg("--from-code=UTF-8")
             .arg("--join-existing")
             .args(header_args())

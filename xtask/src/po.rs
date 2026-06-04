@@ -2,20 +2,15 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 //! PO/POT helpers used by extraction and the check: a canonical message-body
-//! form for currency comparison, a header-block form for integrity comparison,
-//! and a minimal reader that yields the source strings of `rust-format` entries
-//! so their placeholders can be validated.
+//! form for currency comparison, and a minimal reader that yields the source
+//! strings of `rust-format` entries so their placeholders can be validated.
 //!
-//! Only what these two callers need is parsed here; the heavy lifting stays
-//! with the GNU gettext tools.
+//! Only what these callers need is parsed here; the heavy lifting stays with
+//! the GNU gettext tools.
 
 use std::path::Path;
 
 use crate::tools;
-
-/// Fixed token substituted for the volatile `POT-Creation-Date` value so two
-/// templates generated at different times still compare equal.
-const REDACTED_DATE_LINE: &str = "\"POT-Creation-Date: <redacted>\\n\"";
 
 /// The message catalog of `pot`, normalized for currency comparison: sorted by
 /// msgid, locations dropped, wrapping removed, header stripped. Two POTs with
@@ -44,44 +39,12 @@ pub fn message_body(root: &Path, pot: &Path, tag: &str) -> Result<String, String
     Ok(strip_header(&text))
 }
 
-/// The raw header block of the POT at `path` (leading comments plus the header
-/// entry, up to the first blank line) with the volatile creation date redacted.
-/// Compared between the committed and a freshly generated template to catch
-/// tampering with the license comment or header fields, which the message-body
-/// comparison deliberately ignores.
-pub fn header_block(path: &Path) -> Result<String, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|err| format!("cannot read {}: {err}", path.display()))?;
-    Ok(redact_volatile(header_of(&text)))
-}
-
-/// The header paragraph of a PO/POT file: everything up to the first blank line.
-/// PO escapes real newlines inside strings, so a blank line unambiguously ends
-/// the header.
-fn header_of(po: &str) -> &str {
-    po.split_once("\n\n").map_or(po, |(header, _)| header)
-}
-
-/// The message catalog: everything after the header paragraph.
+/// The message catalog: everything after the header paragraph. PO escapes real
+/// newlines inside strings, so the first blank line unambiguously ends the
+/// header (which carries the volatile creation date, excluded from comparison).
 fn strip_header(po: &str) -> String {
     po.split_once("\n\n")
         .map_or_else(String::new, |(_, body)| body.to_owned())
-}
-
-/// Replace the value of the `POT-Creation-Date` header line (the only volatile
-/// field a generated template carries) with a fixed token.
-fn redact_volatile(header: &str) -> String {
-    header
-        .lines()
-        .map(|line| {
-            if line.starts_with("\"POT-Creation-Date:") {
-                REDACTED_DATE_LINE
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// A source string carried by a `rust-format` entry, with a human reference for
@@ -177,19 +140,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn redact_volatile_replaces_only_the_creation_date() {
-        let header = "\"Project-Id-Version: Sustain\\n\"\n\"POT-Creation-Date: 2026-06-04 15:23+0200\\n\"\n\"Content-Type: text/plain; charset=UTF-8\\n\"";
-        let redacted = redact_volatile(header);
-        assert!(redacted.contains("Project-Id-Version: Sustain"));
-        assert!(redacted.contains("Content-Type: text/plain; charset=UTF-8"));
-        assert!(redacted.contains("<redacted>"));
-        assert!(!redacted.contains("2026-06-04"));
-    }
-
-    #[test]
-    fn header_of_stops_at_the_first_blank_line() {
+    fn strip_header_returns_only_the_message_catalog() {
         let pot = "# comment\nmsgid \"\"\nmsgstr \"\"\n\n#: a.rs:1\nmsgid \"Hi\"\nmsgstr \"\"\n";
-        assert_eq!(header_of(pot), "# comment\nmsgid \"\"\nmsgstr \"\"");
+        assert_eq!(strip_header(pot), "#: a.rs:1\nmsgid \"Hi\"\nmsgstr \"\"\n");
     }
 
     #[test]

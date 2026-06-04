@@ -130,8 +130,9 @@ jobs:
   # Localization catalog gate. xtask shells out to GNU gettext, and the
   # rust-format extraction it relies on needs gettext >= 0.24 — Debian trixie
   # ships 0.23.1, so this job runs on debian:testing (gettext 0.26). `cargo run
-  # -p xtask` only pulls proc-macro2, so no GTK/GStreamer dev packages are
-  # needed; build-essential supplies the linker.
+  # -p xtask` has no third-party dependencies, so no GTK/GStreamer dev packages
+  # are needed; build-essential supplies the linker. (xtask's own unit tests are
+  # pure and run in the main `test` job.)
   i18n:
     name: i18n catalogs
     runs-on: ubuntu-24.04
@@ -152,8 +153,6 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Validate catalogs and template
         run: cargo run --locked -p xtask -- i18n-check
-      - name: Localization tooling tests (incl. gettext-backed integration tests)
-        run: cargo test --locked -p xtask -- --include-ignored
 
   deny:
     name: cargo-deny

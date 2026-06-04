@@ -61,6 +61,19 @@ pub fn metainfo_source(root: &Path) -> PathBuf {
     root.join("data").join(format!("{APP_ID}.metainfo.xml"))
 }
 
+/// The vendored AppStream ITS rules, used by `xgettext --its` so AppStream
+/// extraction is reproducible regardless of which gettext/appstream ITS rules
+/// the host happens to install. See `build-aux/gettext/README.md`.
+pub fn vendored_metainfo_its(root: &Path) -> PathBuf {
+    vendored_gettext_datadir(root).join("its/metainfo.its")
+}
+
+/// The directory to point `GETTEXTDATADIR` at so `msgfmt --xml` resolves the
+/// same vendored ITS rules ([`vendored_metainfo_its`]) as extraction.
+pub fn vendored_gettext_datadir(root: &Path) -> PathBuf {
+    root.join("build-aux/gettext")
+}
+
 /// Scratch directory for intermediate extraction/check files. Kept separate
 /// from [`dist_dir`] so transient artifacts never leak into what packaging
 /// installs.
@@ -75,35 +88,12 @@ pub fn dist_dir(root: &Path) -> PathBuf {
     root.join("target/i18n/dist")
 }
 
-/// Whether `file` lives under one of the [`RUST_SOURCE_ROOTS`], i.e. a crate
-/// where unqualified gettext calls are extracted and therefore allowed.
-pub fn is_extraction_root_file(root: &Path, file: &Path) -> bool {
-    RUST_SOURCE_ROOTS
-        .iter()
-        .any(|relative| file.starts_with(root.join(relative)))
-}
-
-/// Whether `file` is part of the `sustain_i18n` crate, the only place permitted
-/// to name `gettextrs` directly.
-pub fn is_i18n_crate_file(root: &Path, file: &Path) -> bool {
-    file.starts_with(root.join("crates/i18n"))
-}
-
 /// Deterministic, sorted list of `*.rs` files under [`RUST_SOURCE_ROOTS`].
 pub fn rust_sources(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     for relative in RUST_SOURCE_ROOTS {
         collect_rs(&root.join(relative), &mut files)?;
     }
-    files.sort();
-    Ok(files)
-}
-
-/// Deterministic, sorted list of every `*.rs` file under `crates/`, used by the
-/// call-shape guard to scan the whole workspace, not just the extraction roots.
-pub fn all_crate_sources(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut files = Vec::new();
-    collect_rs(&root.join("crates"), &mut files)?;
     files.sort();
     Ok(files)
 }
