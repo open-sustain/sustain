@@ -112,10 +112,10 @@ identical between the two; the only difference is core count (16 vs
 12), which is marginal for this product. Anything that feels (or
 measures) slow on either machine will be worse on real-world hardware.
 
-### Hard requirement: cold start ≤ 400 ms
+### Hard requirement: cold start ≤ 150 ms
 
 Launching `sustain` from a terminal on a 10,000-track library must
-reach the GTK main-loop first-idle landmark in **400 ms or less** on
+reach the GTK main-loop first-idle landmark in **150 ms or less** on
 the maintainer's machines (release build, warm filesystem cache).
 
 The `[TIMING]` instrumentation in `crates/app/src/main.rs`,
@@ -128,7 +128,7 @@ prints the relevant milestones to stderr on every launch:
 [TIMING] ...   activate: first idle reached at <ms>ms     <-- the budget gate
 ```
 
-Any change that pushes `first idle` past 400 ms is a regression and
+Any change that pushes `first idle` past 150 ms is a regression and
 must be fixed before merge — not deferred. Add new instrumentation
 landmarks (not per-callback noise) when introducing a new startup
 phase, so future regressions are visible the first time anyone
