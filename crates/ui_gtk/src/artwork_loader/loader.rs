@@ -62,16 +62,13 @@ const RESULT_DELIVERY_PACING: Duration = Duration::from_millis(8);
 /// Upper bound on resident *tile* textures.
 ///
 /// A tile is the small grid / now-playing cover — at 132px RGBA roughly
-/// 70 KB of texture memory. Tiles are what the Albums grid paints, so they
-/// must stay resident generously: evicting a cover the user can still
-/// scroll back to is exactly the thrash that makes the grid feel broken.
-/// This ceiling holds several thousand tiles — far more than any viewport
-/// and enough to keep a typical library's covers resident for a whole
-/// session — while staying bounded so a pathological library can't grow it
-/// without limit. At ~70 KB each the worst case is on the order of a few
-/// hundred MB of readily-evictable texture memory, which the GPU keeps in
-/// the large GTT/host heap rather than the small device-local VRAM heap.
-const MAX_CACHED_TILE_ARTWORKS: usize = 4096;
+/// 70 KB of pixel payload before renderer-specific allocation overhead.
+/// The Albums grid virtualizes rows, so 512 entries comfortably exceed the
+/// largest realized viewport while bounding the cache payload near 36 MB.
+/// Do not assume the renderer places these textures in host-visible memory:
+/// GTK's Vulkan backend may allocate them from the same constrained budget
+/// needed for swapchain images (#176).
+const MAX_CACHED_TILE_ARTWORKS: usize = 512;
 
 /// Upper bound on resident *detail* textures.
 ///
@@ -225,9 +222,14 @@ impl ArtworkLoader {
         let repository = Arc::new(ArtworkRepository::new(metadata_service, cache_dir));
         let (request_tx, request_rx) = mpsc::channel::<WorkerRequest>();
         let request_rx = Arc::new(Mutex::new(request_rx));
-        let (result_tx, result_rx) = async_channel::unbounded::<WorkerResult>();
+        let worker_count = worker_count();
+        // Each queued result owns a GdkTexture outside the resident LRUs.
+        // Limit the queue to one completed result per worker so a busy or
+        // renderer-blocked main loop applies backpressure instead of allowing
+        // transient texture memory to grow without bound.
+        let (result_tx, result_rx) = async_channel::bounded::<WorkerResult>(worker_count);
 
-        for index in 0..worker_count() {
+        for index in 0..worker_count {
             let request_rx = Arc::clone(&request_rx);
             let result_tx = result_tx.clone();
             let repository = Arc::clone(&repository);
@@ -422,9 +424,9 @@ pub(super) fn worker_loop(
             }
         };
         let decoded = repository.load(&request.source, request.generation, request.variant);
-        // The channel is unbounded, so `send_blocking` never actually
-        // blocks; it only errs once every receiver is gone — i.e. at
-        // shutdown — at which point the worker stops.
+        // Intentionally block when the main loop already has one completed
+        // result per worker waiting. This bounds transient GdkTextures outside
+        // the LRUs; the send only errors once the receiver is gone at shutdown.
         if result_tx
             .send_blocking(WorkerResult {
                 source: request.source,

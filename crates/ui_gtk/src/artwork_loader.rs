@@ -25,14 +25,15 @@
 //!   immutable after construction.)
 //! * The two sizes live in separate bounded caches: tiles (the cheap grid
 //!   cover) are retained generously so scrollback never thrashes, while the
-//!   far heavier detail texture is kept to a small window so it cannot
-//!   exhaust the GPU's device-local memory. See `MAX_CACHED_TILE_ARTWORKS`
-//!   and `MAX_CACHED_DETAIL_ARTWORKS`.
-//! * A GTK main-loop poller drains the result channel under a strict
-//!   per-tick budget (small max batch + short wall-clock cap) so even a
-//!   burst of completions can't monopolise the main thread, places each
-//!   result in the cache for its size, and fires every callback that was
-//!   waiting on that (source, size).
+//!   far heavier detail texture is kept to a small window so neither tier can
+//!   exhaust the renderer's texture-memory budget. See
+//!   `MAX_CACHED_TILE_ARTWORKS` and `MAX_CACHED_DETAIL_ARTWORKS`.
+//! * A bounded result channel applies backpressure to workers if GTK cannot
+//!   keep up, so completed textures cannot accumulate outside those caches.
+//!   A GTK main-loop drainer handles results under a strict wall-clock budget
+//!   so a burst cannot monopolise the main thread, places each result in the
+//!   cache for its size, and fires every callback waiting on that
+//!   (source, size).
 //! * Staleness — discarding callbacks whose target widget is no longer
 //!   relevant (Albums grid rebuilt, now-playing track changed) — is the
 //!   caller's concern. Each view tracks its own per-view generation
