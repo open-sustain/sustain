@@ -96,6 +96,14 @@ fn runtime_error_text_maps_metadata_write_failed() {
 }
 
 #[test]
+fn metadata_write_retry_notice_is_concise() {
+    assert_eq!(
+        metadata_write_retry_text(),
+        "Some changes could not be mirrored to audio files. Sustain will retry."
+    );
+}
+
+#[test]
 fn analysis_progress_always_reads_as_completed_over_total() {
     assert_eq!(
         analysis_background_running_text(3, 10),

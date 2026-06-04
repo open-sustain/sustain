@@ -186,11 +186,21 @@ pub(super) fn install_metadata_writer_event_consumer(
                 sustain_app_runtime::MetadataWriterEvent::MissingTrackRelocation(result) => {
                     Some((result.track_id, result.outcome.is_ok()))
                 }
-                _ => None,
+                sustain_app_runtime::MetadataWriterEvent::Mirror(_)
+                | sustain_app_runtime::MetadataWriterEvent::TrackAvailabilityChanged(_)
+                | sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_)
+                | sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(_)
+                | sustain_app_runtime::MetadataWriterEvent::YoutubeAudioReplacement(_) => None,
             };
             let mirror_track_id = match &event {
-                sustain_app_runtime::MetadataWriterEvent::Mirror(result) => Some(result.track_id),
-                sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_)
+                sustain_app_runtime::MetadataWriterEvent::Mirror(result)
+                    if result.kind == sustain_app_runtime::MetadataWriteKind::Artwork =>
+                {
+                    Some(result.track_id)
+                }
+                sustain_app_runtime::MetadataWriterEvent::Mirror(_) => None,
+                sustain_app_runtime::MetadataWriterEvent::TrackAvailabilityChanged(_)
+                | sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_)
                 | sustain_app_runtime::MetadataWriterEvent::MissingTrackRelocation(_)
                 | sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(_)
                 | sustain_app_runtime::MetadataWriterEvent::YoutubeAudioReplacement(_) => None,
@@ -212,10 +222,10 @@ pub(super) fn install_metadata_writer_event_consumer(
                 _ => None,
             };
             runtime.borrow_mut().apply_metadata_writer_event(event);
-            // Managed retarget application reloads SQLite through
-            // `apply_track_updated`, which fires the standard observer.
-            // Plain mirror completion changes no SQLite row, but artwork
-            // consumers still need a row repaint.
+            // Events that change track data reload SQLite through
+            // `apply_track_updated`, which fires the standard observer. Plain
+            // mirror completion changes no SQLite row, but artwork consumers
+            // still need a row repaint.
             if let Some(track_id) = mirror_track_id
                 && let Some(callback) = track_row_changed_holder.borrow().as_ref()
             {

@@ -27,7 +27,7 @@ use std::{
 
 use sustain_domain::{
     DuplicateConsolidationRequest, FieldChange, LibraryManagementMode, MetadataChange,
-    TrackMetadata,
+    TrackAvailability, TrackMetadata,
 };
 use sustain_library_store::{
     LibraryStore, PendingTagMirror, StoreError, StoredTagMirrorArtwork, TagMirrorArtwork,
@@ -38,6 +38,7 @@ use sustain_metadata::{MetadataError, MetadataService};
 use crate::{
     ApplicationRuntimeError,
     duplicate_consolidation::{DuplicateConsolidationResult, consolidate_duplicate_tracks},
+    file_presence::{FilePresence, probe_file_presence},
     library_mutation::relocate_missing_track_with_store,
     managed_library::{ManagedLibraryFilesystemValidator, retarget_managed_metadata},
     youtube_audio_downloader::StagedYoutubeAudio,
@@ -46,12 +47,17 @@ use crate::{
 
 const DRAIN_BATCH_SIZE: usize = 64;
 const MAX_RETRY_DELAY_SECONDS: i64 = 5 * 60;
+const MAX_LOCATION_RECONCILE_ATTEMPTS: usize = 3;
 const IDLE_WAIT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MetadataWriteOutcome {
     Succeeded,
     Failed,
+    /// The durable mirror remains pending, but its audio file is proven absent.
+    /// This is not a tag-write failure: the row will retry quietly and the
+    /// runtime updates the track's availability so the user can locate it.
+    DeferredMissing,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,8 +71,9 @@ pub enum MetadataWriteKind {
 pub struct MetadataWriteResult {
     pub track_id: TrackId,
     pub kind: MetadataWriteKind,
-    /// `Failed` means the durable row remains pending and will retry. SQLite
-    /// already contains the authoritative user-visible value.
+    /// `Failed` and `DeferredMissing` mean the durable row remains pending and
+    /// will retry. SQLite already contains the authoritative user-visible
+    /// value.
     pub outcome: MetadataWriteOutcome,
 }
 
@@ -99,6 +106,7 @@ pub struct YoutubeAudioReplacementResult {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MetadataWriterEvent {
     Mirror(MetadataWriteResult),
+    TrackAvailabilityChanged(TrackId),
     ManagedRetarget(ManagedMetadataRetargetResult),
     MissingTrackRelocation(MissingTrackRelocationResult),
     DuplicateConsolidation(DuplicateConsolidationWriterResult),
@@ -401,8 +409,17 @@ fn drain_due_batch(
     let mut artwork_completed = false;
     for pending in pending {
         let kind = primary_kind(pending.kinds);
-        match mirror_one(metadata_service, library_store, library_path, &pending) {
-            Ok(()) => {
+        let attempt = mirror_one(metadata_service, library_store, library_path, &pending);
+        if attempt.availability_changed() {
+            emit_event(
+                result_sink,
+                MetadataWriterEvent::TrackAvailabilityChanged(pending.track_id),
+            );
+        }
+        let (error, outcome) = match attempt {
+            MirrorAttempt::Succeeded {
+                availability_changed: _,
+            } => {
                 if library_store
                     .complete_tag_mirror(pending.track_id, pending.generation)
                     .unwrap_or(false)
@@ -417,29 +434,36 @@ fn drain_due_batch(
                         },
                     );
                 }
+                continue;
             }
-            Err(error) => {
-                let next_attempt_at_unix =
-                    now_unix.saturating_add(retry_delay_seconds(pending.attempt_count));
-                if library_store
-                    .record_tag_mirror_failure(
-                        pending.track_id,
-                        pending.generation,
-                        next_attempt_at_unix,
-                        &error,
-                    )
-                    .unwrap_or(false)
-                {
-                    emit_result(
-                        result_sink,
-                        MetadataWriteResult {
-                            track_id: pending.track_id,
-                            kind,
-                            outcome: MetadataWriteOutcome::Failed,
-                        },
-                    );
-                }
-            }
+            MirrorAttempt::Failed {
+                error,
+                availability_changed: _,
+            } => (error, MetadataWriteOutcome::Failed),
+            MirrorAttempt::DeferredMissing {
+                error,
+                availability_changed: _,
+            } => (error, MetadataWriteOutcome::DeferredMissing),
+        };
+        let next_attempt_at_unix =
+            now_unix.saturating_add(retry_delay_seconds(pending.attempt_count));
+        if library_store
+            .record_tag_mirror_failure(
+                pending.track_id,
+                pending.generation,
+                next_attempt_at_unix,
+                &error,
+            )
+            .unwrap_or(false)
+        {
+            emit_result(
+                result_sink,
+                MetadataWriteResult {
+                    track_id: pending.track_id,
+                    kind,
+                    outcome,
+                },
+            );
         }
     }
     if artwork_completed && let Err(error) = library_store.garbage_collect_tag_mirror_artwork() {
@@ -583,21 +607,112 @@ fn apply_command(
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum MirrorAttempt {
+    Succeeded {
+        availability_changed: bool,
+    },
+    Failed {
+        error: String,
+        availability_changed: bool,
+    },
+    DeferredMissing {
+        error: String,
+        availability_changed: bool,
+    },
+}
+
+impl MirrorAttempt {
+    const fn availability_changed(&self) -> bool {
+        match self {
+            Self::Succeeded {
+                availability_changed,
+            }
+            | Self::Failed {
+                availability_changed,
+                ..
+            }
+            | Self::DeferredMissing {
+                availability_changed,
+                ..
+            } => *availability_changed,
+        }
+    }
+}
+
 fn mirror_one(
     metadata_service: &dyn MetadataService,
     library_store: &dyn LibraryStore,
     library_path: Option<&PathBuf>,
     pending: &PendingTagMirror,
-) -> Result<(), String> {
-    let track = library_store
-        .track(pending.track_id)
-        .map_err(store_error)?
-        .ok_or_else(|| "the track no longer exists".to_owned())?;
-    if track.location.is_missing() {
-        return Err("the track file is currently missing".to_owned());
+) -> MirrorAttempt {
+    let Some(root) = library_path else {
+        return MirrorAttempt::Failed {
+            error: "the library path is unavailable".to_owned(),
+            availability_changed: false,
+        };
+    };
+
+    let mut prepared = None;
+    for _ in 0..MAX_LOCATION_RECONCILE_ATTEMPTS {
+        let mut track = match library_store.track(pending.track_id) {
+            Ok(Some(track)) => track,
+            Ok(None) => {
+                return MirrorAttempt::Failed {
+                    error: "the track no longer exists".to_owned(),
+                    availability_changed: false,
+                };
+            }
+            Err(error) => {
+                return MirrorAttempt::Failed {
+                    error: store_error(error),
+                    availability_changed: false,
+                };
+            }
+        };
+        let path = root.join(track.location.relative_path.as_path());
+        let expected_availability = match probe_file_presence(&path) {
+            FilePresence::Present => TrackAvailability::Available,
+            FilePresence::Absent => TrackAvailability::Missing,
+            FilePresence::ProbeFailed => {
+                return MirrorAttempt::Failed {
+                    error: "the track file could not be inspected".to_owned(),
+                    availability_changed: false,
+                };
+            }
+        };
+        let availability_changed = track.location.availability != expected_availability;
+        if availability_changed {
+            track.location = track.location.with_availability(expected_availability);
+            match library_store.update_track_availability_if_path_matches(track.id, &track.location)
+            {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    return MirrorAttempt::Failed {
+                        error: store_error(error),
+                        availability_changed: false,
+                    };
+                }
+            }
+        }
+        prepared = Some((track, path, expected_availability, availability_changed));
+        break;
     }
-    let root = library_path.ok_or_else(|| "the library path is unavailable".to_owned())?;
-    let path = root.join(track.location.relative_path.as_path());
+    let Some((track, path, expected_availability, availability_changed)) = prepared else {
+        return MirrorAttempt::Failed {
+            error: "the track location changed repeatedly while preparing the tag mirror"
+                .to_owned(),
+            availability_changed: false,
+        };
+    };
+    if expected_availability == TrackAvailability::Missing {
+        return MirrorAttempt::DeferredMissing {
+            error: "the track file is currently missing".to_owned(),
+            availability_changed,
+        };
+    }
+
     let mut replaced_file = false;
     let outcome = (|| {
         if pending.kinds.metadata {
@@ -631,11 +746,22 @@ fn mirror_one(
         // The outbox writes replace audio-file bytes atomically. Invalidate
         // even when a later coalesced write fails: a SHA-256 cached before the
         // first successful replacement no longer describes the live source.
-        library_store
-            .invalidate_source_fingerprint(pending.track_id)
-            .map_err(store_error)?;
+        if let Err(error) = library_store.invalidate_source_fingerprint(pending.track_id) {
+            return MirrorAttempt::Failed {
+                error: store_error(error),
+                availability_changed,
+            };
+        }
     }
-    outcome
+    match outcome {
+        Ok(()) => MirrorAttempt::Succeeded {
+            availability_changed,
+        },
+        Err(error) => MirrorAttempt::Failed {
+            error,
+            availability_changed,
+        },
+    }
 }
 
 fn read_artwork(
@@ -883,7 +1009,12 @@ mod tests {
             next_attempt_at_unix: 0,
             last_error: None,
         };
-        mirror_one(&service, store.as_ref(), Some(&root), &pending).expect("mirror succeeds");
+        assert_eq!(
+            mirror_one(&service, store.as_ref(), Some(&root), &pending),
+            MirrorAttempt::Succeeded {
+                availability_changed: false,
+            }
+        );
 
         assert!(
             store
@@ -891,6 +1022,177 @@ mod tests {
                 .expect("query cache")
                 .is_none(),
             "a tag rewrite must drop the stale source fingerprint"
+        );
+
+        std::fs::remove_dir_all(root).expect("remove library root");
+    }
+
+    #[test]
+    fn missing_tag_mirror_is_deferred_marks_missing_and_recovers_when_file_returns() {
+        let root = unique_test_directory();
+        std::fs::create_dir_all(&root).expect("create library root");
+
+        let track_id = TrackId::new(1).expect("track id");
+        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        store
+            .save_track(Track {
+                id: track_id,
+                location: TrackLocation::available(
+                    TrackRelativePath::new("track.flac").expect("relative path"),
+                ),
+                metadata: TrackMetadata::default(),
+                rating: Rating::unrated(),
+                statistics: Default::default(),
+                file_size_bytes: None,
+                has_embedded_artwork: None,
+                file_modified_at: None,
+            })
+            .expect("save track");
+        store
+            .apply_track_metadata_change_and_enqueue_mirror(
+                track_id,
+                &MetadataChange {
+                    title: FieldChange::Set("Canonical".to_owned()),
+                    ..MetadataChange::default()
+                },
+            )
+            .expect("queue metadata mirror");
+
+        let service = RecordingMetadataService::default();
+        let (result_tx, result_rx) = async_channel::unbounded();
+        drain_due_synchronously(&service, store.as_ref(), Some(&root), Some(&result_tx));
+
+        assert_eq!(
+            recv_event(&result_rx, Duration::from_secs(1)),
+            MetadataWriterEvent::TrackAvailabilityChanged(track_id)
+        );
+        assert_eq!(
+            recv_result(&result_rx, Duration::from_secs(1)),
+            MetadataWriteResult {
+                track_id,
+                kind: MetadataWriteKind::Metadata,
+                outcome: MetadataWriteOutcome::DeferredMissing,
+            }
+        );
+        assert!(
+            store
+                .track(track_id)
+                .expect("load track")
+                .expect("track exists")
+                .location
+                .is_missing()
+        );
+        assert_eq!(
+            store.tag_mirrors_due(i64::MAX, 10).expect("pending").len(),
+            1,
+            "missing files retain their durable mirror intent"
+        );
+        assert!(
+            service
+                .metadata_paths
+                .lock()
+                .expect("metadata paths")
+                .is_empty(),
+            "a proven-absent file is never passed to the tag service"
+        );
+
+        std::fs::write(root.join("track.flac"), b"audio").expect("restore track");
+        let pending = store
+            .tag_mirrors_due(i64::MAX, 10)
+            .expect("pending")
+            .pop()
+            .expect("pending mirror");
+        assert_eq!(
+            mirror_one(&service, store.as_ref(), Some(&root), &pending),
+            MirrorAttempt::Succeeded {
+                availability_changed: true,
+            }
+        );
+        assert!(
+            !store
+                .track(track_id)
+                .expect("load track")
+                .expect("track exists")
+                .location
+                .is_missing()
+        );
+        assert_eq!(
+            service
+                .metadata_paths
+                .lock()
+                .expect("metadata paths")
+                .as_slice(),
+            [root.join("track.flac")]
+        );
+
+        std::fs::remove_dir_all(root).expect("remove library root");
+    }
+
+    #[test]
+    fn missing_probe_never_overwrites_a_concurrent_track_relocation() {
+        let root = unique_test_directory();
+        std::fs::create_dir_all(&root).expect("create library root");
+        std::fs::write(root.join("relocated.flac"), b"audio").expect("write relocated track");
+
+        let track_id = TrackId::new(1).expect("track id");
+        let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        backing
+            .save_track(Track {
+                id: track_id,
+                location: TrackLocation::available(
+                    TrackRelativePath::new("absent.flac").expect("relative path"),
+                ),
+                metadata: TrackMetadata::default(),
+                rating: Rating::unrated(),
+                statistics: Default::default(),
+                file_size_bytes: None,
+                has_embedded_artwork: None,
+                file_modified_at: None,
+            })
+            .expect("save track");
+        backing
+            .apply_track_metadata_change_and_enqueue_mirror(
+                track_id,
+                &MetadataChange {
+                    title: FieldChange::Set("Canonical".to_owned()),
+                    ..MetadataChange::default()
+                },
+            )
+            .expect("queue metadata mirror");
+        let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+        store.replace_path_before_next_availability_update(TrackLocation::available(
+            TrackRelativePath::new("relocated.flac").expect("relative path"),
+        ));
+
+        let service = RecordingMetadataService::default();
+        let (result_tx, result_rx) = async_channel::unbounded();
+        drain_due_synchronously(&service, store.as_ref(), Some(&root), Some(&result_tx));
+
+        assert_eq!(
+            recv_event(&result_rx, Duration::from_secs(1)),
+            MetadataWriterEvent::Mirror(MetadataWriteResult {
+                track_id,
+                kind: MetadataWriteKind::Metadata,
+                outcome: MetadataWriteOutcome::Succeeded,
+            })
+        );
+        assert!(
+            result_rx.try_recv().is_err(),
+            "a stale absent-path probe must not emit an availability change"
+        );
+        let stored = store.track(track_id).expect("load track").expect("track");
+        assert_eq!(
+            stored.location.relative_path.as_path(),
+            Path::new("relocated.flac")
+        );
+        assert!(!stored.location.is_missing());
+        assert_eq!(
+            service
+                .metadata_paths
+                .lock()
+                .expect("metadata paths")
+                .as_slice(),
+            [root.join("relocated.flac")]
         );
 
         std::fs::remove_dir_all(root).expect("remove library root");

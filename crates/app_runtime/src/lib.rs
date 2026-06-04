@@ -6,7 +6,7 @@
 // confines a `#![allow(unsafe_code)]` to a small module exposing a safe API.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -376,7 +376,9 @@ pub struct ApplicationRuntime {
     managed_library_filesystem_validator: managed_library::ManagedLibraryFilesystemValidator,
     metadata_writer: Option<metadata_writer::MetadataWriter>,
     metadata_writer_event_sink: Option<async_channel::Sender<MetadataWriterEvent>>,
-    metadata_write_notification_ids: BTreeMap<TrackId, NotificationId>,
+    metadata_write_failed_track_ids: BTreeSet<TrackId>,
+    metadata_write_notification_id: Option<NotificationId>,
+    managed_metadata_retarget_notification_ids: BTreeMap<TrackId, NotificationId>,
     pending_managed_metadata_retargets: BTreeMap<TrackId, usize>,
     pending_missing_track_relocations: BTreeMap<TrackId, usize>,
     youtube_audio_downloader: Option<youtube_audio_downloader::YoutubeAudioDownloader>,
@@ -554,7 +556,9 @@ impl ApplicationRuntime {
             managed_library_filesystem_validator: Default::default(),
             metadata_writer: None,
             metadata_writer_event_sink: None,
-            metadata_write_notification_ids: BTreeMap::new(),
+            metadata_write_failed_track_ids: BTreeSet::new(),
+            metadata_write_notification_id: None,
+            managed_metadata_retarget_notification_ids: BTreeMap::new(),
             pending_managed_metadata_retargets: BTreeMap::new(),
             pending_missing_track_relocations: BTreeMap::new(),
             youtube_audio_downloader: None,
@@ -637,7 +641,9 @@ impl ApplicationRuntime {
             managed_library_filesystem_validator: Default::default(),
             metadata_writer: None,
             metadata_writer_event_sink: None,
-            metadata_write_notification_ids: BTreeMap::new(),
+            metadata_write_failed_track_ids: BTreeSet::new(),
+            metadata_write_notification_id: None,
+            managed_metadata_retarget_notification_ids: BTreeMap::new(),
             pending_managed_metadata_retargets: BTreeMap::new(),
             pending_missing_track_relocations: BTreeMap::new(),
             youtube_audio_downloader: None,
@@ -950,7 +956,7 @@ impl ApplicationRuntime {
     pub fn apply_metadata_write_result(&mut self, result: MetadataWriteResult) {
         match result.outcome {
             MetadataWriteOutcome::Succeeded => {
-                self.dismiss_metadata_write_warning(result.track_id);
+                self.dismiss_ordinary_metadata_write_warning(result.track_id);
                 if result.kind == MetadataWriteKind::Artwork {
                     self.push_ephemeral_notification(
                         NotificationCategory::MetadataWrite,
@@ -960,9 +966,10 @@ impl ApplicationRuntime {
                 }
             }
             MetadataWriteOutcome::Failed => {
-                let body = "One or more changes are saved in Sustain, but could not be mirrored to the audio file. The pending mirror will retry automatically."
-                    .to_owned();
-                self.push_or_update_metadata_write_warning(result.track_id, body);
+                self.push_metadata_write_warning(result.track_id);
+            }
+            MetadataWriteOutcome::DeferredMissing => {
+                self.dismiss_ordinary_metadata_write_warning(result.track_id);
             }
         }
     }
@@ -970,6 +977,17 @@ impl ApplicationRuntime {
     pub fn apply_metadata_writer_event(&mut self, event: MetadataWriterEvent) {
         match event {
             MetadataWriterEvent::Mirror(result) => self.apply_metadata_write_result(result),
+            MetadataWriterEvent::TrackAvailabilityChanged(track_id) => {
+                self.apply_track_updated(track_id);
+                if self
+                    .library_track(track_id)
+                    .is_some_and(|track| track.location.is_missing())
+                {
+                    self.dismiss_ordinary_metadata_write_warning(track_id);
+                }
+                self.refresh_playback_queue_track_ids();
+                self.notify_track_availability_observer();
+            }
             MetadataWriterEvent::ManagedRetarget(result) => {
                 self.apply_managed_metadata_retarget_result(result);
             }
@@ -989,11 +1007,12 @@ impl ApplicationRuntime {
         self.finish_pending_managed_metadata_retarget(result.track_id);
         self.apply_track_updated(result.track_id);
         match result.outcome {
-            // A successful retarget revalidated the managed root before
-            // touching pathnames. It commits the durable outbox intent but
-            // does not prove file tags have converged yet: only the later
-            // mirror-success event may dismiss the per-track retry warning.
+            // A successful retarget resolves any prior retarget failure. It
+            // commits the durable outbox intent but does not prove file tags
+            // have converged yet: only the later mirror-success event may
+            // dismiss an ordinary tag-write retry warning.
             Ok(()) => {
+                self.dismiss_managed_metadata_retarget_warning(result.track_id);
                 self.dismiss_managed_library_filesystem_warning();
                 if result.empty_directory_cleanup_failed {
                     self.push_managed_library_cleanup_warning();
@@ -1001,7 +1020,7 @@ impl ApplicationRuntime {
             }
             Err(error) => {
                 self.report_managed_library_filesystem_error(&error);
-                self.push_or_update_metadata_write_warning(
+                self.push_or_update_managed_metadata_retarget_warning(
                     result.track_id,
                     "A managed-library metadata edit could not finish safely. Sustain retained its recovery state where needed. Resolve filesystem access and retry the edit."
                         .to_owned(),
@@ -1052,14 +1071,52 @@ impl ApplicationRuntime {
         !self.pending_missing_track_relocations.is_empty()
     }
 
-    fn dismiss_metadata_write_warning(&mut self, track_id: TrackId) {
-        if let Some(id) = self.metadata_write_notification_ids.remove(&track_id) {
+    pub(crate) fn dismiss_all_metadata_write_warnings(&mut self, track_id: TrackId) {
+        self.dismiss_ordinary_metadata_write_warning(track_id);
+        self.dismiss_managed_metadata_retarget_warning(track_id);
+    }
+
+    fn dismiss_managed_metadata_retarget_warning(&mut self, track_id: TrackId) {
+        if let Some(id) = self
+            .managed_metadata_retarget_notification_ids
+            .remove(&track_id)
+        {
             self.dismiss_notification(id);
         }
     }
 
-    fn push_or_update_metadata_write_warning(&mut self, track_id: TrackId, body: String) {
-        if let Some(id) = self.metadata_write_notification_ids.get(&track_id) {
+    fn dismiss_ordinary_metadata_write_warning(&mut self, track_id: TrackId) {
+        self.metadata_write_failed_track_ids.remove(&track_id);
+        if self.metadata_write_failed_track_ids.is_empty()
+            && let Some(id) = self.metadata_write_notification_id.take()
+        {
+            self.dismiss_notification(id);
+        }
+    }
+
+    fn push_metadata_write_warning(&mut self, track_id: TrackId) {
+        self.metadata_write_failed_track_ids.insert(track_id);
+        if self.metadata_write_notification_id.is_some() {
+            return;
+        }
+        let id = self.push_persistent_notification(
+            NotificationCategory::MetadataWrite,
+            NotificationSeverity::Error,
+            notifications::metadata_write_retry_text().to_owned(),
+            false,
+        );
+        self.metadata_write_notification_id = Some(id);
+    }
+
+    fn push_or_update_managed_metadata_retarget_warning(
+        &mut self,
+        track_id: TrackId,
+        body: String,
+    ) {
+        if let Some(id) = self
+            .managed_metadata_retarget_notification_ids
+            .get(&track_id)
+        {
             self.update_notification_body(*id, body);
         } else {
             let id = self.push_persistent_notification(
@@ -1068,7 +1125,8 @@ impl ApplicationRuntime {
                 body,
                 false,
             );
-            self.metadata_write_notification_ids.insert(track_id, id);
+            self.managed_metadata_retarget_notification_ids
+                .insert(track_id, id);
         }
     }
 

@@ -43,6 +43,7 @@ pub(crate) struct FaultyStore {
     fail_device_manifest: AtomicBool,
     fail_save_tracks: AtomicBool,
     fail_flush_durable: AtomicBool,
+    availability_path_replacement: Mutex<Option<TrackLocation>>,
     record_analysis_calls: AtomicU32,
     attempt_failure_calls: AtomicU32,
     online_attempt_calls: AtomicU32,
@@ -65,6 +66,7 @@ impl FaultyStore {
             fail_device_manifest: AtomicBool::new(false),
             fail_save_tracks: AtomicBool::new(false),
             fail_flush_durable: AtomicBool::new(false),
+            availability_path_replacement: Mutex::new(None),
             record_analysis_calls: AtomicU32::new(0),
             attempt_failure_calls: AtomicU32::new(0),
             online_attempt_calls: AtomicU32::new(0),
@@ -110,6 +112,13 @@ impl FaultyStore {
 
     pub(crate) fn set_fail_flush_durable(&self, on: bool) {
         self.fail_flush_durable.store(on, Ordering::SeqCst);
+    }
+
+    pub(crate) fn replace_path_before_next_availability_update(&self, location: TrackLocation) {
+        *self
+            .availability_path_replacement
+            .lock()
+            .expect("availability-path replacement lock is available") = Some(location);
     }
 
     pub(crate) fn record_analysis_calls(&self) -> u32 {
@@ -230,6 +239,23 @@ impl LibraryStore for FaultyStore {
         location: &TrackLocation,
     ) -> StoreResult<()> {
         self.inner.update_track_location(track_id, location)
+    }
+
+    fn update_track_availability_if_path_matches(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+    ) -> StoreResult<bool> {
+        if let Some(replacement) = self
+            .availability_path_replacement
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .take()
+        {
+            self.inner.update_track_location(track_id, &replacement)?;
+        }
+        self.inner
+            .update_track_availability_if_path_matches(track_id, location)
     }
 
     fn relocate_track_and_enqueue_mirror(

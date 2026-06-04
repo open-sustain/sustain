@@ -224,6 +224,22 @@ impl LibraryStore for InMemoryLibraryStore {
         Ok(())
     }
 
+    fn update_track_availability_if_path_matches(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+    ) -> StoreResult<bool> {
+        let mut tracks = self.tracks_guard()?;
+        let Some(track) = tracks.get_mut(&track_id) else {
+            return Ok(false);
+        };
+        if track.location.relative_path != location.relative_path {
+            return Ok(false);
+        }
+        track.location.availability = location.availability;
+        Ok(true)
+    }
+
     fn update_track_locations(&self, updates: &[(TrackId, TrackLocation)]) -> StoreResult<()> {
         let mut tracks = self.tracks_guard()?;
         for (track_id, location) in updates {

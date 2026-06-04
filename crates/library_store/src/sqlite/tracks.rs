@@ -99,6 +99,24 @@ pub(super) fn update_track_location(
         .map_err(StoreError::from)
 }
 
+pub(super) fn update_track_availability_if_path_matches(
+    connection: &Connection,
+    track_id: TrackId,
+    location: &TrackLocation,
+) -> StoreResult<bool> {
+    connection
+        .execute(
+            "UPDATE tracks SET is_missing = ?1 WHERE id = ?2 AND relative_path = ?3",
+            params![
+                location.is_missing(),
+                track_id.get(),
+                relative_path_bytes(&location.relative_path),
+            ],
+        )
+        .map(|changed| changed > 0)
+        .map_err(StoreError::from)
+}
+
 pub(super) fn update_track_locations(
     connection: &mut Connection,
     updates: &[(TrackId, TrackLocation)],

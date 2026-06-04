@@ -460,6 +460,10 @@ pub fn managed_library_cleanup_failed_text() -> &'static str {
     "Some empty managed-library folders could not be removed."
 }
 
+pub fn metadata_write_retry_text() -> &'static str {
+    "Some changes could not be mirrored to audio files. Sustain will retry."
+}
+
 /// Outcome string emitted after the user changes their library path.
 /// `newly_missing` is the number of tracks whose file did not resolve under
 /// the new root; `unresolved` counts paths whose reachability could not be

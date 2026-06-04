@@ -235,6 +235,14 @@ pub trait LibraryStore: Send + Sync {
     /// Update only path and availability, preserving every unrelated field.
     fn update_track_location(&self, track_id: TrackId, location: &TrackLocation)
     -> StoreResult<()>;
+    /// Update only availability while the row still points at the path that
+    /// was probed. Returns `false` when the row disappeared or was relocated,
+    /// so a stale filesystem observation cannot overwrite a newer location.
+    fn update_track_availability_if_path_matches(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+    ) -> StoreResult<bool>;
     /// Atomically update path and availability for a set of tracks.
     fn update_track_locations(&self, updates: &[(TrackId, TrackLocation)]) -> StoreResult<()> {
         for (track_id, location) in updates {

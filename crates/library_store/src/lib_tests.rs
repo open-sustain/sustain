@@ -76,6 +76,64 @@ fn sqlite_store_rejects_whole_row_replacement_by_id() {
     assert_eq!(store.track(first.id), Ok(Some(first)));
 }
 
+fn run_availability_update_requires_matching_path(store: &dyn LibraryStore) {
+    let original = track(1, "original.flac");
+    store.save_track(original.clone()).expect("save track");
+
+    let relocated =
+        TrackLocation::available(TrackRelativePath::new("relocated.flac").expect("relative path"));
+    store
+        .update_track_location(original.id, &relocated)
+        .expect("relocate track");
+
+    let stale_missing = original
+        .location
+        .clone()
+        .with_availability(sustain_domain::TrackAvailability::Missing);
+    assert!(
+        !store
+            .update_track_availability_if_path_matches(original.id, &stale_missing)
+            .expect("reject stale availability update")
+    );
+    assert_eq!(
+        store
+            .track(original.id)
+            .expect("load relocated track")
+            .expect("track")
+            .location,
+        relocated
+    );
+
+    let relocated_missing = relocated
+        .clone()
+        .with_availability(sustain_domain::TrackAvailability::Missing);
+    assert!(
+        store
+            .update_track_availability_if_path_matches(original.id, &relocated_missing)
+            .expect("accept matching availability update")
+    );
+    assert_eq!(
+        store
+            .track(original.id)
+            .expect("load missing track")
+            .expect("track")
+            .location,
+        relocated_missing
+    );
+}
+
+#[test]
+fn sqlite_availability_update_requires_matching_path() {
+    run_availability_update_requires_matching_path(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_availability_update_requires_matching_path() {
+    run_availability_update_requires_matching_path(&InMemoryLibraryStore::new());
+}
+
 #[test]
 fn sqlite_scanner_merge_preserves_authoritative_fields() {
     run_scanner_merge_preserves_authoritative_fields(

@@ -56,6 +56,15 @@ impl LibraryStore for SqliteLibraryStore {
         tracks::update_track_location(&connection, track_id, location)
     }
 
+    fn update_track_availability_if_path_matches(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+    ) -> StoreResult<bool> {
+        let connection = self.connection_guard()?;
+        tracks::update_track_availability_if_path_matches(&connection, track_id, location)
+    }
+
     fn update_track_locations(&self, updates: &[(TrackId, TrackLocation)]) -> StoreResult<()> {
         let mut connection = self.connection_guard()?;
         tracks::update_track_locations(&mut connection, updates)

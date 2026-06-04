@@ -3413,27 +3413,98 @@ fn runtime_update_metadata_applies_optimistic_update_and_reports_tag_write_failu
 }
 
 #[test]
-fn metadata_write_retry_notice_is_persistent_deduplicated_and_dismissed_on_success() {
+fn metadata_write_retry_notice_is_aggregated_until_every_failed_track_succeeds() {
     let mut runtime = ApplicationRuntime::new();
-    let failed = crate::MetadataWriteResult {
+    let observer_calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let observer_calls_for_callback = observer_calls.clone();
+    runtime.set_notification_observer(Box::new(move || {
+        observer_calls_for_callback.fetch_add(1, Ordering::SeqCst);
+    }));
+    let first_failed = crate::MetadataWriteResult {
         track_id: track_id(1),
         kind: crate::MetadataWriteKind::Metadata,
         outcome: crate::MetadataWriteOutcome::Failed,
     };
+    let second_failed = crate::MetadataWriteResult {
+        track_id: track_id(2),
+        ..first_failed
+    };
 
-    runtime.apply_metadata_write_result(failed);
-    runtime.apply_metadata_write_result(failed);
+    runtime.apply_metadata_write_result(first_failed);
+    runtime.apply_metadata_write_result(first_failed);
+    runtime.apply_metadata_write_result(second_failed);
     assert_eq!(runtime.notifications().persistent_stack().len(), 1);
-    assert!(
-        runtime.notifications().persistent_stack()[0]
-            .body
-            .contains("retry automatically")
+    assert_eq!(
+        observer_calls.load(Ordering::SeqCst),
+        1,
+        "retries and additional failed tracks must not re-announce the warning"
+    );
+    assert_eq!(
+        runtime.notifications().persistent_stack()[0].body,
+        "Some changes could not be mirrored to audio files. Sustain will retry."
     );
 
     runtime.apply_metadata_write_result(crate::MetadataWriteResult {
         outcome: crate::MetadataWriteOutcome::Succeeded,
+        ..first_failed
+    });
+    assert_eq!(
+        runtime.notifications().persistent_stack().len(),
+        1,
+        "the aggregate notice remains while another track is pending"
+    );
+
+    runtime.apply_metadata_write_result(crate::MetadataWriteResult {
+        outcome: crate::MetadataWriteOutcome::Succeeded,
+        ..second_failed
+    });
+    assert!(runtime.notifications().persistent_stack().is_empty());
+    assert_eq!(observer_calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn deferred_missing_metadata_write_clears_warning_and_refreshes_availability() {
+    let track_id = track_id(1);
+    let store = Arc::new(InMemoryLibraryStore::new());
+    assert_eq!(
+        store.save_track(test_track(track_id, "missing.flac")),
+        Ok(())
+    );
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    let failed = crate::MetadataWriteResult {
+        track_id,
+        kind: crate::MetadataWriteKind::Metadata,
+        outcome: crate::MetadataWriteOutcome::Failed,
+    };
+    runtime.apply_metadata_write_result(failed);
+    assert_eq!(runtime.notifications().persistent_stack().len(), 1);
+
+    let missing = track_location("missing.flac")
+        .with_availability(sustain_domain::TrackAvailability::Missing);
+    store
+        .update_track_location(track_id, &missing)
+        .expect("persist missing availability");
+    runtime.apply_metadata_writer_event(crate::MetadataWriterEvent::TrackAvailabilityChanged(
+        track_id,
+    ));
+    assert!(
+        runtime.notifications().persistent_stack().is_empty(),
+        "proven missing availability clears the stale write-failure warning independently"
+    );
+    runtime.apply_metadata_write_result(crate::MetadataWriteResult {
+        outcome: crate::MetadataWriteOutcome::DeferredMissing,
         ..failed
     });
+
+    assert!(
+        runtime
+            .library_track(track_id)
+            .expect("track")
+            .location
+            .is_missing()
+    );
     assert!(runtime.notifications().persistent_stack().is_empty());
 }
 
@@ -3457,6 +3528,12 @@ fn runtime_removes_tracks_from_library_and_stops_playback() {
     .with_library_services(store.clone(), Arc::new(TestMetadataService))
     .expect("library services initialize")
     .with_playback_service(Box::new(NullPlaybackService::new()));
+    runtime.apply_metadata_write_result(crate::MetadataWriteResult {
+        track_id: removed_id,
+        kind: crate::MetadataWriteKind::Metadata,
+        outcome: crate::MetadataWriteOutcome::Failed,
+    });
+    assert_eq!(runtime.notifications().persistent_stack().len(), 1);
 
     assert_eq!(
         runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
@@ -3475,6 +3552,10 @@ fn runtime_removes_tracks_from_library_and_stops_playback() {
     assert!(runtime.library_tracks().is_empty());
     assert_eq!(store.track(removed_id), Ok(None));
     assert_eq!(runtime.playback_state(), PlaybackState::Stopped);
+    assert!(
+        runtime.notifications().persistent_stack().is_empty(),
+        "removing a track also removes it from the aggregate mirror warning"
+    );
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }
@@ -3584,6 +3665,26 @@ fn managed_metadata_retarget_event_reloads_sqlite_and_surfaces_failure() {
             .body
             .contains("could not finish safely")
     );
+    runtime.apply_metadata_writer_event(crate::MetadataWriterEvent::Mirror(
+        crate::MetadataWriteResult {
+            track_id,
+            kind: crate::MetadataWriteKind::Metadata,
+            outcome: crate::MetadataWriteOutcome::Succeeded,
+        },
+    ));
+    assert_eq!(
+        runtime.notifications().persistent_stack().len(),
+        1,
+        "an ordinary mirror success does not resolve a managed-retarget failure"
+    );
+    runtime.apply_metadata_writer_event(crate::MetadataWriterEvent::ManagedRetarget(
+        crate::ManagedMetadataRetargetResult {
+            track_id,
+            outcome: Ok(()),
+            empty_directory_cleanup_failed: false,
+        },
+    ));
+    assert!(runtime.notifications().persistent_stack().is_empty());
 }
 
 #[test]
@@ -6287,6 +6388,15 @@ impl LibraryStore for CallCountingLibraryStore {
         location: &TrackLocation,
     ) -> StoreResult<()> {
         self.inner.update_track_location(track_id, location)
+    }
+
+    fn update_track_availability_if_path_matches(
+        &self,
+        track_id: TrackId,
+        location: &TrackLocation,
+    ) -> StoreResult<bool> {
+        self.inner
+            .update_track_availability_if_path_matches(track_id, location)
     }
 
     fn relocate_track_and_enqueue_mirror(

@@ -333,6 +333,7 @@ impl ApplicationRuntime {
         self.library_tracks.retain(|track| track.id != track_id);
         self.search_index.remove(track_id);
         self.playback_queue.remove_track(track_id);
+        self.dismiss_all_metadata_write_warnings(track_id);
         Ok(())
     }
 
