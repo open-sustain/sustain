@@ -702,14 +702,22 @@ pub(crate) fn publish_file_capability(
     destination_path: &Path,
 ) -> io::Result<PinnedFilePath> {
     let destination = PinnedFilePath::creating_parent(destination_path)?;
+    publish_file_capability_to_pinned_path(capability, &destination)?;
+    Ok(destination)
+}
+
+pub(crate) fn publish_file_capability_to_pinned_path(
+    capability: &RegularFileCapability,
+    destination: &PinnedFilePath,
+) -> io::Result<()> {
     destination.link_from(capability)?;
     if !destination.refers_to(capability)? || destination.sync_parent().is_err() {
-        let _ = remove_pinned_regular_file_matching_capability(&destination, capability);
+        let _ = remove_pinned_regular_file_matching_capability(destination, capability);
         return Err(io::Error::other(
             "published pathname could not be durably verified",
         ));
     }
-    Ok(destination)
+    Ok(())
 }
 
 pub(crate) fn publish_pinned_file_without_overwrite(

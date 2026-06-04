@@ -7,7 +7,7 @@
 //! replays an interrupted batch so SQLite and the on-disk layout agree.
 
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     fs,
     io::{Read, Write},
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
@@ -26,7 +26,7 @@ use super::consolidation::{JournalTrackPersistence, PlannedLibraryConsolidationM
 use super::file_ops::{
     FileIdentity, PRIVATE_DIRECTORY_MODE, PinnedFilePath, RegularFileCapability, open_regular_file,
     path_refers_to_capability, prune_empty_ancestor_directories_for_sources,
-    publish_file_capability, publish_pinned_file_without_overwrite,
+    publish_file_capability_to_pinned_path, publish_pinned_file_without_overwrite,
     regular_file_capability_from_file, remove_file_and_sync_parent,
     remove_pinned_regular_file_matching_capability, remove_regular_file_matching_capability,
     sync_directory,
@@ -35,6 +35,77 @@ use super::file_ops::{
 const CONSOLIDATION_JOURNAL_FILE_NAME: &str = ".sustain-consolidation-journal";
 const CONSOLIDATION_JOURNAL_HEADER: &str = "# sustain managed library consolidation journal v3";
 const CONSOLIDATION_RECOVERY_DIRECTORY_NAME: &str = ".sustain-consolidation-recovery";
+
+#[derive(Debug)]
+pub(super) struct PreparedConsolidationRecovery {
+    library_path: PathBuf,
+    directory_path: PathBuf,
+    directory: Arc<fs::File>,
+}
+
+impl PreparedConsolidationRecovery {
+    pub(super) fn pin_source(
+        &self,
+        track_id: TrackId,
+        source: &RegularFileCapability,
+    ) -> ApplicationRuntimeResult<FileIdentity> {
+        let backup = self.backup_path(track_id)?;
+        publish_file_capability_to_pinned_path(source, &backup)
+            .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+        Ok(source.identity())
+    }
+
+    fn open_source(
+        &self,
+        track_id: TrackId,
+        source_identity: FileIdentity,
+    ) -> ApplicationRuntimeResult<RegularFileCapability> {
+        let source = self
+            .backup_path(track_id)?
+            .open_regular_file()
+            .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+        if source.identity() != source_identity {
+            return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+        }
+        Ok(source)
+    }
+
+    fn verify_directory_path(&self) -> ApplicationRuntimeResult<()> {
+        let directory_path = PinnedFilePath::existing_parent(&self.directory_path)
+            .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+        if !directory_path
+            .refers_to_directory(self.directory.as_ref())
+            .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?
+        {
+            return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+        }
+        Ok(())
+    }
+
+    fn backup_path(&self, track_id: TrackId) -> ApplicationRuntimeResult<PinnedFilePath> {
+        let file_name = format!("track-{}.backup", track_id.get());
+        PinnedFilePath::in_open_parent(
+            &self.directory_path,
+            self.directory.clone(),
+            OsStr::new(&file_name),
+        )
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)
+    }
+}
+
+impl Drop for PreparedConsolidationRecovery {
+    fn drop(&mut self) {
+        let journal_path = consolidation_journal_path(&self.library_path);
+        if fs::symlink_metadata(journal_path)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        {
+            let _ = cleanup_open_consolidation_recovery_directory(
+                &self.directory_path,
+                self.directory.clone(),
+            );
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ConsolidationJournalEntry {
@@ -276,10 +347,20 @@ pub(super) fn write_consolidation_journal(
     if journal_path.exists() {
         return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
     }
-    cleanup_orphaned_consolidation_recovery_directory(library_path)?;
+    let recovery = moves
+        .first()
+        .map(|planned_move| &planned_move.prepared_recovery)
+        .ok_or(ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    if recovery.library_path != library_path
+        || moves
+            .iter()
+            .any(|planned_move| !Arc::ptr_eq(recovery, &planned_move.prepared_recovery))
+    {
+        return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+    }
+    recovery.verify_directory_path()?;
 
     let temporary_path = temporary_consolidation_journal_path(library_path);
-    create_consolidation_recovery_links(library_path, moves)?;
     let result = (|| {
         let temporary = PinnedFilePath::existing_parent(&temporary_path)
             .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
@@ -295,7 +376,7 @@ pub(super) fn write_consolidation_journal(
         writeln!(file, "{CONSOLIDATION_JOURNAL_HEADER}")
             .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
         for planned_move in moves {
-            let source = open_consolidation_recovery_source(library_path, planned_move)?;
+            let source = open_consolidation_recovery_source(planned_move)?;
             if !path_refers_to_capability(&planned_move.source_path, &source).unwrap_or(false) {
                 return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
             }
@@ -317,6 +398,7 @@ pub(super) fn write_consolidation_journal(
             .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
         file.sync_all()
             .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+        recovery.verify_directory_path()?;
         publish_journal_without_overwrite_matching_capability(
             &temporary,
             &journal_path,
@@ -329,70 +411,47 @@ pub(super) fn write_consolidation_journal(
 
     if result.is_err() {
         let _ = remove_file_and_sync_parent(&temporary_path);
-        if fs::symlink_metadata(&journal_path).is_err() {
-            cleanup_consolidation_recovery_links(
-                library_path,
-                moves.iter().map(|entry| entry.track_id),
-            );
-        }
     }
     result
 }
 
-fn create_consolidation_recovery_links(
-    library_path: &Path,
-    moves: &[PlannedLibraryConsolidationMove],
-) -> ApplicationRuntimeResult<()> {
-    let directory = consolidation_recovery_directory(library_path);
-    let directory = PinnedFilePath::existing_parent(&directory)
-        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
-    if directory.create_directory(PRIVATE_DIRECTORY_MODE).is_err() {
-        cleanup_consolidation_recovery_links(library_path, std::iter::empty());
-        return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
-    }
-    for planned_move in moves {
-        let backup = consolidation_recovery_backup_path(library_path, planned_move.track_id);
-        let source = open_planned_source(planned_move);
-        if source
-            .and_then(|source| {
-                publish_file_capability(&source, &backup)
-                    .map(drop)
-                    .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)
-            })
-            .is_err()
-        {
-            cleanup_consolidation_recovery_links(
-                library_path,
-                moves.iter().map(|entry| entry.track_id),
-            );
-            return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
-        }
-    }
-    Ok(())
-}
-
-fn open_planned_source(
-    planned_move: &PlannedLibraryConsolidationMove,
-) -> ApplicationRuntimeResult<RegularFileCapability> {
-    let source = open_regular_file(&planned_move.source_path)
-        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
-    if source.identity() != planned_move.source_identity {
-        return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
-    }
-    Ok(source)
-}
-
 pub(super) fn open_consolidation_recovery_source(
-    library_path: &Path,
     planned_move: &PlannedLibraryConsolidationMove,
 ) -> ApplicationRuntimeResult<RegularFileCapability> {
-    let backup = consolidation_recovery_backup_path(library_path, planned_move.track_id);
-    let source = open_regular_file(&backup)
+    planned_move
+        .prepared_recovery
+        .open_source(planned_move.track_id, planned_move.source_identity)
+}
+
+pub(super) fn prepare_consolidation_recovery(
+    library_path: &Path,
+) -> ApplicationRuntimeResult<Arc<PreparedConsolidationRecovery>> {
+    match fs::symlink_metadata(consolidation_journal_path(library_path)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) | Err(_) => return Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+    }
+    let directory_path = consolidation_recovery_directory(library_path);
+    let directory_entry = PinnedFilePath::existing_parent(&directory_path)
         .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
-    if source.identity() != planned_move.source_identity {
+    directory_entry
+        .create_directory(PRIVATE_DIRECTORY_MODE)
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    let directory = Arc::new(
+        directory_entry
+            .open_directory()
+            .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?,
+    );
+    if !directory_entry
+        .refers_to_directory(directory.as_ref())
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?
+    {
         return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
     }
-    Ok(source)
+    Ok(Arc::new(PreparedConsolidationRecovery {
+        library_path: library_path.to_path_buf(),
+        directory_path,
+        directory,
+    }))
 }
 
 pub(super) fn publish_journal_without_overwrite(
@@ -534,35 +593,53 @@ fn cleanup_orphaned_consolidation_recovery_directory(
             .open_directory()
             .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?,
     );
+    cleanup_open_consolidation_recovery_directory(&directory, directory_capability)
+}
+
+fn cleanup_open_consolidation_recovery_directory(
+    directory_path: &Path,
+    directory_capability: Arc<fs::File>,
+) -> ApplicationRuntimeResult<()> {
     let entries = Dir::read_from(directory_capability.as_ref())
         .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
-    for entry in entries {
-        let entry = entry.map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
-        let file_name = OsStr::from_bytes(entry.file_name().to_bytes());
-        if file_name == "." || file_name == ".." {
-            continue;
-        }
-        if !is_consolidation_recovery_backup_name(file_name) {
-            return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
-        }
-        let path =
-            PinnedFilePath::in_open_parent(&directory, directory_capability.clone(), file_name)
-                .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    let file_names = entries
+        .map(|entry| {
+            let entry = entry.map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+            Ok(OsStr::from_bytes(entry.file_name().to_bytes()).to_owned())
+        })
+        .collect::<ApplicationRuntimeResult<Vec<OsString>>>()?
+        .into_iter()
+        .filter(|file_name| file_name != "." && file_name != "..")
+        .collect::<Vec<_>>();
+    if file_names
+        .iter()
+        .any(|file_name| !is_consolidation_recovery_backup_name(file_name))
+    {
+        return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+    }
+    for file_name in file_names {
+        let path = PinnedFilePath::in_open_parent(
+            directory_path,
+            directory_capability.clone(),
+            &file_name,
+        )
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
         let backup = path
             .open_regular_file()
             .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
         remove_pinned_regular_file_matching_capability(&path, &backup)
             .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
     }
-    if !directory_path
-        .refers_to_directory(directory_capability.as_ref())
-        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?
-    {
-        return Err(ApplicationRuntimeError::LibraryConsolidationFailed);
+    let directory_entry = PinnedFilePath::existing_parent(directory_path)
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    match directory_entry.refers_to_directory(directory_capability.as_ref()) {
+        Ok(true) => directory_entry
+            .remove_directory()
+            .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed),
+        Ok(false) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(ApplicationRuntimeError::LibraryConsolidationFailed),
     }
-    directory_path
-        .remove_directory()
-        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)
 }
 
 fn is_consolidation_recovery_backup_name(name: &OsStr) -> bool {

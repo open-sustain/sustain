@@ -2,10 +2,10 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 //! Library consolidation: relocating already-imported tracks to the canonical
-//! managed layout. Planning captures source identities one file at a time and
-//! never retains source descriptors in the returned plan; the runner journals
-//! its intent, performs no-overwrite moves, and persists `is_missing`
-//! corrections it discovers.
+//! managed layout. Planning pins source identities with pre-journal recovery
+//! hard links one file at a time and never retains source descriptors in the
+//! returned plan; the runner journals its intent, performs no-overwrite moves,
+//! and persists `is_missing` corrections it discovers.
 
 use std::{
     collections::BTreeSet,
@@ -33,7 +33,8 @@ use super::file_ops::{
     rollback_file_move,
 };
 use super::journal::{
-    open_consolidation_recovery_source, recover_library_consolidation_journal,
+    PreparedConsolidationRecovery, open_consolidation_recovery_source,
+    prepare_consolidation_recovery, recover_library_consolidation_journal,
     remove_consolidation_journal_if_present, write_consolidation_journal,
 };
 
@@ -123,7 +124,7 @@ impl LibraryConsolidationContext {
                 break;
             }
 
-            let source = open_consolidation_recovery_source(&library_path, planned_move)?;
+            let source = open_consolidation_recovery_source(planned_move)?;
             if move_file_without_copy_or_overwrite_matching_capability(
                 &planned_move.source_path,
                 &planned_move.destination_path,
@@ -213,9 +214,10 @@ pub(super) struct PlannedLibraryConsolidationMove {
     pub(super) track_id: TrackId,
     pub(super) source_path: PathBuf,
     pub(super) destination_path: PathBuf,
-    /// Identity captured while planning. The journal creates and later
-    /// reopens a durable recovery link for this inode one move at a time.
+    /// Identity captured while planning and pinned by the pre-journal recovery
+    /// hard link held alive by `prepared_recovery`.
     pub(super) source_identity: FileIdentity,
+    pub(super) prepared_recovery: Arc<PreparedConsolidationRecovery>,
     pub(super) source_relative_path: TrackRelativePath,
     pub(super) destination_relative_path: TrackRelativePath,
     pub(super) updated_track: Track,
@@ -232,6 +234,7 @@ fn plan_library_consolidation(
     library_path: &Path,
     existing_tracks: &[Track],
 ) -> ApplicationRuntimeResult<LibraryConsolidationPlan> {
+    let recovery = prepare_consolidation_recovery(library_path)?;
     let planner = ManagedTrackPathPlanner::default();
     let mut occupied_paths = existing_tracks
         .iter()
@@ -260,8 +263,8 @@ fn plan_library_consolidation(
     for track in existing_tracks {
         let source_relative_path = track.location.relative_path.clone();
         let source_path = track.location.absolute_path(library_path);
-        let source_identity = match probe_regular_file(&source_path) {
-            Ok(RegularFileProbe::Present(source)) => source.identity(),
+        let source = match probe_regular_file(&source_path) {
+            Ok(RegularFileProbe::Present(source)) => source,
             Ok(RegularFileProbe::MissingOrNonRegular) => {
                 record_missing_track(track);
                 continue;
@@ -288,12 +291,14 @@ fn plan_library_consolidation(
         let destination_path = library_path.join(plan.relative_path.as_path());
         let mut updated_track = track.clone();
         updated_track.location = TrackLocation::available(plan.relative_path.clone());
+        let source_identity = recovery.pin_source(track.id, &source)?;
 
         moves.push(PlannedLibraryConsolidationMove {
             track_id: track.id,
             source_path,
             destination_path,
             source_identity,
+            prepared_recovery: recovery.clone(),
             source_relative_path,
             destination_relative_path: plan.relative_path,
             updated_track,
@@ -314,11 +319,11 @@ pub(super) fn plan_managed_track_retarget(
     existing_tracks: &[Track],
     track: Track,
 ) -> ApplicationRuntimeResult<Option<PlannedLibraryConsolidationMove>> {
+    let recovery = prepare_consolidation_recovery(library_path)?;
     let source_relative_path = track.location.relative_path.clone();
     let source_path = track.location.absolute_path(library_path);
     let source = open_regular_file(&source_path)
         .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
-    let source_identity = source.identity();
 
     let planner = ManagedTrackPathPlanner::default();
     let mut occupied_paths = existing_tracks
@@ -342,12 +347,14 @@ pub(super) fn plan_managed_track_retarget(
     let destination_path = library_path.join(plan.relative_path.as_path());
     let mut updated_track = track;
     updated_track.location = TrackLocation::available(plan.relative_path.clone());
+    let source_identity = recovery.pin_source(updated_track.id, &source)?;
 
     Ok(Some(PlannedLibraryConsolidationMove {
         track_id: updated_track.id,
         source_path,
         destination_path,
         source_identity,
+        prepared_recovery: recovery,
         source_relative_path,
         destination_relative_path: plan.relative_path,
         updated_track,
@@ -362,9 +369,10 @@ pub(super) fn plan_managed_missing_track_relocation(
     source_path: &Path,
     source_relative_path: Option<&TrackRelativePath>,
 ) -> ApplicationRuntimeResult<(Track, Option<PlannedLibraryConsolidationMove>)> {
+    let recovery = prepare_consolidation_recovery(library_path)
+        .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
     let source = open_regular_file(source_path)
         .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
-    let source_identity = source.identity();
 
     let planner = ManagedTrackPathPlanner::default();
     let mut occupied_paths = existing_tracks
@@ -388,6 +396,9 @@ pub(super) fn plan_managed_missing_track_relocation(
     if &plan.relative_path == source_relative_path {
         return Ok((track, None));
     }
+    let source_identity = recovery
+        .pin_source(track.id, &source)
+        .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
 
     Ok((
         track.clone(),
@@ -396,6 +407,7 @@ pub(super) fn plan_managed_missing_track_relocation(
             source_path: source_path.to_path_buf(),
             destination_path: library_path.join(plan.relative_path.as_path()),
             source_identity,
+            prepared_recovery: recovery,
             source_relative_path: source_relative_path.clone(),
             destination_relative_path: plan.relative_path,
             updated_track: track,
@@ -476,7 +488,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn planning_does_not_retain_source_file_descriptors() {
+    fn planning_pins_sources_without_retaining_file_descriptors() {
         let root = tempfile::tempdir().expect("create test root");
         fs::create_dir(root.path().join("loose")).expect("create source directory");
         let tracks = (1..=256)
@@ -492,9 +504,18 @@ mod tests {
         assert_eq!(plan.moves.len(), tracks.len());
         assert_eq!(
             open_file_descriptors_beneath(root.path()),
-            Vec::<PathBuf>::new(),
-            "a live consolidation plan must not pin one descriptor per source"
+            vec![root.path().join(".sustain-consolidation-recovery")],
+            "a live consolidation plan must retain only its shared recovery-directory descriptor"
         );
+        assert_eq!(
+            fs::read_dir(root.path().join(".sustain-consolidation-recovery"))
+                .expect("read recovery directory")
+                .count(),
+            tracks.len(),
+            "every planned move must pin its source with a recovery hard link"
+        );
+        drop(plan);
+        assert!(!root.path().join(".sustain-consolidation-recovery").exists());
     }
 
     #[test]
@@ -533,18 +554,77 @@ mod tests {
     }
 
     #[test]
+    fn planning_failure_cleans_prejournal_recovery_links() {
+        let root = tempfile::tempdir().expect("create test root");
+        fs::write(root.path().join("loose.flac"), b"original").expect("write source");
+        let unprobeable_name = format!("{}.flac", "x".repeat(256));
+
+        assert!(matches!(
+            plan_library_consolidation(
+                root.path(),
+                &[track(1, "loose.flac"), track(2, &unprobeable_name)]
+            ),
+            Err(ApplicationRuntimeError::LibraryConsolidationFailed)
+        ));
+        assert_eq!(
+            fs::read(root.path().join("loose.flac")).expect("read source"),
+            b"original"
+        );
+        assert!(!root.path().join(".sustain-consolidation-recovery").exists());
+    }
+
+    #[test]
+    fn concurrent_planning_refuses_to_reuse_recovery_namespace() {
+        let root = tempfile::tempdir().expect("create test root");
+        fs::write(root.path().join("loose.flac"), b"original").expect("write source");
+        let plan = plan_library_consolidation(root.path(), &[track(1, "loose.flac")])
+            .expect("plan consolidation");
+
+        assert!(matches!(
+            plan_library_consolidation(root.path(), &[track(1, "loose.flac")]),
+            Err(ApplicationRuntimeError::LibraryConsolidationFailed)
+        ));
+        assert_eq!(
+            fs::read(
+                root.path()
+                    .join(".sustain-consolidation-recovery/track-1.backup")
+            )
+            .expect("read first plan's pinned source"),
+            b"original"
+        );
+        drop(plan);
+        assert!(!root.path().join(".sustain-consolidation-recovery").exists());
+    }
+
+    #[test]
     fn journal_publication_rejects_source_replacement_after_planning() {
         let root = tempfile::tempdir().expect("create test root");
         let source = root.path().join("loose.flac");
         fs::write(&source, b"original").expect("write source");
         let plan = plan_library_consolidation(root.path(), &[track(1, "loose.flac")])
             .expect("plan consolidation");
+        assert_eq!(
+            fs::read(
+                root.path()
+                    .join(".sustain-consolidation-recovery/track-1.backup")
+            )
+            .expect("read pinned source"),
+            b"original"
+        );
         fs::remove_file(&source).expect("remove planned source");
         fs::write(&source, b"replacement").expect("write replacement");
+        assert_ne!(
+            open_regular_file(&source)
+                .expect("open replacement")
+                .identity(),
+            plan.moves[0].source_identity,
+            "the recovery hard link must prevent immediate inode reuse"
+        );
 
         assert!(write_consolidation_journal(root.path(), &plan.moves).is_err());
         assert_eq!(fs::read(&source).expect("read replacement"), b"replacement");
         assert!(!root.path().join(".sustain-consolidation-journal").exists());
+        drop(plan);
         assert!(!root.path().join(".sustain-consolidation-recovery").exists());
     }
 
