@@ -15,5 +15,12 @@ publish.workspace = true
 name = "xtask"
 path = "src/main.rs"
 
+[dependencies]
+# Token-tree parsing for the gettext call-shape guard. proc-macro2 in fallback
+# mode tokenizes Rust source and, crucially, descends into macro bodies (so a
+# `gettext(...)` nested in `formatx!(...)` is seen), which a syn AST walk would
+# treat as opaque. `span-locations` gives line/column for actionable errors.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+
 [lints]
 workspace = true

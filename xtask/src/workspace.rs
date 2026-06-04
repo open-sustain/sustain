@@ -61,6 +61,34 @@ pub fn metainfo_source(root: &Path) -> PathBuf {
     root.join("data").join(format!("{APP_ID}.metainfo.xml"))
 }
 
+/// Scratch directory for intermediate extraction/check files. Kept separate
+/// from [`dist_dir`] so transient artifacts never leak into what packaging
+/// installs.
+pub fn work_dir(root: &Path) -> PathBuf {
+    root.join("target/i18n/work")
+}
+
+/// The packaging artifact tree that `i18n-compile` produces and packaging
+/// consumes: `<root>/target/i18n/dist` containing `locale/<lang>/LC_MESSAGES/`,
+/// the localized desktop entry, and the localized AppStream metadata.
+pub fn dist_dir(root: &Path) -> PathBuf {
+    root.join("target/i18n/dist")
+}
+
+/// Whether `file` lives under one of the [`RUST_SOURCE_ROOTS`], i.e. a crate
+/// where unqualified gettext calls are extracted and therefore allowed.
+pub fn is_extraction_root_file(root: &Path, file: &Path) -> bool {
+    RUST_SOURCE_ROOTS
+        .iter()
+        .any(|relative| file.starts_with(root.join(relative)))
+}
+
+/// Whether `file` is part of the `sustain_i18n` crate, the only place permitted
+/// to name `gettextrs` directly.
+pub fn is_i18n_crate_file(root: &Path, file: &Path) -> bool {
+    file.starts_with(root.join("crates/i18n"))
+}
+
 /// Deterministic, sorted list of `*.rs` files under [`RUST_SOURCE_ROOTS`].
 pub fn rust_sources(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();

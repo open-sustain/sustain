@@ -2,46 +2,45 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 //! `cargo xtask i18n-check`: gate the localization contract. Fails on template
-//! drift, catalog/LINGUAS inconsistency, fuzzy/untranslated/obsolete entries,
-//! placeholder or header errors, msgid-set drift between a catalog and the
-//! template, and gettext call shapes the extractor would miss.
+//! message drift, header tampering, non-named placeholders, catalog/LINGUAS
+//! inconsistency, fuzzy/untranslated/obsolete entries, placeholder/header
+//! errors, msgid-set drift between a catalog and the template, and gettext call
+//! shapes the extractor would miss.
 //!
-//! The check is semantic: the template comparison ignores source locations and
-//! the header so unrelated code movement and a refreshed creation date never
-//! produce a false failure — only a changed message set does. It does not claim
-//! to find every unmarked English literal; that remains a source-audit concern.
+//! The message-set comparison ignores source locations and the volatile
+//! creation date so unrelated code movement never falses; the separate header
+//! comparison catches license/header tampering that the message comparison
+//! ignores. The check does not claim to find every unmarked English literal;
+//! that remains a source-audit concern.
 
 use std::path::Path;
 
-use crate::{extract, po, tools, workspace};
-
-/// Qualified call forms that `xgettext` cannot see. Consumers must import the
-/// names from `sustain_i18n` and call them unqualified.
-const FORBIDDEN_QUALIFIED_CALLS: &[&str] = &[
-    "sustain_i18n::gettext(",
-    "sustain_i18n::ngettext(",
-    "sustain_i18n::pgettext(",
-    "sustain_i18n::npgettext(",
-];
+use crate::{extract, lint, po, tools, workspace};
 
 /// Entry point for `cargo xtask i18n-check`.
 pub fn run() -> Result<(), String> {
-    let root = workspace::workspace_root();
+    run_in(&workspace::workspace_root())
+}
+
+/// Check against an explicit workspace root (the real one, or a fixture in
+/// tests).
+pub fn run_in(root: &Path) -> Result<(), String> {
     let tools = tools::preflight()?;
     let mut problems = Vec::new();
 
-    check_pot_current(&root, &tools, &mut problems)?;
+    check_pot_current(root, &tools, &mut problems)?;
+    check_pot_placeholders(root, &mut problems)?;
 
-    let linguas = workspace::linguas(&root)?;
-    let catalogs = workspace::catalog_langs(&root)?;
+    let linguas = workspace::linguas(root)?;
+    let catalogs = workspace::catalog_langs(root)?;
     check_linguas_consistency(&linguas, &catalogs, &mut problems);
 
-    let pot = workspace::pot_path(&root);
+    let pot = workspace::pot_path(root);
     for lang in &linguas {
-        check_catalog(&root, lang, &pot, &mut problems)?;
+        check_catalog(root, lang, &pot, &mut problems)?;
     }
 
-    check_call_shapes(&root, &mut problems)?;
+    check_call_shapes(root, &mut problems)?;
 
     if problems.is_empty() {
         println!("i18n-check: ok ({} catalog(s))", linguas.len());
@@ -55,8 +54,8 @@ pub fn run() -> Result<(), String> {
     }
 }
 
-/// Fail if `po/sustain.pot` does not match a freshly extracted template,
-/// comparing message sets only (locations and header stripped).
+/// Fail if `po/sustain.pot` does not match a freshly extracted template — both
+/// its message set and its header (modulo the volatile creation date).
 fn check_pot_current(
     root: &Path,
     tools: &tools::Tools,
@@ -71,17 +70,44 @@ fn check_pot_current(
         return Ok(());
     }
 
-    let fresh = root.join("target/i18n/check/sustain.pot");
+    let fresh = workspace::work_dir(root).join("check/sustain.pot");
     extract::generate_pot(root, tools, &fresh)?;
 
-    let committed_messages = po::normalized_messages(root, &committed, "committed")?;
-    let fresh_messages = po::normalized_messages(root, &fresh, "fresh")?;
-    if committed_messages != fresh_messages {
+    if po::message_body(root, &committed, "check-committed")?
+        != po::message_body(root, &fresh, "check-fresh")?
+    {
         problems.push(
             "po/sustain.pot is out of date with the marked source strings; \
              run `cargo xtask i18n-extract` and commit po/sustain.pot"
                 .to_owned(),
         );
+    }
+    if po::header_block(&committed)? != po::header_block(&fresh)? {
+        problems.push(
+            "po/sustain.pot header differs from a freshly generated template \
+             (hand-edited or stale); run `cargo xtask i18n-extract` and commit po/sustain.pot"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Fail if any `rust-format` source string in the template uses a placeholder
+/// that is not a `{name}` named placeholder.
+fn check_pot_placeholders(root: &Path, problems: &mut Vec<String>) -> Result<(), String> {
+    let committed = workspace::pot_path(root);
+    if !committed.is_file() {
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(&committed)
+        .map_err(|err| format!("cannot read {}: {err}", committed.display()))?;
+    for source in po::rust_format_source_strings(&text) {
+        for problem in lint::placeholder_problems(&source.value) {
+            problems.push(format!(
+                "po/sustain.pot: in \"{}\": {problem}",
+                truncate(&source.reference)
+            ));
+        }
     }
     Ok(())
 }
@@ -104,9 +130,8 @@ fn check_linguas_consistency(linguas: &[String], catalogs: &[String], problems: 
     }
 }
 
-/// Validate one catalog: placeholders, headers, plural rules, and the absence
-/// of fuzzy, untranslated, or obsolete entries, plus msgid coverage against the
-/// template.
+/// Validate one catalog: placeholders, headers, plural rules, the absence of
+/// fuzzy/untranslated/obsolete entries, and msgid coverage against the template.
 fn check_catalog(
     root: &Path,
     lang: &str,
@@ -119,7 +144,7 @@ fn check_catalog(
         return Ok(());
     }
 
-    let mo = root.join("target/i18n/check").join(format!("{lang}.mo"));
+    let mo = workspace::work_dir(root).join(format!("check/{lang}.mo"));
     if let Some(parent) = mo.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|err| format!("cannot create {}: {err}", parent.display()))?;
@@ -171,36 +196,40 @@ fn check_catalog(
     Ok(())
 }
 
-/// Fail on gettext call shapes the extractor would silently miss.
+/// Fail on gettext call shapes the extractor would silently miss, scanning the
+/// whole workspace on the token tree (so qualified calls — with any spacing —
+/// and unqualified calls outside the extraction roots are both caught).
 fn check_call_shapes(root: &Path, problems: &mut Vec<String>) -> Result<(), String> {
-    let i18n_crate = root.join("crates").join("i18n");
     for file in workspace::all_crate_sources(root)? {
-        // The i18n crate is the one place allowed to name `gettextrs` directly.
-        if file.starts_with(&i18n_crate) {
-            continue;
-        }
-        let text = std::fs::read_to_string(&file)
+        let source = std::fs::read_to_string(&file)
             .map_err(|err| format!("cannot read {}: {err}", file.display()))?;
         let location = file.strip_prefix(root).unwrap_or(&file).to_string_lossy();
-        for (index, line) in text.lines().enumerate() {
-            let line_number = index + 1;
-            for call in FORBIDDEN_QUALIFIED_CALLS {
-                if line.contains(call) {
+        let in_root = workspace::is_extraction_root_file(root, &file);
+        let allow_gettextrs = workspace::is_i18n_crate_file(root, &file);
+        match lint::call_shape_violations(&source, in_root, allow_gettextrs) {
+            Ok(violations) => {
+                for violation in violations {
                     problems.push(format!(
-                        "{location}:{line_number}: qualified `{}` is invisible to xgettext; \
-                         import the name from sustain_i18n and call it unqualified",
-                        call.trim_end_matches('(')
+                        "{location}:{}:{}: {}",
+                        violation.line, violation.column, violation.message
                     ));
                 }
             }
-            if line.contains("gettextrs::") {
-                problems.push(format!(
-                    "{location}:{line_number}: direct `gettextrs::` use bypasses the sustain_i18n boundary"
-                ));
-            }
+            Err(err) => problems.push(format!("{location}: {err}")),
         }
     }
     Ok(())
+}
+
+/// Shorten a long msgid for a one-line diagnostic.
+fn truncate(text: &str) -> String {
+    const MAX: usize = 48;
+    if text.chars().count() <= MAX {
+        text.to_owned()
+    } else {
+        let head: String = text.chars().take(MAX).collect();
+        format!("{head}…")
+    }
 }
 
 /// Indent a captured multi-line tool message to line up under a problem bullet.

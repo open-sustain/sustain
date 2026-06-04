@@ -11,33 +11,40 @@ use crate::{po, tools, tools::Tools, workspace};
 
 /// POT header fields for the template. Passed on every `xgettext` pass because
 /// under `--join-existing` the pass that writes last also writes the header;
-/// keeping them uniform yields one clean, non-FSF-boilerplate header.
-fn header_args() -> [&'static str; 4] {
+/// keeping them uniform yields one consistent header. The default header states
+/// the file is distributed under the package's license (GPL here) — correct for
+/// the project, so `--foreign-user` (which would declare the POT public domain)
+/// is deliberately not used.
+fn header_args() -> [&'static str; 3] {
     [
         "--package-name=Sustain",
         "--copyright-holder=AnnoyingTechnology",
         "--msgid-bugs-address=https://github.com/open-sustain/sustain/issues",
-        "--foreign-user",
     ]
 }
 
 /// Entry point for `cargo xtask i18n-extract`.
 pub fn run() -> Result<(), String> {
-    let root = workspace::workspace_root();
+    run_in(&workspace::workspace_root())
+}
+
+/// Extract against an explicit workspace root (the real one, or a fixture in
+/// tests).
+pub fn run_in(root: &Path) -> Result<(), String> {
     let tools = tools::preflight()?;
-    let pot = workspace::pot_path(&root);
+    let pot = workspace::pot_path(root);
 
     // Generate into scratch first, then replace the committed template only if
-    // its message set actually changed. This keeps `po/sustain.pot` byte-stable
-    // across no-op extractions — the volatile POT-Creation-Date and source
-    // locations refresh only when the strings themselves change.
-    let fresh = root.join("target/i18n/tmp/sustain.fresh.pot");
-    generate_pot(&root, &tools, &fresh)?;
-    let updated = replace_if_changed(&root, &fresh, &pot)?;
+    // its message set or header actually changed. This keeps `po/sustain.pot`
+    // byte-stable across no-op extractions — the volatile POT-Creation-Date and
+    // source locations refresh only when the strings themselves change.
+    let fresh = workspace::work_dir(root).join("sustain.fresh.pot");
+    generate_pot(root, &tools, &fresh)?;
+    let updated = replace_if_changed(root, &fresh, &pot)?;
 
-    let langs = workspace::linguas(&root)?;
+    let langs = workspace::linguas(root)?;
     for lang in &langs {
-        let catalog = workspace::catalog_path(&root, lang);
+        let catalog = workspace::catalog_path(root, lang);
         tools::finish(
             tools::cmd("msgmerge")
                 .arg("--quiet")
@@ -62,12 +69,14 @@ pub fn run() -> Result<(), String> {
     Ok(())
 }
 
-/// Replace `committed` with `fresh` only when their message sets differ.
-/// Returns whether the committed template was rewritten.
+/// Replace `committed` with `fresh` only when their message set or header
+/// (ignoring the volatile creation date) differs. Returns whether the committed
+/// template was rewritten.
 fn replace_if_changed(root: &Path, fresh: &Path, committed: &Path) -> Result<bool, String> {
     if committed.is_file()
-        && po::normalized_messages(root, committed, "committed")?
-            == po::normalized_messages(root, fresh, "fresh")?
+        && po::message_body(root, committed, "extract-committed")?
+            == po::message_body(root, fresh, "extract-fresh")?
+        && po::header_block(committed)? == po::header_block(fresh)?
     {
         return Ok(false);
     }
@@ -90,7 +99,7 @@ fn replace_if_changed(root: &Path, fresh: &Path, committed: &Path) -> Result<boo
 /// `msgcat --sort-output` orders entries by msgid, so the committed template
 /// changes only when the message set changes, not when source lines move.
 pub fn generate_pot(root: &Path, tools: &Tools, out: &Path) -> Result<(), String> {
-    let scratch = root.join("target/i18n/tmp");
+    let scratch = workspace::work_dir(root).join("tmp");
     std::fs::create_dir_all(&scratch)
         .map_err(|err| format!("cannot create {}: {err}", scratch.display()))?;
     let accumulator = scratch.join("accumulator.pot");
