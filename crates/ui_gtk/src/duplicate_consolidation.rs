@@ -130,11 +130,20 @@ fn open_dialog(
     content.set_margin_start(18);
 
     let intro = gtk::Label::new(Some(
-        "Each duplicate is a column. Pick the survivor's audio file (highest quality is preselected, but overridable), its artwork, its rating, and each metadata field — the highlighted box in every row marks the value that will be kept. Populated tags are cherry-picked by default, with the oldest year preferred. Click a \"Track N\" button to take every tag and the rating from that track. Play counts and skips are summed and the oldest date added is kept, so those rows are shown for reference only. The other files are removed only after the survivor has been written and verified.",
+        "Pick the surviving attributes, a single consolidated file will be preserved in your library upon confirmation.",
     ));
     intro.set_xalign(0.0);
     intro.set_wrap(true);
+    intro.add_css_class("consolidation-intro");
     content.append(&intro);
+
+    let intro_detail = gtk::Label::new(Some(
+        "Sensible choices are pre-selected. Implicit choices: play counts and skips are summed, oldest date added is preserved.",
+    ));
+    intro_detail.set_xalign(0.0);
+    intro_detail.set_wrap(true);
+    intro_detail.add_css_class("dim-label");
+    content.append(&intro_detail);
 
     let metadata = default_duplicate_metadata_selection(&tracks).expect("non-empty tracks");
     let metadata_selectors = build_metadata_selectors(&tracks, &metadata);

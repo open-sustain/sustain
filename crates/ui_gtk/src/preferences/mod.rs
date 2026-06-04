@@ -114,7 +114,7 @@ pub(crate) fn settings_button(
     view_settings_changed: ViewSettingsChangedCallback,
 ) -> gtk::Button {
     let icon = gtk::Image::from_icon_name("preferences-system-symbolic");
-    icon.set_pixel_size(16);
+    icon.set_pixel_size(14);
     icon.add_css_class("status-bar-settings-icon");
 
     let label = gtk::Label::new(Some("Settings"));

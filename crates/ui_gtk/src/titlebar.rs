@@ -52,7 +52,10 @@ pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercen
     let play_pause_icon = gtk::Image::from_icon_name("media-playback-start-symbolic");
     play_pause_icon.set_pixel_size(MEDIA_ICON_SIZE);
     let play_pause = media_icon_button_from_image(&play_pause_icon, "Play/Pause");
-    let next = media_icon_button("media-skip-forward-symbolic", "Next");
+    let next = media_icon_button(
+        "media-skip-forward-symbolic",
+        "Next, right-click to display the queue",
+    );
     set_titlebar_control_height(&previous);
     set_titlebar_control_height(&play_pause);
     set_titlebar_control_height(&next);

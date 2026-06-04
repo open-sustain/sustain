@@ -737,24 +737,31 @@ listview.playlist-sidebar-list > row:focus {
    toggle and reads as status-bar furniture rather than a button. */
 .status-bar-settings-button {
     margin: 0 2px;
-    padding: 0 6px;
+    padding: 0 6px 0 2px;
     min-height: 14px;
-    border-radius: 8px;
-    color: alpha(@theme_fg_color, 0.7);
+    font-size: 0.9em;
+    color: alpha(@theme_fg_color, 0.6);
+}
+
+/* Status-bar furniture, not a primary action: suppress the flat-button
+   hover/active background entirely and signal interaction with a text tint
+   only, so it stops reading as a button (#177). */
+.status-bar-settings-button:hover,
+.status-bar-settings-button:active {
+    background: none;
+    box-shadow: none;
 }
 
 .status-bar-settings-button:hover {
-    background-color: alpha(@theme_fg_color, 0.08);
-    color: @theme_fg_color;
+    color: alpha(@theme_fg_color, 0.85);
 }
 
 .status-bar-settings-button:active {
-    background-color: alpha(@theme_fg_color, 0.12);
     color: @theme_fg_color;
 }
 
 .status-bar-settings-icon {
-    opacity: 0.7;
+    opacity: 0.6;
 }
 
 /* Status-bar sidebar collapse / expand toggle. Lives at the start of
@@ -1281,4 +1288,8 @@ columnview.track-table listview row:selected .track-table-status-missing,
 
 .consolidation-field-name {
     font-weight: 700;
+}
+
+.consolidation-intro {
+    font-size: 1.1em;
 }
