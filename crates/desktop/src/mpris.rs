@@ -507,6 +507,10 @@ struct RootInterface {
 }
 
 #[interface(name = "org.mpris.MediaPlayer2")]
+#[allow(
+    clippy::unused_async,
+    reason = "zbus D-Bus methods use async signatures even when a method only forwards a command"
+)]
 impl RootInterface {
     async fn raise(&self) {
         self.command_sink.invoke(MprisCommand::Raise);
@@ -593,6 +597,10 @@ impl PlayerInterface {
 }
 
 #[interface(name = "org.mpris.MediaPlayer2.Player")]
+#[allow(
+    clippy::unused_async,
+    reason = "zbus D-Bus methods use async signatures even when a method only forwards a command"
+)]
 impl PlayerInterface {
     async fn next(&self) {
         self.command_sink.invoke(MprisCommand::Next);

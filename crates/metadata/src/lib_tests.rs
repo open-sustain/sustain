@@ -393,6 +393,10 @@ fn atomic_write_leaves_no_temp_file_when_modify_step_fails() {
     assert_eq!(on_disk.as_slice(), b"original");
 
     // No `.sustain-*.tmp` debris lingers next to the audio file.
+    #[allow(
+        clippy::case_sensitive_file_extension_comparisons,
+        reason = "Sustain's temporary-file suffix is the exact lowercase ASCII literal .tmp"
+    )]
     let leftovers: Vec<_> = fs::read_dir(&root)
         .expect("list test directory")
         .filter_map(Result::ok)
@@ -585,6 +589,10 @@ impl RecordingMetadataService {
 }
 
 impl MetadataService for RecordingMetadataService {
+    #[allow(
+        clippy::unwrap_in_result,
+        reason = "the test double's mutex poisoning is a failed test invariant"
+    )]
     fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
         self.parsed
             .lock()

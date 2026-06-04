@@ -1033,6 +1033,11 @@ fn hex(byte: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_in_result,
+        reason = "test doubles use expect to state fixture mutation invariants"
+    )]
+
     use std::{fs, path::Path, time::SystemTime};
 
     use sustain_domain::{PlayStatistics, Rating, TrackLocation, TrackMetadata, TrackRelativePath};

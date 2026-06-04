@@ -232,7 +232,7 @@ pub fn plan_duplicate_consolidation(
     let audio_track = selected_tracks
         .iter()
         .find(|track| track.id == request.audio_track_id)
-        .expect("validated audio reference");
+        .ok_or(DuplicateConsolidationError::TrackNotFound)?;
 
     let mut survivor = (*audio_track).clone();
     copy_selected_editable_metadata(&mut survivor.metadata, &selected_tracks, &request.metadata)?;
@@ -242,7 +242,7 @@ pub fn plan_duplicate_consolidation(
     survivor.rating = selected_tracks
         .iter()
         .find(|track| track.id == request.rating_track_id)
-        .expect("validated rating reference")
+        .ok_or(DuplicateConsolidationError::TrackNotFound)?
         .rating;
     survivor.statistics.play_count = selected_tracks
         .iter()

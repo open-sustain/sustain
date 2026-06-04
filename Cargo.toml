@@ -43,7 +43,113 @@ gtk = { package = "gtk4", version = "0.10", features = ["v4_18"] }
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
+# Keep the broad stable review group enabled as a ratchet. Individual
+# exceptions below are project policy decisions rather than an invitation to
+# silence a warning at its call site without understanding it.
+pedantic = { level = "warn", priority = -1 }
+
+# Nursery membership changes between Clippy releases. Pin a small
+# correctness-oriented subset so a toolchain update requires an explicit
+# lint-policy decision instead of failing CI on untouched code.
+collection_is_never_read = "warn"
+debug_assert_with_mut_call = "warn"
+fallible_impl_from = "warn"
+future_not_send = "warn"
+large_stack_frames = "warn"
+non_send_fields_in_send_ty = "warn"
+path_buf_push_overwrite = "warn"
+read_zero_byte_vec = "warn"
+significant_drop_in_scrutinee = "warn"
+suspicious_operation_groupings = "warn"
+transmute_undefined_repr = "warn"
+uninhabited_references = "warn"
+while_float = "warn"
+
+# Restriction lints with concrete correctness or release-hygiene value.
+dbg_macro = "warn"
 panic = "warn"
 todo = "warn"
 unimplemented = "warn"
+unwrap_in_result = "warn"
 unwrap_used = "warn"
+
+# The blanket arithmetic/indexing restriction lints do not distinguish
+# unchecked external input from already-validated parser offsets, bounded
+# counters, signal-processing math, or test assertions. The audit produced
+# hundreds of false positives whose required allows would hide the few useful
+# findings. Keep checked access/arithmetic a domain-level review concern.
+arithmetic_side_effects = "allow"
+indexing_slicing = "allow"
+
+# Sustain's crates are private implementation units, not a public Rust API.
+# These lints otherwise push internal functions toward public-crate API
+# conventions or churn signatures without improving the application.
+derive_partial_eq_without_eq = "allow"
+missing_panics_doc = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+needless_pass_by_value = "allow"
+ref_option = "allow"
+return_self_not_must_use = "allow"
+trivially_copy_pass_by_ref = "allow"
+unused_self = "allow"
+
+# Documentation is written for application maintainers and users. Rustdoc
+# remains warning-clean, but Clippy's prose formatting preferences do not
+# improve those audiences enough to justify pervasive markup churn.
+doc_markdown = "allow"
+
+# Numeric casts are audited where their surrounding domain requires checked
+# conversion. Replacing every bounded UI, audio, timestamp, and binary-format
+# cast with boilerplate would obscure rather than clarify those invariants.
+cast_lossless = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+
+# These readability choices are intentionally contextual. Enforcing one form
+# workspace-wide made existing state machines, GTK callback wiring, SQL
+# builders, and binary-format code less direct during the initial audit.
+assigning_clones = "allow"
+bool_to_int_with_if = "allow"
+borrow_as_ptr = "allow"
+default_trait_access = "allow"
+format_collect = "allow"
+format_push_string = "allow"
+if_not_else = "allow"
+items_after_statements = "allow"
+manual_let_else = "allow"
+manual_midpoint = "allow"
+manual_string_new = "allow"
+many_single_char_names = "allow"
+map_unwrap_or = "allow"
+match_same_arms = "allow"
+needless_continue = "allow"
+needless_raw_string_hashes = "allow"
+no_effect_underscore_binding = "allow"
+redundant_closure_for_method_calls = "allow"
+semicolon_if_nothing_returned = "allow"
+similar_names = "allow"
+single_match_else = "allow"
+struct_excessive_bools = "allow"
+struct_field_names = "allow"
+too_many_lines = "allow"
+uninlined_format_args = "allow"
+unnecessary_trailing_comma = "allow"
+unnecessary_wraps = "allow"
+unnested_or_patterns = "allow"
+unreadable_literal = "allow"
+used_underscore_binding = "allow"
+use_self = "allow"
+wildcard_imports = "allow"
+
+# Exact float comparisons are intentional for clamped/sentinel values and
+# their tests. Approximate numerical algorithms use explicit tolerances.
+float_cmp = "allow"
+
+# `expect` marks invariants throughout startup, worker ownership, filesystem
+# protocols, and tests. The messages are more useful than mechanically
+# threading impossible errors through those boundaries; recoverable paths
+# continue to use Result and are guarded by `unwrap_in_result`.
+expect_used = "allow"

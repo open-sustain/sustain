@@ -263,5 +263,17 @@ Core values:
 - Doing it right over doing it now.
 - Honesty above everything.
 
+## Lint and code-quality passes
+
+Optimize lint work for durable signal, not warning-count reduction. Enable a
+useful reproducible policy, document project-level exclusions, use narrow
+reasoned allowances where appropriate, and fix findings that expose real
+correctness, resource, concurrency, or maintainability problems.
+
+Do not create broad mechanical churn, unrelated behavioral refactors, API or
+lifecycle changes, or explicit `drop(...)` calls at function return merely to
+satisfy a lint. Unstable lint groups such as Clippy nursery must be represented
+by a small curated subset rather than blindly enabled or exhaustively pinned.
+
 After every change you make, provide a clear, honest report on ANY change that
 you are not confident about and that could be considered a fragile hack.

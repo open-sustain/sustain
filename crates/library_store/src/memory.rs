@@ -95,32 +95,50 @@ impl InMemoryLibraryStore {
     }
 
     fn remove_track_ancillary_rows(&self, track_ids: &[TrackId]) -> StoreResult<()> {
-        let mut analysis = self
-            .analysis_bookkeeping
-            .lock()
-            .map_err(|_| StoreError::StoreUnavailable)?;
-        let mut waveforms = self
-            .waveforms
-            .lock()
-            .map_err(|_| StoreError::StoreUnavailable)?;
-        let mut synced_lyrics = self
-            .synced_lyrics
-            .lock()
-            .map_err(|_| StoreError::StoreUnavailable)?;
-        let mut online = self
-            .online_bookkeeping
-            .lock()
-            .map_err(|_| StoreError::StoreUnavailable)?;
-        let mut acoustics = self
-            .acoustics
-            .lock()
-            .map_err(|_| StoreError::StoreUnavailable)?;
-        for track_id in track_ids {
-            analysis.remove(track_id);
-            waveforms.remove(track_id);
-            synced_lyrics.remove(track_id);
-            online.remove(track_id);
-            acoustics.remove(track_id);
+        {
+            let mut analysis = self
+                .analysis_bookkeeping
+                .lock()
+                .map_err(|_| StoreError::StoreUnavailable)?;
+            for track_id in track_ids {
+                analysis.remove(track_id);
+            }
+        }
+        {
+            let mut waveforms = self
+                .waveforms
+                .lock()
+                .map_err(|_| StoreError::StoreUnavailable)?;
+            for track_id in track_ids {
+                waveforms.remove(track_id);
+            }
+        }
+        {
+            let mut synced_lyrics = self
+                .synced_lyrics
+                .lock()
+                .map_err(|_| StoreError::StoreUnavailable)?;
+            for track_id in track_ids {
+                synced_lyrics.remove(track_id);
+            }
+        }
+        {
+            let mut online = self
+                .online_bookkeeping
+                .lock()
+                .map_err(|_| StoreError::StoreUnavailable)?;
+            for track_id in track_ids {
+                online.remove(track_id);
+            }
+        }
+        {
+            let mut acoustics = self
+                .acoustics
+                .lock()
+                .map_err(|_| StoreError::StoreUnavailable)?;
+            for track_id in track_ids {
+                acoustics.remove(track_id);
+            }
         }
         Ok(())
     }

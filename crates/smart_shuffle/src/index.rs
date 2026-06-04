@@ -27,7 +27,7 @@
 //! so a stale shape is silently discarded rather than fed mismatched
 //! inputs.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};
 use sustain_domain::{AcousticFeatures, Track, TrackId};
@@ -179,11 +179,10 @@ impl SmartShuffleIndex {
             available_ids.insert(track.id.get());
             // De-duplicate tokens within a track so a genre tag of
             // "Rock/Rock" counts "rock" once toward its frequency.
-            let mut seen: BTreeMap<String, ()> = BTreeMap::new();
-            for token in genre_tokens(track.metadata.genre.as_deref()) {
-                seen.entry(token).or_default();
-            }
-            for token in seen.into_keys() {
+            let seen = genre_tokens(track.metadata.genre.as_deref())
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            for token in seen {
                 *document_frequency.entry(token).or_default() += 1;
             }
         }

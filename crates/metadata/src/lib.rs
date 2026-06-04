@@ -661,7 +661,7 @@ pub fn hash_file_content(path: &Path) -> MetadataResult<TrackContentHash> {
 
 pub fn hash_reader_content(reader: &mut impl Read) -> MetadataResult<TrackContentHash> {
     let mut hasher = Sha256::new();
-    let mut buffer = [0; 64 * 1024];
+    let mut buffer = vec![0; 64 * 1024];
 
     loop {
         let bytes_read = reader
@@ -682,7 +682,7 @@ pub fn copy_and_hash_reader_content(
 ) -> MetadataResult<(u64, TrackContentHash)> {
     let mut hasher = Sha256::new();
     let mut bytes_copied = 0;
-    let mut buffer = [0; 64 * 1024];
+    let mut buffer = vec![0; 64 * 1024];
 
     loop {
         let bytes_read = reader

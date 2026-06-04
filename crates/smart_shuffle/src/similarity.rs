@@ -106,9 +106,17 @@ pub fn tempo_similarity(seed: &Track, cand: &Track) -> Option<f32> {
     let mut ratio = cand_bpm as f32 / seed_bpm as f32;
     // Fold into [1/√2, √2] — the octave centred on 1.0 — so 2× / ½×
     // collapse onto a unison match.
+    #[allow(
+        clippy::while_float,
+        reason = "positive finite BPM inputs and power-of-two steps guarantee termination"
+    )]
     while ratio > std::f32::consts::SQRT_2 {
         ratio /= 2.0;
     }
+    #[allow(
+        clippy::while_float,
+        reason = "positive finite BPM inputs and power-of-two steps guarantee termination"
+    )]
     while ratio < std::f32::consts::FRAC_1_SQRT_2 {
         ratio *= 2.0;
     }

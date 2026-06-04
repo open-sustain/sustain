@@ -246,12 +246,12 @@ impl LibraryStore for FaultyStore {
         track_id: TrackId,
         location: &TrackLocation,
     ) -> StoreResult<bool> {
-        if let Some(replacement) = self
+        let replacement = self
             .availability_path_replacement
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?
-            .take()
-        {
+            .take();
+        if let Some(replacement) = replacement {
             self.inner.update_track_location(track_id, &replacement)?;
         }
         self.inner

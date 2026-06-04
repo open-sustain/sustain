@@ -109,6 +109,10 @@ impl DevicePlanScheduler {
         self.result_receiver.clone()
     }
 
+    #[allow(
+        clippy::unwrap_in_result,
+        reason = "a poisoned scheduler mutex is an unrecoverable internal invariant"
+    )]
     pub(crate) fn request_plan(
         &self,
         generation: DevicePlanGeneration,
@@ -162,12 +166,12 @@ impl DevicePlanScheduler {
             .expect("device-plan worker state poisoned")
             .pending = None;
         self.shared.wake.notify_one();
-        if let Some(worker) = self
+        let worker = self
             .worker
             .lock()
             .expect("device-plan join handle poisoned")
-            .take()
-        {
+            .take();
+        if let Some(worker) = worker {
             let _ = worker.join();
         }
         while self.result_receiver.try_recv().is_ok() {}

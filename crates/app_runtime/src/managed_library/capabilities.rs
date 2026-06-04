@@ -488,6 +488,11 @@ impl ProbePaths {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_in_result,
+        reason = "test doubles use expect to state injected-failure synchronization invariants"
+    )]
+
     use std::{
         collections::BTreeSet,
         sync::Mutex,

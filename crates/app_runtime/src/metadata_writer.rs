@@ -862,6 +862,11 @@ fn metadata_error(error: MetadataError) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::unwrap_in_result,
+        reason = "test doubles use expect to state fixture and synchronization invariants"
+    )]
+
     use std::{
         path::Path,
         sync::{

@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
+#![allow(
+    clippy::unwrap_in_result,
+    reason = "test doubles use expect to state fixture and synchronization invariants"
+)]
+
 use std::{
     fs::File,
     io::Write,
