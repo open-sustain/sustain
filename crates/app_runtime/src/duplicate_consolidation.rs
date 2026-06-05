@@ -16,6 +16,7 @@ use sustain_domain::{
     DuplicateConsolidationRequest, DuplicateMatchMode, Track, TrackId, TrackRelativePath,
     duplicate_groups, plan_duplicate_consolidation,
 };
+use sustain_i18n::{gettext, ngettext, tr_format};
 use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, hash_reader_content};
 
@@ -107,7 +108,7 @@ impl ApplicationRuntime {
         self.duplicate_consolidation_notification_id = Some(self.push_persistent_notification(
             NotificationCategory::DuplicateConsolidation,
             NotificationSeverity::Info,
-            "Consolidating duplicate tracks...".to_owned(),
+            gettext("Consolidating duplicate tracks..."),
             false,
         ));
 
@@ -172,20 +173,29 @@ impl ApplicationRuntime {
                 self.rebuild_search_index();
                 self.refresh_playback_queue_track_ids();
                 self.request_smart_shuffle_rebuild();
+                let removed = result.summary.removed_tracks;
                 let (severity, body) = if result.summary.cleanup_failed {
                     (
                         NotificationSeverity::Warning,
-                        format!(
-                            "{} duplicate track(s) consolidated. Sustain retained recovery files because cleanup could not finish safely.",
-                            result.summary.removed_tracks
+                        tr_format!(
+                            ngettext(
+                                "{removed} duplicate track consolidated. Sustain retained recovery files because cleanup could not finish safely.",
+                                "{removed} duplicate tracks consolidated. Sustain retained recovery files because cleanup could not finish safely.",
+                                removed as u32,
+                            ),
+                            removed = removed,
                         ),
                     )
                 } else {
                     (
                         NotificationSeverity::Info,
-                        format!(
-                            "{} duplicate track(s) consolidated.",
-                            result.summary.removed_tracks
+                        tr_format!(
+                            ngettext(
+                                "{removed} duplicate track consolidated.",
+                                "{removed} duplicate tracks consolidated.",
+                                removed as u32,
+                            ),
+                            removed = removed,
                         ),
                     )
                 };

@@ -11,6 +11,7 @@ use sustain_domain::{
     LibraryManagementMode, MetadataChange, PlaybackCommand, Rating, TrackId, TrackLocation,
     TrackRelativePath,
 };
+use sustain_i18n::gettext;
 use sustain_library_store::TagMirrorArtwork;
 use sustain_metadata::audio_format_from_path;
 
@@ -114,7 +115,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 crate::NotificationCategory::LibraryImport,
                 crate::NotificationSeverity::Warning,
-                "The track was located, but empty library folders could not be removed.".to_owned(),
+                gettext("The track was located, but empty library folders could not be removed."),
             );
         }
     }

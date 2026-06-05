@@ -37,6 +37,7 @@ pub use sustain_domain::{
     duplicate_audio_quality, effective_sort_key, highest_quality_duplicate_audio_track_ids,
     matching_tracks, track_matches_rule_set,
 };
+use sustain_i18n::{gettext, ngettext, tr_format};
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
 pub use sustain_metadata::MetadataService;
 pub use sustain_metadata_remote::{
@@ -816,7 +817,7 @@ impl ApplicationRuntime {
         let notification_id = self.push_persistent_notification(
             NotificationCategory::LibraryHydration,
             NotificationSeverity::Info,
-            "Loading library…".to_owned(),
+            gettext("Loading library…"),
             false,
         );
         self.library_hydration_notification_id = Some(notification_id);
@@ -852,7 +853,7 @@ impl ApplicationRuntime {
                 self.push_persistent_notification(
                     NotificationCategory::LibraryHydration,
                     NotificationSeverity::Error,
-                    "The music library could not be loaded.".to_owned(),
+                    gettext("The music library could not be loaded."),
                     false,
                 );
                 false
@@ -961,7 +962,7 @@ impl ApplicationRuntime {
                     self.push_ephemeral_notification(
                         NotificationCategory::MetadataWrite,
                         NotificationSeverity::Info,
-                        "Artwork updated.".to_owned(),
+                        gettext("Artwork updated."),
                     );
                 }
             }
@@ -1022,8 +1023,9 @@ impl ApplicationRuntime {
                 self.report_managed_library_filesystem_error(&error);
                 self.push_or_update_managed_metadata_retarget_warning(
                     result.track_id,
-                    "A managed-library metadata edit could not finish safely. Sustain retained its recovery state where needed. Resolve filesystem access and retry the edit."
-                        .to_owned(),
+                    gettext(
+                        "A managed-library metadata edit could not finish safely. Sustain retained its recovery state where needed. Resolve filesystem access and retry the edit.",
+                    ),
                 );
             }
         }
@@ -2202,7 +2204,7 @@ impl ApplicationRuntime {
             self.notifications.push_ephemeral(
                 NotificationCategory::SmartShuffle,
                 NotificationSeverity::Warning,
-                "Smart Shuffle: failed to serialise the rebuilt index.".to_owned(),
+                gettext("Smart Shuffle: failed to serialise the rebuilt index."),
             );
             return;
         };
@@ -2216,7 +2218,7 @@ impl ApplicationRuntime {
             self.notifications.push_ephemeral(
                 NotificationCategory::SmartShuffle,
                 NotificationSeverity::Warning,
-                "Smart Shuffle: failed to persist the rebuilt index.".to_owned(),
+                gettext("Smart Shuffle: failed to persist the rebuilt index."),
             );
             return;
         }
@@ -2463,9 +2465,13 @@ impl ApplicationRuntime {
                 self.push_ephemeral_notification(
                     NotificationCategory::AnalysisBackground,
                     NotificationSeverity::Info,
-                    format!(
-                        "Background {} is enabled. These tracks are already queued by the global sweep.",
-                        capability.label()
+                    tr_format!(
+                        // Translators: {capability} is a localized capability name
+                        // such as "BPM analysis"; keep the placeholder verbatim.
+                        gettext(
+                            "Background {capability} is enabled. These tracks are already queued by the global sweep.",
+                        ),
+                        capability = capability.label(),
                     ),
                 );
                 return RunDecision::DeniedBackgroundEnabled;
@@ -2491,7 +2497,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::AnalysisBackground,
                 NotificationSeverity::Info,
-                already_complete_text(original_count, request.label()),
+                already_complete_text(original_count, &request.label()),
             );
             return RunDecision::AlreadyComplete;
         }
@@ -2503,7 +2509,7 @@ impl ApplicationRuntime {
         self.push_ephemeral_notification(
             NotificationCategory::AnalysisBackground,
             NotificationSeverity::Info,
-            queued_text(count, request.label()),
+            queued_text(count, &request.label()),
         );
         RunDecision::Accepted
     }
@@ -2536,24 +2542,46 @@ impl ApplicationRuntime {
         self.push_ephemeral_notification(
             NotificationCategory::OnlineBackground,
             NotificationSeverity::Info,
-            queued_text(count, request.label()),
+            queued_text(count, &request.label()),
         );
         RunDecision::Accepted
     }
 }
 
 fn queued_text(count: usize, label: &str) -> String {
-    format!(
-        "Queued {count} {noun} for {label}.",
-        noun = if count == 1 { "track" } else { "tracks" },
+    tr_format!(
+        // Translators: {label} is a localized capability name such as "artwork
+        // retrieval"; keep the placeholder verbatim.
+        ngettext(
+            "Queued {count} track for {label}.",
+            "Queued {count} tracks for {label}.",
+            count as u32,
+        ),
+        count = count,
+        label = label,
     )
 }
 
 fn already_complete_text(count: usize, label: &str) -> String {
     if count == 1 {
-        format!("That track already has {label} — nothing to queue.")
+        tr_format!(
+            // Translators: {label} is a localized capability name such as
+            // "artwork retrieval"; keep the placeholder verbatim.
+            gettext("That track already has {label} — nothing to queue."),
+            label = label,
+        )
     } else {
-        format!("All {count} tracks already have {label} — nothing to queue.")
+        tr_format!(
+            // Translators: {label} is a localized capability name such as
+            // "artwork retrieval"; keep the placeholder verbatim.
+            ngettext(
+                "All {count} track already has {label} — nothing to queue.",
+                "All {count} tracks already have {label} — nothing to queue.",
+                count as u32,
+            ),
+            count = count,
+            label = label,
+        )
     }
 }
 
@@ -2598,11 +2626,11 @@ pub enum AnalysisCapability {
 impl AnalysisCapability {
     /// Human-readable label for the notification text the runtime
     /// emits when a per-set run is accepted or denied.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Bpm => "BPM analysis",
-            Self::Key => "key detection",
-            Self::Audio => "audio analysis",
+            Self::Bpm => gettext("BPM analysis"),
+            Self::Key => gettext("key detection"),
+            Self::Audio => gettext("audio analysis"),
         }
     }
 }
@@ -2617,11 +2645,11 @@ pub enum OnlineCapability {
 }
 
 impl OnlineCapability {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Lyrics => "lyrics retrieval",
-            Self::Artwork => "artwork retrieval",
-            Self::Tags => "tag enrichment",
+            Self::Lyrics => gettext("lyrics retrieval"),
+            Self::Artwork => gettext("artwork retrieval"),
+            Self::Tags => gettext("tag enrichment"),
         }
     }
 }
@@ -2664,10 +2692,10 @@ impl AnalysisRunRequest {
     }
 
     /// Notification label for the accepted case.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
             Self::Single(capability) => capability.label(),
-            Self::All => "analysis",
+            Self::All => gettext("analysis"),
         }
     }
 }
@@ -2706,10 +2734,10 @@ impl OnlineRunRequest {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
             Self::Single(capability) => capability.label(),
-            Self::All => "online retrieval",
+            Self::All => gettext("online retrieval"),
         }
     }
 }

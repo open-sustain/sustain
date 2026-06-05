@@ -9,6 +9,7 @@ use sustain_domain::{
     PlaybackCommand, PlaybackQueue, PlaybackQueueRequest, PlaybackQueueSource, PlaybackSession,
     PlaybackState, Track, TrackAvailability, TrackId, TrackPlaybackSource,
 };
+use sustain_i18n::gettext;
 use sustain_playback::PlaybackService;
 use sustain_smart_shuffle::{PickContext, format_debug, pick_next_track};
 
@@ -613,8 +614,9 @@ impl ApplicationRuntime {
     }
 
     fn push_or_update_playback_statistics_warning(&mut self) {
-        let body = "Sustain could not save listening statistics. The pending play count is retained in memory and will retry automatically."
-            .to_owned();
+        let body = gettext(
+            "Sustain could not save listening statistics. The pending play count is retained in memory and will retry automatically.",
+        );
         if let Some(id) = self.playback_statistics_notification_id {
             self.update_notification_body(id, body);
         } else {

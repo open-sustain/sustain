@@ -25,6 +25,7 @@ use sustain_domain::{
     DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MusicalKey, Playlist, PlaylistItem,
     SmartPlaylist, SyncDevice, SyncDeviceId, Track, TrackId, matching_tracks,
 };
+use sustain_i18n::{gettext, tr_format};
 use sustain_library_store::{AnalysisCapabilities, LibraryStore};
 use sustain_metadata::MetadataService;
 
@@ -338,7 +339,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Info,
-                "This device's selection is empty.".to_owned(),
+                gettext("This device's selection is empty."),
             );
             return Ok(());
         }
@@ -443,7 +444,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Info,
-                "A device sync is already running.".to_owned(),
+                gettext("A device sync is already running."),
             );
             return Ok(());
         }
@@ -451,7 +452,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Warning,
-                "That device is no longer connected.".to_owned(),
+                gettext("That device is no longer connected."),
             );
             return Ok(());
         };
@@ -460,7 +461,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Info,
-                "Pick at least one playlist to sync to this device.".to_owned(),
+                gettext("Pick at least one playlist to sync to this device."),
             );
             return Ok(());
         }
@@ -499,14 +500,17 @@ impl ApplicationRuntime {
                 self.push_ephemeral_notification(
                     NotificationCategory::DeviceSync,
                     NotificationSeverity::Info,
-                    "A device sync is already running.".to_owned(),
+                    gettext("A device sync is already running."),
                 );
             }
             DeviceSyncStartOutcome::SpawnFailed(detail) => {
                 self.push_ephemeral_notification(
                     NotificationCategory::DeviceSync,
                     NotificationSeverity::Error,
-                    format!("Device sync failed to start: {detail}"),
+                    tr_format!(
+                        gettext("Device sync failed to start: {detail}"),
+                        detail = detail
+                    ),
                 );
             }
         }
@@ -548,8 +552,9 @@ impl ApplicationRuntime {
                             self.push_ephemeral_notification(
                                 NotificationCategory::DeviceSync,
                                 NotificationSeverity::Error,
-                                "Device sync failed: could not save the on-device manifest."
-                                    .to_owned(),
+                                gettext(
+                                    "Device sync failed: could not save the on-device manifest.",
+                                ),
                             );
                         } else {
                             let severity = if outcome.cancelled {
@@ -568,7 +573,7 @@ impl ApplicationRuntime {
                         self.push_ephemeral_notification(
                             NotificationCategory::DeviceSync,
                             NotificationSeverity::Error,
-                            format!("Device sync failed: {message}"),
+                            tr_format!(gettext("Device sync failed: {message}"), message = message),
                         );
                     }
                 }
