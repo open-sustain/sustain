@@ -2192,6 +2192,7 @@ dependencies = [
  "sustain-artwork",
  "sustain-device-sync",
  "sustain-domain",
+ "sustain-i18n",
  "sustain-library-store",
  "sustain-metadata",
  "sustain-metadata-remote",

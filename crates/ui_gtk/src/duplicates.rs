@@ -116,7 +116,7 @@ impl DuplicatesView {
                 self.runtime.borrow_mut().push_ephemeral_notification(
                     NotificationCategory::DuplicateConsolidation,
                     NotificationSeverity::Error,
-                    runtime_error_text(&error).to_owned(),
+                    runtime_error_text(&error),
                 );
                 return;
             }
@@ -192,7 +192,7 @@ impl DuplicatesView {
                 self.runtime.borrow_mut().push_ephemeral_notification(
                     NotificationCategory::DuplicateConsolidation,
                     NotificationSeverity::Error,
-                    runtime_error_text(&error).to_owned(),
+                    runtime_error_text(&error),
                 );
             }
         }

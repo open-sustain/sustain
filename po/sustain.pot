@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-06-04 16:18+0200\n"
+"POT-Creation-Date: 2026-06-05 16:33+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -16,9 +16,84 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:30
 msgid "5-star ratings, play count, skip count, last played, last skipped"
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:721
+#, rust-format
+msgid "A folder cannot be moved inside itself."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:713
+#, rust-format
+msgid "A smart playlist needs at least one rule."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:318
+#, rust-format
+msgid "Adding tracks ({processed}/{total})..."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:313
+#, rust-format
+msgid "Adding tracks..."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:417
+#, rust-format
+msgid "Analysis paused: the library database rejected a write ({detail})."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:356
+#, rust-format
+msgid "Analyzed {completed} track, {skipped}."
+msgid_plural "Analyzed {completed} tracks, {skipped}."
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:344
+#, rust-format
+msgid "Analyzed {completed} track."
+msgid_plural "Analyzed {completed} tracks."
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:334
+#, rust-format
+msgid "Analyzing tracks ({processed}/{total})..."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:674
+#, rust-format
+msgid "Another background task is already running."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:694
+#, rust-format
+msgid "Choose a library folder first."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:744
+#, rust-format
+msgid "Choose a replacement inside the configured library folder."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:747
+#, rust-format
+msgid "Choose a supported audio file."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:778
+#, rust-format
+msgid "Copying tracks ({completed}/{total})…"
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:804
+#, rust-format
+msgid "Device already up to date."
 msgstr ""
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:25
@@ -27,6 +102,67 @@ msgstr ""
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:29
 msgid "Get Info metadata editor with tag mirroring to ID3, Vorbis, and MP4"
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:503
+#, rust-format
+msgid "Import stopped: {imported} added before cancel."
+msgid_plural "Import stopped: {imported} added before cancel."
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:636
+#, rust-format
+msgid "Library folder updated."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:653
+#, rust-format
+msgid "Library folder updated: all {total} track found."
+msgid_plural "Library folder updated: all {total} tracks found."
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:662
+#, rust-format
+msgid ""
+"Library folder updated: {missing} of {total} track not found at the new "
+"location."
+msgid_plural ""
+"Library folder updated: {missing} of {total} tracks not found at the new "
+"location."
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:641
+#, rust-format
+msgid ""
+"Library folder updated: {missing} of {total} track not found; {unresolved} "
+"could not be checked."
+msgid_plural ""
+"Library folder updated: {missing} of {total} tracks not found; {unresolved} "
+"could not be checked."
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: {moved} and {pending} are already-localized phrases
+#. such as "1 moved" / "2 pending"; keep the placeholders verbatim.
+#: crates/app_runtime/src/notifications.rs:552
+#, rust-format
+msgid "Library organization stopped: {moved}, {pending}."
+msgstr ""
+
+#. Translators: {moved}, {organized} and {missing} are
+#. already-localized phrases such as "1 moved" / "0 already
+#. organized" / "0 missing"; keep the placeholders verbatim.
+#: crates/app_runtime/src/notifications.rs:561
+#, rust-format
+msgid "Library organized: {moved}, {organized}, {missing}."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:689
+#, rust-format
+msgid "Library scanning is not available in this build."
 msgstr ""
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:34
@@ -50,8 +186,53 @@ msgstr ""
 msgid "Native light and dark themes that follow the system accent color"
 msgstr ""
 
+#: crates/app_runtime/src/notifications.rs:515
+#, rust-format
+msgid "No audio files were found."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:686
+#, rust-format
+msgid ""
+"One or more of the selected files is missing from disk. Restore or remove "
+"it, then consolidate again."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:424
+#, rust-format
+msgid ""
+"Online retrieval paused: the library database rejected a write ({detail})."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:59
+#, rust-format
+msgid "Organized library mode needs an accessible, writable library folder."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:63
+#, rust-format
+msgid ""
+"Organized library mode needs permission to create files and folders in the "
+"selected library folder."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:325
+#, rust-format
+msgid "Organizing library..."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:750
+#, rust-format
+msgid "Playback is not available."
+msgstr ""
+
 #: data/io.github.open_sustain.sustain.metainfo.xml:28
 msgid "Playlists, smart playlists, and playlist folders"
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:773
+#, rust-format
+msgid "Preparing tracks ({completed}/{total})…"
 msgstr ""
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:32
@@ -62,6 +243,85 @@ msgstr ""
 msgid ""
 "Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, and "
 "AcoustID"
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:756
+#, rust-format
+msgid "Remote artwork retrieval is not available in this build."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:785
+#, rust-format
+msgid "Removing tracks ({completed}/{total})…"
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:393
+#, rust-format
+msgid "Retrieved online data for {completed} track, {skipped}."
+msgid_plural "Retrieved online data for {completed} tracks, {skipped}."
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:381
+#, rust-format
+msgid "Retrieved online data for {completed} track."
+msgid_plural "Retrieved online data for {completed} tracks."
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:371
+#, rust-format
+msgid "Retrieving online data ({completed}/{total})..."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:454
+#, rust-format
+msgid "Scan complete: no changes."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:453
+#, rust-format
+msgid "Scan complete: {changes}."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:449
+#, rust-format
+msgid "Scan partial: missing-file reconciliation skipped."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:446
+#, rust-format
+msgid "Scan partial: {changes}; missing-file reconciliation skipped."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:440
+#, rust-format
+msgid "Scan stopped."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:439
+#, rust-format
+msgid "Scan stopped: {changes}."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:309
+#, rust-format
+msgid "Scanning library..."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:623
+#, rust-format
+msgid "Some changes could not be mirrored to audio files. Sustain will retry."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:569
+#, rust-format
+msgid "Some empty folders could not be removed."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:619
+#, rust-format
+msgid "Some empty managed-library folders could not be removed."
 msgstr ""
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:27
@@ -81,6 +341,186 @@ msgid ""
 "listening statistics, and search."
 msgstr ""
 
+#: crates/app_runtime/src/notifications.rs:826
+#, rust-format
+msgid "Sync complete: {changes}."
+msgstr ""
+
+#. Translators: {copied} and {updated} are already-localized phrases
+#. such as "5 copied" / "3 updated"; keep the placeholders verbatim.
+#: crates/app_runtime/src/notifications.rs:797
+#, rust-format
+msgid "Sync stopped: {copied}, {updated}."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:766
+#, rust-format
+msgid "Syncing {label}…"
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:741
+#, rust-format
+msgid "That file is already attached to another library track."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:759
+#, rust-format
+msgid "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:732
+#, rust-format
+msgid "The downloaded audio could not safely replace this track."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:683
+#, rust-format
+msgid "The duplicate tracks could not be consolidated safely."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:697
+#, rust-format
+msgid "The files could not be added to the library."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:707
+#, rust-format
+msgid "The folder name is not valid."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:680
+#, rust-format
+msgid "The library could not be organized."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:692
+#, rust-format
+msgid "The library database could not be updated."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:700
+#, rust-format
+msgid "The music library is still loading."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:61
+#, rust-format
+msgid "The organized library path must be a folder."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:716
+#, rust-format
+msgid "The playlist could not be updated."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:718
+#, rust-format
+msgid "The playlist folder could not be updated."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:705
+#, rust-format
+msgid "The playlist name is not valid."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:738
+#, rust-format
+msgid "The replacement track file could not be used."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:677
+#, rust-format
+msgid "The selected folder could not be scanned."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:87
+#, rust-format
+msgid ""
+"The selected library folder cannot durably save managed directory changes."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:66
+#, rust-format
+msgid "The selected library folder cannot durably save managed files."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:81
+#, rust-format
+msgid ""
+"The selected library folder cannot publish Sustain's recovery journal "
+"atomically."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:84
+#, rust-format
+msgid ""
+"The selected library folder cannot safely protect Sustain's recovery journal "
+"from overwrite."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:72
+#, rust-format
+msgid ""
+"The selected library folder cannot safely refuse overwriting an existing "
+"managed file."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:75
+#, rust-format
+msgid "The selected library folder cannot safely remove managed pathnames."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:90
+#, rust-format
+msgid ""
+"The selected library folder could not remove Sustain's filesystem probe "
+"files."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:78
+#, rust-format
+msgid ""
+"The selected library folder did not preserve a managed file after a hard-"
+"link move."
+msgstr ""
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:69
+#, rust-format
+msgid ""
+"The selected library folder does not support the hard-link moves required by "
+"organized library mode."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:724
+#, rust-format
+msgid "The smart playlist could not be updated."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:710
+#, rust-format
+msgid "The smart playlist name is not valid."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:753
+#, rust-format
+msgid "The track could not be moved to trash."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:703
+#, rust-format
+msgid "The track metadata could not be updated."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:761
+#, rust-format
+msgid "This action is not available yet."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:751
+#, rust-format
+msgid "Track file is missing."
+msgstr ""
+
 #: data/io.github.open_sustain.sustain.metainfo.xml:36
 msgid ""
 "Two library modes: leave files in place, or keep the library organized on "
@@ -91,6 +531,162 @@ msgstr ""
 msgid "Up Next queue with Play Next and Add to Queue"
 msgstr ""
 
+#: crates/app_runtime/src/notifications.rs:783
+#, rust-format
+msgid "Writing device database…"
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:782
+#, rust-format
+msgid "Writing playlists…"
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:729
+#, rust-format
+msgid "YouTube audio replacement is not available."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:735
+#, rust-format
+msgid ""
+"YouTube replacement is available only for present tracks at or below 192 "
+"kbps."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:726
+#, rust-format
+msgid "Your settings could not be loaded."
+msgstr ""
+
+#: crates/app_runtime/src/notifications.rs:727
+#, rust-format
+msgid "Your settings could not be saved."
+msgstr ""
+
 #: data/io.github.open_sustain.sustain.desktop:9
 msgid "music;player;library;audio;"
 msgstr ""
+
+#. Translators: a terse change-count clause joined into a scan summary,
+#. e.g. "3 added"; refers to tracks added to the library.
+#: crates/app_runtime/src/notifications.rs:468
+#, rust-format
+msgid "{added} added"
+msgid_plural "{added} added"
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: a terse change-count clause, e.g. "5 copied"; tracks copied
+#. to the device before the sync was cancelled.
+#: crates/app_runtime/src/notifications.rs:834
+#, rust-format
+msgid "{copied} copied"
+msgid_plural "{copied} copied"
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: a terse change-count clause, e.g. "5 tracks added";
+#. tracks newly copied to the device.
+#: crates/app_runtime/src/notifications.rs:811
+#, rust-format
+msgid "{copied} track added"
+msgid_plural "{copied} tracks added"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:525
+#, rust-format
+msgid "{duplicates} duplicate skipped"
+msgid_plural "{duplicates} duplicates skipped"
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: a terse change-count clause, e.g. "1 failed"; files
+#. that could not be read.
+#: crates/app_runtime/src/notifications.rs:492
+#, rust-format
+msgid "{failed} failed"
+msgid_plural "{failed} failed"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:535
+#, rust-format
+msgid "{imported} track added, {skipped}."
+msgid_plural "{imported} tracks added, {skipped}."
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:517
+#, rust-format
+msgid "{imported} track added."
+msgid_plural "{imported} tracks added."
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: a terse change-count clause, e.g. "2 missing"; tracks
+#. no longer found on disk.
+#. Translators: a terse change-count clause, e.g. "0 missing"; tracks no
+#. longer found on disk.
+#: crates/app_runtime/src/notifications.rs:484
+#: crates/app_runtime/src/notifications.rs:613
+#, rust-format
+msgid "{missing} missing"
+msgid_plural "{missing} missing"
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: a terse change-count clause, e.g. "1 moved"; tracks
+#. relocated into the organized library.
+#: crates/app_runtime/src/notifications.rs:579
+#, rust-format
+msgid "{moved} moved"
+msgid_plural "{moved} moved"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/app_runtime/src/notifications.rs:600
+#, rust-format
+msgid "{organized} already organized"
+msgid_plural "{organized} already organized"
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: a terse change-count clause, e.g. "2 pending"; tracks not
+#. yet relocated when organization was cancelled.
+#: crates/app_runtime/src/notifications.rs:589
+#, rust-format
+msgid "{pending} pending"
+msgid_plural "{pending} pending"
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: a terse change-count clause, e.g. "2 removed"; tracks
+#. deleted from the device.
+#: crates/app_runtime/src/notifications.rs:822
+#, rust-format
+msgid "{removed} removed"
+msgid_plural "{removed} removed"
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: a terse phrase, e.g. "1 track skipped"; tracks that failed
+#. analysis or retrieval and were skipped.
+#: crates/app_runtime/src/notifications.rs:410
+#, rust-format
+msgid "{skipped} track skipped"
+msgid_plural "{skipped} tracks skipped"
+msgstr[0] ""
+msgstr[1] ""
+
+#. Translators: a terse change-count clause, e.g. "1 updated"; tracks
+#. whose metadata changed.
+#. Translators: a terse change-count clause, e.g. "3 updated"; tracks
+#. re-copied because they changed.
+#: crates/app_runtime/src/notifications.rs:476
+#: crates/app_runtime/src/notifications.rs:844
+#, rust-format
+msgid "{updated} updated"
+msgid_plural "{updated} updated"
+msgstr[0] ""
+msgstr[1] ""

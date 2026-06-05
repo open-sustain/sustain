@@ -30,6 +30,7 @@ sustain-artwork = { path = "../artwork" }
 sustain-settings = { path = "../settings" }
 sustain-device-sync = { path = "../device_sync" }
 sustain-domain = { path = "../domain" }
+sustain-i18n = { path = "../i18n" }
 sustain-library-store = { path = "../library_store" }
 sustain-metadata = { path = "../metadata" }
 sustain-metadata-remote = { path = "../metadata_remote" }

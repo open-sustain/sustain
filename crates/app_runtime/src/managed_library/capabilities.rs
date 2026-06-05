@@ -22,6 +22,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use sustain_i18n::gettext;
+
 use super::file_ops::{
     PRIVATE_DIRECTORY_MODE, PinnedFilePath, link_file_capability, open_directory_path,
     open_regular_file,
@@ -51,42 +53,42 @@ pub enum ManagedLibraryFilesystemError {
 }
 
 impl ManagedLibraryFilesystemError {
-    pub fn user_message(self) -> &'static str {
+    pub fn user_message(self) -> String {
         match self {
             Self::RootUnavailable => {
-                "Organized library mode needs an accessible, writable library folder."
+                gettext("Organized library mode needs an accessible, writable library folder.")
             }
-            Self::RootIsNotDirectory => "The organized library path must be a folder.",
-            Self::CreateProbeDirectoryFailed | Self::CreateProbeFileFailed => {
-                "Organized library mode needs permission to create files and folders in the selected library folder."
-            }
+            Self::RootIsNotDirectory => gettext("The organized library path must be a folder."),
+            Self::CreateProbeDirectoryFailed | Self::CreateProbeFileFailed => gettext(
+                "Organized library mode needs permission to create files and folders in the selected library folder.",
+            ),
             Self::WriteProbeFileFailed | Self::SyncProbeFileFailed => {
-                "The selected library folder cannot durably save managed files."
+                gettext("The selected library folder cannot durably save managed files.")
             }
-            Self::HardLinkFailed | Self::HardLinkIdentityMismatch => {
-                "The selected library folder does not support the hard-link moves required by organized library mode."
-            }
-            Self::HardLinkOverwriteProtectionFailed => {
-                "The selected library folder cannot safely refuse overwriting an existing managed file."
-            }
+            Self::HardLinkFailed | Self::HardLinkIdentityMismatch => gettext(
+                "The selected library folder does not support the hard-link moves required by organized library mode.",
+            ),
+            Self::HardLinkOverwriteProtectionFailed => gettext(
+                "The selected library folder cannot safely refuse overwriting an existing managed file.",
+            ),
             Self::RemoveProbeLinkFailed => {
-                "The selected library folder cannot safely remove managed pathnames."
+                gettext("The selected library folder cannot safely remove managed pathnames.")
             }
-            Self::ReadSurvivingLinkFailed => {
-                "The selected library folder did not preserve a managed file after a hard-link move."
-            }
-            Self::RenamePublicationFailed => {
-                "The selected library folder cannot publish Sustain's recovery journal atomically."
-            }
-            Self::RenameOverwriteProtectionFailed => {
-                "The selected library folder cannot safely protect Sustain's recovery journal from overwrite."
-            }
-            Self::SyncProbeDirectoryFailed => {
-                "The selected library folder cannot durably save managed directory changes."
-            }
-            Self::CleanupFailed => {
-                "The selected library folder could not remove Sustain's filesystem probe files."
-            }
+            Self::ReadSurvivingLinkFailed => gettext(
+                "The selected library folder did not preserve a managed file after a hard-link move.",
+            ),
+            Self::RenamePublicationFailed => gettext(
+                "The selected library folder cannot publish Sustain's recovery journal atomically.",
+            ),
+            Self::RenameOverwriteProtectionFailed => gettext(
+                "The selected library folder cannot safely protect Sustain's recovery journal from overwrite.",
+            ),
+            Self::SyncProbeDirectoryFailed => gettext(
+                "The selected library folder cannot durably save managed directory changes.",
+            ),
+            Self::CleanupFailed => gettext(
+                "The selected library folder could not remove Sustain's filesystem probe files.",
+            ),
         }
     }
 }

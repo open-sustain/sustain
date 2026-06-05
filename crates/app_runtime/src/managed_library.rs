@@ -143,7 +143,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::LibraryImport,
                 NotificationSeverity::Error,
-                notifications::runtime_error_text(&error).to_owned(),
+                notifications::runtime_error_text(&error),
             );
         }
     }
@@ -234,7 +234,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::LibraryConsolidation,
                 NotificationSeverity::Error,
-                notifications::runtime_error_text(&error).to_owned(),
+                notifications::runtime_error_text(&error),
             );
         }
     }
@@ -277,7 +277,7 @@ impl ApplicationRuntime {
         let ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(error) = error else {
             return false;
         };
-        let body = error.user_message().to_owned();
+        let body = error.user_message();
         if let Some(id) = self.managed_library_filesystem_notification_id {
             self.update_notification_body(id, body);
         } else {
@@ -302,7 +302,7 @@ impl ApplicationRuntime {
         self.push_ephemeral_notification(
             NotificationCategory::ManagedLibraryFilesystem,
             NotificationSeverity::Warning,
-            notifications::managed_library_cleanup_failed_text().to_owned(),
+            notifications::managed_library_cleanup_failed_text(),
         );
     }
 }

@@ -127,7 +127,7 @@ pub(super) fn build(
                 &command_controller_for_organization,
                 NotificationCategory::LibraryConsolidation,
                 NotificationSeverity::Warning,
-                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable).to_owned(),
+                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable),
             );
             return Propagation::Stop;
         }
@@ -235,7 +235,7 @@ pub(super) fn build(
                 &command_controller_for_scan,
                 NotificationCategory::LibraryScan,
                 NotificationSeverity::Warning,
-                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable).to_owned(),
+                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable),
             );
             return;
         }

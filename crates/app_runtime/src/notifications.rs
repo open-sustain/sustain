@@ -289,25 +289,40 @@ impl NotificationCenter {
 // can populate `Notification::body` at the same point it transitions
 // its task state. The widget renders the string raw, with no
 // case-by-case knowledge of what it means.
+//
+// Every string here is localized through `sustain_i18n`: static messages go
+// through `gettext`, interpolated ones through `tr_format!` over a
+// `gettext`/`ngettext` template, and count-dependent ones through `ngettext`
+// so each target language selects its own plural form. Because word order
+// varies across languages, a sentence that carries more than one independent
+// count renders each count as its own `ngettext` phrase and injects the
+// finished phrases into an outer template, rather than gluing fragments
+// together positionally.
+
+use sustain_i18n::{gettext, ngettext, tr_format};
 
 use crate::{
     ApplicationRuntimeError, LibraryConsolidationSummary, LibraryImportSummary, LibraryScanSummary,
 };
 
 pub fn library_scan_running_text() -> String {
-    "Scanning library...".to_owned()
+    gettext("Scanning library...")
 }
 
 pub fn library_import_running_text() -> String {
-    "Adding tracks...".to_owned()
+    gettext("Adding tracks...")
 }
 
 pub fn library_import_progress_text(processed: usize, total: usize) -> String {
-    format!("Adding tracks ({processed}/{total})...")
+    tr_format!(
+        gettext("Adding tracks ({processed}/{total})..."),
+        processed = processed,
+        total = total,
+    )
 }
 
 pub fn library_consolidation_running_text() -> String {
-    "Organizing library...".to_owned()
+    gettext("Organizing library...")
 }
 
 pub fn analysis_background_running_text(processed: u32, total: u32) -> String {
@@ -315,23 +330,35 @@ pub fn analysis_background_running_text(processed: u32, total: u32) -> String {
     // reads the same way as every other background task (device sync,
     // online retrieval). The scheduler snapshots `total` once when the run
     // starts so the denominator stays meaningful while its queue refills.
-    format!("Analyzing tracks ({processed}/{total})...")
+    tr_format!(
+        gettext("Analyzing tracks ({processed}/{total})..."),
+        processed = processed,
+        total = total,
+    )
 }
 
 pub fn analysis_background_outcome_text(completed: u32, failed: u32) -> String {
     if failed == 0 {
-        format!(
-            "Analyzed {} {}.",
-            completed,
-            pluralize(completed as usize, "track", "tracks"),
+        tr_format!(
+            ngettext(
+                "Analyzed {completed} track.",
+                "Analyzed {completed} tracks.",
+                completed,
+            ),
+            completed = completed,
         )
     } else {
-        format!(
-            "Analyzed {} {}, {} {} skipped.",
-            completed,
-            pluralize(completed as usize, "track", "tracks"),
-            failed,
-            pluralize(failed as usize, "track", "tracks"),
+        let skipped = skipped_tracks_phrase(failed);
+        tr_format!(
+            // Translators: {skipped} is an already-localized phrase such as
+            // "1 track skipped"; keep the placeholder verbatim.
+            ngettext(
+                "Analyzed {completed} track, {skipped}.",
+                "Analyzed {completed} tracks, {skipped}.",
+                completed,
+            ),
+            completed = completed,
+            skipped = skipped,
         )
     }
 }
@@ -340,33 +367,67 @@ pub fn online_background_running_text(completed: u32, remaining: u32) -> String 
     // Mirror analysis: progress is always completed/total for a uniform
     // read across the notification lane.
     let total = completed.saturating_add(remaining);
-    format!("Retrieving online data ({completed}/{total})...")
+    tr_format!(
+        gettext("Retrieving online data ({completed}/{total})..."),
+        completed = completed,
+        total = total,
+    )
 }
 
 pub fn online_background_outcome_text(completed: u32, failed: u32) -> String {
     if failed == 0 {
-        format!(
-            "Retrieved online data for {} {}.",
-            completed,
-            pluralize(completed as usize, "track", "tracks"),
+        tr_format!(
+            ngettext(
+                "Retrieved online data for {completed} track.",
+                "Retrieved online data for {completed} tracks.",
+                completed,
+            ),
+            completed = completed,
         )
     } else {
-        format!(
-            "Retrieved online data for {} {}, {} {} skipped.",
-            completed,
-            pluralize(completed as usize, "track", "tracks"),
-            failed,
-            pluralize(failed as usize, "track", "tracks"),
+        let skipped = skipped_tracks_phrase(failed);
+        tr_format!(
+            // Translators: {skipped} is an already-localized phrase such as
+            // "1 track skipped"; keep the placeholder verbatim.
+            ngettext(
+                "Retrieved online data for {completed} track, {skipped}.",
+                "Retrieved online data for {completed} tracks, {skipped}.",
+                completed,
+            ),
+            completed = completed,
+            skipped = skipped,
         )
     }
 }
 
+/// The "N tracks skipped" sub-phrase shared by the analysis and online-retrieval
+/// failure summaries. Rendered on its own so its plural form is correct
+/// independently of the surrounding sentence's primary count.
+fn skipped_tracks_phrase(skipped: u32) -> String {
+    tr_format!(
+        // Translators: a terse phrase, e.g. "1 track skipped"; tracks that failed
+        // analysis or retrieval and were skipped.
+        ngettext(
+            "{skipped} track skipped",
+            "{skipped} tracks skipped",
+            skipped
+        ),
+        skipped = skipped,
+    )
+}
+
 pub fn analysis_background_persistence_error_text(detail: &str) -> String {
-    format!("Analysis paused: the library database rejected a write ({detail}).")
+    tr_format!(
+        gettext("Analysis paused: the library database rejected a write ({detail})."),
+        detail = detail,
+    )
 }
 
 pub fn online_background_persistence_error_text(detail: &str) -> String {
-    format!("Online retrieval paused: the library database rejected a write ({detail}).")
+    tr_format!(
+        gettext("Online retrieval paused: the library database rejected a write ({detail})."),
+        detail = detail,
+    )
 }
 
 pub fn library_scan_outcome_text(summary: &LibraryScanSummary) -> String {
@@ -379,49 +440,91 @@ pub fn library_scan_outcome_text(summary: &LibraryScanSummary) -> String {
         // A cancelled scan skips the missing-file sweep, so `changes`
         // here only ever carries additions/updates/failures.
         return match changes {
-            Some(changes) => format!("Scan stopped: {changes}."),
-            None => "Scan stopped.".to_owned(),
+            Some(changes) => tr_format!(gettext("Scan stopped: {changes}."), changes = changes),
+            None => gettext("Scan stopped."),
         };
     }
     if summary.missing_reconciliation_skipped {
         return match changes {
-            Some(changes) => {
-                format!("Scan partial: {changes}; missing-file reconciliation skipped.")
-            }
-            None => "Scan partial: missing-file reconciliation skipped.".to_owned(),
+            Some(changes) => tr_format!(
+                gettext("Scan partial: {changes}; missing-file reconciliation skipped."),
+                changes = changes,
+            ),
+            None => gettext("Scan partial: missing-file reconciliation skipped."),
         };
     }
     match changes {
-        Some(changes) => format!("Scan complete: {changes}."),
-        None => "Scan complete: no changes.".to_owned(),
+        Some(changes) => tr_format!(gettext("Scan complete: {changes}."), changes = changes),
+        None => gettext("Scan complete: no changes."),
     }
 }
 
 /// Joins the non-zero change counts ("3 added, 1 updated, 2 missing,
 /// 1 failed") for the scan outcome notification, or `None` when the scan
-/// changed nothing.
+/// changed nothing. Each clause is pluralized on its own count so every
+/// target language picks the right form.
 fn scan_change_clauses(summary: &LibraryScanSummary) -> Option<String> {
     let mut clauses: Vec<String> = Vec::new();
     if summary.added_tracks > 0 {
-        clauses.push(format!("{} added", summary.added_tracks));
+        clauses.push(tr_format!(
+            // Translators: a terse change-count clause joined into a scan summary,
+            // e.g. "3 added"; refers to tracks added to the library.
+            ngettext(
+                "{added} added",
+                "{added} added",
+                summary.added_tracks as u32
+            ),
+            added = summary.added_tracks,
+        ));
     }
     if summary.updated_tracks > 0 {
-        clauses.push(format!("{} updated", summary.updated_tracks));
+        clauses.push(tr_format!(
+            // Translators: a terse change-count clause, e.g. "1 updated"; tracks
+            // whose metadata changed.
+            ngettext(
+                "{updated} updated",
+                "{updated} updated",
+                summary.updated_tracks as u32
+            ),
+            updated = summary.updated_tracks,
+        ));
     }
     if summary.missing_tracks > 0 {
-        clauses.push(format!("{} missing", summary.missing_tracks));
+        clauses.push(tr_format!(
+            // Translators: a terse change-count clause, e.g. "2 missing"; tracks
+            // no longer found on disk.
+            ngettext(
+                "{missing} missing",
+                "{missing} missing",
+                summary.missing_tracks as u32
+            ),
+            missing = summary.missing_tracks,
+        ));
     }
     if summary.failed_files > 0 {
-        clauses.push(format!("{} failed", summary.failed_files));
+        clauses.push(tr_format!(
+            // Translators: a terse change-count clause, e.g. "1 failed"; files
+            // that could not be read.
+            ngettext(
+                "{failed} failed",
+                "{failed} failed",
+                summary.failed_files as u32
+            ),
+            failed = summary.failed_files,
+        ));
     }
     (!clauses.is_empty()).then(|| clauses.join(", "))
 }
 
 pub fn library_import_outcome_text(summary: &LibraryImportSummary) -> String {
     if summary.cancelled {
-        return format!(
-            "Import stopped: {} added before cancel.",
-            summary.imported_tracks
+        return tr_format!(
+            ngettext(
+                "Import stopped: {imported} added before cancel.",
+                "Import stopped: {imported} added before cancel.",
+                summary.imported_tracks as u32,
+            ),
+            imported = summary.imported_tracks,
         );
     }
     match (
@@ -429,39 +532,119 @@ pub fn library_import_outcome_text(summary: &LibraryImportSummary) -> String {
         summary.duplicate_files,
         summary.discovered_files,
     ) {
-        (0, 0, 0) => "No audio files were found.".to_owned(),
-        (imported, 0, _) => format!("{imported} tracks added."),
+        (0, 0, 0) => gettext("No audio files were found."),
+        (imported, 0, _) => tr_format!(
+            ngettext(
+                "{imported} track added.",
+                "{imported} tracks added.",
+                imported as u32
+            ),
+            imported = imported,
+        ),
         (imported, duplicates, _) => {
-            format!("{imported} tracks added, {duplicates} duplicates skipped.")
+            let skipped = tr_format!(
+                // Translators: a terse change-count clause, e.g. "2 duplicates
+                // skipped"; files skipped because they were already in the library.
+                ngettext(
+                    "{duplicates} duplicate skipped",
+                    "{duplicates} duplicates skipped",
+                    duplicates as u32,
+                ),
+                duplicates = duplicates,
+            );
+            tr_format!(
+                // Translators: {skipped} is an already-localized phrase such as
+                // "2 duplicates skipped"; keep the placeholder verbatim.
+                ngettext(
+                    "{imported} track added, {skipped}.",
+                    "{imported} tracks added, {skipped}.",
+                    imported as u32,
+                ),
+                imported = imported,
+                skipped = skipped,
+            )
         }
     }
 }
 
 pub fn library_consolidation_outcome_text(summary: &LibraryConsolidationSummary) -> String {
     let mut outcome = if summary.cancelled {
-        format!(
-            "Library organization stopped: {} moved, {} pending.",
-            summary.moved_tracks,
-            summary.planned_tracks.saturating_sub(summary.moved_tracks)
+        let pending = summary.planned_tracks.saturating_sub(summary.moved_tracks);
+        tr_format!(
+            // Translators: {moved} and {pending} are already-localized phrases
+            // such as "1 moved" / "2 pending"; keep the placeholders verbatim.
+            gettext("Library organization stopped: {moved}, {pending}."),
+            moved = moved_tracks_phrase(summary.moved_tracks),
+            pending = pending_tracks_phrase(pending),
         )
     } else {
-        format!(
-            "Library organized: {} moved, {} already organized, {} missing.",
-            summary.moved_tracks, summary.already_organized_tracks, summary.missing_tracks
+        tr_format!(
+            // Translators: {moved}, {organized} and {missing} are
+            // already-localized phrases such as "1 moved" / "0 already
+            // organized" / "0 missing"; keep the placeholders verbatim.
+            gettext("Library organized: {moved}, {organized}, {missing}."),
+            moved = moved_tracks_phrase(summary.moved_tracks),
+            organized = already_organized_tracks_phrase(summary.already_organized_tracks),
+            missing = missing_tracks_phrase(summary.missing_tracks),
         )
     };
     if summary.empty_directory_cleanup_failed {
-        outcome.push_str(" Some empty folders could not be removed.");
+        outcome.push(' ');
+        outcome.push_str(&gettext("Some empty folders could not be removed."));
     }
     outcome
 }
 
-pub fn managed_library_cleanup_failed_text() -> &'static str {
-    "Some empty managed-library folders could not be removed."
+/// "N moved" sub-phrase for library-organization summaries.
+fn moved_tracks_phrase(moved: usize) -> String {
+    tr_format!(
+        // Translators: a terse change-count clause, e.g. "1 moved"; tracks
+        // relocated into the organized library.
+        ngettext("{moved} moved", "{moved} moved", moved as u32),
+        moved = moved,
+    )
 }
 
-pub fn metadata_write_retry_text() -> &'static str {
-    "Some changes could not be mirrored to audio files. Sustain will retry."
+/// "N pending" sub-phrase for a cancelled library-organization run.
+fn pending_tracks_phrase(pending: usize) -> String {
+    tr_format!(
+        // Translators: a terse change-count clause, e.g. "2 pending"; tracks not
+        // yet relocated when organization was cancelled.
+        ngettext("{pending} pending", "{pending} pending", pending as u32),
+        pending = pending,
+    )
+}
+
+/// "N already organized" sub-phrase for library-organization summaries.
+fn already_organized_tracks_phrase(organized: usize) -> String {
+    tr_format!(
+        // Translators: a terse change-count clause, e.g. "0 already organized";
+        // tracks that were already in their managed location.
+        ngettext(
+            "{organized} already organized",
+            "{organized} already organized",
+            organized as u32,
+        ),
+        organized = organized,
+    )
+}
+
+/// "N missing" sub-phrase shared by scan and organization summaries.
+fn missing_tracks_phrase(missing: usize) -> String {
+    tr_format!(
+        // Translators: a terse change-count clause, e.g. "0 missing"; tracks no
+        // longer found on disk.
+        ngettext("{missing} missing", "{missing} missing", missing as u32),
+        missing = missing,
+    )
+}
+
+pub fn managed_library_cleanup_failed_text() -> String {
+    gettext("Some empty managed-library folders could not be removed.")
+}
+
+pub fn metadata_write_retry_text() -> String {
+    gettext("Some changes could not be mirrored to audio files. Sustain will retry.")
 }
 
 /// Outcome string emitted after the user changes their library path.
@@ -474,172 +657,238 @@ pub fn library_path_change_outcome_text(
     total: usize,
 ) -> String {
     if total == 0 {
-        return "Library folder updated.".to_owned();
+        return gettext("Library folder updated.");
     }
     if unresolved > 0 {
-        return format!(
-            "Library folder updated: {} of {} {} not found; {} could not be checked.",
-            newly_missing,
-            total,
-            pluralize(total, "track", "tracks"),
-            unresolved,
+        return tr_format!(
+            ngettext(
+                "Library folder updated: {missing} of {total} track not found; {unresolved} could not be checked.",
+                "Library folder updated: {missing} of {total} tracks not found; {unresolved} could not be checked.",
+                total as u32,
+            ),
+            missing = newly_missing,
+            total = total,
+            unresolved = unresolved,
         );
     }
     if newly_missing == 0 {
-        return format!(
-            "Library folder updated: all {} {} found.",
-            total,
-            pluralize(total, "track", "tracks"),
+        return tr_format!(
+            ngettext(
+                "Library folder updated: all {total} track found.",
+                "Library folder updated: all {total} tracks found.",
+                total as u32,
+            ),
+            total = total,
         );
     }
-    format!(
-        "Library folder updated: {} of {} {} not found at the new location.",
-        newly_missing,
-        total,
-        pluralize(total, "track", "tracks"),
+    tr_format!(
+        ngettext(
+            "Library folder updated: {missing} of {total} track not found at the new location.",
+            "Library folder updated: {missing} of {total} tracks not found at the new location.",
+            total as u32,
+        ),
+        missing = newly_missing,
+        total = total,
     )
 }
 
-pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
+pub fn runtime_error_text(error: &ApplicationRuntimeError) -> String {
     match error {
         ApplicationRuntimeError::BackgroundTaskRunning => {
-            "Another background task is already running."
+            gettext("Another background task is already running.")
         }
-        ApplicationRuntimeError::LibraryScanFailed => "The selected folder could not be scanned.",
+        ApplicationRuntimeError::LibraryScanFailed => {
+            gettext("The selected folder could not be scanned.")
+        }
         ApplicationRuntimeError::LibraryConsolidationFailed => {
-            "The library could not be organized."
+            gettext("The library could not be organized.")
         }
         ApplicationRuntimeError::DuplicateConsolidationFailed => {
-            "The duplicate tracks could not be consolidated safely."
+            gettext("The duplicate tracks could not be consolidated safely.")
         }
-        ApplicationRuntimeError::DuplicateConsolidationSourceMissing => {
-            "One or more of the selected files is missing from disk. Restore or remove it, then consolidate again."
-        }
+        ApplicationRuntimeError::DuplicateConsolidationSourceMissing => gettext(
+            "One or more of the selected files is missing from disk. Restore or remove it, then consolidate again.",
+        ),
         ApplicationRuntimeError::LibraryServicesUnavailable => {
-            "Library scanning is not available in this build."
+            gettext("Library scanning is not available in this build.")
         }
-        ApplicationRuntimeError::LibraryStoreFailed => "The library database could not be updated.",
-        ApplicationRuntimeError::LibraryPathUnavailable => "Choose a library folder first.",
+        ApplicationRuntimeError::LibraryStoreFailed => {
+            gettext("The library database could not be updated.")
+        }
+        ApplicationRuntimeError::LibraryPathUnavailable => {
+            gettext("Choose a library folder first.")
+        }
         ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(error) => error.user_message(),
         ApplicationRuntimeError::LibraryImportFailed => {
-            "The files could not be added to the library."
+            gettext("The files could not be added to the library.")
         }
-        ApplicationRuntimeError::LibraryHydrationPending => "The music library is still loading.",
-        ApplicationRuntimeError::MetadataWriteFailed => "The track metadata could not be updated.",
-        ApplicationRuntimeError::InvalidPlaylistName => "The playlist name is not valid.",
-        ApplicationRuntimeError::InvalidPlaylistFolderName => "The folder name is not valid.",
+        ApplicationRuntimeError::LibraryHydrationPending => {
+            gettext("The music library is still loading.")
+        }
+        ApplicationRuntimeError::MetadataWriteFailed => {
+            gettext("The track metadata could not be updated.")
+        }
+        ApplicationRuntimeError::InvalidPlaylistName => gettext("The playlist name is not valid."),
+        ApplicationRuntimeError::InvalidPlaylistFolderName => {
+            gettext("The folder name is not valid.")
+        }
         ApplicationRuntimeError::InvalidSmartPlaylistName => {
-            "The smart playlist name is not valid."
+            gettext("The smart playlist name is not valid.")
         }
         ApplicationRuntimeError::InvalidSmartPlaylistRules => {
-            "A smart playlist needs at least one rule."
+            gettext("A smart playlist needs at least one rule.")
         }
         ApplicationRuntimeError::PlaylistEntryNotFound
-        | ApplicationRuntimeError::PlaylistNotFound => "The playlist could not be updated.",
+        | ApplicationRuntimeError::PlaylistNotFound => {
+            gettext("The playlist could not be updated.")
+        }
         ApplicationRuntimeError::PlaylistFolderNotFound => {
-            "The playlist folder could not be updated."
+            gettext("The playlist folder could not be updated.")
         }
         ApplicationRuntimeError::PlaylistFolderWouldCycle => {
-            "A folder cannot be moved inside itself."
+            gettext("A folder cannot be moved inside itself.")
         }
         ApplicationRuntimeError::SmartPlaylistNotFound => {
-            "The smart playlist could not be updated."
+            gettext("The smart playlist could not be updated.")
         }
-        ApplicationRuntimeError::SettingsLoadFailed => "Your settings could not be loaded.",
-        ApplicationRuntimeError::SettingsSaveFailed => "Your settings could not be saved.",
+        ApplicationRuntimeError::SettingsLoadFailed => {
+            gettext("Your settings could not be loaded.")
+        }
+        ApplicationRuntimeError::SettingsSaveFailed => gettext("Your settings could not be saved."),
         ApplicationRuntimeError::YoutubeAudioDownloadUnavailable => {
-            "YouTube audio replacement is not available."
+            gettext("YouTube audio replacement is not available.")
         }
         ApplicationRuntimeError::YoutubeAudioReplacementFailed => {
-            "The downloaded audio could not safely replace this track."
+            gettext("The downloaded audio could not safely replace this track.")
         }
-        ApplicationRuntimeError::YoutubeAudioReplacementNotEligible => {
-            "YouTube replacement is available only for present tracks at or below 192 kbps."
-        }
+        ApplicationRuntimeError::YoutubeAudioReplacementNotEligible => gettext(
+            "YouTube replacement is available only for present tracks at or below 192 kbps.",
+        ),
         ApplicationRuntimeError::TrackRelocationFailed => {
-            "The replacement track file could not be used."
+            gettext("The replacement track file could not be used.")
         }
         ApplicationRuntimeError::TrackReplacementAlreadyInLibrary => {
-            "That file is already attached to another library track."
+            gettext("That file is already attached to another library track.")
         }
         ApplicationRuntimeError::TrackReplacementOutsideLibrary => {
-            "Choose a replacement inside the configured library folder."
+            gettext("Choose a replacement inside the configured library folder.")
         }
-        ApplicationRuntimeError::TrackReplacementUnsupported => "Choose a supported audio file.",
+        ApplicationRuntimeError::TrackReplacementUnsupported => {
+            gettext("Choose a supported audio file.")
+        }
         ApplicationRuntimeError::PlaybackFailed
-        | ApplicationRuntimeError::PlaybackServiceUnavailable => "Playback is not available.",
-        ApplicationRuntimeError::TrackUnavailable => "Track file is missing.",
-        ApplicationRuntimeError::TrackTrashFailed => "The track could not be moved to trash.",
+        | ApplicationRuntimeError::PlaybackServiceUnavailable => {
+            gettext("Playback is not available.")
+        }
+        ApplicationRuntimeError::TrackUnavailable => gettext("Track file is missing."),
+        ApplicationRuntimeError::TrackTrashFailed => {
+            gettext("The track could not be moved to trash.")
+        }
         ApplicationRuntimeError::ArtworkFetchingUnavailable => {
-            "Remote artwork retrieval is not available in this build."
+            gettext("Remote artwork retrieval is not available in this build.")
         }
         ApplicationRuntimeError::ArtworkRejected => {
-            "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
+            gettext("The artwork is unsupported, corrupt, or exceeds Sustain's size limits.")
         }
-        ApplicationRuntimeError::UnsupportedCommand(_) => "This action is not available yet.",
+        ApplicationRuntimeError::UnsupportedCommand(_) => {
+            gettext("This action is not available yet.")
+        }
     }
 }
 
 pub fn device_sync_running_text(label: &str) -> String {
-    format!("Syncing {label}…")
+    tr_format!(gettext("Syncing {label}…"), label = label)
 }
 
 pub fn device_sync_progress_text(progress: sustain_device_sync::SyncProgress) -> String {
     use sustain_device_sync::SyncStage;
     match progress.stage {
-        SyncStage::Preparing => {
-            format!(
-                "Preparing tracks ({}/{})…",
-                progress.completed, progress.total
-            )
-        }
-        SyncStage::Copying => {
-            format!(
-                "Copying tracks ({}/{})…",
-                progress.completed, progress.total
-            )
-        }
-        SyncStage::WritingPlaylists => "Writing playlists…".to_owned(),
-        SyncStage::WritingDatabase => "Writing device database…".to_owned(),
-        SyncStage::Removing => {
-            format!(
-                "Removing tracks ({}/{})…",
-                progress.completed, progress.total
-            )
-        }
+        SyncStage::Preparing => tr_format!(
+            gettext("Preparing tracks ({completed}/{total})…"),
+            completed = progress.completed,
+            total = progress.total,
+        ),
+        SyncStage::Copying => tr_format!(
+            gettext("Copying tracks ({completed}/{total})…"),
+            completed = progress.completed,
+            total = progress.total,
+        ),
+        SyncStage::WritingPlaylists => gettext("Writing playlists…"),
+        SyncStage::WritingDatabase => gettext("Writing device database…"),
+        SyncStage::Removing => tr_format!(
+            gettext("Removing tracks ({completed}/{total})…"),
+            completed = progress.completed,
+            total = progress.total,
+        ),
     }
 }
 
 pub fn device_sync_outcome_text(outcome: &sustain_device_sync::SyncOutcome) -> String {
     if outcome.cancelled {
-        return format!(
-            "Sync stopped: {} copied, {} updated.",
-            outcome.copied, outcome.updated
+        return tr_format!(
+            // Translators: {copied} and {updated} are already-localized phrases
+            // such as "5 copied" / "3 updated"; keep the placeholders verbatim.
+            gettext("Sync stopped: {copied}, {updated}."),
+            copied = copied_tracks_phrase(outcome.copied),
+            updated = updated_tracks_phrase(outcome.updated),
         );
     }
     let changed = outcome.copied + outcome.updated;
     if changed == 0 && outcome.removed == 0 {
-        return "Device already up to date.".to_owned();
+        return gettext("Device already up to date.");
     }
     let mut parts = Vec::new();
     if outcome.copied > 0 {
-        parts.push(format!(
-            "{} {} added",
-            outcome.copied,
-            pluralize(outcome.copied, "track", "tracks")
+        parts.push(tr_format!(
+            // Translators: a terse change-count clause, e.g. "5 tracks added";
+            // tracks newly copied to the device.
+            ngettext(
+                "{copied} track added",
+                "{copied} tracks added",
+                outcome.copied as u32
+            ),
+            copied = outcome.copied,
         ));
     }
     if outcome.updated > 0 {
-        parts.push(format!("{} updated", outcome.updated));
+        parts.push(updated_tracks_phrase(outcome.updated));
     }
     if outcome.removed > 0 {
-        parts.push(format!("{} removed", outcome.removed));
+        parts.push(tr_format!(
+            // Translators: a terse change-count clause, e.g. "2 removed"; tracks
+            // deleted from the device.
+            ngettext(
+                "{removed} removed",
+                "{removed} removed",
+                outcome.removed as u32
+            ),
+            removed = outcome.removed,
+        ));
     }
-    format!("Sync complete: {}.", parts.join(", "))
+    tr_format!(
+        gettext("Sync complete: {changes}."),
+        changes = parts.join(", ")
+    )
 }
 
-fn pluralize(count: usize, singular: &'static str, plural: &'static str) -> &'static str {
-    if count == 1 { singular } else { plural }
+/// "N copied" sub-phrase for a cancelled device sync.
+fn copied_tracks_phrase(copied: usize) -> String {
+    tr_format!(
+        // Translators: a terse change-count clause, e.g. "5 copied"; tracks copied
+        // to the device before the sync was cancelled.
+        ngettext("{copied} copied", "{copied} copied", copied as u32),
+        copied = copied,
+    )
+}
+
+/// "N updated" sub-phrase shared by the device-sync summaries.
+fn updated_tracks_phrase(updated: usize) -> String {
+    tr_format!(
+        // Translators: a terse change-count clause, e.g. "3 updated"; tracks
+        // re-copied because they changed.
+        ngettext("{updated} updated", "{updated} updated", updated as u32),
+        updated = updated,
+    )
 }
 
 #[cfg(test)]

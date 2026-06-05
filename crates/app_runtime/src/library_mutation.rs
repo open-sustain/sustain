@@ -91,7 +91,7 @@ impl ApplicationRuntime {
                     self.push_ephemeral_notification(
                         crate::NotificationCategory::Command,
                         crate::NotificationSeverity::Error,
-                        crate::runtime_error_text(&error).to_owned(),
+                        crate::runtime_error_text(&error),
                     );
                 }
             }

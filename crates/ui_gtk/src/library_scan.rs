@@ -33,7 +33,7 @@ pub(crate) fn library_scan_requested_callback(
                     runtime.push_ephemeral_notification(
                         NotificationCategory::LibraryScan,
                         NotificationSeverity::Error,
-                        runtime_error_text(&error).to_owned(),
+                        runtime_error_text(&error),
                     );
                     return Err(error);
                 }

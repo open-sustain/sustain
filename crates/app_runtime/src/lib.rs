@@ -1102,7 +1102,7 @@ impl ApplicationRuntime {
         let id = self.push_persistent_notification(
             NotificationCategory::MetadataWrite,
             NotificationSeverity::Error,
-            notifications::metadata_write_retry_text().to_owned(),
+            notifications::metadata_write_retry_text(),
             false,
         );
         self.metadata_write_notification_id = Some(id);
@@ -2092,7 +2092,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::Settings,
                 NotificationSeverity::Warning,
-                runtime_error_text(&ApplicationRuntimeError::SettingsSaveFailed).to_owned(),
+                runtime_error_text(&ApplicationRuntimeError::SettingsSaveFailed),
             );
             return Err(ApplicationRuntimeError::SettingsSaveFailed);
         }

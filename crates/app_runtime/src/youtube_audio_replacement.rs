@@ -169,7 +169,7 @@ impl ApplicationRuntime {
                 self.finish_youtube_audio_replacement(
                     result.track_id,
                     NotificationSeverity::Error,
-                    crate::runtime_error_text(&error).to_owned(),
+                    crate::runtime_error_text(&error),
                 );
             }
         }

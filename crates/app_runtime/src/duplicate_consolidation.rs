@@ -163,7 +163,7 @@ impl ApplicationRuntime {
                     self.push_ephemeral_notification(
                         NotificationCategory::DuplicateConsolidation,
                         NotificationSeverity::Error,
-                        runtime_error_text(&ApplicationRuntimeError::LibraryStoreFailed).to_owned(),
+                        runtime_error_text(&ApplicationRuntimeError::LibraryStoreFailed),
                     );
                     return;
                 };
@@ -199,7 +199,7 @@ impl ApplicationRuntime {
                 self.push_ephemeral_notification(
                     NotificationCategory::DuplicateConsolidation,
                     NotificationSeverity::Error,
-                    runtime_error_text(&error).to_owned(),
+                    runtime_error_text(&error),
                 );
             }
         }

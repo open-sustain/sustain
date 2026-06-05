@@ -109,10 +109,7 @@ impl UiCommandController {
             // succeeds. Do not stack a transient command error above it.
             return;
         }
-        self.report_command_message(
-            NotificationSeverity::Error,
-            runtime_error_text(error).to_owned(),
-        );
+        self.report_command_message(NotificationSeverity::Error, runtime_error_text(error));
     }
 
     fn report_command_message(&self, severity: NotificationSeverity, body: String) {

@@ -18,18 +18,19 @@
 //! `gettext`, `ngettext`, `pgettext`, and `npgettext` at the call site. Import
 //! them by name and call them unqualified; do not write `sustain_i18n::gettext`
 //! or the extractor will silently miss the string. A `gettext`/`ngettext` call
-//! nested inside `formatx!` is still extracted, so the runtime-formatting idiom
-//! is:
+//! nested inside a macro is still extracted, so interpolated messages go through
+//! the [`tr_format!`] macro: it formats a `gettext`/`ngettext` template with
+//! named placeholders and panics only on a placeholder mismatch that
+//! `cargo xtask i18n-check` proves cannot occur in a committed catalog.
 //!
 //! ```no_run
-//! use sustain_i18n::{formatx, ngettext};
+//! use sustain_i18n::{ngettext, tr_format};
 //!
 //! let count: u32 = 3;
-//! let text = formatx!(
+//! let text = tr_format!(
 //!     ngettext("{count} song imported", "{count} songs imported", count),
 //!     count = count,
-//! )
-//! .expect("gettext catalogs are validated by `cargo xtask i18n-check`");
+//! );
 //! # let _ = text;
 //! ```
 //!
@@ -55,6 +56,43 @@ use gettextrs::LocaleCategory;
 // source and can extract their message ids.
 pub use formatx::formatx;
 pub use gettextrs::{gettext, ngettext, npgettext, pgettext};
+
+/// Format a localized template, substituting named placeholders, and panic if
+/// substitution fails.
+///
+/// The first argument is a `gettext` / `ngettext` (etc.) call, kept literal so
+/// `xgettext` extracts its message id; the remaining `name = value` arguments
+/// bind the template's `{name}` placeholders exactly as [`formatx!`] expects.
+///
+/// `cargo xtask i18n-check` validates that every committed catalog's
+/// placeholders match the English template, so the only way the substitution
+/// can fail is a programming error in this repository — a binding that does not
+/// match the template — which surfaces the first time the line runs in a test or
+/// in development, never in a shipped translation. The panic is therefore an
+/// invariant assertion, not a runtime error path, which is why this is a thin
+/// wrapper over `formatx!(…).expect(…)` rather than a fallible API.
+///
+/// ```no_run
+/// use sustain_i18n::{ngettext, tr_format};
+///
+/// let count: u32 = 3;
+/// let text = tr_format!(
+///     ngettext("{count} song imported", "{count} songs imported", count),
+///     count = count,
+/// );
+/// # let _ = text;
+/// ```
+#[macro_export]
+macro_rules! tr_format {
+    ($template:expr $(,)?) => {
+        $crate::formatx!($template)
+            .expect("gettext catalog placeholders are validated by `cargo xtask i18n-check`")
+    };
+    ($template:expr, $($arg:tt)+) => {
+        $crate::formatx!($template, $($arg)+)
+            .expect("gettext catalog placeholders are validated by `cargo xtask i18n-check`")
+    };
+}
 
 /// The gettext text domain. Matches the basename of the installed catalogs at
 /// `<locale dir>/<lang>/LC_MESSAGES/sustain.mo`.
