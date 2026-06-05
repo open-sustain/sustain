@@ -278,6 +278,53 @@ h2 { font-size: clamp(1.7rem, 3.5vw, 2.3rem); margin: 0 0 0.4rem; }
   box-shadow: 0 0 0 1px var(--accent) inset;
 }
 
+/* ───────────────── What you don't get ───────────────── */
+.limit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+}
+.limit {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.3rem 1.4rem;
+}
+.limit-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin: 0 0 0.45rem;
+}
+.limit-head h3 { margin: 0; font-size: 1.12rem; }
+.limit p { margin: 0; color: var(--muted); font-size: 0.98rem; }
+
+/* Status chip: neutral by default (a "maybe"); accent = planned, red = never. */
+.tag {
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface-2);
+}
+.tag--planned {
+  color: var(--accent-2);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.tag--no {
+  color: var(--nope);
+  border-color: color-mix(in srgb, var(--nope) 45%, var(--border));
+  background: color-mix(in srgb, var(--nope) 12%, transparent);
+}
+
 /* ───────────────── Screenshots ───────────────── */
 .shot { margin: 0 0 1.6rem; }
 .shot img {

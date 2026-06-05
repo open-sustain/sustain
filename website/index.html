@@ -7,12 +7,26 @@
   <title>Sustain (iTunes for Linux)</title>
   <meta name="description" content="A free, open-source iTunes-style music library and player for Linux. Manage, rate, search and play your local music, no ads, no tracking, no account, no subscription. Native GTK4." />
 
-  <!-- Social preview -->
+  <!-- Social preview (Open Graph + Twitter/X).
+       og:image and og:url MUST be absolute URLs — crawlers (Facebook, X,
+       LinkedIn, Slack) reject relative paths, which is why no preview rendered.
+       If a custom domain is ever set (see website/README.md), update the base
+       URL on these five absolute tags. -->
   <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Sustain" />
+  <meta property="og:url" content="https://open-sustain.github.io/sustain/" />
   <meta property="og:title" content="Sustain (iTunes for Linux)" />
-  <meta property="og:description" content="The dense, fast, iTunes-style music library you wanted, rebuilt native for Linux. Free and open source. No ads, no tracking, no catch." />
-  <meta property="og:image" content="assets/screenshot-light-songs.png" />
+  <meta property="og:description" content="The dense, fast, iTunes-style music library you wanted, rebuilt native for Linux. Free and open source." />
+  <meta property="og:image" content="https://open-sustain.github.io/sustain/assets/screenshot-light-songs.png" />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content="1833" />
+  <meta property="og:image:height" content="1020" />
+  <meta property="og:image:alt" content="Sustain's Songs view: a dense, sortable track table with star ratings, BPM, key and play counts." />
   <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Sustain (iTunes for Linux)" />
+  <meta name="twitter:description" content="The dense, fast, iTunes-style music library you wanted, rebuilt native for Linux. Free and open source." />
+  <meta name="twitter:image" content="https://open-sustain.github.io/sustain/assets/screenshot-light-songs.png" />
+  <meta name="twitter:image:alt" content="Sustain's Songs view: a dense, sortable track table with star ratings, BPM, key and play counts." />
 
   <link rel="icon" type="image/png" href="assets/icon-256.png" />
   <link rel="stylesheet" href="style.css" />
@@ -45,7 +59,7 @@
       <p class="h1-aside"><span class="asterisk">*</span> Well, almost. Not actually iTunes, not affiliated with Apple, rebuilt from scratch and cherry-picked to taste.</p>
       <p class="lede">
         Manage, rate, search and play your local collection. <br />The iTunes workflow,
-        cherry-picked across its good years and shaped to taste.
+        cherry-picked across its golden years and shaped to taste.
       </p>
 
       <ul class="trust-strip" aria-label="What Sustain is and isn't">
@@ -135,11 +149,11 @@
         </article>
         <article>
           <h3>Local-first, your files</h3>
-          <p>Index your folder in place and never move a file, or let Sustain keep it tidied by artist and album. Your call.</p>
+          <p>Index your folder in place and never move a file, or let Sustain keep it tidied by artist and album.</p>
         </article>
         <article>
           <h3>Consolidate duplicates</h3>
-          <p>Merge duplicate copies of a track into one keeper, with the best of each field preselected — highest-quality audio, available artwork, present tags over blanks, the earliest release date — every choice overridable. Play counts and skips are summed, and the extra files are removed only once the survivor is written and verified.</p>
+          <p>Merge duplicate copies of a track into one keeper, with the best of each field preselected (highest-quality audio, available artwork, present tags over blanks, the earliest release date and every choice overridable).</p>
         </article>
         <article>
           <h3>Playlists &amp; smart playlists</h3>
@@ -167,15 +181,15 @@
         </article>
         <article>
           <h3>Smart Shuffle</h3>
-          <p>A third shuffle mode that picks each next track as a <em>continuation</em> of the one playing, a transparent, local perceptual match on tempo, key, loudness and feel. No cloud, no learning, no profiling.</p>
+          <p>A third shuffle mode tries to keep you in the mood by matching the next track to the one playing. It uses all available attributes and audio analysis when enabled.</p>
         </article>
         <article>
           <h3>Sync to USB &amp; SD</h3>
-          <p>Driving a young-timer with an SD-card or USB head unit? Sync playlists to a stick or card just like you used to sync an iPod, incrementally, only what changed. A deduplicated <code>.m3u8</code> tree, or one folder per playlist for folder-navigating stereos.</p>
+          <p>Driving a young-timer with an SD-card or USB head unit? Sync playlists to a stick or card just like you used to sync an iPod, incrementally, only what changed. A deduplicated <code>.m3u8</code> tree, or one folder per playlist.</p>
         </article>
         <article class="feature-standout">
           <h3>CDJ / XDJ Rekordbox export</h3>
-          <p>Writes a real Pioneer Rekordbox database to the drive (BPM, key, beat grids, mono + colour waveforms, ratings and rendered cover-art thumbnails) so CDJ/XDJ hardware reads it natively. To our knowledge, the only Linux app that does this.</p>
+          <p>Writes a real Pioneer Rekordbox database to thumbdrives (BPM, key, beat grids, waveforms, cover-art) so CDJ/XDJ hardware reads it natively. To our knowledge, the only Linux app that does this.</p>
         </article>
         <article>
           <h3>Native light &amp; dark</h3>
@@ -183,15 +197,69 @@
         </article>
         <article class="feature-standout">
           <h3>No Electron. Built for big libraries.</h3>
-          <p>Rust, GTK4 and GStreamer (no Electron, no web wrapper, no half-gigabyte of Chromium). Designed and tested for 10,000-track libraries: instant search, smooth scrolling, and a cold start under half a second.</p>
+          <p>Rust, GTK4 and GStreamer (no Electron, no web wrapper, no half-gigabyte of Chromium). Designed and tested for 10,000-track libraries: instant search, smooth scrolling, and a cold start in 100ms.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ─────────────────── What you don't get ───────────────── -->
+    <section id="limits" class="limits">
+      <h2>What you don't get</h2>
+      <p class="section-lede">
+        A few of these may happen if enough people actually want them.
+      </p>
+
+      <div class="limit-grid">
+        <article class="limit">
+          <div class="limit-head"><h3>CD ripping</h3><span class="tag tag--planned">Planned</span></div>
+          <p>Importing a CD straight to lossless files is squarely in scope, just not built yet.</p>
+        </article>
+
+        <article class="limit">
+          <div class="limit-head"><h3>Podcasts</h3><span class="tag">Maybe</span></div>
+          <p>Podcasts are just RSS feeds, and iTunes' podcast view was genuinely nice, so this could come later.</p>
+        </article>
+
+        <article class="limit">
+          <div class="limit-head"><h3>Internet radio</h3><span class="tag">Maybe</span></div>
+          <p>It's technically feasible and depends on a need for it.</p>
+        </article>
+
+        <article class="limit">
+          <div class="limit-head"><h3>Sync iPods, iPhones &amp; iPads</h3><span class="tag">Maybe</span></div>
+          <p>The DRM and intellectual-property side is a minefield. Open-source tooling already talks to these devices, so it could technically arrive.</p>
+        </article>
+
+        <article class="limit">
+          <div class="limit-head"><h3>Network casting</h3><span class="tag">Maybe</span></div>
+          <p>This could come for open, documented protocols like DLNA/UPnP (AirPlay is Apple-proprietary).</p>
+        </article>
+
+        <article class="limit">
+          <div class="limit-head"><h3>A visualizer</h3><span class="tag">Maybe</span></div>
+          <p>It's a self-contained feature but would require careful research to match what existed.</p>
+        </article>
+
+        <article class="limit">
+          <div class="limit-head"><h3>A built-in equalizer</h3><span class="tag tag--no">Hard no</span></div>
+          <p>On Linux that belongs further down the audio chain: PipeWire with EasyEffects.</p>
+        </article>
+
+        <article class="limit">
+          <div class="limit-head"><h3>Video, TV &amp; movies</h3><span class="tag tag--no">Hard no</span></div>
+          <p>Sustain is a music app, not a media centre, stuffing videos in iTunes was likely an iDevices related move. It makes no sense if Sustain doesn't support iDevices</p>
+        </article>
+
+        <article class="limit">
+          <div class="limit-head"><h3>Apple Music &amp; DRM'd audio</h3><span class="tag tag--no">Hard no</span></div>
+          <p>Your music is precious, and it should stay under your control, not vanish from your shelf because two executives in a glass tower fell out over a licensing deal.</p>
         </article>
       </div>
     </section>
 
     <!-- ────────────────────── Screenshots ───────────────────── -->
     <section id="screenshots" class="screenshots">
-      <h2>See it</h2>
-      <p class="section-lede">Native on both light and dark, with your system accent color.</p>
+      <h2>Screenshots</h2>
 
       <figure class="shot">
         <picture>
@@ -276,14 +344,14 @@
         Trying to bolt iTunes onto Linux with Wine, or hunting for something
         that finally feels right? Point Sustain at your music folder and your
         collection is indexed in place. It doesn't auto-import playlists,
-        ratings or play history — but the guides below double as a spec you
+        ratings or play history, but the guides below double as a spec you
         can hand to an LLM to convert your iTunes export and bring the rest
         across.
       </p>
       <div class="migrate-links">
         <a class="card-link" href="https://github.com/open-sustain/sustain/blob/main/docs/migrating-from-itunes.md">
           <strong>Migrating from iTunes / Apple Music →</strong>
-          <span>Convert an iTunes XML export into ratings, plays and playlists — with an LLM.</span>
+          <span>Convert an iTunes XML export into ratings, plays and playlists (with an LLM/agent).</span>
         </a>
         <a class="card-link" href="https://github.com/open-sustain/sustain/blob/main/docs/migrating-to-sustain.md">
           <strong>Coming from another Linux player →</strong>
@@ -314,7 +382,7 @@
         <p>The Flatpak runs on the <code>org.gnome.Platform//48</code> runtime and brings its own GTK 4 / GStreamer stack, so it works regardless of how old your system's GTK is.</p>
         <pre><code>flatpak install --user ./sustain.flatpak
 flatpak run io.github.open_sustain.sustain</code></pre>
-        <p class="muted">A Flathub submission will follow once the application stabilises.</p>
+        <p class="muted">A Flathub submission is not possible due to their "no AI code and no AI documentation" policy.</p>
       </div>
     </section>
 
