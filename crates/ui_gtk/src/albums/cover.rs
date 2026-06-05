@@ -71,19 +71,29 @@ pub(super) fn apply_cover_texture(cover: &gtk::Overlay, texture: Option<gdk::Tex
 }
 
 pub(super) fn resize_cover_widget(cover: &gtk::Overlay, size: i32) {
-    cover.set_size_request(size, size);
+    set_square_size_request(cover, size);
     if let Some(picture) = cover
         .first_child()
         .and_then(|child| child.downcast::<gtk::Picture>().ok())
     {
-        picture.set_size_request(size, size);
+        set_square_size_request(&picture, size);
         if let Some(icon) = picture
             .next_sibling()
             .and_then(|child| child.downcast::<gtk::Image>().ok())
         {
-            icon.set_pixel_size((size / 3).max(32));
-            icon.set_size_request(size, size);
+            let pixel_size = (size / 3).max(32);
+            if icon.pixel_size() != pixel_size {
+                icon.set_pixel_size(pixel_size);
+            }
+            set_square_size_request(&icon, size);
         }
+    }
+}
+
+fn set_square_size_request(widget: &impl IsA<gtk::Widget>, size: i32) {
+    let widget = widget.as_ref();
+    if widget.width_request() != size || widget.height_request() != size {
+        widget.set_size_request(size, size);
     }
 }
 

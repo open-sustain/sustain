@@ -22,7 +22,8 @@ use super::{
     track_context::TrackRowContextMenu,
 };
 use model::{
-    AlbumKey, AlbumViewModel, album_subtitle, album_track, group_albums, replace_track_in_album,
+    AlbumKey, AlbumTrackReplacement, AlbumViewModel, album_subtitle, album_track, group_albums,
+    replace_track_in_album,
 };
 use track_list::AlbumTrackListView;
 
@@ -91,6 +92,37 @@ pub(crate) struct AlbumsView {
 struct PendingAlbumScroll {
     album_key: AlbumKey,
     visibility_requested: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AlbumDetailKey {
+    album_key: AlbumKey,
+    selected_column: usize,
+    columns: usize,
+    playing_track_id: Option<TrackId>,
+}
+
+#[derive(Clone, Copy)]
+enum AlbumRowRefresh<'a> {
+    Normal,
+    Detail(&'a AlbumKey),
+    Artwork(&'a AlbumKey),
+}
+
+impl AlbumRowRefresh<'_> {
+    fn refreshes_detail_for(self, album_key: &AlbumKey) -> bool {
+        match self {
+            Self::Normal => false,
+            Self::Detail(key) | Self::Artwork(key) => key == album_key,
+        }
+    }
+
+    fn refreshes_artwork_for(self, album_key: &AlbumKey) -> bool {
+        match self {
+            Self::Artwork(key) => key == album_key,
+            Self::Normal | Self::Detail(_) => false,
+        }
+    }
 }
 
 const ALBUM_TILE_WIDTH: i32 = 150;
@@ -204,12 +236,11 @@ impl AlbumsView {
     }
 
     /// Apply an in-place update for a single track that already lives in
-    /// the view, mirroring the row-level refresh the Songs and Playlists
-    /// tables run on `track_data_observer`. The album grouping is *not*
-    /// recomputed: every Sustain feature is existing-tag-preserving, so
-    /// an existing track's album never moves across an update. Only the
-    /// row holding the affected album repaints; the selected album,
-    /// scroll position, and every untouched row's artwork stay intact.
+    /// the same album bucket, mirroring the row-level refresh the Songs and
+    /// Playlists tables run on `track_data_observer`. Album-structure
+    /// metadata edits use `replace_tracks()` instead so regrouping stays
+    /// correct. Only the row holding the affected album repaints; the selected
+    /// album, scroll position, and every untouched row's artwork stay intact.
     ///
     /// A full `replace_tracks` here would tear down the entire grid,
     /// drop the user's expanded album, and scroll back to the top every
@@ -231,28 +262,62 @@ impl AlbumsView {
             let Some(track) = runtime.library_track(track_id) else {
                 return;
             };
-            album_track(track)
+            (
+                album_track(track),
+                runtime.settings().library_path().map(ToOwned::to_owned),
+            )
         };
 
-        let Some(affected_album_key) =
-            replace_track_in_album(&mut self.all_albums.borrow_mut(), track_id, &new_track_vm)
-        else {
+        let (new_track_vm, library_root) = new_track_vm;
+        let Some(replacement) = replace_track_in_album(
+            &mut self.all_albums.borrow_mut(),
+            track_id,
+            &new_track_vm,
+            library_root.as_deref(),
+        ) else {
             return;
+        };
+        let affected_album_key = match replacement {
+            AlbumTrackReplacement::Updated(album_key) => album_key,
+            AlbumTrackReplacement::Unchanged(_) => return,
         };
 
         // `albums` is a separately-cloned filtered view of
         // `all_albums`; the on-screen rows read from it, so the same
         // patch has to land here when the album survived the active
         // search.
-        let visible_album_present =
-            replace_track_in_album(&mut self.albums.borrow_mut(), track_id, &new_track_vm)
-                .is_some();
+        let visible_album_present = replace_track_in_album(
+            &mut self.albums.borrow_mut(),
+            track_id,
+            &new_track_vm,
+            library_root.as_deref(),
+        )
+        .is_some();
         if !visible_album_present {
             return;
         }
 
         if let Some(row_position) = self.row_position_for_album(&affected_album_key) {
-            self.refresh_row_widget(row_position, Some(&affected_album_key));
+            self.refresh_row_widget(row_position, AlbumRowRefresh::Detail(&affected_album_key));
+        }
+    }
+
+    pub(crate) fn refresh_track_artwork(&self, track_id: TrackId) {
+        if !self.activated.get() {
+            return;
+        }
+        let album_key = {
+            let albums = self.albums.borrow();
+            albums
+                .iter()
+                .find(|album| album.tracks.iter().any(|track| track.id == track_id))
+                .map(|album| album.key.clone())
+        };
+        let Some(album_key) = album_key else {
+            return;
+        };
+        if let Some(row_position) = self.row_position_for_album(&album_key) {
+            self.refresh_row_widget(row_position, AlbumRowRefresh::Artwork(&album_key));
         }
     }
 
@@ -295,7 +360,8 @@ impl AlbumsView {
     fn regroup_and_apply_search(&self) {
         {
             let runtime = self.runtime.borrow();
-            *self.all_albums.borrow_mut() = group_albums(runtime.library_tracks());
+            *self.all_albums.borrow_mut() =
+                group_albums(runtime.library_tracks(), runtime.settings().library_path());
         }
         self.visible_columns
             .set(columns_for_width(self.scroller.width()));
@@ -373,12 +439,12 @@ impl AlbumsView {
 
         let selected_row = self.row_position_for_album(&album_key);
         if let Some(row_position) = previous_row {
-            self.refresh_row_widget(row_position, None);
+            self.refresh_row_widget(row_position, AlbumRowRefresh::Normal);
         }
         if let Some(row_position) = selected_row
             && selected_row != previous_row
         {
-            self.refresh_row_widget(row_position, None);
+            self.refresh_row_widget(row_position, AlbumRowRefresh::Normal);
         }
     }
 
@@ -389,7 +455,7 @@ impl AlbumsView {
             .as_ref()
             .and_then(|album_key| self.row_position_for_album(album_key));
         if let Some(row_position) = selected_row {
-            self.refresh_row_widget(row_position, None);
+            self.refresh_row_widget(row_position, AlbumRowRefresh::Normal);
         }
     }
 
@@ -482,15 +548,15 @@ impl AlbumsView {
             .map(|(&position, shell)| (position, shell.clone()))
             .collect();
         for (position, shell) in realized_rows {
-            self.render_row_position(&shell, position, None);
+            self.render_row_position(&shell, position, AlbumRowRefresh::Normal);
         }
     }
 
-    fn refresh_row_widget(&self, row_position: usize, refresh_artwork_for: Option<&AlbumKey>) {
+    fn refresh_row_widget(&self, row_position: usize, refresh: AlbumRowRefresh<'_>) {
         let Some(row_shell) = self.realized_rows.borrow().get(&row_position).cloned() else {
             return;
         };
-        self.render_row_position(&row_shell, row_position, refresh_artwork_for);
+        self.render_row_position(&row_shell, row_position, refresh);
     }
 
     fn row_position_for_album(&self, album_key: &AlbumKey) -> Option<usize> {
@@ -536,7 +602,7 @@ impl AlbumsView {
             realized_rows.retain(|_, shell| shell != &row_shell);
             realized_rows.insert(position, row_shell.clone());
             drop(realized_rows);
-            view_for_bind.render_row_position(&row_shell, position, None);
+            view_for_bind.render_row_position(&row_shell, position, AlbumRowRefresh::Normal);
         });
 
         let view_for_unbind = self.clone();
@@ -578,7 +644,7 @@ impl AlbumsView {
         &self,
         row_shell: &gtk::Box,
         row_position: usize,
-        refresh_artwork_for: Option<&AlbumKey>,
+        refresh: AlbumRowRefresh<'_>,
     ) {
         let row_id = widget_id(row_shell);
         let mut row_widgets = self.row_widgets.borrow_mut();
@@ -600,7 +666,7 @@ impl AlbumsView {
             return;
         }
         let end = (start + columns).min(albums.len());
-        self.render_row_shell(row, &albums[start..end], columns, refresh_artwork_for);
+        self.render_row_shell(row, &albums[start..end], columns, refresh);
     }
 
     fn render_row_shell(
@@ -608,7 +674,7 @@ impl AlbumsView {
         row: &mut AlbumRowWidgets,
         albums: &[AlbumViewModel],
         columns: usize,
-        refresh_artwork_for: Option<&AlbumKey>,
+        refresh: AlbumRowRefresh<'_>,
     ) {
         row.show_tiles();
         row.ensure_slot_count(columns, self);
@@ -624,17 +690,26 @@ impl AlbumsView {
             let is_selected = selected_album
                 .as_ref()
                 .is_some_and(|selected| selected == &album.key);
-            let refresh_artwork = refresh_artwork_for == Some(&album.key);
+            let refresh_artwork = refresh.refreshes_artwork_for(&album.key);
             slot.bind(self, album, is_selected, refresh_artwork);
         }
 
         if let Some((selected_column, selected_album)) =
             selected_album_in_row(albums, self.selected_album.borrow().as_ref())
         {
-            let detail = self.album_detail(selected_album, selected_column, columns);
-            row.set_detail(Some(detail));
+            let detail_key = AlbumDetailKey {
+                album_key: selected_album.key.clone(),
+                selected_column,
+                columns,
+                playing_track_id: self.playing_track_id.get(),
+            };
+            let force_rebuild = refresh.refreshes_detail_for(&selected_album.key);
+            if force_rebuild || row.detail_key.as_ref() != Some(&detail_key) {
+                let detail = self.album_detail(selected_album, selected_column, columns);
+                row.set_detail(Some(detail), Some(detail_key));
+            }
         } else {
-            row.set_detail(None);
+            row.set_detail(None, None);
         }
     }
 
@@ -785,7 +860,7 @@ impl AlbumsView {
         // palette and cover appear with no flash) and from the worker on
         // a cold miss. Either way the heavy tag read + decode + palette
         // extraction never runs here.
-        if let Some(source) = self.album_artwork_source(album) {
+        if let Some(source) = album.artwork_source.clone() {
             let content_for_callback = content.clone();
             let cover_for_callback = detail_cover.clone();
             let generation_cell = self.detail_generation.clone();
@@ -851,34 +926,6 @@ impl AlbumsView {
         lists.append(&right_widget);
         lists
     }
-
-    /// Resolves the artwork source the loader should read for an
-    /// album cover. Mirrors what the synchronous reader used to do
-    /// inline: prefer the first non-missing track, fall back to the
-    /// first track of any kind, and turn relative paths into absolute
-    /// paths against the configured library root. The source keeps the
-    /// original relative path as its cache key so cache rows survive
-    /// library-root moves. Returns `None` only when no library root is set
-    /// or no representative track exists.
-    fn album_artwork_source(&self, album: &AlbumViewModel) -> Option<ArtworkSource> {
-        let relative = album.representative_track_path.as_ref()?;
-        if relative.is_absolute() {
-            return Some(ArtworkSource::embedded_track(
-                relative.clone(),
-                relative.clone(),
-            ));
-        }
-        let root = self
-            .runtime
-            .borrow()
-            .settings()
-            .library_path()?
-            .to_path_buf();
-        Some(ArtworkSource::embedded_track(
-            relative.clone(),
-            root.join(relative),
-        ))
-    }
 }
 
 struct AlbumRowWidgets {
@@ -887,6 +934,7 @@ struct AlbumRowWidgets {
     empty_state: gtk::Label,
     slots: Vec<AlbumTileSlot>,
     detail: Option<gtk::Overlay>,
+    detail_key: Option<AlbumDetailKey>,
 }
 
 impl AlbumRowWidgets {
@@ -911,6 +959,7 @@ impl AlbumRowWidgets {
             empty_state,
             slots: Vec::new(),
             detail: None,
+            detail_key: None,
         }
     }
 
@@ -925,7 +974,7 @@ impl AlbumRowWidgets {
     fn show_empty_state(&mut self) {
         self.tile_row.set_visible(false);
         self.empty_state.set_visible(true);
-        self.set_detail(None);
+        self.set_detail(None, None);
     }
 
     fn show_tiles(&self) {
@@ -933,7 +982,7 @@ impl AlbumRowWidgets {
         self.tile_row.set_visible(true);
     }
 
-    fn set_detail(&mut self, detail: Option<gtk::Overlay>) {
+    fn set_detail(&mut self, detail: Option<gtk::Overlay>, detail_key: Option<AlbumDetailKey>) {
         if let Some(previous) = self.detail.take() {
             self.shell.remove(&previous);
         }
@@ -941,6 +990,7 @@ impl AlbumRowWidgets {
             self.shell.append(&detail);
             self.detail = Some(detail);
         }
+        self.detail_key = detail_key;
     }
 }
 
@@ -1016,7 +1066,7 @@ impl AlbumTileSlot {
         self.set_selected(is_selected);
         self.bind_artwork(
             &view.artwork_loader,
-            view.album_artwork_source(album),
+            album.artwork_source.clone(),
             refresh_artwork,
         );
     }

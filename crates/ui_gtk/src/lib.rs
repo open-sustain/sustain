@@ -103,7 +103,45 @@ const DUPLICATES_VIEW: &str = "duplicates";
 pub(crate) type SharedRuntime = Rc<RefCell<ApplicationRuntime>>;
 pub(crate) type LibraryChangedCallback = Rc<dyn Fn()>;
 pub(crate) type LibraryChangedHolder = Rc<RefCell<Option<LibraryChangedCallback>>>;
-pub(crate) type TrackRowChangedCallback = Rc<dyn Fn(sustain_app_runtime::TrackId)>;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrackRowChangedKind {
+    /// Track fields changed, but album grouping stayed intact. Tables update
+    /// their row and Albums can patch the affected album in place.
+    Data,
+    /// Track fields that define an Albums bucket or its tile subtitle changed.
+    /// Tables update their row, then Albums must regroup.
+    AlbumStructure,
+    /// Track fields changed outside the Albums view model, such as rating or
+    /// play count. Tables update their row and Albums stays untouched.
+    TableOnly,
+    /// Embedded artwork changed without a SQLite row change.
+    Artwork,
+}
+
+impl TrackRowChangedKind {
+    pub(crate) fn for_metadata_change(change: &sustain_app_runtime::MetadataChange) -> Self {
+        if metadata_change_affects_album_structure(change) {
+            Self::AlbumStructure
+        } else {
+            Self::Data
+        }
+    }
+}
+
+fn metadata_change_affects_album_structure(change: &sustain_app_runtime::MetadataChange) -> bool {
+    field_changed(&change.artist)
+        || field_changed(&change.album)
+        || field_changed(&change.album_artist)
+        || field_changed(&change.year)
+        || field_changed(&change.compilation)
+}
+
+fn field_changed<T>(field: &sustain_app_runtime::FieldChange<T>) -> bool {
+    !matches!(field, sustain_app_runtime::FieldChange::Unchanged)
+}
+
+pub(crate) type TrackRowChangedCallback =
+    Rc<dyn Fn(sustain_app_runtime::TrackId, TrackRowChangedKind)>;
 pub(crate) type TrackRowChangedHolder = Rc<RefCell<Option<TrackRowChangedCallback>>>;
 /// Re-sync the `is_missing` flag on every loaded row from the
 /// runtime's view of the library, repaint visible status icons, and
@@ -261,7 +299,7 @@ pub fn run(
     // Spawn the MPRIS worker. `start` returns immediately: the session-bus
     // connection and name acquisition run on the worker thread, off the
     // cold-start critical path, so this never delays window presentation or
-    // the 400 ms first-idle budget (#98). State published before the bus is
+    // the 150 ms first-idle budget (#98). State published before the bus is
     // ready queues and is applied once it connects; a hung or unavailable
     // bus is bounded and surfaces as a logged "disabled". The inbound
     // channel carries method calls from the MPRIS worker thread to the GTK
@@ -439,4 +477,44 @@ fn start_mpris(
             let _ = command_tx.try_send(command);
         }),
     })
+}
+
+#[cfg(test)]
+mod track_row_changed_kind_tests {
+    use sustain_app_runtime::{FieldChange, MetadataChange};
+
+    use super::TrackRowChangedKind;
+
+    #[test]
+    fn album_grouping_metadata_changes_regroup_albums() {
+        let mut change = MetadataChange {
+            album: FieldChange::Set("New Album".to_owned()),
+            ..MetadataChange::default()
+        };
+        assert_eq!(
+            TrackRowChangedKind::for_metadata_change(&change),
+            TrackRowChangedKind::AlbumStructure
+        );
+
+        change = MetadataChange {
+            year: FieldChange::Set(2026),
+            ..MetadataChange::default()
+        };
+        assert_eq!(
+            TrackRowChangedKind::for_metadata_change(&change),
+            TrackRowChangedKind::AlbumStructure
+        );
+    }
+
+    #[test]
+    fn non_grouping_metadata_changes_patch_album_in_place() {
+        let change = MetadataChange {
+            title: FieldChange::Set("New Title".to_owned()),
+            ..MetadataChange::default()
+        };
+        assert_eq!(
+            TrackRowChangedKind::for_metadata_change(&change),
+            TrackRowChangedKind::Data
+        );
+    }
 }

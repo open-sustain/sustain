@@ -61,7 +61,7 @@ pub(super) fn inline_edit_hooks(
                     return false;
                 }
                 if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-                    callback(track_id);
+                    callback(track_id, inline_edit_changed_kind(field));
                 }
                 true
             },
@@ -84,17 +84,16 @@ pub(super) fn rating_changed_callback(
             return false;
         }
         if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-            callback(track_id);
+            callback(track_id, TrackRowChangedKind::TableOnly);
         }
         true
     })
 }
 
-/// Targeted refresh path for single-track mutations (rating, play count).
-/// Updates only the affected row in the visible tables, refreshes the
-/// AlbumsView model without touching the Songs table's store, and refreshes
-/// the status-bar summary. Skips the sidebar tree because row-field mutations
-/// do not alter playlist/folder structure.
+/// Targeted refresh path for single-track mutations. Updates only the affected
+/// row in the visible tables, applies the cheapest correct Albums refresh for
+/// the change kind, and refreshes the status-bar summary. Skips the sidebar
+/// tree because row-field mutations do not alter playlist/folder structure.
 ///
 /// When a smart playlist is selected, the Playlists table falls back to a
 /// full reflow because the mutation may add/remove the track from the
@@ -128,7 +127,7 @@ pub(super) fn track_row_changed_callback(
     let visible_summary_refresh = ctx.visible_summary_refresh;
     let device_panel = ctx.device_panel.clone();
 
-    Rc::new(move |track_id: TrackId| {
+    Rc::new(move |track_id: TrackId, kind: TrackRowChangedKind| {
         let row = {
             let runtime_borrow = runtime.borrow();
             let honor_sort_tags = runtime_borrow.settings().library.honor_sort_tags;
@@ -143,11 +142,22 @@ pub(super) fn track_row_changed_callback(
         };
 
         songs_table.update_row(track_id, row.clone());
-        // In-place per-track refresh — never `replace_tracks`. A single
-        // background completion (Lyrics/Tags/Artwork/BPM/Key/Waveform,
-        // metadata write, rating change) must not collapse the
-        // currently-expanded album or scroll the grid back to the top.
-        albums_view.update_track(track_id);
+        match kind {
+            TrackRowChangedKind::Data => {
+                // In-place per-track refresh — never `replace_tracks`. A
+                // single background completion (Lyrics/Tags/BPM/Key/Waveform,
+                // metadata write) must not collapse the currently-expanded
+                // album or scroll the grid back to the top.
+                albums_view.update_track(track_id);
+            }
+            TrackRowChangedKind::AlbumStructure => {
+                albums_view.replace_tracks();
+            }
+            TrackRowChangedKind::Artwork => {
+                albums_view.refresh_track_artwork(track_id);
+            }
+            TrackRowChangedKind::TableOnly => {}
+        }
 
         match sidebar.current_selection() {
             Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(smart_id))) => {
@@ -202,6 +212,19 @@ pub(super) fn track_row_changed_callback(
         // export readiness; refresh it when that view is on screen.
         device_panel.refresh_readiness();
     })
+}
+
+fn inline_edit_changed_kind(field: EditableField) -> TrackRowChangedKind {
+    match field {
+        EditableField::Artist | EditableField::Album | EditableField::Year => {
+            TrackRowChangedKind::AlbumStructure
+        }
+        EditableField::Title
+        | EditableField::Genre
+        | EditableField::Bpm
+        | EditableField::Key
+        | EditableField::TrackNumber => TrackRowChangedKind::Data,
+    }
 }
 
 fn schedule_playlists_structural_refresh(

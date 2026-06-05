@@ -44,9 +44,10 @@
 //!   another view's in-flight requests.
 //! * The repository checks a small SQLite cache before touching the audio file.
 //!   Cache rows are keyed by source plus the representative file fingerprint,
-//!   and store already-scaled tile/detail PNG payloads plus the derived palette.
-//!   Today the only source is embedded artwork from an audio file; the explicit
-//!   source boundary is where the missing-artwork downloader should plug in.
+//!   and merge whichever already-scaled tile/detail PNG payloads have been
+//!   requested plus the derived palette. Today the only source is embedded
+//!   artwork from an audio file; the explicit source boundary is where the
+//!   missing-artwork downloader should plug in.
 
 mod decode;
 mod disk_cache;

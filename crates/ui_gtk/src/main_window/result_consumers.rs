@@ -229,7 +229,7 @@ pub(super) fn install_metadata_writer_event_consumer(
             if let Some(track_id) = mirror_track_id
                 && let Some(callback) = track_row_changed_holder.borrow().as_ref()
             {
-                callback(track_id);
+                callback(track_id, TrackRowChangedKind::Artwork);
             }
             if let Some((track_id, succeeded)) = relocation {
                 relocation_completed(track_id, succeeded);
@@ -321,7 +321,7 @@ pub(super) fn install_track_data_observer(
             let track_row_changed_holder = track_row_changed_holder.clone();
             glib::idle_add_local_once(move || {
                 if let Some(callback) = track_row_changed_holder.borrow().clone() {
-                    callback(track_id);
+                    callback(track_id, TrackRowChangedKind::Data);
                 }
             });
         }));
@@ -421,7 +421,7 @@ pub(super) fn install_device_plan_result_consumer(
 }
 
 /// Delay before the one-shot launch rebuild fires. A second is plenty
-/// to clear the cold-start window (the 400 ms first-idle budget plus
+/// to clear the cold-start window (the 150 ms first-idle budget plus
 /// margin) so the rebuild's main-thread prep — cloning the track list
 /// and loading cached acoustics before the build hands off to a
 /// background worker — never counts against startup. The user never
@@ -544,7 +544,7 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
             );
             playback_changed();
             if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-                callback(result.track_id);
+                callback(result.track_id, TrackRowChangedKind::Artwork);
             }
         }
     });

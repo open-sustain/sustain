@@ -342,7 +342,7 @@ pub(super) fn build_rating_cell_factory(
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     let context_for_setup = context_menu;
-    let rating_changed_for_bind = rating_changed;
+    let rating_changed_for_setup = rating_changed;
     let reorder_for_setup = row_reorder;
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
@@ -361,47 +361,6 @@ pub(super) fn build_rating_cell_factory(
             context_for_setup.as_ref(),
             reorder_for_setup.as_ref(),
         );
-        list_item.set_child(Some(&cell));
-    });
-
-    let bindings_for_teardown = bindings.clone();
-    factory.connect_teardown(move |_factory, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        bindings_for_teardown
-            .0
-            .borrow_mut()
-            .retain(|binding| binding.list_item != *list_item);
-    });
-
-    let bindings_for_bind = bindings;
-    factory.connect_bind(move |_factory, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let Some(cell) = list_item
-            .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
-        else {
-            return;
-        };
-        apply_bound_row_tint(&cell, list_item);
-        sync_row_selection_class(&cell, list_item.is_selected());
-        clear_box_children(&cell);
-
-        let Some(row_object) = list_item
-            .item()
-            .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
-        else {
-            return;
-        };
-        let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
-            return;
-        };
-        let rating = row.rating;
-        drop(row);
-
         let rating_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         rating_box.add_css_class("rating-stars");
         rating_box.set_margin_start(6);
@@ -413,13 +372,18 @@ pub(super) fn build_rating_cell_factory(
             let button = gtk::Button::with_label("");
             button.add_css_class("flat");
             button.add_css_class("rating-star");
-            sync_rating_button(&button, star, rating);
 
-            let row_object_for_click = row_object.clone();
+            let list_item_for_click = list_item.clone();
             let rating_box_for_click = rating_box.clone();
-            let rating_changed_for_click = rating_changed_for_bind.clone();
+            let rating_changed_for_click = rating_changed_for_setup.clone();
             button.connect_clicked(move |_| {
-                let Ok(row) = row_object_for_click.try_borrow::<TrackTableRow>() else {
+                let Some(row_object) = list_item_for_click
+                    .item()
+                    .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+                else {
+                    return;
+                };
+                let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
                     return;
                 };
                 let Some(track_id) = row.track_id else {
@@ -444,6 +408,52 @@ pub(super) fn build_rating_cell_factory(
         }
 
         cell.append(&rating_box);
+        list_item.set_child(Some(&cell));
+    });
+
+    let bindings_for_bind = bindings.clone();
+    let bindings_for_teardown = bindings;
+    factory.connect_teardown(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        bindings_for_teardown
+            .0
+            .borrow_mut()
+            .retain(|binding| binding.list_item != *list_item);
+    });
+
+    factory.connect_bind(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(cell) = list_item
+            .child()
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+        else {
+            return;
+        };
+        apply_bound_row_tint(&cell, list_item);
+        sync_row_selection_class(&cell, list_item.is_selected());
+
+        let Some(row_object) = list_item
+            .item()
+            .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+        else {
+            return;
+        };
+        let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
+            return;
+        };
+        let rating = row.rating;
+        drop(row);
+        let Some(rating_box) = cell
+            .first_child()
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+        else {
+            return;
+        };
+        sync_rating_buttons(&rating_box, rating);
         bindings_for_bind.register(list_item, &rating_box);
     });
 
@@ -743,12 +753,6 @@ fn sync_row_selection_class(cell: &gtk::Box, selected: bool) {
         cell.add_css_class("track-table-row-selected");
     } else {
         cell.remove_css_class("track-table-row-selected");
-    }
-}
-
-fn clear_box_children(container: &gtk::Box) {
-    while let Some(child) = container.first_child() {
-        container.remove(&child);
     }
 }
 

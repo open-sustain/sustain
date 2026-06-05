@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{cell::Cell, rc::Rc, sync::mpsc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::mpsc,
+    time::Duration,
+};
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -18,7 +23,9 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct DuplicatesView {
     root: gtk::Box,
-    table: TrackTable,
+    table: Rc<RefCell<Option<TrackTable>>>,
+    context_menu: TrackRowContextMenu,
+    track_activated: TrackActivatedCallback,
     runtime: SharedRuntime,
     strict: gtk::Switch,
     status: gtk::Label,
@@ -52,20 +59,11 @@ impl DuplicatesView {
         header.append(&strict);
         root.append(&header);
 
-        let table = build_track_table(
-            Vec::new(),
-            Some(track_activated),
-            Some(context_menu),
-            None,
-            None,
-            None,
-        );
-        table.disable_sorting_and_column_reordering();
-        root.append(&table.widget());
-
         let view = Self {
             root,
-            table,
+            table: Rc::new(RefCell::new(None)),
+            context_menu,
+            track_activated,
             runtime,
             strict,
             status,
@@ -100,7 +98,27 @@ impl DuplicatesView {
         }
     }
 
+    fn ensure_table(&self) -> TrackTable {
+        if let Some(table) = self.table.borrow().as_ref() {
+            return table.clone();
+        }
+
+        let table = build_track_table(
+            Vec::new(),
+            Some(self.track_activated.clone()),
+            Some(self.context_menu.clone()),
+            None,
+            None,
+            None,
+        );
+        table.disable_sorting_and_column_reordering();
+        self.root.append(&table.widget());
+        self.table.borrow_mut().replace(table.clone());
+        table
+    }
+
     fn scan(&self) {
+        self.ensure_table();
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
         self.status.set_text("Scanning for duplicate tracks...");
@@ -180,7 +198,7 @@ impl DuplicatesView {
                     rows
                 };
                 let row_count = rows.len();
-                self.table.replace_rows(rows);
+                self.ensure_table().replace_rows(rows);
                 self.status.set_text(&format!(
                     "{} duplicate group(s), {} track(s).",
                     groups.len(),

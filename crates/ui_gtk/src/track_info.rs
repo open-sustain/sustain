@@ -8,7 +8,7 @@ use gtk::{gdk, glib};
 use sustain_app_runtime::{ApplicationCommand, MetadataChange, Track, TrackId};
 
 use super::{
-    LibraryChangedHolder, SharedRuntime, TrackRowChangedHolder,
+    LibraryChangedHolder, SharedRuntime, TrackRowChangedHolder, TrackRowChangedKind,
     artwork_loader::{ArtworkLoader, ArtworkSource},
     command_controller::SharedCommandController,
 };
@@ -358,12 +358,17 @@ fn commit_current(
 
     let mut any_succeeded = false;
     let mut any_failed = false;
+    let mut callback_kind = None;
     if change != MetadataChange::default() {
+        let change_kind = TrackRowChangedKind::for_metadata_change(&change);
         match command_controller.dispatch(ApplicationCommand::UpdateMetadata {
             track_id,
             change: Box::new(change),
         }) {
-            Ok(()) => any_succeeded = true,
+            Ok(()) => {
+                any_succeeded = true;
+                callback_kind = Some(change_kind);
+            }
             Err(_) => any_failed = true,
         }
     }
@@ -372,13 +377,19 @@ fn commit_current(
             track_id,
             rating: new_rating,
         }) {
-            Ok(()) => any_succeeded = true,
+            Ok(()) => {
+                any_succeeded = true;
+                callback_kind.get_or_insert(TrackRowChangedKind::TableOnly);
+            }
             Err(_) => any_failed = true,
         }
     }
     if reset_clicked && cursor.baseline_play_count > 0 {
         match command_controller.dispatch(ApplicationCommand::ResetPlayCount { track_id }) {
-            Ok(()) => any_succeeded = true,
+            Ok(()) => {
+                any_succeeded = true;
+                callback_kind.get_or_insert(TrackRowChangedKind::TableOnly);
+            }
             Err(_) => any_failed = true,
         }
     }
@@ -386,7 +397,7 @@ fn commit_current(
 
     if any_succeeded {
         if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-            callback(track_id);
+            callback(track_id, callback_kind.unwrap_or(TrackRowChangedKind::Data));
         } else if let Some(callback) = library_changed_holder.borrow().as_ref() {
             callback();
         }

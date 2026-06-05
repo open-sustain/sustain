@@ -2,10 +2,11 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use sustain_app_runtime::{Track, TrackId, TrackMetadata};
 
+use crate::artwork_loader::ArtworkSource;
 use crate::util::non_empty_text;
 
 /// Stable identity for an album, derived from the normalized grouping
@@ -34,6 +35,7 @@ pub(super) struct AlbumViewModel {
     /// `None` when every track is missing on disk and the album is being
     /// rendered purely from cached metadata.
     pub(super) representative_track_path: Option<PathBuf>,
+    pub(super) artwork_source: Option<ArtworkSource>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,6 +47,12 @@ pub(super) struct AlbumTrackViewModel {
     pub(super) track_number: Option<u32>,
     pub(super) duration_seconds: u64,
     pub(super) is_missing: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum AlbumTrackReplacement {
+    Updated(AlbumKey),
+    Unchanged(AlbumKey),
 }
 
 #[derive(Clone, Debug)]
@@ -63,7 +71,7 @@ const UNKNOWN_ALBUM: &str = "Unknown Album";
 const UNKNOWN_ARTIST: &str = "Unknown Artist";
 const COMPILATION_ALBUM_ARTIST: &str = "Various Artists";
 
-pub(super) fn group_albums(tracks: &[Track]) -> Vec<AlbumViewModel> {
+pub(super) fn group_albums(tracks: &[Track], library_root: Option<&Path>) -> Vec<AlbumViewModel> {
     let mut albums = BTreeMap::<AlbumKey, AlbumBucket>::new();
 
     for track in tracks {
@@ -105,6 +113,10 @@ pub(super) fn group_albums(tracks: &[Track]) -> Vec<AlbumViewModel> {
                 .find(|track| !track.is_missing)
                 .or_else(|| bucket.tracks.first())
                 .map(|track| track.file_path.clone());
+            let artwork_source = representative_track_path_to_source(
+                representative_track_path.as_ref(),
+                library_root,
+            );
             let artist = album_display_artist(&bucket);
             AlbumViewModel {
                 key: bucket.key,
@@ -113,33 +125,68 @@ pub(super) fn group_albums(tracks: &[Track]) -> Vec<AlbumViewModel> {
                 year: bucket.year,
                 tracks: bucket.tracks,
                 representative_track_path,
+                artwork_source,
             }
         })
         .collect()
 }
 
 /// Locate the album holding `track_id` and replace that track's row in
-/// place. Returns the album's key so callers can re-render exactly the
-/// row that needs it; `None` when no album currently holds the track.
+/// place. Returns the album's key plus whether visible fields actually
+/// changed, so callers can re-render exactly the row that needs it and skip
+/// no-op changes; `None` when no album currently holds the track.
 ///
 /// The track list is re-sorted with [`compare_album_tracks`] because a
 /// metadata update can move a track within its album (e.g. a Tags
-/// retrieval populating a missing track number). The track's album
-/// itself never moves — every Sustain feature is existing-tag-preserving,
-/// so the album grouping key (artist + title) is stable across updates.
+/// retrieval populating a missing track number). Callers must use a full
+/// regroup instead when metadata changes can move the track to a different
+/// album bucket.
 pub(super) fn replace_track_in_album(
     albums: &mut [AlbumViewModel],
     track_id: TrackId,
     new_track: &AlbumTrackViewModel,
-) -> Option<AlbumKey> {
+    library_root: Option<&Path>,
+) -> Option<AlbumTrackReplacement> {
     for album in albums.iter_mut() {
         if let Some(slot) = album.tracks.iter_mut().find(|track| track.id == track_id) {
+            if slot == new_track {
+                return Some(AlbumTrackReplacement::Unchanged(album.key.clone()));
+            }
             *slot = new_track.clone();
             album.tracks.sort_by(compare_album_tracks);
-            return Some(album.key.clone());
+            refresh_album_artwork_source(album, library_root);
+            return Some(AlbumTrackReplacement::Updated(album.key.clone()));
         }
     }
     None
+}
+
+fn refresh_album_artwork_source(album: &mut AlbumViewModel, library_root: Option<&Path>) {
+    album.representative_track_path = album
+        .tracks
+        .iter()
+        .find(|track| !track.is_missing)
+        .or_else(|| album.tracks.first())
+        .map(|track| track.file_path.clone());
+    album.artwork_source =
+        representative_track_path_to_source(album.representative_track_path.as_ref(), library_root);
+}
+
+fn representative_track_path_to_source(
+    path: Option<&PathBuf>,
+    library_root: Option<&Path>,
+) -> Option<ArtworkSource> {
+    let relative = path?;
+    if relative.is_absolute() {
+        return Some(ArtworkSource::embedded_track(
+            relative.clone(),
+            relative.clone(),
+        ));
+    }
+    Some(ArtworkSource::embedded_track(
+        relative.clone(),
+        library_root?.join(relative),
+    ))
 }
 
 pub(super) fn album_subtitle(album: &AlbumViewModel) -> String {
@@ -301,8 +348,11 @@ mod tests {
         PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
     };
 
+    use crate::artwork_loader::ArtworkSource;
+
     use super::{
-        AlbumTrackViewModel, duration_text, group_albums, replace_track_in_album, track_number_text,
+        AlbumTrackReplacement, AlbumTrackViewModel, duration_text, group_albums,
+        replace_track_in_album, track_number_text,
     };
 
     #[test]
@@ -313,7 +363,7 @@ mod tests {
             track(3, "other.flac", "Other", "Artist", Some(1), None),
         ];
 
-        let albums = group_albums(&tracks);
+        let albums = group_albums(&tracks, None);
 
         assert_eq!(albums.len(), 2);
         assert_eq!(albums[0].title, "Album");
@@ -337,7 +387,7 @@ mod tests {
             track(2, "b.flac", "Shared", "Artist B", Some(2), None),
         ];
 
-        let albums = group_albums(&tracks);
+        let albums = group_albums(&tracks, None);
 
         assert_eq!(albums.len(), 2);
         assert_eq!(
@@ -356,7 +406,7 @@ mod tests {
             compilation_track(2, "b.flac", "Compilation", "Artist B", Some(2)),
         ];
 
-        let albums = group_albums(&tracks);
+        let albums = group_albums(&tracks, None);
 
         assert_eq!(albums.len(), 1);
         assert_eq!(albums[0].title, "Compilation");
@@ -392,7 +442,7 @@ mod tests {
             ),
         ];
 
-        let albums = group_albums(&tracks);
+        let albums = group_albums(&tracks, None);
 
         assert_eq!(albums.len(), 1);
         assert_eq!(albums[0].artist, "Album Artist");
@@ -409,7 +459,7 @@ mod tests {
             compilation_track(6, "f.flac", "Compilation", "artist a", Some(6)),
         ];
 
-        let albums = group_albums(&tracks);
+        let albums = group_albums(&tracks, None);
 
         assert_eq!(
             albums[0].artist,
@@ -423,13 +473,21 @@ mod tests {
             missing_track(1, "missing.flac", "Album", "Artist"),
             track(2, "present.flac", "Album", "Artist", Some(2), Some(200)),
         ];
+        let library_root = PathBuf::from("/music");
 
-        let albums = group_albums(&tracks);
+        let albums = group_albums(&tracks, Some(&library_root));
 
         assert_eq!(albums.len(), 1);
         assert_eq!(
             albums[0].representative_track_path.as_deref(),
             Some(std::path::Path::new("present.flac"))
+        );
+        assert_eq!(
+            albums[0].artwork_source,
+            Some(ArtworkSource::embedded_track(
+                PathBuf::from("present.flac"),
+                library_root.join("present.flac"),
+            ))
         );
     }
 
@@ -440,27 +498,34 @@ mod tests {
             missing_track(2, "b.flac", "Album", "Artist"),
         ];
 
-        let albums = group_albums(&tracks);
+        let albums = group_albums(&tracks, None);
 
         assert_eq!(albums.len(), 1);
         // Track ordering inside the bucket runs through `compare_album_tracks`,
         // which here ties on disc/track and falls back to title comparison; the
         // important contract is just "some path, not None".
         assert!(albums[0].representative_track_path.is_some());
+        assert!(
+            albums[0].artwork_source.is_none(),
+            "relative album artwork source requires a library root"
+        );
     }
 
     #[test]
     fn uses_unknown_album_and_artist_when_metadata_is_missing() {
-        let albums = group_albums(&[Track {
-            id: track_id(1),
-            location: TrackLocation::available(relative_path("track.flac")),
-            metadata: TrackMetadata::default(),
-            rating: Rating::unrated(),
-            statistics: PlayStatistics::default(),
-            file_size_bytes: None,
-            has_embedded_artwork: None,
-            file_modified_at: None,
-        }]);
+        let albums = group_albums(
+            &[Track {
+                id: track_id(1),
+                location: TrackLocation::available(relative_path("track.flac")),
+                metadata: TrackMetadata::default(),
+                rating: Rating::unrated(),
+                statistics: PlayStatistics::default(),
+                file_size_bytes: None,
+                has_embedded_artwork: None,
+                file_modified_at: None,
+            }],
+            None,
+        );
 
         assert_eq!(albums[0].title, "Unknown Album");
         assert_eq!(albums[0].artist, "Unknown Artist");
@@ -483,11 +548,14 @@ mod tests {
 
     #[test]
     fn replace_track_in_album_updates_target_and_re_sorts() {
-        let mut albums = group_albums(&[
-            track(1, "b.flac", "Album", "Artist", Some(2), Some(2000)),
-            track(2, "a.flac", "Album", "Artist", Some(1), Some(2000)),
-            track(3, "other.flac", "Other", "Artist", Some(1), None),
-        ]);
+        let mut albums = group_albums(
+            &[
+                track(1, "b.flac", "Album", "Artist", Some(2), Some(2000)),
+                track(2, "a.flac", "Album", "Artist", Some(1), Some(2000)),
+                track(3, "other.flac", "Other", "Artist", Some(1), None),
+            ],
+            None,
+        );
         assert_eq!(
             albums[0]
                 .tracks
@@ -503,13 +571,16 @@ mod tests {
         let mut replacement =
             super::album_track(&track(1, "b.flac", "Album", "Artist", Some(1), Some(2000)));
         replacement.track_number = Some(0);
-        let key = replace_track_in_album(&mut albums, track_id(1), &replacement);
+        let key = replace_track_in_album(&mut albums, track_id(1), &replacement, None);
 
         let updated_album = albums
             .iter()
             .find(|album| album.title == "Album")
             .expect("Album bucket present");
-        assert_eq!(key.as_ref(), Some(&updated_album.key));
+        assert_eq!(
+            key.as_ref(),
+            Some(&AlbumTrackReplacement::Updated(updated_album.key.clone()))
+        );
         assert_eq!(
             updated_album
                 .tracks
@@ -522,7 +593,10 @@ mod tests {
 
     #[test]
     fn replace_track_in_album_returns_none_when_track_absent() {
-        let mut albums = group_albums(&[track(1, "a.flac", "Album", "Artist", Some(1), None)]);
+        let mut albums = group_albums(
+            &[track(1, "a.flac", "Album", "Artist", Some(1), None)],
+            None,
+        );
         let ghost = AlbumTrackViewModel {
             id: track_id(99),
             file_path: PathBuf::from("ghost.flac"),
@@ -533,7 +607,23 @@ mod tests {
             is_missing: false,
         };
 
-        assert!(replace_track_in_album(&mut albums, track_id(99), &ghost).is_none());
+        assert!(replace_track_in_album(&mut albums, track_id(99), &ghost, None).is_none());
+    }
+
+    #[test]
+    fn replace_track_in_album_reports_unchanged_when_visible_fields_match() {
+        let mut albums = group_albums(
+            &[track(1, "a.flac", "Album", "Artist", Some(1), None)],
+            None,
+        );
+        let replacement = super::album_track(&track(1, "a.flac", "Album", "Artist", Some(1), None));
+
+        let replacement = replace_track_in_album(&mut albums, track_id(1), &replacement, None);
+
+        assert_eq!(
+            replacement,
+            Some(AlbumTrackReplacement::Unchanged(albums[0].key.clone()))
+        );
     }
 
     fn track(

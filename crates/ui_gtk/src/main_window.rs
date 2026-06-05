@@ -26,7 +26,7 @@ use super::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW,
     SharedMprisService, SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
     SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
-    TrackUpdatedReceiver, YoutubeAudioDownloadResultReceiver,
+    TrackRowChangedKind, TrackUpdatedReceiver, YoutubeAudioDownloadResultReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
@@ -280,17 +280,6 @@ pub(crate) fn build_main_window(
         queue_view_holder.clone(),
         mpris_service.clone(),
     );
-    // The queue popover parents itself to the Next button and drives its
-    // evict/reorder edits through the same command controller and
-    // playback-changed refresh as the rest of the transport.
-    let queue_view = QueueView::new(
-        runtime.clone(),
-        command_controller.clone(),
-        artwork_loader.clone(),
-        playback_changed.clone(),
-        &titlebar.next_button(),
-    );
-    queue_view_holder.replace(Some(queue_view));
     connect_titlebar_playback_controls(
         &titlebar,
         &runtime,
@@ -638,10 +627,32 @@ pub(crate) fn build_main_window(
         let runtime = runtime.clone();
         Box::new(move || runtime.borrow().resume_pending_metadata_writes())
     };
+    let initialize_queue_view: Box<dyn FnOnce()> = {
+        let runtime = runtime.clone();
+        let command_controller = command_controller.clone();
+        let artwork_loader = artwork_loader.clone();
+        let playback_changed = playback_changed.clone();
+        let next_button = titlebar.next_button();
+        let queue_view_holder = queue_view_holder.clone();
+        Box::new(move || {
+            // The queue popover is hidden behind a secondary click on the Next
+            // button. Construct it after the first-idle landmark so startup
+            // does not realize its list factory before the first paint.
+            let queue_view = QueueView::new(
+                runtime,
+                command_controller,
+                artwork_loader,
+                playback_changed,
+                &next_button,
+            );
+            queue_view_holder.replace(Some(queue_view));
+        })
+    };
     let consolidation_requested = library_consolidation_requested_callback(&runtime);
     let deferred_startup = DeferredStartup::new(
         initial_ui_settings.sidebar_selection,
         sidebar.clone(),
+        initialize_queue_view,
         device_populate,
         resume_pending_metadata_writes,
         runtime.clone(),
@@ -886,6 +897,7 @@ impl BuiltMainWindow {
 /// window has had a chance to paint.
 struct DeferredStartup {
     runtime: SharedRuntime,
+    first_idle_startup: Box<dyn FnOnce()>,
     post_hydration_startup: PostHydrationStartup,
 }
 
@@ -893,6 +905,7 @@ impl DeferredStartup {
     fn new(
         selection: UiSidebarSelection,
         sidebar: PlaylistSidebar,
+        initialize_queue_view: Box<dyn FnOnce()>,
         populate_devices: Box<dyn FnOnce()>,
         resume_pending_metadata_writes: Box<dyn FnOnce()>,
         runtime: SharedRuntime,
@@ -925,6 +938,7 @@ impl DeferredStartup {
         }))));
         Self {
             runtime,
+            first_idle_startup: initialize_queue_view,
             post_hydration_startup,
         }
     }
@@ -934,8 +948,14 @@ impl DeferredStartup {
     }
 
     fn run(self) {
-        if !self.runtime.borrow_mut().start_library_hydration()
-            && let Some(callback) = self.post_hydration_startup.borrow_mut().take()
+        let Self {
+            runtime,
+            first_idle_startup,
+            post_hydration_startup,
+        } = self;
+        first_idle_startup();
+        if !runtime.borrow_mut().start_library_hydration()
+            && let Some(callback) = post_hydration_startup.borrow_mut().take()
         {
             callback();
         }

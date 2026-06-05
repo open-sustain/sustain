@@ -21,8 +21,8 @@ const DETAIL_TEXTURE_MAX_SIDE: i32 = TILE_TEXTURE_MAX_SIDE * 3;
 
 /// Decoded artwork shared between tile rendering (needs only the
 /// texture) and detail-panel rendering (also needs the palette to tint
-/// the panel background/text). Both are computed once per file and
-/// cached.
+/// the panel background/text). Each request uploads only its requested
+/// texture size; shared metadata is cached with either size.
 #[derive(Clone, Default)]
 pub(crate) struct DecodedArtwork {
     pub(crate) tile_texture: Option<gdk::Texture>,
@@ -37,9 +37,9 @@ pub(crate) struct DecodedArtwork {
 /// The two sizes have very different memory profiles, so they live in
 /// separate bounded caches (`MAX_CACHED_TILE_ARTWORKS` and
 /// `MAX_CACHED_DETAIL_ARTWORKS`) and a worker only uploads the texture for
-/// the size that was actually asked for. The on-disk cache always holds both
-/// PNG payloads, so the *other* size, when later requested, is produced from
-/// disk without re-reading the audio file.
+/// the size that was actually asked for. The on-disk cache stores tile and
+/// detail payloads independently in the same row, so a later request for the
+/// other size is a hit only if that variant was already produced.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum ArtworkVariant {
     /// Small grid / now-playing cover ([`TILE_TEXTURE_MAX_SIDE`]).
@@ -66,20 +66,26 @@ pub(super) fn decode_artwork(
         Ok(dimensions) => dimensions,
         Err(_) => return DecodedArtworkRecord::default(),
     };
-    let Some((decode_width, decode_height)) =
-        scaled_dimensions(dimensions, DETAIL_TEXTURE_MAX_SIDE)
-    else {
+    let max_side = match variant {
+        ArtworkVariant::Tile => TILE_TEXTURE_MAX_SIDE,
+        ArtworkVariant::Detail => DETAIL_TEXTURE_MAX_SIDE,
+    };
+    let Some((decode_width, decode_height)) = scaled_dimensions(dimensions, max_side) else {
         return DecodedArtworkRecord::default();
     };
     let Some(pixbuf) = pixbuf_from_bytes_at_scale(bytes, decode_width, decode_height) else {
         return DecodedArtworkRecord::default();
     };
 
-    // Both sizes are always scaled and PNG-encoded for the on-disk cache, so
-    // the *other* size can later be served from disk without re-reading the
-    // audio file. Only the requested size is uploaded to a GPU texture.
-    let tile_pixbuf = scaled_pixbuf(&pixbuf, TILE_TEXTURE_MAX_SIDE);
-    let detail_pixbuf = scaled_pixbuf(&pixbuf, DETAIL_TEXTURE_MAX_SIDE);
+    // Produce only the requested texture size. Tile scrolling must not pay for
+    // the 396px detail PNG; a later detail request merges that variant into the
+    // same disk-cache row if it is actually needed.
+    let tile_pixbuf = (variant == ArtworkVariant::Tile)
+        .then(|| scaled_pixbuf(&pixbuf, TILE_TEXTURE_MAX_SIDE))
+        .flatten();
+    let detail_pixbuf = (variant == ArtworkVariant::Detail)
+        .then(|| scaled_pixbuf(&pixbuf, DETAIL_TEXTURE_MAX_SIDE))
+        .flatten();
     let palette = ArtworkPalette::from_pixbuf(&pixbuf);
     let cache_entry = CachedArtwork {
         dimensions: Some(dimensions),
