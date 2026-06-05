@@ -14,7 +14,7 @@ use std::{
 
 use sustain_domain::{
     DuplicateConsolidationRequest, DuplicateMatchMode, Track, TrackId, TrackRelativePath,
-    duplicate_groups, plan_duplicate_consolidation,
+    duplicate_groups_with_acoustics, plan_duplicate_consolidation,
 };
 use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, hash_reader_content};
@@ -64,7 +64,15 @@ impl DuplicateGroupsTask {
             .store
             .tracks()
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        Ok(duplicate_groups(&tracks, self.mode))
+        let acoustics = self
+            .store
+            .load_all_acoustics()
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
+            .into_iter()
+            .collect();
+        Ok(duplicate_groups_with_acoustics(
+            &tracks, self.mode, &acoustics,
+        ))
     }
 }
 

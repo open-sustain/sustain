@@ -423,6 +423,12 @@ pub(crate) fn build_main_window(
         runtime.clone(),
         context_menu,
         library_track_activated.clone(),
+        rating_changed.clone(),
+        inline_edit_hooks(
+            &runtime,
+            &command_controller,
+            track_row_changed_holder.clone(),
+        ),
     );
     let playlist_row_reorder = playlist_row_reorder_callback(
         &command_controller,
@@ -558,6 +564,7 @@ pub(crate) fn build_main_window(
         runtime: &runtime,
         songs_table: &songs_table,
         albums_view: &albums_view,
+        duplicates_view: &duplicates_view,
         playlists_table: &playlists_table,
         playlists_header: &playlists_header,
         sidebar: &sidebar,
@@ -808,6 +815,7 @@ pub(crate) fn build_main_window(
         titlebar: titlebar.clone(),
         songs_table: songs_table.clone(),
         playlists_table: playlists_table.clone(),
+        duplicates_view: duplicates_view.clone(),
         albums_view: albums_view.clone(),
         content_stack: content_stack.clone(),
         toggle_or_start_playback: toggle_or_start_playback.clone(),

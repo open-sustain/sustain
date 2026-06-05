@@ -960,6 +960,9 @@ fn managed_import_copies_external_files_into_planned_library_path() {
         Ok(())
     );
 
+    // Import is a copy operation, not a link or move. The source may live on
+    // another device; only the already-copied staging file is later published
+    // inside the managed library filesystem.
     let expected_destination = library_root
         .join("Unknown Artist")
         .join("Unknown Album")

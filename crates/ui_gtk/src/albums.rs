@@ -71,6 +71,10 @@ pub(crate) struct AlbumsView {
     /// the width watcher after the Albums page has a visible allocation, so
     /// row-position math uses the final column count and live row geometry.
     pending_scroll_album: Rc<RefCell<Option<PendingAlbumScroll>>>,
+    /// Short-lived frame tick used only while a reveal-scroll is pending.
+    /// Width changes arrive through `notify::width`; keeping a permanent tick
+    /// would add Albums work to every frame after first activation.
+    pending_scroll_tick: Rc<RefCell<Option<gtk::TickCallbackId>>>,
     visible_columns: Rc<Cell<usize>>,
     last_width: Rc<Cell<i32>>,
     artwork_loader: ArtworkLoader,
@@ -194,6 +198,7 @@ impl AlbumsView {
             realized_rows: Rc::new(RefCell::new(HashMap::new())),
             row_widgets: Rc::new(RefCell::new(HashMap::new())),
             pending_scroll_album: Rc::new(RefCell::new(None)),
+            pending_scroll_tick: Rc::new(RefCell::new(None)),
             visible_columns: Rc::new(Cell::new(1)),
             last_width: Rc::new(Cell::new(0)),
             artwork_loader,
@@ -466,6 +471,7 @@ impl AlbumsView {
                 album_key,
                 visibility_requested: false,
             });
+        self.ensure_pending_scroll_tick();
     }
 
     fn scroll_pending_album_if_ready(&self) {
@@ -515,18 +521,33 @@ impl AlbumsView {
 
     fn install_width_watcher(&self) {
         let view = self.clone();
-        self.scroller.add_tick_callback(move |scroller, _clock| {
-            let width = scroller.width();
-            if width > 0 && view.last_width.replace(width) != width {
-                let columns = columns_for_width(width);
-                if view.visible_columns.replace(columns) != columns {
-                    view.rebuild_rows();
+        self.scroller
+            .connect_notify_local(Some("width"), move |scroller, _| {
+                let width = scroller.width();
+                if width > 0 && view.last_width.replace(width) != width {
+                    let columns = columns_for_width(width);
+                    if view.visible_columns.replace(columns) != columns {
+                        view.rebuild_rows();
+                    }
                 }
-            }
-            view.scroll_pending_album_if_ready();
+            });
+    }
 
-            glib::ControlFlow::Continue
+    fn ensure_pending_scroll_tick(&self) {
+        if self.pending_scroll_tick.borrow().is_some() {
+            return;
+        }
+        let view = self.clone();
+        let tick_id = self.scroller.add_tick_callback(move |_scroller, _clock| {
+            view.scroll_pending_album_if_ready();
+            if view.pending_scroll_album.borrow().is_some() {
+                glib::ControlFlow::Continue
+            } else {
+                view.pending_scroll_tick.borrow_mut().take();
+                glib::ControlFlow::Break
+            }
         });
+        self.pending_scroll_tick.borrow_mut().replace(tick_id);
     }
 
     fn rebuild_rows(&self) {

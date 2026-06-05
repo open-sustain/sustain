@@ -113,7 +113,7 @@ pub(crate) type CellEditSeedCallback = Rc<dyn Fn(TrackId, EditableField) -> Opti
 pub(crate) type CellEditCommitCallback = Rc<dyn Fn(TrackId, EditableField, String) -> bool>;
 
 /// The two callbacks a table needs to support inline editing. Tables that
-/// do not opt in (everything but the Songs view today) pass `None`.
+/// do not opt in pass `None`.
 #[derive(Clone)]
 pub(crate) struct InlineEditHooks {
     pub(crate) seed: CellEditSeedCallback,

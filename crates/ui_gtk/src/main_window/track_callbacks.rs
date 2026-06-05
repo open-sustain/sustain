@@ -102,6 +102,7 @@ pub(super) struct TrackRowChangedContext<'a> {
     pub(super) runtime: &'a SharedRuntime,
     pub(super) songs_table: &'a TrackTable,
     pub(super) albums_view: &'a AlbumsView,
+    pub(super) duplicates_view: &'a DuplicatesView,
     pub(super) playlists_table: &'a TrackTable,
     pub(super) playlists_header: &'a PlaylistsHeader,
     pub(super) sidebar: &'a PlaylistSidebar,
@@ -118,6 +119,7 @@ pub(super) fn track_row_changed_callback(
     let runtime = ctx.runtime.clone();
     let songs_table = ctx.songs_table.clone();
     let albums_view = ctx.albums_view.clone();
+    let duplicates_view = ctx.duplicates_view.clone();
     let playlists_table = ctx.playlists_table.clone();
     let playlists_header = ctx.playlists_header.clone();
     let sidebar = ctx.sidebar.clone();
@@ -142,21 +144,29 @@ pub(super) fn track_row_changed_callback(
         };
 
         songs_table.update_row(track_id, row.clone());
-        match kind {
-            TrackRowChangedKind::Data => {
-                // In-place per-track refresh — never `replace_tracks`. A
-                // single background completion (Lyrics/Tags/BPM/Key/Waveform,
-                // metadata write) must not collapse the currently-expanded
-                // album or scroll the grid back to the top.
-                albums_view.update_track(track_id);
+        if kind.affects_album_structure() {
+            albums_view.replace_tracks();
+        } else {
+            match kind {
+                TrackRowChangedKind::Data | TrackRowChangedKind::DuplicateGrouping => {
+                    // In-place per-track refresh — never `replace_tracks`. A
+                    // single background completion (Lyrics/Tags/BPM/Key/Waveform,
+                    // metadata write) must not collapse the currently-expanded
+                    // album or scroll the grid back to the top.
+                    albums_view.update_track(track_id);
+                }
+                TrackRowChangedKind::Artwork => {
+                    albums_view.refresh_track_artwork(track_id);
+                }
+                TrackRowChangedKind::AlbumStructure
+                | TrackRowChangedKind::AlbumAndDuplicateGrouping
+                | TrackRowChangedKind::TableOnly => {}
             }
-            TrackRowChangedKind::AlbumStructure => {
-                albums_view.replace_tracks();
-            }
-            TrackRowChangedKind::Artwork => {
-                albums_view.refresh_track_artwork(track_id);
-            }
-            TrackRowChangedKind::TableOnly => {}
+        }
+        if kind.affects_duplicate_grouping() {
+            duplicates_view.refresh_if_active();
+        } else {
+            duplicates_view.update_track_row(track_id);
         }
 
         match sidebar.current_selection() {
@@ -216,11 +226,12 @@ pub(super) fn track_row_changed_callback(
 
 fn inline_edit_changed_kind(field: EditableField) -> TrackRowChangedKind {
     match field {
-        EditableField::Artist | EditableField::Album | EditableField::Year => {
-            TrackRowChangedKind::AlbumStructure
+        EditableField::Artist | EditableField::Album => {
+            TrackRowChangedKind::AlbumAndDuplicateGrouping
         }
-        EditableField::Title
-        | EditableField::Genre
+        EditableField::Year => TrackRowChangedKind::AlbumStructure,
+        EditableField::Title => TrackRowChangedKind::DuplicateGrouping,
+        EditableField::Genre
         | EditableField::Bpm
         | EditableField::Key
         | EditableField::TrackNumber => TrackRowChangedKind::Data,

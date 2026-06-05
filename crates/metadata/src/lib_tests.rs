@@ -19,9 +19,10 @@ use sustain_domain::{FieldChange, TrackMetadata};
 
 use super::{
     AudioFormat, InitialTags, LibraryScanner, MetadataError, MetadataResult, MetadataService,
-    Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, apply_number_change,
-    apply_text_change, apply_year_change, atomic_write_via_rename, audio_format_from_path,
-    bpm_item_key, hash_file_content, lyrics_item_key, valid_embedded_picture,
+    Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, apply_bool_change,
+    apply_number_change, apply_text_change, apply_year_change, atomic_write_via_rename,
+    audio_format_from_path, bpm_item_key, hash_file_content, lyrics_item_key, parse_flag,
+    popularimeter_from_rating, star_rating_value, valid_embedded_picture,
 };
 use sustain_domain::TrackRelativePath;
 
@@ -156,6 +157,187 @@ fn bpm_and_lyrics_survive_a_container_round_trip_on_every_format() {
     assert_bpm_and_lyrics_round_trip(TagType::Id3v2, |tag| Tag::from(Id3v2Tag::from(tag)));
     assert_bpm_and_lyrics_round_trip(TagType::Mp4Ilst, |tag| Tag::from(Ilst::from(tag)));
     assert_bpm_and_lyrics_round_trip(TagType::VorbisComments, |tag| {
+        Tag::from(VorbisComments::from(tag))
+    });
+}
+
+fn assert_full_editable_metadata_round_trip(
+    tag_type: TagType,
+    to_container_and_back: impl Fn(Tag) -> Tag,
+) {
+    let mut tag = Tag::new(tag_type);
+    apply_text_change(
+        &mut tag,
+        ItemKey::TrackTitle,
+        FieldChange::Set("Title".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::TrackArtist,
+        FieldChange::Set("Artist".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::AlbumTitle,
+        FieldChange::Set("Album".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::AlbumArtist,
+        FieldChange::Set("Album Artist".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::Composer,
+        FieldChange::Set("Composer".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::ContentGroup,
+        FieldChange::Set("Grouping".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::Genre,
+        FieldChange::Set("Genre".to_owned()),
+    );
+    apply_number_change(&mut tag, ItemKey::TrackNumber, FieldChange::Set(7_u32));
+    apply_number_change(&mut tag, ItemKey::TrackTotal, FieldChange::Set(12_u32));
+    apply_number_change(&mut tag, ItemKey::DiscNumber, FieldChange::Set(2_u32));
+    apply_number_change(&mut tag, ItemKey::DiscTotal, FieldChange::Set(3_u32));
+    apply_year_change(&mut tag, FieldChange::Set(1998));
+    apply_bool_change(&mut tag, ItemKey::FlagCompilation, FieldChange::Set(true));
+    apply_number_change(&mut tag, bpm_item_key(tag_type), FieldChange::Set(127_u32));
+    apply_text_change(
+        &mut tag,
+        ItemKey::InitialKey,
+        FieldChange::Set("8A".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::Comment,
+        FieldChange::Set("Comment".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        lyrics_item_key(tag_type),
+        FieldChange::Set("Lyrics".to_owned()),
+    );
+
+    let back = to_container_and_back(tag);
+
+    assert_eq!(
+        back.title().as_deref(),
+        Some("Title"),
+        "title lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.artist().as_deref(),
+        Some("Artist"),
+        "artist lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.album().as_deref(),
+        Some("Album"),
+        "album lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(ItemKey::AlbumArtist),
+        Some("Album Artist"),
+        "album artist lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(ItemKey::Composer),
+        Some("Composer"),
+        "composer lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(ItemKey::ContentGroup),
+        Some("Grouping"),
+        "grouping lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.genre().as_deref(),
+        Some("Genre"),
+        "genre lost for {tag_type:?}"
+    );
+    assert_eq!(back.track(), Some(7), "track number lost for {tag_type:?}");
+    assert_eq!(
+        back.track_total(),
+        Some(12),
+        "track total lost for {tag_type:?}"
+    );
+    assert_eq!(back.disk(), Some(2), "disc number lost for {tag_type:?}");
+    assert_eq!(
+        back.disk_total(),
+        Some(3),
+        "disc total lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.date().map(|date| i32::from(date.year)),
+        Some(1998),
+        "year lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(ItemKey::FlagCompilation)
+            .and_then(parse_flag),
+        Some(true),
+        "compilation flag lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(bpm_item_key(tag_type))
+            .and_then(|value| value.trim().parse::<u32>().ok()),
+        Some(127),
+        "bpm lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(ItemKey::InitialKey),
+        Some("8A"),
+        "key lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.comment().as_deref(),
+        Some("Comment"),
+        "comment lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(lyrics_item_key(tag_type)),
+        Some("Lyrics"),
+        "lyrics lost for {tag_type:?}"
+    );
+}
+
+#[test]
+fn editable_metadata_survives_a_container_round_trip_on_every_format() {
+    assert_full_editable_metadata_round_trip(TagType::Id3v2, |tag| Tag::from(Id3v2Tag::from(tag)));
+    assert_full_editable_metadata_round_trip(TagType::Mp4Ilst, |tag| Tag::from(Ilst::from(tag)));
+    assert_full_editable_metadata_round_trip(TagType::VorbisComments, |tag| {
+        Tag::from(VorbisComments::from(tag))
+    });
+}
+
+fn assert_rating_round_trip(tag_type: TagType, to_container_and_back: impl Fn(Tag) -> Tag) {
+    let mut tag = Tag::new(tag_type);
+    let rating = Rating::new(4).expect("rating");
+    tag.insert_text(
+        ItemKey::Popularimeter,
+        popularimeter_from_rating(rating, 23).to_string(),
+    );
+
+    let back = to_container_and_back(tag);
+    let rating = back
+        .ratings()
+        .next()
+        .map(|rating| star_rating_value(rating.rating()));
+
+    assert_eq!(rating, Some(4), "rating lost for {tag_type:?}");
+}
+
+#[test]
+fn rating_survives_a_container_round_trip_on_every_format() {
+    assert_rating_round_trip(TagType::Id3v2, |tag| Tag::from(Id3v2Tag::from(tag)));
+    assert_rating_round_trip(TagType::Mp4Ilst, |tag| Tag::from(Ilst::from(tag)));
+    assert_rating_round_trip(TagType::VorbisComments, |tag| {
         Tag::from(VorbisComments::from(tag))
     });
 }

@@ -24,11 +24,12 @@ use gtk::prelude::*;
 use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, PlaylistId, PlaylistItem};
 
 use super::{
-    ALBUMS_VIEW, LibraryChangedHolder, PLAYLISTS_VIEW, PlaybackChangedCallback, SONGS_VIEW,
-    SharedRuntime, TrackRowChangedHolder,
+    ALBUMS_VIEW, DUPLICATES_VIEW, LibraryChangedHolder, PLAYLISTS_VIEW, PlaybackChangedCallback,
+    SONGS_VIEW, SharedRuntime, TrackRowChangedHolder,
     albums::AlbumsView,
     artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
+    duplicates::DuplicatesView,
     main_window::SidebarCollapseController,
     sidebar::PlaylistSidebar,
     sidebar_context::{
@@ -51,6 +52,7 @@ pub(crate) struct GlobalShortcutContext {
     pub(crate) titlebar: Titlebar,
     pub(crate) songs_table: TrackTable,
     pub(crate) playlists_table: TrackTable,
+    pub(crate) duplicates_view: DuplicatesView,
     pub(crate) albums_view: AlbumsView,
     pub(crate) content_stack: gtk::Stack,
     pub(crate) toggle_or_start_playback: Rc<dyn Fn()>,
@@ -214,6 +216,7 @@ fn install_get_info(context: &GlobalShortcutContext) {
     );
     let songs_table = context.songs_table.clone();
     let playlists_table = context.playlists_table.clone();
+    let duplicates_view = context.duplicates_view.clone();
     let content_stack = context.content_stack.clone();
     let track_context_invocation = context.track_context_invocation.clone();
     action.connect_activate(move |_action, _parameter| {
@@ -225,11 +228,13 @@ fn install_get_info(context: &GlobalShortcutContext) {
                         &content_stack,
                         &songs_table,
                         &playlists_table,
+                        &duplicates_view,
                     ),
                     displayed_track_ids: current_view_order(
                         &content_stack,
                         &songs_table,
                         &playlists_table,
+                        &duplicates_view,
                     ),
                 });
         if invocation.selected_track_ids.is_empty() {
@@ -251,6 +256,7 @@ fn install_show_in_folder(context: &GlobalShortcutContext) {
     );
     let songs_table = context.songs_table.clone();
     let playlists_table = context.playlists_table.clone();
+    let duplicates_view = context.duplicates_view.clone();
     let content_stack = context.content_stack.clone();
     let track_context_invocation = context.track_context_invocation.clone();
     action.connect_activate(move |_action, _parameter| {
@@ -262,6 +268,7 @@ fn install_show_in_folder(context: &GlobalShortcutContext) {
                         &content_stack,
                         &songs_table,
                         &playlists_table,
+                        &duplicates_view,
                     ),
                     displayed_track_ids: Vec::new(),
                 });
@@ -375,11 +382,19 @@ fn install_select_all(
 ) {
     let songs_table = context.songs_table.clone();
     let playlists_table = context.playlists_table.clone();
+    let duplicates_view = context.duplicates_view.clone();
     let content_stack = context.content_stack.clone();
     install_focus_aware_action(
         &context.app,
         SELECT_ALL,
-        move || select_all_in_current_view(&content_stack, &songs_table, &playlists_table),
+        move || {
+            select_all_in_current_view(
+                &content_stack,
+                &songs_table,
+                &playlists_table,
+                &duplicates_view,
+            );
+        },
         focus_aware_actions,
     );
 }
@@ -567,10 +582,12 @@ fn select_all_in_current_view(
     content_stack: &gtk::Stack,
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
+    duplicates_view: &DuplicatesView,
 ) {
     match content_stack.visible_child_name().as_deref() {
         Some(SONGS_VIEW) => songs_table.select_all(),
         Some(PLAYLISTS_VIEW) => playlists_table.select_all(),
+        Some(DUPLICATES_VIEW) => duplicates_view.select_all(),
         _ => {}
     }
 }
@@ -584,10 +601,12 @@ fn current_view_selection(
     content_stack: &gtk::Stack,
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
+    duplicates_view: &DuplicatesView,
 ) -> Vec<sustain_app_runtime::TrackId> {
     match content_stack.visible_child_name().as_deref() {
         Some(SONGS_VIEW) => songs_table.selected_track_ids(),
         Some(PLAYLISTS_VIEW) => playlists_table.selected_track_ids(),
+        Some(DUPLICATES_VIEW) => duplicates_view.selected_track_ids(),
         _ => Vec::new(),
     }
 }
@@ -596,10 +615,12 @@ fn current_view_order(
     content_stack: &gtk::Stack,
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
+    duplicates_view: &DuplicatesView,
 ) -> Vec<sustain_app_runtime::TrackId> {
     match content_stack.visible_child_name().as_deref() {
         Some(SONGS_VIEW) => songs_table.ordered_track_ids(),
         Some(PLAYLISTS_VIEW) => playlists_table.ordered_track_ids(),
+        Some(DUPLICATES_VIEW) => duplicates_view.ordered_track_ids(),
         _ => Vec::new(),
     }
 }

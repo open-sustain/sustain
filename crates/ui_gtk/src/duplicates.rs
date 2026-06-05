@@ -17,7 +17,10 @@ use sustain_app_runtime::{
 use crate::{
     SharedRuntime,
     track_context::TrackRowContextMenu,
-    track_table::{TrackActivatedCallback, TrackTable, TrackTableRow, build_track_table},
+    track_table::{
+        InlineEditHooks, RatingChangedCallback, TrackActivatedCallback, TrackTable, TrackTableRow,
+        build_track_table,
+    },
 };
 
 #[derive(Clone)]
@@ -26,6 +29,8 @@ pub(crate) struct DuplicatesView {
     table: Rc<RefCell<Option<TrackTable>>>,
     context_menu: TrackRowContextMenu,
     track_activated: TrackActivatedCallback,
+    rating_changed: RatingChangedCallback,
+    inline_edit: InlineEditHooks,
     runtime: SharedRuntime,
     strict: gtk::Switch,
     status: gtk::Label,
@@ -38,6 +43,8 @@ impl DuplicatesView {
         runtime: SharedRuntime,
         context_menu: TrackRowContextMenu,
         track_activated: TrackActivatedCallback,
+        rating_changed: RatingChangedCallback,
+        inline_edit: InlineEditHooks,
     ) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.set_hexpand(true);
@@ -64,6 +71,8 @@ impl DuplicatesView {
             table: Rc::new(RefCell::new(None)),
             context_menu,
             track_activated,
+            rating_changed,
+            inline_edit,
             runtime,
             strict,
             status,
@@ -98,6 +107,44 @@ impl DuplicatesView {
         }
     }
 
+    pub(crate) fn selected_track_ids(&self) -> Vec<sustain_app_runtime::TrackId> {
+        self.table
+            .borrow()
+            .as_ref()
+            .map(TrackTable::selected_track_ids)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn ordered_track_ids(&self) -> Vec<sustain_app_runtime::TrackId> {
+        self.table
+            .borrow()
+            .as_ref()
+            .map(TrackTable::ordered_track_ids)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn select_all(&self) {
+        if let Some(table) = self.table.borrow().as_ref() {
+            table.select_all();
+        }
+    }
+
+    pub(crate) fn update_track_row(&self, track_id: sustain_app_runtime::TrackId) {
+        let row = {
+            let runtime = self.runtime.borrow();
+            let honor_sort_tags = runtime.settings().library.honor_sort_tags;
+            runtime
+                .library_track(track_id)
+                .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
+        };
+        let Some(row) = row else {
+            return;
+        };
+        if let Some(table) = self.table.borrow().as_ref() {
+            table.update_row(track_id, row);
+        }
+    }
+
     fn ensure_table(&self) -> TrackTable {
         if let Some(table) = self.table.borrow().as_ref() {
             return table.clone();
@@ -107,9 +154,9 @@ impl DuplicatesView {
             Vec::new(),
             Some(self.track_activated.clone()),
             Some(self.context_menu.clone()),
+            Some(self.rating_changed.clone()),
             None,
-            None,
-            None,
+            Some(self.inline_edit.clone()),
         );
         table.disable_sorting_and_column_reordering();
         self.root.append(&table.widget());

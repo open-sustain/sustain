@@ -8,9 +8,10 @@ use std::{
 
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
-use crate::{Playlist, PlaylistEntry, Track, TrackId, TrackMetadata};
+use crate::{AcousticFeatures, Playlist, PlaylistEntry, Track, TrackId, TrackMetadata};
 
 const STRICT_DURATION_TOLERANCE: Duration = Duration::from_secs(2);
+const LOOSE_DURATION_RATIO_LIMIT: f64 = 1.30;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DuplicateMatchMode {
@@ -140,6 +141,22 @@ fn default_metadata_track_id(tracks: &[Track], field: DuplicateMetadataField) ->
             .min_by_key(|(year, _)| *year)
             .map(|(_, track_id)| track_id);
     }
+    if field == DuplicateMetadataField::Compilation {
+        return tracks
+            .iter()
+            .find(|track| track.metadata.compilation == Some(false))
+            .or_else(|| {
+                tracks
+                    .iter()
+                    .find(|track| track.metadata.compilation.is_none())
+            })
+            .or_else(|| {
+                tracks
+                    .iter()
+                    .find(|track| track.metadata.compilation == Some(true))
+            })
+            .map(|track| track.id);
+    }
     tracks
         .iter()
         .find(|track| metadata_field_is_populated(&track.metadata, field))
@@ -165,6 +182,14 @@ pub fn highest_quality_duplicate_audio_track_ids(tracks: &[Track]) -> Vec<TrackI
 }
 
 pub fn duplicate_groups(tracks: &[Track], mode: DuplicateMatchMode) -> Vec<Vec<TrackId>> {
+    duplicate_groups_with_acoustics(tracks, mode, &BTreeMap::new())
+}
+
+pub fn duplicate_groups_with_acoustics(
+    tracks: &[Track],
+    mode: DuplicateMatchMode,
+    acoustics: &BTreeMap<TrackId, AcousticFeatures>,
+) -> Vec<Vec<TrackId>> {
     let mut loose_groups: BTreeMap<(String, String), Vec<&Track>> = BTreeMap::new();
     for track in tracks {
         let title = normalized_duplicate_text(track.metadata.title.as_deref().unwrap_or_default());
@@ -178,10 +203,7 @@ pub fn duplicate_groups(tracks: &[Track], mode: DuplicateMatchMode) -> Vec<Vec<T
 
     let mut groups = Vec::new();
     for tracks in loose_groups.into_values().filter(|tracks| tracks.len() > 1) {
-        match mode {
-            DuplicateMatchMode::Loose => groups.push(sorted_ids(tracks)),
-            DuplicateMatchMode::Strict => append_strict_groups(&mut groups, tracks),
-        }
+        append_candidate_groups(&mut groups, tracks, mode, acoustics);
     }
     groups
 }
@@ -293,27 +315,63 @@ pub fn plan_duplicate_consolidation(
     })
 }
 
-fn append_strict_groups(groups: &mut Vec<Vec<TrackId>>, tracks: Vec<&Track>) {
-    let mut strict_groups: Vec<Vec<&Track>> = Vec::new();
+fn append_candidate_groups(
+    groups: &mut Vec<Vec<TrackId>>,
+    mut tracks: Vec<&Track>,
+    mode: DuplicateMatchMode,
+    acoustics: &BTreeMap<TrackId, AcousticFeatures>,
+) {
+    tracks.sort_by_key(|track| {
+        (
+            track
+                .metadata
+                .duration
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default(),
+            track.id,
+        )
+    });
+
+    let mut candidate_groups: Vec<Vec<&Track>> = Vec::new();
     for track in tracks {
-        let album = normalized_duplicate_text(track.metadata.album.as_deref().unwrap_or_default());
-        if let Some(group) = strict_groups.iter_mut().find(|group| {
-            let reference = group[0];
-            normalized_duplicate_text(reference.metadata.album.as_deref().unwrap_or_default())
-                == album
-                && durations_match(reference.metadata.duration, track.metadata.duration)
+        if let Some(group) = candidate_groups.iter_mut().find(|group| {
+            group
+                .iter()
+                .all(|reference| duplicate_candidates_match(reference, track, mode, acoustics))
         }) {
             group.push(track);
         } else {
-            strict_groups.push(vec![track]);
+            candidate_groups.push(vec![track]);
         }
     }
     groups.extend(
-        strict_groups
+        candidate_groups
             .into_iter()
             .filter(|group| group.len() > 1)
             .map(sorted_ids),
     );
+}
+
+fn duplicate_candidates_match(
+    left: &Track,
+    right: &Track,
+    mode: DuplicateMatchMode,
+    acoustics: &BTreeMap<TrackId, AcousticFeatures>,
+) -> bool {
+    if !loose_durations_match(left.metadata.duration, right.metadata.duration)
+        || live_marker_mismatch(&left.metadata, &right.metadata)
+        || acoustics_are_clearly_different(acoustics.get(&left.id), acoustics.get(&right.id))
+    {
+        return false;
+    }
+
+    if mode == DuplicateMatchMode::Strict {
+        normalized_duplicate_text(left.metadata.album.as_deref().unwrap_or_default())
+            == normalized_duplicate_text(right.metadata.album.as_deref().unwrap_or_default())
+            && durations_match(left.metadata.duration, right.metadata.duration)
+    } else {
+        true
+    }
 }
 
 fn sorted_ids(mut tracks: Vec<&Track>) -> Vec<TrackId> {
@@ -327,6 +385,91 @@ fn durations_match(left: Option<Duration>, right: Option<Duration>) -> bool {
         (None, None) => true,
         _ => false,
     }
+}
+
+fn loose_durations_match(left: Option<Duration>, right: Option<Duration>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            let left = left.as_secs_f64();
+            let right = right.as_secs_f64();
+            let min = left.min(right);
+            let max = left.max(right);
+            if min == 0.0 {
+                max == 0.0
+            } else {
+                max / min <= LOOSE_DURATION_RATIO_LIMIT
+            }
+        }
+        _ => true,
+    }
+}
+
+fn live_marker_mismatch(left: &TrackMetadata, right: &TrackMetadata) -> bool {
+    has_live_marker(left) != has_live_marker(right)
+}
+
+fn has_live_marker(metadata: &TrackMetadata) -> bool {
+    let mut text = String::new();
+    if let Some(title) = &metadata.title {
+        text.push_str(title);
+        text.push(' ');
+    }
+    if let Some(album) = &metadata.album {
+        text.push_str(album);
+    }
+    text.nfkd()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .any(|token| token == "live")
+}
+
+fn acoustics_are_clearly_different(
+    left: Option<&AcousticFeatures>,
+    right: Option<&AcousticFeatures>,
+) -> bool {
+    let (Some(left), Some(right)) = (left, right) else {
+        return false;
+    };
+
+    let mut differences = 0;
+    if (left.integrated_lufs - right.integrated_lufs).abs() > 8.0
+        || (left.short_term_lufs_max - right.short_term_lufs_max).abs() > 8.0
+    {
+        differences += 1;
+    }
+    if (left.loudness_range_lu - right.loudness_range_lu).abs() > 10.0 {
+        differences += 1;
+    }
+    let onset_min = left.onset_rate_hz.min(right.onset_rate_hz);
+    let onset_max = left.onset_rate_hz.max(right.onset_rate_hz);
+    if onset_max - onset_min > 1.5 && (onset_min <= 0.0 || onset_max / onset_min > 2.5) {
+        differences += 1;
+    }
+    let band_distance = left
+        .band_ratios()
+        .into_iter()
+        .zip(right.band_ratios())
+        .map(|(left, right)| (left - right).abs())
+        .sum::<f32>();
+    if band_distance > 0.65 {
+        differences += 1;
+    }
+    if (left.low_band_variation - right.low_band_variation).abs() > 1.0 {
+        differences += 1;
+    }
+    if (left.tonalness - right.tonalness).abs() > 0.55 {
+        differences += 1;
+    }
+
+    differences >= 2
 }
 
 fn normalized_duplicate_text(value: &str) -> String {
@@ -509,6 +652,47 @@ mod tests {
     }
 
     #[test]
+    fn loose_groups_reject_widely_different_durations() {
+        let tracks = vec![
+            track(1, "Artist", "Song", "Album", 200),
+            track(2, "Artist", "Song", "Album", 260),
+            track(3, "Artist", "Song", "Album", 500),
+        ];
+
+        assert_eq!(
+            duplicate_groups(&tracks, DuplicateMatchMode::Loose),
+            vec![vec![track_id(1), track_id(2)]]
+        );
+    }
+
+    #[test]
+    fn loose_groups_reject_live_marker_mismatches() {
+        let tracks = vec![
+            track(1, "Artist", "Song", "Studio Album", 200),
+            track(2, "Artist", "Song (Live)", "Live Album", 202),
+        ];
+
+        assert!(duplicate_groups(&tracks, DuplicateMatchMode::Loose).is_empty());
+    }
+
+    #[test]
+    fn analyzed_tracks_with_clearly_different_acoustics_do_not_group() {
+        let tracks = vec![
+            track(1, "Artist", "Song", "Album", 200),
+            track(2, "Artist", "Song", "Album", 201),
+        ];
+        let acoustics = BTreeMap::from([
+            (track_id(1), acoustics(-14.0, -9.0, 0.8, [0.50, 0.35, 0.15])),
+            (track_id(2), acoustics(-5.0, -1.0, 3.4, [0.10, 0.30, 0.60])),
+        ]);
+
+        assert!(
+            duplicate_groups_with_acoustics(&tracks, DuplicateMatchMode::Loose, &acoustics)
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn plan_keeps_audio_identity_takes_metadata_and_aggregates_library_values() {
         let mut first = track(1, "Artist", "First", "Album", 200);
         first.rating = Rating::new(3).expect("rating");
@@ -605,6 +789,26 @@ mod tests {
     }
 
     #[test]
+    fn default_metadata_selection_prefers_non_compilation_values() {
+        let mut compilation = track(1, "Artist", "Song", "Compilation", 200);
+        compilation.metadata.compilation = Some(true);
+        let mut original_release = track(2, "Artist", "Song", "Album", 200);
+        original_release.metadata.compilation = None;
+
+        let selection = default_duplicate_metadata_selection(&[compilation, original_release])
+            .expect("selection");
+
+        assert_eq!(
+            selection
+                .fields
+                .iter()
+                .find(|selection| selection.field == DuplicateMetadataField::Compilation)
+                .map(|selection| selection.track_id),
+            Some(track_id(2))
+        );
+    }
+
+    #[test]
     fn highest_quality_audio_prefers_bitrate_then_lossless_on_tie() {
         let mut lower_lossless = track(1, "Artist", "Song", "Album", 200);
         lower_lossless.metadata.bitrate_kbps = Some(256);
@@ -690,6 +894,25 @@ mod tests {
             last_played_at: Some(UNIX_EPOCH + Duration::from_secs(last_played)),
             last_skipped_at: None,
             date_added_at: Some(UNIX_EPOCH + Duration::from_secs(date_added)),
+        }
+    }
+
+    fn acoustics(
+        integrated_lufs: f32,
+        short_term_lufs_max: f32,
+        onset_rate_hz: f32,
+        band_ratios: [f32; 3],
+    ) -> AcousticFeatures {
+        AcousticFeatures {
+            integrated_lufs,
+            short_term_lufs_max,
+            loudness_range_lu: 4.0,
+            onset_rate_hz,
+            low_band_ratio: band_ratios[0],
+            mid_band_ratio: band_ratios[1],
+            high_band_ratio: band_ratios[2],
+            low_band_variation: 0.4,
+            tonalness: 0.5,
         }
     }
 
