@@ -4,20 +4,26 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gtk::glib;
+use sustain_i18n::pgettext;
 
-/// Render a `SystemTime` as `dd/mm/YYYY HH:MM`.
+/// Render a `SystemTime` as a compact local date and time.
 ///
-/// Returns `None` when the timestamp is before the Unix epoch, which only
-/// happens for pathological clocks; callers decide how to render that (em
+/// The `strftime(3)` field order, separators, and clock are localized: each
+/// catalog supplies the pattern its locale expects (the default, used by
+/// English and the C locale, is day/month/year 24-hour time). A pattern that
+/// `glib` cannot apply, like a timestamp before the Unix epoch (only
+/// pathological clocks), yields `None`; callers decide how to render that (em
 /// dash in a details panel, empty cell in the table).
 pub(crate) fn format_system_time_short(time: SystemTime) -> Option<String> {
     let since_epoch = time.duration_since(UNIX_EPOCH).ok()?;
     let seconds = i64::try_from(since_epoch.as_secs()).ok()?;
     let local = glib::DateTime::from_unix_local(seconds).ok()?;
-    local
-        .format("%d/%m/%Y %H:%M")
-        .ok()
-        .map(|text| text.to_string())
+    // Translators: a strftime(3) pattern for a compact local date and time
+    // (run `man strftime`). Reorder the fields and change the separators to
+    // your locale's convention; keep it compact (no seconds). %d = day of
+    // month, %m = month, %Y = 4-digit year, %H = hour (00-23), %M = minute.
+    let pattern = pgettext("compact date-time", "%d/%m/%Y %H:%M");
+    local.format(&pattern).ok().map(|text| text.to_string())
 }
 
 #[cfg(test)]

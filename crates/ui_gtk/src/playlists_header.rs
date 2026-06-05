@@ -10,9 +10,10 @@
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use sustain_i18n::{gettext, ngettext, tr_format};
 
 use crate::TITLEBAR_HEIGHT;
-use crate::status_bar::{duration_text, pluralize};
+use crate::status_bar::duration_text;
 
 /// Snapshot of what the header should display. Computed once per refresh
 /// alongside the table rows; `None` means "no playable selection — hide
@@ -54,10 +55,11 @@ impl PlaylistsHeader {
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         title_row.append(&title);
 
-        let play_button = header_icon_button("media-playback-start-symbolic", "Play");
+        let play_button = header_icon_button("media-playback-start-symbolic", &gettext("Play"));
         title_row.append(&play_button);
 
-        let shuffle_button = header_icon_button("media-playlist-shuffle-symbolic", "Shuffle");
+        let shuffle_button =
+            header_icon_button("media-playlist-shuffle-symbolic", &gettext("Shuffle"));
         title_row.append(&shuffle_button);
 
         title_block.append(&title_row);
@@ -116,11 +118,17 @@ impl PlaylistsHeader {
 }
 
 fn summary_text(track_count: usize, duration_seconds: u64) -> String {
-    format!(
-        "{} {}, {}",
-        track_count,
-        pluralize(track_count, "song", "songs"),
-        duration_text(duration_seconds),
+    let songs = tr_format!(
+        // Translators: a track count, e.g. "12 songs".
+        ngettext("{count} song", "{count} songs", track_count as u32),
+        count = track_count,
+    );
+    // Translators: {songs} and {duration} are already-localized phrases such as
+    // "12 songs" / "2 hours"; keep the placeholders verbatim.
+    tr_format!(
+        gettext("{songs}, {duration}"),
+        songs = songs,
+        duration = duration_text(duration_seconds),
     )
 }
 

@@ -32,7 +32,7 @@ use super::{
     main_window::SidebarCollapseController,
     sidebar::PlaylistSidebar,
     sidebar_context::{
-        NEW_PLAYLIST_DEFAULT_NAME, NEW_SMART_PLAYLIST_DEFAULT_NAME, unique_default_name,
+        new_playlist_default_name, new_smart_playlist_default_name, unique_default_name,
     },
     smart_playlist_editor::{SmartPlaylistEditorMode, open_smart_playlist_editor},
     titlebar::Titlebar,
@@ -624,7 +624,7 @@ pub(crate) fn create_new_playlist(
             .collect();
         (ids, names)
     };
-    let name = unique_default_name(existing_names, NEW_PLAYLIST_DEFAULT_NAME);
+    let name = unique_default_name(existing_names, &new_playlist_default_name());
     if command_controller.dispatch_succeeded(ApplicationCommand::CreatePlaylist {
         name,
         parent_folder_id: None,
@@ -658,7 +658,7 @@ pub(crate) fn open_new_smart_playlist_editor(
         .iter()
         .map(|smart| smart.name.clone())
         .collect();
-    let name = unique_default_name(existing_names, NEW_SMART_PLAYLIST_DEFAULT_NAME);
+    let name = unique_default_name(existing_names, &new_smart_playlist_default_name());
     let sidebar_for_saved = sidebar.clone();
     open_smart_playlist_editor(
         parent,

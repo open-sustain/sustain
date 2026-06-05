@@ -12,6 +12,7 @@ use sustain_app_runtime::{
     ApplicationRuntime, EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_TRANSITION, Notification,
     NotificationId, NotificationKind,
 };
+use sustain_i18n::{gettext, ngettext, tr_format};
 
 use super::{STATUS_BAR_HEIGHT, SharedRuntime};
 use crate::track_table::TrackTableRow;
@@ -185,11 +186,11 @@ impl NotificationSlot {
         label.add_css_class("task-status-label");
         label.set_xalign(1.0);
 
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&gettext("Cancel"));
         cancel.add_css_class("task-status-cancel");
         cancel.set_valign(gtk::Align::Center);
         cancel.set_visible(false);
-        cancel.set_tooltip_text(Some("Cancel"));
+        cancel.set_tooltip_text(Some(&gettext("Cancel")));
         let cancel_for_click = cancel.clone();
         cancel.connect_clicked(move |_| {
             // Cooperative cancellation: disable the button while the
@@ -217,12 +218,11 @@ impl NotificationSlot {
             NotificationKind::Persistent { cancellable: true }
         );
 
-        let label_text = if is_persistent && cancelling {
-            "Cancelling..."
+        if is_persistent && cancelling {
+            self.label.set_text(&gettext("Cancelling..."));
         } else {
-            notification.body.as_str()
-        };
-        self.label.set_text(label_text);
+            self.label.set_text(&notification.body);
+        }
 
         self.spinner.set_visible(is_persistent);
         self.spinner.set_spinning(is_persistent);
@@ -397,12 +397,18 @@ pub(crate) fn library_status_text(
     duration_seconds: u64,
     size_bytes: u64,
 ) -> String {
-    format!(
-        "{} {}, {}, {}",
-        track_count,
-        pluralize(track_count, "song", "songs"),
-        duration_text(duration_seconds),
-        file_size_text(size_bytes),
+    let songs = tr_format!(
+        // Translators: a track count, e.g. "2 songs".
+        ngettext("{count} song", "{count} songs", track_count as u32),
+        count = track_count,
+    );
+    // Translators: {songs}, {duration} and {size} are already-localized phrases
+    // such as "2 songs" / "2 hours" / "250 MB"; keep the placeholders verbatim.
+    tr_format!(
+        gettext("{songs}, {duration}, {size}"),
+        songs = songs,
+        duration = duration_text(duration_seconds),
+        size = file_size_text(size_bytes),
     )
 }
 
@@ -410,15 +416,23 @@ pub(crate) fn duration_text(duration_seconds: u64) -> String {
     let hours = duration_seconds / 3_600;
     if hours >= 24 {
         let days = hours / 24;
-        format!("{} {}", days, pluralize(days as usize, "day", "days"))
+        // Translators: a duration in whole days, e.g. "2 days".
+        tr_format!(
+            ngettext("{days} day", "{days} days", days as u32),
+            days = days
+        )
     } else if hours >= 1 {
-        format!("{} {}", hours, pluralize(hours as usize, "hour", "hours"))
+        // Translators: a duration in whole hours, e.g. "2 hours".
+        tr_format!(
+            ngettext("{hours} hour", "{hours} hours", hours as u32),
+            hours = hours,
+        )
     } else {
         let minutes = duration_seconds / 60;
-        format!(
-            "{} {}",
-            minutes,
-            pluralize(minutes as usize, "minute", "minutes")
+        // Translators: a duration in whole minutes, e.g. "30 minutes".
+        tr_format!(
+            ngettext("{minutes} minute", "{minutes} minutes", minutes as u32),
+            minutes = minutes,
         )
     }
 }
@@ -428,18 +442,14 @@ fn file_size_text(size_bytes: u64) -> String {
     const GB: u64 = 1_000_000_000;
 
     if size_bytes >= GB {
-        format!("{} GB", size_bytes / GB)
+        // Translators: {size} is a number; "GB" is the gigabyte unit symbol
+        // (e.g. French "Go"). Keep it compact.
+        tr_format!(gettext("{size} GB"), size = size_bytes / GB)
     } else {
-        format!("{} MB", size_bytes / MB)
+        // Translators: {size} is a number; "MB" is the megabyte unit symbol
+        // (e.g. French "Mo"). Keep it compact.
+        tr_format!(gettext("{size} MB"), size = size_bytes / MB)
     }
-}
-
-pub(crate) fn pluralize(
-    count: usize,
-    singular: &'static str,
-    plural: &'static str,
-) -> &'static str {
-    if count == 1 { singular } else { plural }
 }
 
 #[cfg(test)]

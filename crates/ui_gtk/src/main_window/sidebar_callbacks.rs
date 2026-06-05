@@ -30,7 +30,7 @@ pub(super) fn sidebar_action_callback(
                 .iter()
                 .map(|folder| folder.name.clone())
                 .collect();
-            let name = unique_default_name(existing_names, NEW_PLAYLIST_FOLDER_DEFAULT_NAME);
+            let name = unique_default_name(existing_names, &new_playlist_folder_default_name());
             if command_controller.dispatch_succeeded(ApplicationCommand::CreatePlaylistFolder {
                 name,
                 parent_folder_id: None,

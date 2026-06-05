@@ -2338,6 +2338,7 @@ dependencies = [
  "sustain-app-runtime",
  "sustain-artwork",
  "sustain-desktop",
+ "sustain-i18n",
 ]
 
 [[package]]

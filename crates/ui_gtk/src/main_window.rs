@@ -58,8 +58,8 @@ use super::{
     },
     sidebar::{PlaylistSidebar, SidebarSelection, build_content_area},
     sidebar_context::{
-        NEW_PLAYLIST_FOLDER_DEFAULT_NAME, SidebarActionCallback, SidebarContextAction,
-        SidebarContextMenu, unique_default_name,
+        SidebarActionCallback, SidebarContextAction, SidebarContextMenu,
+        new_playlist_folder_default_name, unique_default_name,
     },
     smart_playlist_editor::{SmartPlaylistEditorMode, open_smart_playlist_editor},
     statistics::StatisticsView,
