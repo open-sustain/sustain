@@ -8,21 +8,23 @@ use std::{
 };
 
 use lofty::{
+    config::WriteOptions,
     id3::v2::Id3v2Tag,
     mp4::Ilst,
     ogg::VorbisComments,
     picture::{Picture, PictureType},
-    prelude::Accessor,
-    tag::{ItemKey, Tag, TagType},
+    prelude::{Accessor, TaggedFileExt},
+    tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType},
 };
-use sustain_domain::{FieldChange, TrackMetadata};
+use sustain_domain::{FieldChange, MetadataChange, TrackMetadata};
 
 use super::{
-    AudioFormat, InitialTags, LibraryScanner, MetadataError, MetadataResult, MetadataService,
-    Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, apply_bool_change,
+    AudioFormat, InitialTags, LibraryScanner, LoftyMetadataService, MetadataError, MetadataResult,
+    MetadataService, Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, apply_bool_change,
     apply_number_change, apply_text_change, apply_year_change, atomic_write_via_rename,
     audio_format_from_path, bpm_item_key, hash_file_content, lyrics_item_key, parse_flag,
-    popularimeter_from_rating, star_rating_value, valid_embedded_picture,
+    popularimeter_from_rating, repair_invalid_id3v2_languages, star_rating_value,
+    valid_embedded_picture,
 };
 use sustain_domain::TrackRelativePath;
 
@@ -356,6 +358,218 @@ fn id3v2_drops_the_plain_bpm_and_lyrics_keys() {
     assert_eq!(back.get_string(ItemKey::IntegerBpm), None);
     assert_eq!(back.get_string(ItemKey::Lyrics), None);
     assert_eq!(back.get_string(ItemKey::UnsyncLyrics), None);
+}
+
+#[test]
+fn repairs_only_malformed_id3v2_language_frames() {
+    // #193: COMM/USLT carry a 3-byte ISO-639-2 language lofty accepts on
+    // read but refuses to write. Both surface on the abstract tag as items
+    // bearing a `lang`; the repair heals the malformed ones to `XXX` and
+    // leaves valid ones — and the text/description — untouched.
+    let mut tag = Tag::new(TagType::Id3v2);
+
+    let mut malformed_comment = TagItem::new(ItemKey::Comment, ItemValue::Text("note".to_owned()));
+    malformed_comment.set_lang([0, 0, 0]);
+    malformed_comment.set_description("desc".to_owned());
+    tag.push_unchecked(malformed_comment);
+
+    let mut valid_comment = TagItem::new(ItemKey::Comment, ItemValue::Text("keep".to_owned()));
+    valid_comment.set_lang(*b"eng");
+    tag.push_unchecked(valid_comment);
+
+    let mut malformed_lyrics =
+        TagItem::new(ItemKey::UnsyncLyrics, ItemValue::Text("la la".to_owned()));
+    malformed_lyrics.set_lang([0, 0, 0]);
+    tag.push_unchecked(malformed_lyrics);
+
+    repair_invalid_id3v2_languages(&mut tag);
+
+    let comments: Vec<&TagItem> = tag.get_items(ItemKey::Comment).collect();
+    let healed = comments
+        .iter()
+        .find(|item| item.description() == "desc")
+        .expect("the malformed comment survives");
+    assert_eq!(healed.lang(), b"XXX", "malformed language healed to XXX");
+    assert_eq!(
+        healed.value().text(),
+        Some("note"),
+        "comment text preserved"
+    );
+
+    let untouched = comments
+        .iter()
+        .find(|item| item.value().text() == Some("keep"))
+        .expect("the valid comment survives");
+    assert_eq!(
+        untouched.lang(),
+        b"eng",
+        "a valid language is left untouched"
+    );
+
+    let lyrics = tag
+        .get_items(ItemKey::UnsyncLyrics)
+        .next()
+        .expect("lyrics survive");
+    assert_eq!(lyrics.lang(), b"XXX", "USLT language healed too");
+    assert_eq!(
+        lyrics.value().text(),
+        Some("la la"),
+        "lyrics text preserved"
+    );
+}
+
+#[test]
+fn repair_leaves_valid_language_tags_byte_for_byte_unchanged() {
+    // Acceptance criterion: a file without the defect must serialize exactly
+    // as before, so the repair must be a true no-op on valid input.
+    let mut tag = Tag::new(TagType::Id3v2);
+    let mut comment = TagItem::new(ItemKey::Comment, ItemValue::Text("comment".to_owned()));
+    comment.set_lang(*b"eng");
+    tag.push_unchecked(comment);
+
+    let before = dump_id3v2(tag.clone());
+    repair_invalid_id3v2_languages(&mut tag);
+    let after = dump_id3v2(tag);
+
+    assert_eq!(before, after);
+}
+
+/// Serializes `tag` as ID3v2 exactly as the save path would, returning the
+/// frame bytes. Panics if serialization fails, which is the very failure
+/// #193 is about — so a malformed-language tag must be repaired first.
+fn dump_id3v2(tag: Tag) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    Id3v2Tag::from(tag)
+        .dump_to(&mut bytes, WriteOptions::default())
+        .expect("ID3v2 tag serializes");
+    bytes
+}
+
+/// Builds a minimal but lofty-readable MP3: an ID3v2.3 tag carrying a single
+/// `COMM` frame with the given 3-byte `language` and `text`, followed by two
+/// MPEG-1 Layer III frames so lofty can read audio properties. `language` is
+/// written verbatim — including malformed values like `\0\0\0` that lofty
+/// accepts on read but refuses to write — which is exactly the on-disk state
+/// issue #193 must heal.
+fn mp3_with_comment_language(language: [u8; 3], text: &str) -> Vec<u8> {
+    fn synchsafe(mut value: u32) -> [u8; 4] {
+        let mut out = [0u8; 4];
+        for slot in out.iter_mut().rev() {
+            *slot = (value & 0x7f) as u8;
+            value >>= 7;
+        }
+        out
+    }
+
+    // COMM content: encoding (Latin-1) + language + empty description + text.
+    let mut content = vec![0x00];
+    content.extend_from_slice(&language);
+    content.push(0x00);
+    content.extend_from_slice(text.as_bytes());
+
+    let mut frame = Vec::new();
+    frame.extend_from_slice(b"COMM");
+    frame.extend_from_slice(&(content.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&[0x00, 0x00]); // frame flags
+    frame.extend_from_slice(&content);
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"ID3");
+    bytes.extend_from_slice(&[0x03, 0x00, 0x00]); // v2.3.0, no tag flags
+    bytes.extend_from_slice(&synchsafe(frame.len() as u32));
+    bytes.extend_from_slice(&frame);
+
+    // Two CBR MPEG-1 Layer III frames (128 kbps, 44.1 kHz, stereo → 417
+    // bytes each). lofty only parses the frame header, so zeroed audio data
+    // suffices for it to report properties and accept the file.
+    for _ in 0..2 {
+        let mut mpeg_frame = vec![0xFF, 0xFB, 0x90, 0x00];
+        mpeg_frame.resize(417, 0x00);
+        bytes.extend_from_slice(&mpeg_frame);
+    }
+
+    bytes
+}
+
+/// Performs one tag-write kind against a crafted MP3 whose only `COMM` frame
+/// carries the malformed `\0\0\0` language that made every mirror attempt
+/// fail (#193). Asserts the write now succeeds, the comment text is
+/// preserved, and the language is healed to `XXX`. Without the repair the
+/// write returns `WriteFailed` and this fails.
+fn assert_write_heals_invalid_language(
+    write: impl Fn(&LoftyMetadataService, &Path) -> MetadataResult<()>,
+) {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("malformed.mp3");
+    fs::write(&path, mp3_with_comment_language([0, 0, 0], "hello")).expect("write fixture");
+
+    write(&LoftyMetadataService, &path).expect("write heals the malformed language and succeeds");
+
+    let back = lofty::read_from_path(&path).expect("re-read written file");
+    let tag = back.primary_tag().expect("primary tag");
+    assert_eq!(
+        tag.comment().as_deref(),
+        Some("hello"),
+        "comment text preserved across the heal"
+    );
+    let comment = tag
+        .get_items(ItemKey::Comment)
+        .next()
+        .expect("comment item present");
+    assert_eq!(
+        comment.lang(),
+        b"XXX",
+        "language normalized to the spec placeholder"
+    );
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn write_rating_heals_invalid_comment_language() {
+    assert_write_heals_invalid_language(|service, path| {
+        service.write_rating(path, Rating::new(4).expect("valid rating"))
+    });
+}
+
+#[test]
+fn write_metadata_heals_invalid_comment_language() {
+    // A metadata write that does not touch the comment still carries the
+    // pre-existing malformed frame through, so it must heal it too.
+    assert_write_heals_invalid_language(|service, path| {
+        service.write_metadata(path, MetadataChange::default())
+    });
+}
+
+#[test]
+fn write_artwork_heals_invalid_comment_language() {
+    assert_write_heals_invalid_language(|service, path| service.write_artwork(path, None));
+}
+
+#[test]
+fn write_preserves_a_valid_comment_language() {
+    // The inverse guard: a file whose comment language is already valid must
+    // not be rewritten to `XXX`.
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("valid.mp3");
+    fs::write(&path, mp3_with_comment_language(*b"eng", "hello")).expect("write fixture");
+
+    LoftyMetadataService
+        .write_rating(&path, Rating::new(3).expect("valid rating"))
+        .expect("write a valid-language file");
+
+    let back = lofty::read_from_path(&path).expect("re-read written file");
+    let tag = back.primary_tag().expect("primary tag");
+    let comment = tag
+        .get_items(ItemKey::Comment)
+        .next()
+        .expect("comment item present");
+    assert_eq!(comment.lang(), b"eng", "a valid language is left untouched");
+    assert_eq!(tag.comment().as_deref(), Some("hello"));
+
+    fs::remove_dir_all(root).expect("remove test directory");
 }
 
 #[test]

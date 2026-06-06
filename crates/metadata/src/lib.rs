@@ -18,8 +18,11 @@ use lofty::{
     picture::{Picture, PictureType},
     prelude::{Accessor, AudioFile, TaggedFileExt},
     tag::{
-        ItemKey, Tag, TagType,
-        items::popularimeter::{Popularimeter, StarRating},
+        ItemKey, Tag, TagItem, TagType,
+        items::{
+            Lang, UNKNOWN_LANGUAGE,
+            popularimeter::{Popularimeter, StarRating},
+        },
     },
 };
 use sha2::{Digest, Sha256};
@@ -462,6 +465,7 @@ impl MetadataService for LoftyMetadataService {
         let lyrics_key = lyrics_item_key(tag.tag_type());
         apply_text_change(tag, lyrics_key, change.lyrics);
 
+        repair_invalid_id3v2_languages(tag);
         atomic_save_to_path(&tagged_file, path, WriteOptions::default())
     }
 
@@ -501,6 +505,7 @@ impl MetadataService for LoftyMetadataService {
             );
         }
 
+        repair_invalid_id3v2_languages(tag);
         atomic_save_to_path(&tagged_file, path, WriteOptions::default())
     }
 
@@ -550,6 +555,7 @@ impl MetadataService for LoftyMetadataService {
             tag.push_picture(picture);
         }
 
+        repair_invalid_id3v2_languages(tag);
         atomic_save_to_path(&tagged_file, path, WriteOptions::default())
     }
 }
@@ -737,6 +743,57 @@ fn ensure_primary_tag(tagged_file: &mut TaggedFile) {
     }
 
     tagged_file.insert_tag(Tag::new(tagged_file.primary_tag_type()));
+}
+
+/// lofty's exact write-time rule for an ID3v2 language field
+/// (`id3/v2/items/language_frame.rs`): each of the three bytes must be
+/// ASCII-alphabetic. The field is a fixed `[u8; 3]`, so its length is never
+/// in question. A value like `\0\0\0` — which some taggers emit and lofty
+/// accepts on read but rejects on write — fails this rule and makes the
+/// whole frame unserializable.
+fn is_valid_id3v2_language(language: &Lang) -> bool {
+    language.iter().all(u8::is_ascii_alphabetic)
+}
+
+/// De-corrupts malformed ID3v2 language codes on `tag` so a structurally
+/// broken tag inherited from another tagger becomes writable again (#193).
+///
+/// `COMM` and `USLT` are the only ID3v2 frames whose three-byte ISO-639-2
+/// language lofty validates when serializing; both surface on the abstract
+/// tag as items carrying a `lang`, and a single invalid field (e.g.
+/// `\0\0\0`) makes every save of the file fail with `WriteFailed`. Sustain
+/// already owns the file at the moment it rewrites it — SQLite is
+/// authoritative — so a write is the natural, safe point to heal the
+/// container field it inherited.
+///
+/// Only the malformed language is touched: it is reset to the spec's
+/// "undefined" placeholder `XXX` (ID3v2 §4) while the comment/lyrics text
+/// and description are preserved verbatim. Valid languages are left
+/// untouched, so a file without the defect serializes exactly as before.
+/// Non-ID3v2 formats carry no such field and are skipped.
+fn repair_invalid_id3v2_languages(tag: &mut Tag) {
+    if tag.tag_type() != TagType::Id3v2 {
+        return;
+    }
+
+    for item_key in [ItemKey::Comment, ItemKey::UnsyncLyrics] {
+        // `take_filter` pulls out only the malformed items and preserves the
+        // order of the rest, so valid frames keep their position and an
+        // already-clean file is left undisturbed. Each extracted item is
+        // re-appended with a healed language via `push_unchecked`, which —
+        // unlike `insert` — never deduplicates, so two comments that differ
+        // only by their (now-healed) language both survive.
+        let repaired: Vec<TagItem> = tag
+            .take_filter(item_key, |item| !is_valid_id3v2_language(item.lang()))
+            .map(|mut item| {
+                item.set_lang(UNKNOWN_LANGUAGE);
+                item
+            })
+            .collect();
+        for item in repaired {
+            tag.push_unchecked(item);
+        }
+    }
 }
 
 // Persists `tagged_file` over `path` via atomic replace-by-rename: the
