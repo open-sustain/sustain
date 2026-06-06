@@ -34,6 +34,7 @@ pub use sustain_domain::{
 
 mod atomic_file;
 use atomic_file::atomic_write_via_rename;
+mod mpeg_frame;
 
 pub type MetadataResult<T> = Result<T, MetadataError>;
 
@@ -811,11 +812,52 @@ fn atomic_save_to_path(
     path: &Path,
     options: WriteOptions,
 ) -> MetadataResult<()> {
+    let is_mp3 = audio_format_from_path(path) == Ok(AudioFormat::Mp3);
     atomic_write_via_rename(path, |temp_path| {
+        if tagged_file.save_to_path(temp_path, options).is_ok() {
+            return Ok(());
+        }
+
+        // lofty re-detects the format on write and only tolerates a small
+        // window of leading junk before the first MPEG frame. An MP3 that
+        // carries stacked ID3v2 tags or oversized padding between its tag and
+        // its audio pushes the first frame past that window, so lofty refuses
+        // to rewrite it (`UnknownFormat`) even though it read it fine via the
+        // file extension. Heal such a file by compacting its leading region
+        // down to the audio stream, then let lofty write a single clean tag
+        // (#193 follow-up). Non-MP3 formats do not hit this; an MP3 whose
+        // audio already starts at offset 0 failed for some other reason.
+        if !is_mp3 || !compact_mpeg_leading_region(temp_path)? {
+            return Err(MetadataError::WriteFailed);
+        }
+
         tagged_file
             .save_to_path(temp_path, options)
             .map_err(|_| MetadataError::WriteFailed)
     })
+}
+
+/// Compacts the MP3 at `path` in place down to its first MPEG audio frame,
+/// dropping the leading region — stacked ID3v2 tags, oversized padding, and
+/// any other non-standard junk some taggers leave behind — while preserving
+/// the audio (and any trailing tags) byte-for-byte.
+///
+/// Returns `Ok(true)` when a leading region was removed, `Ok(false)` when the
+/// first frame is already at offset 0 (so there was nothing to heal and the
+/// caller's prior write failure had a different cause), and `Err` when no
+/// audio frame could be located. The first frame is found by validating a
+/// chained run of frames (see [`mpeg_frame`]) rather than scanning for a lone
+/// sync, so the cut never lands inside the audio; the byte-exact tail copy is
+/// what makes this a heal rather than a re-encode.
+fn compact_mpeg_leading_region(path: &Path) -> MetadataResult<bool> {
+    let bytes = fs::read(path).map_err(|_| MetadataError::WriteFailed)?;
+    let audio_start =
+        mpeg_frame::first_audio_frame_offset(&bytes).ok_or(MetadataError::WriteFailed)?;
+    if audio_start == 0 {
+        return Ok(false);
+    }
+    fs::write(path, &bytes[audio_start..]).map_err(|_| MetadataError::WriteFailed)?;
+    Ok(true)
 }
 
 fn apply_text_change(tag: &mut Tag, item_key: ItemKey, change: FieldChange<String>) {

@@ -572,6 +572,109 @@ fn write_preserves_a_valid_comment_language() {
     fs::remove_dir_all(root).expect("remove test directory");
 }
 
+fn synchsafe_size(mut value: u32) -> [u8; 4] {
+    let mut out = [0u8; 4];
+    for slot in out.iter_mut().rev() {
+        *slot = (value & 0x7f) as u8;
+        value >>= 7;
+    }
+    out
+}
+
+/// A minimal valid ID3v2.3 tag wrapping `payload` arbitrary body bytes.
+fn id3v2_3_tag(payload: &[u8]) -> Vec<u8> {
+    let mut tag = b"ID3".to_vec();
+    tag.extend_from_slice(&[0x03, 0x00, 0x00]);
+    tag.extend_from_slice(&synchsafe_size(payload.len() as u32));
+    tag.extend_from_slice(payload);
+    tag
+}
+
+/// `count` MPEG-1 Layer III, 128 kbps, 44.1 kHz frames (417 bytes each).
+/// Only the 4-byte header is parsed by lofty, so zeroed payload is fine.
+fn mpeg_audio_frames(count: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for _ in 0..count {
+        let mut frame = vec![0xFF, 0xFB, 0x90, 0x00];
+        frame.resize(417, 0x00);
+        bytes.extend_from_slice(&frame);
+    }
+    bytes
+}
+
+/// A 1×1 PNG that passes Sustain's artwork policy.
+fn tiny_png() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5,
+        0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64,
+        0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]
+}
+
+/// Builds an MP3 whose audio is pushed past lofty's write-time detection
+/// window by `leading`, writes to it via `write`, and asserts the write now
+/// succeeds, the audio stream is preserved byte-for-byte, and the file
+/// re-reads. Without the leading-region heal lofty returns `UnknownFormat`
+/// and the write fails (#193 follow-up).
+fn assert_write_heals_leading_region(
+    leading: Vec<u8>,
+    write: impl Fn(&LoftyMetadataService, &Path) -> MetadataResult<()>,
+) {
+    let mut fixture = leading;
+    fixture.extend_from_slice(&mpeg_audio_frames(6));
+    // The defect must actually exceed lofty's tolerated junk window, otherwise
+    // the heal would never be exercised.
+    let audio_offset =
+        super::mpeg_frame::first_audio_frame_offset(&fixture).expect("fixture has audio");
+    assert!(audio_offset > 1024, "fixture must reproduce the defect");
+    let expected_audio = fixture[audio_offset..].to_vec();
+
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("leading.mp3");
+    fs::write(&path, &fixture).expect("write fixture");
+
+    write(&LoftyMetadataService, &path).expect("write heals the leading region and succeeds");
+
+    let healed = fs::read(&path).expect("read healed file");
+    let healed_offset =
+        super::mpeg_frame::first_audio_frame_offset(&healed).expect("healed file has audio");
+    assert_eq!(
+        &healed[healed_offset..],
+        expected_audio.as_slice(),
+        "audio stream preserved byte-for-byte"
+    );
+    assert!(
+        lofty::read_from_path(&path).is_ok(),
+        "healed file re-reads cleanly"
+    );
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn write_rating_heals_an_mp3_with_stacked_id3v2_tags() {
+    // Two consecutive padding-only ID3v2 tags, as some taggers leave behind.
+    // An all-zero body is valid ID3v2 padding, so lofty reads the file but
+    // refuses to rewrite it because the audio sits past its detection window.
+    let mut leading = id3v2_3_tag(&[0x00; 40]);
+    leading.extend_from_slice(&id3v2_3_tag(&[0x00; 1500]));
+    assert_write_heals_leading_region(leading, |service, path| {
+        service.write_rating(path, Rating::new(4).expect("valid rating"))
+    });
+}
+
+#[test]
+fn write_artwork_heals_an_mp3_with_oversized_padding() {
+    let mut leading = id3v2_3_tag(&[0x00; 64]);
+    leading.extend_from_slice(&vec![0x00; 3000]);
+    assert_write_heals_leading_region(leading, |service, path| {
+        service.write_artwork(path, Some(tiny_png()))
+    });
+}
+
 #[test]
 fn embedded_picture_selection_skips_invalid_front_cover() {
     let valid = vec![
