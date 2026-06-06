@@ -145,8 +145,22 @@ const ALBUM_TILE_COVER_SIZE_EXPANDED: i32 = 140;
 const ALBUM_GRID_MARGIN: i32 = 14;
 const ALBUM_GRID_ROW_SPACING: i32 = 12;
 const ALBUM_GRID_COLUMN_SPACING: i32 = 16;
+// A tile's cover + title + artist measures 181 px tall, with the artist
+// baseline at the same Y whether the tile is selected or not. These row
+// heights are the sole source of truth for the manual virtualizer's vertical
+// layout (the tile buttons carry no `min-height`; see app.css), so they must
+// stay >= that content height.
+//
+// The non-selected height keeps 17 px of trailing rhythm above the next grid
+// row. The selected row instead hugs its content so the expanded detail panel
+// — and its upward arrow — sits just below the selected album's artist line
+// rather than floating a full rhythm gap lower.
 const ALBUM_TILE_ROW_HEIGHT: i32 = 198;
-const ALBUM_TILE_ROW_HEIGHT_SELECTED: i32 = 214;
+const ALBUM_TILE_ROW_HEIGHT_SELECTED: i32 = 182;
+// Gap between the selected tile row and the expanded panel's arrow tip. Kept
+// small so the arrow nearly touches the selected album's artist line, with a
+// few pixels of breathing room.
+const ALBUM_DETAIL_TOP_GAP: i32 = 9;
 const ALBUM_DETAIL_ARTWORK_SIZE: i32 = ALBUM_TILE_COVER_SIZE * 3;
 const ALBUM_DETAIL_TEXT_CHARS: i32 = 48;
 const ALBUM_DETAIL_HEADER_HEIGHT_ESTIMATE: i32 = 56;
@@ -657,10 +671,7 @@ impl AlbumsView {
             ALBUM_DETAIL_HEADER_HEIGHT_ESTIMATE + 14 + track_rows * ALBUM_DETAIL_TRACK_ROW_HEIGHT;
         let panel_height =
             left_height.max(ALBUM_DETAIL_ARTWORK_SIZE) + ALBUM_DETAIL_VERTICAL_PADDING;
-        ALBUM_GRID_ROW_SPACING
-            + ALBUM_DETAIL_ARROW_HEIGHT
-            + panel_height
-            + ALBUM_DETAIL_ARROW_HEIGHT
+        ALBUM_DETAIL_TOP_GAP + ALBUM_DETAIL_ARROW_HEIGHT + panel_height + ALBUM_DETAIL_ARROW_HEIGHT
     }
 
     fn sync_realized_detail_height(&self) {
@@ -948,7 +959,7 @@ impl AlbumsView {
         let force_rebuild = refresh.refreshes_detail_for(&album.key);
         if force_rebuild || row.detail_key.as_ref() != Some(&detail_key) {
             let detail = self.album_detail(&album, selected_column, columns);
-            detail.set_margin_top(ALBUM_GRID_ROW_SPACING);
+            detail.set_margin_top(ALBUM_DETAIL_TOP_GAP);
             row.set_detail(Some(detail), Some(detail_key));
         }
     }

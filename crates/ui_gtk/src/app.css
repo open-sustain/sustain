@@ -432,14 +432,17 @@ button.album-tile.selected {
     margin: 0;
 }
 
+/* No min-height and no bottom padding: the tile is sized to its real content
+   (cover + title + artist) and the album view's row-height constants
+   (ALBUM_TILE_ROW_HEIGHT*) are the sole source of truth for vertical spacing.
+   The 8px top padding stays — it lands the smaller non-selected cover at the
+   same bottom edge as the larger selected (expanded) cover. */
 button.album-tile {
-    padding: 8px;
-    min-height: 198px;
+    padding: 8px 8px 0 8px;
 }
 
 button.album-tile.selected {
     padding: 0;
-    min-height: 214px;
 }
 
 .album-cover,
