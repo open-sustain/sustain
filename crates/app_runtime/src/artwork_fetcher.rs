@@ -33,15 +33,17 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use sustain_artwork::validate_encoded_artwork;
+use sustain_artwork::normalize_artwork;
 use sustain_domain::TrackId;
 use sustain_metadata_remote::{RemoteError, RemoteMetadataService, TrackQuery};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArtworkFetchOutcome {
-    /// A cover was found and downloaded. The bytes are the raw payload
-    /// returned by Cover Art Archive — the caller is responsible for
-    /// writing them through the standard tag-writing path.
+    /// A cover was found and downloaded, then downscaled to Sustain's
+    /// artwork ceiling and re-encoded to a compact JPEG so an oversized
+    /// provider image is not embedded verbatim into the track's tags.
+    /// The caller writes these bytes through the standard tag-writing
+    /// path.
     Fetched(Vec<u8>),
     /// Identification succeeded but no front cover was on file, or
     /// identification itself returned no confident match. From the
@@ -125,8 +127,8 @@ fn worker_loop(
 ) {
     while let Ok(request) = receiver.recv() {
         let outcome = match service.fetch_artwork(&request.query) {
-            Ok(Some(artwork)) => match validate_encoded_artwork(&artwork.bytes) {
-                Ok(_) => ArtworkFetchOutcome::Fetched(artwork.bytes),
+            Ok(Some(artwork)) => match normalize_artwork(&artwork.bytes) {
+                Ok(bytes) => ArtworkFetchOutcome::Fetched(bytes),
                 Err(error) => {
                     eprintln!("Sustain: artwork fetch returned rejected bytes: {error}");
                     ArtworkFetchOutcome::Rejected

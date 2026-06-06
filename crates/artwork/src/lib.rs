@@ -16,13 +16,31 @@ use std::{
     path::Path,
 };
 
-use image::{DynamicImage, ImageReader, Limits};
+use image::{
+    DynamicImage, ImageReader, Limits, RgbImage, codecs::jpeg::JpegEncoder, imageops::FilterType,
+};
 
 pub const MAX_ENCODED_ARTWORK_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ARTWORK_WIDTH: u64 = 4096;
 pub const MAX_ARTWORK_HEIGHT: u64 = 4096;
 pub const MAX_DECODED_ARTWORK_PIXELS: u64 = 16_777_216;
 const MAX_DECODED_ARTWORK_BYTES: u64 = MAX_DECODED_ARTWORK_PIXELS * 8;
+
+/// Longest-edge ceiling for artwork that Sustain re-encodes before it
+/// enters the library. The largest on-screen consumer is the 396 px
+/// detail view (≈792 px at 2× HiDPI), so 1024 px leaves comfortable
+/// headroom while keeping the embedded payload small.
+pub const NORMALIZE_MAX_EDGE: u32 = 1024;
+/// Soft size budget for normalized artwork. Re-encoding steps quality
+/// down toward a quality floor to try to land under this; a pathological
+/// high-entropy cover may still finish above it.
+pub const NORMALIZE_TARGET_BYTES: usize = 250 * 1024;
+/// Initial JPEG quality used when re-encoding oversized artwork.
+const NORMALIZE_JPEG_QUALITY: u8 = 90;
+/// Lowest JPEG quality the size-budget step-down will fall back to.
+const NORMALIZE_MIN_JPEG_QUALITY: u8 = 70;
+/// Quality decrement applied each time an encode overshoots the budget.
+const NORMALIZE_JPEG_QUALITY_STEP: u8 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArtworkDimensions {
@@ -167,6 +185,58 @@ pub fn decode_static_artwork(bytes: &[u8]) -> Result<DynamicImage, ArtworkPolicy
         .map_err(|_| ArtworkPolicyError::UnsupportedOrCorruptImage)
 }
 
+/// Tame an oversized cover before it is written into the library.
+///
+/// Remote providers happily serve multi-megabyte, multi-thousand-pixel
+/// covers; embedding one verbatim into every track's tags wastes disk
+/// and memory for detail the UI never renders above ~792 px. This caps
+/// the longest edge at [`NORMALIZE_MAX_EDGE`] and re-encodes to JPEG,
+/// stepping quality down toward a quality floor only when the result
+/// overshoots [`NORMALIZE_TARGET_BYTES`].
+///
+/// Artwork already within both the dimension ceiling and the size
+/// budget is returned untouched, so a small, clean embedded cover is
+/// never needlessly recompressed (nor a lossless PNG silently degraded
+/// to JPEG). The bytes are decoded under the same resource policy as
+/// [`decode_static_artwork`], so a corrupt payload surfaces as an
+/// [`ArtworkPolicyError`] rather than reaching the tag writer.
+pub fn normalize_artwork(bytes: &[u8]) -> Result<Vec<u8>, ArtworkPolicyError> {
+    let image = decode_static_artwork(bytes)?;
+    let longest_edge = image.width().max(image.height());
+
+    if longest_edge <= NORMALIZE_MAX_EDGE && bytes.len() <= NORMALIZE_TARGET_BYTES {
+        return Ok(bytes.to_vec());
+    }
+
+    let scaled = if longest_edge > NORMALIZE_MAX_EDGE {
+        image.resize(NORMALIZE_MAX_EDGE, NORMALIZE_MAX_EDGE, FilterType::Lanczos3)
+    } else {
+        image
+    };
+
+    // JPEG carries no alpha channel; flatten to RGB. Cover art is
+    // opaque in practice, but a stray alpha plane must not corrupt the
+    // encode.
+    let rgb = scaled.to_rgb8();
+
+    let mut quality = NORMALIZE_JPEG_QUALITY;
+    loop {
+        let encoded = encode_jpeg(&rgb, quality)?;
+        if encoded.len() <= NORMALIZE_TARGET_BYTES || quality <= NORMALIZE_MIN_JPEG_QUALITY {
+            return Ok(encoded);
+        }
+        quality -= NORMALIZE_JPEG_QUALITY_STEP;
+    }
+}
+
+fn encode_jpeg(image: &RgbImage, quality: u8) -> Result<Vec<u8>, ArtworkPolicyError> {
+    let mut buffer = Vec::new();
+    JpegEncoder::new_with_quality(&mut buffer, quality)
+        .encode_image(image)
+        .map_err(|_| ArtworkPolicyError::UnsupportedOrCorruptImage)?;
+    Ok(buffer)
+}
+
 fn artwork_reader(bytes: &[u8]) -> Result<ImageReader<Cursor<&[u8]>>, ArtworkPolicyError> {
     ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -193,6 +263,30 @@ mod tests {
         let image = RgbImage::from_pixel(width, height, Rgb([10, 20, 30]));
         let mut output = Cursor::new(Vec::new());
         DynamicImage::ImageRgb8(image)
+            .write_to(&mut output, ImageFormat::Png)
+            .expect("encode PNG");
+        output.into_inner()
+    }
+
+    fn noisy_rgb(width: u32, height: u32) -> RgbImage {
+        // Deterministic high-entropy fill (xorshift32) so JPEG cannot
+        // trivially compress it away — exercises the size-budget path.
+        let mut state: u32 = 0x1234_5678;
+        RgbImage::from_fn(width, height, |_, _| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            Rgb([
+                (state & 0xff) as u8,
+                ((state >> 8) & 0xff) as u8,
+                ((state >> 16) & 0xff) as u8,
+            ])
+        })
+    }
+
+    fn noisy_png(width: u32, height: u32) -> Vec<u8> {
+        let mut output = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(noisy_rgb(width, height))
             .write_to(&mut output, ImageFormat::Png)
             .expect("encode PNG");
         output.into_inner()
@@ -272,6 +366,54 @@ mod tests {
     fn static_decoder_accepts_valid_png() {
         let decoded = decode_static_artwork(&solid_png(8, 8)).expect("decode PNG");
         assert_eq!((decoded.width(), decoded.height()), (8, 8));
+    }
+
+    #[test]
+    fn normalize_passes_through_small_artwork_unchanged() {
+        // Well within both the dimension ceiling and the size budget:
+        // the original bytes must be returned verbatim, not re-encoded.
+        let source = solid_png(300, 300);
+        assert!(source.len() <= NORMALIZE_TARGET_BYTES);
+        assert_eq!(normalize_artwork(&source).expect("normalize"), source);
+    }
+
+    #[test]
+    fn normalize_caps_longest_edge_preserving_aspect() {
+        let source = solid_png(2000, 1000);
+        let normalized = normalize_artwork(&source).expect("normalize");
+        let decoded = decode_static_artwork(&normalized).expect("decode normalized");
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (NORMALIZE_MAX_EDGE, 512)
+        );
+    }
+
+    #[test]
+    fn normalize_shrinks_large_cover_and_caps_dimensions() {
+        let source = noisy_png(1500, 1500);
+        let normalized = normalize_artwork(&source).expect("normalize");
+        assert!(normalized.len() < source.len());
+        let decoded = decode_static_artwork(&normalized).expect("decode normalized");
+        assert_eq!(decoded.width().max(decoded.height()), NORMALIZE_MAX_EDGE);
+    }
+
+    #[test]
+    fn normalize_meets_size_budget_for_compressible_cover() {
+        let source = solid_png(3000, 3000);
+        let normalized = normalize_artwork(&source).expect("normalize");
+        assert!(normalized.len() <= NORMALIZE_TARGET_BYTES);
+        let decoded = decode_static_artwork(&normalized).expect("decode normalized");
+        assert_eq!(decoded.width().max(decoded.height()), NORMALIZE_MAX_EDGE);
+    }
+
+    #[test]
+    fn lower_jpeg_quality_yields_smaller_payload() {
+        // The step-down loop relies on quality being a monotone size
+        // lever; verify it directly on a high-entropy image.
+        let rgb = noisy_rgb(256, 256);
+        let high = encode_jpeg(&rgb, NORMALIZE_JPEG_QUALITY).expect("encode high quality");
+        let low = encode_jpeg(&rgb, NORMALIZE_MIN_JPEG_QUALITY).expect("encode low quality");
+        assert!(low.len() < high.len());
     }
 
     #[test]
