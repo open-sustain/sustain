@@ -21,6 +21,16 @@ pub(super) struct AlbumKey {
     title: String,
 }
 
+#[cfg(test)]
+impl AlbumKey {
+    pub(super) fn for_test(artist: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            artist: artist.into(),
+            title: title.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct AlbumViewModel {
     pub(super) key: AlbumKey,
