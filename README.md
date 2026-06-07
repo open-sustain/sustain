@@ -116,7 +116,7 @@ A Flathub submission will follow once the application stabilises.
 ## Development
 
 ```sh
-sudo apt install libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+sudo apt install libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libdiscid-dev libclang-dev
 
 cargo run -p sustain-app
 cargo test --workspace
