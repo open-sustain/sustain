@@ -14,6 +14,7 @@ use std::{
 
 use lofty::{
     config::{GlobalOptions, WriteOptions, apply_global_options},
+    error::ErrorKind,
     file::TaggedFile,
     picture::{Picture, PictureType},
     prelude::{Accessor, AudioFile, TaggedFileExt},
@@ -814,19 +815,25 @@ fn atomic_save_to_path(
 ) -> MetadataResult<()> {
     let is_mp3 = audio_format_from_path(path) == Ok(AudioFormat::Mp3);
     atomic_write_via_rename(path, |temp_path| {
-        if tagged_file.save_to_path(temp_path, options).is_ok() {
-            return Ok(());
+        match tagged_file.save_to_path(temp_path, options) {
+            Ok(()) => return Ok(()),
+            // lofty re-detects the format on write and reports `UnknownFormat`
+            // when it cannot find the first MPEG frame within its small window
+            // of tolerated leading junk. That — and only that — is the defect
+            // healed below; every other save failure is surfaced verbatim so
+            // an unrelated error never triggers a leading-region rewrite.
+            Err(error) if matches!(error.kind(), ErrorKind::UnknownFormat) => {}
+            Err(_) => return Err(MetadataError::WriteFailed),
         }
 
-        // lofty re-detects the format on write and only tolerates a small
-        // window of leading junk before the first MPEG frame. An MP3 that
-        // carries stacked ID3v2 tags or oversized padding between its tag and
-        // its audio pushes the first frame past that window, so lofty refuses
-        // to rewrite it (`UnknownFormat`) even though it read it fine via the
-        // file extension. Heal such a file by compacting its leading region
-        // down to the audio stream, then let lofty write a single clean tag
-        // (#193 follow-up). Non-MP3 formats do not hit this; an MP3 whose
-        // audio already starts at offset 0 failed for some other reason.
+        // An MP3 that carries stacked ID3v2 tags or oversized padding between
+        // its tag and its audio pushes the first frame past lofty's window, so
+        // lofty refuses to rewrite it even though it read it fine via the file
+        // extension. Heal such a file by compacting its leading region down to
+        // the audio stream, then let lofty write a single clean tag (#193
+        // follow-up). A non-MP3 that somehow reports `UnknownFormat` is not
+        // something this MPEG-specific compaction can heal; an MP3 whose audio
+        // already starts at offset 0 failed for some other reason.
         if !is_mp3 || !compact_mpeg_leading_region(temp_path)? {
             return Err(MetadataError::WriteFailed);
         }

@@ -13,7 +13,7 @@ use lofty::{
     mp4::Ilst,
     ogg::VorbisComments,
     picture::{Picture, PictureType},
-    prelude::{Accessor, TaggedFileExt},
+    prelude::{Accessor, AudioFile, TaggedFileExt},
     tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType},
 };
 use sustain_domain::{FieldChange, MetadataChange, TrackMetadata};
@@ -615,12 +615,14 @@ fn tiny_png() -> Vec<u8> {
 
 /// Builds an MP3 whose audio is pushed past lofty's write-time detection
 /// window by `leading`, writes to it via `write`, and asserts the write now
-/// succeeds, the audio stream is preserved byte-for-byte, and the file
-/// re-reads. Without the leading-region heal lofty returns `UnknownFormat`
-/// and the write fails (#193 follow-up).
+/// succeeds, the audio stream is preserved byte-for-byte, the file re-reads,
+/// the requested edit survived (`verify_written`), and the heal is permanent.
+/// Without the leading-region heal lofty returns `UnknownFormat` and the write
+/// fails (#193 follow-up).
 fn assert_write_heals_leading_region(
     leading: Vec<u8>,
     write: impl Fn(&LoftyMetadataService, &Path) -> MetadataResult<()>,
+    verify_written: impl Fn(&Path),
 ) {
     let mut fixture = leading;
     fixture.extend_from_slice(&mpeg_audio_frames(6));
@@ -651,6 +653,22 @@ fn assert_write_heals_leading_region(
         "healed file re-reads cleanly"
     );
 
+    // The heal must carry the requested edit through, not merely preserve the
+    // audio: a heal that silently dropped the rating or artwork would still
+    // pass every check above.
+    verify_written(&path);
+
+    // The heal is permanent. lofty's own writer — the path that rejected the
+    // original with `UnknownFormat` — now accepts the healed file directly, so
+    // a subsequent write goes through lofty's normal path instead of compacting
+    // the leading region again.
+    let reopened = lofty::read_from_path(&path).expect("re-read healed file");
+    let probe = root.join("probe.mp3");
+    fs::copy(&path, &probe).expect("stage a copy for the lofty-native write probe");
+    reopened
+        .save_to_path(&probe, WriteOptions::default())
+        .expect("lofty's normal write path accepts the healed file");
+
     fs::remove_dir_all(root).expect("remove test directory");
 }
 
@@ -661,18 +679,40 @@ fn write_rating_heals_an_mp3_with_stacked_id3v2_tags() {
     // refuses to rewrite it because the audio sits past its detection window.
     let mut leading = id3v2_3_tag(&[0x00; 40]);
     leading.extend_from_slice(&id3v2_3_tag(&[0x00; 1500]));
-    assert_write_heals_leading_region(leading, |service, path| {
-        service.write_rating(path, Rating::new(4).expect("valid rating"))
-    });
+    assert_write_heals_leading_region(
+        leading,
+        |service, path| service.write_rating(path, Rating::new(4).expect("valid rating")),
+        |path| {
+            let tags = LoftyMetadataService
+                .read_initial_tags(path)
+                .expect("re-read healed tags");
+            assert_eq!(
+                tags.rating,
+                Rating::new(4).expect("valid rating"),
+                "the written rating survived the heal"
+            );
+        },
+    );
 }
 
 #[test]
 fn write_artwork_heals_an_mp3_with_oversized_padding() {
     let mut leading = id3v2_3_tag(&[0x00; 64]);
     leading.extend_from_slice(&vec![0x00; 3000]);
-    assert_write_heals_leading_region(leading, |service, path| {
-        service.write_artwork(path, Some(tiny_png()))
-    });
+    assert_write_heals_leading_region(
+        leading,
+        |service, path| service.write_artwork(path, Some(tiny_png())),
+        |path| {
+            let artwork = LoftyMetadataService
+                .read_artwork(path)
+                .expect("re-read healed artwork");
+            assert_eq!(
+                artwork.as_deref(),
+                Some(tiny_png().as_slice()),
+                "the written artwork survived the heal"
+            );
+        },
+    );
 }
 
 #[test]
