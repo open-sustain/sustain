@@ -41,7 +41,7 @@ pub(super) fn build(parent_window: &gtk::Window, database_path: &Path) -> gtk::W
     content.append(&name);
 
     content.append(&centered_helper_label(
-        "A music library and player for the Linux desktop.",
+        "A music library manager and player for the Linux desktop.",
     ));
 
     let details = gtk::Box::new(gtk::Orientation::Vertical, 2);

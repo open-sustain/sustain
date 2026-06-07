@@ -34,7 +34,7 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
         append_three_stop_slider(
             &content,
             "CD import format",
-            ["MP3, @256", "MP3, @320", "FLAC (Lossless)"],
+            ["MP3 (256)", "MP3 (320)", "FLAC (Lossless)"],
             "Format used when ripping audio CDs into your library.",
             profile_to_value(encoding.cd_profile),
             0,
