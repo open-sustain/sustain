@@ -18,10 +18,11 @@ use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 
 pub use sustain_domain::{
-    AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage,
-    DEFAULT_PLAYBACK_VOLUME_PERCENT, LibraryManagementMode, LibrarySettings, OnlineSettings,
-    PlaybackSettings, PlaylistFolderId, PlaylistId, PlaylistItem, ShuffleMode, SmartPlaylistId,
-    SmartShuffleEntropy, UiSettings, UiSidebarSelection, UserSettings, VolumePercent,
+    AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
+    DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, LibraryManagementMode, LibrarySettings,
+    OnlineSettings, PlaybackSettings, PlaylistFolderId, PlaylistId, PlaylistItem, ShuffleMode,
+    SmartPlaylistId, SmartShuffleEntropy, UiSettings, UiSidebarSelection, UserSettings,
+    VolumePercent,
 };
 
 pub type SettingsResult<T> = Result<T, SettingsError>;
@@ -280,6 +281,8 @@ struct SettingsDocument {
     online: OnlineSettingsDocument,
     #[serde(default)]
     background_jobs: BackgroundJobsSettingsDocument,
+    #[serde(default)]
+    encoding: EncodingSettingsDocument,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -446,6 +449,39 @@ enum BackgroundResourceUsageDocument {
     Aggressive,
 }
 
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct EncodingSettingsDocument {
+    #[serde(default)]
+    cd_profile: CdEncodingProfileDocument,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CdEncodingProfileDocument {
+    #[default]
+    Flac,
+    Mp3Cbr256,
+    Mp3Cbr320,
+}
+
+impl CdEncodingProfileDocument {
+    fn from_domain(profile: CdEncodingProfile) -> Self {
+        match profile {
+            CdEncodingProfile::Flac => Self::Flac,
+            CdEncodingProfile::Mp3Cbr256 => Self::Mp3Cbr256,
+            CdEncodingProfile::Mp3Cbr320 => Self::Mp3Cbr320,
+        }
+    }
+
+    fn into_domain(self) -> CdEncodingProfile {
+        match self {
+            Self::Flac => CdEncodingProfile::Flac,
+            Self::Mp3Cbr256 => CdEncodingProfile::Mp3Cbr256,
+            Self::Mp3Cbr320 => CdEncodingProfile::Mp3Cbr320,
+        }
+    }
+}
+
 impl Default for PlaybackSettingsDocument {
     fn default() -> Self {
         Self {
@@ -528,6 +564,9 @@ impl SettingsDocument {
                     settings.background_jobs.resource_usage,
                 ),
             },
+            encoding: EncodingSettingsDocument {
+                cd_profile: CdEncodingProfileDocument::from_domain(settings.encoding.cd_profile),
+            },
         }
     }
 
@@ -569,6 +608,9 @@ impl SettingsDocument {
             },
             background_jobs: BackgroundJobsSettings {
                 resource_usage: self.background_jobs.resource_usage.into_domain(),
+            },
+            encoding: EncodingSettings {
+                cd_profile: self.encoding.cd_profile.into_domain(),
             },
         }
     }
@@ -658,11 +700,11 @@ mod tests {
     };
 
     use super::{
-        AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage,
-        DEFAULT_PLAYBACK_VOLUME_PERCENT, InMemorySettingsStore, LibraryManagementMode,
-        OnlineSettings, PlaylistId, PlaylistItem, SettingsStore, ShuffleMode, SmartShuffleEntropy,
-        TomlSettingsStore, UiSettings, UiSidebarSelection, UserSettings, VolumePercent,
-        atomic_replace, create_temporary_sibling_file,
+        AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
+        DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, InMemorySettingsStore,
+        LibraryManagementMode, OnlineSettings, PlaylistId, PlaylistItem, SettingsStore,
+        ShuffleMode, SmartShuffleEntropy, TomlSettingsStore, UiSettings, UiSidebarSelection,
+        UserSettings, VolumePercent, atomic_replace, create_temporary_sibling_file,
     };
 
     #[test]
@@ -920,6 +962,53 @@ mod tests {
     }
 
     #[test]
+    fn toml_settings_store_round_trips_encoding_profile() {
+        for profile in CdEncodingProfile::ALL {
+            let path = unique_settings_path();
+            let store = TomlSettingsStore::new(&path);
+            let settings = UserSettings {
+                encoding: EncodingSettings {
+                    cd_profile: profile,
+                },
+                ..UserSettings::default()
+            };
+
+            assert_eq!(store.save_settings(settings.clone()), Ok(()));
+            assert_eq!(store.load_settings(), Ok(settings));
+
+            let root = path
+                .parent()
+                .and_then(|parent| parent.parent())
+                .expect("test path has two parents");
+            fs::remove_dir_all(root).expect("remove test settings directory");
+        }
+    }
+
+    #[test]
+    fn toml_settings_store_defaults_encoding_to_flac_when_section_missing() {
+        let path = unique_settings_path();
+        let store = TomlSettingsStore::new(&path);
+        fs::create_dir_all(path.parent().expect("settings path has parent"))
+            .expect("create settings dir");
+        fs::write(&path, "[library]\npath = \"/music\"\n").expect("write settings");
+
+        let settings = store.load_settings().expect("settings load");
+
+        assert_eq!(
+            settings.encoding,
+            EncodingSettings::default(),
+            "missing section must fall back to the FLAC default"
+        );
+        assert_eq!(settings.encoding.cd_profile, CdEncodingProfile::Flac);
+
+        let root = path
+            .parent()
+            .and_then(|parent| parent.parent())
+            .expect("test path has two parents");
+        fs::remove_dir_all(root).expect("remove test settings directory");
+    }
+
+    #[test]
     fn toml_settings_store_defaults_background_jobs_when_section_missing() {
         let path = unique_settings_path();
         let store = TomlSettingsStore::new(&path);
@@ -1055,10 +1144,14 @@ mod tests {
     }
 
     fn unique_settings_path() -> PathBuf {
-        let unique_suffix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock after unix epoch")
-            .as_nanos();
+        // A monotonic process-wide counter, not the wall clock: two tests
+        // running in parallel can read `SystemTime::now()` at the same
+        // instant, collide on the directory, and one's teardown
+        // (`remove_dir_all`) then nukes the other's dir mid-write. The
+        // counter guarantees a distinct root per call.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let unique_suffix = COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir()
             .join(format!("sustain_settings_test_{unique_suffix}"))
             .join("sustain")

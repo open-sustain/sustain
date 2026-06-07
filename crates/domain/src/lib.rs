@@ -69,9 +69,10 @@ pub use query::{
 };
 pub use rating::Rating;
 pub use settings::{
-    AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage,
-    DEFAULT_PLAYBACK_VOLUME_PERCENT, LibraryManagementMode, LibrarySettings, OnlineSettings,
-    PlaybackSettings, SmartShuffleEntropy, UiSettings, UiSidebarSelection, UserSettings,
+    AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
+    DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, LibraryManagementMode, LibrarySettings,
+    OnlineSettings, PlaybackSettings, SmartShuffleEntropy, UiSettings, UiSidebarSelection,
+    UserSettings,
 };
 pub use smart_playlist::{
     SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,

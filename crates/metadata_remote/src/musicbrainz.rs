@@ -34,6 +34,12 @@ use crate::mbid::is_well_formed;
 
 const SEARCH_BASE: &str = "https://musicbrainz.org/ws/2/recording/";
 const LOOKUP_BASE: &str = "https://musicbrainz.org/ws/2/recording";
+const DISC_LOOKUP_BASE: &str = "https://musicbrainz.org/ws/2/discid";
+/// Includes for the disc-id lookup. `recordings` brings the per-track
+/// titles and recording MBIDs; `artist-credits` the release and per-track
+/// artists; `release-groups` the release-group MBID and the
+/// `secondary-types` that mark a compilation; `labels` the label name.
+const DISC_LOOKUP_INCLUDES: &str = "recordings+artist-credits+release-groups+labels";
 const RELEASE_GROUP_LOOKUP_BASE: &str = "https://musicbrainz.org/ws/2/release-group";
 const ARTIST_LOOKUP_BASE: &str = "https://musicbrainz.org/ws/2/artist";
 /// Includes for the lookup-by-id endpoint. Release-level details
@@ -131,6 +137,59 @@ pub struct RecordingRelease {
     pub track_number: Option<u32>,
     pub track_total: Option<u32>,
     pub disc_number: Option<u32>,
+}
+
+/// One release whose attached disc matches a probed MusicBrainz Disc ID,
+/// together with the ordered audio-track mapping of the matching medium.
+///
+/// Unlike [`RecordingRelease`] (a recording's view of the releases it
+/// appears on) this is a release's view of one *medium* — the unit a
+/// physical CD maps onto. The CD import flow renders these as selectable
+/// candidates and, once one is chosen, maps its [`DiscTrack`] list onto
+/// the physical audio tracks reported by the optical TOC.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiscRelease {
+    pub release_mbid: String,
+    pub release_group_mbid: Option<String>,
+    pub title: Option<String>,
+    /// Flattened release artist credit (e.g. `"A & B"`).
+    pub artist_credit: Option<String>,
+    /// Year parsed from the release date, when present.
+    pub year: Option<i32>,
+    /// Raw release date string as MusicBrainz returned it (ISO-ish).
+    pub date: Option<String>,
+    pub country: Option<String>,
+    /// First label name attached to the release, when present.
+    pub label: Option<String>,
+    /// Medium format, e.g. `"CD"`.
+    pub format: Option<String>,
+    /// 1-based position of the matching medium within the release.
+    pub disc_number: Option<u32>,
+    /// Total number of media in the release when the lookup response
+    /// carried more than one; a disc-id lookup commonly returns only the
+    /// matching medium, in which case this is `None`.
+    pub disc_total: Option<u32>,
+    /// Number of audio tracks on the matching medium. Always equal to the
+    /// probed TOC's audio-track count — that equality is the compatibility
+    /// guard [`MusicBrainzClient::lookup_disc`] enforces.
+    pub track_total: u32,
+    /// True only when MusicBrainz explicitly types the release-group as a
+    /// compilation. Never inferred from artist strings.
+    pub is_compilation: bool,
+    /// Ordered audio tracks of the matching medium.
+    pub tracks: Vec<DiscTrack>,
+}
+
+/// One audio track of a [`DiscRelease`]'s matching medium.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiscTrack {
+    /// 1-based physical position on the medium.
+    pub position: u32,
+    pub title: Option<String>,
+    /// Flattened per-track artist credit, when the track carries one.
+    pub artist_credit: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub recording_mbid: Option<String>,
 }
 
 #[derive(Clone)]
@@ -247,6 +306,43 @@ impl MusicBrainzClient {
     /// as [`Self::lookup_release_group_genres`].
     pub fn lookup_artist_genres(&self, artist_mbid: &str) -> RemoteResult<Vec<GenreVote>> {
         self.lookup_entity_genres(ARTIST_LOOKUP_BASE, artist_mbid)
+    }
+
+    /// Look up the releases attached to a probed MusicBrainz Disc ID.
+    ///
+    /// This is a single [Disc ID lookup][discid] — not N independent title
+    /// searches — so the result is grounded in MusicBrainz's own TOC
+    /// attachment rather than fuzzy text matching. `audio_track_count` is
+    /// the number of audio tracks the optical TOC reported; releases whose
+    /// matching medium has a different track count are rejected, because a
+    /// genuine disc-id match (the id is derived from the exact TOC) always
+    /// agrees and a disagreement means the mapping cannot be trusted to tag
+    /// the rip.
+    ///
+    /// Returns an empty vector for a malformed disc id, a 404 (the id is
+    /// unknown to MusicBrainz), or a response with no compatible release —
+    /// all normal "no match" outcomes. Transport and rate-limit errors
+    /// propagate so the caller can report them once.
+    ///
+    /// [discid]: https://musicbrainz.org/doc/MusicBrainz_API#discid
+    pub fn lookup_disc(
+        &self,
+        disc_id: &str,
+        audio_track_count: u32,
+    ) -> RemoteResult<Vec<DiscRelease>> {
+        if !disc_id_looks_valid(disc_id) {
+            return Ok(Vec::new());
+        }
+        let url = format!(
+            "{DISC_LOOKUP_BASE}/{id}?inc={DISC_LOOKUP_INCLUDES}&fmt=json",
+            id = url_encode(disc_id),
+        );
+        let payload: DiscPayload = match self.http.get_json(&url) {
+            Ok(value) => value,
+            Err(crate::error::RemoteError::BadStatus(404)) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        Ok(parse_disc_releases(payload, disc_id, audio_track_count))
     }
 
     fn lookup_entity_genres(&self, base_url: &str, mbid: &str) -> RemoteResult<Vec<GenreVote>> {
@@ -509,6 +605,152 @@ fn sort_genres(raw: Vec<RawGenre>) -> Vec<GenreVote> {
     votes
 }
 
+/// A MusicBrainz disc id is libdiscid's 28-character base64url-ish string.
+/// Validating it before assembling a URL keeps malformed ids off the wire
+/// and out of the shared rate-limit budget.
+fn disc_id_looks_valid(disc_id: &str) -> bool {
+    disc_id.len() == 28
+        && disc_id.bytes().all(
+            |byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'),
+        )
+}
+
+fn parse_disc_releases(
+    payload: DiscPayload,
+    disc_id: &str,
+    audio_track_count: u32,
+) -> Vec<DiscRelease> {
+    payload
+        .releases
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|release| into_disc_release(release, disc_id, audio_track_count))
+        .collect()
+}
+
+fn into_disc_release(
+    release: DiscRawRelease,
+    disc_id: &str,
+    audio_track_count: u32,
+) -> Option<DiscRelease> {
+    if release.id.is_empty() {
+        return None;
+    }
+    let media = release.media.unwrap_or_default();
+    let medium = select_disc_medium(&media, disc_id)?;
+    let raw_tracks = medium.tracks.as_deref().unwrap_or_default();
+    // The disc id is computed from the exact TOC, so a real match always has
+    // the probed audio-track count. Reject anything else rather than risk a
+    // mis-ordered tagging.
+    if raw_tracks.len() as u32 != audio_track_count {
+        return None;
+    }
+    let tracks = raw_tracks
+        .iter()
+        .enumerate()
+        .map(|(index, track)| into_disc_track(track, index))
+        .collect();
+    let track_total = medium.track_count.unwrap_or(audio_track_count);
+    let disc_total = (media.len() > 1).then_some(media.len() as u32);
+    let release_group_mbid = release
+        .release_group
+        .as_ref()
+        .map(|group| group.id.clone())
+        .filter(|value| is_non_blank(value));
+    let is_compilation = release
+        .release_group
+        .as_ref()
+        .and_then(|group| group.secondary_types.as_ref())
+        .is_some_and(|types| {
+            types
+                .iter()
+                .any(|kind| kind.eq_ignore_ascii_case("Compilation"))
+        });
+    let label = release
+        .label_info
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|info| info.label.and_then(|label| label.name))
+        .filter(|value| is_non_blank(value));
+    Some(DiscRelease {
+        release_mbid: release.id,
+        release_group_mbid,
+        title: release.title.filter(|value| is_non_blank(value)),
+        artist_credit: release
+            .artist_credit
+            .as_deref()
+            .and_then(format_artist_credit)
+            .filter(|value| is_non_blank(value)),
+        year: release.date.as_deref().and_then(parse_year),
+        date: release.date.filter(|value| is_non_blank(value)),
+        country: release.country.filter(|value| is_non_blank(value)),
+        label,
+        format: medium.format.clone().filter(|value| is_non_blank(value)),
+        disc_number: medium.position,
+        disc_total,
+        track_total,
+        is_compilation,
+        tracks,
+    })
+}
+
+/// Choose the medium the disc id is attached to. The disc-id endpoint
+/// usually returns only the matching medium, but a release with several
+/// media can carry the explicit `discs` array; prefer that exact match and
+/// fall back to the sole medium when only one was returned.
+fn select_disc_medium<'a>(media: &'a [DiscRawMedium], disc_id: &str) -> Option<&'a DiscRawMedium> {
+    if let Some(medium) = media.iter().find(|medium| {
+        medium
+            .discs
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|disc| disc.id.as_deref() == Some(disc_id))
+    }) {
+        return Some(medium);
+    }
+    if media.len() == 1 {
+        return media.first();
+    }
+    None
+}
+
+fn into_disc_track(track: &DiscRawTrack, index: usize) -> DiscTrack {
+    let recording = track.recording.as_ref();
+    let title = track
+        .title
+        .clone()
+        .filter(|value| is_non_blank(value))
+        .or_else(|| {
+            recording
+                .and_then(|recording| recording.title.clone())
+                .filter(|value| is_non_blank(value))
+        });
+    let artist_credit = track
+        .artist_credit
+        .as_deref()
+        .and_then(format_artist_credit)
+        .or_else(|| {
+            recording
+                .and_then(|recording| recording.artist_credit.as_deref())
+                .and_then(format_artist_credit)
+        })
+        .filter(|value| is_non_blank(value));
+    let duration_ms = track
+        .length
+        .or_else(|| recording.and_then(|recording| recording.length));
+    let recording_mbid = recording
+        .map(|recording| recording.id.clone())
+        .filter(|value| is_non_blank(value));
+    DiscTrack {
+        position: track.position.unwrap_or((index + 1) as u32),
+        title,
+        artist_credit,
+        duration_ms,
+        recording_mbid,
+    }
+}
+
 fn into_recording_release(raw: RawRelease) -> Option<RecordingRelease> {
     if raw.id.is_empty() {
         return None;
@@ -687,9 +929,203 @@ struct RawTrack {
     number: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct DiscPayload {
+    #[serde(default)]
+    releases: Option<Vec<DiscRawRelease>>,
+}
+
+#[derive(Deserialize)]
+struct DiscRawRelease {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    country: Option<String>,
+    #[serde(rename = "artist-credit", default)]
+    artist_credit: Option<Vec<RawArtistCredit>>,
+    #[serde(rename = "release-group", default)]
+    release_group: Option<DiscRawReleaseGroup>,
+    #[serde(rename = "label-info", default)]
+    label_info: Option<Vec<RawLabelInfo>>,
+    #[serde(default)]
+    media: Option<Vec<DiscRawMedium>>,
+}
+
+#[derive(Deserialize)]
+struct DiscRawReleaseGroup {
+    #[serde(default)]
+    id: String,
+    #[serde(rename = "secondary-types", default)]
+    secondary_types: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct RawLabelInfo {
+    #[serde(default)]
+    label: Option<RawLabel>,
+}
+
+#[derive(Deserialize)]
+struct RawLabel {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DiscRawMedium {
+    #[serde(default)]
+    position: Option<u32>,
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(rename = "track-count", default)]
+    track_count: Option<u32>,
+    #[serde(default)]
+    discs: Option<Vec<DiscRawDisc>>,
+    #[serde(default)]
+    tracks: Option<Vec<DiscRawTrack>>,
+}
+
+#[derive(Deserialize)]
+struct DiscRawDisc {
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DiscRawTrack {
+    #[serde(default)]
+    position: Option<u32>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    length: Option<u64>,
+    #[serde(rename = "artist-credit", default)]
+    artist_credit: Option<Vec<RawArtistCredit>>,
+    #[serde(default)]
+    recording: Option<DiscRawRecording>,
+}
+
+#[derive(Deserialize)]
+struct DiscRawRecording {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    length: Option<u64>,
+    #[serde(rename = "artist-credit", default)]
+    artist_credit: Option<Vec<RawArtistCredit>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 28-character disc id from the allowed base64url-ish set, matching
+    /// the `id` field of every disc-lookup fixture.
+    const TEST_DISC_ID: &str = "abcdefghijklmnopqrstuvwxyz._";
+
+    fn parse_fixture(json: &str, audio_track_count: u32) -> Vec<DiscRelease> {
+        let payload: DiscPayload =
+            serde_json::from_str(json).expect("fixture parses as a disc payload");
+        parse_disc_releases(payload, TEST_DISC_ID, audio_track_count)
+    }
+
+    #[test]
+    fn disc_id_validation_matches_libdiscid_shape() {
+        assert!(disc_id_looks_valid(TEST_DISC_ID));
+        assert!(!disc_id_looks_valid("too-short"));
+        // A canonical UUID is the wrong shape for a disc id.
+        assert!(!disc_id_looks_valid("3b3d130a-87a8-4a47-b9fb-920f2530d134"));
+        assert!(!disc_id_looks_valid(&"a".repeat(27)));
+        assert!(!disc_id_looks_valid(&"a".repeat(29)));
+        // 28 chars but with a disallowed space/`+`.
+        assert!(!disc_id_looks_valid("abcdefghijklmnopqrstuvwxyz +"));
+    }
+
+    #[test]
+    fn single_compatible_release_maps_tracks_and_metadata() {
+        let releases = parse_fixture(
+            include_str!("../tests/fixtures/discid_single_release.json"),
+            2,
+        );
+        assert_eq!(releases.len(), 1);
+        let release = &releases[0];
+        assert_eq!(release.release_mbid, "11111111-1111-1111-1111-111111111111");
+        assert_eq!(
+            release.release_group_mbid.as_deref(),
+            Some("22222222-2222-2222-2222-222222222222")
+        );
+        assert_eq!(release.title.as_deref(), Some("Compatible Album"));
+        assert_eq!(release.artist_credit.as_deref(), Some("The Band"));
+        assert_eq!(release.year, Some(1997));
+        assert_eq!(release.country.as_deref(), Some("GB"));
+        assert_eq!(release.label.as_deref(), Some("Test Label"));
+        assert_eq!(release.format.as_deref(), Some("CD"));
+        assert_eq!(release.disc_number, Some(1));
+        assert_eq!(release.disc_total, None);
+        assert_eq!(release.track_total, 2);
+        assert!(!release.is_compilation);
+        assert_eq!(release.tracks.len(), 2);
+        assert_eq!(release.tracks[0].position, 1);
+        assert_eq!(release.tracks[0].title.as_deref(), Some("Opener"));
+        assert_eq!(release.tracks[0].artist_credit.as_deref(), Some("The Band"));
+        assert_eq!(release.tracks[0].duration_ms, Some(180_000));
+        assert_eq!(
+            release.tracks[0].recording_mbid.as_deref(),
+            Some("cccc1111-1111-1111-1111-111111111111")
+        );
+        // The second track has no track-level artist credit, so the
+        // recording's credit is used as the fallback.
+        assert_eq!(release.tracks[1].title.as_deref(), Some("Closer"));
+        assert_eq!(
+            release.tracks[1].artist_credit.as_deref(),
+            Some("Guest Artist")
+        );
+    }
+
+    #[test]
+    fn multiple_compatible_releases_are_all_returned() {
+        let releases = parse_fixture(
+            include_str!("../tests/fixtures/discid_multiple_releases.json"),
+            2,
+        );
+        assert_eq!(releases.len(), 2);
+        assert_eq!(releases[0].title.as_deref(), Some("Original Pressing"));
+        assert!(!releases[0].is_compilation);
+        assert_eq!(releases[1].title.as_deref(), Some("Greatest Hits"));
+        assert!(
+            releases[1].is_compilation,
+            "a release-group secondary-type of Compilation must be honored"
+        );
+    }
+
+    #[test]
+    fn incompatible_track_mapping_is_rejected() {
+        let releases = parse_fixture(
+            include_str!("../tests/fixtures/discid_incompatible_rejected.json"),
+            2,
+        );
+        assert_eq!(
+            releases.len(),
+            1,
+            "only the 2-track release is compatible with a 2-track TOC"
+        );
+        assert_eq!(
+            releases[0].release_mbid,
+            "11111111-1111-1111-1111-111111111111"
+        );
+    }
+
+    #[test]
+    fn no_match_yields_no_releases() {
+        let releases = parse_fixture(include_str!("../tests/fixtures/discid_no_match.json"), 2);
+        assert!(releases.is_empty());
+    }
 
     #[test]
     fn lucene_escape_protects_syntax_characters() {

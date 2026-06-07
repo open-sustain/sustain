@@ -82,6 +82,9 @@ pub enum NotificationCategory {
     /// Device sync (#23/#24): copy/playlist/database progress while a
     /// sync runs, and the one-shot outcome summary when it finishes.
     DeviceSync,
+    /// CD import (#25): extraction/encoding progress while a rip runs, and
+    /// the one-shot success/partial/failure summary when it finishes.
+    CdImport,
     /// Persisting `settings.toml` failed during normal operation (e.g. a
     /// debounced volume change could not be written). Always ephemeral —
     /// the in-memory preference still took effect; the user only needs to
@@ -308,6 +311,38 @@ pub fn library_import_progress_text(processed: usize, total: usize) -> String {
 
 pub fn library_consolidation_running_text() -> String {
     "Organizing library...".to_owned()
+}
+
+pub fn cd_import_running_text() -> String {
+    "Importing CD...".to_owned()
+}
+
+pub fn cd_import_progress_text(completed: usize, total: usize) -> String {
+    format!("Importing CD ({completed}/{total})...")
+}
+
+pub fn cd_import_outcome_text(
+    imported: usize,
+    requested: usize,
+    cancelled: bool,
+    failure: Option<&str>,
+) -> String {
+    if let Some(failure) = failure {
+        return format!(
+            "Imported {imported} of {requested} {}: {failure}",
+            pluralize(requested, "track", "tracks"),
+        );
+    }
+    if cancelled {
+        return format!(
+            "CD import stopped: {imported} {} imported.",
+            pluralize(imported, "track", "tracks"),
+        );
+    }
+    format!(
+        "Imported {imported} {} from CD.",
+        pluralize(imported, "track", "tracks"),
+    )
 }
 
 pub fn analysis_background_running_text(processed: u32, total: u32) -> String {
@@ -576,6 +611,14 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         ApplicationRuntimeError::ArtworkRejected => {
             "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
         }
+        ApplicationRuntimeError::CdBackendUnavailable => {
+            "CD ripping is not available in this build."
+        }
+        ApplicationRuntimeError::CdImportDiscChanged => {
+            "The disc changed. Re-insert the original disc and try again."
+        }
+        ApplicationRuntimeError::CdImportFailed => "The CD could not be imported.",
+        ApplicationRuntimeError::CdImportNoTracksSelected => "Select at least one track to import.",
         ApplicationRuntimeError::UnsupportedCommand(_) => "This action is not available yet.",
     }
 }

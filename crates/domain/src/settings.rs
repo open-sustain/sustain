@@ -268,6 +268,52 @@ pub struct BackgroundJobsSettings {
     pub resource_usage: BackgroundResourceUsage,
 }
 
+/// Audio encoding profile used when ripping an audio CD into the library.
+///
+/// A closed enum so an invalid format/bitrate combination can never be
+/// represented: there is no "MP3 at an arbitrary bitrate" state to leak
+/// into the encoder. FLAC is the lossless default; the two MP3 profiles
+/// are constant-bitrate-targeted at exactly 256 or 320 kbps.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CdEncodingProfile {
+    #[default]
+    Flac,
+    Mp3Cbr256,
+    Mp3Cbr320,
+}
+
+impl CdEncodingProfile {
+    pub const ALL: [Self; 3] = [Self::Flac, Self::Mp3Cbr256, Self::Mp3Cbr320];
+
+    /// Library file extension for files produced under this profile.
+    /// Not localized — it is a filesystem fact, safe to keep in the
+    /// durable domain.
+    pub const fn file_extension(self) -> &'static str {
+        match self {
+            Self::Flac => "flac",
+            Self::Mp3Cbr256 | Self::Mp3Cbr320 => "mp3",
+        }
+    }
+
+    /// The targeted constant bitrate in kbps for the MP3 profiles, or
+    /// `None` for the lossless FLAC profile.
+    pub const fn mp3_bitrate_kbps(self) -> Option<u32> {
+        match self {
+            Self::Flac => None,
+            Self::Mp3Cbr256 => Some(256),
+            Self::Mp3Cbr320 => Some(320),
+        }
+    }
+}
+
+/// Settings that govern how Sustain encodes newly created audio files.
+/// Today this is only the CD-rip profile; it lives in its own section so
+/// later encode-time choices have a natural home.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EncodingSettings {
+    pub cd_profile: CdEncodingProfile,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UserSettings {
     pub library: LibrarySettings,
@@ -276,6 +322,7 @@ pub struct UserSettings {
     pub analysis: AnalysisSettings,
     pub online: OnlineSettings,
     pub background_jobs: BackgroundJobsSettings,
+    pub encoding: EncodingSettings,
 }
 
 impl UserSettings {
@@ -291,6 +338,7 @@ impl UserSettings {
             analysis: AnalysisSettings::default(),
             online: OnlineSettings::default(),
             background_jobs: BackgroundJobsSettings::default(),
+            encoding: EncodingSettings::default(),
         }
     }
 
@@ -304,8 +352,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, LibraryManagementMode,
-        OnlineSettings, UserSettings,
+        AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
+        EncodingSettings, LibraryManagementMode, OnlineSettings, UserSettings,
     };
 
     #[test]
@@ -370,6 +418,25 @@ mod tests {
             AnalysisSettings::default().normalized(),
             AnalysisSettings::default()
         );
+    }
+
+    #[test]
+    fn encoding_defaults_to_flac() {
+        let settings = UserSettings::default();
+
+        assert_eq!(settings.encoding, EncodingSettings::default());
+        assert_eq!(settings.encoding.cd_profile, CdEncodingProfile::Flac);
+        assert_eq!(CdEncodingProfile::default(), CdEncodingProfile::Flac);
+    }
+
+    #[test]
+    fn cd_encoding_profile_reports_extension_and_bitrate() {
+        assert_eq!(CdEncodingProfile::Flac.file_extension(), "flac");
+        assert_eq!(CdEncodingProfile::Flac.mp3_bitrate_kbps(), None);
+        assert_eq!(CdEncodingProfile::Mp3Cbr256.file_extension(), "mp3");
+        assert_eq!(CdEncodingProfile::Mp3Cbr256.mp3_bitrate_kbps(), Some(256));
+        assert_eq!(CdEncodingProfile::Mp3Cbr320.file_extension(), "mp3");
+        assert_eq!(CdEncodingProfile::Mp3Cbr320.mp3_bitrate_kbps(), Some(320));
     }
 
     #[test]

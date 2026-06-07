@@ -55,7 +55,8 @@ pub use cover_art_archive::CoverArtArchiveClient;
 pub use error::{RemoteError, RemoteResult};
 pub use lrclib::LrcLibClient;
 pub use musicbrainz::{
-    GenreVote, MusicBrainzClient, RecordingMatch, RecordingRelease, RecordingSearchTerms,
+    DiscRelease, DiscTrack, GenreVote, MusicBrainzClient, RecordingMatch, RecordingRelease,
+    RecordingSearchTerms,
 };
 pub use service::{
     ComposedRemoteMetadataService, FetchedArtwork, FetchedLyrics, GenreCandidate,

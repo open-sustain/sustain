@@ -34,7 +34,7 @@ use crate::acoustid::{AcoustIdClient, AudioFingerprint};
 use crate::cover_art_archive::CoverArtArchiveClient;
 use crate::error::RemoteResult;
 use crate::lrclib::LrcLibClient;
-use crate::musicbrainz::{MusicBrainzClient, RecordingMatch, RecordingSearchTerms};
+use crate::musicbrainz::{DiscRelease, MusicBrainzClient, RecordingMatch, RecordingSearchTerms};
 
 /// Minimum MusicBrainz score (0..=100) we accept from a text-based
 /// recording search before we'd rather fall back to fingerprint
@@ -237,6 +237,31 @@ pub trait RemoteMetadataService: Send + Sync {
     /// records the attempt regardless so the scheduler does not
     /// keep retrying the same miss.
     fn fetch_lyrics(&self, query: &TrackQuery) -> RemoteResult<Option<FetchedLyrics>>;
+
+    /// Resolve a probed MusicBrainz Disc ID into the compatible release
+    /// candidates whose matching medium has exactly `audio_track_count`
+    /// audio tracks. An empty vector is a normal "no match" outcome. The
+    /// default returns no candidates — appropriate for any provider without
+    /// a disc-id endpoint; [`ComposedRemoteMetadataService`] overrides it.
+    ///
+    /// This is an explicit user-driven CD lookup, independent of the
+    /// background-backfill toggles in [`TrackQuery`]-based identification.
+    fn lookup_disc(
+        &self,
+        _disc_id: &str,
+        _audio_track_count: u32,
+    ) -> RemoteResult<Vec<DiscRelease>> {
+        Ok(Vec::new())
+    }
+
+    /// Fetch the front cover for an already-chosen disc release, trying the
+    /// release first and then its release-group. Returns `Ok(None)` when
+    /// Cover Art Archive has nothing on file — a normal outcome. The
+    /// default returns no artwork; [`ComposedRemoteMetadataService`]
+    /// overrides it with a real Cover Art Archive lookup.
+    fn fetch_disc_cover(&self, _release: &DiscRelease) -> RemoteResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
 }
 
 /// The production implementation. Owns one [`MusicBrainzClient`], one
@@ -470,6 +495,25 @@ impl RemoteMetadataService for ComposedRemoteMetadataService {
 
     fn fetch_lyrics(&self, query: &TrackQuery) -> RemoteResult<Option<FetchedLyrics>> {
         self.lrclib.fetch(query)
+    }
+
+    fn lookup_disc(&self, disc_id: &str, audio_track_count: u32) -> RemoteResult<Vec<DiscRelease>> {
+        self.musicbrainz.lookup_disc(disc_id, audio_track_count)
+    }
+
+    fn fetch_disc_cover(&self, release: &DiscRelease) -> RemoteResult<Option<Vec<u8>>> {
+        if let Some(bytes) = self
+            .cover_art_archive
+            .fetch_release_front(&release.release_mbid)?
+        {
+            return Ok(Some(bytes));
+        }
+        if let Some(release_group_mbid) = release.release_group_mbid.as_deref() {
+            return self
+                .cover_art_archive
+                .fetch_release_group_front(release_group_mbid);
+        }
+        Ok(None)
     }
 }
 

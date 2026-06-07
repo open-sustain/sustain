@@ -955,6 +955,47 @@ rescan to see a new sync.
 
 ---
 
+## CD import — *iso-iTunes*
+
+Insert an audio CD and it appears as a transient **Audio CD** row in the sidebar's
+**DEVICES** section (only while a readable audio disc is present — empty optical
+drives are not shown). Selecting it opens a dedicated CD-import page: the release
+artwork on the left, the release identity in the middle, and an **Import CD**
+button on the right, above a song-table-style checklist of the disc's audio tracks
+with every track ticked by default and a select-all action. The same "Import CD"
+workflow iTunes used, driven from Sustain's own library model.
+
+The disc is identified by a **MusicBrainz Disc ID** computed from its table of
+contents (via libdiscid) — a single disc-id lookup, not per-track title guessing.
+When exactly one release matches it is used automatically; when several pressings
+match, a release selector appears and a choice is required before importing; when
+nothing matches, or there is no network, a valid `Audio CD` / `Unknown Artist` /
+`Track NN` fallback is rendered so an offline import still works. The chosen
+release's front cover is fetched once from the Cover Art Archive, shown in the
+header, and embedded in every imported track. Discovery and the lookup run off
+the UI thread and never block the main loop; the first probe happens only after
+startup so cold start is unaffected.
+
+Encoding is configured in the **Encoding** Preferences tab, with three profiles —
+**FLAC** (lossless, the default), **MP3 256 kbps**, and **MP3 320 kbps** — and the
+profile is captured when an import starts. Extraction uses GStreamer's
+full-paranoia `cdparanoiasrc`; each track is encoded to an unpublished staging
+file beneath the library, tagged and given its cover through Sustain's normal tag
+writer, read back to capture its real duration / bitrate / sample rate, then
+published with the no-overwrite managed-library move and committed as a durable
+library row. CD imports always create owned files inside the library folder, even
+when the library is otherwise in "reference files in place" mode, because an
+optical track has no durable path to reference.
+
+Completed tracks survive cancellation, ejection, a later-track failure, and a
+crash: each track's publish/row transition is journaled, so a restart
+deterministically finishes or rolls back an interrupted one, and an existing
+library file is never overwritten. Progress, cancellation, and the success /
+partial / failure outcome all flow through the status-bar notification lane;
+playback continues uninterrupted during a rip.
+
+---
+
 ## Single-instance enforcement — *iso-iTunes*
 
 A second Sustain process targeting the same library database is

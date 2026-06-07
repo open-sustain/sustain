@@ -562,7 +562,7 @@ fn create_temporary_copy_path(parent: &Path) -> Result<PinnedFilePath, VerifiedF
     Err(VerifiedFileCopyError::CreateTemporaryFileFailed)
 }
 
-pub(super) fn move_file_without_copy_or_overwrite(
+pub(crate) fn move_file_without_copy_or_overwrite(
     source_path: &Path,
     destination_path: &Path,
 ) -> Result<(), FileMoveError> {

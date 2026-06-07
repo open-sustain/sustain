@@ -17,7 +17,7 @@ use cells::{
 };
 use columns::{TRACK_TABLE_COLUMNS, TrackTableColumn};
 use drag_drop::{RowDropCellRegistry, RowReorderHooks};
-use empty_row_painter::EmptyRowPainter;
+pub(crate) use empty_row_painter::EmptyRowPainter;
 use inline_edit::InlineEditController;
 pub(crate) use inline_edit::{EditableField, InlineEditHooks};
 pub(crate) use row::TrackTableRow;

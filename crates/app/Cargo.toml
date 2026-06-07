@@ -14,10 +14,25 @@ authors = ["AnnoyingTechnology"]
 name = "sustain"
 path = "src/main.rs"
 
+[features]
+default = ["optical"]
+# Links MusicBrainz libdiscid for audio-CD ripping. On for the Debian
+# package (which depends on libdiscid0); the Flatpak build turns it off via
+# `--no-default-features` because the GNOME runtime ships no libdiscid and
+# Flatpak CD-drive access is out of scope. With it off the app still builds
+# and runs — the optical probe simply finds no drive — so the binary is
+# always usable.
+optical = ["sustain-cd-import/optical"]
+
 [dependencies]
 directories = "6.0.0"
 rustix = { version = "1", features = ["fs"] }
 sustain-app-runtime = { path = "../app_runtime" }
+# Composition root for the CD-import backend. The `optical` feature above
+# forwards to this crate's libdiscid-backed probe; it is the only place
+# libdiscid is linked, so the Debian package ships full CD-import support
+# (and depends on libdiscid0) while the Flatpak build omits it.
+sustain-cd-import = { path = "../cd_import", default-features = false }
 sustain-i18n = { path = "../i18n" }
 sustain-library-store = { path = "../library_store" }
 sustain-metadata = { path = "../metadata" }
@@ -34,7 +49,7 @@ name = "sustain"
 maintainer = "Sustain contributors <https://github.com/open-sustain/sustain>"
 section = "sound"
 priority = "optional"
-depends = "$auto, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad"
+depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, libdiscid0"
 recommends = "yt-dlp, ffmpeg"
 extended-description = """
 Sustain is a Linux desktop music player in the lineage of 2010s iTunes.

@@ -11,27 +11,30 @@ use std::{
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use sustain_app_runtime::{
-    MetadataChange, PlaybackCommand, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState,
-    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
-    Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, UiSettings, UiSidebarSelection,
+    CdImportProgress, CdImportRequest, CdImportResult, MetadataChange, PlaybackCommand,
+    PlaybackQueueRequest, PlaybackQueueSource, PlaybackState, Playlist, PlaylistEntry,
+    PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode, TocSnapshot, Track,
+    TrackColumnLayout, TrackColumnLayoutScope, TrackId, UiSettings, UiSidebarSelection,
     normalize_query, track_matches_search_text,
 };
 
 use super::{
     ALBUMS_VIEW, APP_ID, AnalysisProgressReceiver, ApplicationCommand, ApplicationRuntime,
-    ArtworkFetchResultReceiver, AvailabilityChangedCallback, ConnectedDevice, DEVICES_VIEW,
-    DUPLICATES_VIEW, DevicePlanResultReceiver, DeviceSyncEventReceiver, LibraryChangedCallback,
+    ApplicationRuntimeError, ArtworkFetchResultReceiver, AvailabilityChangedCallback,
+    CD_IMPORT_VIEW, CdLookupEventReceiver, ConnectedDevice, DEVICES_VIEW, DUPLICATES_VIEW,
+    DevicePlanResultReceiver, DeviceSyncEventReceiver, LibraryChangedCallback,
     LibraryChangedHolder, LibraryHydrationResultReceiver, MetadataWriterEventReceiver,
-    MprisCommandReceiver, MtpDiscoveryResultReceiver, OnlineProgressReceiver, PLAYLISTS_VIEW,
-    PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
-    SONGS_VIEW, STATISTICS_VIEW, SharedMprisService, SharedRuntime, ShowAlbumAction,
-    ShowAlbumHolder, SmartPlaylistTrackStatus, SmartShuffleRebuildResultReceiver,
-    TrackRowChangedCallback, TrackRowChangedHolder, TrackRowChangedKind, TrackUpdatedReceiver,
-    YoutubeAudioDownloadResultReceiver,
+    MprisCommandReceiver, MtpDiscoveryResultReceiver, OnlineProgressReceiver,
+    OpticalDiscoveryResultReceiver, PLAYLISTS_VIEW, PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH,
+    SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW, SharedMprisService,
+    SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
+    SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
+    TrackRowChangedKind, TrackUpdatedReceiver, YoutubeAudioDownloadResultReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
     artwork_loader::ArtworkLoader,
+    cd_import_panel::{CdImportPanel, CdImportRequestedCallback},
     command_controller::{SharedCommandController, UiCommandController},
     content_stack::build_content_stack,
     device_panel::DeviceSyncPanel,
@@ -57,7 +60,7 @@ use super::{
         GlobalShortcutContext, create_new_playlist, install_global_shortcuts,
         open_new_smart_playlist_editor,
     },
-    sidebar::{PlaylistSidebar, SidebarSelection, build_content_area},
+    sidebar::{PlaylistSidebar, SidebarDeviceEntry, SidebarSelection, build_content_area},
     sidebar_context::{
         NEW_PLAYLIST_FOLDER_DEFAULT_NAME, SidebarActionCallback, SidebarContextAction,
         SidebarContextMenu, unique_default_name,
@@ -160,6 +163,8 @@ pub(crate) struct MainWindowAsyncReceivers {
     pub device_sync_event_rx: Option<DeviceSyncEventReceiver>,
     pub device_plan_result_rx: Option<DevicePlanResultReceiver>,
     pub mtp_discovery_rx: Option<MtpDiscoveryResultReceiver>,
+    pub optical_discovery_rx: Option<OpticalDiscoveryResultReceiver>,
+    pub cd_lookup_rx: Option<CdLookupEventReceiver>,
     pub library_hydration_result_rx: Option<LibraryHydrationResultReceiver>,
 }
 
@@ -183,6 +188,8 @@ pub(crate) fn build_main_window(
         device_sync_event_rx,
         device_plan_result_rx,
         mtp_discovery_rx,
+        optical_discovery_rx,
+        cd_lookup_rx,
         library_hydration_result_rx,
     } = receivers;
     let tbw = std::time::Instant::now();
@@ -501,6 +508,7 @@ pub(crate) fn build_main_window(
     songs_drop_overlay.add_overlay(&songs_drop_indicator);
 
     let device_panel = DeviceSyncPanel::new(runtime.clone(), command_controller.clone());
+    let cd_import_panel = CdImportPanel::new(runtime.clone());
     let statistics_view = StatisticsView::new(runtime.clone());
     let content_stack = build_content_stack(
         &songs_drop_overlay,
@@ -509,17 +517,21 @@ pub(crate) fn build_main_window(
         &statistics_view.widget(),
         &playlists_view,
         device_panel.widget(),
+        cd_import_panel.widget(),
     );
     install_albums_view_activator(&content_stack, &albums_view);
     install_duplicates_view(&content_stack, &sidebar, &duplicates_view);
     install_statistics_view_activator(&content_stack, &statistics_view);
-    install_device_sync_view(
-        &content_stack,
-        &sidebar,
-        &device_panel,
-        &runtime,
+    install_devices_section(DevicesSectionContext {
+        content_stack: &content_stack,
+        sidebar: &sidebar,
+        device_panel: &device_panel,
+        cd_import_panel: &cd_import_panel,
+        runtime: &runtime,
         mtp_discovery_rx,
-    );
+        optical_discovery_rx,
+        cd_lookup_rx,
+    });
     // The playlists table is built empty. It only needs to be populated
     // when the user actually opens the Playlists view; rebuilding it on
     // every library_changed / selection change while Songs is visible
@@ -569,6 +581,7 @@ pub(crate) fn build_main_window(
         visible_summary_refresh.clone(),
         &current_search_text,
     );
+    install_cd_import_requested(&cd_import_panel, &runtime, library_changed.clone());
     install_track_availability_observer(&runtime, &songs_table, &playlists_table);
     let track_row_changed = track_row_changed_callback(TrackRowChangedContext {
         runtime: &runtime,
@@ -636,12 +649,14 @@ pub(crate) fn build_main_window(
         let sidebar = sidebar.clone();
         let runtime = runtime.clone();
         Box::new(move || {
-            // Kick the async Android/MTP probe so a phone already attached
-            // at launch appears once the worker resolves it (the discovery
-            // consumer re-renders); show block devices immediately.
+            // Kick the async Android/MTP and optical-disc probes so a phone
+            // or audio CD already present at launch appears once the workers
+            // resolve (their discovery consumers re-render); show block
+            // devices immediately. Both probes run only after this
+            // first-idle landmark, so they never count against cold start.
             runtime.borrow_mut().refresh_mtp_devices();
-            let devices = runtime.borrow().connected_devices();
-            sidebar.set_devices(&devices);
+            runtime.borrow_mut().refresh_optical_discs();
+            sidebar.set_devices(&device_entries(&runtime));
         })
     };
     let resume_pending_metadata_writes: Box<dyn FnOnce()> = {
@@ -993,30 +1008,64 @@ impl DeferredStartup {
 /// place — any caller that flips the stack to `ALBUMS_VIEW`
 /// automatically picks it up. `activate()` is idempotent, so the
 /// notification firing on every later switch is harmless.
-/// Wire the DEVICES sidebar section to the device-sync panel and keep
-/// the device list live.
-///
-/// Selecting a device shows its panel and flips the content stack to it;
-/// switching to any other page clears the device row highlight so only
-/// one navigation surface looks active at a time.
-///
-/// Discovery is otherwise run once, on the first idle, which would miss a
-/// stick plugged in (or auto-mounted by udisks moments) after launch.
-/// GIO's [`gio::VolumeMonitor`] is the native mount/unmount source on the
-/// session; each event re-runs the cheap `/proc/mounts` discovery and
-/// rebuilds the section. The monitor is a process singleton that GIO
-/// finalises once its last reference drops (its internal pointer is
-/// weak), which would silence further events — so it is parked in the
-/// content-stack notify closure below, owned for the whole session and
-/// freed with the UI. Anchoring it there rather than on the sidebar
-/// avoids a sidebar↔monitor reference cycle.
-fn install_device_sync_view(
-    content_stack: &gtk::Stack,
-    sidebar: &PlaylistSidebar,
-    device_panel: &DeviceSyncPanel,
-    runtime: &SharedRuntime,
+/// The dynamic DEVICES sidebar section holds two kinds of transient entry —
+/// removable sync targets (opening the device-sync panel) and inserted audio
+/// CDs (opening the CD-import page). They share one rendering and one set of
+/// discovery sources, so they are wired together here.
+struct DevicesSectionContext<'a> {
+    content_stack: &'a gtk::Stack,
+    sidebar: &'a PlaylistSidebar,
+    device_panel: &'a DeviceSyncPanel,
+    cd_import_panel: &'a CdImportPanel,
+    runtime: &'a SharedRuntime,
     mtp_discovery_rx: Option<MtpDiscoveryResultReceiver>,
-) {
+    optical_discovery_rx: Option<OpticalDiscoveryResultReceiver>,
+    cd_lookup_rx: Option<CdLookupEventReceiver>,
+}
+
+/// The current DEVICES entries: removable sync targets followed by inserted
+/// audio CDs, both rebuilt from live runtime state.
+fn device_entries(runtime: &SharedRuntime) -> Vec<SidebarDeviceEntry> {
+    let runtime = runtime.borrow();
+    let mut entries: Vec<SidebarDeviceEntry> = runtime
+        .connected_devices()
+        .into_iter()
+        .map(SidebarDeviceEntry::SyncTarget)
+        .collect();
+    entries.extend(
+        runtime
+            .optical_discs()
+            .iter()
+            .cloned()
+            .map(SidebarDeviceEntry::AudioCd),
+    );
+    entries
+}
+
+/// Wire the DEVICES sidebar section to the device-sync panel and the
+/// CD-import page, and keep the entry list live.
+///
+/// Selecting an entry shows its page and flips the content stack to it;
+/// switching to any other page clears the row highlight so only one
+/// navigation surface looks active at a time. Discovery (Android/MTP and
+/// optical disc) runs off the main thread; GIO's [`gio::VolumeMonitor`] is
+/// the native mount/media-change source and re-runs it. The monitor is a
+/// process singleton GIO finalises once its last reference drops, so it is
+/// parked in the content-stack notify closure below, owned for the whole
+/// session and freed with the UI — anchoring it there avoids a
+/// sidebar↔monitor reference cycle.
+fn install_devices_section(context: DevicesSectionContext<'_>) {
+    let DevicesSectionContext {
+        content_stack,
+        sidebar,
+        device_panel,
+        cd_import_panel,
+        runtime,
+        mtp_discovery_rx,
+        optical_discovery_rx,
+        cd_lookup_rx,
+    } = context;
+
     {
         let content_stack = content_stack.clone();
         let device_panel = device_panel.clone();
@@ -1027,31 +1076,159 @@ fn install_device_sync_view(
             device_panel.show_device(connected);
         }));
     }
+    {
+        let content_stack = content_stack.clone();
+        let cd_import_panel = cd_import_panel.clone();
+        let runtime = runtime.clone();
+        sidebar.set_cd_selected_callback(Rc::new(move |snapshot: TocSnapshot| {
+            content_stack.set_visible_child_name(CD_IMPORT_VIEW);
+            cd_import_panel.show_disc(snapshot.clone());
+            // Read-only MusicBrainz lookup off the main thread; results land
+            // on the CD-lookup consumer below. Only show the "searching"
+            // artwork when a lookup actually started — without a remote
+            // service nothing would ever resolve it.
+            if runtime.borrow_mut().lookup_disc_releases(&snapshot) {
+                cd_import_panel.mark_lookup_started();
+            }
+        }));
+    }
+    {
+        let runtime = runtime.clone();
+        sidebar.set_cd_eject_callback(Rc::new(move |snapshot: TocSnapshot| {
+            eject_optical_disc(&snapshot.device_path, &runtime);
+        }));
+    }
+    {
+        let runtime = runtime.clone();
+        cd_import_panel.set_eject_requested_callback(Rc::new(move |snapshot: TocSnapshot| {
+            eject_optical_disc(&snapshot.device_path, &runtime);
+        }));
+    }
 
-    // Render the device list (sidebar + panel) from current runtime state:
-    // block devices probed inline plus the cached Android/MTP set.
+    // Render both kinds of DEVICES entry from current runtime state, refresh
+    // the device panel, and — when the hardware backing a transient view has
+    // gone away — leave that view for the selection that preceded it.
     let render_devices: Rc<dyn Fn()> = {
         let sidebar = sidebar.clone();
         let device_panel = device_panel.clone();
+        let cd_import_panel = cd_import_panel.clone();
+        let content_stack = content_stack.clone();
         let runtime = runtime.clone();
         Rc::new(move || {
-            let devices = runtime.borrow().connected_devices();
-            sidebar.set_devices(&devices);
-            device_panel.connected_devices_changed(&devices);
+            let connected = runtime.borrow().connected_devices();
+
+            // Resolve "is the thing this transient view shows still here?"
+            // before `set_devices` drops the (now stale) transient highlight.
+            let shown_disc_gone = match cd_import_panel.current_snapshot() {
+                Some(shown) => !runtime
+                    .borrow()
+                    .optical_discs()
+                    .iter()
+                    .any(|disc| disc.identity() == shown.identity()),
+                None => false,
+            };
+            let shown_device_gone = match device_panel.shown_device() {
+                Some(device) => !connected.iter().any(|other| other.id == device.id),
+                None => false,
+            };
+            let visible = content_stack.visible_child_name();
+            let on_cd_page = visible.as_deref() == Some(CD_IMPORT_VIEW);
+            let on_device_page = visible.as_deref() == Some(DEVICES_VIEW);
+
+            sidebar.set_devices(&device_entries(&runtime));
+            device_panel.connected_devices_changed(&connected);
+
+            if shown_disc_gone {
+                cd_import_panel.forget_disc();
+                runtime.borrow_mut().invalidate_cd_metadata();
+                if on_cd_page {
+                    sidebar.restore_persistent_selection();
+                }
+            }
+            if shown_device_gone && on_device_page {
+                sidebar.restore_persistent_selection();
+            }
         })
     };
-    // A full refresh kicks the asynchronous Android/MTP probe (cheap on the
-    // main thread; its result re-renders through the discovery consumer) and
-    // renders immediately with what is already known.
+    // A full refresh kicks the asynchronous Android/MTP and optical-disc
+    // probes (cheap on the main thread; their results re-render through the
+    // discovery consumers) and renders immediately with what is known. The
+    // optical probe is skipped while a CD import owns the drive.
     let refresh_devices: Rc<dyn Fn()> = {
         let render_devices = render_devices.clone();
         let runtime = runtime.clone();
         Rc::new(move || {
-            runtime.borrow_mut().refresh_mtp_devices();
+            {
+                let mut runtime = runtime.borrow_mut();
+                runtime.refresh_mtp_devices();
+                if !matches!(
+                    runtime.background_task_status(),
+                    sustain_app_runtime::BackgroundTaskStatus::CdImportRunning
+                ) {
+                    runtime.refresh_optical_discs();
+                }
+            }
             render_devices();
         })
     };
-    install_mtp_discovery_consumer(mtp_discovery_rx, runtime.clone(), render_devices);
+    install_mtp_discovery_consumer(mtp_discovery_rx, runtime.clone(), render_devices.clone());
+
+    // Optical-disc discovery results re-render the section.
+    if let Some(receiver) = optical_discovery_rx {
+        let runtime = runtime.clone();
+        let render_devices = render_devices.clone();
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok(result) = receiver.recv().await {
+                if runtime.borrow_mut().apply_optical_discovery(result) {
+                    render_devices();
+                }
+            }
+        });
+    }
+
+    // MusicBrainz disc lookup + cover results, dropped when their generation
+    // no longer matches the disc currently on the page.
+    if let Some(receiver) = cd_lookup_rx {
+        let runtime = runtime.clone();
+        let cd_import_panel = cd_import_panel.clone();
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok(event) = receiver.recv().await {
+                match event {
+                    sustain_app_runtime::CdLookupEvent::Releases {
+                        generation,
+                        releases,
+                        failed,
+                        ..
+                    } => {
+                        if !runtime
+                            .borrow()
+                            .is_current_cd_metadata_generation(generation)
+                        {
+                            continue;
+                        }
+                        if failed {
+                            runtime.borrow_mut().push_ephemeral_notification(
+                                sustain_app_runtime::NotificationCategory::CdImport,
+                                sustain_app_runtime::NotificationSeverity::Warning,
+                                "Could not reach MusicBrainz; using fallback CD metadata."
+                                    .to_owned(),
+                            );
+                        }
+                        cd_import_panel.apply_releases(releases, failed);
+                    }
+                    sustain_app_runtime::CdLookupEvent::Cover { generation, cover } => {
+                        if runtime
+                            .borrow()
+                            .is_current_cd_metadata_generation(generation)
+                        {
+                            cd_import_panel.apply_cover(cover);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     let volume_monitor = gio::VolumeMonitor::get();
     {
         let refresh_devices = refresh_devices.clone();
@@ -1065,16 +1242,141 @@ fn install_device_sync_view(
     let sidebar = sidebar.clone();
     content_stack.connect_visible_child_name_notify(move |stack| {
         // `volume_monitor` is captured (not otherwise used here) so the
-        // singleton lives as long as the content stack; see the doc
-        // comment above.
+        // singleton lives as long as the content stack; see the doc comment.
         let _keep_monitor_alive = &volume_monitor;
-        // Leaving a transient view's page (the device panel today) drops
-        // its sidebar highlight so the persistent selection shows through.
+        // Leaving a transient view's page (device panel or CD-import page)
+        // drops its sidebar highlight so the persistent selection shows
+        // through.
         if !matches!(
             stack.visible_child_name().as_deref(),
-            Some(DEVICES_VIEW) | Some(DUPLICATES_VIEW)
+            Some(DEVICES_VIEW) | Some(CD_IMPORT_VIEW) | Some(DUPLICATES_VIEW)
         ) {
             sidebar.clear_transient_highlight();
+        }
+    });
+}
+
+/// Eject the optical disc in `device_path` via GIO, so the desktop's normal
+/// eject machinery (GVfs) runs rather than us touching the device directly.
+/// The removal propagates back through the volume monitor, which refreshes
+/// the DEVICES section and — if the CD page is showing this disc — leaves it.
+/// A failed eject is reported through the notification lane.
+fn eject_optical_disc(device_path: &std::path::Path, runtime: &SharedRuntime) {
+    let Some(device) = device_path.to_str() else {
+        return;
+    };
+    let monitor = gio::VolumeMonitor::get();
+    let Some(drive) = monitor
+        .connected_drives()
+        .into_iter()
+        .find(|drive| drive.identifier("unix-device").as_deref() == Some(device))
+    else {
+        return;
+    };
+    if !drive.can_eject() {
+        return;
+    }
+    let runtime = runtime.clone();
+    drive.eject_with_operation(
+        gio::MountUnmountFlags::NONE,
+        Some(&gio::MountOperation::new()),
+        gio::Cancellable::NONE,
+        move |result| {
+            if result.is_err() {
+                runtime.borrow_mut().push_ephemeral_notification(
+                    sustain_app_runtime::NotificationCategory::CdImport,
+                    sustain_app_runtime::NotificationSeverity::Warning,
+                    "Could not eject the disc.".to_owned(),
+                );
+            }
+        },
+    );
+}
+
+/// One event from the CD-import worker thread.
+enum CdImportWorkerEvent {
+    Progress(CdImportProgress),
+    Finished(Result<CdImportResult, ApplicationRuntimeError>),
+}
+
+/// Wire the CD page's `Import CD` button to the runtime's prepare /
+/// background-worker / apply path, mirroring library import: prepare claims
+/// the mutation slot on the main thread, the rip runs on a worker, and its
+/// progress/outcome are applied back on the GTK loop.
+fn install_cd_import_requested(
+    cd_import_panel: &CdImportPanel,
+    runtime: &SharedRuntime,
+    library_changed: LibraryChangedCallback,
+) {
+    let runtime = runtime.clone();
+    let panel = cd_import_panel.clone();
+    let callback: CdImportRequestedCallback = Rc::new(move |request: CdImportRequest| {
+        let task = {
+            let mut runtime = runtime.borrow_mut();
+            match runtime.prepare_cd_import(request) {
+                Ok(task) => task,
+                Err(error) => {
+                    runtime.fail_cd_import(error);
+                    return;
+                }
+            }
+        };
+        // The slot is claimed; reflect it on the button immediately.
+        panel.refresh_import_sensitivity();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = crate::run_cd_import_task(task, |progress| {
+                let _sent = tx.send(CdImportWorkerEvent::Progress(progress));
+            });
+            let _sent = tx.send(CdImportWorkerEvent::Finished(outcome));
+        });
+        poll_cd_import(rx, runtime.clone(), panel.clone(), library_changed.clone());
+    });
+    cd_import_panel.set_import_requested_callback(callback);
+}
+
+fn poll_cd_import(
+    rx: std::sync::mpsc::Receiver<CdImportWorkerEvent>,
+    runtime: SharedRuntime,
+    cd_import_panel: CdImportPanel,
+    library_changed: LibraryChangedCallback,
+) {
+    glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        let mut latest_progress = None;
+        let mut finished = None;
+        loop {
+            match rx.try_recv() {
+                Ok(CdImportWorkerEvent::Progress(progress)) => latest_progress = Some(progress),
+                Ok(CdImportWorkerEvent::Finished(outcome)) => {
+                    finished = Some(outcome);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    finished = Some(Err(ApplicationRuntimeError::CdImportFailed));
+                    break;
+                }
+            }
+        }
+        if let Some(progress) = latest_progress {
+            runtime
+                .borrow_mut()
+                .update_cd_import_progress(progress.completed_tracks, progress.total_tracks);
+        }
+        match finished {
+            Some(Ok(result)) => {
+                runtime.borrow_mut().apply_cd_import_result(result);
+                library_changed();
+                cd_import_panel.refresh_import_sensitivity();
+                glib::ControlFlow::Break
+            }
+            Some(Err(error)) => {
+                runtime.borrow_mut().fail_cd_import(error);
+                cd_import_panel.refresh_import_sensitivity();
+                glib::ControlFlow::Break
+            }
+            None => glib::ControlFlow::Continue,
         }
     });
 }

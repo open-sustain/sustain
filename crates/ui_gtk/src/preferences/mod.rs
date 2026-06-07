@@ -14,6 +14,7 @@ use super::{
 
 mod about_tab;
 mod analysis_tab;
+mod encoding_tab;
 mod library_tab;
 mod online_tab;
 mod shuffle_tab;
@@ -58,6 +59,7 @@ pub(super) const HELPER_MIN_WIDTH_CHARS: i32 = 10;
 pub(super) const PATH_ENTRY_VISIBLE_CHARS: i32 = 36;
 
 const TAB_LIBRARY: &str = "library";
+const TAB_ENCODING: &str = "encoding";
 const TAB_ANALYSIS: &str = "analysis";
 const TAB_ONLINE: &str = "online";
 const TAB_SHUFFLE: &str = "shuffle";
@@ -77,12 +79,20 @@ pub(crate) fn install_preferences_action(
         return;
     }
 
-    let preferences = gio::SimpleAction::new("preferences", None);
+    // The action carries the tab to land on as a string target, so any
+    // widget can open Preferences at a specific page (e.g. the CD page's
+    // "Encoding Settings" button → the Encoding tab). The Ctrl+, accelerator
+    // targets the Library tab via the detailed action name.
+    let preferences = gio::SimpleAction::new("preferences", Some(glib::VariantTy::STRING));
     let window = window.clone();
     let command_controller = command_controller.clone();
     let scan_requested = scan_requested.clone();
     let consolidation_requested = consolidation_requested.clone();
-    preferences.connect_activate(move |_action, _parameter| {
+    preferences.connect_activate(move |_action, parameter| {
+        let initial_tab = parameter
+            .and_then(glib::Variant::str)
+            .filter(|tab| TABS.contains(tab))
+            .unwrap_or(TAB_LIBRARY);
         open_preferences_window(
             &window,
             command_controller.clone(),
@@ -90,11 +100,27 @@ pub(crate) fn install_preferences_action(
             scan_requested.clone(),
             consolidation_requested.clone(),
             view_settings_changed.clone(),
+            initial_tab,
         );
     });
     app.add_action(&preferences);
-    app.set_accels_for_action("app.preferences", &[PREFERENCES_ACCELERATOR]);
+    app.set_accels_for_action(
+        &format!("app.preferences::{TAB_LIBRARY}"),
+        &[PREFERENCES_ACCELERATOR],
+    );
 }
+
+/// Every valid Preferences tab id, so an action target naming an unknown tab
+/// falls back to the Library landing rather than a blank stack page.
+const TABS: [&str; 7] = [
+    TAB_LIBRARY,
+    TAB_ENCODING,
+    TAB_ANALYSIS,
+    TAB_ONLINE,
+    TAB_SHUFFLE,
+    TAB_VIEWS,
+    TAB_ABOUT,
+];
 
 /// Build the status bar's "cog + Settings" entry.
 ///
@@ -142,6 +168,7 @@ pub(crate) fn settings_button(
             scan_requested.clone(),
             consolidation_requested.clone(),
             view_settings_changed.clone(),
+            TAB_LIBRARY,
         );
     });
 
@@ -155,6 +182,7 @@ fn open_preferences_window(
     scan_requested: LibraryScanRequestedCallback,
     consolidation_requested: LibraryConsolidationRequestedCallback,
     view_settings_changed: ViewSettingsChangedCallback,
+    initial_tab: &str,
 ) {
     let window = gtk::Window::builder()
         .title("Preferences")
@@ -216,6 +244,9 @@ fn open_preferences_window(
     );
     stack.add_named(&library_page, Some(TAB_LIBRARY));
 
+    let encoding_page = encoding_tab::build(command_controller.clone());
+    stack.add_named(&encoding_page, Some(TAB_ENCODING));
+
     let analysis_page = analysis_tab::build(command_controller.clone());
     stack.add_named(&analysis_page, Some(TAB_ANALYSIS));
 
@@ -231,7 +262,7 @@ fn open_preferences_window(
     let about_page = about_tab::build(&window, &database_path);
     stack.add_named(&about_page, Some(TAB_ABOUT));
 
-    let tab_strip = build_tab_strip(&stack, &window);
+    let tab_strip = build_tab_strip(&stack, &window, initial_tab);
 
     panel.append(&tab_strip);
     panel.append(&stack);
@@ -255,34 +286,49 @@ fn open_preferences_window(
 
 /// Builds the headerless drag surface that combines the three icon-above-label
 /// tab buttons and the close button on the trailing end.
-fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window) -> gtk::Widget {
+fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window, initial_tab: &str) -> gtk::Widget {
     let library_button = build_tab_button("folder-music-symbolic", "Library");
+    let encoding_button = build_tab_button("media-optical-symbolic", "Encoding");
     let analysis_button = build_tab_button("applications-science-symbolic", "Analysis");
     let online_button = build_tab_button("network-transmit-receive-symbolic", "Online");
     let shuffle_button = build_tab_button("media-playlist-shuffle-symbolic", "Shuffle");
     let views_button = build_tab_button("view-list-symbolic", "Views");
     let about_button = build_tab_button("help-about-symbolic", "About");
 
-    // Group them all so exactly one is active at a time. The Library tab
-    // is the default landing.
+    // Group them all so exactly one is active at a time.
+    encoding_button.set_group(Some(&library_button));
     analysis_button.set_group(Some(&library_button));
     online_button.set_group(Some(&library_button));
     shuffle_button.set_group(Some(&library_button));
     views_button.set_group(Some(&library_button));
     about_button.set_group(Some(&library_button));
-    library_button.set_active(true);
 
     wire_tab_button(&library_button, stack, TAB_LIBRARY);
+    wire_tab_button(&encoding_button, stack, TAB_ENCODING);
     wire_tab_button(&analysis_button, stack, TAB_ANALYSIS);
     wire_tab_button(&online_button, stack, TAB_ONLINE);
     wire_tab_button(&shuffle_button, stack, TAB_SHUFFLE);
     wire_tab_button(&views_button, stack, TAB_VIEWS);
     wire_tab_button(&about_button, stack, TAB_ABOUT);
 
+    // Land on the requested tab (Library by default). Activating the grouped
+    // toggle fires its handler, which sets the visible stack page.
+    let landing = match initial_tab {
+        TAB_ENCODING => &encoding_button,
+        TAB_ANALYSIS => &analysis_button,
+        TAB_ONLINE => &online_button,
+        TAB_SHUFFLE => &shuffle_button,
+        TAB_VIEWS => &views_button,
+        TAB_ABOUT => &about_button,
+        _ => &library_button,
+    };
+    landing.set_active(true);
+
     let tab_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     tab_box.add_css_class("preferences-tab-buttons");
     tab_box.set_halign(gtk::Align::Center);
     tab_box.append(&library_button);
+    tab_box.append(&encoding_button);
     tab_box.append(&analysis_button);
     tab_box.append(&online_button);
     tab_box.append(&shuffle_button);

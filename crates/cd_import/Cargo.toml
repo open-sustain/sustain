@@ -1,0 +1,37 @@
+[package]
+name = "sustain-cd-import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sustain_cd_import"
+path = "src/lib.rs"
+
+[features]
+default = ["optical"]
+# Links MusicBrainz libdiscid (via the `discid` crate) to read a physical
+# disc's TOC and compute its Disc ID. On by default so the Debian package
+# ships full CD-import support and depends on libdiscid0. Turn it off — for
+# example a Flatpak build whose runtime does not carry libdiscid — and the
+# crate still compiles: `SystemOpticalProbe` reports no optical backend and
+# the application stays usable without CD ripping. Audio extraction itself
+# goes through GStreamer and needs no extra feature.
+optical = ["dep:discid"]
+
+[dependencies]
+# Value types only: the CD encoding profile. The crate owns no SQLite,
+# notifications, GTK, or the live application model.
+sustain-domain = { path = "../domain" }
+# Audio extraction and encoding via cdparanoiasrc + flacenc / lamemp3enc.
+gstreamer = "0.24.5"
+# Reads the audio TOC and computes the MusicBrainz Disc ID. Optional so the
+# crate degrades cleanly where libdiscid is unavailable (see the `optical`
+# feature above). `discid::DiscId` is intentionally not Send/Sync and is
+# kept inside the probing worker.
+discid = { version = "0.7", optional = true }
+
+[lints]
+workspace = true

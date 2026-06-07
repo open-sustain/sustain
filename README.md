@@ -86,6 +86,7 @@ Implemented:
 - Smart Shuffle that picks each next track as a continuation of the one playing — a local, transparent perceptual match, no cloud, no learning (*Sustain-native*)
 - Sync playlists and smart playlists to USB sticks, SD cards, and Android phones over MTP, incrementally — as a deduplicated `.m3u8` tree or one folder per playlist (*Sustain-native*)
 - **CDJ/XDJ-ready Rekordbox export** — writes the full Pioneer feature set to the drive (BPM, key, beat grids, waveforms and artwork) so the hardware reads it natively; the only Linux music app I know of that does this, not just copies files (*Sustain-native*)
+- Rip audio CDs straight into the library — MusicBrainz Disc ID lookup, embedded cover art, and FLAC / MP3 256 / MP3 320 encoding (*iso-iTunes*)
 - Native light / dark theme and system accent color (*Sustain-native*)
 
 ## Install

@@ -4,7 +4,8 @@
 use gtk::prelude::*;
 
 use super::{
-    ALBUMS_VIEW, DEVICES_VIEW, DUPLICATES_VIEW, PLAYLISTS_VIEW, SONGS_VIEW, STATISTICS_VIEW,
+    ALBUMS_VIEW, CD_IMPORT_VIEW, DEVICES_VIEW, DUPLICATES_VIEW, PLAYLISTS_VIEW, SONGS_VIEW,
+    STATISTICS_VIEW,
 };
 
 pub(crate) fn build_content_stack(
@@ -14,6 +15,7 @@ pub(crate) fn build_content_stack(
     statistics_view: &impl IsA<gtk::Widget>,
     playlists_view: &impl IsA<gtk::Widget>,
     devices_view: &impl IsA<gtk::Widget>,
+    cd_import_view: &impl IsA<gtk::Widget>,
 ) -> gtk::Stack {
     let stack = gtk::Stack::new();
     stack.set_hexpand(true);
@@ -30,6 +32,7 @@ pub(crate) fn build_content_stack(
     stack.add_named(statistics_view, Some(STATISTICS_VIEW));
     stack.add_named(playlists_view, Some(PLAYLISTS_VIEW));
     stack.add_named(devices_view, Some(DEVICES_VIEW));
+    stack.add_named(cd_import_view, Some(CD_IMPORT_VIEW));
     stack.set_visible_child_name(SONGS_VIEW);
 
     stack

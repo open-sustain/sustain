@@ -82,3 +82,26 @@ fn validate_artwork(bytes: Option<Vec<u8>>) -> RemoteResult<Option<Vec<u8>>> {
         })
         .transpose()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::validate_artwork;
+
+    #[test]
+    fn absent_artwork_is_a_normal_outcome() {
+        // A 404 from Cover Art Archive arrives here as `None`, and "no cover
+        // on file" must not be reported as an error.
+        assert_eq!(validate_artwork(None), Ok(None));
+    }
+
+    #[test]
+    fn valid_image_bytes_pass_through_unchanged() {
+        let bytes = include_bytes!("../tests/fixtures/cover_2x2.png").to_vec();
+        assert_eq!(validate_artwork(Some(bytes.clone())), Ok(Some(bytes)));
+    }
+
+    #[test]
+    fn corrupt_image_bytes_are_rejected() {
+        assert!(validate_artwork(Some(vec![0xff, 0x00, 0x01, 0x02])).is_err());
+    }
+}

@@ -14,10 +14,17 @@
 //! `gtk::Widget::set_parent`). It forwards measure/allocate to the child
 //! unchanged and, in `snapshot()`, paints alpha bands matching
 //! `.track-table-row-even` from the bottom of the last real row down to
-//! the viewport bottom. Geometry is driven by two inputs: the header's
-//! resolved bottom edge (read at snapshot time from
-//! `ColumnView::first_child`) and a single authoritative pitch constant,
-//! [`ROW_HEIGHT_PX`], pinned by CSS.
+//! the viewport bottom. Geometry is driven by two inputs: the y where data
+//! rows begin and a single authoritative pitch constant, [`ROW_HEIGHT_PX`],
+//! pinned by CSS.
+//!
+//! Two layouts are supported. The track table ([`EmptyRowPainter::new`])
+//! wraps a `ColumnView` whose first child is a header row; the painter
+//! resolves the rows' top from that header's bottom edge. A headerless list
+//! ([`EmptyRowPainter::new_headerless`]) — e.g. the CD-import checklist —
+//! has its rows begin flush at the top of the scroller, so the data top is
+//! simply `0`. Both share the same row pitch and the same theme-derived
+//! band colour, so the two views stripe identically.
 
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -42,6 +49,8 @@ pub(crate) mod imp {
     #[derive(Default)]
     pub struct EmptyRowPainter {
         pub(super) scroller: OnceCell<gtk::ScrolledWindow>,
+        /// Present for the column-view track table (rows begin below the
+        /// header); absent for a headerless list (rows begin at the top).
         pub(super) column_view: OnceCell<gtk::ColumnView>,
         pub(super) row_count: Cell<u32>,
     }
@@ -85,12 +94,16 @@ pub(crate) mod imp {
                 return;
             }
 
-            let header_bottom = self.measure_header_bottom_y();
+            let Some(content_top) = self.measure_content_top() else {
+                // Layout has not settled yet (the column-view header has no
+                // height). Emit nothing; GTK re-snapshots once it has.
+                return;
+            };
             let row_count = i32::try_from(self.row_count.get()).unwrap_or(i32::MAX);
             let bands = compute_filler_bands(
                 widget_width,
                 widget_height,
-                header_bottom,
+                content_top,
                 row_count,
                 ROW_HEIGHT_PX,
             );
@@ -114,32 +127,36 @@ pub(crate) mod imp {
 
     impl EmptyRowPainter {
         /// Resolve the y-coordinate where data rows begin, in painter-local
-        /// pixels. The `ColumnView`'s first child is the header row widget;
-        /// translating its bottom edge into our coordinate space accounts for
-        /// any chrome the `ScrolledWindow` may insert above the viewport
-        /// without us having to hard-code numbers that the theme could shift.
+        /// pixels, or `None` when layout has not settled enough to know.
         ///
-        /// Returns `0` when allocation has not happened yet (header height
-        /// is 0 before the first layout pass). The caller treats that as "no
-        /// bands this frame"; GTK will re-snapshot once allocation completes.
-        fn measure_header_bottom_y(&self) -> i32 {
+        /// For the headerless list (no `ColumnView` attached) rows begin
+        /// flush at the top of the scroller, so the answer is simply `0`.
+        ///
+        /// For the column-view track table the `ColumnView`'s first child is
+        /// the header row widget; translating its bottom edge into our
+        /// coordinate space accounts for any chrome the `ScrolledWindow` may
+        /// insert above the viewport without hard-coding numbers the theme
+        /// could shift. Before the first layout pass the header height is `0`;
+        /// that returns `None` so the caller paints nothing until GTK
+        /// re-snapshots post-allocation.
+        fn measure_content_top(&self) -> Option<i32> {
             let Some(column_view) = self.column_view.get() else {
-                return 0;
+                return Some(0);
             };
-            let Some(header) = column_view.first_child() else {
-                return 0;
-            };
+            let header = column_view.first_child()?;
             let header_height = header.height();
             if header_height <= 0 {
-                return 0;
+                return None;
             }
             let widget = self.obj();
             let bottom_in_header = gtk::graphene::Point::new(0.0, header_height as f32);
-            header
-                .compute_point(widget.upcast_ref::<gtk::Widget>(), &bottom_in_header)
-                .map(|point| point.y() as i32)
-                .unwrap_or(0)
-                .max(0)
+            Some(
+                header
+                    .compute_point(widget.upcast_ref::<gtk::Widget>(), &bottom_in_header)
+                    .map(|point| point.y() as i32)
+                    .unwrap_or(0)
+                    .max(0),
+            )
         }
     }
 }
@@ -164,10 +181,25 @@ impl EmptyRowPainter {
         painter.set_vexpand(scroller.vexpands());
         scroller.set_parent(&painter);
         // OnceCell::set returns Err if already populated; that cannot happen
-        // because `new` is the only path that constructs a painter and it
-        // populates each cell exactly once.
+        // because `new` is the only path that populates these cells and it
+        // populates each exactly once.
         let _ = painter.imp().scroller.set(scroller.clone());
         let _ = painter.imp().column_view.set(column_view.clone());
+        painter
+    }
+
+    /// Wrap a headerless list's `ScrolledWindow` — a plain row list with no
+    /// `ColumnView` header above the rows (the CD-import checklist). Rows
+    /// begin flush at the top of the scroller, so the filler stripes tile
+    /// from `y = 0` at the same pitch and colour as the track table.
+    pub(crate) fn new_headerless(scroller: &gtk::ScrolledWindow) -> Self {
+        let painter: Self = glib::Object::new();
+        painter.set_hexpand(scroller.hexpands());
+        painter.set_vexpand(scroller.vexpands());
+        scroller.set_parent(&painter);
+        let _ = painter.imp().scroller.set(scroller.clone());
+        // `column_view` is left unset: that absence is exactly what
+        // `measure_content_top` reads as "headerless, rows start at 0".
         painter
     }
 
@@ -194,11 +226,16 @@ pub(crate) struct FillerBand {
 
 /// Pure geometry helper: returns the rectangles that should be painted with
 /// the "even row" tint so the alternating zebra continues past
-/// `header_bottom + row_count * row_pitch` down to the viewport bottom.
+/// `content_top + row_count * row_pitch` down to the viewport bottom.
+///
+/// `content_top` is the y where data rows begin (the column-view header's
+/// bottom edge, or `0` for a headerless list). Readiness — "has layout
+/// settled enough to know where rows begin?" — is the caller's
+/// responsibility; this function trusts the `content_top` it is given.
 ///
 /// Returns an empty vector when:
 /// - the widget has no positive area, or
-/// - `header_bottom` is zero (allocation has not happened yet), or
+/// - `content_top` is negative (a degenerate input), or
 /// - the real rows already fill or overflow the viewport.
 ///
 /// The "even" parity is computed from the row index that the first filler
@@ -207,15 +244,15 @@ pub(crate) struct FillerBand {
 pub(crate) fn compute_filler_bands(
     widget_width: i32,
     widget_height: i32,
-    header_bottom: i32,
+    content_top: i32,
     row_count: i32,
     row_pitch: i32,
 ) -> Vec<FillerBand> {
-    if widget_width <= 0 || widget_height <= 0 || row_pitch <= 0 || header_bottom <= 0 {
+    if widget_width <= 0 || widget_height <= 0 || row_pitch <= 0 || content_top < 0 {
         return Vec::new();
     }
     let row_count = row_count.max(0);
-    let data_end_y = header_bottom.saturating_add(row_count.saturating_mul(row_pitch));
+    let data_end_y = content_top.saturating_add(row_count.saturating_mul(row_pitch));
     if data_end_y >= widget_height {
         return Vec::new();
     }
@@ -297,11 +334,19 @@ mod tests {
     }
 
     #[test]
-    fn no_bands_before_header_is_measured() {
-        // header_bottom = 0 means GTK has not allocated yet; emit nothing
-        // and let the next snapshot (post-allocation) do the real work.
-        let bands = compute_filler_bands(800, 400, 0, 0, 28);
-        assert!(bands.is_empty());
+    fn headerless_empty_paints_from_the_top() {
+        // A headerless list has `content_top = 0`: an empty list tiles the
+        // whole viewport from the very top. (The track table's "header not
+        // measured yet" case is gated in the painter, not here.)
+        let bands = compute_filler_bands(800, 200, 0, 0, 28);
+        let painted_y: Vec<i32> = bands.iter().map(|band| band.y).collect();
+        assert_eq!(painted_y, vec![0, 56, 112, 168]);
+    }
+
+    #[test]
+    fn no_bands_for_negative_content_top() {
+        // Defensive: a negative top is a degenerate input and paints nothing.
+        assert!(compute_filler_bands(800, 400, -1, 0, 28).is_empty());
     }
 
     #[test]

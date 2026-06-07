@@ -69,7 +69,11 @@ modules:
         [source.crates-io]
         replace-with = "vendored-sources"
         EOF
-      - cargo --offline build --release --locked -p sustain-app
+      # `--no-default-features` drops the `optical` feature: the GNOME
+      # runtime ships no libdiscid and Flatpak CD-drive access is out of
+      # scope, so the disc probe is not compiled. Everything else (playback,
+      # library, sync) is unaffected and the app stays fully usable.
+      - cargo --offline build --release --locked --no-default-features -p sustain-app
       - install -Dm755 target/release/sustain ${FLATPAK_DEST}/bin/sustain
       - install -Dm644 data/io.github.open_sustain.sustain.desktop
           ${FLATPAK_DEST}/share/applications/io.github.open_sustain.sustain.desktop

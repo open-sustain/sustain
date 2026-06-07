@@ -1120,6 +1120,65 @@ columnview.track-table listview row:selected .track-table-status-missing,
     background-color: alpha(@theme_fg_color, 0.05);
 }
 
+/* --- CD import page (#25). All colours are theme-derived so the page
+   reads correctly in both light and dark; the Import button inherits the
+   system accent via the built-in `.suggested-action` class. --- */
+/* Fixed-height top bar, matching the Playlists header (the height itself is
+   pinned in code to TITLEBAR_HEIGHT); only horizontal padding here so the
+   bar never grows taller than that. The left inset matches the artwork's
+   vertical inset (the centring gap in the fixed-height bar) so the cover is
+   evenly framed on its three exposed sides. */
+.cd-import-header {
+    padding: 0 18px 0 8px;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.15);
+}
+
+.cd-import-artwork {
+    border-radius: 6px;
+    background-color: alpha(@theme_fg_color, 0.06);
+}
+
+.cd-import-title {
+    font-weight: bold;
+    font-size: 1.15em;
+}
+
+/* Striped checklist, pinned to the library table's row pitch so the filler
+   stripes painted below the last track line up exactly: 28px content +
+   1px border = the 29px ROW_HEIGHT_PX the painter tiles at. The even/odd
+   tints mirror `.track-table-row-even/-odd`. */
+.cd-import-checklist {
+    padding: 0;
+}
+
+.cd-import-track-row {
+    min-height: 28px;
+    padding: 0 12px;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.05);
+}
+
+.cd-import-track-row-even {
+    background-color: alpha(@theme_fg_color, 0.025);
+}
+
+.cd-import-track-row-odd {
+    background-color: transparent;
+}
+
+/* Keep the per-track tick from driving the row taller than the 28px pitch. */
+.cd-import-track-check {
+    min-height: 0;
+    padding: 0;
+}
+
+/* The eject control on an audio-CD sidebar row: a subtle flat icon button
+   that does not bloat the compact row height. */
+.playlist-sidebar-cd-eject {
+    min-width: 0;
+    min-height: 0;
+    padding: 2px 4px;
+}
+
 /* Per-metric analysis readiness in the Pioneer export panel. Theme-aware
    semantic colours from the same Adwaita palette as @error_color above,
    so they read correctly in both light and dark. */

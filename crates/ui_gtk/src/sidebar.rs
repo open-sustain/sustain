@@ -11,7 +11,7 @@ use gtk::{gdk, gio, glib};
 
 use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, ConnectedDevice, DeviceKind, OnlineRunRequest,
-    PlaylistItem, SmartPlaylistId, TrackId,
+    PlaylistItem, SmartPlaylistId, TocSnapshot, TrackId,
 };
 
 use super::{
@@ -44,10 +44,30 @@ pub(crate) type SidebarAnalysisRunCallback = Rc<dyn Fn(PlaylistItem, AnalysisRun
 /// Invoked when the user picks any item inside the "Retrieve"
 /// submenu on a playlist or smart playlist sidebar row.
 pub(crate) type SidebarOnlineRunCallback = Rc<dyn Fn(PlaylistItem, OnlineRunRequest)>;
-/// Invoked when the user clicks a row under the DEVICES section. Carries
-/// the connected device so the panel can render and sync it.
+/// Invoked when the user clicks a removable-sync-target row under the
+/// DEVICES section. Carries the connected device so the panel can render
+/// and sync it.
 pub(crate) type SidebarDeviceSelectedCallback = Rc<dyn Fn(ConnectedDevice)>;
+/// Invoked when the user clicks an inserted-audio-CD row under the DEVICES
+/// section. Carries the probed disc snapshot so the CD-import page can
+/// render it.
+pub(crate) type SidebarCdSelectedCallback = Rc<dyn Fn(TocSnapshot)>;
+/// Invoked when the user clicks the eject control on an audio-CD row.
+/// Carries the disc snapshot so the caller can resolve and eject the drive.
+pub(crate) type SidebarCdEjectCallback = Rc<dyn Fn(TocSnapshot)>;
 pub(crate) type SidebarDuplicatesSelectedCallback = Rc<dyn Fn()>;
+
+/// A transient entry shown under the DEVICES section. The two kinds open
+/// different pages — a removable sync target opens the device-sync panel; an
+/// inserted audio CD opens the CD-import page — so the row model is typed
+/// rather than forcing one shape onto both.
+#[derive(Clone)]
+pub(crate) enum SidebarDeviceEntry {
+    /// A mounted, writable sync target (USB stick, SD card, Android phone).
+    SyncTarget(ConnectedDevice),
+    /// An inserted, readable audio CD.
+    AudioCd(TocSnapshot),
+}
 /// Queries whether a given analysis capability is enabled globally
 /// (i.e. covered by the background sweep). The sidebar renders the
 /// matching submenu item insensitive whenever this returns `true`.
@@ -128,6 +148,8 @@ pub(crate) struct PlaylistSidebar {
     /// Container holding the dynamically-rebuilt DEVICES rows.
     devices_body: gtk::Box,
     on_device_selected: Rc<RefCell<Option<SidebarDeviceSelectedCallback>>>,
+    on_cd_selected: Rc<RefCell<Option<SidebarCdSelectedCallback>>>,
+    on_cd_eject: Rc<RefCell<Option<SidebarCdEjectCallback>>>,
     on_duplicates_selected: Rc<RefCell<Option<SidebarDuplicatesSelectedCallback>>>,
     /// The currently highlighted *transient* row (a device today, the
     /// future Duplicates scan), for single-selection CSS. Mutually
@@ -192,6 +214,9 @@ impl PlaylistSidebar {
         );
         let on_device_selected: Rc<RefCell<Option<SidebarDeviceSelectedCallback>>> =
             Rc::new(RefCell::new(None));
+        let on_cd_selected: Rc<RefCell<Option<SidebarCdSelectedCallback>>> =
+            Rc::new(RefCell::new(None));
+        let on_cd_eject: Rc<RefCell<Option<SidebarCdEjectCallback>>> = Rc::new(RefCell::new(None));
         let on_duplicates_selected: Rc<RefCell<Option<SidebarDuplicatesSelectedCallback>>> =
             Rc::new(RefCell::new(None));
         let active_transient_row: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
@@ -379,6 +404,8 @@ impl PlaylistSidebar {
             playlists_section_collapsed,
             devices_body,
             on_device_selected,
+            on_cd_selected,
+            on_cd_eject,
             on_duplicates_selected,
             active_transient_row,
             persistent_selection,
@@ -457,6 +484,31 @@ impl PlaylistSidebar {
         self.on_device_selected.replace(Some(callback));
     }
 
+    pub(crate) fn set_cd_selected_callback(&self, callback: SidebarCdSelectedCallback) {
+        self.on_cd_selected.replace(Some(callback));
+    }
+
+    pub(crate) fn set_cd_eject_callback(&self, callback: SidebarCdEjectCallback) {
+        self.on_cd_eject.replace(Some(callback));
+    }
+
+    /// Re-activate the persistent selection that preceded a transient view.
+    /// Used when a transient view's backing hardware goes away (an audio CD
+    /// is ejected, a sync device is unplugged) while that view is on screen:
+    /// the page is no longer meaningful, so we fall back to the library row
+    /// or playlist the user was on before. Re-selecting fires the normal
+    /// selection-changed path, which switches the content area and clears the
+    /// (already-stale) transient highlight.
+    pub(crate) fn restore_persistent_selection(&self) {
+        match self.persistent_selection.get() {
+            SidebarSelection::Music => self.select_music(),
+            SidebarSelection::Albums => self.select_albums(),
+            SidebarSelection::Statistics => self.select_statistics(),
+            // `select_item` falls back to Music if the playlist is gone.
+            SidebarSelection::Item(item) => self.select_item(item),
+        }
+    }
+
     pub(crate) fn set_duplicates_selected_callback(
         &self,
         callback: SidebarDuplicatesSelectedCallback,
@@ -464,15 +516,16 @@ impl PlaylistSidebar {
         self.on_duplicates_selected.replace(Some(callback));
     }
 
-    /// Rebuild the DEVICES section from the current set of connected
-    /// devices. Clears the previous rows and any highlight.
-    pub(crate) fn set_devices(&self, devices: &[ConnectedDevice]) {
+    /// Rebuild the DEVICES section from the current set of transient
+    /// entries — removable sync targets and inserted audio CDs. Clears the
+    /// previous rows and any highlight.
+    pub(crate) fn set_devices(&self, entries: &[SidebarDeviceEntry]) {
         while let Some(child) = self.devices_body.first_child() {
             self.devices_body.remove(&child);
         }
         self.active_transient_row.replace(None);
 
-        if devices.is_empty() {
+        if entries.is_empty() {
             let empty = gtk::Label::new(Some("No devices connected"));
             empty.add_css_class("playlist-sidebar-devices-empty");
             empty.add_css_class("dim-label");
@@ -481,27 +534,77 @@ impl PlaylistSidebar {
             return;
         }
 
-        for device in devices {
-            let icon = match device.kind {
-                DeviceKind::Android => "phone-symbolic",
-                DeviceKind::UsbDrive => "drive-removable-media-symbolic",
-            };
-            let row = build_library_row(&device.label, icon);
-            let gesture = gtk::GestureClick::new();
-            gesture.set_button(gdk::BUTTON_PRIMARY);
-            let sidebar = self.clone();
-            let row_widget = row.clone().upcast::<gtk::Widget>();
-            let device = device.clone();
-            gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-                // A device is a transient view: take over the highlight,
-                // deactivating (but remembering) the persistent selection.
-                sidebar.activate_transient_view(&row_widget);
-                if let Some(callback) = sidebar.on_device_selected.borrow().as_ref() {
-                    callback(device.clone());
+        for entry in entries {
+            let row = match entry {
+                SidebarDeviceEntry::SyncTarget(device) => {
+                    let icon = match device.kind {
+                        DeviceKind::Android => "phone-symbolic",
+                        DeviceKind::UsbDrive => "drive-removable-media-symbolic",
+                    };
+                    let row = build_library_row(&device.label, icon);
+                    let sidebar = self.clone();
+                    let row_widget = row.clone().upcast::<gtk::Widget>();
+                    let device = device.clone();
+                    attach_transient_row_gesture(
+                        &row,
+                        move |sidebar_row| {
+                            sidebar.activate_transient_view(sidebar_row);
+                            if let Some(callback) = sidebar.on_device_selected.borrow().as_ref() {
+                                callback(device.clone());
+                            }
+                        },
+                        row_widget,
+                    );
+                    row
                 }
-            });
-            row.add_controller(gesture);
+                SidebarDeviceEntry::AudioCd(snapshot) => {
+                    let row = build_library_row("Audio CD", "media-optical-symbolic");
+                    // Trailing eject control. A flat icon button so it reads
+                    // as a per-row affordance, not a primary action. Clicking
+                    // it claims the press (GtkButton handles the click), so the
+                    // row's select gesture does not also fire.
+                    let eject = gtk::Button::from_icon_name("media-eject-symbolic");
+                    eject.add_css_class("flat");
+                    eject.add_css_class("playlist-sidebar-cd-eject");
+                    eject.set_tooltip_text(Some("Eject"));
+                    eject.set_valign(gtk::Align::Center);
+                    // Drive the eject from a CAPTURE-phase gesture that claims
+                    // the press before it reaches the row's bubble-phase select
+                    // gesture — otherwise the click falls through and merely
+                    // re-opens the CD page instead of ejecting.
+                    {
+                        let gesture = gtk::GestureClick::new();
+                        gesture.set_button(gdk::BUTTON_PRIMARY);
+                        gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+                        let sidebar = self.clone();
+                        let snapshot = snapshot.clone();
+                        gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
+                            gesture.set_state(gtk::EventSequenceState::Claimed);
+                            if let Some(callback) = sidebar.on_cd_eject.borrow().as_ref() {
+                                callback(snapshot.clone());
+                            }
+                        });
+                        eject.add_controller(gesture);
+                    }
+                    if let Some(inner) = row.child().and_downcast::<gtk::Box>() {
+                        inner.append(&eject);
+                    }
+                    let sidebar = self.clone();
+                    let row_widget = row.clone().upcast::<gtk::Widget>();
+                    let snapshot = snapshot.clone();
+                    attach_transient_row_gesture(
+                        &row,
+                        move |sidebar_row| {
+                            sidebar.activate_transient_view(sidebar_row);
+                            if let Some(callback) = sidebar.on_cd_selected.borrow().as_ref() {
+                                callback(snapshot.clone());
+                            }
+                        },
+                        row_widget,
+                    );
+                    row
+                }
+            };
             self.devices_body.append(&row);
         }
     }
@@ -661,6 +764,23 @@ impl PlaylistSidebar {
             callback(self.current_selection());
         }
     }
+}
+
+/// Attach the primary-click gesture that activates a transient DEVICES row.
+/// Shared by the sync-target and audio-CD rows: both claim the gesture,
+/// take over the sidebar highlight, and fire their kind's callback.
+fn attach_transient_row_gesture(
+    row: &gtk::TreeExpander,
+    on_pressed: impl Fn(&gtk::Widget) + 'static,
+    row_widget: gtk::Widget,
+) {
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_PRIMARY);
+    gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        on_pressed(&row_widget);
+    });
+    row.add_controller(gesture);
 }
 
 /// Builds a row under the LIBRARY section (Music, Albums, …).

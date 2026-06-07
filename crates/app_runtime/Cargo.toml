@@ -27,6 +27,11 @@ libc = "0.2"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 sustain-analysis = { path = "../analysis" }
 sustain-artwork = { path = "../artwork" }
+# CD-import backend: the optical-probe and encoder traits plus their value
+# types. `default-features = false` keeps libdiscid out of this crate's
+# build (the runtime composes against the traits); the `app` composition
+# root enables the `optical` feature on the concrete probe.
+sustain-cd-import = { path = "../cd_import", default-features = false }
 sustain-settings = { path = "../settings" }
 # Android/MTP device transport (gio/GVfs), selected per device kind.
 sustain-device-mtp = { path = "../device_mtp" }

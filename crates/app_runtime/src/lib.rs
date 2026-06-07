@@ -14,14 +14,16 @@ use std::{
     },
 };
 
+pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, ApplicationQuery, BackgroundJobsSettings,
-    BackgroundResourceUsage, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind,
-    DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest, DuplicateMatchMode,
-    DuplicateMetadataField, DuplicateMetadataFieldSelection, DuplicateMetadataSelection,
-    FieldChange, FilesPerFolderCap, GenreDistribution, GenrePlayCount, GenreRating, GenreShare,
-    LazyPickContext, LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange,
-    MonotonicClock, OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
+    BackgroundResourceUsage, CdEncodingProfile, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT,
+    DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest,
+    DuplicateMatchMode, DuplicateMetadataField, DuplicateMetadataFieldSelection,
+    DuplicateMetadataSelection, EncodingSettings, FieldChange, FilesPerFolderCap,
+    GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LazyPickContext,
+    LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange, MonotonicClock,
+    OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
     PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
     PlaybackSession, PlaybackSettings, PlaybackState, Playlist, PlaylistEntry, PlaylistFolder,
     PlaylistFolderId, PlaylistId, PlaylistItem, QualityBucket, QualityDistribution, QualityRange,
@@ -40,8 +42,8 @@ pub use sustain_domain::{
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
 pub use sustain_metadata::MetadataService;
 pub use sustain_metadata_remote::{
-    AudioFingerprint, FetchedArtwork, RemoteError, RemoteMetadataService, RemoteResult, TrackMatch,
-    TrackMatchSource, TrackQuery,
+    AudioFingerprint, DiscRelease, DiscTrack, FetchedArtwork, RemoteError, RemoteMetadataService,
+    RemoteResult, TrackMatch, TrackMatchSource, TrackQuery,
 };
 use sustain_playback::PlaybackService;
 pub use sustain_playback::TrackEndedCallback;
@@ -74,6 +76,7 @@ pub use priority::{IoPriorityClass, NiceLevel, resolve_worker_count};
 pub const ONLINE_PROVIDER_VERSION: u32 = 2;
 
 pub(crate) mod artwork_fetcher;
+mod cd_import;
 mod commands;
 mod device_plan_scheduler;
 mod device_sync;
@@ -150,6 +153,16 @@ pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;
 pub enum ApplicationRuntimeError {
     ArtworkFetchingUnavailable,
     ArtworkRejected,
+    /// CD ripping was requested but no optical probe / encoder backend is
+    /// installed (e.g. a build without the `optical` feature).
+    CdBackendUnavailable,
+    /// The disc in the drive no longer matches the one the import was
+    /// prepared against — the user swapped or ejected it.
+    CdImportDiscChanged,
+    /// A CD import could not start or could not complete a track.
+    CdImportFailed,
+    /// A CD import was requested with an empty track selection.
+    CdImportNoTracksSelected,
     DuplicateConsolidationFailed,
     DuplicateConsolidationSourceMissing,
     LibraryPathUnavailable,
@@ -188,6 +201,11 @@ pub enum ApplicationRuntimeError {
 }
 
 pub use youtube_audio_downloader::YoutubeAudioDownloadResult;
+
+pub use cd_import::{
+    CdImportProgress, CdImportRequest, CdImportResult, CdImportSummary, CdImportTask,
+    CdLookupEvent, CdTrackOverride, OpticalDiscoveryResult, run_cd_import_task,
+};
 
 /// Trims a user-supplied name and rejects it when blank once trimmed. The three
 /// playlist kinds (playlists, folders, smart playlists) share this rule but
@@ -241,6 +259,7 @@ pub enum BackgroundTaskStatus {
     LibraryImportRunning,
     LibraryConsolidationRunning,
     DuplicateConsolidationRunning,
+    CdImportRunning,
 }
 
 impl BackgroundTaskStatus {
@@ -427,6 +446,23 @@ pub struct ApplicationRuntime {
     mtp_discovery_generation: u64,
     mtp_discovery_sink: async_channel::Sender<device_sync::MtpDiscoveryResult>,
     mtp_discovery_source: async_channel::Receiver<device_sync::MtpDiscoveryResult>,
+    // CD import (#25). The optical probe + encoder are composed by the
+    // `app` root (the only place the libdiscid-backed `optical` feature is
+    // enabled). Disc discovery and MusicBrainz lookup are read-only async
+    // work delivered through their own channels; generation counters discard
+    // a probe/lookup a later eject or insert has superseded. The rip itself
+    // claims the library-mutation slot via `BackgroundTaskStatus`.
+    cd_probe: Option<Arc<dyn sustain_cd_import::OpticalProbe>>,
+    cd_encoder: Option<Arc<dyn sustain_cd_import::CdEncoder>>,
+    cd_import_cancellation: Option<Arc<AtomicBool>>,
+    cd_import_notification_id: Option<NotificationId>,
+    optical_discs: Vec<sustain_cd_import::TocSnapshot>,
+    optical_discovery_generation: u64,
+    optical_discovery_sink: async_channel::Sender<cd_import::OpticalDiscoveryResult>,
+    optical_discovery_source: async_channel::Receiver<cd_import::OpticalDiscoveryResult>,
+    cd_metadata_generation: u64,
+    cd_lookup_sink: async_channel::Sender<cd_import::CdLookupEvent>,
+    cd_lookup_source: async_channel::Receiver<cd_import::CdLookupEvent>,
     /// In-memory copy of the prepared Smart Shuffle index (genre IDF
     /// and, later, normalization statistics). `None` when the index
     /// has never been built yet, or when the persisted blob's schema
@@ -532,6 +568,8 @@ pub struct SmartShuffleIndexMetadata {
 impl ApplicationRuntime {
     pub fn new() -> Self {
         let (mtp_discovery_sink, mtp_discovery_source) = async_channel::unbounded();
+        let (optical_discovery_sink, optical_discovery_source) = async_channel::unbounded();
+        let (cd_lookup_sink, cd_lookup_source) = async_channel::unbounded();
         Self {
             settings: UserSettings::default(),
             settings_store: None,
@@ -597,6 +635,17 @@ impl ApplicationRuntime {
             mtp_discovery_generation: 0,
             mtp_discovery_sink,
             mtp_discovery_source,
+            cd_probe: None,
+            cd_encoder: None,
+            cd_import_cancellation: None,
+            cd_import_notification_id: None,
+            optical_discs: Vec::new(),
+            optical_discovery_generation: 0,
+            optical_discovery_sink,
+            optical_discovery_source,
+            cd_metadata_generation: 0,
+            cd_lookup_sink,
+            cd_lookup_source,
             smart_shuffle_index: None,
             smart_shuffle_metadata: None,
             track_updated_sink: None,
@@ -622,6 +671,8 @@ impl ApplicationRuntime {
             repeat_mode: RepeatMode::Off,
         });
         let (mtp_discovery_sink, mtp_discovery_source) = async_channel::unbounded();
+        let (optical_discovery_sink, optical_discovery_source) = async_channel::unbounded();
+        let (cd_lookup_sink, cd_lookup_source) = async_channel::unbounded();
         Ok(Self {
             settings,
             settings_store: Some(settings_store),
@@ -687,6 +738,17 @@ impl ApplicationRuntime {
             mtp_discovery_generation: 0,
             mtp_discovery_sink,
             mtp_discovery_source,
+            cd_probe: None,
+            cd_encoder: None,
+            cd_import_cancellation: None,
+            cd_import_notification_id: None,
+            optical_discs: Vec::new(),
+            optical_discovery_generation: 0,
+            optical_discovery_sink,
+            optical_discovery_source,
+            cd_metadata_generation: 0,
+            cd_lookup_sink,
+            cd_lookup_source,
             smart_shuffle_index: None,
             smart_shuffle_metadata: None,
             track_updated_sink: None,
@@ -1766,6 +1828,7 @@ impl ApplicationRuntime {
         self.request_library_scan_cancellation();
         self.request_library_import_cancellation();
         self.request_library_consolidation_cancellation();
+        self.request_cd_import_cancellation();
         // A device sync runs on its own worker (not part of the
         // mutually-exclusive library-task set), so cancel it here too:
         // this is the method the status-bar Cancel button invokes, and
@@ -1789,6 +1852,7 @@ impl ApplicationRuntime {
         flag_set(self.library_scan_cancellation.as_ref())
             || flag_set(self.library_import_cancellation.as_ref())
             || flag_set(self.library_consolidation_cancellation.as_ref())
+            || flag_set(self.cd_import_cancellation.as_ref())
             // The device sync worker is not part of the mutually-exclusive
             // library-task set and tracks its own cancel flag, so consult
             // it directly — otherwise the lane never shows "Cancelling..."

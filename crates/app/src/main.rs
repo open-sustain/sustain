@@ -224,7 +224,17 @@ fn main() {
         sustain_metadata_remote::acoustid_api_key(),
     );
     runtime.set_remote_metadata_service(Arc::new(remote_service));
-    tlog!("remote metadata service installed, handing off to ui_gtk::run");
+    tlog!("remote metadata service installed");
+
+    // Install the CD-import backend: the libdiscid-backed optical probe and
+    // the GStreamer encoder. Both are zero-sized handles; discovery itself is
+    // deferred until after first idle by the UI, so this never touches a
+    // drive at startup and cannot regress the cold-start budget.
+    runtime.set_cd_backend(
+        Arc::new(sustain_cd_import::SystemOpticalProbe::new()),
+        Arc::new(sustain_cd_import::GStreamerCdEncoder::new()),
+    );
+    tlog!("cd-import backend installed, handing off to ui_gtk::run");
 
     // Known GTK/GDK runtime warning on some Wayland/Vulkan setups:
     // `vkAcquireNextImageKHR(): ... VK_SUBOPTIMAL_KHR`.

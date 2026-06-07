@@ -1,0 +1,41 @@
+{
+  "id": "abcdefghijklmnopqrstuvwxyz._",
+  "releases": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "title": "Compatible Album",
+      "artist-credit": [{ "name": "The Band" }],
+      "release-group": { "id": "22222222-2222-2222-2222-222222222222" },
+      "media": [
+        {
+          "position": 1,
+          "format": "CD",
+          "track-count": 2,
+          "discs": [{ "id": "abcdefghijklmnopqrstuvwxyz._" }],
+          "tracks": [
+            { "position": 1, "title": "Opener", "length": 180000 },
+            { "position": 2, "title": "Closer", "length": 240000 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "55555555-5555-5555-5555-555555555555",
+      "title": "Wrong Track Count Edition",
+      "artist-credit": [{ "name": "The Band" }],
+      "release-group": { "id": "66666666-6666-6666-6666-666666666666" },
+      "media": [
+        {
+          "position": 1,
+          "format": "CD",
+          "track-count": 3,
+          "tracks": [
+            { "position": 1, "title": "A", "length": 100000 },
+            { "position": 2, "title": "B", "length": 100000 },
+            { "position": 3, "title": "C", "length": 100000 }
+          ]
+        }
+      ]
+    }
+  ]
+}

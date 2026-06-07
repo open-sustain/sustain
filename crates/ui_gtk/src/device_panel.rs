@@ -107,6 +107,13 @@ impl DeviceSyncPanel {
         self.current_device.clone()
     }
 
+    /// The device the panel is currently rendering, if any — so the main
+    /// window can tell when the device backing a visible sync view has been
+    /// unplugged and leave that view.
+    pub(crate) fn shown_device(&self) -> Option<ConnectedDevice> {
+        self.current_device.borrow().clone()
+    }
+
     /// Install the callback that recomputes the status-bar summary. The
     /// panel fires it whenever the device's selected content changes.
     pub(crate) fn set_summary_refresh(&self, refresh: SummaryRefresh) {

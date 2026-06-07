@@ -11,10 +11,12 @@ use main_window::build_main_window;
 
 pub use sustain_app_runtime::{
     ApplicationCommand, ApplicationQuery, ApplicationRuntime, ApplicationRuntimeError,
-    BackgroundResourceUsage, BackgroundTaskStatus, ConnectedDevice, LibraryConsolidationResult,
-    LibraryConsolidationSummary, LibraryHydrationSnapshot, LibraryHydrationState,
-    LibraryImportProgress, LibraryImportResult, LibraryImportSummary, LibraryManagementMode,
-    LibraryScanResult, LibraryScanSummary, SmartPlaylistTrackStatus, UserSettings,
+    BackgroundResourceUsage, BackgroundTaskStatus, CdEncodingProfile, CdImportProgress,
+    CdImportRequest, CdImportResult, CdImportSummary, CdLookupEvent, ConnectedDevice, DiscRelease,
+    DiscTrack, LibraryConsolidationResult, LibraryConsolidationSummary, LibraryHydrationSnapshot,
+    LibraryHydrationState, LibraryImportProgress, LibraryImportResult, LibraryImportSummary,
+    LibraryManagementMode, LibraryScanResult, LibraryScanSummary, OpticalDiscoveryResult,
+    RawTocTrack, SmartPlaylistTrackStatus, TocSnapshot, TocTrack, UserSettings, run_cd_import_task,
     run_library_consolidation_task, run_library_import_task, run_library_import_task_with_progress,
     run_library_scan_task,
 };
@@ -24,6 +26,7 @@ mod albums;
 mod app_css;
 mod artwork_color;
 mod artwork_loader;
+mod cd_import_panel;
 mod chart;
 mod command_controller;
 mod content_stack;
@@ -98,6 +101,7 @@ const ALBUMS_VIEW: &str = "albums";
 const STATISTICS_VIEW: &str = "statistics";
 const PLAYLISTS_VIEW: &str = "playlists";
 const DEVICES_VIEW: &str = "devices";
+const CD_IMPORT_VIEW: &str = "cd-import";
 const DUPLICATES_VIEW: &str = "duplicates";
 
 pub(crate) type SharedRuntime = Rc<RefCell<ApplicationRuntime>>;
@@ -204,6 +208,9 @@ pub(crate) type DevicePlanResultReceiver =
     async_channel::Receiver<sustain_app_runtime::DevicePlanResult>;
 pub(crate) type MtpDiscoveryResultReceiver =
     async_channel::Receiver<sustain_app_runtime::MtpDiscoveryResult>;
+pub(crate) type OpticalDiscoveryResultReceiver =
+    async_channel::Receiver<sustain_app_runtime::OpticalDiscoveryResult>;
+pub(crate) type CdLookupEventReceiver = async_channel::Receiver<sustain_app_runtime::CdLookupEvent>;
 pub(crate) type LibraryHydrationResultReceiver = async_channel::Receiver<
     sustain_app_runtime::ApplicationRuntimeResult<LibraryHydrationSnapshot>,
 >;
@@ -296,6 +303,8 @@ pub fn run(
     let smart_shuffle_rebuild_result_rx = runtime.smart_shuffle_rebuild_result_receiver();
     let device_plan_result_rx = runtime.device_plan_result_receiver();
     let mtp_discovery_rx = runtime.mtp_discovery_receiver();
+    let optical_discovery_rx = runtime.optical_discovery_receiver();
+    let cd_lookup_rx = runtime.cd_lookup_receiver();
     let device_sync_event_rx = runtime.device_sync_event_receiver();
     let library_hydration_result_rx = runtime.library_hydration_result_receiver();
 
@@ -372,6 +381,10 @@ pub fn run(
         Rc::new(RefCell::new(Some(device_plan_result_rx)));
     let mtp_discovery_rx_holder: Rc<RefCell<Option<MtpDiscoveryResultReceiver>>> =
         Rc::new(RefCell::new(Some(mtp_discovery_rx)));
+    let optical_discovery_rx_holder: Rc<RefCell<Option<OpticalDiscoveryResultReceiver>>> =
+        Rc::new(RefCell::new(Some(optical_discovery_rx)));
+    let cd_lookup_rx_holder: Rc<RefCell<Option<CdLookupEventReceiver>>> =
+        Rc::new(RefCell::new(Some(cd_lookup_rx)));
     let library_hydration_result_rx_holder: Rc<RefCell<Option<LibraryHydrationResultReceiver>>> =
         Rc::new(RefCell::new(Some(library_hydration_result_rx)));
 
@@ -396,6 +409,8 @@ pub fn run(
             let device_sync_event_rx = device_sync_event_rx_holder.borrow_mut().take();
             let device_plan_result_rx = device_plan_result_rx_holder.borrow_mut().take();
             let mtp_discovery_rx = mtp_discovery_rx_holder.borrow_mut().take();
+            let optical_discovery_rx = optical_discovery_rx_holder.borrow_mut().take();
+            let cd_lookup_rx = cd_lookup_rx_holder.borrow_mut().take();
             let library_hydration_result_rx =
                 library_hydration_result_rx_holder.borrow_mut().take();
             let main_window = build_main_window(
@@ -416,6 +431,8 @@ pub fn run(
                     device_sync_event_rx,
                     device_plan_result_rx,
                     mtp_discovery_rx,
+                    optical_discovery_rx,
+                    cd_lookup_rx,
                     library_hydration_result_rx,
                 },
             );
