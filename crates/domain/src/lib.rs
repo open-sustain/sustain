@@ -88,7 +88,9 @@ pub use track::{
     SourceFileStat, SourceFingerprint, Track, TrackAvailability, TrackContentHash, TrackLocation,
     TrackRelativePath,
 };
-pub use track_column_layout::{TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope};
+pub use track_column_layout::{
+    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
+};
 pub use waveform::{
     BeatGrid, DETAIL_SEGMENTS_PER_SECOND, PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment,
     WaveformSegments,

@@ -28,7 +28,7 @@ use super::{
     LibraryQuery, LibraryStore, OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder,
     PlaylistFolderId, SmartPlaylist, SmartPlaylistId, SqliteLibraryStore, StoredSmartShuffleIndex,
     StoredSyncedLyrics, StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry,
-    TrackColumnLayout, TrackColumnLayoutScope,
+    TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
 use crate::{PlaylistId, StoreResult, TrackId};
 use sustain_domain::SyncedLyricsLine;
@@ -2096,6 +2096,42 @@ fn sqlite_store_layout_round_trips_for_each_scope() {
         );
         assert_eq!(store.delete_track_column_layout(scope), Ok(()));
         assert_eq!(store.load_track_column_layout(scope), Ok(None));
+    }
+}
+
+#[test]
+fn sqlite_store_layout_round_trips_sort_for_each_scope() {
+    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory sqlite store");
+    let playlist = playlist(1, "Favorites", Vec::new());
+    assert_eq!(store.save_playlist(playlist.clone()), Ok(()));
+    let smart = smart_playlist_with_rules(7, "Top Rated", None, 0, simple_text_rule_set());
+    assert_eq!(store.save_smart_playlist(smart.clone()), Ok(()));
+
+    let mut layout = sample_layout();
+    layout.sort = Some(TrackColumnSort {
+        column_id: "date_added".to_owned(),
+        ascending: false,
+    });
+
+    for scope in [
+        TrackColumnLayoutScope::Default,
+        TrackColumnLayoutScope::Playlist(playlist.id),
+        TrackColumnLayoutScope::SmartPlaylist(smart.id),
+    ] {
+        assert_eq!(store.save_track_column_layout(scope, &layout), Ok(()));
+        assert_eq!(
+            store.load_track_column_layout(scope),
+            Ok(Some(layout.clone()))
+        );
+
+        // Re-saving without a sort must durably clear the stored sort row,
+        // not leave the previous one behind.
+        let cleared = sample_layout();
+        assert_eq!(store.save_track_column_layout(scope, &cleared), Ok(()));
+        assert_eq!(
+            store.load_track_column_layout(scope),
+            Ok(Some(cleared.clone()))
+        );
     }
 }
 

@@ -721,8 +721,10 @@ is persisted across restarts.
 
 ### Column sorting — *iso-iTunes*
 Click a column header in the Music or playlist track table to sort by it;
-click again to reverse direction. Albums view is grid-based and does
-not sort by columns.
+click again to reverse direction. The chosen sort column and direction are
+remembered across restarts, per view: the Music library and each smart
+playlist keep their own, while regular playlists default to their manual
+play order. Albums view is grid-based and does not sort by columns.
 
 ### Column customization — *iso-iTunes*
 Column visibility, order, and width are user-customizable via the

@@ -337,6 +337,33 @@ CREATE TABLE IF NOT EXISTS sync_manifest (
 );
 "#;
 
+// Migration 2 appends per-scope sort persistence. The column layout (which
+// columns, where, how wide) was versioned from the alpha baseline, but the
+// active sort column and direction were not, so the user's chosen ordering
+// was discarded on every restart. One sort row per scope, mirroring the
+// three `track_column_layout_*` tables; the PRIMARY KEY guarantees a single
+// sort per scope, and the foreign keys cascade the override away with the
+// playlist that owned it.
+pub(super) const ADD_TRACK_COLUMN_SORT_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS track_column_sort_default (
+    id        INTEGER PRIMARY KEY CHECK (id = 0),
+    column_id TEXT    NOT NULL,
+    ascending INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS track_column_sort_playlist_override (
+    playlist_id INTEGER PRIMARY KEY REFERENCES playlists(id) ON DELETE CASCADE,
+    column_id   TEXT    NOT NULL,
+    ascending   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS track_column_sort_smart_playlist_override (
+    smart_playlist_id INTEGER PRIMARY KEY REFERENCES smart_playlists(id) ON DELETE CASCADE,
+    column_id         TEXT    NOT NULL,
+    ascending         INTEGER NOT NULL
+);
+"#;
+
 #[derive(Clone, Copy)]
 struct TrackColumn {
     name: &'static str,

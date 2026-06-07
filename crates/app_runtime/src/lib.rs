@@ -33,7 +33,7 @@ pub use sustain_domain::{
     SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
     SmartShuffleEntropy, SyncDevice, SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock,
     Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
-    TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
+    TrackColumnSort, TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
     TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings, VolumePercent, YearCount,
     compare_optional_text, compute_library_statistics, default_duplicate_metadata_selection,
     duplicate_audio_quality, effective_sort_key, highest_quality_duplicate_audio_track_ids,

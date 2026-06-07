@@ -16,7 +16,7 @@ pub use sustain_domain::{
     Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist,
     SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track,
     TrackAnalysis, TrackAudioProperties, TrackColumnEntry, TrackColumnLayout,
-    TrackColumnLayoutScope, TrackId, TrackLocation, WaveformSegments,
+    TrackColumnLayoutScope, TrackColumnSort, TrackId, TrackLocation, WaveformSegments,
 };
 pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 

@@ -4,13 +4,18 @@
 use crate::{PlaylistId, SmartPlaylistId};
 
 /// Persisted layout for the track table: which columns are shown, in what
-/// order, and at what pixel width. The domain treats `column_id` as opaque
-/// so the UI can evolve its own column set without dragging the domain along.
+/// order, at what pixel width, and which column currently sorts the rows.
+/// The domain treats `column_id` as opaque so the UI can evolve its own
+/// column set without dragging the domain along.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrackColumnLayout {
     /// Ordered left-to-right. The vector order *is* the column order; no
     /// separate position field is exposed at the domain level.
     pub entries: Vec<TrackColumnEntry>,
+    /// The active sort, or `None` when no column sort is applied (the view
+    /// falls back to its natural order). Persisted alongside the columns so
+    /// the user's chosen ordering survives a restart.
+    pub sort: Option<TrackColumnSort>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18,6 +23,14 @@ pub struct TrackColumnEntry {
     pub column_id: String,
     pub visible: bool,
     pub width_px: u32,
+}
+
+/// Which column orders the track table, and in which direction. `column_id`
+/// draws from the same opaque vocabulary as [`TrackColumnEntry::column_id`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrackColumnSort {
+    pub column_id: String,
+    pub ascending: bool,
 }
 
 /// Scope for a stored layout. `Default` is the user-wide fallback applied to
@@ -32,6 +45,9 @@ pub enum TrackColumnLayoutScope {
 
 impl TrackColumnLayout {
     pub fn new(entries: Vec<TrackColumnEntry>) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            sort: None,
+        }
     }
 }

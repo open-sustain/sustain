@@ -361,8 +361,8 @@ impl LibraryStore for SqliteLibraryStore {
     }
 
     fn delete_track_column_layout(&self, scope: TrackColumnLayoutScope) -> StoreResult<()> {
-        let connection = self.connection_guard()?;
-        column_layouts::delete_track_column_layout(&connection, scope)
+        let mut connection = self.connection_guard()?;
+        column_layouts::delete_track_column_layout(&mut connection, scope)
     }
 
     fn record_analysis(

@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashSet;
 use std::rc::Rc;
-use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackId};
+use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackColumnSort, TrackId};
 
 use super::track_context::TrackRowContextMenu;
 pub(crate) use cells::row_track_id;
@@ -141,6 +141,14 @@ impl TrackTable {
     }
 
     /// Append one idle-sized batch when no newer rebuild superseded it.
+    ///
+    /// Splices the whole batch under a single `items-changed` rather than
+    /// appending row-by-row. When a column sort is active the wrapping
+    /// `SortListModel` answers every `items-changed` by merging the new rows
+    /// into sorted position — O(n) per event — so a per-row loop is O(n²) and
+    /// stalls for seconds while the initial library publishes on a 10k
+    /// library (the trap `replace_rows` documents). One splice per batch keeps
+    /// the cost at one merge per batch instead of one per row.
     pub(crate) fn append_progressive_rows(
         &self,
         generation: u64,
@@ -149,9 +157,9 @@ impl TrackTable {
         if self.row_replacement_generation.get() != generation {
             return false;
         }
-        for row in rows {
-            self.store.append(&glib::BoxedAnyObject::new(row));
-        }
+        let additions: Vec<glib::BoxedAnyObject> =
+            rows.into_iter().map(glib::BoxedAnyObject::new).collect();
+        self.store.splice(self.store.n_items(), 0, &additions);
         true
     }
 
@@ -395,6 +403,60 @@ impl TrackTable {
             self.table.insert_column(insert_at, &managed.column);
             insert_at += 1;
         }
+
+        self.apply_sort(layout.sort.as_ref());
+    }
+
+    /// Make the table's active sort match `sort` exactly: point the
+    /// `ColumnView` at the persisted column and direction, or clear sorting
+    /// when `sort` is `None` (or names a column this table does not have).
+    /// Authoritative on purpose — a view switch must not inherit the previous
+    /// selection's sort. Runs under the [`ApplyLayoutGuard`] set by
+    /// [`Self::apply_layout`], so the resulting `changed` signal does not loop
+    /// back into a save.
+    fn apply_sort(&self, sort: Option<&TrackColumnSort>) {
+        let target = sort.and_then(|sort| {
+            self.managed_columns
+                .iter()
+                .find(|managed| managed.column_id == sort.column_id.as_str())
+                .map(|managed| (&managed.column, sort.ascending))
+        });
+        match target {
+            Some((column, ascending)) => {
+                let direction = if ascending {
+                    gtk::SortType::Ascending
+                } else {
+                    gtk::SortType::Descending
+                };
+                self.table.sort_by_column(Some(column), direction);
+            }
+            None => self
+                .table
+                .sort_by_column(None::<&gtk::ColumnViewColumn>, gtk::SortType::Ascending),
+        }
+    }
+
+    /// Detach the active sort ahead of a progressive bulk load, returning it
+    /// for [`Self::reapply_sort`] to restore once every row is in place.
+    ///
+    /// Streaming thousands of rows into a sorted model merges each batch into
+    /// position and visibly reshuffles the list as it fills. Detaching first
+    /// lets the rows append at the tail, then a single re-sort settles them
+    /// once. Guarded so neither the clear nor the later restore schedules a
+    /// layout save.
+    pub(crate) fn detach_sort_for_bulk_load(&self) -> Option<TrackColumnSort> {
+        let _guard = ApplyLayoutGuard::enter(self.applying_layout.clone());
+        let sort = read_current_sort(&self.table, &self.managed_columns);
+        self.table
+            .sort_by_column(None::<&gtk::ColumnViewColumn>, gtk::SortType::Ascending);
+        sort
+    }
+
+    /// Restore a sort detached by [`Self::detach_sort_for_bulk_load`] in one
+    /// pass over the now-populated model.
+    pub(crate) fn reapply_sort(&self, sort: Option<TrackColumnSort>) {
+        let _guard = ApplyLayoutGuard::enter(self.applying_layout.clone());
+        self.apply_sort(sort.as_ref());
     }
 
     pub(crate) fn set_layout_changed_callback(&self, callback: LayoutChangedCallback) {
@@ -428,6 +490,9 @@ impl TrackTable {
     /// reorder gate (which only accepts drops while this sort is active)
     /// is satisfied without the user having to click any header first.
     pub(crate) fn apply_playlist_default_sort(&self) {
+        // Programmatic like apply_layout, so suppress the resulting sorter
+        // `changed` from scheduling a layout save on every playlist selection.
+        let _guard = ApplyLayoutGuard::enter(self.applying_layout.clone());
         self.table
             .sort_by_column(Some(&self.status_column), gtk::SortType::Ascending);
     }
@@ -502,7 +567,28 @@ fn read_current_layout(
             width_px: managed.column.fixed_width().max(0) as u32,
         });
     }
-    TrackColumnLayout::new(entries)
+    let sort = read_current_sort(table, managed_columns);
+    TrackColumnLayout { entries, sort }
+}
+
+/// Read the table's active sort as a persistable [`TrackColumnSort`], or
+/// `None` when nothing is sorted or the primary sort column is not one of the
+/// managed columns (the playlist status/manual-order column has no persisted
+/// id and intentionally maps to `None`).
+fn read_current_sort(
+    table: &gtk::ColumnView,
+    managed_columns: &[ManagedColumn],
+) -> Option<TrackColumnSort> {
+    let column_sorter = table.sorter()?.downcast::<gtk::ColumnViewSorter>().ok()?;
+    let active = column_sorter.primary_sort_column()?;
+    let column_id = managed_columns
+        .iter()
+        .find(|managed| managed.column.as_ptr() as *const () == active.as_ptr() as *const ())?
+        .column_id;
+    Some(TrackColumnSort {
+        column_id: column_id.to_owned(),
+        ascending: matches!(column_sorter.primary_sort_order(), gtk::SortType::Ascending),
+    })
 }
 
 fn vertical_scroll_info() -> gtk::ScrollInfo {
@@ -783,6 +869,16 @@ fn install_layout_change_listeners(
             });
     }
 
+    // Clicking a column header re-points the ColumnView's sorter, which emits
+    // `changed`. Persisting the new sort is the whole point of this listener;
+    // restoring a sort under apply_layout's guard is suppressed by `schedule`.
+    if let Some(sorter) = table.sorter() {
+        let schedule_for_sort = schedule.clone();
+        sorter.connect_changed(move |_sorter, _change| {
+            schedule_for_sort();
+        });
+    }
+
     let schedule_for_reorder = schedule;
     table
         .columns()
@@ -910,6 +1006,44 @@ mod tests {
 
             assert_eq!(table.store.n_items(), 3);
             assert_eq!(table.store.item(0), first_object);
+        });
+    }
+
+    #[test]
+    fn apply_layout_round_trips_the_persisted_sort() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(vec![row(1), row(2)], None, None, None, None, None);
+
+            // A freshly built table carries no column sort.
+            assert!(
+                read_current_layout(&table.table, &table.managed_columns)
+                    .sort
+                    .is_none()
+            );
+
+            let mut layout = read_current_layout(&table.table, &table.managed_columns);
+            layout.sort = Some(TrackColumnSort {
+                column_id: "date_added".to_owned(),
+                ascending: false,
+            });
+            table.apply_layout(&layout);
+
+            assert_eq!(
+                read_current_layout(&table.table, &table.managed_columns).sort,
+                Some(TrackColumnSort {
+                    column_id: "date_added".to_owned(),
+                    ascending: false,
+                })
+            );
+
+            // Applying a layout with no sort authoritatively clears it.
+            layout.sort = None;
+            table.apply_layout(&layout);
+            assert!(
+                read_current_layout(&table.table, &table.managed_columns)
+                    .sort
+                    .is_none()
+            );
         });
     }
 

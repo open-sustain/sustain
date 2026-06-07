@@ -101,6 +101,10 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
             runtime.settings().library.honor_sort_tags,
         )
     };
+    // Stream the rows in without an active sort, then settle them once at the
+    // end (see reapply below). With the sort live, each batch would merge into
+    // sorted position and reshuffle the visible list on every idle tick.
+    let detached_sort = Rc::new(RefCell::new(songs_table.detach_sort_for_bulk_load()));
     let generation = songs_table.begin_progressive_replace();
     let cursor = Rc::new(Cell::new(0usize));
     let visible_count = Rc::new(Cell::new(0usize));
@@ -132,6 +136,11 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
         if still_current && end < total_tracks {
             return glib::ControlFlow::Continue;
         }
+
+        // Settle the streamed rows into the persisted order in a single pass.
+        // Runs on supersession too, so a search that took over mid-load still
+        // ends up with the sorter reattached over its own results.
+        songs_table.reapply_sort(detached_sort.borrow_mut().take());
 
         if still_current && content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW) {
             status_bar.update_summary_values(

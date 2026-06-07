@@ -9,9 +9,12 @@
 
 use rusqlite::Connection;
 
-use crate::{StoreError, StoreResult, schema::SCHEMA_SQL};
+use crate::{
+    StoreError, StoreResult,
+    schema::{ADD_TRACK_COLUMN_SORT_SQL, SCHEMA_SQL},
+};
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -20,11 +23,18 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    description: "initial alpha schema",
-    sql: SCHEMA_SQL,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        description: "initial alpha schema",
+        sql: SCHEMA_SQL,
+    },
+    Migration {
+        version: 2,
+        description: "persist track table sort order per scope",
+        sql: ADD_TRACK_COLUMN_SORT_SQL,
+    },
+];
 
 const _: () = {
     assert!(MIGRATIONS.len() == CURRENT_SCHEMA_VERSION as usize);
@@ -120,6 +130,9 @@ mod tests {
         "track_column_layout_default",
         "track_column_layout_playlist_override",
         "track_column_layout_smart_playlist_override",
+        "track_column_sort_default",
+        "track_column_sort_playlist_override",
+        "track_column_sort_smart_playlist_override",
         "track_online_status",
         "track_synced_lyrics",
         "track_waveform",
@@ -132,7 +145,7 @@ mod tests {
 
         apply_pending(&connection).expect("migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 1);
+        assert_eq!(user_version(&connection).expect("version"), 2);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
     }
 
@@ -143,22 +156,55 @@ mod tests {
 
         apply_pending(&connection).expect("second migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 1);
+        assert_eq!(user_version(&connection).expect("version"), 2);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
+    }
+
+    #[test]
+    fn upgrade_from_v1_adds_sort_tables_and_preserves_data() {
+        let connection = Connection::open_in_memory().expect("connection");
+        // Stand up an existing alpha library pinned at schema version 1.
+        connection
+            .execute_batch(SCHEMA_SQL)
+            .expect("baseline schema");
+        connection
+            .pragma_update(None, "user_version", 1)
+            .expect("set version");
+        connection
+            .execute(
+                "INSERT INTO track_column_layout_default (column_id, position, visible, width_px) \
+                 VALUES ('date_added', 0, 1, 120)",
+                [],
+            )
+            .expect("seed layout");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(user_version(&connection).expect("version"), 2);
+        assert_eq!(tables(&connection), EXPECTED_TABLES);
+        // The pre-existing layout row survives the migration untouched.
+        let column_id: String = connection
+            .query_row(
+                "SELECT column_id FROM track_column_layout_default",
+                [],
+                |row| row.get(0),
+            )
+            .expect("layout preserved");
+        assert_eq!(column_id, "date_added");
     }
 
     #[test]
     fn database_from_a_newer_build_is_rejected() {
         let connection = Connection::open_in_memory().expect("connection");
         connection
-            .pragma_update(None, "user_version", 2)
+            .pragma_update(None, "user_version", 3)
             .expect("set version");
 
         assert_eq!(
             apply_pending(&connection),
             Err(StoreError::DatabaseAhead {
-                current: 2,
-                supported: 1,
+                current: 3,
+                supported: 2,
             })
         );
     }
