@@ -9,10 +9,11 @@
 //! id, which re-recognises a device whose marker was deleted. The mount
 //! path is never used as identity — it is unstable across sessions.
 //!
-//! Discovery enumerates mounted removable block devices (USB sticks, SD
-//! cards) from `/proc/mounts`. Android/MTP devices are not block mounts
-//! and are out of scope until their transport lands; nothing here blocks
-//! on slow hardware, and callers run it lazily (never at startup).
+//! Discovery here enumerates mounted removable block devices (USB sticks,
+//! SD cards) from `/proc/mounts`. Android phones are not block mounts;
+//! their MTP discovery lives in the `device_mtp` crate and is merged in by
+//! the runtime. Nothing here blocks on slow hardware, and callers run it
+//! lazily (never at startup).
 
 use std::fs;
 use std::io::Read;
@@ -21,17 +22,18 @@ use std::path::{Path, PathBuf};
 use sustain_domain::{DeviceKind, DeviceRelativePath, SyncDevice, SyncDeviceId};
 
 use crate::device_root::DeviceRoot;
+use crate::transport::{DeviceTarget, DeviceTransport};
 
 /// Name of the identity marker written at a device's root.
 pub const MARKER_FILE: &str = ".sustain-device-id";
 
 /// A currently-connected device, resolved against Sustain's known set.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectedDevice {
     pub id: SyncDeviceId,
     pub kind: DeviceKind,
-    /// Filesystem mount point.
-    pub mount_path: PathBuf,
+    /// How to reach the device's storage (a mount point, or an MTP volume).
+    pub target: DeviceTarget,
     pub volume_id: Option<String>,
     /// Suggested label (the volume's mount-dir name).
     pub label: String,
@@ -63,23 +65,33 @@ pub fn generate_device_id() -> Option<SyncDeviceId> {
     SyncDeviceId::new(formatted)
 }
 
-/// Read the identity marker at a device root, if present and valid.
-pub fn read_marker(mount: &Path) -> Option<SyncDeviceId> {
-    let root = DeviceRoot::open(mount).ok()?;
+/// Read the identity marker through any transport, if present and valid.
+pub fn read_marker_via_transport(transport: &dyn DeviceTransport) -> Option<SyncDeviceId> {
     let marker = DeviceRelativePath::new(MARKER_FILE).expect("static marker path is safe");
-    let contents = root.read_to_string(&marker, 4096).ok()?;
+    let contents = transport.read_to_string(&marker, 4096).ok()?;
     SyncDeviceId::new(contents.trim())
 }
 
-/// Write the identity marker at a device root.
-pub fn write_marker(mount: &Path, id: &SyncDeviceId) -> std::io::Result<()> {
-    let root = DeviceRoot::open(mount)?;
-    write_marker_to_root(&root, id)
+/// Write the identity marker through any transport. The marker always
+/// lives at the transport's own root, not under a configured sub-path.
+pub fn write_marker_via_transport(
+    transport: &dyn DeviceTransport,
+    id: &SyncDeviceId,
+) -> std::io::Result<()> {
+    let marker = DeviceRelativePath::new(MARKER_FILE).expect("static marker path is safe");
+    transport.write_file(&marker, id.as_str().as_bytes())
 }
 
-pub(crate) fn write_marker_to_root(root: &DeviceRoot, id: &SyncDeviceId) -> std::io::Result<()> {
-    let marker = DeviceRelativePath::new(MARKER_FILE).expect("static marker path is safe");
-    root.write_file(&marker, id.as_str().as_bytes())
+/// Read the identity marker at a mounted device root, if present and valid.
+pub fn read_marker(mount: &Path) -> Option<SyncDeviceId> {
+    let root = DeviceRoot::open(mount).ok()?;
+    read_marker_via_transport(&root)
+}
+
+/// Write the identity marker at a mounted device root.
+pub fn write_marker(mount: &Path, id: &SyncDeviceId) -> std::io::Result<()> {
+    let root = DeviceRoot::open(mount)?;
+    write_marker_via_transport(&root, id)
 }
 
 /// A mounted filesystem entry from `/proc/mounts`.
@@ -205,7 +217,9 @@ pub fn discover(known: &[SyncDevice]) -> Vec<ConnectedDevice> {
         devices.push(ConnectedDevice {
             id,
             kind: DeviceKind::UsbDrive,
-            mount_path: mount.mount_point,
+            target: DeviceTarget::Filesystem {
+                mount_path: mount.mount_point,
+            },
             volume_id,
             label: stored_label.unwrap_or(label),
             is_known,

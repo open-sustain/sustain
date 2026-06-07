@@ -56,7 +56,11 @@ pub(crate) fn hash_source_file(
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid SHA-256 digest"))
 }
 
-pub(crate) fn ensure_source_unchanged(
+/// Verify a source file still matches the stat that was observed for it,
+/// both through the already-opened descriptor and through a fresh lookup of
+/// the path, so a file rewritten or swapped during export is caught. The
+/// `device_mtp` transport reuses this to guard its streaming copies.
+pub fn ensure_source_unchanged(
     path: &Path,
     opened_file: &File,
     expected: &SourceFileStat,

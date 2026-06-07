@@ -16,10 +16,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use sustain_device_mtp::MtpTransport;
 use sustain_device_sync::{
-    ConnectedDevice, PreparedPioneerAssets, PreparedSyncRequest, SourceSnapshot, SyncInputPlaylist,
-    SyncInputTrack, SyncOutcome, SyncProgress, SyncRequest, SyncStage, capacity, engine,
-    resolve_source_fingerprint, source_file_stat,
+    ConnectedDevice, DeviceRoot, DeviceTarget, DeviceTransport, PreparedPioneerAssets,
+    PreparedSyncRequest, SourceSnapshot, SyncInputPlaylist, SyncInputTrack, SyncOutcome,
+    SyncProgress, SyncRequest, SyncStage, engine, resolve_source_fingerprint, source_file_stat,
 };
 use sustain_domain::{
     DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MusicalKey, Playlist, PlaylistItem,
@@ -58,6 +59,15 @@ pub enum DeviceSyncPlanState {
     Unavailable,
 }
 
+/// The outcome of one asynchronous MTP discovery probe, sent from the
+/// worker thread back to the runtime. `generation` lets the runtime drop a
+/// result that a newer refresh has already superseded.
+#[derive(Debug)]
+pub struct MtpDiscoveryResult {
+    generation: u64,
+    devices: Vec<ConnectedDevice>,
+}
+
 pub(crate) struct DevicePlanCache {
     generation: DevicePlanGeneration,
     mount: DeviceMountIdentity,
@@ -66,15 +76,100 @@ pub(crate) struct DevicePlanCache {
 
 impl ApplicationRuntime {
     /// Enumerate currently-connected devices, resolved against the saved
-    /// device configuration. Performs filesystem probing — call lazily
-    /// (never during the cold-start window).
+    /// device configuration: block-mounted drives probed inline (cheap,
+    /// reads `/proc/mounts`) followed by the cached Android-over-MTP
+    /// devices. The MTP probe is slow, so it never runs here — it is
+    /// refreshed asynchronously by [`Self::refresh_mtp_devices`] and its
+    /// result merged in from the cache. Call lazily (never during the
+    /// cold-start window).
     pub fn connected_devices(&self) -> Vec<ConnectedDevice> {
-        let known = self
-            .library_store
+        let known = self.known_sync_devices();
+        let mut devices = sustain_device_sync::discover(&known);
+        devices.extend(self.mtp_devices.iter().cloned());
+        devices
+    }
+
+    /// The saved device configuration, used to recognise connected devices.
+    fn known_sync_devices(&self) -> Vec<SyncDevice> {
+        self.library_store
             .as_ref()
             .and_then(|store| store.sync_devices().ok())
-            .unwrap_or_default();
-        sustain_device_sync::discover(&known)
+            .unwrap_or_default()
+    }
+
+    /// Refresh the cache of connected Android-over-MTP devices.
+    ///
+    /// Cheap on the main thread: it reads gio's volume monitor for
+    /// candidate volumes (no device I/O) and hands the slow per-candidate
+    /// storage + identity-marker probe to a one-shot worker thread. The
+    /// worker's result arrives on [`Self::mtp_discovery_receiver`] and is
+    /// applied by [`Self::apply_mtp_discovery`]; until then the previous
+    /// cache stays in effect. When no candidate is present (the phone was
+    /// unplugged) the cache is cleared synchronously so the device list
+    /// updates immediately, with no worker spawned.
+    pub fn refresh_mtp_devices(&mut self) {
+        self.mtp_discovery_generation = self
+            .mtp_discovery_generation
+            .checked_add(1)
+            .expect("mtp-discovery generation space exhausted");
+        let generation = self.mtp_discovery_generation;
+
+        let candidates = sustain_device_mtp::candidates();
+        if candidates.is_empty() {
+            self.mtp_devices.clear();
+            return;
+        }
+
+        let known = self.known_sync_devices();
+        let sink = self.mtp_discovery_sink.clone();
+        // A one-shot detached worker: gio objects are `!Send`, so the probe
+        // reconstructs them on this thread from the plain candidate data and
+        // never shares them with the main loop. The closure captures only
+        // owned, `Send` data (candidates, known config, the channel sender),
+        // so it is safe to outlive this call. Spawn failure (resource
+        // exhaustion) simply leaves the existing cache in place.
+        let spawn = std::thread::Builder::new()
+            .name("sustain-mtp-discovery".to_owned())
+            .spawn(move || {
+                let devices = candidates
+                    .iter()
+                    .filter_map(|candidate| sustain_device_mtp::resolve(candidate, &known))
+                    .collect();
+                // The receiver lives as long as the runtime; a send error
+                // only means the app is shutting down, so dropping the
+                // result is the right thing to do.
+                let _ = sink.send_blocking(MtpDiscoveryResult {
+                    generation,
+                    devices,
+                });
+            });
+        if let Err(error) = spawn {
+            self.push_ephemeral_notification(
+                NotificationCategory::DeviceSync,
+                NotificationSeverity::Error,
+                format!("Could not scan for Android devices: {error}"),
+            );
+        }
+    }
+
+    /// The channel the UI shell drains on idle, feeding each MTP discovery
+    /// result back into [`Self::apply_mtp_discovery`].
+    pub fn mtp_discovery_receiver(&self) -> async_channel::Receiver<MtpDiscoveryResult> {
+        self.mtp_discovery_source.clone()
+    }
+
+    /// Apply an MTP discovery result from the worker. Stale results (from a
+    /// probe a newer refresh has superseded) are dropped. Returns `true`
+    /// when the cache changed and the device list should be re-rendered.
+    pub fn apply_mtp_discovery(&mut self, result: MtpDiscoveryResult) -> bool {
+        if result.generation != self.mtp_discovery_generation {
+            return false;
+        }
+        if self.mtp_devices == result.devices {
+            return false;
+        }
+        self.mtp_devices = result.devices;
+        true
     }
 
     /// The saved configuration for a device, if Sustain has it.
@@ -609,8 +704,18 @@ impl ApplicationRuntime {
 fn mount_identity(connected: &ConnectedDevice) -> DeviceMountIdentity {
     DeviceMountIdentity {
         device_id: connected.id.clone(),
-        mount_path: connected.mount_path.clone(),
+        target: connected.target.clone(),
         volume_id: connected.volume_id.clone(),
+    }
+}
+
+/// Open the transport for a device target. Called on the sync/plan worker
+/// thread, so the (thread-affine) gio MTP transport is created and used on
+/// the same thread and never crosses back.
+fn open_transport(target: &DeviceTarget) -> std::io::Result<Box<dyn DeviceTransport>> {
+    match target {
+        DeviceTarget::Filesystem { mount_path } => Ok(Box::new(DeviceRoot::open(mount_path)?)),
+        DeviceTarget::Mtp(mtp) => Ok(Box::new(MtpTransport::open(mtp))),
     }
 }
 
@@ -665,7 +770,10 @@ impl DeviceSyncPreparation {
             Ok(None) => return Ok(cancelled_outcome()),
             Err(error) => return Err(error.to_string()),
         };
-        engine::sync(&prepared, progress, cancelled).map_err(|error| error.to_string())
+        let transport = open_transport(&self.mount.target)
+            .map_err(|error| format!("could not open the device: {error}"))?;
+        engine::sync(transport.as_ref(), &prepared, progress, cancelled)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -681,7 +789,11 @@ impl DevicePlanPreparation {
         if cancelled() {
             return None;
         }
-        let capacity = match capacity(&self.mount.mount_path) {
+        let transport = match open_transport(&self.mount.target) {
+            Ok(transport) => transport,
+            Err(error) => return Some(Err(format!("could not open the device: {error}"))),
+        };
+        let capacity = match transport.capacity() {
             Ok(capacity) => capacity,
             Err(error) => return Some(Err(format!("device capacity probe failed: {error}"))),
         };
@@ -707,7 +819,7 @@ impl DevicePlanPreparation {
         let plan = if request.tracks.is_empty() {
             None
         } else {
-            match engine::plan(&request) {
+            match engine::plan(transport.as_ref(), &request) {
                 Ok(plan) => Some(plan),
                 Err(error) => return Some(Err(error.to_string())),
             }
@@ -735,7 +847,6 @@ fn build_worker_sync_request(
     if selection.is_empty() {
         return Ok(Some(SyncRequest {
             device,
-            mount_path: mount.mount_path.clone(),
             tracks: Vec::new(),
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
@@ -817,7 +928,6 @@ fn build_worker_sync_request(
     }
     Ok(Some(SyncRequest {
         device,
-        mount_path: mount.mount_path.clone(),
         tracks,
         playlists: resolved_playlists,
         previous_manifest,
@@ -1012,8 +1122,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use sustain_device_sync::{
-        DeviceCapacity, SourceSnapshot, SyncInputTrack, SyncProgress, SyncRequest, SyncStage,
-        source_file_stat,
+        DeviceCapacity, DeviceTarget, SourceSnapshot, SyncInputTrack, SyncProgress, SyncRequest,
+        SyncStage, source_file_stat,
     };
     use sustain_domain::{
         DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MetadataChange, Rating,
@@ -1032,7 +1142,9 @@ mod tests {
         ConnectedDevice {
             id: SyncDeviceId::new(id).expect("device id"),
             kind: DeviceKind::UsbDrive,
-            mount_path: mount_path.into(),
+            target: DeviceTarget::Filesystem {
+                mount_path: mount_path.into(),
+            },
             volume_id: Some(format!("{id}-volume")),
             label: id.to_owned(),
             is_known: true,
@@ -1089,7 +1201,6 @@ mod tests {
                 files_per_folder_cap: FilesPerFolderCap::Unlimited,
                 volume_id: None,
             },
-            mount_path: "/mnt/device".into(),
             tracks: source_paths
                 .iter()
                 .enumerate()
@@ -1143,7 +1254,7 @@ mod tests {
             .generation;
         let mount = DeviceMountIdentity {
             device_id: first.id.clone(),
-            mount_path: first.mount_path.clone(),
+            target: first.target.clone(),
             volume_id: first.volume_id.clone(),
         };
         let second = connected("second", "/mnt/second");

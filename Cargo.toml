@@ -5,6 +5,7 @@ members = [
   "crates/app_runtime",
   "crates/artwork",
   "crates/desktop",
+  "crates/device_mtp",
   "crates/device_sync",
   "crates/domain",
   "crates/i18n",

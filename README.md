@@ -84,13 +84,9 @@ Implemented:
 - Background BPM and musical-key detection, with a tempo/harmony-aware smart-playlist rule engine (*Sustain-native*)
 - Background backfill of artwork, ID3 tags, and lyrics via MusicBrainz, Cover Art Archive, AcoustID, and LRClib (*iTunes-adjacent*)
 - Smart Shuffle that picks each next track as a continuation of the one playing — a local, transparent perceptual match, no cloud, no learning (*Sustain-native*)
-- Sync playlists and smart playlists to USB sticks and SD cards, incrementally — as a deduplicated `.m3u8` tree or one folder per playlist (*Sustain-native*)
+- Sync playlists and smart playlists to USB sticks, SD cards, and Android phones over MTP, incrementally — as a deduplicated `.m3u8` tree or one folder per playlist (*Sustain-native*)
 - **CDJ/XDJ-ready Rekordbox export** — writes the full Pioneer feature set to the drive (BPM, key, beat grids, waveforms and artwork) so the hardware reads it natively; the only Linux music app I know of that does this, not just copies files (*Sustain-native*)
 - Native light / dark theme and system accent color (*Sustain-native*)
-
-## Roadmap
-
-- Sync to Android phones over MTP (USB/SD-card sync and Pioneer Rekordbox export already ship)
 
 ## Install
 

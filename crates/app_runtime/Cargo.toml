@@ -28,6 +28,8 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 sustain-analysis = { path = "../analysis" }
 sustain-artwork = { path = "../artwork" }
 sustain-settings = { path = "../settings" }
+# Android/MTP device transport (gio/GVfs), selected per device kind.
+sustain-device-mtp = { path = "../device_mtp" }
 sustain-device-sync = { path = "../device_sync" }
 sustain-domain = { path = "../domain" }
 sustain-library-store = { path = "../library_store" }

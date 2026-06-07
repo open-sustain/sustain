@@ -21,29 +21,26 @@ mod layout;
 pub mod model;
 mod sanitize;
 mod source;
+pub mod transport;
 
+pub use device_root::DeviceRoot;
 pub use engine::{plan, sync};
 pub use identity::{
-    ConnectedDevice, MARKER_FILE, discover, generate_device_id, read_marker, write_marker,
+    ConnectedDevice, MARKER_FILE, discover, generate_device_id, read_marker,
+    read_marker_via_transport, write_marker, write_marker_via_transport,
 };
 pub use model::{
     DeviceCapacity, GenreBytes, Placement, PreparedPioneerAssets, PreparedSyncRequest,
     SourceSnapshot, SyncError, SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncPlan,
     SyncProgress, SyncRequest, SyncStage,
 };
-pub use source::{resolve_source_fingerprint, source_file_stat};
-
-/// Probe a connected device's filesystem capacity through an opened root
-/// descriptor. The root is opened with `O_NOFOLLOW`, matching every other
-/// removable-media operation in this crate.
-pub fn capacity(mount_path: &std::path::Path) -> std::io::Result<DeviceCapacity> {
-    device_root::DeviceRoot::open(mount_path)?.capacity()
-}
+pub use source::{ensure_source_unchanged, resolve_source_fingerprint, source_file_stat};
+pub use transport::{DeviceTarget, DeviceTransport, MtpTarget};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use sustain_domain::{
         DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, SourceFileStat,
         SyncDevice, SyncDeviceId, TrackId,
@@ -105,6 +102,11 @@ mod tests {
         }
     }
 
+    /// Open a filesystem transport on a scratch device root.
+    fn transport(dest: &Path) -> DeviceRoot {
+        DeviceRoot::open(dest).expect("open scratch device root")
+    }
+
     fn request(
         fx: &Fixture,
         layout: DeviceLayout,
@@ -113,7 +115,6 @@ mod tests {
     ) -> SyncRequest {
         SyncRequest {
             device: device(layout),
-            mount_path: fx.dest.path().to_path_buf(),
             tracks: fx.tracks.clone(),
             playlists: vec![SyncInputPlaylist {
                 name: "My Set".into(),
@@ -141,15 +142,15 @@ mod tests {
             .expect("fixture sources are all resolved")
     }
 
-    fn run(req: &SyncRequest) -> SyncOutcome {
-        sync(&prepared(req), &mut |_| {}, &|| false).expect("sync ok")
+    fn run(dest: &Path, req: &SyncRequest) -> SyncOutcome {
+        sync(&transport(dest), &prepared(req), &mut |_| {}, &|| false).expect("sync ok")
     }
 
     #[test]
     fn m3u_layout_writes_tree_and_playlist() {
         let fx = fixture(3);
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        let outcome = run(&req);
+        let outcome = run(fx.dest.path(), &req);
         assert_eq!(outcome.copied, 3);
         assert!(fx.dest.path().join("My Set.m3u8").exists());
         let m3u = std::fs::read_to_string(fx.dest.path().join("My Set.m3u8")).expect("read m3u");
@@ -164,7 +165,7 @@ mod tests {
     fn folder_layout_copies_per_playlist_and_is_stable() {
         let fx = fixture(2);
         let req = request(&fx, DeviceLayout::FolderPerPlaylist, Vec::new(), false);
-        let first = run(&req);
+        let first = run(fx.dest.path(), &req);
         assert_eq!(first.copied, 2);
         assert!(fx.dest.path().join("My Set").is_dir());
 
@@ -175,7 +176,7 @@ mod tests {
             first.manifest.clone(),
             false,
         );
-        let second = run(&req2);
+        let second = run(fx.dest.path(), &req2);
         assert_eq!(second.copied, 0);
         assert_eq!(second.updated, 0);
         assert_eq!(second.unchanged, 2);
@@ -227,7 +228,6 @@ mod tests {
     ) -> SyncRequest {
         SyncRequest {
             device: device(layout),
-            mount_path: PathBuf::from("/mnt/device"),
             tracks,
             playlists,
             previous_manifest: prev,
@@ -329,7 +329,7 @@ mod tests {
     fn pioneer_layout_writes_pdb_and_anlz() {
         let fx = fixture(2);
         let req = request(&fx, DeviceLayout::Pioneer, Vec::new(), false);
-        let outcome = run(&req);
+        let outcome = run(fx.dest.path(), &req);
         assert_eq!(outcome.copied, 2);
         assert!(fx.dest.path().join("PIONEER/rekordbox/export.pdb").exists());
         assert!(fx.dest.path().join("Contents").is_dir());
@@ -366,7 +366,6 @@ mod tests {
         // them to a single artwork id.
         let req = SyncRequest {
             device: device(DeviceLayout::Pioneer),
-            mount_path: fx.dest.path().to_path_buf(),
             tracks: fx.tracks.clone(),
             playlists: vec![SyncInputPlaylist {
                 name: "My Set".into(),
@@ -382,6 +381,7 @@ mod tests {
         }
         assert_eq!(assets.artwork_count(), 1);
         sync(
+            &transport(fx.dest.path()),
             &PreparedSyncRequest::new(req, Some(assets)).expect("prepared Pioneer request"),
             &mut |_| {},
             &|| false,
@@ -399,9 +399,9 @@ mod tests {
     fn incremental_resync_copies_nothing_when_unchanged() {
         let fx = fixture(3);
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        let first = run(&req);
+        let first = run(fx.dest.path(), &req);
         let req2 = request(&fx, DeviceLayout::M3u, first.manifest.clone(), false);
-        let second = run(&req2);
+        let second = run(fx.dest.path(), &req2);
         assert_eq!(second.copied, 0);
         assert_eq!(second.unchanged, 3);
     }
@@ -410,7 +410,7 @@ mod tests {
     fn incremental_resync_replaces_a_truncated_destination() {
         let fx = fixture(2);
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        let first = run(&req);
+        let first = run(fx.dest.path(), &req);
         let truncated = fx
             .dest
             .path()
@@ -418,7 +418,7 @@ mod tests {
         std::fs::write(&truncated, b"partial").expect("truncate destination");
 
         let req2 = request(&fx, DeviceLayout::M3u, first.manifest.clone(), false);
-        let second = run(&req2);
+        let second = run(fx.dest.path(), &req2);
         assert_eq!(second.updated, 1);
         assert_eq!(second.unchanged, 1);
         assert_eq!(
@@ -434,7 +434,10 @@ mod tests {
         // size-only fingerprint missed content changes; the SHA-256 catches
         // them.
         let fx = fixture(2);
-        let first = run(&request(&fx, DeviceLayout::M3u, Vec::new(), false));
+        let first = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::M3u, Vec::new(), false),
+        );
         assert_eq!(first.copied, 2);
 
         // An external tool rewrites track 1's bytes. Re-observe the source so
@@ -447,7 +450,6 @@ mod tests {
 
         let req = SyncRequest {
             device: device(DeviceLayout::M3u),
-            mount_path: fx.dest.path().to_path_buf(),
             tracks,
             playlists: vec![SyncInputPlaylist {
                 name: "My Set".into(),
@@ -457,7 +459,7 @@ mod tests {
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };
-        let second = run(&req);
+        let second = run(fx.dest.path(), &req);
         // Only the rewritten track is re-copied; the untouched one is skipped.
         assert_eq!(second.updated, 1);
         assert_eq!(second.unchanged, 1);
@@ -468,13 +470,15 @@ mod tests {
     fn removal_only_with_confirmation() {
         let fx = fixture(3);
         // First sync all three.
-        let first = run(&request(&fx, DeviceLayout::M3u, Vec::new(), false));
+        let first = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::M3u, Vec::new(), false),
+        );
 
         // Shrink the resolved selection to the first two tracks (the
         // runtime passes only selected tracks as `req.tracks`).
         let shrink = |remove: bool| SyncRequest {
             device: device(DeviceLayout::M3u),
-            mount_path: fx.dest.path().to_path_buf(),
             tracks: fx.tracks[..2].to_vec(),
             playlists: vec![SyncInputPlaylist {
                 name: "My Set".into(),
@@ -486,12 +490,24 @@ mod tests {
         };
 
         // Without confirmation, the third file stays and remains tracked.
-        let kept = sync(&prepared(&shrink(false)), &mut |_| {}, &|| false).expect("sync");
+        let kept = sync(
+            &transport(fx.dest.path()),
+            &prepared(&shrink(false)),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("sync");
         assert_eq!(kept.removed, 0);
         assert_eq!(kept.manifest.len(), 3);
 
         // With confirmation, the stale file is removed.
-        let removed = sync(&prepared(&shrink(true)), &mut |_| {}, &|| false).expect("sync");
+        let removed = sync(
+            &transport(fx.dest.path()),
+            &prepared(&shrink(true)),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("sync");
         assert_eq!(removed.removed, 1);
         assert_eq!(removed.manifest.len(), 2);
     }
@@ -499,10 +515,12 @@ mod tests {
     #[test]
     fn cancellation_before_removal_keeps_stale_manifest_rows() {
         let fx = fixture(3);
-        let first = run(&request(&fx, DeviceLayout::M3u, Vec::new(), false));
+        let first = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::M3u, Vec::new(), false),
+        );
         let shrink = SyncRequest {
             device: device(DeviceLayout::M3u),
-            mount_path: fx.dest.path().to_path_buf(),
             tracks: fx.tracks[..2].to_vec(),
             playlists: vec![SyncInputPlaylist {
                 name: "My Set".into(),
@@ -513,8 +531,13 @@ mod tests {
             export_date: "2026-01-01".into(),
         };
 
-        let outcome =
-            sync(&prepared(&shrink), &mut |_| {}, &|| true).expect("cancelled sync succeeds");
+        let outcome = sync(
+            &transport(fx.dest.path()),
+            &prepared(&shrink),
+            &mut |_| {},
+            &|| true,
+        )
+        .expect("cancelled sync succeeds");
         assert!(outcome.cancelled);
         assert_eq!(outcome.removed, 0);
         assert_eq!(outcome.manifest, first.manifest);
@@ -526,7 +549,10 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let fx = fixture(2);
-        let first = run(&request(&fx, DeviceLayout::M3u, Vec::new(), false));
+        let first = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::M3u, Vec::new(), false),
+        );
         let stale = fx
             .dest
             .path()
@@ -538,7 +564,6 @@ mod tests {
 
         let shrink = SyncRequest {
             device: device(DeviceLayout::M3u),
-            mount_path: fx.dest.path().to_path_buf(),
             tracks: fx.tracks[..1].to_vec(),
             playlists: vec![SyncInputPlaylist {
                 name: "My Set".into(),
@@ -548,7 +573,15 @@ mod tests {
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
-        assert!(sync(&prepared(&shrink), &mut |_| {}, &|| false).is_err());
+        assert!(
+            sync(
+                &transport(fx.dest.path()),
+                &prepared(&shrink),
+                &mut |_| {},
+                &|| false
+            )
+            .is_err()
+        );
         assert_eq!(
             std::fs::read(host.path()).expect("read host file"),
             b"host-data"
@@ -559,7 +592,7 @@ mod tests {
     fn marker_is_written_on_sync() {
         let fx = fixture(1);
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        run(&req);
+        run(fx.dest.path(), &req);
         assert_eq!(
             read_marker(fx.dest.path()).map(SyncDeviceId::into_string),
             Some("test-device".to_owned())
@@ -596,7 +629,15 @@ mod tests {
         symlink(host.path(), fx.dest.path().join(MARKER_FILE)).expect("marker symlink");
 
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        assert!(sync(&prepared(&req), &mut |_| {}, &|| false).is_err());
+        assert!(
+            sync(
+                &transport(fx.dest.path()),
+                &prepared(&req),
+                &mut |_| {},
+                &|| false
+            )
+            .is_err()
+        );
         assert_eq!(
             std::fs::read_to_string(host.path()).expect("read host file"),
             "host-data"
@@ -615,7 +656,15 @@ mod tests {
         symlink(host.path(), fx.dest.path().join("Music/Artist 2")).expect("artist symlink");
 
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        assert!(sync(&prepared(&req), &mut |_| {}, &|| false).is_err());
+        assert!(
+            sync(
+                &transport(fx.dest.path()),
+                &prepared(&req),
+                &mut |_| {},
+                &|| false
+            )
+            .is_err()
+        );
         assert_eq!(
             std::fs::read_dir(host.path())
                 .expect("read host dir")
@@ -637,7 +686,15 @@ mod tests {
         symlink(host.path(), album.join("01 Title 1.mp3")).expect("track symlink");
 
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        assert!(sync(&prepared(&req), &mut |_| {}, &|| false).is_err());
+        assert!(
+            sync(
+                &transport(fx.dest.path()),
+                &prepared(&req),
+                &mut |_| {},
+                &|| false
+            )
+            .is_err()
+        );
         assert_eq!(
             std::fs::read_to_string(host.path()).expect("read host file"),
             "host-data"
@@ -661,7 +718,7 @@ mod tests {
             track.source.stat.size_bytes = size;
         }
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
-        let plan = plan(&req).expect("plan");
+        let plan = plan(&transport(fx.dest.path()), &req).expect("plan");
 
         // Largest first; House aggregated (150), Unknown aggregated (210).
         assert_eq!(
@@ -691,7 +748,6 @@ mod tests {
         let fx = fixture(0);
         let req = SyncRequest {
             device: device(DeviceLayout::M3u),
-            mount_path: fx.dest.path().to_path_buf(),
             tracks: Vec::new(),
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
@@ -699,7 +755,12 @@ mod tests {
             export_date: "2026-01-01".into(),
         };
         assert!(matches!(
-            sync(&prepared(&req), &mut |_| {}, &|| false),
+            sync(
+                &transport(fx.dest.path()),
+                &prepared(&req),
+                &mut |_| {},
+                &|| false
+            ),
             Err(SyncError::Empty)
         ));
     }

@@ -18,14 +18,14 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use sustain_domain::{DeviceLayout, DeviceRelativePath, WaveformSegments};
+use sustain_domain::{DeviceKind, DeviceLayout, DeviceRelativePath, WaveformSegments};
 use sustain_pioneer::{
     AnlzInput, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz, artwork::ARTWORK_BUCKET,
     path_hash, pdb,
 };
 
-use crate::device_root::DeviceRoot;
 use crate::model::{Placement, PreparedSyncRequest, SyncError, SyncRequest};
+use crate::transport::DeviceTransport;
 
 const MUSIC_DIR: &str = "Music";
 const CONTENTS_DIR: &str = "Contents";
@@ -116,16 +116,16 @@ fn allocate_unique_path(
 /// this run, so the Pioneer writer can refresh only stale ANLZ files.
 pub(crate) fn finalize(
     req: &PreparedSyncRequest,
-    root: &DeviceRoot,
+    transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
     written: &HashSet<usize>,
     cancel: &dyn Fn() -> bool,
 ) -> Result<(), SyncError> {
     match req.device.layout {
-        DeviceLayout::M3u => write_m3u_playlists(req, root, base, placements),
+        DeviceLayout::M3u => write_m3u_playlists(req, transport, base, placements),
         DeviceLayout::FolderPerPlaylist => Ok(()),
-        DeviceLayout::Pioneer => write_pioneer(req, root, base, placements, written, cancel),
+        DeviceLayout::Pioneer => write_pioneer(req, transport, base, placements, written, cancel),
     }
 }
 
@@ -273,14 +273,38 @@ fn unique_name(used: &mut HashSet<String>, base: String) -> String {
 
 fn write_m3u_playlists(
     req: &SyncRequest,
-    root: &DeviceRoot,
+    transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
 ) -> Result<(), SyncError> {
-    // track index -> its on-device relative path.
+    // Android players auto-discover playlists where their relative entries
+    // resolve, so the `.m3u8` is dropped inside the `Music/` tree with
+    // entries relative to it (`Artist/Album/Track`). Every other target
+    // keeps the playlist at the device root with `Music/`-prefixed entries
+    // (the player reads them from the drive root).
+    let android = req.device.kind == DeviceKind::Android;
+    let playlist_dir = if android {
+        DeviceRelativePath::new(MUSIC_DIR).expect("static Music dir is safe")
+    } else {
+        DeviceRelativePath::root()
+    };
+    let entry_prefix = if android {
+        format!("{MUSIC_DIR}/")
+    } else {
+        String::new()
+    };
+
+    // track index -> its on-device path, made relative to the playlist's
+    // own location so each entry resolves next to the `.m3u8`.
     let path_for: HashMap<usize, &str> = placements
         .iter()
-        .map(|p| (p.track_index, p.rel_path.as_str()))
+        .map(|p| {
+            let rel = p.rel_path.as_str();
+            (
+                p.track_index,
+                rel.strip_prefix(&entry_prefix).unwrap_or(rel),
+            )
+        })
         .collect();
 
     let mut used: HashSet<String> = HashSet::new();
@@ -301,10 +325,12 @@ fn write_m3u_playlists(
                 rel,
             ));
         }
-        let dest = base
+        let relative = playlist_dir
             .join_component(&name)
             .ok_or_else(|| SyncError::planning("generated an unsafe playlist path"))?;
-        root.write_file(&dest, body.as_bytes())
+        let dest = base.join(&relative);
+        transport
+            .write_file(&dest, body.as_bytes())
             .map_err(|error| SyncError::io(dest.as_str(), error))?;
     }
     Ok(())
@@ -316,7 +342,7 @@ fn write_m3u_playlists(
 
 fn write_pioneer(
     req: &PreparedSyncRequest,
-    root: &DeviceRoot,
+    transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
     written: &HashSet<usize>,
@@ -345,7 +371,7 @@ fn write_pioneer(
             .join_component("ANLZ0000.EXT")
             .expect("static ANLZ filename is safe");
         let needs_anlz = written.contains(&placement_index)
-            || !root
+            || !transport
                 .is_regular_file(&anlz_ext)
                 .map_err(|error| SyncError::io(anlz_ext.as_str(), error))?;
         if needs_anlz {
@@ -363,9 +389,11 @@ fn write_pioneer(
             let dat = anlz_dir
                 .join_component("ANLZ0000.DAT")
                 .expect("static ANLZ filename is safe");
-            root.write_file(&dat, &anlz::dat_bytes(&input))
+            transport
+                .write_file(&dat, &anlz::dat_bytes(&input))
                 .map_err(|error| SyncError::io(dat.as_str(), error))?;
-            root.write_file(&anlz_ext, &anlz::ext_bytes(&input))
+            transport
+                .write_file(&anlz_ext, &anlz::ext_bytes(&input))
                 .map_err(|error| SyncError::io(anlz_ext.as_str(), error))?;
         }
 
@@ -420,16 +448,19 @@ fn write_pioneer(
         &DeviceRelativePath::new(ARTWORK_BUCKET)
             .expect("static Pioneer artwork bucket path is safe"),
     );
-    root.remove_tree_if_exists(&artwork_bucket, cancel)
+    transport
+        .remove_tree_if_exists(&artwork_bucket, cancel)
         .map_err(|error| SyncError::io(artwork_bucket.as_str(), error))?;
     if !assets.artwork.is_empty() {
-        root.ensure_dir_all(&artwork_bucket)
+        transport
+            .ensure_dir_all(&artwork_bucket)
             .map_err(|error| SyncError::io(artwork_bucket.as_str(), error))?;
         for (name, bytes) in assets.artwork.files() {
             let path = artwork_bucket
                 .join_component(&name)
                 .expect("generated Pioneer artwork filename is safe");
-            root.write_file(&path, bytes)
+            transport
+                .write_file(&path, bytes)
                 .map_err(|error| SyncError::io(path.as_str(), error))?;
         }
     }
@@ -446,7 +477,8 @@ fn write_pioneer(
         &req.export_date,
     )
     .map_err(SyncError::Pdb)?;
-    root.write_file(&pdb_path, &bytes)
+    transport
+        .write_file(&pdb_path, &bytes)
         .map_err(|error| SyncError::io(pdb_path.as_str(), error))?;
     Ok(())
 }

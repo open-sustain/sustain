@@ -22,11 +22,12 @@ use super::{
     ArtworkFetchResultReceiver, AvailabilityChangedCallback, ConnectedDevice, DEVICES_VIEW,
     DUPLICATES_VIEW, DevicePlanResultReceiver, DeviceSyncEventReceiver, LibraryChangedCallback,
     LibraryChangedHolder, LibraryHydrationResultReceiver, MetadataWriterEventReceiver,
-    MprisCommandReceiver, OnlineProgressReceiver, PLAYLISTS_VIEW, PlaybackChangedCallback,
-    SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW,
-    SharedMprisService, SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
-    SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
-    TrackRowChangedKind, TrackUpdatedReceiver, YoutubeAudioDownloadResultReceiver,
+    MprisCommandReceiver, MtpDiscoveryResultReceiver, OnlineProgressReceiver, PLAYLISTS_VIEW,
+    PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+    SONGS_VIEW, STATISTICS_VIEW, SharedMprisService, SharedRuntime, ShowAlbumAction,
+    ShowAlbumHolder, SmartPlaylistTrackStatus, SmartShuffleRebuildResultReceiver,
+    TrackRowChangedCallback, TrackRowChangedHolder, TrackRowChangedKind, TrackUpdatedReceiver,
+    YoutubeAudioDownloadResultReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
@@ -117,9 +118,10 @@ use result_consumers::{
     install_analysis_progress_consumer, install_artwork_fetch_result_consumer,
     install_device_plan_result_consumer, install_device_sync_event_consumer,
     install_library_hydration_result_consumer, install_metadata_writer_event_consumer,
-    install_online_progress_consumer, install_smart_shuffle_launch_rebuild,
-    install_smart_shuffle_rebuild_result_consumer, install_track_data_observer,
-    install_track_updated_consumer, install_youtube_audio_download_result_consumer,
+    install_mtp_discovery_consumer, install_online_progress_consumer,
+    install_smart_shuffle_launch_rebuild, install_smart_shuffle_rebuild_result_consumer,
+    install_track_data_observer, install_track_updated_consumer,
+    install_youtube_audio_download_result_consumer,
 };
 use search::{SearchWiringContext, install_search_wiring};
 use sidebar_callbacks::{
@@ -157,6 +159,7 @@ pub(crate) struct MainWindowAsyncReceivers {
     pub smart_shuffle_rebuild_result_rx: Option<SmartShuffleRebuildResultReceiver>,
     pub device_sync_event_rx: Option<DeviceSyncEventReceiver>,
     pub device_plan_result_rx: Option<DevicePlanResultReceiver>,
+    pub mtp_discovery_rx: Option<MtpDiscoveryResultReceiver>,
     pub library_hydration_result_rx: Option<LibraryHydrationResultReceiver>,
 }
 
@@ -179,6 +182,7 @@ pub(crate) fn build_main_window(
         smart_shuffle_rebuild_result_rx,
         device_sync_event_rx,
         device_plan_result_rx,
+        mtp_discovery_rx,
         library_hydration_result_rx,
     } = receivers;
     let tbw = std::time::Instant::now();
@@ -509,7 +513,13 @@ pub(crate) fn build_main_window(
     install_albums_view_activator(&content_stack, &albums_view);
     install_duplicates_view(&content_stack, &sidebar, &duplicates_view);
     install_statistics_view_activator(&content_stack, &statistics_view);
-    install_device_sync_view(&content_stack, &sidebar, &device_panel, &runtime);
+    install_device_sync_view(
+        &content_stack,
+        &sidebar,
+        &device_panel,
+        &runtime,
+        mtp_discovery_rx,
+    );
     // The playlists table is built empty. It only needs to be populated
     // when the user actually opens the Playlists view; rebuilding it on
     // every library_changed / selection change while Songs is visible
@@ -626,6 +636,10 @@ pub(crate) fn build_main_window(
         let sidebar = sidebar.clone();
         let runtime = runtime.clone();
         Box::new(move || {
+            // Kick the async Android/MTP probe so a phone already attached
+            // at launch appears once the worker resolves it (the discovery
+            // consumer re-renders); show block devices immediately.
+            runtime.borrow_mut().refresh_mtp_devices();
             let devices = runtime.borrow().connected_devices();
             sidebar.set_devices(&devices);
         })
@@ -1001,6 +1015,7 @@ fn install_device_sync_view(
     sidebar: &PlaylistSidebar,
     device_panel: &DeviceSyncPanel,
     runtime: &SharedRuntime,
+    mtp_discovery_rx: Option<MtpDiscoveryResultReceiver>,
 ) {
     {
         let content_stack = content_stack.clone();
@@ -1013,7 +1028,9 @@ fn install_device_sync_view(
         }));
     }
 
-    let refresh_devices: Rc<dyn Fn()> = {
+    // Render the device list (sidebar + panel) from current runtime state:
+    // block devices probed inline plus the cached Android/MTP set.
+    let render_devices: Rc<dyn Fn()> = {
         let sidebar = sidebar.clone();
         let device_panel = device_panel.clone();
         let runtime = runtime.clone();
@@ -1023,6 +1040,18 @@ fn install_device_sync_view(
             device_panel.connected_devices_changed(&devices);
         })
     };
+    // A full refresh kicks the asynchronous Android/MTP probe (cheap on the
+    // main thread; its result re-renders through the discovery consumer) and
+    // renders immediately with what is already known.
+    let refresh_devices: Rc<dyn Fn()> = {
+        let render_devices = render_devices.clone();
+        let runtime = runtime.clone();
+        Rc::new(move || {
+            runtime.borrow_mut().refresh_mtp_devices();
+            render_devices();
+        })
+    };
+    install_mtp_discovery_consumer(mtp_discovery_rx, runtime.clone(), render_devices);
     let volume_monitor = gio::VolumeMonitor::get();
     {
         let refresh_devices = refresh_devices.clone();

@@ -140,7 +140,7 @@ impl DeviceSyncPanel {
         match connected {
             Some(device)
                 if !self.current_device_connected.get()
-                    || device.mount_path != current.mount_path
+                    || device.target != current.target
                     || device.volume_id != current.volume_id =>
             {
                 self.show_device(device.clone());
@@ -202,7 +202,7 @@ impl DeviceSyncPanel {
         title.add_css_class("device-sync-title");
         title.set_xalign(0.0);
         header.append(&title);
-        let mount = gtk::Label::new(Some(&format!("Mounted at {}", device.mount_path.display())));
+        let mount = gtk::Label::new(Some(&device.target.location_label()));
         mount.add_css_class("dim-label");
         mount.set_xalign(0.0);
         header.append(&mount);

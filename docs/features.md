@@ -883,11 +883,11 @@ MPRIS and work globally without focus.
 
 ## Device sync — *Sustain-native*
 
-A **DEVICES** section in the sidebar lists connected USB sticks and SD cards.
-Selecting one opens its sync panel in the main content column: a tick-list of
-playlists and smart playlists to send to the device, the on-drive format, and a
-Sync button. The same GUI-driven workflow iTunes used for iPod sync, generalised
-to any removable drive.
+A **DEVICES** section in the sidebar lists connected USB sticks, SD cards, and
+Android phones (over MTP). Selecting one opens its sync panel in the main content
+column: a tick-list of playlists and smart playlists to send to the device, the
+on-drive format, and a Sync button. The same GUI-driven workflow iTunes used for
+iPod sync, generalised to any removable drive or phone.
 
 Sustain owns the sync state. A device is recognised across sessions by a
 generated `.sustain-device-id` marker written at its root (with the filesystem
@@ -914,7 +914,9 @@ Three on-drive formats, chosen per device:
 
 - **Playlists as `.m3u8`** — one deduplicated `Music/Artist/Album/NN Title.ext`
   tree plus one UTF-8 `.m3u8` per playlist. For phones and players that read
-  playlists.
+  playlists. On an Android target each `.m3u8` is written inside `Music/` with
+  its entries relative to that folder, where the common Android players resolve
+  them.
 - **One folder per playlist** — a folder per playlist with real audio copies
   (a track in three playlists is copied three times), no `.m3u`. Names are
   capped at 32 characters and per-track positions stay stable across syncs so
@@ -939,8 +941,17 @@ Three on-drive formats, chosen per device:
   itself — to the maintainer's knowledge, no other Linux application produces
   it. (Hot cues and memory cues are not written.)
 
-Android (MTP) transport is not yet implemented — only mounted block devices
-(USB sticks, SD cards, external SSDs) are synced today.
+Android phones are reached over **MTP** through the desktop's GVfs backend — the
+same path the file manager uses, so no special drivers or root access are needed.
+A connected phone appears in **DEVICES** alongside removable drives and syncs into
+its primary storage (`/sdcard`), defaulting to the `Playlists as .m3u8` format so
+audio lands under `/sdcard/Music/Artist/Album/` and each playlist resolves where
+Android players look for it. Because MTP cannot rename, files are published in
+place; an interrupted copy is caught by the size/fingerprint diff and re-sent on
+the next sync. Reconnects are recognised by the same `.sustain-device-id` marker,
+with the phone's MTP serial as the fallback. Android's media index can take a
+moment to notice freshly copied files, so a player may need a manual library
+rescan to see a new sync.
 
 ---
 

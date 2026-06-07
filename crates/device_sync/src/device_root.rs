@@ -27,7 +27,7 @@ use rustix::{
 };
 use sustain_domain::{DeviceRelativePath, SourceFileStat};
 
-use crate::{model::DeviceCapacity, source::ensure_source_unchanged};
+use crate::{model::DeviceCapacity, source::ensure_source_unchanged, transport::DeviceTransport};
 
 const DIRECTORY_MODE: Mode = Mode::RUSR
     .union(Mode::WUSR)
@@ -56,13 +56,15 @@ const MAX_DIRECTORY_WORK_ENTRIES: usize = 128;
 const MAX_DIRECTORY_DEPTH: usize = 128;
 
 /// One opened device mount root. All descendant operations are relative to
-/// `fd`; no caller receives an ambient joined path for mutation.
-pub(crate) struct DeviceRoot {
+/// `fd`; no caller receives an ambient joined path for mutation. The
+/// [`DeviceTransport`] implementation below is the engine's seam onto a
+/// mounted block filesystem.
+pub struct DeviceRoot {
     fd: OwnedFd,
 }
 
 impl DeviceRoot {
-    pub(crate) fn open(path: &Path) -> io::Result<Self> {
+    pub fn open(path: &Path) -> io::Result<Self> {
         let fd = open(path, DIRECTORY_FLAGS, Mode::empty()).map_err(io::Error::from)?;
         Ok(Self { fd })
     }
@@ -287,6 +289,66 @@ impl DeviceRoot {
             return Err(error.into());
         }
         sync_parent(&parent)
+    }
+}
+
+/// Bridge the root-confined inherent methods onto the engine's transport
+/// seam. Each method forwards to the same-named inherent method (inherent
+/// methods win Rust's method resolution, so there is no recursion); the
+/// inherent versions stay `pub(crate)` for direct in-crate callers such as
+/// identity-marker probing.
+impl DeviceTransport for DeviceRoot {
+    fn capacity(&self) -> io::Result<DeviceCapacity> {
+        self.capacity()
+    }
+
+    fn ensure_dir_all(&self, path: &DeviceRelativePath) -> io::Result<()> {
+        self.ensure_dir_all(path)
+    }
+
+    fn is_regular_file(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+        self.is_regular_file(path)
+    }
+
+    fn regular_file_len(&self, path: &DeviceRelativePath) -> io::Result<Option<u64>> {
+        self.regular_file_len(path)
+    }
+
+    fn read_to_string(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<String> {
+        self.read_to_string(path, limit)
+    }
+
+    fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {
+        self.write_file(path, bytes)
+    }
+
+    fn copy_file(
+        &self,
+        source_path: &Path,
+        path: &DeviceRelativePath,
+        expected: &SourceFileStat,
+    ) -> io::Result<()> {
+        self.copy_file(source_path, path, expected)
+    }
+
+    fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+        self.remove_file_if_exists(path)
+    }
+
+    fn remove_tree_if_exists(
+        &self,
+        path: &DeviceRelativePath,
+        cancel: &dyn Fn() -> bool,
+    ) -> io::Result<bool> {
+        self.remove_tree_if_exists(path, cancel)
+    }
+
+    fn cleanup_stale_temporary_files(
+        &self,
+        path: &DeviceRelativePath,
+        cancel: &dyn Fn() -> bool,
+    ) -> io::Result<()> {
+        self.cleanup_stale_temporary_files(path, cancel)
     }
 }
 

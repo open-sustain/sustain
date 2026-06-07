@@ -2190,6 +2190,7 @@ dependencies = [
  "rustix",
  "sustain-analysis",
  "sustain-artwork",
+ "sustain-device-mtp",
  "sustain-device-sync",
  "sustain-domain",
  "sustain-library-store",
@@ -2219,6 +2220,17 @@ dependencies = [
  "futures-lite",
  "sustain-app-runtime",
  "zbus",
+]
+
+[[package]]
+name = "sustain-device-mtp"
+version = "0.6.0-alpha.11"
+dependencies = [
+ "gio",
+ "glib",
+ "sustain-device-sync",
+ "sustain-domain",
+ "tempfile",
 ]
 
 [[package]]

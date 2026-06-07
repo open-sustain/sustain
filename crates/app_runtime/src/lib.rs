@@ -105,7 +105,7 @@ pub use device_plan_scheduler::{
     DeviceMountIdentity, DevicePlanGeneration, DevicePlanResult, DevicePlanScheduler,
     DevicePlanSnapshot,
 };
-pub use device_sync::{DeviceAnalysisReadiness, DeviceSyncPlanState};
+pub use device_sync::{DeviceAnalysisReadiness, DeviceSyncPlanState, MtpDiscoveryResult};
 pub use device_sync_scheduler::{
     DeviceSyncCompletion, DeviceSyncEvent, DeviceSyncRunId, DeviceSyncScheduler,
     DeviceSyncStartOutcome,
@@ -417,6 +417,16 @@ pub struct ApplicationRuntime {
     // Id of the persistent notification shown while a device sync runs,
     // so progress can update it in place and completion can dismiss it.
     device_sync_notification_id: Option<NotificationId>,
+    // Async MTP (Android) discovery. The cheap volume-monitor scan runs on
+    // the main thread; the slow per-phone storage + identity-marker probe
+    // is handed to a one-shot worker thread, whose resolved devices land in
+    // `mtp_devices` and merge into [`Self::connected_devices`]. The
+    // generation counter discards a probe a newer refresh has superseded
+    // (e.g. plug then unplug in quick succession).
+    mtp_devices: Vec<ConnectedDevice>,
+    mtp_discovery_generation: u64,
+    mtp_discovery_sink: async_channel::Sender<device_sync::MtpDiscoveryResult>,
+    mtp_discovery_source: async_channel::Receiver<device_sync::MtpDiscoveryResult>,
     /// In-memory copy of the prepared Smart Shuffle index (genre IDF
     /// and, later, normalization statistics). `None` when the index
     /// has never been built yet, or when the persisted blob's schema
@@ -521,6 +531,7 @@ pub struct SmartShuffleIndexMetadata {
 
 impl ApplicationRuntime {
     pub fn new() -> Self {
+        let (mtp_discovery_sink, mtp_discovery_source) = async_channel::unbounded();
         Self {
             settings: UserSettings::default(),
             settings_store: None,
@@ -582,6 +593,10 @@ impl ApplicationRuntime {
             device_plan_cache: None,
             device_sync_scheduler: DeviceSyncScheduler::new(),
             device_sync_notification_id: None,
+            mtp_devices: Vec::new(),
+            mtp_discovery_generation: 0,
+            mtp_discovery_sink,
+            mtp_discovery_source,
             smart_shuffle_index: None,
             smart_shuffle_metadata: None,
             track_updated_sink: None,
@@ -606,6 +621,7 @@ impl ApplicationRuntime {
             shuffle_mode: settings.playback.shuffle_mode,
             repeat_mode: RepeatMode::Off,
         });
+        let (mtp_discovery_sink, mtp_discovery_source) = async_channel::unbounded();
         Ok(Self {
             settings,
             settings_store: Some(settings_store),
@@ -667,6 +683,10 @@ impl ApplicationRuntime {
             device_plan_cache: None,
             device_sync_scheduler: DeviceSyncScheduler::new(),
             device_sync_notification_id: None,
+            mtp_devices: Vec::new(),
+            mtp_discovery_generation: 0,
+            mtp_discovery_sink,
+            mtp_discovery_source,
             smart_shuffle_index: None,
             smart_shuffle_metadata: None,
             track_updated_sink: None,

@@ -99,11 +99,13 @@ pub struct SyncInputPlaylist {
 }
 
 /// A complete sync request.
+///
+/// The request is transport-agnostic: it says *what* to put on the device,
+/// not *where* the device is. The caller opens a [`crate::DeviceTransport`]
+/// and hands it to [`crate::plan`] / [`crate::sync`] alongside this.
 #[derive(Clone, Debug)]
 pub struct SyncRequest {
     pub device: SyncDevice,
-    /// Mount point of the device (filesystem root we write under).
-    pub mount_path: PathBuf,
     /// The resolved track set (deduplicated by track).
     pub tracks: Vec<SyncInputTrack>,
     /// The ticked playlists, referencing `tracks` by index.

@@ -420,6 +420,27 @@ pub(super) fn install_device_plan_result_consumer(
     });
 }
 
+/// Drains the asynchronous Android/MTP discovery channel. The slow
+/// per-phone storage + identity-marker probe runs on a worker thread; each
+/// resolved set lands here. When it actually changes the cached device set,
+/// `render_devices` repaints the sidebar and device panel.
+pub(super) fn install_mtp_discovery_consumer(
+    receiver: Option<MtpDiscoveryResultReceiver>,
+    runtime: SharedRuntime,
+    render_devices: Rc<dyn Fn()>,
+) {
+    let Some(receiver) = receiver else {
+        return;
+    };
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(result) = receiver.recv().await {
+            if runtime.borrow_mut().apply_mtp_discovery(result) {
+                render_devices();
+            }
+        }
+    });
+}
+
 /// Delay before the one-shot launch rebuild fires. A second is plenty
 /// to clear the cold-start window (the 150 ms first-idle budget plus
 /// margin) so the rebuild's main-thread prep — cloning the track list

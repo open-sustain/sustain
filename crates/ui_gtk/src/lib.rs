@@ -202,6 +202,8 @@ pub(crate) type DeviceSyncEventReceiver =
     async_channel::Receiver<sustain_app_runtime::DeviceSyncEvent>;
 pub(crate) type DevicePlanResultReceiver =
     async_channel::Receiver<sustain_app_runtime::DevicePlanResult>;
+pub(crate) type MtpDiscoveryResultReceiver =
+    async_channel::Receiver<sustain_app_runtime::MtpDiscoveryResult>;
 pub(crate) type LibraryHydrationResultReceiver = async_channel::Receiver<
     sustain_app_runtime::ApplicationRuntimeResult<LibraryHydrationSnapshot>,
 >;
@@ -293,6 +295,7 @@ pub fn run(
     // forever in the channel and the index would never be adopted.
     let smart_shuffle_rebuild_result_rx = runtime.smart_shuffle_rebuild_result_receiver();
     let device_plan_result_rx = runtime.device_plan_result_receiver();
+    let mtp_discovery_rx = runtime.mtp_discovery_receiver();
     let device_sync_event_rx = runtime.device_sync_event_receiver();
     let library_hydration_result_rx = runtime.library_hydration_result_receiver();
 
@@ -367,6 +370,8 @@ pub fn run(
         Rc::new(RefCell::new(Some(device_sync_event_rx)));
     let device_plan_result_rx_holder: Rc<RefCell<Option<DevicePlanResultReceiver>>> =
         Rc::new(RefCell::new(Some(device_plan_result_rx)));
+    let mtp_discovery_rx_holder: Rc<RefCell<Option<MtpDiscoveryResultReceiver>>> =
+        Rc::new(RefCell::new(Some(mtp_discovery_rx)));
     let library_hydration_result_rx_holder: Rc<RefCell<Option<LibraryHydrationResultReceiver>>> =
         Rc::new(RefCell::new(Some(library_hydration_result_rx)));
 
@@ -390,6 +395,7 @@ pub fn run(
                 smart_shuffle_rebuild_result_rx_holder.borrow_mut().take();
             let device_sync_event_rx = device_sync_event_rx_holder.borrow_mut().take();
             let device_plan_result_rx = device_plan_result_rx_holder.borrow_mut().take();
+            let mtp_discovery_rx = mtp_discovery_rx_holder.borrow_mut().take();
             let library_hydration_result_rx =
                 library_hydration_result_rx_holder.borrow_mut().take();
             let main_window = build_main_window(
@@ -409,6 +415,7 @@ pub fn run(
                     smart_shuffle_rebuild_result_rx,
                     device_sync_event_rx,
                     device_plan_result_rx,
+                    mtp_discovery_rx,
                     library_hydration_result_rx,
                 },
             );

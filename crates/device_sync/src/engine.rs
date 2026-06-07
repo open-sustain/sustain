@@ -11,12 +11,12 @@ use std::collections::HashSet;
 use sustain_domain::{DeviceLayout, DeviceRelativePath, SyncManifestEntry};
 use sustain_pioneer::path_hash;
 
-use crate::device_root::DeviceRoot;
 use crate::layout;
 use crate::model::{
     GenreBytes, Placement, PreparedSyncRequest, SyncError, SyncOutcome, SyncPlan, SyncProgress,
     SyncRequest, SyncStage,
 };
+use crate::transport::DeviceTransport;
 
 /// The on-device subtree to write under: the Pioneer format owns the drive
 /// root (its `PIONEER/` tree is expected there); the other layouts honor the
@@ -38,7 +38,7 @@ struct Diff {
 
 fn compute_diff(
     req: &SyncRequest,
-    root: &DeviceRoot,
+    transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
 ) -> Result<Diff, SyncError> {
@@ -58,7 +58,7 @@ fn compute_diff(
         let known = prev.get(placement.rel_path.as_str());
         let path = base.join(&placement.rel_path);
         let expected_size = req.tracks[placement.track_index].source.stat.size_bytes;
-        let present = root
+        let present = transport
             .regular_file_len(&path)
             .map_err(|error| SyncError::io(path.as_str(), error))?;
         if known == Some(&placement.fingerprint.as_str()) && present == Some(expected_size) {
@@ -91,15 +91,13 @@ fn compute_diff(
 
 /// Compute what a sync would do, without writing anything. The UI shows
 /// this — particularly `to_remove` — before confirming a destructive run.
-pub fn plan(req: &SyncRequest) -> Result<SyncPlan, SyncError> {
+pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPlan, SyncError> {
     if req.tracks.is_empty() {
         return Err(SyncError::Empty);
     }
-    let root =
-        DeviceRoot::open(&req.mount_path).map_err(|error| SyncError::io(&req.mount_path, error))?;
     let base = device_base(req);
     let placements = layout::plan_placements(req)?;
-    let diff = compute_diff(req, &root, &base, &placements)?;
+    let diff = compute_diff(req, transport, &base, &placements)?;
     let bytes_to_copy = diff
         .to_write
         .iter()
@@ -152,6 +150,7 @@ fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreByte
 /// without corrupting the device (the manifest returned reflects exactly
 /// what is on the device at the stopping point).
 pub fn sync(
+    transport: &dyn DeviceTransport,
     req: &PreparedSyncRequest,
     progress: &mut dyn FnMut(SyncProgress),
     cancel: &dyn Fn() -> bool,
@@ -167,21 +166,21 @@ pub fn sync(
             ..SyncOutcome::default()
         });
     }
-    let root =
-        DeviceRoot::open(&req.mount_path).map_err(|error| SyncError::io(&req.mount_path, error))?;
     let base = device_base(req);
-    root.cleanup_stale_temporary_files(&base, cancel)
+    transport
+        .cleanup_stale_temporary_files(&base, cancel)
         .map_err(|error| SyncError::io(base.as_str(), error))?;
-    root.ensure_dir_all(&base)
+    transport
+        .ensure_dir_all(&base)
         .map_err(|error| SyncError::io(base.as_str(), error))?;
 
     // Register the device early so even a partial sync is recognised next
-    // time (the marker always lives at the mount root, not the sub-path).
-    crate::identity::write_marker_to_root(&root, &req.device.id)
+    // time (the marker always lives at the device root, not the sub-path).
+    crate::identity::write_marker_via_transport(transport, &req.device.id)
         .map_err(|error| SyncError::io(crate::identity::MARKER_FILE, error))?;
 
     let placements = layout::plan_placements(req)?;
-    let diff = compute_diff(req, &root, &base, &placements)?;
+    let diff = compute_diff(req, transport, &base, &placements)?;
 
     let mut outcome = SyncOutcome {
         unchanged: diff.unchanged.len(),
@@ -204,7 +203,8 @@ pub fn sync(
         let placement = &placements[placement_index];
         let track = &req.tracks[placement.track_index];
         let dest = base.join(&placement.rel_path);
-        root.copy_file(&track.source_path, &dest, &track.source.stat)
+        transport
+            .copy_file(&track.source_path, &dest, &track.source.stat)
             .map_err(|error| SyncError::io(&track.source_path, error))?;
 
         let is_update = req
@@ -243,7 +243,7 @@ pub fn sync(
             completed: 0,
             total: 1,
         });
-        layout::finalize(req, &root, &base, &placements, &written, cancel)?;
+        layout::finalize(req, transport, &base, &placements, &written, cancel)?;
         progress(SyncProgress {
             stage,
             completed: 1,
@@ -260,7 +260,7 @@ pub fn sync(
                 retain_unremoved_manifest_entries(req, &diff.removals[done..], &mut manifest);
                 break;
             }
-            remove_placement(req, &root, &base, rel, cancel)?;
+            remove_placement(req, transport, &base, rel, cancel)?;
             outcome.removed += 1;
             progress(SyncProgress {
                 stage: SyncStage::Removing,
@@ -299,20 +299,22 @@ fn manifest_entry(req: &PreparedSyncRequest, placement: &Placement) -> SyncManif
 /// Best-effort: a failed delete does not abort the sync.
 fn remove_placement(
     req: &SyncRequest,
-    root: &DeviceRoot,
+    transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     rel: &DeviceRelativePath,
     cancel: &dyn Fn() -> bool,
 ) -> Result<(), SyncError> {
     let audio_path = base.join(rel);
-    root.remove_file_if_exists(&audio_path)
+    transport
+        .remove_file_if_exists(&audio_path)
         .map_err(|error| SyncError::io(audio_path.as_str(), error))?;
     if req.device.layout == DeviceLayout::Pioneer {
         let anlz_dir = path_hash::anlz_dir(&format!("/{rel}"));
         let anlz_dir = DeviceRelativePath::new(anlz_dir.trim_start_matches('/').to_owned())
             .ok_or_else(|| SyncError::planning("Pioneer path hash generated an unsafe path"))?;
         let anlz_path = base.join(&anlz_dir);
-        root.remove_tree_if_exists(&anlz_path, cancel)
+        transport
+            .remove_tree_if_exists(&anlz_path, cancel)
             .map_err(|error| SyncError::io(anlz_path.as_str(), error))?;
     }
     Ok(())

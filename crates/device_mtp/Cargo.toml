@@ -1,0 +1,29 @@
+[package]
+name = "sustain-device-mtp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sustain_device_mtp"
+path = "src/lib.rs"
+
+[dependencies]
+# The transport seam this crate plugs into, plus the durable device value
+# types its discovery resolves against.
+sustain-device-sync = { path = "../device_sync" }
+sustain-domain = { path = "../domain" }
+# GVfs-mediated MTP access: gio's GFile API talks to the desktop's
+# gvfsd-mtp backend, so Sustain reaches an Android phone the same way the
+# file manager does — no unsafe FFI, no fighting the automounter.
+gio = "0.21"
+glib = "0.21"
+
+[dev-dependencies]
+# Scratch source file for the live copy round-trip.
+tempfile = "3"
+
+[lints]
+workspace = true

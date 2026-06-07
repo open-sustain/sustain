@@ -9,14 +9,13 @@
 //! newest generation instead of building an unbounded queue of obsolete
 //! plans.
 
-use std::path::PathBuf;
 use std::sync::{
     Arc, Condvar, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread::{self, JoinHandle};
 
-use sustain_device_sync::{DeviceCapacity, SyncPlan};
+use sustain_device_sync::{DeviceCapacity, DeviceTarget, SyncPlan};
 use sustain_domain::SyncDeviceId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,7 +34,8 @@ impl DevicePlanGeneration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceMountIdentity {
     pub device_id: SyncDeviceId,
-    pub mount_path: PathBuf,
+    /// How to reach the device's storage (a mount point, or an MTP volume).
+    pub target: DeviceTarget,
     pub volume_id: Option<String>,
 }
 
@@ -230,7 +230,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    use sustain_device_sync::{DeviceCapacity, SyncPlan};
+    use sustain_device_sync::{DeviceCapacity, DeviceTarget, SyncPlan};
     use sustain_domain::SyncDeviceId;
 
     use super::{
@@ -240,7 +240,9 @@ mod tests {
     fn mount() -> DeviceMountIdentity {
         DeviceMountIdentity {
             device_id: SyncDeviceId::new("device-id").expect("device id"),
-            mount_path: "/mnt/device".into(),
+            target: DeviceTarget::Filesystem {
+                mount_path: "/mnt/device".into(),
+            },
             volume_id: Some("volume".to_owned()),
         }
     }

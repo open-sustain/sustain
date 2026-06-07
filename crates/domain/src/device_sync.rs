@@ -2,7 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 //! Durable value types for syncing playlists to external devices
-//! (USB sticks, SD cards, and — once its transport lands — Android).
+//! (USB sticks, SD cards, and Android phones over MTP).
 //!
 //! These are the facts Sustain owns and persists about a device: its
 //! stable identity, the on-drive layout to write, and which playlists
@@ -227,13 +227,13 @@ impl FilesPerFolderCap {
 }
 
 /// What kind of device this is — drives the sidebar icon and the default
-/// sub-path. Android's MTP transport is not yet implemented; the variant
-/// exists so a recognised phone can be represented and configured.
+/// sub-path. Android phones are reached over MTP (see the `device_mtp`
+/// crate); plain drives are mounted block filesystems.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceKind {
     /// A mounted block device: USB stick, SD card, external SSD.
     UsbDrive,
-    /// An Android phone or tablet (MTP transport pending).
+    /// An Android phone or tablet reached over MTP.
     Android,
 }
 
@@ -253,12 +253,14 @@ impl DeviceKind {
         }
     }
 
-    /// Default sub-path under the device root to sync into. Android
-    /// targets its `Music` folder; a plain drive targets the root.
+    /// Default sub-path under the device root to sync into. Both kinds
+    /// default to the root: the MTP transport anchors at the phone's
+    /// primary storage root (`/sdcard`), and the canonical `M3u` layout
+    /// already nests audio under `Music/`, so audio lands at
+    /// `/sdcard/Music/...` exactly as Android expects.
     pub const fn default_sub_path(self) -> &'static str {
         match self {
-            Self::UsbDrive => "",
-            Self::Android => "Music",
+            Self::UsbDrive | Self::Android => "",
         }
     }
 }
@@ -335,7 +337,7 @@ mod tests {
         for kind in [DeviceKind::UsbDrive, DeviceKind::Android] {
             assert_eq!(DeviceKind::from_db(kind.as_db()), Some(kind));
         }
-        assert_eq!(DeviceKind::Android.default_sub_path(), "Music");
+        assert_eq!(DeviceKind::Android.default_sub_path(), "");
         assert_eq!(DeviceKind::UsbDrive.default_sub_path(), "");
     }
 
