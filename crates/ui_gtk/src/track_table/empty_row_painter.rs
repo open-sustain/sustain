@@ -18,13 +18,11 @@
 //! rows begin and a single authoritative pitch constant, [`ROW_HEIGHT_PX`],
 //! pinned by CSS.
 //!
-//! Two layouts are supported. The track table ([`EmptyRowPainter::new`])
-//! wraps a `ColumnView` whose first child is a header row; the painter
-//! resolves the rows' top from that header's bottom edge. A headerless list
-//! ([`EmptyRowPainter::new_headerless`]) — e.g. the CD-import checklist —
-//! has its rows begin flush at the top of the scroller, so the data top is
-//! simply `0`. Both share the same row pitch and the same theme-derived
-//! band colour, so the two views stripe identically.
+//! The painter ([`EmptyRowPainter::new`]) wraps a `ColumnView` whose first
+//! child is a header row; it resolves the rows' top from that header's
+//! bottom edge. Every table that uses it — the library and playlist tables
+//! and the CD-import table — shares the same row pitch and the same
+//! theme-derived band colour, so they all stripe identically.
 
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
@@ -129,16 +127,14 @@ pub(crate) mod imp {
         /// Resolve the y-coordinate where data rows begin, in painter-local
         /// pixels, or `None` when layout has not settled enough to know.
         ///
-        /// For the headerless list (no `ColumnView` attached) rows begin
-        /// flush at the top of the scroller, so the answer is simply `0`.
-        ///
-        /// For the column-view track table the `ColumnView`'s first child is
-        /// the header row widget; translating its bottom edge into our
-        /// coordinate space accounts for any chrome the `ScrolledWindow` may
-        /// insert above the viewport without hard-coding numbers the theme
-        /// could shift. Before the first layout pass the header height is `0`;
-        /// that returns `None` so the caller paints nothing until GTK
-        /// re-snapshots post-allocation.
+        /// The `ColumnView`'s first child is the header row widget;
+        /// translating its bottom edge into our coordinate space accounts for
+        /// any chrome the `ScrolledWindow` may insert above the viewport
+        /// without hard-coding numbers the theme could shift. Before the first
+        /// layout pass the header height is `0`; that returns `None` so the
+        /// caller paints nothing until GTK re-snapshots post-allocation. The
+        /// `None`-column-view fallback to `0` is a defensive default that the
+        /// single [`EmptyRowPainter::new`] constructor never actually hits.
         fn measure_content_top(&self) -> Option<i32> {
             let Some(column_view) = self.column_view.get() else {
                 return Some(0);
@@ -185,21 +181,6 @@ impl EmptyRowPainter {
         // populates each exactly once.
         let _ = painter.imp().scroller.set(scroller.clone());
         let _ = painter.imp().column_view.set(column_view.clone());
-        painter
-    }
-
-    /// Wrap a headerless list's `ScrolledWindow` — a plain row list with no
-    /// `ColumnView` header above the rows (the CD-import checklist). Rows
-    /// begin flush at the top of the scroller, so the filler stripes tile
-    /// from `y = 0` at the same pitch and colour as the track table.
-    pub(crate) fn new_headerless(scroller: &gtk::ScrolledWindow) -> Self {
-        let painter: Self = glib::Object::new();
-        painter.set_hexpand(scroller.hexpands());
-        painter.set_vexpand(scroller.vexpands());
-        scroller.set_parent(&painter);
-        let _ = painter.imp().scroller.set(scroller.clone());
-        // `column_view` is left unset: that absence is exactly what
-        // `measure_content_top` reads as "headerless, rows start at 0".
         painter
     }
 
@@ -334,10 +315,10 @@ mod tests {
     }
 
     #[test]
-    fn headerless_empty_paints_from_the_top() {
-        // A headerless list has `content_top = 0`: an empty list tiles the
-        // whole viewport from the very top. (The track table's "header not
-        // measured yet" case is gated in the painter, not here.)
+    fn zero_content_top_paints_from_the_top() {
+        // With `content_top = 0` an empty list tiles the whole viewport from
+        // the very top. (The "header not measured yet" case is gated in the
+        // painter via `measure_content_top`, not here.)
         let bands = compute_filler_bands(800, 200, 0, 0, 28);
         let painted_y: Vec<i32> = bands.iter().map(|band| band.y).collect();
         assert_eq!(painted_y, vec![0, 56, 112, 168]);

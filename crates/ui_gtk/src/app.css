@@ -1143,29 +1143,12 @@ columnview.track-table listview row:selected .track-table-status-missing,
     font-size: 1.15em;
 }
 
-/* Striped checklist, pinned to the library table's row pitch so the filler
-   stripes painted below the last track line up exactly: 28px content +
-   1px border = the 29px ROW_HEIGHT_PX the painter tiles at. The even/odd
-   tints mirror `.track-table-row-even/-odd`. */
-.cd-import-checklist {
-    padding: 0;
-}
+/* The CD track list is a `gtk::ColumnView` built like the Songs table, so it
+   reuses the `.track-table-*` cell, zebra, and selection styling directly —
+   no list-specific row rules are needed here. */
 
-.cd-import-track-row {
-    min-height: 28px;
-    padding: 0 12px;
-    border-bottom: 1px solid alpha(@theme_fg_color, 0.05);
-}
-
-.cd-import-track-row-even {
-    background-color: alpha(@theme_fg_color, 0.025);
-}
-
-.cd-import-track-row-odd {
-    background-color: transparent;
-}
-
-/* Keep the per-track tick from driving the row taller than the 28px pitch. */
+/* Keep the per-track import tick from driving the row taller than the
+   28px `.track-table-cell` pitch the filler stripes line up with. */
 .cd-import-track-check {
     min-height: 0;
     padding: 0;

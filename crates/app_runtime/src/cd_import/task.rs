@@ -108,12 +108,14 @@ impl WorkerContext<'_> {
             // so the progress closure can hold `&mut self.progress` without
             // colliding with a borrow of `self.task`.
             let completed = imported.len();
+            let track_number = plan.track_number;
             let encoder = self.task.encoder.clone();
             let cancellation = self.task.cancellation_requested.clone();
             let request = EncodeRequest {
                 device_path: self.task.snapshot.device_path.clone(),
                 track: plan.track_number,
                 profile: self.task.profile,
+                read_mode: self.task.read_mode,
                 destination: staging.clone(),
             };
             let report = &mut self.progress;
@@ -123,6 +125,7 @@ impl WorkerContext<'_> {
                     report(CdImportProgress {
                         completed_tracks: completed,
                         total_tracks: total,
+                        current_track_number: Some(track_number),
                         current_track_percent: percent,
                     });
                 },
@@ -196,6 +199,7 @@ impl WorkerContext<'_> {
             (self.progress)(CdImportProgress {
                 completed_tracks: imported.len(),
                 total_tracks: total,
+                current_track_number: None,
                 current_track_percent: 100,
             });
         }

@@ -22,7 +22,7 @@ use std::sync::{
 use std::thread;
 
 use sustain_cd_import::{CdEncoder, DiscIdentity, OpticalProbe, TocSnapshot};
-use sustain_domain::{CdEncodingProfile, Track, TrackMetadata};
+use sustain_domain::{CdEncodingProfile, CdReadMode, Track, TrackMetadata};
 use sustain_library_store::LibraryStore;
 use sustain_metadata::MetadataService;
 use sustain_metadata_remote::DiscRelease;
@@ -72,6 +72,7 @@ pub struct CdTrackOverride {
 pub struct CdImportTask {
     pub(super) library_path: PathBuf,
     pub(super) profile: CdEncodingProfile,
+    pub(super) read_mode: CdReadMode,
     pub(super) snapshot: TocSnapshot,
     pub(super) expected_identity: DiscIdentity,
     pub(super) plans: Vec<CdTrackPlan>,
@@ -94,6 +95,11 @@ pub(super) struct CdTrackPlan {
 pub struct CdImportProgress {
     pub completed_tracks: usize,
     pub total_tracks: usize,
+    /// Physical track number currently being ripped, or `None` between
+    /// tracks (e.g. immediately after one is published). The UI shows a
+    /// spinner on this row; the first `completed_tracks` of the import set
+    /// are rendered done.
+    pub current_track_number: Option<u32>,
     pub current_track_percent: u8,
 }
 
@@ -331,9 +337,10 @@ impl ApplicationRuntime {
             .to_path_buf();
         self.ensure_managed_library_filesystem_supported_at(&library_path)?;
 
-        // Capture the encoding profile at preparation; later Preferences
-        // changes affect only subsequent imports.
+        // Capture the encoding profile and read mode at preparation; later
+        // Preferences changes affect only subsequent imports.
         let profile = self.settings.encoding.cd_profile;
+        let read_mode = self.settings.encoding.cd_read_mode;
         if let Err(error) = encoder.ensure_available(profile) {
             // Precise, one-shot notification naming the missing element.
             self.push_ephemeral_notification(
@@ -389,6 +396,7 @@ impl ApplicationRuntime {
         Ok(CdImportTask {
             library_path,
             profile,
+            read_mode,
             expected_identity,
             snapshot,
             plans,

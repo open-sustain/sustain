@@ -22,7 +22,8 @@ pub(super) fn inline_edit_hooks(
 ) -> InlineEditHooks {
     let seed = {
         let runtime = runtime.clone();
-        Rc::new(move |track_id: TrackId, field: EditableField| {
+        Rc::new(move |object: &glib::Object, field: EditableField| {
+            let track_id = crate::track_table::row_track_id(Some(object.clone()))?;
             runtime
                 .borrow()
                 .library_tracks()
@@ -36,7 +37,10 @@ pub(super) fn inline_edit_hooks(
         let runtime = runtime.clone();
         let command_controller = command_controller.clone();
         Rc::new(
-            move |track_id: TrackId, field: EditableField, new_text: String| {
+            move |object: &glib::Object, field: EditableField, new_text: String| {
+                let Some(track_id) = crate::track_table::row_track_id(Some(object.clone())) else {
+                    return false;
+                };
                 let initial = {
                     let runtime = runtime.borrow();
                     runtime

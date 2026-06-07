@@ -17,7 +17,7 @@ use std::{
 pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, ApplicationQuery, BackgroundJobsSettings,
-    BackgroundResourceUsage, CdEncodingProfile, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT,
+    BackgroundResourceUsage, CdEncodingProfile, CdReadMode, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT,
     DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest,
     DuplicateMatchMode, DuplicateMetadataField, DuplicateMetadataFieldSelection,
     DuplicateMetadataSelection, EncodingSettings, FieldChange, FilesPerFolderCap,

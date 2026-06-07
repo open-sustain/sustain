@@ -1363,16 +1363,26 @@ fn poll_cd_import(
             runtime
                 .borrow_mut()
                 .update_cd_import_progress(progress.completed_tracks, progress.total_tracks);
+            // Reflect the rip inline in the track table's status column
+            // (issue #195): done ticks for the completed tracks, a spinner on
+            // the one being ripped.
+            cd_import_panel
+                .apply_import_progress(progress.completed_tracks, progress.current_track_number);
         }
         match finished {
             Some(Ok(result)) => {
+                let imported = result.summary.imported_tracks;
                 runtime.borrow_mut().apply_cd_import_result(result);
                 library_changed();
+                cd_import_panel.finish_import_display(imported);
                 cd_import_panel.refresh_import_sensitivity();
                 glib::ControlFlow::Break
             }
             Some(Err(error)) => {
                 runtime.borrow_mut().fail_cd_import(error);
+                // The prepare/dispatch failed before any track was imported;
+                // clear every spinner.
+                cd_import_panel.finish_import_display(0);
                 cd_import_panel.refresh_import_sensitivity();
                 glib::ControlFlow::Break
             }

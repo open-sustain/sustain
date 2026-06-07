@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 
-use sustain_domain::CdEncodingProfile;
+use sustain_domain::{CdEncodingProfile, CdReadMode};
 
 use crate::error::CdImportResult;
 
@@ -25,6 +25,9 @@ pub struct EncodeRequest {
     pub track: u32,
     /// Encoding profile captured at task preparation.
     pub profile: CdEncodingProfile,
+    /// How thoroughly to read the disc — error-correction depth and the
+    /// read-speed cap — captured at task preparation.
+    pub read_mode: CdReadMode,
     /// Where to write the encoded file — a staging path on the library
     /// filesystem, on the same filesystem as its eventual destination.
     pub destination: PathBuf,
@@ -154,10 +157,6 @@ mod gst_backend {
     };
     use crate::error::{CdImportError, CdImportResult};
 
-    /// `cdparanoiasrc`'s full-paranoia mode nick. Set as a trusted constant,
-    /// not user input.
-    const PARANOIA_MODE_FULL: &str = "full";
-
     /// How often the encode loop wakes to pump the bus, sample progress, and
     /// check for cancellation.
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -205,8 +204,11 @@ mod gst_backend {
             // the `u32` track number directly. Passing an `i32` here makes
             // GObject reject the value type and panics the worker thread.
             source.set_property("track", request.track);
-            // A trusted constant nick, never user input.
-            source.set_property_from_str("paranoia-mode", PARANOIA_MODE_FULL);
+            // Error-correction depth and read-speed cap for the chosen read
+            // mode. The paranoia-mode nick is a trusted constant, never user
+            // input; `read-speed` is a plain `gint` (`-1` = full drive speed).
+            source.set_property_from_str("paranoia-mode", request.read_mode.paranoia_mode_nick());
+            source.set_property("read-speed", request.read_mode.read_speed());
 
             let convert = Self::make(CONVERT_FACTORY)?;
             let resample = Self::make(RESAMPLE_FACTORY)?;

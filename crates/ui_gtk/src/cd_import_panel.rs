@@ -7,10 +7,19 @@
 //! Layout: a fixed-height top bar — the same height as the title bar, like
 //! the Playlists header — carrying the release artwork on the left, the
 //! release identity (title over artist/details) and an optional release
-//! selector in the middle, and the `Import CD` button on the right. Below it
-//! a song-table-style checklist of the disc's audio tracks (all ticked by
-//! default), striped like the library table and continuing its zebra into
-//! the empty region below the last track.
+//! selector in the middle, and the action cluster (Encoding Settings, Eject,
+//! Import CD) on the right. Below it the disc's audio tracks are listed in a
+//! [`gtk::ColumnView`] built exactly like the Songs table: striped rows that
+//! continue their zebra into the empty region below the last track via the
+//! shared [`EmptyRowPainter`], proper column headers, and the same
+//! click-an-already-selected-cell inline editing through the shared
+//! [`InlineEditController`].
+//!
+//! The columns are: a leading rip-status column (empty / spinner while a
+//! track is being ripped / green tick once done — issue #195), an import
+//! tick, the track number, the editable title and artist, and the duration.
+//! Editing title/artist lets a disc MusicBrainz could not identify be named
+//! by hand; the typed value wins over the looked-up / generated one.
 //!
 //! The page renders a valid fallback identity immediately so an offline
 //! import works; a MusicBrainz disc-id lookup refines it when it arrives,
@@ -22,17 +31,17 @@
 //! "disc removed" surface.
 
 use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
-use std::collections::BTreeMap;
-
 use gtk::prelude::*;
-use gtk::{gdk, gdk_pixbuf, glib};
+use gtk::{gdk, gdk_pixbuf, gio, glib};
 
 use sustain_app_runtime::{CdImportRequest, CdTrackOverride, DiscRelease, TocSnapshot};
 
-use crate::{SharedRuntime, TITLEBAR_HEIGHT, track_table::EmptyRowPainter};
+use crate::track_table::{EditableField, EmptyRowPainter, InlineEditController};
+use crate::{SharedRuntime, TITLEBAR_HEIGHT};
 
 const FALLBACK_ALBUM: &str = "Audio CD";
 const FALLBACK_ARTIST: &str = "Unknown Artist";
@@ -40,6 +49,21 @@ const FALLBACK_ARTIST: &str = "Unknown Artist";
 /// inside the fixed [`TITLEBAR_HEIGHT`] top bar with a little vertical
 /// breathing room.
 const ARTWORK_SIZE: i32 = 56;
+
+/// Fixed widths for the non-text columns. The status column matches the
+/// Songs table's leading status column so the two views read identically.
+const STATUS_COLUMN_WIDTH: i32 = 26;
+const SELECT_COLUMN_WIDTH: i32 = 34;
+const NUMBER_COLUMN_WIDTH: i32 = 48;
+const TITLE_COLUMN_WIDTH: i32 = 280;
+const ARTIST_COLUMN_WIDTH: i32 = 200;
+const TIME_COLUMN_WIDTH: i32 = 70;
+const STATUS_ICON_SIZE: i32 = 14;
+/// The "done" tick glyph. Rendered as a filled green check disc via the
+/// shared `device-analysis-badge`/`ok` classes — the exact same badge the
+/// Smart Shuffle preferences tab uses for its "ready" state, so it reads
+/// green in both light and dark themes and against the system accent.
+const DONE_ICON: &str = "object-select-symbolic";
 
 /// Fired when the user clicks `Import CD`. The main window wires this to
 /// the runtime's prepare / background-worker / apply path.
@@ -49,28 +73,99 @@ pub(crate) type CdImportRequestedCallback = Rc<dyn Fn(CdImportRequest)>;
 /// disc so the main window can resolve and eject the drive.
 pub(crate) type CdEjectRequestedCallback = Rc<dyn Fn(TocSnapshot)>;
 
-/// A double-click-to-edit table cell: a label that swaps to an entry for
-/// inline editing (used for the per-track title and artist, so a disc
-/// MusicBrainz could not identify can be named by hand).
-#[derive(Clone)]
-struct EditableCell {
-    stack: gtk::Stack,
-    label: gtk::Label,
-    entry: gtk::Entry,
+/// Per-track rip status rendered in the leading status column (issue #195).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CdRipStatus {
+    /// Not (yet) being ripped — the column is empty.
+    Pending,
+    /// Currently being read/encoded — an animated spinner.
+    Ripping,
+    /// Imported — a green tick.
+    Done,
 }
 
-/// Which track field an [`EditableCell`] edits.
-#[derive(Clone, Copy)]
-enum OverrideField {
-    Title,
-    Artist,
-}
-
-struct TrackRow {
+/// One disc track, the model item backing a [`gtk::ColumnView`] row. Mutable
+/// per-row state (the import tick, the inline-edit overrides, the rip status)
+/// lives behind interior mutability so the cell factories can read and write
+/// it through the bound [`glib::BoxedAnyObject`] without a `&mut` model.
+struct CdRow {
     number: u32,
-    check: gtk::CheckButton,
-    title: EditableCell,
-    artist: EditableCell,
+    duration: Duration,
+    /// The looked-up / generated title and artist for the selected release;
+    /// recomputed when the chosen release changes.
+    base_title: RefCell<String>,
+    base_artist: RefCell<String>,
+    /// User-typed overrides; a non-blank value wins over the base for both
+    /// display and import. Kept across release switches.
+    override_title: RefCell<Option<String>>,
+    override_artist: RefCell<Option<String>>,
+    /// Whether this track is ticked for import.
+    selected: Cell<bool>,
+    status: Cell<CdRipStatus>,
+}
+
+impl CdRow {
+    fn display_title(&self) -> String {
+        non_blank(self.override_title.borrow().as_deref())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| self.base_title.borrow().clone())
+    }
+
+    fn display_artist(&self) -> String {
+        non_blank(self.override_artist.borrow().as_deref())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| self.base_artist.borrow().clone())
+    }
+}
+
+/// A bound title/artist label, refreshed when the chosen release or a user
+/// override changes its displayed value. Mirrors the Songs table's
+/// `TextBindings`. Pruned on teardown.
+struct CdTextBinding {
+    list_item: gtk::ListItem,
+    label: gtk::Label,
+    field: EditableField,
+}
+
+#[derive(Clone, Default)]
+struct CdTextBindings(Rc<RefCell<Vec<CdTextBinding>>>);
+
+impl CdTextBindings {
+    fn refresh(&self) {
+        let mut bindings = self.0.borrow_mut();
+        bindings.retain(|binding| binding.list_item.item().is_some());
+        for binding in bindings.iter() {
+            let field = binding.field;
+            let text = list_item_cd_row(&binding.list_item, |row| match field {
+                EditableField::Artist => row.display_artist(),
+                _ => row.display_title(),
+            })
+            .unwrap_or_default();
+            binding.label.set_text(&text);
+        }
+    }
+}
+
+/// A bound status cell, refreshed as a rip progresses. Pruned on teardown.
+struct CdStatusBinding {
+    list_item: gtk::ListItem,
+    spinner: gtk::Spinner,
+    icon: gtk::Image,
+}
+
+#[derive(Clone, Default)]
+struct CdStatusBindings(Rc<RefCell<Vec<CdStatusBinding>>>);
+
+impl CdStatusBindings {
+    fn refresh(&self) {
+        let mut bindings = self.0.borrow_mut();
+        bindings.retain(|binding| binding.list_item.item().is_some());
+        for binding in bindings.iter() {
+            let status = list_item_cd_row(&binding.list_item, |row| row.status.get())
+                .unwrap_or(CdRipStatus::Pending);
+            render_cd_status(&binding.spinner, &binding.icon, status);
+        }
+    }
 }
 
 struct PanelState {
@@ -78,10 +173,10 @@ struct PanelState {
     releases: Vec<DiscRelease>,
     selected_release: Option<usize>,
     cover: Option<Vec<u8>>,
-    rows: Vec<TrackRow>,
-    /// Per-track user edits keyed by physical track number; these win over
-    /// the looked-up / generated title and artist.
-    overrides: BTreeMap<u32, CdTrackOverride>,
+    /// Sorted physical track numbers captured when an import starts, so the
+    /// status column can mark the first `completed_tracks` of them done while
+    /// the rest stay pending (issue #195).
+    importing: Vec<u32>,
 }
 
 impl PanelState {
@@ -104,8 +199,9 @@ pub(crate) struct CdImportPanel {
     title_label: gtk::Label,
     subtitle_label: gtk::Label,
     release_selector: gtk::DropDown,
-    checklist_box: gtk::Box,
-    painter: EmptyRowPainter,
+    store: gio::ListStore,
+    text_bindings: CdTextBindings,
+    status_bindings: CdStatusBindings,
     import_button: gtk::Button,
     state: Rc<RefCell<PanelState>>,
     /// Suppresses the release-selector notify while a programmatic model
@@ -186,15 +282,124 @@ impl CdImportPanel {
         header.append(&actions);
         root.append(&header);
 
-        // --- Track checklist: striped rows + filler stripes below ---
-        let checklist_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        checklist_box.add_css_class("cd-import-checklist");
+        // --- Track table: a ColumnView built like the Songs table ---
+        let store = gio::ListStore::new::<glib::BoxedAnyObject>();
+        let table = gtk::ColumnView::new(None::<gtk::SelectionModel>);
+        table.add_css_class("track-table");
+        table.set_hexpand(true);
+        table.set_vexpand(true);
+        table.set_show_column_separators(false);
+        table.set_show_row_separators(false);
+        table.set_single_click_activate(false);
+        table.set_reorderable(false);
+
+        // A single selectable row drives the inline-edit interaction (click an
+        // already-selected cell to edit); the per-row tick column owns the
+        // separate "which tracks to import" choice.
+        let selection = gtk::SingleSelection::new(Some(store.clone()));
+        selection.set_autoselect(false);
+        selection.set_can_unselect(true);
+
+        let text_bindings = CdTextBindings::default();
+        let status_bindings = CdStatusBindings::default();
+        let suppress_check_toggle = Rc::new(Cell::new(false));
+
+        let inline_edit = {
+            let seed = Rc::new(move |object: &glib::Object, field: EditableField| {
+                with_cd_row(object, |row| match field {
+                    EditableField::Artist => row.display_artist(),
+                    _ => row.display_title(),
+                })
+            });
+            let commit_bindings = text_bindings.clone();
+            let commit = Rc::new(
+                move |object: &glib::Object, field: EditableField, new_text: String| {
+                    let applied = with_cd_row(object, |row| match field {
+                        EditableField::Artist => {
+                            *row.override_artist.borrow_mut() = Some(new_text);
+                        }
+                        EditableField::Title => {
+                            *row.override_title.borrow_mut() = Some(new_text);
+                        }
+                        _ => {}
+                    });
+                    if applied.is_none() {
+                        return false;
+                    }
+                    commit_bindings.refresh();
+                    true
+                },
+            );
+            InlineEditController::new(crate::track_table::InlineEditHooks { seed, commit })
+        };
+
+        table.append_column(&fixed_column(
+            None,
+            STATUS_COLUMN_WIDTH,
+            &build_cd_status_factory(status_bindings.clone()),
+        ));
+        table.append_column(&fixed_column(
+            None,
+            SELECT_COLUMN_WIDTH,
+            &build_cd_check_factory(
+                store.clone(),
+                runtime.clone(),
+                import_button.clone(),
+                suppress_check_toggle,
+            ),
+        ));
+        table.append_column(&fixed_column(
+            Some("#"),
+            NUMBER_COLUMN_WIDTH,
+            &build_cd_number_factory(),
+        ));
+        table.append_column(&fixed_column(
+            Some("Title"),
+            TITLE_COLUMN_WIDTH,
+            &build_cd_text_factory(
+                EditableField::Title,
+                text_bindings.clone(),
+                inline_edit.clone(),
+            ),
+        ));
+        table.append_column(&fixed_column(
+            Some("Artist"),
+            ARTIST_COLUMN_WIDTH,
+            &build_cd_text_factory(
+                EditableField::Artist,
+                text_bindings.clone(),
+                inline_edit.clone(),
+            ),
+        ));
+        table.append_column(&fixed_column(
+            Some("Time"),
+            TIME_COLUMN_WIDTH,
+            &build_cd_duration_factory(),
+        ));
+        let filler = gtk::ColumnViewColumn::new(None, Some(build_cd_filler_factory()));
+        filler.set_expand(true);
+        filler.set_resizable(false);
+        table.append_column(&filler);
+
+        table.set_model(Some(&selection));
+
         let scroller = gtk::ScrolledWindow::new();
         scroller.set_hexpand(true);
         scroller.set_vexpand(true);
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_child(Some(&checklist_box));
-        let painter = EmptyRowPainter::new_headerless(&scroller);
+        scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+        scroller.set_child(Some(&table));
+
+        // Continue the zebra into the empty area below the last track, like
+        // the library table. The painter reads the row count from the store
+        // on every change.
+        let painter = EmptyRowPainter::new(&scroller, &table);
+        painter.set_row_count(store.n_items());
+        let painter_for_store = painter.downgrade();
+        store.connect_items_changed(move |store, _position, _removed, _added| {
+            if let Some(painter) = painter_for_store.upgrade() {
+                painter.set_row_count(store.n_items());
+            }
+        });
         root.append(&painter);
 
         let panel = Self {
@@ -205,16 +410,16 @@ impl CdImportPanel {
             title_label,
             subtitle_label,
             release_selector,
-            checklist_box,
-            painter,
+            store,
+            text_bindings,
+            status_bindings,
             import_button,
             state: Rc::new(RefCell::new(PanelState {
                 snapshot: None,
                 releases: Vec::new(),
                 selected_release: None,
                 cover: None,
-                rows: Vec::new(),
-                overrides: BTreeMap::new(),
+                importing: Vec::new(),
             })),
             suppress_toggles: Rc::new(Cell::new(false)),
             runtime,
@@ -263,7 +468,8 @@ impl CdImportPanel {
                     }
                     state.selected_release().cloned()
                 };
-                panel.refresh_metadata();
+                panel.refresh_header();
+                panel.recompute_row_base();
                 if let Some(release) = selected {
                     // Re-fetch the cover for the newly chosen release; show
                     // the spinner until that Cover event resolves it.
@@ -278,13 +484,18 @@ impl CdImportPanel {
             let Some(request) = panel.current_request() else {
                 return;
             };
+            // Record the import set (sorted, matching the worker's order) and
+            // reset the status column so it tracks the rip (issue #195).
+            let mut importing = request.selected_tracks.clone();
+            importing.sort_unstable();
+            panel.begin_import_display(importing);
             if let Some(callback) = panel.on_import_requested.borrow().as_ref() {
                 callback(request);
             }
         });
     }
 
-    /// Render the page for a freshly-probed disc: build the checklist, show
+    /// Render the page for a freshly-probed disc: build the row model, show
     /// the fallback identity, and reset any prior lookup state. The artwork
     /// starts on the placeholder; [`Self::mark_lookup_started`] switches it
     /// to the spinner when a MusicBrainz lookup is actually in flight.
@@ -295,14 +506,14 @@ impl CdImportPanel {
             state.releases.clear();
             state.selected_release = None;
             state.cover = None;
-            state.overrides.clear();
+            state.importing.clear();
         }
         self.suppress_toggles.set(true);
         self.release_selector.set_visible(false);
         self.suppress_toggles.set(false);
         self.set_artwork_placeholder();
-        self.rebuild_checklist(&snapshot);
-        self.refresh_metadata();
+        self.rebuild_rows(&snapshot);
+        self.refresh_header();
         self.update_import_sensitivity();
     }
 
@@ -330,7 +541,8 @@ impl CdImportPanel {
             state.selected_release().cloned()
         };
         self.populate_release_selector();
-        self.refresh_metadata();
+        self.refresh_header();
+        self.recompute_row_base();
         match chosen {
             Some(release) => {
                 // A match was found; keep the spinner up while its cover is
@@ -366,13 +578,9 @@ impl CdImportPanel {
             state.releases.clear();
             state.selected_release = None;
             state.cover = None;
-            state.rows.clear();
-            state.overrides.clear();
+            state.importing.clear();
         }
-        while let Some(child) = self.checklist_box.first_child() {
-            self.checklist_box.remove(&child);
-        }
-        self.painter.set_row_count(0);
+        self.store.remove_all();
         self.suppress_toggles.set(true);
         self.release_selector.set_visible(false);
         self.suppress_toggles.set(false);
@@ -393,6 +601,52 @@ impl CdImportPanel {
         self.update_import_sensitivity();
     }
 
+    /// Reflect a rip-progress tick in the status column (issue #195): the
+    /// first `completed` tracks of the import set are done, the
+    /// `current` track (if any) shows a spinner, the rest stay pending.
+    pub(crate) fn apply_import_progress(&self, completed: usize, current: Option<u32>) {
+        let importing = self.state.borrow().importing.clone();
+        let done: HashSet<u32> = importing.iter().take(completed).copied().collect();
+        self.set_all_status(|number| {
+            if done.contains(&number) {
+                CdRipStatus::Done
+            } else if current == Some(number) {
+                CdRipStatus::Ripping
+            } else {
+                CdRipStatus::Pending
+            }
+        });
+    }
+
+    /// Settle the status column when the rip ends: the `imported` tracks of
+    /// the import set are done, every other row clears (its spinner stops).
+    pub(crate) fn finish_import_display(&self, imported: usize) {
+        let importing = self.state.borrow().importing.clone();
+        let done: HashSet<u32> = importing.iter().take(imported).copied().collect();
+        self.set_all_status(|number| {
+            if done.contains(&number) {
+                CdRipStatus::Done
+            } else {
+                CdRipStatus::Pending
+            }
+        });
+    }
+
+    fn begin_import_display(&self, importing: Vec<u32>) {
+        self.state.borrow_mut().importing = importing;
+        self.set_all_status(|_| CdRipStatus::Pending);
+    }
+
+    fn set_all_status(&self, status_for: impl Fn(u32) -> CdRipStatus) {
+        for index in 0..self.store.n_items() {
+            let Some(object) = self.store.item(index) else {
+                continue;
+            };
+            let _ = with_cd_row(&object, |row| row.status.set(status_for(row.number)));
+        }
+        self.status_bindings.refresh();
+    }
+
     fn populate_release_selector(&self) {
         let state = self.state.borrow();
         let labels: Vec<String> = state.releases.iter().map(release_selector_label).collect();
@@ -411,7 +665,7 @@ impl CdImportPanel {
         self.release_selector.set_visible(multiple);
     }
 
-    fn refresh_metadata(&self) {
+    fn refresh_header(&self) {
         let state = self.state.borrow();
         let release = state.selected_release();
         let title = release
@@ -419,129 +673,73 @@ impl CdImportPanel {
             .unwrap_or(FALLBACK_ALBUM);
         self.title_label.set_text(title);
         self.subtitle_label.set_text(&subtitle_text(release));
-        if let Some(snapshot) = state.snapshot.as_ref() {
-            for row in &state.rows {
-                let (mut track_title, mut track_artist) =
-                    track_display(snapshot, release, row.number);
-                // A user's inline edit wins over the looked-up value.
-                if let Some(over) = state.overrides.get(&row.number) {
-                    if let Some(title) = non_blank(over.title.as_deref()) {
-                        track_title = title.to_owned();
-                    }
-                    if let Some(artist) = non_blank(over.artist.as_deref()) {
-                        track_artist = artist.to_owned();
-                    }
-                }
-                row.title.label.set_text(&track_title);
-                row.artist.label.set_text(&track_artist);
-            }
-        }
     }
 
-    /// Record a user's inline edit of a track field and refresh the labels
-    /// so the edited value is shown (and used at import).
-    fn set_track_override(&self, number: u32, field: OverrideField, value: String) {
+    /// Recompute every row's base (looked-up) title/artist for the chosen
+    /// release and refresh the visible labels. User overrides are untouched,
+    /// so a hand-typed title survives a release switch.
+    fn recompute_row_base(&self) {
         {
-            let mut state = self.state.borrow_mut();
-            let entry = state.overrides.entry(number).or_default();
-            match field {
-                OverrideField::Title => entry.title = Some(value),
-                OverrideField::Artist => entry.artist = Some(value),
+            let state = self.state.borrow();
+            let Some(snapshot) = state.snapshot.as_ref() else {
+                return;
+            };
+            let release = state.selected_release();
+            for index in 0..self.store.n_items() {
+                let Some(object) = self.store.item(index) else {
+                    continue;
+                };
+                let _ = with_cd_row(&object, |row| {
+                    let (title, artist) = track_display(snapshot, release, row.number);
+                    *row.base_title.borrow_mut() = title;
+                    *row.base_artist.borrow_mut() = artist;
+                });
             }
         }
-        self.refresh_metadata();
+        self.text_bindings.refresh();
     }
 
-    fn rebuild_checklist(&self, snapshot: &TocSnapshot) {
-        while let Some(child) = self.checklist_box.first_child() {
-            self.checklist_box.remove(&child);
-        }
-        let mut rows = Vec::with_capacity(snapshot.tracks.len());
-        for (index, track) in snapshot.tracks.iter().enumerate() {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-            row.add_css_class("cd-import-track-row");
-            // Zebra parity matches the library table's `row_position % 2`
-            // rule, so the filler painter's stripes line up below them.
-            row.add_css_class(if index % 2 == 0 {
-                "cd-import-track-row-even"
-            } else {
-                "cd-import-track-row-odd"
-            });
-
-            let check = gtk::CheckButton::new();
-            check.set_active(true);
-            check.add_css_class("cd-import-track-check");
-            check.set_valign(gtk::Align::Center);
-
-            let number = gtk::Label::new(Some(&format!("{:02}", track.number)));
-            number.add_css_class("cd-import-track-number");
-            number.add_css_class("dim-label");
-            number.set_xalign(1.0);
-            number.set_width_chars(2);
-
-            let title = build_editable_cell("cd-import-track-title", false);
-            let artist = build_editable_cell("cd-import-track-artist", true);
-
-            let duration = gtk::Label::new(Some(&format_duration(track.duration())));
-            duration.add_css_class("cd-import-track-duration");
-            duration.add_css_class("dim-label");
-            duration.set_xalign(1.0);
-            // Fixed-width duration column so the title/artist split — and thus
-            // the column boundaries — line up across every row.
-            duration.set_width_chars(5);
-
-            row.append(&check);
-            row.append(&number);
-            row.append(&title.stack);
-            row.append(&artist.stack);
-            row.append(&duration);
-            self.checklist_box.append(&row);
-
-            let panel = self.clone();
-            check.connect_toggled(move |_| {
-                panel.update_import_sensitivity();
-            });
-
-            let number_value = track.number;
-            {
-                let panel = self.clone();
-                wire_cell_editing(&title, move |text| {
-                    panel.set_track_override(number_value, OverrideField::Title, text);
-                });
-            }
-            {
-                let panel = self.clone();
-                wire_cell_editing(&artist, move |text| {
-                    panel.set_track_override(number_value, OverrideField::Artist, text);
-                });
-            }
-
-            rows.push(TrackRow {
+    fn rebuild_rows(&self, snapshot: &TocSnapshot) {
+        self.store.remove_all();
+        for track in &snapshot.tracks {
+            let (title, artist) = track_display(snapshot, None, track.number);
+            let row = CdRow {
                 number: track.number,
-                check,
-                title,
-                artist,
-            });
+                duration: track.duration(),
+                base_title: RefCell::new(title),
+                base_artist: RefCell::new(artist),
+                override_title: RefCell::new(None),
+                override_artist: RefCell::new(None),
+                selected: Cell::new(true),
+                status: Cell::new(CdRipStatus::Pending),
+            };
+            self.store.append(&glib::BoxedAnyObject::new(row));
         }
-        self.state.borrow_mut().rows = rows;
-        self.painter
-            .set_row_count(u32::try_from(snapshot.tracks.len()).unwrap_or(u32::MAX));
-    }
-
-    fn selected_track_numbers(&self) -> Vec<u32> {
-        self.state
-            .borrow()
-            .rows
-            .iter()
-            .filter(|row| row.check.is_active())
-            .map(|row| row.number)
-            .collect()
     }
 
     fn current_request(&self) -> Option<CdImportRequest> {
         let state = self.state.borrow();
         let snapshot = state.snapshot.clone()?;
-        let selected_tracks = self.selected_track_numbers();
+        let mut selected_tracks = Vec::new();
+        let mut overrides = BTreeMap::new();
+        for index in 0..self.store.n_items() {
+            let Some(object) = self.store.item(index) else {
+                continue;
+            };
+            let _ = with_cd_row(&object, |row| {
+                if !row.selected.get() {
+                    return;
+                }
+                selected_tracks.push(row.number);
+                let track_override = CdTrackOverride {
+                    title: row.override_title.borrow().clone(),
+                    artist: row.override_artist.borrow().clone(),
+                };
+                if track_override.title.is_some() || track_override.artist.is_some() {
+                    overrides.insert(row.number, track_override);
+                }
+            });
+        }
         if selected_tracks.is_empty() {
             return None;
         }
@@ -550,30 +748,21 @@ impl CdImportPanel {
             selected_tracks,
             release: state.selected_release().cloned(),
             cover: state.cover.clone(),
-            overrides: state.overrides.clone(),
+            overrides,
         })
     }
 
     fn update_import_sensitivity(&self) {
-        self.import_button.set_sensitive(self.import_allowed());
+        self.import_button
+            .set_sensitive(import_allowed(&self.store, &self.runtime));
     }
 
     /// Whether the page's own state permits an import: a disc is shown and at
     /// least one track is ticked. Separated from the runtime gates so it can
     /// be unit-tested without a configured library or CD backend.
+    #[cfg(test)]
     fn panel_ready_for_import(&self) -> bool {
-        let state = self.state.borrow();
-        state.snapshot.is_some() && state.rows.iter().any(|row| row.check.is_active())
-    }
-
-    fn import_allowed(&self) -> bool {
-        if !self.panel_ready_for_import() {
-            return false;
-        }
-        let runtime = self.runtime.borrow();
-        runtime.settings().library_path().is_some()
-            && !runtime.background_task_status().is_running()
-            && runtime.cd_import_unavailable_reason().is_none()
+        self.state.borrow().snapshot.is_some() && any_selected(&self.store)
     }
 
     fn set_artwork_searching(&self) {
@@ -598,6 +787,479 @@ impl CdImportPanel {
         self.artwork_picture.set_paintable(Some(texture));
         self.artwork_picture.set_visible(true);
     }
+}
+
+/// Whether the runtime currently permits starting a CD import for the rows in
+/// `store`. Shared by the panel's button refresh and the per-row tick handler.
+fn import_allowed(store: &gio::ListStore, runtime: &SharedRuntime) -> bool {
+    if !any_selected(store) {
+        return false;
+    }
+    let runtime = runtime.borrow();
+    runtime.settings().library_path().is_some()
+        && !runtime.background_task_status().is_running()
+        && runtime.cd_import_unavailable_reason().is_none()
+}
+
+fn any_selected(store: &gio::ListStore) -> bool {
+    (0..store.n_items()).any(|index| {
+        store
+            .item(index)
+            .and_then(|object| with_cd_row(&object, |row| row.selected.get()))
+            .unwrap_or(false)
+    })
+}
+
+/// Build a fixed-width, non-resizable column from a factory. Mirrors the
+/// Songs table's structural columns; the trailing filler column absorbs slack.
+fn fixed_column(
+    title: Option<&str>,
+    width: i32,
+    factory: &gtk::SignalListItemFactory,
+) -> gtk::ColumnViewColumn {
+    let column = gtk::ColumnViewColumn::new(title, Some(factory.clone()));
+    column.set_resizable(false);
+    column.set_expand(false);
+    column.set_fixed_width(width);
+    column
+}
+
+fn new_cell() -> gtk::Box {
+    let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    cell.add_css_class("track-table-cell");
+    cell.set_hexpand(true);
+    cell.set_vexpand(true);
+    cell.set_halign(gtk::Align::Fill);
+    cell.set_valign(gtk::Align::Fill);
+    cell
+}
+
+fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+
+    let bindings_setup = bindings.clone();
+    factory.connect_setup(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let cell = new_cell();
+        install_cd_cell_selection_sync(list_item, &cell);
+
+        let spinner = gtk::Spinner::new();
+        spinner.set_halign(gtk::Align::Center);
+        spinner.set_valign(gtk::Align::Center);
+        spinner.set_hexpand(true);
+        spinner.set_size_request(STATUS_ICON_SIZE, STATUS_ICON_SIZE);
+        spinner.set_visible(false);
+
+        let icon = gtk::Image::from_icon_name(DONE_ICON);
+        // Filled green check disc, identical to the Smart Shuffle "ready"
+        // badge: the round fill comes from `device-analysis-badge`, the
+        // success colour from `ok`, and the glyph is recoloured to the base.
+        icon.add_css_class("device-analysis-badge");
+        icon.add_css_class("ok");
+        icon.set_pixel_size(STATUS_ICON_SIZE);
+        icon.set_halign(gtk::Align::Center);
+        icon.set_valign(gtk::Align::Center);
+        icon.set_hexpand(true);
+        icon.set_visible(false);
+
+        cell.append(&spinner);
+        cell.append(&icon);
+        list_item.set_child(Some(&cell));
+
+        bindings_setup.0.borrow_mut().push(CdStatusBinding {
+            list_item: list_item.clone(),
+            spinner,
+            icon,
+        });
+    });
+
+    let bindings_teardown = bindings;
+    factory.connect_teardown(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        bindings_teardown
+            .0
+            .borrow_mut()
+            .retain(|binding| binding.list_item != *list_item);
+    });
+
+    factory.connect_unbind(move |_factory, item| {
+        // Stop a recycled cell's spinner so it does not keep animating for a
+        // row that is no longer visible.
+        let Some((spinner, _icon)) = status_widgets_of(item) else {
+            return;
+        };
+        spinner.stop();
+        spinner.set_visible(false);
+    });
+
+    factory.connect_bind(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(cell) = list_item
+            .child()
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+        else {
+            return;
+        };
+        bind_cell_chrome(&cell, list_item);
+        let Some((spinner, icon)) = status_widgets_of(item) else {
+            return;
+        };
+        let status =
+            list_item_cd_row(list_item, |row| row.status.get()).unwrap_or(CdRipStatus::Pending);
+        render_cd_status(&spinner, &icon, status);
+    });
+
+    factory
+}
+
+fn build_cd_check_factory(
+    store: gio::ListStore,
+    runtime: SharedRuntime,
+    import_button: gtk::Button,
+    suppress: Rc<Cell<bool>>,
+) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+
+    let suppress_setup = suppress.clone();
+    factory.connect_setup(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let cell = new_cell();
+        install_cd_cell_selection_sync(list_item, &cell);
+
+        let check = gtk::CheckButton::new();
+        check.add_css_class("cd-import-track-check");
+        check.set_halign(gtk::Align::Center);
+        check.set_valign(gtk::Align::Center);
+        check.set_hexpand(true);
+
+        let list_item_for_toggle = list_item.clone();
+        let store_for_toggle = store.clone();
+        let runtime_for_toggle = runtime.clone();
+        let button_for_toggle = import_button.clone();
+        let suppress_for_toggle = suppress_setup.clone();
+        check.connect_toggled(move |check| {
+            if suppress_for_toggle.get() {
+                return;
+            }
+            let _ = list_item_cd_row(&list_item_for_toggle, |row| {
+                row.selected.set(check.is_active());
+            });
+            button_for_toggle.set_sensitive(import_allowed(&store_for_toggle, &runtime_for_toggle));
+        });
+
+        cell.append(&check);
+        list_item.set_child(Some(&cell));
+    });
+
+    let suppress_bind = suppress;
+    factory.connect_bind(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(cell) = list_item
+            .child()
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+        else {
+            return;
+        };
+        bind_cell_chrome(&cell, list_item);
+        let Some(check) = cell
+            .first_child()
+            .and_then(|child| child.downcast::<gtk::CheckButton>().ok())
+        else {
+            return;
+        };
+        let selected = list_item_cd_row(list_item, |row| row.selected.get()).unwrap_or(false);
+        suppress_bind.set(true);
+        check.set_active(selected);
+        suppress_bind.set(false);
+    });
+
+    factory
+}
+
+fn build_cd_number_factory() -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let cell = new_cell();
+        install_cd_cell_selection_sync(list_item, &cell);
+        let label = gtk::Label::new(None);
+        label.add_css_class("dim-label");
+        label.set_xalign(1.0);
+        label.set_hexpand(true);
+        label.set_valign(gtk::Align::Center);
+        label.set_margin_start(8);
+        label.set_margin_end(8);
+        cell.append(&label);
+        list_item.set_child(Some(&cell));
+    });
+    factory.connect_bind(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(cell) = list_item
+            .child()
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+        else {
+            return;
+        };
+        bind_cell_chrome(&cell, list_item);
+        let Some(label) = cell
+            .first_child()
+            .and_then(|child| child.downcast::<gtk::Label>().ok())
+        else {
+            return;
+        };
+        let text =
+            list_item_cd_row(list_item, |row| format!("{:02}", row.number)).unwrap_or_default();
+        label.set_text(&text);
+    });
+    factory
+}
+
+fn build_cd_duration_factory() -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let cell = new_cell();
+        install_cd_cell_selection_sync(list_item, &cell);
+        let label = gtk::Label::new(None);
+        label.add_css_class("dim-label");
+        label.set_xalign(1.0);
+        label.set_hexpand(true);
+        label.set_valign(gtk::Align::Center);
+        label.set_margin_start(8);
+        label.set_margin_end(8);
+        cell.append(&label);
+        list_item.set_child(Some(&cell));
+    });
+    factory.connect_bind(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(cell) = list_item
+            .child()
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+        else {
+            return;
+        };
+        bind_cell_chrome(&cell, list_item);
+        let Some(label) = cell
+            .first_child()
+            .and_then(|child| child.downcast::<gtk::Label>().ok())
+        else {
+            return;
+        };
+        let text =
+            list_item_cd_row(list_item, |row| format_duration(row.duration)).unwrap_or_default();
+        label.set_text(&text);
+    });
+    factory
+}
+
+fn build_cd_text_factory(
+    field: EditableField,
+    bindings: CdTextBindings,
+    inline_edit: InlineEditController,
+) -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+
+    let bindings_setup = bindings.clone();
+    let inline_setup = inline_edit.clone();
+    factory.connect_setup(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let cell = new_cell();
+        install_cd_cell_selection_sync(list_item, &cell);
+
+        let label = gtk::Label::new(None);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_hexpand(true);
+        label.set_valign(gtk::Align::Center);
+        label.set_margin_start(8);
+        label.set_margin_end(8);
+        label.set_xalign(0.0);
+        cell.append(&label);
+        list_item.set_child(Some(&cell));
+
+        // Same inline-edit interaction as the Songs table: a click on an
+        // editable cell of the already-selected row opens the entry.
+        inline_setup.register_editable_cell(list_item, &cell, field);
+
+        bindings_setup.0.borrow_mut().push(CdTextBinding {
+            list_item: list_item.clone(),
+            label,
+            field,
+        });
+    });
+
+    let bindings_teardown = bindings;
+    factory.connect_teardown(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        bindings_teardown
+            .0
+            .borrow_mut()
+            .retain(|binding| binding.list_item != *list_item);
+    });
+
+    // A cell about to be recycled to another row must not keep an open
+    // editor: commit and close it first.
+    let inline_unbind = inline_edit;
+    factory.connect_unbind(move |_factory, item| {
+        let Some(cell) = item
+            .downcast_ref::<gtk::ListItem>()
+            .and_then(|list_item| list_item.child())
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+        else {
+            return;
+        };
+        inline_unbind.finish_if_editing_cell(&cell);
+    });
+
+    factory.connect_bind(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(cell) = list_item
+            .child()
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+        else {
+            return;
+        };
+        bind_cell_chrome(&cell, list_item);
+        let Some(label) = cell
+            .first_child()
+            .and_then(|child| child.downcast::<gtk::Label>().ok())
+        else {
+            return;
+        };
+        let text = list_item_cd_row(list_item, |row| match field {
+            EditableField::Artist => row.display_artist(),
+            _ => row.display_title(),
+        })
+        .unwrap_or_default();
+        label.set_text(&text);
+    });
+
+    factory
+}
+
+fn build_cd_filler_factory() -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let cell = new_cell();
+        install_cd_cell_selection_sync(list_item, &cell);
+        list_item.set_child(Some(&cell));
+    });
+    factory.connect_bind(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(cell) = list_item
+            .child()
+            .and_then(|child| child.downcast::<gtk::Box>().ok())
+        else {
+            return;
+        };
+        bind_cell_chrome(&cell, list_item);
+    });
+    factory
+}
+
+/// The (spinner, icon) of a status cell from its list item, if realized.
+fn status_widgets_of(item: &glib::Object) -> Option<(gtk::Spinner, gtk::Image)> {
+    let cell = item
+        .downcast_ref::<gtk::ListItem>()?
+        .child()?
+        .downcast::<gtk::Box>()
+        .ok()?;
+    let spinner = cell.first_child()?.downcast::<gtk::Spinner>().ok()?;
+    let icon = spinner.next_sibling()?.downcast::<gtk::Image>().ok()?;
+    Some((spinner, icon))
+}
+
+fn render_cd_status(spinner: &gtk::Spinner, icon: &gtk::Image, status: CdRipStatus) {
+    match status {
+        CdRipStatus::Pending => {
+            spinner.stop();
+            spinner.set_visible(false);
+            icon.set_visible(false);
+        }
+        CdRipStatus::Ripping => {
+            icon.set_visible(false);
+            spinner.set_visible(true);
+            spinner.start();
+        }
+        CdRipStatus::Done => {
+            spinner.stop();
+            spinner.set_visible(false);
+            icon.set_visible(true);
+        }
+    }
+}
+
+fn install_cd_cell_selection_sync(list_item: &gtk::ListItem, cell: &gtk::Box) {
+    let cell_for_selection = cell.clone();
+    list_item.connect_selected_notify(move |list_item| {
+        sync_cd_selection_class(&cell_for_selection, list_item.is_selected());
+    });
+    sync_cd_selection_class(cell, list_item.is_selected());
+}
+
+fn bind_cell_chrome(cell: &gtk::Box, list_item: &gtk::ListItem) {
+    apply_cd_row_tint(cell, list_item);
+    sync_cd_selection_class(cell, list_item.is_selected());
+}
+
+fn apply_cd_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
+    cell.remove_css_class("track-table-row-even");
+    cell.remove_css_class("track-table-row-odd");
+    if list_item.position() % 2 == 0 {
+        cell.add_css_class("track-table-row-even");
+    } else {
+        cell.add_css_class("track-table-row-odd");
+    }
+}
+
+fn sync_cd_selection_class(cell: &gtk::Box, selected: bool) {
+    if selected {
+        cell.add_css_class("track-table-row-selected");
+    } else {
+        cell.remove_css_class("track-table-row-selected");
+    }
+}
+
+/// Borrow the [`CdRow`] behind a bound model object and run `f` over it.
+/// `None` when the object is not a `CdRow` (it always is in this view).
+fn with_cd_row<R>(object: &glib::Object, f: impl FnOnce(&CdRow) -> R) -> Option<R> {
+    let boxed = object.downcast_ref::<glib::BoxedAnyObject>()?;
+    let row = boxed.try_borrow::<CdRow>().ok()?;
+    Some(f(&row))
+}
+
+/// Borrow the [`CdRow`] bound to a list item and run `f` over it.
+fn list_item_cd_row<R>(list_item: &gtk::ListItem, f: impl FnOnce(&CdRow) -> R) -> Option<R> {
+    let object = list_item.item()?;
+    with_cd_row(&object, f)
 }
 
 /// Build the fixed-size artwork overlay and return it with the three layers
@@ -642,107 +1304,6 @@ fn build_artwork() -> (gtk::Overlay, gtk::Picture, gtk::Image, gtk::Spinner) {
     artwork.set_measure_overlay(&spinner, false);
 
     (artwork, picture, icon, spinner)
-}
-
-/// Build a double-click-to-edit table cell. The label is shown normally; a
-/// double-click swaps in the entry seeded with the current text. Editing is
-/// committed on Enter or focus loss and cancelled on Escape.
-fn build_editable_cell(label_css_class: &str, dim: bool) -> EditableCell {
-    let stack = gtk::Stack::new();
-    stack.set_hexpand(true);
-    stack.set_transition_type(gtk::StackTransitionType::None);
-    // Size to the visible child so the compact label keeps the row at its
-    // 28px pitch; the taller entry only grows the row while editing.
-    stack.set_vhomogeneous(false);
-
-    let label = gtk::Label::new(None);
-    label.add_css_class(label_css_class);
-    if dim {
-        label.add_css_class("dim-label");
-    }
-    label.set_xalign(0.0);
-    label.set_hexpand(true);
-    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-
-    let entry = gtk::Entry::new();
-    // Reuse the library table's inline-edit entry styling — same kind of
-    // in-table cell editor, so it must look identical.
-    entry.add_css_class("track-table-inline-edit");
-    entry.set_hexpand(true);
-
-    stack.add_named(&label, Some("label"));
-    stack.add_named(&entry, Some("entry"));
-    stack.set_visible_child_name("label");
-
-    EditableCell {
-        stack,
-        label,
-        entry,
-    }
-}
-
-/// Wire a cell's edit lifecycle: double-click to begin, Enter / focus-out to
-/// commit (calling `on_commit` with the typed text), Escape to cancel.
-fn wire_cell_editing(cell: &EditableCell, on_commit: impl Fn(String) + 'static) {
-    let on_commit = Rc::new(on_commit);
-
-    let gesture = gtk::GestureClick::new();
-    gesture.set_button(gdk::BUTTON_PRIMARY);
-    {
-        let cell = cell.clone();
-        gesture.connect_pressed(move |gesture, n_press, _x, _y| {
-            if n_press < 2 {
-                return;
-            }
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            cell.entry.set_text(&cell.label.text());
-            cell.stack.set_visible_child_name("entry");
-            cell.entry.grab_focus();
-            cell.entry.select_region(0, -1);
-        });
-    }
-    cell.label.add_controller(gesture);
-
-    {
-        let cell = cell.clone();
-        let on_commit = on_commit.clone();
-        cell.entry.connect_activate(move |entry| {
-            let text = entry.text().to_string();
-            cell.stack.set_visible_child_name("label");
-            on_commit(text);
-        });
-    }
-
-    let focus = gtk::EventControllerFocus::new();
-    {
-        let cell = cell.clone();
-        let on_commit = on_commit.clone();
-        focus.connect_leave(move |_| {
-            // Only commit if we are leaving an active edit (Escape already
-            // restored the label, so this is a no-op then).
-            if cell.stack.visible_child_name().as_deref() == Some("entry") {
-                let text = cell.entry.text().to_string();
-                cell.stack.set_visible_child_name("label");
-                on_commit(text);
-            }
-        });
-    }
-    cell.entry.add_controller(focus);
-
-    let keys = gtk::EventControllerKey::new();
-    {
-        let cell = cell.clone();
-        keys.connect_key_pressed(move |_controller, key, _code, _modifiers| {
-            if key == gdk::Key::Escape {
-                // Cancel: drop the edit and restore the label unchanged.
-                cell.stack.set_visible_child_name("label");
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
-        });
-    }
-    cell.entry.add_controller(keys);
 }
 
 fn texture_from_bytes(bytes: &[u8]) -> Option<gdk::Texture> {
@@ -929,6 +1490,23 @@ mod tests {
         CdImportPanel::new(runtime)
     }
 
+    fn set_selected(panel: &CdImportPanel, index: u32, value: bool) {
+        let object = panel.store.item(index).expect("row exists");
+        with_cd_row(&object, |row| row.selected.set(value)).expect("CdRow");
+    }
+
+    fn row_status(panel: &CdImportPanel, number: u32) -> CdRipStatus {
+        (0..panel.store.n_items())
+            .find_map(|index| {
+                let object = panel.store.item(index)?;
+                with_cd_row(&object, |row| {
+                    (row.number == number).then(|| row.status.get())
+                })
+                .flatten()
+            })
+            .expect("track present in the model")
+    }
+
     #[test]
     fn most_reasonable_prefers_album_then_earliest_pressing() {
         // Nothing to pick from.
@@ -958,26 +1536,24 @@ mod tests {
         let ran = crate::test_support::with_gtk(|| {
             let panel = panel();
             panel.show_disc(snapshot("disc-a", 3));
-            assert_eq!(panel.state.borrow().rows.len(), 3);
+            assert_eq!(panel.store.n_items(), 3);
             assert!(
-                panel
-                    .state
-                    .borrow()
-                    .rows
-                    .iter()
-                    .all(|row| row.check.is_active()),
+                (0..panel.store.n_items()).all(|index| {
+                    let object = panel.store.item(index).expect("row");
+                    with_cd_row(&object, |row| row.selected.get()).unwrap_or(false)
+                }),
                 "every track is ticked on show"
             );
             assert!(panel.panel_ready_for_import());
 
             // Untick every row → not import-ready.
-            for row in &panel.state.borrow().rows {
-                row.check.set_active(false);
+            for index in 0..panel.store.n_items() {
+                set_selected(&panel, index, false);
             }
             assert!(!panel.panel_ready_for_import());
 
             // Re-tick one → ready again.
-            panel.state.borrow().rows[0].check.set_active(true);
+            set_selected(&panel, 0, true);
             assert!(panel.panel_ready_for_import());
         });
         if !ran {
@@ -1016,6 +1592,31 @@ mod tests {
             assert!(!panel.release_selector.is_visible());
             assert!(panel.panel_ready_for_import());
             assert_eq!(panel.title_label.text(), "Only");
+        });
+        if !ran {
+            eprintln!("SMOKE: no display, skipping");
+        }
+    }
+
+    #[test]
+    fn import_progress_marks_done_ripping_and_pending_rows() {
+        let ran = crate::test_support::with_gtk(|| {
+            let panel = panel();
+            panel.show_disc(snapshot("disc-a", 3));
+            panel.begin_import_display(vec![1, 2, 3]);
+            assert_eq!(row_status(&panel, 1), CdRipStatus::Pending);
+
+            // One track done, the second ripping.
+            panel.apply_import_progress(1, Some(2));
+            assert_eq!(row_status(&panel, 1), CdRipStatus::Done);
+            assert_eq!(row_status(&panel, 2), CdRipStatus::Ripping);
+            assert_eq!(row_status(&panel, 3), CdRipStatus::Pending);
+
+            // The run finished having imported two of the three.
+            panel.finish_import_display(2);
+            assert_eq!(row_status(&panel, 1), CdRipStatus::Done);
+            assert_eq!(row_status(&panel, 2), CdRipStatus::Done);
+            assert_eq!(row_status(&panel, 3), CdRipStatus::Pending);
         });
         if !ran {
             eprintln!("SMOKE: no display, skipping");

@@ -16,7 +16,7 @@ use std::time::Duration;
 use sustain_cd_import::{
     CdEncoder, CdImportError, EncodeProgress, EncodeRequest, OpticalProbe, RawTocTrack, TocSnapshot,
 };
-use sustain_domain::{CdEncodingProfile, Track, TrackMetadata};
+use sustain_domain::{CdEncodingProfile, CdReadMode, Track, TrackMetadata};
 use sustain_library_store::{InMemoryLibraryStore, LibraryStore};
 use sustain_metadata::{InitialTags, MetadataResult, MetadataService};
 
@@ -230,6 +230,7 @@ impl Harness {
         CdImportTask {
             library_path: self.root.clone(),
             profile: CdEncodingProfile::Flac,
+            read_mode: CdReadMode::default(),
             expected_identity: snapshot.identity(),
             snapshot: snapshot.clone(),
             plans,
@@ -415,10 +416,21 @@ fn progress_is_monotonic_and_bounded() {
             event.completed_tracks >= last_completed,
             "completed-track count never decreases"
         );
+        if let Some(number) = event.current_track_number {
+            assert!(
+                number == 1 || number == 2,
+                "the ripping track is one of the selected tracks"
+            );
+        }
         last_completed = event.completed_tracks;
     }
     assert_eq!(result.summary.imported_tracks, 2);
-    assert_eq!(events.last().expect("last event").completed_tracks, 2);
+    let last = events.last().expect("last event");
+    assert_eq!(last.completed_tracks, 2);
+    assert_eq!(
+        last.current_track_number, None,
+        "no track is ripping once the run has finished"
+    );
     harness.cleanup();
 }
 

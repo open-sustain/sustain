@@ -631,7 +631,7 @@ pub(super) fn collect_selected_track_ids(selection: &gtk::MultiSelection) -> Vec
         .collect()
 }
 
-pub(super) fn row_track_id(item: Option<glib::Object>) -> Option<TrackId> {
+pub(crate) fn row_track_id(item: Option<glib::Object>) -> Option<TrackId> {
     let row_object = item?.downcast::<glib::BoxedAnyObject>().ok()?;
     let row = row_object.try_borrow::<TrackTableRow>().ok()?;
     row.track_id

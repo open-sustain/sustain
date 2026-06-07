@@ -32,9 +32,8 @@ use std::{
 
 use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
-use sustain_app_runtime::{MetadataChange, TrackId, TrackMetadata};
+use sustain_app_runtime::{MetadataChange, TrackMetadata};
 
-use super::row::TrackTableRow;
 use crate::metadata_diff::{number_diff, signed_number_diff, text_diff};
 
 /// Fallback double-click interval when the display has no settings object.
@@ -102,15 +101,16 @@ fn optional_to_string<T: ToString>(value: Option<T>) -> String {
     value.map(|value| value.to_string()).unwrap_or_default()
 }
 
-/// Reads the current value of an editable field for `track_id`, returning
-/// `None` if the track is gone. Wired by the main window to the runtime's
-/// authoritative metadata.
-pub(crate) type CellEditSeedCallback = Rc<dyn Fn(TrackId, EditableField) -> Option<String>>;
-/// Commits an edited field. Returns `true` when the editor should close
-/// (the value was written, or it was a no-op), `false` to keep the value
-/// (a dispatch failure). Wired by the main window to dispatch
-/// `UpdateMetadata` and refresh the affected row.
-pub(crate) type CellEditCommitCallback = Rc<dyn Fn(TrackId, EditableField, String) -> bool>;
+/// Reads the current value of an editable field for the row's bound model
+/// object, returning `None` if it cannot be resolved. The controller is
+/// table-agnostic: it hands back the `ListItem`'s item and the caller
+/// downcasts it to its own row type — a library row keyed by `TrackId`, a
+/// CD-import row keyed by track number, and so on.
+pub(crate) type CellEditSeedCallback = Rc<dyn Fn(&glib::Object, EditableField) -> Option<String>>;
+/// Commits an edited field for the row's bound model object. Returns `true`
+/// when the editor should close (the value was written, or it was a no-op),
+/// `false` to keep it open (a dispatch failure).
+pub(crate) type CellEditCommitCallback = Rc<dyn Fn(&glib::Object, EditableField, String) -> bool>;
 
 /// The two callbacks a table needs to support inline editing. Tables that
 /// do not opt in pass `None`.
@@ -157,8 +157,15 @@ struct OrderedCell {
 
 /// Coordinates inline editing across every editable cell of one table.
 /// Cheaply cloneable — every field is shared state behind an `Rc`.
+///
+/// The controller is table-agnostic: it identifies a row by the
+/// `gtk::ListItem`'s bound model object (recycle-safe by object identity)
+/// and leaves interpreting that object to the [`InlineEditHooks`]. The same
+/// machinery therefore drives the Songs/Playlist tables and the CD-import
+/// table, so the macOS-style "click an already-selected cell to edit"
+/// interaction stays identical everywhere.
 #[derive(Clone)]
-pub(super) struct InlineEditController {
+pub(crate) struct InlineEditController {
     hooks: InlineEditHooks,
     active: Rc<RefCell<Option<ActiveEdit>>>,
     cells: Rc<RefCell<Vec<EditableCellEntry>>>,
@@ -167,7 +174,7 @@ pub(super) struct InlineEditController {
 }
 
 impl InlineEditController {
-    pub(super) fn new(hooks: InlineEditHooks) -> Self {
+    pub(crate) fn new(hooks: InlineEditHooks) -> Self {
         let double_click_ms = gtk::Settings::default()
             .map(|settings| settings.gtk_double_click_time())
             .unwrap_or(DEFAULT_DOUBLE_CLICK_MS);
@@ -182,7 +189,7 @@ impl InlineEditController {
 
     /// Register a realized editable cell and install its click gesture.
     /// Called once per cell widget at factory setup time.
-    pub(super) fn register_editable_cell(
+    pub(crate) fn register_editable_cell(
         &self,
         list_item: &gtk::ListItem,
         cell: &gtk::Box,
@@ -258,12 +265,12 @@ impl InlineEditController {
     fn arm_open(&self, list_item: &gtk::ListItem, cell: &gtk::Box, field: EditableField) {
         self.cancel_pending();
 
-        // The row's identity at arm time. GTK reuses `ListItem` slots and
+        // The row's bound item at arm time. GTK reuses `ListItem` slots and
         // cell widgets across rows, so by the time the timer fires this
         // slot may have been recycled to a different (still-selected) row
-        // by a scroll. Re-checking the track id then keeps the editor from
-        // opening on the wrong row.
-        let Some(armed_track_id) = row_track_id(list_item) else {
+        // by a scroll. Re-checking the bound item by object identity then
+        // keeps the editor from opening on the wrong row.
+        let Some(armed_item) = list_item.item() else {
             return;
         };
 
@@ -276,10 +283,10 @@ impl InlineEditController {
             let (Some(list_item), Some(cell)) = (list_item.upgrade(), cell.upgrade()) else {
                 return;
             };
-            // The row must still be selected and still be the same track
+            // The row must still be selected and still be the same item
             // when the timer fires; otherwise the user clicked elsewhere or
             // scrolled the slot onto a different row in the meantime.
-            if !list_item.is_selected() || row_track_id(&list_item) != Some(armed_track_id) {
+            if !list_item.is_selected() || list_item.item().as_ref() != Some(&armed_item) {
                 return;
             }
             controller.open_edit(field, &cell, &list_item);
@@ -290,7 +297,7 @@ impl InlineEditController {
     /// Commit and close the open edit if it belongs to `cell`. Called when
     /// a cell unbinds (scrolls off / is recycled) so an open editor is
     /// never left stranded in a cell about to be reused for another row.
-    pub(super) fn finish_if_editing_cell(&self, cell: &gtk::Box) {
+    pub(crate) fn finish_if_editing_cell(&self, cell: &gtk::Box) {
         let editing_this = self
             .active
             .borrow()
@@ -311,18 +318,18 @@ impl InlineEditController {
     /// edit first, and is a no-op if this exact cell is already being
     /// edited.
     fn open_edit(&self, field: EditableField, cell: &gtk::Box, list_item: &gtk::ListItem) {
-        let Some(track_id) = row_track_id(list_item) else {
+        let Some(item) = list_item.item() else {
             return;
         };
         if let Some(active) = self.active.borrow().as_ref()
             && active.field == field
-            && row_track_id(&active.list_item) == Some(track_id)
+            && active.list_item.item().as_ref() == Some(&item)
         {
             return;
         }
         self.finish_active(FinishMode::Commit);
 
-        let Some(seed) = (self.hooks.seed)(track_id, field) else {
+        let Some(seed) = (self.hooks.seed)(&item, field) else {
             return;
         };
         let Some(label) = cell
@@ -443,10 +450,10 @@ impl InlineEditController {
         }
         active.label.set_visible(true);
         if mode == FinishMode::Commit
-            && let Some(track_id) = row_track_id(&active.list_item)
+            && let Some(item) = active.list_item.item()
         {
             let text = active.entry.text().to_string();
-            (self.hooks.commit)(track_id, active.field, text);
+            (self.hooks.commit)(&item, active.field, text);
         }
         Some(active)
     }
@@ -516,13 +523,6 @@ fn cell_origin_x(cell: &gtk::Box) -> Option<f32> {
         &graphene::Point::new(0.0, 0.0),
     )?;
     Some(point.x())
-}
-
-fn row_track_id(list_item: &gtk::ListItem) -> Option<TrackId> {
-    let object = list_item.item()?;
-    let boxed = object.downcast::<glib::BoxedAnyObject>().ok()?;
-    let row = boxed.try_borrow::<TrackTableRow>().ok()?;
-    row.track_id
 }
 
 #[cfg(test)]

@@ -306,12 +306,62 @@ impl CdEncodingProfile {
     }
 }
 
-/// Settings that govern how Sustain encodes newly created audio files.
-/// Today this is only the CD-rip profile; it lives in its own section so
-/// later encode-time choices have a natural home.
+/// How thoroughly Sustain reads an audio CD when ripping — a single
+/// speed/accuracy dial that bundles the `cdparanoiasrc` knobs that go
+/// together: error-correction depth and a read-speed cap. Higher accuracy
+/// re-reads and verifies more (and, at the top, slows the drive), which is
+/// what protects damaged discs at the cost of speed.
+///
+/// A closed enum so the encoder is never handed an arbitrary flag/speed
+/// combination; each variant resolves to a trusted `paranoia-mode` nick and
+/// a `read-speed`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CdReadMode {
+    /// Raw read at full drive speed with no jitter correction — fastest,
+    /// best for clean discs.
+    Fast,
+    /// `cdparanoia`'s real jitter correction — fragment reconstruction plus
+    /// dynamic overlap reads — at full drive speed, without the heavy
+    /// scratch/repair re-reads. The sensible everyday default.
+    #[default]
+    Balanced,
+    /// Maximum overlap / scratch / repair correction with the drive capped
+    /// to 1× — slowest, for scratched or archival discs.
+    Paranoid,
+}
+
+impl CdReadMode {
+    pub const ALL: [Self; 3] = [Self::Fast, Self::Balanced, Self::Paranoid];
+
+    /// The `cdparanoiasrc` `paranoia-mode` flag nick for this mode. A
+    /// trusted constant applied via `set_property_from_str` — never user
+    /// input.
+    pub const fn paranoia_mode_nick(self) -> &'static str {
+        match self {
+            Self::Fast => "disable",
+            Self::Balanced => "fragment+overlap",
+            Self::Paranoid => "full",
+        }
+    }
+
+    /// The `cdparanoiasrc` `read-speed` to request: `-1` leaves the drive at
+    /// full speed; `Paranoid` caps it to 1× to minimise read errors on
+    /// damaged media.
+    pub const fn read_speed(self) -> i32 {
+        match self {
+            Self::Fast | Self::Balanced => -1,
+            Self::Paranoid => 1,
+        }
+    }
+}
+
+/// Settings that govern how Sustain encodes newly created audio files and
+/// reads audio CDs. It lives in its own section so later encode-time choices
+/// have a natural home.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EncodingSettings {
     pub cd_profile: CdEncodingProfile,
+    pub cd_read_mode: CdReadMode,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -353,7 +403,7 @@ mod tests {
 
     use super::{
         AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
-        EncodingSettings, LibraryManagementMode, OnlineSettings, UserSettings,
+        CdReadMode, EncodingSettings, LibraryManagementMode, OnlineSettings, UserSettings,
     };
 
     #[test]
@@ -427,6 +477,28 @@ mod tests {
         assert_eq!(settings.encoding, EncodingSettings::default());
         assert_eq!(settings.encoding.cd_profile, CdEncodingProfile::Flac);
         assert_eq!(CdEncodingProfile::default(), CdEncodingProfile::Flac);
+    }
+
+    #[test]
+    fn cd_read_mode_defaults_to_balanced_and_bundles_paranoia_with_speed() {
+        assert_eq!(CdReadMode::default(), CdReadMode::Balanced);
+        assert_eq!(
+            UserSettings::default().encoding.cd_read_mode,
+            CdReadMode::Balanced
+        );
+
+        // Fast: raw read, full drive speed.
+        assert_eq!(CdReadMode::Fast.paranoia_mode_nick(), "disable");
+        assert_eq!(CdReadMode::Fast.read_speed(), -1);
+        // Balanced: fragment + overlap jitter correction, full drive speed.
+        assert_eq!(
+            CdReadMode::Balanced.paranoia_mode_nick(),
+            "fragment+overlap"
+        );
+        assert_eq!(CdReadMode::Balanced.read_speed(), -1);
+        // Paranoid: maximum correction, drive capped to 1×.
+        assert_eq!(CdReadMode::Paranoid.paranoia_mode_nick(), "full");
+        assert_eq!(CdReadMode::Paranoid.read_speed(), 1);
     }
 
     #[test]

@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 
 pub use sustain_domain::{
     AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
-    DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, LibraryManagementMode, LibrarySettings,
-    OnlineSettings, PlaybackSettings, PlaylistFolderId, PlaylistId, PlaylistItem, ShuffleMode,
-    SmartPlaylistId, SmartShuffleEntropy, UiSettings, UiSidebarSelection, UserSettings,
-    VolumePercent,
+    CdReadMode, DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, LibraryManagementMode,
+    LibrarySettings, OnlineSettings, PlaybackSettings, PlaylistFolderId, PlaylistId, PlaylistItem,
+    ShuffleMode, SmartPlaylistId, SmartShuffleEntropy, UiSettings, UiSidebarSelection,
+    UserSettings, VolumePercent,
 };
 
 pub type SettingsResult<T> = Result<T, SettingsError>;
@@ -453,6 +453,8 @@ enum BackgroundResourceUsageDocument {
 struct EncodingSettingsDocument {
     #[serde(default)]
     cd_profile: CdEncodingProfileDocument,
+    #[serde(default)]
+    cd_read_mode: CdReadModeDocument,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -478,6 +480,33 @@ impl CdEncodingProfileDocument {
             Self::Flac => CdEncodingProfile::Flac,
             Self::Mp3Cbr256 => CdEncodingProfile::Mp3Cbr256,
             Self::Mp3Cbr320 => CdEncodingProfile::Mp3Cbr320,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CdReadModeDocument {
+    Fast,
+    #[default]
+    Balanced,
+    Paranoid,
+}
+
+impl CdReadModeDocument {
+    fn from_domain(mode: CdReadMode) -> Self {
+        match mode {
+            CdReadMode::Fast => Self::Fast,
+            CdReadMode::Balanced => Self::Balanced,
+            CdReadMode::Paranoid => Self::Paranoid,
+        }
+    }
+
+    fn into_domain(self) -> CdReadMode {
+        match self {
+            Self::Fast => CdReadMode::Fast,
+            Self::Balanced => CdReadMode::Balanced,
+            Self::Paranoid => CdReadMode::Paranoid,
         }
     }
 }
@@ -566,6 +595,7 @@ impl SettingsDocument {
             },
             encoding: EncodingSettingsDocument {
                 cd_profile: CdEncodingProfileDocument::from_domain(settings.encoding.cd_profile),
+                cd_read_mode: CdReadModeDocument::from_domain(settings.encoding.cd_read_mode),
             },
         }
     }
@@ -611,6 +641,7 @@ impl SettingsDocument {
             },
             encoding: EncodingSettings {
                 cd_profile: self.encoding.cd_profile.into_domain(),
+                cd_read_mode: self.encoding.cd_read_mode.into_domain(),
             },
         }
     }
@@ -701,7 +732,7 @@ mod tests {
 
     use super::{
         AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
-        DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, InMemorySettingsStore,
+        CdReadMode, DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, InMemorySettingsStore,
         LibraryManagementMode, OnlineSettings, PlaylistId, PlaylistItem, SettingsStore,
         ShuffleMode, SmartShuffleEntropy, TomlSettingsStore, UiSettings, UiSidebarSelection,
         UserSettings, VolumePercent, atomic_replace, create_temporary_sibling_file,
@@ -969,6 +1000,31 @@ mod tests {
             let settings = UserSettings {
                 encoding: EncodingSettings {
                     cd_profile: profile,
+                    ..EncodingSettings::default()
+                },
+                ..UserSettings::default()
+            };
+
+            assert_eq!(store.save_settings(settings.clone()), Ok(()));
+            assert_eq!(store.load_settings(), Ok(settings));
+
+            let root = path
+                .parent()
+                .and_then(|parent| parent.parent())
+                .expect("test path has two parents");
+            fs::remove_dir_all(root).expect("remove test settings directory");
+        }
+    }
+
+    #[test]
+    fn toml_settings_store_round_trips_cd_read_mode() {
+        for mode in CdReadMode::ALL {
+            let path = unique_settings_path();
+            let store = TomlSettingsStore::new(&path);
+            let settings = UserSettings {
+                encoding: EncodingSettings {
+                    cd_read_mode: mode,
+                    ..EncodingSettings::default()
                 },
                 ..UserSettings::default()
             };
@@ -1000,6 +1056,7 @@ mod tests {
             "missing section must fall back to the FLAC default"
         );
         assert_eq!(settings.encoding.cd_profile, CdEncodingProfile::Flac);
+        assert_eq!(settings.encoding.cd_read_mode, CdReadMode::Balanced);
 
         let root = path
             .parent()
