@@ -76,4 +76,19 @@ impl AcousticFeatures {
             self.high_band_ratio,
         ]
     }
+
+    /// `true` when every measurement is finite. Both `LibraryStore`
+    /// backends gate persistence on this so a NaN or ∞ from a degenerate
+    /// decode never reaches the database or the Smart Shuffle index.
+    pub fn all_finite(&self) -> bool {
+        self.integrated_lufs.is_finite()
+            && self.short_term_lufs_max.is_finite()
+            && self.loudness_range_lu.is_finite()
+            && self.onset_rate_hz.is_finite()
+            && self.low_band_ratio.is_finite()
+            && self.mid_band_ratio.is_finite()
+            && self.high_band_ratio.is_finite()
+            && self.low_band_variation.is_finite()
+            && self.tonalness.is_finite()
+    }
 }

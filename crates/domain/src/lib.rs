@@ -56,7 +56,7 @@ pub use managed_library::{
 };
 pub use metadata::{
     FieldChange, MAX_BPM, MetadataChange, TrackAudioProperties, TrackMetadata, valid_bpm,
-    validate_bpm,
+    validate_analysis_bpm, validate_bpm,
 };
 pub use musical_key::MusicalKey;
 pub use playback::{

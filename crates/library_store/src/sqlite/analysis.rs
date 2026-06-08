@@ -35,7 +35,7 @@ pub(super) fn record_analysis(
     }
 
     if capabilities.bpm
-        && let Some(bpm) = analysis.bpm.and_then(valid_metadata_bpm_from_analysis)
+        && let Some(bpm) = analysis.bpm.and_then(sustain_domain::validate_analysis_bpm)
     {
         transaction
             .execute(
@@ -58,7 +58,7 @@ pub(super) fn record_analysis(
 
     if capabilities.audio
         && let Some(acoustics) = analysis.acoustics
-        && acoustic_features_are_finite(acoustics)
+        && acoustics.all_finite()
     {
         transaction
             .execute(
@@ -80,17 +80,6 @@ pub(super) fn record_analysis(
     }
 
     transaction.commit().map_err(StoreError::from)
-}
-
-fn valid_metadata_bpm_from_analysis(bpm: f32) -> Option<u32> {
-    if !bpm.is_finite() || bpm < 0.0 {
-        return None;
-    }
-    let rounded = bpm.round();
-    if rounded > sustain_domain::MAX_BPM as f32 {
-        return None;
-    }
-    sustain_domain::validate_bpm(rounded as u32)
 }
 
 pub(super) fn record_analysis_attempt_failure(
@@ -229,23 +218,11 @@ pub(super) fn load_all_acoustics(
             low_band_variation: value(8)?,
             tonalness: value(9)?,
         };
-        if acoustic_features_are_finite(features) {
+        if features.all_finite() {
             out.push((track_id, features));
         }
     }
     Ok(out)
-}
-
-fn acoustic_features_are_finite(features: AcousticFeatures) -> bool {
-    features.integrated_lufs.is_finite()
-        && features.short_term_lufs_max.is_finite()
-        && features.loudness_range_lu.is_finite()
-        && features.onset_rate_hz.is_finite()
-        && features.low_band_ratio.is_finite()
-        && features.mid_band_ratio.is_finite()
-        && features.high_band_ratio.is_finite()
-        && features.low_band_variation.is_finite()
-        && features.tonalness.is_finite()
 }
 
 fn build_filter_tracks_needing_analysis_sql(id_count: usize) -> String {

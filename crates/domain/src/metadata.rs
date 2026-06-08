@@ -189,6 +189,21 @@ pub const fn validate_bpm(value: u32) -> Option<u32> {
     TrackMetadata::validate_bpm(value)
 }
 
+/// Validate a raw BPM produced by audio analysis into a metadata BPM,
+/// rounding to the nearest integer and rejecting non-finite, negative,
+/// or out-of-range values. The single gate both `LibraryStore` backends
+/// apply before persisting an analyzer-derived BPM into track metadata.
+pub fn validate_analysis_bpm(bpm: f32) -> Option<u32> {
+    if !bpm.is_finite() || bpm < 0.0 {
+        return None;
+    }
+    let rounded = bpm.round();
+    if rounded > MAX_BPM as f32 {
+        return None;
+    }
+    validate_bpm(rounded as u32)
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum FieldChange<T> {
     #[default]
