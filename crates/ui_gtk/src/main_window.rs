@@ -12,10 +12,10 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 use sustain_app_runtime::{
     CdImportProgress, CdImportRequest, CdImportResult, MetadataChange, PlaybackCommand,
-    PlaybackQueueRequest, PlaybackQueueSource, PlaybackState, Playlist, PlaylistEntry,
-    PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode, TocSnapshot, Track,
-    TrackColumnLayout, TrackColumnLayoutScope, TrackId, UiSettings, UiSidebarSelection,
-    normalize_query, track_matches_search_text,
+    PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState, Playlist,
+    PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
+    TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, UiSettings,
+    UiSidebarSelection, normalize_query, track_matches_search_text,
 };
 
 use super::{
@@ -107,10 +107,10 @@ pub(crate) use sidebar_collapse::SidebarCollapseController;
 
 use mpris_bridge::{install_mpris_command_consumer, now_playing_to_mpris_metadata};
 use playback::{
-    install_playback_error_callback, install_playlists_header_playback,
-    install_track_ended_callback, library_track_activated_callback, make_toggle_or_start_playback,
-    playback_changed_callback, playlist_track_activated_callback,
-    repopulate_request_for_visible_view, update_play_pause_sensitivity,
+    install_playback_event_callback, install_playlists_header_playback,
+    library_track_activated_callback, make_toggle_or_start_playback, playback_changed_callback,
+    playlist_track_activated_callback, repopulate_request_for_visible_view,
+    update_play_pause_sensitivity,
 };
 use playlists::{
     add_to_playlist_callback, add_to_playlist_provider, install_playlists_view_activator,
@@ -297,8 +297,7 @@ pub(crate) fn build_main_window(
         command_controller.clone(),
         playback_changed.clone(),
     );
-    install_track_ended_callback(&runtime, &command_controller, &playback_changed);
-    install_playback_error_callback(&runtime, &playback_changed);
+    install_playback_event_callback(&runtime, &command_controller, &playback_changed);
     install_mpris_command_consumer(
         mpris_command_rx,
         command_controller.clone(),

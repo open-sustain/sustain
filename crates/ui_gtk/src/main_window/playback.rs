@@ -452,37 +452,32 @@ pub(super) fn update_play_pause_sensitivity(titlebar: &Titlebar, runtime: &Appli
     titlebar.set_play_pause_sensitive(has_current_track || library_has_tracks);
 }
 
-pub(super) fn install_track_ended_callback(
+pub(super) fn install_playback_event_callback(
     runtime: &SharedRuntime,
     command_controller: &SharedCommandController,
     playback_changed: &PlaybackChangedCallback,
 ) {
+    let runtime_for_callback = runtime.clone();
     let command_controller = command_controller.clone();
     let playback_changed = playback_changed.clone();
     // The bus watch fires from glib's main context, the same thread that
-    // services GTK events. Dispatching PlayNextTrack therefore happens at a
-    // quiescent point, so no other borrow of the runtime can be in flight.
-    runtime.borrow().set_track_ended_callback(Box::new(move || {
-        if command_controller
-            .dispatch_succeeded(ApplicationCommand::Playback(PlaybackCommand::PlayNextTrack))
-        {
-            playback_changed();
-        }
-    }));
-}
-
-pub(super) fn install_playback_error_callback(
-    runtime: &SharedRuntime,
-    playback_changed: &PlaybackChangedCallback,
-) {
-    let runtime_for_callback = runtime.clone();
-    let playback_changed = playback_changed.clone();
+    // services GTK events. Dispatching therefore happens at a quiescent
+    // point, so no other borrow of the runtime can be in flight.
     runtime
         .borrow()
-        .set_playback_error_callback(Box::new(move |error| {
-            let _ = runtime_for_callback
-                .borrow_mut()
-                .handle_playback_backend_error(error);
-            playback_changed();
+        .set_playback_event_callback(Box::new(move |event| match event {
+            PlaybackEvent::TrackEnded => {
+                if command_controller.dispatch_succeeded(ApplicationCommand::Playback(
+                    PlaybackCommand::PlayNextTrack,
+                )) {
+                    playback_changed();
+                }
+            }
+            PlaybackEvent::FatalError(error) => {
+                let _ = runtime_for_callback
+                    .borrow_mut()
+                    .handle_playback_backend_error(error);
+                playback_changed();
+            }
         }));
 }

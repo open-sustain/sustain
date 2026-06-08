@@ -17,12 +17,6 @@ const APPLICATION_NAME: &str = "Sustain";
 const PULSE_SINK_FACTORY: &str = "pulsesink";
 const PULSE_STREAM_PROPERTIES_NAME: &str = "props";
 
-/// Invoked when the currently playing track finishes naturally (end-of-stream).
-/// Not invoked for manual stops, pauses, seeks, or `play_track` replacements —
-/// only when the audio runs to its end.
-pub type TrackEndedCallback = Box<dyn Fn()>;
-type SharedTrackEndedCallback = Rc<dyn Fn()>;
-
 /// A fatal asynchronous backend failure reported after a play request was
 /// accepted, such as a decoder error discovered during preroll.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,8 +25,21 @@ pub struct PlaybackBackendError {
     pub message: String,
 }
 
-pub type PlaybackErrorCallback = Box<dyn Fn(PlaybackBackendError)>;
-type SharedPlaybackErrorCallback = Rc<dyn Fn(PlaybackBackendError)>;
+/// An asynchronous notification from the playback backend, delivered to the
+/// single event sink registered with [`PlaybackService::set_on_event`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlaybackEvent {
+    /// The current track finished naturally (end-of-stream). Not emitted for
+    /// manual stops, pauses, seeks, or `play_track` replacements — only when
+    /// the audio runs to its end.
+    TrackEnded,
+    /// A fatal backend failure surfaced after a play request was accepted,
+    /// such as a decoder error discovered during preroll.
+    FatalError(PlaybackBackendError),
+}
+
+pub type PlaybackEventCallback = Box<dyn Fn(PlaybackEvent)>;
+type SharedPlaybackEventCallback = Rc<dyn Fn(PlaybackEvent)>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlaybackError {
@@ -51,16 +58,14 @@ pub trait PlaybackService {
     fn set_volume(&self, volume: VolumePercent) -> PlaybackResult<()>;
     fn volume(&self) -> VolumePercent;
     fn state(&self) -> PlaybackState;
-    fn set_on_track_ended(&self, callback: TrackEndedCallback);
-    fn set_on_playback_error(&self, callback: PlaybackErrorCallback);
+    fn set_on_event(&self, callback: PlaybackEventCallback);
 }
 
 #[derive(Default)]
 pub struct NullPlaybackService {
     state: RefCell<PlaybackState>,
     volume: RefCell<VolumePercent>,
-    on_track_ended: RefCell<Option<TrackEndedCallback>>,
-    on_playback_error: RefCell<Option<PlaybackErrorCallback>>,
+    on_event: RefCell<Option<PlaybackEventCallback>>,
 }
 
 impl NullPlaybackService {
@@ -130,12 +135,8 @@ impl PlaybackService for NullPlaybackService {
         self.state.borrow().clone()
     }
 
-    fn set_on_track_ended(&self, callback: TrackEndedCallback) {
-        self.on_track_ended.replace(Some(callback));
-    }
-
-    fn set_on_playback_error(&self, callback: PlaybackErrorCallback) {
-        self.on_playback_error.replace(Some(callback));
+    fn set_on_event(&self, callback: PlaybackEventCallback) {
+        self.on_event.replace(Some(callback));
     }
 }
 
@@ -143,8 +144,7 @@ pub struct GStreamerPlaybackService {
     playbin: gst::Element,
     state: Rc<RefCell<PlaybackState>>,
     volume: RefCell<VolumePercent>,
-    on_track_ended: Rc<RefCell<Option<SharedTrackEndedCallback>>>,
-    on_playback_error: Rc<RefCell<Option<SharedPlaybackErrorCallback>>>,
+    on_event: Rc<RefCell<Option<SharedPlaybackEventCallback>>>,
     // Bus watch is removed when the guard drops; keep it alive for the
     // lifetime of the service so EOS messages keep reaching us.
     _bus_watch: gst::bus::BusWatchGuard,
@@ -161,23 +161,20 @@ impl GStreamerPlaybackService {
         }
 
         let state = Rc::new(RefCell::new(PlaybackState::Stopped));
-        let on_track_ended: Rc<RefCell<Option<SharedTrackEndedCallback>>> =
-            Rc::new(RefCell::new(None));
-        let on_playback_error: Rc<RefCell<Option<SharedPlaybackErrorCallback>>> =
+        let on_event: Rc<RefCell<Option<SharedPlaybackEventCallback>>> =
             Rc::new(RefCell::new(None));
 
         let bus = playbin.bus().ok_or(PlaybackError::BackendUnavailable)?;
-        let on_eos = on_track_ended.clone();
-        let on_error = on_playback_error.clone();
+        let bus_on_event = on_event.clone();
         let bus_state = state.clone();
         let bus_playbin = playbin.clone();
         let bus_watch = bus
             .add_watch_local(move |_bus, message| {
                 match message.view() {
                     gst::MessageView::Eos(_) => {
-                        let callback = on_eos.borrow().clone();
+                        let callback = bus_on_event.borrow().clone();
                         if let Some(callback) = callback {
-                            callback();
+                            callback(PlaybackEvent::TrackEnded);
                         }
                     }
                     gst::MessageView::Error(error) => {
@@ -189,9 +186,9 @@ impl GStreamerPlaybackService {
                         let _ = bus_playbin.set_state(gst::State::Null);
                         bus_state.replace(PlaybackState::Stopped);
 
-                        let callback = on_error.borrow().clone();
+                        let callback = bus_on_event.borrow().clone();
                         if let Some(callback) = callback {
-                            callback(backend_error);
+                            callback(PlaybackEvent::FatalError(backend_error));
                         }
                     }
                     gst::MessageView::StateChanged(state_changed)
@@ -225,8 +222,7 @@ impl GStreamerPlaybackService {
             playbin,
             state,
             volume: RefCell::new(VolumePercent::default()),
-            on_track_ended,
-            on_playback_error,
+            on_event,
             _bus_watch: bus_watch,
         })
     }
@@ -346,12 +342,8 @@ impl PlaybackService for GStreamerPlaybackService {
         }
     }
 
-    fn set_on_track_ended(&self, callback: TrackEndedCallback) {
-        self.on_track_ended.replace(Some(Rc::from(callback)));
-    }
-
-    fn set_on_playback_error(&self, callback: PlaybackErrorCallback) {
-        self.on_playback_error.replace(Some(Rc::from(callback)));
+    fn set_on_event(&self, callback: PlaybackEventCallback) {
+        self.on_event.replace(Some(Rc::from(callback)));
     }
 }
 

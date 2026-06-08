@@ -46,7 +46,7 @@ pub use sustain_metadata_remote::{
     RemoteResult, TrackMatch, TrackMatchSource, TrackQuery,
 };
 use sustain_playback::PlaybackService;
-pub use sustain_playback::{PlaybackBackendError, PlaybackErrorCallback, TrackEndedCallback};
+pub use sustain_playback::{PlaybackBackendError, PlaybackEvent, PlaybackEventCallback};
 pub use sustain_search::{
     SearchIndex, album_matches_search_text, filter_tracks_by_search_text, normalize_query,
     track_matches_search_text,
@@ -2045,15 +2045,9 @@ impl ApplicationRuntime {
             .unwrap_or_default()
     }
 
-    pub fn set_track_ended_callback(&self, callback: TrackEndedCallback) {
+    pub fn set_playback_event_callback(&self, callback: PlaybackEventCallback) {
         if let Some(service) = self.playback_service.as_deref() {
-            service.set_on_track_ended(callback);
-        }
-    }
-
-    pub fn set_playback_error_callback(&self, callback: PlaybackErrorCallback) {
-        if let Some(service) = self.playback_service.as_deref() {
-            service.set_on_playback_error(callback);
+            service.set_on_event(callback);
         }
     }
 
