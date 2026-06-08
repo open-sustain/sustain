@@ -369,6 +369,30 @@ impl TrackTable {
         false
     }
 
+    /// Anchor the viewport at the first row and move the keyboard cursor to
+    /// it. No-op on an empty model.
+    ///
+    /// The initial library publish streams rows in id order with the sort
+    /// detached, so while the list fills, track id 1 sits at the top and GTK
+    /// adopts it as the viewport's scroll anchor. When the sort is reapplied at
+    /// the end, the `ColumnView` keeps that anchored row in view and follows it
+    /// to wherever it now sorts — a deterministic mid-list jump on every launch
+    /// (#201). Calling this *after* the reapply re-anchors to row 0, so the
+    /// view settles at the top intentionally instead of chasing track id 1.
+    /// Issued as the last scroll request in the publish tick, it wins over GTK's
+    /// implicit follow-the-anchor behaviour on the next layout pass.
+    pub(crate) fn scroll_to_top(&self) {
+        if self.selection.n_items() == 0 {
+            return;
+        }
+        self.table.scroll_to(
+            0,
+            None,
+            gtk::ListScrollFlags::FOCUS,
+            Some(vertical_scroll_info()),
+        );
+    }
+
     /// Apply a persisted layout: reorder columns, set visibility, set widths.
     /// Any managed column missing from `layout` keeps its factory defaults and
     /// is appended after the explicit entries.

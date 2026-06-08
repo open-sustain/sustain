@@ -142,6 +142,16 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
         // ends up with the sorter reattached over its own results.
         songs_table.reapply_sort(detached_sort.borrow_mut().take());
 
+        // Re-anchor the freshly-published view at the top (#201). Without this,
+        // GTK keeps the row it tracked while the list filled unsorted — track
+        // id 1 — in view, and the reapply above drags the viewport to wherever
+        // that row now sorts (~90% down on a Date-Added-style sort). Only the
+        // authoritative initial load steers the scroll; a search that
+        // superseded it owns its own view.
+        if still_current {
+            songs_table.scroll_to_top();
+        }
+
         if still_current && content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW) {
             status_bar.update_summary_values(
                 visible_count.get(),
