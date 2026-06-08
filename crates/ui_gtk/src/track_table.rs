@@ -1071,6 +1071,78 @@ mod tests {
         });
     }
 
+    #[test]
+    fn superseded_hydration_reattaches_the_sort_without_persisting() {
+        // Pins the load-bearing half of `publish_initial_library_rows`: the
+        // deferred hydration detaches the sorter while it streams rows, and it
+        // MUST hand the sorter back when it exits — even when a search has
+        // superseded it. `replace_rows` (the search path) deliberately never
+        // touches the sorter, so it relies on the steady-state invariant that a
+        // sorter is always live; if the superseded hydration skipped the
+        // reapply, the search's results would render unsorted and the user's
+        // active sort would be silently dropped for the rest of the session.
+        // Every step here is programmatic and guarded, so none of it may arm a
+        // persistence write.
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(vec![row(1), row(2)], None, None, None, None, None);
+            let sort = TrackColumnSort {
+                column_id: "date_added".to_owned(),
+                ascending: false,
+            };
+            let mut layout = read_current_layout(&table.table, &table.managed_columns);
+            layout.sort = Some(sort.clone());
+            table.apply_layout(&layout);
+
+            // From here on, any attempt to persist is observable. The
+            // `ApplyLayoutGuard` is the only thing that should keep the
+            // programmatic detach/reapply below from arming a save.
+            let saves = Rc::new(Cell::new(0u32));
+            let saves_for_cb = saves.clone();
+            table.set_layout_changed_callback(Rc::new(move |_layout: TrackColumnLayout| {
+                saves_for_cb.set(saves_for_cb.get() + 1);
+            }));
+
+            // Hydration borrows the sorter and starts a progressive publish.
+            let detached = table.detach_sort_for_bulk_load();
+            assert_eq!(detached, Some(sort.clone()));
+            assert!(
+                read_current_sort(&table.table, &table.managed_columns).is_none(),
+                "the sorter must be unset while rows stream in"
+            );
+            let generation = table.begin_progressive_replace();
+            assert!(table.append_progressive_rows(generation, vec![row(1)]));
+
+            // A search supersedes the load: `replace_rows` bumps the generation
+            // and, by design, leaves the sorter untouched (still detached).
+            table.replace_rows(vec![row(3), row(4)]);
+            assert!(
+                !table.append_progressive_rows(generation, vec![row(2)]),
+                "the superseded load must report it no longer owns the model"
+            );
+
+            // The hydration loop exits and reapplies the sort unconditionally,
+            // reattaching it over the search's own rows.
+            table.reapply_sort(detached);
+            assert_eq!(
+                read_current_sort(&table.table, &table.managed_columns),
+                Some(sort),
+                "supersession must still reattach the sorter over the new rows"
+            );
+
+            // None of that guarded lifecycle may schedule a layout save.
+            assert!(
+                table.pending_save.borrow().is_none(),
+                "the guarded detach/reapply must not arm a debounced save"
+            );
+            table.flush_pending_layout_save();
+            assert_eq!(
+                saves.get(),
+                0,
+                "programmatic sort restore must never persist"
+            );
+        });
+    }
+
     fn row(id: i64) -> TrackTableRow {
         TrackTableRow {
             track_id: TrackId::new(id),
