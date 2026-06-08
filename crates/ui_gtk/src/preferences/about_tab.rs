@@ -83,22 +83,24 @@ pub(super) fn build(parent_window: &gtk::Window, database_path: &Path) -> gtk::W
     content.upcast()
 }
 
-/// Backup guidance (issue #119). The SQLite database is the source of
-/// truth for every value that exists only in Sustain — ratings, play
-/// counts, playlists, and edits the user never wrote back to their files
-/// — so a music-folder backup alone would lose all of it. Surface the
-/// folder that actually holds the database (resolved at runtime, so it is
-/// correct under the `--database` / `--local-scope` dev flags too) and
-/// tell the user to back it up alongside their music.
+/// Backup guidance (issue #119, #203). Sustain consolidates the library by
+/// mirroring ratings, tags, and artwork back into the music files, so those
+/// survive in the files themselves. What lives *only* in the SQLite database
+/// is what a file tag cannot represent — playlists and listening statistics
+/// (play/skip counts, last played/skipped) — and a music-folder backup alone
+/// would lose it. Surface the folder that actually holds the database
+/// (resolved at runtime, so it is correct under the `--database` /
+/// `--local-scope` dev flags too) and tell the user to back it up alongside
+/// their music.
 fn build_backup_section(database_path: &Path) -> gtk::Widget {
     let section = gtk::Box::new(gtk::Orientation::Vertical, 4);
     section.set_halign(gtk::Align::Center);
     section.set_margin_top(20);
 
     section.append(&centered_helper_label(
-        "Your ratings, play counts, playlists, and library edits live in \
-         Sustain's database, not in your music files. Back up this folder \
-         alongside your music collection:",
+        "Playlists and listening stats live only in Sustain's database — your \
+         ratings, tags, and artwork are also written to your music files. Back \
+         up this folder alongside your music:",
     ));
 
     let folder = backup_folder(database_path);
