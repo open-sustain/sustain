@@ -568,16 +568,43 @@ pub struct SmartShuffleIndexMetadata {
 
 impl ApplicationRuntime {
     pub fn new() -> Self {
+        Self::from_loaded_settings(UserSettings::default(), None)
+    }
+
+    pub fn with_settings_store(
+        settings_store: Box<dyn SettingsStore>,
+    ) -> ApplicationRuntimeResult<Self> {
+        let settings = settings_store
+            .load_settings()
+            .map_err(|_| ApplicationRuntimeError::SettingsLoadFailed)?;
+        Ok(Self::from_loaded_settings(settings, Some(settings_store)))
+    }
+
+    /// The single baseline constructor. Both [`Self::new`] and
+    /// [`Self::with_settings_store`] funnel through here so the ~85
+    /// default field initializers exist once; they differ only in the
+    /// loaded `settings` and whether a `settings_store` is attached. The
+    /// initial playback queue is derived from the persisted shuffle
+    /// preference — which collapses to `PlaybackQueue::default()` for the
+    /// `UserSettings::default()` case, where `shuffle_mode` is `Off`.
+    fn from_loaded_settings(
+        settings: UserSettings,
+        settings_store: Option<Box<dyn SettingsStore>>,
+    ) -> Self {
+        let playback_queue = PlaybackQueue::empty(PlaybackOptions {
+            shuffle_mode: settings.playback.shuffle_mode,
+            repeat_mode: RepeatMode::Off,
+        });
         let (mtp_discovery_sink, mtp_discovery_source) = async_channel::unbounded();
         let (optical_discovery_sink, optical_discovery_source) = async_channel::unbounded();
         let (cd_lookup_sink, cd_lookup_source) = async_channel::unbounded();
         Self {
-            settings: UserSettings::default(),
-            settings_store: None,
+            settings,
+            settings_store,
             library_store: None,
             metadata_service: None,
             playback_service: None,
-            playback_queue: PlaybackQueue::default(),
+            playback_queue,
             playback_session: None,
             next_playback_session_id: 1,
             pending_play_registrations: VecDeque::new(),
@@ -658,109 +685,6 @@ impl ApplicationRuntime {
             track_data_observer: None,
             smart_shuffle_state_observer: None,
         }
-    }
-
-    pub fn with_settings_store(
-        settings_store: Box<dyn SettingsStore>,
-    ) -> ApplicationRuntimeResult<Self> {
-        let settings = settings_store
-            .load_settings()
-            .map_err(|_| ApplicationRuntimeError::SettingsLoadFailed)?;
-
-        let initial_playback_queue = PlaybackQueue::empty(PlaybackOptions {
-            shuffle_mode: settings.playback.shuffle_mode,
-            repeat_mode: RepeatMode::Off,
-        });
-        let (mtp_discovery_sink, mtp_discovery_source) = async_channel::unbounded();
-        let (optical_discovery_sink, optical_discovery_source) = async_channel::unbounded();
-        let (cd_lookup_sink, cd_lookup_source) = async_channel::unbounded();
-        Ok(Self {
-            settings,
-            settings_store: Some(settings_store),
-            library_store: None,
-            metadata_service: None,
-            playback_service: None,
-            playback_queue: initial_playback_queue,
-            playback_session: None,
-            next_playback_session_id: 1,
-            pending_play_registrations: VecDeque::new(),
-            playback_statistics_notification_id: None,
-            library_tracks: Vec::new(),
-            search_index: SearchIndex::new(),
-            library_hydration_state: LibraryHydrationState::Ready,
-            library_hydration_worker: library_hydration::LibraryHydrationWorker::new(),
-            library_hydration_notification_id: None,
-            playlists: Vec::new(),
-            playlist_folders: Vec::new(),
-            smart_playlists: Vec::new(),
-            last_scan_library_path: None,
-            last_scan_summary: None,
-            last_library_import_summary: None,
-            last_library_consolidation_summary: None,
-            background_task_status: BackgroundTaskStatus::Idle,
-            library_scan_cancellation: None,
-            library_import_cancellation: None,
-            library_consolidation_cancellation: None,
-            library_scan_notification_id: None,
-            library_import_notification_id: None,
-            library_consolidation_notification_id: None,
-            duplicate_consolidation_notification_id: None,
-            managed_library_filesystem_notification_id: None,
-            managed_library_filesystem_validator: Default::default(),
-            metadata_writer: None,
-            metadata_writer_event_sink: None,
-            metadata_write_failed_track_ids: BTreeSet::new(),
-            metadata_write_notification_id: None,
-            managed_metadata_retarget_notification_ids: BTreeMap::new(),
-            pending_managed_metadata_retargets: BTreeMap::new(),
-            pending_missing_track_relocations: BTreeMap::new(),
-            youtube_audio_downloader: None,
-            youtube_audio_download_result_sink: None,
-            youtube_audio_replacement_notification_ids: BTreeMap::new(),
-            pending_youtube_audio_replacements: BTreeMap::new(),
-            remote_metadata_service: None,
-            artwork_fetcher: None,
-            artwork_fetch_result_sink: None,
-            analysis_scheduler: None,
-            analysis_progress_sink: None,
-            analysis_notification_id: None,
-            analysis_persistence_error_id: None,
-            online_scheduler: None,
-            online_progress_sink: None,
-            online_notification_id: None,
-            online_persistence_error_id: None,
-            smart_shuffle_scheduler: SmartShuffleScheduler::new(),
-            device_plan_scheduler: DevicePlanScheduler::new(),
-            next_device_plan_generation: 0,
-            device_plan_cache: None,
-            device_sync_scheduler: DeviceSyncScheduler::new(),
-            device_sync_notification_id: None,
-            mtp_devices: Vec::new(),
-            mtp_discovery_generation: 0,
-            mtp_discovery_sink,
-            mtp_discovery_source,
-            cd_probe: None,
-            cd_encoder: None,
-            cd_import_cancellation: None,
-            cd_import_notification_id: None,
-            optical_discs: Vec::new(),
-            optical_discovery_generation: 0,
-            optical_discovery_sink,
-            optical_discovery_source,
-            cd_metadata_generation: 0,
-            cd_lookup_sink,
-            cd_lookup_source,
-            smart_shuffle_index: None,
-            smart_shuffle_metadata: None,
-            track_updated_sink: None,
-            clock: Arc::new(SystemClock),
-            monotonic_clock: Arc::new(SystemMonotonicClock::new()),
-            notifications: NotificationCenter::new(),
-            notification_observer: None,
-            track_availability_observer: None,
-            track_data_observer: None,
-            smart_shuffle_state_observer: None,
-        })
     }
 
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
