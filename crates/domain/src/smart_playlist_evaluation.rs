@@ -10,7 +10,7 @@ use crate::{
     SmartPlaylistBoolField, SmartPlaylistDateField, SmartPlaylistLimit,
     SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
     SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
-    SmartPlaylistTextOperator, Track,
+    SmartPlaylistTextOperator, Track, normalize_search_text,
 };
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -163,8 +163,8 @@ fn evaluate_text(
     let Some(track_value) = track_value else {
         return false;
     };
-    let track = track_value.to_lowercase();
-    let needle = rule_value.to_lowercase();
+    let track = normalize_search_text(track_value);
+    let needle = normalize_search_text(rule_value);
     match operator {
         SmartPlaylistTextOperator::Contains => track.contains(&needle),
         SmartPlaylistTextOperator::DoesNotContain => !track.contains(&needle),
@@ -260,7 +260,7 @@ fn sort_for_selection(
 }
 
 fn ci_string(value: Option<&str>) -> String {
-    value.unwrap_or("").to_lowercase()
+    value.map(normalize_search_text).unwrap_or_default()
 }
 
 fn random_seed(now: SystemTime) -> u64 {

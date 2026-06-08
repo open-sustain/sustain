@@ -268,11 +268,12 @@ impl LibraryStore for SqliteLibraryStore {
     }
 
     fn garbage_collect_tag_mirror_artwork(&self) -> StoreResult<()> {
+        let snapshot = std::time::SystemTime::now();
         let referenced = {
             let connection = self.connection_guard()?;
             tag_mirror::referenced_artwork(&connection)?
         };
-        self.tag_mirror_blobs.garbage_collect(&referenced)
+        self.tag_mirror_blobs.garbage_collect(&referenced, snapshot)
     }
 
     fn distinct_genres(&self) -> StoreResult<Vec<String>> {

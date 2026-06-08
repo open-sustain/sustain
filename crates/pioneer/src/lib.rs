@@ -44,3 +44,31 @@ pub const PDB_RELATIVE_PATH: &str = "PIONEER/rekordbox/export.pdb";
 /// Root directory of the audio files on the drive (each track stored
 /// once under `Contents/Artist/Album/`).
 pub const CONTENTS_DIR: &str = "Contents";
+
+const MAX_TEMPO_CENTIBPM: f32 = u16::MAX as f32;
+
+fn tempo_centibpm(bpm: f32) -> Option<u16> {
+    if !bpm.is_finite() || bpm <= 0.0 {
+        return None;
+    }
+    let centibpm = (bpm * 100.0).round();
+    if !(0.0..=MAX_TEMPO_CENTIBPM).contains(&centibpm) {
+        return None;
+    }
+    Some(centibpm as u16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tempo_centibpm;
+
+    #[test]
+    fn tempo_centibpm_rejects_non_finite_or_out_of_range_values() {
+        assert_eq!(tempo_centibpm(f32::NAN), None);
+        assert_eq!(tempo_centibpm(0.0), None);
+        assert_eq!(tempo_centibpm(-1.0), None);
+        assert_eq!(tempo_centibpm(655.35), Some(u16::MAX));
+        assert_eq!(tempo_centibpm(655.36), None);
+        assert_eq!(tempo_centibpm(99_999.0), None);
+    }
+}

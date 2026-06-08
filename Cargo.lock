@@ -2434,7 +2434,6 @@ name = "sustain-search"
 version = "0.7.0-alpha.2"
 dependencies = [
  "sustain-domain",
- "unicode-normalization",
 ]
 
 [[package]]

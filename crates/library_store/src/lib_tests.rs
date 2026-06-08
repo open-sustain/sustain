@@ -889,6 +889,20 @@ fn sample_analysis(bpm: Option<f32>, key: Option<MusicalKey>) -> TrackAnalysis {
     }
 }
 
+fn finite_acoustics() -> AcousticFeatures {
+    AcousticFeatures {
+        integrated_lufs: -14.0,
+        short_term_lufs_max: -10.0,
+        loudness_range_lu: 5.0,
+        onset_rate_hz: 2.0,
+        low_band_ratio: 0.4,
+        mid_band_ratio: 0.4,
+        high_band_ratio: 0.2,
+        low_band_variation: 0.5,
+        tonalness: 0.8,
+    }
+}
+
 /// Standard context used by analysis tests: analyzer_version 1
 /// plus caller-supplied wall-clock.
 fn ctx(now_unix: i64) -> AnalysisContext {
@@ -924,6 +938,32 @@ fn run_record_analysis_round_trips_waveform_bytes(store: &dyn LibraryStore) {
     );
 }
 
+fn run_record_analysis_ignores_non_finite_acoustics(store: &dyn LibraryStore) {
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+    let mut analysis = sample_analysis(Some(126.0), Some(MusicalKey::DMinor));
+    analysis.acoustics = Some(AcousticFeatures {
+        integrated_lufs: f32::NAN,
+        ..finite_acoustics()
+    });
+
+    store
+        .record_analysis(
+            track.id,
+            &analysis,
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_000),
+        )
+        .expect("record analysis");
+
+    assert!(
+        store
+            .load_all_acoustics()
+            .expect("load acoustics")
+            .is_empty()
+    );
+}
+
 #[test]
 fn sqlite_record_analysis_round_trips_waveform_bytes() {
     let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
@@ -933,6 +973,17 @@ fn sqlite_record_analysis_round_trips_waveform_bytes() {
 #[test]
 fn in_memory_record_analysis_round_trips_waveform_bytes() {
     run_record_analysis_round_trips_waveform_bytes(&InMemoryLibraryStore::new());
+}
+
+#[test]
+fn sqlite_record_analysis_ignores_non_finite_acoustics() {
+    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
+    run_record_analysis_ignores_non_finite_acoustics(&store);
+}
+
+#[test]
+fn in_memory_record_analysis_ignores_non_finite_acoustics() {
+    run_record_analysis_ignores_non_finite_acoustics(&InMemoryLibraryStore::new());
 }
 
 fn run_record_analysis_fills_tracks_columns_only_when_null(store: &dyn LibraryStore) {

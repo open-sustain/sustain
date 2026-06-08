@@ -62,6 +62,24 @@ impl RowDropCellRegistry {
         });
     }
 
+    pub(super) fn unregister(&self, list_item: &gtk::ListItem) {
+        self.cells.borrow_mut().retain(|entry| {
+            entry
+                .widget
+                .upgrade()
+                .inspect(|widget| {
+                    widget.remove_css_class(ROW_DROP_ABOVE_CSS_CLASS);
+                    widget.remove_css_class(ROW_DROP_BELOW_CSS_CLASS);
+                })
+                .is_some()
+                && entry
+                    .list_item
+                    .upgrade()
+                    .is_some_and(|registered| registered != *list_item)
+        });
+        self.current_target.set(None);
+    }
+
     fn clear_all(&self) {
         if self.current_target.get().is_none() {
             return;

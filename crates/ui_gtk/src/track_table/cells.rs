@@ -94,6 +94,14 @@ impl TrackTableContextMenu {
         });
     }
 
+    fn unregister_cell(&self, list_item: &gtk::ListItem) {
+        self.cells.borrow_mut().retain(|cell| {
+            cell.list_item
+                .upgrade()
+                .is_some_and(|registered| registered != *list_item)
+        });
+    }
+
     fn ordered_track_ids(&self) -> Vec<TrackId> {
         super::ordered_track_ids(&self.selection)
     }
@@ -147,7 +155,9 @@ pub(super) struct StatusBindings(Rc<RefCell<Vec<StatusBinding>>>);
 
 impl StatusBindings {
     pub(super) fn refresh(&self, playing_track_id: Option<TrackId>) {
-        for binding in self.0.borrow().iter() {
+        let mut bindings = self.0.borrow_mut();
+        bindings.retain(|binding| binding.list_item.item().is_some());
+        for binding in bindings.iter() {
             refresh_status_icon(&binding.list_item, &binding.icon, playing_track_id);
         }
     }
@@ -223,8 +233,8 @@ pub(super) fn build_text_cell_factory(
     inline_edit: Option<InlineEditController>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
-    let context_for_setup = context_menu;
-    let reorder_for_setup = row_reorder;
+    let context_for_setup = context_menu.clone();
+    let reorder_for_setup = row_reorder.clone();
     let inline_edit_for_setup = inline_edit.clone();
     let editable_field = column.editable_field();
     let bindings_for_setup = bindings.clone();
@@ -271,10 +281,21 @@ pub(super) fn build_text_cell_factory(
     });
 
     let bindings_for_teardown = bindings;
+    let context_for_teardown = context_menu;
+    let reorder_for_teardown = row_reorder;
+    let inline_edit_for_teardown = inline_edit.clone();
     factory.connect_teardown(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
+        if let Some(controller) = inline_edit_for_teardown.as_ref() {
+            controller.unregister_editable_cell(list_item);
+        }
+        uninstall_cell_chrome(
+            list_item,
+            context_for_teardown.as_ref(),
+            reorder_for_teardown.as_ref(),
+        );
         bindings_for_teardown
             .0
             .borrow_mut()
@@ -341,9 +362,9 @@ pub(super) fn build_rating_cell_factory(
     row_reorder: Option<RowReorderHooks>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
-    let context_for_setup = context_menu;
+    let context_for_setup = context_menu.clone();
     let rating_changed_for_setup = rating_changed;
-    let reorder_for_setup = row_reorder;
+    let reorder_for_setup = row_reorder.clone();
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
@@ -413,10 +434,17 @@ pub(super) fn build_rating_cell_factory(
 
     let bindings_for_bind = bindings.clone();
     let bindings_for_teardown = bindings;
+    let context_for_teardown = context_menu;
+    let reorder_for_teardown = row_reorder;
     factory.connect_teardown(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
+        uninstall_cell_chrome(
+            list_item,
+            context_for_teardown.as_ref(),
+            reorder_for_teardown.as_ref(),
+        );
         bindings_for_teardown
             .0
             .borrow_mut()
@@ -481,8 +509,8 @@ fn build_status_cell_factory(
     let factory = gtk::SignalListItemFactory::new();
 
     let bindings_for_setup = bindings.clone();
-    let context_for_setup = context_menu;
-    let reorder_for_setup = row_reorder;
+    let context_for_setup = context_menu.clone();
+    let reorder_for_setup = row_reorder.clone();
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
@@ -518,10 +546,17 @@ fn build_status_cell_factory(
     });
 
     let bindings_for_teardown = bindings;
+    let context_for_teardown = context_menu;
+    let reorder_for_teardown = row_reorder;
     factory.connect_teardown(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
+        uninstall_cell_chrome(
+            list_item,
+            context_for_teardown.as_ref(),
+            reorder_for_teardown.as_ref(),
+        );
         bindings_for_teardown
             .0
             .borrow_mut()
@@ -559,8 +594,8 @@ fn build_filler_factory(
     row_reorder: Option<RowReorderHooks>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
-    let context_for_setup = context_menu;
-    let reorder_for_setup = row_reorder;
+    let context_for_setup = context_menu.clone();
+    let reorder_for_setup = row_reorder.clone();
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
@@ -579,6 +614,19 @@ fn build_filler_factory(
             reorder_for_setup.as_ref(),
         );
         list_item.set_child(Some(&cell));
+    });
+
+    let context_for_teardown = context_menu;
+    let reorder_for_teardown = row_reorder;
+    factory.connect_teardown(move |_factory, item| {
+        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        uninstall_cell_chrome(
+            list_item,
+            context_for_teardown.as_ref(),
+            reorder_for_teardown.as_ref(),
+        );
     });
 
     factory.connect_bind(move |_factory, item| {
@@ -611,6 +659,19 @@ fn install_cell_chrome(
     }
     if let Some(hooks) = row_reorder {
         install_cell_drop_target(list_item, cell, hooks.clone());
+    }
+}
+
+fn uninstall_cell_chrome(
+    list_item: &gtk::ListItem,
+    context_menu: Option<&TrackTableContextMenu>,
+    row_reorder: Option<&RowReorderHooks>,
+) {
+    if let Some(menu) = context_menu {
+        menu.unregister_cell(list_item);
+    }
+    if let Some(hooks) = row_reorder {
+        hooks.cells.unregister(list_item);
     }
 }
 

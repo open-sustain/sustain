@@ -96,10 +96,12 @@ fn beats(bpm: Option<f32>, duration_ms: u32) -> Vec<Beat> {
     let Some(bpm) = bpm.filter(|b| *b > 0.0) else {
         return Vec::new();
     };
+    let Some(tempo) = crate::tempo_centibpm(bpm) else {
+        return Vec::new();
+    };
     if duration_ms < 4000 {
         return Vec::new();
     }
-    let tempo = (bpm * 100.0).round() as u16;
     let interval = 60_000.0 / bpm;
     let mut out = Vec::new();
     let mut time = 0.0f32;

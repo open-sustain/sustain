@@ -35,12 +35,12 @@ pub(super) fn record_analysis(
     }
 
     if capabilities.bpm
-        && let Some(bpm) = analysis.bpm
+        && let Some(bpm) = analysis.bpm.and_then(valid_metadata_bpm_from_analysis)
     {
         transaction
             .execute(
                 FILL_TRACK_BPM_IF_NULL_SQL,
-                params![bpm.round() as i64, track_id.get()],
+                params![i64::from(bpm), track_id.get()],
             )
             .map_err(StoreError::from)?;
     }
@@ -58,6 +58,7 @@ pub(super) fn record_analysis(
 
     if capabilities.audio
         && let Some(acoustics) = analysis.acoustics
+        && acoustic_features_are_finite(acoustics)
     {
         transaction
             .execute(
@@ -79,6 +80,17 @@ pub(super) fn record_analysis(
     }
 
     transaction.commit().map_err(StoreError::from)
+}
+
+fn valid_metadata_bpm_from_analysis(bpm: f32) -> Option<u32> {
+    if !bpm.is_finite() || bpm < 0.0 {
+        return None;
+    }
+    let rounded = bpm.round();
+    if rounded > sustain_domain::MAX_BPM as f32 {
+        return None;
+    }
+    sustain_domain::validate_bpm(rounded as u32)
 }
 
 pub(super) fn record_analysis_attempt_failure(
@@ -206,22 +218,34 @@ pub(super) fn load_all_acoustics(
         let value = |index: usize| -> StoreResult<f32> {
             Ok(row.get::<_, f64>(index).map_err(StoreError::from)? as f32)
         };
-        out.push((
-            track_id,
-            AcousticFeatures {
-                integrated_lufs: value(1)?,
-                short_term_lufs_max: value(2)?,
-                loudness_range_lu: value(3)?,
-                onset_rate_hz: value(4)?,
-                low_band_ratio: value(5)?,
-                mid_band_ratio: value(6)?,
-                high_band_ratio: value(7)?,
-                low_band_variation: value(8)?,
-                tonalness: value(9)?,
-            },
-        ));
+        let features = AcousticFeatures {
+            integrated_lufs: value(1)?,
+            short_term_lufs_max: value(2)?,
+            loudness_range_lu: value(3)?,
+            onset_rate_hz: value(4)?,
+            low_band_ratio: value(5)?,
+            mid_band_ratio: value(6)?,
+            high_band_ratio: value(7)?,
+            low_band_variation: value(8)?,
+            tonalness: value(9)?,
+        };
+        if acoustic_features_are_finite(features) {
+            out.push((track_id, features));
+        }
     }
     Ok(out)
+}
+
+fn acoustic_features_are_finite(features: AcousticFeatures) -> bool {
+    features.integrated_lufs.is_finite()
+        && features.short_term_lufs_max.is_finite()
+        && features.loudness_range_lu.is_finite()
+        && features.onset_rate_hz.is_finite()
+        && features.low_band_ratio.is_finite()
+        && features.mid_band_ratio.is_finite()
+        && features.high_band_ratio.is_finite()
+        && features.low_band_variation.is_finite()
+        && features.tonalness.is_finite()
 }
 
 fn build_filter_tracks_needing_analysis_sql(id_count: usize) -> String {

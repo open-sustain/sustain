@@ -9,7 +9,7 @@ use sustain_domain::{
     PlaybackCommand, PlaybackQueue, PlaybackQueueRequest, PlaybackQueueSource, PlaybackSession,
     PlaybackState, Track, TrackAvailability, TrackId, TrackPlaybackSource,
 };
-use sustain_playback::PlaybackService;
+use sustain_playback::{PlaybackBackendError, PlaybackService};
 use sustain_smart_shuffle::{PickContext, format_debug, pick_next_track};
 
 use crate::{
@@ -102,6 +102,42 @@ impl ApplicationRuntime {
         self.playback_service
             .as_deref()
             .ok_or(ApplicationRuntimeError::PlaybackServiceUnavailable)
+    }
+
+    pub fn handle_playback_backend_error(
+        &mut self,
+        error: PlaybackBackendError,
+    ) -> ApplicationRuntimeResult<()> {
+        self.freeze_current_playback_session();
+        self.push_ephemeral_notification(
+            NotificationCategory::Playback,
+            NotificationSeverity::Error,
+            self.playback_backend_error_text(&error),
+        );
+        self.play_next_track()
+    }
+
+    fn playback_backend_error_text(&self, error: &PlaybackBackendError) -> String {
+        let detail = error.message.trim();
+        let Some(track_id) = error.track_id else {
+            return if detail.is_empty() {
+                "Playback failed. Skipping to the next track.".to_owned()
+            } else {
+                format!("Playback failed: {detail}. Skipping to the next track.")
+            };
+        };
+        let track_name = self
+            .library_tracks
+            .iter()
+            .find(|track| track.id == track_id)
+            .and_then(track_display_name)
+            .unwrap_or_else(|| format!("#{}", track_id.get()));
+
+        if detail.is_empty() {
+            format!("Playback failed for {track_name}. Skipping to the next track.")
+        } else {
+            format!("Playback failed for {track_name}: {detail}. Skipping to the next track.")
+        }
     }
 
     fn pause_playback(&mut self) -> ApplicationRuntimeResult<()> {
@@ -763,4 +799,22 @@ pub(super) fn playback_shuffle_seed() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos() as u64)
         .unwrap_or(0)
+}
+
+fn track_display_name(track: &Track) -> Option<String> {
+    track
+        .metadata
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            track
+                .location
+                .path()
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .filter(|stem| !stem.trim().is_empty())
+        })
 }

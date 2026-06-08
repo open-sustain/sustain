@@ -25,6 +25,7 @@ mod smart_playlist_defaults;
 mod smart_playlist_evaluation;
 mod statistics;
 mod synced_lyrics;
+mod text;
 mod track;
 mod track_column_layout;
 mod waveform;
@@ -53,7 +54,10 @@ pub use library_statistics::{
 pub use managed_library::{
     ManagedTrackPathError, ManagedTrackPathInput, ManagedTrackPathPlan, ManagedTrackPathPlanner,
 };
-pub use metadata::{FieldChange, MetadataChange, TrackAudioProperties, TrackMetadata};
+pub use metadata::{
+    FieldChange, MAX_BPM, MetadataChange, TrackAudioProperties, TrackMetadata, valid_bpm,
+    validate_bpm,
+};
 pub use musical_key::MusicalKey;
 pub use playback::{
     LazyPickContext, PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueEntry,
@@ -84,6 +88,7 @@ pub use smart_playlist_defaults::default_smart_playlists;
 pub use smart_playlist_evaluation::{matching_tracks, track_matches_rule, track_matches_rule_set};
 pub use statistics::PlayStatistics;
 pub use synced_lyrics::{SyncedLyrics, SyncedLyricsLine};
+pub use text::normalize_search_text;
 pub use track::{
     SourceFileStat, SourceFingerprint, Track, TrackAvailability, TrackContentHash, TrackLocation,
     TrackRelativePath,

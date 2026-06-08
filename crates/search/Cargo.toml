@@ -12,7 +12,6 @@ path = "src/lib.rs"
 
 [dependencies]
 sustain-domain = { path = "../domain" }
-unicode-normalization = "0.1"
 
 [lints]
 workspace = true

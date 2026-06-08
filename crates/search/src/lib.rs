@@ -5,10 +5,10 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 pub use sustain_domain::{
     LibraryQuery, SortDirection, Track, TrackId, TrackSort, TrackSortColumn, compare_optional_text,
+    normalize_search_text,
 };
 
 /// Joins a track's searchable fields in its precomputed document. Chosen
@@ -202,14 +202,6 @@ fn push_field(document: &mut String, field: &str) {
         document.push(FIELD_SEPARATOR);
     }
     document.push_str(&normalize_search_text(trimmed));
-}
-
-fn normalize_search_text(text: &str) -> String {
-    text.trim()
-        .nfkd()
-        .filter(|character| !is_combining_mark(*character))
-        .flat_map(char::to_lowercase)
-        .collect()
 }
 
 #[cfg(test)]

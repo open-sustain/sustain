@@ -30,7 +30,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde::{Deserialize, Serialize};
-use sustain_domain::{AcousticFeatures, Track, TrackId};
+use sustain_domain::{AcousticFeatures, Track, TrackId, normalize_search_text};
 
 use crate::SmartShuffleError;
 
@@ -311,9 +311,8 @@ fn percentile(values: &mut [f32], fraction: f32) -> f32 {
 /// for a token present on none. With `total = 0` the library is empty
 /// and every token gets the same neutral weight.
 fn idf(total: u32, document_frequency: u32) -> f32 {
-    let total = f32::from(u16::try_from(total.min(u32::from(u16::MAX))).unwrap_or(u16::MAX));
-    let df =
-        f32::from(u16::try_from(document_frequency.min(u32::from(u16::MAX))).unwrap_or(u16::MAX));
+    let total = total as f32;
+    let df = document_frequency as f32;
     ((total + 1.0) / (df + 1.0)).ln() + 1.0
 }
 
@@ -328,23 +327,9 @@ pub fn genre_tokens(genre: Option<&str>) -> Vec<String> {
     let Some(genre) = genre else {
         return Vec::new();
     };
-    let mut slug = String::with_capacity(genre.len());
-    let mut last_was_separator = true;
-    for character in genre.chars() {
-        let lowered = character.to_ascii_lowercase();
-        if lowered.is_ascii_alphanumeric() {
-            slug.push(lowered);
-            last_was_separator = false;
-        } else if !last_was_separator {
-            slug.push('-');
-            last_was_separator = true;
-        }
-    }
-    while slug.ends_with('-') {
-        slug.pop();
-    }
-    slug.split('-')
-        .filter(|token| token.len() >= 2)
+    normalize_search_text(genre)
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| token.chars().count() >= 2)
         .map(str::to_owned)
         .collect()
 }
@@ -396,6 +381,7 @@ mod tests {
             genre_tokens(Some("Alternative Rock")),
             vec!["alternative", "rock"]
         );
+        assert_eq!(genre_tokens(Some("Björk")), vec!["bjork"]);
         assert_eq!(genre_tokens(Some("R&B")), Vec::<String>::new());
         assert_eq!(genre_tokens(None), Vec::<String>::new());
     }
@@ -428,6 +414,14 @@ mod tests {
         assert!(idf(1000, 1000) > 0.0);
         // Present on none → finite and larger.
         assert!(idf(1000, 0) > idf(1000, 1000));
+    }
+
+    #[test]
+    fn idf_uses_full_track_counts_above_u16_max() {
+        let observed = idf(100_000, 90_000);
+        let expected = ((100_000.0_f32 + 1.0) / (90_000.0_f32 + 1.0)).ln() + 1.0;
+
+        assert!((observed - expected).abs() < 1e-6);
     }
 
     #[test]

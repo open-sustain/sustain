@@ -46,7 +46,7 @@ pub use sustain_metadata_remote::{
     RemoteResult, TrackMatch, TrackMatchSource, TrackQuery,
 };
 use sustain_playback::PlaybackService;
-pub use sustain_playback::TrackEndedCallback;
+pub use sustain_playback::{PlaybackBackendError, PlaybackErrorCallback, TrackEndedCallback};
 pub use sustain_search::{
     SearchIndex, album_matches_search_text, filter_tracks_by_search_text, normalize_query,
     track_matches_search_text,
@@ -178,6 +178,7 @@ pub enum ApplicationRuntimeError {
     InvalidPlaylistFolderName,
     InvalidSmartPlaylistName,
     InvalidSmartPlaylistRules,
+    InvalidBpm,
     BackgroundTaskRunning,
     PlaybackFailed,
     PlaybackServiceUnavailable,
@@ -2050,6 +2051,12 @@ impl ApplicationRuntime {
         }
     }
 
+    pub fn set_playback_error_callback(&self, callback: PlaybackErrorCallback) {
+        if let Some(service) = self.playback_service.as_deref() {
+            service.set_on_playback_error(callback);
+        }
+    }
+
     pub fn playback_options(&self) -> PlaybackOptions {
         self.playback_queue.options()
     }
@@ -2283,7 +2290,7 @@ impl ApplicationRuntime {
     fn apply_smart_shuffle_rebuild_result_inner(&mut self, result: SmartShuffleRebuildResult) {
         let index = result.index;
         let Ok(blob) = index.to_blob() else {
-            self.notifications.push_ephemeral(
+            self.push_ephemeral_notification(
                 NotificationCategory::SmartShuffle,
                 NotificationSeverity::Warning,
                 "Smart Shuffle: failed to serialise the rebuilt index.".to_owned(),
@@ -2297,7 +2304,7 @@ impl ApplicationRuntime {
         if let Some(store) = self.library_store.as_ref()
             && store.save_smart_shuffle_index(&stored).is_err()
         {
-            self.notifications.push_ephemeral(
+            self.push_ephemeral_notification(
                 NotificationCategory::SmartShuffle,
                 NotificationSeverity::Warning,
                 "Smart Shuffle: failed to persist the rebuilt index.".to_owned(),

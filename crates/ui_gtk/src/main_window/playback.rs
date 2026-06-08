@@ -470,3 +470,19 @@ pub(super) fn install_track_ended_callback(
         }
     }));
 }
+
+pub(super) fn install_playback_error_callback(
+    runtime: &SharedRuntime,
+    playback_changed: &PlaybackChangedCallback,
+) {
+    let runtime_for_callback = runtime.clone();
+    let playback_changed = playback_changed.clone();
+    runtime
+        .borrow()
+        .set_playback_error_callback(Box::new(move |error| {
+            let _ = runtime_for_callback
+                .borrow_mut()
+                .handle_playback_backend_error(error);
+            playback_changed();
+        }));
+}

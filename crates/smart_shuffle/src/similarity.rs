@@ -28,7 +28,7 @@
 
 use std::time::SystemTime;
 
-use sustain_domain::{AcousticFeatures, MusicalKey, Track};
+use sustain_domain::{AcousticFeatures, MusicalKey, Track, normalize_search_text};
 
 use crate::index::SmartShuffleIndex;
 use crate::index::genre_tokens;
@@ -288,17 +288,18 @@ pub fn composer_similarity(seed: &Track, cand: &Track) -> Option<f32> {
 }
 
 fn relation(seed: Option<&str>, cand: Option<&str>) -> Option<f32> {
-    let seed = non_blank(seed)?;
-    let cand = non_blank(cand)?;
-    Some(if seed.eq_ignore_ascii_case(cand) {
-        1.0
-    } else {
-        0.0
-    })
+    let seed = normalized_non_blank(seed)?;
+    let cand = normalized_non_blank(cand)?;
+    Some(if seed == cand { 1.0 } else { 0.0 })
 }
 
 fn non_blank(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|v| !v.is_empty())
+}
+
+fn normalized_non_blank(value: Option<&str>) -> Option<String> {
+    let normalized = normalize_search_text(value?);
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 // --- Acoustic (DSP) similarities (§6.1, §7, §8) -----------------------------
@@ -439,10 +440,10 @@ fn free_text_tokens(value: Option<&str>) -> Vec<String> {
     let Some(value) = non_blank(value) else {
         return Vec::new();
     };
-    value
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|token| token.len() >= 2)
-        .map(|token| token.to_ascii_lowercase())
+    normalize_search_text(value)
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| token.chars().count() >= 2)
+        .map(str::to_owned)
         .collect()
 }
 
@@ -553,6 +554,34 @@ mod tests {
             tempo_similarity(&with_bpm(120), &track(TrackMetadata::default())),
             None
         );
+    }
+
+    #[test]
+    fn artist_relation_folds_accents_and_case() {
+        let seed = track(TrackMetadata {
+            artist: Some("Björk".to_owned()),
+            ..TrackMetadata::default()
+        });
+        let candidate = track(TrackMetadata {
+            artist: Some("BJORK".to_owned()),
+            ..TrackMetadata::default()
+        });
+
+        assert_eq!(same_artist(&seed, &candidate), Some(1.0));
+    }
+
+    #[test]
+    fn grouping_tokens_fold_accents_before_matching() {
+        let seed = track(TrackMetadata {
+            grouping: Some("Déjà Vu".to_owned()),
+            ..TrackMetadata::default()
+        });
+        let candidate = track(TrackMetadata {
+            grouping: Some("deja".to_owned()),
+            ..TrackMetadata::default()
+        });
+
+        assert_eq!(grouping_similarity(&seed, &candidate), Some(0.5));
     }
 
     #[test]

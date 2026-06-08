@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
@@ -16,10 +16,11 @@ use lofty::{
     config::{GlobalOptions, WriteOptions, apply_global_options},
     error::ErrorKind,
     file::TaggedFile,
+    id3::v2::{Frame, Id3v2Tag, PopularimeterFrame},
     picture::{Picture, PictureType},
     prelude::{Accessor, AudioFile, TaggedFileExt},
     tag::{
-        ItemKey, Tag, TagItem, TagType,
+        ItemKey, Tag, TagExt, TagItem, TagType,
         items::{
             Lang, UNKNOWN_LANGUAGE,
             popularimeter::{Popularimeter, StarRating},
@@ -31,6 +32,7 @@ use sustain_artwork::{ArtworkPolicyError, MAX_ENCODED_ARTWORK_BYTES, validate_en
 
 pub use sustain_domain::{
     FieldChange, MetadataChange, Rating, TrackContentHash, TrackMetadata, TrackRelativePath,
+    validate_bpm,
 };
 
 mod atomic_file;
@@ -222,6 +224,8 @@ trait ScanFilesystem {
         path: &Path,
     ) -> io::Result<Box<dyn Iterator<Item = io::Result<PathBuf>>>>;
     fn symlink_metadata(&self, path: &Path) -> io::Result<fs::Metadata>;
+    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata>;
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -244,6 +248,23 @@ impl ScanFilesystem for StdScanFilesystem {
     fn symlink_metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
         fs::symlink_metadata(path)
     }
+
+    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        fs::metadata(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        fs::canonicalize(path)
+    }
+}
+
+struct ScanWalk<'a, S: ScanFilesystem> {
+    library_path: &'a Path,
+    scan: &'a mut LibraryScan,
+    cancellation: &'a AtomicBool,
+    known_fingerprints: &'a BTreeMap<TrackRelativePath, ScanFingerprint>,
+    filesystem: &'a S,
+    visited_directories: HashSet<PathBuf>,
 }
 
 impl<'a, S> LibraryScanner<'a, S>
@@ -284,14 +305,17 @@ where
         }
 
         let mut scan = LibraryScan::default();
-        self.scan_directory(
-            library_path,
-            library_path,
-            &mut scan,
-            cancellation,
-            known_fingerprints,
-            filesystem,
-        );
+        {
+            let mut walk = ScanWalk {
+                library_path,
+                scan: &mut scan,
+                cancellation,
+                known_fingerprints,
+                filesystem,
+                visited_directories: HashSet::new(),
+            };
+            self.scan_directory(library_path, false, &mut walk);
+        }
         scan.cancelled = scan.cancelled || cancellation.load(Ordering::SeqCst);
         scan.complete_for_missing_reconciliation &= !scan.cancelled;
         scan.tracks
@@ -300,52 +324,73 @@ where
         Ok(scan)
     }
 
-    fn scan_directory(
+    fn scan_directory<F: ScanFilesystem>(
         &self,
-        library_path: &Path,
         directory: &Path,
-        scan: &mut LibraryScan,
-        cancellation: &AtomicBool,
-        known_fingerprints: &BTreeMap<TrackRelativePath, ScanFingerprint>,
-        filesystem: &impl ScanFilesystem,
+        reached_by_symlink: bool,
+        walk: &mut ScanWalk<'_, F>,
     ) {
-        let entries = match filesystem.read_directory(directory) {
+        match walk.filesystem.canonicalize(directory) {
+            Ok(canonical) => {
+                if !walk.visited_directories.insert(canonical) {
+                    if reached_by_symlink {
+                        walk.scan
+                            .record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
+                    }
+                    return;
+                }
+            }
+            Err(_) => {
+                walk.scan
+                    .record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
+                return;
+            }
+        }
+
+        let entries = match walk.filesystem.read_directory(directory) {
             Ok(entries) => entries,
             Err(_) => {
-                scan.record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
+                walk.scan
+                    .record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
                 return;
             }
         };
 
         for entry in entries {
-            if cancellation.load(Ordering::SeqCst) {
-                scan.cancelled = true;
+            if walk.cancellation.load(Ordering::SeqCst) {
+                walk.scan.cancelled = true;
                 return;
             }
             let path = match entry {
                 Ok(path) => path,
                 Err(_) => {
-                    scan.record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
+                    walk.scan
+                        .record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
                     continue;
                 }
             };
-            let metadata = match filesystem.symlink_metadata(&path) {
+            let metadata = match walk.filesystem.symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(_) => {
-                    scan.record_failure(path, MetadataError::ReadFailed);
+                    walk.scan.record_failure(path, MetadataError::ReadFailed);
                     continue;
                 }
             };
+            let file_type = metadata.file_type();
+            let (metadata, reached_by_symlink) = if file_type.is_symlink() {
+                match walk.filesystem.metadata(&path) {
+                    Ok(target) => (target, true),
+                    Err(_) => {
+                        walk.scan.record_failure(path, MetadataError::ReadFailed);
+                        continue;
+                    }
+                }
+            } else {
+                (metadata, false)
+            };
             if metadata.file_type().is_dir() {
-                self.scan_directory(
-                    library_path,
-                    &path,
-                    scan,
-                    cancellation,
-                    known_fingerprints,
-                    filesystem,
-                );
-                if scan.cancelled {
+                self.scan_directory(&path, reached_by_symlink, walk);
+                if walk.scan.cancelled {
                     return;
                 }
             } else if metadata.file_type().is_file() {
@@ -353,12 +398,12 @@ where
                 // syscall — so an unchanged file can be fingerprinted and
                 // skipped below (#71).
                 self.scan_file(
-                    library_path,
+                    walk.library_path,
                     path,
                     metadata.len(),
                     metadata.modified().ok(),
-                    known_fingerprints,
-                    scan,
+                    walk.known_fingerprints,
+                    walk.scan,
                 );
             }
         }
@@ -486,20 +531,24 @@ impl MetadataService for LoftyMetadataService {
         // (MusicBee, Foobar2000, …) store play counts in the POPM
         // counter field, and silently zeroing them out on every rating
         // edit would clobber data that doesn't belong to us.
-        let preserved_counter = tag
-            .ratings()
-            .next()
+        let preserved_popularimeter = tag.ratings().next().map(|popularimeter| {
+            PreservedPopularimeter::from_parts(
+                popularimeter.email().unwrap_or("").to_owned(),
+                popularimeter.play_counter,
+            )
+        });
+        let preserved_counter = preserved_popularimeter
+            .as_ref()
             .map(|popularimeter| popularimeter.play_counter)
             .unwrap_or(0);
 
         if rating == Rating::unrated() {
-            // The high-level Popularimeter API has no representation
-            // for "POPM with rating=0", so transitioning a rated track
-            // to unrated removes the frame entirely. In the rare case
-            // where another tool stored a play counter there, it is
-            // lost. Sustain does not use the counter for its own
-            // accounting, so this only affects external readers.
-            let _removed = tag.take(ItemKey::Popularimeter).count();
+            if let Some(id3v2) =
+                id3v2_tag_clearing_rating_preserving_counter(tag, preserved_popularimeter)
+            {
+                return atomic_save_id3v2_to_path(&id3v2, path, WriteOptions::default());
+            }
+            clear_rating(tag);
         } else {
             tag.insert_text(
                 ItemKey::Popularimeter,
@@ -594,7 +643,7 @@ fn read_tags(path: &Path, backfill_title_from_filename: bool) -> MetadataResult<
             .and_then(parse_flag),
         bpm: tag
             .and_then(|tag| tag.get_string(bpm_item_key(tag.tag_type())))
-            .and_then(|value| value.trim().parse::<u32>().ok()),
+            .and_then(parse_bpm),
         key: tag
             .and_then(|tag| tag.get_string(ItemKey::InitialKey))
             .map(ToOwned::to_owned),
@@ -813,9 +862,26 @@ fn atomic_save_to_path(
     path: &Path,
     options: WriteOptions,
 ) -> MetadataResult<()> {
+    atomic_save_lofty(path, |temp_path| {
+        tagged_file.save_to_path(temp_path, options)
+    })
+}
+
+fn atomic_save_id3v2_to_path(
+    id3v2: &Id3v2Tag,
+    path: &Path,
+    options: WriteOptions,
+) -> MetadataResult<()> {
+    atomic_save_lofty(path, |temp_path| id3v2.save_to_path(temp_path, options))
+}
+
+fn atomic_save_lofty(
+    path: &Path,
+    mut save: impl FnMut(&Path) -> lofty::error::Result<()>,
+) -> MetadataResult<()> {
     let is_mp3 = audio_format_from_path(path) == Ok(AudioFormat::Mp3);
     atomic_write_via_rename(path, |temp_path| {
-        match tagged_file.save_to_path(temp_path, options) {
+        match save(temp_path) {
             Ok(()) => return Ok(()),
             // lofty re-detects the format on write and reports `UnknownFormat`
             // when it cannot find the first MPEG frame within its small window
@@ -838,9 +904,7 @@ fn atomic_save_to_path(
             return Err(MetadataError::WriteFailed);
         }
 
-        tagged_file
-            .save_to_path(temp_path, options)
-            .map_err(|_| MetadataError::WriteFailed)
+        save(temp_path).map_err(|_| MetadataError::WriteFailed)
     })
 }
 
@@ -962,11 +1026,15 @@ fn apply_bool_change(tag: &mut Tag, item_key: ItemKey, change: FieldChange<bool>
 }
 
 fn parse_flag(value: &str) -> Option<bool> {
-    match value.trim() {
-        "1" | "true" | "TRUE" | "True" | "yes" => Some(true),
-        "0" | "false" | "FALSE" | "False" | "no" => Some(false),
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" => Some(true),
+        "0" | "false" | "no" => Some(false),
         _ => None,
     }
+}
+
+fn parse_bpm(value: &str) -> Option<u32> {
+    value.trim().parse::<u32>().ok().and_then(validate_bpm)
 }
 
 fn star_rating_value(rating: StarRating) -> u8 {
@@ -988,6 +1056,44 @@ fn popularimeter_from_rating(rating: Rating, play_counter: u64) -> Popularimeter
         5 => Popularimeter::musicbee(StarRating::Five, play_counter),
         _ => unreachable!("unrated ratings are removed before conversion"),
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PreservedPopularimeter {
+    email: String,
+    play_counter: u64,
+}
+
+impl PreservedPopularimeter {
+    fn from_parts(email: String, play_counter: u64) -> Self {
+        Self {
+            email,
+            play_counter,
+        }
+    }
+}
+
+fn clear_rating(tag: &mut Tag) {
+    let _removed = tag.take(ItemKey::Popularimeter).count();
+}
+
+fn id3v2_tag_clearing_rating_preserving_counter(
+    tag: &mut Tag,
+    preserved_popularimeter: Option<PreservedPopularimeter>,
+) -> Option<Id3v2Tag> {
+    let preserved = preserved_popularimeter.filter(|popularimeter| {
+        tag.tag_type() == TagType::Id3v2 && popularimeter.play_counter > 0
+    })?;
+
+    clear_rating(tag);
+    repair_invalid_id3v2_languages(tag);
+    let mut id3v2 = Id3v2Tag::from(tag.clone());
+    id3v2.insert(Frame::Popularimeter(PopularimeterFrame::new(
+        preserved.email,
+        0,
+        preserved.play_counter,
+    )));
+    Some(id3v2)
 }
 
 #[cfg(test)]

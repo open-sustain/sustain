@@ -928,6 +928,7 @@ impl LibraryStore for InMemoryLibraryStore {
 
         if capabilities.audio
             && let Some(acoustics) = analysis.acoustics
+            && acoustic_features_are_finite(acoustics)
         {
             self.acoustics
                 .lock()
@@ -941,9 +942,10 @@ impl LibraryStore for InMemoryLibraryStore {
         if let Some(track) = tracks.get_mut(&track_id) {
             if capabilities.bpm
                 && let Some(bpm) = analysis.bpm
+                && let Some(bpm) = valid_metadata_bpm_from_analysis(bpm)
                 && track.metadata.bpm.is_none()
             {
-                track.metadata.bpm = Some(bpm.round() as u32);
+                track.metadata.bpm = Some(bpm);
             }
             if capabilities.key
                 && let Some(key) = analysis.key
@@ -1066,6 +1068,7 @@ impl LibraryStore for InMemoryLibraryStore {
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?
             .iter()
+            .filter(|(_, features)| acoustic_features_are_finite(**features))
             .map(|(id, features)| (*id, *features))
             .collect())
     }
@@ -1370,4 +1373,27 @@ impl LibraryStore for InMemoryLibraryStore {
             .cloned()
             .unwrap_or_default())
     }
+}
+
+fn valid_metadata_bpm_from_analysis(bpm: f32) -> Option<u32> {
+    if !bpm.is_finite() || bpm < 0.0 {
+        return None;
+    }
+    let rounded = bpm.round();
+    if rounded > sustain_domain::MAX_BPM as f32 {
+        return None;
+    }
+    sustain_domain::validate_bpm(rounded as u32)
+}
+
+fn acoustic_features_are_finite(features: AcousticFeatures) -> bool {
+    features.integrated_lufs.is_finite()
+        && features.short_term_lufs_max.is_finite()
+        && features.loudness_range_lu.is_finite()
+        && features.onset_rate_hz.is_finite()
+        && features.low_band_ratio.is_finite()
+        && features.mid_band_ratio.is_finite()
+        && features.high_band_ratio.is_finite()
+        && features.low_band_variation.is_finite()
+        && features.tonalness.is_finite()
 }

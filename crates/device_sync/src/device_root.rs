@@ -132,7 +132,9 @@ impl DeviceRoot {
             ));
         }
         let mut bytes = Vec::new();
-        File::from(fd).take(limit + 1).read_to_end(&mut bytes)?;
+        File::from(fd)
+            .take(limit.saturating_add(1))
+            .read_to_end(&mut bytes)?;
         if bytes.len() as u64 > limit {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

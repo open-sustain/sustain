@@ -22,6 +22,7 @@ use super::decode::{
 
 const CACHE_SCHEMA_VERSION: i64 = 2;
 const CACHE_SOURCE_KIND_EMBEDDED_TRACK: &str = "embedded-track";
+const CACHE_MAX_BYTES: i64 = 5_i64 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ArtworkSource {
@@ -203,15 +204,21 @@ impl CachedArtworkRow {
 
 pub(super) struct ArtworkDiskCache {
     connection: Mutex<Connection>,
+    max_bytes: i64,
 }
 
 impl ArtworkDiskCache {
     pub(super) fn open(cache_dir: &Path) -> Option<Self> {
+        Self::open_with_max_bytes(cache_dir, CACHE_MAX_BYTES)
+    }
+
+    fn open_with_max_bytes(cache_dir: &Path, max_bytes: i64) -> Option<Self> {
         fs::create_dir_all(cache_dir).ok()?;
         let connection = Connection::open(cache_dir.join("artwork-cache.sqlite")).ok()?;
         Self::initialize(&connection).ok()?;
         Some(Self {
             connection: Mutex::new(connection),
+            max_bytes,
         })
     }
 
@@ -325,12 +332,12 @@ impl ArtworkDiskCache {
         };
         let cached = {
             let connection = self.connection.lock().ok()?;
-            connection
+            let cached = connection
                 .query_row(
                     query,
                     params![
                         source_kind,
-                        source_key,
+                        source_key.as_slice(),
                         fingerprint.file_size,
                         fingerprint.mtime_ns,
                         CACHE_SCHEMA_VERSION,
@@ -349,7 +356,26 @@ impl ArtworkDiskCache {
                 )
                 .optional()
                 .ok()
-                .flatten()?
+                .flatten()?;
+            let _ = connection.execute(
+                r#"
+                UPDATE artwork_cache
+                   SET updated_at_unix = unixepoch()
+                 WHERE source_kind = ?1
+                   AND source_key = ?2
+                   AND file_size = ?3
+                   AND mtime_ns = ?4
+                   AND format_version = ?5
+                "#,
+                params![
+                    source_kind,
+                    source_key.as_slice(),
+                    fingerprint.file_size,
+                    fingerprint.mtime_ns,
+                    CACHE_SCHEMA_VERSION,
+                ],
+            );
+            cached
         };
         cached.decode(variant)
     }
@@ -384,8 +410,9 @@ impl ArtworkDiskCache {
         let background = palette.map(|palette| palette.background);
         let foreground = palette.map(|palette| palette.foreground);
         let secondary = palette.map(|palette| palette.secondary);
-        let _ = connection.execute(
-            r#"
+        if connection
+            .execute(
+                r#"
             INSERT INTO artwork_cache (
                 source_kind,
                 source_key,
@@ -531,35 +558,148 @@ impl ArtworkDiskCache {
                     END,
                 updated_at_unix = excluded.updated_at_unix
             "#,
-            params![
-                source_kind,
-                source_key,
-                fingerprint.file_size,
-                fingerprint.mtime_ns,
-                CACHE_SCHEMA_VERSION,
-                cached
-                    .dimensions
-                    .map(|dimensions| i64::from(dimensions.width)),
-                cached
-                    .dimensions
-                    .map(|dimensions| i64::from(dimensions.height)),
-                cached
-                    .encoded_bytes_len
-                    .and_then(|bytes| i64::try_from(bytes).ok()),
-                cached.tile_png.as_deref(),
-                cached.detail_png.as_deref(),
-                background.map(|color| i64::from(color.red)),
-                background.map(|color| i64::from(color.green)),
-                background.map(|color| i64::from(color.blue)),
-                foreground.map(|color| i64::from(color.red)),
-                foreground.map(|color| i64::from(color.green)),
-                foreground.map(|color| i64::from(color.blue)),
-                secondary.map(|color| i64::from(color.red)),
-                secondary.map(|color| i64::from(color.green)),
-                secondary.map(|color| i64::from(color.blue)),
-            ],
-        );
+                params![
+                    source_kind,
+                    source_key,
+                    fingerprint.file_size,
+                    fingerprint.mtime_ns,
+                    CACHE_SCHEMA_VERSION,
+                    cached
+                        .dimensions
+                        .map(|dimensions| i64::from(dimensions.width)),
+                    cached
+                        .dimensions
+                        .map(|dimensions| i64::from(dimensions.height)),
+                    cached
+                        .encoded_bytes_len
+                        .and_then(|bytes| i64::try_from(bytes).ok()),
+                    cached.tile_png.as_deref(),
+                    cached.detail_png.as_deref(),
+                    background.map(|color| i64::from(color.red)),
+                    background.map(|color| i64::from(color.green)),
+                    background.map(|color| i64::from(color.blue)),
+                    foreground.map(|color| i64::from(color.red)),
+                    foreground.map(|color| i64::from(color.green)),
+                    foreground.map(|color| i64::from(color.blue)),
+                    secondary.map(|color| i64::from(color.red)),
+                    secondary.map(|color| i64::from(color.green)),
+                    secondary.map(|color| i64::from(color.blue)),
+                ],
+            )
+            .is_ok()
+        {
+            let _ = self.evict_over_budget(&connection);
+        }
     }
+
+    fn evict_over_budget(&self, connection: &Connection) -> rusqlite::Result<()> {
+        if self.max_bytes <= 0 {
+            connection.execute("DELETE FROM artwork_cache", [])?;
+            return Ok(());
+        }
+
+        let mut total_bytes = cache_payload_bytes(connection)?;
+        if total_bytes <= self.max_bytes {
+            return Ok(());
+        }
+
+        for key in oldest_detail_payloads(connection)? {
+            if total_bytes <= self.max_bytes {
+                break;
+            }
+            connection.execute(
+                r#"
+                UPDATE artwork_cache
+                   SET detail_png = NULL
+                 WHERE source_kind = ?1
+                   AND source_key = ?2
+                "#,
+                params![key.source_kind.as_str(), key.source_key.as_slice()],
+            )?;
+            total_bytes = total_bytes.saturating_sub(key.payload_bytes);
+        }
+
+        if total_bytes <= self.max_bytes {
+            return Ok(());
+        }
+
+        for key in oldest_rows(connection)? {
+            if total_bytes <= self.max_bytes {
+                break;
+            }
+            connection.execute(
+                r#"
+                DELETE FROM artwork_cache
+                 WHERE source_kind = ?1
+                   AND source_key = ?2
+                "#,
+                params![key.source_kind.as_str(), key.source_key.as_slice()],
+            )?;
+            total_bytes = total_bytes.saturating_sub(key.payload_bytes);
+        }
+        Ok(())
+    }
+}
+
+struct CachePayloadKey {
+    source_kind: String,
+    source_key: Vec<u8>,
+    payload_bytes: i64,
+}
+
+fn cache_payload_bytes(connection: &Connection) -> rusqlite::Result<i64> {
+    connection.query_row(
+        r#"
+        SELECT COALESCE(SUM(
+                   COALESCE(length(tile_png), 0)
+                 + COALESCE(length(detail_png), 0)
+               ), 0)
+          FROM artwork_cache
+        "#,
+        [],
+        |row| row.get(0),
+    )
+}
+
+fn oldest_detail_payloads(connection: &Connection) -> rusqlite::Result<Vec<CachePayloadKey>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT source_kind,
+               source_key,
+               length(detail_png)
+          FROM artwork_cache
+         WHERE detail_png IS NOT NULL
+         ORDER BY updated_at_unix ASC, source_kind ASC, source_key ASC
+        "#,
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(CachePayloadKey {
+            source_kind: row.get(0)?,
+            source_key: row.get(1)?,
+            payload_bytes: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn oldest_rows(connection: &Connection) -> rusqlite::Result<Vec<CachePayloadKey>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT source_kind,
+               source_key,
+               COALESCE(length(tile_png), 0) + COALESCE(length(detail_png), 0)
+          FROM artwork_cache
+         ORDER BY updated_at_unix ASC, source_kind ASC, source_key ASC
+        "#,
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok(CachePayloadKey {
+            source_kind: row.get(0)?,
+            source_key: row.get(1)?,
+            payload_bytes: row.get(2)?,
+        })
+    })?;
+    rows.collect()
 }
 
 #[cfg(test)]
@@ -570,6 +710,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
+    use rusqlite::params;
     use sustain_artwork::{ArtworkDimensions, MAX_ENCODED_ARTWORK_BYTES};
 
     use crate::artwork_color::{ArtworkPaletteComponents, RgbColorComponents};
@@ -661,6 +802,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cache_hit_refreshes_row_recency() {
+        let (_dir, cache) = test_cache();
+        let source = test_source();
+        let fingerprint = test_fingerprint();
+        cache.store(
+            &source,
+            fingerprint,
+            &CachedArtwork {
+                tile_png: Some(VALID_PNG.to_vec()),
+                ..cached_metadata()
+            },
+        );
+        set_updated_at(&cache, &source, 1);
+
+        assert!(
+            cache
+                .load(&source, fingerprint, ArtworkVariant::Tile)
+                .is_some(),
+            "valid tile row should load from cache"
+        );
+
+        assert!(
+            updated_at(&cache, &source) > 1,
+            "cache hits should refresh recency for eviction ordering"
+        );
+    }
+
+    #[test]
+    fn cache_eviction_trims_detail_payloads_before_tile_rows() {
+        let max_bytes = i64::try_from(VALID_PNG.len() * 3).expect("small payload size");
+        let (_dir, cache) = test_cache_with_limit(max_bytes);
+        let fingerprint = test_fingerprint();
+
+        for index in 1..=3 {
+            cache.store(
+                &test_source_at(index),
+                fingerprint,
+                &CachedArtwork {
+                    tile_png: Some(VALID_PNG.to_vec()),
+                    detail_png: Some(VALID_PNG.to_vec()),
+                    ..cached_metadata()
+                },
+            );
+        }
+
+        assert_eq!(row_count(&cache), 3);
+        assert_eq!(payload_count(&cache, "tile_png"), 3);
+        assert_eq!(payload_count(&cache, "detail_png"), 0);
+        assert_eq!(payload_bytes(&cache), max_bytes);
+    }
+
     struct TestCacheDir(PathBuf);
 
     impl Drop for TestCacheDir {
@@ -680,10 +873,26 @@ mod tests {
         (TestCacheDir(dir), cache)
     }
 
+    fn test_cache_with_limit(max_bytes: i64) -> (TestCacheDir, ArtworkDiskCache) {
+        let index = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "sustain-ui-artwork-cache-test-{}-{index}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = ArtworkDiskCache::open_with_max_bytes(&dir, max_bytes)
+            .expect("open artwork disk cache");
+        (TestCacheDir(dir), cache)
+    }
+
     fn test_source() -> ArtworkSource {
+        test_source_at(1)
+    }
+
+    fn test_source_at(index: u32) -> ArtworkSource {
         ArtworkSource::embedded_track(
-            PathBuf::from("Artist/Album/01.flac"),
-            PathBuf::from("/tmp/01.flac"),
+            PathBuf::from(format!("Artist/Album/{index:02}.flac")),
+            PathBuf::from(format!("/tmp/{index:02}.flac")),
         )
     }
 
@@ -713,5 +922,61 @@ mod tests {
 
     const fn rgb(red: u8, green: u8, blue: u8) -> RgbColorComponents {
         RgbColorComponents { red, green, blue }
+    }
+
+    fn set_updated_at(cache: &ArtworkDiskCache, source: &ArtworkSource, updated_at: i64) {
+        let (source_kind, source_key) = source.cache_key();
+        let connection = cache.connection.lock().expect("cache connection");
+        connection
+            .execute(
+                r#"
+                UPDATE artwork_cache
+                   SET updated_at_unix = ?3
+                 WHERE source_kind = ?1
+                   AND source_key = ?2
+                "#,
+                params![source_kind, source_key, updated_at],
+            )
+            .expect("set updated_at");
+    }
+
+    fn updated_at(cache: &ArtworkDiskCache, source: &ArtworkSource) -> i64 {
+        let (source_kind, source_key) = source.cache_key();
+        let connection = cache.connection.lock().expect("cache connection");
+        connection
+            .query_row(
+                r#"
+                SELECT updated_at_unix
+                  FROM artwork_cache
+                 WHERE source_kind = ?1
+                   AND source_key = ?2
+                "#,
+                params![source_kind, source_key],
+                |row| row.get(0),
+            )
+            .expect("load updated_at")
+    }
+
+    fn row_count(cache: &ArtworkDiskCache) -> i64 {
+        let connection = cache.connection.lock().expect("cache connection");
+        connection
+            .query_row("SELECT COUNT(*) FROM artwork_cache", [], |row| row.get(0))
+            .expect("count rows")
+    }
+
+    fn payload_count(cache: &ArtworkDiskCache, column: &str) -> i64 {
+        let connection = cache.connection.lock().expect("cache connection");
+        connection
+            .query_row(
+                &format!("SELECT COUNT(*) FROM artwork_cache WHERE {column} IS NOT NULL"),
+                [],
+                |row| row.get(0),
+            )
+            .expect("count payloads")
+    }
+
+    fn payload_bytes(cache: &ArtworkDiskCache) -> i64 {
+        let connection = cache.connection.lock().expect("cache connection");
+        super::cache_payload_bytes(&connection).expect("count payload bytes")
     }
 }

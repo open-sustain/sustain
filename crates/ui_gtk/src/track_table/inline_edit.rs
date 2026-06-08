@@ -203,6 +203,25 @@ impl InlineEditController {
         self.install_click_gesture(list_item, cell, field);
     }
 
+    pub(crate) fn unregister_editable_cell(&self, list_item: &gtk::ListItem) {
+        let editing_this_item = self
+            .active
+            .borrow()
+            .as_ref()
+            .is_some_and(|active| active.list_item == *list_item);
+        if editing_this_item {
+            self.finish_active(FinishMode::Commit);
+        }
+
+        self.cells.borrow_mut().retain(|entry| {
+            entry.cell.upgrade().is_some()
+                && entry
+                    .list_item
+                    .upgrade()
+                    .is_some_and(|registered| registered != *list_item)
+        });
+    }
+
     fn install_click_gesture(
         &self,
         list_item: &gtk::ListItem,

@@ -22,8 +22,8 @@ use super::{
     AudioFormat, InitialTags, LibraryScanner, LoftyMetadataService, MetadataError, MetadataResult,
     MetadataService, Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, apply_bool_change,
     apply_number_change, apply_text_change, apply_year_change, atomic_write_via_rename,
-    audio_format_from_path, bpm_item_key, hash_file_content, lyrics_item_key, parse_flag,
-    popularimeter_from_rating, repair_invalid_id3v2_languages, star_rating_value,
+    audio_format_from_path, bpm_item_key, hash_file_content, lyrics_item_key, parse_bpm,
+    parse_flag, popularimeter_from_rating, repair_invalid_id3v2_languages, star_rating_value,
     valid_embedded_picture,
 };
 use sustain_domain::TrackRelativePath;
@@ -70,6 +70,20 @@ fn rejects_unsupported_audio_formats() {
         audio_format_from_path(Path::new("/music/no-extension")),
         Err(MetadataError::UnsupportedAudioFormat)
     );
+}
+
+#[test]
+fn parse_flag_accepts_yes_no_case_insensitively() {
+    assert_eq!(parse_flag("YES"), Some(true));
+    assert_eq!(parse_flag("Yes"), Some(true));
+    assert_eq!(parse_flag("NO"), Some(false));
+    assert_eq!(parse_flag("No"), Some(false));
+}
+
+#[test]
+fn parse_bpm_rejects_values_outside_the_metadata_range() {
+    assert_eq!(parse_bpm("655"), Some(655));
+    assert_eq!(parse_bpm("656"), None);
 }
 
 #[test]
@@ -345,6 +359,42 @@ fn rating_survives_a_container_round_trip_on_every_format() {
 }
 
 #[test]
+fn write_rating_preserves_popm_counter_when_setting_rating() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("rated.mp3");
+    fs::write(&path, mp3_with_popm("other-player@example.com", 64, 23)).expect("write fixture");
+
+    LoftyMetadataService
+        .write_rating(&path, Rating::new(4).expect("valid rating"))
+        .expect("write rating");
+
+    let popm = raw_popm(&path).expect("POPM frame survives");
+    assert_eq!(popm.play_counter, 23);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn write_rating_preserves_popm_counter_when_clearing_rating() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("cleared.mp3");
+    fs::write(&path, mp3_with_popm("other-player@example.com", 196, 23)).expect("write fixture");
+
+    LoftyMetadataService
+        .write_rating(&path, Rating::unrated())
+        .expect("clear rating");
+
+    let popm = raw_popm(&path).expect("POPM counter frame survives");
+    assert_eq!(popm.email, "other-player@example.com");
+    assert_eq!(popm.rating, 0);
+    assert_eq!(popm.play_counter, 23);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
 fn id3v2_drops_the_plain_bpm_and_lyrics_keys() {
     // Documents why the fix was needed: ID3v2 maps neither `ItemKey::Bpm`
     // nor `ItemKey::Lyrics`, so the old write path lost both on save.
@@ -602,6 +652,52 @@ fn mpeg_audio_frames(count: usize) -> Vec<u8> {
     bytes
 }
 
+fn mp3_with_popm(email: &str, rating: u8, play_counter: u64) -> Vec<u8> {
+    let mut content = email.as_bytes().to_vec();
+    content.push(0);
+    content.push(rating);
+    content.extend_from_slice(&play_counter.to_be_bytes());
+
+    let mut frame = Vec::new();
+    frame.extend_from_slice(b"POPM");
+    frame.extend_from_slice(&(content.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&[0x00, 0x00]);
+    frame.extend_from_slice(&content);
+
+    let mut bytes = id3v2_3_tag(&frame);
+    bytes.extend_from_slice(&mpeg_audio_frames(4));
+    bytes
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RawPopm {
+    email: String,
+    rating: u8,
+    play_counter: u64,
+}
+
+fn raw_popm(path: &Path) -> Option<RawPopm> {
+    let bytes = fs::read(path).ok()?;
+    let offset = bytes.windows(4).position(|window| window == b"POPM")?;
+    let size_start = offset.checked_add(4)?;
+    let content_start = offset.checked_add(10)?;
+    let size = u32::from_be_bytes(bytes.get(size_start..size_start + 4)?.try_into().ok()?);
+    let content_end = content_start.checked_add(size as usize)?;
+    let content = bytes.get(content_start..content_end)?;
+    let email_end = content.iter().position(|byte| *byte == 0)?;
+    let email = String::from_utf8(content[..email_end].to_vec()).ok()?;
+    let rating = *content.get(email_end + 1)?;
+    let counter = content.get(email_end + 2..)?;
+    let play_counter = counter
+        .iter()
+        .fold(0_u64, |value, byte| (value << 8) | u64::from(*byte));
+    Some(RawPopm {
+        email,
+        rating,
+        play_counter,
+    })
+}
+
 /// A 1×1 PNG that passes Sustain's artwork policy.
 fn tiny_png() -> Vec<u8> {
     vec![
@@ -771,6 +867,68 @@ fn scanner_recurses_and_ignores_unsupported_files() {
     assert!(!scan.cancelled);
 
     fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn scanner_follows_symlinked_tracks_and_folders() {
+    let root = unique_test_directory();
+    let targets = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library directory");
+    fs::create_dir_all(targets.join("album")).expect("create target album");
+    fs::write(targets.join("linked.mp3"), b"audio").expect("write target track");
+    fs::write(targets.join("album/song.flac"), b"audio").expect("write target album track");
+    std::os::unix::fs::symlink(targets.join("linked.mp3"), root.join("linked.mp3"))
+        .expect("symlink track");
+    std::os::unix::fs::symlink(targets.join("album"), root.join("album")).expect("symlink album");
+
+    let metadata_service =
+        FakeMetadataService::for_paths([root.join("linked.mp3"), root.join("album/song.flac")]);
+    let scan = LibraryScanner::new(&metadata_service)
+        .scan(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
+        )
+        .expect("scan symlinked library");
+
+    let scanned_paths = scan
+        .tracks
+        .iter()
+        .map(|track| track.relative_path.as_path().to_path_buf())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        scanned_paths,
+        vec![
+            PathBuf::from("album/song.flac"),
+            PathBuf::from("linked.mp3")
+        ]
+    );
+    assert!(scan.failures.is_empty());
+
+    fs::remove_dir_all(root).expect("remove test library");
+    fs::remove_dir_all(targets).expect("remove test targets");
+}
+
+#[test]
+fn scanner_records_broken_symlinks_as_failures() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library directory");
+    std::os::unix::fs::symlink(root.join("missing.mp3"), root.join("broken.mp3"))
+        .expect("create broken symlink");
+
+    let scan = LibraryScanner::new(&FakeMetadataService::default())
+        .scan(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
+        )
+        .expect("scan library");
+
+    assert!(scan.tracks.is_empty());
+    assert_eq!(scan.failures.len(), 1);
+    assert!(!scan.complete_for_missing_reconciliation);
+
+    fs::remove_dir_all(root).expect("remove test library");
 }
 
 #[test]
@@ -1197,6 +1355,17 @@ impl ScanFilesystem for FaultInjectingScanFilesystem {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
         }
         StdScanFilesystem.symlink_metadata(path)
+    }
+
+    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        if self.unreadable_path.as_deref() == Some(path) {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        StdScanFilesystem.metadata(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        StdScanFilesystem.canonicalize(path)
     }
 }
 

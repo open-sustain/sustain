@@ -1284,7 +1284,11 @@ fn track_row(
     } else {
         track.sample_rate_hz
     };
-    let tempo = track.bpm.map(|b| (b * 100.0).round() as u32).unwrap_or(0);
+    let tempo = track
+        .bpm
+        .and_then(crate::tempo_centibpm)
+        .map(u32::from)
+        .unwrap_or(0);
 
     let mut row = Vec::with_capacity(0x88);
     let u16 = |row: &mut Vec<u8>, v: u16| row.extend_from_slice(&v.to_le_bytes());

@@ -9,6 +9,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
+    time::SystemTime,
 };
 
 use sha2::{Digest, Sha256};
@@ -179,7 +180,11 @@ impl TagMirrorBlobStore {
         Ok(bytes)
     }
 
-    pub(crate) fn garbage_collect(&self, referenced: &BTreeSet<String>) -> StoreResult<()> {
+    pub(crate) fn garbage_collect(
+        &self,
+        referenced: &BTreeSet<String>,
+        snapshot: SystemTime,
+    ) -> StoreResult<()> {
         let entries = match fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -201,6 +206,13 @@ impl TagMirrorBlobStore {
                 .strip_prefix("sha256-")
                 .is_some_and(|digest| referenced.contains(digest));
             if !referenced_blob {
+                if entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .is_ok_and(|modified| modified.duration_since(snapshot).is_ok())
+                {
+                    continue;
+                }
                 fs::remove_file(entry.path())
                     .map_err(|error| StoreError::Database(error.to_string()))?;
                 removed = true;
@@ -251,4 +263,65 @@ fn sync_directory(path: &Path) -> StoreResult<()> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| StoreError::Database(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{Duration, SystemTime},
+    };
+
+    use super::TagMirrorBlobStore;
+
+    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(1);
+
+    const VALID_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5,
+        0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64,
+        0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    #[test]
+    fn garbage_collect_skips_blobs_newer_than_snapshot() {
+        let (_dir, store) = test_store();
+        let artwork = store.publish(VALID_PNG).expect("publish artwork");
+        let path = store.path_for(&artwork);
+
+        store
+            .garbage_collect(&Default::default(), SystemTime::UNIX_EPOCH)
+            .expect("collect with old snapshot");
+        assert!(path.exists());
+
+        store
+            .garbage_collect(
+                &Default::default(),
+                SystemTime::now() + Duration::from_secs(1),
+            )
+            .expect("collect with future snapshot");
+        assert!(!path.exists());
+    }
+
+    fn test_store() -> (TestDir, TagMirrorBlobStore) {
+        let index = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "sustain-tag-mirror-test-{}-{index}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = TagMirrorBlobStore::new(root.clone());
+        (TestDir(root), store)
+    }
+
+    struct TestDir(PathBuf);
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 }

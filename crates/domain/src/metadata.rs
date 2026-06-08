@@ -3,6 +3,8 @@
 
 use std::{path::Path, time::Duration};
 
+pub const MAX_BPM: u32 = 655;
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrackMetadata {
     pub title: Option<String>,
@@ -157,12 +159,34 @@ impl TrackMetadata {
         {
             return;
         }
-        if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
-            && !stem.trim().is_empty()
-        {
-            self.title = Some(stem.to_owned());
+        if let Some(stem) = path.file_stem() {
+            let stem = stem.to_string_lossy();
+            if stem.trim().is_empty() {
+                return;
+            }
+            self.title = Some(stem.into_owned());
         }
     }
+
+    pub const fn valid_bpm(value: u32) -> bool {
+        value <= MAX_BPM
+    }
+
+    pub const fn validate_bpm(value: u32) -> Option<u32> {
+        if Self::valid_bpm(value) {
+            Some(value)
+        } else {
+            None
+        }
+    }
+}
+
+pub const fn valid_bpm(value: u32) -> bool {
+    TrackMetadata::valid_bpm(value)
+}
+
+pub const fn validate_bpm(value: u32) -> Option<u32> {
+    TrackMetadata::validate_bpm(value)
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -226,7 +250,7 @@ fn fill_blank_text_field(target: &mut Option<String>, change: &FieldChange<Strin
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::Path};
 
     use super::{FieldChange, MetadataChange, TrackMetadata};
 
@@ -261,6 +285,16 @@ mod tests {
         metadata.ensure_title_from_filename(Path::new("/library/should-not-be-used.mp3"));
 
         assert_eq!(metadata.title.as_deref(), Some("Real Title"));
+    }
+
+    #[test]
+    fn ensure_title_from_filename_uses_lossy_non_utf8_stem() {
+        let mut metadata = TrackMetadata::default();
+        let path = Path::new("/library").join(OsString::from_vec(b"bad-\xff.mp3".to_vec()));
+
+        metadata.ensure_title_from_filename(&path);
+
+        assert_eq!(metadata.title.as_deref(), Some("bad-\u{fffd}"));
     }
 
     #[test]

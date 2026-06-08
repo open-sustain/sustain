@@ -62,6 +62,9 @@ pub enum NotificationCategory {
     ArtworkFetch,
     MetadataWrite,
     YoutubeAudioReplacement,
+    /// Playback transport failures that happen asynchronously after the
+    /// backend accepted a play request.
+    Playback,
     PlaybackStatistics,
     Command,
     /// Background DSP analysis (BPM / key / waveform) driven by the
@@ -569,6 +572,7 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         ApplicationRuntimeError::InvalidSmartPlaylistRules => {
             "A smart playlist needs at least one rule."
         }
+        ApplicationRuntimeError::InvalidBpm => "BPM must be between 0 and 655.",
         ApplicationRuntimeError::PlaylistEntryNotFound
         | ApplicationRuntimeError::PlaylistNotFound => "The playlist could not be updated.",
         ApplicationRuntimeError::PlaylistFolderNotFound => {

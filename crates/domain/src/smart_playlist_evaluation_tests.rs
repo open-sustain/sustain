@@ -109,6 +109,18 @@ fn text_contains_is_case_insensitive() {
 }
 
 #[test]
+fn text_contains_folds_accents_like_search() {
+    let track = track(1, Some("Déjà Vu"), 0, None);
+    let rule = SmartPlaylistRule::Text {
+        field: SmartPlaylistTextField::Genre,
+        operator: SmartPlaylistTextOperator::Contains,
+        value: "deja".to_owned(),
+    };
+
+    assert!(track_matches_rule(&track, &rule, unix(2_000)));
+}
+
+#[test]
 fn text_is_not_rejects_exact_match() {
     let track = track(1, Some("Jazz"), 0, None);
     let rule = SmartPlaylistRule::Text {
@@ -306,6 +318,34 @@ fn limit_truncates_to_count_after_sorting_by_play_count() {
     let matched_ids: Vec<i64> = matched.iter().map(|track| track.id.get()).collect();
 
     assert_eq!(matched_ids, vec![1, 4]);
+}
+
+#[test]
+fn limit_sorted_by_title_folds_accents_like_search() {
+    let mut tracks = vec![
+        track(1, Some("Jazz"), 0, None),
+        track(2, Some("Jazz"), 0, None),
+    ];
+    tracks[0].metadata.title = Some("Éclair".to_owned());
+    tracks[1].metadata.title = Some("Zebra".to_owned());
+
+    let rules = SmartPlaylistRuleSet {
+        match_kind: SmartPlaylistMatchKind::All,
+        rules: vec![SmartPlaylistRule::Text {
+            field: SmartPlaylistTextField::Genre,
+            operator: SmartPlaylistTextOperator::Is,
+            value: "Jazz".to_owned(),
+        }],
+        limit: Some(SmartPlaylistLimit {
+            count: NonZeroU32::new(1).expect("positive count"),
+            selection: SmartPlaylistLimitSelection::TitleAscending,
+        }),
+    };
+
+    let matched = matching_tracks(&tracks, &rules, unix(2_000));
+    let matched_ids: Vec<i64> = matched.iter().map(|track| track.id.get()).collect();
+
+    assert_eq!(matched_ids, vec![1]);
 }
 
 #[test]
