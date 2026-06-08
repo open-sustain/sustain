@@ -18,13 +18,14 @@ use lofty::{
 };
 use sustain_domain::{FieldChange, MetadataChange, TrackMetadata};
 
+use super::read::{parse_bpm, parse_flag, star_rating_value};
+use super::scan::{ScanFilesystem, StdScanFilesystem};
 use super::{
     AudioFormat, InitialTags, LibraryScanner, LoftyMetadataService, MetadataError, MetadataResult,
-    MetadataService, Rating, ScanFilesystem, ScanFingerprint, StdScanFilesystem, apply_bool_change,
-    apply_number_change, apply_text_change, apply_year_change, atomic_write_via_rename,
-    audio_format_from_path, bpm_item_key, hash_file_content, lyrics_item_key, parse_bpm,
-    parse_flag, popularimeter_from_rating, repair_invalid_id3v2_languages, star_rating_value,
-    valid_embedded_picture,
+    MetadataService, Rating, ScanFingerprint, apply_bool_change, apply_number_change,
+    apply_text_change, apply_year_change, atomic_write_via_rename, audio_format_from_path,
+    bpm_item_key, hash_file_content, lyrics_item_key, popularimeter_from_rating,
+    repair_invalid_id3v2_languages, valid_embedded_picture,
 };
 use sustain_domain::TrackRelativePath;
 
