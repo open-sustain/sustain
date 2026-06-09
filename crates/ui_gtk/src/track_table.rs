@@ -804,17 +804,22 @@ pub(crate) fn build_track_table(
     // not opt into inline editing (everything but the Songs view today).
     let inline_edit = inline_edit.map(InlineEditController::new);
 
-    // The reorderable playlist table resorts on every playlist switch, and a
-    // synchronous resort of a large playlist was part of the #226 freeze.
-    // Incremental sorting spreads that work across idle ticks so the switch
-    // stays responsive. Only the playlist table opts in (row_reorder.is_some());
-    // the Songs view loads once and does not pay for it. Keep this tied to the
-    // playlist table — re-measure switches before changing where it applies.
-    let use_incremental_sort = row_reorder.is_some();
+    // Sorting is deliberately synchronous — `SortListModel`'s `incremental`
+    // mode stays off. The playlist table briefly opted in during the #226
+    // freeze fix, but an incremental model presents a temporarily-unsorted
+    // item order while the deferred sort runs, and `replace_rows`' in-place
+    // payload swap depends on the post-swap sorter nudge for the displayed
+    // order to be correct at all. The combination drew every playlist switch
+    // as the OLD playlist's permutation over the new rows, then visibly
+    // shuffled them into place across the following frames. A synchronous
+    // resort settles inside the same main-loop dispatch, so the switch
+    // renders atomically; it is affordable because row sort keys are stored
+    // pre-collated and the play-order sorter compares plain integers — the
+    // Songs view already takes this exact synchronous path on every column-
+    // header click over the full library. `replace_rows_presents_play_order_
+    // synchronously` pins the atomicity; re-measure a large playlist switch
+    // before reintroducing any deferred sorting here.
     let sorted_rows = gtk::SortListModel::new(Some(store.clone()), table.sorter());
-    if use_incremental_sort {
-        sorted_rows.set_incremental(true);
-    }
     let selection = gtk::MultiSelection::new(Some(sorted_rows));
 
     let scroller = gtk::ScrolledWindow::new();
@@ -1337,6 +1342,46 @@ mod tests {
                 saves.get(),
                 0,
                 "programmatic sort restore must never persist"
+            );
+        });
+    }
+
+    /// Regression for the messy playlist-open rendering: with the play-order
+    /// sort active, `replace_rows` must leave the sorted selection model
+    /// presenting the new rows in their final order before it returns — i.e.
+    /// before GTK can draw a frame. The in-place payload swap deliberately
+    /// emits no `items-changed` for the reused prefix, so the wrapping
+    /// `SortListModel` keeps the OLD playlist's permutation until the sorter
+    /// nudge re-sorts; if that re-sort is deferred (incremental sorting), the
+    /// switch draws the new rows scrambled and shuffles them into place over
+    /// the following frames.
+    #[test]
+    fn replace_rows_presents_play_order_synchronously() {
+        crate::test_support::with_gtk(|| {
+            // The playlists-table configuration: a row-reorder hook is what
+            // installs the play-order sorter on the status column.
+            let reorder: RowReorderCallback = Rc::new(|_| false);
+            let table = build_track_table(Vec::new(), None, None, None, Some(reorder), None);
+            table.apply_playlist_default_sort();
+
+            // "Old playlist": play order follows track id.
+            let first: Vec<TrackTableRow> = (1..=600)
+                .map(|id| row(id).with_playlist_position(Some(id as u32)))
+                .collect();
+            table.replace_rows(first);
+
+            // "New playlist": same length, reversed play order, so the
+            // payload swap invalidates every previously sorted position.
+            let second: Vec<TrackTableRow> = (1..=600)
+                .map(|id| row(id).with_playlist_position(Some(601 - id as u32)))
+                .collect();
+            table.replace_rows(second);
+
+            let presented = ordered_track_ids(&table.selection);
+            let expected: Vec<TrackId> = (1..=600).rev().filter_map(TrackId::new).collect();
+            assert_eq!(
+                presented, expected,
+                "the sorted view must present the new play order synchronously"
             );
         });
     }
