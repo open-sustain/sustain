@@ -271,21 +271,18 @@ fn resolve_move_target(
     Some((target_parent, position))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn sidebar_selection_changed_callback(
     runtime: &SharedRuntime,
     playlists_table: &TrackTable,
-    playlists_header: &PlaylistsHeader,
+    playlists_refresh: &PlaylistsViewRefreshContext,
     content_stack: &gtk::Stack,
-    playlists_dirty: &Rc<Cell<bool>>,
     visible_summary_refresh: VisibleSummaryRefreshCallback,
     current_search_text: &Rc<RefCell<String>>,
 ) -> crate::sidebar::SidebarSelectionChangedCallback {
     let runtime = runtime.clone();
     let playlists_table = playlists_table.clone();
-    let playlists_header = playlists_header.clone();
+    let playlists_refresh = playlists_refresh.clone();
     let content_stack = content_stack.clone();
-    let playlists_dirty = playlists_dirty.clone();
     let current_search_text = current_search_text.clone();
 
     Rc::new(move |selection| {
@@ -311,20 +308,28 @@ pub(super) fn sidebar_selection_changed_callback(
             Some(SidebarSelection::Statistics) => STATISTICS_VIEW,
             Some(SidebarSelection::Item(_)) => PLAYLISTS_VIEW,
         };
+        let switching_to_playlists = target == PLAYLISTS_VIEW
+            && content_stack.visible_child_name().as_deref() != Some(PLAYLISTS_VIEW);
+        if switching_to_playlists {
+            playlists_refresh.mark_dirty();
+        }
         if content_stack.visible_child_name().as_deref() != Some(target) {
             content_stack.set_visible_child_name(target);
         }
         let search_text = current_search_text.borrow().clone();
-        refresh_playlists_view_if_visible(
-            &runtime.borrow(),
-            &content_stack,
-            &playlists_table,
-            &playlists_header,
-            selection,
-            &search_text,
-            &playlists_dirty,
-        );
-        visible_summary_refresh();
+        let playlists_refreshed = if switching_to_playlists && !playlists_refresh.dirty() {
+            true
+        } else {
+            refresh_playlists_view_if_visible(
+                &runtime.borrow(),
+                &playlists_refresh,
+                selection,
+                &search_text,
+            )
+        };
+        if !playlists_refreshed {
+            visible_summary_refresh();
+        }
     })
 }
 

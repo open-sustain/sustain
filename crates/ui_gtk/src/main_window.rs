@@ -113,8 +113,8 @@ use playback::{
     update_play_pause_sensitivity,
 };
 use playlists::{
-    add_to_playlist_callback, add_to_playlist_provider, install_playlists_view_activator,
-    playlist_table_rows_for, refresh_playlists_view_if_visible,
+    PlaylistsViewRefreshContext, add_to_playlist_callback, add_to_playlist_provider,
+    install_playlists_view_activator, playlist_table_rows_for, refresh_playlists_view_if_visible,
 };
 use result_consumers::{
     ArtworkFetchResultConsumerContext, LibraryHydrationResultConsumerContext,
@@ -538,15 +538,14 @@ pub(crate) fn build_main_window(
     // is wasted work and dominates startup time on large libraries
     // (measured: ~672ms for 8890 rows in `replace_rows`).
     let playlists_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(true));
-    install_playlists_view_activator(
+    let playlists_refresh = PlaylistsViewRefreshContext::new(
         &content_stack,
-        &runtime,
         &playlists_table,
         &playlists_header,
-        &sidebar,
-        &current_search_text,
+        &status_bar,
         &playlists_dirty,
     );
+    install_playlists_view_activator(&playlists_refresh, &runtime, &sidebar, &current_search_text);
     tlog!("content stack + activators installed");
     // The Play button's behaviour depends on the visible view, which now
     // exists. One shared closure drives both the button and the Space
@@ -564,8 +563,8 @@ pub(crate) fn build_main_window(
     let visible_summary_refresh = visible_summary_refresh_callback(
         &runtime,
         &content_stack,
-        &sidebar,
         &status_bar,
+        &playlists_table,
         &current_search_text,
         device_panel.current_device_cell(),
     );
@@ -589,10 +588,8 @@ pub(crate) fn build_main_window(
         albums_view: &albums_view,
         duplicates_view: &duplicates_view,
         playlists_table: &playlists_table,
-        playlists_header: &playlists_header,
+        playlists_refresh: &playlists_refresh,
         sidebar: &sidebar,
-        content_stack: &content_stack,
-        playlists_dirty: &playlists_dirty,
         visible_summary_refresh: visible_summary_refresh.clone(),
         current_search_text: &current_search_text,
         device_panel: &device_panel,
@@ -639,9 +636,8 @@ pub(crate) fn build_main_window(
     sidebar.set_selection_changed(sidebar_selection_changed_callback(
         &runtime,
         &playlists_table,
-        &playlists_header,
+        &playlists_refresh,
         &content_stack,
-        &playlists_dirty,
         visible_summary_refresh.clone(),
         &current_search_text,
     ));
@@ -713,11 +709,9 @@ pub(crate) fn build_main_window(
             runtime: runtime.clone(),
             songs_table: songs_table.clone(),
             albums_view: albums_view.clone(),
-            playlists_table: playlists_table.clone(),
-            playlists_header: playlists_header.clone(),
+            playlists_refresh: playlists_refresh.clone(),
             sidebar: sidebar.clone(),
             content_stack: content_stack.clone(),
-            playlists_dirty: playlists_dirty.clone(),
             status_bar: status_bar.clone(),
             visible_summary_refresh: visible_summary_refresh.clone(),
         },
@@ -1591,15 +1585,15 @@ fn install_track_availability_observer(
 fn visible_summary_refresh_callback(
     runtime: &SharedRuntime,
     content_stack: &gtk::Stack,
-    sidebar: &PlaylistSidebar,
     status_bar: &StatusBar,
+    playlists_table: &TrackTable,
     current_search_text: &Rc<RefCell<String>>,
     current_device: Rc<RefCell<Option<ConnectedDevice>>>,
 ) -> VisibleSummaryRefreshCallback {
     let runtime = runtime.clone();
     let content_stack = content_stack.clone();
-    let sidebar = sidebar.clone();
     let status_bar = status_bar.clone();
+    let playlists_table = playlists_table.clone();
     let current_search_text = current_search_text.clone();
 
     Rc::new(move || {
@@ -1622,28 +1616,15 @@ fn visible_summary_refresh_callback(
             status_bar.update_summary(&rows);
             return;
         }
+        if content_stack.visible_child_name().as_deref() == Some(PLAYLISTS_VIEW) {
+            let (track_count, duration_seconds, size_bytes) = playlists_table.summary_values();
+            status_bar.update_summary_values(track_count, duration_seconds, size_bytes);
+            return;
+        }
         let search_text = current_search_text.borrow().clone();
-        let rows = visible_view_rows(
-            &runtime.borrow(),
-            &content_stack,
-            sidebar.current_selection(),
-            &search_text,
-        );
+        let rows = runtime_library_table_rows(&runtime.borrow(), &search_text);
         status_bar.update_summary(&rows);
     })
-}
-
-fn visible_view_rows(
-    runtime: &ApplicationRuntime,
-    content_stack: &gtk::Stack,
-    sidebar_selection: Option<SidebarSelection>,
-    search_text: &str,
-) -> Vec<TrackTableRow> {
-    if content_stack.visible_child_name().as_deref() == Some(PLAYLISTS_VIEW) {
-        playlist_table_rows_for(runtime, sidebar_selection, search_text)
-    } else {
-        runtime_library_table_rows(runtime, search_text)
-    }
 }
 
 fn track_analyze_run_callback(runtime: &SharedRuntime) -> TrackAnalyzeRunCallback {

@@ -68,6 +68,7 @@ impl ApplicationRuntime {
         library_store
             .delete_playlist_folder(folder_id)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        self.clear_track_column_layout_cache();
         playlist_items::compact_sibling_positions(library_store, removed.parent_folder_id)?;
         self.reload_playlist_state()
     }

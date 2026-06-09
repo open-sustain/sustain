@@ -37,11 +37,9 @@ pub(super) struct SearchWiringContext {
     pub(super) runtime: SharedRuntime,
     pub(super) songs_table: TrackTable,
     pub(super) albums_view: AlbumsView,
-    pub(super) playlists_table: TrackTable,
-    pub(super) playlists_header: PlaylistsHeader,
+    pub(super) playlists_refresh: PlaylistsViewRefreshContext,
     pub(super) sidebar: PlaylistSidebar,
     pub(super) content_stack: gtk::Stack,
-    pub(super) playlists_dirty: Rc<Cell<bool>>,
     pub(super) status_bar: StatusBar,
     pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
 }
@@ -53,11 +51,9 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
         runtime,
         songs_table,
         albums_view,
-        playlists_table,
-        playlists_header,
+        playlists_refresh,
         sidebar,
         content_stack,
-        playlists_dirty,
         status_bar,
         visible_summary_refresh,
     } = context;
@@ -99,11 +95,9 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
             let runtime = runtime.clone();
             let songs_table = songs_table.clone();
             let albums_view = albums_view.clone();
-            let playlists_table = playlists_table.clone();
-            let playlists_header = playlists_header.clone();
+            let playlists_refresh = playlists_refresh.clone();
             let sidebar = sidebar.clone();
             let content_stack = content_stack.clone();
-            let playlists_dirty = playlists_dirty.clone();
             let status_bar = status_bar.clone();
             let visible_summary_refresh = visible_summary_refresh.clone();
             let pending_rebuild_clear = pending_rebuild.clone();
@@ -125,17 +119,14 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
 
                 albums_view.set_search_text(new_text.clone());
 
-                refresh_playlists_view_if_visible(
+                let playlists_refreshed = refresh_playlists_view_if_visible(
                     &runtime.borrow(),
-                    &content_stack,
-                    &playlists_table,
-                    &playlists_header,
+                    &playlists_refresh,
                     sidebar.current_selection(),
                     &new_text,
-                    &playlists_dirty,
                 );
 
-                if !songs_visible {
+                if !songs_visible && !playlists_refreshed {
                     visible_summary_refresh();
                 }
             });

@@ -108,10 +108,8 @@ pub(super) struct TrackRowChangedContext<'a> {
     pub(super) albums_view: &'a AlbumsView,
     pub(super) duplicates_view: &'a DuplicatesView,
     pub(super) playlists_table: &'a TrackTable,
-    pub(super) playlists_header: &'a PlaylistsHeader,
+    pub(super) playlists_refresh: &'a PlaylistsViewRefreshContext,
     pub(super) sidebar: &'a PlaylistSidebar,
-    pub(super) content_stack: &'a gtk::Stack,
-    pub(super) playlists_dirty: &'a Rc<Cell<bool>>,
     pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
     pub(super) current_search_text: &'a Rc<RefCell<String>>,
     pub(super) device_panel: &'a DeviceSyncPanel,
@@ -125,10 +123,8 @@ pub(super) fn track_row_changed_callback(
     let albums_view = ctx.albums_view.clone();
     let duplicates_view = ctx.duplicates_view.clone();
     let playlists_table = ctx.playlists_table.clone();
-    let playlists_header = ctx.playlists_header.clone();
+    let playlists_refresh = ctx.playlists_refresh.clone();
     let sidebar = ctx.sidebar.clone();
-    let content_stack = ctx.content_stack.clone();
-    let playlists_dirty = ctx.playlists_dirty.clone();
     let current_search_text = ctx.current_search_text.clone();
     let visible_summary_refresh = ctx.visible_summary_refresh;
     let device_panel = ctx.device_panel.clone();
@@ -199,12 +195,9 @@ pub(super) fn track_row_changed_callback(
                 if membership_changed {
                     schedule_playlists_structural_refresh(
                         runtime.clone(),
-                        content_stack.clone(),
-                        playlists_table.clone(),
-                        playlists_header.clone(),
+                        playlists_refresh.clone(),
                         sidebar.clone(),
                         current_search_text.clone(),
-                        playlists_dirty.clone(),
                     );
                 } else if was_in_table {
                     // Membership unchanged and the row is visible —
@@ -244,30 +237,24 @@ fn inline_edit_changed_kind(field: EditableField) -> TrackRowChangedKind {
 
 fn schedule_playlists_structural_refresh(
     runtime: SharedRuntime,
-    content_stack: gtk::Stack,
-    playlists_table: TrackTable,
-    playlists_header: PlaylistsHeader,
+    playlists_refresh: PlaylistsViewRefreshContext,
     sidebar: PlaylistSidebar,
     current_search_text: Rc<RefCell<String>>,
-    playlists_dirty: Rc<Cell<bool>>,
 ) {
-    if content_stack.visible_child_name().as_deref() != Some(PLAYLISTS_VIEW) {
-        playlists_dirty.set(true);
+    if !playlists_refresh.is_visible() {
+        playlists_refresh.mark_dirty();
         return;
     }
-    if playlists_dirty.replace(true) {
+    if playlists_refresh.mark_dirty_and_was_dirty() {
         return;
     }
     glib::idle_add_local_once(move || {
         let search_text = current_search_text.borrow().clone();
         refresh_playlists_view_if_visible(
             &runtime.borrow(),
-            &content_stack,
-            &playlists_table,
-            &playlists_header,
+            &playlists_refresh,
             sidebar.current_selection(),
             &search_text,
-            &playlists_dirty,
         );
     });
 }

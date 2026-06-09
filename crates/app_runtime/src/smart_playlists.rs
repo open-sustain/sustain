@@ -2,7 +2,8 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use sustain_domain::{
-    PlaylistFolderId, SmartPlaylist, SmartPlaylistId, SmartPlaylistRuleSet, default_smart_playlists,
+    PlaylistFolderId, SmartPlaylist, SmartPlaylistId, SmartPlaylistRuleSet, TrackColumnLayoutScope,
+    default_smart_playlists,
 };
 
 use crate::{
@@ -92,6 +93,7 @@ impl ApplicationRuntime {
         library_store
             .delete_smart_playlist(smart_playlist_id)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        self.forget_track_column_layout(TrackColumnLayoutScope::SmartPlaylist(smart_playlist_id));
         playlist_items::compact_sibling_positions(library_store, removed.parent_folder_id)?;
         self.reload_playlist_state()
     }

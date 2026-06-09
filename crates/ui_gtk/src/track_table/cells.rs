@@ -3,6 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     rc::Rc,
 };
 
@@ -29,7 +30,7 @@ pub(super) struct TrackTableContextMenu {
     menu: TrackRowContextMenu,
     selection: gtk::MultiSelection,
     popover_parent: glib::WeakRef<gtk::ColumnView>,
-    cells: Rc<RefCell<Vec<TrackTableContextCell>>>,
+    cells: Rc<RefCell<HashMap<usize, TrackTableContextCell>>>,
 }
 
 impl TrackTableContextMenu {
@@ -42,7 +43,7 @@ impl TrackTableContextMenu {
             menu,
             selection,
             popover_parent: popover_parent.downgrade(),
-            cells: Rc::new(RefCell::new(Vec::new())),
+            cells: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
@@ -88,18 +89,17 @@ impl TrackTableContextMenu {
     }
 
     fn register_cell(&self, list_item: &gtk::ListItem, cell: &gtk::Box) {
-        self.cells.borrow_mut().push(TrackTableContextCell {
-            widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
-            list_item: list_item.downgrade(),
-        });
+        self.cells.borrow_mut().insert(
+            list_item_key(list_item),
+            TrackTableContextCell {
+                widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
+                list_item: list_item.downgrade(),
+            },
+        );
     }
 
     fn unregister_cell(&self, list_item: &gtk::ListItem) {
-        self.cells.borrow_mut().retain(|cell| {
-            cell.list_item
-                .upgrade()
-                .is_some_and(|registered| registered != *list_item)
-        });
+        self.cells.borrow_mut().remove(&list_item_key(list_item));
     }
 
     fn ordered_track_ids(&self) -> Vec<TrackId> {
@@ -119,8 +119,10 @@ impl TrackTableContextMenu {
 
     fn list_item_for_widget(&self, widget: &gtk::Widget) -> Option<TrackTableContextHit> {
         let mut cells = self.cells.borrow_mut();
-        cells.retain(|cell| cell.widget.upgrade().is_some() && cell.list_item.upgrade().is_some());
-        cells.iter().find_map(|cell| {
+        cells.retain(|_, cell| {
+            cell.widget.upgrade().is_some() && cell.list_item.upgrade().is_some()
+        });
+        cells.values().find_map(|cell| {
             let registered = cell.widget.upgrade()?;
             if registered == *widget {
                 Some(TrackTableContextHit {
@@ -159,7 +161,7 @@ trait CellBinding {
 /// binding in at setup (or bind), teardown removes the binding for that
 /// [`gtk::ListItem`], and a refresh prunes the dead bindings before visiting
 /// the live ones. Each cell kind parameterises this with its own payload.
-struct BindingRegistry<T>(Rc<RefCell<Vec<T>>>);
+struct BindingRegistry<T>(Rc<RefCell<HashMap<usize, T>>>);
 
 impl<T> Clone for BindingRegistry<T> {
     fn clone(&self) -> Self {
@@ -169,28 +171,26 @@ impl<T> Clone for BindingRegistry<T> {
 
 impl<T> Default for BindingRegistry<T> {
     fn default() -> Self {
-        Self(Rc::new(RefCell::new(Vec::new())))
+        Self(Rc::new(RefCell::new(HashMap::new())))
     }
 }
 
 impl<T: CellBinding> BindingRegistry<T> {
     fn push(&self, binding: T) {
-        self.0.borrow_mut().push(binding);
+        self.0
+            .borrow_mut()
+            .insert(list_item_key(binding.list_item()), binding);
     }
 
     /// Replaces any binding already registered for this list item. Rating
     /// cells re-register on every bind as the cell is recycled, so a stale
     /// entry for the same list item must not pile up.
     fn replace(&self, binding: T) {
-        let mut bindings = self.0.borrow_mut();
-        bindings.retain(|existing| existing.list_item() != binding.list_item());
-        bindings.push(binding);
+        self.push(binding);
     }
 
     fn remove(&self, list_item: &gtk::ListItem) {
-        self.0
-            .borrow_mut()
-            .retain(|binding| binding.list_item() != list_item);
+        self.0.borrow_mut().remove(&list_item_key(list_item));
     }
 
     /// Prunes bindings whose cell is no longer live, then visits each
@@ -198,11 +198,15 @@ impl<T: CellBinding> BindingRegistry<T> {
     /// re-enter the registry.
     fn for_each_live(&self, mut visit: impl FnMut(&T)) {
         let mut bindings = self.0.borrow_mut();
-        bindings.retain(|binding| binding.is_live());
-        for binding in bindings.iter() {
+        bindings.retain(|_, binding| binding.is_live());
+        for binding in bindings.values() {
             visit(binding);
         }
     }
+}
+
+fn list_item_key(list_item: &gtk::ListItem) -> usize {
+    list_item.as_ptr() as usize
 }
 
 struct StatusBinding {

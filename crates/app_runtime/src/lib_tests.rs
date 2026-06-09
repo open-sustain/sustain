@@ -34,7 +34,7 @@ use sustain_library_store::{
     PlaylistFolder, SourceFingerprint, SqliteLibraryStore, StoreError, StoreResult,
     StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
     SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, TrackAnalysis,
-    TrackColumnLayout, TrackColumnLayoutScope,
+    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
 use sustain_metadata::{
     InitialTags, LibraryScan, MetadataChange, MetadataError, MetadataResult, ScannedTrack,
@@ -2381,6 +2381,81 @@ fn runtime_saves_ui_settings_with_settings_store() {
     assert_eq!(runtime.save_ui_settings(ui.clone()), Ok(()));
 
     assert_eq!(runtime.settings().ui, ui);
+}
+
+#[test]
+fn runtime_caches_loaded_track_column_layouts() {
+    let counts = Arc::new(StoreCallCounts::default());
+    let inner = InMemoryLibraryStore::new();
+    let scope = TrackColumnLayoutScope::Playlist(playlist_id(1));
+    let layout = sample_track_column_layout();
+    inner
+        .save_track_column_layout(scope, &layout)
+        .expect("seed layout");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(CallCountingLibraryStore::new(inner, counts.clone()));
+    let runtime = ApplicationRuntime::new()
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize");
+
+    assert_eq!(
+        runtime.load_track_column_layout(scope),
+        Ok(Some(layout.clone()))
+    );
+    assert_eq!(runtime.load_track_column_layout(scope), Ok(Some(layout)));
+    assert_eq!(
+        counts.track_column_layout_loads.load(Ordering::SeqCst),
+        1,
+        "playlist selection must not touch SQLite after the layout snapshot is cached",
+    );
+}
+
+#[test]
+fn runtime_caches_missing_track_column_layouts() {
+    let counts = Arc::new(StoreCallCounts::default());
+    let store: Arc<dyn LibraryStore> = Arc::new(CallCountingLibraryStore::new(
+        InMemoryLibraryStore::new(),
+        counts.clone(),
+    ));
+    let runtime = ApplicationRuntime::new()
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    let scope = TrackColumnLayoutScope::SmartPlaylist(smart_playlist_id(1));
+
+    assert_eq!(runtime.load_track_column_layout(scope), Ok(None));
+    assert_eq!(runtime.load_track_column_layout(scope), Ok(None));
+    assert_eq!(
+        counts.track_column_layout_loads.load(Ordering::SeqCst),
+        1,
+        "missing playlist overrides are cached too",
+    );
+}
+
+#[test]
+fn runtime_track_column_layout_save_updates_the_hot_path_cache() {
+    let counts = Arc::new(StoreCallCounts::default());
+    let store: Arc<dyn LibraryStore> = Arc::new(CallCountingLibraryStore::new(
+        InMemoryLibraryStore::new(),
+        counts.clone(),
+    ));
+    let runtime = ApplicationRuntime::new()
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    let layout = sample_track_column_layout();
+
+    runtime
+        .save_track_column_layout(TrackColumnLayoutScope::Default, &layout)
+        .expect("save layout");
+
+    assert_eq!(
+        runtime.load_track_column_layout(TrackColumnLayoutScope::Default),
+        Ok(Some(layout)),
+    );
+    assert_eq!(
+        counts.track_column_layout_loads.load(Ordering::SeqCst),
+        0,
+        "loading immediately after a successful save should use the updated runtime snapshot",
+    );
 }
 
 #[test]
@@ -5667,6 +5742,27 @@ fn playlist_id(value: i64) -> PlaylistId {
     }
 }
 
+fn smart_playlist_id(value: i64) -> SmartPlaylistId {
+    match SmartPlaylistId::new(value) {
+        Some(smart_playlist_id) => smart_playlist_id,
+        None => unreachable!("hard-coded positive smart playlist id should be valid"),
+    }
+}
+
+fn sample_track_column_layout() -> TrackColumnLayout {
+    TrackColumnLayout {
+        entries: vec![TrackColumnEntry {
+            column_id: "title".to_owned(),
+            visible: true,
+            width_px: 240,
+        }],
+        sort: Some(TrackColumnSort {
+            column_id: "title".to_owned(),
+            ascending: true,
+        }),
+    }
+}
+
 fn assert_playlist_track_ids(
     playlists: &[Playlist],
     playlist_id: PlaylistId,
@@ -6366,6 +6462,7 @@ fn online_run_is_a_force_path_that_does_not_pre_filter() {
 struct StoreCallCounts {
     track: std::sync::atomic::AtomicUsize,
     tracks: std::sync::atomic::AtomicUsize,
+    track_column_layout_loads: std::sync::atomic::AtomicUsize,
     statistics_updates: std::sync::atomic::AtomicUsize,
 }
 
@@ -6379,6 +6476,17 @@ struct CallCountingLibraryStore {
     counts: Arc<StoreCallCounts>,
     statistics_failures_remaining: std::sync::atomic::AtomicUsize,
     tracks_failures_remaining: std::sync::atomic::AtomicUsize,
+}
+
+impl CallCountingLibraryStore {
+    fn new(inner: InMemoryLibraryStore, counts: Arc<StoreCallCounts>) -> Self {
+        Self {
+            inner,
+            counts,
+            statistics_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
+            tracks_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
 }
 
 impl LibraryStore for CallCountingLibraryStore {
@@ -6648,6 +6756,9 @@ impl LibraryStore for CallCountingLibraryStore {
         &self,
         scope: TrackColumnLayoutScope,
     ) -> StoreResult<Option<TrackColumnLayout>> {
+        self.counts
+            .track_column_layout_loads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.load_track_column_layout(scope)
     }
 

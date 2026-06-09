@@ -6,6 +6,7 @@
 // confines a `#![allow(unsafe_code)]` to a small module exposing a safe API.
 
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
@@ -378,6 +379,7 @@ pub struct ApplicationRuntime {
     playlists: Vec<Playlist>,
     playlist_folders: Vec<PlaylistFolder>,
     smart_playlists: Vec<SmartPlaylist>,
+    track_column_layouts: RefCell<TrackColumnLayoutCache>,
     last_scan_library_path: Option<PathBuf>,
     last_scan_summary: Option<LibraryScanSummary>,
     last_library_import_summary: Option<LibraryImportSummary>,
@@ -541,6 +543,70 @@ pub type TrackDataObserver = Box<dyn Fn(TrackId)>;
 /// main loop (e.g. `glib::idle_add_local_once`).
 pub type SmartShuffleStateObserver = Box<dyn Fn()>;
 
+#[derive(Default)]
+struct TrackColumnLayoutCache {
+    default: Option<TrackColumnLayoutCacheEntry>,
+    playlists: BTreeMap<PlaylistId, TrackColumnLayoutCacheEntry>,
+    smart_playlists: BTreeMap<SmartPlaylistId, TrackColumnLayoutCacheEntry>,
+}
+
+#[derive(Clone)]
+enum TrackColumnLayoutCacheEntry {
+    Present(TrackColumnLayout),
+    Missing,
+}
+
+impl TrackColumnLayoutCacheEntry {
+    fn from_loaded(layout: Option<TrackColumnLayout>) -> Self {
+        match layout {
+            Some(layout) => Self::Present(layout),
+            None => Self::Missing,
+        }
+    }
+
+    fn into_loaded(self) -> Option<TrackColumnLayout> {
+        match self {
+            Self::Present(layout) => Some(layout),
+            Self::Missing => None,
+        }
+    }
+}
+
+impl TrackColumnLayoutCache {
+    fn get(&self, scope: TrackColumnLayoutScope) -> Option<TrackColumnLayoutCacheEntry> {
+        match scope {
+            TrackColumnLayoutScope::Default => self.default.clone(),
+            TrackColumnLayoutScope::Playlist(id) => self.playlists.get(&id).cloned(),
+            TrackColumnLayoutScope::SmartPlaylist(id) => self.smart_playlists.get(&id).cloned(),
+        }
+    }
+
+    fn store(&mut self, scope: TrackColumnLayoutScope, layout: Option<TrackColumnLayout>) {
+        let entry = TrackColumnLayoutCacheEntry::from_loaded(layout);
+        match scope {
+            TrackColumnLayoutScope::Default => self.default = Some(entry),
+            TrackColumnLayoutScope::Playlist(id) => {
+                self.playlists.insert(id, entry);
+            }
+            TrackColumnLayoutScope::SmartPlaylist(id) => {
+                self.smart_playlists.insert(id, entry);
+            }
+        }
+    }
+
+    fn forget(&mut self, scope: TrackColumnLayoutScope) {
+        match scope {
+            TrackColumnLayoutScope::Default => self.default = None,
+            TrackColumnLayoutScope::Playlist(id) => {
+                self.playlists.remove(&id);
+            }
+            TrackColumnLayoutScope::SmartPlaylist(id) => {
+                self.smart_playlists.remove(&id);
+            }
+        }
+    }
+}
+
 /// Lifecycle of the track-sized portion of runtime startup.
 ///
 /// `Publishing` means SQLite state and the search index are authoritative in
@@ -617,6 +683,7 @@ impl ApplicationRuntime {
             playlists: Vec::new(),
             playlist_folders: Vec::new(),
             smart_playlists: Vec::new(),
+            track_column_layouts: RefCell::new(TrackColumnLayoutCache::default()),
             last_scan_library_path: None,
             last_scan_summary: None,
             last_library_import_summary: None,
@@ -720,6 +787,8 @@ impl ApplicationRuntime {
         library_store: Arc<dyn LibraryStore>,
         metadata_service: Arc<dyn MetadataService>,
     ) -> ApplicationRuntimeResult<()> {
+        self.track_column_layouts
+            .replace(TrackColumnLayoutCache::default());
         if let Some(library_path) = self.settings.library_path() {
             duplicate_consolidation::recover_duplicate_consolidation_journal(
                 library_path,
@@ -770,6 +839,8 @@ impl ApplicationRuntime {
         library_store: Arc<dyn LibraryStore>,
         metadata_service: Arc<dyn MetadataService>,
     ) -> ApplicationRuntimeResult<()> {
+        self.track_column_layouts
+            .replace(TrackColumnLayoutCache::default());
         if let Some(library_path) = self.settings.library_path() {
             duplicate_consolidation::recover_duplicate_consolidation_journal(
                 library_path,
@@ -2285,12 +2356,19 @@ impl ApplicationRuntime {
         &self,
         scope: TrackColumnLayoutScope,
     ) -> ApplicationRuntimeResult<Option<TrackColumnLayout>> {
+        if let Some(layout) = self.track_column_layouts.borrow().get(scope) {
+            return Ok(layout.into_loaded());
+        }
         let Some(store) = self.library_store.as_deref() else {
             return Ok(None);
         };
-        store
+        let layout = store
             .load_track_column_layout(scope)
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        self.track_column_layouts
+            .borrow_mut()
+            .store(scope, layout.clone());
+        Ok(layout)
     }
 
     pub fn save_track_column_layout(
@@ -2303,7 +2381,20 @@ impl ApplicationRuntime {
         };
         store
             .save_track_column_layout(scope, layout)
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        self.track_column_layouts
+            .borrow_mut()
+            .store(scope, Some(layout.clone()));
+        Ok(())
+    }
+
+    pub(crate) fn forget_track_column_layout(&self, scope: TrackColumnLayoutScope) {
+        self.track_column_layouts.borrow_mut().forget(scope);
+    }
+
+    pub(crate) fn clear_track_column_layout_cache(&self) {
+        self.track_column_layouts
+            .replace(TrackColumnLayoutCache::default());
     }
 
     pub fn smart_playlist_matching_tracks(

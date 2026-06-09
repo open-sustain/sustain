@@ -115,6 +115,28 @@ impl TrackTable {
         self.store.splice(0, self.store.n_items(), &additions);
     }
 
+    pub(crate) fn summary_values(&self) -> (usize, u64, u64) {
+        let mut track_count = 0usize;
+        let mut duration_seconds = 0u64;
+        let mut size_bytes = 0u64;
+        for position in 0..self.store.n_items() {
+            let Some(row_object) = self
+                .store
+                .item(position)
+                .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+            else {
+                continue;
+            };
+            let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
+                continue;
+            };
+            track_count += 1;
+            duration_seconds += row.duration_seconds;
+            size_bytes += row.file_size_bytes;
+        }
+        (track_count, duration_seconds, size_bytes)
+    }
+
     /// Append structurally new rows without replacing the existing model.
     ///
     /// Import completion uses this path so freshly-added tracks can appear in
@@ -1030,6 +1052,23 @@ mod tests {
 
             assert_eq!(table.store.n_items(), 3);
             assert_eq!(table.store.item(0), first_object);
+        });
+    }
+
+    #[test]
+    fn summary_values_reads_the_current_store_rows() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(Vec::new(), None, None, None, None, None);
+            let mut first = row(1);
+            first.duration_seconds = 61;
+            first.file_size_bytes = 1_000;
+            let mut second = row(2);
+            second.duration_seconds = 122;
+            second.file_size_bytes = 2_500;
+
+            table.replace_rows(vec![first, second]);
+
+            assert_eq!(table.summary_values(), (2, 183, 3_500));
         });
     }
 

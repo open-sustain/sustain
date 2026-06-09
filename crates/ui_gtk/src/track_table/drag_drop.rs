@@ -3,6 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     rc::Rc,
 };
 
@@ -45,7 +46,7 @@ pub(super) struct RowReorderHooks {
 /// for the same target return early without touching CSS.
 #[derive(Clone, Default)]
 pub(super) struct RowDropCellRegistry {
-    cells: Rc<RefCell<Vec<RowDropCellEntry>>>,
+    cells: Rc<RefCell<HashMap<usize, RowDropCellEntry>>>,
     current_target: Rc<Cell<Option<(u32, RowDropPosition)>>>,
 }
 
@@ -56,28 +57,26 @@ struct RowDropCellEntry {
 
 impl RowDropCellRegistry {
     fn register(&self, list_item: &gtk::ListItem, cell: &gtk::Box) {
-        self.cells.borrow_mut().push(RowDropCellEntry {
-            widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
-            list_item: list_item.downgrade(),
-        });
+        self.cells.borrow_mut().insert(
+            list_item_key(list_item),
+            RowDropCellEntry {
+                widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
+                list_item: list_item.downgrade(),
+            },
+        );
     }
 
     pub(super) fn unregister(&self, list_item: &gtk::ListItem) {
-        self.cells.borrow_mut().retain(|entry| {
-            entry
-                .widget
-                .upgrade()
-                .inspect(|widget| {
-                    widget.remove_css_class(ROW_DROP_ABOVE_CSS_CLASS);
-                    widget.remove_css_class(ROW_DROP_BELOW_CSS_CLASS);
-                })
-                .is_some()
-                && entry
-                    .list_item
-                    .upgrade()
-                    .is_some_and(|registered| registered != *list_item)
-        });
-        self.current_target.set(None);
+        let mut cells = self.cells.borrow_mut();
+        if let Some(entry) = cells.remove(&list_item_key(list_item)) {
+            if let Some(widget) = entry.widget.upgrade() {
+                widget.remove_css_class(ROW_DROP_ABOVE_CSS_CLASS);
+                widget.remove_css_class(ROW_DROP_BELOW_CSS_CLASS);
+            }
+        }
+        if cells.is_empty() {
+            self.current_target.set(None);
+        }
     }
 
     fn clear_all(&self) {
@@ -86,10 +85,10 @@ impl RowDropCellRegistry {
         }
         self.current_target.set(None);
         let mut cells = self.cells.borrow_mut();
-        cells.retain(|entry| {
+        cells.retain(|_, entry| {
             entry.widget.upgrade().is_some() && entry.list_item.upgrade().is_some()
         });
-        for entry in cells.iter() {
+        for entry in cells.values() {
             let Some(widget) = entry.widget.upgrade() else {
                 continue;
             };
@@ -118,10 +117,10 @@ impl RowDropCellRegistry {
             RowDropPosition::Below => ROW_DROP_BELOW_CSS_CLASS,
         };
         let mut cells = self.cells.borrow_mut();
-        cells.retain(|entry| {
+        cells.retain(|_, entry| {
             entry.widget.upgrade().is_some() && entry.list_item.upgrade().is_some()
         });
-        for entry in cells.iter() {
+        for entry in cells.values() {
             let (Some(widget), Some(list_item)) =
                 (entry.widget.upgrade(), entry.list_item.upgrade())
             else {
@@ -136,6 +135,10 @@ impl RowDropCellRegistry {
         }
         self.current_target.set(Some((row_position, drop)));
     }
+}
+
+fn list_item_key(list_item: &gtk::ListItem) -> usize {
+    list_item.as_ptr() as usize
 }
 
 /// [`RowDropCellRegistry`] in [`RowReorderHooks`], so the visual matches

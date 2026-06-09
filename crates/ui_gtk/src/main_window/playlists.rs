@@ -7,6 +7,49 @@
 
 use super::*;
 
+#[derive(Clone)]
+pub(super) struct PlaylistsViewRefreshContext {
+    content_stack: gtk::Stack,
+    playlists_table: TrackTable,
+    playlists_header: PlaylistsHeader,
+    status_bar: StatusBar,
+    playlists_dirty: Rc<Cell<bool>>,
+}
+
+impl PlaylistsViewRefreshContext {
+    pub(super) fn new(
+        content_stack: &gtk::Stack,
+        playlists_table: &TrackTable,
+        playlists_header: &PlaylistsHeader,
+        status_bar: &StatusBar,
+        playlists_dirty: &Rc<Cell<bool>>,
+    ) -> Self {
+        Self {
+            content_stack: content_stack.clone(),
+            playlists_table: playlists_table.clone(),
+            playlists_header: playlists_header.clone(),
+            status_bar: status_bar.clone(),
+            playlists_dirty: playlists_dirty.clone(),
+        }
+    }
+
+    pub(super) fn mark_dirty(&self) {
+        self.playlists_dirty.set(true);
+    }
+
+    pub(super) fn dirty(&self) -> bool {
+        self.playlists_dirty.get()
+    }
+
+    pub(super) fn is_visible(&self) -> bool {
+        self.content_stack.visible_child_name().as_deref() == Some(PLAYLISTS_VIEW)
+    }
+
+    pub(super) fn mark_dirty_and_was_dirty(&self) -> bool {
+        self.playlists_dirty.replace(true)
+    }
+}
+
 /// Mirror of `install_albums_view_activator` for the Playlists view.
 /// The table is built empty and stays empty while another page is
 /// visible; `library_changed` / selection-changed / search rebuilds
@@ -17,36 +60,33 @@ use super::*;
 /// playlists table is never populated for a session that does not
 /// visit a playlist.
 pub(super) fn install_playlists_view_activator(
-    content_stack: &gtk::Stack,
+    refresh_context: &PlaylistsViewRefreshContext,
     runtime: &SharedRuntime,
-    playlists_table: &TrackTable,
-    playlists_header: &PlaylistsHeader,
     sidebar: &PlaylistSidebar,
     current_search_text: &Rc<RefCell<String>>,
-    playlists_dirty: &Rc<Cell<bool>>,
 ) {
     let runtime = runtime.clone();
-    let playlists_table = playlists_table.clone();
-    let playlists_header = playlists_header.clone();
+    let refresh_context = refresh_context.clone();
     let sidebar = sidebar.clone();
     let current_search_text = current_search_text.clone();
-    let playlists_dirty = playlists_dirty.clone();
+    let content_stack = refresh_context.content_stack.clone();
     content_stack.connect_visible_child_name_notify(move |stack| {
         if stack.visible_child_name().as_deref() != Some(PLAYLISTS_VIEW) {
             return;
         }
-        if !playlists_dirty.get() {
+        if !refresh_context.dirty() {
             return;
         }
         let search_text = current_search_text.borrow().clone();
         rebuild_playlists_view(
             &runtime.borrow(),
-            &playlists_table,
-            &playlists_header,
+            &refresh_context.playlists_table,
+            &refresh_context.playlists_header,
+            &refresh_context.status_bar,
             sidebar.current_selection(),
             &search_text,
         );
-        playlists_dirty.set(false);
+        refresh_context.playlists_dirty.set(false);
     });
 }
 
@@ -57,24 +97,24 @@ pub(super) fn install_playlists_view_activator(
 /// rebuild on the next visit. See its doc-comment for the rationale.
 pub(super) fn refresh_playlists_view_if_visible(
     runtime: &ApplicationRuntime,
-    content_stack: &gtk::Stack,
-    playlists_table: &TrackTable,
-    playlists_header: &PlaylistsHeader,
+    refresh_context: &PlaylistsViewRefreshContext,
     sidebar_selection: Option<SidebarSelection>,
     search_text: &str,
-    playlists_dirty: &Cell<bool>,
-) {
-    if content_stack.visible_child_name().as_deref() == Some(PLAYLISTS_VIEW) {
+) -> bool {
+    if refresh_context.is_visible() {
         rebuild_playlists_view(
             runtime,
-            playlists_table,
-            playlists_header,
+            &refresh_context.playlists_table,
+            &refresh_context.playlists_header,
+            &refresh_context.status_bar,
             sidebar_selection,
             search_text,
         );
-        playlists_dirty.set(false);
+        refresh_context.playlists_dirty.set(false);
+        true
     } else {
-        playlists_dirty.set(true);
+        refresh_context.mark_dirty();
+        false
     }
 }
 
@@ -86,22 +126,44 @@ fn rebuild_playlists_view(
     runtime: &ApplicationRuntime,
     playlists_table: &TrackTable,
     playlists_header: &PlaylistsHeader,
+    status_bar: &StatusBar,
     sidebar_selection: Option<SidebarSelection>,
     search_text: &str,
 ) {
     let rows = playlist_table_rows_for(runtime, sidebar_selection, search_text);
+    let summary = playlist_rows_summary(&rows);
     playlists_header.set_state(playlists_header_state_for(
         runtime,
         sidebar_selection,
-        &rows,
+        summary,
     ));
+    status_bar.update_summary_values(
+        summary.track_count,
+        summary.duration_seconds,
+        summary.size_bytes,
+    );
     playlists_table.replace_rows(rows);
+}
+
+#[derive(Clone, Copy)]
+struct PlaylistRowsSummary {
+    track_count: usize,
+    duration_seconds: u64,
+    size_bytes: u64,
+}
+
+fn playlist_rows_summary(rows: &[TrackTableRow]) -> PlaylistRowsSummary {
+    PlaylistRowsSummary {
+        track_count: rows.len(),
+        duration_seconds: rows.iter().map(|row| row.duration_seconds).sum(),
+        size_bytes: rows.iter().map(|row| row.file_size_bytes).sum(),
+    }
 }
 
 fn playlists_header_state_for(
     runtime: &ApplicationRuntime,
     selection: Option<SidebarSelection>,
-    rows: &[TrackTableRow],
+    summary: PlaylistRowsSummary,
 ) -> Option<PlaylistsHeaderState> {
     let title = match selection {
         Some(SidebarSelection::Item(PlaylistItem::Playlist(id))) => runtime
@@ -129,8 +191,8 @@ fn playlists_header_state_for(
     };
     Some(PlaylistsHeaderState {
         title,
-        track_count: rows.len(),
-        duration_seconds: rows.iter().map(|row| row.duration_seconds).sum(),
+        track_count: summary.track_count,
+        duration_seconds: summary.duration_seconds,
     })
 }
 

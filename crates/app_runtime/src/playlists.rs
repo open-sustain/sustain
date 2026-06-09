@@ -3,7 +3,9 @@
 
 use std::collections::BTreeSet;
 
-use sustain_domain::{Playlist, PlaylistEntry, PlaylistFolderId, PlaylistId, TrackId};
+use sustain_domain::{
+    Playlist, PlaylistEntry, PlaylistFolderId, PlaylistId, TrackColumnLayoutScope, TrackId,
+};
 use sustain_library_store::LibraryStore;
 
 use crate::{
@@ -72,6 +74,7 @@ impl ApplicationRuntime {
         library_store
             .delete_playlist(playlist_id)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        self.forget_track_column_layout(TrackColumnLayoutScope::Playlist(playlist_id));
         playlist_items::compact_sibling_positions(library_store, removed.parent_folder_id)?;
         self.reload_playlist_state()
     }
