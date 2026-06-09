@@ -1349,7 +1349,8 @@ mod tests {
             album: String::new(),
             genre: String::new(),
             has_lyrics: false,
-            track_name_sort_key: format!("Track {id}"),
+            // Sort keys are stored pre-collated (`normalize_sort_text`).
+            track_name_sort_key: format!("track {id}"),
             artist_sort_key: String::new(),
             album_sort_key: String::new(),
             year: None,

@@ -99,17 +99,26 @@ pub enum SortDirection {
 
 /// Compares two optional text fields for library sort order.
 ///
-/// Each side is reduced to its trimmed, Unicode-lowercased form, and a missing
-/// value (`None`) collates as the empty string. This is the single
-/// normalization used everywhere the library sorts by a text column — the
-/// library store, the search/filter pipeline, and the track-table column
-/// headers — so the three always agree, including on non-ASCII text.
+/// Each side collates as its trimmed, Unicode-lowercased form — exactly
+/// the key [`crate::normalize_sort_text`] builds, applied lazily here so
+/// a comparison allocates nothing and stops at the first differing
+/// character. A missing value (`None`) collates as the empty string.
+/// This is the single collation used everywhere the library sorts by a
+/// text column — the library store, the search/filter pipeline, and the
+/// track-table column headers — so the three always agree, including on
+/// non-ASCII text. Code that compares the same strings many times (a
+/// whole-table sort) can instead build [`crate::normalize_sort_text`]
+/// keys once and compare them with `str::cmp`, which orders identically.
 pub fn compare_optional_text(left: Option<&str>, right: Option<&str>) -> Ordering {
-    fn normalized(value: Option<&str>) -> String {
-        value.unwrap_or_default().trim().to_lowercase()
+    fn collation_chars(value: Option<&str>) -> impl Iterator<Item = char> + '_ {
+        value
+            .unwrap_or_default()
+            .trim()
+            .chars()
+            .flat_map(char::to_lowercase)
     }
 
-    normalized(left).cmp(&normalized(right))
+    collation_chars(left).cmp(collation_chars(right))
 }
 
 /// The text a column actually sorts by, honoring the "sort as" tag
@@ -199,6 +208,38 @@ mod tests {
         assert_eq!(compare_optional_text(None, Some("")), Ordering::Equal);
         assert_eq!(compare_optional_text(None, Some("a")), Ordering::Less);
         assert_eq!(compare_optional_text(Some("a"), None), Ordering::Greater);
+    }
+
+    #[test]
+    fn optional_text_collation_orders_exactly_like_sort_key_comparison() {
+        // The lazy comparison and a `str::cmp` over pre-built
+        // `normalize_sort_text` keys must stay interchangeable: the track
+        // table sorts by stored keys while the library store compares
+        // values directly, and the two orders may never diverge.
+        let samples = [
+            None,
+            Some(""),
+            Some("   "),
+            Some("  Édith  "),
+            Some("édith"),
+            Some("ABBA"),
+            Some("abba"),
+            Some("déjà"),
+            Some("deja"),
+            Some("weiß"),
+            Some("İstanbul"),
+            Some("ΟΔΥΣΣΕΥΣ"),
+        ];
+        for left in samples {
+            for right in samples {
+                assert_eq!(
+                    compare_optional_text(left, right),
+                    crate::normalize_sort_text(left.unwrap_or_default())
+                        .cmp(&crate::normalize_sort_text(right.unwrap_or_default())),
+                    "collation diverged for {left:?} vs {right:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -20,9 +20,10 @@ pub fn matching_tracks<'a>(
     rules: &SmartPlaylistRuleSet,
     now: SystemTime,
 ) -> Vec<&'a Track> {
+    let prepared = PreparedRuleSet::new(rules, now);
     let mut matched: Vec<&Track> = tracks
         .iter()
-        .filter(|track| track_matches_rule_set(track, rules, now))
+        .filter(|track| prepared.matches(track))
         .collect();
 
     if let Some(limit) = rules.limit {
@@ -37,29 +38,108 @@ pub fn track_matches_rule_set(
     rules: &SmartPlaylistRuleSet,
     now: SystemTime,
 ) -> bool {
-    if rules.rules.is_empty() {
-        return false;
-    }
-
-    match rules.match_kind {
-        SmartPlaylistMatchKind::All => rules
-            .rules
-            .iter()
-            .all(|rule| track_matches_rule(track, rule, now)),
-        SmartPlaylistMatchKind::Any => rules
-            .rules
-            .iter()
-            .any(|rule| track_matches_rule(track, rule, now)),
-    }
+    PreparedRuleSet::new(rules, now).matches(track)
 }
 
 pub fn track_matches_rule(track: &Track, rule: &SmartPlaylistRule, now: SystemTime) -> bool {
+    rule_matches(track, rule, &rule_constants(rule, now))
+}
+
+/// A rule set with its per-rule constants resolved once for one
+/// evaluation pass — text needles search-normalized up front,
+/// relative-date windows anchored to a single cutoff — so evaluating a
+/// 10,000-track library does not redo that work per track.
+struct PreparedRuleSet<'rules> {
+    match_kind: SmartPlaylistMatchKind,
+    rules: Vec<(&'rules SmartPlaylistRule, RuleConstants)>,
+}
+
+impl<'rules> PreparedRuleSet<'rules> {
+    fn new(rules: &'rules SmartPlaylistRuleSet, now: SystemTime) -> Self {
+        Self {
+            match_kind: rules.match_kind,
+            rules: rules
+                .rules
+                .iter()
+                .map(|rule| (rule, rule_constants(rule, now)))
+                .collect(),
+        }
+    }
+
+    /// Whether `track` matches the rule set. An empty rule set matches
+    /// nothing.
+    fn matches(&self, track: &Track) -> bool {
+        if self.rules.is_empty() {
+            return false;
+        }
+
+        match self.match_kind {
+            SmartPlaylistMatchKind::All => self
+                .rules
+                .iter()
+                .all(|(rule, constants)| rule_matches(track, rule, constants)),
+            SmartPlaylistMatchKind::Any => self
+                .rules
+                .iter()
+                .any(|(rule, constants)| rule_matches(track, rule, constants)),
+        }
+    }
+}
+
+/// One rule's evaluation-ready constants: whatever the rule can resolve
+/// once per pass instead of once per track. Built by [`rule_constants`]
+/// from the same rule it is later matched against.
+enum RuleConstants {
+    None,
+    /// The text rule's value, already [`normalize_search_text`]-folded.
+    TextNeedle(String),
+    /// The absolute cutoff a relative-date rule compares against.
+    DateCutoff(SystemTime),
+}
+
+fn rule_constants(rule: &SmartPlaylistRule, now: SystemTime) -> RuleConstants {
+    match rule {
+        SmartPlaylistRule::Text { value, .. } => {
+            RuleConstants::TextNeedle(normalize_search_text(value))
+        }
+        SmartPlaylistRule::DateInLast { days, .. }
+        | SmartPlaylistRule::DateNotInLast { days, .. } => {
+            RuleConstants::DateCutoff(relative_date_cutoff(now, days.get()))
+        }
+        SmartPlaylistRule::TextIsEmpty { .. }
+        | SmartPlaylistRule::TextIsPresent { .. }
+        | SmartPlaylistRule::Number { .. }
+        | SmartPlaylistRule::NumberIsEmpty { .. }
+        | SmartPlaylistRule::NumberIsPresent { .. }
+        | SmartPlaylistRule::Rating { .. }
+        | SmartPlaylistRule::DateBefore { .. }
+        | SmartPlaylistRule::DateAfter { .. }
+        | SmartPlaylistRule::DateIsEmpty { .. }
+        | SmartPlaylistRule::DateIsPresent { .. }
+        | SmartPlaylistRule::Bool(_)
+        | SmartPlaylistRule::FileIsMissing
+        | SmartPlaylistRule::FileIsPresent => RuleConstants::None,
+    }
+}
+
+fn relative_date_cutoff(now: SystemTime, days: u32) -> SystemTime {
+    now.checked_sub(Duration::from_secs(u64::from(days) * SECONDS_PER_DAY))
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+/// Evaluates one rule against one track. `constants` must come from
+/// [`rule_constants`] for this same rule; the `unreachable!` arms guard
+/// that pairing.
+fn rule_matches(track: &Track, rule: &SmartPlaylistRule, constants: &RuleConstants) -> bool {
     match rule {
         SmartPlaylistRule::Text {
-            field,
-            operator,
-            value,
-        } => evaluate_text(text_field_value(track, *field).as_deref(), *operator, value),
+            field, operator, ..
+        } => {
+            let RuleConstants::TextNeedle(needle) = constants else {
+                unreachable!("text rule prepared without a needle");
+            };
+            evaluate_text(text_field_value(track, *field), *operator, needle)
+        }
         SmartPlaylistRule::TextIsEmpty { field } => text_field_value(track, *field)
             .map(|value| value.trim().is_empty())
             .unwrap_or(true),
@@ -84,18 +164,18 @@ pub fn track_matches_rule(track: &Track, rule: &SmartPlaylistRule, now: SystemTi
         SmartPlaylistRule::DateAfter { field, date } => {
             date_field_value(track, *field).is_some_and(|track_date| track_date > *date)
         }
-        SmartPlaylistRule::DateInLast { field, days } => {
-            let cutoff = now
-                .checked_sub(Duration::from_secs(u64::from(days.get()) * SECONDS_PER_DAY))
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            date_field_value(track, *field).is_some_and(|track_date| track_date >= cutoff)
+        SmartPlaylistRule::DateInLast { field, .. } => {
+            let RuleConstants::DateCutoff(cutoff) = constants else {
+                unreachable!("relative-date rule prepared without a cutoff");
+            };
+            date_field_value(track, *field).is_some_and(|track_date| track_date >= *cutoff)
         }
-        SmartPlaylistRule::DateNotInLast { field, days } => {
-            let cutoff = now
-                .checked_sub(Duration::from_secs(u64::from(days.get()) * SECONDS_PER_DAY))
-                .unwrap_or(SystemTime::UNIX_EPOCH);
+        SmartPlaylistRule::DateNotInLast { field, .. } => {
+            let RuleConstants::DateCutoff(cutoff) = constants else {
+                unreachable!("relative-date rule prepared without a cutoff");
+            };
             match date_field_value(track, *field) {
-                Some(track_date) => track_date < cutoff,
+                Some(track_date) => track_date < *cutoff,
                 None => true,
             }
         }
@@ -113,21 +193,20 @@ fn bool_field_value(track: &Track, field: SmartPlaylistBoolField) -> bool {
     }
 }
 
-fn text_field_value(track: &Track, field: SmartPlaylistTextField) -> Option<String> {
+fn text_field_value(track: &Track, field: SmartPlaylistTextField) -> Option<&str> {
     match field {
-        SmartPlaylistTextField::Title => track.metadata.title.clone(),
-        SmartPlaylistTextField::Artist => track.metadata.artist.clone(),
-        SmartPlaylistTextField::Album => track.metadata.album.clone(),
-        SmartPlaylistTextField::AlbumArtist => track.metadata.album_artist.clone(),
-        SmartPlaylistTextField::Composer => track.metadata.composer.clone(),
-        SmartPlaylistTextField::Genre => track.metadata.genre.clone(),
+        SmartPlaylistTextField::Title => track.metadata.title.as_deref(),
+        SmartPlaylistTextField::Artist => track.metadata.artist.as_deref(),
+        SmartPlaylistTextField::Album => track.metadata.album.as_deref(),
+        SmartPlaylistTextField::AlbumArtist => track.metadata.album_artist.as_deref(),
+        SmartPlaylistTextField::Composer => track.metadata.composer.as_deref(),
+        SmartPlaylistTextField::Genre => track.metadata.genre.as_deref(),
         SmartPlaylistTextField::FileName => track
             .location
             .path()
             .file_name()
-            .and_then(|os_str| os_str.to_str())
-            .map(str::to_owned),
-        SmartPlaylistTextField::MusicalKey => track.metadata.key.clone(),
+            .and_then(|os_str| os_str.to_str()),
+        SmartPlaylistTextField::MusicalKey => track.metadata.key.as_deref(),
     }
 }
 
@@ -155,23 +234,24 @@ fn date_field_value(track: &Track, field: SmartPlaylistDateField) -> Option<Syst
     }
 }
 
+/// `needle` must already be [`normalize_search_text`]-folded (prepared
+/// once per evaluation pass); only the track side is normalized here.
 fn evaluate_text(
     track_value: Option<&str>,
     operator: SmartPlaylistTextOperator,
-    rule_value: &str,
+    needle: &str,
 ) -> bool {
     let Some(track_value) = track_value else {
         return false;
     };
     let track = normalize_search_text(track_value);
-    let needle = normalize_search_text(rule_value);
     match operator {
-        SmartPlaylistTextOperator::Contains => track.contains(&needle),
-        SmartPlaylistTextOperator::DoesNotContain => !track.contains(&needle),
+        SmartPlaylistTextOperator::Contains => track.contains(needle),
+        SmartPlaylistTextOperator::DoesNotContain => !track.contains(needle),
         SmartPlaylistTextOperator::Is => track == needle,
         SmartPlaylistTextOperator::IsNot => track != needle,
-        SmartPlaylistTextOperator::StartsWith => track.starts_with(&needle),
-        SmartPlaylistTextOperator::EndsWith => track.ends_with(&needle),
+        SmartPlaylistTextOperator::StartsWith => track.starts_with(needle),
+        SmartPlaylistTextOperator::EndsWith => track.ends_with(needle),
     }
 }
 
@@ -209,28 +289,16 @@ fn sort_for_selection(
             tracks.sort_by_key(|track| pseudo_random_key(track.id.get(), seed));
         }
         SmartPlaylistLimitSelection::TitleAscending => {
-            tracks.sort_by(|left, right| {
-                ci_string(left.metadata.title.as_deref())
-                    .cmp(&ci_string(right.metadata.title.as_deref()))
-            });
+            tracks.sort_by_cached_key(|track| ci_string(track.metadata.title.as_deref()));
         }
         SmartPlaylistLimitSelection::ArtistAscending => {
-            tracks.sort_by(|left, right| {
-                ci_string(left.metadata.artist.as_deref())
-                    .cmp(&ci_string(right.metadata.artist.as_deref()))
-            });
+            tracks.sort_by_cached_key(|track| ci_string(track.metadata.artist.as_deref()));
         }
         SmartPlaylistLimitSelection::AlbumAscending => {
-            tracks.sort_by(|left, right| {
-                ci_string(left.metadata.album.as_deref())
-                    .cmp(&ci_string(right.metadata.album.as_deref()))
-            });
+            tracks.sort_by_cached_key(|track| ci_string(track.metadata.album.as_deref()));
         }
         SmartPlaylistLimitSelection::GenreAscending => {
-            tracks.sort_by(|left, right| {
-                ci_string(left.metadata.genre.as_deref())
-                    .cmp(&ci_string(right.metadata.genre.as_deref()))
-            });
+            tracks.sort_by_cached_key(|track| ci_string(track.metadata.genre.as_deref()));
         }
         SmartPlaylistLimitSelection::HighestRating => {
             tracks.sort_by_key(|track| Reverse(track.rating.stars()));
@@ -259,6 +327,8 @@ fn sort_for_selection(
     }
 }
 
+/// The case-insensitive key the limit sorts order by. Allocated once per
+/// track via `sort_by_cached_key`, not once per comparison.
 fn ci_string(value: Option<&str>) -> String {
     value.map(normalize_search_text).unwrap_or_default()
 }

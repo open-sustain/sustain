@@ -3,7 +3,7 @@
 
 use std::{path::Path, time::SystemTime};
 
-use sustain_app_runtime::{Track, TrackId, effective_sort_key};
+use sustain_app_runtime::{Track, TrackId, effective_sort_key, normalize_sort_text};
 
 use crate::util::non_empty_text;
 
@@ -59,9 +59,10 @@ pub(crate) struct TrackTableRow {
     pub(crate) has_lyrics: bool,
     /// Effective sort keys for the text columns, resolved at row-build
     /// time from the track's "sort as" tags and the live
-    /// honor-sort-tags preference (issue #13). The column comparators
-    /// order by these so "The Beatles" files under B while still
-    /// displaying as written.
+    /// honor-sort-tags preference (issue #13), then pre-collated with
+    /// [`normalize_sort_text`] so the column comparators are plain
+    /// `str::cmp`. The keys order "The Beatles" under B while the row
+    /// still displays as written.
     pub(super) track_name_sort_key: String,
     pub(super) artist_sort_key: String,
     pub(super) album_sort_key: String,
@@ -162,13 +163,15 @@ impl TrackTableRow {
 
 /// The effective sort key for a text column: the tag-derived "sort as"
 /// value when the preference is on and one is present, otherwise the
-/// already-resolved display string. Shares
-/// [`sustain_app_runtime::effective_sort_key`] with the library store so
-/// the table headers and the store sort agree (issue #13).
+/// already-resolved display string — pre-collated so sorting compares
+/// stored keys with `str::cmp` instead of re-normalizing per comparison.
+/// Shares [`sustain_app_runtime::effective_sort_key`] and
+/// [`normalize_sort_text`] with the library store so the table headers
+/// and the store sort agree (issue #13).
 fn sort_key(sort_field: Option<&str>, display: &str, honor_sort_tags: bool) -> String {
-    effective_sort_key(sort_field, Some(display), honor_sort_tags)
-        .unwrap_or(display)
-        .to_owned()
+    normalize_sort_text(
+        effective_sort_key(sort_field, Some(display), honor_sort_tags).unwrap_or(display),
+    )
 }
 
 fn file_stem_text(path: &Path) -> Option<String> {

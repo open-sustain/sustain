@@ -38,7 +38,7 @@ pub use sustain_domain::{
     TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings, VolumePercent, YearCount,
     compare_optional_text, compute_library_statistics, default_duplicate_metadata_selection,
     duplicate_audio_quality, effective_sort_key, highest_quality_duplicate_audio_track_ids,
-    matching_tracks, track_matches_rule_set,
+    matching_tracks, normalize_sort_text, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
 pub use sustain_metadata::MetadataService;
