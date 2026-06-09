@@ -657,16 +657,19 @@ impl AlbumsView {
             return measured_height;
         }
 
-        let album = self
+        // Only the track count feeds the estimate — read it through the
+        // borrow instead of cloning the whole album (tracks included) on
+        // every layout pass that runs before the height is measured.
+        let track_count = self
             .albums
             .borrow()
             .iter()
             .find(|album| &album.key == album_key)
-            .cloned();
-        let Some(album) = album else {
+            .map(|album| album.tracks.len());
+        let Some(track_count) = track_count else {
             return 0;
         };
-        let track_rows = album.tracks.len().div_ceil(2).max(1) as i32;
+        let track_rows = track_count.div_ceil(2).max(1) as i32;
         let left_height =
             ALBUM_DETAIL_HEADER_HEIGHT_ESTIMATE + 14 + track_rows * ALBUM_DETAIL_TRACK_ROW_HEIGHT;
         let panel_height =
@@ -773,6 +776,15 @@ impl AlbumsView {
             .map(detail_position_for_tile_row)
     }
 
+    /// Move the (single) detail row in the row store to follow a new
+    /// selection. The realized-row map is *reindexed* for the removal and
+    /// insertion instead of being cleared: a detail move only shifts the
+    /// list positions after the affected row, so every realized shell
+    /// keeps its widget tree and `update_visible_rows` re-renders it in
+    /// place (the generation bump invalidates the bind), releasing only
+    /// rows that actually leave the viewport. Releasing and re-realizing
+    /// all ~40–60 visible rows per album click was the bulk of the
+    /// selection stutter.
     fn sync_detail_row_for_selection(
         &self,
         previous_detail_tile_row: Option<usize>,
@@ -781,15 +793,13 @@ impl AlbumsView {
         let Some(selected_tile_row) = self.tile_row_index_for_album(selected_album) else {
             self.selected_album.borrow_mut().take();
             if let Some(previous_tile_row) = previous_detail_tile_row {
-                remove_row_store_item(
-                    &self.row_store,
-                    detail_position_for_tile_row(previous_tile_row),
-                );
+                let removed_position = detail_position_for_tile_row(previous_tile_row);
+                remove_row_store_item(&self.row_store, removed_position);
+                self.shift_realized_rows_for_removal(removed_position);
             }
             self.row_model_generation
                 .set(self.row_model_generation.get().wrapping_add(1));
             self.measured_detail_height.set(0);
-            self.clear_realized_rows();
             self.update_visible_rows();
             return;
         };
@@ -798,6 +808,8 @@ impl AlbumsView {
             album_key: selected_album.clone(),
         };
         if previous_detail_tile_row == Some(selected_tile_row) {
+            // Same tile row: the detail stays at its position, only its
+            // album changes. No positions shift.
             replace_row_store_item(
                 &self.row_store,
                 detail_position_for_tile_row(selected_tile_row),
@@ -806,27 +818,39 @@ impl AlbumsView {
             self.row_model_generation
                 .set(self.row_model_generation.get().wrapping_add(1));
             self.measured_detail_height.set(0);
-            self.clear_realized_rows();
             self.update_visible_rows();
             return;
         }
 
         if let Some(previous_tile_row) = previous_detail_tile_row {
-            remove_row_store_item(
-                &self.row_store,
-                detail_position_for_tile_row(previous_tile_row),
-            );
+            let removed_position = detail_position_for_tile_row(previous_tile_row);
+            remove_row_store_item(&self.row_store, removed_position);
+            self.shift_realized_rows_for_removal(removed_position);
         }
-        insert_row_store_item(
-            &self.row_store,
-            detail_position_for_tile_row(selected_tile_row),
-            detail_row,
-        );
+        let inserted_position = detail_position_for_tile_row(selected_tile_row);
+        insert_row_store_item(&self.row_store, inserted_position, detail_row);
+        self.shift_realized_rows_for_insertion(inserted_position);
         self.row_model_generation
             .set(self.row_model_generation.get().wrapping_add(1));
         self.measured_detail_height.set(0);
-        self.clear_realized_rows();
         self.update_visible_rows();
+    }
+
+    /// Reindex `realized_rows` after the row store removed the row at
+    /// `removed_position`: that row's shell (if realized) is released and
+    /// every realized position after it shifts down by one, so each
+    /// remaining shell stays keyed to the store row it renders.
+    fn shift_realized_rows_for_removal(&self, removed_position: usize) {
+        self.release_row(removed_position);
+        shift_positions_after_removal(&mut self.realized_rows.borrow_mut(), removed_position);
+    }
+
+    /// Reindex `realized_rows` after the row store inserted a row at
+    /// `inserted_position`: every realized position at or after it shifts
+    /// up by one. The inserted row itself is realized by the next
+    /// `update_visible_rows` pass if it is in the viewport.
+    fn shift_realized_rows_for_insertion(&self, inserted_position: usize) {
+        shift_positions_after_insertion(&mut self.realized_rows.borrow_mut(), inserted_position);
     }
 
     fn refresh_album_widgets(&self, album_key: &AlbumKey, refresh: AlbumRowRefresh<'_>) {
@@ -1535,6 +1559,40 @@ fn remove_row_store_item(store: &gio::ListStore, position: usize) {
     }
 }
 
+/// Shift a position-keyed map's keys down by one after the underlying
+/// list removed the row at `removed_position`. The caller is expected to
+/// have dropped the entry for the removed position itself.
+fn shift_positions_after_removal<V>(
+    positions: &mut std::collections::HashMap<usize, V>,
+    removed_position: usize,
+) {
+    let entries: Vec<(usize, V)> = positions.drain().collect();
+    positions.extend(entries.into_iter().map(|(position, value)| {
+        if position > removed_position {
+            (position - 1, value)
+        } else {
+            (position, value)
+        }
+    }));
+}
+
+/// Shift a position-keyed map's keys up by one for every entry at or
+/// after `inserted_position`, after the underlying list inserted a row
+/// there.
+fn shift_positions_after_insertion<V>(
+    positions: &mut std::collections::HashMap<usize, V>,
+    inserted_position: usize,
+) {
+    let entries: Vec<(usize, V)> = positions.drain().collect();
+    positions.extend(entries.into_iter().map(|(position, value)| {
+        if position >= inserted_position {
+            (position + 1, value)
+        } else {
+            (position, value)
+        }
+    }));
+}
+
 fn album_list_row_at(store: &gio::ListStore, position: usize) -> Option<AlbumListRow> {
     let row_object = store
         .item(position as u32)?
@@ -1665,6 +1723,7 @@ mod tests {
         align_widget_to_viewport_top, apply_cover_texture, build_album_tile_content,
         build_cover_widget, columns_for_width, detail_position_for_tile_row, insert_row_store_item,
         remove_row_store_item, replace_row_store, replace_row_store_item,
+        shift_positions_after_insertion, shift_positions_after_removal,
         tile_list_position_for_tile_row,
     };
 
@@ -1782,6 +1841,29 @@ mod tests {
         assert_eq!(
             album_list_row_at(&store, 1),
             Some(AlbumListRow::Tiles { tile_row_index: 1 })
+        );
+    }
+
+    #[test]
+    fn position_maps_follow_row_removal_and_insertion() {
+        // The realized-row map must track a detail-row move the same way
+        // the row store does, so a selection change re-renders shells in
+        // place instead of releasing every realized row.
+        let mut positions: HashMap<usize, &str> =
+            [(0, "tiles-0"), (2, "tiles-1"), (3, "tiles-2")].into();
+
+        // Detail removed at position 1 (not realized): later rows close up.
+        shift_positions_after_removal(&mut positions, 1);
+        assert_eq!(
+            positions,
+            [(0, "tiles-0"), (1, "tiles-1"), (2, "tiles-2")].into()
+        );
+
+        // Detail inserted at position 1: rows at or after it move down.
+        shift_positions_after_insertion(&mut positions, 1);
+        assert_eq!(
+            positions,
+            [(0, "tiles-0"), (2, "tiles-1"), (3, "tiles-2")].into()
         );
     }
 
