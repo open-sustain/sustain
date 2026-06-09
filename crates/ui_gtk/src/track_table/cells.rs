@@ -145,21 +145,89 @@ struct TrackTableContextHit {
     list_item: gtk::ListItem,
 }
 
+/// One cell whose contents the table refreshes in place. Pairing a
+/// [`gtk::ListItem`] with the widget(s) that display its track's data lets a
+/// targeted update find the right live cells without rebuilding the row.
+trait CellBinding {
+    fn list_item(&self) -> &gtk::ListItem;
+    /// Whether the binding still maps to a live, bound cell. A recycled or
+    /// destroyed cell is dropped on the next refresh.
+    fn is_live(&self) -> bool;
+}
+
+/// The lifecycle every track-table cell registry shares: a cell pushes its
+/// binding in at setup (or bind), teardown removes the binding for that
+/// [`gtk::ListItem`], and a refresh prunes the dead bindings before visiting
+/// the live ones. Each cell kind parameterises this with its own payload.
+struct BindingRegistry<T>(Rc<RefCell<Vec<T>>>);
+
+impl<T> Clone for BindingRegistry<T> {
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+}
+
+impl<T> Default for BindingRegistry<T> {
+    fn default() -> Self {
+        Self(Rc::new(RefCell::new(Vec::new())))
+    }
+}
+
+impl<T: CellBinding> BindingRegistry<T> {
+    fn push(&self, binding: T) {
+        self.0.borrow_mut().push(binding);
+    }
+
+    /// Replaces any binding already registered for this list item. Rating
+    /// cells re-register on every bind as the cell is recycled, so a stale
+    /// entry for the same list item must not pile up.
+    fn replace(&self, binding: T) {
+        let mut bindings = self.0.borrow_mut();
+        bindings.retain(|existing| existing.list_item() != binding.list_item());
+        bindings.push(binding);
+    }
+
+    fn remove(&self, list_item: &gtk::ListItem) {
+        self.0
+            .borrow_mut()
+            .retain(|binding| binding.list_item() != list_item);
+    }
+
+    /// Prunes bindings whose cell is no longer live, then visits each
+    /// survivor. The borrow is held across the visit, so `visit` must not
+    /// re-enter the registry.
+    fn for_each_live(&self, mut visit: impl FnMut(&T)) {
+        let mut bindings = self.0.borrow_mut();
+        bindings.retain(|binding| binding.is_live());
+        for binding in bindings.iter() {
+            visit(binding);
+        }
+    }
+}
+
 struct StatusBinding {
     list_item: gtk::ListItem,
     icon: gtk::Image,
 }
 
+impl CellBinding for StatusBinding {
+    fn list_item(&self) -> &gtk::ListItem {
+        &self.list_item
+    }
+
+    fn is_live(&self) -> bool {
+        self.list_item.item().is_some()
+    }
+}
+
 #[derive(Clone, Default)]
-pub(super) struct StatusBindings(Rc<RefCell<Vec<StatusBinding>>>);
+pub(super) struct StatusBindings(BindingRegistry<StatusBinding>);
 
 impl StatusBindings {
     pub(super) fn refresh(&self, playing_track_id: Option<TrackId>) {
-        let mut bindings = self.0.borrow_mut();
-        bindings.retain(|binding| binding.list_item.item().is_some());
-        for binding in bindings.iter() {
+        self.0.for_each_live(|binding| {
             refresh_status_icon(&binding.list_item, &binding.icon, playing_track_id);
-        }
+        });
     }
 }
 
@@ -169,16 +237,23 @@ struct TextBinding {
     column: TrackTableColumn,
 }
 
+impl CellBinding for TextBinding {
+    fn list_item(&self) -> &gtk::ListItem {
+        &self.list_item
+    }
+
+    fn is_live(&self) -> bool {
+        self.list_item.item().is_some()
+    }
+}
+
 #[derive(Clone, Default)]
-pub(super) struct TextBindings(Rc<RefCell<Vec<TextBinding>>>);
+pub(super) struct TextBindings(BindingRegistry<TextBinding>);
 
 impl TextBindings {
     pub(super) fn refresh_track(&self, track_id: TrackId) {
-        let mut bindings = self.0.borrow_mut();
-        bindings.retain(|binding| binding.list_item.item().is_some());
-        for binding in bindings.iter() {
-            refresh_text_binding(binding, track_id);
-        }
+        self.0
+            .for_each_live(|binding| refresh_text_binding(binding, track_id));
     }
 }
 
@@ -187,27 +262,30 @@ struct RatingBinding {
     rating_box: glib::WeakRef<gtk::Box>,
 }
 
+impl CellBinding for RatingBinding {
+    fn list_item(&self) -> &gtk::ListItem {
+        &self.list_item
+    }
+
+    fn is_live(&self) -> bool {
+        self.list_item.item().is_some() && self.rating_box.upgrade().is_some()
+    }
+}
+
 #[derive(Clone, Default)]
-pub(super) struct RatingBindings(Rc<RefCell<Vec<RatingBinding>>>);
+pub(super) struct RatingBindings(BindingRegistry<RatingBinding>);
 
 impl RatingBindings {
     fn register(&self, list_item: &gtk::ListItem, rating_box: &gtk::Box) {
-        let mut bindings = self.0.borrow_mut();
-        bindings.retain(|binding| binding.list_item != *list_item);
-        bindings.push(RatingBinding {
+        self.0.replace(RatingBinding {
             list_item: list_item.clone(),
             rating_box: rating_box.downgrade(),
         });
     }
 
     pub(super) fn refresh_track(&self, track_id: TrackId) {
-        let mut bindings = self.0.borrow_mut();
-        bindings.retain(|binding| {
-            binding.list_item.item().is_some() && binding.rating_box.upgrade().is_some()
-        });
-        for binding in bindings.iter() {
-            refresh_rating_binding(binding, track_id);
-        }
+        self.0
+            .for_each_live(|binding| refresh_rating_binding(binding, track_id));
     }
 }
 
@@ -243,15 +321,8 @@ pub(super) fn build_text_cell_factory(
             return;
         };
 
-        let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        cell.add_css_class("track-table-cell");
-        cell.set_hexpand(true);
-        cell.set_vexpand(true);
-        cell.set_halign(gtk::Align::Fill);
-        cell.set_valign(gtk::Align::Fill);
-        install_cell_chrome(
+        let cell = new_track_cell(
             list_item,
-            &cell,
             context_for_setup.as_ref(),
             reorder_for_setup.as_ref(),
         );
@@ -273,7 +344,7 @@ pub(super) fn build_text_cell_factory(
             controller.register_editable_cell(list_item, &cell, field);
         }
 
-        bindings_for_setup.0.borrow_mut().push(TextBinding {
+        bindings_for_setup.0.push(TextBinding {
             list_item: list_item.clone(),
             label,
             column,
@@ -296,10 +367,7 @@ pub(super) fn build_text_cell_factory(
             context_for_teardown.as_ref(),
             reorder_for_teardown.as_ref(),
         );
-        bindings_for_teardown
-            .0
-            .borrow_mut()
-            .retain(|binding| binding.list_item != *list_item);
+        bindings_for_teardown.0.remove(list_item);
     });
 
     // A cell about to be recycled to another row must not keep an open
@@ -370,15 +438,8 @@ pub(super) fn build_rating_cell_factory(
             return;
         };
 
-        let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        cell.add_css_class("track-table-cell");
-        cell.set_hexpand(true);
-        cell.set_vexpand(true);
-        cell.set_halign(gtk::Align::Fill);
-        cell.set_valign(gtk::Align::Fill);
-        install_cell_chrome(
+        let cell = new_track_cell(
             list_item,
-            &cell,
             context_for_setup.as_ref(),
             reorder_for_setup.as_ref(),
         );
@@ -445,10 +506,7 @@ pub(super) fn build_rating_cell_factory(
             context_for_teardown.as_ref(),
             reorder_for_teardown.as_ref(),
         );
-        bindings_for_teardown
-            .0
-            .borrow_mut()
-            .retain(|binding| binding.list_item != *list_item);
+        bindings_for_teardown.0.remove(list_item);
     });
 
     factory.connect_bind(move |_factory, item| {
@@ -516,15 +574,8 @@ fn build_status_cell_factory(
             return;
         };
 
-        let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        cell.add_css_class("track-table-cell");
-        cell.set_hexpand(true);
-        cell.set_vexpand(true);
-        cell.set_halign(gtk::Align::Fill);
-        cell.set_valign(gtk::Align::Fill);
-        install_cell_chrome(
+        let cell = new_track_cell(
             list_item,
-            &cell,
             context_for_setup.as_ref(),
             reorder_for_setup.as_ref(),
         );
@@ -539,7 +590,7 @@ fn build_status_cell_factory(
 
         list_item.set_child(Some(&cell));
 
-        bindings_for_setup.0.borrow_mut().push(StatusBinding {
+        bindings_for_setup.0.push(StatusBinding {
             list_item: list_item.clone(),
             icon,
         });
@@ -557,10 +608,7 @@ fn build_status_cell_factory(
             context_for_teardown.as_ref(),
             reorder_for_teardown.as_ref(),
         );
-        bindings_for_teardown
-            .0
-            .borrow_mut()
-            .retain(|binding| binding.list_item != *list_item);
+        bindings_for_teardown.0.remove(list_item);
     });
 
     let playing_for_bind = playing_track_id;
@@ -601,15 +649,8 @@ fn build_filler_factory(
             return;
         };
 
-        let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        cell.add_css_class("track-table-cell");
-        cell.set_hexpand(true);
-        cell.set_vexpand(true);
-        cell.set_halign(gtk::Align::Fill);
-        cell.set_valign(gtk::Align::Fill);
-        install_cell_chrome(
+        let cell = new_track_cell(
             list_item,
-            &cell,
             context_for_setup.as_ref(),
             reorder_for_setup.as_ref(),
         );
@@ -644,6 +685,27 @@ fn build_filler_factory(
     });
 
     factory
+}
+
+/// Builds the `gtk::Box` every track-table cell factory shares: the
+/// `track-table-cell` styling, fill expansion, and the row chrome wired
+/// through [`install_cell_chrome`] (selection sync, context-menu
+/// registration, drag source, reorder drop target). Each factory then
+/// appends its own content — a label, rating stars, a status icon, or
+/// nothing for the filler column.
+fn new_track_cell(
+    list_item: &gtk::ListItem,
+    context_menu: Option<&TrackTableContextMenu>,
+    row_reorder: Option<&RowReorderHooks>,
+) -> gtk::Box {
+    let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    cell.add_css_class("track-table-cell");
+    cell.set_hexpand(true);
+    cell.set_vexpand(true);
+    cell.set_halign(gtk::Align::Fill);
+    cell.set_valign(gtk::Align::Fill);
+    install_cell_chrome(list_item, &cell, context_menu, row_reorder);
+    cell
 }
 
 fn install_cell_chrome(
