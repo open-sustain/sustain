@@ -3,7 +3,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
 };
 
@@ -30,7 +29,7 @@ pub(super) struct TrackTableContextMenu {
     menu: TrackRowContextMenu,
     selection: gtk::MultiSelection,
     popover_parent: glib::WeakRef<gtk::ColumnView>,
-    cells: Rc<RefCell<HashMap<usize, TrackTableContextCell>>>,
+    cells: Rc<RefCell<Vec<TrackTableContextCell>>>,
 }
 
 impl TrackTableContextMenu {
@@ -43,7 +42,7 @@ impl TrackTableContextMenu {
             menu,
             selection,
             popover_parent: popover_parent.downgrade(),
-            cells: Rc::new(RefCell::new(HashMap::new())),
+            cells: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -89,17 +88,10 @@ impl TrackTableContextMenu {
     }
 
     fn register_cell(&self, list_item: &gtk::ListItem, cell: &gtk::Box) {
-        self.cells.borrow_mut().insert(
-            list_item_key(list_item),
-            TrackTableContextCell {
-                widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
-                list_item: list_item.downgrade(),
-            },
-        );
-    }
-
-    fn unregister_cell(&self, list_item: &gtk::ListItem) {
-        self.cells.borrow_mut().remove(&list_item_key(list_item));
+        self.cells.borrow_mut().push(TrackTableContextCell {
+            widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
+            list_item: list_item.downgrade(),
+        });
     }
 
     fn ordered_track_ids(&self) -> Vec<TrackId> {
@@ -119,10 +111,8 @@ impl TrackTableContextMenu {
 
     fn list_item_for_widget(&self, widget: &gtk::Widget) -> Option<TrackTableContextHit> {
         let mut cells = self.cells.borrow_mut();
-        cells.retain(|_, cell| {
-            cell.widget.upgrade().is_some() && cell.list_item.upgrade().is_some()
-        });
-        cells.values().find_map(|cell| {
+        cells.retain(|cell| cell.widget.upgrade().is_some() && cell.list_item.upgrade().is_some());
+        cells.iter().find_map(|cell| {
             let registered = cell.widget.upgrade()?;
             if registered == *widget {
                 Some(TrackTableContextHit {
@@ -147,21 +137,25 @@ struct TrackTableContextHit {
     list_item: gtk::ListItem,
 }
 
-/// One cell whose contents the table refreshes in place. Pairing a
-/// [`gtk::ListItem`] with the widget(s) that display its track's data lets a
-/// targeted update find the right live cells without rebuilding the row.
+/// One cell whose contents the table refreshes in place.
+///
+/// Bindings keep only weak widget references. GTK can tear down thousands of
+/// cached cells when a large playlist shrinks to a small one; making the
+/// registries self-pruning lets that teardown stay inside GTK instead of
+/// firing one Sustain cleanup callback per cell.
 trait CellBinding {
-    fn list_item(&self) -> &gtk::ListItem;
+    fn key(&self) -> usize;
+    fn list_item(&self) -> Option<gtk::ListItem>;
     /// Whether the binding still maps to a live, bound cell. A recycled or
     /// destroyed cell is dropped on the next refresh.
     fn is_live(&self) -> bool;
 }
 
 /// The lifecycle every track-table cell registry shares: a cell pushes its
-/// binding in at setup (or bind), teardown removes the binding for that
-/// [`gtk::ListItem`], and a refresh prunes the dead bindings before visiting
-/// the live ones. Each cell kind parameterises this with its own payload.
-struct BindingRegistry<T>(Rc<RefCell<HashMap<usize, T>>>);
+/// binding in at setup (or bind), and later refreshes prune dead weak
+/// references before visiting the survivors. Each cell kind parameterises
+/// this with its own payload.
+struct BindingRegistry<T>(Rc<RefCell<Vec<T>>>);
 
 impl<T> Clone for BindingRegistry<T> {
     fn clone(&self) -> Self {
@@ -171,26 +165,23 @@ impl<T> Clone for BindingRegistry<T> {
 
 impl<T> Default for BindingRegistry<T> {
     fn default() -> Self {
-        Self(Rc::new(RefCell::new(HashMap::new())))
+        Self(Rc::new(RefCell::new(Vec::new())))
     }
 }
 
 impl<T: CellBinding> BindingRegistry<T> {
     fn push(&self, binding: T) {
-        self.0
-            .borrow_mut()
-            .insert(list_item_key(binding.list_item()), binding);
+        self.0.borrow_mut().push(binding);
     }
 
     /// Replaces any binding already registered for this list item. Rating
     /// cells re-register on every bind as the cell is recycled, so a stale
     /// entry for the same list item must not pile up.
     fn replace(&self, binding: T) {
-        self.push(binding);
-    }
-
-    fn remove(&self, list_item: &gtk::ListItem) {
-        self.0.borrow_mut().remove(&list_item_key(list_item));
+        let key = binding.key();
+        let mut bindings = self.0.borrow_mut();
+        bindings.retain(|existing| existing.key() != key);
+        bindings.push(binding);
     }
 
     /// Prunes bindings whose cell is no longer live, then visits each
@@ -198,8 +189,8 @@ impl<T: CellBinding> BindingRegistry<T> {
     /// re-enter the registry.
     fn for_each_live(&self, mut visit: impl FnMut(&T)) {
         let mut bindings = self.0.borrow_mut();
-        bindings.retain(|_, binding| binding.is_live());
-        for binding in bindings.values() {
+        bindings.retain(|binding| binding.is_live());
+        for binding in bindings.iter() {
             visit(binding);
         }
     }
@@ -210,17 +201,24 @@ fn list_item_key(list_item: &gtk::ListItem) -> usize {
 }
 
 struct StatusBinding {
-    list_item: gtk::ListItem,
-    icon: gtk::Image,
+    key: usize,
+    list_item: glib::WeakRef<gtk::ListItem>,
+    icon: glib::WeakRef<gtk::Image>,
 }
 
 impl CellBinding for StatusBinding {
-    fn list_item(&self) -> &gtk::ListItem {
-        &self.list_item
+    fn key(&self) -> usize {
+        self.key
+    }
+
+    fn list_item(&self) -> Option<gtk::ListItem> {
+        self.list_item.upgrade()
     }
 
     fn is_live(&self) -> bool {
-        self.list_item.item().is_some()
+        self.list_item()
+            .is_some_and(|list_item| list_item.item().is_some())
+            && self.icon.upgrade().is_some()
     }
 }
 
@@ -230,24 +228,35 @@ pub(super) struct StatusBindings(BindingRegistry<StatusBinding>);
 impl StatusBindings {
     pub(super) fn refresh(&self, playing_track_id: Option<TrackId>) {
         self.0.for_each_live(|binding| {
-            refresh_status_icon(&binding.list_item, &binding.icon, playing_track_id);
+            let (Some(list_item), Some(icon)) = (binding.list_item(), binding.icon.upgrade())
+            else {
+                return;
+            };
+            refresh_status_icon(&list_item, &icon, playing_track_id);
         });
     }
 }
 
 struct TextBinding {
-    list_item: gtk::ListItem,
-    label: gtk::Label,
+    key: usize,
+    list_item: glib::WeakRef<gtk::ListItem>,
+    label: glib::WeakRef<gtk::Label>,
     column: TrackTableColumn,
 }
 
 impl CellBinding for TextBinding {
-    fn list_item(&self) -> &gtk::ListItem {
-        &self.list_item
+    fn key(&self) -> usize {
+        self.key
+    }
+
+    fn list_item(&self) -> Option<gtk::ListItem> {
+        self.list_item.upgrade()
     }
 
     fn is_live(&self) -> bool {
-        self.list_item.item().is_some()
+        self.list_item()
+            .is_some_and(|list_item| list_item.item().is_some())
+            && self.label.upgrade().is_some()
     }
 }
 
@@ -259,20 +268,31 @@ impl TextBindings {
         self.0
             .for_each_live(|binding| refresh_text_binding(binding, track_id));
     }
+
+    pub(super) fn refresh_all(&self) {
+        self.0.for_each_live(refresh_text_binding_value);
+    }
 }
 
 struct RatingBinding {
-    list_item: gtk::ListItem,
+    key: usize,
+    list_item: glib::WeakRef<gtk::ListItem>,
     rating_box: glib::WeakRef<gtk::Box>,
 }
 
 impl CellBinding for RatingBinding {
-    fn list_item(&self) -> &gtk::ListItem {
-        &self.list_item
+    fn key(&self) -> usize {
+        self.key
+    }
+
+    fn list_item(&self) -> Option<gtk::ListItem> {
+        self.list_item.upgrade()
     }
 
     fn is_live(&self) -> bool {
-        self.list_item.item().is_some() && self.rating_box.upgrade().is_some()
+        self.list_item()
+            .is_some_and(|list_item| list_item.item().is_some())
+            && self.rating_box.upgrade().is_some()
     }
 }
 
@@ -282,7 +302,8 @@ pub(super) struct RatingBindings(BindingRegistry<RatingBinding>);
 impl RatingBindings {
     fn register(&self, list_item: &gtk::ListItem, rating_box: &gtk::Box) {
         self.0.replace(RatingBinding {
-            list_item: list_item.clone(),
+            key: list_item_key(list_item),
+            list_item: list_item.downgrade(),
             rating_box: rating_box.downgrade(),
         });
     }
@@ -290,6 +311,10 @@ impl RatingBindings {
     pub(super) fn refresh_track(&self, track_id: TrackId) {
         self.0
             .for_each_live(|binding| refresh_rating_binding(binding, track_id));
+    }
+
+    pub(super) fn refresh_all(&self) {
+        self.0.for_each_live(refresh_rating_binding_value);
     }
 }
 
@@ -349,34 +374,25 @@ pub(super) fn build_text_cell_factory(
         }
 
         bindings_for_setup.0.push(TextBinding {
-            list_item: list_item.clone(),
-            label,
+            key: list_item_key(list_item),
+            list_item: list_item.downgrade(),
+            label: label.downgrade(),
             column,
         });
-    });
-
-    let bindings_for_teardown = bindings;
-    let context_for_teardown = context_menu;
-    let reorder_for_teardown = row_reorder;
-    let inline_edit_for_teardown = inline_edit.clone();
-    factory.connect_teardown(move |_factory, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        if let Some(controller) = inline_edit_for_teardown.as_ref() {
-            controller.unregister_editable_cell(list_item);
-        }
-        uninstall_cell_chrome(
-            list_item,
-            context_for_teardown.as_ref(),
-            reorder_for_teardown.as_ref(),
-        );
-        bindings_for_teardown.0.remove(list_item);
     });
 
     // A cell about to be recycled to another row must not keep an open
     // editor: commit and close it first so the entry is gone before the
     // slot is reused.
+    if let Some(controller) = inline_edit.clone() {
+        let controller_for_teardown = controller.clone();
+        factory.connect_teardown(move |_factory, item| {
+            let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
+                return;
+            };
+            controller_for_teardown.unregister_editable_cell(list_item);
+        });
+    }
     let inline_edit_for_unbind = inline_edit;
     factory.connect_unbind(move |_factory, item| {
         let Some(controller) = inline_edit_for_unbind.as_ref() else {
@@ -498,21 +514,6 @@ pub(super) fn build_rating_cell_factory(
     });
 
     let bindings_for_bind = bindings.clone();
-    let bindings_for_teardown = bindings;
-    let context_for_teardown = context_menu;
-    let reorder_for_teardown = row_reorder;
-    factory.connect_teardown(move |_factory, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        uninstall_cell_chrome(
-            list_item,
-            context_for_teardown.as_ref(),
-            reorder_for_teardown.as_ref(),
-        );
-        bindings_for_teardown.0.remove(list_item);
-    });
-
     factory.connect_bind(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
@@ -595,24 +596,10 @@ fn build_status_cell_factory(
         list_item.set_child(Some(&cell));
 
         bindings_for_setup.0.push(StatusBinding {
-            list_item: list_item.clone(),
-            icon,
+            key: list_item_key(list_item),
+            list_item: list_item.downgrade(),
+            icon: icon.downgrade(),
         });
-    });
-
-    let bindings_for_teardown = bindings;
-    let context_for_teardown = context_menu;
-    let reorder_for_teardown = row_reorder;
-    factory.connect_teardown(move |_factory, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        uninstall_cell_chrome(
-            list_item,
-            context_for_teardown.as_ref(),
-            reorder_for_teardown.as_ref(),
-        );
-        bindings_for_teardown.0.remove(list_item);
     });
 
     let playing_for_bind = playing_track_id;
@@ -661,19 +648,6 @@ fn build_filler_factory(
         list_item.set_child(Some(&cell));
     });
 
-    let context_for_teardown = context_menu;
-    let reorder_for_teardown = row_reorder;
-    factory.connect_teardown(move |_factory, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        uninstall_cell_chrome(
-            list_item,
-            context_for_teardown.as_ref(),
-            reorder_for_teardown.as_ref(),
-        );
-    });
-
     factory.connect_bind(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
@@ -705,7 +679,7 @@ fn new_track_cell(
     let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     cell.add_css_class("track-table-cell");
     cell.set_hexpand(true);
-    cell.set_vexpand(true);
+    cell.set_vexpand(false);
     cell.set_halign(gtk::Align::Fill);
     cell.set_valign(gtk::Align::Fill);
     install_cell_chrome(list_item, &cell, context_menu, row_reorder);
@@ -725,19 +699,6 @@ fn install_cell_chrome(
     }
     if let Some(hooks) = row_reorder {
         install_cell_drop_target(list_item, cell, hooks.clone());
-    }
-}
-
-fn uninstall_cell_chrome(
-    list_item: &gtk::ListItem,
-    context_menu: Option<&TrackTableContextMenu>,
-    row_reorder: Option<&RowReorderHooks>,
-) {
-    if let Some(menu) = context_menu {
-        menu.unregister_cell(list_item);
-    }
-    if let Some(hooks) = row_reorder {
-        hooks.cells.unregister(list_item);
     }
 }
 
@@ -765,8 +726,10 @@ pub(crate) fn row_track_id(item: Option<glib::Object>) -> Option<TrackId> {
 }
 
 fn refresh_text_binding(binding: &TextBinding, target_track_id: TrackId) {
-    let Some(row_object) = binding
-        .list_item
+    let (Some(list_item), Some(label)) = (binding.list_item(), binding.label.upgrade()) else {
+        return;
+    };
+    let Some(row_object) = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
     else {
@@ -778,12 +741,31 @@ fn refresh_text_binding(binding: &TextBinding, target_track_id: TrackId) {
     if row.track_id != Some(target_track_id) {
         return;
     }
-    binding.label.set_text(&binding.column.text(&row));
+    label.set_text(&binding.column.text(&row));
+}
+
+fn refresh_text_binding_value(binding: &TextBinding) {
+    let (Some(list_item), Some(label)) = (binding.list_item(), binding.label.upgrade()) else {
+        return;
+    };
+    let Some(row_object) = list_item
+        .item()
+        .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+    else {
+        label.set_text("");
+        return;
+    };
+    let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
+        return;
+    };
+    label.set_text(&binding.column.text(&row));
 }
 
 fn refresh_rating_binding(binding: &RatingBinding, target_track_id: TrackId) {
-    let Some(row_object) = binding
-        .list_item
+    let Some(list_item) = binding.list_item() else {
+        return;
+    };
+    let Some(row_object) = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
     else {
@@ -797,7 +779,28 @@ fn refresh_rating_binding(binding: &RatingBinding, target_track_id: TrackId) {
     }
     let rating = row.rating;
     drop(row);
+    refresh_rating_box(binding, rating);
+}
 
+fn refresh_rating_binding_value(binding: &RatingBinding) {
+    let Some(list_item) = binding.list_item() else {
+        return;
+    };
+    let Some(row_object) = list_item
+        .item()
+        .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+    else {
+        return;
+    };
+    let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
+        return;
+    };
+    let rating = row.rating;
+    drop(row);
+    refresh_rating_box(binding, rating);
+}
+
+fn refresh_rating_box(binding: &RatingBinding, rating: u8) {
     let Some(rating_box) = binding.rating_box.upgrade() else {
         return;
     };

@@ -289,13 +289,17 @@ pub(super) fn sidebar_selection_changed_callback(
         // Layout + default sort are cheap and harmless even when the
         // playlists view is not visible — they only set widget state
         // that any future visit will rely on.
-        if let Some(layout) = layout_for_selection(&runtime.borrow(), selection) {
-            playlists_table.apply_layout(&layout);
-        }
-        if matches!(
+        let regular_playlist_selected = matches!(
             selection,
             Some(SidebarSelection::Item(PlaylistItem::Playlist(_)))
-        ) {
+        );
+        if let Some(mut layout) = layout_for_selection(&runtime.borrow(), selection) {
+            if regular_playlist_selected {
+                layout.sort = None;
+            }
+            playlists_table.apply_layout(&layout);
+        }
+        if regular_playlist_selected {
             playlists_table.apply_playlist_default_sort();
         }
         // The sidebar selection is the sole driver of the content

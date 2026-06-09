@@ -94,6 +94,7 @@ pub(crate) struct TrackTable {
 /// instantaneous and a pending save survives realistic close-window races
 /// when [`TrackTable::flush_pending_layout_save`] is invoked on shutdown.
 const LAYOUT_SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
+const LARGE_SHRINK_UNMAP_THRESHOLD: u32 = 512;
 
 impl TrackTable {
     pub(crate) fn widget(&self) -> gtk::Widget {
@@ -102,17 +103,79 @@ impl TrackTable {
 
     pub(crate) fn replace_rows(&self, rows: Vec<TrackTableRow>) {
         self.bump_row_replacement_generation();
-        // One `splice` instead of `remove_all` + N `append`s. Each append
-        // fires its own `items-changed`, which the wrapping `SortListModel`
-        // answers with a binary-insert-and-shift (O(n)) and the
-        // `MultiSelection` with its own bookkeeping — so a per-row rebuild is
-        // O(n²) and visibly stalls for seconds on a 10k library or a large
-        // playlist (#157). `splice` removes every old row and inserts every
-        // new one under a single `items-changed`, so the sorter re-sorts and
-        // the selection reconciles exactly once.
-        let additions: Vec<glib::BoxedAnyObject> =
-            rows.into_iter().map(glib::BoxedAnyObject::new).collect();
-        self.store.splice(0, self.store.n_items(), &additions);
+        self.selection.unselect_all();
+
+        // Keep the model identity stable and reuse the existing row objects
+        // for the common prefix. A full remove+insert makes GTK tear down and
+        // rebind every realized cell even when the next playlist is tiny; that
+        // is the remaining playlist-selection stall after the quadratic
+        // teardown bug was fixed (#226). Updating the boxed row payloads in
+        // place limits structural model work to the length delta.
+        let old_len = self.store.n_items();
+        let new_len = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+        let common_len = old_len.min(new_len);
+        let mut rows = rows.into_iter();
+        for position in 0..common_len {
+            let Some(row_object) = self
+                .store
+                .item(position)
+                .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+            else {
+                continue;
+            };
+            if let Some(new_row) = rows.next() {
+                *row_object.borrow_mut::<TrackTableRow>() = new_row;
+            }
+        }
+
+        // GTK's ColumnView has no public "batch model changes" API. For a
+        // large collapse, keeping the mapped view attached makes ListBase
+        // synchronously reconcile thousands of removed rows against its
+        // realized cell cache. Unmapping the view around that single splice
+        // bounds the work to one teardown/remap before the next frame can be
+        // drawn; small shrinks stay mapped because unmapping costs more than
+        // it saves there.
+        let unmap_for_large_shrink = old_len.saturating_sub(new_len) > LARGE_SHRINK_UNMAP_THRESHOLD
+            && self.table.is_mapped();
+        let restore_focus = unmap_for_large_shrink && self.table.has_focus();
+        if unmap_for_large_shrink {
+            self.table.set_visible(false);
+        }
+
+        if old_len > new_len {
+            let no_additions: &[glib::BoxedAnyObject] = &[];
+            self.store.splice(new_len, old_len - new_len, no_additions);
+        } else if new_len > old_len {
+            let additions: Vec<glib::BoxedAnyObject> =
+                rows.map(glib::BoxedAnyObject::new).collect();
+            self.store.splice(old_len, 0, &additions);
+        }
+
+        if unmap_for_large_shrink {
+            self.table.set_visible(true);
+            if restore_focus {
+                let _ = self.table.grab_focus();
+            }
+        }
+
+        self.refresh_after_in_place_replacement();
+    }
+
+    fn refresh_after_in_place_replacement(&self) {
+        let _guard = ApplyLayoutGuard::enter(self.applying_layout.clone());
+        if let Some(sorter) = self.table.sorter() {
+            let active_column_sort = sorter
+                .downcast_ref::<gtk::ColumnViewSorter>()
+                .and_then(gtk::ColumnViewSorter::primary_sort_column)
+                .is_some();
+            if active_column_sort {
+                sorter.changed(gtk::SorterChange::Different);
+            }
+        }
+        self.text_bindings.refresh_all();
+        self.rating_bindings.refresh_all();
+        self.status_bindings.refresh(self.playing_track_id.get());
+        self.scroll_to_top();
     }
 
     pub(crate) fn summary_values(&self) -> (usize, u64, u64) {
@@ -422,6 +485,9 @@ impl TrackTable {
     /// The [`Self::applying_layout`] guard is set for the duration so the resulting
     /// `notify::*` and `items-changed` signals do not loop back into a save.
     pub(crate) fn apply_layout(&self, layout: &TrackColumnLayout) {
+        if read_current_layout(&self.table, &self.managed_columns) == *layout {
+            return;
+        }
         let _guard = ApplyLayoutGuard::enter(self.applying_layout.clone());
         let mut applied: HashSet<&'static str> = HashSet::new();
         // Position 0 is the status column; managed columns start at 1, and the
@@ -536,6 +602,9 @@ impl TrackTable {
     /// reorder gate (which only accepts drops while this sort is active)
     /// is satisfied without the user having to click any header first.
     pub(crate) fn apply_playlist_default_sort(&self) {
+        if status_sort_is_active(&self.table, &self.status_column) {
+            return;
+        }
         // Programmatic like apply_layout, so suppress the resulting sorter
         // `changed` from scheduling a layout save on every playlist selection.
         let _guard = ApplyLayoutGuard::enter(self.applying_layout.clone());
@@ -637,6 +706,21 @@ fn read_current_sort(
     })
 }
 
+fn status_sort_is_active(table: &gtk::ColumnView, status_column: &gtk::ColumnViewColumn) -> bool {
+    let Some(column_sorter) = table
+        .sorter()
+        .and_then(|sorter| sorter.downcast::<gtk::ColumnViewSorter>().ok())
+    else {
+        return false;
+    };
+    let Some(active_column) = column_sorter.primary_sort_column() else {
+        return false;
+    };
+
+    active_column.as_ptr() as *const () == status_column.as_ptr() as *const ()
+        && matches!(column_sorter.primary_sort_order(), gtk::SortType::Ascending)
+}
+
 fn vertical_scroll_info() -> gtk::ScrollInfo {
     let scroll_info = gtk::ScrollInfo::new();
     scroll_info.set_enable_horizontal(false);
@@ -675,7 +759,11 @@ pub(crate) fn build_track_table(
     // not opt into inline editing (everything but the Songs view today).
     let inline_edit = inline_edit.map(InlineEditController::new);
 
+    let use_incremental_sort = row_reorder.is_some();
     let sorted_rows = gtk::SortListModel::new(Some(store.clone()), table.sorter());
+    if use_incremental_sort {
+        sorted_rows.set_incremental(true);
+    }
     let selection = gtk::MultiSelection::new(Some(sorted_rows));
 
     let scroller = gtk::ScrolledWindow::new();
@@ -1056,6 +1144,24 @@ mod tests {
     }
 
     #[test]
+    fn replace_rows_reuses_common_row_objects() {
+        crate::test_support::with_gtk(|| {
+            let table =
+                build_track_table(vec![row(1), row(2), row(3)], None, None, None, None, None);
+            let first_object = store_object_key(&table, 0);
+            let second_object = store_object_key(&table, 1);
+
+            table.replace_rows(vec![row(4), row(5)]);
+
+            assert_eq!(table.store.n_items(), 2);
+            assert_eq!(store_object_key(&table, 0), first_object);
+            assert_eq!(store_object_key(&table, 1), second_object);
+            assert_eq!(store_track_id(&table, 0), TrackId::new(4));
+            assert_eq!(store_track_id(&table, 1), TrackId::new(5));
+        });
+    }
+
+    #[test]
     fn summary_values_reads_the_current_store_rows() {
         crate::test_support::with_gtk(|| {
             let table = build_track_table(Vec::new(), None, None, None, None, None);
@@ -1152,7 +1258,9 @@ mod tests {
             assert!(table.append_progressive_rows(generation, vec![row(1)]));
 
             // A search supersedes the load: `replace_rows` bumps the generation
-            // and, by design, leaves the sorter untouched (still detached).
+            // and only asks an already-attached sorter to re-evaluate changed
+            // row payloads. While hydration has the sorter detached, it stays
+            // detached.
             table.replace_rows(vec![row(3), row(4)]);
             assert!(
                 !table.append_progressive_rows(generation, vec![row(2)]),
@@ -1211,5 +1319,22 @@ mod tests {
             playlist_position: None,
             group_band: None,
         }
+    }
+
+    fn store_object_key(table: &TrackTable, position: u32) -> Option<usize> {
+        table
+            .store
+            .item(position)
+            .map(|object| object.as_ptr() as usize)
+    }
+
+    fn store_track_id(table: &TrackTable, position: u32) -> Option<TrackId> {
+        let row_object = table
+            .store
+            .item(position)?
+            .downcast::<glib::BoxedAnyObject>()
+            .ok()?;
+        let row = row_object.try_borrow::<TrackTableRow>().ok()?;
+        row.track_id
     }
 }

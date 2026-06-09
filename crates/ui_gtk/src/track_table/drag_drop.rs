@@ -3,7 +3,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
 };
 
@@ -46,7 +45,7 @@ pub(super) struct RowReorderHooks {
 /// for the same target return early without touching CSS.
 #[derive(Clone, Default)]
 pub(super) struct RowDropCellRegistry {
-    cells: Rc<RefCell<HashMap<usize, RowDropCellEntry>>>,
+    cells: Rc<RefCell<Vec<RowDropCellEntry>>>,
     current_target: Rc<Cell<Option<(u32, RowDropPosition)>>>,
 }
 
@@ -57,26 +56,10 @@ struct RowDropCellEntry {
 
 impl RowDropCellRegistry {
     fn register(&self, list_item: &gtk::ListItem, cell: &gtk::Box) {
-        self.cells.borrow_mut().insert(
-            list_item_key(list_item),
-            RowDropCellEntry {
-                widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
-                list_item: list_item.downgrade(),
-            },
-        );
-    }
-
-    pub(super) fn unregister(&self, list_item: &gtk::ListItem) {
-        let mut cells = self.cells.borrow_mut();
-        if let Some(entry) = cells.remove(&list_item_key(list_item)) {
-            if let Some(widget) = entry.widget.upgrade() {
-                widget.remove_css_class(ROW_DROP_ABOVE_CSS_CLASS);
-                widget.remove_css_class(ROW_DROP_BELOW_CSS_CLASS);
-            }
-        }
-        if cells.is_empty() {
-            self.current_target.set(None);
-        }
+        self.cells.borrow_mut().push(RowDropCellEntry {
+            widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
+            list_item: list_item.downgrade(),
+        });
     }
 
     fn clear_all(&self) {
@@ -85,10 +68,10 @@ impl RowDropCellRegistry {
         }
         self.current_target.set(None);
         let mut cells = self.cells.borrow_mut();
-        cells.retain(|_, entry| {
+        cells.retain(|entry| {
             entry.widget.upgrade().is_some() && entry.list_item.upgrade().is_some()
         });
-        for entry in cells.values() {
+        for entry in cells.iter() {
             let Some(widget) = entry.widget.upgrade() else {
                 continue;
             };
@@ -117,10 +100,10 @@ impl RowDropCellRegistry {
             RowDropPosition::Below => ROW_DROP_BELOW_CSS_CLASS,
         };
         let mut cells = self.cells.borrow_mut();
-        cells.retain(|_, entry| {
+        cells.retain(|entry| {
             entry.widget.upgrade().is_some() && entry.list_item.upgrade().is_some()
         });
-        for entry in cells.values() {
+        for entry in cells.iter() {
             let (Some(widget), Some(list_item)) =
                 (entry.widget.upgrade(), entry.list_item.upgrade())
             else {
@@ -135,10 +118,6 @@ impl RowDropCellRegistry {
         }
         self.current_target.set(Some((row_position, drop)));
     }
-}
-
-fn list_item_key(list_item: &gtk::ListItem) -> usize {
-    list_item.as_ptr() as usize
 }
 
 /// [`RowDropCellRegistry`] in [`RowReorderHooks`], so the visual matches
@@ -288,33 +267,46 @@ pub(super) fn install_cell_drag_source(
     let selection = selection.clone();
     let cell_for_prepare = cell.clone();
     drag_source.connect_prepare(move |source, _x, _y| {
-        let position = list_item.position();
-        let row_track_id = row_track_id(list_item.item())?;
-
-        let track_ids = if position != gtk::INVALID_LIST_POSITION && selection.is_selected(position)
-        {
-            let mut selected = collect_selected_track_ids(&selection);
-            if !selected.contains(&row_track_id) {
-                selected.push(row_track_id);
-            }
-            selected
-        } else {
-            vec![row_track_id]
-        };
-
-        if track_ids.is_empty() {
-            return None;
-        }
-
-        if let Some(paintable) = build_drag_paintable(&cell_for_prepare, position, &selection) {
-            source.set_icon(Some(&paintable), 0, 0);
-        }
-
-        Some(gdk::ContentProvider::for_value(
-            &tracks_drag_payload(&track_ids).to_value(),
-        ))
+        prepare_tracks_drag(
+            source,
+            &list_item,
+            &selection,
+            cell_for_prepare.upcast_ref(),
+        )
     });
     cell.add_controller(drag_source);
+}
+
+fn prepare_tracks_drag(
+    source: &gtk::DragSource,
+    list_item: &gtk::ListItem,
+    selection: &gtk::MultiSelection,
+    hit_widget: &gtk::Widget,
+) -> Option<gdk::ContentProvider> {
+    let position = list_item.position();
+    let row_track_id = row_track_id(list_item.item())?;
+
+    let track_ids = if position != gtk::INVALID_LIST_POSITION && selection.is_selected(position) {
+        let mut selected = collect_selected_track_ids(selection);
+        if !selected.contains(&row_track_id) {
+            selected.push(row_track_id);
+        }
+        selected
+    } else {
+        vec![row_track_id]
+    };
+
+    if track_ids.is_empty() {
+        return None;
+    }
+
+    if let Some(paintable) = build_drag_paintable(hit_widget, position, selection) {
+        source.set_icon(Some(&paintable), 0, 0);
+    }
+
+    Some(gdk::ContentProvider::for_value(
+        &tracks_drag_payload(&track_ids).to_value(),
+    ))
 }
 
 /// Build the drag image. Single-track drags use a [`gtk::WidgetPaintable`] of
@@ -341,7 +333,7 @@ pub(super) fn install_cell_drag_source(
 ///    GTK refuses to paint widgets mid-virtualization, the composite returns
 ///    `None` and we fall back to the single-row paintable below.
 pub(super) fn build_drag_paintable(
-    cell: &gtk::Box,
+    cell: &gtk::Widget,
     originating_position: u32,
     selection: &gtk::MultiSelection,
 ) -> Option<gdk::Paintable> {
@@ -369,7 +361,7 @@ pub(super) fn build_drag_paintable(
 /// node name `row`. If a future GTK renames or restructures the listview
 /// hierarchy this returns `None` and the drag falls back to no icon (cursor
 /// without preview). Caller is responsible for the fallback.
-fn find_listview_row(cell: &gtk::Box) -> Option<gtk::Widget> {
+fn find_listview_row(cell: &gtk::Widget) -> Option<gtk::Widget> {
     let mut current: Option<gtk::Widget> = cell.parent();
     while let Some(widget) = current {
         if widget.css_name() == "row" {
