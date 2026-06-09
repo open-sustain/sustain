@@ -231,12 +231,16 @@ pub(crate) fn build_main_window(
     let current_search_text: Rc<RefCell<String>> =
         Rc::new(RefCell::new(initial_search_text.clone()));
 
-    let library_tracks = runtime_library_table_rows(&runtime.borrow(), &initial_search_text);
-    tlog!("library rows materialised");
+    // Library hydration is always deferred in the app path (`main.rs`
+    // hydrates synchronously only for the force-backfill CLI command,
+    // which never reaches the window). The library is therefore empty
+    // while this function runs: the songs table and the status bar start
+    // from explicitly empty rows — like the playlists table below — and
+    // the hydration-complete consumer populates them.
     let status_bar = {
         let runtime_for_cancel = runtime.clone();
         StatusBar::new(
-            &library_tracks,
+            &[],
             Rc::new(move || {
                 runtime_for_cancel
                     .borrow()
@@ -412,14 +416,14 @@ pub(crate) fn build_main_window(
         track_row_changed_holder.clone(),
     );
     let songs_table = build_track_table(
-        library_tracks.clone(),
+        Vec::new(),
         Some(library_track_activated.clone()),
         Some(context_menu.clone()),
         Some(rating_changed.clone()),
         None,
         Some(songs_inline_edit),
     );
-    tlog!("songs table populated");
+    tlog!("songs table built (empty until hydration)");
     songs_table_holder.replace(Some(songs_table.clone()));
     let albums_view = AlbumsView::new(
         runtime.clone(),

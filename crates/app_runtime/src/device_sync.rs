@@ -193,7 +193,6 @@ impl ApplicationRuntime {
     /// live. Drives the status-bar track/duration/size summary while the
     /// device view is shown.
     pub fn device_selected_tracks(&self, id: &SyncDeviceId) -> Vec<Track> {
-        let by_id: HashMap<_, _> = self.library_tracks.iter().map(|t| (t.id, t)).collect();
         let mut seen = HashSet::new();
         let mut tracks = Vec::new();
         for item in self.device_selection(id) {
@@ -202,9 +201,9 @@ impl ApplicationRuntime {
             };
             for tid in track_ids {
                 if seen.insert(tid)
-                    && let Some(track) = by_id.get(&tid)
+                    && let Some(track) = self.library_track(tid)
                 {
-                    tracks.push((*track).clone());
+                    tracks.push(track.clone());
                 }
             }
         }
@@ -394,9 +393,8 @@ impl ApplicationRuntime {
             total,
             ..Default::default()
         };
-        let by_id: HashMap<_, _> = self.library_tracks.iter().map(|t| (t.id, t)).collect();
         for tid in &track_ids {
-            if let Some(track) = by_id.get(tid) {
+            if let Some(track) = self.library_track(*tid) {
                 if track.metadata.bpm.is_none() {
                     readiness.missing_bpm += 1;
                 }

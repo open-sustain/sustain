@@ -455,6 +455,10 @@ pub fn run(
                     tact_for_idle.elapsed().as_secs_f64() * 1000.0
                 );
                 main_window.run_deferred_startup();
+                eprintln!(
+                    "[TIMING]   activate: deferred startup dispatched (library hydration kicked off) at {:.1}ms",
+                    tact_for_idle.elapsed().as_secs_f64() * 1000.0
+                );
             });
         }
     });

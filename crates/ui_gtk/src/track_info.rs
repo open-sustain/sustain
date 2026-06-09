@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{cell::RefCell, collections::HashSet, path::PathBuf, rc::Rc};
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
@@ -422,13 +422,8 @@ fn find_valid_index(
     direction: Direction,
 ) -> Option<usize> {
     let runtime = runtime.borrow();
-    let current_ids: HashSet<TrackId> = runtime
-        .library_tracks()
-        .iter()
-        .map(|track| track.id)
-        .collect();
     find_valid_index_by(cursor, direction, |track_id| {
-        current_ids.contains(&track_id)
+        runtime.library_track(track_id).is_some()
     })
 }
 

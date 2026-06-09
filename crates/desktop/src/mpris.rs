@@ -319,15 +319,23 @@ async fn apply_update(
         MprisUpdate::NowPlaying(metadata) => {
             let new_metadata = build_mpris_metadata(&metadata);
             let duration_micros = metadata.duration.map(duration_to_micros).unwrap_or(0);
-            {
+            let metadata_changed = {
                 let mut iface = player_ref.get_mut().await;
+                let metadata_changed = iface.metadata != new_metadata;
                 iface.metadata = new_metadata;
                 // Keep the clamp bound current so the advancing position
                 // never runs past the end of the track.
                 iface.position.set_duration_micros(duration_micros);
+                metadata_changed
+            };
+            // A pause/resume re-publishes the same now-playing snapshot;
+            // only a real change is worth a PropertiesChanged broadcast
+            // (matching the equality guard the PlaybackState branch
+            // already applies).
+            if metadata_changed {
+                let iface = player_ref.get().await;
+                iface.metadata_changed(player_ref.signal_emitter()).await?;
             }
-            let iface = player_ref.get().await;
-            iface.metadata_changed(player_ref.signal_emitter()).await?;
         }
     }
     Ok(())
