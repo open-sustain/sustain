@@ -142,7 +142,12 @@ fn queue_request_for_playlist_selection(
         return queue_request_for_library(runtime, search_text);
     }
 
-    let candidates: Vec<(Track, PlaybackQueueSource)> = match selection {
+    // Queue construction works on track ids only: playlist entries and
+    // smart-playlist matches already carry them, membership/playability
+    // of each id is the runtime's job when it resolves the request, and
+    // the search filter runs against the precomputed search index — no
+    // whole-library map and no `Track` clones on the play path.
+    let (source, candidate_track_ids): (PlaybackQueueSource, Vec<TrackId>) = match selection {
         Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id))) => {
             let Some(playlist) = runtime
                 .playlists()
@@ -151,44 +156,37 @@ fn queue_request_for_playlist_selection(
             else {
                 return PlaybackQueueRequest::Library;
             };
-            let tracks_by_id: HashMap<TrackId, &Track> = runtime
-                .library_tracks()
-                .iter()
-                .map(|track| (track.id, track))
-                .collect();
             let mut entries: Vec<&PlaylistEntry> = playlist.entries.iter().collect();
             entries.sort_by_key(|entry| entry.position);
-            let source = PlaybackQueueSource::Playlist(playlist_id);
-            entries
-                .into_iter()
-                .filter_map(|entry| {
-                    tracks_by_id
-                        .get(&entry.track_id)
-                        .copied()
-                        .cloned()
-                        .map(|track| (track, source.clone()))
-                })
-                .collect()
+            (
+                PlaybackQueueSource::Playlist(playlist_id),
+                entries.into_iter().map(|entry| entry.track_id).collect(),
+            )
         }
-        Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(smart_playlist_id))) => runtime
-            .smart_playlist_matching_tracks(smart_playlist_id)
-            .into_iter()
-            .map(|track| (track.clone(), PlaybackQueueSource::Selection))
-            .collect(),
+        Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(smart_playlist_id))) => (
+            PlaybackQueueSource::Selection,
+            runtime
+                .smart_playlist_matching_tracks(smart_playlist_id)
+                .into_iter()
+                .map(|track| track.id)
+                .collect(),
+        ),
         _ => return queue_request_for_library(runtime, search_text),
     };
 
-    let source = match candidates.first() {
-        Some((_, source)) => source.clone(),
-        None => return PlaybackQueueRequest::Library,
+    if candidate_track_ids.is_empty() {
+        return PlaybackQueueRequest::Library;
+    }
+
+    let normalized = normalize_query(search_text);
+    let ordered_track_ids = if normalized.is_empty() {
+        candidate_track_ids
+    } else {
+        candidate_track_ids
+            .into_iter()
+            .filter(|track_id| runtime.search_matches(*track_id, &normalized))
+            .collect()
     };
-    let ordered_track_ids: Vec<TrackId> = candidates
-        .into_iter()
-        .filter(|(track, _)| {
-            search_text.is_empty() || track_matches_search_text(track, search_text)
-        })
-        .map(|(track, _)| track.id)
-        .collect();
     PlaybackQueueRequest::Explicit {
         source,
         ordered_track_ids,
@@ -199,13 +197,17 @@ fn queue_request_for_library(
     runtime: &ApplicationRuntime,
     search_text: &str,
 ) -> PlaybackQueueRequest {
-    if search_text.trim().is_empty() {
+    // Normalize the query once and test against the runtime's search
+    // index, exactly like `runtime_library_table_rows` builds the visible
+    // rows — the queue must mirror what the table shows.
+    let normalized = normalize_query(search_text);
+    if normalized.is_empty() {
         return PlaybackQueueRequest::Library;
     }
     let ordered_track_ids = runtime
         .library_tracks()
         .iter()
-        .filter(|track| track_matches_search_text(track, search_text))
+        .filter(|track| runtime.search_matches(track.id, &normalized))
         .map(|track| track.id)
         .collect();
     PlaybackQueueRequest::Explicit {

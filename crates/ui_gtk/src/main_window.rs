@@ -15,7 +15,7 @@ use sustain_app_runtime::{
     PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState, Playlist,
     PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
     TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, UiSettings,
-    UiSidebarSelection, normalize_query, track_matches_search_text,
+    UiSidebarSelection, normalize_query,
 };
 
 use super::{

@@ -14,7 +14,7 @@ use super::*;
 ///
 /// Filtering follows the agreed product semantics:
 /// - Music view filters across the 7 track-level fields covered by
-///   [`track_matches_search_text`].
+///   [`sustain_app_runtime::track_matches_search_text`].
 /// - Albums view filters by album-level fields only (title, artist,
 ///   year) via [`AlbumsView::set_search_text`].
 /// - Playlist view filters within the currently selected playlist /

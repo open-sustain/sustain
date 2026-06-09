@@ -213,10 +213,14 @@ impl ApplicationRuntime {
                 source,
                 ordered_track_ids,
             } => {
-                let playable: HashSet<TrackId> = self.playable_track_ids().into_iter().collect();
+                // Membership and playability are checked per id against the
+                // id-sorted in-memory library (a binary search each) instead
+                // of materializing a whole-library id set for every queue
+                // build — explicit queues are usually far smaller than the
+                // library.
                 let filtered: Vec<TrackId> = ordered_track_ids
                     .into_iter()
-                    .filter(|id| playable.contains(id))
+                    .filter(|id| self.track_is_playable(*id))
                     .collect();
                 (source, filtered)
             }
@@ -732,6 +736,13 @@ impl ApplicationRuntime {
             .filter(|track| !track.location.is_missing())
             .map(|track| track.id)
             .collect()
+    }
+
+    /// Whether `track_id` is in the library and not missing on disk —
+    /// the per-id form of [`Self::playable_track_ids`]'s filter.
+    fn track_is_playable(&self, track_id: TrackId) -> bool {
+        self.library_track(track_id)
+            .is_some_and(|track| !track.location.is_missing())
     }
 
     /// Re-derive the queue's ordered track ids from the current library
