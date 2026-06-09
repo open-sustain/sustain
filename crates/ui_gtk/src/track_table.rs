@@ -94,6 +94,15 @@ pub(crate) struct TrackTable {
 /// instantaneous and a pending save survives realistic close-window races
 /// when [`TrackTable::flush_pending_layout_save`] is invoked on shutdown.
 const LAYOUT_SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Row-count drop above which [`TrackTable::replace_rows`] hides the
+/// `ColumnView` around the shrink splice.
+///
+/// 512 is an empirically tuned value, not a round number. It was settled while
+/// fixing the multi-second playlist-switch freeze (#226): below it the
+/// unmap/remap costs more than the GTK reconciliation it saves, above it the
+/// synchronous teardown of GTK's realized-cell cache dominates the switch.
+/// Re-measure a large→small playlist switch before changing it.
 const LARGE_SHRINK_UNMAP_THRESHOLD: u32 = 512;
 
 impl TrackTable {
@@ -101,16 +110,32 @@ impl TrackTable {
         self.painter.clone().upcast()
     }
 
+    /// Swap the entire visible row set for `rows`, reusing row objects where
+    /// possible.
+    ///
+    /// PERFORMANCE-CRITICAL — this is the playlist-switch hot path. Selecting a
+    /// playlist used to freeze the UI for ~10 s (#226). The body below is the
+    /// end product of extensive trial-and-error profiling; every step earns its
+    /// keep against a measured stall, not abstract tidiness:
+    ///
+    /// - reuse the boxed row objects for the common prefix, so GTK only does
+    ///   structural work for the length delta instead of tearing down and
+    ///   rebinding every realized cell even when the next playlist is tiny;
+    /// - splice only the surplus/deficit, under a single `items-changed`;
+    /// - unmap the view around a large shrink (see
+    ///   [`LARGE_SHRINK_UNMAP_THRESHOLD`]).
+    ///
+    /// Any refactor here must re-measure a large→small playlist switch and not
+    /// regress it. "Cleaner" code that reintroduces a full remove+insert, a
+    /// per-row append loop, or a mapped large-shrink splice will bring the
+    /// freeze back.
     pub(crate) fn replace_rows(&self, rows: Vec<TrackTableRow>) {
         self.bump_row_replacement_generation();
         self.selection.unselect_all();
 
-        // Keep the model identity stable and reuse the existing row objects
-        // for the common prefix. A full remove+insert makes GTK tear down and
-        // rebind every realized cell even when the next playlist is tiny; that
-        // is the remaining playlist-selection stall after the quadratic
-        // teardown bug was fixed (#226). Updating the boxed row payloads in
-        // place limits structural model work to the length delta.
+        // Reuse the existing boxed row objects for the common prefix: updating
+        // the payloads in place keeps the model identity stable and limits
+        // structural model work to the length delta.
         let old_len = self.store.n_items();
         let new_len = u32::try_from(rows.len()).unwrap_or(u32::MAX);
         let common_len = old_len.min(new_len);
@@ -161,6 +186,16 @@ impl TrackTable {
         self.refresh_after_in_place_replacement();
     }
 
+    /// Refresh cell contents after the in-place payload swap in
+    /// [`Self::replace_rows`].
+    ///
+    /// Mutating the boxed row payloads in place (rather than replacing the
+    /// objects) means GTK sees no `items-changed` for the reused prefix, so it
+    /// rebinds none of those cells on its own. We therefore nudge the sorter
+    /// and refresh the visible bindings by hand. This is the correctness half
+    /// of the #226 playlist-switch fix — it is what makes the cheap in-place
+    /// swap show the right data — so do not drop these refreshes when reworking
+    /// `replace_rows`.
     fn refresh_after_in_place_replacement(&self) {
         let _guard = ApplyLayoutGuard::enter(self.applying_layout.clone());
         if let Some(sorter) = self.table.sorter() {
@@ -485,6 +520,11 @@ impl TrackTable {
     /// The [`Self::applying_layout`] guard is set for the duration so the resulting
     /// `notify::*` and `items-changed` signals do not loop back into a save.
     pub(crate) fn apply_layout(&self, layout: &TrackColumnLayout) {
+        // Skip the column reshuffle when the table already matches. Sidebar
+        // selection re-applies the layout on every playlist switch, and most
+        // switches share an identical layout; running the full insert_column
+        // cascade each time was avoidable work the #226 freeze fix removed from
+        // the hot path. Do not drop this guard without re-measuring switches.
         if read_current_layout(&self.table, &self.managed_columns) == *layout {
             return;
         }
@@ -602,6 +642,11 @@ impl TrackTable {
     /// reorder gate (which only accepts drops while this sort is active)
     /// is satisfied without the user having to click any header first.
     pub(crate) fn apply_playlist_default_sort(&self) {
+        // Already on the play-order sort: bail before touching the sorter.
+        // Every playlist selection calls this, and re-issuing sort_by_column
+        // forces a full re-sort plus selection reconcile even when nothing
+        // changed — avoidable work the #226 freeze fix removed from the hot
+        // path. Do not drop this guard without re-measuring playlist switches.
         if status_sort_is_active(&self.table, &self.status_column) {
             return;
         }
@@ -759,6 +804,12 @@ pub(crate) fn build_track_table(
     // not opt into inline editing (everything but the Songs view today).
     let inline_edit = inline_edit.map(InlineEditController::new);
 
+    // The reorderable playlist table resorts on every playlist switch, and a
+    // synchronous resort of a large playlist was part of the #226 freeze.
+    // Incremental sorting spreads that work across idle ticks so the switch
+    // stays responsive. Only the playlist table opts in (row_reorder.is_some());
+    // the Songs view loads once and does not pay for it. Keep this tied to the
+    // playlist table — re-measure switches before changing where it applies.
     let use_incremental_sort = row_reorder.is_some();
     let sorted_rows = gtk::SortListModel::new(Some(store.clone()), table.sorter());
     if use_incremental_sort {

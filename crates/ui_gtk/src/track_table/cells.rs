@@ -142,7 +142,11 @@ struct TrackTableContextHit {
 /// Bindings keep only weak widget references. GTK can tear down thousands of
 /// cached cells when a large playlist shrinks to a small one; making the
 /// registries self-pruning lets that teardown stay inside GTK instead of
-/// firing one Sustain cleanup callback per cell.
+/// firing one Sustain cleanup callback per cell. This weak, prune-on-walk
+/// design is part of the #226 playlist-switch fix: reintroducing per-cell
+/// `teardown` removal (a map keyed by list item, scanned on every teardown)
+/// brings back the multi-second freeze, so keep the registries weak and do not
+/// re-add an eager teardown path.
 trait CellBinding {
     fn key(&self) -> usize;
     fn list_item(&self) -> Option<gtk::ListItem>;

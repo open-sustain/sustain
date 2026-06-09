@@ -35,7 +35,10 @@ pub(super) struct RowReorderHooks {
 /// stripe across all sibling cells in the same row. `ListItem::position`
 /// (re-read live, not cached at register time) identifies which cells belong
 /// to the target row; entries with a dead widget or list_item weak ref are
-/// pruned on the next walk.
+/// pruned on the next walk. Prune-on-walk (rather than an eager per-cell
+/// unregister at teardown) is part of the #226 playlist-switch fix — eager
+/// teardown of every drop cell was one of the costs behind the multi-second
+/// freeze, so keep this registry weak and self-pruning.
 ///
 /// Painting is deduped: GTK fires `connect_motion` for every pixel of cursor
 /// movement, so without a guard a steady cursor over one row would still
