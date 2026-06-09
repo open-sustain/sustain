@@ -337,6 +337,24 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
             None => continue,
         };
 
+        // The "remaining" figure in the progress ticks is a UI hint.
+        // Count it once per batch instead of re-running the
+        // needing-online scan after every processed track; stamped
+        // background items are decremented locally and any intra-batch
+        // drift is corrected when the next batch counts again.
+        let mut remaining_background = library_store
+            .tracks_needing_online(
+                effective_capabilities(&state.settings),
+                provider_version,
+                BATCH_SIZE.saturating_mul(64),
+            )
+            .map(|ids| ids.len() as u32)
+            .unwrap_or(0);
+
+        // Library-genre bias list for tag enrichment, resolved at most
+        // once per batch (see `attempt_tags`).
+        let mut genre_bias: Option<Vec<String>> = None;
+
         for item in batch {
             // Re-check between tracks so a toggle in Preferences stops
             // the loop within at most one track's worth of work for
@@ -378,6 +396,7 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 remote_service.as_ref(),
                 &tag_writer,
                 library_store.as_ref(),
+                &mut genre_bias,
             );
 
             if matches!(report.outcome, ProcessOutcome::Succeeded)
@@ -416,6 +435,13 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                     }
                     continue 'outer;
                 }
+                // The stamp just removed a background item from the
+                // needing-online set the batch-start count measured.
+                // Explicit items may or may not have been in that set,
+                // so they leave the estimate untouched.
+                if !item.is_explicit {
+                    remaining_background = remaining_background.saturating_sub(1);
+                }
             }
 
             match report.outcome {
@@ -427,15 +453,7 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 }
             }
 
-            let remaining = library_store
-                .tracks_needing_online(
-                    effective_capabilities(&state.settings),
-                    provider_version,
-                    BATCH_SIZE.saturating_mul(64),
-                )
-                .map(|ids| ids.len() as u32)
-                .unwrap_or(0)
-                .saturating_add(state.explicit_queue.len() as u32);
+            let remaining = remaining_background.saturating_add(state.explicit_queue.len() as u32);
             (progress)(SchedulerProgress::Tick {
                 completed: state.completed,
                 failed: state.failed,
@@ -500,6 +518,7 @@ fn process_track(
     remote_service: &dyn RemoteMetadataService,
     tag_writer: &MetadataWriteHandle,
     library_store: &dyn LibraryStore,
+    genre_bias: &mut Option<Vec<String>>,
 ) -> ProcessReport {
     let query = query_from_metadata(&track.metadata);
     let mut any_success = false;
@@ -523,6 +542,7 @@ fn process_track(
             tag_writer,
             library_store,
             &mut cached_match,
+            genre_bias,
         ) {
             AttemptOutcome::Succeeded => {
                 any_success = true;
@@ -882,6 +902,7 @@ fn attempt_tags(
     tag_writer: &MetadataWriteHandle,
     library_store: &dyn LibraryStore,
     cached_match: &mut Option<TrackMatch>,
+    genre_bias: &mut Option<Vec<String>>,
 ) -> AttemptOutcome {
     // Gate-shaped check: don't talk to the network if there is
     // nothing we are allowed to fill. The positional fields require
@@ -948,12 +969,16 @@ fn attempt_tags(
         change.year = FieldChange::Set(year);
     }
     if need_genre {
-        // Library-aware genre selection. A failed distinct_genres()
-        // query degrades gracefully to "no library bias": the worker
-        // still gets to pick a genre based on votes alone, rather
-        // than silently skipping the whole track.
-        let library_genres = library_store.distinct_genres().unwrap_or_default();
-        if let Some(name) = select_genre(&matched.genres, &library_genres) {
+        // Library-aware genre selection. The bias list is resolved at
+        // most once per worker batch through the `genre_bias` memo —
+        // dozens of genre-needing tracks share one distinct_genres()
+        // query, and a list one batch stale is harmless. A failed query
+        // degrades gracefully to "no library bias" for the rest of the
+        // batch: the worker still gets to pick a genre based on votes
+        // alone, rather than silently skipping the whole track.
+        let library_genres =
+            genre_bias.get_or_insert_with(|| library_store.distinct_genres().unwrap_or_default());
+        if let Some(name) = select_genre(&matched.genres, library_genres) {
             change.genre = FieldChange::Set(name);
         }
     }
