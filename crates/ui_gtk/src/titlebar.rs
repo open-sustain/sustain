@@ -313,10 +313,18 @@ impl Titlebar {
 
 pub(crate) fn sync_play_pause_icon(icon: &gtk::Image, state: &PlaybackState) {
     match state {
-        PlaybackState::Playing { .. } => {
+        // `Loading` is a track the user just started that is still prerolling;
+        // it shows the pause glyph alongside `Playing` so the control reads as
+        // "playing, click to pause" the instant playback is requested. The
+        // backend reaches `Playing` asynchronously and nothing re-runs this
+        // sync between the two, so rendering `Loading` as the start glyph would
+        // leave the button stuck on play for the whole track (and flash play
+        // for a frame on every skip). This mirrors the MPRIS mapping, which
+        // already reports `Loading` as "Playing".
+        PlaybackState::Playing { .. } | PlaybackState::Loading { .. } => {
             icon.set_icon_name(Some("media-playback-pause-symbolic"));
         }
-        PlaybackState::Paused { .. } | PlaybackState::Stopped | PlaybackState::Loading { .. } => {
+        PlaybackState::Paused { .. } | PlaybackState::Stopped => {
             icon.set_icon_name(Some("media-playback-start-symbolic"));
         }
     }
