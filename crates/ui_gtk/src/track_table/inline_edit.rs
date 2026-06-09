@@ -34,6 +34,7 @@ use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
 use sustain_app_runtime::{MetadataChange, TrackMetadata};
 
+use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
 use crate::metadata_diff::{number_diff, signed_number_diff, text_diff};
 
 /// Fallback double-click interval when the display has no settings object.
@@ -140,9 +141,24 @@ struct ActiveEdit {
 /// A realized editable cell, used to find the row's other editable cells
 /// when Tab hops between them. Pruned lazily when its widgets die.
 struct EditableCellEntry {
+    key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
     cell: glib::WeakRef<gtk::Box>,
     field: EditableField,
+}
+
+impl CellBinding for EditableCellEntry {
+    fn key(&self) -> usize {
+        self.key
+    }
+
+    fn list_item(&self) -> Option<gtk::ListItem> {
+        self.list_item.upgrade()
+    }
+
+    fn is_live(&self) -> bool {
+        self.list_item.upgrade().is_some() && self.cell.upgrade().is_some()
+    }
 }
 
 /// An editable cell at a known horizontal offset, used to order a row's
@@ -168,7 +184,7 @@ struct OrderedCell {
 pub(crate) struct InlineEditController {
     hooks: InlineEditHooks,
     active: Rc<RefCell<Option<ActiveEdit>>>,
-    cells: Rc<RefCell<Vec<EditableCellEntry>>>,
+    cells: BindingRegistry<EditableCellEntry>,
     pending_open: Rc<RefCell<Option<glib::SourceId>>>,
     double_click_ms: i32,
 }
@@ -181,45 +197,30 @@ impl InlineEditController {
         Self {
             hooks,
             active: Rc::new(RefCell::new(None)),
-            cells: Rc::new(RefCell::new(Vec::new())),
+            cells: BindingRegistry::default(),
             pending_open: Rc::new(RefCell::new(None)),
             double_click_ms,
         }
     }
 
     /// Register a realized editable cell and install its click gesture.
-    /// Called once per cell widget at factory setup time.
+    /// Called once per cell widget at factory setup time. There is no
+    /// unregister: the registry prunes dead entries lazily (see
+    /// `cell_registry`), and an open editor on a cell leaving service is
+    /// committed by the factory's unbind hook.
     pub(crate) fn register_editable_cell(
         &self,
         list_item: &gtk::ListItem,
         cell: &gtk::Box,
         field: EditableField,
     ) {
-        self.cells.borrow_mut().push(EditableCellEntry {
+        self.cells.push(EditableCellEntry {
+            key: list_item_key(list_item),
             list_item: list_item.downgrade(),
             cell: cell.downgrade(),
             field,
         });
         self.install_click_gesture(list_item, cell, field);
-    }
-
-    pub(crate) fn unregister_editable_cell(&self, list_item: &gtk::ListItem) {
-        let editing_this_item = self
-            .active
-            .borrow()
-            .as_ref()
-            .is_some_and(|active| active.list_item == *list_item);
-        if editing_this_item {
-            self.finish_active(FinishMode::Commit);
-        }
-
-        self.cells.borrow_mut().retain(|entry| {
-            entry.cell.upgrade().is_some()
-                && entry
-                    .list_item
-                    .upgrade()
-                    .is_some_and(|registered| registered != *list_item)
-        });
     }
 
     fn install_click_gesture(
@@ -507,19 +508,17 @@ impl InlineEditController {
     /// on-screen x. Hidden columns have no realized cell, so they fall out
     /// naturally.
     fn editable_cells_at(&self, position: u32) -> Vec<OrderedCell> {
-        let mut cells = self.cells.borrow_mut();
-        cells.retain(|entry| entry.list_item.upgrade().is_some() && entry.cell.upgrade().is_some());
         let mut ordered: Vec<OrderedCell> = Vec::new();
-        for entry in cells.iter() {
+        self.cells.for_each_live(|entry| {
             let (Some(list_item), Some(cell)) = (entry.list_item.upgrade(), entry.cell.upgrade())
             else {
-                continue;
+                return;
             };
             if list_item.position() != position {
-                continue;
+                return;
             }
             let Some(x) = cell_origin_x(&cell) else {
-                continue;
+                return;
             };
             ordered.push(OrderedCell {
                 field: entry.field,
@@ -527,7 +526,7 @@ impl InlineEditController {
                 cell,
                 x,
             });
-        }
+        });
         ordered.sort_by(|a, b| a.x.total_cmp(&b.x));
         ordered
     }

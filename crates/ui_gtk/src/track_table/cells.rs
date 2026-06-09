@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::Cell, rc::Rc};
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
@@ -15,6 +12,7 @@ use super::{
     RatingChangedCallback, columns::TrackTableColumn, inline_edit::InlineEditController,
     row::TrackTableRow,
 };
+use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
 use crate::track_context::TrackRowContextMenu;
 use crate::util::sync_rating_button;
 
@@ -29,7 +27,7 @@ pub(super) struct TrackTableContextMenu {
     menu: TrackRowContextMenu,
     selection: gtk::MultiSelection,
     popover_parent: glib::WeakRef<gtk::ColumnView>,
-    cells: Rc<RefCell<Vec<TrackTableContextCell>>>,
+    cells: BindingRegistry<TrackTableContextCell>,
 }
 
 impl TrackTableContextMenu {
@@ -42,7 +40,7 @@ impl TrackTableContextMenu {
             menu,
             selection,
             popover_parent: popover_parent.downgrade(),
-            cells: Rc::new(RefCell::new(Vec::new())),
+            cells: BindingRegistry::default(),
         }
     }
 
@@ -88,7 +86,8 @@ impl TrackTableContextMenu {
     }
 
     fn register_cell(&self, list_item: &gtk::ListItem, cell: &gtk::Box) {
-        self.cells.borrow_mut().push(TrackTableContextCell {
+        self.cells.push(TrackTableContextCell {
+            key: list_item_key(list_item),
             widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
             list_item: list_item.downgrade(),
         });
@@ -110,9 +109,7 @@ impl TrackTableContextMenu {
     }
 
     fn list_item_for_widget(&self, widget: &gtk::Widget) -> Option<TrackTableContextHit> {
-        let mut cells = self.cells.borrow_mut();
-        cells.retain(|cell| cell.widget.upgrade().is_some() && cell.list_item.upgrade().is_some());
-        cells.iter().find_map(|cell| {
+        self.cells.find_map_live(|cell| {
             let registered = cell.widget.upgrade()?;
             if registered == *widget {
                 Some(TrackTableContextHit {
@@ -126,82 +123,29 @@ impl TrackTableContextMenu {
     }
 }
 
-#[derive(Clone)]
 struct TrackTableContextCell {
+    key: usize,
     widget: glib::WeakRef<gtk::Widget>,
     list_item: glib::WeakRef<gtk::ListItem>,
+}
+
+impl CellBinding for TrackTableContextCell {
+    fn key(&self) -> usize {
+        self.key
+    }
+
+    fn list_item(&self) -> Option<gtk::ListItem> {
+        self.list_item.upgrade()
+    }
+
+    fn is_live(&self) -> bool {
+        self.widget.upgrade().is_some() && self.list_item.upgrade().is_some()
+    }
 }
 
 struct TrackTableContextHit {
     widget: gtk::Widget,
     list_item: gtk::ListItem,
-}
-
-/// One cell whose contents the table refreshes in place.
-///
-/// Bindings keep only weak widget references. GTK can tear down thousands of
-/// cached cells when a large playlist shrinks to a small one; making the
-/// registries self-pruning lets that teardown stay inside GTK instead of
-/// firing one Sustain cleanup callback per cell. This weak, prune-on-walk
-/// design is part of the #226 playlist-switch fix: reintroducing per-cell
-/// `teardown` removal (a map keyed by list item, scanned on every teardown)
-/// brings back the multi-second freeze, so keep the registries weak and do not
-/// re-add an eager teardown path.
-trait CellBinding {
-    fn key(&self) -> usize;
-    fn list_item(&self) -> Option<gtk::ListItem>;
-    /// Whether the binding still maps to a live, bound cell. A recycled or
-    /// destroyed cell is dropped on the next refresh.
-    fn is_live(&self) -> bool;
-}
-
-/// The lifecycle every track-table cell registry shares: a cell pushes its
-/// binding in at setup (or bind), and later refreshes prune dead weak
-/// references before visiting the survivors. Each cell kind parameterises
-/// this with its own payload.
-struct BindingRegistry<T>(Rc<RefCell<Vec<T>>>);
-
-impl<T> Clone for BindingRegistry<T> {
-    fn clone(&self) -> Self {
-        Self(Rc::clone(&self.0))
-    }
-}
-
-impl<T> Default for BindingRegistry<T> {
-    fn default() -> Self {
-        Self(Rc::new(RefCell::new(Vec::new())))
-    }
-}
-
-impl<T: CellBinding> BindingRegistry<T> {
-    fn push(&self, binding: T) {
-        self.0.borrow_mut().push(binding);
-    }
-
-    /// Replaces any binding already registered for this list item. Rating
-    /// cells re-register on every bind as the cell is recycled, so a stale
-    /// entry for the same list item must not pile up.
-    fn replace(&self, binding: T) {
-        let key = binding.key();
-        let mut bindings = self.0.borrow_mut();
-        bindings.retain(|existing| existing.key() != key);
-        bindings.push(binding);
-    }
-
-    /// Prunes bindings whose cell is no longer live, then visits each
-    /// survivor. The borrow is held across the visit, so `visit` must not
-    /// re-enter the registry.
-    fn for_each_live(&self, mut visit: impl FnMut(&T)) {
-        let mut bindings = self.0.borrow_mut();
-        bindings.retain(|binding| binding.is_live());
-        for binding in bindings.iter() {
-            visit(binding);
-        }
-    }
-}
-
-fn list_item_key(list_item: &gtk::ListItem) -> usize {
-    list_item.as_ptr() as usize
 }
 
 struct StatusBinding {
@@ -220,9 +164,7 @@ impl CellBinding for StatusBinding {
     }
 
     fn is_live(&self) -> bool {
-        self.list_item()
-            .is_some_and(|list_item| list_item.item().is_some())
-            && self.icon.upgrade().is_some()
+        self.list_item.upgrade().is_some() && self.icon.upgrade().is_some()
     }
 }
 
@@ -258,9 +200,7 @@ impl CellBinding for TextBinding {
     }
 
     fn is_live(&self) -> bool {
-        self.list_item()
-            .is_some_and(|list_item| list_item.item().is_some())
-            && self.label.upgrade().is_some()
+        self.list_item.upgrade().is_some() && self.label.upgrade().is_some()
     }
 }
 
@@ -294,9 +234,7 @@ impl CellBinding for RatingBinding {
     }
 
     fn is_live(&self) -> bool {
-        self.list_item()
-            .is_some_and(|list_item| list_item.item().is_some())
-            && self.rating_box.upgrade().is_some()
+        self.list_item.upgrade().is_some() && self.rating_box.upgrade().is_some()
     }
 }
 
@@ -387,16 +325,9 @@ pub(super) fn build_text_cell_factory(
 
     // A cell about to be recycled to another row must not keep an open
     // editor: commit and close it first so the entry is gone before the
-    // slot is reused.
-    if let Some(controller) = inline_edit.clone() {
-        let controller_for_teardown = controller.clone();
-        factory.connect_teardown(move |_factory, item| {
-            let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-                return;
-            };
-            controller_for_teardown.unregister_editable_cell(list_item);
-        });
-    }
+    // slot is reused. Unbind also precedes teardown, so this hook covers a
+    // cell being destroyed mid-edit too — there is deliberately no
+    // teardown hook (see `cell_registry`).
     let inline_edit_for_unbind = inline_edit;
     factory.connect_unbind(move |_factory, item| {
         let Some(controller) = inline_edit_for_unbind.as_ref() else {

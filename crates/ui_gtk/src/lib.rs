@@ -27,6 +27,7 @@ mod app_css;
 mod artwork_color;
 mod artwork_loader;
 mod cd_import_panel;
+mod cell_registry;
 mod chart;
 mod command_controller;
 mod content_stack;

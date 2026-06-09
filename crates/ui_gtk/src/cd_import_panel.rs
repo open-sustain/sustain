@@ -40,6 +40,7 @@ use gtk::{gdk, gdk_pixbuf, gio, glib};
 
 use sustain_app_runtime::{CdImportRequest, CdTrackOverride, DiscRelease, TocSnapshot};
 
+use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
 use crate::track_table::{EditableField, EmptyRowPainter, InlineEditController};
 use crate::{SharedRuntime, TITLEBAR_HEIGHT};
 
@@ -118,53 +119,94 @@ impl CdRow {
     }
 }
 
-/// A bound title/artist label, refreshed when the chosen release or a user
-/// override changes its displayed value. Mirrors the Songs table's
-/// `TextBindings`. Pruned on teardown.
+/// A realized title/artist label, refreshed when the chosen release or a
+/// user override changes its displayed value. Mirrors the Songs table's
+/// `TextBindings`: weak references, pruned lazily on walks (see
+/// `cell_registry`).
 struct CdTextBinding {
-    list_item: gtk::ListItem,
-    label: gtk::Label,
+    key: usize,
+    list_item: glib::WeakRef<gtk::ListItem>,
+    label: glib::WeakRef<gtk::Label>,
     field: EditableField,
 }
 
+impl CellBinding for CdTextBinding {
+    fn key(&self) -> usize {
+        self.key
+    }
+
+    fn list_item(&self) -> Option<gtk::ListItem> {
+        self.list_item.upgrade()
+    }
+
+    fn is_live(&self) -> bool {
+        self.list_item.upgrade().is_some() && self.label.upgrade().is_some()
+    }
+}
+
 #[derive(Clone, Default)]
-struct CdTextBindings(Rc<RefCell<Vec<CdTextBinding>>>);
+struct CdTextBindings(BindingRegistry<CdTextBinding>);
 
 impl CdTextBindings {
     fn refresh(&self) {
-        let mut bindings = self.0.borrow_mut();
-        bindings.retain(|binding| binding.list_item.item().is_some());
-        for binding in bindings.iter() {
+        self.0.for_each_live(|binding| {
+            let (Some(list_item), Some(label)) = (binding.list_item(), binding.label.upgrade())
+            else {
+                return;
+            };
             let field = binding.field;
-            let text = list_item_cd_row(&binding.list_item, |row| match field {
+            let text = list_item_cd_row(&list_item, |row| match field {
                 EditableField::Artist => row.display_artist(),
                 _ => row.display_title(),
             })
             .unwrap_or_default();
-            binding.label.set_text(&text);
-        }
+            label.set_text(&text);
+        });
     }
 }
 
-/// A bound status cell, refreshed as a rip progresses. Pruned on teardown.
+/// A realized status cell, refreshed as a rip progresses. Weak references,
+/// pruned lazily on walks (see `cell_registry`).
 struct CdStatusBinding {
-    list_item: gtk::ListItem,
-    spinner: gtk::Spinner,
-    icon: gtk::Image,
+    key: usize,
+    list_item: glib::WeakRef<gtk::ListItem>,
+    spinner: glib::WeakRef<gtk::Spinner>,
+    icon: glib::WeakRef<gtk::Image>,
+}
+
+impl CellBinding for CdStatusBinding {
+    fn key(&self) -> usize {
+        self.key
+    }
+
+    fn list_item(&self) -> Option<gtk::ListItem> {
+        self.list_item.upgrade()
+    }
+
+    fn is_live(&self) -> bool {
+        self.list_item.upgrade().is_some()
+            && self.spinner.upgrade().is_some()
+            && self.icon.upgrade().is_some()
+    }
 }
 
 #[derive(Clone, Default)]
-struct CdStatusBindings(Rc<RefCell<Vec<CdStatusBinding>>>);
+struct CdStatusBindings(BindingRegistry<CdStatusBinding>);
 
 impl CdStatusBindings {
     fn refresh(&self) {
-        let mut bindings = self.0.borrow_mut();
-        bindings.retain(|binding| binding.list_item.item().is_some());
-        for binding in bindings.iter() {
-            let status = list_item_cd_row(&binding.list_item, |row| row.status.get())
+        self.0.for_each_live(|binding| {
+            let (Some(list_item), Some(spinner), Some(icon)) = (
+                binding.list_item(),
+                binding.spinner.upgrade(),
+                binding.icon.upgrade(),
+            ) else {
+                return;
+            };
+            let status = list_item_cd_row(&list_item, |row| row.status.get())
                 .unwrap_or(CdRipStatus::Pending);
-            render_cd_status(&binding.spinner, &binding.icon, status);
-        }
+            render_cd_status(&spinner, &icon, status);
+        });
     }
 }
 
@@ -837,7 +879,7 @@ fn new_cell() -> gtk::Box {
 fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
-    let bindings_setup = bindings.clone();
+    let bindings_setup = bindings;
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
@@ -868,22 +910,12 @@ fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFac
         cell.append(&icon);
         list_item.set_child(Some(&cell));
 
-        bindings_setup.0.borrow_mut().push(CdStatusBinding {
-            list_item: list_item.clone(),
-            spinner,
-            icon,
+        bindings_setup.0.push(CdStatusBinding {
+            key: list_item_key(list_item),
+            list_item: list_item.downgrade(),
+            spinner: spinner.downgrade(),
+            icon: icon.downgrade(),
         });
-    });
-
-    let bindings_teardown = bindings;
-    factory.connect_teardown(move |_factory, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        bindings_teardown
-            .0
-            .borrow_mut()
-            .retain(|binding| binding.list_item != *list_item);
     });
 
     factory.connect_unbind(move |_factory, item| {
@@ -1077,7 +1109,7 @@ fn build_cd_text_factory(
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
-    let bindings_setup = bindings.clone();
+    let bindings_setup = bindings;
     let inline_setup = inline_edit.clone();
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
@@ -1100,22 +1132,12 @@ fn build_cd_text_factory(
         // editable cell of the already-selected row opens the entry.
         inline_setup.register_editable_cell(list_item, &cell, field);
 
-        bindings_setup.0.borrow_mut().push(CdTextBinding {
-            list_item: list_item.clone(),
-            label,
+        bindings_setup.0.push(CdTextBinding {
+            key: list_item_key(list_item),
+            list_item: list_item.downgrade(),
+            label: label.downgrade(),
             field,
         });
-    });
-
-    let bindings_teardown = bindings;
-    factory.connect_teardown(move |_factory, item| {
-        let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        bindings_teardown
-            .0
-            .borrow_mut()
-            .retain(|binding| binding.list_item != *list_item);
     });
 
     // A cell about to be recycled to another row must not keep an open

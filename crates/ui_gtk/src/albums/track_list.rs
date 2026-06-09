@@ -3,7 +3,7 @@
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 use sustain_app_runtime::{PlaybackQueueRequest, PlaybackQueueSource, TrackId};
 
 use super::{
@@ -12,6 +12,7 @@ use super::{
 };
 use crate::{
     PlaybackChangedCallback,
+    cell_registry::{BindingRegistry, CellBinding, list_item_key},
     command_controller::SharedCommandController,
     missing_track::{LocateMissingTrackCallback, play_track_or_offer_locate},
     track_context::TrackRowContextMenu,
@@ -246,7 +247,7 @@ fn row_track_id(item: Option<glib::Object>) -> Option<TrackId> {
 struct AlbumTrackContextMenu {
     menu: TrackRowContextMenu,
     ordered_track_ids: Rc<Vec<TrackId>>,
-    rows: Rc<RefCell<Vec<AlbumTrackContextRow>>>,
+    rows: BindingRegistry<AlbumTrackContextRow>,
 }
 
 impl AlbumTrackContextMenu {
@@ -254,7 +255,7 @@ impl AlbumTrackContextMenu {
         Self {
             menu,
             ordered_track_ids: Rc::new(ordered_track_ids),
-            rows: Rc::new(RefCell::new(Vec::new())),
+            rows: BindingRegistry::default(),
         }
     }
 
@@ -288,7 +289,8 @@ impl AlbumTrackContextMenu {
     }
 
     fn register_row(&self, list_item: &gtk::ListItem, row: &gtk::Box) {
-        self.rows.borrow_mut().push(AlbumTrackContextRow {
+        self.rows.push(AlbumTrackContextRow {
+            key: list_item_key(list_item),
             widget: row.clone().upcast::<gtk::Widget>().downgrade(),
             list_item: list_item.downgrade(),
         });
@@ -306,9 +308,7 @@ impl AlbumTrackContextMenu {
     }
 
     fn list_item_for_widget(&self, widget: &gtk::Widget) -> Option<gtk::ListItem> {
-        let mut rows = self.rows.borrow_mut();
-        rows.retain(|row| row.widget.upgrade().is_some() && row.list_item.upgrade().is_some());
-        rows.iter().find_map(|row| {
+        self.rows.find_map_live(|row| {
             let registered = row.widget.upgrade()?;
             if registered == *widget {
                 row.list_item.upgrade()
@@ -319,10 +319,24 @@ impl AlbumTrackContextMenu {
     }
 }
 
-#[derive(Clone)]
 struct AlbumTrackContextRow {
+    key: usize,
     widget: glib::WeakRef<gtk::Widget>,
     list_item: glib::WeakRef<gtk::ListItem>,
+}
+
+impl CellBinding for AlbumTrackContextRow {
+    fn key(&self) -> usize {
+        self.key
+    }
+
+    fn list_item(&self) -> Option<gtk::ListItem> {
+        self.list_item.upgrade()
+    }
+
+    fn is_live(&self) -> bool {
+        self.widget.upgrade().is_some() && self.list_item.upgrade().is_some()
+    }
 }
 
 fn refresh_status_icon(
