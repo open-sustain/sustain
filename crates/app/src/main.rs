@@ -263,7 +263,7 @@ fn main() {
     );
 }
 
-/// Drive the hidden `--force-backfill` command to completion and exit.
+/// Drive the `--force-backfill` command to completion and exit.
 ///
 /// Streams one line per track to stderr (so progress is visible while a
 /// large library is rewritten) and prints a final tally. Exits non-zero if

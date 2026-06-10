@@ -12,7 +12,7 @@
 //! exact mirror primitives the per-edit path uses — so a POPM rating
 //! preserves any foreign `play_counter`, the same standard tag frames are
 //! touched, and listening statistics are never written to files. Driven by
-//! the hidden `sustain --force-backfill` CLI command (#143).
+//! the `sustain --force-backfill` CLI command (#143).
 
 use crate::metadata_writer::full_metadata_mirror;
 use crate::{ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, Track};

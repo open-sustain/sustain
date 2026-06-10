@@ -39,6 +39,13 @@ Developer-isolation options (default: XDG config/data/cache locations):
   --local-scope       Keep config, database, and cache in the working
       --dev           directory (sustain.toml, sustain.sqlite, sustain.cache/).
   --profile           Print developer performance landmarks to stderr.
+
+Maintenance options:
+  --force-backfill    Rewrite editable track metadata and ratings from SQLite
+                      to the audio file tags, then exit. Useful after manually
+                      editing Sustain's database track tags.
+
+General options:
   -h, --help          Print this help and exit.
 
 Explicit --config/--database win over --local-scope. When any of these
@@ -52,12 +59,10 @@ pub(crate) struct Cli {
     pub(crate) database: Option<PathBuf>,
     pub(crate) local_scope: bool,
     pub(crate) profile: bool,
-    /// Hidden maintenance command: rewrite every library track's file
-    /// tags from the authoritative SQLite values, then exit without
-    /// launching the UI (#143). Deliberately absent from [`USAGE`] — it
-    /// is only useful after a bulk external import (Rhythmbox / iTunes
-    /// XML) left SQLite and the files out of sync; a normal Sustain user
-    /// never drifts, so the command stays undocumented.
+    /// Maintenance command: rewrite every library track's file tags from
+    /// the authoritative SQLite values, then exit without launching the UI.
+    /// Useful after direct database edits or bulk external imports leave
+    /// SQLite and the audio files out of sync (#143).
     pub(crate) force_backfill: bool,
 }
 
@@ -362,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_hidden_force_backfill_flag() {
+    fn parses_force_backfill_flag() {
         let cli = parse_args(args(&["--force-backfill"]))
             .expect("valid")
             .expect("not help");
@@ -389,6 +394,12 @@ mod tests {
     #[test]
     fn help_mentions_profile_flag() {
         assert!(USAGE.contains("--profile"));
+    }
+
+    #[test]
+    fn help_mentions_force_backfill_flag() {
+        assert!(USAGE.contains("--force-backfill"));
+        assert!(USAGE.contains("editing Sustain's database track tags"));
     }
 
     #[test]

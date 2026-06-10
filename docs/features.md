@@ -852,6 +852,20 @@ copying.
 
 ---
 
+## Command-line maintenance
+
+### Force tag backfill — *Sustain-native*
+
+`sustain --force-backfill` rewrites every present library track's
+editable metadata fields and rating from SQLite to the audio file's
+native tags, streams per-track progress to stderr, and exits without
+launching the UI. It is intended for advanced maintenance cases such as
+manually editing Sustain's database track tags or bulk-importing
+external library history into SQLite. Listening statistics remain
+SQLite-only and are never written to file tags.
+
+---
+
 ## Keyboard shortcuts — *iso-iTunes*
 
 Global shortcuts are wired as GTK application actions and listed in the
