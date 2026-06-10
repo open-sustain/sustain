@@ -163,11 +163,7 @@ pub(crate) struct PlaylistSidebar {
 }
 
 impl PlaylistSidebar {
-    pub(crate) fn new(
-        runtime: SharedRuntime,
-        _library_collapsed: bool,
-        playlists_collapsed: bool,
-    ) -> Self {
+    pub(crate) fn new(runtime: SharedRuntime, playlists_collapsed: bool) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("playlist-sidebar");
         root.set_vexpand(true);

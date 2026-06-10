@@ -312,7 +312,6 @@ pub(crate) fn build_main_window(
 
     let sidebar = PlaylistSidebar::new(
         runtime.clone(),
-        initial_ui_settings.library_section_collapsed,
         initial_ui_settings.playlists_section_collapsed,
     );
     let sidebar_widget = sidebar.widget();
