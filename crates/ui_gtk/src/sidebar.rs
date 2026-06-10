@@ -7,7 +7,7 @@ use std::{
 };
 
 use gtk::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gdk, glib};
 
 use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, ConnectedDevice, DeviceKind, OnlineRunRequest,
@@ -45,10 +45,10 @@ pub(crate) type SidebarAnalysisRunCallback = Rc<dyn Fn(PlaylistItem, AnalysisRun
 /// submenu on a playlist or smart playlist sidebar row.
 pub(crate) type SidebarOnlineRunCallback = Rc<dyn Fn(PlaylistItem, OnlineRunRequest)>;
 /// Invoked when the user clicks a removable-sync-target row under the
-/// DEVICES section. Carries the connected device so the panel can render
+/// Devices section. Carries the connected device so the panel can render
 /// and sync it.
 pub(crate) type SidebarDeviceSelectedCallback = Rc<dyn Fn(ConnectedDevice)>;
-/// Invoked when the user clicks an inserted-audio-CD row under the DEVICES
+/// Invoked when the user clicks an inserted-audio-CD row under the Devices
 /// section. Carries the probed disc snapshot so the CD-import page can
 /// render it.
 pub(crate) type SidebarCdSelectedCallback = Rc<dyn Fn(TocSnapshot)>;
@@ -57,7 +57,7 @@ pub(crate) type SidebarCdSelectedCallback = Rc<dyn Fn(TocSnapshot)>;
 pub(crate) type SidebarCdEjectCallback = Rc<dyn Fn(TocSnapshot)>;
 pub(crate) type SidebarDuplicatesSelectedCallback = Rc<dyn Fn()>;
 
-/// A transient entry shown under the DEVICES section. The two kinds open
+/// A transient entry shown under the Devices section. The two kinds open
 /// different pages — a removable sync target opens the device-sync panel; an
 /// inserted audio CD opens the CD-import page — so the row model is typed
 /// rather than forcing one shape onto both.
@@ -82,11 +82,11 @@ pub(crate) type SidebarOnlineBusyQuery = Rc<dyn Fn() -> bool>;
 /// The sidebar's top-level selection targets.
 ///
 /// The sidebar drives every top-level navigation choice:
-/// - `Music` — the LIBRARY → Music row, the whole-library track table.
-/// - `Albums` — the LIBRARY → Albums row, the album-cover grid.
-/// - `Statistics` — the LIBRARY → Statistics row, the library-wide
+/// - `Music` — the Library → Music row, the whole-library track table.
+/// - `Albums` — the Library → Albums row, the album-cover grid.
+/// - `Statistics` — the Library → Statistics row, the library-wide
 ///   diagnostic charts.
-/// - `Item` — a row under the PLAYLISTS section (regular playlist,
+/// - `Item` — a row under the Playlists section (regular playlist,
 ///   smart playlist, or folder).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SidebarSelection {
@@ -106,7 +106,7 @@ type OnlineRunCallbackHolder = Rc<RefCell<Option<SidebarOnlineRunCallback>>>;
 type AnalysisEnabledQueryHolder = Rc<RefCell<Option<SidebarAnalysisEnabledQuery>>>;
 type OnlineBusyQueryHolder = Rc<RefCell<Option<SidebarOnlineBusyQuery>>>;
 
-/// Which row under the LIBRARY section is currently active. Mutually
+/// Which row under the Library section is currently active. Mutually
 /// exclusive with a playlist selection in the list view.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum LibraryRowState {
@@ -123,10 +123,10 @@ enum LibraryRowState {
 pub(crate) struct PlaylistSidebar {
     root: gtk::Box,
     selection: gtk::SingleSelection,
-    music_row: gtk::TreeExpander,
-    albums_row: gtk::TreeExpander,
-    duplicates_row: gtk::TreeExpander,
-    statistics_row: gtk::TreeExpander,
+    music_row: gtk::Box,
+    albums_row: gtk::Box,
+    duplicates_row: gtk::Box,
+    statistics_row: gtk::Box,
     library_state: Rc<Cell<LibraryRowState>>,
     runtime: SharedRuntime,
     on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
@@ -140,12 +140,12 @@ pub(crate) struct PlaylistSidebar {
     analysis_enabled_query: AnalysisEnabledQueryHolder,
     online_busy_query: OnlineBusyQueryHolder,
     pending_rename: Rc<RefCell<Option<PlaylistItem>>>,
-    /// Fold state of the LIBRARY disclosure section. Read back at
+    /// Fold state of the Library disclosure section. Read back at
     /// shutdown so the choice persists across launches.
     library_section_collapsed: Rc<Cell<bool>>,
-    /// Fold state of the PLAYLISTS disclosure section.
+    /// Fold state of the Playlists disclosure section.
     playlists_section_collapsed: Rc<Cell<bool>>,
-    /// Container holding the dynamically-rebuilt DEVICES rows.
+    /// Container holding the dynamically-rebuilt Devices rows.
     devices_body: gtk::Box,
     on_device_selected: Rc<RefCell<Option<SidebarDeviceSelectedCallback>>>,
     on_cd_selected: Rc<RefCell<Option<SidebarCdSelectedCallback>>>,
@@ -173,13 +173,14 @@ impl PlaylistSidebar {
         root.set_vexpand(true);
         root.set_size_request(SIDEBAR_MIN_WIDTH, -1);
 
-        let (library_header, library_caret) = build_section_header("LIBRARY");
+        let (library_header, library_caret) = build_section_header("Library");
         root.append(&library_header);
 
-        let music_row = build_library_row("Music", "audio-x-generic-symbolic");
-        let albums_row = build_library_row("Albums", "media-optical-symbolic");
-        let duplicates_row = build_library_row("Duplicates", "edit-copy-symbolic");
-        let statistics_row = build_library_row("Statistics", "sustain-statistics-symbolic");
+        let music_row = build_standalone_sidebar_row("Music", "audio-x-generic-symbolic");
+        let albums_row = build_standalone_sidebar_row("Albums", "media-optical-symbolic");
+        let duplicates_row = build_standalone_sidebar_row("Duplicates", "edit-copy-symbolic");
+        let statistics_row =
+            build_standalone_sidebar_row("Statistics", "sustain-statistics-symbolic");
         // Duplicates and Statistics are optional library rows, toggled in
         // the Views preferences (both shown by default).
         {
@@ -193,14 +194,14 @@ impl PlaylistSidebar {
         root.append(&duplicates_row);
         root.append(&statistics_row);
 
-        // DEVICES section: connected USB sticks / SD cards. Sits between
-        // LIBRARY and PLAYLISTS; the playlist list view below keeps
+        // Devices section: connected USB sticks / SD cards. Sits between
+        // Library and Playlists; the playlist list view below keeps
         // vexpand, so this group stays a fixed-height block pinned under
         // the library rows while the playlists absorb the remaining
         // space. Rows are rebuilt dynamically from device discovery,
         // which runs after first-frame to keep startup cheap. Folded
         // state is not persisted — the section defaults to expanded.
-        let (devices_header, devices_caret) = build_section_header("DEVICES");
+        let (devices_header, devices_caret) = build_section_header("Devices");
         root.append(&devices_header);
         let devices_body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         devices_body.add_css_class("playlist-sidebar-devices");
@@ -222,7 +223,7 @@ impl PlaylistSidebar {
         let active_transient_row: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
         let persistent_selection = Rc::new(Cell::new(SidebarSelection::Music));
 
-        let (playlists_header, playlists_caret) = build_section_header("PLAYLISTS");
+        let (playlists_header, playlists_caret) = build_section_header("Playlists");
         root.append(&playlists_header);
 
         let tree_model = build_tree_model(&runtime.borrow());
@@ -271,8 +272,8 @@ impl PlaylistSidebar {
         // at shutdown so the choice persists across launches. The
         // sections are independent.
         //
-        // LIBRARY folds away its two fixed-height rows, so collapsing it
-        // lets PLAYLISTS rise to fill the freed space. PLAYLISTS folds the
+        // Library folds away its fixed-height rows, so collapsing it
+        // lets Playlists rise to fill the freed space. Playlists folds the
         // list view itself rather than the enclosing scroller: the scroller
         // keeps `vexpand`, so the now-empty area is held by the scroller
         // instead of letting the list float up under the header.
@@ -344,7 +345,7 @@ impl PlaylistSidebar {
         // the first row of the playlist tree as "selected", which
         // would render two rows highlighted simultaneously (Music via
         // its CSS class and a playlist via the list selection). Force
-        // an empty playlist selection up front; the LIBRARY state is
+        // an empty playlist selection up front; the Library state is
         // the only thing live at this point.
         music_row.add_css_class("selected");
         selection.set_selected(gtk::INVALID_LIST_POSITION);
@@ -412,13 +413,13 @@ impl PlaylistSidebar {
         }
     }
 
-    /// Whether the LIBRARY disclosure section is currently folded shut.
+    /// Whether the Library disclosure section is currently folded shut.
     /// Read at shutdown to persist the fold state.
     pub(crate) fn library_section_collapsed(&self) -> bool {
         self.library_section_collapsed.get()
     }
 
-    /// Whether the PLAYLISTS disclosure section is currently folded shut.
+    /// Whether the Playlists disclosure section is currently folded shut.
     pub(crate) fn playlists_section_collapsed(&self) -> bool {
         self.playlists_section_collapsed.get()
     }
@@ -427,7 +428,7 @@ impl PlaylistSidebar {
         self.root.clone()
     }
 
-    /// Show or hide the optional LIBRARY rows per the Views preferences.
+    /// Show or hide the optional Library rows per the Views preferences.
     /// Called live when the toggles change so the sidebar updates without
     /// a relaunch.
     pub(crate) fn set_view_row_visibility(&self, show_duplicates: bool, show_statistics: bool) {
@@ -516,7 +517,7 @@ impl PlaylistSidebar {
         self.on_duplicates_selected.replace(Some(callback));
     }
 
-    /// Rebuild the DEVICES section from the current set of transient
+    /// Rebuild the Devices section from the current set of transient
     /// entries — removable sync targets and inserted audio CDs. Clears the
     /// previous rows and any highlight.
     pub(crate) fn set_devices(&self, entries: &[SidebarDeviceEntry]) {
@@ -541,7 +542,7 @@ impl PlaylistSidebar {
                         DeviceKind::Android => "phone-symbolic",
                         DeviceKind::UsbDrive => "drive-removable-media-symbolic",
                     };
-                    let row = build_library_row(&device.label, icon);
+                    let row = build_standalone_sidebar_row(&device.label, icon);
                     let sidebar = self.clone();
                     let row_widget = row.clone().upcast::<gtk::Widget>();
                     let device = device.clone();
@@ -558,7 +559,9 @@ impl PlaylistSidebar {
                     row
                 }
                 SidebarDeviceEntry::AudioCd(snapshot) => {
-                    let row = build_library_row("Audio CD", "media-optical-symbolic");
+                    let row_parts =
+                        build_standalone_sidebar_row_parts("Audio CD", "media-optical-symbolic");
+                    let row = row_parts.row;
                     // Trailing eject control. A flat icon button so it reads
                     // as a per-row affordance, not a primary action. Clicking
                     // it claims the press (GtkButton handles the click), so the
@@ -586,9 +589,7 @@ impl PlaylistSidebar {
                         });
                         eject.add_controller(gesture);
                     }
-                    if let Some(inner) = row.child().and_downcast::<gtk::Box>() {
-                        inner.append(&eject);
-                    }
+                    row_parts.content.append(&eject);
                     let sidebar = self.clone();
                     let row_widget = row.clone().upcast::<gtk::Widget>();
                     let snapshot = snapshot.clone();
@@ -694,7 +695,7 @@ impl PlaylistSidebar {
         }
     }
 
-    /// Paint the `.selected` CSS class onto exactly the LIBRARY row that
+    /// Paint the `.selected` CSS class onto exactly the Library row that
     /// matches the current [`LibraryRowState`], clearing it from the
     /// others. Centralised so adding a row (Statistics) does not multiply
     /// the per-call-site class juggling.
@@ -766,11 +767,11 @@ impl PlaylistSidebar {
     }
 }
 
-/// Attach the primary-click gesture that activates a transient DEVICES row.
+/// Attach the primary-click gesture that activates a transient Devices row.
 /// Shared by the sync-target and audio-CD rows: both claim the gesture,
 /// take over the sidebar highlight, and fire their kind's callback.
 fn attach_transient_row_gesture(
-    row: &gtk::TreeExpander,
+    row: &gtk::Box,
     on_pressed: impl Fn(&gtk::Widget) + 'static,
     row_widget: gtk::Widget,
 ) {
@@ -783,25 +784,33 @@ fn attach_transient_row_gesture(
     row.add_controller(gesture);
 }
 
-/// Builds a row under the LIBRARY section (Music, Albums, …).
+/// Builds a standalone top-level sidebar row (Music, Albums, Devices, …).
 ///
 /// Rendered with the same `.playlist-sidebar-row` styling as a playlist
-/// row so the LIBRARY and PLAYLISTS sections present a uniform list of
+/// row so the Library, Devices, and Playlists sections present a uniform list of
 /// selectable items.
-///
-/// The outer wrapper is a [`gtk::TreeExpander`] so each library row
-/// sits at the same horizontal indent as the playlist-row factory's
-/// TreeExpanders. That column is only reserved when the expander has a
-/// real [`gtk::TreeListRow`] attached — without one, TreeExpander
-/// renders its child flush-left. Library rows are not part of any tree
-/// model, so the helper below builds a one-item stub
-/// [`gtk::TreeListModel`] purely to obtain a depth-0, no-children row
-/// whose only job is to convince the expander to allocate its toggle
-/// column. The expander keeps a reference to the row (which keeps the
-/// stub model alive), so the model does not need to be stored on the
-/// sidebar struct.
-fn build_library_row(label_text: &str, icon_name: &str) -> gtk::TreeExpander {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+fn build_standalone_sidebar_row(label_text: &str, icon_name: &str) -> gtk::Box {
+    build_standalone_sidebar_row_parts(label_text, icon_name).row
+}
+
+struct StandaloneSidebarRowParts {
+    row: gtk::Box,
+    content: gtk::Box,
+}
+
+fn build_standalone_sidebar_row_parts(
+    label_text: &str,
+    icon_name: &str,
+) -> StandaloneSidebarRowParts {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.add_css_class("playlist-sidebar-row");
+
+    let indent_slot = gtk::Image::from_icon_name(SIDEBAR_TREE_INDENT_ICON);
+    indent_slot.set_opacity(0.0);
+    indent_slot.set_can_target(false);
+
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.set_hexpand(true);
 
     let icon = gtk::Image::from_icon_name(icon_name);
     icon.add_css_class("playlist-sidebar-icon");
@@ -811,33 +820,17 @@ fn build_library_row(label_text: &str, icon_name: &str) -> gtk::TreeExpander {
     label.set_hexpand(true);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
-    row.append(&icon);
-    row.append(&label);
+    content.append(&icon);
+    content.append(&label);
+    row.append(&indent_slot);
+    row.append(&content);
 
-    let expander = gtk::TreeExpander::new();
-    expander.add_css_class("playlist-sidebar-row");
-    expander.set_child(Some(&row));
-    if let Some(stub_row) = library_row_stub_tree_list_row() {
-        expander.set_list_row(Some(&stub_row));
-    }
-    expander
+    StandaloneSidebarRowParts { row, content }
 }
 
-/// Builds a throwaway one-item [`gtk::TreeListModel`] and returns its
-/// depth-0 [`gtk::TreeListRow`]. See [`build_library_row`] for the
-/// rationale — TreeExpander only allocates indent for its toggle column
-/// when a list row is attached, and there is no natural tree model that
-/// the Music entry belongs to.
-fn library_row_stub_tree_list_row() -> Option<gtk::TreeListRow> {
-    let stub_store = gio::ListStore::new::<glib::BoxedAnyObject>();
-    stub_store.append(&glib::BoxedAnyObject::new(()));
-    let stub_model = gtk::TreeListModel::new(stub_store, false, true, |_| None);
-    stub_model.row(0)
-}
-
-/// Builds a clickable disclosure header for a sidebar section — the
-/// small uppercase labels that introduce the LIBRARY and PLAYLISTS
-/// groups, each prefixed by a caret that reflects (and toggles) whether
+/// Builds a clickable disclosure header for a sidebar section — the small
+/// labels that introduce the Library, Devices, and Playlists groups, each
+/// prefixed by a caret that reflects (and toggles) whether
 /// the section is folded. Returns the header row and its caret image;
 /// the caller wires the fold behaviour via [`connect_section_toggle`].
 ///
@@ -866,6 +859,10 @@ const SECTION_EXPANDED_ICON: &str = "pan-down-symbolic";
 /// Caret icon for a collapsed (folded) disclosure section — points to
 /// the inline-end edge (right in LTR).
 const SECTION_COLLAPSED_ICON: &str = "pan-end-symbolic";
+/// Invisible slot used by standalone top-level rows to align their content
+/// with depth-0 playlist rows, whose real [`gtk::TreeExpander`] prepends an
+/// expander or indent node before the row content.
+const SIDEBAR_TREE_INDENT_ICON: &str = "pan-end-symbolic";
 
 /// Paints a section's current fold state: swaps the caret glyph and
 /// shows or hides every body widget belonging to the section.
@@ -943,8 +940,8 @@ fn connect_section_toggle(
     header.add_controller(keys);
 }
 
-/// Toggle the `.selected` highlight on a single LIBRARY row.
-fn set_row_selected(row: &gtk::TreeExpander, selected: bool) {
+/// Toggle the `.selected` highlight on a single Library row.
+fn set_row_selected(row: &gtk::Box, selected: bool) {
     if selected {
         row.add_css_class("selected");
     } else {
@@ -959,16 +956,16 @@ fn set_row_selected(row: &gtk::TreeExpander, selected: bool) {
 /// rather than `&self`.
 fn paint_library_rows(
     state: LibraryRowState,
-    music_row: &gtk::TreeExpander,
-    albums_row: &gtk::TreeExpander,
-    statistics_row: &gtk::TreeExpander,
+    music_row: &gtk::Box,
+    albums_row: &gtk::Box,
+    statistics_row: &gtk::Box,
 ) {
     set_row_selected(music_row, state == LibraryRowState::Music);
     set_row_selected(albums_row, state == LibraryRowState::Albums);
     set_row_selected(statistics_row, state == LibraryRowState::Statistics);
 }
 
-/// Map a LIBRARY row's state to the selection it represents. Returns
+/// Map a Library row's state to the selection it represents. Returns
 /// `None` for [`LibraryRowState::None`], which is not a row.
 fn library_row_selection(state: LibraryRowState) -> Option<SidebarSelection> {
     match state {
@@ -995,9 +992,9 @@ fn activate_transient_view_state(
     library_state: &Rc<Cell<LibraryRowState>>,
     selection: &gtk::SingleSelection,
     on_selection_changed: &Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
-    music_row: &gtk::TreeExpander,
-    albums_row: &gtk::TreeExpander,
-    statistics_row: &gtk::TreeExpander,
+    music_row: &gtk::Box,
+    albums_row: &gtk::Box,
+    statistics_row: &gtk::Box,
 ) {
     // Entering the transient state from a persistent one: snapshot the
     // persistent selection. Switching transient-to-transient keeps the
@@ -1024,11 +1021,11 @@ fn activate_transient_view_state(
 
 #[allow(clippy::too_many_arguments)]
 fn connect_library_row(
-    target_row: &gtk::TreeExpander,
+    target_row: &gtk::Box,
     target_state: LibraryRowState,
-    music_row: &gtk::TreeExpander,
-    albums_row: &gtk::TreeExpander,
-    statistics_row: &gtk::TreeExpander,
+    music_row: &gtk::Box,
+    albums_row: &gtk::Box,
+    statistics_row: &gtk::Box,
     library_state: &Rc<Cell<LibraryRowState>>,
     selection: &gtk::SingleSelection,
     on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
@@ -1060,9 +1057,9 @@ fn connect_library_row(
 
 fn connect_selection_signal(
     selection: &gtk::SingleSelection,
-    music_row: &gtk::TreeExpander,
-    albums_row: &gtk::TreeExpander,
-    statistics_row: &gtk::TreeExpander,
+    music_row: &gtk::Box,
+    albums_row: &gtk::Box,
+    statistics_row: &gtk::Box,
     library_state: &Rc<Cell<LibraryRowState>>,
     on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
 ) {
@@ -1074,7 +1071,7 @@ fn connect_selection_signal(
     selection.connect_selected_notify(move |_selection| {
         let item = selected_item(&selection_clone);
         let new_selection = if let Some(item) = item {
-            // A playlist row was just picked. Any active LIBRARY row
+            // A playlist row was just picked. Any active Library row
             // loses its highlight.
             if library_state.get() != LibraryRowState::None {
                 library_state.set(LibraryRowState::None);

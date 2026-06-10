@@ -22,7 +22,7 @@ pub(super) fn build(
 
     let duplicates_row = build_switch_row(
         "Show Duplicates in the sidebar",
-        "Lists the Duplicates view in the left column's LIBRARY section.",
+        "Lists the Duplicates view in the left column's Library section.",
         initial.sidebar_show_duplicates,
     );
     wire_view_switch(
@@ -35,7 +35,7 @@ pub(super) fn build(
 
     let statistics_row = build_switch_row(
         "Show Statistics in the sidebar",
-        "Lists the Statistics view in the left column's LIBRARY section.",
+        "Lists the Statistics view in the left column's Library section.",
         initial.sidebar_show_statistics,
     );
     wire_view_switch(

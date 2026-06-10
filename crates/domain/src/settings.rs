@@ -112,18 +112,18 @@ pub struct UiSettings {
     /// the sidebar does not zero this out, so re-expanding restores
     /// the same width.
     pub sidebar_width: Option<u32>,
-    /// Whether the LIBRARY disclosure section (Music / Albums rows) is
-    /// folded shut. Independent of [`Self::playlists_section_collapsed`];
+    /// Whether the Library disclosure section is folded shut. Independent of
+    /// [`Self::playlists_section_collapsed`];
     /// folding only hides the section's rows, it does not change which
     /// view is selected.
     pub library_section_collapsed: bool,
-    /// Whether the PLAYLISTS disclosure section (the playlist tree) is
+    /// Whether the Playlists disclosure section (the playlist tree) is
     /// folded shut. Independent of [`Self::library_section_collapsed`].
     pub playlists_section_collapsed: bool,
-    /// Whether the sidebar's LIBRARY → Duplicates row is shown. On by
+    /// Whether the sidebar's Library → Duplicates row is shown. On by
     /// default.
     pub sidebar_show_duplicates: bool,
-    /// Whether the sidebar's LIBRARY → Statistics row is shown. On by
+    /// Whether the sidebar's Library → Statistics row is shown. On by
     /// default.
     pub sidebar_show_statistics: bool,
 }
@@ -148,15 +148,15 @@ impl Default for UiSettings {
 /// and which row the sidebar paints as active.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum UiSidebarSelection {
-    /// LIBRARY → Music. Default for a fresh install and the natural
+    /// Library → Music. Default for a fresh install and the natural
     /// landing surface — a full track table of the whole library.
     #[default]
     Music,
-    /// LIBRARY → Albums. Full-width album-cover grid.
+    /// Library → Albums. Full-width album-cover grid.
     Albums,
-    /// LIBRARY → Statistics. Whole-library diagnostic charts.
+    /// Library → Statistics. Whole-library diagnostic charts.
     Statistics,
-    /// PLAYLISTS → a specific playlist, smart playlist, or folder row.
+    /// Playlists → a specific playlist, smart playlist, or folder row.
     Playlist(PlaylistItem),
 }
 

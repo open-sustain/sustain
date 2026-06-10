@@ -180,13 +180,11 @@ fn accent_css(palette: AccentPalette) -> String {
         }}
 
         /* Sidebar selection. Two row populations need the accent fill:
-           the standalone "Music" entry under LIBRARY (a `gtk::Box` that
-           carries `.playlist-sidebar-row` and gets a `.selected` class
-           toggled in code), and every row under PLAYLISTS (each lives
-           inside a `gtk::ListView` whose `row:selected` pseudoclass is
-           managed by GTK). Painting both with the same accent keeps the
-           two sections visually uniform and matches the track table's
-           selection colour. */
+           standalone rows under Library/Devices carry `.playlist-sidebar-row`
+           and get `.selected` toggled in code; playlist rows live inside a
+           `gtk::ListView` whose `row:selected` pseudoclass is managed by GTK.
+           Painting both with the same accent keeps the sections visually
+           uniform and matches the track table's selection colour. */
         .playlist-sidebar-row.selected {{
             background-color: {background};
             color: {foreground};

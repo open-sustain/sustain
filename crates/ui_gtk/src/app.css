@@ -379,8 +379,8 @@ button.preferences-tab-button:checked {
 
 /* The inner `listview.playlist-sidebar-list` is not given an explicit
    background, so it shows GTK's default `@theme_base_color`. Painting the
-   same color on the sidebar Box keeps the upper zone (LIBRARY label,
-   Music row, PLAYLISTS label) visually contiguous with the scrolling
+   same color on the sidebar Box keeps the upper zone (Library label,
+   Music row, Playlists label) visually contiguous with the scrolling
    playlist list below — otherwise the two regions render in different
    shades and the upper zone looks like a separate header band. */
 .playlist-sidebar {
@@ -629,14 +629,12 @@ listview.album-track-table > row:focus-visible {
     color: #e66100;
 }
 
-/* LIBRARY / PLAYLISTS section header labels. Small, muted, lightly
-   letter-spaced typographic markers. Text is set uppercase at the
-   source (GTK4 CSS has no text-transform). The spacing that used to
-   live here now sits on the clickable header row below. */
+/* Sidebar section header labels. Small and muted by default; hover strengthens
+   the text and caret without adding another background layer. */
 .playlist-sidebar-section-header {
     color: alpha(@theme_fg_color, 0.55);
     font-size: 0.85em;
-    letter-spacing: 0.06em;
+    letter-spacing: 0;
 }
 
 /* Clickable disclosure row wrapping a section's caret and label. The
@@ -651,8 +649,9 @@ listview.album-track-table > row:focus-visible {
     border-radius: 4px;
 }
 
-.playlist-sidebar-section-header-row:hover {
-    background-color: alpha(@theme_fg_color, 0.06);
+.playlist-sidebar-section-header-row:hover .playlist-sidebar-section-header,
+.playlist-sidebar-section-header-row:hover .playlist-sidebar-section-caret {
+    color: alpha(@theme_fg_color, 0.78);
 }
 
 .playlist-sidebar-section-header-row:focus-visible {
@@ -667,8 +666,8 @@ listview.album-track-table > row:focus-visible {
     color: alpha(@theme_fg_color, 0.55);
 }
 
-/* Shared chrome for every selectable sidebar row — the Music entry under
-   LIBRARY and every playlist/folder/smart-playlist row under PLAYLISTS.
+/* Shared chrome for every selectable sidebar row — standalone rows under
+   Library/Devices and every playlist/folder/smart-playlist row under Playlists.
    No border-radius: the accent selection background painted by accent.rs
    spans the full row width with square edges, matching the GTK default
    `listview > row:selected` rectangle so the two row populations look
@@ -685,7 +684,7 @@ listview.album-track-table > row:focus-visible {
    with their own opaque background, which renders the scrolling
    playlist area as a separate "card" sitting on top of `.playlist-sidebar`.
    We strip those backgrounds so the sidebar's own colour shows through
-   uniformly — no seam between the upper LIBRARY/Music/PLAYLISTS strip and
+   uniformly — no seam between the upper Library/Music/Playlists strip and
    the playlist list below. */
 .playlist-sidebar-list,
 .playlist-sidebar-list > row {
@@ -1052,7 +1051,7 @@ columnview.track-table listview row:selected .track-table-status-missing,
     border-radius: 4px;
 }
 
-/* DEVICES section + device-sync panel (#23/#24). Theme-aware: derived
+/* Devices section + device-sync panel (#23/#24). Theme-aware: derived
    from @theme_fg_color/@theme_selected_bg_color so they read correctly
    in both light and dark and follow the system accent. */
 .playlist-sidebar-devices-empty {
