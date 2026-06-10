@@ -109,6 +109,7 @@ impl ApplicationRuntime {
         error: PlaybackBackendError,
     ) -> ApplicationRuntimeResult<()> {
         self.freeze_current_playback_session();
+        self.log_playback_backend_error(&error);
         self.push_ephemeral_notification(
             NotificationCategory::Playback,
             NotificationSeverity::Error,
@@ -118,13 +119,8 @@ impl ApplicationRuntime {
     }
 
     fn playback_backend_error_text(&self, error: &PlaybackBackendError) -> String {
-        let detail = error.message.trim();
         let Some(track_id) = error.track_id else {
-            return if detail.is_empty() {
-                "Playback failed. Skipping to the next track.".to_owned()
-            } else {
-                format!("Playback failed: {detail}. Skipping to the next track.")
-            };
+            return "Playback failed. Skipping to the next track.".to_owned();
         };
         let track_name = self
             .library_tracks
@@ -133,10 +129,22 @@ impl ApplicationRuntime {
             .and_then(track_display_name)
             .unwrap_or_else(|| format!("#{}", track_id.get()));
 
+        format!("Playback failed for {track_name}. Skipping to the next track.")
+    }
+
+    fn log_playback_backend_error(&self, error: &PlaybackBackendError) {
+        let detail = error.message.trim();
         if detail.is_empty() {
-            format!("Playback failed for {track_name}. Skipping to the next track.")
+            return;
+        }
+
+        if let Some(track_id) = error.track_id {
+            eprintln!(
+                "Sustain: playback backend error for track {}: {detail}",
+                track_id.get()
+            );
         } else {
-            format!("Playback failed for {track_name}: {detail}. Skipping to the next track.")
+            eprintln!("Sustain: playback backend error: {detail}");
         }
     }
 

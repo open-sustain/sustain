@@ -352,11 +352,17 @@ impl NowPlayingView {
         let track_id = track.map(|track| track.id);
         let same_track = *self.artwork_path.borrow() == new_path;
         if same_track {
-            // Geometry hasn't changed — still re-apply the visible-state
-            // because a fetch result may have arrived (cache primed
-            // by the result consumer) or completed (pending cleared)
-            // without changing the underlying source path.
-            self.apply_artwork_state(track_id, new_source.as_ref());
+            let Some(source) = new_source else {
+                self.apply_decoded_artwork(&DecodedArtwork::default());
+                self.apply_artwork_state(track_id, None);
+                return;
+            };
+            // The source path did not change, but the cache entry may have:
+            // remote fetches and Get Info edits prime the shared loader under
+            // the same key. Re-apply resident artwork, and if a current-track
+            // entry was evicted or invalidated, re-request it without treating
+            // the track itself as changed.
+            self.apply_or_request_artwork(track_id, source, self.artwork_generation.get(), false);
             return;
         }
         *self.artwork_path.borrow_mut() = new_path;
@@ -375,15 +381,26 @@ impl NowPlayingView {
             return;
         };
 
-        // Warm the larger detail cover off the main thread. The tile path
-        // below only resolves the small texture, but clicking the tile opens
-        // the lyrics/artwork overlay, which wants the full-resolution detail.
-        // Loading it now means that click is instant and crisp instead of
-        // falling back to the upscaled tile; the detail cache is bounded, so
-        // this pins at most the current track's cover.
-        self.artwork_loader
-            .request_detail(source.clone(), Box::new(|_| {}));
+        self.apply_or_request_artwork(track_id, source, generation_snapshot, true);
+    }
 
+    fn apply_or_request_artwork(
+        &self,
+        track_id: Option<TrackId>,
+        source: ArtworkSource,
+        generation_snapshot: u64,
+        warm_detail: bool,
+    ) {
+        if warm_detail {
+            // Warm the larger detail cover off the main thread. The tile path
+            // below only resolves the small texture, but clicking the tile opens
+            // the lyrics/artwork overlay, which wants the full-resolution detail.
+            // Loading it now means that click is instant and crisp instead of
+            // falling back to the upscaled tile; the detail cache is bounded, so
+            // this pins at most the current track's cover.
+            self.artwork_loader
+                .request_detail(source.clone(), Box::new(|_| {}));
+        }
         // Synchronous cache hit (in-memory) — apply immediately to
         // avoid a one-tick gap where the previous artwork's color
         // would still be visible. Cold cache requests fall through to

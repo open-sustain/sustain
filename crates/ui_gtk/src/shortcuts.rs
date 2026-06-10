@@ -212,6 +212,7 @@ fn install_get_info(context: &GlobalShortcutContext) {
         &context.command_controller,
         &context.library_changed_holder,
         &context.track_row_changed_holder,
+        context.playback_changed.clone(),
         &context.artwork_loader,
     );
     let songs_table = context.songs_table.clone();

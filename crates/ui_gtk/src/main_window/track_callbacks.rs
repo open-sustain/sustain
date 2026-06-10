@@ -285,6 +285,7 @@ pub(super) fn track_context_actions(
             command_controller,
             &library_changed_holder,
             &track_row_changed_holder,
+            playback_changed.clone(),
             artwork_loader,
         )),
         TrackContextAction::show_album(
@@ -341,6 +342,7 @@ pub(super) fn playlist_track_context_actions(
             command_controller,
             &library_changed_holder,
             &track_row_changed_holder,
+            playback_changed.clone(),
             artwork_loader,
         )),
         TrackContextAction::show_album(

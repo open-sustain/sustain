@@ -8,7 +8,8 @@ use gtk::{gdk, glib};
 use sustain_app_runtime::{ApplicationCommand, MetadataChange, Track, TrackId};
 
 use super::{
-    LibraryChangedHolder, SharedRuntime, TrackRowChangedHolder, TrackRowChangedKind,
+    LibraryChangedHolder, PlaybackChangedCallback, SharedRuntime, TrackRowChangedHolder,
+    TrackRowChangedKind,
     artwork_loader::{ArtworkLoader, ArtworkSource},
     command_controller::SharedCommandController,
 };
@@ -42,6 +43,7 @@ pub(crate) fn open_track_info_dialog(
     command_controller: &SharedCommandController,
     library_changed_holder: &LibraryChangedHolder,
     track_row_changed_holder: &TrackRowChangedHolder,
+    playback_changed: PlaybackChangedCallback,
     artwork_loader: &ArtworkLoader,
     ordered_track_ids: Vec<TrackId>,
     start_index: usize,
@@ -93,7 +95,8 @@ pub(crate) fn open_track_info_dialog(
     let artwork = ArtworkPage::new(
         parent,
         command_controller,
-        library_changed_holder,
+        track_row_changed_holder,
+        playback_changed,
         initial.track.id,
         header.cover_frame.clone(),
         artwork_loader,

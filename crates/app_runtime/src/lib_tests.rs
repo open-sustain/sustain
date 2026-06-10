@@ -44,9 +44,10 @@ use sustain_settings::{SettingsError, SettingsResult, SettingsStore};
 
 use super::{
     ApplicationRuntime, ApplicationRuntimeError, LibraryConsolidationSummary, LibraryScanSummary,
-    MetadataService, NotificationCategory, NotificationSeverity, PlaybackQueueEntryKind,
-    PlaybackQueueRequest, PlaybackQueueSource, normalize_query, run_library_consolidation_task,
-    run_library_import_task, run_library_import_task_with_progress, run_library_scan_task,
+    MetadataService, NotificationCategory, NotificationSeverity, PlaybackBackendError,
+    PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource, normalize_query,
+    run_library_consolidation_task, run_library_import_task, run_library_import_task_with_progress,
+    run_library_scan_task,
 };
 use crate::{
     file_presence::{FilePresence, probe_file_presence, probe_path_entry_presence},
@@ -2523,6 +2524,35 @@ fn runtime_plays_tracks_through_playback_service() {
         runtime.now_playing().track.map(|track| track.id),
         Some(track_id)
     );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn playback_backend_errors_keep_status_text_concise() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+
+    runtime
+        .handle_playback_backend_error(PlaybackBackendError {
+            track_id: Some(track_id(1)),
+            message: format!(
+                "No decoder available. {}",
+                "debug/plugin-search-detail ".repeat(64)
+            ),
+        })
+        .expect("handle backend error");
+
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("playback notification");
+    assert_eq!(notification.category, NotificationCategory::Playback);
+    assert_eq!(
+        notification.body,
+        "Playback failed for a. Skipping to the next track."
+    );
+    assert!(!notification.body.contains("debug/plugin-search-detail"));
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }

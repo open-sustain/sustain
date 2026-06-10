@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use gtk::prelude::*;
 use gtk::{FileDialog, FileFilter, gdk, gio, glib};
 use sustain_app_runtime::{ApplicationCommand, TrackId};
 use sustain_artwork::{ArtworkReadError, read_artwork_file};
 
-use super::{ARTWORK_PREVIEW_SIZE, COVER_THUMB_SIZE, LibraryChangedHolder};
+use super::{ARTWORK_PREVIEW_SIZE, COVER_THUMB_SIZE};
 use crate::artwork_loader::{ArtworkLoader, ArtworkSource};
 use crate::command_controller::SharedCommandController;
+use crate::{PlaybackChangedCallback, TrackRowChangedHolder, TrackRowChangedKind};
 
 /// Updates the preview frame, the header thumbnail, the explanatory
 /// note, and the Remove button from a (possibly absent) decoded texture
@@ -18,9 +22,38 @@ use crate::command_controller::SharedCommandController;
 /// always decoded off the GTK thread before this runs (#107).
 type ArtworkRefreshCallback = Rc<dyn Fn(Option<gdk::Texture>, bool)>;
 
+#[derive(Clone)]
+struct ArtworkChangePublisher {
+    track_row_changed_holder: TrackRowChangedHolder,
+    playback_changed: PlaybackChangedCallback,
+    artwork_loader: ArtworkLoader,
+}
+
+impl ArtworkChangePublisher {
+    fn publish(
+        &self,
+        track_id: TrackId,
+        artwork_source: Option<ArtworkSource>,
+        artwork: Option<Vec<u8>>,
+    ) {
+        if let Some(source) = artwork_source {
+            self.artwork_loader.invalidate(&source);
+            match artwork {
+                Some(bytes) => self.artwork_loader.prime(source, bytes),
+                None => self.artwork_loader.prime_missing(source),
+            }
+        }
+        if let Some(callback) = self.track_row_changed_holder.borrow().as_ref() {
+            callback(track_id, TrackRowChangedKind::Artwork);
+        }
+        (self.playback_changed)();
+    }
+}
+
 pub(super) struct ArtworkPage {
     pub(super) widget: gtk::Box,
     current_track_id: Rc<Cell<TrackId>>,
+    current_artwork_source: Rc<RefCell<Option<ArtworkSource>>>,
     load_generation: Rc<Cell<u64>>,
     refresh: ArtworkRefreshCallback,
     artwork_loader: ArtworkLoader,
@@ -31,7 +64,8 @@ impl ArtworkPage {
     pub(super) fn new(
         parent_window: &gtk::Window,
         command_controller: &SharedCommandController,
-        library_changed_holder: &LibraryChangedHolder,
+        track_row_changed_holder: &TrackRowChangedHolder,
+        playback_changed: PlaybackChangedCallback,
         track_id: TrackId,
         header_cover: gtk::Frame,
         artwork_loader: &ArtworkLoader,
@@ -81,20 +115,30 @@ impl ArtworkPage {
         };
 
         let current_track_id = Rc::new(Cell::new(track_id));
+        let current_artwork_source = Rc::new(RefCell::new(None));
         let load_generation = Rc::new(Cell::new(0));
+        let artwork_change_publisher = ArtworkChangePublisher {
+            track_row_changed_holder: track_row_changed_holder.clone(),
+            playback_changed,
+            artwork_loader: artwork_loader.clone(),
+        };
 
         {
             let parent_window = parent_window.clone();
             let command_controller = command_controller.clone();
-            let library_changed_holder = library_changed_holder.clone();
+            let artwork_change_publisher = artwork_change_publisher.clone();
             let refresh = refresh.clone();
             let current_track_id = current_track_id.clone();
+            let current_artwork_source = current_artwork_source.clone();
             add_button.connect_clicked(move |_| {
+                let track_id = current_track_id.get();
+                let artwork_source = current_artwork_source.borrow().clone();
                 open_artwork_picker(
                     &parent_window,
                     command_controller.clone(),
-                    library_changed_holder.clone(),
-                    current_track_id.get(),
+                    artwork_change_publisher.clone(),
+                    track_id,
+                    artwork_source,
                     current_track_id.clone(),
                     refresh.clone(),
                 );
@@ -103,18 +147,19 @@ impl ArtworkPage {
 
         {
             let command_controller = command_controller.clone();
-            let library_changed_holder = library_changed_holder.clone();
+            let artwork_change_publisher = artwork_change_publisher.clone();
             let refresh = refresh.clone();
             let current_track_id = current_track_id.clone();
+            let current_artwork_source = current_artwork_source.clone();
             remove_button.connect_clicked(move |_| {
+                let track_id = current_track_id.get();
+                let artwork_source = current_artwork_source.borrow().clone();
                 if command_controller.dispatch_succeeded(ApplicationCommand::SetArtwork {
-                    track_id: current_track_id.get(),
+                    track_id,
                     artwork: None,
                 }) {
+                    artwork_change_publisher.publish(track_id, artwork_source, None);
                     refresh(None, false);
-                    if let Some(callback) = library_changed_holder.borrow().as_ref() {
-                        callback();
-                    }
                 }
             });
         }
@@ -122,6 +167,7 @@ impl ArtworkPage {
         let page = Self {
             widget: page,
             current_track_id,
+            current_artwork_source,
             load_generation,
             refresh,
             artwork_loader: artwork_loader.clone(),
@@ -137,6 +183,7 @@ impl ArtworkPage {
         has_embedded_artwork: bool,
     ) {
         self.current_track_id.set(track_id);
+        self.current_artwork_source.replace(artwork_source.clone());
         let generation = self.load_generation.get().wrapping_add(1);
         self.load_generation.set(generation);
         (self.refresh)(None, has_embedded_artwork);
@@ -208,8 +255,9 @@ enum PickedArtwork {
 fn open_artwork_picker(
     parent: &gtk::Window,
     command_controller: SharedCommandController,
-    library_changed_holder: LibraryChangedHolder,
+    artwork_change_publisher: ArtworkChangePublisher,
     track_id: TrackId,
+    artwork_source: Option<ArtworkSource>,
     current_track_id: Rc<Cell<TrackId>>,
     refresh: ArtworkRefreshCallback,
 ) {
@@ -264,15 +312,18 @@ fn open_artwork_picker(
             };
             match outcome {
                 PickedArtwork::Ready { bytes, texture } => {
+                    let cache_bytes = bytes.clone();
                     if command_controller.dispatch_succeeded(ApplicationCommand::SetArtwork {
                         track_id,
                         artwork: Some(bytes),
                     }) {
+                        artwork_change_publisher.publish(
+                            track_id,
+                            artwork_source,
+                            Some(cache_bytes),
+                        );
                         if current_track_id.get() == track_id {
                             refresh(texture, true);
-                        }
-                        if let Some(callback) = library_changed_holder.borrow().as_ref() {
-                            callback();
                         }
                     }
                 }

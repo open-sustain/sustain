@@ -9,7 +9,8 @@ use gtk::{FileLauncher, gdk, gio};
 use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, TrackId};
 
 use super::{
-    LibraryChangedHolder, SharedRuntime, ShowAlbumHolder, TrackRowChangedHolder,
+    LibraryChangedHolder, PlaybackChangedCallback, SharedRuntime, ShowAlbumHolder,
+    TrackRowChangedHolder,
     artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
     track_context::{TrackActionCallback, TrackActionInvocation, TrackActionVisibility},
@@ -38,6 +39,7 @@ pub(crate) fn get_info_callback(
     command_controller: &SharedCommandController,
     library_changed_holder: &LibraryChangedHolder,
     track_row_changed_holder: &TrackRowChangedHolder,
+    playback_changed: PlaybackChangedCallback,
     artwork_loader: &ArtworkLoader,
 ) -> TrackActionCallback {
     let parent_window = parent_window.clone();
@@ -45,6 +47,7 @@ pub(crate) fn get_info_callback(
     let command_controller = command_controller.clone();
     let library_changed_holder = library_changed_holder.clone();
     let track_row_changed_holder = track_row_changed_holder.clone();
+    let playback_changed = playback_changed.clone();
     let artwork_loader = artwork_loader.clone();
     Rc::new(move |invocation: TrackActionInvocation| {
         let track_ids = invocation.selected_track_ids;
@@ -73,6 +76,7 @@ pub(crate) fn get_info_callback(
             &command_controller,
             &library_changed_holder,
             &track_row_changed_holder,
+            playback_changed.clone(),
             &artwork_loader,
             invocation.displayed_track_ids,
             start_index,

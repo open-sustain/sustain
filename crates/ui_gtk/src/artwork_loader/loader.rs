@@ -364,12 +364,26 @@ impl ArtworkLoader {
     /// the next miss-driven worker load once the tag write has
     /// landed and the file fingerprint has updated.
     pub(crate) fn prime(&self, source: ArtworkSource, bytes: Vec<u8>) {
+        self.prime_from_bytes(source, Some(bytes));
+    }
+
+    /// Insert an explicit "no artwork" entry for `source`.
+    ///
+    /// Manual artwork removal is committed through the asynchronous tag writer.
+    /// Priming the in-memory caches as absent lets the UI reflect the accepted
+    /// user intent immediately without racing a worker reload against the
+    /// still-pending file rewrite.
+    pub(crate) fn prime_missing(&self, source: ArtworkSource) {
+        self.prime_from_bytes(source, None);
+    }
+
+    fn prime_from_bytes(&self, source: ArtworkSource, bytes: Option<Vec<u8>>) {
         // Populate both caches so the new cover is visible whether the next
         // reader asks for the tile (now-playing tile) or the detail
         // (lyrics/artwork overlay). Decoding twice is acceptable: priming
         // happens once, on a manual cover accept, not on a hot path.
-        let tile = decode_artwork(Some(bytes.clone()), ArtworkVariant::Tile);
-        let detail = decode_artwork(Some(bytes), ArtworkVariant::Detail);
+        let tile = decode_artwork(bytes.clone(), ArtworkVariant::Tile);
+        let detail = decode_artwork(bytes, ArtworkVariant::Detail);
         self.inner
             .tiles
             .borrow_mut()
