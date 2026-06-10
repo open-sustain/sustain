@@ -92,7 +92,6 @@ fn popup_menu(anchor: &gtk::Widget, x: f64, y: f64) {
 
     let popover = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
     popover.set_has_arrow(false);
-    popover.add_css_class("compact-context-menu");
     popover.set_parent(anchor);
     // Install the model after attaching so its tracker inherits application
     // actions from the window and this anchor's sidebar-local action group.

@@ -203,6 +203,7 @@ impl TrackSelectionRequirement {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrackActionConfirmation {
     None,
+    RemoveFromLibrary,
     MoveToTrash,
 }
 
@@ -309,7 +310,7 @@ impl TrackContextAction {
             label: "Remove from Library",
             section: TrackContextActionSection::Destructive,
             selection: TrackSelectionRequirement::AtLeastOne,
-            confirmation: TrackActionConfirmation::None,
+            confirmation: TrackActionConfirmation::RemoveFromLibrary,
             visibility: None,
             callback,
         }
@@ -519,7 +520,6 @@ impl TrackRowContextMenu {
             .insert_action_group(&local_action_group, Some(&action_group));
         let popover = track_context_popover();
         popover.set_has_arrow(false);
-        popover.add_css_class("compact-context-menu");
         popover.set_parent(popover_parent.as_ref());
         // GtkPopoverMenu builds its tracker when the model is installed. Do
         // that only after parenting so the tracker sees the popup-local group
@@ -817,6 +817,20 @@ fn run_context_action(
         TrackActionConfirmation::None => {
             (action.callback)(invocation);
         }
+        TrackActionConfirmation::RemoveFromLibrary => {
+            let callback = action.callback.clone();
+            let displayed_track_ids = invocation.displayed_track_ids;
+            confirm_remove_from_library(
+                parent,
+                invocation.selected_track_ids,
+                move |confirmed_ids| {
+                    callback(TrackActionInvocation {
+                        selected_track_ids: confirmed_ids,
+                        displayed_track_ids,
+                    });
+                },
+            );
+        }
         TrackActionConfirmation::MoveToTrash => {
             let callback = action.callback.clone();
             let displayed_track_ids = invocation.displayed_track_ids;
@@ -832,6 +846,21 @@ fn run_context_action(
             );
         }
     }
+}
+
+fn confirm_remove_from_library(
+    parent: &gtk::Window,
+    track_ids: Vec<TrackId>,
+    on_confirm: impl FnOnce(Vec<TrackId>) + 'static,
+) {
+    let detail = remove_from_library_confirmation_detail(track_ids.len());
+    crate::confirmation::show_confirmation_alert(
+        parent,
+        "Remove from Library",
+        &detail,
+        "Remove from Library",
+        move || on_confirm(track_ids),
+    );
 }
 
 fn confirm_move_to_trash(
@@ -859,6 +888,16 @@ fn trash_confirmation_detail(count: usize) -> String {
     }
 }
 
+fn remove_from_library_confirmation_detail(count: usize) -> String {
+    if count == 1 {
+        "The audio file will stay on disk, but the track will be removed from Sustain. Library data for this track, including play count and date added, will be removed.".to_owned()
+    } else {
+        format!(
+            "The audio files will stay on disk, but the {count} tracks will be removed from Sustain. Library data for these tracks, including play counts and dates added, will be removed."
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -872,22 +911,39 @@ mod tests {
 
     use super::{
         ADD_TO_PLAYLIST_ACTION, AddToPlaylistAction, AddToPlaylistEntry, TrackActionCallback,
-        TrackActionInvocation, TrackActionVisibility, TrackContextAction, TrackContextActionId,
-        TrackContextActionSection, TrackContextActionSet, TrackContextInvocationState,
-        TrackRowContextMenu, TrackSelectionRequirement, add_to_playlist_submenu_model,
+        TrackActionConfirmation, TrackActionInvocation, TrackActionVisibility, TrackContextAction,
+        TrackContextActionId, TrackContextActionSection, TrackContextActionSet,
+        TrackContextInvocationState, TrackRowContextMenu, TrackSelectionRequirement,
+        add_to_playlist_submenu_model, remove_from_library_confirmation_detail,
         track_context_popover, trash_confirmation_detail,
     };
 
     #[test]
-    fn single_track_confirmation_detail_uses_singular_phrasing() {
+    fn single_track_trash_confirmation_detail_uses_singular_phrasing() {
         let detail = trash_confirmation_detail(1);
         assert!(detail.contains("audio file will be moved"));
     }
 
     #[test]
-    fn multi_track_confirmation_detail_uses_plural_phrasing_with_count() {
+    fn multi_track_trash_confirmation_detail_uses_plural_phrasing_with_count() {
         let detail = trash_confirmation_detail(3);
         assert!(detail.contains("3 audio files"));
+    }
+
+    #[test]
+    fn single_track_library_removal_confirmation_detail_names_library_data_loss() {
+        let detail = remove_from_library_confirmation_detail(1);
+        assert!(detail.contains("audio file will stay on disk"));
+        assert!(detail.contains("play count"));
+        assert!(detail.contains("date added"));
+    }
+
+    #[test]
+    fn multi_track_library_removal_confirmation_detail_uses_plural_phrasing_with_count() {
+        let detail = remove_from_library_confirmation_detail(3);
+        assert!(detail.contains("3 tracks"));
+        assert!(detail.contains("play counts"));
+        assert!(detail.contains("dates added"));
     }
 
     #[test]
@@ -918,8 +974,16 @@ mod tests {
         assert_eq!(actions[5].label, "Show Album");
         assert_eq!(actions[6].id, TrackContextActionId::RemoveFromLibrary);
         assert_eq!(actions[6].label, "Remove from Library");
+        assert_eq!(
+            actions[6].confirmation,
+            TrackActionConfirmation::RemoveFromLibrary
+        );
         assert_eq!(actions[7].id, TrackContextActionId::MoveToTrash);
         assert_eq!(actions[7].label, "Move to Trash");
+        assert_eq!(
+            actions[7].confirmation,
+            TrackActionConfirmation::MoveToTrash
+        );
     }
 
     #[test]

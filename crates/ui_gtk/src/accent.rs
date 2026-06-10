@@ -211,10 +211,10 @@ fn accent_css(palette: AccentPalette) -> String {
            selected-row label rule above also reaches into the menu. Restore
            theme foreground inside the popover: selected-row contrast belongs
            to the row, not to the separate popover surface. */
-        .playlist-sidebar-row.selected popover.compact-context-menu,
-        .playlist-sidebar-row.selected popover.compact-context-menu label,
-        listview.playlist-sidebar-list > row:selected popover.compact-context-menu,
-        listview.playlist-sidebar-list > row:selected popover.compact-context-menu label {{
+        .playlist-sidebar-row.selected popover,
+        .playlist-sidebar-row.selected popover label,
+        listview.playlist-sidebar-list > row:selected popover,
+        listview.playlist-sidebar-list > row:selected popover label {{
             color: @theme_fg_color;
         }}
 
@@ -296,9 +296,7 @@ mod tests {
     fn accent_css_restores_theme_text_inside_selected_sidebar_popovers() {
         let css = accent_css(accent_palette("green"));
 
-        assert!(css.contains(
-            "listview.playlist-sidebar-list > row:selected popover.compact-context-menu label"
-        ));
+        assert!(css.contains("listview.playlist-sidebar-list > row:selected popover label"));
         assert!(css.contains("color: @theme_fg_color"));
     }
 

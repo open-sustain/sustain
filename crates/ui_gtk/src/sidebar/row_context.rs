@@ -89,7 +89,6 @@ fn popup_row_context_menu(anchor: &gtk::Widget, context: SidebarRowContext, x: f
 
     let popover = playlist_row_context_popover();
     popover.set_has_arrow(false);
-    popover.add_css_class("compact-context-menu");
     popover.set_parent(anchor);
     popover.set_menu_model(Some(&menu));
 
