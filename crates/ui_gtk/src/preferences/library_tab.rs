@@ -262,9 +262,10 @@ pub(super) fn build(
     let sort_tags_row = build_switch_row(
         "Sort using sort-order tags",
         "Order the library by the \u{201C}sort as\u{201D} tags some files carry \
-         (ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT, and friends), so \
-         \u{201C}The Beatles\u{201D} files under B and \u{201C}Björk\u{201D} sorts as \
-         \u{201C}Bjork\u{201D}. Turn off for strict alphabetic-as-shown ordering.",
+         (ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT, and friends) plus \
+         Sustain's generated leading-article sort values, so \u{201C}The Beatles\u{201D} \
+         files under B and \u{201C}Björk\u{201D} sorts as \u{201C}Bjork\u{201D}. Turn off for \
+         strict alphabetic-as-shown ordering.",
         sort_tags_enabled,
     );
     let command_controller_for_sort_tags = command_controller.clone();

@@ -56,8 +56,8 @@ pub(crate) fn read_tags(
             .and_then(|tag| tag.get_string(lyrics_item_key(tag.tag_type())))
             .map(ToOwned::to_owned),
         // Tag-derived "sort as" names (issue #13). Read once at import
-        // alongside the display fields; only used for ordering, never
-        // written back.
+        // alongside the display fields; only used for ordering and full-file
+        // metadata mirrors, never displayed.
         title_sort: tag
             .and_then(|tag| tag.get_string(ItemKey::TrackTitleSortOrder))
             .map(ToOwned::to_owned),
@@ -80,6 +80,7 @@ pub(crate) fn read_tags(
     };
     if backfill_title_from_filename {
         metadata.ensure_title_from_filename(path);
+        metadata.fill_missing_generated_sort_fields();
     }
 
     let rating = tag

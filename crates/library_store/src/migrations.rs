@@ -11,10 +11,10 @@ use rusqlite::Connection;
 
 use crate::{
     StoreError, StoreResult,
-    schema::{ADD_TRACK_COLUMN_SORT_SQL, SCHEMA_SQL},
+    schema::{ADD_TRACK_COLUMN_SORT_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL, SCHEMA_SQL},
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -33,6 +33,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 2,
         description: "persist track table sort order per scope",
         sql: ADD_TRACK_COLUMN_SORT_SQL,
+    },
+    Migration {
+        version: 3,
+        description: "backfill generated sort fields",
+        sql: BACKFILL_GENERATED_SORT_FIELDS_SQL,
     },
 ];
 
@@ -145,7 +150,7 @@ mod tests {
 
         apply_pending(&connection).expect("migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 2);
+        assert_eq!(user_version(&connection).expect("version"), 3);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
     }
 
@@ -156,7 +161,7 @@ mod tests {
 
         apply_pending(&connection).expect("second migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 2);
+        assert_eq!(user_version(&connection).expect("version"), 3);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
     }
 
@@ -180,7 +185,7 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 2);
+        assert_eq!(user_version(&connection).expect("version"), 3);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
         // The pre-existing layout row survives the migration untouched.
         let column_id: String = connection
@@ -194,17 +199,98 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_from_v2_backfills_generated_sort_fields() {
+        let connection = Connection::open_in_memory().expect("connection");
+        connection
+            .execute_batch(SCHEMA_SQL)
+            .expect("baseline schema");
+        connection
+            .execute_batch(ADD_TRACK_COLUMN_SORT_SQL)
+            .expect("schema version 2 migration");
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO tracks (
+                    id, relative_path, title, artist, album, album_artist,
+                    composer, title_sort, artist_sort, album_sort,
+                    album_artist_sort, composer_sort
+                )
+                VALUES
+                    (
+                        1, x'61', 'The Song', 'The Artist', 'A Record',
+                        'An Album Artist', 'The Composer', NULL, '   ',
+                        NULL, NULL, NULL
+                    ),
+                    (
+                        2, x'62', 'The Explicit Song', 'The Explicit Artist',
+                        NULL, NULL, NULL, 'Song, Explicit The',
+                        'Artist, Explicit The', NULL, NULL, NULL
+                    );
+                "#,
+            )
+            .expect("seed version 2 tracks");
+        connection
+            .pragma_update(None, "user_version", 2)
+            .expect("set version");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(user_version(&connection).expect("version"), 3);
+        let generated: [Option<String>; 5] = connection
+            .query_row(
+                "SELECT title_sort, artist_sort, album_sort, album_artist_sort, composer_sort \
+                 FROM tracks WHERE id = 1",
+                [],
+                |row| {
+                    Ok([
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ])
+                },
+            )
+            .expect("generated row");
+        assert_eq!(
+            generated,
+            [
+                Some("Song (The)".to_owned()),
+                Some("Artist (The)".to_owned()),
+                Some("Record (A)".to_owned()),
+                Some("Album Artist (An)".to_owned()),
+                Some("Composer (The)".to_owned()),
+            ]
+        );
+
+        let explicit: (Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT title_sort, artist_sort FROM tracks WHERE id = 2",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("explicit row");
+        assert_eq!(
+            explicit,
+            (
+                Some("Song, Explicit The".to_owned()),
+                Some("Artist, Explicit The".to_owned()),
+            )
+        );
+    }
+
+    #[test]
     fn database_from_a_newer_build_is_rejected() {
         let connection = Connection::open_in_memory().expect("connection");
         connection
-            .pragma_update(None, "user_version", 3)
+            .pragma_update(None, "user_version", 4)
             .expect("set version");
 
         assert_eq!(
             apply_pending(&connection),
             Err(StoreError::DatabaseAhead {
-                current: 3,
-                supported: 2,
+                current: 4,
+                supported: 3,
             })
         );
     }

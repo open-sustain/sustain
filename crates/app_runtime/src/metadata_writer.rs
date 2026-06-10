@@ -792,6 +792,11 @@ pub(crate) fn full_metadata_mirror(metadata: &TrackMetadata) -> MetadataChange {
         key: mirror_field(&metadata.key),
         comments: mirror_field(&metadata.comments),
         lyrics: mirror_field(&metadata.lyrics),
+        title_sort: mirror_field(&metadata.title_sort),
+        artist_sort: mirror_field(&metadata.artist_sort),
+        album_sort: mirror_field(&metadata.album_sort),
+        album_artist_sort: mirror_field(&metadata.album_artist_sort),
+        composer_sort: mirror_field(&metadata.composer_sort),
     }
 }
 

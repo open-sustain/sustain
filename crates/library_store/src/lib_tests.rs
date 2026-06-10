@@ -220,6 +220,109 @@ fn run_online_fill_preserves_existing_values(store: &dyn LibraryStore) {
 }
 
 #[test]
+fn sqlite_online_fill_generates_missing_sort_fields() {
+    run_online_fill_generates_missing_sort_fields(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_online_fill_generates_missing_sort_fields() {
+    run_online_fill_generates_missing_sort_fields(&InMemoryLibraryStore::new());
+}
+
+fn run_online_fill_generates_missing_sort_fields(store: &dyn LibraryStore) {
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("seed row");
+
+    store
+        .fill_missing_track_metadata(
+            track.id,
+            &MetadataChange {
+                artist: FieldChange::Set("The Remote Artist".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("fill missing metadata");
+
+    let loaded = store.track(track.id).expect("load").expect("track exists");
+    assert_eq!(loaded.metadata.artist.as_deref(), Some("The Remote Artist"));
+    assert_eq!(
+        loaded.metadata.artist_sort.as_deref(),
+        Some("Remote Artist (The)")
+    );
+}
+
+#[test]
+fn sqlite_metadata_edit_refreshes_generated_sort_fields() {
+    run_metadata_edit_refreshes_generated_sort_fields(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_metadata_edit_refreshes_generated_sort_fields() {
+    run_metadata_edit_refreshes_generated_sort_fields(&InMemoryLibraryStore::new());
+}
+
+fn run_metadata_edit_refreshes_generated_sort_fields(store: &dyn LibraryStore) {
+    let mut track = track(1, "a.flac");
+    track.metadata.artist = Some("The Weeknd".to_owned());
+    track.metadata.fill_missing_generated_sort_fields();
+    store.save_track(track.clone()).expect("seed row");
+
+    store
+        .apply_track_metadata_change(
+            track.id,
+            &MetadataChange {
+                artist: FieldChange::Set("The Beatles".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("apply edit");
+
+    let loaded = store.track(track.id).expect("load").expect("track exists");
+    assert_eq!(loaded.metadata.artist.as_deref(), Some("The Beatles"));
+    assert_eq!(
+        loaded.metadata.artist_sort.as_deref(),
+        Some("Beatles (The)")
+    );
+}
+
+#[test]
+fn sqlite_metadata_edit_preserves_explicit_sort_fields() {
+    run_metadata_edit_preserves_explicit_sort_fields(
+        &SqliteLibraryStore::open_in_memory().expect("store"),
+    );
+}
+
+#[test]
+fn in_memory_metadata_edit_preserves_explicit_sort_fields() {
+    run_metadata_edit_preserves_explicit_sort_fields(&InMemoryLibraryStore::new());
+}
+
+fn run_metadata_edit_preserves_explicit_sort_fields(store: &dyn LibraryStore) {
+    let mut track = track(1, "a.flac");
+    track.metadata.artist = Some("The Beatles".to_owned());
+    track.metadata.artist_sort = Some("Beatles, The".to_owned());
+    store.save_track(track.clone()).expect("seed row");
+
+    store
+        .apply_track_metadata_change(
+            track.id,
+            &MetadataChange {
+                artist: FieldChange::Set("The Beach Boys".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("apply edit");
+
+    let loaded = store.track(track.id).expect("load").expect("track exists");
+    assert_eq!(loaded.metadata.artist.as_deref(), Some("The Beach Boys"));
+    assert_eq!(loaded.metadata.artist_sort.as_deref(), Some("Beatles, The"));
+}
+
+#[test]
 fn in_memory_store_saves_and_loads_playlists() {
     let store = InMemoryLibraryStore::new();
     let playlist = playlist(1, "Favorites", vec![entry(1, 2, 0)]);

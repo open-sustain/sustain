@@ -3382,6 +3382,11 @@ fn managed_metadata_update_moves_file_when_planned_path_changes() {
                 key: FieldChange::Clear,
                 comments: FieldChange::Clear,
                 lyrics: FieldChange::Clear,
+                title_sort: FieldChange::Clear,
+                artist_sort: FieldChange::Clear,
+                album_sort: FieldChange::Clear,
+                album_artist_sort: FieldChange::Clear,
+                composer_sort: FieldChange::Clear,
             }
         )]
     );

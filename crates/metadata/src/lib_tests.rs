@@ -218,6 +218,31 @@ fn assert_full_editable_metadata_round_trip(
         ItemKey::Genre,
         FieldChange::Set("Genre".to_owned()),
     );
+    apply_text_change(
+        &mut tag,
+        ItemKey::TrackTitleSortOrder,
+        FieldChange::Set("Title Sort".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::TrackArtistSortOrder,
+        FieldChange::Set("Artist Sort".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::AlbumTitleSortOrder,
+        FieldChange::Set("Album Sort".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::AlbumArtistSortOrder,
+        FieldChange::Set("Album Artist Sort".to_owned()),
+    );
+    apply_text_change(
+        &mut tag,
+        ItemKey::ComposerSortOrder,
+        FieldChange::Set("Composer Sort".to_owned()),
+    );
     apply_number_change(&mut tag, ItemKey::TrackNumber, FieldChange::Set(7_u32));
     apply_number_change(&mut tag, ItemKey::TrackTotal, FieldChange::Set(12_u32));
     apply_number_change(&mut tag, ItemKey::DiscNumber, FieldChange::Set(2_u32));
@@ -278,6 +303,39 @@ fn assert_full_editable_metadata_round_trip(
         Some("Genre"),
         "genre lost for {tag_type:?}"
     );
+    assert_eq!(
+        back.get_string(ItemKey::TrackTitleSortOrder),
+        Some("Title Sort"),
+        "title sort lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(ItemKey::TrackArtistSortOrder),
+        Some("Artist Sort"),
+        "artist sort lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(ItemKey::AlbumTitleSortOrder),
+        Some("Album Sort"),
+        "album sort lost for {tag_type:?}"
+    );
+    assert_eq!(
+        back.get_string(ItemKey::AlbumArtistSortOrder),
+        Some("Album Artist Sort"),
+        "album artist sort lost for {tag_type:?}"
+    );
+    if tag_type == TagType::VorbisComments {
+        assert_eq!(
+            back.get_string(ItemKey::ComposerSortOrder),
+            None,
+            "Lofty currently has no Vorbis COMPOSERSORT mapping"
+        );
+    } else {
+        assert_eq!(
+            back.get_string(ItemKey::ComposerSortOrder),
+            Some("Composer Sort"),
+            "composer sort lost for {tag_type:?}"
+        );
+    }
     assert_eq!(back.track(), Some(7), "track number lost for {tag_type:?}");
     assert_eq!(
         back.track_total(),
@@ -331,6 +389,80 @@ fn editable_metadata_survives_a_container_round_trip_on_every_format() {
     assert_full_editable_metadata_round_trip(TagType::VorbisComments, |tag| {
         Tag::from(VorbisComments::from(tag))
     });
+}
+
+#[test]
+fn write_metadata_writes_sort_order_fields() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("sort-fields.mp3");
+    let mut bytes = dump_id3v2(Tag::new(TagType::Id3v2));
+    bytes.extend_from_slice(&mpeg_audio_frames(4));
+    fs::write(&path, bytes).expect("write fixture");
+
+    LoftyMetadataService
+        .write_metadata(
+            &path,
+            MetadataChange {
+                title_sort: FieldChange::Set("Title Sort".to_owned()),
+                artist_sort: FieldChange::Set("Artist Sort".to_owned()),
+                album_sort: FieldChange::Set("Album Sort".to_owned()),
+                album_artist_sort: FieldChange::Set("Album Artist Sort".to_owned()),
+                composer_sort: FieldChange::Set("Composer Sort".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("write sort fields");
+
+    let tags = LoftyMetadataService
+        .read_persisted_tags(&path)
+        .expect("re-read written tags");
+    assert_eq!(tags.metadata.title_sort.as_deref(), Some("Title Sort"));
+    assert_eq!(tags.metadata.artist_sort.as_deref(), Some("Artist Sort"));
+    assert_eq!(tags.metadata.album_sort.as_deref(), Some("Album Sort"));
+    assert_eq!(
+        tags.metadata.album_artist_sort.as_deref(),
+        Some("Album Artist Sort")
+    );
+    assert_eq!(
+        tags.metadata.composer_sort.as_deref(),
+        Some("Composer Sort")
+    );
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn read_initial_tags_generates_missing_article_sort_fields() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("generated-sort-fields.mp3");
+    let mut tag = Tag::new(TagType::Id3v2);
+    tag.insert_text(ItemKey::TrackTitle, "The Song".to_owned());
+    tag.insert_text(ItemKey::TrackArtist, "The Artist".to_owned());
+    tag.insert_text(ItemKey::AlbumTitle, "A Record".to_owned());
+    let mut bytes = dump_id3v2(tag);
+    bytes.extend_from_slice(&mpeg_audio_frames(4));
+    fs::write(&path, bytes).expect("write fixture");
+
+    let initial = LoftyMetadataService
+        .read_initial_tags(&path)
+        .expect("read initial tags");
+    assert_eq!(initial.metadata.title_sort.as_deref(), Some("Song (The)"));
+    assert_eq!(
+        initial.metadata.artist_sort.as_deref(),
+        Some("Artist (The)")
+    );
+    assert_eq!(initial.metadata.album_sort.as_deref(), Some("Record (A)"));
+
+    let exact = LoftyMetadataService
+        .read_persisted_tags(&path)
+        .expect("read exact tags");
+    assert_eq!(exact.metadata.title_sort, None);
+    assert_eq!(exact.metadata.artist_sort, None);
+    assert_eq!(exact.metadata.album_sort, None);
+
+    fs::remove_dir_all(root).expect("remove test directory");
 }
 
 fn assert_rating_round_trip(tag_type: TagType, to_container_and_back: impl Fn(Tag) -> Tag) {

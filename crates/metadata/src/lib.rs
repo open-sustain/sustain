@@ -255,6 +255,17 @@ impl MetadataService for LoftyMetadataService {
         apply_text_change(tag, ItemKey::Composer, change.composer);
         apply_text_change(tag, ItemKey::ContentGroup, change.grouping);
         apply_text_change(tag, ItemKey::Genre, change.genre);
+        apply_text_change(tag, ItemKey::TrackTitleSortOrder, change.title_sort);
+        apply_text_change(tag, ItemKey::TrackArtistSortOrder, change.artist_sort);
+        apply_text_change(tag, ItemKey::AlbumTitleSortOrder, change.album_sort);
+        apply_text_change(tag, ItemKey::AlbumArtistSortOrder, change.album_artist_sort);
+        // Lofty 0.24 has ID3v2/MP4 mappings for composer sort, but no Vorbis
+        // `COMPOSERSORT` mapping. Inserting the generic key into a Vorbis tag is
+        // silently discarded on merge, so keep SQLite authoritative rather than
+        // pretending we mirrored a field the backend cannot round-trip.
+        if tag.tag_type() != TagType::VorbisComments {
+            apply_text_change(tag, ItemKey::ComposerSortOrder, change.composer_sort);
+        }
         apply_number_change(tag, ItemKey::TrackNumber, change.track_number);
         apply_number_change(tag, ItemKey::TrackTotal, change.track_total);
         apply_number_change(tag, ItemKey::DiscNumber, change.disc_number);

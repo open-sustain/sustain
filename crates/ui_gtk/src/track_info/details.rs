@@ -299,6 +299,7 @@ impl DetailsPage {
                 &self.text_view_text(&self.comments),
             ),
             lyrics: FieldChange::Unchanged,
+            ..MetadataChange::default()
         }
     }
 

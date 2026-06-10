@@ -355,6 +355,11 @@ fn full_set_change(metadata: &TrackMetadata) -> MetadataChange {
         key: set(&metadata.key),
         comments: set(&metadata.comments),
         lyrics: set(&metadata.lyrics),
+        title_sort: set(&metadata.title_sort),
+        artist_sort: set(&metadata.artist_sort),
+        album_sort: set(&metadata.album_sort),
+        album_artist_sort: set(&metadata.album_artist_sort),
+        composer_sort: set(&metadata.composer_sort),
     }
 }
 

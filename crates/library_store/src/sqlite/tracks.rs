@@ -4,7 +4,7 @@
 //! SQLite `LibraryStore` operations for the tracks table.
 
 use super::*;
-use sustain_domain::FieldChange;
+use sustain_domain::TrackMetadata;
 
 pub(super) fn save_track(connection: &Connection, track: &Track) -> StoreResult<()> {
     execute_full_track(connection, SAVE_TRACK_SQL.as_str(), track)
@@ -265,66 +265,11 @@ pub(super) fn apply_track_metadata_change(
     track_id: TrackId,
     change: &MetadataChange,
 ) -> StoreResult<()> {
-    let (title_action, title) = text_change_parts(&change.title);
-    let (artist_action, artist) = text_change_parts(&change.artist);
-    let (album_action, album) = text_change_parts(&change.album);
-    let (album_artist_action, album_artist) = text_change_parts(&change.album_artist);
-    let (composer_action, composer) = text_change_parts(&change.composer);
-    let (grouping_action, grouping) = text_change_parts(&change.grouping);
-    let (genre_action, genre) = text_change_parts(&change.genre);
-    let (track_number_action, track_number) = copied_change_parts(&change.track_number);
-    let (track_total_action, track_total) = copied_change_parts(&change.track_total);
-    let (disc_number_action, disc_number) = copied_change_parts(&change.disc_number);
-    let (disc_total_action, disc_total) = copied_change_parts(&change.disc_total);
-    let (year_action, year) = copied_change_parts(&change.year);
-    let (compilation_action, compilation) = copied_change_parts(&change.compilation);
-    let (bpm_action, bpm) = copied_change_parts(&change.bpm);
-    let (key_action, key) = text_change_parts(&change.key);
-    let (comments_action, comments) = text_change_parts(&change.comments);
-    let (lyrics_action, lyrics) = text_change_parts(&change.lyrics);
-    connection
-        .execute(
-            APPLY_TRACK_METADATA_CHANGE_SQL,
-            params![
-                track_id.get(),
-                title_action,
-                title,
-                artist_action,
-                artist,
-                album_action,
-                album,
-                album_artist_action,
-                album_artist,
-                composer_action,
-                composer,
-                grouping_action,
-                grouping,
-                genre_action,
-                genre,
-                track_number_action,
-                track_number.map(i64::from),
-                track_total_action,
-                track_total.map(i64::from),
-                disc_number_action,
-                disc_number.map(i64::from),
-                disc_total_action,
-                disc_total.map(i64::from),
-                year_action,
-                year.map(i64::from),
-                compilation_action,
-                compilation,
-                bpm_action,
-                bpm.map(i64::from),
-                key_action,
-                key,
-                comments_action,
-                comments,
-                lyrics_action,
-                lyrics,
-            ],
-        )
-        .map(|_| ())
-        .map_err(StoreError::from)
+    let Some(mut track) = track(connection, track_id)? else {
+        return Ok(());
+    };
+    track.metadata.apply_change(change);
+    update_track_metadata(connection, track_id, &track.metadata)
 }
 
 pub(super) fn fill_missing_track_metadata(
@@ -332,62 +277,74 @@ pub(super) fn fill_missing_track_metadata(
     track_id: TrackId,
     change: &MetadataChange,
 ) -> StoreResult<()> {
+    let Some(mut track) = track(connection, track_id)? else {
+        return Ok(());
+    };
+    track.metadata.fill_missing_from_change(change);
+    update_track_metadata(connection, track_id, &track.metadata)
+}
+
+fn update_track_metadata(
+    connection: &Connection,
+    track_id: TrackId,
+    metadata: &TrackMetadata,
+) -> StoreResult<()> {
     connection
         .execute(
-            FILL_MISSING_TRACK_METADATA_SQL,
+            r#"
+            UPDATE tracks SET
+                title = ?2,
+                artist = ?3,
+                album = ?4,
+                album_artist = ?5,
+                composer = ?6,
+                grouping = ?7,
+                genre = ?8,
+                track_number = ?9,
+                track_total = ?10,
+                disc_number = ?11,
+                disc_total = ?12,
+                year = ?13,
+                compilation = ?14,
+                bpm = ?15,
+                musical_key = ?16,
+                comments = ?17,
+                lyrics = ?18,
+                title_sort = ?19,
+                artist_sort = ?20,
+                album_sort = ?21,
+                album_artist_sort = ?22,
+                composer_sort = ?23
+            WHERE id = ?1
+            "#,
             params![
                 track_id.get(),
-                text_fill_value(&change.title),
-                text_fill_value(&change.artist),
-                text_fill_value(&change.album),
-                text_fill_value(&change.album_artist),
-                text_fill_value(&change.composer),
-                text_fill_value(&change.grouping),
-                text_fill_value(&change.genre),
-                copied_fill_value(&change.track_number).map(i64::from),
-                copied_fill_value(&change.track_total).map(i64::from),
-                copied_fill_value(&change.disc_number).map(i64::from),
-                copied_fill_value(&change.disc_total).map(i64::from),
-                copied_fill_value(&change.year).map(i64::from),
-                copied_fill_value(&change.compilation),
-                copied_fill_value(&change.bpm).map(i64::from),
-                text_fill_value(&change.key),
-                text_fill_value(&change.comments),
-                text_fill_value(&change.lyrics),
+                metadata.title.as_deref(),
+                metadata.artist.as_deref(),
+                metadata.album.as_deref(),
+                metadata.album_artist.as_deref(),
+                metadata.composer.as_deref(),
+                metadata.grouping.as_deref(),
+                metadata.genre.as_deref(),
+                metadata.track_number.map(i64::from),
+                metadata.track_total.map(i64::from),
+                metadata.disc_number.map(i64::from),
+                metadata.disc_total.map(i64::from),
+                metadata.year.map(i64::from),
+                metadata.compilation,
+                metadata.bpm.map(i64::from),
+                metadata.key.as_deref(),
+                metadata.comments.as_deref(),
+                metadata.lyrics.as_deref(),
+                metadata.title_sort.as_deref(),
+                metadata.artist_sort.as_deref(),
+                metadata.album_sort.as_deref(),
+                metadata.album_artist_sort.as_deref(),
+                metadata.composer_sort.as_deref(),
             ],
         )
         .map(|_| ())
         .map_err(StoreError::from)
-}
-
-fn text_change_parts(change: &FieldChange<String>) -> (i64, Option<&str>) {
-    match change {
-        FieldChange::Unchanged => (0, None),
-        FieldChange::Set(value) => (1, Some(value)),
-        FieldChange::Clear => (2, None),
-    }
-}
-
-fn copied_change_parts<T: Copy>(change: &FieldChange<T>) -> (i64, Option<T>) {
-    match change {
-        FieldChange::Unchanged => (0, None),
-        FieldChange::Set(value) => (1, Some(*value)),
-        FieldChange::Clear => (2, None),
-    }
-}
-
-fn text_fill_value(change: &FieldChange<String>) -> Option<&str> {
-    match change {
-        FieldChange::Set(value) => Some(value),
-        FieldChange::Unchanged | FieldChange::Clear => None,
-    }
-}
-
-fn copied_fill_value<T: Copy>(change: &FieldChange<T>) -> Option<T> {
-    match change {
-        FieldChange::Set(value) => Some(*value),
-        FieldChange::Unchanged | FieldChange::Clear => None,
-    }
 }
 
 pub(super) fn delete_track(connection: &Connection, track_id: TrackId) -> StoreResult<()> {
