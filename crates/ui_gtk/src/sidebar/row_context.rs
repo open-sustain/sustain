@@ -470,66 +470,17 @@ fn confirm_and_delete(
         ),
     };
 
-    let window = gtk::Window::builder()
-        .title(title)
-        .transient_for(&parent_window)
-        .modal(true)
-        .resizable(false)
-        .default_width(440)
-        .build();
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.set_margin_top(18);
-    content.set_margin_end(18);
-    content.set_margin_bottom(18);
-    content.set_margin_start(18);
-
-    let detail_label = gtk::Label::new(Some(&detail));
-    detail_label.add_css_class("dim-label");
-    detail_label.set_xalign(0.0);
-    detail_label.set_wrap(true);
-    content.append(&detail_label);
-
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    buttons.set_halign(gtk::Align::End);
-
-    let cancel_button = gtk::Button::with_label("Cancel");
-    let delete_button = gtk::Button::with_label(button_label);
-    delete_button.add_css_class("destructive-action");
-
-    let window_for_cancel = window.clone();
-    cancel_button.connect_clicked(move |_| {
-        window_for_cancel.close();
-    });
-
-    let window_for_delete = window.clone();
-    delete_button.connect_clicked(move |_| {
-        if let Some(callback) = on_delete.borrow().as_ref() {
-            callback(item);
-        }
-        window_for_delete.close();
-    });
-
-    buttons.append(&cancel_button);
-    buttons.append(&delete_button);
-    content.append(&buttons);
-    window.set_child(Some(&content));
-    window.set_default_widget(Some(&cancel_button));
-
-    let key_controller = gtk::EventControllerKey::new();
-    let window_for_escape = window.clone();
-    key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-        if key == gdk::Key::Escape {
-            window_for_escape.close();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    window.add_controller(key_controller);
-
-    window.present();
-    cancel_button.grab_focus();
+    crate::confirmation::show_confirmation_alert(
+        &parent_window,
+        title,
+        &detail,
+        button_label,
+        move || {
+            if let Some(callback) = on_delete.borrow().as_ref() {
+                callback(item);
+            }
+        },
+    );
 }
 
 #[cfg(test)]

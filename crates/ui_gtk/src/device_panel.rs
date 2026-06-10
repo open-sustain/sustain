@@ -1038,86 +1038,30 @@ impl PreSyncWarnings {
 
 /// Confirm a sync that has something the user should weigh first: stale
 /// removals (destructive) and/or Pioneer analysis gaps (a caution).
-/// Mirrors the trash-confirmation dialog: a small modal with Cancel as
-/// the default. `on_confirm` fires only on the proceed button.
+/// `on_confirm` fires only on the proceed button.
 fn confirm_sync(parent: &gtk::Window, warnings: PreSyncWarnings, on_confirm: impl Fn() + 'static) {
-    let window = gtk::Window::builder()
-        .title("Sync device")
-        .transient_for(parent)
-        .modal(true)
-        .resizable(false)
-        .default_width(440)
-        .build();
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.set_margin_top(18);
-    content.set_margin_end(18);
-    content.set_margin_bottom(18);
-    content.set_margin_start(18);
-
     // Analysis caution first (informational), then the removal warning
-    // (destructive) closest to the action buttons.
-    for sentence in [warnings.analysis_sentence(), warnings.removal_sentence()]
+    // (destructive) closest to the action button.
+    let detail = [warnings.analysis_sentence(), warnings.removal_sentence()]
         .into_iter()
         .flatten()
-    {
-        let detail = gtk::Label::new(Some(&sentence));
-        detail.add_css_class("dim-label");
-        detail.set_xalign(0.0);
-        detail.set_wrap(true);
-        content.append(&detail);
-    }
-
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    buttons.set_halign(gtk::Align::End);
-
-    let cancel = gtk::Button::with_label("Cancel");
-    // Removals delete files, so that path keeps the destructive styling and
-    // wording; an analysis-only caution is a plain "proceed anyway".
-    let confirm = if warnings.remove_count > 0 {
-        let button = gtk::Button::with_label("Sync and remove");
-        button.add_css_class("destructive-action");
-        button
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    // Removals delete files, so keep the stronger wording; an analysis-only
+    // caution is a plain "proceed anyway".
+    let confirm_label = if warnings.remove_count > 0 {
+        "Sync and remove"
     } else {
-        let button = gtk::Button::with_label("Sync anyway");
-        button.add_css_class("suggested-action");
-        button
+        "Sync anyway"
     };
 
-    {
-        let window = window.clone();
-        cancel.connect_clicked(move |_| window.close());
-    }
-    {
-        let window = window.clone();
-        confirm.connect_clicked(move |_| {
-            on_confirm();
-            window.close();
-        });
-    }
-
-    buttons.append(&cancel);
-    buttons.append(&confirm);
-    content.append(&buttons);
-    window.set_child(Some(&content));
-    window.set_default_widget(Some(&cancel));
-
-    let key_controller = gtk::EventControllerKey::new();
-    {
-        let window = window.clone();
-        key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-            if key == gdk::Key::Escape {
-                window.close();
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
-        });
-    }
-    window.add_controller(key_controller);
-
-    window.present();
-    cancel.grab_focus();
+    crate::confirmation::show_confirmation_alert(
+        parent,
+        "Sync device",
+        &detail,
+        confirm_label,
+        on_confirm,
+    );
 }
 
 /// Format a byte count in SI units (powers of 1000), matching how the

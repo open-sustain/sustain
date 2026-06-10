@@ -637,11 +637,8 @@ fn install_cell_chrome(
     }
 }
 
-/// Drop target wired only when the parent table opts into row reordering
-/// (currently just the regular-playlist track table). Each cell is its own
-/// drop target — GTK's ColumnView does not surface a single per-row widget
-/// without a custom row factory — but the drop-indicator stripe is painted
-/// across **every** sibling cell in the target row via the shared
+/// Collect selected track ids from the table selection in model order.
+/// Rows without a track id are ignored.
 pub(super) fn collect_selected_track_ids(selection: &gtk::MultiSelection) -> Vec<TrackId> {
     let bitset = selection.selection();
     let Some((iter, first)) = gtk::BitsetIter::init_first(&bitset) else {

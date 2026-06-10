@@ -4,6 +4,7 @@
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use gtk::{gdk, glib};
 use sustain_app_runtime::{ApplicationCommand, TrackId};
 
 use crate::{
@@ -102,5 +103,20 @@ fn open_dialog(
         move |_| submit()
     });
     entry.connect_activate(move |_| submit());
+
+    let key_controller = gtk::EventControllerKey::new();
+    {
+        let window = window.clone();
+        key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
+            if key == gdk::Key::Escape {
+                window.close();
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+    }
+    window.add_controller(key_controller);
+
     window.present();
 }

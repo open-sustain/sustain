@@ -32,7 +32,6 @@ pub(crate) type TrackAnalyzeEnabledQuery = Rc<dyn Fn(AnalysisCapability) -> bool
 /// a run is in flight (issue #61).
 pub(crate) type TrackRetrieveBusyQuery = Rc<dyn Fn() -> bool>;
 pub(crate) type YoutubeAudioReplacementCallback = Rc<dyn Fn(TrackId)>;
-type PendingConfirmCallback = Rc<RefCell<Option<Box<dyn FnOnce(Vec<TrackId>)>>>>;
 const TRACK_CONTEXT_ACTION_GROUP: &str = "track-context";
 const ADD_TO_PLAYLIST_ACTION: &str = "add-to-playlist";
 
@@ -841,70 +840,13 @@ fn confirm_move_to_trash(
     on_confirm: impl FnOnce(Vec<TrackId>) + 'static,
 ) {
     let detail = trash_confirmation_detail(track_ids.len());
-
-    let window = gtk::Window::builder()
-        .title("Move to Trash")
-        .transient_for(parent)
-        .modal(true)
-        .resizable(false)
-        .default_width(440)
-        .build();
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.set_margin_top(18);
-    content.set_margin_end(18);
-    content.set_margin_bottom(18);
-    content.set_margin_start(18);
-
-    let detail_label = gtk::Label::new(Some(&detail));
-    detail_label.add_css_class("dim-label");
-    detail_label.set_xalign(0.0);
-    detail_label.set_wrap(true);
-    content.append(&detail_label);
-
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    buttons.set_halign(gtk::Align::End);
-
-    let cancel_button = gtk::Button::with_label("Cancel");
-    let trash_button = gtk::Button::with_label("Move to Trash");
-    trash_button.add_css_class("destructive-action");
-
-    let window_for_cancel = window.clone();
-    cancel_button.connect_clicked(move |_| {
-        window_for_cancel.close();
-    });
-
-    let confirm_callback: PendingConfirmCallback =
-        Rc::new(RefCell::new(Some(Box::new(on_confirm))));
-    let callback_for_trash = confirm_callback.clone();
-    let window_for_trash = window.clone();
-    trash_button.connect_clicked(move |_| {
-        if let Some(callback) = callback_for_trash.borrow_mut().take() {
-            callback(track_ids.clone());
-        }
-        window_for_trash.close();
-    });
-
-    buttons.append(&cancel_button);
-    buttons.append(&trash_button);
-    content.append(&buttons);
-    window.set_child(Some(&content));
-    window.set_default_widget(Some(&cancel_button));
-
-    let key_controller = gtk::EventControllerKey::new();
-    let window_for_escape = window.clone();
-    key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-        if key == gdk::Key::Escape {
-            window_for_escape.close();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    window.add_controller(key_controller);
-
-    window.present();
-    cancel_button.grab_focus();
+    crate::confirmation::show_confirmation_alert(
+        parent,
+        "Move to Trash",
+        &detail,
+        "Move to Trash",
+        move || on_confirm(track_ids),
+    );
 }
 
 fn trash_confirmation_detail(count: usize) -> String {

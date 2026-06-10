@@ -30,6 +30,7 @@ mod cd_import_panel;
 mod cell_registry;
 mod chart;
 mod command_controller;
+mod confirmation;
 mod content_stack;
 mod date_format;
 mod device_panel;
