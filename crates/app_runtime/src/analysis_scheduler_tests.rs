@@ -5,8 +5,8 @@ use std::{
     fs::File,
     io::Write,
     sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc as std_mpsc,
     },
     time::{Duration, Instant},
@@ -958,15 +958,17 @@ fn explicit_run_processes_tracks_with_global_settings_off() {
 fn explicit_run_drains_ahead_of_background_sweep() {
     // The explicit queue is meant to feel "do this now". Even
     // when the background sweep has tracks lined up, the
-    // explicit batch must reach the workers first.
-    use std::sync::Mutex;
+    // explicit batch must preempt any background work that has
+    // not already reached the worker pool.
 
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
     let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
 
-    // Five background tracks the settings will sweep up.
-    for index in 0..5_i64 {
+    // More background tracks than the one-worker pool can have in
+    // flight. That leaves undispatched pending work for the explicit
+    // request to preempt.
+    for index in 0..8_i64 {
         let relative = format!("bg_{index:02}.flac");
         let mut track = touch_in(&library_root, &relative);
         track.id = TrackId::new(index + 1).expect("non-zero");
@@ -980,7 +982,13 @@ fn explicit_run_drains_ahead_of_background_sweep() {
         .expect("save explicit");
 
     let order: Arc<Mutex<Vec<TrackId>>> = Arc::new(Mutex::new(Vec::new()));
+    let first_background_started = Arc::new((Mutex::new(false), Condvar::new()));
+    let release_first_background = Arc::new((Mutex::new(false), Condvar::new()));
+    let blocked_once = Arc::new(AtomicBool::new(false));
     let order_for_closure = order.clone();
+    let first_background_started_for_closure = first_background_started.clone();
+    let release_first_background_for_closure = release_first_background.clone();
+    let blocked_once_for_closure = blocked_once.clone();
     let analyzer: AnalyzerFn = Arc::new(move |path, _caps, _opts, _duration| {
         // Recover the TrackId from the path stem so the test can
         // assert on processing order without needing a richer
@@ -999,6 +1007,17 @@ fn explicit_run_drains_ahead_of_background_sweep() {
         };
         if let Some(id) = TrackId::new(id_value) {
             order_for_closure.lock().expect("lock").push(id);
+        }
+        if stem.starts_with("bg_") && !blocked_once_for_closure.swap(true, Ordering::SeqCst) {
+            let (started_lock, started_cvar) = &*first_background_started_for_closure;
+            *started_lock.lock().expect("lock started") = true;
+            started_cvar.notify_one();
+
+            let (release_lock, release_cvar) = &*release_first_background_for_closure;
+            let mut released = release_lock.lock().expect("lock release");
+            while !*released {
+                released = release_cvar.wait(released).expect("wait release");
+            }
         }
         ok_analyzer()(
             std::path::Path::new("ignored"),
@@ -1022,9 +1041,23 @@ fn explicit_run_drains_ahead_of_background_sweep() {
         Some(library_root),
     ));
 
-    // The five background tracks are already eligible. Submit
-    // the explicit run; the supervisor must put it ahead of the
-    // queue.
+    let (started_lock, started_cvar) = &*first_background_started;
+    let mut started = started_lock.lock().expect("lock started");
+    while !*started {
+        let wait_result = started_cvar
+            .wait_timeout(started, Duration::from_secs(2))
+            .expect("wait for first background");
+        started = wait_result.0;
+        assert!(
+            !wait_result.1.timed_out(),
+            "background worker did not start"
+        );
+    }
+
+    // The first background track is in-flight and the pool may have
+    // accepted its bounded queue slack. Submit the explicit run; the
+    // supervisor must put it ahead of any background tracks that are
+    // only pending in the supervisor.
     scheduler.request_explicit_run(
         vec![explicit_track.id],
         AnalysisCapabilities {
@@ -1034,11 +1067,15 @@ fn explicit_run_drains_ahead_of_background_sweep() {
         },
     );
 
+    let (release_lock, release_cvar) = &*release_first_background;
+    *release_lock.lock().expect("lock release") = true;
+    release_cvar.notify_one();
+
     // Wait until everything is done.
     let _tick = wait_for(
         &rx,
         Duration::from_secs(5),
-        |progress| matches!(progress, SchedulerProgress::Tick { completed, .. } if *completed >= 6),
+        |progress| matches!(progress, SchedulerProgress::Tick { completed, .. } if *completed >= 9),
     );
 
     let seen = order.lock().expect("lock").clone();
@@ -1046,13 +1083,15 @@ fn explicit_run_drains_ahead_of_background_sweep() {
         .iter()
         .position(|id| *id == explicit_track.id)
         .expect("explicit track was processed");
-    // A background track may slip ahead if it reached the worker
-    // queue before the explicit command arrived: that race is
-    // bounded by the queue capacity (worker_count + 1). With one
-    // worker that's at most one background track.
+    // A background track may slip ahead if it already reached the
+    // worker pool before the explicit command arrived. With the
+    // one-worker test pool and its one-worker-plus-one-slack queue,
+    // at most three tracks can be ahead: one running and up to two
+    // buffered. The remaining pending background tracks must be
+    // preempted.
     assert!(
-        explicit_position <= 1,
-        "explicit run must reach the workers immediately, saw position {explicit_position} of {}",
+        explicit_position <= 3,
+        "explicit run must preempt pending background work, saw position {explicit_position} of {}",
         seen.len()
     );
 

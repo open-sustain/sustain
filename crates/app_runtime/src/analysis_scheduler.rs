@@ -54,11 +54,12 @@
 //!    settings, so a user can ask for audio analysis on a single
 //!    playlist while keeping audio analysis globally off.
 //!
-//! The explicit queue is drained first on every refill, then any
-//! remaining buffer slack is filled from the background query. Items
-//! that overlap (same track present in both queues with different
-//! capabilities) are not merged — they dispatch as two separate
-//! passes against the file, which is wasteful but correct.
+//! The explicit queue is drained ahead of the background query, and a
+//! newly submitted explicit run preempts background items that have
+//! been fetched but not yet handed to a worker. Items already in
+//! flight are allowed to finish; descriptor-level cancellation would
+//! make the worker protocol more complex without improving the user
+//! visible "do this next" contract.
 
 use std::{
     collections::{HashSet, VecDeque},
@@ -604,6 +605,8 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
             pending.clear();
         }
 
+        prioritize_explicit_work(&mut state, &mut pending, &in_flight);
+
         // 1b. A worker reported a rejected store write. Persisting is
         //     the gating step for "work complete": a rejected write
         //     means the DSP result is lost and the track will resurface
@@ -711,19 +714,13 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         //    gate produced.
         if pending.is_empty() {
             // 3a. Explicit queue first.
-            while pending.len() < BATCH_SIZE {
-                match state.explicit_queue.pop_front() {
-                    Some(item) => {
-                        if !in_flight.contains(&item.track_id) {
-                            pending.push_back(item);
-                        }
-                    }
-                    None => break,
-                }
-            }
+            drain_ready_explicit_work(&mut state, &mut pending, &in_flight);
 
             // 3b. Background sweep fills the remainder.
-            if pending.len() < BATCH_SIZE && !bg_capabilities.is_empty() {
+            if pending.len() < BATCH_SIZE
+                && state.explicit_queue.is_empty()
+                && !bg_capabilities.is_empty()
+            {
                 let room = BATCH_SIZE.saturating_sub(pending.len());
                 let limit = room.saturating_add(in_flight.len());
                 match library_store.tracks_needing_analysis(
@@ -796,6 +793,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                 // the work_tx clone above and this iteration.
                 break;
             }
+            prioritize_explicit_work(&mut state, &mut pending, &in_flight);
 
             // Resolve capabilities: explicit items keep what the user
             // submitted; background items snap to the live settings so
@@ -860,6 +858,51 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         } else {
             wait_for_outcome_with_timeout(&outcome_rx, &mut state, &mut in_flight, &progress);
         }
+    }
+}
+
+fn prioritize_explicit_work(
+    state: &mut SupervisorState,
+    pending: &mut VecDeque<PendingItem>,
+    in_flight: &HashSet<TrackId>,
+) {
+    if state.explicit_queue.is_empty() {
+        return;
+    }
+
+    // Background pending items have not reached a worker yet and will
+    // resurface from `tracks_needing_analysis`, so dropping them here
+    // is a priority decision, not data loss. Explicit items already in
+    // `pending` stay ahead of newly promoted explicit requests.
+    pending.retain(|item| item.is_explicit);
+    drain_ready_explicit_work(state, pending, in_flight);
+}
+
+fn drain_ready_explicit_work(
+    state: &mut SupervisorState,
+    pending: &mut VecDeque<PendingItem>,
+    in_flight: &HashSet<TrackId>,
+) {
+    let queued = state.explicit_queue.len();
+    for _ in 0..queued {
+        if pending.len() >= BATCH_SIZE {
+            break;
+        }
+
+        let Some(item) = state.explicit_queue.pop_front() else {
+            break;
+        };
+        if in_flight.contains(&item.track_id) {
+            state.explicit_queue.push_back(item);
+            continue;
+        }
+        if pending
+            .iter()
+            .any(|pending_item| pending_item.is_explicit && pending_item.track_id == item.track_id)
+        {
+            continue;
+        }
+        pending.push_back(item);
     }
 }
 

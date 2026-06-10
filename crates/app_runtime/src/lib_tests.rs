@@ -3674,7 +3674,7 @@ fn runtime_removes_tracks_from_library_and_stops_playback() {
 }
 
 #[test]
-fn runtime_moves_tracks_to_trash_and_removes_underlying_file() {
+fn move_to_trash_removes_track_and_underlying_file_after_backend_success() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
     let track_path = root.join("track.flac");
@@ -3696,9 +3696,11 @@ fn runtime_moves_tracks_to_trash_and_removes_underlying_file() {
     .with_playback_service(Box::new(NullPlaybackService::new()));
 
     assert_eq!(
-        runtime.handle_command(ApplicationCommand::MoveTrackToTrash {
-            track_id: trashed_id,
-        }),
+        runtime.move_track_to_trash_with(
+            trashed_id,
+            |_| Ok(Some(dummy_file_identity())),
+            |path, _| std::fs::remove_file(path).map_err(|_| ()),
+        ),
         Ok(())
     );
 
