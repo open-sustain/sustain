@@ -520,7 +520,7 @@ impl TrackRowContextMenu {
         popover_parent
             .as_ref()
             .insert_action_group(&local_action_group, Some(&action_group));
-        let popover = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
+        let popover = track_context_popover();
         popover.set_has_arrow(false);
         popover.add_css_class("compact-context-menu");
         popover.set_parent(popover_parent.as_ref());
@@ -669,6 +669,16 @@ impl TrackRowContextMenu {
         }
         section
     }
+}
+
+fn track_context_popover() -> gtk::PopoverMenu {
+    // The default GtkPopoverMenu mode slides forward into submenus. On this
+    // desktop context menu that path can stall while GTK realizes the target
+    // submenu contents, especially for the playlist list. Traditional nested
+    // submenus avoid that forward-animation cost and match desktop menus.
+    gtk::PopoverMenu::builder()
+        .flags(gtk::PopoverMenuFlags::NESTED)
+        .build()
 }
 
 fn add_to_playlist_submenu_model() -> gio::Menu {
@@ -945,7 +955,7 @@ mod tests {
     use super::{
         TrackActionCallback, TrackActionInvocation, TrackActionVisibility, TrackContextAction,
         TrackContextActionId, TrackContextActionSection, TrackContextInvocationState,
-        TrackSelectionRequirement, trash_confirmation_detail,
+        TrackSelectionRequirement, track_context_popover, trash_confirmation_detail,
     };
 
     #[test]
@@ -1081,6 +1091,21 @@ mod tests {
                 "idle cleanup unparented popover"
             );
             window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
+    fn track_context_popover_uses_nested_submenus() {
+        let ran = crate::test_support::with_gtk(|| {
+            let popover = track_context_popover();
+            assert_eq!(
+                popover.flags(),
+                gtk::PopoverMenuFlags::NESTED,
+                "track context menus should use desktop nested submenus, not sliding submenus"
+            );
         });
         if !ran {
             eprintln!("skipped GTK widget test: no display available");
