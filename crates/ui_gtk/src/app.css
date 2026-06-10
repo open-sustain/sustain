@@ -625,21 +625,9 @@ listview.album-track-table > row:focus-visible {
     color: @theme_fg_color;
 }
 
-.track-context-menu,
-.sidebar-context-menu {
-    padding: 4px;
-}
-
-.sidebar-context-menu,
-button.sidebar-context-menu-item label {
-    color: @theme_fg_color;
-}
-
 /* Adwaita's `popover > contents` pads the popover frame by ~6px on every
    side. For dense iTunes-style menus we want the popover edge to sit
-   close to the menu items; override the inner padding so the only
-   breathing room comes from the menu's own `.track-context-menu` /
-   `.sidebar-context-menu` padding. */
+   close to the model-generated menu items. */
 popover.compact-context-menu > contents {
     padding: 0;
 }
@@ -783,26 +771,6 @@ listview.playlist-sidebar-list > row:focus {
 .sidebar-collapse-toggle:hover {
     background-color: alpha(@theme_fg_color, 0.08);
     color: @theme_fg_color;
-}
-
-button.track-context-menu-item,
-button.sidebar-context-menu-item {
-    min-height: 30px;
-    min-width: 160px;
-    padding-left: 8px;
-    padding-right: 8px;
-}
-
-/* Explicit, theme-adaptive separator color. The default GTK separator
-   tint plus an extra opacity reduction rendered nearly invisible against
-   dark popover backgrounds; switching to an alpha-foreground fill keeps
-   the line readable in both light and dark themes without depending on
-   the system separator color. */
-.track-context-menu-separator {
-    margin-top: 4px;
-    margin-bottom: 4px;
-    min-height: 1px;
-    background-color: alpha(@theme_fg_color, 0.18);
 }
 
 .track-table header {
