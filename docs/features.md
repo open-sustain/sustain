@@ -731,7 +731,7 @@ Sustain reads title, artist, album, album artist, and composer sort-order
 tags at first import and stores them in SQLite so display names can remain
 unchanged while sorting by their intended keys. When a file lacks a sort
 field, Sustain generates leading-English-article values such as
-`The Weeknd` -> `Weeknd (The)`. The Library preference for honoring sort
+`The Beatles` -> `Beatles (The)`. The Library preference for honoring sort
 tags is enabled by default; disabling it makes text columns sort by the
 display fields only. Full metadata mirrors preserve stored sort fields where
 the active metadata backend can round-trip the standard file tag.

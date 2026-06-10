@@ -267,7 +267,7 @@ fn in_memory_metadata_edit_refreshes_generated_sort_fields() {
 
 fn run_metadata_edit_refreshes_generated_sort_fields(store: &dyn LibraryStore) {
     let mut track = track(1, "a.flac");
-    track.metadata.artist = Some("The Weeknd".to_owned());
+    track.metadata.artist = Some("The Beatles".to_owned());
     track.metadata.fill_missing_generated_sort_fields();
     store.save_track(track.clone()).expect("seed row");
 

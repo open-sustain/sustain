@@ -457,7 +457,7 @@ mod tests {
     fn generated_sort_fields_reorder_leading_articles() {
         let mut metadata = TrackMetadata {
             title: Some("An Opening".to_owned()),
-            artist: Some("The Weeknd".to_owned()),
+            artist: Some("The Beatles".to_owned()),
             album: Some("A Record".to_owned()),
             album_artist: Some("the collective".to_owned()),
             composer: Some("No Article".to_owned()),
@@ -467,7 +467,7 @@ mod tests {
         metadata.fill_missing_generated_sort_fields();
 
         assert_eq!(metadata.title_sort.as_deref(), Some("Opening (An)"));
-        assert_eq!(metadata.artist_sort.as_deref(), Some("Weeknd (The)"));
+        assert_eq!(metadata.artist_sort.as_deref(), Some("Beatles (The)"));
         assert_eq!(metadata.album_sort.as_deref(), Some("Record (A)"));
         assert_eq!(
             metadata.album_artist_sort.as_deref(),
@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn metadata_change_refreshes_sort_fields_generated_by_sustain() {
         let mut metadata = TrackMetadata {
-            artist: Some("The Weeknd".to_owned()),
+            artist: Some("The Beatles".to_owned()),
             ..TrackMetadata::default()
         };
         metadata.fill_missing_generated_sort_fields();
