@@ -286,6 +286,12 @@ pub(super) fn sidebar_selection_changed_callback(
     let current_search_text = current_search_text.clone();
 
     Rc::new(move |selection| {
+        let selection_profile = sustain_profiler::ProfileScope::start();
+        sustain_profiler::profile_mark!(
+            selection_profile,
+            "playlist selection: sidebar callback entered (kind={})",
+            selection_profile_kind(selection)
+        );
         // Layout + default sort are cheap and harmless even when the
         // playlists view is not visible — they only set widget state
         // that any future visit will rely on.
@@ -293,6 +299,7 @@ pub(super) fn sidebar_selection_changed_callback(
             selection,
             Some(SidebarSelection::Item(PlaylistItem::Playlist(_)))
         );
+        let layout_profile = sustain_profiler::ProfileScope::start();
         if let Some(mut layout) = layout_for_selection(&runtime.borrow(), selection) {
             // A regular playlist always lands on the play-order (status) sort
             // applied just below, so drop any persisted column sort here: letting
@@ -308,6 +315,10 @@ pub(super) fn sidebar_selection_changed_callback(
         if regular_playlist_selected {
             playlists_table.apply_playlist_default_sort();
         }
+        sustain_profiler::profile_mark!(
+            layout_profile,
+            "playlist selection: column-layout load/apply phase"
+        );
         // The sidebar selection is the sole driver of the content
         // stack: Music → SONGS_VIEW, Albums → ALBUMS_VIEW, a playlist
         // item → PLAYLISTS_VIEW. A null selection means nothing is
@@ -323,9 +334,14 @@ pub(super) fn sidebar_selection_changed_callback(
         if switching_to_playlists {
             playlists_refresh.mark_dirty();
         }
+        let stack_profile = sustain_profiler::ProfileScope::start();
         if content_stack.visible_child_name().as_deref() != Some(target) {
             content_stack.set_visible_child_name(target);
         }
+        sustain_profiler::profile_mark!(
+            stack_profile,
+            "playlist selection: stack switch phase (target={target})"
+        );
         let search_text = current_search_text.borrow().clone();
         let playlists_refreshed = if switching_to_playlists && !playlists_refresh.dirty() {
             true
@@ -341,6 +357,18 @@ pub(super) fn sidebar_selection_changed_callback(
             visible_summary_refresh();
         }
     })
+}
+
+fn selection_profile_kind(selection: Option<SidebarSelection>) -> &'static str {
+    match selection {
+        Some(SidebarSelection::Music) => "music",
+        Some(SidebarSelection::Albums) => "albums",
+        Some(SidebarSelection::Statistics) => "statistics",
+        Some(SidebarSelection::Item(PlaylistItem::Playlist(_))) => "regular-playlist",
+        Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(_))) => "smart-playlist",
+        Some(SidebarSelection::Item(PlaylistItem::Folder(_))) => "folder",
+        None => "none",
+    }
 }
 
 pub(super) fn sidebar_tracks_drop_callback(

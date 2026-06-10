@@ -38,6 +38,7 @@ Developer-isolation options (default: XDG config/data/cache locations):
   --database <path>   Use this SQLite database instead of the XDG default.
   --local-scope       Keep config, database, and cache in the working
       --dev           directory (sustain.toml, sustain.sqlite, sustain.cache/).
+  --profile           Print developer performance landmarks to stderr.
   -h, --help          Print this help and exit.
 
 Explicit --config/--database win over --local-scope. When any of these
@@ -50,6 +51,7 @@ pub(crate) struct Cli {
     pub(crate) config: Option<PathBuf>,
     pub(crate) database: Option<PathBuf>,
     pub(crate) local_scope: bool,
+    pub(crate) profile: bool,
     /// Hidden maintenance command: rewrite every library track's file
     /// tags from the authoritative SQLite values, then exit without
     /// launching the UI (#143). Deliberately absent from [`USAGE`] — it
@@ -104,6 +106,7 @@ where
         match name.as_str() {
             "--help" | "-h" if inline.is_none() => return Ok(None),
             "--local-scope" | "--dev" if inline.is_none() => cli.local_scope = true,
+            "--profile" if inline.is_none() => cli.profile = true,
             "--force-backfill" if inline.is_none() => cli.force_backfill = true,
             "--config" => cli.config = Some(take_value("--config", inline, &mut arguments)?),
             "--database" => cli.database = Some(take_value("--database", inline, &mut arguments)?),
@@ -315,9 +318,20 @@ mod tests {
                 config: Some(PathBuf::from("a.toml")),
                 database: Some(PathBuf::from("b.sqlite")),
                 local_scope: true,
+                profile: false,
                 force_backfill: false,
             }
         );
+    }
+
+    #[test]
+    fn process_parser_consumes_profile_before_gtk_argument_forwarding() {
+        let parsed = parse_process_args(args(&["sustain", "--profile"]))
+            .expect("valid")
+            .expect("not help");
+
+        assert_eq!(parsed.gtk_arguments, vec!["sustain"]);
+        assert!(parsed.cli.profile);
     }
 
     #[test]
@@ -332,6 +346,7 @@ mod tests {
             config: Some(PathBuf::from("a.toml")),
             database: Some(PathBuf::from("b.sqlite")),
             local_scope: false,
+            profile: false,
             force_backfill: false,
         };
         assert_eq!(spaced, expected);
@@ -357,6 +372,23 @@ mod tests {
             parse_args(args(&["--force-backfill=1"])),
             Err(CliError::Unknown("--force-backfill=1".to_owned()))
         );
+    }
+
+    #[test]
+    fn parses_profile_flag() {
+        let cli = parse_args(args(&["--profile"]))
+            .expect("valid")
+            .expect("not help");
+        assert!(cli.profile);
+        assert_eq!(
+            parse_args(args(&["--profile=1"])),
+            Err(CliError::Unknown("--profile=1".to_owned()))
+        );
+    }
+
+    #[test]
+    fn help_mentions_profile_flag() {
+        assert!(USAGE.contains("--profile"));
     }
 
     #[test]
@@ -435,6 +467,7 @@ mod tests {
             config: Some(PathBuf::from("/etc/custom.toml")),
             database: Some(PathBuf::from("/data/custom.sqlite")),
             local_scope: true,
+            profile: false,
             force_backfill: false,
         };
         let resolved = resolve_paths(&cli, Some(Path::new("/work")), &xdg_defaults())
@@ -455,6 +488,7 @@ mod tests {
             config: Some(PathBuf::from("/etc/custom.toml")),
             database: Some(PathBuf::from("/data/custom.sqlite")),
             local_scope: false,
+            profile: false,
             force_backfill: false,
         };
         let resolved = resolve_paths(&cli, Some(Path::new("/work")), &xdg_defaults())

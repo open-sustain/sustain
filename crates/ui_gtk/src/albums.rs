@@ -359,6 +359,10 @@ impl AlbumsView {
         self.apply_search();
     }
 
+    pub(crate) fn visible_album_count(&self) -> usize {
+        self.albums.borrow().len()
+    }
+
     /// Re-derive `albums` from `all_albums` according to the active search,
     /// clear selection, and rebuild the virtual row model.
     fn apply_search(&self) {

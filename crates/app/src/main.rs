@@ -25,30 +25,9 @@ use crate::instance_lock::{AcquireOutcome, InstanceLock};
 const GTK_APPLICATION_ID: &str = "io.github.open_sustain.sustain";
 
 fn main() {
-    let t0 = std::time::Instant::now();
-    macro_rules! tlog {
-        ($label:expr) => {
-            eprintln!(
-                "[TIMING] {:>8.1}ms {}",
-                t0.elapsed().as_secs_f64() * 1000.0,
-                $label
-            );
-        };
-    }
-    tlog!("main() entered");
-    // Bind the process locale and gettext catalogs before anything else: this
-    // is the one and only locale mutation, it must precede GTK initialization
-    // and thread creation, and `setlocale(LC_ALL, "")` here also lets GTK
-    // localize its own stock strings. The calls are O(1); the (kilobyte-sized)
-    // catalog is mmapped lazily on first lookup during UI construction.
-    sustain_i18n::init();
-    tlog!("locale bound");
-    // Parse developer-isolation flags and resolve the config, database,
-    // and artwork-cache locations up front (issue #7). The database path
-    // is resolved before anything else so the single-instance lock is
-    // keyed off the exact same path the library store will open. See
-    // `launch.rs` for the precedence rules and `instance_lock.rs` for the
-    // integrity rationale.
+    // Parse Sustain-owned flags before initialization so `--profile` can
+    // govern every subsequent startup landmark and still be stripped from
+    // the argv GTK receives.
     let parsed_args = match launch::parse_process_args(std::env::args()) {
         Ok(Some(parsed_args)) => parsed_args,
         Ok(None) => {
@@ -62,6 +41,24 @@ fn main() {
         }
     };
     let cli = parsed_args.cli;
+    let mut startup_profile = sustain_profiler::StartupProfiler::start_if(cli.profile);
+    sustain_profiler::profile_startup!(startup_profile, "main() entered");
+
+    // Bind the process locale and gettext catalogs before anything else: this
+    // is the one and only locale mutation, it must precede GTK initialization
+    // and thread creation, and `setlocale(LC_ALL, "")` here also lets GTK
+    // localize its own stock strings. Argument parsing above is pure Rust and
+    // does not observe the process locale. The calls are O(1); the
+    // (kilobyte-sized) catalog is mmapped lazily on first lookup during UI
+    // construction.
+    sustain_i18n::init();
+    sustain_profiler::profile_startup!(startup_profile, "locale bound");
+
+    // Resolve the config, database, and artwork-cache locations up front
+    // (issue #7). The database path is resolved before anything else so the
+    // single-instance lock is keyed off the exact same path the library store
+    // will open. See `launch.rs` for the precedence rules and
+    // `instance_lock.rs` for the integrity rationale.
     let defaults = launch::XdgDefaults {
         config: sustain_settings::default_settings_path(),
         database: sustain_library_store::default_database_path(),
@@ -116,7 +113,8 @@ fn main() {
         }
     };
 
-    tlog!("instance lock acquired");
+    startup_profile.activate();
+    sustain_profiler::profile_startup!(startup_profile, "instance lock acquired");
     let settings_store = sustain_settings::TomlSettingsStore::new(&paths.config);
     let settings_path = settings_store.path().to_path_buf();
     let mut runtime = match sustain_app_runtime::ApplicationRuntime::with_settings_store(Box::new(
@@ -138,10 +136,10 @@ fn main() {
         }
     };
 
-    tlog!("settings store opened");
+    sustain_profiler::profile_startup!(startup_profile, "settings store opened");
     match sustain_library_store::SqliteLibraryStore::open(&paths.database) {
         Ok(library_store) => {
-            tlog!("sqlite library store opened");
+            sustain_profiler::profile_startup!(startup_profile, "SQLite store opened");
             let was_freshly_created = library_store.was_freshly_created();
             // The force-backfill command iterates every track immediately, so
             // it needs the library hydrated synchronously; the UI prefers the
@@ -160,6 +158,17 @@ fn main() {
             if let Err(error) = services_result {
                 eprintln!("Sustain: library services failed to initialize ({error:?}).");
                 process::exit(1);
+            }
+            if cli.force_backfill {
+                sustain_profiler::profile_startup!(
+                    startup_profile,
+                    "library services installed (track hydration synchronous)"
+                );
+            } else {
+                sustain_profiler::profile_startup!(
+                    startup_profile,
+                    "library services installed (track hydration deferred)"
+                );
             }
             if was_freshly_created {
                 if let Err(error) = runtime.seed_default_smart_playlists() {
@@ -190,8 +199,6 @@ fn main() {
         }
     }
 
-    tlog!("library services installed (track hydration deferred)");
-
     // Hidden maintenance command (#143): rewrite every track's file tags
     // from the authoritative SQLite values, then exit without ever building
     // the UI, playback, or networked-metadata services.
@@ -202,7 +209,7 @@ fn main() {
     if let Ok(playback_service) = sustain_playback::GStreamerPlaybackService::new() {
         runtime = runtime.with_playback_service(Box::new(playback_service));
     }
-    tlog!("playback service initialized");
+    sustain_profiler::profile_startup!(startup_profile, "playback service initialized");
 
     // Install the networked metadata service. The User-Agent is
     // mandatory for MusicBrainz; the contact URL points back at the
@@ -224,7 +231,7 @@ fn main() {
         sustain_metadata_remote::acoustid_api_key(),
     );
     runtime.set_remote_metadata_service(Arc::new(remote_service));
-    tlog!("remote metadata service installed");
+    sustain_profiler::profile_startup!(startup_profile, "remote metadata service installed");
 
     // Install the CD-import backend: the libdiscid-backed optical probe and
     // the GStreamer encoder. Both are zero-sized handles; discovery itself is
@@ -234,7 +241,10 @@ fn main() {
         Arc::new(sustain_cd_import::SystemOpticalProbe::new()),
         Arc::new(sustain_cd_import::GStreamerCdEncoder::new()),
     );
-    tlog!("cd-import backend installed, handing off to ui_gtk::run");
+    sustain_profiler::profile_startup!(
+        startup_profile,
+        "CD-import backend installed, handing off to ui_gtk::run"
+    );
 
     // Known GTK/GDK runtime warning on some Wayland/Vulkan setups:
     // `vkAcquireNextImageKHR(): ... VK_SUBOPTIMAL_KHR`.

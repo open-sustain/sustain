@@ -62,6 +62,7 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
     connect_titlebar_search(
         titlebar,
         Rc::new(move |new_text| {
+            let change_profile = sustain_profiler::ProfileScope::start();
             if *current_search_text.borrow() == new_text {
                 return;
             }
@@ -91,6 +92,7 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
             if let Some(previous) = pending_rebuild.borrow_mut().take() {
                 previous.remove();
             }
+            sustain_profiler::profile_mark!(change_profile, "search: text changed phase");
 
             let runtime = runtime.clone();
             let songs_table = songs_table.clone();
@@ -104,7 +106,14 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
             let source_id = glib::timeout_add_local_once(SEARCH_REBUILD_DEBOUNCE, move || {
                 pending_rebuild_clear.borrow_mut().take();
 
+                let songs_rows_profile = sustain_profiler::ProfileScope::start();
                 let songs_rows = runtime_library_table_rows(&runtime.borrow(), &new_text);
+                let songs_row_count = songs_rows.len();
+                sustain_profiler::profile_mark!(
+                    songs_rows_profile,
+                    "search: Songs rows built ({} rows)",
+                    songs_row_count
+                );
                 // Share one pass: when Songs is the visible view, summarize
                 // the rows we just built (count + duration + size) instead
                 // of re-filtering and re-materializing the whole table for
@@ -115,16 +124,35 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
                 if songs_visible {
                     status_bar.update_summary(&songs_rows);
                 }
+                let songs_replace_profile = sustain_profiler::ProfileScope::start();
                 songs_table.replace_rows(songs_rows);
+                sustain_profiler::profile_mark!(
+                    songs_replace_profile,
+                    "search: Songs table replace_rows ({} rows)",
+                    songs_row_count
+                );
 
+                let albums_profile = sustain_profiler::ProfileScope::start();
                 albums_view.set_search_text(new_text.clone());
+                sustain_profiler::profile_mark!(
+                    albums_profile,
+                    "search: Albums view update phase ({} albums)",
+                    albums_view.visible_album_count()
+                );
 
+                let playlists_profile = sustain_profiler::ProfileScope::start();
                 let playlists_refreshed = refresh_playlists_view_if_visible(
                     &runtime.borrow(),
                     &playlists_refresh,
                     sidebar.current_selection(),
                     &new_text,
                 );
+                if playlists_refreshed {
+                    sustain_profiler::profile_mark!(
+                        playlists_profile,
+                        "search: Playlists view update phase"
+                    );
+                }
 
                 if !songs_visible && !playlists_refreshed {
                     visible_summary_refresh();

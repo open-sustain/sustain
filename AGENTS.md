@@ -118,21 +118,24 @@ Launching `sustain` from a terminal on a 10,000-track library must
 reach the GTK main-loop first-idle landmark in **150 ms or less** on
 the maintainer's machines (release build, warm filesystem cache).
 
-The `[TIMING]` instrumentation in `crates/app/src/main.rs`,
+When checking cold-start performance, run the release binary with
+`--profile`; the startup landmarks are intentionally silent without
+that flag. The `[PROFILE]` instrumentation in `crates/app/src/main.rs`,
 `crates/ui_gtk/src/lib.rs`, and `crates/ui_gtk/src/main_window.rs`
-prints the relevant milestones to stderr on every launch:
+prints the relevant milestones to stderr when profiling is enabled:
 
 ```
-[TIMING] ... main() entered
-[TIMING] ...   activate: window.present() returned at <ms>ms
-[TIMING] ...   activate: first idle reached at <ms>ms     <-- the budget gate
+[PROFILE] ... main() entered
+[PROFILE] ... activate: window.present() returned at <ms>ms
+[PROFILE] ... activate: first idle reached at <ms>ms     <-- the budget gate
 ```
 
 Any change that pushes `first idle` past 150 ms is a regression and
 must be fixed before merge — not deferred. Add new instrumentation
 landmarks (not per-callback noise) when introducing a new startup
-phase, so future regressions are visible the first time anyone
-launches the app.
+phase, and bind any new performance instrumentation to the `--profile`
+flag so future regressions are visible during profiled launches without
+making normal launches noisy.
 
 ## Development Phase
 

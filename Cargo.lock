@@ -2284,6 +2284,7 @@ dependencies = [
  "sustain-metadata",
  "sustain-metadata-remote",
  "sustain-playback",
+ "sustain-profiler",
  "sustain-settings",
  "sustain-ui-gtk",
 ]
@@ -2337,6 +2338,7 @@ dependencies = [
  "async-io",
  "futures-lite",
  "sustain-app-runtime",
+ "sustain-profiler",
  "zbus",
 ]
 
@@ -2430,6 +2432,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sustain-profiler"
+version = "0.7.0-alpha.5"
+
+[[package]]
 name = "sustain-search"
 version = "0.7.0-alpha.5"
 dependencies = [
@@ -2466,6 +2472,7 @@ dependencies = [
  "sustain-app-runtime",
  "sustain-artwork",
  "sustain-desktop",
+ "sustain-profiler",
 ]
 
 [[package]]

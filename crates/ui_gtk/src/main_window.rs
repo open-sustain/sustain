@@ -192,23 +192,13 @@ pub(crate) fn build_main_window(
         cd_lookup_rx,
         library_hydration_result_rx,
     } = receivers;
-    let tbw = std::time::Instant::now();
-    macro_rules! tlog {
-        ($label:expr) => {
-            eprintln!(
-                "[TIMING]     build_main_window+{:>7.1}ms {}",
-                tbw.elapsed().as_secs_f64() * 1000.0,
-                $label
-            );
-        };
-    }
-    tlog!("entered");
+    let window_profile = sustain_profiler::ProfileScope::start();
+    sustain_profiler::profile_mark!(window_profile, "build_main_window entered");
     // Coarse timing landmarks live in this function (and in `main` /
-    // `ui_gtk::run`) so a launch regression shows up the first time
-    // anyone runs the app from a terminal. Keep them sparse: only
-    // phases that can plausibly grow with library size or new
-    // features warrant a print. Per-callback timings inside hot
-    // paths are intentionally absent.
+    // `ui_gtk::run`) so a launch regression is visible when profiling
+    // is enabled. Keep them sparse: only phases that can plausibly grow
+    // with library size or new features warrant a print. Per-callback
+    // timings inside hot paths are intentionally absent.
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .decorated(false)
@@ -237,6 +227,10 @@ pub(crate) fn build_main_window(
     // while this function runs: the songs table and the status bar start
     // from explicitly empty rows — like the playlists table below — and
     // the hydration-complete consumer populates them.
+    sustain_profiler::profile_mark!(
+        window_profile,
+        "library rows materialized (0 rows; hydration deferred)"
+    );
     let status_bar = {
         let runtime_for_cancel = runtime.clone();
         StatusBar::new(
@@ -423,7 +417,10 @@ pub(crate) fn build_main_window(
         None,
         Some(songs_inline_edit),
     );
-    tlog!("songs table built (empty until hydration)");
+    sustain_profiler::profile_mark!(
+        window_profile,
+        "Songs table populated (0 rows; hydration deferred)"
+    );
     songs_table_holder.replace(Some(songs_table.clone()));
     let albums_view = AlbumsView::new(
         runtime.clone(),
@@ -484,7 +481,7 @@ pub(crate) fn build_main_window(
     playlists_table_holder.replace(Some(playlists_table.clone()));
     install_track_column_layout_persistence(&runtime, &songs_table, &playlists_table, &sidebar);
     playback_changed();
-    tlog!("tables + playback wired");
+    sustain_profiler::profile_mark!(window_profile, "tables/playback wired");
     let playlists_header = PlaylistsHeader::new();
     let playlists_view = gtk::Box::new(gtk::Orientation::Vertical, 0);
     playlists_view.set_hexpand(true);
@@ -550,7 +547,7 @@ pub(crate) fn build_main_window(
         &playlists_dirty,
     );
     install_playlists_view_activator(&playlists_refresh, &runtime, &sidebar, &current_search_text);
-    tlog!("content stack + activators installed");
+    sustain_profiler::profile_mark!(window_profile, "content stack + activators installed");
     // The Play button's behaviour depends on the visible view, which now
     // exists. One shared closure drives both the button and the Space
     // shortcut so the two surfaces never diverge.
@@ -904,7 +901,7 @@ pub(crate) fn build_main_window(
         glib::Propagation::Proceed
     });
 
-    tlog!("widgets assembled");
+    sustain_profiler::profile_mark!(window_profile, "widgets assembled");
     BuiltMainWindow {
         window,
         deferred_startup,

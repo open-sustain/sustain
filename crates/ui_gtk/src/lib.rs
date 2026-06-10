@@ -223,21 +223,12 @@ pub fn run(
     database_path: PathBuf,
     gtk_arguments: Vec<String>,
 ) {
-    let trun = std::time::Instant::now();
-    macro_rules! tlog {
-        ($label:expr) => {
-            eprintln!(
-                "[TIMING] {:>8.1}ms run: {}",
-                trun.elapsed().as_secs_f64() * 1000.0,
-                $label
-            );
-        };
-    }
-    tlog!("entered");
+    let run_profile = sustain_profiler::ProfileScope::start();
+    sustain_profiler::profile_mark!(run_profile, "ui_gtk::run entered");
     let app = gtk::Application::builder()
         .application_id(application_id)
         .build();
-    tlog!("gtk Application built");
+    sustain_profiler::profile_mark!(run_profile, "GTK application built");
 
     // Install the result sink before starting the async metadata writer so a
     // restored outbox row that fails on its first startup attempt is visible
@@ -246,13 +237,13 @@ pub fn run(
     let (writer_event_tx, writer_event_rx) =
         async_channel::unbounded::<sustain_app_runtime::MetadataWriterEvent>();
     runtime.set_metadata_writer_event_sink(writer_event_tx);
-    tlog!("about to start metadata writer");
+    sustain_profiler::profile_mark!(run_profile, "metadata writer start requested");
     if let Err(error) = runtime.start_metadata_writer() {
         eprintln!(
             "Sustain: async metadata writer could not start ({error:?}); tag writes will run on the main thread."
         );
     }
-    tlog!("metadata writer running");
+    sustain_profiler::profile_mark!(run_profile, "metadata writer started");
 
     // Start the artwork fetcher and install its result sink. The
     // fetcher only runs when a remote metadata service was installed
@@ -264,7 +255,7 @@ pub fn run(
     let (fetch_result_tx, fetch_result_rx) =
         async_channel::unbounded::<sustain_app_runtime::ArtworkFetchResult>();
     runtime.set_artwork_fetch_result_sink(fetch_result_tx);
-    tlog!("about to start artwork fetcher");
+    sustain_profiler::profile_mark!(run_profile, "artwork fetcher start requested");
     if let Err(error) = runtime.start_artwork_fetcher() {
         // The only legitimate failure here is "no remote metadata
         // service installed", which is a normal state for builds
@@ -275,16 +266,16 @@ pub fn run(
         );
     }
 
-    tlog!("artwork fetcher started");
+    sustain_profiler::profile_mark!(run_profile, "artwork fetcher started");
 
     let (youtube_audio_result_tx, youtube_audio_result_rx) =
         async_channel::unbounded::<sustain_app_runtime::YoutubeAudioDownloadResult>();
     runtime.set_youtube_audio_download_result_sink(youtube_audio_result_tx);
-    tlog!("about to start YouTube audio downloader");
+    sustain_profiler::profile_mark!(run_profile, "YouTube audio downloader start requested");
     if let Err(error) = runtime.start_youtube_audio_downloader() {
         eprintln!("Sustain: YouTube audio replacement disabled ({error:?}).");
     }
-    tlog!("YouTube audio downloader started");
+    sustain_profiler::profile_mark!(run_profile, "YouTube audio downloader started");
 
     // Install the shared track-updated channel BEFORE either scheduler
     // is started so each captures a live sender. The UI shell drains
@@ -329,9 +320,12 @@ pub fn run(
     runtime.set_online_progress_sink(online_progress_tx);
     if runtime.library_hydration_state() == LibraryHydrationState::Ready {
         start_background_schedulers(&mut runtime);
-        tlog!("background schedulers started");
+        sustain_profiler::profile_mark!(run_profile, "background schedulers started");
     } else {
-        tlog!("background schedulers deferred until library hydration");
+        sustain_profiler::profile_mark!(
+            run_profile,
+            "background schedulers deferred until library hydration"
+        );
     }
 
     let runtime = Rc::new(RefCell::new(runtime));
@@ -346,7 +340,7 @@ pub fn run(
     // main thread, where they can safely touch the runtime.
     let (mpris_command_tx, mpris_command_rx) =
         async_channel::unbounded::<sustain_desktop::MprisCommand>();
-    tlog!("about to start mpris");
+    sustain_profiler::profile_mark!(run_profile, "MPRIS start requested");
     let mpris_service = match start_mpris(mpris_command_tx) {
         Ok(service) => Some(Rc::new(service)),
         Err(error) => {
@@ -389,15 +383,12 @@ pub fn run(
     let library_hydration_result_rx_holder: Rc<RefCell<Option<LibraryHydrationResultReceiver>>> =
         Rc::new(RefCell::new(Some(library_hydration_result_rx)));
 
-    tlog!("mpris done; about to connect_activate");
+    sustain_profiler::profile_mark!(run_profile, "connect_activate installation starting");
     app.connect_activate({
         let runtime = runtime.clone();
         move |app| {
-            let tact = std::time::Instant::now();
-            eprintln!(
-                "[TIMING]   activate: entered (run+0={:.1}ms)",
-                trun.elapsed().as_secs_f64() * 1000.0
-            );
+            let activate_profile = sustain_profiler::ProfileScope::start();
+            sustain_profiler::profile_mark!(activate_profile, "activate: entered");
             let mpris_command_rx = mpris_command_rx_holder.borrow_mut().take();
             let writer_event_rx = writer_event_rx_holder.borrow_mut().take();
             let fetch_result_rx = fetch_result_rx_holder.borrow_mut().take();
@@ -437,33 +428,42 @@ pub fn run(
                     library_hydration_result_rx,
                 },
             );
-            eprintln!(
-                "[TIMING]   activate: build_main_window returned at {:.1}ms",
-                tact.elapsed().as_secs_f64() * 1000.0
-            );
+            if let Some(profile) = activate_profile {
+                sustain_profiler::profile!(
+                    "activate: build_main_window returned at {:.1}ms",
+                    profile.elapsed_ms()
+                );
+            }
             main_window.window.present();
-            eprintln!(
-                "[TIMING]   activate: window.present() returned at {:.1}ms",
-                tact.elapsed().as_secs_f64() * 1000.0
-            );
+            if let Some(profile) = activate_profile {
+                sustain_profiler::profile!(
+                    "activate: window.present() returned at {:.1}ms",
+                    profile.elapsed_ms()
+                );
+            }
             // Fires after the main loop has finished its current dispatch
             // batch — i.e. roughly when the window has had a chance to map.
-            let tact_for_idle = tact;
+            let profile_for_idle = activate_profile;
             gtk::glib::idle_add_local_once(move || {
-                eprintln!(
-                    "[TIMING]   activate: first idle reached at {:.1}ms",
-                    tact_for_idle.elapsed().as_secs_f64() * 1000.0
-                );
+                if let Some(profile) = profile_for_idle {
+                    sustain_profiler::profile!(
+                        "activate: first idle reached at {:.1}ms",
+                        profile.elapsed_ms()
+                    );
+                }
                 main_window.run_deferred_startup();
-                eprintln!(
-                    "[TIMING]   activate: deferred startup dispatched (library hydration kicked off) at {:.1}ms",
-                    tact_for_idle.elapsed().as_secs_f64() * 1000.0
-                );
+                if let Some(profile) = profile_for_idle {
+                    sustain_profiler::profile!(
+                        "activate: deferred startup dispatched (library hydration kicked off) at {:.1}ms",
+                        profile.elapsed_ms()
+                    );
+                }
             });
         }
     });
+    sustain_profiler::profile_mark!(run_profile, "connect_activate installed");
 
-    tlog!("about to enter app.run() (gtk main loop)");
+    sustain_profiler::profile_mark!(run_profile, "app.run() entered");
     app.run_with_args(&gtk_arguments);
 
     // Stop producers before joining the tag-mirror actor. Canonical edits and

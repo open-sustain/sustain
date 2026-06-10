@@ -67,7 +67,7 @@ pub(super) fn install_library_hydration_result_consumer(
             run_once(&post_hydration_startup);
             return;
         }
-        eprintln!("[TIMING]   hydrate: SQLite snapshot adopted; publishing Songs rows");
+        sustain_profiler::profile!("hydrate: SQLite snapshot adopted; publishing Songs rows");
         publish_initial_library_rows(InitialLibraryRowsPublication {
             runtime,
             songs_table,
@@ -92,7 +92,7 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
         current_search_text,
         post_hydration_startup,
     } = publication;
-    let started = std::time::Instant::now();
+    let hydration_profile = sustain_profiler::ProfileScope::start();
     let normalized_search = normalize_query(&current_search_text.borrow());
     let (total_tracks, honor_sort_tags) = {
         let runtime = runtime.borrow();
@@ -167,10 +167,14 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
         sidebar.refresh_silently();
         update_play_pause_sensitivity(&titlebar, &runtime.borrow());
         run_once(&post_hydration_startup);
-        eprintln!(
-            "[TIMING]   hydrate: Songs rows published in {:.1}ms",
-            started.elapsed().as_secs_f64() * 1000.0
-        );
+        if let Some(profile) = hydration_profile {
+            sustain_profiler::profile!(
+                "hydrate: Songs rows published ({} visible / {} total) in {:.1}ms",
+                visible_count.get(),
+                total_tracks,
+                profile.elapsed_ms()
+            );
+        }
         glib::ControlFlow::Break
     });
 }

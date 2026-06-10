@@ -15,6 +15,7 @@ members = [
   "crates/metadata_remote",
   "crates/pioneer",
   "crates/playback",
+  "crates/profiler",
   "crates/search",
   "crates/settings",
   "crates/smart_shuffle",

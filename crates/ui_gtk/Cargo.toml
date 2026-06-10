@@ -18,6 +18,7 @@ rusqlite = { version = "0.39.0", features = ["bundled"] }
 sustain-app-runtime = { path = "../app_runtime" }
 sustain-artwork = { path = "../artwork" }
 sustain-desktop = { path = "../desktop" }
+sustain-profiler = { path = "../profiler" }
 
 [lints]
 workspace = true

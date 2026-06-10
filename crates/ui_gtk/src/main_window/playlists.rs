@@ -130,7 +130,10 @@ fn rebuild_playlists_view(
     sidebar_selection: Option<SidebarSelection>,
     search_text: &str,
 ) {
+    let rows_profile = sustain_profiler::ProfileScope::start();
     let rows = playlist_table_rows_for(runtime, sidebar_selection, search_text);
+    let row_count = rows.len();
+    sustain_profiler::profile_mark!(rows_profile, "playlist rows built ({} rows)", row_count);
     let summary = playlist_rows_summary(&rows);
     playlists_header.set_state(playlists_header_state_for(
         runtime,
@@ -142,7 +145,13 @@ fn rebuild_playlists_view(
         summary.duration_seconds,
         summary.size_bytes,
     );
+    let replace_profile = sustain_profiler::ProfileScope::start();
     playlists_table.replace_rows(rows);
+    sustain_profiler::profile_mark!(
+        replace_profile,
+        "playlist table replace_rows ({} rows)",
+        row_count
+    );
 }
 
 #[derive(Clone, Copy)]

@@ -172,7 +172,7 @@ impl MprisService {
         let (update_tx, update_rx) = async_channel::unbounded::<MprisUpdate>();
         let (shutdown_tx, shutdown_rx) = async_channel::bounded::<()>(1);
         let command_sink = Arc::new(config.command_sink);
-        let started = Instant::now();
+        let profiler = sustain_profiler::ProfileScope::start();
 
         let worker = thread::Builder::new()
             .name("sustain-mpris".to_owned())
@@ -201,10 +201,12 @@ impl MprisService {
                             return;
                         }
                     };
-                    eprintln!(
-                        "[TIMING]     mpris: ready at {:.1}ms (off the cold-start path)",
-                        started.elapsed().as_secs_f64() * 1000.0
-                    );
+                    if let Some(profiler) = profiler {
+                        sustain_profiler::profile!(
+                            "mpris: ready at {:.1}ms (off the cold-start path)",
+                            profiler.elapsed_ms()
+                        );
+                    }
 
                     let player_ref: InterfaceRef<PlayerInterface> =
                         match connection.object_server().interface(OBJECT_PATH).await {
