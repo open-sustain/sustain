@@ -837,7 +837,7 @@ fn build_standalone_sidebar_row_parts(
 /// The whole row is the click/focus target. It is focusable so the
 /// Left/Right arrow keys can drive the fold once the header is focused.
 fn build_section_header(text: &str) -> (gtk::Box, gtk::Image) {
-    let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     header.add_css_class("playlist-sidebar-section-header-row");
     header.set_focusable(true);
 
