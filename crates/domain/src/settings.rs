@@ -112,10 +112,9 @@ pub struct UiSettings {
     /// the sidebar does not zero this out, so re-expanding restores
     /// the same width.
     pub sidebar_width: Option<u32>,
-    /// Whether the Library disclosure section is folded shut. Independent of
-    /// [`Self::playlists_section_collapsed`];
-    /// folding only hides the section's rows, it does not change which
-    /// view is selected.
+    /// Legacy Library fold state. The GTK sidebar keeps Library always
+    /// visible and writes this as `false`; retained so older settings files
+    /// still parse without a migration layer.
     pub library_section_collapsed: bool,
     /// Whether the Playlists disclosure section (the playlist tree) is
     /// folded shut. Independent of [`Self::library_section_collapsed`].

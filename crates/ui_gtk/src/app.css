@@ -629,32 +629,30 @@ listview.album-track-table > row:focus-visible {
     color: #e66100;
 }
 
-/* Sidebar section header labels. Small and muted by default; hover strengthens
-   the text and caret without adding another background layer. */
+/* Sidebar section header labels. Small, muted, and bold. Static section
+   headers stay inert; the Playlists disclosure header strengthens text and
+   caret on hover. */
 .playlist-sidebar-section-header {
     color: alpha(@theme_fg_color, 0.55);
     font-size: 0.85em;
+    font-weight: bold;
     letter-spacing: 0;
 }
 
-/* Clickable disclosure row wrapping a section's caret and label. The
-   whole row is the fold toggle (click, or Enter/Space when focused);
-   Left folds and Right unfolds. Margins reproduce the old header
-   spacing — breathing room from the row above and separation from the
-   first row underneath — while the inner padding keeps the click/hover
-   target a comfortable height. */
+/* Shared section-header row geometry. Static headers only use this spacing;
+   the Playlists disclosure header also uses it as the click/focus target. */
 .playlist-sidebar-section-header-row {
     margin: 10px 8px 4px 8px;
     padding: 2px 4px;
     border-radius: 4px;
 }
 
-.playlist-sidebar-section-header-row:hover .playlist-sidebar-section-header,
-.playlist-sidebar-section-header-row:hover .playlist-sidebar-section-caret {
+.playlist-sidebar-section-header-toggle:hover .playlist-sidebar-section-header,
+.playlist-sidebar-section-header-toggle:hover .playlist-sidebar-section-caret {
     color: alpha(@theme_fg_color, 0.78);
 }
 
-.playlist-sidebar-section-header-row:focus-visible {
+.playlist-sidebar-section-header-toggle:focus-visible {
     outline: 1px solid alpha(@theme_fg_color, 0.3);
     outline-offset: -1px;
 }
@@ -1049,14 +1047,6 @@ columnview.track-table listview row:selected .track-table-status-missing,
 .suggestion-list row {
     padding: 4px 8px;
     border-radius: 4px;
-}
-
-/* Devices section + device-sync panel (#23/#24). Theme-aware: derived
-   from @theme_fg_color/@theme_selected_bg_color so they read correctly
-   in both light and dark and follow the system accent. */
-.playlist-sidebar-devices-empty {
-    margin: 2px 8px 4px 28px;
-    font-size: 0.9em;
 }
 
 .device-sync-title {

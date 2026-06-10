@@ -140,11 +140,11 @@ pub(crate) struct PlaylistSidebar {
     analysis_enabled_query: AnalysisEnabledQueryHolder,
     online_busy_query: OnlineBusyQueryHolder,
     pending_rename: Rc<RefCell<Option<PlaylistItem>>>,
-    /// Fold state of the Library disclosure section. Read back at
-    /// shutdown so the choice persists across launches.
-    library_section_collapsed: Rc<Cell<bool>>,
     /// Fold state of the Playlists disclosure section.
     playlists_section_collapsed: Rc<Cell<bool>>,
+    /// Static header for the dynamically-rebuilt Devices rows. Hidden with
+    /// the body while there are no device rows.
+    devices_header: gtk::Box,
     /// Container holding the dynamically-rebuilt Devices rows.
     devices_body: gtk::Box,
     on_device_selected: Rc<RefCell<Option<SidebarDeviceSelectedCallback>>>,
@@ -165,7 +165,7 @@ pub(crate) struct PlaylistSidebar {
 impl PlaylistSidebar {
     pub(crate) fn new(
         runtime: SharedRuntime,
-        library_collapsed: bool,
+        _library_collapsed: bool,
         playlists_collapsed: bool,
     ) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -173,7 +173,7 @@ impl PlaylistSidebar {
         root.set_vexpand(true);
         root.set_size_request(SIDEBAR_MIN_WIDTH, -1);
 
-        let (library_header, library_caret) = build_section_header("Library");
+        let library_header = build_static_section_header("Library");
         root.append(&library_header);
 
         let music_row = build_standalone_sidebar_row("Music", "audio-x-generic-symbolic");
@@ -195,24 +195,16 @@ impl PlaylistSidebar {
         root.append(&statistics_row);
 
         // Devices section: connected USB sticks / SD cards. Sits between
-        // Library and Playlists; the playlist list view below keeps
-        // vexpand, so this group stays a fixed-height block pinned under
-        // the library rows while the playlists absorb the remaining
-        // space. Rows are rebuilt dynamically from device discovery,
-        // which runs after first-frame to keep startup cheap. Folded
-        // state is not persisted — the section defaults to expanded.
-        let (devices_header, devices_caret) = build_section_header("Devices");
+        // Library and Playlists only when relevant hardware is present.
+        // Rows are rebuilt dynamically from device discovery, which runs
+        // after first-frame to keep startup cheap.
+        let devices_header = build_static_section_header("Devices");
+        devices_header.set_visible(false);
         root.append(&devices_header);
         let devices_body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         devices_body.add_css_class("playlist-sidebar-devices");
+        devices_body.set_visible(false);
         root.append(&devices_body);
-        let devices_section_collapsed = Rc::new(Cell::new(false));
-        connect_section_toggle(
-            &devices_header,
-            &devices_caret,
-            devices_section_collapsed,
-            vec![devices_body.clone().upcast::<gtk::Widget>()],
-        );
         let on_device_selected: Rc<RefCell<Option<SidebarDeviceSelectedCallback>>> =
             Rc::new(RefCell::new(None));
         let on_cd_selected: Rc<RefCell<Option<SidebarCdSelectedCallback>>> =
@@ -223,7 +215,7 @@ impl PlaylistSidebar {
         let active_transient_row: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
         let persistent_selection = Rc::new(Cell::new(SidebarSelection::Music));
 
-        let (playlists_header, playlists_caret) = build_section_header("Playlists");
+        let (playlists_header, playlists_caret) = build_disclosure_section_header("Playlists");
         root.append(&playlists_header);
 
         let tree_model = build_tree_model(&runtime.borrow());
@@ -267,29 +259,11 @@ impl PlaylistSidebar {
         scroller.set_child(Some(&list_view));
         root.append(&scroller);
 
-        // Wire the two disclosure sections. Folding hides the section's
-        // rows and flips the caret; the state lives in a cell read back
-        // at shutdown so the choice persists across launches. The
-        // sections are independent.
-        //
-        // Library folds away its fixed-height rows, so collapsing it
-        // lets Playlists rise to fill the freed space. Playlists folds the
-        // list view itself rather than the enclosing scroller: the scroller
+        // Wire the Playlists disclosure section. Folding hides the list view
+        // itself rather than the enclosing scroller: the scroller
         // keeps `vexpand`, so the now-empty area is held by the scroller
         // instead of letting the list float up under the header.
-        let library_section_collapsed = Rc::new(Cell::new(library_collapsed));
         let playlists_section_collapsed = Rc::new(Cell::new(playlists_collapsed));
-        connect_section_toggle(
-            &library_header,
-            &library_caret,
-            library_section_collapsed.clone(),
-            vec![
-                music_row.clone().upcast::<gtk::Widget>(),
-                albums_row.clone().upcast::<gtk::Widget>(),
-                duplicates_row.clone().upcast::<gtk::Widget>(),
-                statistics_row.clone().upcast::<gtk::Widget>(),
-            ],
-        );
         connect_section_toggle(
             &playlists_header,
             &playlists_caret,
@@ -401,8 +375,8 @@ impl PlaylistSidebar {
             analysis_enabled_query,
             online_busy_query,
             pending_rename,
-            library_section_collapsed,
             playlists_section_collapsed,
+            devices_header,
             devices_body,
             on_device_selected,
             on_cd_selected,
@@ -413,10 +387,10 @@ impl PlaylistSidebar {
         }
     }
 
-    /// Whether the Library disclosure section is currently folded shut.
-    /// Read at shutdown to persist the fold state.
+    /// Library is a static section now; report expanded so any old persisted
+    /// collapsed state is cleared on the next settings save.
     pub(crate) fn library_section_collapsed(&self) -> bool {
-        self.library_section_collapsed.get()
+        false
     }
 
     /// Whether the Playlists disclosure section is currently folded shut.
@@ -525,13 +499,11 @@ impl PlaylistSidebar {
             self.devices_body.remove(&child);
         }
         self.active_transient_row.replace(None);
+        let has_devices = !entries.is_empty();
+        self.devices_header.set_visible(has_devices);
+        self.devices_body.set_visible(has_devices);
 
         if entries.is_empty() {
-            let empty = gtk::Label::new(Some("No devices connected"));
-            empty.add_css_class("playlist-sidebar-devices-empty");
-            empty.add_css_class("dim-label");
-            empty.set_xalign(0.0);
-            self.devices_body.append(&empty);
             return;
         }
 
@@ -828,30 +800,49 @@ fn build_standalone_sidebar_row_parts(
     StandaloneSidebarRowParts { row, content }
 }
 
-/// Builds a clickable disclosure header for a sidebar section — the small
-/// labels that introduce the Library, Devices, and Playlists groups, each
-/// prefixed by a caret that reflects (and toggles) whether
-/// the section is folded. Returns the header row and its caret image;
-/// the caller wires the fold behaviour via [`connect_section_toggle`].
+/// Builds a non-interactive sidebar section header, used for sections that
+/// are always expanded when visible.
+fn build_static_section_header(text: &str) -> gtk::Box {
+    let header = build_section_header_row();
+    let label = build_section_header_label(text);
+    header.append(&label);
+    header
+}
+
+/// Builds a clickable disclosure header for a sidebar section. The small
+/// label is followed by a caret that reflects (and toggles) whether the
+/// section is folded. Returns the header row and its caret image; the caller
+/// wires the fold behaviour via [`connect_section_toggle`].
 ///
 /// The whole row is the click/focus target. It is focusable so the
 /// Left/Right arrow keys can drive the fold once the header is focused.
-fn build_section_header(text: &str) -> (gtk::Box, gtk::Image) {
-    let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-    header.add_css_class("playlist-sidebar-section-header-row");
+fn build_disclosure_section_header(text: &str) -> (gtk::Box, gtk::Image) {
+    let header = build_section_header_row();
+    header.add_css_class("playlist-sidebar-section-header-toggle");
     header.set_focusable(true);
+
+    let label = build_section_header_label(text);
+    header.append(&label);
 
     let caret = gtk::Image::from_icon_name(SECTION_EXPANDED_ICON);
     caret.add_css_class("playlist-sidebar-section-caret");
+    header.append(&caret);
 
+    (header, caret)
+}
+
+fn build_section_header_row() -> gtk::Box {
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    header.add_css_class("playlist-sidebar-section-header-row");
+    header.set_hexpand(true);
+    header
+}
+
+fn build_section_header_label(text: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class("playlist-sidebar-section-header");
     label.set_xalign(0.0);
-    label.set_hexpand(true);
-
-    header.append(&caret);
-    header.append(&label);
-    (header, caret)
+    label
 }
 
 /// Caret icon for an expanded (open) disclosure section — points down.
