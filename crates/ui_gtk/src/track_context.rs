@@ -33,10 +33,8 @@ pub(crate) type TrackAnalyzeEnabledQuery = Rc<dyn Fn(AnalysisCapability) -> bool
 pub(crate) type TrackRetrieveBusyQuery = Rc<dyn Fn() -> bool>;
 pub(crate) type YoutubeAudioReplacementCallback = Rc<dyn Fn(TrackId)>;
 type PendingConfirmCallback = Rc<RefCell<Option<Box<dyn FnOnce(Vec<TrackId>)>>>>;
-const ADD_TO_PLAYLIST_MAX_VISIBLE_HEIGHT: i32 = 360;
-const ADD_TO_PLAYLIST_MAX_LABEL_CHARS: i32 = 48;
 const TRACK_CONTEXT_ACTION_GROUP: &str = "track-context";
-const PLAYLIST_LIST_CUSTOM_ID: &str = "playlist-list";
+const ADD_TO_PLAYLIST_ACTION: &str = "add-to-playlist";
 
 #[derive(Clone, Debug)]
 pub(crate) struct TrackActionInvocation {
@@ -528,14 +526,6 @@ impl TrackRowContextMenu {
         // that only after parenting so the tracker sees the popup-local group
         // and inherited application actions from the anchor hierarchy.
         popover.set_menu_model(Some(&menu));
-        if let Some(add) = &self.add_to_playlist {
-            let playlist_list =
-                build_add_to_playlist_custom_child(add, &popover, invocation.selected_track_ids);
-            assert!(
-                popover.add_child(&playlist_list, PLAYLIST_LIST_CUSTOM_ID),
-                "playlist-list custom menu child must match its model placeholder"
-            );
-        }
 
         let popover_for_close = popover.clone();
         let invocation_state = self.invocation_state.clone();
@@ -571,10 +561,15 @@ impl TrackRowContextMenu {
         invocation: &TrackActionInvocation,
     ) -> gio::Menu {
         let root = gio::Menu::new();
-        if self.add_to_playlist.is_some() {
+        if let Some(add) = &self.add_to_playlist {
             root.append_submenu(
                 Some("Add to Playlist\u{2026}"),
-                &add_to_playlist_submenu_model(),
+                &add_to_playlist_submenu_model(
+                    add,
+                    action_group,
+                    local_action_group,
+                    &invocation.selected_track_ids,
+                ),
             );
         }
 
@@ -681,11 +676,44 @@ fn track_context_popover() -> gtk::PopoverMenu {
         .build()
 }
 
-fn add_to_playlist_submenu_model() -> gio::Menu {
+fn add_to_playlist_submenu_model(
+    action: &AddToPlaylistAction,
+    action_group: &gio::SimpleActionGroup,
+    local_action_group: &str,
+    track_ids: &[TrackId],
+) -> gio::Menu {
     let menu = gio::Menu::new();
-    let item = gio::MenuItem::new(None, None);
-    item.set_attribute_value("custom", Some(&PLAYLIST_LIST_CUSTOM_ID.to_variant()));
-    menu.append_item(&item);
+
+    let entries = (action.provider)();
+    if entries.is_empty() {
+        menu.append(Some("No playlists."), None::<&str>);
+        return menu;
+    }
+
+    let callback = action.callback.clone();
+    let track_ids = track_ids.to_vec();
+    let add_action = gio::SimpleAction::new(ADD_TO_PLAYLIST_ACTION, Some(glib::VariantTy::INT64));
+    add_action.connect_activate(move |_action, parameter| {
+        let Some(playlist_id) = parameter
+            .and_then(glib::Variant::get::<i64>)
+            .and_then(PlaylistId::new)
+        else {
+            return;
+        };
+        callback(playlist_id, track_ids.clone());
+    });
+    action_group.add_action(&add_action);
+
+    let detailed_action = format!("{local_action_group}.{ADD_TO_PLAYLIST_ACTION}");
+    for entry in entries {
+        let item = gio::MenuItem::new(Some(&entry.display_path), None);
+        item.set_action_and_target_value(
+            Some(&detailed_action),
+            Some(&entry.playlist_id.get().to_variant()),
+        );
+        menu.append_item(&item);
+    }
+
     menu
 }
 
@@ -779,59 +807,6 @@ fn add_local_action(
     action.set_enabled(enabled);
     action.connect_activate(move |_action, _parameter| callback());
     action_group.add_action(&action);
-}
-
-fn build_add_to_playlist_custom_child(
-    action: &AddToPlaylistAction,
-    popover: &gtk::PopoverMenu,
-    track_ids: Vec<TrackId>,
-) -> gtk::Widget {
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    content.add_css_class("track-context-menu");
-    content.add_css_class("track-context-playlist-list");
-
-    let entries = (action.provider)();
-    if entries.is_empty() {
-        let empty = gtk::Label::new(Some("No playlists."));
-        empty.add_css_class("dim-label");
-        empty.set_margin_top(6);
-        empty.set_margin_end(8);
-        empty.set_margin_bottom(6);
-        empty.set_margin_start(8);
-        content.append(&empty);
-    } else {
-        for entry in entries {
-            let button = playlist_button(&entry.display_path);
-            let popover = popover.clone();
-            let callback = action.callback.clone();
-            let track_ids = track_ids.clone();
-            button.connect_clicked(move |_| {
-                popover.popdown();
-                callback(entry.playlist_id, track_ids.clone());
-            });
-            content.append(&button);
-        }
-    }
-
-    let scroller = gtk::ScrolledWindow::new();
-    scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    scroller.set_propagate_natural_height(true);
-    scroller.set_max_content_height(ADD_TO_PLAYLIST_MAX_VISIBLE_HEIGHT);
-    scroller.set_child(Some(&content));
-    scroller.upcast()
-}
-
-fn playlist_button(label_text: &str) -> gtk::Button {
-    let label = gtk::Label::new(Some(label_text));
-    label.set_xalign(0.0);
-    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    label.set_max_width_chars(ADD_TO_PLAYLIST_MAX_LABEL_CHARS);
-    let button = gtk::Button::new();
-    button.add_css_class("flat");
-    button.add_css_class("track-context-menu-item");
-    button.set_child(Some(&label));
-    button.set_hexpand(true);
-    button
 }
 
 fn run_context_action(
@@ -950,12 +925,15 @@ mod tests {
     };
 
     use gtk::prelude::*;
-    use sustain_app_runtime::TrackId;
+    use gtk::{gio, glib};
+    use sustain_app_runtime::{PlaylistId, TrackId};
 
     use super::{
-        TrackActionCallback, TrackActionInvocation, TrackActionVisibility, TrackContextAction,
-        TrackContextActionId, TrackContextActionSection, TrackContextInvocationState,
-        TrackSelectionRequirement, track_context_popover, trash_confirmation_detail,
+        ADD_TO_PLAYLIST_ACTION, AddToPlaylistAction, AddToPlaylistEntry, TrackActionCallback,
+        TrackActionInvocation, TrackActionVisibility, TrackContextAction, TrackContextActionId,
+        TrackContextActionSection, TrackContextActionSet, TrackContextInvocationState,
+        TrackRowContextMenu, TrackSelectionRequirement, add_to_playlist_submenu_model,
+        track_context_popover, trash_confirmation_detail,
     };
 
     #[test]
@@ -1113,6 +1091,106 @@ mod tests {
     }
 
     #[test]
+    fn add_to_playlist_submenu_uses_parameterized_model_items() {
+        let action = add_to_playlist_action(vec![
+            add_to_playlist_entry(10, "Folder / Playlist"),
+            add_to_playlist_entry(11, "Other"),
+        ]);
+        let action_group = gio::SimpleActionGroup::new();
+        let selected_track_id = track_id(4);
+
+        let menu = add_to_playlist_submenu_model(
+            &action,
+            &action_group,
+            "track-context-7",
+            &[selected_track_id],
+        );
+
+        assert_eq!(menu.n_items(), 2);
+        assert_eq!(
+            menu.item_attribute_value(0, "label", Some(glib::VariantTy::STRING))
+                .and_then(|value| value.get::<String>()),
+            Some("Folder / Playlist".to_owned())
+        );
+        assert_eq!(
+            menu.item_attribute_value(0, "action", Some(glib::VariantTy::STRING))
+                .and_then(|value| value.get::<String>()),
+            Some("track-context-7.add-to-playlist".to_owned())
+        );
+        assert_eq!(
+            menu.item_attribute_value(0, "target", Some(glib::VariantTy::INT64))
+                .and_then(|value| value.get::<i64>()),
+            Some(10)
+        );
+        assert!(
+            menu.item_attribute_value(0, "custom", None).is_none(),
+            "playlist submenu must not rely on GtkPopoverMenu custom children"
+        );
+    }
+
+    #[test]
+    fn add_to_playlist_action_invokes_callback_with_target_playlist() {
+        let chosen = Rc::new(RefCell::new(None));
+        let chosen_for_callback = chosen.clone();
+        let action = AddToPlaylistAction {
+            provider: Rc::new(|| vec![add_to_playlist_entry(10, "Playlist")]),
+            callback: Rc::new(move |playlist_id, track_ids| {
+                chosen_for_callback.replace(Some((playlist_id, track_ids)));
+            }),
+        };
+        let action_group = gio::SimpleActionGroup::new();
+        let selected_track_id = track_id(4);
+
+        let _menu = add_to_playlist_submenu_model(
+            &action,
+            &action_group,
+            "track-context-7",
+            &[selected_track_id],
+        );
+        action_group.activate_action(ADD_TO_PLAYLIST_ACTION, Some(&10_i64.to_variant()));
+
+        assert_eq!(
+            *chosen.borrow(),
+            Some((playlist_id(10), vec![selected_track_id]))
+        );
+    }
+
+    #[test]
+    fn track_context_popup_with_playlist_submenu_does_not_panic() {
+        let ran = crate::test_support::with_gtk(|| {
+            let window = gtk::Window::new();
+            let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            window.set_child(Some(&anchor));
+            window.present();
+
+            let menu = TrackRowContextMenu::new(
+                TrackContextActionSet::new(Vec::new()),
+                window.clone(),
+                TrackContextInvocationState::default(),
+            )
+            .with_add_to_playlist(
+                Rc::new(|| vec![add_to_playlist_entry(10, "Playlist")]),
+                Rc::new(|_playlist_id, _track_ids| {}),
+            );
+
+            menu.popup_at(vec![track_id(4)], vec![track_id(4)], &anchor, 0.0, 0.0);
+            let popover = descendant_of_type(anchor.upcast_ref(), "GtkPopoverMenu")
+                .expect("track context popover was parented to the anchor");
+            popover
+                .downcast::<gtk::Popover>()
+                .expect("GtkPopoverMenu is a GtkPopover")
+                .popdown();
+
+            let ctx = glib::MainContext::default();
+            while ctx.iteration(false) {}
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
     fn get_info_accepts_multi_selection() {
         let action = TrackContextAction::get_info(no_op_callback());
         let one = TrackId::new(1).expect("positive track id");
@@ -1237,6 +1315,28 @@ mod tests {
                 *calls.borrow_mut() += 1;
             }
         })
+    }
+
+    fn add_to_playlist_action(entries: Vec<AddToPlaylistEntry>) -> AddToPlaylistAction {
+        AddToPlaylistAction {
+            provider: Rc::new(move || entries.clone()),
+            callback: Rc::new(|_playlist_id, _track_ids| {}),
+        }
+    }
+
+    fn add_to_playlist_entry(id: i64, display_path: &str) -> AddToPlaylistEntry {
+        AddToPlaylistEntry {
+            playlist_id: playlist_id(id),
+            display_path: display_path.to_owned(),
+        }
+    }
+
+    fn track_id(value: i64) -> TrackId {
+        TrackId::new(value).expect("positive track id")
+    }
+
+    fn playlist_id(value: i64) -> PlaylistId {
+        PlaylistId::new(value).expect("positive playlist id")
     }
 
     fn always_visible() -> TrackActionVisibility {
