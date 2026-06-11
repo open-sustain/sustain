@@ -29,8 +29,34 @@
     border-radius: 10px;
 }
 
-.media-control {
-    opacity: 0.90;
+button.media-control {
+    background: none;
+    border: none;
+    box-shadow: none;
+    color: alpha(@theme_fg_color, 0.78);
+    opacity: 1;
+}
+
+button.media-control:hover,
+button.media-control:active,
+button.media-control:focus {
+    background: none;
+    border: none;
+    box-shadow: none;
+    outline: 0 solid transparent;
+    color: alpha(@theme_fg_color, 0.78);
+}
+
+button.media-control:active {
+    color: alpha(@theme_fg_color, 0.58);
+}
+
+button.media-control:focus-visible {
+    color: alpha(@theme_fg_color, 0.78);
+}
+
+button.media-control:disabled {
+    color: alpha(@theme_fg_color, 0.32);
 }
 
 .now-playing-area {
@@ -287,10 +313,16 @@ button.preferences-tab-button:checked:hover {
     background: transparent;
     border: none;
     box-shadow: none;
+    outline: 0 solid transparent;
 }
 
 button.preferences-tab-button:hover {
     opacity: 0.85;
+}
+
+button.preferences-tab-button:focus-visible {
+    color: @theme_selected_bg_color;
+    opacity: 1.0;
 }
 
 button.preferences-tab-button:checked {

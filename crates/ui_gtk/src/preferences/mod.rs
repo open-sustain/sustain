@@ -282,6 +282,7 @@ fn open_preferences_window(
     window.add_controller(key_controller);
 
     window.present();
+    focus_visible_preferences_page(&stack);
 }
 
 /// Builds the headerless drag surface that combines the three icon-above-label
@@ -385,8 +386,18 @@ fn build_tab_button(icon_name: &str, label_text: &str) -> gtk::ToggleButton {
     let button = gtk::ToggleButton::new();
     button.add_css_class("flat");
     button.add_css_class("preferences-tab-button");
+    button.set_focus_on_click(false);
     button.set_child(Some(&content));
     button
+}
+
+fn focus_visible_preferences_page(stack: &gtk::Stack) {
+    let stack = stack.clone();
+    glib::idle_add_local_once(move || {
+        if let Some(page) = stack.visible_child() {
+            let _focused = page.child_focus(gtk::DirectionType::TabForward);
+        }
+    });
 }
 
 fn wire_tab_button(button: &gtk::ToggleButton, stack: &gtk::Stack, page_name: &'static str) {

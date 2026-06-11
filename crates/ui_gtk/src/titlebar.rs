@@ -349,6 +349,7 @@ fn media_icon_button_from_image(icon: &gtk::Image, tooltip: &str) -> gtk::Button
     button.set_tooltip_text(Some(tooltip));
     button.add_css_class("flat");
     button.add_css_class("media-control");
+    button.set_focus_on_click(false);
     set_titlebar_control_height(&button);
     button
 }
