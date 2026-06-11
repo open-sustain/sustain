@@ -29,6 +29,7 @@ const MAX_YOUTUBE_DOWNLOAD_RUNTIME: Duration = Duration::from_secs(5 * 60);
 const MAX_YOUTUBE_STAGED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_YOUTUBE_OUTPUT_PATH_BYTES: u64 = 4096;
 const MAX_YOUTUBE_STAGED_ENTRIES: usize = 1024;
+const YOUTUBE_DOWNLOAD_POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub(crate) const MAX_YOUTUBE_REPLACEMENT_DURATION: Duration = Duration::from_secs(20 * 60);
 
 #[derive(Debug)]
@@ -183,7 +184,7 @@ fn download_with_limits(
             terminate_process_group(&mut child);
             return Err(YoutubeAudioDownloadError::Cancelled);
         }
-        if started_at.elapsed() > max_runtime {
+        if started_at.elapsed() >= max_runtime {
             terminate_process_group(&mut child);
             return Err(YoutubeAudioDownloadError::TimedOut);
         }
@@ -200,7 +201,11 @@ fn download_with_limits(
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Ok(None) => thread::sleep(
+                max_runtime
+                    .saturating_sub(started_at.elapsed())
+                    .min(YOUTUBE_DOWNLOAD_POLL_INTERVAL),
+            ),
             Err(_) => {
                 terminate_process_group(&mut child);
                 return Err(YoutubeAudioDownloadError::DownloadFailed);
@@ -381,7 +386,10 @@ sleep 5"#,
             1024,
         );
 
-        assert!(matches!(result, Err(YoutubeAudioDownloadError::TimedOut)));
+        assert!(
+            matches!(result, Err(YoutubeAudioDownloadError::TimedOut)),
+            "unexpected result: {result:?}"
+        );
         assert!(started_at.elapsed() < Duration::from_secs(2));
         assert!(!recorded_staging_directory(&record).exists());
     }
