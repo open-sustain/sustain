@@ -300,7 +300,7 @@ h2 { font-size: clamp(1.7rem, 3.5vw, 2.3rem); margin: 0 0 0.4rem; }
 .limit-head h3 { margin: 0; font-size: 1.12rem; }
 .limit p { margin: 0; color: var(--muted); font-size: 0.98rem; }
 
-/* Status chip: neutral by default (a "maybe"); accent = planned, red = never. */
+/* Status chip: neutral by default (a "maybe"); red = never. */
 .tag {
   flex: none;
   font-size: 0.7rem;
@@ -313,11 +313,6 @@ h2 { font-size: clamp(1.7rem, 3.5vw, 2.3rem); margin: 0 0 0.4rem; }
   border: 1px solid var(--border);
   color: var(--muted);
   background: var(--surface-2);
-}
-.tag--planned {
-  color: var(--accent-2);
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .tag--no {
   color: var(--nope);
