@@ -81,8 +81,8 @@ use std::time::Duration;
 
 use decode::{DecodedAudio, decode_full, decode_window};
 use sustain_dsp::{
-    KeyTemplates, NormalizationConfig, NormalizationMethod, compute_stft, detect_key,
-    detect_spectral_flux_onsets, estimate_bpm_tempogram,
+    CHROMA_FMAX_HZ, KeyTemplates, NormalizationConfig, NormalizationMethod, compute_stft,
+    detect_key, detect_spectral_flux_onsets, emphasize_harmonic, estimate_bpm_tempogram,
     extract_chroma_from_spectrogram_with_options, normalize,
 };
 
@@ -155,6 +155,15 @@ pub use waveform::WaveformTiers;
 /// chroma, and so the detected key, change for many tracks, which must be
 /// re-attempted under the same `FILL_*_IF_NULL` wipe-and-rescan policy.
 ///
+/// Version 9: key detection now runs a median-filter
+/// harmonic-percussive separation (`emphasize_harmonic`, `KEY_HPSS_*`) over
+/// the key STFT before chroma, attenuating percussive/broadband energy that
+/// otherwise spreads across every pitch class and dilutes the profile. Only
+/// the spectrogram feeding chroma changes — STFT, scoring, profiles, and the
+/// chroma mapping are all unchanged — but the chroma, and so the detected key,
+/// shift for many tracks, which re-attempt under the same `FILL_*_IF_NULL`
+/// wipe-and-rescan policy. BPM is untouched.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -172,7 +181,7 @@ pub use waveform::WaveformTiers;
 /// byte-for-byte on the synthetic corpus, so stored values' meaning is
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
-pub const ANALYZER_VERSION: u32 = 8;
+pub const ANALYZER_VERSION: u32 = 9;
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
 /// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default
@@ -288,6 +297,27 @@ const KEY_STFT_FRAME_SIZE: usize = 8192;
 /// Derived from the frame size rather than set independently, so the key
 /// front-end carries no hop tuning of its own.
 const KEY_STFT_HOP_SIZE: usize = KEY_STFT_FRAME_SIZE / 4;
+
+/// HPSS harmonic-estimate median window, as a **time span** (seconds). The
+/// harmonic-percussive separation that runs before chroma takes the median of
+/// each frequency bin over this span to estimate the sustained (harmonic)
+/// component: a tone is stationary across it, a percussive transient is not.
+/// ~200 ms is roughly an eighth-to-sixteenth note — long enough to outlast
+/// transients, short enough not to blur across note changes — and the order
+/// Driedger & Müller use for the time-direction median. It is expressed as a
+/// physical span, not a frame count, so it is invariant to sample rate;
+/// [`Analyzer::key`] converts it to an odd frame count at the key STFT's hop
+/// (≈5 frames at 44.1 kHz). Literature-order, not corpus-tuned.
+const KEY_HPSS_HARMONIC_SPAN_SECS: f32 = 0.20;
+
+/// HPSS percussive-estimate median window, as a **frequency span** (Hz). The
+/// median of each frame over this span estimates the broadband (percussive)
+/// component: wide enough to look past a narrow harmonic peak to the noise
+/// floor, narrow relative to the spacing between harmonics. Expressed as a
+/// physical span so it is invariant to sample rate; [`Analyzer::key`] converts
+/// it to an odd bin count at the key STFT's resolution (≈37 bins at 44.1 kHz).
+/// Literature-order, not corpus-tuned.
+const KEY_HPSS_PERCUSSIVE_SPAN_HZ: f32 = 200.0;
 
 /// BPM resolution (in BPM) the tempogram searches at. 1.0 BPM matches
 /// the upstream default and the resolution our UI displays at.
@@ -439,8 +469,35 @@ impl Analyzer {
     pub fn key(&self) -> Option<MusicalKey> {
         let stft = self.key_stft()?;
         let window = self.bpmkey_audio()?;
+
+        // Suppress percussive/broadband energy before chroma. The HPSS median
+        // windows are physical spans, converted to odd kernel lengths at this
+        // track's sample rate and the key STFT's resolution so the span — not a
+        // frame/bin count — is what stays fixed across sample rates.
+        let sample_rate = window.sample_rate as f32;
+        let freq_res = sample_rate / KEY_STFT_FRAME_SIZE as f32;
+        let time_kernel = odd_kernel(
+            KEY_HPSS_HARMONIC_SPAN_SECS,
+            KEY_STFT_HOP_SIZE as f32 / sample_rate,
+        );
+        let freq_kernel = odd_kernel(KEY_HPSS_PERCUSSIVE_SPAN_HZ, freq_res);
+
+        // Chroma only reads up to `CHROMA_FMAX_HZ`, so HPSS only needs that
+        // band (plus the percussive median's half-window, so the top retained
+        // bin keeps its neighbors). Restricting the spectrogram to it keeps the
+        // separation off the high-frequency bins chroma discards. The prefix
+        // slice preserves bin→frequency indexing, so chroma's output is
+        // identical to running it on the full transform.
+        let cutoff_bin = ((CHROMA_FMAX_HZ / freq_res).ceil() as usize + freq_kernel / 2 + 1)
+            .min(stft.first().map_or(0, Vec::len));
+        let banded: Vec<Vec<f32>> = stft
+            .iter()
+            .map(|frame| frame[..cutoff_bin].to_vec())
+            .collect();
+        let harmonic = emphasize_harmonic(&banded, time_kernel, freq_kernel).ok()?;
+
         let chroma = extract_chroma_from_spectrogram_with_options(
-            stft,
+            &harmonic,
             window.sample_rate,
             KEY_STFT_FRAME_SIZE,
             true,
@@ -660,6 +717,16 @@ fn octave_normalize(mut bpm: f32, min: f32, max: f32) -> f32 {
         bpm /= 2.0;
     }
     bpm
+}
+
+/// Convert a physical span into an **odd** median-filter kernel length (≥ 1) at
+/// the given resolution — `resolution` is seconds-per-frame for a time window
+/// or Hz-per-bin for a frequency window. Odd lengths give the median a single
+/// center sample; an even result is rounded up to the next odd. Used to derive
+/// the HPSS kernels from `KEY_HPSS_*_SPAN_*` at the track's sample rate.
+fn odd_kernel(span: f32, resolution: f32) -> usize {
+    let raw = (span / resolution).round().max(1.0) as usize;
+    raw | 1
 }
 
 /// Normalization config that asks stratum-dsp for an ITU-R BS.1770-4

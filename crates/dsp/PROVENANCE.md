@@ -1,7 +1,10 @@
-# Provenance — vendored DSP
+# Provenance — vendored DSP + Sustain-authored extensions
 
-This crate (`sustain-dsp`) is a **vendored, trimmed** copy of selected modules
-of **stratum-dsp**, not a from-scratch implementation.
+This crate (`sustain-dsp`) began as a **vendored, trimmed** copy of selected
+modules of **stratum-dsp**, and now also carries a small set of **original
+Sustain-authored DSP extensions** (re-derived from the literature, not copied
+from upstream — see "Sustain-authored additions" below). The bulk is vendored;
+the extensions are individually called out.
 
 | | |
 | --- | --- |
@@ -88,6 +91,39 @@ deviations, all recorded so a future upstream change can be re-merged:
   and `AutocorrTempogramResult.strength` are computed and asserted by their own
   modules' tests but read by neither Sustain's consumer nor (post-trim)
   non-test code, so they carry a documented allow rather than being amputated.
+
+## Sustain-authored additions (not vendored)
+
+Original code written for Sustain, living in this crate because it is pure DSP
+that belongs next to the primitives it composes. It was **re-derived from the
+cited literature, with no upstream code copied**, so it has no upstream path to
+re-merge against — when reconciling with a future `stratum-dsp`, treat these
+files as Sustain's own.
+
+| This crate | Origin |
+| --- | --- |
+| `src/features/chroma/hpss.rs` | Sustain-authored. Median-filter harmonic-percussive separation (soft Wiener mask), re-derived from Fitzgerald (2010) and Driedger & Müller (2014). The vendoring deliberately left HPSS out (it was trimmed as unreachable); this is a fresh implementation, not the fork's HPSS, and inherits none of the fork's corpus-fitted constants. Used by `sustain-analysis` on the key path before chroma. |
+
+## License policy for this crate
+
+**Every file in `sustain-dsp` — vendored or Sustain-authored — uses the
+`// SPDX-License-Identifier: MIT OR Apache-2.0` header, matching the crate's
+declared `license = "MIT OR Apache-2.0"`.** This is deliberate and overrides
+the workspace-wide "new `.rs` files are GPL-3.0-or-later" rule in the root
+`AGENTS.md`/`CLAUDE.md`:
+
+- The vendored code keeps its upstream permissive license (the attribution
+  must travel with it).
+- New Sustain-authored DSP added here stays permissive so the crate remains
+  **uniformly MIT/Apache** — a single-license, reusable, mixed-license-free DSP
+  core. A GPL file would make the whole crate effectively GPL on distribution
+  (GPLv3 is one-directional: it can absorb Apache-2.0/MIT, not the reverse),
+  defeating the point of keeping it permissive.
+- The GPL-3.0-or-later application consumes this crate freely; that direction
+  is GPLv3-compatible (see <https://www.apache.org/licenses/GPL-compatibility.html>).
+
+Do **not** "fix" a header in this crate to GPL. New files here are
+`MIT OR Apache-2.0` on purpose.
 
 ## Re-merging upstream changes
 

@@ -59,6 +59,12 @@ const SEMITONE_OFFSET: f32 = 57.0;
 const DEFAULT_CHROMA_FMIN_HZ: f32 = 100.0;
 const DEFAULT_CHROMA_FMAX_HZ: f32 = 5000.0;
 
+/// Upper edge of the band [`extract_chroma_from_spectrogram_with_options`]
+/// reads (Hz); bins above this are ignored. Exposed so a caller that
+/// preprocesses the spectrogram for chroma (e.g. HPSS harmonic emphasis) can
+/// scope that work to the band chroma consumes instead of the full transform.
+pub const CHROMA_FMAX_HZ: f32 = DEFAULT_CHROMA_FMAX_HZ;
+
 /// Compute the magnitude STFT of a mono signal.
 ///
 /// Returns one magnitude spectrum (`frame_size / 2 + 1` real-FFT bins) per
