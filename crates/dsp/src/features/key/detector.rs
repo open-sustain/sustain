@@ -131,37 +131,24 @@ pub fn detect_key_weighted(
         scores.push((Key::Minor(key_idx), score));
     }
 
-    // Step 1.5: Normalize major and minor scores separately to address scale differences.
-    // This helps when major and minor template scores have different ranges, which can
-    // bias mode selection. We normalize by the max score in each mode category.
-    let max_major = scores
-        .iter()
-        .filter_map(|(k, s)| {
-            if matches!(k, Key::Major(_)) {
-                Some(*s)
-            } else {
-                None
-            }
-        })
-        .fold(0.0f32, f32::max);
-    let max_minor = scores
-        .iter()
-        .filter_map(|(k, s)| {
-            if matches!(k, Key::Minor(_)) {
-                Some(*s)
-            } else {
-                None
-            }
-        })
-        .fold(0.0f32, f32::max);
-
-    // Normalize scores if max values are non-zero
-    if max_major > 1e-9 && max_minor > 1e-9 {
-        for (k, s) in scores.iter_mut() {
-            match k {
-                Key::Major(_) => *s /= max_major,
-                Key::Minor(_) => *s /= max_minor,
-            }
+    // Step 1.5: Scale all 24 scores into [0, 1] by a single shared maximum.
+    //
+    // This keeps the downstream circle-of-fifths bonus and the confidence
+    // calculation operating in a known [0, 1] range, while preserving the
+    // *relative* magnitude between the major and minor candidates — which is
+    // precisely what decides the mode. An earlier revision normalized the
+    // major and minor score sets by their own *separate* maxima. Because the
+    // key templates are already L2-normalized unit vectors (so cross-mode dot
+    // products are directly comparable), that per-mode rescaling discarded
+    // the cross-mode signal entirely: the top major and top minor candidate
+    // both became exactly 1.0, stayed tied after the identical self-bonus
+    // below, and the deterministic tie-break (major sorts before minor)
+    // always resolved the tie to major — making minor keys unreachable on
+    // real audio (#192). A single shared maximum avoids that.
+    let max_score = scores.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
+    if max_score > 1e-9 {
+        for (_, s) in scores.iter_mut() {
+            *s /= max_score;
         }
     }
 
@@ -365,6 +352,28 @@ mod tests {
         assert!(!detection.top_keys.is_empty());
         assert!(detection.top_keys.len() <= 3);
         assert_eq!(detection.top_keys[0].0, Key::Major(0));
+    }
+
+    #[test]
+    fn detects_minor_key_from_a_minor_template() {
+        // A clean A-minor signal: feed the A-minor template itself (a unit
+        // vector emphasizing A, C, E) as the chroma. The best match is
+        // unambiguously A minor, so the detector must select a *minor* key
+        // rather than collapsing to major. Regression guard for the #192
+        // bug where normalizing the major and minor score sets by their own
+        // maxima made the top minor and top major candidate always tie,
+        // and the tie-break always picked major — so minor was unreachable.
+        let templates = KeyTemplates::new();
+        let a_minor = templates.get_minor_template(9).to_vec();
+        let chroma_vectors = vec![a_minor; 10];
+
+        let detection = detect_key(&chroma_vectors, &templates).unwrap();
+        assert_eq!(
+            detection.key,
+            Key::Minor(9),
+            "A-minor chroma must detect as A minor, got {:?}",
+            detection.key
+        );
     }
 
     #[test]

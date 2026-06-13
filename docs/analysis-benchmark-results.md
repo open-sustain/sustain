@@ -94,3 +94,53 @@ half-tempo octave. This is a range/corpus interaction, not a tempo-detection
 bug; the 76–155 default is left unchanged here and range sensitivity is a
 separate question. The 61.3 % therefore understates the as-shipped metrical
 accuracy *for this corpus*.
+
+---
+
+## 2026-06-13 — GiantSteps, post-fix (key-detector mode fix, `ANALYZER_VERSION` 6)
+
+Same datasets, audio, and BPM range as the pre-fix run above; the only change
+is the key-detector correctness fix landed in this commit (the per-mode score
+normalization that pinned every result to major was replaced by a single
+shared-maximum scaling, restoring honest cross-mode comparison —
+`ANALYZER_VERSION` 5 → 6).
+
+### Key (MIREX)
+
+604 tracks scored.
+
+| Metric | Pre-fix | **Post-fix** |
+| --- | --- | --- |
+| MIREX weighted | 15.6 % | **35.3 %** |
+| correct | 23 | **118** |
+| fifth | 36 | 174 |
+| relative | 99 | 13 |
+| parallel | 117 | 23 |
+| other | 329 | 276 |
+
+Minor keys are now reachable: `triad_a_minor` in the synthetic corpus detects
+as A minor (was F major), exact-correct on real audio quintupled (23 → 118),
+and MIREX more than doubled.
+
+**Known limitation — the fix flips the mode bias, it does not balance it.**
+Predicted mode mix went from 604 major / 0 minor (pre-fix) to **5 major / 599
+minor** (post-fix), against a ground-truth mix of 93 major / 511 minor. The
+detector now over-predicts minor almost as strongly as it used to over-predict
+major, and the headline gain is partly because this corpus is ~85 % minor. The
+root cause is that raw Krumhansl-Kessler dot-product matching against
+L2-normalized profiles is minor-leaning on real polyphonic audio; the old
+per-mode normalization was a crude counterweight that overshot into a
+hard major lock. Removing it is the correct minimal fix (raw cosine similarity
+is the right cross-mode comparison) and a real improvement, but genuinely
+balanced mode discrimination needs a follow-up: mean-centered correlation (the
+actual Krumhansl-Schmuckler formulation uses the Pearson coefficient, not a
+raw dot product) and/or modern profiles (e.g. Albrecht-Shanahan). Tracked under
+#192; not attempted in this pass to keep the change minimal and avoid
+corpus-specific tuning.
+
+### Tempo
+
+**Unchanged** — byte-identical to the pre-fix run (61.3 % within ±2, MAE
+25.18, all 661 BPM outputs match), confirming the key fix is isolated to key
+detection and does not touch the tempo path.
+
