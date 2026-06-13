@@ -69,6 +69,16 @@ cargo run -p sustain-analysis-bench --release -- adapt-fmak \
   --audio       ../fma_large \
   --out         crates/analysis_bench/corpora/fmak_key.toml
 
+# Adapt the maintainer's private key/BPM reference set (a rich reference.toml
+# of hand-curated ground truth, with audio alongside it) into a gitignored
+# manifest pinned to the shipped BPM range. Provenance tiers (goldish/silver)
+# are reported but not embedded; reference rows with no audio are reported and
+# excluded. Everything here stays outside git — audio, manifest, and results:
+cargo run -p sustain-analysis-bench --release -- adapt-private \
+  --reference validation-data/private/reference.toml \
+  --audio     validation-data/private \
+  --out       validation-data/private/private_pop_core.toml
+
 # Before/after a DSP or decoder change (e.g. #172):
 cargo run -p sustain-analysis-bench --release -- compare \
   --baseline /tmp/before.json --candidate /tmp/after.json

@@ -10,6 +10,7 @@
 //! analysis-bench compare         --baseline <json> --candidate <json>
 //! analysis-bench adapt-giantsteps --dataset <tempo|key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
 //! analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
+//! analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>
 //! ```
 //!
 //! * `run` analyzes every track in a manifest and writes a JSON report
@@ -31,6 +32,12 @@
 //!   manifest with key ground truth. Annotated tracks with no audio under the
 //!   given root are reported and excluded (partial archive subsets cover only
 //!   part of FMAK); this command never downloads.
+//! * `adapt-private` turns the maintainer's private `reference.toml` (rich
+//!   key/BPM ground truth) plus an audio root into a (gitignored) manifest
+//!   with key and BPM ground truth, pinned to the analyzer's shipped BPM
+//!   range. Reference rows with no audio under the root are reported and
+//!   excluded; provenance tiers (goldish/silver) are reported but not
+//!   embedded. This command never downloads.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +46,9 @@ use std::process::ExitCode;
 use sustain_analysis_bench::fmak::{self, AdaptOptions as FmakOptions, AdaptReport as FmakReport};
 use sustain_analysis_bench::giantsteps::{self, AdaptOptions, AdaptReport, Dataset};
 use sustain_analysis_bench::manifest::Manifest;
+use sustain_analysis_bench::private::{
+    self, AdaptOptions as PrivateOptions, AdaptReport as PrivateReport,
+};
 use sustain_analysis_bench::run::{Report, TrackResult, run_manifest};
 
 const USAGE: &str = "\
@@ -47,7 +57,8 @@ usage:
   analysis-bench gen             --manifest <toml> --out <dir>
   analysis-bench compare         --baseline <json> --candidate <json>
   analysis-bench adapt-giantsteps --dataset <tempo|key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
-  analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>";
+  analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
+  analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>";
 
 /// A CLI failure: either bad invocation (exit 2) or a runtime error (exit 1).
 enum CliError {
@@ -80,6 +91,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "compare" => cmd_compare(rest),
         "adapt-giantsteps" => cmd_adapt_giantsteps(rest),
         "adapt-fmak" => cmd_adapt_fmak(rest),
+        "adapt-private" => cmd_adapt_private(rest),
         other => Err(CliError::Usage(format!("unknown command {other:?}"))),
     }
 }
@@ -270,6 +282,51 @@ fn print_fmak_summary(report: &FmakReport) {
     }
     if report.skipped > 0 {
         eprintln!("  {} row(s) skipped (empty key label)", report.skipped);
+    }
+    if report.key_unparseable > 0 {
+        eprintln!(
+            "  {} key label(s) the scorer cannot parse — they will not be scored",
+            report.key_unparseable
+        );
+    }
+}
+
+fn cmd_adapt_private(args: &[String]) -> Result<(), CliError> {
+    let args = Args::parse(args)?;
+    let options = PrivateOptions {
+        reference: PathBuf::from(args.required("reference")?),
+        audio_dir: PathBuf::from(args.required("audio")?),
+    };
+    let report = private::adapt(&options).map_err(|err| CliError::Failure(format!("{err}")))?;
+    write_manifest(args.required("out")?, &report.manifest_toml)?;
+    print_private_summary(&report);
+    Ok(())
+}
+
+fn print_private_summary(report: &PrivateReport) {
+    eprintln!(
+        "corpus {:?}: {} track(s) emitted from {} reference row(s)",
+        report.corpus_id, report.track_count, report.total
+    );
+    eprintln!(
+        "  tiers: {} goldish, {} silver{}",
+        report.goldish,
+        report.silver,
+        if report.untiered > 0 {
+            format!(", {} untiered", report.untiered)
+        } else {
+            String::new()
+        }
+    );
+    eprintln!(
+        "  ground truth: {} with key, {} with BPM",
+        report.with_key, report.with_bpm
+    );
+    if report.missing_audio > 0 {
+        eprintln!(
+            "  {} reference row(s) excluded — no audio under the root",
+            report.missing_audio
+        );
     }
     if report.key_unparseable > 0 {
         eprintln!(

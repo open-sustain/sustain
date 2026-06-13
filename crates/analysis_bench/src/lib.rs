@@ -39,10 +39,14 @@
 //! * [`fmak`] — adapt the FMAK / FMAKv2 key annotations + a Free Music
 //!   Archive audio root into a manifest (a second, independent key corpus;
 //!   audio stays external).
+//! * [`private`] — adapt the maintainer's private key/BPM `reference.toml` +
+//!   an audio root into a manifest (a real-audio reality check; audio,
+//!   source URLs, manifest, and results all stay external).
 
 pub mod fixtures;
 pub mod fmak;
 pub mod giantsteps;
 pub mod manifest;
 pub mod metrics;
+pub mod private;
 pub mod run;
