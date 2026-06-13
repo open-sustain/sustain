@@ -311,25 +311,66 @@ The harness computes both compatible rates from the MIREX category histogram
 (`KeySummary::strict_compatible_pct` / `loose_compatible_pct`; `run` prints them
 as the key headline and `compare` shows the strict delta).
 
-**Initial target thresholds** (where key work should *trend*; the parenthetical
-is the current v7 strict-compatible baseline, all below target by design):
+#### Two bars: minimum acceptance gate vs product ambition
 
-| Corpus | Strict-compatible target | Current (v7) |
+The thresholds come in two tiers that must **not** be conflated — the floor a
+change has to clear, and the bar the product actually aims at.
+
+**External calibration.** On a 50-track dance/electronic set, commercial key
+tools score, by *exact* key:
+
+| Tool | Exact key (50 dance/electronic tracks) |
+| --- | --- |
+| Mixed In Key 12 | 94 % (47/50) |
+| KeyFinder | 90 % (45/50) |
+| Beatport | 88 % (44/50) |
+| Rekordbox 7 | 82 % (41/50) |
+
+These are *exact*-key figures, and Sustain's headline is the looser
+*strict-compatible* rate (compatible ⊇ exact). So pegging a compatible target to
+these numbers is a **conservative** reading, not an aggressive one: if
+commercial tools clear 82–94 % *exact* on the product's core material, then
+Sustain aiming for 85–90 % *compatible* there is simply the right bar.
+Pioneer/XDJ/CDJ/Rekordbox compatibility is the real user workflow, so **Rekordbox
+parity is a meaningful product benchmark**, not a stretch fantasy.
+
+**Minimum acceptance gate** — the floor a key change must clear to be worth
+keeping at all. This is the gate, **not the ambition**. (Parenthetical = current
+v7 strict-compatible, all still below even the gate — this is the starting
+point.)
+
+| Corpus | Min acceptance gate (strict-compatible) | Current (v7) |
 | --- | --- | --- |
-| Private goldish | **≥ 75 %** trending, stretch ≥ 85 % | 61.1 % |
+| Private goldish | ≥ 75 % | 61.1 % |
 | Private all-core | ≥ 65–70 % | 50.0 % |
-| FMAK (`fma_medium`) | ≥ 55–60 % initially | 47.9 % |
-| GiantSteps Key | ≥ 60 % (do **not** overfit — EDM/minor-skewed) | 51.5 % |
+| FMAK (`fma_medium`) | ≥ 55–60 % | 47.9 % |
+| GiantSteps Key | ≥ 60 % | 51.5 % |
 
-Two guards alongside the headline:
+**Product ambition / DJ-tool parity** — the bar that actually matters, set
+against the commercial tools on the core use case:
 
-- **Exact key** as a secondary signal — roughly ≥ 40–50 % on private goldish is
-  healthy, but it does not gate a change on its own.
+| Target set | Ambition (strict-compatible) |
+| --- | --- |
+| Private goldish / DJ-relevant | **≥ 85 %**, stretch ≥ 90 % |
+| Dedicated dance/electronic calibration set (if built) | **≥ 90 %**, exact key tracked separately |
+
+Public corpora (GiantSteps, FMAK) stay as **regression guards**: broader, noisier,
+and harder than the product's core material (FMAK spans 17 genres; GiantSteps is
+EDM- and minor-skewed). They must clear the acceptance gate and they catch
+regressions, but they **do not cap ambition** — a change that lifts them *and*
+holds the DJ-relevant set is good; one tuned to them at the expense of the
+dance/electronic core is not. Do not overfit GiantSteps' minor skew.
+
+Two guardrails alongside the headline:
+
+- **Exact key** — tracked separately, never the primary gate. A useful secondary
+  signal (≈ 40–50 % on private goldish is healthy today); on a dedicated
+  dance/electronic set, *exact*-key parity with the tools above (~80 %+) becomes
+  a real longer-term goal in its own right.
 - **Mode mix must not collapse** — keep the predicted major/minor split within
-  roughly 15–20 percentage points of each corpus's ground-truth mix initially.
-  A change that lifts the compatible rate by flattening to one mode is a
-  regression, not a win (this is exactly the failure mode #192 has cycled
-  through twice).
+  roughly 15–20 percentage points of each corpus's ground-truth mix. A change
+  that lifts the compatible rate by flattening to one mode is a regression, not
+  a win (the failure mode #192 has cycled through twice).
 
 ## Prioritised, testable roadmap
 
