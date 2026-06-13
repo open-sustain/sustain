@@ -108,8 +108,10 @@ pub struct AdaptOptions {
     /// Path to the directory holding the downloaded `<stem>.mp3` audio.
     pub audio_dir: PathBuf,
     /// Verify each audio file against the upstream `md5/<stem>.md5` digest.
-    /// On by default; tracks whose md5 file is absent are reported as
-    /// unverifiable rather than failing.
+    /// On by default, and strict: every emitted track must have an upstream
+    /// digest, so a missing `md5/<stem>.md5` is a hard error rather than a
+    /// silently unverified track. Pass `--no-md5` to opt out of verification
+    /// entirely.
     pub verify_md5: bool,
 }
 
@@ -128,10 +130,10 @@ pub struct AdaptReport {
     /// Emitted key labels the harness scorer cannot parse (so they will not
     /// be scored). Always 0 for the tempo dataset.
     pub key_unparseable: usize,
-    /// Audio files whose md5 matched the upstream digest.
+    /// Audio files whose md5 matched the upstream digest. `0` when
+    /// verification is disabled (`--no-md5`); otherwise it equals
+    /// `track_count`, since a missing digest is a hard error.
     pub md5_verified: usize,
-    /// Tracks with no upstream md5 file to verify against (verification on).
-    pub md5_unverifiable: usize,
 }
 
 /// Adaptation failures. Anything that would silently degrade a baseline —
@@ -165,6 +167,17 @@ pub enum AdaptError {
     /// A path could not be represented as UTF-8 (TOML manifests are UTF-8).
     #[error("path is not valid UTF-8: {0}")]
     NonUtf8Path(PathBuf),
+    /// An audio file path could not be canonicalized to an absolute path, so
+    /// the manifest would otherwise be tied to the adapter's working
+    /// directory.
+    #[error("canonicalizing audio path {path}: {source}")]
+    CanonicalizeAudio {
+        /// Path that failed to canonicalize.
+        path: PathBuf,
+        /// Underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
     /// A tempo annotation did not parse as a number.
     #[error("{count} malformed tempo annotation(s); first: {first}")]
     MalformedAnnotation {
@@ -179,6 +192,19 @@ pub enum AdaptError {
         /// How many audio files were absent.
         count: usize,
         /// First absent path.
+        first: PathBuf,
+    },
+    /// MD5 verification was enabled but one or more tracks had no upstream
+    /// `md5/<stem>.md5` digest to verify against. A checksum-backed baseline
+    /// requires every emitted track to be verifiable.
+    #[error(
+        "{count} track(s) have no upstream md5 digest to verify against; first: {first} \
+         (the dataset ships md5/<stem>.md5; pass --no-md5 to skip verification)"
+    )]
+    MissingMd5 {
+        /// How many tracks lacked an upstream md5 file.
+        count: usize,
+        /// The first absent `md5/<stem>.md5` path.
         first: PathBuf,
     },
     /// An upstream md5 file was not a single 32-hex digest.
@@ -316,9 +342,9 @@ pub fn adapt(options: &AdaptOptions) -> Result<AdaptReport, AdaptError> {
     let mut skipped = 0_usize;
     let mut key_unparseable = 0_usize;
     let mut md5_verified = 0_usize;
-    let mut md5_unverifiable = 0_usize;
     let mut malformed: Vec<PathBuf> = Vec::new();
     let mut missing_audio: Vec<PathBuf> = Vec::new();
+    let mut missing_md5: Vec<PathBuf> = Vec::new();
     let mut md5_mismatch: Vec<(PathBuf, String, String)> = Vec::new();
 
     for (stem, ann_path) in &entries {
@@ -362,13 +388,26 @@ pub fn adapt(options: &AdaptOptions) -> Result<AdaptReport, AdaptError> {
                         continue;
                     }
                 }
-                None => md5_unverifiable += 1,
+                None => {
+                    missing_md5.push(md5_path);
+                    continue;
+                }
             }
         }
 
-        let path = audio_path
+        // Canonicalize so the manifest carries an absolute path that does not
+        // depend on the working directory of a later `analysis-bench run`.
+        // The file exists (checked above), so failure is genuinely exceptional.
+        let canonical =
+            audio_path
+                .canonicalize()
+                .map_err(|source| AdaptError::CanonicalizeAudio {
+                    path: audio_path.clone(),
+                    source,
+                })?;
+        let path = canonical
             .to_str()
-            .ok_or_else(|| AdaptError::NonUtf8Path(audio_path.clone()))?
+            .ok_or_else(|| AdaptError::NonUtf8Path(canonical.clone()))?
             .to_string();
         tracks.push(TrackDoc {
             id: stem.clone(),
@@ -388,6 +427,12 @@ pub fn adapt(options: &AdaptOptions) -> Result<AdaptReport, AdaptError> {
     if let Some(first) = missing_audio.first() {
         return Err(AdaptError::MissingAudio {
             count: missing_audio.len(),
+            first: first.clone(),
+        });
+    }
+    if let Some(first) = missing_md5.first() {
+        return Err(AdaptError::MissingMd5 {
+            count: missing_md5.len(),
             first: first.clone(),
         });
     }
@@ -426,12 +471,12 @@ pub fn adapt(options: &AdaptOptions) -> Result<AdaptReport, AdaptError> {
         skipped,
         key_unparseable,
         md5_verified,
-        md5_unverifiable,
     })
 }
 
 /// Read a single 32-hex md5 digest from an upstream `md5/<stem>.md5` file.
-/// Returns `None` if the file is absent (nothing to verify against).
+/// Returns `None` if the file is absent; the caller decides whether a missing
+/// digest is fatal (it is, under default verification).
 fn read_expected_md5(path: &Path) -> Result<Option<String>, AdaptError> {
     if !path.is_file() {
         return Ok(None);
@@ -662,7 +707,6 @@ mod tests {
         let report = adapt(&fx.options(Dataset::Tempo, true)).expect("adapt with md5");
         assert_eq!(report.track_count, 1);
         assert_eq!(report.md5_verified, 1);
-        assert_eq!(report.md5_unverifiable, 0);
     }
 
     #[test]
@@ -677,15 +721,79 @@ mod tests {
     }
 
     #[test]
-    fn missing_md5_file_is_unverifiable_not_fatal() {
+    fn missing_md5_file_is_a_hard_error_with_verification_on() {
         let fx = Fixture::new();
         fx.annotation(Dataset::Tempo, "a.LOFI", "128.0");
         fx.audio_file("a.LOFI", "abc");
         // No md5 file written.
 
-        let report = adapt(&fx.options(Dataset::Tempo, true)).expect("adapt without md5 file");
+        // Default verification is strict: an emitted track with no upstream
+        // digest fails rather than slipping into the baseline unverified.
+        let err = adapt(&fx.options(Dataset::Tempo, true))
+            .expect_err("missing md5 errors when verifying");
+        assert!(matches!(err, AdaptError::MissingMd5 { count: 1, .. }));
+
+        // `--no-md5` is the explicit escape hatch: the same checkout adapts.
+        let report = adapt(&fx.options(Dataset::Tempo, false)).expect("adapt with --no-md5");
         assert_eq!(report.track_count, 1);
         assert_eq!(report.md5_verified, 0);
-        assert_eq!(report.md5_unverifiable, 1);
+    }
+
+    #[test]
+    fn relative_audio_dir_emits_a_canonical_absolute_path() {
+        let fx = Fixture::new();
+        fx.annotation(Dataset::Tempo, "a.LOFI", "128.0");
+        fx.audio_file("a.LOFI", "abc");
+
+        // Drive the adapter with an audio directory expressed *relative* to
+        // the process working directory (built by walking up to the
+        // filesystem root, then back down to the temp fixture — no cwd
+        // mutation, so it is safe under parallel test execution).
+        let cwd = std::env::current_dir().expect("cwd");
+        let depth = cwd
+            .components()
+            .filter(|c| matches!(c, std::path::Component::Normal(_)))
+            .count();
+        let mut relative_audio = std::path::PathBuf::new();
+        for _ in 0..depth {
+            relative_audio.push("..");
+        }
+        let absolute_audio = fx.audio();
+        relative_audio.push(
+            absolute_audio
+                .strip_prefix("/")
+                .expect("absolute temp path"),
+        );
+        assert!(
+            relative_audio.is_relative(),
+            "test drives a relative --audio"
+        );
+
+        let options = AdaptOptions {
+            dataset: Dataset::Tempo,
+            repo: fx.repo(),
+            audio_dir: relative_audio,
+            verify_md5: false,
+        };
+        let report = adapt(&options).expect("adapt with relative audio dir");
+
+        // The emitted path is the canonical absolute audio path, independent
+        // of any future caller's working directory.
+        let expected = absolute_audio
+            .join("a.LOFI.mp3")
+            .canonicalize()
+            .expect("canonicalize expected audio path");
+        let expected_str = expected.to_str().expect("utf-8 path");
+        assert!(
+            std::path::Path::new(expected_str).is_absolute(),
+            "expected path is absolute"
+        );
+        assert!(
+            report
+                .manifest_toml
+                .contains(&format!("path = \"{expected_str}\"")),
+            "manifest should carry the canonical absolute path {expected_str:?}; got:\n{}",
+            report.manifest_toml
+        );
     }
 }

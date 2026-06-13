@@ -49,8 +49,10 @@ cargo run -p sustain-analysis-bench --release -- run \
   --out /tmp/private-results.json
 
 # Adapt a local GiantSteps Tempo/Key checkout (annotations + audio fetched
-# separately with the dataset's own audio_dl.sh) into a gitignored manifest,
-# md5-verifying the audio against the upstream digests (--no-md5 opts out):
+# separately with the dataset's own audio_dl.sh) into a gitignored manifest.
+# MD5 verification is required by default: every emitted track must have an
+# upstream md5/<stem>.md5, and a missing digest is a hard error (--no-md5
+# opts out of verification entirely):
 cargo run -p sustain-analysis-bench --release -- adapt-giantsteps \
   --dataset key \
   --repo  ../giantsteps-key-dataset \

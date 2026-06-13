@@ -238,8 +238,8 @@ fn print_adapt_summary(report: &AdaptReport, dataset: Dataset, verified: bool) {
     }
     if verified {
         eprintln!(
-            "  md5: {} verified, {} unverifiable (no upstream md5 file)",
-            report.md5_verified, report.md5_unverifiable
+            "  md5: {} verified against upstream digests (every track required one)",
+            report.md5_verified
         );
     } else {
         eprintln!("  md5: verification disabled (--no-md5)");
