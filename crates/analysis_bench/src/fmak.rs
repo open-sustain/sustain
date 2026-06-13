@@ -25,6 +25,20 @@
 //!   parser locates `track_id` and `key_and_mode` by name (the first row that
 //!   names both is the header) rather than by position — one adapter reads
 //!   either file.
+//! * **Plain, unquoted CSV — assumed and enforced, not pulled in via a CSV
+//!   crate.** The parser splits on `,`; this is sound because every FMAK field
+//!   is structurally comma/quote/newline-free: an integer index, the closed
+//!   24-value key vocabulary (`C Major` … `G# minor`), an integer `track_id`,
+//!   and a base62 `spotify:track:…` URI. Verified across the full pinned files
+//!   (fmakv2.csv md5 `3b2d16784ffbda850c8ddf0519478bfd` and the original
+//!   keys.csv): zero `"` characters and a uniform field count throughout. The
+//!   assumption is also *enforced*, so heavy reliance is safe: a row whose
+//!   field count differs from the header, or whose `track_id` column is not an
+//!   integer, is a hard [`AdaptError::MalformedRow`] — any quoted or
+//!   embedded-comma field shifts the columns and trips exactly that check,
+//!   so a non-simple file fails loudly rather than mis-parsing silently. If a
+//!   future variant ever needs RFC-4180 quoting, swap this for a real CSV
+//!   reader; today it would only ever error, never lie.
 //! * **No per-track checksum.** FMA's integrity model is a per-archive SHA1
 //!   verified at download (`sha1sum -c fma_large.zip`), not per-track digests
 //!   like GiantSteps' `md5/`. There is nothing upstream to re-verify a single
@@ -250,6 +264,10 @@ pub fn adapt(options: &AdaptOptions) -> Result<AdaptReport, AdaptError> {
         if line.trim().is_empty() {
             continue;
         }
+        // Plain split on `,` — sound only for unquoted CSV, which FMAK is (see
+        // the module docs). The two checks below enforce that: a quoted or
+        // embedded-comma field changes the field count or pushes a non-integer
+        // into the `track_id` column, so it errors rather than mis-parsing.
         let fields: Vec<&str> = line.split(',').collect();
         if fields.len() != header.field_count {
             malformed.push((offset + 1, (*line).to_string()));
