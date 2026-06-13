@@ -18,8 +18,10 @@ use crate::error::AnalysisError;
 
 /// Detect musical key from chroma vectors
 ///
-/// Averages chroma vectors across all frames, then computes dot product with
-/// each of the 24 key templates. The key with the highest score is selected.
+/// Aggregates the chroma across all frames into a mean profile and correlates
+/// it with each of the 24 Krumhansl-Kessler key templates using the
+/// Krumhansl-Schmuckler metric (mean-centered Pearson correlation). The
+/// highest-scoring key is selected.
 ///
 /// # Arguments
 ///
@@ -110,45 +112,64 @@ pub fn detect_key_weighted(
         }
     }
 
-    // Step 1: Compute weighted scores for all 24 keys.
+    // Step 1: Aggregate the frames into a single (optionally weighted) mean
+    // chroma and correlate it against each of the 24 key profiles with the
+    // Krumhansl-Schmuckler metric — Pearson correlation, i.e. a mean-centered
+    // match rather than a raw dot product. Centering both the chroma and the
+    // profile removes the shared baseline energy that real polyphonic audio
+    // spreads across every pitch class; a raw dot product against that
+    // baseline systematically favors the denser minor profile, which is the
+    // generic major/minor confusion #192 tracks. Pearson is invariant to each
+    // profile's scale and offset, so the L2-normalized templates need no
+    // change. Frame weights, when given, shape the mean profile (emphasizing
+    // cleaner frames) rather than weighting independent per-frame matches.
     //
-    // We keep the scoring frame-based (sum of dot products) so we can apply frame weights
-    // without constructing a potentially biased global histogram.
-    let mut scores = Vec::with_capacity(24);
-    let weights = frame_weights;
-
-    // Major keys (0-11)
+    // With no usable signal — no frame carries weight, or the mean chroma is
+    // perfectly flat — there is no tonal evidence: every score is zero, the
+    // ranking falls back to the deterministic key order, and the confidence
+    // below is zero. We never fabricate a tonal decision from noise.
+    let mean = mean_chroma(chroma_vectors, frame_weights).filter(|m| has_tonal_variance(m));
+    let mut scores: Vec<(Key, f32)> = Vec::with_capacity(24);
     for key_idx in 0..12 {
-        let template = templates.get_major_template(key_idx);
-        let score = weighted_sum_dot(chroma_vectors, weights, template);
+        let score = mean.as_ref().map_or(0.0, |m| {
+            pearson_correlation(m, templates.get_major_template(key_idx))
+        });
         scores.push((Key::Major(key_idx), score));
     }
-
-    // Minor keys (0-11)
     for key_idx in 0..12 {
-        let template = templates.get_minor_template(key_idx);
-        let score = weighted_sum_dot(chroma_vectors, weights, template);
+        let score = mean.as_ref().map_or(0.0, |m| {
+            pearson_correlation(m, templates.get_minor_template(key_idx))
+        });
         scores.push((Key::Minor(key_idx), score));
     }
 
-    // Step 1.5: Scale all 24 scores into [0, 1] by a single shared maximum.
-    //
-    // This keeps the downstream circle-of-fifths bonus and the confidence
-    // calculation operating in a known [0, 1] range, while preserving the
-    // *relative* magnitude between the major and minor candidates — which is
-    // precisely what decides the mode. An earlier revision normalized the
-    // major and minor score sets by their own *separate* maxima. Because the
-    // key templates are already L2-normalized unit vectors (so cross-mode dot
-    // products are directly comparable), that per-mode rescaling discarded
-    // the cross-mode signal entirely: the top major and top minor candidate
-    // both became exactly 1.0, stayed tied after the identical self-bonus
-    // below, and the deterministic tie-break (major sorts before minor)
-    // always resolved the tie to major — making minor keys unreachable on
-    // real audio (#192). A single shared maximum avoids that.
-    let max_score = scores.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
-    if max_score > 1e-9 {
+    // Step 1.5: Map all 24 raw correlations (each in [-1, 1]) onto a shared
+    // [0, 1] scale with one min-max normalization. The transform is monotonic
+    // across the whole set, so it preserves both the ranking and the
+    // *cross-mode* magnitude that decides major vs. minor — unlike an earlier
+    // per-mode rescale that pinned the top major and top minor to an exact tie
+    // and, via the deterministic tie-break, made minor unreachable on real
+    // audio (#192). It also lets the downstream circle-of-fifths bonus and the
+    // confidence calculation, which assume non-negative scores, stay sign-safe
+    // without ever clamping a negative correlation to zero (which would throw
+    // away genuine anti-correlation signal).
+    let max_raw = scores
+        .iter()
+        .map(|(_, s)| *s)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_raw = scores.iter().map(|(_, s)| *s).fold(f32::INFINITY, f32::min);
+    let range = max_raw - min_raw;
+    if range > 1e-9 {
         for (_, s) in scores.iter_mut() {
-            *s /= max_score;
+            *s = (*s - min_raw) / range;
+        }
+    } else {
+        // A flat field — no key is meaningfully better than any other. Zero
+        // every score so confidence collapses to zero rather than inventing a
+        // winner from float noise; the deterministic sort still yields a
+        // stable key.
+        for (_, s) in scores.iter_mut() {
+            *s = 0.0;
         }
     }
 
@@ -228,28 +249,13 @@ pub fn detect_key_weighted(
 
     scores = refined_scores;
 
-    // Step 2: Sort by score (highest first)
+    // Step 2: Sort by score (highest first); the best-scoring key wins.
     sort_key_scores_desc(&mut scores);
+    let (final_key, final_score) = scores[0];
 
-    // Step 3: Select best key using weighted top-N voting (if top keys are close)
-    // This helps when the best key is only slightly better than alternatives
-    let (best_key, best_score) = scores[0];
-    let second_score = if scores.len() > 1 { scores[1].1 } else { 0.0 };
-    let third_score = if scores.len() > 2 { scores[2].1 } else { 0.0 };
-
-    // If top 3 keys are within 5% of each other, use weighted voting
-    let score_threshold = best_score * 0.95;
-    let use_weighted_voting =
-        second_score >= score_threshold && third_score >= score_threshold * 0.90;
-
-    let final_key = best_key;
-
-    // Compute confidence for final key
-    let final_score = scores
-        .iter()
-        .find(|(k, _)| *k == final_key)
-        .map(|(_, s)| *s)
-        .unwrap_or(best_score);
+    // Confidence is the top key's margin over the next-best key, on the shared
+    // [0, 1] scale. It is zero when there is no tonal evidence (the flat field
+    // above), so a flat or signal-less track never reports spurious certainty.
     let best_other = scores
         .iter()
         .find(|(k, _)| *k != final_key)
@@ -267,11 +273,10 @@ pub fn detect_key_weighted(
     let top_keys: Vec<(Key, f32)> = scores.iter().take(top_n).cloned().collect();
 
     log::debug!(
-        "Detected key: {:?}, score: {:.4}, confidence: {:.4} (weighted voting: {})",
+        "Detected key: {:?}, score: {:.4}, confidence: {:.4}",
         final_key,
         final_score,
-        confidence,
-        use_weighted_voting
+        confidence
     );
 
     Ok(KeyDetectionResult {
@@ -282,98 +287,99 @@ pub fn detect_key_weighted(
     })
 }
 
-/// Compute dot product between two vectors.
-fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
-}
-
-/// Sum dot products across frames, optionally applying per-frame weights.
-fn weighted_sum_dot(chroma_vectors: &[Vec<f32>], weights: Option<&[f32]>, template: &[f32]) -> f32 {
-    let mut acc = 0.0f32;
-    match weights {
+/// Mean chroma across all frames, optionally frame-weighted. Returns `None`
+/// when no frame carries usable weight (all-zero weights, or no frames), so
+/// the caller treats it as "no tonal evidence" instead of dividing by zero.
+fn mean_chroma(chroma_vectors: &[Vec<f32>], weights: Option<&[f32]>) -> Option<[f32; 12]> {
+    let mut acc = [0.0f32; 12];
+    let total: f32 = match weights {
         None => {
             for chroma in chroma_vectors {
-                acc += dot_product(chroma, template);
-            }
-        }
-        Some(w) => {
-            for (chroma, &wt) in chroma_vectors.iter().zip(w.iter()) {
-                if wt > 0.0 {
-                    acc += wt * dot_product(chroma, template);
+                for (a, &c) in acc.iter_mut().zip(chroma) {
+                    *a += c;
                 }
             }
+            chroma_vectors.len() as f32
         }
+        Some(w) => {
+            let mut total = 0.0f32;
+            for (chroma, &wt) in chroma_vectors.iter().zip(w.iter()) {
+                if wt > 0.0 {
+                    for (a, &c) in acc.iter_mut().zip(chroma) {
+                        *a += wt * c;
+                    }
+                    total += wt;
+                }
+            }
+            total
+        }
+    };
+    if total <= 1e-12 {
+        return None;
     }
-    acc
+    for a in acc.iter_mut() {
+        *a /= total;
+    }
+    Some(acc)
+}
+
+/// Whether a chroma profile carries enough variance to hold tonal
+/// information. A near-uniform profile correlates with every key template
+/// only through floating-point noise, which the downstream min-max rescale
+/// would amplify into a spurious winner; this lets the caller treat such a
+/// profile as "no evidence" instead. The test is *relative* to the profile's
+/// own energy (variance as a fraction of mean square), so it carries no
+/// absolute magnitude tuned to any signal level or corpus — it only separates
+/// a genuinely structured profile (ratio ~0.1–1) from float-flat noise
+/// (ratio ~1e-13), and changes no decision on real tonal audio.
+fn has_tonal_variance(chroma: &[f32]) -> bool {
+    let n = chroma.len() as f32;
+    let mean = chroma.iter().sum::<f32>() / n;
+    let variance = chroma.iter().map(|&x| (x - mean) * (x - mean)).sum::<f32>() / n;
+    let mean_square = chroma.iter().map(|&x| x * x).sum::<f32>() / n;
+    variance > mean_square * 1e-6
+}
+
+/// Pearson correlation between two equal-length vectors — the
+/// Krumhansl-Schmuckler key-finding metric. Returns `0.0` when either vector
+/// has no variance (a flat distribution carries no tonal information to
+/// correlate), so the result is always finite and in `[-1, 1]`.
+fn pearson_correlation(a: &[f32], b: &[f32]) -> f32 {
+    let n = a.len() as f32;
+    let mean_a = a.iter().sum::<f32>() / n;
+    let mean_b = b.iter().sum::<f32>() / n;
+    let mut cov = 0.0f32;
+    let mut var_a = 0.0f32;
+    let mut var_b = 0.0f32;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        let da = x - mean_a;
+        let db = y - mean_b;
+        cov += da * db;
+        var_a += da * da;
+        var_b += db * db;
+    }
+    let denom = (var_a * var_b).sqrt();
+    if denom > 1e-12 {
+        cov / denom
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Build `count` identical chroma frames from a 12-element profile.
+    fn frames(profile: &[f32], count: usize) -> Vec<Vec<f32>> {
+        vec![profile.to_vec(); count]
+    }
+
     #[test]
     fn test_detect_key_empty() {
         let templates = KeyTemplates::new();
         let result = detect_key(&[], &templates);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_detect_key_basic() {
-        let templates = KeyTemplates::new();
-
-        // Create chroma vectors that match C major
-        // C major template has high values at indices 0 (C), 4 (E), 7 (G)
-        let mut chroma_vectors = Vec::new();
-        for _ in 0..10 {
-            let mut chroma = vec![0.0f32; 12];
-            chroma[0] = 0.3; // C
-            chroma[4] = 0.3; // E
-            chroma[7] = 0.3; // G
-                             // Normalize
-            let norm: f32 = chroma.iter().map(|&x| x * x).sum::<f32>().sqrt();
-            for x in &mut chroma {
-                *x /= norm;
-            }
-            chroma_vectors.push(chroma);
-        }
-
-        let result = detect_key(&chroma_vectors, &templates);
-        assert!(result.is_ok());
-
-        let detection = result.unwrap();
-        assert!(detection.confidence >= 0.0 && detection.confidence <= 1.0);
-        assert_eq!(detection.all_scores.len(), 24);
-
-        // Best key should be C major (index 0)
-        assert_eq!(detection.key, Key::Major(0));
-
-        // Check top_keys is populated
-        assert!(!detection.top_keys.is_empty());
-        assert!(detection.top_keys.len() <= 3);
-        assert_eq!(detection.top_keys[0].0, Key::Major(0));
-    }
-
-    #[test]
-    fn detects_minor_key_from_a_minor_template() {
-        // A clean A-minor signal: feed the A-minor template itself (a unit
-        // vector emphasizing A, C, E) as the chroma. The best match is
-        // unambiguously A minor, so the detector must select a *minor* key
-        // rather than collapsing to major. Regression guard for the #192
-        // bug where normalizing the major and minor score sets by their own
-        // maxima made the top minor and top major candidate always tie,
-        // and the tie-break always picked major — so minor was unreachable.
-        let templates = KeyTemplates::new();
-        let a_minor = templates.get_minor_template(9).to_vec();
-        let chroma_vectors = vec![a_minor; 10];
-
-        let detection = detect_key(&chroma_vectors, &templates).unwrap();
-        assert_eq!(
-            detection.key,
-            Key::Minor(9),
-            "A-minor chroma must detect as A minor, got {:?}",
-            detection.key
-        );
     }
 
     #[test]
@@ -385,21 +391,109 @@ mod tests {
     }
 
     #[test]
-    fn test_average_chroma() {
-        // Historical test placeholder: key detector no longer exposes average-chroma directly.
-        // Keep a sanity check that weighted scoring behaves sensibly.
+    fn detects_c_major_from_tonic_triad() {
+        // A clean C-major triad (C, E, G) must resolve to a *major* key, and
+        // specifically C major: the mean-centered correlation has to prefer
+        // the major profile over its parallel/relative minors.
         let templates = KeyTemplates::new();
-        let chroma_vectors = vec![vec![0.0f32; 12]; 10];
-        let weights = vec![0.0f32; 10];
-        let result = detect_key_weighted(&chroma_vectors, &templates, Some(&weights));
-        assert!(result.is_ok());
+        let mut chroma = vec![0.0f32; 12];
+        chroma[0] = 1.0; // C
+        chroma[4] = 1.0; // E
+        chroma[7] = 1.0; // G
+        let detection = detect_key(&frames(&chroma, 10), &templates).unwrap();
+        assert_eq!(detection.key, Key::Major(0), "got {:?}", detection.key);
+        assert!(!detection.top_keys.is_empty() && detection.top_keys.len() <= 3);
+        assert_eq!(detection.all_scores.len(), 24);
     }
 
     #[test]
-    fn test_dot_product() {
-        let a = vec![1.0, 2.0, 3.0];
-        let b = vec![4.0, 5.0, 6.0];
-        let result = dot_product(&a, &b);
-        assert_eq!(result, 32.0); // 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
+    fn major_template_chroma_detects_that_major_key() {
+        // Feeding a major profile as the chroma is the cleanest possible major
+        // signal; the detector must return that major key. Regression guard
+        // for the #192 mode bias that called every track minor.
+        let templates = KeyTemplates::new();
+        for key_idx in 0..12 {
+            let profile = templates.get_major_template(key_idx).to_vec();
+            let detection = detect_key(&frames(&profile, 8), &templates).unwrap();
+            assert_eq!(
+                detection.key,
+                Key::Major(key_idx),
+                "major template {key_idx} detected as {:?}",
+                detection.key
+            );
+        }
+    }
+
+    #[test]
+    fn minor_template_chroma_detects_that_minor_key() {
+        // The companion guard: a minor profile must resolve to that minor key,
+        // so both modes stay reachable now that scoring is mean-centered.
+        let templates = KeyTemplates::new();
+        for key_idx in 0..12 {
+            let profile = templates.get_minor_template(key_idx).to_vec();
+            let detection = detect_key(&frames(&profile, 8), &templates).unwrap();
+            assert_eq!(
+                detection.key,
+                Key::Minor(key_idx),
+                "minor template {key_idx} detected as {:?}",
+                detection.key
+            );
+        }
+    }
+
+    #[test]
+    fn flat_chroma_has_zero_confidence_and_finite_scores() {
+        // A perfectly flat distribution carries no tonal evidence: the
+        // detector must not invent a winner from float noise. Scores stay
+        // finite, confidence is zero, and the key is the deterministic
+        // fallback (C major sorts first).
+        let templates = KeyTemplates::new();
+        let detection = detect_key(&frames(&[0.1f32; 12], 10), &templates).unwrap();
+        assert_eq!(detection.confidence, 0.0);
+        assert_eq!(detection.key, Key::Major(0));
+        assert_eq!(detection.all_scores.len(), 24);
+        assert!(detection.all_scores.iter().all(|(_, s)| s.is_finite()));
+    }
+
+    #[test]
+    fn all_scores_and_confidence_are_finite() {
+        // A realistic, lopsided chroma must never produce NaN/inf anywhere.
+        let templates = KeyTemplates::new();
+        let chroma = vec![
+            0.4, 0.05, 0.2, 0.02, 0.3, 0.1, 0.03, 0.35, 0.04, 0.15, 0.02, 0.08,
+        ];
+        let detection = detect_key(&frames(&chroma, 12), &templates).unwrap();
+        assert!(detection.confidence.is_finite());
+        assert!((0.0..=1.0).contains(&detection.confidence));
+        assert_eq!(detection.all_scores.len(), 24);
+        assert!(detection.all_scores.iter().all(|(_, s)| s.is_finite()));
+        assert!(!detection.top_keys.is_empty() && detection.top_keys.len() <= 3);
+    }
+
+    #[test]
+    fn zero_weights_yield_finite_zero_confidence() {
+        // All-zero frame weights leave no usable signal; the detector must
+        // return a finite, zero-confidence result rather than dividing by zero
+        // or producing NaN.
+        let templates = KeyTemplates::new();
+        let chroma_vectors = frames(&[0.2f32; 12], 10);
+        let weights = vec![0.0f32; 10];
+        let detection = detect_key_weighted(&chroma_vectors, &templates, Some(&weights)).unwrap();
+        assert_eq!(detection.confidence, 0.0);
+        assert!(detection.all_scores.iter().all(|(_, s)| s.is_finite()));
+    }
+
+    #[test]
+    fn frame_weights_shape_the_mean_profile() {
+        // Three frames, but only the C-major frame carries weight — the result
+        // must follow the weighted frame, confirming weights shape the mean
+        // profile rather than every frame contributing equally.
+        let templates = KeyTemplates::new();
+        let c_major = templates.get_major_template(0).to_vec();
+        let a_minor = templates.get_minor_template(9).to_vec();
+        let chroma_vectors = vec![c_major, a_minor.clone(), a_minor];
+        let weights = vec![1.0f32, 0.0, 0.0];
+        let detection = detect_key_weighted(&chroma_vectors, &templates, Some(&weights)).unwrap();
+        assert_eq!(detection.key, Key::Major(0));
     }
 }

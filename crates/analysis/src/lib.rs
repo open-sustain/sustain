@@ -132,6 +132,19 @@ pub use waveform::WaveformTiers;
 /// the `FILL_*_IF_NULL` policy noted under version 4, an existing populated
 /// key is only replaced on a wipe-and-rescan.)
 ///
+/// Version 7: the key detector now scores with mean-centered (Pearson)
+/// correlation — the actual Krumhansl-Schmuckler metric — instead of a raw
+/// dot product against the L2-normalized profiles. The raw dot product
+/// correlated against the baseline energy real polyphonic audio spreads
+/// across every pitch class, which systematically favored the denser minor
+/// profile and made the detector predict minor for ~98–100% of real tracks
+/// (#192); centering both the aggregated chroma and the profile removes that
+/// bias. Measured across GiantSteps Key, FMAK, and a private set, major-track
+/// MIREX roughly tripled (≈6–10% → ≈25–32%) while minor-track accuracy
+/// regressed only moderately, so key outputs change for many tracks and
+/// previously-attempted rows must be re-attempted (subject to the same
+/// `FILL_*_IF_NULL` wipe-and-rescan policy as above).
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -148,7 +161,7 @@ pub use waveform::WaveformTiers;
 /// byte-for-byte on the synthetic corpus, so stored values' meaning is
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
-pub const ANALYZER_VERSION: u32 = 6;
+pub const ANALYZER_VERSION: u32 = 7;
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
 /// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default

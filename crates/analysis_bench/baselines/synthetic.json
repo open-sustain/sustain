@@ -17,10 +17,10 @@
     },
     "key": {
       "scored": 3,
-      "weighted_pct": 33.333336,
+      "weighted_pct": 66.66667,
       "categories": {
-        "correct": 1,
-        "other": 2
+        "correct": 2,
+        "other": 1
       }
     }
   },
@@ -318,7 +318,7 @@
         "key"
       ],
       "bpm": 141.3116455078125,
-      "key": "Fm",
+      "key": "C",
       "acoustics": {
         "integrated_lufs": -42.235542,
         "short_term_lufs_max": -42.102737,
@@ -340,8 +340,8 @@
       },
       "key_score": {
         "ground_truth": "C",
-        "category": "other",
-        "score": 0.0
+        "category": "correct",
+        "score": 1.0
       }
     },
     {
