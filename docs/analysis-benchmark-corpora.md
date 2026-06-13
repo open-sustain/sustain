@@ -75,7 +75,7 @@ imply a metric we cannot compute.
 | --- | --- | --- | --- | --- | --- | --- |
 | GiantSteps Tempo | 2 | `bpm` | [giantsteps-tempo-dataset](https://github.com/GiantSteps/giantsteps-tempo-dataset) @ `d51ab24` | annotations in-repo (per-repo terms; contact TU Wien) | JKU mirror **live** (`cp.jku.at/datasets/giantsteps/backup/<id>.LOFI.mp3`, the primary in the repo's `audio_dl.sh`); Beatport `geo-samples` CDN **dead**; mirdata ships annotations only. Audio external, never committed. | **Adapter shipped** (`adapt-giantsteps --dataset tempo`): maps `annotations_v2/tempo/*.bpm` → per-track `bpm`, skips `0.0` sentinels, and by default requires + md5-verifies each track's `md5/` digest (`--no-md5` opts out). Baseline **recorded 2026-06-13** ([results](analysis-benchmark-results.md)). |
 | GiantSteps Key | 2 | `key` | [giantsteps-key-dataset](https://github.com/GiantSteps/giantsteps-key-dataset) @ `6bcd492` | **CC BY-SA 4.0** | JKU mirror **live** (same backup path + `audio_dl.sh`); Beatport CDN dead; mirdata annotations-only. Audio external, never committed. | **Adapter shipped** (`adapt-giantsteps --dataset key`): maps `annotations/key/*.key` → per-track `key` (the harness scorer parses the label); same default-on, strict `md5/` verification as Tempo (`--no-md5` opts out). Baseline **recorded 2026-06-13** ([results](analysis-benchmark-results.md)); key result governed by a detector bug under fix (#192). |
-| FMAK / FMAKv2 | 1 | `key` | FMAKv2 [Zenodo `12759100`](https://zenodo.org/records/12759100) (`fmakv2.csv`, md5 `3b2d16784ffbda850c8ddf0519478bfd`); orig. FMAK [Zenodo `10719859`](https://zenodo.org/records/10719859) | **CC BY 4.0** (annotations) | FMA audio, **per-track CC licenses** — not redistributed; downloaded as an `fma_*` archive from [mdeff/fma](https://github.com/mdeff/fma) (per-archive SHA1), kept external | **Adapter shipped** (`adapt-fmak`): maps `fmakv2.csv` (`track_id`,`key_and_mode`) → per-track `key` against an FMA audio root (`<id6[..3]>/<id6>.mp3`); annotated tracks absent from the chosen archive subset are reported and excluded. Expert song-level key/mode, 5,489 tracks / 17 genres / 24 keys — an independent second key corpus to cross-check GiantSteps. Baseline **pending** a local FMA download + run. |
+| FMAK / FMAKv2 | 1 | `key` | FMAKv2 [Zenodo `12759100`](https://zenodo.org/records/12759100) (`fmakv2.csv`, md5 `3b2d16784ffbda850c8ddf0519478bfd`); orig. FMAK [Zenodo `10719859`](https://zenodo.org/records/10719859) | **CC BY 4.0** (annotations) | FMA audio, **per-track CC licenses** — not redistributed; downloaded as an `fma_*` archive from [mdeff/fma](https://github.com/mdeff/fma) (per-archive SHA1), kept external | **Adapter shipped** (`adapt-fmak`): maps `fmakv2.csv` (`track_id`,`key_and_mode`) → per-track `key` against an FMA audio root (`<id6[..3]>/<id6>.mp3`); annotated tracks absent from the chosen archive subset are reported and excluded. Expert song-level key/mode, 5,489 tracks / 17 genres / 24 keys — an independent second key corpus to cross-check GiantSteps. **Partial baseline recorded** (`fma_medium` subset, 1,723/5,489 covered) — see [results](analysis-benchmark-results.md); full FMAK (`fma_large`) run still pending. |
 | FMA Small | 1 | `bpm` (sanity) | <https://github.com/mdeff/fma> | metadata CC BY 4.0; code MIT | per-track artist licenses | Echonest tempo labels are weak → development/tuning only, **not** final accuracy claims. Keep tuning runs separate from validation runs. |
 | Freesound Loop (FSL10K) | 4 | `bpm`, `key` | <https://zenodo.org/records/3967852> | per-sound CC (see `FSL10K/metadata.json`) | downloadable from Zenodo | 9,455 loops with tempo/key/genre. Short-audio robustness; user/tag-derived BPM needs caveat-aware scoring. |
 | Ballroom | 3 | — (beat grid) | <https://github.com/CPJKU/BallroomAnnotations> | annotation repo only | audio archive **external** | **Deferred**: no beat-grid metric yet. Revisit when a beat task lands; pin repo tag + archive checksum. |
@@ -222,19 +222,20 @@ Sustain. Download an FMA archive yourself and keep it outside the working tree.
    cargo run -p sustain-analysis-bench --release -- adapt-fmak \
      --annotations fmakv2.csv \
      --audio       fma_large \
-     --out         crates/analysis_bench/corpora/fmak_key.toml
+     --out         validation-data/fma/corpora/fmak_key.toml
    ```
 
-4. Run the harness and record the result **outside** the repo:
+4. Run the harness and record the result **outside** git (the repo's
+   gitignored `validation-data/` workspace is the maintainer's home for this):
 
    ```bash
    cargo run -p sustain-analysis-bench --release -- run \
-     --manifest crates/analysis_bench/corpora/fmak_key.toml \
-     --out      ~/sustain-validation-data/results/fmak_key.json
+     --manifest validation-data/fma/corpora/fmak_key.toml \
+     --out      validation-data/fma/results/fmak_key.json
    ```
 
-The generated `corpora/fmak_key.toml` is gitignored (it names local audio
-paths); audio and results stay external. Record the harness commit,
+The generated manifest is gitignored (it names local audio paths); audio and
+results stay out of git. Record the harness commit,
 `ANALYZER_VERSION`, `corpus_id`, the FMA archive used (and how many annotated
 tracks were excluded for missing audio), and the headline metrics alongside the
 result, per the policy above — recorded runs live in

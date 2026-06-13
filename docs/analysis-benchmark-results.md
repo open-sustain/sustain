@@ -11,8 +11,10 @@ date, the harness commit, `ANALYZER_VERSION`, the BPM range, the pinned
 dataset commits, scored counts, MD5 status, and the headline metrics, plus
 any finding the run exposed. **Not** committed: audio, the generated
 per-track manifests (they name local audio paths and are gitignored), local
-filesystem paths, or the full timing-heavy result JSON. Those stay external
-(the maintainer keeps them under `~/sustain-validation-data/`).
+filesystem paths, or the full timing-heavy result JSON. Those stay out of
+git, under the repo's gitignored `validation-data/` workspace (large
+public-corpus downloads, extracted audio, generated manifests, and result
+JSONs all live there).
 
 Each run is recorded as its own dated section, so a baseline taken before a
 DSP change sits next to the baseline taken after it and the two can be
@@ -168,4 +170,80 @@ corpus-specific tuning.
 **Unchanged** — byte-identical to the pre-fix run (61.3 % within ±2, MAE
 25.18, all 661 BPM outputs match), confirming the key fix is isolated to key
 detection and does not touch the tempo path.
+
+---
+
+## 2026-06-13 — FMAK / FMAKv2 key, partial (`fma_medium` subset)
+
+A second, independent key baseline on the same post-fix analyzer
+(`ANALYZER_VERSION` 6), against FMAK/FMAKv2 — expert song-level key
+annotations for the Free Music Archive — rather than GiantSteps. The point
+is cross-corpus corroboration: GiantSteps Key is genre-narrow (mostly
+electronic, ~85 % minor), so a second corpus from a different distribution
+tells us whether the post-fix behaviour is a property of the detector or of
+that one corpus.
+
+**This is a *partial* FMAK baseline, not full FMAK.** FMAKv2 annotates 5,489
+FMA tracks; the audio was taken from the `fma_medium` archive (25,000 clips,
+genre-biased), which contains only 1,723 of those annotated tracks. The
+remaining 3,766 annotated tracks are simply absent from this archive subset.
+Full FMAK coverage requires the `fma_large` archive (covers all FMA ids);
+that run is not done here.
+
+| | |
+| --- | --- |
+| Harness commit | `62aced3` |
+| `ANALYZER_VERSION` | 6 |
+| BPM range | 76–155 (unchanged; key-only run) |
+| Build | `--release` |
+| Working tree at run time | clean (`git status --porcelain` empty, `git_dirty = false`, `HEAD == 62aced3`) |
+| Annotations | FMAKv2 `fmakv2.csv` (Zenodo 12759100, CC BY 4.0), MD5 `3b2d16784ffbda850c8ddf0519478bfd` |
+| Audio | `fma_medium.zip`, SHA1 `c67b69ea232021025fca9231fc1c7c1a063ab50b` (FMA ships per-archive SHA1; there is no per-track digest, so the adapter does not MD5-verify individual clips) |
+
+### Coverage
+
+| | |
+| --- | --- |
+| Annotated rows | 5,489 |
+| Emitted (audio present in `fma_medium`) | **1,723** (31.4 %) |
+| Excluded — no audio in this archive subset | 3,766 |
+| Skipped — empty key label | 0 |
+| Unparseable key label | 0 |
+
+### Key (MIREX)
+
+1,723 tracks scored.
+
+| Metric | Value |
+| --- | --- |
+| MIREX weighted | **30.0 %** |
+| correct | 331 (19.2 %) |
+| fifth | 268 (15.6 %) |
+| relative | 65 (3.8 %) |
+| parallel | 159 (9.2 %) |
+| other | 900 (52.2 %) |
+
+### Finding: the minor bias reproduces on an independent corpus
+
+FMAK is far more mode-balanced than GiantSteps — ground truth is **740 major
+/ 983 minor** (43 % / 57 %) — yet the detector predicts **40 major / 1,682
+minor** (2 % / 98 %; one track produced no key). Split by ground-truth mode:
+
+| Ground-truth mode | n | correct | fifth | relative | parallel | other | MIREX |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| major | 740 | 15 | 14 | 63 | 158 | 490 | **9.8 %** |
+| minor | 983 | 316 | 254 | 2 | 1 | 410 | **45.1 %** |
+
+This is the same pathology recorded in the post-fix GiantSteps section above
+(predicted-minor share 98 % here vs. 99 % there), now seen on a corpus with a
+completely different genre mix and a near-even mode split. The major column is
+dominated by `parallel` errors (158) — right tonic, wrong mode — which is the
+signature of a detector that finds the correct key centre but defaults to
+minor. Because both corpora agree, the residual error is a **generic
+mode-discrimination weakness in the DSP, not GiantSteps-specific corpus
+noise**: the headline 30 % is held down by major tracks scoring 9.8 %, not by
+anything peculiar to FMA. This is the cross-corpus signal #192 was waiting on
+to decide that the next key fix (mean-centered correlation / modern profiles)
+is generic rather than corpus-specific. **No DSP was changed in this pass**;
+balanced mode discrimination remains the open #192 follow-up.
 
