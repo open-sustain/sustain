@@ -342,3 +342,69 @@ next key fix — balanced mode discrimination (mean-centered / Pearson
 correlation, alternative profiles) — is generic, while tempo needs no change
 here.
 
+---
+
+## 2026-06-13 — key detector v7 (mean-centered Pearson mode scoring), all three corpora
+
+The first DSP change under #192: the key detector now scores with the actual
+Krumhansl-Schmuckler metric — Pearson correlation against the aggregated
+chroma profile — instead of a raw dot product against the L2-normalized
+templates (`ANALYZER_VERSION` 6 → 7). The raw dot product correlated against
+the baseline energy real polyphonic audio spreads across every pitch class,
+which systematically favoured the denser minor profile; centering both the
+chroma and each profile removes that bias. All three key corpora above are
+re-baselined here from a clean tree so the before (v6) → after (v7) effect is
+directly comparable. Tempo is untouched by this key-only change.
+
+| | |
+| --- | --- |
+| Harness commit | `4439760` (clean tree; the v7 DSP is commit `e9a42e6`, with an AGENTS-only doc commit on top) |
+| `ANALYZER_VERSION` | 7 |
+| BPM range | 76–155 (unchanged) |
+| Build | `--release` |
+| Working tree at run time | clean (`git_dirty = false`, `HEAD == 4439760`) |
+
+### Headline (MIREX-weighted key), v6 → v7
+
+| Corpus | n | v6 | **v7** | predicted-minor share v6 → v7 |
+| --- | --- | --- | --- | --- |
+| GiantSteps Key | 604 | 35.3 % | **35.5 %** | 99.2 % → 81.8 % |
+| FMAK (`fma_medium`) | 1,723 | 30.0 % | **36.9 %** | 97.7 % → 71.5 % |
+| Private core | 26 | 40.8 % | **41.5 %** | 100 % → 73.1 % |
+
+### Mode split, v6 → v7 (the change that matters)
+
+The point of the change is *mode discrimination*, which the overall headline
+hides on minor-heavy corpora. Split by ground-truth mode:
+
+| Corpus | major-track MIREX v6 → v7 | minor-track MIREX v6 → v7 |
+| --- | --- | --- |
+| GiantSteps Key (93 maj / 511 min) | ~0 → **24.7 %** | — → 37.5 % |
+| FMAK (740 maj / 983 min) | 9.8 % → **32.0 %** | 45.1 % → 40.6 % |
+| Private core (10 maj / 16 min) | 6.0 % → **24.0 %** | 62.5 % → 52.5 % |
+
+(GiantSteps v6 predicted only 5 of 604 tracks major, so its major-track recall
+was effectively zero; v7 predicts 110 major. Per-mode v6 figures for FMAK and
+private are the dated sections above.)
+
+### Finding: it balances the mode call rather than flipping it
+
+Across all three corpora the change moves in the same direction: major-track
+MIREX rises substantially (≈0–10 % → 24–32 %), minor-track MIREX regresses
+only moderately and stays the *stronger* mode, and the predicted-minor share
+falls from 98–100 % toward — but not past — the true mix (GiantSteps is 85 %
+minor, FMAK 57 %, private 62 %). Overall MIREX is non-negative everywhere
+(FMAK +6.9, private +0.7, GiantSteps +0.2; the synthetic key fixtures rose
+33.3 % → 66.7 % as the C-major triad now detects C major). The gain is largest
+on FMAK, the most mode-balanced corpus — exactly what a genuine
+mode-discrimination fix predicts, and evidence it is not a single-corpus
+overfit. On the private set the *goldish* tier (trustworthy, analysis-backed
+labels) improved 46.7 % → 51.7 %, while the noisier, Spotify-correlated
+*silver* tier (n = 8) fell 27.5 % → 18.8 %.
+
+This is a real improvement but **not** a full resolution: predicted-minor is
+still elevated versus ground truth and minor accuracy slipped, so #192 stays
+open. The next principled step is a profile A/B (Temperley / Albrecht-Shanahan
+against the current Krumhansl-Kessler) under this same harness — no DSP was
+tuned and no corpus-specific constant was introduced to reach these numbers.
+
