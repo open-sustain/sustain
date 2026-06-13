@@ -145,6 +145,16 @@ pub use waveform::WaveformTiers;
 /// previously-attempted rows must be re-attempted (subject to the same
 /// `FILL_*_IF_NULL` wipe-and-rescan policy as above).
 ///
+/// Version 8: key detection now runs on its own dedicated STFT
+/// (`KEY_STFT_FRAME_SIZE`, 8192-point) instead of reusing the 2048-point
+/// tempogram STFT. The tempo frame's ~21.5 Hz bins cannot separate
+/// adjacent semitones below ~360 Hz, smearing the low-register harmonic
+/// energy chroma depends on; the 8192-point frame's ~5.4 Hz bins resolve
+/// semitones down to ~90 Hz. Scoring, profiles, and the chroma mapping
+/// are unchanged — only the spectrogram feeding chroma is finer — but the
+/// chroma, and so the detected key, change for many tracks, which must be
+/// re-attempted under the same `FILL_*_IF_NULL` wipe-and-rescan policy.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -161,7 +171,7 @@ pub use waveform::WaveformTiers;
 /// byte-for-byte on the synthetic corpus, so stored values' meaning is
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
-pub const ANALYZER_VERSION: u32 = 7;
+pub const ANALYZER_VERSION: u32 = 8;
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
 /// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default
@@ -259,6 +269,24 @@ const STFT_FRAME_SIZE: usize = 2048;
 /// the tempogram's novelty curve was tuned against.
 const STFT_HOP_SIZE: usize = 512;
 
+/// STFT frame size for key/chroma detection, decoupled from the tempo
+/// STFT (`STFT_FRAME_SIZE`). The two pull in opposite directions: the
+/// tempogram wants a short frame so onset timing stays sharp, whereas
+/// chroma wants frequency resolution fine enough to separate adjacent
+/// semitones in the low register. At 44.1 kHz an 8192-point transform
+/// yields ~5.4 Hz bins, which resolves semitones down to ~90 Hz; the
+/// 2048-point tempo frame (~21.5 Hz bins) cannot distinguish semitones
+/// below ~360 Hz, smearing the bass/low-mid range — most of the chroma
+/// band, which starts at 100 Hz — where much of a track's harmonic root
+/// energy lives.
+const KEY_STFT_FRAME_SIZE: usize = 8192;
+
+/// STFT hop size for key/chroma detection. Frame/4 = 75% overlap — the
+/// same overlap fraction as the tempo STFT and the standard chroma hop.
+/// Derived from the frame size rather than set independently, so the key
+/// front-end carries no hop tuning of its own.
+const KEY_STFT_HOP_SIZE: usize = KEY_STFT_FRAME_SIZE / 4;
+
 /// BPM resolution (in BPM) the tempogram searches at. 1.0 BPM matches
 /// the upstream default and the resolution our UI displays at.
 const TEMPOGRAM_BPM_RESOLUTION: f32 = 1.0;
@@ -332,9 +360,14 @@ pub struct Analyzer {
     /// tracks route acoustics through `full_audio`.
     acoustics_window: OnceCell<Option<DecodedAudio>>,
     /// Centered BPM/key window (a slice of a larger region when one is
-    /// in memory, otherwise its own decode).
+    /// in memory, otherwise its own decode). Shared by BPM and key —
+    /// they analyze the same audio region; only their spectrograms differ.
     bpmkey_audio: OnceCell<Option<DecodedAudio>>,
-    bpmkey_stft: OnceCell<Option<Vec<Vec<f32>>>>,
+    /// Spectrogram for the tempogram, computed at `STFT_FRAME_SIZE`.
+    tempo_stft: OnceCell<Option<Vec<Vec<f32>>>>,
+    /// Spectrogram for chroma/key, computed at `KEY_STFT_FRAME_SIZE` —
+    /// a larger frame than the tempogram for low-register pitch resolution.
+    key_stft: OnceCell<Option<Vec<Vec<f32>>>>,
 }
 
 impl Analyzer {
@@ -355,7 +388,8 @@ impl Analyzer {
             full_audio: OnceCell::new(),
             acoustics_window: OnceCell::new(),
             bpmkey_audio: OnceCell::new(),
-            bpmkey_stft: OnceCell::new(),
+            tempo_stft: OnceCell::new(),
+            key_stft: OnceCell::new(),
         }
     }
 
@@ -372,7 +406,7 @@ impl Analyzer {
     /// file cannot be decoded, is too short for analysis, or the DSP
     /// engine cannot produce a confident estimate.
     pub fn bpm(&self) -> Option<f32> {
-        let stft = self.bpmkey_stft()?;
+        let stft = self.tempo_stft()?;
         let window = self.bpmkey_audio()?;
         let estimate = estimate_bpm_tempogram(
             stft,
@@ -398,12 +432,12 @@ impl Analyzer {
     /// the key detector's best match does not correspond to one of
     /// Sustain's 24 canonical [`MusicalKey`] variants.
     pub fn key(&self) -> Option<MusicalKey> {
-        let stft = self.bpmkey_stft()?;
+        let stft = self.key_stft()?;
         let window = self.bpmkey_audio()?;
         let chroma = extract_chroma_from_spectrogram_with_options(
             stft,
             window.sample_rate,
-            STFT_FRAME_SIZE,
+            KEY_STFT_FRAME_SIZE,
             true,
             0.5,
         )
@@ -537,21 +571,43 @@ impl Analyzer {
             .as_ref()
     }
 
-    /// STFT of the centered BPM/key window, shared by `bpm` and `key`.
-    fn bpmkey_stft(&self) -> Option<&Vec<Vec<f32>>> {
+    /// Tempogram STFT of the centered BPM/key window, at `STFT_FRAME_SIZE`.
+    /// Used only by `bpm`; key has its own larger-frame spectrogram
+    /// (`key_stft`) so the two no longer share an STFT size.
+    fn tempo_stft(&self) -> Option<&Vec<Vec<f32>>> {
         // Pull the decoded window out first: we cannot call
         // `bpmkey_audio()` inside `get_or_init` without borrowing `self`
         // twice.
-        if self.bpmkey_stft.get().is_none() {
+        if self.tempo_stft.get().is_none() {
             let computed = match self.bpmkey_audio() {
                 Some(audio) => compute_stft(&audio.samples, STFT_FRAME_SIZE, STFT_HOP_SIZE).ok(),
                 None => None,
             };
             // OnceCell::set returns Err only on a concurrent init, which
             // cannot happen (OnceCell is !Sync); ignore that case.
-            let _ = self.bpmkey_stft.set(computed);
+            let _ = self.tempo_stft.set(computed);
         }
-        self.bpmkey_stft.get().and_then(|cached| cached.as_ref())
+        self.tempo_stft.get().and_then(|cached| cached.as_ref())
+    }
+
+    /// Chroma/key STFT of the centered BPM/key window, at
+    /// `KEY_STFT_FRAME_SIZE`. The larger frame gives chroma the
+    /// low-register frequency resolution the short tempogram frame lacks
+    /// (see `KEY_STFT_FRAME_SIZE`). Shares the decoded window with the
+    /// tempogram — one decode — but never the spectrogram.
+    fn key_stft(&self) -> Option<&Vec<Vec<f32>>> {
+        // Same borrow dance as `tempo_stft`: resolve the window before
+        // touching the cell.
+        if self.key_stft.get().is_none() {
+            let computed = match self.bpmkey_audio() {
+                Some(audio) => {
+                    compute_stft(&audio.samples, KEY_STFT_FRAME_SIZE, KEY_STFT_HOP_SIZE).ok()
+                }
+                None => None,
+            };
+            let _ = self.key_stft.set(computed);
+        }
+        self.key_stft.get().and_then(|cached| cached.as_ref())
     }
 
     /// Start offset (seconds) that centers a `len_secs` window in the

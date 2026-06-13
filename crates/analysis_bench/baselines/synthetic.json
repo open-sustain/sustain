@@ -79,7 +79,7 @@
         "key"
       ],
       "bpm": 90.84320068359375,
-      "key": "Gm",
+      "key": "Am",
       "acoustics": {
         "integrated_lufs": -45.095444,
         "short_term_lufs_max": -45.091675,
@@ -141,7 +141,7 @@
         "key"
       ],
       "bpm": 95.89004516601562,
-      "key": "Am",
+      "key": "Gm",
       "acoustics": {
         "integrated_lufs": -40.735886,
         "short_term_lufs_max": -40.735886,
@@ -172,7 +172,7 @@
         "key"
       ],
       "bpm": 90.84320068359375,
-      "key": "Cm",
+      "key": "Bm",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.628326,
@@ -209,7 +209,7 @@
         "key"
       ],
       "bpm": 118.0,
-      "key": "Cm",
+      "key": "Bm",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.628326,
@@ -246,7 +246,7 @@
         "key"
       ],
       "bpm": 128.0,
-      "key": "Cm",
+      "key": "Bm",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.0484,
@@ -283,7 +283,7 @@
         "key"
       ],
       "bpm": 138.78822326660156,
-      "key": "Cm",
+      "key": "Bm",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.0484,
@@ -320,7 +320,7 @@
         "key"
       ],
       "bpm": 141.3116455078125,
-      "key": "C",
+      "key": "Em",
       "acoustics": {
         "integrated_lufs": -42.235542,
         "short_term_lufs_max": -42.102737,
@@ -342,8 +342,8 @@
       },
       "key_score": {
         "ground_truth": "C",
-        "category": "correct",
-        "score": 1.0
+        "category": "other",
+        "score": 0.0
       }
     },
     {
@@ -356,7 +356,7 @@
         "key"
       ],
       "bpm": 78.22608947753906,
-      "key": "Bm",
+      "key": "G",
       "acoustics": {
         "integrated_lufs": -38.641853,
         "short_term_lufs_max": -38.60244,
@@ -378,8 +378,8 @@
       },
       "key_score": {
         "ground_truth": "G",
-        "category": "other",
-        "score": 0.0
+        "category": "correct",
+        "score": 1.0
       }
     },
     {

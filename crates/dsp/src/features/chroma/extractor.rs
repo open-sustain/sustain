@@ -280,9 +280,9 @@ fn frame_to_chroma_tuned(
 /// Extract chroma vectors from a precomputed magnitude spectrogram.
 ///
 /// One 12-element, L2-normalized chroma vector per spectrogram frame. This is
-/// the entry point Sustain's key detector uses: it computes the STFT once (via
-/// [`compute_stft`], shared with the tempogram) and maps each frame to a pitch
-/// class profile.
+/// the entry point Sustain's key detector uses: it takes a spectrogram from
+/// [`compute_stft`] (the key detector gives chroma its own larger-frame STFT,
+/// distinct from the tempogram's) and maps each frame to a pitch class profile.
 ///
 /// # Arguments
 ///
