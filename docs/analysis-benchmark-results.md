@@ -595,3 +595,127 @@ layers. #192 stays open: HPCP-style profiles and temporal smoothing remain, each
 to be measured in isolation, before any profile A/B. No DSP was tuned and no
 corpus-specific constant was introduced.
 
+## 2026-06-13 — key detector v10 (core HPCP front-end), all three corpora
+
+The third **front-end** change under #192, isolated from the v8 STFT decoupling
+and the v9 HPSS pass. Through v9 the key path summed *every* magnitude bin in
+the chroma band into pitch classes, averaging the noise floor between partials
+straight into the profile the templates match. v10 replaces that band-summed
+chroma with a core **Harmonic Pitch Class Profile** (`compute_hpcp`,
+Sustain-authored — re-derived from Gómez 2006, *Tonal Description of Music Audio
+Signals*; **no MTG Essentia code read or copied**, see
+`crates/dsp/PROVENANCE.md`). The profile is built from the spectrum's **peaks**:
+spectral peak picking with quadratic (QIFFT) interpolation, energy weighting
+(peak amplitude²), and a squared-cosine pitch-class window (±1 semitone).
+**One variable changed:** the HPSS front-end, STFT size, [100, 5000] Hz band,
+440 Hz grid, and the entire detector (templates, mean-centered Pearson,
+cross-mode rescale, circle-of-fifths bonus, L2 normalization) are all untouched.
+This is the *core* HPCP only — harmonic summation, tuning estimation,
+sub-semitone resolution, and max-normalization are deliberately deferred to
+separate later layers (`ANALYZER_VERSION` 9 → 10).
+
+| | |
+| --- | --- |
+| Harness commit | `05bd5a0` |
+| `ANALYZER_VERSION` | 10 |
+| BPM range | 76–155 (unchanged) |
+| Build | `--release` |
+| Working tree at run time | clean (`git_dirty = false`, `HEAD == 05bd5a0`) |
+
+### Headline: strict harmonic-compatible rate (the product metric), v9 → v10
+
+`strict-compatible = correct + fifth + relative`. Exact key, MIREX-weighted,
+and the `other` (product-fail) count are guardrails alongside it.
+
+| Corpus | n | strict-compat v9 → **v10** | exact v9 → v10 | MIREX v9 → v10 | `other` v9 → v10 |
+| --- | --- | --- | --- | --- | --- |
+| Private goldish | 18 | 94.4 % → **100.0 %** | 61.1 % → 61.1 % | 77.8 % → 77.2 % | 1 → 0 |
+| Private all-core | 26 | 88.5 % → **92.3 %** | 57.7 % → 57.7 % | 71.5 % → 71.9 % | 3 → 2 |
+| Private silver | 8 | 75.0 % → **75.0 %** | 50.0 % → 50.0 % | 57.5 % → 60.0 % | 2 → 2 |
+| FMAK (`fma_medium`) | 1,723 | 61.9 % → **70.3 %** | 31.4 % → **45.0 %** | 47.0 % → **57.7 %** | 527 → 374 |
+| GiantSteps Key | 604 | 61.6 % → **60.6 %** | 26.8 % → **36.1 %** | 45.4 % → **49.8 %** | 167 → 147 |
+
+Aggregate over all 2,353 scored real tracks: strict **62.1 % → 68.0 %**
+(+5.9 pp), exact **30.5 % → 42.8 %** (+12.3 pp). `other` drops on every corpus.
+The product tier (private goldish) reaches **100 % strict, 0 `other`**, and FMAK
+gains across the board. The single dip is **GiantSteps strict −1.0 pp** — the
+histogram and mode-mix note below explain why.
+
+### Category histogram + loose-compatible rate, v9 → v10
+
+`loose = strict + parallel`. The strict/loose split matters for Camelot-wheel
+(Pioneer/Rekordbox) interpretation: `fifth` and `relative` are wheel-adjacent
+(strict-compatible); `parallel` is a same-tonic mode flip that is *not*
+wheel-adjacent but still close to the ear (loose-only).
+
+| Corpus | correct / fifth / relative / parallel / other v9 → **v10** | strict v9→v10 | loose v9→v10 |
+| --- | --- | --- | --- |
+| Private all-core (26) | 15/6/2/0/3 → **15/5/4/0/2** | 88.5 → 92.3 | 88.5 → 92.3 |
+| FMAK (1,723) | 541/428/98/129/527 → **775/307/129/138/374** | 61.9 → 70.3 | 69.4 → 78.3 |
+| GiantSteps (604) | 162/182/28/65/167 → **218/101/47/91/147** | 61.6 → 60.6 | 72.4 → **75.7** |
+
+On GiantSteps the `fifth` bucket loses 81 tracks while `correct` gains 56,
+`relative` +19, and `parallel` +26. Many former fifths now land exactly right
+(exact +9.3 pp) and `other` still drops, but the ≈26 that migrate **fifth →
+parallel** cross the strict boundary — so strict edges down 1.0 pp while
+**loose rises +3.3 pp** (72.4 → 75.7). Read as wheel-compatibility, GiantSteps
+did not get worse; the strict count moved because mode flips replaced fifth
+relations.
+
+### Mode mix — a regression on GiantSteps, *not* a clean pass
+
+This is the real caveat. Predicted-minor share against truth:
+
+| Corpus | predicted minor v9 → **v10** | truth minor | gap v9 → v10 |
+| --- | --- | --- | --- |
+| Private all-core | 65.4 % → 73.1 % | 61.5 % | 3.9 → 11.6 pp |
+| Private goldish | 66.7 % → 88.9 % | 72.2 % | 5.5 → 16.7 pp |
+| FMAK | 51.5 % → 45.1 % | 57.1 % | 5.6 → 12.0 pp |
+| GiantSteps Key | 70.2 % → **54.6 %** | **84.6 %** | 14.4 → **30.0 pp** |
+
+No corpus *collapses* (the most extreme split is GiantSteps at 55/45, still
+balanced). But the earlier ±15–20 pp mode-mix guard is **breached on
+GiantSteps**: its predicted-minor share drifts to ~30 pp below an 85 %-minor
+truth — a genuine mode-mix regression, and the mechanism behind both the strict
+dip and the fifth→parallel migration above. The private-goldish gap also widens
+to the edge of the guard (16.7 pp). The next layer must target this
+mode/parallel boundary directly.
+
+### BPM byte-identity
+
+**Unchanged** — every BPM output is byte-identical to v9 across all 2,353
+benchmarked tracks (private 26, FMAK 1,723, GiantSteps 604). HPCP is applied
+only on the key path; the tempogram never sees it.
+
+### Runtime cost — faster than v9
+
+HPCP processes spectral peaks rather than every bin, so the key band is
+*cheaper* than the band-summed chroma it replaces. Still background work, off
+the cold-start path (analysis never runs at launch).
+
+| Corpus (window) | key band v9 → **v10** | total ms/track v9 → v10 | throughput v9 → v10 |
+| --- | --- | --- | --- |
+| Private (full, ~120 s; BPM+key) | 313.9 → **266.7 ms** | 483 → 444 ms | 2.07 → **2.25 tracks/s** |
+| GiantSteps (120 s; key-only) | 381.9 → **338.2 ms** | 382 → 338 ms | 2.62 → **2.96 tracks/s** |
+| FMAK (~30 s clips; key-only) | 99.5 → **88.4 ms** | 99.5 → 88.4 ms | 10.0 → **11.3 tracks/s** |
+
+### Finding: a net quality win and a product win, with one corpus regression to watch
+
+- **Net quality win.** Aggregate strict +5.9 pp and exact +12.3 pp over 2,353
+  tracks, `other` down on every corpus, BPM byte-identical, and *faster*.
+- **Product / private win.** The trustworthy goldish tier goes 94.4 → **100 %
+  strict with zero `other`**; all-core +3.8 pp.
+- **Public exact/MIREX/other win.** FMAK +8.4 strict / +13.6 exact / +10.7
+  MIREX; GiantSteps +9.3 exact / +4.4 MIREX, `other` down on both.
+- **One primary-metric dip:** GiantSteps strict −1.0 pp (loose +3.3 pp; the
+  strict count moved via fifth→parallel, not via new `other` failures).
+- **One mode-mix regression:** GiantSteps predicted-minor 70 → 55 % against
+  85 % truth (~30 pp, outside the ±15–20 pp guard). Not a collapse, but a real
+  regression that the next layer (mode/parallel boundary) must address — with no
+  broad tuning sweep.
+
+#192 stays open. Harmonic summation, tuning estimation, sub-semitone
+resolution, and max-normalization remain as separate, individually-measured
+layers; the immediate priority is the GiantSteps mode/parallel regression. No
+DSP was tuned and no corpus-specific constant was introduced.
+
