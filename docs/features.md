@@ -541,6 +541,14 @@ overrides a value imported from a file tag or set by the user. The BPM
 column ships visible by default and feeds the `BPM` smart-playlist field
 for tempo-aware rules.
 
+Current validation snapshot, with the default 76–155 BPM band: every
+private-reference track whose labelled tempo falls inside the band lands
+within +/-2 BPM (22/22). The all-core private set scores 84.6% overall
+because four deliberately-kept labels sit at or below the 76 BPM floor;
+GiantSteps Tempo scores 61.3% within +/-2 BPM because much of its fast
+160–185 BPM material is outside the shipped range and folds to half
+tempo. Those misses are range artefacts, not known tempogram defects.
+
 ### Musical key detection — *Sustain-native*
 Estimates the song's tonal centre via chroma analysis over the same
 centered window as BPM, and stores one of the 24 major/minor labels in
@@ -548,6 +556,19 @@ centered window as BPM, and stores one of the 24 major/minor labels in
 field. The Music Key column ships hidden by default; surface it through
 the column selector. The same field is exposed to smart-playlist rules
 for harmony-aware sets.
+
+The product target is harmonic compatibility for Pioneer/Rekordbox-style
+filtering rather than exact tonic+mode alone. The validation headline is
+therefore **strict-compatible** key rate: exact key, a fifth away, or the
+relative major/minor. At the current v10 analysis engine the recorded
+strict-compatible rates are 100.0% on the 18-track high-confidence
+private goldish set, 92.3% on the 26-track private all-core set, 70.3%
+on 1,723 FMAK `fma_medium` clips, and 60.6% on 604 GiantSteps Key
+tracks. Exact-key rates on the same sets are 61.1%, 57.7%, 45.0%, and
+36.1%. GiantSteps remains the watched caveat: exact, loose-compatible,
+MIREX, and `other` all improved in the v10 benchmark, but its
+major/minor prediction mix drifted too far major, so future DSP work
+continues to track that mode boundary.
 
 ### Audio analysis — *Sustain-native*
 A single heavy decode pass produces, as byproducts of the one decode,
