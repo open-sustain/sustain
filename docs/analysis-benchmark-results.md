@@ -496,3 +496,102 @@ profile A/B (Temperley / Albrecht-Shanahan) worth running, since profile
 optimality depends on chroma quality. No DSP was tuned and no corpus-specific
 constant was introduced to reach these numbers.
 
+---
+
+## 2026-06-13 — key detector v9 (HPSS harmonic emphasis), all three corpora
+
+The second **front-end** change under #192, isolated from the v8 STFT
+decoupling. Percussive/broadband energy (drums, transients) spreads across
+every pitch class and dilutes the chroma profile the key templates match
+against. A median-filter harmonic-percussive separation
+(`emphasize_harmonic`, Sustain-authored — re-derived from Fitzgerald 2010 /
+Driedger & Müller 2014, not vendored) now runs over the 8192-pt key STFT
+before chroma: a time-median estimates the harmonic component `H`, a
+frequency-median the percussive component `P`, and a soft Wiener mask
+`H² / (H² + P²)` weights each bin by how harmonic it is. The median windows
+are physical spans (200 ms time, 200 Hz frequency) converted to odd kernels at
+the track's sample rate — fixed before measuring, not swept (`ANALYZER_VERSION`
+8 → 9). **One variable changed:** STFT, scoring, profiles, and the chroma
+mapping are all untouched; no HPCP/smoothing/profile/constant rides along.
+
+| | |
+| --- | --- |
+| Harness commit | `56448d7` |
+| `ANALYZER_VERSION` | 9 |
+| BPM range | 76–155 (unchanged) |
+| Build | `--release` |
+| Working tree at run time | clean (`git_dirty = false`, `HEAD == 56448d7`) |
+
+### Headline: strict harmonic-compatible rate (the product metric), v8 → v9
+
+`strict-compatible = correct + fifth + relative`. Exact key, MIREX-weighted,
+and the `other` (product-fail) count are guardrails alongside it.
+
+| Corpus | n | strict-compat v8 → **v9** | exact v8 → v9 | MIREX v8 → v9 | `other` v8 → v9 |
+| --- | --- | --- | --- | --- | --- |
+| Private goldish | 18 | 94.4 % → **94.4 %** | 61.1 % → 61.1 % | 77.8 % → 77.8 % | 1 → 1 |
+| Private all-core | 26 | 84.6 % → **88.5 %** | 53.8 % → 57.7 % | 68.5 % → 71.5 % | 4 → 3 |
+| Private silver | 8 | 62.5 % → **75.0 %** | 37.5 % → 50.0 % | 47.5 % → 57.5 % | 3 → 2 |
+| FMAK (`fma_medium`) | 1,723 | 57.9 % → **61.9 %** | 29.4 % → 31.4 % | 44.2 % → 47.0 % | 595 → 527 |
+| GiantSteps Key | 604 | 59.1 % → **61.6 %** | 23.7 % → 26.8 % | 42.4 % → 45.4 % | 191 → 167 |
+
+Every metric rises or holds on every corpus, and `other` (a product fail)
+drops everywhere.
+
+### Mode mix (within the ±15–20 pp guard, no collapse)
+
+| Corpus | predicted maj/min v8 → **v9** | truth maj/min | v8 → v9 gap |
+| --- | --- | --- | --- |
+| Private all-core | 8/18 → **9/17** | 10/16 | ~8 → ~4 pp |
+| Private goldish | 6/12 → **6/12** | 5/13 | ~6 → ~6 pp |
+| FMAK | 745/977 → **835/887** | 740/983 | 0.3 → 5.6 pp |
+| GiantSteps Key | 160/444 → **180/424** | 93/511 | 11.1 → 14.4 pp |
+
+HPSS drifts slightly more major on the two public corpora (toward, not past, a
+balanced split; still inside the guard) while accuracy rises — the extra major
+calls land correctly more often than not, so it is a sharpening, not a
+collapse.
+
+### BPM byte-identity
+
+**Unchanged** — every BPM output is byte-identical to v8 across all 2,353
+benchmarked tracks (private 26, FMAK 1,723, GiantSteps 604). HPSS is applied
+only on the key path; the tempogram never sees it.
+
+### Runtime cost
+
+HPSS adds a median-filter pass over the key STFT. It is scoped to the chroma
+band (`CHROMA_FMAX_HZ`) and uses a sliding-window frequency median, which keeps
+the cost bounded; it is background work, off the cold-start path (analysis
+never runs at launch).
+
+| Corpus (window) | key band v8 → **v9** | total ms/track v8 → v9 | throughput v8 → v9 |
+| --- | --- | --- | --- |
+| Private (full, ~120 s; BPM+key) | 115.6 → **313.9 ms** | 290 → 483 ms | 3.4 → **2.1 tracks/s** |
+| GiantSteps (120 s; key-only) | 187.7 → **381.9 ms** | 188 → 382 ms | 5.3 → **2.6 tracks/s** |
+| FMAK (~30 s clips; key-only) | 51.2 → **99.5 ms** | 51 → 100 ms | 19.5 → **10.0 tracks/s** |
+
+≈ +200 ms/track on full-length material, ≈ +48 ms on short clips — the key band
+roughly doubles, scaling with window length.
+
+### Finding: a clean front-end gain on harder material; the product tier is preserved
+
+HPSS lifts every corpus on every metric with no regression anywhere, so it is a
+genuine, generalizing front-end improvement, not a corpus-specific fit. The
+shape of the win is worth recording honestly:
+
+- **Private goldish — the trustworthy product tier — is flat at 94.4 %.** It is
+  already at its ceiling (1 `other` of 18), so HPSS has no room to improve it;
+  the point is that it is **preserved, not regressed**.
+- **The gains are on harder/noisier material:** the private *silver* tier
+  (noisier, Spotify-correlated labels) jumps +12.5 pp, and the two public
+  regression guards rise (FMAK +4.0, GiantSteps +2.5). This is exactly the
+  target outcome — improve the broad/hard corpora while holding the product
+  core.
+
+The runtime cost (≈ +200 ms/track, background-only) was accepted as the price
+for a clean accuracy gain that also lays the groundwork for the next front-end
+layers. #192 stays open: HPCP-style profiles and temporal smoothing remain, each
+to be measured in isolation, before any profile A/B. No DSP was tuned and no
+corpus-specific constant was introduced.
+

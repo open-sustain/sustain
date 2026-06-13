@@ -148,25 +148,26 @@ spacing needs the resolution), an HPSS-style **harmonic mask**, and
 measured jump (45.6% → 63.2%). Gómez/MTG HPCP and Faraldo are the named
 next-level references.
 
-**What Sustain has (after v8).** Key now runs its own 8192-point STFT
-(`KEY_STFT_FRAME_SIZE`, decoupled from the 2048-point tempogram in v8 — see
-below), still feeding the base chroma path (`chroma/extractor.rs`):
-band-limited 100–5000 Hz, magnitude compressed `^0.6`, soft-mapped (σ=0.5),
-L2-normalised **per frame**, with the per-frame template matches then summed
-flat over the window. The "naive full-track chroma averaging" the fork's note
-identifies as the collapse trigger is now finer-grained in frequency, but
-**still has no temporal smoothing, no HPSS, no HPCP, and no tuning
-estimation** — those are the remaining front-end layers.
+**What Sustain has (after v9).** Key runs its own 8192-point STFT
+(`KEY_STFT_FRAME_SIZE`, decoupled from the 2048-point tempogram in v8), then a
+median-filter HPSS harmonic emphasis (`emphasize_harmonic`, v9) over that
+spectrogram, feeding the base chroma path (`chroma/extractor.rs`): band-limited
+100–5000 Hz, magnitude compressed `^0.6`, soft-mapped (σ=0.5), L2-normalised
+**per frame**, with the per-frame template matches then summed flat over the
+window. The "naive full-track chroma averaging" the fork's note identifies as
+the collapse trigger is now finer-grained in frequency and percussion-suppressed,
+but **still has no HPCP, no temporal smoothing, and no tuning estimation** —
+those are the remaining front-end layers.
 
 **Decision.**
-- *Highest-value, lowest-risk roadmap item — **step 1 done (v8):*** **decouple
-  the key STFT from the tempo STFT.** The Analyzer already slices a dedicated
-  key/BPM window; key now takes its own larger-FFT (8192-point) transform
-  instead of reusing the 2048 tempogram STFT (whose size was a tempo/key
-  compromise, per the comment at `lib.rs:239`). That decoupling alone is the v8
-  win recorded in the results. Still to layer in, incrementally and each
-  verified on a benchmark: HPSS-style harmonic emphasis, then HPCP-style
-  profiles, then temporal smoothing.
+- *Highest-value, lowest-risk roadmap item — **steps 1–2 done (v8, v9):***
+  **decouple the key STFT from the tempo STFT, then suppress percussion before
+  chroma.** The Analyzer already slices a dedicated key/BPM window; key takes
+  its own larger-FFT (8192-point) transform (v8) instead of reusing the 2048
+  tempogram STFT (whose size was a tempo/key compromise, per the comment at
+  `lib.rs:239`), and runs median-filter HPSS over it (v9). Both are the front-end
+  wins recorded in the results. Still to layer in, incrementally and each
+  verified on a benchmark: HPCP-style profiles, then temporal smoothing.
 - *Verify, don't trust:* re-measure each increment on FMAK + GiantSteps; the
   fork's per-step deltas are n=68.
 - *Do not inherit:* the `100`/`5000` Hz band-limit, the `^0.6` compression, the
@@ -341,16 +342,19 @@ Pioneer/XDJ/CDJ/Rekordbox compatibility is the real user workflow, so **Rekordbo
 parity is a meaningful product benchmark**, not a stretch fantasy.
 
 **Minimum acceptance gate** — the floor a key change must clear to be worth
-keeping at all. This is the gate, **not the ambition**. The v8 dedicated key
-STFT (see [results](analysis-benchmark-results.md)) cleared every gate but
-GiantSteps, which sits 0.9 pp under after a +7.6 pp rise.
+keeping at all. This is the gate, **not the ambition**. The v9 HPSS harmonic
+emphasis (see [results](analysis-benchmark-results.md)) lifts every corpus on
+top of v8 and pushes GiantSteps over the last open gate.
 
-| Corpus | Min acceptance gate (strict-compatible) | v7 | **v8** |
-| --- | --- | --- | --- |
-| Private goldish | ≥ 75 % | 61.1 % | **94.4 %** ✓ |
-| Private all-core | ≥ 65–70 % | 50.0 % | **84.6 %** ✓ |
-| FMAK (`fma_medium`) | ≥ 55–60 % | 47.9 % | **57.9 %** ✓ |
-| GiantSteps Key | ≥ 60 % | 51.5 % | 59.1 % (−0.9) |
+| Corpus | Min acceptance gate (strict-compatible) | v7 | v8 | **v9** |
+| --- | --- | --- | --- | --- |
+| Private goldish | ≥ 75 % | 61.1 % | 94.4 % | **94.4 %** ✓ |
+| Private all-core | ≥ 65–70 % | 50.0 % | 84.6 % | **88.5 %** ✓ |
+| FMAK (`fma_medium`) | ≥ 55–60 % | 47.9 % | 57.9 % | **61.9 %** ✓ |
+| GiantSteps Key | ≥ 60 % | 51.5 % | 59.1 % | **61.6 %** ✓ |
+
+All four corpora now clear the minimum acceptance gate. The product-ambition
+tier (goldish ≥ 85 %, stretch ≥ 90 %) is also clear — goldish sits at 94.4 %.
 
 **Product ambition / DJ-tool parity** — the bar that actually matters, set
 against the commercial tools on the core use case:
@@ -387,10 +391,13 @@ confirmed by a recorded benchmark before and after.
    harmonic emphasis + HPCP, independent of the 2048 tempogram STFT. The fork's
    largest measured win and architecturally clean. *Gate:* MIREX-weighted on
    FMAK + GiantSteps. **Step 1 landed (v8):** the dedicated 8192-point key STFT
-   alone lifted strict-compatible +7.6–34.6 pp and snapped the predicted
-   major/minor mix to ground truth (FMAK within 0.3 pp) — measured one variable
-   at a time, no harmonic emphasis/HPCP/smoothing yet. Those remain the next
-   sub-steps, each its own benchmarked change.
+   lifted strict-compatible +7.6–34.6 pp and snapped the predicted major/minor
+   mix to ground truth (FMAK within 0.3 pp). **Step 2 landed (v9):** median-
+   filter HPSS harmonic emphasis before chroma lifted every corpus again
+   (+2.5–4.0 pp on the public guards, +12.5 on private silver; goldish held at
+   its 94.4 % ceiling), at ≈ +200 ms/track. Each was measured one variable at a
+   time. **Next:** HPCP-style profiles, then temporal smoothing — each its own
+   benchmarked change.
 2. **Mode discrimination** (Area 1) — mean-centred (Pearson) correlation **[done,
    v7]** and/or alternative/multi-profile templates **[next, after the front-end
    is built out — profile optimality depends on chroma quality]**; resolve the
