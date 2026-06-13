@@ -8,17 +8,18 @@ the `sustain-analysis-bench` harness (`crates/analysis_bench/`, whose
 **This file is a plan, not a result.** A corpus is only usable for a
 quality claim after its audio and annotations are actually present locally,
 a file-level manifest with checksums is recorded, and a benchmark run is
-captured. Until then every real-audio row below is **pending a recorded
-run** — no BPM/key accuracy number in this repository is backed by real
-audio yet. The committed `baselines/synthetic.json` is a determinism and
+captured. Recorded runs live in
+[`analysis-benchmark-results.md`](analysis-benchmark-results.md) (aggregate
+metrics only — never audio, local paths, or generated manifests). The
+committed `baselines/synthetic.json` is a determinism and
 constructed-ground-truth baseline only; it deliberately makes no accuracy
 claim.
 
-GiantSteps Tempo and Key now have a shipped, reproducible adapter
+GiantSteps Tempo and Key have a shipped, reproducible adapter
 (`analysis-bench adapt-giantsteps`) and a verified-live audio source (the
-JKU mirror), so their acquisition is no longer hypothetical. What remains
-before any GiantSteps claim is simply running the harness over the adapted
-manifest and recording the result — see
+JKU mirror). A first full baseline was recorded 2026-06-13 — see
+[`analysis-benchmark-results.md`](analysis-benchmark-results.md). To
+reproduce or extend it, see
 [Acquiring and adapting GiantSteps](#acquiring-and-adapting-giantsteps-tempo--key).
 
 Registry transcribed 2026-06-13, adapted for the Sustain harness from the
@@ -66,8 +67,8 @@ imply a metric we cannot compute.
 
 | Corpus | Tier | Harness tasks | Source | Annotation license | Audio availability | Status / next action |
 | --- | --- | --- | --- | --- | --- | --- |
-| GiantSteps Tempo | 2 | `bpm` | [giantsteps-tempo-dataset](https://github.com/GiantSteps/giantsteps-tempo-dataset) @ `d51ab24` | annotations in-repo (per-repo terms; contact TU Wien) | JKU mirror **live** (`cp.jku.at/datasets/giantsteps/backup/<id>.LOFI.mp3`, the primary in the repo's `audio_dl.sh`); Beatport `geo-samples` CDN **dead**; mirdata ships annotations only. Audio external, never committed. | **Adapter shipped** (`adapt-giantsteps --dataset tempo`): maps `annotations_v2/tempo/*.bpm` → per-track `bpm`, skips `0.0` sentinels, and by default requires + md5-verifies each track's `md5/` digest (`--no-md5` opts out). Baseline **pending a recorded run**. |
-| GiantSteps Key | 2 | `key` | [giantsteps-key-dataset](https://github.com/GiantSteps/giantsteps-key-dataset) @ `6bcd492` | **CC BY-SA 4.0** | JKU mirror **live** (same backup path + `audio_dl.sh`); Beatport CDN dead; mirdata annotations-only. Audio external, never committed. | **Adapter shipped** (`adapt-giantsteps --dataset key`): maps `annotations/key/*.key` → per-track `key` (the harness scorer parses the label); same default-on, strict `md5/` verification as Tempo (`--no-md5` opts out). Baseline **pending a recorded run**. |
+| GiantSteps Tempo | 2 | `bpm` | [giantsteps-tempo-dataset](https://github.com/GiantSteps/giantsteps-tempo-dataset) @ `d51ab24` | annotations in-repo (per-repo terms; contact TU Wien) | JKU mirror **live** (`cp.jku.at/datasets/giantsteps/backup/<id>.LOFI.mp3`, the primary in the repo's `audio_dl.sh`); Beatport `geo-samples` CDN **dead**; mirdata ships annotations only. Audio external, never committed. | **Adapter shipped** (`adapt-giantsteps --dataset tempo`): maps `annotations_v2/tempo/*.bpm` → per-track `bpm`, skips `0.0` sentinels, and by default requires + md5-verifies each track's `md5/` digest (`--no-md5` opts out). Baseline **recorded 2026-06-13** ([results](analysis-benchmark-results.md)). |
+| GiantSteps Key | 2 | `key` | [giantsteps-key-dataset](https://github.com/GiantSteps/giantsteps-key-dataset) @ `6bcd492` | **CC BY-SA 4.0** | JKU mirror **live** (same backup path + `audio_dl.sh`); Beatport CDN dead; mirdata annotations-only. Audio external, never committed. | **Adapter shipped** (`adapt-giantsteps --dataset key`): maps `annotations/key/*.key` → per-track `key` (the harness scorer parses the label); same default-on, strict `md5/` verification as Tempo (`--no-md5` opts out). Baseline **recorded 2026-06-13** ([results](analysis-benchmark-results.md)); key result governed by a detector bug under fix (#192). |
 | FMAK / FMA Keys | 1 | `key` | <https://zenodo.org/records/10719860> | CC BY 4.0 (annotations) | FMA audio, **per-track licenses** — check each | Expert song-level key/mode for 5,489 songs. Build an FMAK→manifest adapter; verify per-track audio licenses before any redistribution. |
 | FMA Small | 1 | `bpm` (sanity) | <https://github.com/mdeff/fma> | metadata CC BY 4.0; code MIT | per-track artist licenses | Echonest tempo labels are weak → development/tuning only, **not** final accuracy claims. Keep tuning runs separate from validation runs. |
 | Freesound Loop (FSL10K) | 4 | `bpm`, `key` | <https://zenodo.org/records/3967852> | per-sound CC (see `FSL10K/metadata.json`) | downloadable from Zenodo | 9,455 loops with tempo/key/genre. Short-audio robustness; user/tag-derived BPM needs caveat-aware scoring. |
@@ -169,8 +170,9 @@ build the BPM corpus (`annotations_v2/tempo/*.bpm`; tracks annotated `0.0`
 are reported and skipped). The generated `corpora/giantsteps_*.toml` is
 gitignored — it names local audio paths — and audio and results stay
 external. Record the harness commit, `ANALYZER_VERSION`, `corpus_id`, and
-headline metrics alongside the result, per the policy above. **Until such a
-run is recorded, no GiantSteps accuracy number is claimed.**
+headline metrics alongside the result, per the policy above — the recorded
+runs live in
+[`analysis-benchmark-results.md`](analysis-benchmark-results.md).
 
 ## Tier 5 — private reality check (pending corpus acquisition)
 
