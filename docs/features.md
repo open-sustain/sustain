@@ -528,14 +528,18 @@ prompt.
 
 ### BPM detection — *Sustain-native*
 A tempogram estimator over the track's beat envelope, octave-normalized
-into the configured `[min_bpm, max_bpm]` band (default 70–170 BPM). It
-reads a **centered** window of the track — the middle two minutes —
-rather than the opening seconds, where intros (especially in electronic
-music) are too sparse and tame to read a steady tempo from. The estimate
-fills `tracks.bpm` only when SQLite has no value for that field —
-analysis supplies missing data, it never overrides a value imported from
-a file tag or set by the user. The BPM column ships visible by default
-and feeds the `BPM` smart-playlist field for tempo-aware rules.
+into a `[min, max]` band (default 76–155 BPM). The band is adjustable in
+the Analysis preferences tab — two BPM fields let a user widen it for
+very slow or very fast material or narrow it to bias the octave fold —
+and it applies to every analysis run, background sweeps and manual
+one-off runs alike. Detection reads a **centered** window of the track —
+the middle two minutes — rather than the opening seconds, where intros
+(especially in electronic music) are too sparse and tame to read a
+steady tempo from. The estimate fills `tracks.bpm` only when SQLite has
+no value for that field — analysis supplies missing data, it never
+overrides a value imported from a file tag or set by the user. The BPM
+column ships visible by default and feeds the `BPM` smart-playlist field
+for tempo-aware rules.
 
 ### Musical key detection — *Sustain-native*
 Estimates the song's tonal centre via chroma analysis over the same

@@ -139,9 +139,11 @@ pub use waveform::WaveformTiers;
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
 pub const ANALYZER_VERSION: u32 = 5;
 
-/// DSP tunables exposed to callers. Defaults reflect the values the
-/// rhythmbox-to-pioneer-xdj-exporter author landed on after testing on
-/// a large DJ-style library.
+/// DSP tunables exposed to callers. The default mirrors Sustain's
+/// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default
+/// surfaced in the Analysis preferences tab — so a caller that does not
+/// thread the user's setting through still octave-normalizes into the
+/// same window the app uses.
 ///
 /// Capability gating (which bands to compute) is **not** in this
 /// struct — that lives on the call site, which simply chooses which
@@ -165,8 +167,8 @@ pub struct AnalysisOptions {
 impl Default for AnalysisOptions {
     fn default() -> Self {
         Self {
-            min_bpm: 70.0,
-            max_bpm: 170.0,
+            min_bpm: 76.0,
+            max_bpm: 155.0,
         }
     }
 }

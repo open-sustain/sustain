@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use gtk::glib::Propagation;
 use gtk::prelude::*;
-use sustain_app_runtime::AnalysisSettings;
 use sustain_app_runtime::priority::resolve_worker_count;
+use sustain_app_runtime::{AnalysisSettings, BpmRange};
 
 use super::super::{
     ApplicationCommand, BackgroundResourceUsage, command_controller::SharedCommandController,
@@ -85,9 +85,16 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
     content.append(&key_row.container);
     content.append(&audio_row.container);
 
+    // BPM detection range: the octave-normalization window the tempo
+    // estimator folds into. Grouped with the capability toggles because
+    // it is an analysis setting too — it applies to every run, not just
+    // the background sweep.
+    content.append(&build_bpm_range_section(command_controller.clone()));
+
     // Separator + resource-usage slider. The separator keeps the
-    // "what to compute" toggles visually distinct from the "how
-    // aggressively to compute" knob beneath them.
+    // analysis settings above — what to compute, and the BPM window —
+    // visually distinct from the resource knob that governs how
+    // aggressively the background pool runs.
     let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
     separator.add_css_class("preference-section-separator");
     content.append(&separator);
@@ -205,8 +212,132 @@ fn audio_switch_settings(current: AnalysisSettings, audio_on: bool) -> AnalysisS
         }
         .normalized()
     } else {
-        AnalysisSettings::default()
+        // Clear the capability toggles but keep the BPM range — it is a
+        // DSP tunable orthogonal to the toggles, and stopping the heavy
+        // pass must not silently reset the user's window.
+        AnalysisSettings {
+            bpm_range: current.bpm_range,
+            ..AnalysisSettings::default()
+        }
     }
+}
+
+/// BPM detection range: two whole-BPM spin buttons (minimum and
+/// maximum) for the octave-normalization window. The window is a DSP
+/// tunable that applies to every analysis run — background and manual —
+/// so a change here, like the capability toggles, flows through
+/// `UpdateSettings` to the scheduler, which respawns its worker pool
+/// with the new options.
+fn build_bpm_range_section(command_controller: SharedCommandController) -> gtk::Widget {
+    let container = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    container.add_css_class("preference-slider-row");
+
+    let header = gtk::Label::new(Some("BPM detection range"));
+    header.set_xalign(0.0);
+    container.append(&header);
+
+    let initial = command_controller
+        .runtime()
+        .borrow()
+        .settings()
+        .analysis
+        .bpm_range;
+
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let min_spin = labelled_bpm_spin(
+        &row,
+        "Minimum",
+        f64::from(BpmRange::ABSOLUTE_MIN),
+        f64::from(BpmRange::ABSOLUTE_MAX - 1),
+        f64::from(initial.min()),
+    );
+    let max_spin = labelled_bpm_spin(
+        &row,
+        "Maximum",
+        f64::from(BpmRange::ABSOLUTE_MIN + 1),
+        f64::from(BpmRange::ABSOLUTE_MAX),
+        f64::from(initial.max()),
+    );
+    container.append(&row);
+
+    let caption = gtk::Label::new(Some(
+        "The tempo window BPM detection folds octaves into. Widen it for very slow or \
+         fast material; narrow it to bias the fold. Applies to background and manual analysis.",
+    ));
+    caption.add_css_class("preference-helper");
+    caption.set_xalign(0.0);
+    caption.set_wrap(true);
+    caption.set_natural_wrap_mode(gtk::NaturalWrapMode::Word);
+    caption.set_width_chars(HELPER_MIN_WIDTH_CHARS);
+    caption.set_max_width_chars(HELPER_MAX_WIDTH_CHARS);
+    container.append(&caption);
+
+    wire_bpm_range_spins(&min_spin, &max_spin, command_controller);
+
+    container.upcast()
+}
+
+/// Append a `label` followed by its spin button to `row` and return the
+/// spin button. Whole-BPM only (`set_digits(0)`); GTK clamps entry to
+/// `[lo, hi]`.
+fn labelled_bpm_spin(row: &gtk::Box, label: &str, lo: f64, hi: f64, value: f64) -> gtk::SpinButton {
+    let caption = gtk::Label::new(Some(label));
+    let spin = gtk::SpinButton::with_range(lo, hi, 1.0);
+    spin.set_digits(0);
+    spin.set_value(value);
+    row.append(&caption);
+    row.append(&spin);
+    spin
+}
+
+/// Wire both spin buttons so any change rebuilds a [`BpmRange`] (which
+/// repairs an inverted or out-of-range window), reflects the repaired
+/// values back onto the buttons, and dispatches `UpdateSettings`. A
+/// shared `syncing` guard keeps the programmatic write-back from
+/// re-entering the handlers.
+fn wire_bpm_range_spins(
+    min_spin: &gtk::SpinButton,
+    max_spin: &gtk::SpinButton,
+    command_controller: SharedCommandController,
+) {
+    let syncing = Rc::new(Cell::new(false));
+    for spin in [min_spin, max_spin] {
+        let min_spin = min_spin.clone();
+        let max_spin = max_spin.clone();
+        let command_controller = command_controller.clone();
+        let syncing = syncing.clone();
+        spin.connect_value_changed(move |_| {
+            if syncing.get() {
+                return;
+            }
+            apply_bpm_range(&min_spin, &max_spin, &command_controller, &syncing);
+        });
+    }
+}
+
+fn apply_bpm_range(
+    min_spin: &gtk::SpinButton,
+    max_spin: &gtk::SpinButton,
+    command_controller: &SharedCommandController,
+    syncing: &Rc<Cell<bool>>,
+) {
+    let range = BpmRange::new(
+        min_spin.value().round() as u16,
+        max_spin.value().round() as u16,
+    );
+    // Reflect the repaired (clamped, ordered) values without
+    // re-entering this handler via the programmatic `set_value`.
+    syncing.set(true);
+    min_spin.set_value(f64::from(range.min()));
+    max_spin.set_value(f64::from(range.max()));
+    syncing.set(false);
+
+    let mut settings = command_controller.runtime().borrow().settings().clone();
+    if settings.analysis.bpm_range == range {
+        return;
+    }
+    settings.analysis.bpm_range = range;
+    let _ = command_controller.dispatch(ApplicationCommand::UpdateSettings(settings));
 }
 
 /// Slider with three discrete stops (Innocuous / Balanced /
@@ -344,7 +475,7 @@ fn caption_text(usage: BackgroundResourceUsage) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisSettings, BackgroundResourceUsage, SwitchState, audio_switch_settings,
+        AnalysisSettings, BackgroundResourceUsage, BpmRange, SwitchState, audio_switch_settings,
         bpm_switch_state, key_switch_state, usage_to_value, value_to_usage,
     };
 
@@ -355,6 +486,7 @@ mod tests {
             bpm: true,
             key: false,
             audio: false,
+            bpm_range: BpmRange::default(),
         };
         assert_eq!(
             bpm_switch_state(off),
@@ -378,6 +510,7 @@ mod tests {
             bpm: true,
             key: true,
             audio: true,
+            bpm_range: BpmRange::default(),
         };
         assert_eq!(
             bpm_switch_state(on),
@@ -397,23 +530,40 @@ mod tests {
 
     #[test]
     fn disabling_audio_disables_all_background_analysis_capabilities() {
+        // Disabling audio clears every capability toggle but preserves the
+        // BPM range — it is a DSP tunable, not a capability, and must not
+        // be reset by stopping the heavy pass.
+        let custom_range = BpmRange::new(60, 180);
         assert_eq!(
             audio_switch_settings(
                 AnalysisSettings {
                     bpm: true,
                     key: true,
                     audio: true,
+                    bpm_range: custom_range,
                 },
                 false,
             ),
-            AnalysisSettings::default()
+            AnalysisSettings {
+                bpm: false,
+                key: false,
+                audio: false,
+                bpm_range: custom_range,
+            }
         );
         assert_eq!(
-            audio_switch_settings(AnalysisSettings::default(), true),
+            audio_switch_settings(
+                AnalysisSettings {
+                    bpm_range: custom_range,
+                    ..AnalysisSettings::default()
+                },
+                true,
+            ),
             AnalysisSettings {
                 bpm: true,
                 key: true,
                 audio: true,
+                bpm_range: custom_range,
             }
         );
     }

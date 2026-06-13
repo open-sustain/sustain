@@ -19,6 +19,12 @@ member, so `cargo fmt`/`clippy`/`test` cover it like everything else.
   of the determinism guarantee. Ground truth is exact by construction, so it
   also yields a coarse accuracy figure — but **this tier does not make
   accuracy claims.**
+- **Tiers 1–4 — public reference corpora**: GiantSteps Tempo/Key, FMAK,
+  Freesound Loop, and friends — the real external quality signal. These are
+  acquired locally (audio never committed) and scored per the registry in
+  [`docs/analysis-benchmark-corpora.md`](../../docs/analysis-benchmark-corpora.md),
+  which records each corpus's source, licenses, checksums, and the tasks it
+  supports. No accuracy claim until a corpus is present and a run recorded.
 - **Tier 5 — private real-audio**: corpora such as the maintainer's local
   `test-library/`, referenced by `path` from a **gitignored** manifest.
   These carry the real BPM/key/loudness quality signal. Audio is never

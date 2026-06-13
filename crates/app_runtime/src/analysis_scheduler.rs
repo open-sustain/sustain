@@ -178,7 +178,6 @@ pub struct AnalysisSchedulerConfig {
     pub initial_resource_usage: BackgroundResourceUsage,
     pub library_path: Option<PathBuf>,
     pub analyzer_version: u32,
-    pub analysis_options: AnalysisOptions,
 }
 
 #[derive(Clone, Debug)]
@@ -529,7 +528,6 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         initial_resource_usage,
         library_path,
         analyzer_version,
-        analysis_options,
     } = config;
 
     let mut state = SupervisorState {
@@ -580,10 +578,10 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
             DrainOutcome::Continue => {}
         }
         if pool_was_alive && pool.is_none() {
-            // A command (resource-usage flip) tore the pool down.
-            // The old pool's last-second outcomes may still be in
-            // transit; we discard the in-flight set so the new
-            // pool starts clean, and `apply_outcome`'s
+            // A command (resource-usage flip or BPM-range change) tore
+            // the pool down. The old pool's last-second outcomes may
+            // still be in transit; we discard the in-flight set so the
+            // new pool starts clean, and `apply_outcome`'s
             // `HashSet::remove` is defensive for the stragglers.
             //
             // Background items in `pending` can be dropped — the
@@ -685,13 +683,16 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         }
 
         // 2. Make sure a pool is alive and sized to the current preset.
+        //    The DSP tunables (BPM range) are resolved from the current
+        //    settings here, so a respawn after a range change picks up
+        //    the new window.
         if pool.is_none() {
             pool = Some(spawn_pool(
                 state.resource_usage,
                 &library_store,
                 &analyzer,
                 &track_updated,
-                analysis_options,
+                options_from_settings(&state.settings),
                 &outcome_tx,
             ));
         }
@@ -1091,6 +1092,18 @@ fn apply_command(
 ) {
     match command {
         SchedulerCommand::SettingsChanged(settings) => {
+            // The BPM detection range is a DSP tunable baked into each
+            // worker at spawn — unlike the capability toggles, which are
+            // read fresh per dispatch — so a range change needs a pool
+            // respawn to take effect, the same teardown the
+            // resource-usage flip uses. A toggle-only change leaves the
+            // pool alone. The dispatch loop recreates the pool with the
+            // new window on its next iteration.
+            if state.settings.bpm_range != settings.bpm_range {
+                if let Some(p) = pool.take() {
+                    p.shutdown();
+                }
+            }
             state.settings = settings;
         }
         SchedulerCommand::ResourceUsageChanged(usage) => {
@@ -1147,6 +1160,17 @@ fn capabilities_from(settings: &AnalysisSettings) -> AnalysisCapabilities {
         bpm: settings.bpm,
         key: settings.key,
         audio: settings.audio,
+    }
+}
+
+/// Resolve the DSP tunables the workers bake in from the analysis
+/// settings. The BPM detection range is the only such tunable today; it
+/// is stored as whole BPM in settings and widened to the `f32`
+/// [`AnalysisOptions`] the analyzer expects.
+fn options_from_settings(settings: &AnalysisSettings) -> AnalysisOptions {
+    AnalysisOptions {
+        min_bpm: f32::from(settings.bpm_range.min()),
+        max_bpm: f32::from(settings.bpm_range.max()),
     }
 }
 

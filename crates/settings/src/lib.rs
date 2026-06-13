@@ -18,7 +18,7 @@ use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 
 pub use sustain_domain::{
-    AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
+    AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, BpmRange, CdEncodingProfile,
     CdReadMode, DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, LibraryManagementMode,
     LibrarySettings, OnlineSettings, PlaybackSettings, PlaylistFolderId, PlaylistId, PlaylistItem,
     ShuffleMode, SmartPlaylistId, SmartShuffleEntropy, UiSettings, UiSidebarSelection,
@@ -414,7 +414,7 @@ fn default_view_visible() -> bool {
     true
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct AnalysisSettingsDocument {
     #[serde(default)]
     bpm: bool,
@@ -422,6 +422,30 @@ struct AnalysisSettingsDocument {
     key: bool,
     #[serde(default)]
     audio: bool,
+    #[serde(default = "default_min_bpm")]
+    min_bpm: u16,
+    #[serde(default = "default_max_bpm")]
+    max_bpm: u16,
+}
+
+impl Default for AnalysisSettingsDocument {
+    fn default() -> Self {
+        Self {
+            bpm: false,
+            key: false,
+            audio: false,
+            min_bpm: default_min_bpm(),
+            max_bpm: default_max_bpm(),
+        }
+    }
+}
+
+fn default_min_bpm() -> u16 {
+    BpmRange::default().min()
+}
+
+fn default_max_bpm() -> u16 {
+    BpmRange::default().max()
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -582,6 +606,8 @@ impl SettingsDocument {
                 bpm: settings.analysis.bpm,
                 key: settings.analysis.key,
                 audio: settings.analysis.audio,
+                min_bpm: settings.analysis.bpm_range.min(),
+                max_bpm: settings.analysis.bpm_range.max(),
             },
             online: OnlineSettingsDocument {
                 artwork: settings.online.artwork,
@@ -625,10 +651,13 @@ impl SettingsDocument {
             // Normalize on load so a hand-edited config with
             // `audio = true, bpm = false` reaches the runtime as the
             // valid all-on state — `audio` always implies bpm + key.
+            // `BpmRange::new` likewise repairs an out-of-range or
+            // inverted hand-edited window into a valid one.
             analysis: AnalysisSettings {
                 bpm: self.analysis.bpm,
                 key: self.analysis.key,
                 audio: self.analysis.audio,
+                bpm_range: BpmRange::new(self.analysis.min_bpm, self.analysis.max_bpm),
             }
             .normalized(),
             online: OnlineSettings {
@@ -731,11 +760,12 @@ mod tests {
     };
 
     use super::{
-        AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
-        CdReadMode, DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, InMemorySettingsStore,
-        LibraryManagementMode, OnlineSettings, PlaylistId, PlaylistItem, SettingsStore,
-        ShuffleMode, SmartShuffleEntropy, TomlSettingsStore, UiSettings, UiSidebarSelection,
-        UserSettings, VolumePercent, atomic_replace, create_temporary_sibling_file,
+        AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, BpmRange,
+        CdEncodingProfile, CdReadMode, DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings,
+        InMemorySettingsStore, LibraryManagementMode, OnlineSettings, PlaylistId, PlaylistItem,
+        SettingsStore, ShuffleMode, SmartShuffleEntropy, TomlSettingsStore, UiSettings,
+        UiSidebarSelection, UserSettings, VolumePercent, atomic_replace,
+        create_temporary_sibling_file,
     };
 
     #[test]
@@ -830,6 +860,11 @@ mod tests {
         assert!(loaded.analysis.audio);
         assert!(loaded.analysis.bpm, "audio on must imply bpm on");
         assert!(loaded.analysis.key, "audio on must imply key on");
+        assert_eq!(
+            loaded.analysis.bpm_range,
+            BpmRange::default(),
+            "a section that omits the BPM range falls back to the preset"
+        );
 
         let root = path
             .parent()
@@ -946,6 +981,9 @@ mod tests {
                 bpm: true,
                 key: false,
                 audio: false,
+                // A non-preset, in-range window so the round-trip proves
+                // the BPM range is persisted, not silently reset.
+                bpm_range: BpmRange::new(60, 180),
             },
             online: OnlineSettings {
                 artwork: true,

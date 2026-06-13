@@ -18,11 +18,11 @@ use std::{
 pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, ApplicationQuery, BackgroundJobsSettings,
-    BackgroundResourceUsage, CdEncodingProfile, CdReadMode, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT,
-    DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest,
-    DuplicateMatchMode, DuplicateMetadataField, DuplicateMetadataFieldSelection,
-    DuplicateMetadataSelection, EncodingSettings, FieldChange, FilesPerFolderCap,
-    GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LazyPickContext,
+    BackgroundResourceUsage, BpmRange, CdEncodingProfile, CdReadMode, Clock,
+    DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath,
+    DuplicateConsolidationRequest, DuplicateMatchMode, DuplicateMetadataField,
+    DuplicateMetadataFieldSelection, DuplicateMetadataSelection, EncodingSettings, FieldChange,
+    FilesPerFolderCap, GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LazyPickContext,
     LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange, MonotonicClock,
     OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
     PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
@@ -1393,7 +1393,6 @@ impl ApplicationRuntime {
                 initial_resource_usage: self.settings.background_jobs.resource_usage,
                 library_path: self.settings.library.path.clone(),
                 analyzer_version: sustain_analysis::ANALYZER_VERSION,
-                analysis_options: sustain_analysis::AnalysisOptions::default(),
             },
         );
         self.analysis_scheduler = Some(scheduler);

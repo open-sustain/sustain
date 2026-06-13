@@ -14,7 +14,7 @@ use std::{
 
 use sustain_analysis::{AnalysisError, AnalysisOptions, TrackAnalysis};
 use sustain_domain::{
-    AnalysisSettings, BackgroundResourceUsage, MusicalKey, PREVIEW_SEGMENT_COUNT, Track,
+    AnalysisSettings, BackgroundResourceUsage, BpmRange, MusicalKey, PREVIEW_SEGMENT_COUNT, Track,
     TrackLocation, TrackRelativePath, WaveformSegment, WaveformSegments,
 };
 use sustain_library_store::{AnalysisCapabilities, InMemoryLibraryStore, LibraryStore, TrackId};
@@ -137,7 +137,6 @@ fn deterministic_config(
         initial_resource_usage: BackgroundResourceUsage::Innocuous,
         library_path,
         analyzer_version: 1,
-        analysis_options: AnalysisOptions::default(),
     }
 }
 
@@ -160,6 +159,7 @@ fn scheduler_processes_pending_tracks_with_settings_enabled() {
             bpm: true,
             key: true,
             audio: true,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -204,6 +204,7 @@ fn scheduler_records_failures_without_clobbering_run() {
             bpm: true,
             key: false,
             audio: false,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -261,6 +262,7 @@ fn scheduler_progress_denominator_does_not_slide_when_pool_grows_mid_run() {
             bpm: true,
             key: false,
             audio: false,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root.clone()),
     ));
@@ -316,6 +318,7 @@ fn rejected_record_analysis_halts_without_false_completion() {
             bpm: true,
             key: true,
             audio: true,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -381,6 +384,7 @@ fn rejected_failure_stamp_halts_the_sweep() {
             bpm: true,
             key: false,
             audio: false,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -474,6 +478,7 @@ fn settings_change_resumes_a_blocked_scheduler() {
         bpm: false,
         key: false,
         audio: true,
+        bpm_range: BpmRange::default(),
     });
 
     let tick = wait_for(&rx, Duration::from_secs(2), |progress| {
@@ -525,6 +530,7 @@ fn toggling_capabilities_off_stops_the_running_scheduler() {
             bpm: false,
             key: false,
             audio: true,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -630,11 +636,11 @@ fn track_updated_sink_fires_after_successful_analysis() {
             bpm: true,
             key: true,
             audio: true,
+            bpm_range: BpmRange::default(),
         },
         initial_resource_usage: BackgroundResourceUsage::Innocuous,
         library_path: Some(library_root),
         analyzer_version: 1,
-        analysis_options: AnalysisOptions::default(),
     });
 
     let observed = notify_rx
@@ -670,6 +676,7 @@ fn resource_usage_change_respawns_pool_without_losing_work() {
             bpm: true,
             key: true,
             audio: true,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -742,6 +749,7 @@ fn analyzer_receives_the_live_capability_mask() {
             bpm: true,
             key: false,
             audio: false,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -821,6 +829,7 @@ fn streaming_dispatch_keeps_workers_fed_across_batch_boundary() {
             bpm: true,
             key: true,
             audio: true,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -923,6 +932,7 @@ fn explicit_run_processes_tracks_with_global_settings_off() {
             bpm: false,
             key: false,
             audio: false,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -1037,6 +1047,7 @@ fn explicit_run_drains_ahead_of_background_sweep() {
             bpm: true,
             key: false,
             audio: false,
+            bpm_range: BpmRange::default(),
         },
         Some(library_root),
     ));
@@ -1094,6 +1105,61 @@ fn explicit_run_drains_ahead_of_background_sweep() {
         "explicit run must preempt pending background work, saw position {explicit_position} of {}",
         seen.len()
     );
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn configured_bpm_range_reaches_the_analyzer() {
+    // The BPM detection range is a DSP tunable resolved from the
+    // analysis settings and baked into each worker at spawn. A
+    // non-preset window in the settings must arrive at the analyzer
+    // verbatim — widened from whole BPM to the f32 the DSP expects —
+    // proving the settings → AnalysisOptions wiring.
+    use std::sync::Mutex;
+
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let track = touch_in(&library_root, "tempo.flac");
+
+    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    store.save_track(track).expect("save track");
+
+    let observed: Arc<Mutex<Vec<AnalysisOptions>>> = Arc::new(Mutex::new(Vec::new()));
+    let observed_for_closure = observed.clone();
+    let analyzer: AnalyzerFn = Arc::new(move |_path, _caps, opts, _duration| {
+        observed_for_closure.lock().expect("lock").push(opts);
+        ok_analyzer()(
+            std::path::Path::new("ignored"),
+            AnalysisCapabilities::all(),
+            AnalysisOptions::default(),
+            None,
+        )
+    });
+
+    let (sink, rx) = capturing_sink();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        analyzer,
+        sink,
+        fixed_clock(1),
+        store.clone(),
+        AnalysisSettings {
+            bpm: true,
+            key: false,
+            audio: false,
+            bpm_range: BpmRange::new(60, 180),
+        },
+        Some(library_root),
+    ));
+
+    let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Tick { completed: 1, .. })
+    });
+
+    let seen = observed.lock().expect("lock").clone();
+    assert_eq!(seen.len(), 1, "the one track must be analyzed once");
+    assert_eq!(seen[0].min_bpm, 60.0);
+    assert_eq!(seen[0].max_bpm, 180.0);
 
     scheduler.shutdown();
 }

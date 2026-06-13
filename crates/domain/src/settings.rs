@@ -159,10 +159,67 @@ pub enum UiSidebarSelection {
     Playlist(PlaylistItem),
 }
 
-/// Background-capability toggles for local audio analysis. Each flag enables
-/// a paced background worker that fills the matching value on tracks that
-/// are missing it. Flags never gate manual right-click runs — those are
-/// always available and intentionally overwrite existing values.
+/// The `[min, max]` BPM window the tempo estimator octave-normalizes its
+/// raw estimate into: a detected tempo below `min` is doubled, and one above
+/// `max` is halved, while doing so keeps the result inside the window. Stored
+/// as whole BPM — the user never needs sub-BPM bounds — and exposed in the
+/// Analysis preferences tab.
+///
+/// The constructor repairs invalid input rather than rejecting it, so a
+/// hand-edited config or a stale UI state can never hand the analyzer a
+/// degenerate window: both bounds are clamped into
+/// `[ABSOLUTE_MIN, ABSOLUTE_MAX]` and `max` is forced strictly above `min`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BpmRange {
+    min: u16,
+    max: u16,
+}
+
+impl BpmRange {
+    /// Lowest tempo bound the window may take. Below this, octave folding
+    /// stops being meaningful for the music Sustain targets.
+    pub const ABSOLUTE_MIN: u16 = 30;
+    /// Highest tempo bound the window may take.
+    pub const ABSOLUTE_MAX: u16 = 300;
+
+    /// Construct a range, clamping both bounds into
+    /// `[ABSOLUTE_MIN, ABSOLUTE_MAX]` and guaranteeing `min < max`. Invalid
+    /// input (out of range, inverted, or collapsed to a point) is repaired,
+    /// never rejected.
+    pub fn new(min: u16, max: u16) -> Self {
+        let min = min.clamp(Self::ABSOLUTE_MIN, Self::ABSOLUTE_MAX - 1);
+        let max = max.clamp(min + 1, Self::ABSOLUTE_MAX);
+        Self { min, max }
+    }
+
+    /// Lower bound, in whole BPM.
+    pub fn min(self) -> u16 {
+        self.min
+    }
+
+    /// Upper bound, in whole BPM.
+    pub fn max(self) -> u16 {
+        self.max
+    }
+}
+
+impl Default for BpmRange {
+    /// Sustain's shipped preset: 76–155 BPM. Wide enough to keep
+    /// double-time house and half-time hip-hop near their notated tempo,
+    /// narrow enough that the octave fold has a single obvious target for
+    /// most material.
+    fn default() -> Self {
+        Self { min: 76, max: 155 }
+    }
+}
+
+/// The persisted "Analysis" settings section: the background-capability
+/// toggles plus the BPM-detection range.
+///
+/// Each capability flag (`bpm`, `key`, `audio`) enables a paced background
+/// worker that fills the matching value on tracks that are missing it. Flags
+/// never gate manual right-click runs — those are always available and
+/// intentionally overwrite existing values.
 ///
 /// The `audio` flag covers the single heavy decode pass: the perceptual
 /// acoustic features (loudness, onset density, timbre) Smart Shuffle
@@ -170,11 +227,16 @@ pub enum UiSidebarSelection {
 /// BPM + key — the analyzer derives all three from the one in-memory
 /// decode, so enabling `audio` implies enabling `bpm` and `key`. See
 /// [`AnalysisSettings::normalized`].
+///
+/// `bpm_range` is a DSP tunable rather than a capability gate: it is the
+/// window BPM detection octave-normalizes into, and it applies to every
+/// analysis run — background sweeps and manual one-off runs alike.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AnalysisSettings {
     pub bpm: bool,
     pub key: bool,
     pub audio: bool,
+    pub bpm_range: BpmRange,
 }
 
 impl AnalysisSettings {
@@ -186,13 +248,15 @@ impl AnalysisSettings {
     /// already has the samples for. Normalising at every ingestion point
     /// (settings load, the `UpdateSettings` command) means a hand-edited
     /// config or a stale UI state can never reach the scheduler with
-    /// `audio: true, bpm: false`.
+    /// `audio: true, bpm: false`. The BPM range is orthogonal to the
+    /// toggles and is preserved unchanged.
     pub fn normalized(self) -> Self {
         if self.audio {
             Self {
                 bpm: true,
                 key: true,
                 audio: true,
+                bpm_range: self.bpm_range,
             }
         } else {
             self
@@ -401,8 +465,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, CdEncodingProfile,
-        CdReadMode, EncodingSettings, LibraryManagementMode, OnlineSettings, UserSettings,
+        AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, BpmRange,
+        CdEncodingProfile, CdReadMode, EncodingSettings, LibraryManagementMode, OnlineSettings,
+        UserSettings,
     };
 
     #[test]
@@ -443,17 +508,21 @@ mod tests {
     fn audio_normalization_forces_bpm_and_key_on() {
         // `audio` on implies `bpm` and `key` on — they come off the same
         // decode, so the scheduler must never see audio-without-the-rest.
+        // The BPM range is orthogonal and must survive untouched.
+        let custom_range = BpmRange::new(60, 180);
         assert_eq!(
             AnalysisSettings {
                 bpm: false,
                 key: false,
                 audio: true,
+                bpm_range: custom_range,
             }
             .normalized(),
             AnalysisSettings {
                 bpm: true,
                 key: true,
                 audio: true,
+                bpm_range: custom_range,
             }
         );
         // With `audio` off the other flags are left exactly as they are.
@@ -461,12 +530,43 @@ mod tests {
             bpm: true,
             key: false,
             audio: false,
+            bpm_range: custom_range,
         };
         assert_eq!(bpm_only.normalized(), bpm_only);
         assert_eq!(
             AnalysisSettings::default().normalized(),
             AnalysisSettings::default()
         );
+    }
+
+    #[test]
+    fn default_bpm_range_is_the_shipped_preset() {
+        assert_eq!(BpmRange::default().min(), 76);
+        assert_eq!(BpmRange::default().max(), 155);
+    }
+
+    #[test]
+    fn bpm_range_clamps_into_absolute_bounds_and_orders_min_below_max() {
+        // Both bounds out of range clamp inward.
+        let clamped = BpmRange::new(0, 9_999);
+        assert_eq!(clamped.min(), BpmRange::ABSOLUTE_MIN);
+        assert_eq!(clamped.max(), BpmRange::ABSOLUTE_MAX);
+
+        // Inverted input is repaired: `max` is lifted strictly above `min`.
+        let inverted = BpmRange::new(150, 90);
+        assert!(inverted.min() < inverted.max());
+        assert_eq!(inverted.min(), 150);
+        assert_eq!(inverted.max(), 151);
+
+        // A collapsed point becomes a one-BPM-wide window rather than a
+        // degenerate one the octave fold would treat as a no-op.
+        let point = BpmRange::new(120, 120);
+        assert_eq!(point.min(), 120);
+        assert_eq!(point.max(), 121);
+
+        // An in-range, well-ordered window is preserved verbatim.
+        let ok = BpmRange::new(76, 155);
+        assert_eq!((ok.min(), ok.max()), (76, 155));
     }
 
     #[test]
