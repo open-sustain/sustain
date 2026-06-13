@@ -23,13 +23,12 @@
 
 use std::path::Path;
 
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{CODEC_TYPE_NULL, Decoder, DecoderOptions};
+use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
 use crate::AnalysisError;
@@ -92,44 +91,55 @@ fn decode_region(path: &Path, region: Region) -> Result<DecodedAudio, AnalysisEr
         hint.with_extension(extension);
     }
 
-    let probed = symphonia::default::get_probe()
-        .format(
+    // 0.6's probe returns the `FormatReader` directly (no `probed.format`
+    // wrapper) and takes the format/metadata options by value.
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &hint,
             media_source,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .map_err(|err| AnalysisError::DecoderError {
             path: path_label.clone(),
             message: format!("probe failed: {err}"),
         })?;
 
-    let mut format = probed.format;
-
-    let track = format
-        .tracks()
-        .iter()
-        .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
-        .ok_or_else(|| AnalysisError::NoAudioTrack {
-            path: path_label.clone(),
-        })?;
-
-    let track_id = track.id;
-    let sample_rate =
-        track
+    // 0.6 moved non-codec track info out of codec parameters and made
+    // `Track::codec_params` optional (`None` for unknown/non-audio
+    // tracks), so the old `CODEC_TYPE_NULL` scan becomes "the default
+    // audio track, if it carries audio codec parameters". The Copy values
+    // and the decoder are pulled out in this block so the immutable borrow
+    // of `format` ends before the seek / decode loop borrows it mutably.
+    let (track_id, sample_rate, mut decoder) = {
+        let track =
+            format
+                .default_track(TrackType::Audio)
+                .ok_or_else(|| AnalysisError::NoAudioTrack {
+                    path: path_label.clone(),
+                })?;
+        let track_id = track.id;
+        let codec_params = track
             .codec_params
+            .as_ref()
+            .and_then(|params| params.audio())
+            .ok_or_else(|| AnalysisError::NoAudioTrack {
+                path: path_label.clone(),
+            })?;
+        let sample_rate = codec_params
             .sample_rate
             .ok_or_else(|| AnalysisError::DecoderError {
                 path: path_label.clone(),
                 message: "no sample rate reported by decoder".to_string(),
             })?;
-
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|err| AnalysisError::DecoderError {
-            path: path_label.clone(),
-            message: format!("decoder factory failed: {err}"),
-        })?;
+        let decoder = symphonia::default::get_codecs()
+            .make_audio_decoder(codec_params, &AudioDecoderOptions::default())
+            .map_err(|err| AnalysisError::DecoderError {
+                path: path_label.clone(),
+                message: format!("decoder factory failed: {err}"),
+            })?;
+        (track_id, sample_rate, decoder)
+    };
 
     // Plan the collection bounds for this region. `skip_samples` is the
     // mono-sample lead-in to discard when we could not seek; `max_samples`
@@ -177,12 +187,16 @@ fn decode_region(path: &Path, region: Region) -> Result<DecodedAudio, AnalysisEr
 /// a decoder reset, as symphonia requires after a discontinuity.
 fn seek_to(
     format: &mut dyn FormatReader,
-    decoder: &mut dyn Decoder,
+    decoder: &mut dyn AudioDecoder,
     track_id: u32,
     start_secs: f64,
 ) -> bool {
-    let seconds = start_secs.floor();
-    let time = Time::new(seconds as u64, start_secs - seconds);
+    // 0.6's `Time` is a seconds/nanoseconds pair built from a float total;
+    // a non-finite offset has no representation, so treat that as "cannot
+    // seek" and let the caller fall back to decode-and-discard.
+    let Some(time) = Time::try_from_secs_f64(start_secs) else {
+        return false;
+    };
     let seeked = format
         .seek(
             SeekMode::Accurate,
@@ -203,22 +217,23 @@ fn seek_to(
 /// `max_samples` have been retained (or at end-of-stream).
 fn collect_samples(
     format: &mut dyn FormatReader,
-    decoder: &mut dyn Decoder,
+    decoder: &mut dyn AudioDecoder,
     track_id: u32,
     mut skip_samples: usize,
     max_samples: Option<usize>,
     path_label: &str,
 ) -> Result<Vec<f32>, AnalysisError> {
     let mut samples: Vec<f32> = Vec::new();
+    // Reused across packets so the interleaved copy does not reallocate
+    // every iteration.
+    let mut interleaved: Vec<f32> = Vec::new();
 
     loop {
         let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            // Symphonia signals end-of-stream as an UnexpectedEof IoError,
-            // which is the expected terminator — not a failure.
-            Err(SymphoniaError::IoError(io)) if io.kind() == std::io::ErrorKind::UnexpectedEof => {
-                break;
-            }
+            Ok(Some(packet)) => packet,
+            // 0.6 signals end-of-media as `Ok(None)`; an IO `UnexpectedEof`
+            // is now a genuine error rather than the terminator.
+            Ok(None) => break,
             Err(err) => {
                 return Err(AnalysisError::DecoderError {
                     path: path_label.to_string(),
@@ -227,7 +242,7 @@ fn collect_samples(
             }
         };
 
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
 
@@ -247,17 +262,18 @@ fn collect_samples(
             }
         };
 
-        let spec = *decoded.spec();
-        let capacity = decoded.capacity() as u64;
-        let mut buffer = SampleBuffer::<f32>::new(capacity, spec);
-        buffer.copy_interleaved_ref(decoded);
-        let channel_count = spec.channels.count();
+        // 0.6 removed `SampleBuffer`; copy the decoded audio into an
+        // interleaved `f32` scratch buffer via the audio-buffer API.
+        // `num_planes` is the channel count for interleaved audio.
+        let channel_count = decoded.num_planes();
+        interleaved.resize(decoded.samples_interleaved(), 0.0);
+        decoded.copy_to_slice_interleaved(&mut interleaved);
 
         // Collapse to mono on the fly, honoring the lead-in skip and the
         // collection cap so a windowed decode never materializes more
         // than the window it was asked for.
         if channel_count <= 1 {
-            for &sample in buffer.samples() {
+            for &sample in &interleaved {
                 if skip_samples > 0 {
                     skip_samples -= 1;
                     continue;
@@ -272,7 +288,7 @@ fn collect_samples(
             // is fine; if any one channel saturates we accept the
             // attenuation.
             let inverse = 1.0_f32 / channel_count as f32;
-            for frame in buffer.samples().chunks_exact(channel_count) {
+            for frame in interleaved.chunks_exact(channel_count) {
                 if skip_samples > 0 {
                     skip_samples -= 1;
                     continue;

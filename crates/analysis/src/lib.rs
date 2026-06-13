@@ -126,6 +126,16 @@ pub use waveform::WaveformTiers;
 /// Version 5: waveform detail windows are laid out on the exact Pioneer
 /// half-frame timeline (150 entries per second), including for sample
 /// rates that are not divisible by 150.
+///
+/// Deliberately *not* gated here: the audio *decoder* library version.
+/// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
+/// decoded samples slightly — enough to shift waveform/acoustics and,
+/// rarely, a BPM estimate — but the band split, BPM/key engine, and
+/// waveform encoding (the things this version actually gates) are
+/// unchanged, and PCM/WAV decode is bit-identical. Re-deriving every
+/// existing library's audio pass for sub-perceptual decoder rounding would
+/// be disproportionate, so the version stays at 5: existing rows keep
+/// their values; only newly-analyzed tracks use the 0.6 decode.
 pub const ANALYZER_VERSION: u32 = 5;
 
 /// DSP tunables exposed to callers. Defaults reflect the values the
