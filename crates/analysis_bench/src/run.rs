@@ -272,8 +272,22 @@ pub struct BpmSummary {
 pub struct KeySummary {
     /// Tracks with key ground truth.
     pub scored: usize,
-    /// MIREX weighted score as a percentage.
+    /// MIREX weighted score as a percentage. Kept as the research/regression
+    /// metric, comparable to prior MIR work.
     pub weighted_pct: f32,
+    /// Strict harmonic-compatible rate (percent): `correct + fifth +
+    /// relative`. The **product-facing key headline** — for DJ /
+    /// Rekordbox-style filtering and mixing, a prediction in this set lands in
+    /// a harmonically usable neighbourhood of the true key (exact, a fifth
+    /// away, or the relative major/minor, all adjacent on the Camelot wheel).
+    #[serde(default)]
+    pub strict_compatible_pct: f32,
+    /// Loose harmonic-compatible rate (percent): strict plus `parallel` (same
+    /// tonic, opposite mode). Diagnostic only until we confirm whether Pioneer
+    /// treats the parallel key as compatible; reported alongside strict so the
+    /// parallel contribution stays visible.
+    #[serde(default)]
+    pub loose_compatible_pct: f32,
     /// Histogram of MIREX categories.
     pub categories: BTreeMap<String, usize>,
 }
@@ -593,11 +607,31 @@ fn summarize_key(tracks: &[TrackResult]) -> Option<KeySummary> {
             .entry(category_label(score.category))
             .or_default() += 1;
     }
+    let (strict_compatible_pct, loose_compatible_pct) = compatible_rates(&categories, scores.len());
     Some(KeySummary {
         scored: scores.len(),
         weighted_pct: score_sum / scores.len() as f32 * 100.0,
+        strict_compatible_pct,
+        loose_compatible_pct,
         categories,
     })
+}
+
+/// Strict and loose harmonic-compatible key rates (percent) from a MIREX
+/// category histogram. Strict = `correct + fifth + relative`; loose adds
+/// `parallel`. Derived from the histogram rather than stored separately, so it
+/// is computable from any report — including ones recorded before these rates
+/// were summarized — which is what lets [`crate::run`] consumers compare an
+/// older baseline against a newer candidate.
+pub fn compatible_rates(categories: &BTreeMap<String, usize>, scored: usize) -> (f32, f32) {
+    if scored == 0 {
+        return (0.0, 0.0);
+    }
+    let count = |name: &str| categories.get(name).copied().unwrap_or(0);
+    let strict = count("correct") + count("fifth") + count("relative");
+    let loose = strict + count("parallel");
+    let denom = scored as f32;
+    (strict as f32 / denom * 100.0, loose as f32 / denom * 100.0)
 }
 
 fn summarize_timing(tracks: &[TrackResult]) -> TimingSummary {
@@ -723,8 +757,29 @@ fn git_tree_dirty() -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{score_bpm, score_key};
+    use super::{compatible_rates, score_bpm, score_key};
     use crate::metrics::KeyCategory;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn compatible_rates_partition_categories() {
+        let categories: BTreeMap<String, usize> = [
+            ("correct", 5),
+            ("fifth", 3),
+            ("relative", 2),
+            ("parallel", 4),
+            ("other", 6),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        // 20 scored: strict = 5+3+2 = 10 (50%), loose = +4 = 14 (70%).
+        let (strict, loose) = compatible_rates(&categories, 20);
+        assert_eq!(strict, 50.0);
+        assert_eq!(loose, 70.0);
+        // Empty / zero-scored is finite zero, not a divide-by-zero.
+        assert_eq!(compatible_rates(&BTreeMap::new(), 0), (0.0, 0.0));
+    }
 
     #[test]
     fn bpm_score_marks_a_close_hit() {

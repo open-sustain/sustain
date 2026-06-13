@@ -49,7 +49,7 @@ use sustain_analysis_bench::manifest::Manifest;
 use sustain_analysis_bench::private::{
     self, AdaptOptions as PrivateOptions, AdaptReport as PrivateReport,
 };
-use sustain_analysis_bench::run::{Report, TrackResult, run_manifest};
+use sustain_analysis_bench::run::{Report, TrackResult, compatible_rates, run_manifest};
 
 const USAGE: &str = "\
 usage:
@@ -374,8 +374,9 @@ fn print_run_summary(report: &Report) {
     }
     if let Some(key) = &report.summary.key {
         eprintln!(
-            "  KEY: {:.1}% MIREX-weighted over {} scored",
-            key.weighted_pct, key.scored
+            "  KEY: {:.1}% strict-compatible (correct+fifth+relative), \
+             {:.1}% loose (+parallel) over {} scored [MIREX {:.1}%]",
+            key.strict_compatible_pct, key.loose_compatible_pct, key.scored, key.weighted_pct
         );
     }
     if let Some(timing) = &report.summary.timing {
@@ -397,6 +398,22 @@ fn print_comparison(baseline: &Report, candidate: &Report) {
         .map(|b| b.within_tolerance_pct);
     if let (Some(b), Some(c)) = (base_bpm, cand_bpm) {
         println!("BPM within ±2:  {b:.1}% -> {c:.1}%  ({:+.1})", c - b);
+    }
+    // Strict harmonic-compatible rate is the product headline; derive it from
+    // each report's category histogram so an older baseline (recorded before
+    // the rate was summarized) still compares.
+    let base_sc = baseline
+        .summary
+        .key
+        .as_ref()
+        .map(|k| compatible_rates(&k.categories, k.scored).0);
+    let cand_sc = candidate
+        .summary
+        .key
+        .as_ref()
+        .map(|k| compatible_rates(&k.categories, k.scored).0);
+    if let (Some(b), Some(c)) = (base_sc, cand_sc) {
+        println!("KEY strict-compat: {b:.1}% -> {c:.1}%  ({:+.1})", c - b);
     }
     let base_key = baseline.summary.key.as_ref().map(|k| k.weighted_pct);
     let cand_key = candidate.summary.key.as_ref().map(|k| k.weighted_pct);

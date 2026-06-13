@@ -285,6 +285,52 @@ Every roadmap item above is gated on a recorded before/after run in
 `analysis-benchmark-results.md`, from a clean tree, on FMAK + GiantSteps (and the
 private reference corpus when it lands).
 
+### Product key-quality target
+
+Exact key is *not* the product goal. Sustain exports to Pioneer
+XDJ/CDJ/Rekordbox-style workflows, where the operative question is whether the
+predicted key lands in a **harmonically compatible set** for filtering and
+mixing — not whether it nails the exact tonic+mode. So the metrics split into a
+research tier and a product tier:
+
+- **Exact key** — still reported. A useful *secondary* goal (≈40–50 %+ on
+  private goldish would be good), but **not** the primary gate.
+- **MIREX-weighted** — still reported, as the research/regression metric
+  comparable to prior MIR work.
+- **Strict harmonic-compatible rate** = `correct + fifth + relative` — the
+  **product headline**. These three are adjacent on the Camelot wheel DJ
+  software filters by, so a prediction in this set is harmonically usable.
+- **Loose-compatible** = `correct + fifth + relative + parallel` — **diagnostic
+  only**, until we confirm whether Pioneer treats the parallel key (same tonic,
+  opposite mode) as compatible. `parallel` stays broken out and visible
+  precisely because its usefulness in practice is unsettled — it may belong in
+  the headline set later, or not.
+- **`other`** = product fail.
+
+The harness computes both compatible rates from the MIREX category histogram
+(`KeySummary::strict_compatible_pct` / `loose_compatible_pct`; `run` prints them
+as the key headline and `compare` shows the strict delta).
+
+**Initial target thresholds** (where key work should *trend*; the parenthetical
+is the current v7 strict-compatible baseline, all below target by design):
+
+| Corpus | Strict-compatible target | Current (v7) |
+| --- | --- | --- |
+| Private goldish | **≥ 75 %** trending, stretch ≥ 85 % | 61.1 % |
+| Private all-core | ≥ 65–70 % | 50.0 % |
+| FMAK (`fma_medium`) | ≥ 55–60 % initially | 47.9 % |
+| GiantSteps Key | ≥ 60 % (do **not** overfit — EDM/minor-skewed) | 51.5 % |
+
+Two guards alongside the headline:
+
+- **Exact key** as a secondary signal — roughly ≥ 40–50 % on private goldish is
+  healthy, but it does not gate a change on its own.
+- **Mode mix must not collapse** — keep the predicted major/minor split within
+  roughly 15–20 percentage points of each corpus's ground-truth mix initially.
+  A change that lifts the compatible rate by flattening to one mode is a
+  regression, not a win (this is exactly the failure mode #192 has cycled
+  through twice).
+
 ## Prioritised, testable roadmap
 
 Ordered by expected impact against risk. **None of this is implemented in this

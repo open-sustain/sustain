@@ -18,6 +18,8 @@
     "key": {
       "scored": 3,
       "weighted_pct": 66.66667,
+      "strict_compatible_pct": 66.66667,
+      "loose_compatible_pct": 66.66667,
       "categories": {
         "correct": 2,
         "other": 1

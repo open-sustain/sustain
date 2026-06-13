@@ -87,7 +87,16 @@ imply a metric we cannot compute.
 
 - **BPM headline**: accuracy within ±2 BPM, plus mean absolute error and the
   metrical-ratio buckets.
-- **Key headline**: exact match plus MIREX related-key categories.
+- **Key headline (product-facing)**: the **strict harmonic-compatible rate**
+  (`correct + fifth + relative` — the keys adjacent on the Camelot wheel that
+  DJ/Rekordbox-style filtering treats as mixable), with a diagnostic *loose*
+  rate (`+ parallel`) alongside. Sustain's product goal is harmonic
+  compatibility for export/filtering, not exact key, so this is what a
+  key-detection change is judged by. **Exact match** and **MIREX-weighted**
+  related-key categories stay reported as research/regression metrics, and the
+  predicted major/minor **mode mix** is watched so a compatible-rate gain that
+  collapses mode is caught. See the "Product key-quality target" in
+  [`analysis-dsp-roadmap.md`](analysis-dsp-roadmap.md) for the thresholds.
 - **Beat grid**: not computed yet — out of scope until the harness grows a
   beat-grid task; do not claim beat quality beyond the synthetic fixtures.
 - **No silent label trust**: weak labels (Echonest tempo, loop tags) are for

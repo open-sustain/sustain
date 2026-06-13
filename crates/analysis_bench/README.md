@@ -145,6 +145,14 @@ Ported from the stratum-dsp validation suite (`validation/_metrics.py`,
   octave/harmonic confusions instead of scoring them as plain misses.
 - **Key** — MIREX categories (`correct`, `fifth`, `relative`, `parallel`,
   `other`) with the standard weights (1.0 / 0.5 / 0.3 / 0.2 / 0.0), compared
-  on pitch classes so enharmonic spellings never matter.
+  on pitch classes so enharmonic spellings never matter. From the category
+  histogram the run also reports the **product-facing key headline**: the
+  *strict harmonic-compatible* rate (`correct + fifth + relative` — exact, a
+  fifth away, or the relative major/minor, all adjacent on the Camelot wheel
+  that DJ/Rekordbox-style filtering uses) and a diagnostic *loose* rate (strict
+  `+ parallel`). Exact-match and MIREX-weighted stay as research/regression
+  metrics; the compatible rate is what a key-detection change is judged by. See
+  the "Product key-quality target" in
+  [`docs/analysis-dsp-roadmap.md`](../../docs/analysis-dsp-roadmap.md).
 
 [`Analyzer`]: https://docs.rs/sustain-analysis
