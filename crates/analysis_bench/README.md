@@ -24,7 +24,10 @@ member, so `cargo fmt`/`clippy`/`test` cover it like everything else.
   acquired locally (audio never committed) and scored per the registry in
   [`docs/analysis-benchmark-corpora.md`](../../docs/analysis-benchmark-corpora.md),
   which records each corpus's source, licenses, checksums, and the tasks it
-  supports. No accuracy claim until a corpus is present and a run recorded.
+  supports. GiantSteps has a ready adapter — `adapt-giantsteps` (below) —
+  that turns a pinned checkout plus a downloaded-audio directory into a
+  scored manifest. No accuracy claim until a corpus is present and a run
+  recorded.
 - **Tier 5 — private real-audio**: corpora such as the maintainer's local
   `test-library/`, referenced by `path` from a **gitignored** manifest.
   These carry the real BPM/key/loudness quality signal. Audio is never
@@ -44,6 +47,15 @@ cargo run -p sustain-analysis-bench --release -- run \
 cargo run -p sustain-analysis-bench --release -- run \
   --manifest crates/analysis_bench/corpora/private.toml \
   --out /tmp/private-results.json
+
+# Adapt a local GiantSteps Tempo/Key checkout (annotations + audio fetched
+# separately with the dataset's own audio_dl.sh) into a gitignored manifest,
+# md5-verifying the audio against the upstream digests (--no-md5 opts out):
+cargo run -p sustain-analysis-bench --release -- adapt-giantsteps \
+  --dataset key \
+  --repo  ../giantsteps-key-dataset \
+  --audio ../giantsteps-key-dataset/audio \
+  --out   crates/analysis_bench/corpora/giantsteps_key.toml
 
 # Before/after a DSP or decoder change (e.g. #172):
 cargo run -p sustain-analysis-bench --release -- compare \

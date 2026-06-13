@@ -34,8 +34,11 @@
 //! * [`metrics`] — BPM and MIREX-key scoring, ported from the stratum-dsp
 //!   validation suite's `_metrics.py` / `_keys.py`.
 //! * [`run`] — drive the analyzer over a manifest and assemble the report.
+//! * [`giantsteps`] — adapt a local GiantSteps Tempo/Key checkout into a
+//!   manifest (the first public reference corpus; audio stays external).
 
 pub mod fixtures;
+pub mod giantsteps;
 pub mod manifest;
 pub mod metrics;
 pub mod run;

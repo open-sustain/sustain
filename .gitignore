@@ -16,11 +16,14 @@
 # crate cherry-picks DSP from. Not part of Sustain; kept out of the repo.
 /rhythmbox-to-pioneer-xdj-exporter/
 
-# Private analysis-benchmark corpora and their results. Real-audio
-# manifests reference local filesystem paths and may name private tracks;
-# never commit them, their results, or generated fixtures. Only the
-# synthetic corpus and its reproducible baseline are tracked.
-/crates/analysis_bench/corpora/private*.toml
+# Analysis-benchmark corpus manifests that reference local audio by
+# filesystem path — generated public corpora (e.g. GiantSteps, emitted by
+# `analysis-bench adapt-giantsteps`) and private real-audio corpora that may
+# name private tracks — are never committed, nor are their results or
+# generated fixtures. Only the synthetic recipe and its reproducible
+# baseline are tracked.
+/crates/analysis_bench/corpora/*.toml
+!/crates/analysis_bench/corpora/synthetic.toml
 /crates/analysis_bench/baselines/private*.json
 /crates/analysis_bench/results/
 /crates/analysis_bench/fixtures/

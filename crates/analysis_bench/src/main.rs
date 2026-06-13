@@ -5,9 +5,10 @@
 //! analysis pipeline.
 //!
 //! ```text
-//! analysis-bench run     --manifest <toml> [--out <json>] [--fixtures <dir>] [--reproducible]
-//! analysis-bench gen     --manifest <toml> --out <dir>
-//! analysis-bench compare --baseline <json> --candidate <json>
+//! analysis-bench run             --manifest <toml> [--out <json>] [--fixtures <dir>] [--reproducible]
+//! analysis-bench gen             --manifest <toml> --out <dir>
+//! analysis-bench compare         --baseline <json> --candidate <json>
+//! analysis-bench adapt-giantsteps --dataset <tempo|key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
 //! ```
 //!
 //! * `run` analyzes every track in a manifest and writes a JSON report
@@ -19,19 +20,26 @@
 //!   (for inspection or manual decoding).
 //! * `compare` diffs two reports by track id and prints accuracy/timing
 //!   deltas — the before/after view for a DSP or decoder change.
+//! * `adapt-giantsteps` turns a local GiantSteps Tempo/Key checkout plus a
+//!   downloaded-audio directory into a (gitignored) manifest with ground
+//!   truth, md5-verifying the audio against the upstream digests. Audio is
+//!   fetched separately with the dataset's own `audio_dl.sh`; this command
+//!   never downloads.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use sustain_analysis_bench::giantsteps::{self, AdaptOptions, AdaptReport, Dataset};
 use sustain_analysis_bench::manifest::Manifest;
 use sustain_analysis_bench::run::{Report, TrackResult, run_manifest};
 
 const USAGE: &str = "\
 usage:
-  analysis-bench run     --manifest <toml> [--out <json>] [--fixtures <dir>] [--reproducible]
-  analysis-bench gen     --manifest <toml> --out <dir>
-  analysis-bench compare --baseline <json> --candidate <json>";
+  analysis-bench run             --manifest <toml> [--out <json>] [--fixtures <dir>] [--reproducible]
+  analysis-bench gen             --manifest <toml> --out <dir>
+  analysis-bench compare         --baseline <json> --candidate <json>
+  analysis-bench adapt-giantsteps --dataset <tempo|key> --repo <dir> --audio <dir> --out <toml> [--no-md5]";
 
 /// A CLI failure: either bad invocation (exit 2) or a runtime error (exit 1).
 enum CliError {
@@ -62,6 +70,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "run" => cmd_run(rest),
         "gen" => cmd_gen(rest),
         "compare" => cmd_compare(rest),
+        "adapt-giantsteps" => cmd_adapt_giantsteps(rest),
         other => Err(CliError::Usage(format!("unknown command {other:?}"))),
     }
 }
@@ -81,8 +90,8 @@ impl Args {
             let Some(key) = arg.strip_prefix("--") else {
                 return Err(CliError::Usage(format!("unexpected argument {arg:?}")));
             };
-            // `--reproducible` is the only valueless switch.
-            if key == "reproducible" {
+            // `--reproducible` and `--no-md5` are the only valueless switches.
+            if key == "reproducible" || key == "no-md5" {
                 flags.push(key.to_string());
                 continue;
             }
@@ -185,6 +194,56 @@ fn cmd_compare(args: &[String]) -> Result<(), CliError> {
     let candidate = load_report(args.required("candidate")?)?;
     print_comparison(&baseline, &candidate);
     Ok(())
+}
+
+fn cmd_adapt_giantsteps(args: &[String]) -> Result<(), CliError> {
+    let args = Args::parse(args)?;
+    let dataset: Dataset = args
+        .required("dataset")?
+        .parse()
+        .map_err(|err| CliError::Usage(format!("{err}")))?;
+    let options = AdaptOptions {
+        dataset,
+        repo: PathBuf::from(args.required("repo")?),
+        audio_dir: PathBuf::from(args.required("audio")?),
+        verify_md5: !args.has_flag("no-md5"),
+    };
+    let report = giantsteps::adapt(&options).map_err(|err| CliError::Failure(format!("{err}")))?;
+
+    let out = args.required("out")?;
+    if let Some(parent) = Path::new(out)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| CliError::Failure(format!("create {}: {err}", parent.display())))?;
+    }
+    std::fs::write(out, &report.manifest_toml)
+        .map_err(|err| CliError::Failure(format!("write manifest: {err}")))?;
+    eprintln!("wrote {out}");
+    print_adapt_summary(&report, dataset, options.verify_md5);
+    Ok(())
+}
+
+fn print_adapt_summary(report: &AdaptReport, dataset: Dataset, verified: bool) {
+    eprintln!(
+        "corpus {:?}: {} track(s), {} skipped (no ground truth)",
+        report.corpus_id, report.track_count, report.skipped
+    );
+    if dataset == Dataset::Key && report.key_unparseable > 0 {
+        eprintln!(
+            "  {} key label(s) the scorer cannot parse — they will not be scored",
+            report.key_unparseable
+        );
+    }
+    if verified {
+        eprintln!(
+            "  md5: {} verified, {} unverifiable (no upstream md5 file)",
+            report.md5_verified, report.md5_unverifiable
+        );
+    } else {
+        eprintln!("  md5: verification disabled (--no-md5)");
+    }
 }
 
 fn load_report(path: &str) -> Result<Report, CliError> {
