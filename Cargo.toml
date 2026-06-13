@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/analysis",
+  "crates/analysis_bench",
   "crates/app",
   "crates/app_runtime",
   "crates/artwork",

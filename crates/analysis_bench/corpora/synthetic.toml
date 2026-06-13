@@ -1,0 +1,75 @@
+# Synthetic benchmark corpus — Tier 0.
+#
+# Every track is generated deterministically from the recipe below, so
+# this file (not any audio) is what is committed, and the baseline it
+# produces is byte-stable across machines:
+#
+#   analysis-bench run --manifest crates/analysis_bench/corpora/synthetic.toml \
+#       --out crates/analysis_bench/baselines/synthetic.json --reproducible
+#
+# Ground-truth `bpm`/`key` are exact by construction (a click train's
+# tempo, a triad's key), so the run also scores a coarse accuracy figure.
+# This tier exists for determinism and regression visibility, NOT to make
+# accuracy claims — those come from the private real-audio corpora (see
+# the crate README).
+
+[meta]
+corpus_id = "synthetic_v1"
+description = "Deterministic generated fixtures: silence, tones, ramp, metronomes, triads."
+
+[options]
+# The generalist range the maintainer favours (covers the library's
+# tempo spread without forcing octave folds on the long tails).
+min_bpm = 76.0
+max_bpm = 155.0
+# Key is intentionally excluded here: published `stratum-dsp 1.0`'s
+# `detect_key` selects via a `max_by` over a `HashMap`, so on ambiguous
+# chroma the result flips between runs (the determinism test documents
+# this). A committed key baseline would therefore churn. Key — and triad
+# fixtures with key ground truth — return to this corpus once the #192
+# ingest/rework makes key detection deterministic.
+tasks = ["waveform", "acoustics", "bpm"]
+
+# --- decode / mono / waveform determinism ---
+
+[[track]]
+id = "silence_mono"
+synthetic = { kind = "silence", secs = 8.0, channels = 1 }
+
+[[track]]
+id = "silence_stereo"
+synthetic = { kind = "silence", secs = 8.0, channels = 2 }
+
+[[track]]
+id = "tone_220_mono"
+synthetic = { kind = "tone", freq_hz = 220.0, secs = 8.0, channels = 1 }
+
+[[track]]
+id = "tone_440_stereo"
+synthetic = { kind = "tone", freq_hz = 440.0, secs = 8.0, channels = 2 }
+
+[[track]]
+id = "ramp"
+synthetic = { kind = "ramp", secs = 8.0 }
+
+# --- BPM: metronomes with exact ground truth ---
+
+[[track]]
+id = "click_090"
+synthetic = { kind = "click_train", bpm = 90.0, secs = 20.0 }
+bpm = 90.0
+
+[[track]]
+id = "click_120"
+synthetic = { kind = "click_train", bpm = 120.0, secs = 20.0 }
+bpm = 120.0
+
+[[track]]
+id = "click_128"
+synthetic = { kind = "click_train", bpm = 128.0, secs = 20.0 }
+bpm = 128.0
+
+[[track]]
+id = "click_140"
+synthetic = { kind = "click_train", bpm = 140.0, secs = 20.0 }
+bpm = 140.0

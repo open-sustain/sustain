@@ -2272,6 +2272,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sustain-analysis-bench"
+version = "0.7.0-alpha.9"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sustain-analysis",
+ "sustain-domain",
+ "tempfile",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "sustain-app"
 version = "0.7.0-alpha.9"
 dependencies = [

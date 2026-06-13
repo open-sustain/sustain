@@ -16,6 +16,15 @@
 # crate cherry-picks DSP from. Not part of Sustain; kept out of the repo.
 /rhythmbox-to-pioneer-xdj-exporter/
 
+# Private analysis-benchmark corpora and their results. Real-audio
+# manifests reference local filesystem paths and may name private tracks;
+# never commit them, their results, or generated fixtures. Only the
+# synthetic corpus and its reproducible baseline are tracked.
+/crates/analysis_bench/corpora/private*.toml
+/crates/analysis_bench/baselines/private*.json
+/crates/analysis_bench/results/
+/crates/analysis_bench/fixtures/
+
 # Flatpak cargo sources are regenerated from Cargo.lock at build time by
 # `flatpak-cargo-generator.py`. The file is multi-megabyte generated
 # content that must stay in lock-step with Cargo.lock; deriving it at

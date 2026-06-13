@@ -1,0 +1,295 @@
+{
+  "corpus_id": "synthetic_v1",
+  "bpm_range": [
+    76.0,
+    155.0
+  ],
+  "summary": {
+    "track_count": 9,
+    "error_count": 0,
+    "bpm": {
+      "scored": 4,
+      "within_tolerance_pct": 100.0,
+      "mean_abs_error": 1.0137443542480469,
+      "ratio_buckets": {
+        "1x": 4
+      }
+    }
+  },
+  "tracks": [
+    {
+      "id": "silence_mono",
+      "source": "synthetic:silence",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm"
+      ],
+      "bpm": 76.0,
+      "key": null,
+      "acoustics": null,
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 1200,
+        "preview_duration_ms": 20.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "a947e50590de8025",
+        "detail_hash": "d0549f149dd63a25"
+      }
+    },
+    {
+      "id": "silence_stereo",
+      "source": "synthetic:silence",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm"
+      ],
+      "bpm": 76.0,
+      "key": null,
+      "acoustics": null,
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 1200,
+        "preview_duration_ms": 20.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "a947e50590de8025",
+        "detail_hash": "d0549f149dd63a25"
+      }
+    },
+    {
+      "id": "tone_220_mono",
+      "source": "synthetic:tone",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm"
+      ],
+      "bpm": 90.84320068359375,
+      "key": null,
+      "acoustics": {
+        "integrated_lufs": -45.095444,
+        "short_term_lufs_max": -45.091675,
+        "loudness_range_lu": 0.0,
+        "onset_rate_hz": 9.375,
+        "low_band_ratio": 0.9981185,
+        "mid_band_ratio": 0.0018814622,
+        "high_band_ratio": 5.3144866e-10,
+        "low_band_variation": 0.000005916315,
+        "tonalness": 1.0
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 1200,
+        "preview_duration_ms": 20.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "3dfb5e1a31f99b58",
+        "detail_hash": "2341ad0fe50b84ce"
+      }
+    },
+    {
+      "id": "tone_440_stereo",
+      "source": "synthetic:tone",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm"
+      ],
+      "bpm": 80.0,
+      "key": null,
+      "acoustics": {
+        "integrated_lufs": -32.93875,
+        "short_term_lufs_max": -32.937897,
+        "loudness_range_lu": 0.0,
+        "onset_rate_hz": 17.0,
+        "low_band_ratio": 2.2710904e-7,
+        "mid_band_ratio": 0.99999976,
+        "high_band_ratio": 5.3244265e-10,
+        "low_band_variation": 0.098181315,
+        "tonalness": 1.0
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 1200,
+        "preview_duration_ms": 20.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "f44a2f1a8bf25740",
+        "detail_hash": "013f5179a7fc7c32"
+      }
+    },
+    {
+      "id": "ramp",
+      "source": "synthetic:ramp",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm"
+      ],
+      "bpm": 95.89004516601562,
+      "key": null,
+      "acoustics": {
+        "integrated_lufs": -40.735886,
+        "short_term_lufs_max": -40.735886,
+        "loudness_range_lu": 12.04129,
+        "onset_rate_hz": 0.5,
+        "low_band_ratio": 1.0,
+        "mid_band_ratio": 5.564876e-11,
+        "high_band_ratio": 1.3570174e-10,
+        "low_band_variation": 7.320699e-7,
+        "tonalness": 1.0
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 1200,
+        "preview_duration_ms": 20.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "96555333a18e8817",
+        "detail_hash": "ca63ff0b90fe4b5b"
+      }
+    },
+    {
+      "id": "click_090",
+      "source": "synthetic:click_train",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm"
+      ],
+      "bpm": 90.84320068359375,
+      "key": null,
+      "acoustics": {
+        "integrated_lufs": -41.628326,
+        "short_term_lufs_max": -41.628326,
+        "loudness_range_lu": 0.0,
+        "onset_rate_hz": 2.25,
+        "low_band_ratio": 0.88597995,
+        "mid_band_ratio": 0.10716483,
+        "high_band_ratio": 0.00685523,
+        "low_band_variation": 0.2055319,
+        "tonalness": 0.9793418
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 3000,
+        "preview_duration_ms": 50.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "61d50beb4f972955",
+        "detail_hash": "6827e572f89d362d"
+      },
+      "bpm_score": {
+        "ground_truth": 90.0,
+        "abs_error": 0.84320068359375,
+        "within_tolerance": true,
+        "ratio_bucket": "1x"
+      }
+    },
+    {
+      "id": "click_120",
+      "source": "synthetic:click_train",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm"
+      ],
+      "bpm": 118.0,
+      "key": null,
+      "acoustics": {
+        "integrated_lufs": -41.628326,
+        "short_term_lufs_max": -41.628326,
+        "loudness_range_lu": 0.0,
+        "onset_rate_hz": 3.0,
+        "low_band_ratio": 0.8859797,
+        "mid_band_ratio": 0.107165046,
+        "high_band_ratio": 0.0068552387,
+        "low_band_variation": 0.22271365,
+        "tonalness": 0.97015226
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 3000,
+        "preview_duration_ms": 50.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "961ed81dd08cd965",
+        "detail_hash": "210571c598bb1e45"
+      },
+      "bpm_score": {
+        "ground_truth": 120.0,
+        "abs_error": 2.0,
+        "within_tolerance": true,
+        "ratio_bucket": "1x"
+      }
+    },
+    {
+      "id": "click_128",
+      "source": "synthetic:click_train",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm"
+      ],
+      "bpm": 128.0,
+      "key": null,
+      "acoustics": {
+        "integrated_lufs": -41.628326,
+        "short_term_lufs_max": -41.0484,
+        "loudness_range_lu": 0.57992554,
+        "onset_rate_hz": 3.4,
+        "low_band_ratio": 0.88597965,
+        "mid_band_ratio": 0.1071651,
+        "high_band_ratio": 0.00685525,
+        "low_band_variation": 0.18515229,
+        "tonalness": 0.98373973
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 3000,
+        "preview_duration_ms": 50.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "56aaa496544859d7",
+        "detail_hash": "83719d79b76f1187"
+      },
+      "bpm_score": {
+        "ground_truth": 128.0,
+        "abs_error": 0.0,
+        "within_tolerance": true,
+        "ratio_bucket": "1x"
+      }
+    },
+    {
+      "id": "click_140",
+      "source": "synthetic:click_train",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm"
+      ],
+      "bpm": 138.78822326660156,
+      "key": null,
+      "acoustics": {
+        "integrated_lufs": -41.628326,
+        "short_term_lufs_max": -41.0484,
+        "loudness_range_lu": 0.57992554,
+        "onset_rate_hz": 3.6,
+        "low_band_ratio": 0.8859796,
+        "mid_band_ratio": 0.107165135,
+        "high_band_ratio": 0.006855252,
+        "low_band_variation": 0.20768577,
+        "tonalness": 0.9769972
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 3000,
+        "preview_duration_ms": 50.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "306c1221341df523",
+        "detail_hash": "e755d504310e5996"
+      },
+      "bpm_score": {
+        "ground_truth": 140.0,
+        "abs_error": 1.2117767333984375,
+        "within_tolerance": true,
+        "ratio_bucket": "1x"
+      }
+    }
+  ]
+}
