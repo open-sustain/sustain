@@ -16,6 +16,13 @@
 # crate cherry-picks DSP from. Not part of Sustain; kept out of the repo.
 /rhythmbox-to-pioneer-xdj-exporter/
 
+# Maintainer-local analysis-validation workspace: large public-corpus
+# downloads and extracted audio (e.g. FMA archives behind FMAK), private
+# reference collections, curated key/tempo annotations, generated corpus
+# manifests, and result JSONs. Multi-gigabyte and/or private — never
+# committed. Only aggregate metrics and provenance reach docs/.
+/validation-data/
+
 # Analysis-benchmark corpus manifests that reference local audio by
 # filesystem path — generated public corpora (e.g. GiantSteps, emitted by
 # `analysis-bench adapt-giantsteps`) and private real-audio corpora that may
