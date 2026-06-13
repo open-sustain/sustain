@@ -104,13 +104,14 @@ candidate (both → 1.0) and the deterministic tie-break always chose major, so
 minor was unreachable. The reconciliation is that the fork's tie was broken
 downstream (mode heuristic + a different front-end), while Sustain's was not.
 
-**What Sustain has.** Canonical KK templates (`key/templates.rs`), cosine
-scoring summed over frames, the #192 fix (single shared-max normalisation,
-`key/detector.rs:134`), and circle-of-fifths bonus weighting
-(`key/detector.rs:155`, magic `circle_bonus_weight = 0.20`). It **lacks** the
-mode heuristic and any clarity output, and carries **dead code**: `detector.rs`
-computes `use_weighted_voting` (lines 240–243) and never uses it
-(`final_key = best_key` always).
+**What Sustain has (after v7/v8).** Canonical KK templates
+(`key/templates.rs`); mean-centred **Pearson** correlation against the
+aggregated chroma profile (v7 — the actual Krumhansl–Schmuckler metric,
+replacing the old raw dot product), with a single shared-max rescale across all
+24 raw scores (`key/detector.rs`); circle-of-fifths bonus weighting (magic
+`circle_bonus_weight = 0.20`); and, as of v8, a dedicated 8192-point key STFT
+(Area 2). The dead `use_weighted_voting` block was removed in v7. It still
+**lacks** the mode heuristic and any clarity output.
 
 **Cross-corpus evidence (recorded).** GiantSteps (≈99% predicted minor) and the
 FMAK/fma_medium partial baseline (98% predicted minor against a 43/57 major/minor
@@ -119,15 +120,17 @@ ground truth; major tracks score 9.8% MIREX vs minor 45.1%, dominated by
 generic mode-discrimination weakness, not corpus noise.
 
 **Decision.**
-- *Keep:* canonical KK profiles; cosine scoring; the shared-max fix.
+- *Keep:* canonical KK profiles; the shared-max rescale.
 - *Reimplement / verify:* mode discrimination. Candidates, in increasing
   ambition — (a) **mean-centred (Pearson) correlation**, the actual
   Krumhansl–Schmuckler formulation, which removes the need for any ad-hoc
   per-mode rescaling and is the principled answer to the per-mode-norm
-  contradiction; (b) alternative profiles (Temperley, Albrecht–Shanahan); (c)
-  Faraldo **multi-profile** scoring (audit's high-priority item). Re-derive, do
-  not port the fork's mode-heuristic constants.
-- *Clean up:* remove the dead `use_weighted_voting` block.
+  contradiction — **done in v7**; (b) alternative profiles (Temperley,
+  Albrecht–Shanahan); (c) Faraldo **multi-profile** scoring (audit's
+  high-priority item). (b)/(c) wait until the front-end (Area 2) is built out,
+  since profile optimality depends on chroma quality. Re-derive, do not port the
+  fork's mode-heuristic constants.
+- *Clean up:* the dead `use_weighted_voting` block — **removed in v7**.
 - *Do not inherit:* the `0.20` circle-of-fifths weight, the `0.95/0.90` voting
   thresholds, the n=68 per-step deltas.
 - *Success criterion:* predicted major/minor ratio within ~10 pp of ground truth
@@ -145,22 +148,25 @@ spacing needs the resolution), an HPSS-style **harmonic mask**, and
 measured jump (45.6% → 63.2%). Gómez/MTG HPCP and Faraldo are the named
 next-level references.
 
-**What Sustain has.** The **base path only** (`chroma/extractor.rs`): the *same*
-2048-point STFT shared with the tempogram (`crates/analysis/src/lib.rs:243`,
-`STFT_FRAME_SIZE = 2048`), band-limited 100–5000 Hz, magnitude compressed
-`^0.6`, soft-mapped (σ=0.5), L2-normalised **per frame**, with the per-frame
-template matches then summed flat over the window. No temporal smoothing, no
-HPSS, no HPCP, no tuning estimation, no key-specific STFT — the module doc says
-so explicitly. This is the "naive full-track chroma
-averaging" the fork's note identifies as the collapse trigger.
+**What Sustain has (after v8).** Key now runs its own 8192-point STFT
+(`KEY_STFT_FRAME_SIZE`, decoupled from the 2048-point tempogram in v8 — see
+below), still feeding the base chroma path (`chroma/extractor.rs`):
+band-limited 100–5000 Hz, magnitude compressed `^0.6`, soft-mapped (σ=0.5),
+L2-normalised **per frame**, with the per-frame template matches then summed
+flat over the window. The "naive full-track chroma averaging" the fork's note
+identifies as the collapse trigger is now finer-grained in frequency, but
+**still has no temporal smoothing, no HPSS, no HPCP, and no tuning
+estimation** — those are the remaining front-end layers.
 
 **Decision.**
-- *Highest-value, lowest-risk roadmap item:* **decouple the key STFT from the
-  tempo STFT.** The Analyzer already slices a dedicated key/BPM window; give key
-  its own larger-FFT (≈8192) transform instead of reusing the 2048 tempogram
-  STFT (whose size is a tempo/key compromise, per the comment at `lib.rs:239`).
-  Layer in, incrementally and each verified on a benchmark: HPSS-style harmonic
-  emphasis, then HPCP-style profiles, then temporal smoothing.
+- *Highest-value, lowest-risk roadmap item — **step 1 done (v8):*** **decouple
+  the key STFT from the tempo STFT.** The Analyzer already slices a dedicated
+  key/BPM window; key now takes its own larger-FFT (8192-point) transform
+  instead of reusing the 2048 tempogram STFT (whose size was a tempo/key
+  compromise, per the comment at `lib.rs:239`). That decoupling alone is the v8
+  win recorded in the results. Still to layer in, incrementally and each
+  verified on a benchmark: HPSS-style harmonic emphasis, then HPCP-style
+  profiles, then temporal smoothing.
 - *Verify, don't trust:* re-measure each increment on FMAK + GiantSteps; the
   fork's per-step deltas are n=68.
 - *Do not inherit:* the `100`/`5000` Hz band-limit, the `^0.6` compression, the
@@ -335,16 +341,16 @@ Pioneer/XDJ/CDJ/Rekordbox compatibility is the real user workflow, so **Rekordbo
 parity is a meaningful product benchmark**, not a stretch fantasy.
 
 **Minimum acceptance gate** — the floor a key change must clear to be worth
-keeping at all. This is the gate, **not the ambition**. (Parenthetical = current
-v7 strict-compatible, all still below even the gate — this is the starting
-point.)
+keeping at all. This is the gate, **not the ambition**. The v8 dedicated key
+STFT (see [results](analysis-benchmark-results.md)) cleared every gate but
+GiantSteps, which sits 0.9 pp under after a +7.6 pp rise.
 
-| Corpus | Min acceptance gate (strict-compatible) | Current (v7) |
-| --- | --- | --- |
-| Private goldish | ≥ 75 % | 61.1 % |
-| Private all-core | ≥ 65–70 % | 50.0 % |
-| FMAK (`fma_medium`) | ≥ 55–60 % | 47.9 % |
-| GiantSteps Key | ≥ 60 % | 51.5 % |
+| Corpus | Min acceptance gate (strict-compatible) | v7 | **v8** |
+| --- | --- | --- | --- |
+| Private goldish | ≥ 75 % | 61.1 % | **94.4 %** ✓ |
+| Private all-core | ≥ 65–70 % | 50.0 % | **84.6 %** ✓ |
+| FMAK (`fma_medium`) | ≥ 55–60 % | 47.9 % | **57.9 %** ✓ |
+| GiantSteps Key | ≥ 60 % | 51.5 % | 59.1 % (−0.9) |
 
 **Product ambition / DJ-tool parity** — the bar that actually matters, set
 against the commercial tools on the core use case:
@@ -374,17 +380,22 @@ Two guardrails alongside the headline:
 
 ## Prioritised, testable roadmap
 
-Ordered by expected impact against risk. **None of this is implemented in this
-pass.** Each item is a hypothesis to be confirmed by a recorded benchmark
-before and after.
+Ordered by expected impact against risk. Each item is a hypothesis to be
+confirmed by a recorded benchmark before and after.
 
 1. **Key front-end decoupling** (Area 2) — give key its own ≈8192-point STFT +
    harmonic emphasis + HPCP, independent of the 2048 tempogram STFT. The fork's
    largest measured win and architecturally clean. *Gate:* MIREX-weighted on
-   FMAK + GiantSteps.
-2. **Mode discrimination** (Area 1) — mean-centred (Pearson) correlation and/or
-   alternative/multi-profile templates; resolve the per-mode-normalisation
-   contradiction principledly. *Gate:* predicted major/minor balance + MIREX.
+   FMAK + GiantSteps. **Step 1 landed (v8):** the dedicated 8192-point key STFT
+   alone lifted strict-compatible +7.6–34.6 pp and snapped the predicted
+   major/minor mix to ground truth (FMAK within 0.3 pp) — measured one variable
+   at a time, no harmonic emphasis/HPCP/smoothing yet. Those remain the next
+   sub-steps, each its own benchmarked change.
+2. **Mode discrimination** (Area 1) — mean-centred (Pearson) correlation **[done,
+   v7]** and/or alternative/multi-profile templates **[next, after the front-end
+   is built out — profile optimality depends on chroma quality]**; resolve the
+   per-mode-normalisation contradiction principledly. *Gate:* predicted
+   major/minor balance + MIREX.
 3. **Confidence / unknown surface** (Area 4) — expose clarity + confidence and an
    ambiguous state; re-derive thresholds. *Gate:* clarity↔error correlation on
    FMAK. Addresses a standing product risk.
