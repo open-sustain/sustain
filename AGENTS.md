@@ -6,6 +6,8 @@ roughly aligned with the dense, predictable library workflow of iTunes 11,
 circa 2012. Sustain is its own product — not a clone of any prior Linux
 player, not a continuation of any other project's UX.
 
+NEVER USE CLAUDE MEMORY FEATURE. Your memory are existing projects .md files, github issues and comments. And for critical, always in the back of your head: AGENTS.md/CLAUDE.md (symlinks of each other).
+
 Project and application naming:
 
 - Product/application name: `Sustain`
