@@ -30,13 +30,17 @@
 //! ## Sustain note
 //!
 //! Vendored from `stratum-dsp@5f4b416`, trimmed to the STFT front-end and the
-//! straight (non-tuned, non-HPCP) chroma path Sustain's key detector uses:
-//! [`compute_stft`] and [`extract_chroma_from_spectrogram_with_options`]
-//! (which fans out to the private `frame_to_chroma` / `frame_to_chroma_tuned`).
-//! The upstream tuning-estimation, HPCP, log-frequency, beat-synchronous,
+//! straight (non-tuned, non-HPCP) chroma path: [`compute_stft`] and
+//! [`extract_chroma_from_spectrogram_with_options`] (which fans out to the
+//! private `frame_to_chroma` / `frame_to_chroma_tuned`). The upstream
+//! tuning-estimation, HPCP, log-frequency, beat-synchronous,
 //! spectrogram-conditioning, and raw-sample `extract_chroma*` helpers belong to
 //! the full `analyze_audio` key pipeline Sustain does not call and are not
 //! vendored.
+//!
+//! Sustain's key detector no longer consumes this band-summed path directly: it
+//! now extracts its profile through the sibling, Sustain-authored core HPCP in
+//! [`super::hpcp`]. This primitive remains the crate's vendored chroma surface.
 
 use crate::error::AnalysisError;
 use rustfft::num_complex::Complex;
@@ -45,11 +49,17 @@ use rustfft::FftPlanner;
 /// Numerical stability epsilon
 const EPSILON: f32 = 1e-10;
 
-/// Reference frequency for semitone calculation (A4)
-const A4_FREQ: f32 = 440.0;
+/// Reference frequency for semitone calculation (A4).
+///
+/// `pub(crate)` so the sibling [`super::hpcp`] front-end maps peaks onto the
+/// exact same pitch-class grid as this band-summed path; the two chroma
+/// variants must agree on what pitch-class index 0 means or the shared key
+/// templates would be rotated against one of them.
+pub(crate) const A4_FREQ: f32 = 440.0;
 
-/// Semitone offset to map A4 to semitone 57 (middle of piano range)
-const SEMITONE_OFFSET: f32 = 57.0;
+/// Semitone offset to map A4 to semitone 57 (middle of piano range). Shared
+/// with [`super::hpcp`] for the reason given on [`A4_FREQ`].
+pub(crate) const SEMITONE_OFFSET: f32 = 57.0;
 
 /// Default band-pass limits for chroma extraction.
 ///
@@ -64,6 +74,11 @@ const DEFAULT_CHROMA_FMAX_HZ: f32 = 5000.0;
 /// preprocesses the spectrogram for chroma (e.g. HPSS harmonic emphasis) can
 /// scope that work to the band chroma consumes instead of the full transform.
 pub const CHROMA_FMAX_HZ: f32 = DEFAULT_CHROMA_FMAX_HZ;
+
+/// Lower edge of the chroma band (Hz). `pub(crate)` so [`super::hpcp`]
+/// band-limits its peaks to the same `[CHROMA_FMIN_HZ, CHROMA_FMAX_HZ]` range
+/// this path sums over, rather than restating the literal.
+pub(crate) const CHROMA_FMIN_HZ: f32 = DEFAULT_CHROMA_FMIN_HZ;
 
 /// Compute the magnitude STFT of a mono signal.
 ///

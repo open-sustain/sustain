@@ -4,10 +4,10 @@
 // PROVENANCE.md and LICENSE-MIT / LICENSE-APACHE in this crate. This file
 // (the crate root) is Sustain-authored glue that curates the public surface;
 // the modules below are the vendored DSP, trimmed to the reachable subset,
-// plus clearly-marked Sustain-authored DSP extensions (currently the
-// median-filter HPSS in `features/chroma/hpss.rs`). New files in this crate
-// stay `MIT OR Apache-2.0` to match the crate's license, NOT the workspace's
-// GPL — see PROVENANCE.md.
+// plus clearly-marked Sustain-authored DSP extensions (the median-filter HPSS
+// in `features/chroma/hpss.rs` and the core HPCP in
+// `features/chroma/hpcp.rs`). New files in this crate stay `MIT OR Apache-2.0`
+// to match the crate's license, NOT the workspace's GPL — see PROVENANCE.md.
 
 //! Minimal audio-analysis DSP for Sustain.
 //!
@@ -28,10 +28,15 @@
 //! * [`estimate_bpm_tempogram`] — tempogram BPM (returns [`BpmEstimate`]).
 //! * [`emphasize_harmonic`] — *Sustain-authored* median-filter HPSS that
 //!   attenuates percussive energy in a spectrogram before chroma.
+//! * [`compute_hpcp`] — *Sustain-authored* core Harmonic Pitch Class Profile
+//!   (peak-picking + squared-cosine pitch-class weighting); the chroma source
+//!   the key detector uses.
 //! * [`extract_chroma_from_spectrogram_with_options`] + [`detect_key`] +
 //!   [`KeyTemplates`] — chroma → Krumhansl-Kessler template key detection
 //!   (returns [`KeyDetectionResult`] over [`Key`]). Key selection is
-//!   deterministic (a total-order sort with a fixed tiebreak).
+//!   deterministic (a total-order sort with a fixed tiebreak). The vendored
+//!   band-summed chroma here remains available, but the key detector now reads
+//!   its profile from [`compute_hpcp`].
 //! * [`detect_spectral_flux_onsets`] — spectral-flux onset frames.
 //! * [`normalize`] (+ [`NormalizationConfig`], [`NormalizationMethod`],
 //!   [`LoudnessMetadata`]) — ITU-R BS.1770-4 loudness measurement/normalization.
@@ -67,6 +72,7 @@ pub use error::AnalysisError;
 pub use features::chroma::extractor::{
     compute_stft, extract_chroma_from_spectrogram_with_options, CHROMA_FMAX_HZ,
 };
+pub use features::chroma::hpcp::compute_hpcp;
 pub use features::chroma::hpss::emphasize_harmonic;
 pub use features::key::detector::detect_key;
 pub use features::key::templates::KeyTemplates;

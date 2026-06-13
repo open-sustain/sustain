@@ -6,8 +6,11 @@
 //! `smoothing` (`smooth_chroma`) helpers are only used by the `analyze_audio`
 //! key pipeline Sustain does not call and are not vendored.
 //!
-//! [`hpss`] is **Sustain-authored** (not vendored): a median-filter
-//! harmonic-percussive separation that runs before chroma on the key path.
+//! [`hpss`] and [`hpcp`] are **Sustain-authored** (not vendored): a
+//! median-filter harmonic-percussive separation that runs before chroma, and a
+//! core Harmonic Pitch Class Profile that the key detector uses in place of the
+//! vendored band-summed [`extractor`] path.
 
 pub(crate) mod extractor;
+pub(crate) mod hpcp;
 pub(crate) mod hpss;

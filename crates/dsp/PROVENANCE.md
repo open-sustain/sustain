@@ -103,6 +103,7 @@ files as Sustain's own.
 | This crate | Origin |
 | --- | --- |
 | `src/features/chroma/hpss.rs` | Sustain-authored. Median-filter harmonic-percussive separation (soft Wiener mask), re-derived from Fitzgerald (2010) and Driedger & Müller (2014). The vendoring deliberately left HPSS out (it was trimmed as unreachable); this is a fresh implementation, not the fork's HPSS, and inherits none of the fork's corpus-fitted constants. Used by `sustain-analysis` on the key path before chroma. |
+| `src/features/chroma/hpcp.rs` | Sustain-authored. Core Harmonic Pitch Class Profile — spectral peak picking with quadratic (QIFFT) interpolation, energy weighting, and a squared-cosine pitch-class window — re-derived from Gómez (2006), *Tonal Description of Music Audio Signals*. **No code was read or copied from MTG's Essentia, the AGPL-3.0 reference implementation**, and none of the upstream fork's HPCP (which was trimmed as unreachable, see Adaptations) was used. It implements only the core front-end; harmonic summation, tuning estimation, sub-semitone resolution, and max-normalization are deliberately omitted. Used by `sustain-analysis` on the key path in place of the vendored band-summed chroma. |
 
 ## License policy for this crate
 

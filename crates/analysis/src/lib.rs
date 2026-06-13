@@ -81,9 +81,9 @@ use std::time::Duration;
 
 use decode::{DecodedAudio, decode_full, decode_window};
 use sustain_dsp::{
-    CHROMA_FMAX_HZ, KeyTemplates, NormalizationConfig, NormalizationMethod, compute_stft,
-    detect_key, detect_spectral_flux_onsets, emphasize_harmonic, estimate_bpm_tempogram,
-    extract_chroma_from_spectrogram_with_options, normalize,
+    CHROMA_FMAX_HZ, KeyTemplates, NormalizationConfig, NormalizationMethod, compute_hpcp,
+    compute_stft, detect_key, detect_spectral_flux_onsets, emphasize_harmonic,
+    estimate_bpm_tempogram, normalize,
 };
 
 pub use waveform::WaveformTiers;
@@ -164,6 +164,19 @@ pub use waveform::WaveformTiers;
 /// shift for many tracks, which re-attempt under the same `FILL_*_IF_NULL`
 /// wipe-and-rescan policy. BPM is untouched.
 ///
+/// Version 10: key detection now builds its pitch-class profile with a core
+/// Harmonic Pitch Class Profile (`compute_hpcp`) instead of the vendored
+/// band-summed chroma. HPCP derives the profile from the spectrum's *peaks* —
+/// spectral peak picking with quadratic (QIFFT) interpolation, energy
+/// weighting, and a squared-cosine pitch-class window — so the noise floor
+/// between partials no longer dilutes the profile. The HPSS front-end, the STFT
+/// size, the `[100, 5000] Hz` band, the 440 Hz pitch-class grid, and the entire
+/// detector (templates, mean-centered Pearson, cross-mode rescale,
+/// circle-of-fifths bonus, L2 normalization) are all unchanged — only how the
+/// spectrogram becomes a chroma vector. The detected key shifts for many
+/// tracks, which re-attempt under the same `FILL_*_IF_NULL` wipe-and-rescan
+/// policy. BPM is untouched.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -181,7 +194,7 @@ pub use waveform::WaveformTiers;
 /// byte-for-byte on the synthetic corpus, so stored values' meaning is
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
-pub const ANALYZER_VERSION: u32 = 9;
+pub const ANALYZER_VERSION: u32 = 10;
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
 /// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default
@@ -496,14 +509,11 @@ impl Analyzer {
             .collect();
         let harmonic = emphasize_harmonic(&banded, time_kernel, freq_kernel).ok()?;
 
-        let chroma = extract_chroma_from_spectrogram_with_options(
-            &harmonic,
-            window.sample_rate,
-            KEY_STFT_FRAME_SIZE,
-            true,
-            0.5,
-        )
-        .ok()?;
+        // Core HPCP: derive the pitch-class profile from the spectrum's peaks
+        // (peak-picking + QIFFT interpolation + squared-cosine weighting)
+        // rather than summing every bin, on the same band and pitch-class grid
+        // the band-summed path used.
+        let chroma = compute_hpcp(&harmonic, window.sample_rate, KEY_STFT_FRAME_SIZE).ok()?;
         if chroma.is_empty() {
             return None;
         }
