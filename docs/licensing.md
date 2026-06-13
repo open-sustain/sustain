@@ -54,6 +54,31 @@ attribution set must land with its regenerated inventory in the same change.
 The release workflow's install-layout check asserts the Debian path exists, so
 a packaging change that drops the file fails the release.
 
+### Vendored Rust source — `crates/dsp` (`sustain-dsp`)
+
+`crates/dsp` (`sustain-dsp`) is the one workspace crate that is **not**
+first-party: it is a trimmed, vendored copy of `stratum-dsp`, licensed
+**MIT OR Apache-2.0** (see `crates/dsp/PROVENANCE.md`, which pins the upstream
+commit, and the retained `crates/dsp/LICENSE-MIT` / `crates/dsp/LICENSE-APACHE`).
+It is statically linked into the binary like any other crate.
+
+Because `cargo about` ignores every `publish = false` workspace crate
+(`private = { ignore = true }`), and `sustain-dsp` must stay `publish = false`
+like the rest of the workspace, it does **not** appear in
+`THIRD-PARTY-LICENSES.md`, and cargo-about has no per-crate un-ignore. Its
+notices are therefore retained in the source tree (`crates/dsp/LICENSE-MIT`,
+`crates/dsp/LICENSE-APACHE`, `crates/dsp/PROVENANCE.md`) **and shipped
+directly** by both binary packages:
+
+| Artifact | Path |
+| --- | --- |
+| Debian `.deb` | `/usr/share/doc/sustain/sustain-dsp/LICENSE-MIT` and `…/LICENSE-APACHE` (cargo-deb assets in `crates/app/Cargo.toml`) |
+| Flatpak | `/app/share/licenses/io.github.open_sustain.sustain/sustain-dsp/LICENSE-MIT` and `…/LICENSE-APACHE` |
+
+The release workflow's `.deb`-contents check asserts both Debian paths, so a
+packaging change that drops them fails the release — the same guard the
+generated inventory has. Both licenses are GPL-3.0-or-later compatible.
+
 ## Non-Cargo components, and why they are not in the inventory
 
 The `cargo about` inventory deliberately covers only the statically linked

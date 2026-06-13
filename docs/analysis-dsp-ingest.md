@@ -1,16 +1,17 @@
 # Analysis DSP ingest — gate artifacts (#192)
 
-> **Status: pre-ingest planning. Nothing in this document changes shipping
-> behaviour.** It is the review gate that must clear before the DSP rework
-> begins: the exact analysis-output contract, the *measured* transitive call
-> graph of the DSP we actually use, and the vendoring/provenance shape. The
-> ingest itself (vendor the minimal core, drop the published `stratum-dsp`
-> crate, collapse to a single symphonia) is a separate, focused change tracked
-> as Phase 4 below.
+> **Status: the ingest has landed (§5).** This document is the review gate that
+> preceded it — the exact analysis-output contract, the *measured* transitive
+> call graph of the DSP Sustain uses, and the vendoring/provenance shape — and
+> now doubles as the reference for what was vendored. The ingest itself (vendor
+> the minimal core into `crates/dsp`, drop the published `stratum-dsp`, collapse
+> to a single symphonia) is recorded in §5; per-file detail is in
+> `crates/dsp/PROVENANCE.md`.
 
-`crates/analysis` currently reaches into the published `stratum-dsp` 1.0 crate
-for BPM, key, the STFT, spectral-flux onsets, and ITU-R BS.1770 loudness. The
-ingest target is the fork `open-sustain/stratum-dsp@wip/dsp-rework`
+`crates/analysis` reached into the published `stratum-dsp` 1.0 crate for BPM,
+key, the STFT, spectral-flux onsets, and ITU-R BS.1770 loudness; the ingest
+replaced that with the vendored `sustain-dsp` (`crates/dsp`). The ingest source
+was the fork `open-sustain/stratum-dsp@wip/dsp-rework`
 (HEAD `5f4b4160441725cdd8a6e4355b6908d41b0451db`), **not** crates.io — the fork
 already carries fixes (notably deterministic key selection, see §1.3) that the
 published crate lacks. Everything measured below was read directly from that
@@ -79,19 +80,18 @@ Sustain stores these values once and treats them as authoritative
 (`ANALYZER_VERSION` gating, library-wins policy). They must therefore be a
 deterministic function of the decoded samples + `AnalysisOptions`:
 
-- **Same file + same options → identical `bpm`, `acoustics`, `waveform`.**
-  Verified byte-stable by `crates/analysis_bench` against the committed
-  synthetic baseline.
-- **Key is the known exception today.** The Phase-1 synthetic corpus excludes
-  `key` because the **published** `stratum-dsp` 1.0 selects the winning key via
-  a `max_by` over a `HashMap`, so ties resolve in hash-iteration order and flip
-  between runs.
-  **The fork fixes this.** `features/key/detector.rs::detect_key_weighted`
-  ranks with `sort_key_scores_desc` → `compare_key_scores_desc`, a `total_cmp`
-  with a `key_sort_index` secondary key — fully deterministic, no map
-  iteration. **Ingesting the fork's detector resolves the key non-determinism**,
-  after which `key` (and the triad fixtures with key ground truth) return to the
-  synthetic corpus and the determinism assertions.
+- **Same file + same options → identical `bpm`, `key`, `acoustics`, `waveform`.**
+  Verified by `crates/analysis_bench`: the determinism test asserts all four,
+  and the committed synthetic baseline regenerates byte-for-byte.
+- **Key determinism — resolved by the ingest.** Phase 1 surfaced that the
+  **published** `stratum-dsp` 1.0 selected the winning key via a `max_by` over a
+  `HashMap`, so ties resolved in hash-iteration order and flipped between runs;
+  the synthetic corpus excluded `key` to avoid a churning baseline. The vendored
+  `sustain-dsp` (from the fork) ranks with `detect_key_weighted` →
+  `sort_key_scores_desc` → `compare_key_scores_desc`, a `total_cmp` with a
+  `key_sort_index` secondary key — fully deterministic, no map iteration. So
+  `key` and the triad fixtures with key ground truth are back in the synthetic
+  corpus and the determinism assertions.
 
 ### 1.4 Equivalence tolerance (what the ingest must preserve)
 
@@ -198,35 +198,32 @@ workspace dependency today.
 
 ### 3.1 Where the source lands
 
-Vendor the reachable closure into a first-party module tree under
-`crates/analysis`, preserving the upstream module shape so the algorithms stay
-legible and diffable against the fork:
+**Decision (landed): a sibling crate `crates/dsp` (`sustain-dsp`)** that
+`crates/analysis` depends on — chosen over an inline module because the fork's
+per-module `#[cfg(test)]` suites come along, the DSP boundary is explicit and
+independently testable, and a crate boundary documents the "domain stays off
+GTK/symphonia/storage" rule. The crate is pure DSP: its only dependencies are
+`rustfft` and `log`. The vendored files keep their upstream module shape so the
+algorithms stay legible and diffable against the fork:
 
 ```
-crates/analysis/src/dsp/            <- vendored from stratum-dsp@5f4b416
-  mod.rs                            (declares the submodules below)
-  error.rs                          (AnalysisError)
-  key.rs            or key/         (Key enum; detector; templates; mod helpers)
-  chroma.rs                         (compute_stft + chroma extraction)
-  onset.rs                          (detect_spectral_flux_onsets)
-  period/                           (tempogram, novelty, tempogram_fft, tempogram_autocorr, BpmEstimate)
-  normalization.rs                  (BS.1770-4 loudness)
-  LICENSE-MIT
-  LICENSE-APACHE
-  PROVENANCE.md
+crates/dsp/                         <- vendored from stratum-dsp@5f4b416
+  Cargo.toml                        (edition 2021; license = "MIT OR Apache-2.0"; deps: rustfft, log)
+  PROVENANCE.md, LICENSE-MIT, LICENSE-APACHE
+  src/lib.rs                        (Sustain-authored: curated public API + module decls)
+  src/error.rs                      (AnalysisError)
+  src/analysis/result.rs            (Key)
+  src/features/chroma/extractor.rs  (compute_stft + extract_chroma_from_spectrogram_with_options)
+  src/features/key/{mod,detector,templates}.rs
+  src/features/onset/spectral_flux.rs
+  src/features/period/{mod,tempogram,novelty,tempogram_fft,tempogram_autocorr}.rs
+  src/preprocessing/normalization.rs
 ```
 
-The exact flattening (one `key.rs` vs a `key/` dir) is an implementation
-detail for Phase 4; the constraint is that every vendored file keeps its
-upstream identity recorded so a future upstream fix can be re-merged.
-
-> Open decision for review: vendor under `crates/analysis/src/dsp/` (above), or
-> as a sibling first-party crate `crates/dsp` (`sustain-dsp`) that
-> `crates/analysis` depends on. A sibling crate keeps the DSP boundary explicit
-> and independently testable (the fork's own unit tests come along); an inline
-> module avoids a crate. Recommendation: **sibling `crates/dsp`**, because the
-> fork's per-module `#[cfg(test)]` suites are worth keeping and a crate boundary
-> documents the "domain stays off GTK/symphonia" architecture rule.
+The public surface is exactly the primitives the analyzer composes (re-exported
+from the crate root); the module tree is crate-private. No orchestration API and
+no genre/profile layer were added. Per-file trims and adaptations are recorded
+in `crates/dsp/PROVENANCE.md`.
 
 ### 3.2 License retention (the obligation)
 
@@ -311,15 +308,30 @@ Outstanding for Phase 4 entry: capture that real-audio baseline, then proceed.
 
 ---
 
-## 5. Phase 4 (ingest) — not started; gated on review of §1–§4
+## 5. Phase 4 (ingest) — landed
 
-1. Vendor the §2.2 closure into the §3.1 layout, retaining §3.2 notices.
-2. Repoint `crates/analysis/src/lib.rs` imports at the vendored module; drop the
-   `stratum-dsp` dependency from `crates/analysis/Cargo.toml`; add `rustfft`
-   (+ `log` or strip its calls).
-3. Re-enable deterministic `key` in the synthetic corpus + determinism test
-   (§1.3).
-4. Run the harness against synthetic (byte-stable gate) and the private
-   real-audio baseline (MIR tolerances, §1.4); decide `ANALYZER_VERSION`.
-5. Regenerate `THIRD-PARTY-LICENSES.md`; add the licensing.md entry; full
-   workspace gate; re-verify cold start ≤ 150 ms.
+1. **Vendored** the §2.2 closure into `crates/dsp` (§3.1) with the §3.2 notices
+   retained (`PROVENANCE.md`, `LICENSE-MIT`, `LICENSE-APACHE`). Pure DSP:
+   `rustfft` + `log` only.
+2. **Repointed** `crates/analysis` at `sustain_dsp`; dropped the `stratum-dsp`
+   dependency. `rustfft`/`log` are now direct deps of the vendored crate;
+   `serde`/`serde_json`/`rayon` left the analysis dependency path.
+3. **Re-enabled deterministic `key`** in the synthetic corpus (triad fixtures
+   restored) and asserted it in the determinism test (§1.3).
+4. **Validated**: the vendored full-band path reproduces the published-1.0
+   BPM/acoustics/waveform on the synthetic corpus **byte-for-byte**, so
+   `ANALYZER_VERSION` stays at 5 (no change to stored values' meaning; key only
+   becomes deterministic on ties, which `FILL_IF_NULL` never re-clobbers). The
+   real-audio MIR baseline (§4) remains the deeper validation and is still owed.
+5. Regenerated `THIRD-PARTY-LICENSES.md` (drops `stratum-dsp`); `cargo-deny`
+   licenses/bans/sources ok; added the `docs/licensing.md` vendored-source
+   record (with the open binary-packaging item for the MIT/Apache notice).
+   Full workspace gate green.
+
+### Still owed (follow-ups, not blockers)
+
+- Record the **real-audio** quality baseline of the vendored implementation
+  from the private manifests, so before/after BPM/key/loudness quality is
+  measured on real material, not only synthetics.
+- Resolve the binary-packaging attribution placement for `sustain-dsp`'s
+  MIT/Apache notice (see `docs/licensing.md`).

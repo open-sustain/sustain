@@ -19,9 +19,12 @@ path = "src/lib.rs"
 # `default-features = false`). 0.6 brings SIMD-by-default decode,
 # decode-from-non-owning-packets, and the hardened MP4/MKV demuxers.
 symphonia = { version = "0.6", features = ["mp3", "aac", "flac", "wav", "ogg", "vorbis"] }
-# BPM + key detection. Chroma-based; takes mono f32 samples and a
-# sample rate; returns BPM + a key string we map onto sustain_domain::MusicalKey.
-stratum-dsp = "1.0"
+# BPM + key + STFT + spectral-flux onsets + BS.1770 loudness. Vendored,
+# trimmed minimal DSP core (was the published `stratum-dsp` crate; see
+# crates/dsp/PROVENANCE.md). Takes mono f32 samples / a magnitude
+# spectrogram and a sample rate; returns BPM + a `Key` we map onto
+# sustain_domain::MusicalKey.
+sustain-dsp = { path = "../dsp" }
 # Digital biquad IIR filters for the 3-band split (low/mid/high) used
 # to produce per-segment frequency-band energies for the waveform.
 biquad = "0.6"

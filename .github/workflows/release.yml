@@ -214,6 +214,10 @@ jobs:
           DEB=$(find artifacts -type f -name "sustain_*_${{ matrix.arch }}.deb" -print -quit)
           dpkg-deb --contents "${DEB}" > /tmp/deb-contents.txt
           grep -qE '/usr/share/doc/sustain/THIRD-PARTY-LICENSES\.md$' /tmp/deb-contents.txt
+          # The vendored sustain-dsp crate's MIT/Apache notices ship directly
+          # (cargo-about excludes private workspace crates from the inventory).
+          grep -qE '/usr/share/doc/sustain/sustain-dsp/LICENSE-MIT$' /tmp/deb-contents.txt
+          grep -qE '/usr/share/doc/sustain/sustain-dsp/LICENSE-APACHE$' /tmp/deb-contents.txt
 
   # Distro-agnostic build for users on Elementary / Zorin / Mint /
   # Fedora / openSUSE / etc. Targets the org.gnome.Platform//48

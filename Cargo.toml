@@ -10,6 +10,7 @@ members = [
   "crates/device_mtp",
   "crates/device_sync",
   "crates/domain",
+  "crates/dsp",
   "crates/i18n",
   "crates/library_store",
   "crates/metadata",

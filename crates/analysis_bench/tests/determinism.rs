@@ -9,20 +9,18 @@
 //! without committing any audio (fixtures are generated on the fly and
 //! discarded).
 //!
-//! # Key is deliberately excluded (known non-determinism, tracked by #192)
+//! # Key is now deterministic (resolved by the #192 vendoring)
 //!
-//! The harness surfaced — on its first run — that **key detection is not
-//! deterministic** in the published `stratum-dsp 1.0` that the analyzer
-//! currently links: `detect_key` selects the winning key with a `max_by`
-//! over a `std::collections::HashMap`, so on ambiguous chroma (a tie in
-//! count/confidence) the result depends on hash-map iteration order and
-//! flips between runs. BPM, acoustics, and the waveform tiers are all
-//! byte-stable; only key wobbles. This is precisely the determinism that
-//! the #192 ingest/rework must establish ("identical input/config →
-//! identical output; expose uncertainty rather than arbitrary
-//! tie-breaks"). Until that lands, this test asserts determinism on the
-//! deterministic outputs and leaves key out; key should be added back here
-//! once the rework makes it stable.
+//! The harness surfaced — on its first run — that key detection was **not**
+//! deterministic in the published `stratum-dsp 1.0` the analyzer used to
+//! link: `detect_key` selected the winning key with a `max_by` over a
+//! `std::collections::HashMap`, so on ambiguous chroma (a tie in
+//! count/confidence) the result depended on hash-map iteration order and
+//! flipped between runs. The #192 ingest replaced that crate with the
+//! vendored `sustain_dsp`, whose `detect_key` ranks with a total-order sort
+//! and a fixed `key_sort_index` tiebreak — deterministic by construction. So
+//! key is asserted here alongside BPM, acoustics, and the waveform tiers;
+//! all of the analyzer's stored outputs are now byte-stable across runs.
 
 use std::path::Path;
 
@@ -81,9 +79,10 @@ fn deterministic_outputs_are_stable_across_runs() {
     assert_eq!(first.tracks.len(), second.tracks.len());
     for (a, b) in first.tracks.iter().zip(&second.tracks) {
         assert_eq!(a.id, b.id);
-        // Decode → mono → waveform → BPM → acoustics are all
-        // deterministic. (Key is excluded — see the module docs.)
+        // Decode → mono → waveform → BPM → key → acoustics are all
+        // deterministic with the vendored DSP (see the module docs).
         assert_eq!(a.bpm, b.bpm, "{}: BPM not deterministic", a.id);
+        assert_eq!(a.key, b.key, "{}: key not deterministic", a.id);
         assert_eq!(
             a.acoustics, b.acoustics,
             "{}: acoustics not deterministic",

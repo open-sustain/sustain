@@ -85,6 +85,13 @@ modules:
       # bundled Rust dependencies are reproduced here.
       - install -Dm644 THIRD-PARTY-LICENSES.md
           ${FLATPAK_DEST}/share/licenses/io.github.open_sustain.sustain/THIRD-PARTY-LICENSES.md
+      # The vendored sustain-dsp crate is MIT OR Apache-2.0 third-party code,
+      # but cargo-about ignores private workspace crates, so it is absent from
+      # the inventory above; ship its notices directly (see crates/dsp/PROVENANCE.md).
+      - install -Dm644 crates/dsp/LICENSE-MIT
+          ${FLATPAK_DEST}/share/licenses/io.github.open_sustain.sustain/sustain-dsp/LICENSE-MIT
+      - install -Dm644 crates/dsp/LICENSE-APACHE
+          ${FLATPAK_DEST}/share/licenses/io.github.open_sustain.sustain/sustain-dsp/LICENSE-APACHE
       - |
         for size in 16 24 32 48 64 128 256 512; do
           install -Dm644 \

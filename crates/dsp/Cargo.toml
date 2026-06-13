@@ -1,0 +1,35 @@
+[package]
+name = "sustain-dsp"
+version.workspace = true
+# Vendored from stratum-dsp (edition 2021); kept on the upstream edition for
+# faithful re-merge rather than ported to the workspace's 2024. Editions are
+# per-crate, so this composes with the rest of the workspace unchanged.
+edition = "2021"
+rust-version.workspace = true
+# This crate is vendored third-party code, not first-party Sustain code, so it
+# keeps its upstream dual license rather than the workspace GPL-3.0-or-later.
+# Both are GPL-3.0-or-later compatible; see PROVENANCE.md and the LICENSE-*
+# files in this directory, and docs/licensing.md for the attribution record.
+license = "MIT OR Apache-2.0"
+publish.workspace = true
+description = "Minimal vendored DSP core (STFT, tempogram BPM, chroma/key, spectral-flux onsets, BS.1770 loudness) for Sustain."
+
+[lib]
+name = "sustain_dsp"
+path = "src/lib.rs"
+
+[dependencies]
+# FFT for the STFT front-end and the FFT tempogram. Pulled in directly now
+# that the vendored code lives here rather than transitively via stratum-dsp.
+rustfft = "6.2"
+# Logging facade used by the vendored debug/warn traces. No sink is configured
+# by this crate; it inherits the application's logger when one is installed.
+log = "0.4"
+
+# This crate intentionally does NOT inherit the workspace clippy ratchet
+# (`[lints] workspace = true`): it is vendored third-party code kept verbatim
+# for provenance and upstream re-merge, and upstream maintains its own
+# `clippy::all` cleanliness. We still forbid unsafe — the vendored DSP is pure
+# safe Rust — which is stronger than the workspace's `deny`.
+[lints.rust]
+unsafe_code = "forbid"

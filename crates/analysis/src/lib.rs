@@ -43,18 +43,17 @@
 //! free. BPM/key requested *without* audio decode only their own
 //! centered window.
 //!
-//! The Analyzer reaches into `stratum_dsp::features::*` directly
-//! (chroma extractor for the STFT, period::tempogram for BPM, key
-//! detector for key) rather than going through
-//! [`stratum_dsp::analyze_audio`]'s compute-everything orchestration.
-//! That orchestration is intentionally bypassed: it always computes
-//! every band, so calling it for "BPM only" still pays for chroma +
-//! key detection. The trade-off is that we lose some of the
-//! orchestration's confidence-boosting heuristics (multi-resolution
-//! tempogram, onset consensus); accuracy on a 200-track validation
-//! set was measured at ~85% with the plain tempogram path versus
-//! ~92% with the full orchestration. The maintainer's call is that
-//! 7 percentage points is the right price for an honest skip path.
+//! The Analyzer composes the vendored `sustain_dsp` primitives directly
+//! (chroma extractor for the STFT, period tempogram for BPM, key detector
+//! for key). The vendored core is deliberately just those primitives: it
+//! omits the upstream `analyze_audio` compute-everything orchestration,
+//! which always computes every band, so calling it for "BPM only" would
+//! still pay for chroma + key detection. The trade-off is that we forgo
+//! that orchestration's confidence-boosting heuristics (multi-resolution
+//! tempogram, onset consensus); accuracy on a 200-track validation set was
+//! measured at ~85% with the plain tempogram path versus ~92% with the
+//! full orchestration. The maintainer's call is that 7 percentage points
+//! is the right price for an honest skip path.
 //!
 //! Persistence, paced scheduling, and "needs analysis" bookkeeping
 //! live in `sustain-library-store` and `sustain-app-runtime`
@@ -81,15 +80,10 @@ pub use sustain_domain::{
 use std::time::Duration;
 
 use decode::{DecodedAudio, decode_full, decode_window};
-use stratum_dsp::features::chroma::extractor::{
-    compute_stft, extract_chroma_from_spectrogram_with_options,
-};
-use stratum_dsp::features::key::detect_key;
-use stratum_dsp::features::key::templates::KeyTemplates;
-use stratum_dsp::features::onset::spectral_flux::detect_spectral_flux_onsets;
-use stratum_dsp::features::period::tempogram::estimate_bpm_tempogram;
-use stratum_dsp::preprocessing::normalization::{
-    NormalizationConfig, NormalizationMethod, normalize,
+use sustain_dsp::{
+    KeyTemplates, NormalizationConfig, NormalizationMethod, compute_stft, detect_key,
+    detect_spectral_flux_onsets, estimate_bpm_tempogram,
+    extract_chroma_from_spectrogram_with_options, normalize,
 };
 
 pub use waveform::WaveformTiers;
@@ -136,6 +130,13 @@ pub use waveform::WaveformTiers;
 /// existing library's audio pass for sub-perceptual decoder rounding would
 /// be disproportionate, so the version stays at 5: existing rows keep
 /// their values; only newly-analyzed tracks use the 0.6 decode.
+///
+/// Likewise *not* gated: the #192 vendoring of the BPM/key/STFT/onset/loudness
+/// DSP out of the published `stratum-dsp` crate into `sustain-dsp`. The
+/// vendored full-band path reproduces the previous BPM/acoustics/waveform
+/// byte-for-byte on the synthetic corpus, so stored values' meaning is
+/// unchanged — key merely becomes deterministic on ambiguous ties (which the
+/// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
 pub const ANALYZER_VERSION: u32 = 5;
 
 /// DSP tunables exposed to callers. Defaults reflect the values the
@@ -779,12 +780,12 @@ fn frame_tonalness(frame: &[f32]) -> Option<f32> {
     Some((1.0 - flatness) as f32)
 }
 
-/// Render a `stratum_dsp::Key` as the lower-case label our mapper
-/// expects. `stratum_dsp::Key` exposes a `name()` accessor on
-/// `KeyType`, but its `Debug` is what other call sites use; we
-/// format explicitly so the mapping table below stays canonical.
-fn stratum_key_label(key: &stratum_dsp::Key) -> String {
-    use stratum_dsp::Key;
+/// Render a `sustain_dsp::Key` as the lower-case label our mapper
+/// expects. `sustain_dsp::Key` exposes a `name()` accessor, but its
+/// `Debug` is what other call sites use; we format explicitly so the
+/// mapping table below stays canonical.
+fn stratum_key_label(key: &sustain_dsp::Key) -> String {
+    use sustain_dsp::Key;
     let (root, mode) = match key {
         Key::Major(idx) => (*idx, "major"),
         Key::Minor(idx) => (*idx, "minor"),
@@ -898,7 +899,7 @@ mod tests {
         // through `map_stratum_key` to a `MusicalKey`. Guard against
         // a typo introducing a label the mapper does not know.
         for root in 0_u32..12 {
-            for mode in [stratum_dsp::Key::Major(root), stratum_dsp::Key::Minor(root)] {
+            for mode in [sustain_dsp::Key::Major(root), sustain_dsp::Key::Minor(root)] {
                 let label = stratum_key_label(&mode);
                 assert!(
                     map_stratum_key(&label).is_some(),

@@ -5,7 +5,7 @@
     155.0
   ],
   "summary": {
-    "track_count": 9,
+    "track_count": 12,
     "error_count": 0,
     "bpm": {
       "scored": 4,
@@ -13,6 +13,14 @@
       "mean_abs_error": 1.0137443542480469,
       "ratio_buckets": {
         "1x": 4
+      }
+    },
+    "key": {
+      "scored": 3,
+      "weighted_pct": 66.66667,
+      "categories": {
+        "correct": 2,
+        "other": 1
       }
     }
   },
@@ -23,10 +31,11 @@
       "tasks": [
         "waveform",
         "acoustics",
-        "bpm"
+        "bpm",
+        "key"
       ],
       "bpm": 76.0,
-      "key": null,
+      "key": "C",
       "acoustics": null,
       "waveform": {
         "preview_segments": 400,
@@ -43,10 +52,11 @@
       "tasks": [
         "waveform",
         "acoustics",
-        "bpm"
+        "bpm",
+        "key"
       ],
       "bpm": 76.0,
-      "key": null,
+      "key": "C",
       "acoustics": null,
       "waveform": {
         "preview_segments": 400,
@@ -63,10 +73,11 @@
       "tasks": [
         "waveform",
         "acoustics",
-        "bpm"
+        "bpm",
+        "key"
       ],
       "bpm": 90.84320068359375,
-      "key": null,
+      "key": "Eb",
       "acoustics": {
         "integrated_lufs": -45.095444,
         "short_term_lufs_max": -45.091675,
@@ -93,10 +104,11 @@
       "tasks": [
         "waveform",
         "acoustics",
-        "bpm"
+        "bpm",
+        "key"
       ],
       "bpm": 80.0,
-      "key": null,
+      "key": "A",
       "acoustics": {
         "integrated_lufs": -32.93875,
         "short_term_lufs_max": -32.937897,
@@ -123,10 +135,11 @@
       "tasks": [
         "waveform",
         "acoustics",
-        "bpm"
+        "bpm",
+        "key"
       ],
       "bpm": 95.89004516601562,
-      "key": null,
+      "key": "C",
       "acoustics": {
         "integrated_lufs": -40.735886,
         "short_term_lufs_max": -40.735886,
@@ -153,10 +166,11 @@
       "tasks": [
         "waveform",
         "acoustics",
-        "bpm"
+        "bpm",
+        "key"
       ],
       "bpm": 90.84320068359375,
-      "key": null,
+      "key": "F",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.628326,
@@ -189,10 +203,11 @@
       "tasks": [
         "waveform",
         "acoustics",
-        "bpm"
+        "bpm",
+        "key"
       ],
       "bpm": 118.0,
-      "key": null,
+      "key": "F",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.628326,
@@ -225,10 +240,11 @@
       "tasks": [
         "waveform",
         "acoustics",
-        "bpm"
+        "bpm",
+        "key"
       ],
       "bpm": 128.0,
-      "key": null,
+      "key": "F",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.0484,
@@ -261,10 +277,11 @@
       "tasks": [
         "waveform",
         "acoustics",
-        "bpm"
+        "bpm",
+        "key"
       ],
       "bpm": 138.78822326660156,
-      "key": null,
+      "key": "F",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.0484,
@@ -289,6 +306,114 @@
         "abs_error": 1.2117767333984375,
         "within_tolerance": true,
         "ratio_bucket": "1x"
+      }
+    },
+    {
+      "id": "triad_c_major",
+      "source": "synthetic:triad",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm",
+        "key"
+      ],
+      "bpm": 141.3116455078125,
+      "key": "C",
+      "acoustics": {
+        "integrated_lufs": -42.235542,
+        "short_term_lufs_max": -42.102737,
+        "loudness_range_lu": 0.106170654,
+        "onset_rate_hz": 17.15,
+        "low_band_ratio": 0.03389491,
+        "mid_band_ratio": 0.9661051,
+        "high_band_ratio": 1.527835e-9,
+        "low_band_variation": 0.01155414,
+        "tonalness": 1.0
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 3000,
+        "preview_duration_ms": 50.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "1bb9d62239377b96",
+        "detail_hash": "cdc845373a023ce6"
+      },
+      "key_score": {
+        "ground_truth": "C",
+        "category": "correct",
+        "score": 1.0
+      }
+    },
+    {
+      "id": "triad_g_major",
+      "source": "synthetic:triad",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm",
+        "key"
+      ],
+      "bpm": 78.22608947753906,
+      "key": "G",
+      "acoustics": {
+        "integrated_lufs": -38.641853,
+        "short_term_lufs_max": -38.60244,
+        "loudness_range_lu": 0.026794434,
+        "onset_rate_hz": 12.15,
+        "low_band_ratio": 0.00008831424,
+        "mid_band_ratio": 0.99991167,
+        "high_band_ratio": 1.5266416e-9,
+        "low_band_variation": 0.04705821,
+        "tonalness": 1.0
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 3000,
+        "preview_duration_ms": 50.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "33880fb15beff41c",
+        "detail_hash": "c2aa6c8626f4aba9"
+      },
+      "key_score": {
+        "ground_truth": "G",
+        "category": "correct",
+        "score": 1.0
+      }
+    },
+    {
+      "id": "triad_a_minor",
+      "source": "synthetic:triad",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm",
+        "key"
+      ],
+      "bpm": 83.27293395996094,
+      "key": "F",
+      "acoustics": {
+        "integrated_lufs": -40.92018,
+        "short_term_lufs_max": -40.853195,
+        "loudness_range_lu": 0.059448242,
+        "onset_rate_hz": 17.1,
+        "low_band_ratio": 0.03389476,
+        "mid_band_ratio": 0.9661052,
+        "high_band_ratio": 1.5271788e-9,
+        "low_band_variation": 0.011282495,
+        "tonalness": 1.0
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 3000,
+        "preview_duration_ms": 50.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "091c30445a043392",
+        "detail_hash": "00c281c1e4f07727"
+      },
+      "key_score": {
+        "ground_truth": "Am",
+        "category": "other",
+        "score": 0.0
       }
     }
   ]

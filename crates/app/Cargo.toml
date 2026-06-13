@@ -89,6 +89,12 @@ assets = [
     # already emits /usr/share/doc/sustain/copyright for Sustain's own
     # GPL-3.0-or-later license; this is the third-party complement.
     ["../../THIRD-PARTY-LICENSES.md", "usr/share/doc/sustain/THIRD-PARTY-LICENSES.md", "644"],
+    # The vendored `sustain-dsp` crate is MIT OR Apache-2.0 third-party code,
+    # but cargo-about ignores private workspace crates, so it is absent from
+    # the inventory above. Ship its notices directly (see crates/dsp/PROVENANCE.md
+    # and docs/licensing.md).
+    ["../dsp/LICENSE-MIT", "usr/share/doc/sustain/sustain-dsp/LICENSE-MIT", "644"],
+    ["../dsp/LICENSE-APACHE", "usr/share/doc/sustain/sustain-dsp/LICENSE-APACHE", "644"],
     ["../../data/icons/hicolor/16x16/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
     ["../../data/icons/hicolor/24x24/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/24x24/apps/", "644"],
     ["../../data/icons/hicolor/32x32/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/32x32/apps/", "644"],

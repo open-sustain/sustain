@@ -22,13 +22,13 @@ description = "Deterministic generated fixtures: silence, tones, ramp, metronome
 # tempo spread without forcing octave folds on the long tails).
 min_bpm = 76.0
 max_bpm = 155.0
-# Key is intentionally excluded here: published `stratum-dsp 1.0`'s
-# `detect_key` selects via a `max_by` over a `HashMap`, so on ambiguous
-# chroma the result flips between runs (the determinism test documents
-# this). A committed key baseline would therefore churn. Key — and triad
-# fixtures with key ground truth — return to this corpus once the #192
-# ingest/rework makes key detection deterministic.
-tasks = ["waveform", "acoustics", "bpm"]
+# Key is included: the #192 ingest replaced published `stratum-dsp 1.0`
+# (whose `detect_key` selected via a `max_by` over a `HashMap`, so an
+# ambiguous chroma flipped between runs) with the vendored `sustain-dsp`,
+# whose `detect_key` ranks with a total-order sort and a fixed tiebreak —
+# deterministic, so a committed key baseline is stable. The triad fixtures
+# below carry exact key ground truth.
+tasks = ["waveform", "acoustics", "bpm", "key"]
 
 # --- decode / mono / waveform determinism ---
 
@@ -73,3 +73,20 @@ bpm = 128.0
 id = "click_140"
 synthetic = { kind = "click_train", bpm = 140.0, secs = 20.0 }
 bpm = 140.0
+
+# --- key: sustained triads with exact ground truth ---
+
+[[track]]
+id = "triad_c_major"
+synthetic = { kind = "triad", root_pc = 0, minor = false, secs = 20.0 }
+key = "C"
+
+[[track]]
+id = "triad_g_major"
+synthetic = { kind = "triad", root_pc = 7, minor = false, secs = 20.0 }
+key = "G"
+
+[[track]]
+id = "triad_a_minor"
+synthetic = { kind = "triad", root_pc = 9, minor = true, secs = 20.0 }
+key = "Am"
