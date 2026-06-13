@@ -844,3 +844,102 @@ max-normalization remain separate, individually-measured layers; the GiantSteps
 mode/parallel boundary is still the priority. No DSP was tuned and no
 corpus-specific constant was introduced.
 
+## 2026-06-13 — key detector v12 (HPCP global tuning estimation), all three corpora
+
+The fifth **front-end** layer under #192, after v8 (key STFT), v9 (HPSS),
+v10 (core HPCP), and v11 (harmonic summation). Through v11 the pitch-class grid
+was pinned to a fixed A4 = 440 Hz, so any track mastered or recorded off concert
+pitch landed every note a fraction of a semitone off the grid and split its
+energy across two bins. v12 estimates the recording's reference pitch once — the
+**energy-weighted circular mean** of every peak's deviation from the 440 grid —
+and subtracts it from every pitch class before binning. **One variable changed:**
+HPSS, the 8192-pt STFT, the band, peak picking, energy weighting, the
+squared-cosine window, harmonic summation, and the entire detector are untouched
+(`ANALYZER_VERSION` 11 → 12). The estimate is a true vector sum (robust to the
+±0.5-semitone wrap), **parameter-free**, and self-zeroing — an in-tune signal
+averages to ≈ 0, so already-on-grid material is left alone. No threshold, no
+knob, no corpus constant.
+
+| | |
+| --- | --- |
+| Harness commit | `29a5d96` |
+| `ANALYZER_VERSION` | 12 |
+| BPM range | 76–155 (unchanged) |
+| Build | `--release` |
+| Working tree at run time | clean (`git_dirty = false`, `HEAD == 29a5d96`) |
+
+### Headline: strict harmonic-compatible rate (the product metric), v11 → v12
+
+| Corpus | n | strict-compat v11 → **v12** | exact v11 → v12 | MIREX v11 → v12 | `other` v11 → v12 |
+| --- | --- | --- | --- | --- | --- |
+| Private goldish | 18 | 100.0 % → **100.0 %** | 77.8 % → 77.8 % | 85.6 % → **86.7 %** | 0 → 0 |
+| Private all-core | 26 | 96.2 % → 96.2 % | 69.2 % → **65.4 %** | 78.8 % → **77.7 %** | 1 → 1 |
+| Private silver | 8 | 87.5 % → 87.5 % | 50.0 % → **37.5 %** | 63.7 % → **57.5 %** | 1 → 1 |
+| FMAK (`fma_medium`) | 1,723 | 72.1 % → **72.6 %** | 49.4 % → **49.8 %** | 60.6 % → **61.0 %** | 355 → 346 |
+| GiantSteps Key | 604 | 62.9 % → **64.7 %** | 43.7 % → **44.5 %** | 49.8 % → **55.4 %** ¹ | 137 → 134 |
+
+¹ GiantSteps MIREX 54.4 → 55.4.
+
+Aggregate over all 2,353 scored tracks: strict **70.0 % → 70.8 %** (+0.8 pp),
+exact **48.2 % → 48.6 %** (+0.4 pp), MIREX **59.2 % → 59.7 %** (+0.5 pp). The two
+larger public corpora both improve; **GiantSteps strict +1.8 pp** is the largest
+single move and a third consecutive front-end gain there. Goldish holds 100 %
+strict / 0 `other` with MIREX +1.1.
+
+### The one caveat: a single private silver track loses its exact match
+
+Private all-core exact **−3.8 pp** and MIREX **−1.2** come from **one
+silver-tier track** moving `correct → fifth` (`18/2/5` → `17/4/4` in
+correct/fifth/relative) — it stays strict-compatible, so private strict holds at
+96.2 %. Tuning shifted one off-440-leaning master the wrong way; the
+energy-weighted mean is, by design, swayed by a loud detuned element. Goldish (the
+trusted product tier) is untouched. The product metric (strict / goldish) does
+not regress; this is a secondary-metric wobble on a low-confidence label,
+outweighed across 2,353 tracks by the GiantSteps/FMAK gains.
+
+### Mode mix — still the open issue, neither helped nor harmed on GiantSteps
+
+| Corpus | predicted minor v11 → **v12** | truth minor | gap v11 → v12 |
+| --- | --- | --- | --- |
+| Private all-core | 69.2 % → 73.1 % | 61.5 % | 7.7 → 11.5 pp |
+| FMAK | 43.6 % → 42.9 % | 57.1 % | 13.5 → 14.1 pp |
+| GiantSteps Key | 53.5 % → 53.5 % | 84.6 % | 31.1 → **31.1 pp** |
+
+The GiantSteps gap is **unchanged** — tuning estimation does not touch the
+major/minor boundary, as expected (it shifts the whole grid uniformly). The
+private gap widens to 11.5 pp (still inside the ±15–20 pp guard). The mode/parallel
+boundary remains the open target for a later layer.
+
+### BPM byte-identity
+
+**Unchanged** — every BPM output is byte-identical to v11 (and so to v8–v10)
+across all 2,353 tracks. Tuning is applied only on the key path.
+
+### Runtime cost — a light pass
+
+The tuning estimate is one extra pass over the peaks (peak-pick + one `log2` +
+accumulate, no harmonic fan-out), so it is far cheaper than the binning pass.
+
+| Corpus (window) | key band v11 → **v12** | total ms/track v11 → v12 |
+| --- | --- | --- |
+| Private (full, ~120 s; BPM+key) | 362.2 → **386.6 ms** (+7 %) | 537 → 559 ms |
+| GiantSteps (120 s; key-only) | 434.1 → **457.7 ms** (+5 %) | 434 → 458 ms |
+| FMAK (~30 s clips; key-only) | 111.6 → **116.4 ms** (+4 %) | 111.6 → 116.4 ms |
+
+### Finding: a small net win on the public corpora, with one private wobble
+
+- **Net win.** Aggregate strict +0.8 pp, exact +0.4 pp, MIREX +0.5 pp; both
+  public corpora up on strict/exact/MIREX; `other` down on each; BPM
+  byte-identical; runtime cost light (+4–7 %).
+- **GiantSteps recovers further.** Strict +1.8 pp / exact +0.8 / MIREX +1.0 —
+  the off-440 correction helps even on this nominally-digital corpus.
+- **Goldish preserved.** 100 % strict / 0 `other`, MIREX +1.1.
+- **One caveat:** private all-core exact −3.8 pp (one silver track,
+  `correct → fifth`; strict and goldish untouched).
+- **Open issue unchanged:** GiantSteps mode-mix gap (~31 pp) is not moved by
+  tuning. Still the next layer's target.
+
+#192 stays open. Sub-semitone resolution and max-normalization remain separate,
+individually-measured layers; the GiantSteps mode/parallel boundary is still the
+priority. No DSP was tuned and no corpus-specific constant was introduced.
+

@@ -13,33 +13,33 @@ member, so `cargo fmt`/`clippy`/`test` cover it like everything else.
 
 ## Current recorded status
 
-The current stop point for #192 is `ANALYZER_VERSION` **11**: dedicated
+The current stop point for #192 is `ANALYZER_VERSION` **12**: dedicated
 8192-point key STFT (v8), HPSS harmonic emphasis (v9), a Sustain-authored
-core HPCP front-end (v10), and HPCP harmonic summation (v11). The detailed,
-aggregate-only record is
+core HPCP front-end (v10), HPCP harmonic summation (v11), and HPCP global
+tuning estimation (v12). The detailed, aggregate-only record is
 [`docs/analysis-benchmark-results.md`](../../docs/analysis-benchmark-results.md);
 this README keeps the short operational snapshot for the next DSP pass.
 
 Key quality is judged by **strict harmonic-compatible rate** (`correct + fifth + relative`),
 because Sustain's product target is DJ/Pioneer/Rekordbox-style compatible
-filtering, not exact key alone. At v11:
+filtering, not exact key alone. At v12:
 
 | Corpus | n | strict-compatible | exact | notes |
 | --- | ---: | ---: | ---: | --- |
-| Private goldish | 18 | **100.0 %** | 77.8 % | trusted product-tier labels; 0 `other`; exact +16.7 pp vs v10 |
-| Private all-core | 26 | **96.2 %** | 69.2 % | 18 goldish + 8 silver |
-| FMAK (`fma_medium`) | 1,723 | **72.1 %** | 49.4 % | broad public key regression corpus |
-| GiantSteps Key | 604 | **62.9 %** | 43.7 % | strict +2.3 pp vs v10 (reverses v10's dip); exact, MIREX, loose, `other` all improved |
+| Private goldish | 18 | **100.0 %** | 77.8 % | trusted product-tier labels; 0 `other`; preserved through v12 |
+| Private all-core | 26 | **96.2 %** | 65.4 % | 18 goldish + 8 silver; exact −3.8 pp vs v11 (one silver track) |
+| FMAK (`fma_medium`) | 1,723 | **72.6 %** | 49.8 % | broad public key regression corpus |
+| GiantSteps Key | 604 | **64.7 %** | 44.5 % | strict +1.8 pp vs v11; third straight front-end gain |
 
-Aggregate over the 2,353 scored real key tracks: strict-compatible **70.0 %**
-(+2.0 pp vs v10), exact **48.2 %** (+5.4 pp), MIREX +3.4 pp, and `other` drops
-on every corpus — a clean across-the-board win with no primary-metric dip. BPM
-is byte-identical to v10 across those runs. The one cost is runtime: key
-time/track is +26-36 % (background analysis, off the cold-start path). The open
-issue is unchanged: the GiantSteps mode-mix gap (predicted-minor 53.5 % against
-84.6 % minor truth, ~31 pp) is *not* resolved by v11 — neither worsened
-materially nor fixed. Future key work should address that mode/parallel boundary
-without broad constant sweeps.
+Aggregate over the 2,353 scored real key tracks: strict-compatible **70.8 %**
+(+0.8 pp vs v11), exact **48.6 %** (+0.4 pp), MIREX +0.5 pp; both public corpora
+up on strict/exact/MIREX and `other` drops on each. BPM is byte-identical to v11.
+Runtime cost is light (key time/track +4-7 %, background analysis). The one
+caveat: private all-core exact −3.8 pp from a single silver track moving
+`correct → fifth` (strict and goldish untouched). The open issue is unchanged:
+the GiantSteps mode-mix gap (predicted-minor 53.5 % against 84.6 % minor truth,
+~31 pp) is moved by neither v11 nor v12. Future key work should address that
+mode/parallel boundary without broad constant sweeps.
 
 BPM quality at the shipped 76-155 range is currently limited more by corpus
 range than by gross detection: the private corpus has every in-range track

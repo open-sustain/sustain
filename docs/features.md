@@ -560,16 +560,16 @@ for harmony-aware sets.
 The product target is harmonic compatibility for Pioneer/Rekordbox-style
 filtering rather than exact tonic+mode alone. The validation headline is
 therefore **strict-compatible** key rate: exact key, a fifth away, or the
-relative major/minor. At the current v11 analysis engine the recorded
+relative major/minor. At the current v12 analysis engine the recorded
 strict-compatible rates are 100.0% on the 18-track high-confidence
-private goldish set, 96.2% on the 26-track private all-core set, 72.1%
-on 1,723 FMAK `fma_medium` clips, and 62.9% on 604 GiantSteps Key
-tracks. Exact-key rates on the same sets are 77.8%, 69.2%, 49.4%, and
-43.7%. v11 (HPCP harmonic summation) improved every corpus on
-strict, exact, MIREX, and loose-compatible rates over v10, at a bounded
-background-analysis runtime cost. GiantSteps remains the watched caveat:
-its major/minor prediction mix still leans too far major, so future DSP
-work continues to track that mode boundary.
+private goldish set, 96.2% on the 26-track private all-core set, 72.6%
+on 1,723 FMAK `fma_medium` clips, and 64.7% on 604 GiantSteps Key
+tracks. Exact-key rates on the same sets are 77.8%, 65.4%, 49.8%, and
+44.5%. The HPCP front-end now does peak-based chroma with harmonic
+summation (v11) and global tuning estimation (v12); both public corpora
+improved again at v12 while the trusted goldish tier held. GiantSteps
+remains the watched caveat: its major/minor prediction mix still leans
+too far major, so future DSP work continues to track that mode boundary.
 
 ### Audio analysis — *Sustain-native*
 A single heavy decode pass produces, as byproducts of the one decode,
