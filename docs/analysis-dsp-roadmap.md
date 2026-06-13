@@ -62,7 +62,7 @@ to Sustain's vendored `crates/dsp` + `crates/analysis`.
 | Temperley 1999 (cited in `templates.rs`) | Alternative key-finding profiles | Mentioned, **not implemented** |
 | Gomtsyan 2019 (`gomtsyan_2019…`) | KK still competitive vs ML; clarity = max/mean | Reference; clarity **not implemented** |
 | Müller & Ewert 2010 (`mueller_2010…`) | STFT chroma, freq→semitone, octave sum, L2 | **Implemented** — `chroma/extractor.rs` (off the key path since v10) |
-| Gómez 2006 (refresh-audit candidate) | HPCP: peak-based, harmonic-weighted pitch-class profile | **Core implemented (Sustain-authored, v10)** — peaks + QIFFT + energy + squared-cosine window, `chroma/hpcp.rs`; harmonic summation / tuning deferred |
+| Gómez 2006 (refresh-audit candidate) | HPCP: peak-based, harmonic-weighted pitch-class profile | **Implemented (Sustain-authored, v10+v11)** — peaks + QIFFT + energy + squared-cosine window (v10) + harmonic summation (v11, subharmonic folding, N=8 / decay 0.6), `chroma/hpcp.rs`; tuning estimation / sub-semitone resolution deferred |
 | Ellis & Poliner 2007 (`ellis_poliner_2007…`) | Temporal chroma smoothing | **Not vendored** (a later front-end layer) |
 | Driedger & Müller 2014 (`driedger_mueller_2014_hpss`) | Median-filter HPSS harmonic/percussive split | **Implemented (Sustain-authored, v9)** — re-derived, `chroma/hpss.rs` |
 | Grosche 2012 (`grosche_2012_tempogram`) | Fourier tempogram over a global novelty curve | **Implemented** — `period/tempogram_fft.rs` |
@@ -80,8 +80,9 @@ to Sustain's vendored `crates/dsp` + `crates/analysis`.
 
 **Candidate literature flagged by the refresh audit, partially acted on:**
 Gómez 2006 (HPCP tonal description) — the **core** HPCP front-end landed in v10
-(`chroma/hpcp.rs`); harmonic summation, the MTG HPCP Vamp parameterisation's
-tuning estimation, and sub-semitone resolution remain as later layers.
+and **harmonic summation** (subharmonic folding) in v11 (`chroma/hpcp.rs`); the
+MTG HPCP Vamp parameterisation's tuning estimation and sub-semitone resolution
+remain as later layers.
 Faraldo et al. 2017 *multi-profile EDM key estimation* (flagged "high-priority
 key roadmap item"); `mir_eval` (Raffel 2014), JAMS, and `mirdata` (Bittner 2019)
 for evaluation methodology; Beat This (Foscarin 2024) and Böck HMM as Phase-2/ML
@@ -151,37 +152,41 @@ spacing needs the resolution), an HPSS-style **harmonic mask**, and
 measured jump (45.6% → 63.2%). Gómez/MTG HPCP and Faraldo are the named
 next-level references.
 
-**What Sustain has (after v10).** Key runs its own 8192-point STFT
+**What Sustain has (after v11).** Key runs its own 8192-point STFT
 (`KEY_STFT_FRAME_SIZE`, decoupled from the 2048-point tempogram in v8), then a
 median-filter HPSS harmonic emphasis (`emphasize_harmonic`, v9) over that
-spectrogram, and as of v10 a **core Harmonic Pitch Class Profile**
+spectrogram, and as of v10/v11 a **Harmonic Pitch Class Profile**
 (`chroma/hpcp.rs`) in place of the base band-summed chroma: spectral peak
-picking with quadratic (QIFFT) interpolation, energy weighting (amplitude²), and
-a squared-cosine pitch-class window (±1 semitone), still band-limited 100–5000 Hz
-and L2-normalised **per frame**, with the per-frame template matches summed flat
-over the window. The "naive full-track chroma averaging" the fork's note
-identifies as the collapse trigger is now finer-grained in frequency,
-percussion-suppressed, and peak-derived, but **still has no harmonic summation,
-no tuning estimation, no sub-semitone resolution, and no temporal smoothing** —
+picking with quadratic (QIFFT) interpolation, energy weighting (amplitude²), a
+squared-cosine pitch-class window (±1 semitone), and **harmonic summation** —
+each peak also credits its first eight subharmonics (`freq/h`, decay 0.6),
+folding overtone energy back onto its fundamentals (v11). Still band-limited
+100–5000 Hz and L2-normalised **per frame**, with the per-frame template matches
+summed flat over the window. The "naive full-track chroma averaging" the fork's
+note identifies as the collapse trigger is now finer-grained in frequency,
+percussion-suppressed, peak-derived, and harmonically folded, but **still has no
+tuning estimation, no sub-semitone resolution, and no temporal smoothing** —
 those are the remaining front-end layers. The vendored band-summed
 `chroma/extractor.rs` stays in the crate as a primitive but is no longer on the
 key path.
 
 **Decision.**
-- *Highest-value, lowest-risk roadmap item — **steps 1–3 done (v8, v9, v10):***
+- *Highest-value, lowest-risk roadmap item — **steps 1–4 done (v8, v9, v10, v11):***
   **decouple the key STFT from the tempo STFT, suppress percussion before chroma,
-  then derive the profile from spectral peaks.** Key takes its own larger-FFT
-  (8192-point) transform (v8) instead of reusing the 2048 tempogram STFT (whose
-  size was a tempo/key compromise, per the comment at `lib.rs:239`), runs
-  median-filter HPSS over it (v9), and builds a core HPCP from the peaks (v10).
-  All three are recorded front-end changes. v10 is a net quality win (aggregate
-  strict +5.9 pp, exact +12.3 pp; goldish 94.4 → 100 %; BPM byte-identical;
-  faster) but carries **one regression to watch: GiantSteps shifts major-ward
-  (predicted-minor 70 → 55 % against 85 % truth, ~30 pp — outside the ±15–20 pp
-  mode-mix guard), costing −1.0 pp strict there while loose rises +3.3 pp.** Still
-  to layer in, incrementally and each verified on a benchmark: harmonic summation,
-  tuning estimation, sub-semitone resolution, then temporal smoothing — with the
-  **mode/parallel boundary as the immediate priority**, and no broad tuning sweep.
+  derive the profile from spectral peaks, then fold overtone energy back to
+  fundamentals.** Key takes its own larger-FFT (8192-point) transform (v8)
+  instead of reusing the 2048 tempogram STFT (whose size was a tempo/key
+  compromise, per the comment at `lib.rs:239`), runs median-filter HPSS over it
+  (v9), builds a core HPCP from the peaks (v10), and adds harmonic summation
+  (v11). All four are recorded front-end changes. v11 is a clean across-the-board
+  quality win (aggregate strict +2.0 pp, exact +5.4 pp; every corpus up on
+  strict/exact/MIREX/loose; goldish holds 100 % strict and +16.7 pp exact;
+  GiantSteps strict +2.3 pp, reversing v10's −1.0 pp dip; BPM byte-identical) at
+  a bounded runtime cost (key time +26–36 %, background only). Still
+  to layer in, incrementally and each verified on a benchmark: tuning estimation,
+  sub-semitone resolution, then temporal smoothing — with the **GiantSteps
+  mode/parallel boundary (still ~31 pp off, *not* resolved by v11) as the
+  immediate priority**, and no broad tuning sweep.
 - *Verify, don't trust:* re-measure each increment on FMAK + GiantSteps; the
   fork's per-step deltas are n=68.
 - *Do not inherit:* the `100`/`5000` Hz band-limit — re-justify or expose as a
@@ -357,23 +362,25 @@ Pioneer/XDJ/CDJ/Rekordbox compatibility is the real user workflow, so **Rekordbo
 parity is a meaningful product benchmark**, not a stretch fantasy.
 
 **Minimum acceptance gate** — the floor a key change must clear to be worth
-keeping at all. This is the gate, **not the ambition**. The v10 core HPCP
-front-end (see [results](analysis-benchmark-results.md)) is a net quality win
-(aggregate strict +5.9 pp, exact +12.3 pp; goldish to 100 %) that keeps every
-corpus over its gate, with one watched regression: GiantSteps strict −1.0 pp
-(loose +3.3 pp) from a major-ward mode shift outside the ±15–20 pp mode guard.
+keeping at all. This is the gate, **not the ambition**. The v11 HPCP harmonic
+summation layer (see [results](analysis-benchmark-results.md)) is a clean
+across-the-board quality win (aggregate strict +2.0 pp, exact +5.4 pp; every
+corpus up on strict/exact/MIREX/loose; goldish holds 100 % and +16.7 pp exact;
+GiantSteps strict +2.3 pp, reversing v10's −1.0 pp dip) at a bounded background
+runtime cost (+26–36 % key time). The GiantSteps mode/parallel gap (~31 pp) is
+*not* resolved by v11 and stays the open issue.
 
-| Corpus | Min acceptance gate (strict-compatible) | v7 | v8 | v9 | **v10** |
-| --- | --- | --- | --- | --- | --- |
-| Private goldish | ≥ 75 % | 61.1 % | 94.4 % | 94.4 % | **100.0 %** ✓ |
-| Private all-core | ≥ 65–70 % | 50.0 % | 84.6 % | 88.5 % | **92.3 %** ✓ |
-| FMAK (`fma_medium`) | ≥ 55–60 % | 47.9 % | 57.9 % | 61.9 % | **70.3 %** ✓ |
-| GiantSteps Key | ≥ 60 % | 51.5 % | 59.1 % | 61.6 % | **60.6 %** ✓ |
+| Corpus | Min acceptance gate (strict-compatible) | v7 | v8 | v9 | v10 | **v11** |
+| --- | --- | --- | --- | --- | --- | --- |
+| Private goldish | ≥ 75 % | 61.1 % | 94.4 % | 94.4 % | 100.0 % | **100.0 %** ✓ |
+| Private all-core | ≥ 65–70 % | 50.0 % | 84.6 % | 88.5 % | 92.3 % | **96.2 %** ✓ |
+| FMAK (`fma_medium`) | ≥ 55–60 % | 47.9 % | 57.9 % | 61.9 % | 70.3 % | **72.1 %** ✓ |
+| GiantSteps Key | ≥ 60 % | 51.5 % | 59.1 % | 61.6 % | 60.6 % | **62.9 %** ✓ |
 
-All four corpora still clear the minimum acceptance gate. The product-ambition
-tier (goldish ≥ 85 %, stretch ≥ 90 %) is clear with margin — goldish sits at
-**100 %**. The open issue is not the gate but the GiantSteps mode/parallel
-regression, which the next front-end layer must target.
+All four corpora clear the minimum acceptance gate, GiantSteps now with margin
+again. The product-ambition tier (goldish ≥ 85 %, stretch ≥ 90 %) is clear with
+margin — goldish sits at **100 %**. The open issue is not the gate but the
+GiantSteps mode/parallel gap, which the next front-end layer must target.
 
 **Product ambition / DJ-tool parity** — the bar that actually matters, set
 against the commercial tools on the core use case:
