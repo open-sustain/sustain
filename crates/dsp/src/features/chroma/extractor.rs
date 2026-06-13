@@ -62,8 +62,9 @@ const DEFAULT_CHROMA_FMAX_HZ: f32 = 5000.0;
 /// Compute the magnitude STFT of a mono signal.
 ///
 /// Returns one magnitude spectrum (`frame_size / 2 + 1` real-FFT bins) per
-/// frame, Hann-windowed, hopped by `hop_size`. This is the shared spectral
-/// front-end behind both BPM (tempogram) and key (chroma) detection.
+/// frame, Hann-windowed, hopped by `hop_size`. This is the spectral
+/// front-end both BPM (tempogram) and key (chroma) detection build on —
+/// each calling it at its own frame size, not sharing one transform.
 ///
 /// # Errors
 ///

@@ -162,8 +162,9 @@ pub use waveform::WaveformTiers;
 /// waveform encoding (the things this version actually gates) are
 /// unchanged, and PCM/WAV decode is bit-identical. Re-deriving every
 /// existing library's audio pass for sub-perceptual decoder rounding would
-/// be disproportionate, so the version stays at 5: existing rows keep
-/// their values; only newly-analyzed tracks use the 0.6 decode.
+/// be disproportionate, so the decoder migration does not advance this
+/// version on its own: existing rows keep their values; only
+/// newly-analyzed tracks use the 0.6 decode.
 ///
 /// Likewise *not* gated: the #192 vendoring of the BPM/key/STFT/onset/loudness
 /// DSP out of the published `stratum-dsp` crate into `sustain-dsp`. The
@@ -259,10 +260,11 @@ const ACOUSTICS_LONG_WINDOW_SECS: f64 = 8.0 * 60.0;
 /// either errors or returns garbage.
 const MIN_SAMPLES_FOR_ANALYSIS: usize = 44_100;
 
-/// STFT frame size used for both BPM and key. Matches stratum-dsp's
-/// own default (`AnalysisConfig::frame_size`); a smaller frame loses
-/// frequency resolution that the key detector needs, a larger frame
-/// blurs onsets the tempogram looks for.
+/// STFT frame size for the tempogram. Matches stratum-dsp's own
+/// default (`AnalysisConfig::frame_size`); short enough to keep onset
+/// timing sharp for the novelty curve. Key detection no longer shares
+/// this transform — it has its own larger `KEY_STFT_FRAME_SIZE` (below)
+/// for low-register pitch resolution.
 const STFT_FRAME_SIZE: usize = 2048;
 
 /// STFT hop size. Matches stratum-dsp's default — 75% overlap, which
@@ -316,9 +318,10 @@ const LOUDNESS_RANGE_GATE_LU: f32 = 20.0;
 /// Capability-driven, stateful analyzer for one audio file. Cheap to
 /// construct — the constructor does no I/O — and caches the decoded
 /// regions the band methods share, so a caller that requests both BPM
-/// and key only pays for one decode + one STFT, and a caller that also
-/// requests audio analysis pays for the acoustics decode and slices the
-/// BPM/key window out of it for free.
+/// and key pays for only one decode of the shared window (each then
+/// computes its own STFT — the tempogram's short frame and key's larger
+/// one), and a caller that also requests audio analysis pays for the
+/// acoustics decode and slices the BPM/key window out of it for free.
 ///
 /// The caches are lazy and region-keyed:
 ///
@@ -326,10 +329,12 @@ const LOUDNESS_RANGE_GATE_LU: f32 = 20.0;
 /// * [`Self::acoustics`] uses the whole track on normal-length tracks
 ///   (sharing `full_audio` with the waveform) and a centered
 ///   `ACOUSTICS_LONG_WINDOW_SECS` decode on long tracks.
-/// * [`Self::bpm`] / [`Self::key`] use a centered `BPM_KEY_WINDOW_SECS`
-///   window plus its STFT. When a larger region is already in memory
-///   (the audio pass ran first), the window is sliced from its centre —
-///   no extra I/O. Otherwise it is decoded on its own.
+/// * [`Self::bpm`] / [`Self::key`] share a centered `BPM_KEY_WINDOW_SECS`
+///   window but each compute their own STFT from it (BPM the 2048-point
+///   tempogram transform, key the 8192-point `KEY_STFT_FRAME_SIZE`). When
+///   a larger region is already in memory (the audio pass ran first), the
+///   window is sliced from its centre — no extra I/O. Otherwise it is
+///   decoded on its own.
 ///
 /// To get the free slice, a caller that wants everything should prime
 /// the larger region first: call [`Self::waveform`]/[`Self::acoustics`]
