@@ -9,6 +9,7 @@
 //! analysis-bench gen             --manifest <toml> --out <dir>
 //! analysis-bench compare         --baseline <json> --candidate <json>
 //! analysis-bench adapt-giantsteps --dataset <tempo|key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
+//! analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
 //! ```
 //!
 //! * `run` analyzes every track in a manifest and writes a JSON report
@@ -25,11 +26,17 @@
 //!   truth, md5-verifying the audio against the upstream digests. Audio is
 //!   fetched separately with the dataset's own `audio_dl.sh`; this command
 //!   never downloads.
+//! * `adapt-fmak` turns an FMAK / FMAKv2 key CSV plus an extracted Free Music
+//!   Archive audio root (`fma_large`/`fma_medium`/…) into a (gitignored)
+//!   manifest with key ground truth. Annotated tracks with no audio under the
+//!   given root are reported and excluded (partial archive subsets cover only
+//!   part of FMAK); this command never downloads.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use sustain_analysis_bench::fmak::{self, AdaptOptions as FmakOptions, AdaptReport as FmakReport};
 use sustain_analysis_bench::giantsteps::{self, AdaptOptions, AdaptReport, Dataset};
 use sustain_analysis_bench::manifest::Manifest;
 use sustain_analysis_bench::run::{Report, TrackResult, run_manifest};
@@ -39,7 +46,8 @@ usage:
   analysis-bench run             --manifest <toml> [--out <json>] [--fixtures <dir>] [--reproducible]
   analysis-bench gen             --manifest <toml> --out <dir>
   analysis-bench compare         --baseline <json> --candidate <json>
-  analysis-bench adapt-giantsteps --dataset <tempo|key> --repo <dir> --audio <dir> --out <toml> [--no-md5]";
+  analysis-bench adapt-giantsteps --dataset <tempo|key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
+  analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>";
 
 /// A CLI failure: either bad invocation (exit 2) or a runtime error (exit 1).
 enum CliError {
@@ -71,6 +79,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "gen" => cmd_gen(rest),
         "compare" => cmd_compare(rest),
         "adapt-giantsteps" => cmd_adapt_giantsteps(rest),
+        "adapt-fmak" => cmd_adapt_fmak(rest),
         other => Err(CliError::Usage(format!("unknown command {other:?}"))),
     }
 }
@@ -209,18 +218,7 @@ fn cmd_adapt_giantsteps(args: &[String]) -> Result<(), CliError> {
         verify_md5: !args.has_flag("no-md5"),
     };
     let report = giantsteps::adapt(&options).map_err(|err| CliError::Failure(format!("{err}")))?;
-
-    let out = args.required("out")?;
-    if let Some(parent) = Path::new(out)
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(parent)
-            .map_err(|err| CliError::Failure(format!("create {}: {err}", parent.display())))?;
-    }
-    std::fs::write(out, &report.manifest_toml)
-        .map_err(|err| CliError::Failure(format!("write manifest: {err}")))?;
-    eprintln!("wrote {out}");
+    write_manifest(args.required("out")?, &report.manifest_toml)?;
     print_adapt_summary(&report, dataset, options.verify_md5);
     Ok(())
 }
@@ -244,6 +242,56 @@ fn print_adapt_summary(report: &AdaptReport, dataset: Dataset, verified: bool) {
     } else {
         eprintln!("  md5: verification disabled (--no-md5)");
     }
+}
+
+fn cmd_adapt_fmak(args: &[String]) -> Result<(), CliError> {
+    let args = Args::parse(args)?;
+    let options = FmakOptions {
+        annotations: PathBuf::from(args.required("annotations")?),
+        audio_dir: PathBuf::from(args.required("audio")?),
+    };
+    let report = fmak::adapt(&options).map_err(|err| CliError::Failure(format!("{err}")))?;
+    write_manifest(args.required("out")?, &report.manifest_toml)?;
+    print_fmak_summary(&report);
+    Ok(())
+}
+
+fn print_fmak_summary(report: &FmakReport) {
+    eprintln!(
+        "corpus {:?}: {} track(s) emitted from {} annotated",
+        report.corpus_id, report.track_count, report.annotated
+    );
+    if report.missing_audio > 0 {
+        eprintln!(
+            "  {} annotated track(s) excluded — no audio under the FMA root \
+             (not in this archive subset)",
+            report.missing_audio
+        );
+    }
+    if report.skipped > 0 {
+        eprintln!("  {} row(s) skipped (empty key label)", report.skipped);
+    }
+    if report.key_unparseable > 0 {
+        eprintln!(
+            "  {} key label(s) the scorer cannot parse — they will not be scored",
+            report.key_unparseable
+        );
+    }
+}
+
+/// Write an adapter's manifest TOML to `out`, creating the parent directory.
+fn write_manifest(out: &str, manifest_toml: &str) -> Result<(), CliError> {
+    if let Some(parent) = Path::new(out)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| CliError::Failure(format!("create {}: {err}", parent.display())))?;
+    }
+    std::fs::write(out, manifest_toml)
+        .map_err(|err| CliError::Failure(format!("write manifest: {err}")))?;
+    eprintln!("wrote {out}");
+    Ok(())
 }
 
 fn load_report(path: &str) -> Result<Report, CliError> {

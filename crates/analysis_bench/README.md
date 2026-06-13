@@ -59,6 +59,16 @@ cargo run -p sustain-analysis-bench --release -- adapt-giantsteps \
   --audio ../giantsteps-key-dataset/audio \
   --out   crates/analysis_bench/corpora/giantsteps_key.toml
 
+# Adapt the FMAK / FMAKv2 key annotations (a single CSV keyed by FMA
+# track_id) against an extracted Free Music Archive audio root. The audio is
+# downloaded separately as an fma_* archive (fma_large covers all FMAK ids);
+# annotated tracks absent from the chosen archive subset are reported and
+# excluded, never silently dropped:
+cargo run -p sustain-analysis-bench --release -- adapt-fmak \
+  --annotations ../fmakv2.csv \
+  --audio       ../fma_large \
+  --out         crates/analysis_bench/corpora/fmak_key.toml
+
 # Before/after a DSP or decoder change (e.g. #172):
 cargo run -p sustain-analysis-bench --release -- compare \
   --baseline /tmp/before.json --candidate /tmp/after.json
