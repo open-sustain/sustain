@@ -18,6 +18,11 @@ Each run is recorded as its own dated section, so a baseline taken before a
 DSP change sits next to the baseline taken after it and the two can be
 compared directly.
 
+**Recording rule:** a baseline must be run from a clean working tree
+(`git status --porcelain` empty) so the JSON `env`'s `git_commit` names the
+exact code that produced it. The harness records a `git_dirty` flag for this
+reason; a section whose run was dirty is not a trustworthy baseline.
+
 ---
 
 ## 2026-06-13 — GiantSteps Tempo + Key, pre-fix baseline
@@ -100,10 +105,30 @@ accuracy *for this corpus*.
 ## 2026-06-13 — GiantSteps, post-fix (key-detector mode fix, `ANALYZER_VERSION` 6)
 
 Same datasets, audio, and BPM range as the pre-fix run above; the only change
-is the key-detector correctness fix landed in this commit (the per-mode score
-normalization that pinned every result to major was replaced by a single
+is the key-detector correctness fix landed in commit `064bbc2` (the per-mode
+score normalization that pinned every result to major was replaced by a single
 shared-maximum scaling, restoring honest cross-mode comparison —
 `ANALYZER_VERSION` 5 → 6).
+
+| | |
+| --- | --- |
+| Harness commit | `064bbc2` |
+| `ANALYZER_VERSION` | 6 |
+| BPM range | 76–155 (unchanged) |
+| Build | `--release` |
+| GiantSteps Key commit | `6bcd492` |
+| GiantSteps Tempo commit | `d51ab24` |
+| Working tree at run time | clean (`git status --porcelain` empty, `HEAD == origin/main == 064bbc2`) |
+
+**Provenance note.** These figures were re-recorded from a clean checkout of
+`064bbc2`: the result JSON `env` now reports `git_commit = 064bbc2` and
+`analyzer_version = 6`. The first capture of this baseline had been run from an
+uncommitted working tree, so its `env` reported the *previous* HEAD
+(`3f8b29d`) alongside the post-fix `analyzer_version = 6` — an inconsistent
+record. A recorded baseline must always be run from a clean tree so its
+`git_commit` names the exact code that produced it; the bench `env` now also
+records a `git_dirty` flag (`git status --porcelain` non-empty) so any future
+dirty-tree run is self-evident rather than silently mislabelled.
 
 ### Key (MIREX)
 

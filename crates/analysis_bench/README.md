@@ -68,6 +68,14 @@ cargo run -p sustain-analysis-bench -- gen \
   --manifest crates/analysis_bench/corpora/synthetic.toml --out /tmp/fixtures
 ```
 
+A full `run` captures an `env` block recording the build profile, the
+`ANALYZER_VERSION`, the host, and — for provenance — the short git commit and
+a `git_dirty` flag. **Record reference baselines only from a clean working
+tree** (`git status --porcelain` empty): the commit hash alone names HEAD and
+cannot reveal uncommitted edits, so a dirty-tree run would label its outputs
+with a commit that did not produce them. `git_dirty` makes such a run
+self-evident.
+
 `--reproducible` drops the machine-specific environment capture and **all
 wall-clock timings**, leaving only the deterministic outputs and scores, so
 the file diffs meaningfully. Timing baselines are inherently machine-specific

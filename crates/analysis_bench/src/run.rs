@@ -51,6 +51,13 @@ pub struct Env {
     /// Short git commit, if the working tree is a git checkout.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_commit: Option<String>,
+    /// Whether the working tree had uncommitted changes when the run started.
+    /// `git_commit` names HEAD only; without this flag a run from a
+    /// modified-but-uncommitted tree records HEAD's hash and is otherwise
+    /// indistinguishable from a clean run — exactly how an earlier post-fix
+    /// baseline came to carry a stale commit. `None` outside a git checkout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_dirty: Option<bool>,
     /// Wall-clock seconds since the Unix epoch when the run started.
     pub timestamp_unix: u64,
     /// CPU model string from `/proc/cpuinfo`, if readable.
@@ -73,6 +80,7 @@ impl Env {
             }
             .to_string(),
             git_commit: git_short_commit(),
+            git_dirty: git_tree_dirty(),
             timestamp_unix: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -695,6 +703,22 @@ fn git_short_commit() -> Option<String> {
     }
     let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!commit.is_empty()).then_some(commit)
+}
+
+/// Whether the working tree has uncommitted changes (`git status --porcelain`
+/// reports a non-empty diff), or `None` if this is not a git checkout. Recorded
+/// next to [`git_short_commit`] so a baseline taken from a dirty tree is
+/// self-evident: the commit hash alone cannot reveal uncommitted edits, so a
+/// recorded baseline must be run from a clean tree to be trustworthy.
+fn git_tree_dirty() -> Option<bool> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(!output.stdout.is_empty())
 }
 
 #[cfg(test)]
