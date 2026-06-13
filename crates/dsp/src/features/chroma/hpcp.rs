@@ -25,12 +25,17 @@
 //!    bins within ±[`PITCH_WINDOW_SEMITONES`] of it, weighted by `cos²(·)`, so a
 //!    peak landing between two bins splits smoothly across them and one landing
 //!    on a bin lands fully on it.
+//! 4. **Harmonic summation** — each peak also credits the pitch classes of its
+//!    first [`N_HARMONICS`] *subharmonics* (`freq / h`), decayed by
+//!    [`HARMONIC_DECAY`] per harmonic, folding overtone energy back onto the
+//!    fundamentals it could belong to. This concentrates each played note on
+//!    its true pitch class and counters the systematic leak whereby a tonic's
+//!    5th harmonic (its major third) inflates the major-third bin.
 //!
-//! This module deliberately implements only that **core** front-end. Harmonic
-//! summation, reference-frequency (tuning) estimation, sub-semitone resolution,
-//! and per-frame max-normalization — the remaining elements of a full HPCP —
-//! are intentionally *not* here; each is a separable change to be measured on
-//! its own. The output contract matches the vendored path exactly: one
+//! Reference-frequency (tuning) estimation, sub-semitone resolution, and
+//! per-frame max-normalization — the remaining elements of a full HPCP — are
+//! intentionally *not* here; each is a separable change to be measured on its
+//! own. The output contract matches the vendored path exactly: one
 //! 12-element, L2-normalized pitch-class vector per frame, on the same
 //! pitch-class grid (shared [`A4_FREQ`]/[`SEMITONE_OFFSET`]) and the same
 //! `[`[CHROMA_FMIN_HZ]`, `[CHROMA_FMAX_HZ]`]` band, so [`detect_key`] consumes
@@ -62,6 +67,22 @@ const EPSILON: f32 = 1e-10;
 /// the ±1-bin spread the band-summed path applies, derived from the bin spacing
 /// rather than fitted to any corpus.
 const PITCH_WINDOW_SEMITONES: f32 = 1.0;
+
+/// Number of harmonics folded by the harmonic-summation step. Each spectral
+/// peak credits the pitch classes of its first `N_HARMONICS` *subharmonics*
+/// (`freq / h`, h = 1..=`N_HARMONICS`), attributing the peak's energy back to
+/// the fundamentals it could be an overtone of. Eight is the canonical
+/// HPCP / harmonic-salience depth (Gómez 2006); with [`HARMONIC_DECAY`] the
+/// eighth term carries `0.6^7 ≈ 0.028` of the energy, so deeper folding is
+/// negligible. A fixed literature value, not tuned to any corpus.
+const N_HARMONICS: usize = 8;
+
+/// Geometric decay of the harmonic-summation weight: the h-th subharmonic
+/// contributes `HARMONIC_DECAY^(h-1)` of the peak's energy, so `h = 1` (the
+/// peak's own pitch class) keeps full weight and reproduces the core term
+/// exactly. `0.6` is the standard harmonic-weighting decay (Gómez 2006); like
+/// [`N_HARMONICS`] it is a fixed literature value, not fitted to any corpus.
+const HARMONIC_DECAY: f32 = 0.6;
 
 /// Compute a Harmonic Pitch Class Profile for each frame of a magnitude
 /// spectrogram.
@@ -159,19 +180,46 @@ fn frame_to_hpcp(magnitude_frame: &[f32], freq_resolution: f32, fmax: f32) -> Ve
         let amplitude = (mid - 0.25 * (left - right) * offset).max(0.0);
         let energy = amplitude * amplitude;
 
-        // Pitch class of the peak on the shared grid (index 0 = C): the
-        // `+ SEMITONE_OFFSET` is what places A4 at pitch class 9, matching the
-        // key templates.
-        let pitch_class = (12.0 * (freq / A4_FREQ).log2() + SEMITONE_OFFSET).rem_euclid(12.0);
+        // Harmonic summation. A peak at `freq` is, physically, a candidate h-th
+        // harmonic of a fundamental at `freq / h`, so we credit each
+        // subharmonic's pitch class with the peak's energy scaled by a
+        // geometric decay — folding overtone energy back onto the fundamentals
+        // it could belong to. `h = 1` is the peak's own pitch class at full
+        // weight (the core contribution); the `h ≥ 2` terms pull, e.g., a
+        // tonic's 5th-harmonic (major-third) and 3rd-harmonic (fifth) leakage
+        // back toward the tonic, raising the contrast between played scale
+        // degrees and spurious overtone bins. `freq / h` stays positive and its
+        // pitch class is octave-invariant, so no band re-check is needed: the
+        // band filter above already decided this *peak* is trustworthy.
+        let mut harmonic_weight = 1.0;
+        for h in 1..=N_HARMONICS {
+            // Pitch class of the subharmonic on the shared grid (index 0 = C):
+            // the `+ SEMITONE_OFFSET` is what places A4 at pitch class 9,
+            // matching the key templates.
+            let sub_freq = freq / h as f32;
+            let pitch_class =
+                (12.0 * (sub_freq / A4_FREQ).log2() + SEMITONE_OFFSET).rem_euclid(12.0);
+            let contribution = energy * harmonic_weight;
 
-        for (bin, slot) in hpcp.iter_mut().enumerate() {
-            let raw = (pitch_class - bin as f32).abs();
-            let distance = raw.min(12.0 - raw); // circular pitch-class distance
-            if distance < PITCH_WINDOW_SEMITONES {
-                let phase = std::f32::consts::FRAC_PI_2 * distance / PITCH_WINDOW_SEMITONES;
-                let weight = phase.cos() * phase.cos();
-                *slot += energy * weight;
+            // The squared-cosine window spans strictly less than one semitone,
+            // so only the two bins straddling `pitch_class` can receive energy;
+            // every other bin a full 0..12 scan would visit fails the distance
+            // test and adds nothing. Touching just those two — `floor` and its
+            // circular successor — is the identical sum on the identical bins,
+            // and keeps the 8× harmonic fan-out affordable. The two indices are
+            // always distinct (`floor ∈ 0..=11`), so no bin is added twice.
+            let lo = pitch_class.floor() as usize % 12;
+            for bin in [lo, (lo + 1) % 12] {
+                let raw = (pitch_class - bin as f32).abs();
+                let distance = raw.min(12.0 - raw); // circular pitch-class distance
+                if distance < PITCH_WINDOW_SEMITONES {
+                    let phase = std::f32::consts::FRAC_PI_2 * distance / PITCH_WINDOW_SEMITONES;
+                    let weight = phase.cos() * phase.cos();
+                    hpcp[bin] += contribution * weight;
+                }
             }
+
+            harmonic_weight *= HARMONIC_DECAY;
         }
     }
 
@@ -274,17 +322,51 @@ mod tests {
 
     #[test]
     fn peak_between_bins_splits_across_neighbors() {
-        // A peak whose frequency sits roughly a quarter-tone above A spreads
-        // across A (9) and A#/Bb (10) and leaves the rest near zero.
+        // A peak whose frequency sits a quarter-tone above A splits across
+        // A (9) and A#/Bb (10): octave-related subharmonics (`freq/2`, `/4`,
+        // `/8`) share that same off-grid pitch class, so the fundamental's two
+        // nearest bins stay the two largest of the profile.
         let between = 440.0 * 2.0f32.powf(0.5 / 12.0); // +0.5 semitone above A4
         let spec = vec![frame_with_peak(bin_of(between))];
         let hpcp = &compute_hpcp(&spec, SAMPLE_RATE, FFT_SIZE).unwrap()[0];
         assert!(hpcp[9] > 0.1, "A bin not energized: {}", hpcp[9]);
         assert!(hpcp[10] > 0.1, "A# bin not energized: {}", hpcp[10]);
-        for (bin, &v) in hpcp.iter().enumerate() {
-            if bin != 9 && bin != 10 {
-                assert!(v < 0.05, "off-target bin {bin} carries energy: {v}");
-            }
-        }
+        let mut ranked: Vec<usize> = (0..12).collect();
+        ranked.sort_by(|&a, &b| hpcp[b].total_cmp(&hpcp[a]));
+        assert_eq!(
+            [ranked[0], ranked[1]]
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            [9usize, 10].into_iter().collect(),
+            "fundamental's two nearest bins are not the two largest: {hpcp:?}"
+        );
+    }
+
+    #[test]
+    fn harmonic_summation_credits_subharmonics() {
+        // A single A4 peak must, under harmonic summation, energize the pitch
+        // class of its 3rd subharmonic (A4/3 ≈ 146.7 Hz = D) — which is silent
+        // under core-only HPCP. The fundamental A (9) still dominates.
+        let spec = vec![frame_with_peak(bin_of(440.0))];
+        let hpcp = &compute_hpcp(&spec, SAMPLE_RATE, FFT_SIZE).unwrap()[0];
+        assert!(
+            hpcp[2] > 0.0,
+            "3rd subharmonic (D) not credited — harmonic summation inactive: {hpcp:?}"
+        );
+        let top = hpcp
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .unwrap()
+            .0;
+        assert_eq!(
+            top, 9,
+            "fundamental A no longer dominant: pitch class {top}"
+        );
+        assert!(
+            hpcp[9] > hpcp[2],
+            "fundamental A not above its subharmonic D"
+        );
     }
 }

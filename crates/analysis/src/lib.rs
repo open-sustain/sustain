@@ -177,6 +177,17 @@ pub use waveform::WaveformTiers;
 /// tracks, which re-attempt under the same `FILL_*_IF_NULL` wipe-and-rescan
 /// policy. BPM is untouched.
 ///
+/// Version 11: the HPCP front-end adds harmonic summation — each spectral peak
+/// now also credits the pitch classes of its first eight *subharmonics*
+/// (`freq / h`, decayed by `0.6` per harmonic), folding overtone energy back
+/// onto the fundamentals it could belong to. This counters the systematic v10
+/// leak whereby a tonic's 5th harmonic (its major third) inflated the
+/// major-third bin and biased minor-key audio toward the parallel major. Only
+/// the chroma mapping changes — HPSS, STFT, band, grid, peak picking, energy
+/// weighting, window, and the entire detector are unchanged. The detected key
+/// shifts for some tracks, which re-attempt under the same `FILL_*_IF_NULL`
+/// wipe-and-rescan policy. BPM is untouched.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -194,7 +205,7 @@ pub use waveform::WaveformTiers;
 /// byte-for-byte on the synthetic corpus, so stored values' meaning is
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
-pub const ANALYZER_VERSION: u32 = 10;
+pub const ANALYZER_VERSION: u32 = 11;
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
 /// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default
