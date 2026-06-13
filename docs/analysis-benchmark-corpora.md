@@ -81,7 +81,7 @@ imply a metric we cannot compute.
 | Ballroom | 3 | — (beat grid) | <https://github.com/CPJKU/BallroomAnnotations> | annotation repo only | audio archive **external** | **Deferred**: no beat-grid metric yet. Revisit when a beat task lands; pin repo tag + archive checksum. |
 | Harmonix Set | 3 | — (beat grid) | <https://github.com/urinieto/harmonixset> | annotations MIT | audio **indirect/external** | **Deferred**: beat/downbeat/segment value, no harness metric yet. |
 | Beat This | research | — | <https://zenodo.org/records/13922116> | Zenodo package | mel spectrograms, **no audio for many sets** | Literature comparison only; not a sample-in audio corpus. |
-| Sustain private | 5 | `bpm`, `key`, `acoustics` | local library only | n/a | local, **never committed** | See "Tier 5" below. Pending maintainer-provided paths + ground truth. |
+| Sustain private | 5 | `bpm`, `key` | local library only | n/a | local, **never committed** | **Adapter shipped** (`adapt-private`): maps a private `reference.toml` (rich hand-curated key/BPM ground truth) + an audio root → a gitignored manifest pinned to the shipped BPM range; provenance tiers (goldish/silver) reported, not embedded. Reality-check baseline **recorded 2026-06-13** (26 tracks, 18 goldish + 8 silver) — see [results](analysis-benchmark-results.md). See "Tier 5" below. |
 
 ## Evaluation policy
 
@@ -241,54 +241,49 @@ tracks were excluded for missing audio), and the headline metrics alongside the
 result, per the policy above — recorded runs live in
 [`analysis-benchmark-results.md`](analysis-benchmark-results.md).
 
-## Tier 5 — private reality check (pending corpus acquisition)
+## Tier 5 — private reality check (adapter shipped, baseline recorded)
 
-**Status: no private corpus is recorded in this environment.** This item
-stays open until the maintainer provides local audio with trustworthy
-ground truth. To record it:
+The maintainer's own audio with hand-curated key/BPM ground truth — the best
+product sanity check, and the cross-genre complement to the electronic
+GiantSteps and the CC-licensed FMA. A first **reality-check baseline was
+recorded 2026-06-13** (26 tracks; see
+[`analysis-benchmark-results.md`](analysis-benchmark-results.md)). Everything
+private stays out of git: audio, source URLs, the generated manifest, and the
+per-track results all live under the gitignored `validation-data/` workspace,
+and only aggregate metrics reach the results file.
 
-1. Copy the template below to `crates/analysis_bench/corpora/private.toml`
-   — that path is **gitignored** (`corpora/private*.toml`), so the real
-   paths and titles never reach git.
-2. Fill in one `[[track]]` per known track, with curated `bpm`/`key` ground
-   truth. The `id` is opaque and is the only track identifier that appears
-   in results — the `path` never does.
-3. Run a full report to a location **outside** the repo, e.g.
-   `~/sustain-validation-data/results/private.json`:
+The corpus's canonical form is a private `reference.toml` — one `[[tracks]]`
+entry per track with the authoritative `key`, `bpm` where known, a
+`confidence` tier (`goldish` = musical analysis + ≥2 independent databases
+agree; `silver` = ≥3 secondary databases, the weaker label), a
+`duration_seconds` hint, and rich provenance (artist/title/source URLs/notes
+the harness ignores). The `adapt-private` command turns that file plus the
+audio root into a gitignored harness manifest.
+
+1. Adapt the private reference into a (gitignored) manifest. The manifest
+   `id` is each file's stem; provenance tiers are reported in the summary but
+   never embedded in the manifest, and the run is pinned to the analyzer's
+   shipped BPM range:
+
+   ```bash
+   cargo run -p sustain-analysis-bench --release -- adapt-private \
+     --reference validation-data/private/reference.toml \
+     --audio     validation-data/private \
+     --out       validation-data/private/private_pop_core.toml
+   ```
+
+2. Run a full report to a location **outside** the repo (the gitignored
+   `validation-data/` workspace):
 
    ```bash
    cargo run -p sustain-analysis-bench --release -- run \
-     --manifest crates/analysis_bench/corpora/private.toml \
-     --out      ~/sustain-validation-data/results/private.json
+     --manifest validation-data/private/private_pop_core.toml \
+     --out      validation-data/private/results/private_pop_core.json
    ```
 
-4. Quote only the aggregate metrics (and, if useful, the harness commit and
-   `ANALYZER_VERSION`) when reporting — never the per-track paths.
-
-Private manifest template (save as `corpora/private.toml`, gitignored):
-
-```toml
-[meta]
-corpus_id = "private_reality_check"
-description = "Maintainer-owned tracks with curated BPM/key ground truth."
-
-[options]
-# Leave unset to use the analyzer default (76–155, the shipped preset), or
-# pin the window the run should use.
-# min_bpm = 76.0
-# max_bpm = 155.0
-tasks = ["bpm", "key", "acoustics"]
-
-[[track]]
-id = "track_0001"                 # opaque; the path below never appears in results
-path = "/home/me/music/example_a.flac"
-duration_secs = 251.0             # optional; makes window placement deterministic
-bpm = 128.0                       # curated ground truth
-key = "Am"                        # curated ground truth (any common spelling)
-
-[[track]]
-id = "track_0002"
-path = "/home/me/music/example_b.flac"
-bpm = 92.0
-key = "F#m"
-```
+3. Quote only the aggregate metrics and the provenance (harness commit,
+   `ANALYZER_VERSION`, tier split) when reporting — never the per-track paths,
+   titles, source URLs, or the manifest. The gold/silver split is recovered at
+   analysis time by joining result `id`s back to the reference's `confidence`
+   column. Recorded runs live in
+   [`analysis-benchmark-results.md`](analysis-benchmark-results.md).
