@@ -326,7 +326,8 @@ fn strip_leading_article<'a>(value: &'a str, article: &str) -> Option<&'a str> {
     if value.len() <= article.len() {
         return None;
     }
-    let (prefix, after_prefix) = value.split_at(article.len());
+    let prefix = value.get(..article.len())?;
+    let after_prefix = value.get(article.len()..)?;
     if !prefix.eq_ignore_ascii_case(article)
         || !after_prefix.chars().next().is_some_and(char::is_whitespace)
     {
@@ -474,6 +475,18 @@ mod tests {
             Some("collective (The)")
         );
         assert_eq!(metadata.composer_sort, None);
+    }
+
+    #[test]
+    fn generated_sort_fields_ignore_non_ascii_prefix_boundaries() {
+        let mut metadata = TrackMetadata {
+            artist: Some("Bałdych & Herman Duo Art".to_owned()),
+            ..TrackMetadata::default()
+        };
+
+        metadata.fill_missing_generated_sort_fields();
+
+        assert_eq!(metadata.artist_sort, None);
     }
 
     #[test]

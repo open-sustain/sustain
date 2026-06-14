@@ -12,6 +12,12 @@ pub(crate) fn install_window_state_chrome(
     window_frame: &gtk::Overlay,
 ) {
     update_window_state_chrome(window, window_frame);
+    install_toplevel_state_observer(window, window_frame);
+
+    let window_frame_for_realize = window_frame.clone();
+    window.connect_realize(move |window| {
+        install_toplevel_state_observer(window, &window_frame_for_realize);
+    });
 
     let window_frame_for_fullscreen = window_frame.clone();
     window.connect_fullscreened_notify(move |window| {
@@ -25,7 +31,41 @@ pub(crate) fn install_window_state_chrome(
 }
 
 fn update_window_state_chrome(window: &gtk::ApplicationWindow, window_frame: &gtk::Overlay) {
-    let is_floating = !window.is_fullscreen() && !window.is_maximized();
+    let is_floating = toplevel_for_window(window)
+        .map(|toplevel| toplevel_state_is_floating(toplevel.state()))
+        .unwrap_or_else(|| !window.is_fullscreen() && !window.is_maximized());
+    apply_window_frame_margin(window_frame, is_floating);
+}
+
+fn install_toplevel_state_observer(window: &gtk::ApplicationWindow, window_frame: &gtk::Overlay) {
+    let Some(toplevel) = toplevel_for_window(window) else {
+        return;
+    };
+    apply_window_frame_margin(window_frame, toplevel_state_is_floating(toplevel.state()));
+
+    let window_frame = window_frame.clone();
+    toplevel.connect_state_notify(move |toplevel| {
+        apply_window_frame_margin(&window_frame, toplevel_state_is_floating(toplevel.state()));
+    });
+}
+
+fn toplevel_for_window(window: &gtk::ApplicationWindow) -> Option<gdk::Toplevel> {
+    window.surface()?.downcast::<gdk::Toplevel>().ok()
+}
+
+fn toplevel_state_is_floating(state: gdk::ToplevelState) -> bool {
+    !state.intersects(
+        gdk::ToplevelState::FULLSCREEN
+            | gdk::ToplevelState::MAXIMIZED
+            | gdk::ToplevelState::TILED
+            | gdk::ToplevelState::TOP_TILED
+            | gdk::ToplevelState::RIGHT_TILED
+            | gdk::ToplevelState::BOTTOM_TILED
+            | gdk::ToplevelState::LEFT_TILED,
+    )
+}
+
+fn apply_window_frame_margin(window_frame: &gtk::Overlay, is_floating: bool) {
     let margin = if is_floating {
         window_frame.add_css_class("window-frame");
         WINDOW_SHADOW_MARGIN
@@ -153,4 +193,22 @@ fn resize_handle(
     handle.add_controller(click);
 
     handle
+}
+
+#[cfg(test)]
+mod tests {
+    use gtk::gdk;
+
+    use super::toplevel_state_is_floating;
+
+    #[test]
+    fn floating_chrome_only_applies_to_untiled_windows() {
+        assert!(toplevel_state_is_floating(gdk::ToplevelState::empty()));
+        assert!(!toplevel_state_is_floating(gdk::ToplevelState::MAXIMIZED));
+        assert!(!toplevel_state_is_floating(gdk::ToplevelState::FULLSCREEN));
+        assert!(!toplevel_state_is_floating(gdk::ToplevelState::TILED));
+        assert!(!toplevel_state_is_floating(
+            gdk::ToplevelState::LEFT_TILED | gdk::ToplevelState::RIGHT_RESIZABLE
+        ));
+    }
 }
