@@ -64,12 +64,12 @@ fn update_survivor(connection: &Connection, track: &Track) -> StoreResult<()> {
             WHERE id = ?26
             "#,
             params![
-                metadata.title.as_deref(),
-                metadata.artist.as_deref(),
-                metadata.album.as_deref(),
-                metadata.album_artist.as_deref(),
-                metadata.composer.as_deref(),
-                metadata.genre.as_deref(),
+                metadata_text_param(&metadata.title),
+                metadata_text_param(&metadata.artist),
+                metadata_text_param(&metadata.album),
+                metadata_text_param(&metadata.album_artist),
+                metadata_text_param(&metadata.composer),
+                metadata_text_param(&metadata.genre),
                 metadata.track_number.map(i64::from),
                 metadata.disc_number.map(i64::from),
                 metadata.year.map(i64::from),
@@ -79,14 +79,14 @@ fn update_survivor(connection: &Connection, track: &Track) -> StoreResult<()> {
                 statistics.last_played_at.and_then(system_time_to_unix),
                 statistics.last_skipped_at.and_then(system_time_to_unix),
                 statistics.date_added_at.and_then(system_time_to_unix),
-                metadata.grouping.as_deref(),
+                metadata_text_param(&metadata.grouping),
                 metadata.track_total.map(i64::from),
                 metadata.disc_total.map(i64::from),
                 metadata.compilation,
                 metadata.bpm.map(i64::from),
-                metadata.key.as_deref(),
-                metadata.comments.as_deref(),
-                metadata.lyrics.as_deref(),
+                metadata_text_param(&metadata.key),
+                metadata_text_param(&metadata.comments),
+                metadata_text_param(&metadata.lyrics),
                 track
                     .file_size_bytes
                     .map(|size| sqlite_integer(size, "file size"))

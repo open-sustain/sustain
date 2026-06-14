@@ -76,6 +76,24 @@ fn sqlite_store_rejects_whole_row_replacement_by_id() {
     assert_eq!(store.track(first.id), Ok(Some(first)));
 }
 
+#[test]
+fn sqlite_save_track_normalizes_empty_text_metadata() {
+    let store = SqliteLibraryStore::open_in_memory().expect("store");
+    let mut track = track(1, "blank.flac");
+    track.metadata.title = Some(" \n\t".to_owned());
+    track.metadata.artist = Some("  Artist  ".to_owned());
+    track.metadata.grouping = Some(String::new());
+    track.metadata.comments = Some("\r".to_owned());
+
+    store.save_track(track.clone()).expect("save track");
+
+    let loaded = store.track(track.id).expect("load").expect("track exists");
+    assert_eq!(loaded.metadata.title, None);
+    assert_eq!(loaded.metadata.artist.as_deref(), Some("  Artist  "));
+    assert_eq!(loaded.metadata.grouping, None);
+    assert_eq!(loaded.metadata.comments, None);
+}
+
 fn run_availability_update_requires_matching_path(store: &dyn LibraryStore) {
     let original = track(1, "original.flac");
     store.save_track(original.clone()).expect("save track");

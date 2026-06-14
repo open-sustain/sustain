@@ -54,6 +54,24 @@ pub struct TrackAudioProperties {
 }
 
 impl TrackMetadata {
+    pub fn normalize_text_fields(&mut self) {
+        normalize_text_field(&mut self.title);
+        normalize_text_field(&mut self.artist);
+        normalize_text_field(&mut self.album);
+        normalize_text_field(&mut self.album_artist);
+        normalize_text_field(&mut self.composer);
+        normalize_text_field(&mut self.grouping);
+        normalize_text_field(&mut self.genre);
+        normalize_text_field(&mut self.key);
+        normalize_text_field(&mut self.comments);
+        normalize_text_field(&mut self.lyrics);
+        normalize_text_field(&mut self.title_sort);
+        normalize_text_field(&mut self.artist_sort);
+        normalize_text_field(&mut self.album_sort);
+        normalize_text_field(&mut self.album_artist_sort);
+        normalize_text_field(&mut self.composer_sort);
+    }
+
     pub fn audio_properties(&self) -> TrackAudioProperties {
         TrackAudioProperties {
             duration: self.duration,
@@ -89,13 +107,13 @@ impl TrackMetadata {
         let previous_album_artist = self.album_artist.clone();
         let previous_composer = self.composer.clone();
 
-        apply_field_change(&mut self.title, &change.title);
-        apply_field_change(&mut self.artist, &change.artist);
-        apply_field_change(&mut self.album, &change.album);
-        apply_field_change(&mut self.album_artist, &change.album_artist);
-        apply_field_change(&mut self.composer, &change.composer);
-        apply_field_change(&mut self.grouping, &change.grouping);
-        apply_field_change(&mut self.genre, &change.genre);
+        apply_text_field_change(&mut self.title, &change.title);
+        apply_text_field_change(&mut self.artist, &change.artist);
+        apply_text_field_change(&mut self.album, &change.album);
+        apply_text_field_change(&mut self.album_artist, &change.album_artist);
+        apply_text_field_change(&mut self.composer, &change.composer);
+        apply_text_field_change(&mut self.grouping, &change.grouping);
+        apply_text_field_change(&mut self.genre, &change.genre);
         apply_field_change(&mut self.track_number, &change.track_number);
         apply_field_change(&mut self.track_total, &change.track_total);
         apply_field_change(&mut self.disc_number, &change.disc_number);
@@ -103,14 +121,14 @@ impl TrackMetadata {
         apply_field_change(&mut self.year, &change.year);
         apply_field_change(&mut self.compilation, &change.compilation);
         apply_field_change(&mut self.bpm, &change.bpm);
-        apply_field_change(&mut self.key, &change.key);
-        apply_field_change(&mut self.comments, &change.comments);
-        apply_field_change(&mut self.lyrics, &change.lyrics);
-        apply_field_change(&mut self.title_sort, &change.title_sort);
-        apply_field_change(&mut self.artist_sort, &change.artist_sort);
-        apply_field_change(&mut self.album_sort, &change.album_sort);
-        apply_field_change(&mut self.album_artist_sort, &change.album_artist_sort);
-        apply_field_change(&mut self.composer_sort, &change.composer_sort);
+        apply_text_field_change(&mut self.key, &change.key);
+        apply_text_field_change(&mut self.comments, &change.comments);
+        apply_text_field_change(&mut self.lyrics, &change.lyrics);
+        apply_text_field_change(&mut self.title_sort, &change.title_sort);
+        apply_text_field_change(&mut self.artist_sort, &change.artist_sort);
+        apply_text_field_change(&mut self.album_sort, &change.album_sort);
+        apply_text_field_change(&mut self.album_artist_sort, &change.album_artist_sort);
+        apply_text_field_change(&mut self.composer_sort, &change.composer_sort);
 
         if matches!(&change.title_sort, FieldChange::Unchanged) {
             refresh_generated_sort_field(
@@ -151,16 +169,16 @@ impl TrackMetadata {
 
     /// Apply only `Set` values whose target field is still absent. Used by
     /// slow background enrichment so a user edit committed while network
-    /// work was in flight always wins. Blank genre and lyrics values count as
-    /// absent because their consumers already treat them that way.
+    /// work was in flight always wins. Empty or whitespace-only text values
+    /// count as absent, matching the tag and store boundaries.
     pub fn fill_missing_from_change(&mut self, change: &MetadataChange) {
-        fill_missing_field(&mut self.title, &change.title);
-        fill_missing_field(&mut self.artist, &change.artist);
-        fill_missing_field(&mut self.album, &change.album);
-        fill_missing_field(&mut self.album_artist, &change.album_artist);
-        fill_missing_field(&mut self.composer, &change.composer);
-        fill_missing_field(&mut self.grouping, &change.grouping);
-        fill_blank_text_field(&mut self.genre, &change.genre);
+        fill_missing_text_field(&mut self.title, &change.title);
+        fill_missing_text_field(&mut self.artist, &change.artist);
+        fill_missing_text_field(&mut self.album, &change.album);
+        fill_missing_text_field(&mut self.album_artist, &change.album_artist);
+        fill_missing_text_field(&mut self.composer, &change.composer);
+        fill_missing_text_field(&mut self.grouping, &change.grouping);
+        fill_missing_text_field(&mut self.genre, &change.genre);
         fill_missing_field(&mut self.track_number, &change.track_number);
         fill_missing_field(&mut self.track_total, &change.track_total);
         fill_missing_field(&mut self.disc_number, &change.disc_number);
@@ -168,14 +186,14 @@ impl TrackMetadata {
         fill_missing_field(&mut self.year, &change.year);
         fill_missing_field(&mut self.compilation, &change.compilation);
         fill_missing_field(&mut self.bpm, &change.bpm);
-        fill_missing_field(&mut self.key, &change.key);
-        fill_missing_field(&mut self.comments, &change.comments);
-        fill_blank_text_field(&mut self.lyrics, &change.lyrics);
-        fill_missing_field(&mut self.title_sort, &change.title_sort);
-        fill_missing_field(&mut self.artist_sort, &change.artist_sort);
-        fill_missing_field(&mut self.album_sort, &change.album_sort);
-        fill_missing_field(&mut self.album_artist_sort, &change.album_artist_sort);
-        fill_missing_field(&mut self.composer_sort, &change.composer_sort);
+        fill_missing_text_field(&mut self.key, &change.key);
+        fill_missing_text_field(&mut self.comments, &change.comments);
+        fill_missing_text_field(&mut self.lyrics, &change.lyrics);
+        fill_missing_text_field(&mut self.title_sort, &change.title_sort);
+        fill_missing_text_field(&mut self.artist_sort, &change.artist_sort);
+        fill_missing_text_field(&mut self.album_sort, &change.album_sort);
+        fill_missing_text_field(&mut self.album_artist_sort, &change.album_artist_sort);
+        fill_missing_text_field(&mut self.composer_sort, &change.composer_sort);
         self.fill_missing_generated_sort_fields();
     }
 
@@ -378,6 +396,18 @@ fn apply_field_change<T: Clone>(target: &mut Option<T>, change: &FieldChange<T>)
     }
 }
 
+fn apply_text_field_change(target: &mut Option<String>, change: &FieldChange<String>) {
+    match change {
+        FieldChange::Unchanged => {}
+        FieldChange::Set(value) => {
+            *target = normalized_text_value(value.clone());
+        }
+        FieldChange::Clear => {
+            *target = None;
+        }
+    }
+}
+
 fn fill_missing_field<T: Clone>(target: &mut Option<T>, change: &FieldChange<T>) {
     if target.is_none()
         && let FieldChange::Set(value) = change
@@ -386,13 +416,30 @@ fn fill_missing_field<T: Clone>(target: &mut Option<T>, change: &FieldChange<T>)
     }
 }
 
-fn fill_blank_text_field(target: &mut Option<String>, change: &FieldChange<String>) {
+fn fill_missing_text_field(target: &mut Option<String>, change: &FieldChange<String>) {
     if target
         .as_deref()
         .is_none_or(|value| value.trim().is_empty())
         && let FieldChange::Set(value) = change
     {
-        *target = Some(value.clone());
+        *target = normalized_text_value(value.clone());
+    }
+}
+
+fn normalize_text_field(field: &mut Option<String>) {
+    if field
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        *field = None;
+    }
+}
+
+fn normalized_text_value(value: String) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
     }
 }
 
@@ -573,6 +620,30 @@ mod tests {
     }
 
     #[test]
+    fn normalize_text_fields_treats_empty_strings_as_absent() {
+        let mut metadata = TrackMetadata {
+            title: Some(String::new()),
+            artist: Some(" \t\n".to_owned()),
+            album: Some("  Album  ".to_owned()),
+            grouping: Some("\r".to_owned()),
+            comments: Some("line one\n".to_owned()),
+            title_sort: Some(" ".to_owned()),
+            artist_sort: Some(" Artist Sort ".to_owned()),
+            ..TrackMetadata::default()
+        };
+
+        metadata.normalize_text_fields();
+
+        assert_eq!(metadata.title, None);
+        assert_eq!(metadata.artist, None);
+        assert_eq!(metadata.album.as_deref(), Some("  Album  "));
+        assert_eq!(metadata.grouping, None);
+        assert_eq!(metadata.comments.as_deref(), Some("line one\n"));
+        assert_eq!(metadata.title_sort, None);
+        assert_eq!(metadata.artist_sort.as_deref(), Some(" Artist Sort "));
+    }
+
+    #[test]
     fn metadata_changes_default_to_unchanged() {
         let change = MetadataChange::default();
 
@@ -604,6 +675,31 @@ mod tests {
         assert_eq!(metadata.artist, None);
         assert_eq!(metadata.track_number, Some(1));
         assert_eq!(metadata.year, Some(1998));
+    }
+
+    #[test]
+    fn track_metadata_blank_text_sets_clear_fields() {
+        let mut metadata = TrackMetadata {
+            artist: Some("Old artist".to_owned()),
+            grouping: Some("Old group".to_owned()),
+            comments: Some("Old comment".to_owned()),
+            title_sort: Some("Old sort".to_owned()),
+            ..TrackMetadata::default()
+        };
+        let change = MetadataChange {
+            artist: FieldChange::Set(" Artist ".to_owned()),
+            grouping: FieldChange::Set(" \n\t".to_owned()),
+            comments: FieldChange::Set(String::new()),
+            title_sort: FieldChange::Set(" ".to_owned()),
+            ..MetadataChange::default()
+        };
+
+        metadata.apply_change(&change);
+
+        assert_eq!(metadata.artist.as_deref(), Some(" Artist "));
+        assert_eq!(metadata.grouping, None);
+        assert_eq!(metadata.comments, None);
+        assert_eq!(metadata.title_sort, None);
     }
 
     #[test]
@@ -691,6 +787,20 @@ mod tests {
         assert_eq!(metadata.artist.as_deref(), Some("Remote artist"));
         assert_eq!(metadata.genre.as_deref(), Some("House"));
         assert_eq!(metadata.year, None);
+    }
+
+    #[test]
+    fn fill_missing_from_change_ignores_blank_text_values() {
+        let mut metadata = TrackMetadata::default();
+
+        metadata.fill_missing_from_change(&MetadataChange {
+            title: FieldChange::Set(" \n\t".to_owned()),
+            artist: FieldChange::Set("Remote artist".to_owned()),
+            ..MetadataChange::default()
+        });
+
+        assert_eq!(metadata.title, None);
+        assert_eq!(metadata.artist.as_deref(), Some("Remote artist"));
     }
 
     #[test]

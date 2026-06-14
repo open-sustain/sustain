@@ -78,6 +78,7 @@ pub(crate) fn read_tags(
         sample_rate_hz: properties.sample_rate(),
         channels: properties.channels(),
     };
+    metadata.normalize_text_fields();
     if backfill_title_from_filename {
         metadata.ensure_title_from_filename(path);
         metadata.fill_missing_generated_sort_fields();

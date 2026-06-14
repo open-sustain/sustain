@@ -378,7 +378,8 @@ CREATE TABLE IF NOT EXISTS track_column_sort_smart_playlist_override (
 
 // Migration 3 backfills Sustain-generated leading-article sort fields for
 // libraries created before missing sort fields were generated at import time.
-// Explicit sort tags, including whitespace-padded values, are preserved.
+// Non-empty explicit sort tags, including whitespace-padded values, are
+// preserved.
 pub(super) const BACKFILL_GENERATED_SORT_FIELDS_SQL: &str = r#"
 UPDATE tracks
 SET
@@ -440,6 +441,58 @@ CREATE TABLE IF NOT EXISTS sync_device_artists (
     PRIMARY KEY (device_id, artist),
     FOREIGN KEY (device_id) REFERENCES sync_devices(id) ON DELETE CASCADE
 );
+"#;
+
+// Migration 5 heals libraries that captured empty metadata strings from file
+// tags before Sustain normalized them at the read boundary. Empty tag values
+// are semantically absent and not all target containers can round-trip them.
+// Non-empty strings are left byte-for-byte intact.
+pub(super) const NORMALIZE_EMPTY_TRACK_METADATA_SQL: &str = r#"
+UPDATE tracks SET title = NULL
+WHERE title IS NOT NULL
+  AND trim(title, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET artist = NULL
+WHERE artist IS NOT NULL
+  AND trim(artist, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET album = NULL
+WHERE album IS NOT NULL
+  AND trim(album, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET album_artist = NULL
+WHERE album_artist IS NOT NULL
+  AND trim(album_artist, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET composer = NULL
+WHERE composer IS NOT NULL
+  AND trim(composer, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET genre = NULL
+WHERE genre IS NOT NULL
+  AND trim(genre, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET grouping = NULL
+WHERE grouping IS NOT NULL
+  AND trim(grouping, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET musical_key = NULL
+WHERE musical_key IS NOT NULL
+  AND trim(musical_key, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET comments = NULL
+WHERE comments IS NOT NULL
+  AND trim(comments, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET lyrics = NULL
+WHERE lyrics IS NOT NULL
+  AND trim(lyrics, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET title_sort = NULL
+WHERE title_sort IS NOT NULL
+  AND trim(title_sort, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET artist_sort = NULL
+WHERE artist_sort IS NOT NULL
+  AND trim(artist_sort, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET album_sort = NULL
+WHERE album_sort IS NOT NULL
+  AND trim(album_sort, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET album_artist_sort = NULL
+WHERE album_artist_sort IS NOT NULL
+  AND trim(album_artist_sort, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
+UPDATE tracks SET composer_sort = NULL
+WHERE composer_sort IS NOT NULL
+  AND trim(composer_sort, char(9) || char(10) || char(11) || char(12) || char(13) || char(32)) = '';
 "#;
 
 #[derive(Clone, Copy)]

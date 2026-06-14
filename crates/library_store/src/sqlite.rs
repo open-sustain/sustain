@@ -31,6 +31,10 @@ mod tracks;
 /// bound-parameter limit. Shared by the analysis and online filter builders.
 const FILTER_IN_LIST_CHUNK_SIZE: usize = 500;
 
+fn metadata_text_param(value: &Option<String>) -> Option<&str> {
+    value.as_deref().filter(|value| !value.trim().is_empty())
+}
+
 impl LibraryStore for SqliteLibraryStore {
     fn save_track(&self, track: Track) -> StoreResult<()> {
         let connection = self.connection_guard()?;

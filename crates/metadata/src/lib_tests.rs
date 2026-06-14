@@ -433,6 +433,38 @@ fn write_metadata_writes_sort_order_fields() {
 }
 
 #[test]
+fn write_metadata_blank_text_clears_existing_fields() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("blank-text-clears.mp3");
+    let mut tag = Tag::new(TagType::Id3v2);
+    tag.insert_text(ItemKey::ContentGroup, "Old group".to_owned());
+    tag.insert_text(ItemKey::Comment, "Old comment".to_owned());
+    let mut bytes = dump_id3v2(tag);
+    bytes.extend_from_slice(&mpeg_audio_frames(4));
+    fs::write(&path, bytes).expect("write fixture");
+
+    LoftyMetadataService
+        .write_metadata(
+            &path,
+            MetadataChange {
+                grouping: FieldChange::Set(String::new()),
+                comments: FieldChange::Set(" \n\t".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("write blank fields");
+
+    let tags = LoftyMetadataService
+        .read_persisted_tags(&path)
+        .expect("re-read written tags");
+    assert_eq!(tags.metadata.grouping, None);
+    assert_eq!(tags.metadata.comments, None);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
 fn read_initial_tags_generates_missing_article_sort_fields() {
     let root = unique_test_directory();
     fs::create_dir_all(&root).expect("create test directory");
@@ -461,6 +493,39 @@ fn read_initial_tags_generates_missing_article_sort_fields() {
     assert_eq!(exact.metadata.title_sort, None);
     assert_eq!(exact.metadata.artist_sort, None);
     assert_eq!(exact.metadata.album_sort, None);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn read_tags_normalizes_empty_text_fields_before_backfilling() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("blank-title.mp3");
+    let mut tag = Tag::new(TagType::Id3v2);
+    tag.insert_text(ItemKey::TrackTitle, " \n\t".to_owned());
+    tag.insert_text(ItemKey::TrackArtist, "  Artist  ".to_owned());
+    tag.insert_text(ItemKey::ContentGroup, String::new());
+    tag.insert_text(ItemKey::Comment, "\r".to_owned());
+    let mut bytes = dump_id3v2(tag);
+    bytes.extend_from_slice(&mpeg_audio_frames(4));
+    fs::write(&path, bytes).expect("write fixture");
+
+    let initial = LoftyMetadataService
+        .read_initial_tags(&path)
+        .expect("read initial tags");
+    assert_eq!(initial.metadata.title.as_deref(), Some("blank-title"));
+    assert_eq!(initial.metadata.artist.as_deref(), Some("  Artist  "));
+    assert_eq!(initial.metadata.grouping, None);
+    assert_eq!(initial.metadata.comments, None);
+
+    let exact = LoftyMetadataService
+        .read_persisted_tags(&path)
+        .expect("read exact tags");
+    assert_eq!(exact.metadata.title, None);
+    assert_eq!(exact.metadata.artist.as_deref(), Some("  Artist  "));
+    assert_eq!(exact.metadata.grouping, None);
+    assert_eq!(exact.metadata.comments, None);
 
     fs::remove_dir_all(root).expect("remove test directory");
 }

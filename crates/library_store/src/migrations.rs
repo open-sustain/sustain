@@ -13,11 +13,11 @@ use crate::{
     StoreError, StoreResult,
     schema::{
         ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_TRACK_COLUMN_SORT_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
-        SCHEMA_SQL,
+        NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 4;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -46,6 +46,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 4,
         description: "persist per-device artist sync selections",
         sql: ADD_SYNC_DEVICE_ARTISTS_SQL,
+    },
+    Migration {
+        version: 5,
+        description: "normalize empty track metadata strings",
+        sql: NORMALIZE_EMPTY_TRACK_METADATA_SQL,
     },
 ];
 
@@ -159,7 +164,7 @@ mod tests {
 
         apply_pending(&connection).expect("migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 4);
+        assert_eq!(user_version(&connection).expect("version"), 5);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
     }
 
@@ -170,7 +175,7 @@ mod tests {
 
         apply_pending(&connection).expect("second migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 4);
+        assert_eq!(user_version(&connection).expect("version"), 5);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
     }
 
@@ -194,7 +199,7 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 4);
+        assert_eq!(user_version(&connection).expect("version"), 5);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
         // The pre-existing layout row survives the migration untouched.
         let column_id: String = connection
@@ -244,7 +249,7 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 4);
+        assert_eq!(user_version(&connection).expect("version"), 5);
         let generated: [Option<String>; 5] = connection
             .query_row(
                 "SELECT title_sort, artist_sort, album_sort, album_artist_sort, composer_sort \
@@ -324,7 +329,7 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 4);
+        assert_eq!(user_version(&connection).expect("version"), 5);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
         let selection: (String, i64) = connection
             .query_row(
@@ -343,17 +348,146 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_from_v4_normalizes_empty_track_metadata_strings() {
+        let connection = Connection::open_in_memory().expect("connection");
+        connection
+            .execute_batch(SCHEMA_SQL)
+            .expect("baseline schema");
+        connection
+            .execute_batch(ADD_TRACK_COLUMN_SORT_SQL)
+            .expect("schema version 2 migration");
+        connection
+            .execute_batch(BACKFILL_GENERATED_SORT_FIELDS_SQL)
+            .expect("schema version 3 migration");
+        connection
+            .execute_batch(ADD_SYNC_DEVICE_ARTISTS_SQL)
+            .expect("schema version 4 migration");
+        connection
+            .execute_batch(
+                r#"
+                INSERT INTO tracks (
+                    id, relative_path, title, artist, album, album_artist,
+                    composer, genre, grouping, musical_key, comments, lyrics,
+                    title_sort, artist_sort, album_sort, album_artist_sort,
+                    composer_sort
+                )
+                VALUES
+                    (
+                        1, x'61', '', ' ', char(9), char(10), char(11),
+                        char(12), char(13), char(9) || char(10),
+                        char(13) || char(32), char(32) || char(9),
+                        '', ' ', char(10), char(13), char(9)
+                    ),
+                    (
+                        2, x'62', '  Real title  ', NULL, 'Album',
+                        'The Artist', 'Composer', 'Genre', 'Grouping',
+                        '8A', '  Real comment  ', 'line one' || char(10),
+                        ' Title Sort ', 'Artist Sort', 'Album Sort',
+                        'Album Artist Sort', 'Composer Sort'
+                    );
+                "#,
+            )
+            .expect("seed version 4 tracks");
+        connection
+            .pragma_update(None, "user_version", 4)
+            .expect("set version");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(user_version(&connection).expect("version"), 5);
+        let normalized: [Option<String>; 15] = connection
+            .query_row(
+                "SELECT title, artist, album, album_artist, composer, genre, \
+                        grouping, musical_key, comments, lyrics, title_sort, \
+                        artist_sort, album_sort, album_artist_sort, composer_sort \
+                 FROM tracks WHERE id = 1",
+                [],
+                |row| {
+                    Ok([
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
+                        row.get(12)?,
+                        row.get(13)?,
+                        row.get(14)?,
+                    ])
+                },
+            )
+            .expect("normalized row");
+        let absent: [Option<String>; 15] = std::array::from_fn(|_| None);
+        assert_eq!(normalized, absent);
+
+        let preserved: [Option<String>; 15] = connection
+            .query_row(
+                "SELECT title, artist, album, album_artist, composer, genre, \
+                        grouping, musical_key, comments, lyrics, title_sort, \
+                        artist_sort, album_sort, album_artist_sort, composer_sort \
+                 FROM tracks WHERE id = 2",
+                [],
+                |row| {
+                    Ok([
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
+                        row.get(12)?,
+                        row.get(13)?,
+                        row.get(14)?,
+                    ])
+                },
+            )
+            .expect("preserved row");
+        assert_eq!(
+            preserved,
+            [
+                Some("  Real title  ".to_owned()),
+                None,
+                Some("Album".to_owned()),
+                Some("The Artist".to_owned()),
+                Some("Composer".to_owned()),
+                Some("Genre".to_owned()),
+                Some("Grouping".to_owned()),
+                Some("8A".to_owned()),
+                Some("  Real comment  ".to_owned()),
+                Some("line one\n".to_owned()),
+                Some(" Title Sort ".to_owned()),
+                Some("Artist Sort".to_owned()),
+                Some("Album Sort".to_owned()),
+                Some("Album Artist Sort".to_owned()),
+                Some("Composer Sort".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn database_from_a_newer_build_is_rejected() {
         let connection = Connection::open_in_memory().expect("connection");
         connection
-            .pragma_update(None, "user_version", 5)
+            .pragma_update(None, "user_version", 6)
             .expect("set version");
 
         assert_eq!(
             apply_pending(&connection),
             Err(StoreError::DatabaseAhead {
-                current: 5,
-                supported: 4,
+                current: 6,
+                supported: 5,
             })
         );
     }

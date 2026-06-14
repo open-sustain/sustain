@@ -158,7 +158,11 @@ pub(crate) fn apply_text_change(tag: &mut Tag, item_key: ItemKey, change: FieldC
     match change {
         FieldChange::Unchanged => {}
         FieldChange::Set(value) => {
-            tag.insert_text(item_key, value);
+            if value.trim().is_empty() {
+                let _removed = tag.take(item_key).count();
+            } else {
+                tag.insert_text(item_key, value);
+            }
         }
         FieldChange::Clear => {
             let _removed = tag.take(item_key).count();
