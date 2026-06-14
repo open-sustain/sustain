@@ -540,6 +540,20 @@ impl LibraryStore for SqliteLibraryStore {
         devices::device_selection(&connection, id)
     }
 
+    fn save_device_artist_selection(
+        &self,
+        id: &SyncDeviceId,
+        artists: &[String],
+    ) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        devices::save_device_artist_selection(&mut connection, id, artists)
+    }
+
+    fn device_artist_selection(&self, id: &SyncDeviceId) -> StoreResult<Vec<String>> {
+        let connection = self.connection_guard()?;
+        devices::device_artist_selection(&connection, id)
+    }
+
     fn save_device_manifest(
         &self,
         id: &SyncDeviceId,

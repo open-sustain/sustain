@@ -6963,6 +6963,18 @@ impl LibraryStore for CallCountingLibraryStore {
         self.inner.device_selection(id)
     }
 
+    fn save_device_artist_selection(
+        &self,
+        id: &SyncDeviceId,
+        artists: &[String],
+    ) -> StoreResult<()> {
+        self.inner.save_device_artist_selection(id, artists)
+    }
+
+    fn device_artist_selection(&self, id: &SyncDeviceId) -> StoreResult<Vec<String>> {
+        self.inner.device_artist_selection(id)
+    }
+
     fn save_device_manifest(
         &self,
         id: &SyncDeviceId,

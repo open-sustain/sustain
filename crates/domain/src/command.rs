@@ -147,6 +147,11 @@ pub enum ApplicationCommand {
         device_id: SyncDeviceId,
         selection: Vec<PlaylistItem>,
     },
+    /// Replace the ticked artists for a device.
+    SetDeviceArtistSelection {
+        device_id: SyncDeviceId,
+        artists: Vec<String>,
+    },
     /// Rename the device as shown in the sidebar.
     RenameDevice {
         device_id: SyncDeviceId,
@@ -157,7 +162,7 @@ pub enum ApplicationCommand {
     ForgetDevice {
         device_id: SyncDeviceId,
     },
-    /// Start an incremental sync of the device's ticked playlists. When
+    /// Start an incremental sync of the device's ticked playlists/artists. When
     /// `remove_stale` is false, tracks no longer in the selection are
     /// left on the device; when true, they are deleted (the UI confirms
     /// destructive removals before setting this).
@@ -166,8 +171,8 @@ pub enum ApplicationCommand {
         remove_stale: bool,
     },
     /// Run analysis (BPM / key / waveform) over the tracks in a device's
-    /// ticked playlists that are still missing it — the Pioneer export's
-    /// "analyse the missing ones" action.
+    /// ticked playlists/artists that are still missing it — the Pioneer
+    /// export's "analyse the missing ones" action.
     AnalyzeDeviceTracks {
         device_id: SyncDeviceId,
     },

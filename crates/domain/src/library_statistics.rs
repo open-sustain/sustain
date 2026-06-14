@@ -19,6 +19,7 @@
 //! bucketing rule still lives here while the calendar dependency stays at
 //! the edge.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::SystemTime;
 
@@ -52,29 +53,30 @@ pub struct LibraryStatistics {
     pub added_years: Vec<YearCount>,
 }
 
-/// One genre's slice of the library, by track count.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// One genre's slice of the library, by weighted track contribution.
+#[derive(Clone, Debug, PartialEq)]
 pub struct GenreShare {
     /// The genre name, or `None` for tracks with no genre tag.
     pub genre: Option<String>,
-    /// Number of tracks carrying this genre.
-    pub track_count: usize,
+    /// Track contribution carried by this genre. A track tagged
+    /// `House/Deep` contributes `0.5` to `House` and `0.5` to `Deep`.
+    pub track_weight: f64,
 }
 
 /// The aggregated tail of the genre distribution beyond the top N.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OtherGenres {
     /// How many distinct genres were folded together.
     pub genre_count: usize,
-    /// How many tracks those genres hold in total.
-    pub track_count: usize,
+    /// Weighted track contribution held by those folded genres.
+    pub track_weight: f64,
 }
 
 /// Genre distribution: the largest genres individually (capped at a fixed
 /// count), plus an optional folded tail. `total_tracks` is the
 /// whole-library count (including untagged tracks) so each share is a
 /// fraction of the library, not of the charted subset.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GenreDistribution {
     pub entries: Vec<GenreShare>,
     pub other: Option<OtherGenres>,
@@ -131,10 +133,12 @@ pub struct QualityDistribution {
 }
 
 /// A genre ranked by total play count.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GenrePlayCount {
     pub genre: Option<String>,
-    pub total_play_count: u64,
+    /// Weighted play count. A ten-play track tagged `House/Deep`
+    /// contributes five plays to each genre.
+    pub total_play_count: f64,
 }
 
 /// A genre ranked by its total rating points across rated tracks.
@@ -144,12 +148,12 @@ pub struct GenreRating {
     /// Weighted score used for ranking: the sum of stars across every rated
     /// track in the genre. This naturally gives a genre with broad library
     /// support more weight than a one-track marginal genre.
-    pub total_stars: u64,
+    pub total_stars: f64,
     /// Mean star rating across the genre's rated (one-star-or-better)
     /// tracks.
     pub average_stars: f64,
-    /// How many rated tracks the average is computed over.
-    pub rated_track_count: usize,
+    /// Weighted rated-track contribution the average is computed over.
+    pub rated_track_weight: f64,
 }
 
 /// Track count for one release decade. `decade` is the decade's first
@@ -189,16 +193,38 @@ pub fn compute_library_statistics(
     }
 }
 
-/// Normalise a track's genre into a grouping key: trimmed, with empty or
-/// whitespace-only tags treated as "no genre" (`None`).
-fn genre_key(track: &Track) -> Option<String> {
-    track
-        .metadata
-        .genre
-        .as_deref()
-        .map(str::trim)
-        .filter(|genre| !genre.is_empty())
-        .map(str::to_owned)
+/// Normalise a track's genre tag into grouping keys. Slash-delimited tags
+/// split into equal-weighted genre components; empty components are ignored.
+/// A tag with no usable component still contributes to the untagged bucket.
+fn genre_keys(track: &Track) -> Vec<Option<String>> {
+    let Some(raw) = track.metadata.genre.as_deref() else {
+        return vec![None];
+    };
+
+    let mut genres = Vec::new();
+    for genre in raw.split('/') {
+        let genre = genre.trim();
+        if genre.is_empty() || genres.iter().any(|existing: &String| existing == genre) {
+            continue;
+        }
+        genres.push(genre.to_owned());
+    }
+
+    if genres.is_empty() {
+        vec![None]
+    } else {
+        genres.into_iter().map(Some).collect()
+    }
+}
+
+fn weighted_genres(track: &Track) -> Vec<(Option<String>, f64)> {
+    let keys = genre_keys(track);
+    let weight = 1.0 / keys.len() as f64;
+    keys.into_iter().map(|genre| (genre, weight)).collect()
+}
+
+fn compare_weight_desc(left: f64, right: f64) -> Ordering {
+    right.partial_cmp(&left).unwrap_or(Ordering::Equal)
 }
 
 /// Sort a per-genre `(metric, genre)` ranking in descending metric order,
@@ -214,19 +240,22 @@ fn genre_tiebreak(left: &Option<String>, right: &Option<String>) -> std::cmp::Or
 }
 
 fn genre_distribution(tracks: &[Track]) -> GenreDistribution {
-    let mut counts: HashMap<Option<String>, usize> = HashMap::new();
+    let mut counts: HashMap<Option<String>, f64> = HashMap::new();
     for track in tracks {
-        *counts.entry(genre_key(track)).or_insert(0) += 1;
+        for (genre, weight) in weighted_genres(track) {
+            *counts.entry(genre).or_insert(0.0) += weight;
+        }
     }
 
     let mut ranked: Vec<GenreShare> = counts
         .into_iter()
-        .map(|(genre, track_count)| GenreShare { genre, track_count })
+        .map(|(genre, track_weight)| GenreShare {
+            genre,
+            track_weight,
+        })
         .collect();
     ranked.sort_by(|left, right| {
-        right
-            .track_count
-            .cmp(&left.track_count)
+        compare_weight_desc(left.track_weight, right.track_weight)
             .then_with(|| genre_tiebreak(&left.genre, &right.genre))
     });
 
@@ -234,7 +263,7 @@ fn genre_distribution(tracks: &[Track]) -> GenreDistribution {
         let tail = &ranked[GENRE_DISTRIBUTION_TOP_N..];
         Some(OtherGenres {
             genre_count: tail.len(),
-            track_count: tail.iter().map(|share| share.track_count).sum(),
+            track_weight: tail.iter().map(|share| share.track_weight).sum(),
         })
     } else {
         None
@@ -273,23 +302,23 @@ fn quality_distribution(tracks: &[Track]) -> QualityDistribution {
 }
 
 fn most_played_genres(tracks: &[Track]) -> Vec<GenrePlayCount> {
-    let mut totals: HashMap<Option<String>, u64> = HashMap::new();
+    let mut totals: HashMap<Option<String>, f64> = HashMap::new();
     for track in tracks {
-        *totals.entry(genre_key(track)).or_insert(0) += track.statistics.play_count;
+        for (genre, weight) in weighted_genres(track) {
+            *totals.entry(genre).or_insert(0.0) += track.statistics.play_count as f64 * weight;
+        }
     }
     let mut ranked: Vec<GenrePlayCount> = totals
         .into_iter()
         // A genre nobody has played is not "most played".
-        .filter(|(_, total)| *total > 0)
+        .filter(|(_, total)| *total > 0.0)
         .map(|(genre, total_play_count)| GenrePlayCount {
             genre,
             total_play_count,
         })
         .collect();
     ranked.sort_by(|left, right| {
-        right
-            .total_play_count
-            .cmp(&left.total_play_count)
+        compare_weight_desc(left.total_play_count, right.total_play_count)
             .then_with(|| genre_tiebreak(&left.genre, &right.genre))
     });
     ranked.truncate(TOP_GENRE_RANK);
@@ -297,40 +326,40 @@ fn most_played_genres(tracks: &[Track]) -> Vec<GenrePlayCount> {
 }
 
 fn most_liked_genres(tracks: &[Track]) -> Vec<GenreRating> {
-    // (sum of stars, number of rated tracks) per genre, over rated
+    // (sum of stars, rated-track weight) per genre, over rated
     // tracks only — zero-star tracks are excluded per the project's
     // rating-as-exclusion convention.
-    let mut sums: HashMap<Option<String>, (u64, usize)> = HashMap::new();
+    let mut sums: HashMap<Option<String>, (f64, f64)> = HashMap::new();
     for track in tracks {
         let stars = track.rating.stars();
         if stars == 0 {
             continue;
         }
-        let entry = sums.entry(genre_key(track)).or_insert((0, 0));
-        entry.0 += u64::from(stars);
-        entry.1 += 1;
+        for (genre, weight) in weighted_genres(track) {
+            let entry = sums.entry(genre).or_insert((0.0, 0.0));
+            entry.0 += f64::from(stars) * weight;
+            entry.1 += weight;
+        }
     }
 
     let mut ranked: Vec<GenreRating> = sums
         .into_iter()
-        .map(|(genre, (star_sum, rated_track_count))| GenreRating {
+        .map(|(genre, (star_sum, rated_track_weight))| GenreRating {
             genre,
             total_stars: star_sum,
-            average_stars: star_sum as f64 / rated_track_count as f64,
-            rated_track_count,
+            average_stars: star_sum / rated_track_weight,
+            rated_track_weight,
         })
         .collect();
     ranked.sort_by(|left, right| {
-        right
-            .total_stars
-            .cmp(&left.total_stars)
+        compare_weight_desc(left.total_stars, right.total_stars)
             .then_with(|| {
                 right
                     .average_stars
                     .partial_cmp(&left.average_stars)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .unwrap_or(Ordering::Equal)
             })
-            .then_with(|| right.rated_track_count.cmp(&left.rated_track_count))
+            .then_with(|| compare_weight_desc(left.rated_track_weight, right.rated_track_weight))
             .then_with(|| genre_tiebreak(&left.genre, &right.genre))
     });
     ranked.truncate(TOP_GENRE_RANK);
@@ -455,6 +484,13 @@ mod tests {
         compute_library_statistics(tracks, fake_year)
     }
 
+    fn assert_near(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "expected {expected}, got {actual}",
+        );
+    }
+
     #[test]
     fn empty_library_yields_zeroed_statistics() {
         let stats = compute(&[]);
@@ -487,11 +523,11 @@ mod tests {
         assert_eq!(dist.total_tracks, tracks.len());
         assert_eq!(dist.entries.len(), GENRE_DISTRIBUTION_TOP_N);
         assert_eq!(dist.entries[0].genre.as_deref(), Some("g00"));
-        assert_eq!(dist.entries[0].track_count, 14);
+        assert_near(dist.entries[0].track_weight, 14.0);
         // The two smallest genres (g12 = 2 tracks, g13 = 1 track) fold.
         let other = dist.other.expect("a folded tail");
         assert_eq!(other.genre_count, 2);
-        assert_eq!(other.track_count, 3);
+        assert_near(other.track_weight, 3.0);
     }
 
     #[test]
@@ -511,7 +547,30 @@ mod tests {
             .expect("an untagged bucket");
         // Both the `None` genre and the whitespace-only genre collapse
         // into the single untagged bucket.
-        assert_eq!(untagged.track_count, 3);
+        assert_near(untagged.track_weight, 3.0);
+    }
+
+    #[test]
+    fn genre_distribution_splits_slash_delimited_genres() {
+        let tracks = [
+            track(1, Some("House/Deep")),
+            track(2, Some("House")),
+            track(3, Some("Techno / Ambient / ")),
+            track(4, Some("House/House")),
+        ];
+        let dist = compute(&tracks).genre_distribution;
+        let weight = |genre_name: &str| {
+            dist.entries
+                .iter()
+                .find(|share| share.genre.as_deref() == Some(genre_name))
+                .expect("genre present")
+                .track_weight
+        };
+
+        assert_near(weight("House"), 2.5);
+        assert_near(weight("Deep"), 0.5);
+        assert_near(weight("Techno"), 0.5);
+        assert_near(weight("Ambient"), 0.5);
     }
 
     #[test]
@@ -555,9 +614,24 @@ mod tests {
 
         assert_eq!(ranked.len(), 2);
         assert_eq!(ranked[0].genre.as_deref(), Some("Techno"));
-        assert_eq!(ranked[0].total_play_count, 20);
+        assert_near(ranked[0].total_play_count, 20.0);
         assert_eq!(ranked[1].genre.as_deref(), Some("House"));
-        assert_eq!(ranked[1].total_play_count, 15);
+        assert_near(ranked[1].total_play_count, 15.0);
+    }
+
+    #[test]
+    fn most_played_genres_split_track_plays_across_slash_genres() {
+        let tracks = [
+            played(track(1, Some("House/Deep")), 10),
+            played(track(2, Some("Deep")), 1),
+        ];
+        let ranked = compute(&tracks).most_played_genres;
+
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].genre.as_deref(), Some("Deep"));
+        assert_near(ranked[0].total_play_count, 6.0);
+        assert_eq!(ranked[1].genre.as_deref(), Some("House"));
+        assert_near(ranked[1].total_play_count, 5.0);
     }
 
     #[test]
@@ -580,11 +654,11 @@ mod tests {
 
         assert_eq!(ranked.len(), 2);
         assert_eq!(ranked[0].genre.as_deref(), Some("Soul"));
-        assert_eq!(ranked[0].total_stars, 20);
-        assert_eq!(ranked[0].rated_track_count, 5);
-        assert!((ranked[0].average_stars - 4.0).abs() < f64::EPSILON);
+        assert_near(ranked[0].total_stars, 20.0);
+        assert_near(ranked[0].rated_track_weight, 5.0);
+        assert_near(ranked[0].average_stars, 4.0);
         assert_eq!(ranked[1].genre.as_deref(), Some("Jazz"));
-        assert_eq!(ranked[1].total_stars, 5);
+        assert_near(ranked[1].total_stars, 5.0);
     }
 
     #[test]
@@ -607,6 +681,25 @@ mod tests {
         assert_eq!(ranked.len(), 2);
         assert_eq!(ranked[0].genre.as_deref(), Some("B"));
         assert_eq!(ranked[1].genre.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn most_liked_genres_split_rating_points_without_lowering_the_average() {
+        let tracks = [
+            rated(track(1, Some("House/Deep")), 4),
+            rated(track(2, Some("Deep")), 5),
+        ];
+        let ranked = compute(&tracks).most_liked_genres;
+
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].genre.as_deref(), Some("Deep"));
+        assert_near(ranked[0].total_stars, 7.0);
+        assert_near(ranked[0].rated_track_weight, 1.5);
+        assert_near(ranked[0].average_stars, 7.0 / 1.5);
+        assert_eq!(ranked[1].genre.as_deref(), Some("House"));
+        assert_near(ranked[1].total_stars, 2.0);
+        assert_near(ranked[1].rated_track_weight, 0.5);
+        assert_near(ranked[1].average_stars, 4.0);
     }
 
     #[test]

@@ -76,6 +76,15 @@ pub use priority::{IoPriorityClass, NiceLevel, resolve_worker_count};
 /// stamped track for the corrected pipeline.
 pub const ONLINE_PROVIDER_VERSION: u32 = 2;
 
+pub(crate) fn track_artist_name(track: &Track) -> Option<&str> {
+    track
+        .metadata
+        .artist
+        .as_deref()
+        .map(str::trim)
+        .filter(|artist| !artist.is_empty())
+}
+
 pub(crate) mod artwork_fetcher;
 mod cd_import;
 mod commands;
@@ -119,7 +128,9 @@ pub use duplicate_consolidation::{
     recover_duplicate_consolidation_journal,
 };
 pub use smart_shuffle_scheduler::{SmartShuffleRebuildResult, SmartShuffleScheduler};
-pub use sustain_device_sync::{ConnectedDevice, DeviceCapacity, SyncPlan, SyncProgress, SyncStage};
+pub use sustain_device_sync::{
+    ConnectedDevice, DeviceCapacity, DeviceTarget, SyncPlan, SyncProgress, SyncStage,
+};
 pub use sustain_smart_shuffle::{
     INDEX_SCHEMA_VERSION as SMART_SHUFFLE_INDEX_SCHEMA_VERSION, PickMode, SmartShuffleError,
     SmartShuffleIndex,
@@ -1726,6 +1737,21 @@ impl ApplicationRuntime {
         let mut genres: Vec<String> = unique.into_iter().collect();
         genres.sort_by_key(|genre| genre.to_lowercase());
         genres
+    }
+
+    /// Every distinct, non-empty track artist currently in the library,
+    /// sorted case-insensitively. Feeds the device-sync artist checklist so
+    /// the selection reflects the authoritative SQLite library state.
+    pub fn distinct_artists(&self) -> Vec<String> {
+        let mut unique = std::collections::BTreeSet::<String>::new();
+        for track in &self.library_tracks {
+            if let Some(artist) = track_artist_name(track) {
+                unique.insert(artist.to_owned());
+            }
+        }
+        let mut artists: Vec<String> = unique.into_iter().collect();
+        artists.sort_by_key(|artist| artist.to_lowercase());
+        artists
     }
 
     /// Look up a single in-memory library track by id. `library_tracks` is

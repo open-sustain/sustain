@@ -6,10 +6,10 @@
 //!
 //! Layout: a header whose left side identifies the device (name + mount
 //! path) and whose right corner holds the configuration options
-//! (on-drive format, per-layout settings); below it the ticked-playlist
-//! list fills the remaining height in its own contrasting container; and
-//! a fixed bottom bar carries the disk-occupation bar (how much of the
-//! device the ticked playlists would occupy) alongside the `Forget
+//! (on-drive format, per-layout settings); below it the ticked playlist
+//! and artist lists fill the remaining height in their own contrasting
+//! containers; and a fixed bottom bar carries the disk-occupation bar (how
+//! much of the device the ticked content would occupy) alongside the `Forget
 //! device` / `Sync` actions. All mutations go through the command
 //! controller; all progress flows through the runtime's notification
 //! lane, so the panel never schedules its own timers or pokes the status
@@ -215,7 +215,7 @@ impl DeviceSyncPanel {
         header.append(&mount);
         self.body.append(&header);
 
-        // --- Two columns: playlists (left) | settings (right) ---
+        // --- Three columns: playlists | artists | settings ---
         let columns = gtk::Box::new(gtk::Orientation::Horizontal, 18);
         columns.set_margin_top(12);
         columns.set_margin_start(18);
@@ -229,6 +229,13 @@ impl DeviceSyncPanel {
         playlists_column.append(&section_label("Playlists to sync"));
         playlists_column.append(&self.build_playlist_container(device));
         columns.append(&playlists_column);
+
+        let artists_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        artists_column.set_hexpand(true);
+        artists_column.set_vexpand(true);
+        artists_column.append(&section_label("Artists to sync"));
+        artists_column.append(&self.build_artist_container(device));
+        columns.append(&artists_column);
 
         let settings_column = gtk::Box::new(gtk::Orientation::Vertical, 6);
         settings_column.set_valign(gtk::Align::Start);
@@ -463,6 +470,70 @@ impl DeviceSyncPanel {
         container
     }
 
+    fn build_artist_container(&self, device: &ConnectedDevice) -> gtk::Box {
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        container.add_css_class("device-sync-playlist-container");
+        container.set_hexpand(true);
+        container.set_vexpand(true);
+
+        let runtime = self.runtime.borrow();
+        let selected: std::collections::HashSet<String> = runtime
+            .device_artist_selection(&device.id)
+            .into_iter()
+            .collect();
+
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let mut entries: Vec<(String, gtk::CheckButton)> = Vec::new();
+        for artist in runtime.distinct_artists() {
+            let check = playlist_check(&artist, ARTIST_ICON, selected.contains(&artist));
+            list.append(&check);
+            entries.push((artist, check));
+        }
+        drop(runtime);
+
+        if entries.is_empty() {
+            let empty = gtk::Label::new(Some(
+                "No artists yet. Add music with artist tags to sync by artist.",
+            ));
+            empty.set_xalign(0.0);
+            empty.set_valign(gtk::Align::Start);
+            empty.add_css_class("dim-label");
+            container.append(&empty);
+            return container;
+        }
+
+        let entries = Rc::new(entries);
+        for (_, check) in entries.iter() {
+            let panel = self.clone();
+            let device = device.clone();
+            let entries = entries.clone();
+            check.connect_toggled(move |_| {
+                let artists: Vec<String> = entries
+                    .iter()
+                    .filter(|(_, check)| check.is_active())
+                    .map(|(artist, _)| artist.clone())
+                    .collect();
+                if panel.command_controller.dispatch_succeeded(
+                    ApplicationCommand::SetDeviceArtistSelection {
+                        device_id: device.id.clone(),
+                        artists,
+                    },
+                ) {
+                    panel.request_plan(&device);
+                }
+                panel.refresh_selection_derived(&device);
+                panel.fire_summary_refresh();
+            });
+        }
+
+        let scroller = gtk::ScrolledWindow::new();
+        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        scroller.set_vexpand(true);
+        scroller.set_child(Some(&list));
+        container.append(&scroller);
+        container
+    }
+
     /// (Re)fill the bottom bar from the current plan + device capacity.
     /// Safe to call from a playlist toggle: it only touches the bottom
     /// bar, never the checklist the toggle came from.
@@ -560,7 +631,7 @@ impl DeviceSyncPanel {
                 Self::clear(&panel.body);
                 Self::clear(&panel.bottom_bar);
                 let note = gtk::Label::new(Some(
-                    "Device forgotten. Its saved playlists and sync history were cleared.",
+                    "Device forgotten. Its saved playlists, artists, and sync history were cleared.",
                 ));
                 note.set_xalign(0.0);
                 note.set_valign(gtk::Align::Start);
@@ -707,6 +778,7 @@ const SETTINGS_COLUMN_WIDTH: i32 = 260;
 /// Sidebar-consistent icons for the two playlist kinds in the checklist.
 const PLAYLIST_ICON: &str = "view-list-symbolic";
 const SMART_PLAYLIST_ICON: &str = "emblem-system-symbolic";
+const ARTIST_ICON: &str = "avatar-default-symbolic";
 
 /// A checklist row: a check button whose child is the playlist's icon
 /// (normal vs smart, matching the sidebar) followed by its name.

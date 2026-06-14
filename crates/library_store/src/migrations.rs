@@ -11,10 +11,13 @@ use rusqlite::Connection;
 
 use crate::{
     StoreError, StoreResult,
-    schema::{ADD_TRACK_COLUMN_SORT_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL, SCHEMA_SQL},
+    schema::{
+        ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_TRACK_COLUMN_SORT_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
+        SCHEMA_SQL,
+    },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -38,6 +41,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 3,
         description: "backfill generated sort fields",
         sql: BACKFILL_GENERATED_SORT_FIELDS_SQL,
+    },
+    Migration {
+        version: 4,
+        description: "persist per-device artist sync selections",
+        sql: ADD_SYNC_DEVICE_ARTISTS_SQL,
     },
 ];
 
@@ -126,6 +134,7 @@ mod tests {
         "smart_playlists",
         "smart_shuffle_index",
         "source_fingerprint_cache",
+        "sync_device_artists",
         "sync_device_playlists",
         "sync_devices",
         "sync_manifest",
@@ -150,7 +159,7 @@ mod tests {
 
         apply_pending(&connection).expect("migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 3);
+        assert_eq!(user_version(&connection).expect("version"), 4);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
     }
 
@@ -161,7 +170,7 @@ mod tests {
 
         apply_pending(&connection).expect("second migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 3);
+        assert_eq!(user_version(&connection).expect("version"), 4);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
     }
 
@@ -185,7 +194,7 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 3);
+        assert_eq!(user_version(&connection).expect("version"), 4);
         assert_eq!(tables(&connection), EXPECTED_TABLES);
         // The pre-existing layout row survives the migration untouched.
         let column_id: String = connection
@@ -235,7 +244,7 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 3);
+        assert_eq!(user_version(&connection).expect("version"), 4);
         let generated: [Option<String>; 5] = connection
             .query_row(
                 "SELECT title_sort, artist_sort, album_sort, album_artist_sort, composer_sort \
@@ -280,17 +289,71 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_from_v3_adds_artist_selection_table_and_preserves_devices() {
+        let connection = Connection::open_in_memory().expect("connection");
+        connection
+            .execute_batch(SCHEMA_SQL)
+            .expect("baseline schema");
+        connection
+            .execute_batch(ADD_TRACK_COLUMN_SORT_SQL)
+            .expect("schema version 2 migration");
+        connection
+            .execute_batch(BACKFILL_GENERATED_SORT_FIELDS_SQL)
+            .expect("schema version 3 migration");
+        connection
+            .execute_batch("DROP TABLE sync_device_artists;")
+            .expect("simulate pre-v4 schema");
+        connection
+            .execute(
+                "INSERT INTO sync_devices \
+                 (id, label, kind, layout, sub_path, files_per_folder_cap, volume_id) \
+                 VALUES ('dev', 'USB', 0, 0, '', 0, NULL)",
+                [],
+            )
+            .expect("seed device");
+        connection
+            .execute(
+                "INSERT INTO sync_device_playlists \
+                 (device_id, item_kind, item_id, position) VALUES ('dev', 0, 7, 0)",
+                [],
+            )
+            .expect("seed playlist selection");
+        connection
+            .pragma_update(None, "user_version", 3)
+            .expect("set version");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(user_version(&connection).expect("version"), 4);
+        assert_eq!(tables(&connection), EXPECTED_TABLES);
+        let selection: (String, i64) = connection
+            .query_row(
+                "SELECT device_id, item_id FROM sync_device_playlists",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("playlist selection preserved");
+        assert_eq!(selection, ("dev".to_owned(), 7));
+        let artist_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM sync_device_artists", [], |row| {
+                row.get(0)
+            })
+            .expect("artist table present");
+        assert_eq!(artist_count, 0);
+    }
+
+    #[test]
     fn database_from_a_newer_build_is_rejected() {
         let connection = Connection::open_in_memory().expect("connection");
         connection
-            .pragma_update(None, "user_version", 4)
+            .pragma_update(None, "user_version", 5)
             .expect("set version");
 
         assert_eq!(
             apply_pending(&connection),
             Err(StoreError::DatabaseAhead {
-                current: 4,
-                supported: 3,
+                current: 5,
+                supported: 4,
             })
         );
     }

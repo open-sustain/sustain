@@ -1136,9 +1136,9 @@ columnview.track-table listview row:selected .track-table-status-missing,
     padding: 0;
 }
 
-/* The eject control on an audio-CD sidebar row: a subtle flat icon button
-   that does not bloat the compact row height. */
-.playlist-sidebar-cd-eject {
+/* The eject control on transient device sidebar rows: a subtle flat icon
+   button that does not bloat the compact row height. */
+.playlist-sidebar-eject {
     min-width: 0;
     min-height: 0;
     padding: 2px 4px;

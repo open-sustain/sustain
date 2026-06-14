@@ -269,6 +269,9 @@ impl ApplicationRuntime {
             } => {
                 self.set_device_selection(device_id, selection)?;
             }
+            ApplicationCommand::SetDeviceArtistSelection { device_id, artists } => {
+                self.set_device_artist_selection(device_id, artists)?;
+            }
             ApplicationCommand::RenameDevice { device_id, label } => {
                 self.rename_device(device_id, label)?;
             }

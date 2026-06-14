@@ -146,24 +146,35 @@ fn local_year(time: SystemTime) -> Option<i32> {
 }
 
 /// `"<count> (<pct>%)"` — a count alongside its share of `total`. Used by
-/// the distribution donut legends.
-fn share_text(count: usize, total: usize) -> String {
-    let percent = if total == 0 {
-        0.0
-    } else {
-        count as f64 / total as f64 * 100.0
-    };
-    format!("{count} ({percent:.0}%)")
+/// integer-count distribution donut legends.
+fn count_share_text(count: usize, total: usize) -> String {
+    quantity_share_text(count as f64, total as f64)
 }
 
-/// [`share_text`] over `u64` counts, for the play-count donut.
-fn share_text_u64(count: u64, total: u64) -> String {
-    let percent = if total == 0 {
+/// `"<quantity> (<pct>%)"` for fractional weighted quantities.
+fn quantity_share_text(quantity: f64, total: f64) -> String {
+    let percent = if total == 0.0 {
         0.0
     } else {
-        count as f64 / total as f64 * 100.0
+        quantity / total * 100.0
     };
-    format!("{count} ({percent:.0}%)")
+    format!("{} ({percent:.0}%)", quantity_text(quantity))
+}
+
+fn quantity_text(quantity: f64) -> String {
+    let rounded = quantity.round();
+    if (quantity - rounded).abs() < 0.005 {
+        return format!("{rounded:.0}");
+    }
+
+    let mut text = format!("{quantity:.2}");
+    while text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
 }
 
 /// A genre name for display, mapping the "no genre tag" case to a
@@ -185,8 +196,8 @@ fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
         .iter()
         .map(|entry| DonutSlice {
             label: genre_label(&entry.genre),
-            fraction: fraction(entry.track_count, total),
-            value: share_text(entry.track_count, total),
+            fraction: fraction_f64(entry.track_weight, total as f64),
+            value: quantity_share_text(entry.track_weight, total as f64),
             muted: false,
         })
         .collect();
@@ -201,8 +212,8 @@ fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
                     "genres"
                 }
             ),
-            fraction: fraction(other.track_count, total),
-            value: share_text(other.track_count, total),
+            fraction: fraction_f64(other.track_weight, total as f64),
+            value: quantity_share_text(other.track_weight, total as f64),
             muted: true,
         });
     }
@@ -227,7 +238,7 @@ fn quality_distribution_section(distribution: &QualityDistribution) -> gtk::Widg
             .map(|bucket| DonutSlice {
                 label: quality_label(bucket.range).to_owned(),
                 fraction: fraction(bucket.track_count, total),
-                value: share_text(bucket.track_count, total),
+                value: count_share_text(bucket.track_count, total),
                 muted: false,
             })
             .collect()
@@ -254,17 +265,18 @@ fn quality_label(range: QualityRange) -> &'static str {
 fn most_played_section(genres: &[GenrePlayCount]) -> gtk::Widget {
     // A play count is a real quantity, so the donut shows each genre's
     // share of the plays among the most-played five.
-    let total: u64 = genres.iter().map(|genre| genre.total_play_count).sum();
+    let total: f64 = genres.iter().map(|genre| genre.total_play_count).sum();
     let slices: Vec<DonutSlice> = genres
         .iter()
         .map(|genre| DonutSlice {
             label: genre_label(&genre.genre),
-            fraction: fraction_u64(genre.total_play_count, total),
-            value: share_text_u64(genre.total_play_count, total),
+            fraction: fraction_f64(genre.total_play_count, total),
+            value: quantity_share_text(genre.total_play_count, total),
             muted: false,
         })
         .collect();
-    let content = (total > 0).then(|| chart::donut(slices, Some(donut_center(total, "plays"))));
+    let content = (total > 0.0)
+        .then(|| chart::donut(slices, Some(donut_center(quantity_text(total), "plays"))));
     section(
         "Most played genres",
         Some("Top 5 by total play count."),
@@ -277,14 +289,14 @@ fn most_liked_section(genres: &[GenreRating]) -> gtk::Widget {
     let max = genres
         .iter()
         .map(|genre| genre.total_stars)
-        .max()
-        .unwrap_or(0);
+        .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(0.0);
     let bars: Vec<VerticalBar> = genres
         .iter()
         .map(|genre| VerticalBar {
             label: genre_label(&genre.genre),
-            fraction: fraction_u64(genre.total_stars, max),
-            value: format!("{}★", genre.total_stars),
+            fraction: fraction_f64(genre.total_stars, max),
+            value: format!("{}★", quantity_text(genre.total_stars)),
         })
         .collect();
     let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
@@ -354,11 +366,11 @@ fn fraction(numerator: usize, denominator: usize) -> f64 {
     }
 }
 
-fn fraction_u64(numerator: u64, denominator: u64) -> f64 {
-    if denominator == 0 {
+fn fraction_f64(numerator: f64, denominator: f64) -> f64 {
+    if denominator == 0.0 {
         0.0
     } else {
-        numerator as f64 / denominator as f64
+        numerator / denominator
     }
 }
 
@@ -419,19 +431,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn share_text_pairs_count_with_rounded_percent() {
-        assert_eq!(share_text(0, 0), "0 (0%)");
-        assert_eq!(share_text(0, 10), "0 (0%)");
-        assert_eq!(share_text(1, 4), "1 (25%)");
-        assert_eq!(share_text(1, 3), "1 (33%)");
-        assert_eq!(share_text(10, 10), "10 (100%)");
+    fn count_share_text_pairs_count_with_rounded_percent() {
+        assert_eq!(count_share_text(0, 0), "0 (0%)");
+        assert_eq!(count_share_text(0, 10), "0 (0%)");
+        assert_eq!(count_share_text(1, 4), "1 (25%)");
+        assert_eq!(count_share_text(1, 3), "1 (33%)");
+        assert_eq!(count_share_text(10, 10), "10 (100%)");
     }
 
     #[test]
-    fn share_text_u64_matches_share_text() {
-        assert_eq!(share_text_u64(0, 0), "0 (0%)");
-        assert_eq!(share_text_u64(1, 4), "1 (25%)");
-        assert_eq!(share_text_u64(10, 10), "10 (100%)");
+    fn quantity_share_text_trims_fractional_weights() {
+        assert_eq!(quantity_share_text(0.5, 10.0), "0.5 (5%)");
+        assert_eq!(quantity_share_text(1.0 / 3.0, 1.0), "0.33 (33%)");
+        assert_eq!(quantity_share_text(10.0, 10.0), "10 (100%)");
     }
 
     #[test]
@@ -439,6 +451,8 @@ mod tests {
         assert_eq!(fraction(3, 0), 0.0);
         assert_eq!(fraction(0, 10), 0.0);
         assert!((fraction(1, 4) - 0.25).abs() < f64::EPSILON);
+        assert_eq!(fraction_f64(3.0, 0.0), 0.0);
+        assert!((fraction_f64(0.5, 2.0) - 0.25).abs() < f64::EPSILON);
     }
 
     #[test]

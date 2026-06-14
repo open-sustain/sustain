@@ -39,6 +39,7 @@ pub struct InMemoryLibraryStore {
     acoustics: Mutex<BTreeMap<TrackId, AcousticFeatures>>,
     sync_devices: Mutex<BTreeMap<SyncDeviceId, SyncDevice>>,
     device_selections: Mutex<BTreeMap<SyncDeviceId, Vec<PlaylistItem>>>,
+    device_artist_selections: Mutex<BTreeMap<SyncDeviceId, Vec<String>>>,
     device_manifests: Mutex<BTreeMap<SyncDeviceId, Vec<SyncManifestEntry>>>,
 }
 
@@ -1323,6 +1324,10 @@ impl LibraryStore for InMemoryLibraryStore {
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?
             .remove(id);
+        self.device_artist_selections
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .remove(id);
         self.device_manifests
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?
@@ -1345,6 +1350,28 @@ impl LibraryStore for InMemoryLibraryStore {
     fn device_selection(&self, id: &SyncDeviceId) -> StoreResult<Vec<PlaylistItem>> {
         Ok(self
             .device_selections
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .get(id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn save_device_artist_selection(
+        &self,
+        id: &SyncDeviceId,
+        artists: &[String],
+    ) -> StoreResult<()> {
+        self.device_artist_selections
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .insert(id.clone(), artists.to_vec());
+        Ok(())
+    }
+
+    fn device_artist_selection(&self, id: &SyncDeviceId) -> StoreResult<Vec<String>> {
+        Ok(self
+            .device_artist_selections
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?
             .get(id)

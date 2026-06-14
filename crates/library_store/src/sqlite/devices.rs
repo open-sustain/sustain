@@ -133,6 +133,54 @@ pub(super) fn device_selection(
     Ok(selection)
 }
 
+pub(super) fn save_device_artist_selection(
+    connection: &mut Connection,
+    id: &SyncDeviceId,
+    artists: &[String],
+) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    transaction
+        .execute(
+            "DELETE FROM sync_device_artists WHERE device_id = ?1",
+            params![id.as_str()],
+        )
+        .map_err(StoreError::from)?;
+    for (position, artist) in artists.iter().enumerate() {
+        let artist = artist.trim();
+        if artist.is_empty() {
+            continue;
+        }
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO sync_device_artists \
+                 (device_id, artist, position) VALUES (?1, ?2, ?3)",
+                params![id.as_str(), artist, position as i64],
+            )
+            .map_err(StoreError::from)?;
+    }
+    transaction.commit().map_err(StoreError::from)
+}
+
+pub(super) fn device_artist_selection(
+    connection: &Connection,
+    id: &SyncDeviceId,
+) -> StoreResult<Vec<String>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT artist FROM sync_device_artists \
+             WHERE device_id = ?1 ORDER BY position",
+        )
+        .map_err(StoreError::from)?;
+    let mut rows = statement
+        .query(params![id.as_str()])
+        .map_err(StoreError::from)?;
+    let mut artists = Vec::new();
+    while let Some(row) = rows.next().map_err(StoreError::from)? {
+        artists.push(row.get(0).map_err(StoreError::from)?);
+    }
+    Ok(artists)
+}
+
 pub(super) fn save_device_manifest(
     connection: &mut Connection,
     id: &SyncDeviceId,
@@ -312,6 +360,32 @@ mod tests {
     }
 
     #[test]
+    fn artist_selection_round_trips_in_order() {
+        let store = SqliteLibraryStore::open_in_memory().expect("store");
+        let d = device("dev-artists");
+        store.save_sync_device(&d).expect("save");
+        let artists = vec![
+            "Aphex Twin".to_owned(),
+            "Bałdych & Herman Duo Art".to_owned(),
+        ];
+        store
+            .save_device_artist_selection(&d.id, &artists)
+            .expect("save artist selection");
+        assert_eq!(
+            store
+                .device_artist_selection(&d.id)
+                .expect("load artist selection"),
+            artists
+        );
+
+        let next = vec!["Nala Sinephro".to_owned()];
+        store
+            .save_device_artist_selection(&d.id, &next)
+            .expect("replace artist selection");
+        assert_eq!(store.device_artist_selection(&d.id).expect("load"), next);
+    }
+
+    #[test]
     fn manifest_round_trips() {
         let store = SqliteLibraryStore::open_in_memory().expect("store");
         let d = device("dev-c");
@@ -346,6 +420,9 @@ mod tests {
             )
             .expect("sel");
         store
+            .save_device_artist_selection(&d.id, &["Artist".to_owned()])
+            .expect("artists");
+        store
             .save_device_manifest(
                 &d.id,
                 &[SyncManifestEntry {
@@ -359,6 +436,12 @@ mod tests {
         store.delete_sync_device(&d.id).expect("delete");
         assert_eq!(store.sync_device(&d.id).expect("load"), None);
         assert!(store.device_selection(&d.id).expect("sel").is_empty());
+        assert!(
+            store
+                .device_artist_selection(&d.id)
+                .expect("artists")
+                .is_empty()
+        );
         assert!(store.device_manifest(&d.id).expect("manifest").is_empty());
     }
 

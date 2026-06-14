@@ -35,11 +35,11 @@ use crate::device_plan_scheduler::{
 use crate::device_sync_scheduler::{DeviceSyncEvent, DeviceSyncStartOutcome};
 use crate::{
     AnalysisRunRequest, ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult,
-    NotificationCategory, NotificationSeverity, notifications,
+    NotificationCategory, NotificationSeverity, notifications, track_artist_name,
 };
 
-/// Per-device analysis coverage for the ticked playlists, shown in the
-/// Pioneer export panel. `analyzable` is how many tracks an analysis run
+/// Per-device analysis coverage for the ticked playlists/artists, shown in
+/// the Pioneer export panel. `analyzable` is how many tracks an analysis run
 /// would still touch (distinguishes "not yet attempted" from "attempted,
 /// no confident result": a track counted in `missing_bpm` but not in
 /// `analyzable` was already attempted and produced nothing).
@@ -187,11 +187,19 @@ impl ApplicationRuntime {
             .unwrap_or_default()
     }
 
+    /// The saved ticked-artist selection for a device.
+    pub fn device_artist_selection(&self, id: &SyncDeviceId) -> Vec<String> {
+        self.library_store
+            .as_ref()
+            .and_then(|store| store.device_artist_selection(id).ok())
+            .unwrap_or_default()
+    }
+
     /// The deduplicated set of library tracks the device's ticked
-    /// playlists resolve to, in first-seen order — a track in several
-    /// selected playlists counts once. Smart playlists are evaluated
-    /// live. Drives the status-bar track/duration/size summary while the
-    /// device view is shown.
+    /// playlists and artists resolve to, in first-seen order — a track in
+    /// several selected sources counts once. Smart playlists and artist
+    /// names are evaluated live. Drives the status-bar track/duration/size
+    /// summary while the device view is shown.
     pub fn device_selected_tracks(&self, id: &SyncDeviceId) -> Vec<Track> {
         let mut seen = HashSet::new();
         let mut tracks = Vec::new();
@@ -200,6 +208,15 @@ impl ApplicationRuntime {
                 continue;
             };
             for tid in track_ids {
+                if seen.insert(tid)
+                    && let Some(track) = self.library_track(tid)
+                {
+                    tracks.push(track.clone());
+                }
+            }
+        }
+        for artist in self.device_artist_selection(id) {
+            for tid in artist_track_ids(&artist, &self.library_tracks) {
                 if seen.insert(tid)
                     && let Some(track) = self.library_track(tid)
                 {
@@ -351,6 +368,22 @@ impl ApplicationRuntime {
         Ok(())
     }
 
+    pub(crate) fn set_device_artist_selection(
+        &mut self,
+        id: SyncDeviceId,
+        artists: Vec<String>,
+    ) -> ApplicationRuntimeResult<()> {
+        let store = self
+            .library_store
+            .as_ref()
+            .ok_or(ApplicationRuntimeError::LibraryStoreFailed)?;
+        store
+            .save_device_artist_selection(&id, &artists)
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        self.invalidate_device_sync_plan();
+        Ok(())
+    }
+
     pub(crate) fn forget_device(&mut self, id: SyncDeviceId) -> ApplicationRuntimeResult<()> {
         let store = self
             .library_store
@@ -385,7 +418,7 @@ impl ApplicationRuntime {
 
     // --- Analysis readiness (Pioneer panel) ---
 
-    /// Analysis coverage over the tracks in a device's ticked playlists.
+    /// Analysis coverage over the tracks in a device's ticked playlists/artists.
     pub fn device_analysis_readiness(&self, id: &SyncDeviceId) -> DeviceAnalysisReadiness {
         let track_ids = self.device_selection_track_ids(id);
         let total = track_ids.len();
@@ -549,11 +582,11 @@ impl ApplicationRuntime {
             return Ok(());
         };
         let device = self.ensure_device_config(&connected)?;
-        if self.device_selection(&id).is_empty() {
+        if self.device_selection(&id).is_empty() && self.device_artist_selection(&id).is_empty() {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Info,
-                "Pick at least one playlist to sync to this device.".to_owned(),
+                "Pick at least one playlist or artist to sync to this device.".to_owned(),
             );
             return Ok(());
         }
@@ -672,8 +705,8 @@ impl ApplicationRuntime {
 
     // --- Resolution helpers ---
 
-    /// Distinct track ids across a device's ticked playlists (available
-    /// tracks only), order-preserving.
+    /// Distinct track ids across a device's ticked playlists/artists
+    /// (available tracks only), order-preserving.
     fn device_selection_track_ids(&self, id: &SyncDeviceId) -> Vec<sustain_domain::TrackId> {
         let mut seen = std::collections::HashSet::new();
         let mut ids = Vec::new();
@@ -682,6 +715,13 @@ impl ApplicationRuntime {
                 continue;
             };
             for tid in track_ids {
+                if seen.insert(tid) {
+                    ids.push(tid);
+                }
+            }
+        }
+        for artist in self.device_artist_selection(id) {
+            for tid in artist_track_ids(&artist, &self.library_tracks) {
                 if seen.insert(tid) {
                     ids.push(tid);
                 }
@@ -842,7 +882,10 @@ fn build_worker_sync_request(
     let selection = store
         .device_selection(&mount.device_id)
         .map_err(|error| format!("could not load device selection: {error:?}"))?;
-    if selection.is_empty() {
+    let artist_selection = store
+        .device_artist_selection(&mount.device_id)
+        .map_err(|error| format!("could not load device artist selection: {error:?}"))?;
+    if selection.is_empty() && artist_selection.is_empty() {
         return Ok(Some(SyncRequest {
             device,
             tracks: Vec::new(),
@@ -886,41 +929,45 @@ fn build_worker_sync_request(
         };
         let name = snapshot_playlist_name(item, &playlists, &smart_playlists)
             .unwrap_or_else(|| "Playlist".to_owned());
-        let mut indices = Vec::with_capacity(track_ids.len());
-        for track_id in track_ids {
-            if cancelled() {
-                return Ok(None);
-            }
-            let index = match index_of.get(&track_id) {
-                Some(&index) => Some(index),
-                None => {
-                    let Some(track) = by_id.get(&track_id) else {
-                        continue;
-                    };
-                    if track.location.is_missing() {
-                        continue;
-                    }
-                    let Some(library_path) = library_path else {
-                        continue;
-                    };
-                    let source_path = track.location.absolute_path(library_path);
-                    let Some(source) = source_snapshot(store, track.id, &source_path)
-                        .map_err(|error| format!("could not inspect source track: {error:?}"))?
-                    else {
-                        continue;
-                    };
-                    let index = tracks.len();
-                    tracks.push(sync_input_track(track, source_path, source));
-                    index_of.insert(track_id, index);
-                    Some(index)
-                }
-            };
-            if let Some(index) = index {
-                indices.push(index);
-            }
-        }
+        let Some(indices) = resolve_sync_track_indices(
+            store,
+            &by_id,
+            &mut index_of,
+            &mut tracks,
+            library_path,
+            track_ids,
+            cancelled,
+        )?
+        else {
+            return Ok(None);
+        };
         resolved_playlists.push(SyncInputPlaylist {
             name,
+            track_indices: indices,
+        });
+    }
+    for artist in artist_selection {
+        if cancelled() {
+            return Ok(None);
+        }
+        let track_ids = artist_track_ids(&artist, &library_tracks);
+        if track_ids.is_empty() {
+            continue;
+        }
+        let Some(indices) = resolve_sync_track_indices(
+            store,
+            &by_id,
+            &mut index_of,
+            &mut tracks,
+            library_path,
+            track_ids,
+            cancelled,
+        )?
+        else {
+            return Ok(None);
+        };
+        resolved_playlists.push(SyncInputPlaylist {
+            name: artist,
             track_indices: indices,
         });
     }
@@ -932,6 +979,51 @@ fn build_worker_sync_request(
         remove_stale,
         export_date,
     }))
+}
+
+fn resolve_sync_track_indices(
+    store: &dyn LibraryStore,
+    by_id: &HashMap<TrackId, &Track>,
+    index_of: &mut HashMap<TrackId, usize>,
+    tracks: &mut Vec<SyncInputTrack>,
+    library_path: Option<&std::path::Path>,
+    track_ids: Vec<TrackId>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<Vec<usize>>, String> {
+    let mut indices = Vec::with_capacity(track_ids.len());
+    for track_id in track_ids {
+        if cancelled() {
+            return Ok(None);
+        }
+        let index = match index_of.get(&track_id) {
+            Some(&index) => Some(index),
+            None => {
+                let Some(track) = by_id.get(&track_id) else {
+                    continue;
+                };
+                if track.location.is_missing() {
+                    continue;
+                }
+                let Some(library_path) = library_path else {
+                    continue;
+                };
+                let source_path = track.location.absolute_path(library_path);
+                let Some(source) = source_snapshot(store, track.id, &source_path)
+                    .map_err(|error| format!("could not inspect source track: {error:?}"))?
+                else {
+                    continue;
+                };
+                let index = tracks.len();
+                tracks.push(sync_input_track(track, source_path, source));
+                index_of.insert(track_id, index);
+                Some(index)
+            }
+        };
+        if let Some(index) = index {
+            indices.push(index);
+        }
+    }
+    Ok(Some(indices))
 }
 
 fn prepare_sync_request(
@@ -985,6 +1077,18 @@ fn prepare_sync_request(
         });
     }
     PreparedSyncRequest::new(request, pioneer_assets).map(Some)
+}
+
+fn artist_track_ids(artist: &str, tracks: &[Track]) -> Vec<TrackId> {
+    let artist = artist.trim();
+    if artist.is_empty() {
+        return Vec::new();
+    }
+    tracks
+        .iter()
+        .filter(|track| track_artist_name(track) == Some(artist))
+        .map(|track| track.id)
+        .collect()
 }
 
 fn snapshot_playlist_track_ids(
@@ -1124,15 +1228,16 @@ mod tests {
         SyncStage, source_file_stat,
     };
     use sustain_domain::{
-        DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MetadataChange, Rating,
-        SyncDevice, SyncDeviceId, TrackId, TrackMetadata,
+        DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MetadataChange,
+        PlayStatistics, Rating, SyncDevice, SyncDeviceId, Track, TrackId, TrackLocation,
+        TrackMetadata, TrackRelativePath,
     };
-    use sustain_library_store::InMemoryLibraryStore;
+    use sustain_library_store::{InMemoryLibraryStore, LibraryStore};
     use sustain_metadata::{InitialTags, MetadataResult, MetadataService};
 
     use super::{
         ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
-        DeviceSyncPlanState, prepare_sync_request, unix_to_ymd,
+        DeviceSyncPlanState, build_worker_sync_request, prepare_sync_request, unix_to_ymd,
     };
     use crate::ApplicationRuntime;
 
@@ -1147,6 +1252,25 @@ mod tests {
             label: id.to_owned(),
             is_known: true,
             has_marker: true,
+        }
+    }
+
+    fn library_track(id: i64, relative_path: &str, artist: &str) -> Track {
+        Track {
+            id: TrackId::new(id).expect("track id"),
+            location: TrackLocation::available(
+                TrackRelativePath::new(relative_path).expect("relative path"),
+            ),
+            metadata: TrackMetadata {
+                title: Some(format!("Track {id}")),
+                artist: Some(artist.to_owned()),
+                ..TrackMetadata::default()
+            },
+            rating: Rating::unrated(),
+            statistics: PlayStatistics::default(),
+            file_size_bytes: None,
+            has_embedded_artwork: None,
+            file_modified_at: None,
         }
     }
 
@@ -1238,6 +1362,61 @@ mod tests {
         assert_eq!(unix_to_ymd(1_700_000_000), "2023-11-14");
         // 2026-05-29 00:00:00 UTC
         assert_eq!(unix_to_ymd(1_780_012_800), "2026-05-29");
+    }
+
+    #[test]
+    fn artist_selection_resolves_to_an_artist_playlist() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("artist-track.mp3"), b"audio").expect("source file");
+        std::fs::write(temp.path().join("other-track.mp3"), b"audio").expect("source file");
+
+        let store = InMemoryLibraryStore::new();
+        let device = SyncDevice {
+            id: SyncDeviceId::new("artist-device").expect("device id"),
+            label: "USB".to_owned(),
+            kind: DeviceKind::UsbDrive,
+            layout: DeviceLayout::M3u,
+            sub_path: DeviceRelativePath::root(),
+            files_per_folder_cap: FilesPerFolderCap::Unlimited,
+            volume_id: None,
+        };
+        store.save_sync_device(&device).expect("save device");
+        store
+            .save_device_artist_selection(&device.id, &["Artist A".to_owned()])
+            .expect("save artist selection");
+        store
+            .save_track(library_track(1, "artist-track.mp3", "Artist A"))
+            .expect("save selected track");
+        store
+            .save_track(library_track(2, "other-track.mp3", "Other Artist"))
+            .expect("save unselected track");
+
+        let request = build_worker_sync_request(
+            &store,
+            &DeviceMountIdentity {
+                device_id: device.id,
+                target: DeviceTarget::Filesystem {
+                    mount_path: "/tmp/device".into(),
+                },
+                volume_id: None,
+            },
+            Some(temp.path()),
+            std::time::UNIX_EPOCH,
+            "2026-06-14".to_owned(),
+            false,
+            &|| false,
+        )
+        .expect("request result")
+        .expect("not cancelled");
+
+        assert_eq!(request.tracks.len(), 1);
+        assert_eq!(request.playlists.len(), 1);
+        assert_eq!(request.playlists[0].name, "Artist A");
+        assert_eq!(request.playlists[0].track_indices, vec![0]);
+        assert_eq!(
+            request.tracks[0].track_id,
+            TrackId::new(1).expect("track id")
+        );
     }
 
     #[test]

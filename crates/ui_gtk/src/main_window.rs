@@ -11,9 +11,9 @@ use std::{
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use sustain_app_runtime::{
-    CdImportProgress, CdImportRequest, CdImportResult, MetadataChange, PlaybackCommand,
-    PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState, Playlist,
-    PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
+    CdImportProgress, CdImportRequest, CdImportResult, DeviceTarget, MetadataChange,
+    PlaybackCommand, PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState,
+    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
     TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, UiSettings,
     UiSidebarSelection, normalize_query,
 };
@@ -1088,6 +1088,12 @@ fn install_devices_section(context: DevicesSectionContext<'_>) {
     }
     {
         let runtime = runtime.clone();
+        sidebar.set_device_eject_callback(Rc::new(move |device: ConnectedDevice| {
+            eject_usb_device(&device, &runtime);
+        }));
+    }
+    {
+        let runtime = runtime.clone();
         sidebar.set_cd_eject_callback(Rc::new(move |snapshot: TocSnapshot| {
             eject_optical_disc(&snapshot.device_path, &runtime);
         }));
@@ -1285,6 +1291,68 @@ fn eject_optical_disc(device_path: &std::path::Path, runtime: &SharedRuntime) {
             }
         },
     );
+}
+
+/// Eject or unmount a mounted USB sync target through GIO. Eject is
+/// preferred when the backend exposes it; otherwise unmount keeps the user
+/// action useful for ordinary removable filesystems whose desktop stack only
+/// advertises unmount. Failures go through the notification lane.
+fn eject_usb_device(device: &ConnectedDevice, runtime: &SharedRuntime) {
+    let DeviceTarget::Filesystem { mount_path } = &device.target else {
+        return;
+    };
+    let monitor = gio::VolumeMonitor::get();
+    let Some(mount) = monitor
+        .mounts()
+        .into_iter()
+        .find(|mount| mount.root().path().as_deref() == Some(mount_path.as_path()))
+    else {
+        runtime.borrow_mut().push_ephemeral_notification(
+            sustain_app_runtime::NotificationCategory::DeviceSync,
+            sustain_app_runtime::NotificationSeverity::Warning,
+            "Could not find the mounted device to eject.".to_owned(),
+        );
+        return;
+    };
+
+    let runtime = runtime.clone();
+    if mount.can_eject() {
+        mount.eject_with_operation(
+            gio::MountUnmountFlags::NONE,
+            Some(&gio::MountOperation::new()),
+            gio::Cancellable::NONE,
+            move |result| {
+                if result.is_err() {
+                    runtime.borrow_mut().push_ephemeral_notification(
+                        sustain_app_runtime::NotificationCategory::DeviceSync,
+                        sustain_app_runtime::NotificationSeverity::Warning,
+                        "Could not eject the device.".to_owned(),
+                    );
+                }
+            },
+        );
+    } else if mount.can_unmount() {
+        mount.unmount_with_operation(
+            gio::MountUnmountFlags::NONE,
+            Some(&gio::MountOperation::new()),
+            gio::Cancellable::NONE,
+            move |result| {
+                if result.is_err() {
+                    runtime.borrow_mut().push_ephemeral_notification(
+                        sustain_app_runtime::NotificationCategory::DeviceSync,
+                        sustain_app_runtime::NotificationSeverity::Warning,
+                        "Could not unmount the device.".to_owned(),
+                    );
+                }
+            },
+        );
+    } else {
+        runtime.borrow_mut().push_ephemeral_notification(
+            sustain_app_runtime::NotificationCategory::DeviceSync,
+            sustain_app_runtime::NotificationSeverity::Warning,
+            "This device cannot be ejected by the desktop.".to_owned(),
+        );
+    }
 }
 
 /// One event from the CD-import worker thread.

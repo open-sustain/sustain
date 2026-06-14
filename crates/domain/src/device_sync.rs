@@ -6,9 +6,10 @@
 //!
 //! These are the facts Sustain owns and persists about a device: its
 //! stable identity, the on-drive layout to write, and which playlists
-//! were ticked for it. The device only carries half the story (which
-//! files are present); the selection lives here, keyed by a Sustain-
-//! generated id stored in a `.sustain-device-id` marker on the device.
+//! and artists were ticked for it. The device only carries half the story
+//! (which files are present); the selection lives here, keyed by a
+//! Sustain-generated id stored in a `.sustain-device-id` marker on the
+//! device.
 //! The sync engine, identity probing, and on-drive writers live in the
 //! `sustain-device-sync` crate; this module is pure data so the storage
 //! layer can persist it without pulling in that machinery.
@@ -266,8 +267,8 @@ impl DeviceKind {
 }
 
 /// A device Sustain knows about: its identity plus the saved per-device
-/// configuration. The ticked playlists are stored separately (see
-/// [`crate::PlaylistItem`]); this is everything else.
+/// configuration. The ticked playlists and artists are stored separately;
+/// this is everything else.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyncDevice {
     pub id: SyncDeviceId,
@@ -301,6 +302,10 @@ pub struct SyncManifestEntry {
 /// A device's saved playlist selection: the ticked playlists and smart
 /// playlists, in display order. Folders are not selectable for sync.
 pub type DeviceSelection = Vec<PlaylistItem>;
+
+/// A device's saved artist selection, in display order. Artist selections
+/// resolve dynamically against the current library at sync time.
+pub type DeviceArtistSelection = Vec<String>;
 
 #[cfg(test)]
 mod tests {

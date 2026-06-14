@@ -10,8 +10,8 @@ use gtk::prelude::*;
 use gtk::{gdk, glib};
 
 use sustain_app_runtime::{
-    AnalysisCapability, AnalysisRunRequest, ConnectedDevice, DeviceKind, OnlineRunRequest,
-    PlaylistItem, SmartPlaylistId, TocSnapshot, TrackId,
+    AnalysisCapability, AnalysisRunRequest, ConnectedDevice, DeviceKind, DeviceTarget,
+    OnlineRunRequest, PlaylistItem, SmartPlaylistId, TocSnapshot, TrackId,
 };
 
 use super::{
@@ -48,6 +48,10 @@ pub(crate) type SidebarOnlineRunCallback = Rc<dyn Fn(PlaylistItem, OnlineRunRequ
 /// Devices section. Carries the connected device so the panel can render
 /// and sync it.
 pub(crate) type SidebarDeviceSelectedCallback = Rc<dyn Fn(ConnectedDevice)>;
+/// Invoked when the user clicks the eject control on a mounted USB device
+/// row. Carries the connected device so the caller can resolve the GIO
+/// mount and request a desktop eject/unmount.
+pub(crate) type SidebarDeviceEjectCallback = Rc<dyn Fn(ConnectedDevice)>;
 /// Invoked when the user clicks an inserted-audio-CD row under the Devices
 /// section. Carries the probed disc snapshot so the CD-import page can
 /// render it.
@@ -148,6 +152,7 @@ pub(crate) struct PlaylistSidebar {
     /// Container holding the dynamically-rebuilt Devices rows.
     devices_body: gtk::Box,
     on_device_selected: Rc<RefCell<Option<SidebarDeviceSelectedCallback>>>,
+    on_device_eject: Rc<RefCell<Option<SidebarDeviceEjectCallback>>>,
     on_cd_selected: Rc<RefCell<Option<SidebarCdSelectedCallback>>>,
     on_cd_eject: Rc<RefCell<Option<SidebarCdEjectCallback>>>,
     on_duplicates_selected: Rc<RefCell<Option<SidebarDuplicatesSelectedCallback>>>,
@@ -202,6 +207,8 @@ impl PlaylistSidebar {
         devices_body.set_visible(false);
         root.append(&devices_body);
         let on_device_selected: Rc<RefCell<Option<SidebarDeviceSelectedCallback>>> =
+            Rc::new(RefCell::new(None));
+        let on_device_eject: Rc<RefCell<Option<SidebarDeviceEjectCallback>>> =
             Rc::new(RefCell::new(None));
         let on_cd_selected: Rc<RefCell<Option<SidebarCdSelectedCallback>>> =
             Rc::new(RefCell::new(None));
@@ -375,6 +382,7 @@ impl PlaylistSidebar {
             devices_header,
             devices_body,
             on_device_selected,
+            on_device_eject,
             on_cd_selected,
             on_cd_eject,
             on_duplicates_selected,
@@ -455,6 +463,10 @@ impl PlaylistSidebar {
         self.on_device_selected.replace(Some(callback));
     }
 
+    pub(crate) fn set_device_eject_callback(&self, callback: SidebarDeviceEjectCallback) {
+        self.on_device_eject.replace(Some(callback));
+    }
+
     pub(crate) fn set_cd_selected_callback(&self, callback: SidebarCdSelectedCallback) {
         self.on_cd_selected.replace(Some(callback));
     }
@@ -510,7 +522,22 @@ impl PlaylistSidebar {
                         DeviceKind::Android => "phone-symbolic",
                         DeviceKind::UsbDrive => "drive-removable-media-symbolic",
                     };
-                    let row = build_standalone_sidebar_row(&device.label, icon);
+                    let row_parts = build_standalone_sidebar_row_parts(&device.label, icon);
+                    let row = row_parts.row;
+                    if device.kind == DeviceKind::UsbDrive
+                        && matches!(&device.target, DeviceTarget::Filesystem { .. })
+                    {
+                        let eject = sidebar_eject_button({
+                            let sidebar = self.clone();
+                            let device = device.clone();
+                            move || {
+                                if let Some(callback) = sidebar.on_device_eject.borrow().as_ref() {
+                                    callback(device.clone());
+                                }
+                            }
+                        });
+                        row_parts.content.append(&eject);
+                    }
                     let sidebar = self.clone();
                     let row_widget = row.clone().upcast::<gtk::Widget>();
                     let device = device.clone();
@@ -530,33 +557,15 @@ impl PlaylistSidebar {
                     let row_parts =
                         build_standalone_sidebar_row_parts("Audio CD", "media-optical-symbolic");
                     let row = row_parts.row;
-                    // Trailing eject control. A flat icon button so it reads
-                    // as a per-row affordance, not a primary action. Clicking
-                    // it claims the press (GtkButton handles the click), so the
-                    // row's select gesture does not also fire.
-                    let eject = gtk::Button::from_icon_name("media-eject-symbolic");
-                    eject.add_css_class("flat");
-                    eject.add_css_class("playlist-sidebar-cd-eject");
-                    eject.set_tooltip_text(Some("Eject"));
-                    eject.set_valign(gtk::Align::Center);
-                    // Drive the eject from a CAPTURE-phase gesture that claims
-                    // the press before it reaches the row's bubble-phase select
-                    // gesture — otherwise the click falls through and merely
-                    // re-opens the CD page instead of ejecting.
-                    {
-                        let gesture = gtk::GestureClick::new();
-                        gesture.set_button(gdk::BUTTON_PRIMARY);
-                        gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+                    let eject = sidebar_eject_button({
                         let sidebar = self.clone();
                         let snapshot = snapshot.clone();
-                        gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
-                            gesture.set_state(gtk::EventSequenceState::Claimed);
+                        move || {
                             if let Some(callback) = sidebar.on_cd_eject.borrow().as_ref() {
                                 callback(snapshot.clone());
                             }
-                        });
-                        eject.add_controller(gesture);
-                    }
+                        }
+                    });
                     row_parts.content.append(&eject);
                     let sidebar = self.clone();
                     let row_widget = row.clone().upcast::<gtk::Widget>();
@@ -794,6 +803,27 @@ fn build_standalone_sidebar_row_parts(
     row.append(&content);
 
     StandaloneSidebarRowParts { row, content }
+}
+
+/// Trailing eject control for transient device rows. It is a flat per-row
+/// affordance and claims the press before the row's own select gesture, so
+/// clicking eject never also opens the device/CD page.
+fn sidebar_eject_button(on_pressed: impl Fn() + 'static) -> gtk::Button {
+    let eject = gtk::Button::from_icon_name("media-eject-symbolic");
+    eject.add_css_class("flat");
+    eject.add_css_class("playlist-sidebar-eject");
+    eject.set_tooltip_text(Some("Eject"));
+    eject.set_valign(gtk::Align::Center);
+
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_PRIMARY);
+    gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+    gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        on_pressed();
+    });
+    eject.add_controller(gesture);
+    eject
 }
 
 /// Builds a non-interactive sidebar section header, used for sections that

@@ -325,6 +325,16 @@ CREATE TABLE IF NOT EXISTS sync_device_playlists (
     FOREIGN KEY (device_id) REFERENCES sync_devices(id) ON DELETE CASCADE
 );
 
+-- Ticked artists per device, in display order. Artist names resolve
+-- dynamically against the current SQLite library at plan/sync time.
+CREATE TABLE IF NOT EXISTS sync_device_artists (
+    device_id TEXT NOT NULL,
+    artist    TEXT NOT NULL,
+    position  INTEGER NOT NULL,
+    PRIMARY KEY (device_id, artist),
+    FOREIGN KEY (device_id) REFERENCES sync_devices(id) ON DELETE CASCADE
+);
+
 -- What Sustain last wrote to a device: track -> on-device path + content
 -- fingerprint. Drives the incremental differ. A track may have several
 -- rows (the folder-per-playlist layout copies it once per playlist), so
@@ -417,6 +427,19 @@ SET
             END
         ELSE composer_sort
     END;
+"#;
+
+// Migration 4 adds artist selections as a sibling sync dimension next to
+// playlists. Existing device configs, playlist selections, and manifests
+// remain untouched; every device starts with an empty artist selection.
+pub(super) const ADD_SYNC_DEVICE_ARTISTS_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS sync_device_artists (
+    device_id TEXT NOT NULL,
+    artist    TEXT NOT NULL,
+    position  INTEGER NOT NULL,
+    PRIMARY KEY (device_id, artist),
+    FOREIGN KEY (device_id) REFERENCES sync_devices(id) ON DELETE CASCADE
+);
 "#;
 
 #[derive(Clone, Copy)]

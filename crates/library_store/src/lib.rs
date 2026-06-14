@@ -588,6 +588,16 @@ pub trait LibraryStore: Send + Sync {
     /// Load a device's ticked-playlist selection.
     fn device_selection(&self, id: &SyncDeviceId) -> StoreResult<Vec<PlaylistItem>>;
 
+    /// Replace a device's ticked-artist selection (in display order).
+    fn save_device_artist_selection(
+        &self,
+        id: &SyncDeviceId,
+        artists: &[String],
+    ) -> StoreResult<()>;
+
+    /// Load a device's ticked-artist selection.
+    fn device_artist_selection(&self, id: &SyncDeviceId) -> StoreResult<Vec<String>>;
+
     /// Replace a device's on-device manifest (what was last written).
     fn save_device_manifest(
         &self,
