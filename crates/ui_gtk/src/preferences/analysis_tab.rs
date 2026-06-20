@@ -232,7 +232,7 @@ fn build_bpm_range_section(command_controller: SharedCommandController) -> gtk::
     let container = gtk::Box::new(gtk::Orientation::Vertical, 4);
     container.add_css_class("preference-slider-row");
 
-    let header = gtk::Label::new(Some("BPM detection range"));
+    let header = gtk::Label::new(Some("BPM range"));
     header.set_xalign(0.0);
     container.append(&header);
 
@@ -243,7 +243,8 @@ fn build_bpm_range_section(command_controller: SharedCommandController) -> gtk::
         .analysis
         .bpm_range;
 
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 32);
+    row.set_halign(gtk::Align::Center);
     let min_spin = labelled_bpm_spin(
         &row,
         "Minimum",
@@ -261,8 +262,9 @@ fn build_bpm_range_section(command_controller: SharedCommandController) -> gtk::
     container.append(&row);
 
     let caption = gtk::Label::new(Some(
-        "The tempo window BPM detection folds octaves into. Widen it for very slow or \
-         fast material; narrow it to bias the fold. Applies to background and manual analysis.",
+        "Sets the tempo window Sustain uses when folding half-time and double-time detections. \
+         Widen it for very slow or fast music; narrow it if results tend to land at half or \
+         double the expected tempo.",
     ));
     caption.add_css_class("preference-helper");
     caption.set_xalign(0.0);
@@ -281,12 +283,14 @@ fn build_bpm_range_section(command_controller: SharedCommandController) -> gtk::
 /// spin button. Whole-BPM only (`set_digits(0)`); GTK clamps entry to
 /// `[lo, hi]`.
 fn labelled_bpm_spin(row: &gtk::Box, label: &str, lo: f64, hi: f64, value: f64) -> gtk::SpinButton {
+    let group = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let caption = gtk::Label::new(Some(label));
     let spin = gtk::SpinButton::with_range(lo, hi, 1.0);
     spin.set_digits(0);
     spin.set_value(value);
-    row.append(&caption);
-    row.append(&spin);
+    group.append(&caption);
+    group.append(&spin);
+    row.append(&group);
     spin
 }
 
