@@ -71,6 +71,10 @@ impl ApplicationRuntime {
             existing_tracks: self.library_tracks.clone(),
             library_store,
             metadata_service,
+            repair_malformed_tags: matches!(
+                self.settings.library.management_mode,
+                sustain_domain::LibraryManagementMode::CopyAddedFilesIntoLibrary
+            ),
             cancellation_requested,
         })
     }
@@ -78,6 +82,7 @@ impl ApplicationRuntime {
     pub fn apply_library_scan_result(&mut self, result: LibraryScanResult) {
         let summary = result.summary;
         self.last_scan_summary = Some(summary.clone());
+        self.last_scan_failures = result.failures;
         self.library_tracks = result.tracks;
         self.rebuild_search_index();
         self.refresh_playback_queue_track_ids();
@@ -115,6 +120,7 @@ impl ApplicationRuntime {
 
     pub fn fail_library_scan(&mut self, error: ApplicationRuntimeError) {
         self.library_scan_cancellation = None;
+        self.last_scan_failures.clear();
         self.background_task_status = crate::BackgroundTaskStatus::Idle;
         if let Some(id) = self.library_scan_notification_id.take() {
             self.dismiss_notification(id);
@@ -130,6 +136,7 @@ impl ApplicationRuntime {
 pub fn run_library_scan_task(task: LibraryScanTask) -> ApplicationRuntimeResult<LibraryScanResult> {
     let known_fingerprints = existing_scan_fingerprints(&task.existing_tracks);
     let scan = LibraryScanner::new(task.metadata_service.as_ref())
+        .with_malformed_tag_repair(task.repair_malformed_tags)
         .scan(
             &task.library_path,
             task.cancellation_requested.as_ref(),
@@ -154,6 +161,7 @@ pub fn run_library_scan_task(task: LibraryScanTask) -> ApplicationRuntimeResult<
     Ok(LibraryScanResult {
         tracks,
         summary: result.summary,
+        failures: result.failures,
     })
 }
 
@@ -172,10 +180,11 @@ pub(crate) fn reconcile_library_scan_with_probe(
     probe: impl Fn(&Path) -> FilePresence,
 ) -> ApplicationRuntimeResult<LibraryScanResult> {
     let skipped_unsupported_files = scan.skipped_unsupported_files;
-    let failed_files = scan.failures.len();
+    let failures = scan.failures;
+    let failed_files = failures.len();
     let cancelled = scan.cancelled;
     let complete_for_missing_reconciliation =
-        scan.complete_for_missing_reconciliation && !cancelled && scan.failures.is_empty();
+        scan.complete_for_missing_reconciliation && !cancelled && failures.is_empty();
     let scanned_tracks = scan.tracks;
     let unchanged_paths = scan.unchanged;
     let mut tracks_by_path = tracks_by_path(existing_tracks.clone());
@@ -258,6 +267,7 @@ pub(crate) fn reconcile_library_scan_with_probe(
             cancelled,
         },
         tracks,
+        failures,
     })
 }
 

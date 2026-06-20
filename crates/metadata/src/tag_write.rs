@@ -70,6 +70,239 @@ pub(crate) fn repair_invalid_id3v2_languages(tag: &mut Tag) {
     }
 }
 
+pub(crate) fn repair_malformed_tag_read_error(
+    path: &Path,
+    repair: MetadataRepair,
+) -> MetadataResult<bool> {
+    if audio_format_from_path(path) != Ok(AudioFormat::Mp3) {
+        return Ok(false);
+    }
+
+    let bytes = fs::read(path).map_err(|_| MetadataError::ReadFailed)?;
+    let Some(repaired) = repair_id3v2_bytes(&bytes, repair)? else {
+        return Ok(false);
+    };
+    atomic_write_via_rename(path, |temp_path| {
+        fs::write(temp_path, &repaired).map_err(|_| MetadataError::WriteFailed)
+    })?;
+    Ok(true)
+}
+
+fn repair_id3v2_bytes(bytes: &[u8], repair: MetadataRepair) -> MetadataResult<Option<Vec<u8>>> {
+    let Some(header) = Id3v2RawHeader::parse(bytes)? else {
+        return Ok(None);
+    };
+    let tag_end = header
+        .content_offset
+        .checked_add(header.content_size)
+        .ok_or(MetadataError::ReadFailed)?;
+    if tag_end > bytes.len() {
+        return Err(MetadataError::ReadFailed);
+    }
+
+    let mut frames = Vec::with_capacity(header.content_size);
+    let mut offset = header.content_offset;
+    let mut changed = false;
+    while offset < tag_end {
+        let remaining = &bytes[offset..tag_end];
+        if remaining.iter().all(|byte| *byte == 0) {
+            break;
+        }
+        if remaining.len() < ID3V2_FRAME_HEADER_SIZE {
+            return Ok(None);
+        }
+
+        let frame_header = &remaining[..ID3V2_FRAME_HEADER_SIZE];
+        let Some(frame_id) = Id3v2FrameId::parse(&frame_header[..4]) else {
+            return Ok(None);
+        };
+        let frame_size = match header.version {
+            Id3v2RawVersion::V23 => u32::from_be_bytes([
+                frame_header[4],
+                frame_header[5],
+                frame_header[6],
+                frame_header[7],
+            ]) as usize,
+            Id3v2RawVersion::V24 => parse_synchsafe_u32(&frame_header[4..8])?,
+        };
+        let frame_end = offset
+            .checked_add(ID3V2_FRAME_HEADER_SIZE)
+            .and_then(|value| value.checked_add(frame_size))
+            .ok_or(MetadataError::ReadFailed)?;
+        if frame_size == 0 || frame_end > tag_end {
+            return Ok(None);
+        }
+        let frame = &bytes[offset..frame_end];
+        let content = &frame[ID3V2_FRAME_HEADER_SIZE..];
+        if should_remove_frame_for_repair(frame_id, content, header.version, repair) {
+            changed = true;
+        } else {
+            frames.extend_from_slice(frame);
+        }
+        offset = frame_end;
+    }
+
+    if !changed {
+        return Ok(None);
+    }
+    if frames.len() > MAX_ID3V2_SYNCHSAFE_SIZE {
+        return Err(MetadataError::WriteFailed);
+    }
+
+    let mut repaired =
+        Vec::with_capacity(bytes.len() - (tag_end - header.content_offset) + frames.len());
+    repaired.extend_from_slice(&bytes[..6]);
+    repaired.extend_from_slice(&synchsafe_u32(frames.len() as u32));
+    repaired.extend_from_slice(&frames);
+    repaired.extend_from_slice(&bytes[tag_end..]);
+    Ok(Some(repaired))
+}
+
+fn should_remove_frame_for_repair(
+    frame_id: Id3v2FrameId,
+    content: &[u8],
+    version: Id3v2RawVersion,
+    repair: MetadataRepair,
+) -> bool {
+    match repair {
+        MetadataRepair::MalformedTag(MalformedTagError::BadTimestamp) => {
+            is_id3v2_timestamp_frame(frame_id, version)
+        }
+        MetadataRepair::MalformedTag(MalformedTagError::TextDecode) => {
+            is_malformed_optional_text_frame(frame_id, content)
+        }
+    }
+}
+
+fn is_id3v2_timestamp_frame(frame_id: Id3v2FrameId, version: Id3v2RawVersion) -> bool {
+    match frame_id.as_str() {
+        "TDRC" | "TDOR" | "TDRL" | "TDTG" | "TDEN" => true,
+        "TYER" | "TDAT" | "TIME" | "TRDA" | "TORY" if version == Id3v2RawVersion::V23 => true,
+        _ => false,
+    }
+}
+
+fn is_malformed_optional_text_frame(frame_id: Id3v2FrameId, content: &[u8]) -> bool {
+    let Some((&encoding, payload)) = content.split_first() else {
+        return frame_id.is_text_information() || frame_id.is_language_text();
+    };
+    if !matches!(encoding, 0x00..=0x03) {
+        return frame_id.is_text_information() || frame_id.is_language_text();
+    }
+
+    let utf16_payload = match frame_id.as_str() {
+        _ if frame_id.is_text_information() => payload,
+        "COMM" | "USLT" if payload.len() >= 3 => &payload[3..],
+        "COMM" | "USLT" => return true,
+        _ => return false,
+    };
+    if !matches!(encoding, 0x01 | 0x02) {
+        return false;
+    }
+    utf16_payload.len() < 2 || utf16_payload.len() % 2 != 0
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Id3v2RawVersion {
+    V23,
+    V24,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Id3v2RawHeader {
+    version: Id3v2RawVersion,
+    content_offset: usize,
+    content_size: usize,
+}
+
+impl Id3v2RawHeader {
+    fn parse(bytes: &[u8]) -> MetadataResult<Option<Self>> {
+        if bytes.len() < ID3V2_HEADER_SIZE || &bytes[..3] != b"ID3" {
+            return Ok(None);
+        }
+        let version = match bytes[3] {
+            3 => Id3v2RawVersion::V23,
+            4 => Id3v2RawVersion::V24,
+            _ => return Ok(None),
+        };
+        let flags = bytes[5];
+        if flags != 0 {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            version,
+            content_offset: ID3V2_HEADER_SIZE,
+            content_size: parse_synchsafe_u32(&bytes[6..10])?,
+        }))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Id3v2FrameId([u8; 4]);
+
+impl Id3v2FrameId {
+    fn parse(bytes: &[u8]) -> Option<Self> {
+        let id: [u8; 4] = bytes.try_into().ok()?;
+        if id
+            .iter()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        {
+            Some(Self(id))
+        } else {
+            None
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match &self.0 {
+            b"TDRC" => "TDRC",
+            b"TDOR" => "TDOR",
+            b"TDRL" => "TDRL",
+            b"TDTG" => "TDTG",
+            b"TDEN" => "TDEN",
+            b"TYER" => "TYER",
+            b"TDAT" => "TDAT",
+            b"TIME" => "TIME",
+            b"TRDA" => "TRDA",
+            b"TORY" => "TORY",
+            b"COMM" => "COMM",
+            b"USLT" => "USLT",
+            _ => "",
+        }
+    }
+
+    fn is_text_information(self) -> bool {
+        self.0[0] == b'T'
+    }
+
+    fn is_language_text(self) -> bool {
+        matches!(&self.0, b"COMM" | b"USLT")
+    }
+}
+
+fn parse_synchsafe_u32(bytes: &[u8]) -> MetadataResult<usize> {
+    if bytes.len() != 4 || bytes.iter().any(|byte| byte & 0x80 != 0) {
+        return Err(MetadataError::ReadFailed);
+    }
+    let value = bytes
+        .iter()
+        .fold(0usize, |value, byte| (value << 7) | usize::from(*byte));
+    Ok(value)
+}
+
+fn synchsafe_u32(mut value: u32) -> [u8; 4] {
+    let mut bytes = [0; 4];
+    for byte in bytes.iter_mut().rev() {
+        *byte = (value & 0x7f) as u8;
+        value >>= 7;
+    }
+    bytes
+}
+
+const ID3V2_HEADER_SIZE: usize = 10;
+const ID3V2_FRAME_HEADER_SIZE: usize = 10;
+const MAX_ID3V2_SYNCHSAFE_SIZE: usize = 0x0fff_ffff;
+
 // Persists `tagged_file` over `path` via atomic replace-by-rename: the
 // new bytes land in an exclusive sibling temp file, retain the source
 // filesystem metadata, get fsync'd to disk, atomically replace the

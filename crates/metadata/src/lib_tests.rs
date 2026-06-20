@@ -21,11 +21,12 @@ use sustain_domain::{FieldChange, MetadataChange, TrackMetadata};
 use super::read::{parse_bpm, parse_flag, star_rating_value};
 use super::scan::{ScanFilesystem, StdScanFilesystem};
 use super::{
-    AudioFormat, InitialTags, LibraryScanner, LoftyMetadataService, MetadataError, MetadataResult,
-    MetadataService, Rating, ScanFingerprint, apply_bool_change, apply_number_change,
-    apply_text_change, apply_year_change, atomic_write_via_rename, audio_format_from_path,
-    bpm_item_key, hash_file_content, lyrics_item_key, popularimeter_from_rating,
-    repair_invalid_id3v2_languages, valid_embedded_picture,
+    AudioFormat, InitialTagRead, InitialTags, LibraryScanner, LoftyMetadataService,
+    MalformedTagError, MetadataError, MetadataRepair, MetadataResult, MetadataService, Rating,
+    ScanFingerprint, apply_bool_change, apply_number_change, apply_text_change, apply_year_change,
+    atomic_write_via_rename, audio_format_from_path, bpm_item_key, hash_file_content,
+    lyrics_item_key, popularimeter_from_rating, repair_invalid_id3v2_languages,
+    valid_embedded_picture,
 };
 use sustain_domain::TrackRelativePath;
 
@@ -693,6 +694,160 @@ fn dump_id3v2(tag: Tag) -> Vec<u8> {
     bytes
 }
 
+#[test]
+fn initial_tag_read_recovers_and_repairs_bad_id3v2_timestamp() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("bad timestamp.mp3");
+    fs::write(
+        &path,
+        mp3_with_id3v2_4_frames(&[
+            id3v2_4_text_frame("TIT2", "Good Title"),
+            id3v2_4_text_frame("TDRC", "20XX"),
+        ]),
+    )
+    .expect("write fixture");
+
+    let read = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&path)
+        .expect("recover malformed timestamp");
+    assert_eq!(
+        read.repair,
+        Some(MetadataRepair::MalformedTag(
+            MalformedTagError::BadTimestamp
+        ))
+    );
+    assert_eq!(read.tags.metadata.title.as_deref(), Some("bad timestamp"));
+    assert!(read.tags.metadata.duration.is_some());
+
+    assert_eq!(
+        LoftyMetadataService.repair_malformed_tags(&path, read.repair.expect("repair diagnostic")),
+        Ok(true)
+    );
+    let repaired = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&path)
+        .expect("read repaired file");
+    assert_eq!(repaired.repair, None);
+    assert_eq!(repaired.tags.metadata.title.as_deref(), Some("Good Title"));
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn initial_tag_read_recovers_and_repairs_bad_utf16_text_frame() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("bad utf16.mp3");
+    fs::write(
+        &path,
+        mp3_with_id3v2_3_frames(&[
+            id3v2_3_frame("TIT2", &[0x01, 0xff]),
+            id3v2_3_text_frame("TPE1", "Preserved Artist"),
+        ]),
+    )
+    .expect("write fixture");
+
+    let read = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&path)
+        .expect("recover malformed utf16");
+    assert_eq!(
+        read.repair,
+        Some(MetadataRepair::MalformedTag(MalformedTagError::TextDecode))
+    );
+    assert_eq!(read.tags.metadata.title.as_deref(), Some("bad utf16"));
+    assert_eq!(read.tags.metadata.artist, None);
+
+    assert_eq!(
+        LoftyMetadataService.repair_malformed_tags(&path, read.repair.expect("repair diagnostic")),
+        Ok(true)
+    );
+    let repaired = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&path)
+        .expect("read repaired file");
+    assert_eq!(repaired.repair, None);
+    assert_eq!(repaired.tags.metadata.title.as_deref(), Some("bad utf16"));
+    assert_eq!(
+        repaired.tags.metadata.artist.as_deref(),
+        Some("Preserved Artist")
+    );
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn initial_tag_read_reports_supported_container_extension_mismatch() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("wrong.flac");
+    fs::write(
+        &path,
+        mp3_with_id3v2_3_frames(&[id3v2_3_text_frame("TIT2", "Title")]),
+    )
+    .expect("write fixture");
+
+    assert_eq!(
+        LoftyMetadataService.read_initial_tags_with_diagnostics(&path),
+        Err(MetadataError::ContainerFormatMismatch {
+            expected: AudioFormat::Flac,
+            detected: AudioFormat::Mp3,
+        })
+    );
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+fn id3v2_3_text_frame(id: &str, text: &str) -> Vec<u8> {
+    let mut content = vec![0x00];
+    content.extend_from_slice(text.as_bytes());
+    id3v2_3_frame(id, &content)
+}
+
+fn id3v2_3_frame(id: &str, content: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::new();
+    frame.extend_from_slice(id.as_bytes());
+    frame.extend_from_slice(&(content.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&[0x00, 0x00]);
+    frame.extend_from_slice(content);
+    frame
+}
+
+fn mp3_with_id3v2_3_frames(frames: &[Vec<u8>]) -> Vec<u8> {
+    let body = frames.concat();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"ID3");
+    bytes.extend_from_slice(&[0x03, 0x00, 0x00]);
+    bytes.extend_from_slice(&synchsafe_size(body.len() as u32));
+    bytes.extend_from_slice(&body);
+    bytes.extend_from_slice(&mpeg_audio_frames(2));
+    bytes
+}
+
+fn id3v2_4_text_frame(id: &str, text: &str) -> Vec<u8> {
+    let mut content = vec![0x00];
+    content.extend_from_slice(text.as_bytes());
+    id3v2_4_frame(id, &content)
+}
+
+fn id3v2_4_frame(id: &str, content: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::new();
+    frame.extend_from_slice(id.as_bytes());
+    frame.extend_from_slice(&synchsafe_size(content.len() as u32));
+    frame.extend_from_slice(&[0x00, 0x00]);
+    frame.extend_from_slice(content);
+    frame
+}
+
+fn mp3_with_id3v2_4_frames(frames: &[Vec<u8>]) -> Vec<u8> {
+    let body = frames.concat();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"ID3");
+    bytes.extend_from_slice(&[0x04, 0x00, 0x00]);
+    bytes.extend_from_slice(&synchsafe_size(body.len() as u32));
+    bytes.extend_from_slice(&body);
+    bytes.extend_from_slice(&mpeg_audio_frames(2));
+    bytes
+}
+
 /// Builds a minimal but lofty-readable MP3: an ID3v2.3 tag carrying a single
 /// `COMM` frame with the given 3-byte `language` and `text`, followed by two
 /// MPEG-1 Layer III frames so lofty can read audio properties. `language` is
@@ -1068,6 +1223,67 @@ fn scanner_recurses_and_ignores_unsupported_files() {
 }
 
 #[test]
+fn scanner_repairs_malformed_tags_only_when_repair_is_enabled() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("song.mp3");
+    fs::write(
+        &path,
+        mp3_with_id3v2_4_frames(&[
+            id3v2_4_text_frame("TIT2", "Good Title"),
+            id3v2_4_text_frame("TDRC", "20XX"),
+        ]),
+    )
+    .expect("write fixture");
+
+    let observational_scan = LibraryScanner::new(&LoftyMetadataService)
+        .scan(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
+        )
+        .expect("scan without repair");
+    assert_eq!(observational_scan.tracks.len(), 1);
+    assert!(observational_scan.failures.is_empty());
+    assert_eq!(
+        observational_scan.tracks[0].metadata.title.as_deref(),
+        Some("song")
+    );
+    assert!(observational_scan.tracks[0].file_modified_at.is_some());
+    assert!(
+        LoftyMetadataService
+            .read_initial_tags_with_diagnostics(&path)
+            .expect("read still-malformed file")
+            .repair
+            .is_some()
+    );
+
+    let managed_scan = LibraryScanner::new(&LoftyMetadataService)
+        .with_malformed_tag_repair(true)
+        .scan(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
+        )
+        .expect("scan with repair");
+    assert_eq!(managed_scan.tracks.len(), 1);
+    assert!(managed_scan.failures.is_empty());
+    assert_eq!(
+        managed_scan.tracks[0].metadata.title.as_deref(),
+        Some("Good Title")
+    );
+    assert!(managed_scan.tracks[0].file_modified_at.is_some());
+
+    let repaired = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&path)
+        .expect("read repaired file");
+    assert_eq!(repaired.repair, None);
+    assert_eq!(repaired.tags.metadata.title.as_deref(), Some("Good Title"));
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
 fn scanner_follows_symlinked_tracks_and_folders() {
     let root = unique_test_directory();
     let targets = unique_test_directory();
@@ -1410,6 +1626,33 @@ fn scanner_reparses_when_only_mtime_differs() {
     fs::remove_dir_all(root).expect("remove test directory");
 }
 
+#[test]
+fn scanner_retries_later_when_repair_does_not_restore_full_tag_reading() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("song.mp3");
+    fs::write(&path, b"audio").expect("write file");
+
+    let scan = LibraryScanner::new(&IncompleteRepairMetadataService)
+        .with_malformed_tag_repair(true)
+        .scan(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
+        )
+        .expect("scan test directory");
+
+    assert_eq!(scan.tracks.len(), 1);
+    assert!(scan.failures.is_empty());
+    assert_eq!(scan.tracks[0].metadata.title.as_deref(), Some("Fallback"));
+    assert_eq!(
+        scan.tracks[0].file_modified_at, None,
+        "an incomplete repair must not be fingerprinted as clean"
+    );
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
 #[derive(Default)]
 struct FakeMetadataService {
     tracks: BTreeMap<PathBuf, TrackMetadata>,
@@ -1446,6 +1689,50 @@ impl MetadataService for FakeMetadataService {
             rating: Rating::new(4).expect("valid test rating"),
             has_embedded_artwork: false,
         })
+    }
+
+    fn write_metadata(&self, _path: &Path, _change: super::MetadataChange) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn write_rating(&self, _path: &Path, _rating: Rating) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        Ok(())
+    }
+}
+
+struct IncompleteRepairMetadataService;
+
+impl MetadataService for IncompleteRepairMetadataService {
+    fn read_initial_tags(&self, _path: &Path) -> MetadataResult<InitialTags> {
+        Err(MetadataError::ReadFailed)
+    }
+
+    fn read_initial_tags_with_diagnostics(&self, _path: &Path) -> MetadataResult<InitialTagRead> {
+        Ok(InitialTagRead {
+            tags: InitialTags {
+                metadata: TrackMetadata {
+                    title: Some("Fallback".to_owned()),
+                    ..TrackMetadata::default()
+                },
+                rating: Rating::unrated(),
+                has_embedded_artwork: false,
+            },
+            repair: Some(MetadataRepair::MalformedTag(
+                MalformedTagError::BadTimestamp,
+            )),
+        })
+    }
+
+    fn repair_malformed_tags(&self, _path: &Path, _repair: MetadataRepair) -> MetadataResult<bool> {
+        Ok(true)
     }
 
     fn write_metadata(&self, _path: &Path, _change: super::MetadataChange) -> MetadataResult<()> {

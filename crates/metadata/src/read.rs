@@ -11,16 +11,46 @@
 //! authoritative.
 
 use super::*;
+use lofty::{config::ParseOptions, error::LoftyError, file::FileType, probe::Probe};
 
 pub(crate) fn read_tags(
     path: &Path,
     backfill_title_from_filename: bool,
-) -> MetadataResult<InitialTags> {
+) -> MetadataResult<InitialTagRead> {
     audio_format_from_path(path)?;
-    let tagged_file = read_tagged_file(path)?;
+    match read_tagged_file(path) {
+        Ok(tagged_file) => Ok(InitialTagRead::clean(initial_tags_from_tagged_file(
+            path,
+            &tagged_file,
+            true,
+            backfill_title_from_filename,
+        ))),
+        Err(MetadataError::MalformedTag(kind)) => {
+            let tagged_file = read_tagged_file_without_tags(path)?;
+            Ok(InitialTagRead {
+                tags: initial_tags_from_tagged_file(
+                    path,
+                    &tagged_file,
+                    false,
+                    backfill_title_from_filename,
+                ),
+                repair: Some(MetadataRepair::MalformedTag(kind)),
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn initial_tags_from_tagged_file(
+    path: &Path,
+    tagged_file: &TaggedFile,
+    read_tags: bool,
+    backfill_title_from_filename: bool,
+) -> InitialTags {
     let tag = tagged_file
         .primary_tag()
-        .or_else(|| tagged_file.first_tag());
+        .or_else(|| tagged_file.first_tag())
+        .filter(|_| read_tags);
     let properties = tagged_file.properties();
 
     let mut metadata = TrackMetadata {
@@ -90,11 +120,11 @@ pub(crate) fn read_tags(
         .unwrap_or_else(Rating::unrated);
     let has_embedded_artwork = tag.and_then(valid_embedded_picture).is_some();
 
-    Ok(InitialTags {
+    InitialTags {
         metadata,
         rating,
         has_embedded_artwork,
-    })
+    }
 }
 
 pub(crate) fn read_tagged_file(path: &Path) -> MetadataResult<TaggedFile> {
@@ -102,7 +132,51 @@ pub(crate) fn read_tagged_file(path: &Path) -> MetadataResult<TaggedFile> {
     // every metadata entry point so worker threads and future Lofty defaults
     // cannot drift away from the application's encoded-artwork cap.
     apply_global_options(GlobalOptions::new().allocation_limit(MAX_ENCODED_ARTWORK_BYTES));
-    lofty::read_from_path(path).map_err(|_| MetadataError::ReadFailed)
+    let expected_format = audio_format_from_path(path).ok();
+    lofty::read_from_path(path)
+        .map_err(|error| metadata_error_from_lofty(path, expected_format, error))
+}
+
+fn read_tagged_file_without_tags(path: &Path) -> MetadataResult<TaggedFile> {
+    apply_global_options(GlobalOptions::new().allocation_limit(MAX_ENCODED_ARTWORK_BYTES));
+    let expected_format = audio_format_from_path(path).ok();
+    Probe::open(path)
+        .and_then(|probe| probe.options(ParseOptions::new().read_tags(false)).read())
+        .map_err(|error| metadata_error_from_lofty(path, expected_format, error))
+}
+
+fn metadata_error_from_lofty(
+    path: &Path,
+    expected_format: Option<AudioFormat>,
+    error: LoftyError,
+) -> MetadataError {
+    match error.kind() {
+        ErrorKind::BadTimestamp(_) => MetadataError::MalformedTag(MalformedTagError::BadTimestamp),
+        ErrorKind::TextDecode(_) => MetadataError::MalformedTag(MalformedTagError::TextDecode),
+        _ => container_format_mismatch(path, expected_format).unwrap_or(MetadataError::ReadFailed),
+    }
+}
+
+fn container_format_mismatch(path: &Path, expected: Option<AudioFormat>) -> Option<MetadataError> {
+    let expected = expected?;
+    let detected = detected_audio_format_from_content(path)?;
+    (detected != expected).then_some(MetadataError::ContainerFormatMismatch { expected, detected })
+}
+
+fn detected_audio_format_from_content(path: &Path) -> Option<AudioFormat> {
+    let probe = Probe::open(path).ok()?.guess_file_type().ok()?;
+    audio_format_from_lofty_file_type(probe.file_type()?)
+}
+
+fn audio_format_from_lofty_file_type(file_type: FileType) -> Option<AudioFormat> {
+    match file_type {
+        FileType::Mpeg => Some(AudioFormat::Mp3),
+        FileType::Vorbis | FileType::Opus => Some(AudioFormat::Ogg),
+        FileType::Flac => Some(AudioFormat::Flac),
+        FileType::Mp4 => Some(AudioFormat::Mp4),
+        FileType::Wav => Some(AudioFormat::Wav),
+        _ => None,
+    }
 }
 
 pub(crate) fn valid_embedded_picture(tag: &Tag) -> Option<&Picture> {

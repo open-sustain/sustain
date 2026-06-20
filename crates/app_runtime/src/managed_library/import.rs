@@ -32,8 +32,8 @@ use super::{
     capabilities::ManagedLibraryFilesystemValidator,
     file_ops::{
         VerifiedFileCopy, copy_file_to_staging_verified,
-        prune_empty_ancestor_directories_for_sources, publish_staged_file, remove_copied_files,
-        remove_staged_file,
+        prune_empty_ancestor_directories_for_sources, publish_staged_file,
+        refresh_verified_staging, remove_copied_files, remove_staged_file,
     },
 };
 
@@ -167,15 +167,16 @@ impl LibraryImportContext<'_> {
             // staging file. The staged descriptor is then rewound and hashed
             // independently before publication, retaining the read-back
             // integrity assertion without a second source read (#146).
-            let staging = match copy_file_to_staging_verified(&source_path, &library_path) {
+            let mut staging = match copy_file_to_staging_verified(&source_path, &library_path) {
                 Ok(staging) => staging,
                 Err(_) => {
                     let _ = rollback_managed_import_files(&library_path, &copied_files, None);
                     return Err(ApplicationRuntimeError::LibraryImportFailed);
                 }
             };
-            let source_size = staging.bytes_copied;
-            let content_hash = staging.content_hash.clone();
+            let original_content_hash = staging.content_hash.clone();
+            let mut source_size = staging.bytes_copied;
+            let mut content_hash = staging.content_hash.clone();
             if seen_hashes.contains(content_hash.as_str())
                 || content_index.contains_matching(source_size, &content_hash)
             {
@@ -185,14 +186,47 @@ impl LibraryImportContext<'_> {
                 continue;
             }
 
-            let initial_tags = match self.metadata_service.read_initial_tags(&source_path) {
-                Ok(tags) => tags,
+            let initial_read = match self
+                .metadata_service
+                .read_initial_tags_with_diagnostics(&source_path)
+            {
+                Ok(read) => read,
                 Err(_) => {
                     remove_staged_file(staging);
                     let _ = rollback_managed_import_files(&library_path, &copied_files, None);
                     return Err(ApplicationRuntimeError::LibraryImportFailed);
                 }
             };
+            let mut initial_tags = initial_read.tags;
+            let repaired_staging = initial_read.repair.is_some_and(|repair| {
+                match self
+                    .metadata_service
+                    .repair_malformed_tags(staging.path(), repair)
+                {
+                    Ok(true) => true,
+                    Ok(false) | Err(_) => false,
+                }
+            });
+            if repaired_staging {
+                if refresh_verified_staging(&mut staging).is_err() {
+                    remove_staged_file(staging);
+                    let _ = rollback_managed_import_files(&library_path, &copied_files, None);
+                    return Err(ApplicationRuntimeError::LibraryImportFailed);
+                }
+                source_size = staging.bytes_copied;
+                content_hash = staging.content_hash.clone();
+                if let Ok(tags) = self.metadata_service.read_initial_tags(staging.path()) {
+                    initial_tags = tags;
+                }
+                if seen_hashes.contains(content_hash.as_str())
+                    || content_index.contains_matching(source_size, &content_hash)
+                {
+                    remove_staged_file(staging);
+                    duplicate_files += 1;
+                    self.report_progress(tracks.len() + duplicate_files, total_files);
+                    continue;
+                }
+            }
             let InitialTags {
                 metadata,
                 rating,
@@ -256,6 +290,7 @@ impl LibraryImportContext<'_> {
                 // and self-heals (#71).
                 file_modified_at: None,
             });
+            seen_hashes.insert(original_content_hash.as_str().to_owned());
             seen_hashes.insert(content_hash.as_str().to_owned());
             copied_files.push(copy);
             self.report_progress(tracks.len() + duplicate_files, total_files);

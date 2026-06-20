@@ -37,7 +37,8 @@ use sustain_library_store::{
     TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
 use sustain_metadata::{
-    InitialTags, LibraryScan, MetadataChange, MetadataError, MetadataResult, ScannedTrack,
+    InitialTagRead, InitialTags, LibraryScan, MalformedTagError, MetadataChange, MetadataError,
+    MetadataRepair, MetadataResult, ScannedTrack,
 };
 use sustain_playback::NullPlaybackService;
 use sustain_settings::{SettingsError, SettingsResult, SettingsStore};
@@ -997,6 +998,67 @@ fn managed_import_copies_external_files_into_planned_library_path() {
     assert_eq!(store.operation_log(), vec!["save_tracks", "flush_durable"]);
     assert_eq!(store.save_tracks_calls(), 1);
     assert_eq!(store.flush_durable_calls(), 1);
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn managed_import_repairs_owned_staging_copy_not_external_source() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_path = external_root.join("source.flac");
+    std::fs::write(&source_path, b"audio bytes").expect("write external source");
+    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let metadata_service = Arc::new(RepairingImportMetadataService::default());
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store.clone(), metadata_service.clone())
+            .expect("library services initialize");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::AddExternalLibraryItems {
+            paths: vec![source_path.clone()]
+        }),
+        Ok(())
+    );
+
+    let repaired_paths = metadata_service.repaired_paths();
+    assert_eq!(repaired_paths.len(), 1);
+    assert_ne!(repaired_paths[0], source_path);
+    assert_eq!(repaired_paths[0].parent(), Some(library_root.as_path()));
+    assert!(
+        repaired_paths[0]
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".sustain-copy-"))
+    );
+    assert_eq!(
+        std::fs::read(&source_path).expect("source remains untouched"),
+        b"audio bytes"
+    );
+
+    let expected_destination = library_root
+        .join("Unknown Artist")
+        .join("Unknown Album")
+        .join("Repaired Track.flac");
+    assert_eq!(
+        std::fs::read(&expected_destination).expect("copied file exists"),
+        b"audio bytes"
+    );
+    assert_eq!(
+        runtime.library_tracks()[0].metadata.title.as_deref(),
+        Some("Repaired Track")
+    );
+    assert_eq!(
+        store.tracks().expect("store tracks"),
+        runtime.library_tracks()
+    );
 
     std::fs::remove_dir_all(library_root).expect("remove library root");
     std::fs::remove_dir_all(external_root).expect("remove external root");
@@ -4841,6 +4903,74 @@ impl MetadataService for TestMetadataService {
 
     fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
         Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct RepairingImportMetadataService {
+    repaired_paths: Mutex<Vec<PathBuf>>,
+}
+
+impl RepairingImportMetadataService {
+    fn repaired_paths(&self) -> Vec<PathBuf> {
+        self.repaired_paths
+            .lock()
+            .expect("repair path lock not poisoned")
+            .clone()
+    }
+}
+
+impl MetadataService for RepairingImportMetadataService {
+    fn read_initial_tags(&self, _path: &Path) -> MetadataResult<InitialTags> {
+        Ok(initial_tags_with_title("Repaired Track"))
+    }
+
+    fn read_initial_tags_with_diagnostics(&self, _path: &Path) -> MetadataResult<InitialTagRead> {
+        Ok(InitialTagRead {
+            tags: initial_tags_with_title("Fallback Track"),
+            repair: Some(MetadataRepair::MalformedTag(
+                MalformedTagError::BadTimestamp,
+            )),
+        })
+    }
+
+    fn repair_malformed_tags(&self, path: &Path, repair: MetadataRepair) -> MetadataResult<bool> {
+        assert_eq!(
+            repair,
+            MetadataRepair::MalformedTag(MalformedTagError::BadTimestamp)
+        );
+        self.repaired_paths
+            .lock()
+            .expect("repair path lock not poisoned")
+            .push(path.to_path_buf());
+        Ok(true)
+    }
+
+    fn write_metadata(&self, _path: &Path, _change: MetadataChange) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn write_rating(&self, _path: &Path, _rating: Rating) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        Ok(())
+    }
+}
+
+fn initial_tags_with_title(title: &str) -> InitialTags {
+    InitialTags {
+        metadata: TrackMetadata {
+            title: Some(title.to_owned()),
+            ..TrackMetadata::default()
+        },
+        rating: Rating::new(3).expect("valid test rating"),
+        has_embedded_artwork: false,
     }
 }
 

@@ -13,6 +13,7 @@ use super::*;
 
 pub struct LibraryScanner<'a, S: ?Sized> {
     metadata_service: &'a S,
+    repair_malformed_tags: bool,
 }
 
 pub(crate) trait ScanFilesystem {
@@ -70,7 +71,15 @@ where
     S: MetadataService + ?Sized,
 {
     pub const fn new(metadata_service: &'a S) -> Self {
-        Self { metadata_service }
+        Self {
+            metadata_service,
+            repair_malformed_tags: false,
+        }
+    }
+
+    pub const fn with_malformed_tag_repair(mut self, repair_malformed_tags: bool) -> Self {
+        self.repair_malformed_tags = repair_malformed_tags;
+        self
     }
 
     /// Walks `library_path`, parsing each supported file's tags. Files
@@ -195,40 +204,31 @@ where
                 // Read the mtime from the stat we already have — no extra
                 // syscall — so an unchanged file can be fingerprinted and
                 // skipped below (#71).
-                self.scan_file(
-                    walk.library_path,
-                    path,
-                    metadata.len(),
-                    metadata.modified().ok(),
-                    walk.known_fingerprints,
-                    walk.scan,
-                );
+                self.scan_file(path, metadata.len(), metadata.modified().ok(), walk);
             }
         }
     }
 
-    fn scan_file(
+    fn scan_file<F: ScanFilesystem>(
         &self,
-        library_path: &Path,
         path: PathBuf,
         file_size_bytes: u64,
         modified_at: Option<SystemTime>,
-        known_fingerprints: &BTreeMap<TrackRelativePath, ScanFingerprint>,
-        scan: &mut LibraryScan,
+        walk: &mut ScanWalk<'_, F>,
     ) {
         if audio_format_from_path(&path).is_err() {
-            scan.skipped_unsupported_files += 1;
+            walk.scan.skipped_unsupported_files += 1;
             return;
         }
 
         let relative_path = match path
-            .strip_prefix(library_path)
+            .strip_prefix(walk.library_path)
             .ok()
             .and_then(|path| TrackRelativePath::new(path.to_path_buf()))
         {
             Some(relative_path) => relative_path,
             None => {
-                scan.record_failure(path, MetadataError::ReadFailed);
+                walk.scan.record_failure(path, MetadataError::ReadFailed);
                 return;
             }
         };
@@ -242,9 +242,58 @@ where
         let fingerprint =
             modified_at.and_then(|modified_at| ScanFingerprint::new(file_size_bytes, modified_at));
         if let Some(fingerprint) = fingerprint {
-            if known_fingerprints.get(&relative_path) == Some(&fingerprint) {
-                scan.unchanged.push(relative_path);
+            if walk.known_fingerprints.get(&relative_path) == Some(&fingerprint) {
+                walk.scan.unchanged.push(relative_path);
                 return;
+            }
+        }
+
+        let initial_read = match self
+            .metadata_service
+            .read_initial_tags_with_diagnostics(&path)
+        {
+            Ok(read) => read,
+            Err(error) => {
+                walk.scan.record_failure(path, error);
+                return;
+            }
+        };
+
+        let repaired = self.repair_malformed_tags
+            && initial_read
+                .repair
+                .is_some_and(|repair| self.repair_file(&path, repair, walk.scan));
+
+        let (file_size_bytes, mut modified_at) = if repaired {
+            match walk.filesystem.metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_file() => {
+                    (metadata.len(), metadata.modified().ok())
+                }
+                _ => {
+                    walk.scan.record_failure(path, MetadataError::ReadFailed);
+                    return;
+                }
+            }
+        } else if self.repair_malformed_tags && initial_read.repair.is_some() {
+            // Leave the fingerprint incomplete so a managed-library scan can
+            // retry the repair later instead of permanently treating the
+            // malformed tag as an unchanged file.
+            (file_size_bytes, None)
+        } else {
+            (file_size_bytes, modified_at)
+        };
+
+        let mut tags = initial_read.tags;
+        if repaired {
+            match self.metadata_service.read_initial_tags(&path) {
+                Ok(repaired_tags) => tags = repaired_tags,
+                Err(_) => {
+                    // The tagless fallback was enough to keep the audio file
+                    // indexed, but the repair did not fully restore normal tag
+                    // parsing. Do not fingerprint the row as unchanged; a later
+                    // scan should retry the repair/read path.
+                    modified_at = None;
+                }
             }
         }
 
@@ -252,14 +301,8 @@ where
             metadata,
             rating,
             has_embedded_artwork,
-        } = match self.metadata_service.read_initial_tags(&path) {
-            Ok(tags) => tags,
-            Err(error) => {
-                scan.record_failure(path, error);
-                return;
-            }
-        };
-        scan.tracks.push(ScannedTrack {
+        } = tags;
+        walk.scan.tracks.push(ScannedTrack {
             relative_path,
             metadata,
             rating,
@@ -267,5 +310,15 @@ where
             has_embedded_artwork,
             file_modified_at: modified_at,
         });
+    }
+
+    fn repair_file(&self, path: &Path, repair: MetadataRepair, scan: &mut LibraryScan) -> bool {
+        match self.metadata_service.repair_malformed_tags(path, repair) {
+            Ok(repaired) => repaired,
+            Err(error) => {
+                scan.record_failure(path.to_path_buf(), error);
+                false
+            }
+        }
     }
 }

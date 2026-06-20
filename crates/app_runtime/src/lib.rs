@@ -41,7 +41,9 @@ pub use sustain_domain::{
     matching_tracks, normalize_sort_text, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
-pub use sustain_metadata::MetadataService;
+pub use sustain_metadata::{
+    AudioFormat, MalformedTagError, MetadataError, MetadataService, ScanFailure,
+};
 pub use sustain_metadata_remote::{
     AudioFingerprint, DiscRelease, DiscTrack, FetchedArtwork, RemoteError, RemoteMetadataService,
     RemoteResult, TrackMatch, TrackMatchSource, TrackQuery,
@@ -297,6 +299,7 @@ pub struct LibraryScanTask {
     existing_tracks: Vec<Track>,
     library_store: Arc<dyn LibraryStore>,
     metadata_service: Arc<dyn MetadataService>,
+    repair_malformed_tags: bool,
     cancellation_requested: Arc<AtomicBool>,
 }
 
@@ -322,6 +325,7 @@ pub struct LibraryConsolidationTask {
 pub struct LibraryScanResult {
     pub tracks: Vec<Track>,
     pub summary: LibraryScanSummary,
+    pub failures: Vec<ScanFailure>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -393,6 +397,7 @@ pub struct ApplicationRuntime {
     track_column_layouts: RefCell<TrackColumnLayoutCache>,
     last_scan_library_path: Option<PathBuf>,
     last_scan_summary: Option<LibraryScanSummary>,
+    last_scan_failures: Vec<ScanFailure>,
     last_library_import_summary: Option<LibraryImportSummary>,
     last_library_consolidation_summary: Option<LibraryConsolidationSummary>,
     background_task_status: BackgroundTaskStatus,
@@ -697,6 +702,7 @@ impl ApplicationRuntime {
             track_column_layouts: RefCell::new(TrackColumnLayoutCache::default()),
             last_scan_library_path: None,
             last_scan_summary: None,
+            last_scan_failures: Vec::new(),
             last_library_import_summary: None,
             last_library_consolidation_summary: None,
             background_task_status: BackgroundTaskStatus::Idle,
@@ -1805,6 +1811,10 @@ impl ApplicationRuntime {
 
     pub fn last_scan_summary(&self) -> Option<&LibraryScanSummary> {
         self.last_scan_summary.as_ref()
+    }
+
+    pub fn last_scan_failures(&self) -> &[ScanFailure] {
+        &self.last_scan_failures
     }
 
     pub fn last_library_import_summary(&self) -> Option<&LibraryImportSummary> {

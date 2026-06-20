@@ -50,6 +50,12 @@ pub(crate) struct VerifiedFileStaging {
     capability: RegularFileCapability,
 }
 
+impl VerifiedFileStaging {
+    pub(crate) fn path(&self) -> &Path {
+        self.temporary.path()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FileIdentity {
     pub(crate) device: u64,
@@ -536,6 +542,37 @@ pub(crate) fn publish_staged_file(
 
 pub(crate) fn remove_staged_file(staging: VerifiedFileStaging) {
     let _ = remove_pinned_regular_file_matching_capability(&staging.temporary, &staging.capability);
+}
+
+pub(crate) fn refresh_verified_staging(
+    staging: &mut VerifiedFileStaging,
+) -> Result<(), VerifiedFileCopyError> {
+    let capability = staging
+        .temporary
+        .open_regular_file()
+        .map_err(|_| VerifiedFileCopyError::FinalizeFailed)?;
+    if !staging
+        .temporary
+        .refers_to(&capability)
+        .map_err(|_| VerifiedFileCopyError::FinalizeFailed)?
+    {
+        return Err(VerifiedFileCopyError::FinalizeFailed);
+    }
+
+    let metadata = capability
+        .file
+        .metadata()
+        .map_err(|_| VerifiedFileCopyError::FinalizeFailed)?;
+    let mut reader = capability
+        .try_clone_file()
+        .map_err(|_| VerifiedFileCopyError::FinalizeFailed)?;
+    let content_hash =
+        hash_reader_content(&mut reader).map_err(|_| VerifiedFileCopyError::FinalizeFailed)?;
+
+    staging.bytes_copied = metadata.len();
+    staging.content_hash = content_hash;
+    staging.capability = capability;
+    Ok(())
 }
 
 fn create_temporary_copy_path(parent: &Path) -> Result<PinnedFilePath, VerifiedFileCopyError> {

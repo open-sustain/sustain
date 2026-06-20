@@ -69,8 +69,24 @@ pub enum AudioFormat {
 pub enum MetadataError {
     UnsupportedAudioFormat,
     ArtworkRejected(ArtworkPolicyError),
+    ContainerFormatMismatch {
+        expected: AudioFormat,
+        detected: AudioFormat,
+    },
+    MalformedTag(MalformedTagError),
     WriteFailed,
     ReadFailed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MalformedTagError {
+    BadTimestamp,
+    TextDecode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MetadataRepair {
+    MalformedTag(MalformedTagError),
 }
 
 pub trait MetadataService: Send + Sync {
@@ -92,6 +108,10 @@ pub trait MetadataService: Send + Sync {
     /// [`TrackMetadata`].
     fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags>;
 
+    fn read_initial_tags_with_diagnostics(&self, path: &Path) -> MetadataResult<InitialTagRead> {
+        self.read_initial_tags(path).map(InitialTagRead::clean)
+    }
+
     /// Reads the persisted tag values exactly as written, without the
     /// filename-title fallback used during import. The duplicate
     /// consolidation verifier needs this distinction: it verifies a staged
@@ -107,6 +127,9 @@ pub trait MetadataService: Send + Sync {
     fn write_rating(&self, path: &Path, rating: Rating) -> MetadataResult<()>;
     fn read_artwork(&self, path: &Path) -> MetadataResult<Option<Vec<u8>>>;
     fn write_artwork(&self, path: &Path, artwork: Option<Vec<u8>>) -> MetadataResult<()>;
+    fn repair_malformed_tags(&self, _path: &Path, _repair: MetadataRepair) -> MetadataResult<bool> {
+        Ok(false)
+    }
 }
 
 /// The tag-derived values captured the first time a file enters the
@@ -122,6 +145,18 @@ pub struct InitialTags {
     /// retriever can filter candidates with a SQL predicate instead
     /// of re-probing every file on every cycle.
     pub has_embedded_artwork: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitialTagRead {
+    pub tags: InitialTags,
+    pub repair: Option<MetadataRepair>,
+}
+
+impl InitialTagRead {
+    pub fn clean(tags: InitialTags) -> Self {
+        Self { tags, repair: None }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -233,11 +268,15 @@ pub struct LoftyMetadataService;
 
 impl MetadataService for LoftyMetadataService {
     fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
+        read_tags(path, true).map(|read| read.tags)
+    }
+
+    fn read_initial_tags_with_diagnostics(&self, path: &Path) -> MetadataResult<InitialTagRead> {
         read_tags(path, true)
     }
 
     fn read_persisted_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
-        read_tags(path, false)
+        read_tags(path, false).map(|read| read.tags)
     }
 
     fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()> {
@@ -375,6 +414,10 @@ impl MetadataService for LoftyMetadataService {
 
         repair_invalid_id3v2_languages(tag);
         atomic_save_to_path(&tagged_file, path, WriteOptions::default())
+    }
+
+    fn repair_malformed_tags(&self, path: &Path, repair: MetadataRepair) -> MetadataResult<bool> {
+        tag_write::repair_malformed_tag_read_error(path, repair)
     }
 }
 
