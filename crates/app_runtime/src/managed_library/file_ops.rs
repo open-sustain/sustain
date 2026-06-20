@@ -271,8 +271,8 @@ impl PinnedFilePath {
         static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
         for _ in 0..100 {
             let id = NEXT_TEMPORARY_ID.fetch_add(1, Ordering::Relaxed);
-            let mut file_name = self.file_name.clone();
-            file_name.push(format!(".sustain-{kind}-{}-{id}.tmp", std::process::id()));
+            let file_name =
+                OsString::from(format!(".sustain-{kind}-{}-{id}.tmp", std::process::id()));
             let candidate = Self {
                 path: self.path.with_file_name(&file_name),
                 parent: self.parent.clone(),
@@ -1238,6 +1238,27 @@ mod tests {
             Err(FileMoveError::DestinationExists)
         );
         assert!(second_source.exists());
+
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn managed_move_removes_long_valid_source_name() {
+        let root = unique_test_directory();
+        let source_name = format!("{}.flac", "a".repeat(235));
+        let source = root.join(source_name);
+        let destination = root.join("Artist").join("Album").join("01 Song.flac");
+        fs::create_dir_all(&root).expect("create test directory");
+        fs::write(&source, b"audio bytes").expect("write source");
+        let source_metadata = fs::metadata(&source).expect("source metadata");
+
+        super::move_file_without_copy_or_overwrite(&source, &destination).expect("move succeeds");
+
+        assert!(!source.exists());
+        let destination_metadata = fs::metadata(&destination).expect("destination metadata");
+        assert_eq!(source_metadata.dev(), destination_metadata.dev());
+        assert_eq!(source_metadata.ino(), destination_metadata.ino());
+        assert_no_temporary_files(&root);
 
         fs::remove_dir_all(root).expect("remove test directory");
     }
