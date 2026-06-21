@@ -2193,7 +2193,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sustain-analysis"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "biquad",
  "sustain-domain",
@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-analysis-bench"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2218,7 +2218,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-app"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "directories",
  "rustix",
@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-app-runtime"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "async-channel",
  "chrono",
@@ -2261,14 +2261,14 @@ dependencies = [
 
 [[package]]
 name = "sustain-artwork"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "image",
 ]
 
 [[package]]
 name = "sustain-cd-import"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "discid",
  "gstreamer",
@@ -2277,7 +2277,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-desktop"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "async-channel",
  "async-io",
@@ -2289,7 +2289,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-device-mtp"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "gio",
  "glib",
@@ -2300,7 +2300,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-device-sync"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "rustix",
  "sha2",
@@ -2311,7 +2311,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-domain"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2320,7 +2320,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-dsp"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "log",
  "rustfft",
@@ -2328,7 +2328,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-i18n"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "formatx",
  "gettext-rs",
@@ -2336,7 +2336,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-library-store"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "rusqlite",
  "serde_json",
@@ -2347,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-metadata"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "lofty",
  "rustix",
@@ -2358,7 +2358,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-metadata-remote"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-pioneer"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "image",
  "sha2",
@@ -2378,7 +2378,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-playback"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "gstreamer",
  "sustain-domain",
@@ -2386,18 +2386,18 @@ dependencies = [
 
 [[package]]
 name = "sustain-profiler"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 
 [[package]]
 name = "sustain-search"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "sustain-domain",
 ]
 
 [[package]]
 name = "sustain-settings"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "directories",
  "serde",
@@ -2407,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-smart-shuffle"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2416,7 +2416,7 @@ dependencies = [
 
 [[package]]
 name = "sustain-ui-gtk"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 dependencies = [
  "async-channel",
  "gtk4",
@@ -3347,7 +3347,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.8.0-beta.1"
+version = "0.8.0-beta.2"
 
 [[package]]
 name = "yoke"
