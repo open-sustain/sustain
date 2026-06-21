@@ -42,6 +42,7 @@ pub(crate) struct FaultyStore {
     fail_online_attempt: AtomicBool,
     fail_device_manifest: AtomicBool,
     fail_save_tracks: AtomicBool,
+    fail_save_tracks_on_call: AtomicU32,
     fail_flush_durable: AtomicBool,
     availability_path_replacement: Mutex<Option<TrackLocation>>,
     record_analysis_calls: AtomicU32,
@@ -65,6 +66,7 @@ impl FaultyStore {
             fail_online_attempt: AtomicBool::new(false),
             fail_device_manifest: AtomicBool::new(false),
             fail_save_tracks: AtomicBool::new(false),
+            fail_save_tracks_on_call: AtomicU32::new(0),
             fail_flush_durable: AtomicBool::new(false),
             availability_path_replacement: Mutex::new(None),
             record_analysis_calls: AtomicU32::new(0),
@@ -108,6 +110,10 @@ impl FaultyStore {
 
     pub(crate) fn set_fail_save_tracks(&self, on: bool) {
         self.fail_save_tracks.store(on, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_fail_save_tracks_on_call(&self, call: u32) {
+        self.fail_save_tracks_on_call.store(call, Ordering::SeqCst);
     }
 
     pub(crate) fn set_fail_flush_durable(&self, on: bool) {
@@ -220,8 +226,10 @@ impl LibraryStore for FaultyStore {
 
     fn save_tracks(&self, tracks: &[Track]) -> StoreResult<()> {
         self.record_operation("save_tracks");
-        self.save_tracks_calls.fetch_add(1, Ordering::SeqCst);
-        if self.fail_save_tracks.load(Ordering::SeqCst) {
+        let call = self.save_tracks_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.fail_save_tracks.load(Ordering::SeqCst)
+            || self.fail_save_tracks_on_call.load(Ordering::SeqCst) == call
+        {
             return Err(StoreError::Database(
                 "injected save_tracks failure".to_owned(),
             ));

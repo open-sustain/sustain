@@ -983,7 +983,9 @@ fn managed_import_copies_external_files_into_planned_library_path() {
             discovered_files: 1,
             imported_tracks: 1,
             duplicate_files: 0,
+            failed_files: 0,
             cancelled: false,
+            stopped_on_error: false,
         })
     );
 
@@ -1134,9 +1136,20 @@ fn managed_import_flush_durable_failure_keeps_copied_files() {
     let task = runtime
         .prepare_library_import(vec![source_path])
         .expect("prepare import");
-    let error = run_library_import_task(task).expect_err("flush_durable failure surfaces");
+    let result = run_library_import_task(task).expect("flush_durable failure returns saved rows");
 
-    assert_eq!(error, ApplicationRuntimeError::LibraryStoreFailed);
+    assert_eq!(
+        result.summary,
+        super::LibraryImportSummary {
+            discovered_files: 1,
+            imported_tracks: 1,
+            duplicate_files: 0,
+            failed_files: 0,
+            cancelled: false,
+            stopped_on_error: true,
+        }
+    );
+    assert_eq!(result.tracks.len(), 1);
     assert_eq!(store.operation_log(), vec!["save_tracks", "flush_durable"]);
     assert_eq!(store.save_tracks_calls(), 1);
     assert_eq!(store.flush_durable_calls(), 1);
@@ -1145,6 +1158,116 @@ fn managed_import_flush_durable_failure_keeps_copied_files() {
         std::fs::read(library_root.join("Unknown Artist/Unknown Album/Track.flac"))
             .expect("copied file remains after flush failure"),
         b"audio bytes"
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn managed_import_commits_large_batches_in_bounded_chunks_with_stable_progress() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_paths = write_numbered_flac_sources(&external_root, 65);
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+    let task = runtime
+        .prepare_library_import(source_paths)
+        .expect("prepare import");
+    let mut progress = Vec::new();
+
+    let result = run_library_import_task_with_progress(task, |update| progress.push(update))
+        .expect("chunked import completes");
+    runtime.apply_library_import_result(result);
+
+    assert_eq!(store.save_tracks_calls(), 3);
+    assert_eq!(store.flush_durable_calls(), 3);
+    assert_eq!(
+        store.operation_log(),
+        vec![
+            "save_tracks",
+            "flush_durable",
+            "save_tracks",
+            "flush_durable",
+            "save_tracks",
+            "flush_durable",
+        ]
+    );
+    assert_eq!(progress.len(), 65);
+    for (index, update) in progress.iter().enumerate() {
+        assert_eq!(update.processed_files, index + 1);
+        assert_eq!(update.total_files, 65);
+    }
+    assert_eq!(runtime.library_tracks().len(), 65);
+    assert_eq!(store.tracks().expect("load tracks").len(), 65);
+    assert_eq!(
+        runtime.last_library_import_summary(),
+        Some(&super::LibraryImportSummary {
+            discovered_files: 65,
+            imported_tracks: 65,
+            duplicate_files: 0,
+            failed_files: 0,
+            cancelled: false,
+            stopped_on_error: false,
+        })
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn managed_import_save_failure_after_committed_chunk_keeps_committed_tracks() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_paths = write_numbered_flac_sources(&external_root, 33);
+    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store.set_fail_save_tracks_on_call(2);
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+    let task = runtime
+        .prepare_library_import(source_paths)
+        .expect("prepare import");
+
+    let result = run_library_import_task(task).expect("committed chunk returns as partial result");
+    runtime.apply_library_import_result(result);
+
+    assert_eq!(
+        store.operation_log(),
+        vec!["save_tracks", "flush_durable", "save_tracks"]
+    );
+    assert_eq!(store.save_tracks_calls(), 2);
+    assert_eq!(store.flush_durable_calls(), 1);
+    assert_eq!(runtime.library_tracks().len(), 32);
+    assert_eq!(store.tracks().expect("load tracks").len(), 32);
+    assert_eq!(regular_file_count(&library_root), 32);
+    assert_eq!(
+        runtime.last_library_import_summary(),
+        Some(&super::LibraryImportSummary {
+            discovered_files: 33,
+            imported_tracks: 32,
+            duplicate_files: 0,
+            failed_files: 1,
+            cancelled: false,
+            stopped_on_error: true,
+        })
     );
 
     std::fs::remove_dir_all(library_root).expect("remove library root");
@@ -1233,7 +1356,9 @@ fn managed_import_skips_duplicate_content_hashes_in_same_batch() {
             discovered_files: 2,
             imported_tracks: 1,
             duplicate_files: 1,
+            failed_files: 0,
             cancelled: false,
+            stopped_on_error: false,
         })
     );
 
@@ -1288,7 +1413,9 @@ fn cancelling_managed_import_keeps_completed_tracks_and_reports_progress() {
             discovered_files: 2,
             imported_tracks: 1,
             duplicate_files: 0,
+            failed_files: 0,
             cancelled: true,
+            stopped_on_error: false,
         })
     );
 
@@ -1332,7 +1459,9 @@ fn managed_import_lazily_hashes_same_size_existing_tracks_for_duplicates() {
             discovered_files: 1,
             imported_tracks: 0,
             duplicate_files: 1,
+            failed_files: 0,
             cancelled: false,
+            stopped_on_error: false,
         })
     );
 
@@ -1389,7 +1518,9 @@ fn managed_import_skips_strict_exact_duplicate_already_on_disk_without_a_row() {
             discovered_files: 1,
             imported_tracks: 0,
             duplicate_files: 1,
+            failed_files: 0,
             cancelled: false,
+            stopped_on_error: false,
         })
     );
 
@@ -1435,7 +1566,9 @@ fn unmanaged_external_import_indexes_library_files_in_place() {
             discovered_files: 1,
             imported_tracks: 1,
             duplicate_files: 0,
+            failed_files: 0,
             cancelled: false,
+            stopped_on_error: false,
         })
     );
 
@@ -6268,6 +6401,33 @@ fn test_track(track_id: TrackId, path: &str) -> Track {
         has_embedded_artwork: None,
         file_modified_at: None,
     }
+}
+
+fn write_numbered_flac_sources(root: &Path, count: usize) -> Vec<PathBuf> {
+    (0..count)
+        .map(|index| {
+            let path = root.join(format!("source-{index:03}.flac"));
+            std::fs::write(&path, format!("audio bytes {index}")).expect("write source");
+            path
+        })
+        .collect()
+}
+
+fn regular_file_count(root: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    entries
+        .map(|entry| entry.expect("directory entry is readable").path())
+        .map(|path| {
+            let metadata = std::fs::metadata(&path).expect("path metadata is readable");
+            if metadata.is_dir() {
+                regular_file_count(&path)
+            } else {
+                usize::from(metadata.is_file())
+            }
+        })
+        .sum()
 }
 
 fn test_scanned_track(path: &str) -> ScannedTrack {

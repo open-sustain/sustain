@@ -351,9 +351,13 @@ pub struct LibraryImportSummary {
     pub discovered_files: usize,
     pub imported_tracks: usize,
     pub duplicate_files: usize,
+    pub failed_files: usize,
     // True when the import stopped because the user asked it to. Completed
     // managed copies are retained and committed before the worker returns.
     pub cancelled: bool,
+    // True when an import stopped after an error but still has partial work to
+    // report, such as committed managed chunks or skipped duplicates.
+    pub stopped_on_error: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

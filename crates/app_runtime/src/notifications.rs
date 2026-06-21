@@ -456,6 +456,11 @@ fn scan_change_clauses(summary: &LibraryScanSummary) -> Option<String> {
 }
 
 pub fn library_import_outcome_text(summary: &LibraryImportSummary) -> String {
+    if summary.stopped_on_error {
+        let clauses =
+            library_import_change_clauses(summary).unwrap_or_else(|| "no tracks added".to_owned());
+        return format!("Import stopped after an error: {clauses}.");
+    }
     if summary.cancelled {
         return format!(
             "Import stopped: {} added before cancel.",
@@ -468,11 +473,37 @@ pub fn library_import_outcome_text(summary: &LibraryImportSummary) -> String {
         summary.discovered_files,
     ) {
         (0, 0, 0) => "No audio files were found.".to_owned(),
-        (imported, 0, _) => format!("{imported} tracks added."),
-        (imported, duplicates, _) => {
-            format!("{imported} tracks added, {duplicates} duplicates skipped.")
-        }
+        _ => format!(
+            "{}.",
+            library_import_change_clauses(summary).unwrap_or_else(|| "No changes".to_owned())
+        ),
     }
+}
+
+fn library_import_change_clauses(summary: &LibraryImportSummary) -> Option<String> {
+    let mut clauses = Vec::new();
+    if summary.imported_tracks > 0 {
+        clauses.push(format!(
+            "{} {} added",
+            summary.imported_tracks,
+            pluralize(summary.imported_tracks, "track", "tracks")
+        ));
+    }
+    if summary.duplicate_files > 0 {
+        clauses.push(format!(
+            "{} duplicate {} skipped",
+            summary.duplicate_files,
+            pluralize(summary.duplicate_files, "file", "files")
+        ));
+    }
+    if summary.failed_files > 0 {
+        clauses.push(format!(
+            "{} {} failed",
+            summary.failed_files,
+            pluralize(summary.failed_files, "file", "files")
+        ));
+    }
+    (!clauses.is_empty()).then(|| clauses.join(", "))
 }
 
 pub fn library_consolidation_outcome_text(summary: &LibraryConsolidationSummary) -> String {

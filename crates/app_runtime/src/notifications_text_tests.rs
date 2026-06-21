@@ -126,6 +126,38 @@ fn library_import_progress_reads_as_processed_over_total() {
 }
 
 #[test]
+fn library_import_outcome_lists_added_duplicates_and_failures() {
+    let summary = LibraryImportSummary {
+        discovered_files: 12,
+        imported_tracks: 2,
+        duplicate_files: 1,
+        failed_files: 3,
+        ..LibraryImportSummary::default()
+    };
+
+    assert_eq!(
+        library_import_outcome_text(&summary),
+        "2 tracks added, 1 duplicate file skipped, 3 files failed."
+    );
+}
+
+#[test]
+fn library_import_partial_error_reports_stopped_state() {
+    let summary = LibraryImportSummary {
+        discovered_files: 33,
+        imported_tracks: 32,
+        failed_files: 1,
+        stopped_on_error: true,
+        ..LibraryImportSummary::default()
+    };
+
+    assert_eq!(
+        library_import_outcome_text(&summary),
+        "Import stopped after an error: 32 tracks added, 1 file failed."
+    );
+}
+
+#[test]
 fn online_progress_always_reads_as_completed_over_total() {
     assert_eq!(
         online_background_running_text(2, 5),
