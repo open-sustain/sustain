@@ -29,7 +29,8 @@ use super::{
     SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW, SharedMprisService,
     SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
     SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
-    TrackRowChangedKind, TrackUpdatedReceiver, YoutubeAudioDownloadResultReceiver,
+    TrackRowChangedKind, TrackRowsChangedHolder, TrackUpdatedReceiver,
+    YoutubeAudioDownloadResultReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
@@ -80,9 +81,9 @@ use super::{
         TrackRowContextMenu,
     },
     track_context_ops::{
-        add_to_queue_callback, copy_files_callback, get_info_callback, play_next_callback,
-        playback_has_current_track_visibility, show_album_callback, show_in_folder_callback,
-        track_has_album_visibility,
+        GetInfoCallbackContext, add_to_queue_callback, copy_files_callback, get_info_callback,
+        play_next_callback, playback_has_current_track_visibility, show_album_callback,
+        show_in_folder_callback, track_has_album_visibility,
     },
     track_table::{
         EditableField, InlineEditHooks, RatingChangedCallback, RowDropPosition, RowReorderCallback,
@@ -136,7 +137,7 @@ use sidebar_callbacks::{
 use track_callbacks::{
     TrackRowChangedContext, inline_edit_hooks, playlist_row_reorder_callback,
     playlist_track_context_actions, rating_changed_callback, track_context_actions,
-    track_row_changed_callback,
+    track_row_changed_callback, track_rows_changed_callback,
 };
 
 /// Recompute the status-bar summary (track count, total duration) for
@@ -318,6 +319,7 @@ pub(crate) fn build_main_window(
 
     let library_changed_holder: LibraryChangedHolder = Rc::new(RefCell::new(None));
     let track_row_changed_holder: TrackRowChangedHolder = Rc::new(RefCell::new(None));
+    let track_rows_changed_holder: TrackRowsChangedHolder = Rc::new(RefCell::new(None));
     let parent_window = window.clone().upcast::<gtk::Window>();
     let pending_located_playbacks: PendingLocatedPlaybacks = Rc::new(RefCell::new(HashMap::new()));
     let missing_track_relocation_completed = missing_track_relocation_completed_callback(
@@ -350,6 +352,7 @@ pub(crate) fn build_main_window(
         playback_changed.clone(),
         library_changed_holder.clone(),
         track_row_changed_holder.clone(),
+        track_rows_changed_holder.clone(),
         &artwork_loader,
     );
     let add_to_playlist_provider = add_to_playlist_provider(&runtime);
@@ -382,6 +385,7 @@ pub(crate) fn build_main_window(
         playback_changed.clone(),
         library_changed_holder.clone(),
         track_row_changed_holder.clone(),
+        track_rows_changed_holder.clone(),
         &artwork_loader,
         &sidebar,
     );
@@ -582,7 +586,7 @@ pub(crate) fn build_main_window(
     );
     install_cd_import_requested(&cd_import_panel, &runtime, library_changed.clone());
     install_track_availability_observer(&runtime, &songs_table, &playlists_table);
-    let track_row_changed = track_row_changed_callback(TrackRowChangedContext {
+    let track_rows_changed = track_rows_changed_callback(TrackRowChangedContext {
         runtime: &runtime,
         songs_table: &songs_table,
         albums_view: &albums_view,
@@ -594,7 +598,9 @@ pub(crate) fn build_main_window(
         current_search_text: &current_search_text,
         device_panel: &device_panel,
     });
+    let track_row_changed = track_row_changed_callback(track_rows_changed.clone());
     track_row_changed_holder.replace(Some(track_row_changed));
+    track_rows_changed_holder.replace(Some(track_rows_changed));
     install_metadata_writer_event_consumer(
         metadata_writer_event_rx,
         runtime.clone(),
@@ -845,6 +851,7 @@ pub(crate) fn build_main_window(
         playback_changed: playback_changed.clone(),
         library_changed_holder: library_changed_holder.clone(),
         track_row_changed_holder: track_row_changed_holder.clone(),
+        track_rows_changed_holder: track_rows_changed_holder.clone(),
         artwork_loader: artwork_loader.clone(),
         track_context_invocation,
     });

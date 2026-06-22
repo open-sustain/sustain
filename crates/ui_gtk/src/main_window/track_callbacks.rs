@@ -6,6 +6,10 @@
 //! drag-to-reorder within a playlist, and the remove-from-playlist /
 //! generic track-mutation helpers.
 
+use std::collections::{HashMap, HashSet};
+
+use crate::TrackRowsChangedCallback;
+
 use super::*;
 
 /// Builds the seed/commit pair the Songs table uses for inline cell
@@ -94,9 +98,9 @@ pub(super) fn rating_changed_callback(
     })
 }
 
-/// Targeted refresh path for single-track mutations. Updates only the affected
-/// row in the visible tables, applies the cheapest correct Albums refresh for
-/// the change kind, and refreshes the status-bar summary. Skips the sidebar
+/// Targeted refresh path for row-field mutations. Updates only affected rows
+/// in the visible tables, applies the cheapest correct Albums refresh for the
+/// change kind, and refreshes the status-bar summary once. Skips the sidebar
 /// tree because row-field mutations do not alter playlist/folder structure.
 ///
 /// When a smart playlist is selected, the Playlists table falls back to a
@@ -115,9 +119,9 @@ pub(super) struct TrackRowChangedContext<'a> {
     pub(super) device_panel: &'a DeviceSyncPanel,
 }
 
-pub(super) fn track_row_changed_callback(
+pub(super) fn track_rows_changed_callback(
     ctx: TrackRowChangedContext<'_>,
-) -> TrackRowChangedCallback {
+) -> TrackRowsChangedCallback {
     let runtime = ctx.runtime.clone();
     let songs_table = ctx.songs_table.clone();
     let albums_view = ctx.albums_view.clone();
@@ -129,21 +133,29 @@ pub(super) fn track_row_changed_callback(
     let visible_summary_refresh = ctx.visible_summary_refresh;
     let device_panel = ctx.device_panel.clone();
 
-    Rc::new(move |track_id: TrackId, kind: TrackRowChangedKind| {
-        let row = {
+    Rc::new(move |track_ids: &[TrackId], kind: TrackRowChangedKind| {
+        if track_ids.is_empty() {
+            return;
+        }
+
+        let rows = {
             let runtime_borrow = runtime.borrow();
             let honor_sort_tags = runtime_borrow.settings().library.honor_sort_tags;
-            runtime_borrow
-                .library_tracks()
+            track_ids
                 .iter()
-                .find(|track| track.id == track_id)
-                .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
+                .filter_map(|track_id| {
+                    runtime_borrow
+                        .library_track(*track_id)
+                        .map(|track| (*track_id, TrackTableRow::from_track(track, honor_sort_tags)))
+                })
+                .collect::<HashMap<_, _>>()
         };
-        let Some(row) = row else {
+        if rows.is_empty() {
             return;
-        };
+        }
+        let changed_track_ids = rows.keys().copied().collect::<HashSet<_>>();
 
-        songs_table.update_row(track_id, row.clone());
+        songs_table.update_rows(&rows);
         if kind.affects_album_structure() {
             albums_view.replace_tracks();
         } else {
@@ -153,10 +165,14 @@ pub(super) fn track_row_changed_callback(
                     // single background completion (Lyrics/Tags/BPM/Key/Waveform,
                     // metadata write) must not collapse the currently-expanded
                     // album or scroll the grid back to the top.
-                    albums_view.update_track(track_id);
+                    for track_id in &changed_track_ids {
+                        albums_view.update_track(*track_id);
+                    }
                 }
                 TrackRowChangedKind::Artwork => {
-                    albums_view.refresh_track_artwork(track_id);
+                    for track_id in &changed_track_ids {
+                        albums_view.refresh_track_artwork(*track_id);
+                    }
                 }
                 TrackRowChangedKind::AlbumStructure
                 | TrackRowChangedKind::AlbumAndDuplicateGrouping
@@ -166,7 +182,9 @@ pub(super) fn track_row_changed_callback(
         if kind.affects_duplicate_grouping() {
             duplicates_view.refresh_if_active();
         } else {
-            duplicates_view.update_track_row(track_id);
+            for track_id in &changed_track_ids {
+                duplicates_view.update_track_row(*track_id);
+            }
         }
 
         match sidebar.current_selection() {
@@ -180,18 +198,21 @@ pub(super) fn track_row_changed_callback(
                 // to tell the two apart and avoid the
                 // `replace_rows` that would scroll the user back to
                 // the top of a large library on every track update.
-                let (status, was_in_table) = {
+                let visible_track_ids = playlists_table.contained_track_ids(&changed_track_ids);
+                let membership_changed = {
                     let runtime_borrow = runtime.borrow();
-                    let status = runtime_borrow.smart_playlist_track_status(smart_id, track_id);
-                    let was_in_table = playlists_table.contains_track(track_id);
-                    (status, was_in_table)
+                    changed_track_ids.iter().any(|track_id| {
+                        let status =
+                            runtime_borrow.smart_playlist_track_status(smart_id, *track_id);
+                        let was_in_table = visible_track_ids.contains(track_id);
+                        matches!(
+                            (status, was_in_table),
+                            (SmartPlaylistTrackStatus::Included, false)
+                                | (SmartPlaylistTrackStatus::Excluded, true)
+                                | (SmartPlaylistTrackStatus::RequiresFullRebuild, _)
+                        )
+                    })
                 };
-                let membership_changed = matches!(
-                    (status, was_in_table),
-                    (SmartPlaylistTrackStatus::Included, false)
-                        | (SmartPlaylistTrackStatus::Excluded, true)
-                        | (SmartPlaylistTrackStatus::RequiresFullRebuild, _)
-                );
                 if membership_changed {
                     schedule_playlists_structural_refresh(
                         runtime.clone(),
@@ -199,18 +220,18 @@ pub(super) fn track_row_changed_callback(
                         sidebar.clone(),
                         current_search_text.clone(),
                     );
-                } else if was_in_table {
-                    // Membership unchanged and the row is visible —
-                    // refresh the row's data in place.
-                    playlists_table.update_row(track_id, row);
+                } else if !visible_track_ids.is_empty() {
+                    // Membership unchanged and at least one changed row is
+                    // visible — refresh visible rows' data in place.
+                    playlists_table.update_rows(&rows);
                 }
-                // else: track doesn't match the smart playlist and
-                // isn't on screen anyway; no work needed.
+                // else: changed tracks don't match the smart playlist and
+                // aren't on screen anyway; no work needed.
             }
             _ => {
-                // In-place row update is cheap (one row) and idempotent
-                // for a hidden table; no visibility gating needed.
-                playlists_table.update_row(track_id, row);
+                // In-place row updates are idempotent for a hidden table; no
+                // visibility gating needed.
+                playlists_table.update_rows(&rows);
             }
         }
 
@@ -218,6 +239,14 @@ pub(super) fn track_row_changed_callback(
         // A background BPM/key/waveform completion changes the Pioneer
         // export readiness; refresh it when that view is on screen.
         device_panel.refresh_readiness();
+    })
+}
+
+pub(super) fn track_row_changed_callback(
+    track_rows_changed: TrackRowsChangedCallback,
+) -> TrackRowChangedCallback {
+    Rc::new(move |track_id: TrackId, kind: TrackRowChangedKind| {
+        track_rows_changed(&[track_id], kind);
     })
 }
 
@@ -268,6 +297,7 @@ pub(super) fn track_context_actions(
     playback_changed: PlaybackChangedCallback,
     library_changed_holder: LibraryChangedHolder,
     track_row_changed_holder: TrackRowChangedHolder,
+    track_rows_changed_holder: TrackRowsChangedHolder,
     artwork_loader: &ArtworkLoader,
 ) -> TrackContextActionSet {
     TrackContextActionSet::new(vec![
@@ -279,15 +309,16 @@ pub(super) fn track_context_actions(
             add_to_queue_callback(command_controller),
             playback_has_current_track_visibility(runtime),
         ),
-        TrackContextAction::get_info(get_info_callback(
-            window,
+        TrackContextAction::get_info(get_info_callback(GetInfoCallbackContext {
+            parent_window: window,
             runtime,
             command_controller,
-            &library_changed_holder,
-            &track_row_changed_holder,
-            playback_changed.clone(),
+            library_changed_holder: &library_changed_holder,
+            track_row_changed_holder: &track_row_changed_holder,
+            track_rows_changed_holder: &track_rows_changed_holder,
+            playback_changed: playback_changed.clone(),
             artwork_loader,
-        )),
+        })),
         TrackContextAction::show_album(
             show_album_callback(show_album_holder),
             track_has_album_visibility(runtime),
@@ -324,6 +355,7 @@ pub(super) fn playlist_track_context_actions(
     playback_changed: PlaybackChangedCallback,
     library_changed_holder: LibraryChangedHolder,
     track_row_changed_holder: TrackRowChangedHolder,
+    track_rows_changed_holder: TrackRowsChangedHolder,
     artwork_loader: &ArtworkLoader,
     sidebar: &PlaylistSidebar,
 ) -> TrackContextActionSet {
@@ -336,15 +368,16 @@ pub(super) fn playlist_track_context_actions(
             add_to_queue_callback(command_controller),
             playback_has_current_track_visibility(runtime),
         ),
-        TrackContextAction::get_info(get_info_callback(
-            window,
+        TrackContextAction::get_info(get_info_callback(GetInfoCallbackContext {
+            parent_window: window,
             runtime,
             command_controller,
-            &library_changed_holder,
-            &track_row_changed_holder,
-            playback_changed.clone(),
+            library_changed_holder: &library_changed_holder,
+            track_row_changed_holder: &track_row_changed_holder,
+            track_rows_changed_holder: &track_rows_changed_holder,
+            playback_changed: playback_changed.clone(),
             artwork_loader,
-        )),
+        })),
         TrackContextAction::show_album(
             show_album_callback(show_album_holder),
             track_has_album_visibility(runtime),

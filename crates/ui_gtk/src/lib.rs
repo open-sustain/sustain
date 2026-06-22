@@ -176,6 +176,9 @@ fn field_changed<T>(field: &sustain_app_runtime::FieldChange<T>) -> bool {
 pub(crate) type TrackRowChangedCallback =
     Rc<dyn Fn(sustain_app_runtime::TrackId, TrackRowChangedKind)>;
 pub(crate) type TrackRowChangedHolder = Rc<RefCell<Option<TrackRowChangedCallback>>>;
+pub(crate) type TrackRowsChangedCallback =
+    Rc<dyn Fn(&[sustain_app_runtime::TrackId], TrackRowChangedKind)>;
+pub(crate) type TrackRowsChangedHolder = Rc<RefCell<Option<TrackRowsChangedCallback>>>;
 /// Re-sync the `is_missing` flag on every loaded row from the
 /// runtime's view of the library, repaint visible status icons, and
 /// leave scroll/focus/selection untouched. Fired after operations

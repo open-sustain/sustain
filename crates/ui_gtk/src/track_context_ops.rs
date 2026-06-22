@@ -10,7 +10,7 @@ use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, TrackId};
 
 use super::{
     LibraryChangedHolder, PlaybackChangedCallback, SharedRuntime, ShowAlbumHolder,
-    TrackRowChangedHolder,
+    TrackRowChangedHolder, TrackRowsChangedHolder,
     artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
     track_context::{TrackActionCallback, TrackActionInvocation, TrackActionVisibility},
@@ -33,22 +33,26 @@ pub(crate) fn copy_files_callback(
     })
 }
 
-pub(crate) fn get_info_callback(
-    parent_window: &gtk::Window,
-    runtime: &SharedRuntime,
-    command_controller: &SharedCommandController,
-    library_changed_holder: &LibraryChangedHolder,
-    track_row_changed_holder: &TrackRowChangedHolder,
-    playback_changed: PlaybackChangedCallback,
-    artwork_loader: &ArtworkLoader,
-) -> TrackActionCallback {
-    let parent_window = parent_window.clone();
-    let runtime = runtime.clone();
-    let command_controller = command_controller.clone();
-    let library_changed_holder = library_changed_holder.clone();
-    let track_row_changed_holder = track_row_changed_holder.clone();
-    let playback_changed = playback_changed.clone();
-    let artwork_loader = artwork_loader.clone();
+pub(crate) struct GetInfoCallbackContext<'a> {
+    pub(crate) parent_window: &'a gtk::Window,
+    pub(crate) runtime: &'a SharedRuntime,
+    pub(crate) command_controller: &'a SharedCommandController,
+    pub(crate) library_changed_holder: &'a LibraryChangedHolder,
+    pub(crate) track_row_changed_holder: &'a TrackRowChangedHolder,
+    pub(crate) track_rows_changed_holder: &'a TrackRowsChangedHolder,
+    pub(crate) playback_changed: PlaybackChangedCallback,
+    pub(crate) artwork_loader: &'a ArtworkLoader,
+}
+
+pub(crate) fn get_info_callback(context: GetInfoCallbackContext<'_>) -> TrackActionCallback {
+    let parent_window = context.parent_window.clone();
+    let runtime = context.runtime.clone();
+    let command_controller = context.command_controller.clone();
+    let library_changed_holder = context.library_changed_holder.clone();
+    let track_row_changed_holder = context.track_row_changed_holder.clone();
+    let track_rows_changed_holder = context.track_rows_changed_holder.clone();
+    let playback_changed = context.playback_changed.clone();
+    let artwork_loader = context.artwork_loader.clone();
     Rc::new(move |invocation: TrackActionInvocation| {
         let track_ids = invocation.selected_track_ids;
         if track_ids.len() > 1 {
@@ -56,6 +60,7 @@ pub(crate) fn get_info_callback(
                 &parent_window,
                 &command_controller,
                 &library_changed_holder,
+                &track_rows_changed_holder,
                 track_ids,
             );
             return;

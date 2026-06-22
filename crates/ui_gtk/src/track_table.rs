@@ -6,7 +6,7 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackColumnSort, TrackId};
 
@@ -345,12 +345,56 @@ impl TrackTable {
         false
     }
 
-    /// Whether the underlying store currently holds a row for
-    /// `track_id`. Walks the store but performs no mutation — used by
-    /// the smart-playlist refresh path to decide between an in-place
-    /// row update and a full rebuild without going through
-    /// [`Self::update_row`]'s side-effecting code path.
-    pub(crate) fn contains_track(&self, track_id: TrackId) -> bool {
+    /// Updates every matching cached row in one store pass, without emitting
+    /// `gio::ListModel::items-changed`.
+    ///
+    /// Batch metadata edits can touch dozens or hundreds of rows at once. A
+    /// per-track loop over [`Self::update_row`] would rescan the visible model
+    /// and refresh bound cells once per track; this keeps the same
+    /// scroll-preserving mutation strategy while bounding the table work to one
+    /// scan and one visible-cell refresh.
+    pub(crate) fn update_rows(&self, new_rows: &HashMap<TrackId, TrackTableRow>) -> usize {
+        if new_rows.is_empty() {
+            return 0;
+        }
+
+        let mut updated = 0usize;
+        let n_items = self.store.n_items();
+        for position in 0..n_items {
+            let Some(row_object) = self
+                .store
+                .item(position)
+                .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+            else {
+                continue;
+            };
+            let track_id = match row_object.try_borrow::<TrackTableRow>() {
+                Ok(row) => row.track_id,
+                Err(_) => continue,
+            };
+            let Some(new_row) = track_id.and_then(|track_id| new_rows.get(&track_id)) else {
+                continue;
+            };
+            *row_object.borrow_mut::<TrackTableRow>() = new_row.clone();
+            updated += 1;
+        }
+
+        if updated > 0 {
+            self.text_bindings.refresh_all();
+            self.rating_bindings.refresh_all();
+            self.status_bindings.refresh(self.playing_track_id.get());
+        }
+        updated
+    }
+
+    /// Returns the subset of `candidates` currently represented in the table's
+    /// underlying store. Performs one model scan regardless of candidate count.
+    pub(crate) fn contained_track_ids(&self, candidates: &HashSet<TrackId>) -> HashSet<TrackId> {
+        if candidates.is_empty() {
+            return HashSet::new();
+        }
+
+        let mut present = HashSet::new();
         let n_items = self.store.n_items();
         for position in 0..n_items {
             let Some(row_object) = self
@@ -361,12 +405,13 @@ impl TrackTable {
                 continue;
             };
             if let Ok(row) = row_object.try_borrow::<TrackTableRow>()
-                && row.track_id == Some(track_id)
+                && let Some(track_id) = row.track_id
+                && candidates.contains(&track_id)
             {
-                return true;
+                present.insert(track_id);
             }
         }
-        false
+        present
     }
 
     /// Walk the underlying store once, refreshing each row's
@@ -1235,6 +1280,31 @@ mod tests {
     }
 
     #[test]
+    fn update_rows_patches_matching_rows_without_replacing_objects() {
+        crate::test_support::with_gtk(|| {
+            let table =
+                build_track_table(vec![row(1), row(2), row(3)], None, None, None, None, None);
+            let first_object = store_object_key(&table, 0);
+            let third_object = store_object_key(&table, 2);
+            let mut replacements = HashMap::new();
+            let mut first = row(1);
+            first.track_name = "Updated 1".to_owned();
+            let mut third = row(3);
+            third.track_name = "Updated 3".to_owned();
+            replacements.insert(TrackId::new(1).expect("positive track id"), first);
+            replacements.insert(TrackId::new(3).expect("positive track id"), third);
+
+            assert_eq!(table.update_rows(&replacements), 2);
+
+            assert_eq!(store_object_key(&table, 0), first_object);
+            assert_eq!(store_object_key(&table, 2), third_object);
+            assert_eq!(store_track_name(&table, 0).as_deref(), Some("Updated 1"));
+            assert_eq!(store_track_name(&table, 1).as_deref(), Some("Track 2"));
+            assert_eq!(store_track_name(&table, 2).as_deref(), Some("Updated 3"));
+        });
+    }
+
+    #[test]
     fn apply_layout_round_trips_the_persisted_sort() {
         crate::test_support::with_gtk(|| {
             let table = build_track_table(vec![row(1), row(2)], None, None, None, None, None);
@@ -1433,5 +1503,15 @@ mod tests {
             .ok()?;
         let row = row_object.try_borrow::<TrackTableRow>().ok()?;
         row.track_id
+    }
+
+    fn store_track_name(table: &TrackTable, position: u32) -> Option<String> {
+        let row_object = table
+            .store
+            .item(position)?
+            .downcast::<glib::BoxedAnyObject>()
+            .ok()?;
+        let row = row_object.try_borrow::<TrackTableRow>().ok()?;
+        Some(row.track_name.clone())
     }
 }

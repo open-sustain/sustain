@@ -25,7 +25,7 @@ use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, PlaylistId, Playl
 
 use super::{
     ALBUMS_VIEW, DUPLICATES_VIEW, LibraryChangedHolder, PLAYLISTS_VIEW, PlaybackChangedCallback,
-    SONGS_VIEW, SharedRuntime, TrackRowChangedHolder,
+    SONGS_VIEW, SharedRuntime, TrackRowChangedHolder, TrackRowsChangedHolder,
     albums::AlbumsView,
     artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
@@ -38,7 +38,7 @@ use super::{
     smart_playlist_editor::{SmartPlaylistEditorMode, open_smart_playlist_editor},
     titlebar::Titlebar,
     track_context::{TrackActionInvocation, TrackContextInvocationState},
-    track_context_ops::{get_info_callback, show_in_folder_callback},
+    track_context_ops::{GetInfoCallbackContext, get_info_callback, show_in_folder_callback},
     track_table::TrackTable,
 };
 
@@ -59,6 +59,7 @@ pub(crate) struct GlobalShortcutContext {
     pub(crate) playback_changed: PlaybackChangedCallback,
     pub(crate) library_changed_holder: LibraryChangedHolder,
     pub(crate) track_row_changed_holder: TrackRowChangedHolder,
+    pub(crate) track_rows_changed_holder: TrackRowsChangedHolder,
     pub(crate) artwork_loader: ArtworkLoader,
     pub(crate) track_context_invocation: TrackContextInvocationState,
 }
@@ -206,15 +207,17 @@ fn install_get_info(context: &GlobalShortcutContext) {
         return;
     }
     let action = gio::SimpleAction::new(GET_INFO.action, None);
-    let callback = get_info_callback(
-        &context.window.clone().upcast::<gtk::Window>(),
-        &context.runtime,
-        &context.command_controller,
-        &context.library_changed_holder,
-        &context.track_row_changed_holder,
-        context.playback_changed.clone(),
-        &context.artwork_loader,
-    );
+    let parent_window = context.window.clone().upcast::<gtk::Window>();
+    let callback = get_info_callback(GetInfoCallbackContext {
+        parent_window: &parent_window,
+        runtime: &context.runtime,
+        command_controller: &context.command_controller,
+        library_changed_holder: &context.library_changed_holder,
+        track_row_changed_holder: &context.track_row_changed_holder,
+        track_rows_changed_holder: &context.track_rows_changed_holder,
+        playback_changed: context.playback_changed.clone(),
+        artwork_loader: &context.artwork_loader,
+    });
     let songs_table = context.songs_table.clone();
     let playlists_table = context.playlists_table.clone();
     let duplicates_view = context.duplicates_view.clone();
