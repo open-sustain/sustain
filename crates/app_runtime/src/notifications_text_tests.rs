@@ -180,3 +180,26 @@ fn device_sync_preparation_progress_is_user_visible() {
         "Preparing tracks (4/10)…"
     );
 }
+
+#[test]
+fn device_sync_outcome_reports_partial_copy_failures() {
+    let outcome = sustain_device_sync::SyncOutcome {
+        copied: 12,
+        updated: 1,
+        copy_failures: vec![sustain_device_sync::SyncTrackFailure {
+            track_id: sustain_domain::TrackId::new(7).expect("track id"),
+            source_path: std::path::PathBuf::from("/music/failed.mp3"),
+            on_device_path: sustain_domain::DeviceRelativePath::new(
+                "Music/Artist/Album/failed.mp3",
+            )
+            .expect("device path"),
+            message: "injected failure".to_owned(),
+        }],
+        ..sustain_device_sync::SyncOutcome::default()
+    };
+
+    assert_eq!(
+        device_sync_outcome_text(&outcome),
+        "Sync partial: 12 tracks added, 1 updated, 1 track failed."
+    );
+}

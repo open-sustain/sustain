@@ -295,6 +295,8 @@ pub struct SyncOutcome {
     pub updated: usize,
     pub removed: usize,
     pub unchanged: usize,
+    /// Per-track copy failures that did not abort the whole sync.
+    pub copy_failures: Vec<SyncTrackFailure>,
     /// The new manifest to persist.
     pub manifest: Vec<SyncManifestEntry>,
     /// True once the engine has assembled a manifest representing the
@@ -304,6 +306,15 @@ pub struct SyncOutcome {
     pub manifest_is_authoritative: bool,
     /// True if the run stopped early because cancellation was requested.
     pub cancelled: bool,
+}
+
+/// One recoverable track copy failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncTrackFailure {
+    pub track_id: TrackId,
+    pub source_path: PathBuf,
+    pub on_device_path: DeviceRelativePath,
+    pub message: String,
 }
 
 /// Sync failure.

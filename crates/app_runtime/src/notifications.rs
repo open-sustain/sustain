@@ -690,13 +690,21 @@ pub fn device_sync_progress_text(progress: sustain_device_sync::SyncProgress) ->
 
 pub fn device_sync_outcome_text(outcome: &sustain_device_sync::SyncOutcome) -> String {
     if outcome.cancelled {
-        return format!(
-            "Sync stopped: {} copied, {} updated.",
+        let mut parts = vec![format!(
+            "{} copied, {} updated",
             outcome.copied, outcome.updated
-        );
+        )];
+        if !outcome.copy_failures.is_empty() {
+            parts.push(format!(
+                "{} {} failed",
+                outcome.copy_failures.len(),
+                pluralize(outcome.copy_failures.len(), "track", "tracks")
+            ));
+        }
+        return format!("Sync stopped: {}.", parts.join(", "));
     }
     let changed = outcome.copied + outcome.updated;
-    if changed == 0 && outcome.removed == 0 {
+    if changed == 0 && outcome.removed == 0 && outcome.copy_failures.is_empty() {
         return "Device already up to date.".to_owned();
     }
     let mut parts = Vec::new();
@@ -713,7 +721,16 @@ pub fn device_sync_outcome_text(outcome: &sustain_device_sync::SyncOutcome) -> S
     if outcome.removed > 0 {
         parts.push(format!("{} removed", outcome.removed));
     }
-    format!("Sync complete: {}.", parts.join(", "))
+    if !outcome.copy_failures.is_empty() {
+        parts.push(format!(
+            "{} {} failed",
+            outcome.copy_failures.len(),
+            pluralize(outcome.copy_failures.len(), "track", "tracks")
+        ));
+        format!("Sync partial: {}.", parts.join(", "))
+    } else {
+        format!("Sync complete: {}.", parts.join(", "))
+    }
 }
 
 fn pluralize(count: usize, singular: &'static str, plural: &'static str) -> &'static str {

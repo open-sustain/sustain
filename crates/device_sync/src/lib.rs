@@ -32,7 +32,7 @@ pub use identity::{
 pub use model::{
     DeviceCapacity, GenreBytes, Placement, PreparedPioneerAssets, PreparedSyncRequest,
     SourceSnapshot, SyncError, SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncPlan,
-    SyncProgress, SyncRequest, SyncStage,
+    SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
 };
 pub use source::{ensure_source_unchanged, resolve_source_fingerprint, source_file_stat};
 pub use transport::{DeviceTarget, DeviceTransport, MtpTarget};
@@ -40,7 +40,10 @@ pub use transport::{DeviceTarget, DeviceTransport, MtpTarget};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::{
+        io,
+        path::{Path, PathBuf},
+    };
     use sustain_domain::{
         DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, SourceFileStat,
         SyncDevice, SyncDeviceId, TrackId,
@@ -105,6 +108,79 @@ mod tests {
     /// Open a filesystem transport on a scratch device root.
     fn transport(dest: &Path) -> DeviceRoot {
         DeviceRoot::open(dest).expect("open scratch device root")
+    }
+
+    struct RecoverableCopyFailureTransport {
+        root: DeviceRoot,
+        fail_path: DeviceRelativePath,
+    }
+
+    impl RecoverableCopyFailureTransport {
+        fn new(root: DeviceRoot, fail_path: DeviceRelativePath) -> Self {
+            Self { root, fail_path }
+        }
+    }
+
+    impl DeviceTransport for RecoverableCopyFailureTransport {
+        fn capacity(&self) -> io::Result<DeviceCapacity> {
+            self.root.capacity()
+        }
+
+        fn ensure_dir_all(&self, path: &DeviceRelativePath) -> io::Result<()> {
+            self.root.ensure_dir_all(path)
+        }
+
+        fn is_regular_file(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+            self.root.is_regular_file(path)
+        }
+
+        fn regular_file_len(&self, path: &DeviceRelativePath) -> io::Result<Option<u64>> {
+            self.root.regular_file_len(path)
+        }
+
+        fn read_to_string(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<String> {
+            self.root.read_to_string(path, limit)
+        }
+
+        fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {
+            self.root.write_file(path, bytes)
+        }
+
+        fn copy_file(
+            &self,
+            source_path: &Path,
+            path: &DeviceRelativePath,
+            expected: &SourceFileStat,
+        ) -> io::Result<()> {
+            if path == &self.fail_path {
+                return Err(io::Error::other("injected recoverable copy failure"));
+            }
+            self.root.copy_file(source_path, path, expected)
+        }
+
+        fn can_continue_after_copy_error(&self, _error: &io::Error) -> bool {
+            true
+        }
+
+        fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+            self.root.remove_file_if_exists(path)
+        }
+
+        fn remove_tree_if_exists(
+            &self,
+            path: &DeviceRelativePath,
+            cancel: &dyn Fn() -> bool,
+        ) -> io::Result<bool> {
+            self.root.remove_tree_if_exists(path, cancel)
+        }
+
+        fn cleanup_stale_temporary_files(
+            &self,
+            path: &DeviceRelativePath,
+            cancel: &dyn Fn() -> bool,
+        ) -> io::Result<()> {
+            self.root.cleanup_stale_temporary_files(path, cancel)
+        }
     }
 
     fn request(
@@ -425,6 +501,56 @@ mod tests {
             std::fs::read(&truncated).expect("read repaired destination"),
             std::fs::read(&fx.tracks[0].source_path).expect("read source"),
         );
+    }
+
+    #[test]
+    fn recoverable_copy_failure_keeps_syncing_and_persists_successes() {
+        let fx = fixture(3);
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        let fail_path =
+            DeviceRelativePath::new("Music/Artist 1/Album 1/02 Title 2.mp3").expect("safe path");
+        let transport = RecoverableCopyFailureTransport::new(transport(fx.dest.path()), fail_path);
+
+        let outcome = sync(&transport, &prepared(&req), &mut |_| {}, &|| false)
+            .expect("recoverable copy failure does not abort");
+
+        assert_eq!(outcome.copied, 2);
+        assert_eq!(outcome.updated, 0);
+        assert_eq!(outcome.unchanged, 0);
+        assert_eq!(outcome.copy_failures.len(), 1);
+        assert_eq!(outcome.copy_failures[0].track_id, fx.tracks[1].track_id);
+        assert_eq!(outcome.manifest.len(), 2);
+        assert!(
+            outcome
+                .manifest
+                .iter()
+                .all(|entry| entry.track_id != fx.tracks[1].track_id),
+            "failed track must not be persisted as present"
+        );
+
+        assert!(
+            fx.dest
+                .path()
+                .join("Music/Artist 2/Album 2/01 Title 1.mp3")
+                .exists()
+        );
+        assert!(
+            !fx.dest
+                .path()
+                .join("Music/Artist 1/Album 1/02 Title 2.mp3")
+                .exists()
+        );
+        assert!(
+            fx.dest
+                .path()
+                .join("Music/Artist 2/Album 2/03 Title 3.mp3")
+                .exists()
+        );
+
+        let m3u = std::fs::read_to_string(fx.dest.path().join("My Set.m3u8")).expect("read m3u");
+        assert!(m3u.contains("Title 1"));
+        assert!(!m3u.contains("Title 2"));
+        assert!(m3u.contains("Title 3"));
     }
 
     #[test]

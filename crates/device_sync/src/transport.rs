@@ -95,6 +95,17 @@ pub trait DeviceTransport {
         expected: &SourceFileStat,
     ) -> io::Result<()>;
 
+    /// Whether a failed [`DeviceTransport::copy_file`] should be recorded
+    /// as a per-track sync failure instead of aborting the whole run.
+    ///
+    /// Mounted filesystems fail closed by default because an error can mean
+    /// the untrusted destination tree tried to redirect the write. MTP
+    /// publishes one independent object at a time and cleans failed partials,
+    /// so its transport can continue with later objects.
+    fn can_continue_after_copy_error(&self, _error: &io::Error) -> bool {
+        false
+    }
+
     /// Remove the regular file at `path` if present. Returns whether a
     /// file was removed.
     fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool>;

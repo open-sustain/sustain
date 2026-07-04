@@ -216,6 +216,10 @@ impl DeviceTransport for MtpTransport {
         }
     }
 
+    fn can_continue_after_copy_error(&self, _error: &io::Error) -> bool {
+        true
+    }
+
     fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
         let file = self.resolve(path);
         match file.query_info(

@@ -14,7 +14,7 @@ use sustain_pioneer::path_hash;
 use crate::layout;
 use crate::model::{
     GenreBytes, Placement, PreparedSyncRequest, SyncError, SyncOutcome, SyncPlan, SyncProgress,
-    SyncRequest, SyncStage,
+    SyncRequest, SyncStage, SyncTrackFailure,
 };
 use crate::transport::DeviceTransport;
 
@@ -147,8 +147,10 @@ fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreByte
 
 /// Run the sync. `progress` is called as files are processed; `cancel`
 /// is polled cooperatively between files and lets a long copy stop early
-/// without corrupting the device (the manifest returned reflects exactly
-/// what is on the device at the stopping point).
+/// without corrupting the device. The returned manifest preserves files
+/// known to be present: unchanged files plus successful writes. Recoverable
+/// per-track copy failures are reported separately and excluded because the
+/// destination state is transport-dependent after a failed publication.
 pub fn sync(
     transport: &dyn DeviceTransport,
     req: &PreparedSyncRequest,
@@ -193,6 +195,7 @@ pub fn sync(
         .map(|&i| manifest_entry(req, &placements[i]))
         .collect();
     let mut written: HashSet<usize> = HashSet::new();
+    let mut present: HashSet<usize> = diff.unchanged.iter().copied().collect();
 
     let total = diff.to_write.len();
     for (done, &placement_index) in diff.to_write.iter().enumerate() {
@@ -203,21 +206,31 @@ pub fn sync(
         let placement = &placements[placement_index];
         let track = &req.tracks[placement.track_index];
         let dest = base.join(&placement.rel_path);
-        transport
-            .copy_file(&track.source_path, &dest, &track.source.stat)
-            .map_err(|error| SyncError::io(&track.source_path, error))?;
-
-        let is_update = req
-            .previous_manifest
-            .iter()
-            .any(|m| m.on_device_path == placement.rel_path);
-        if is_update {
-            outcome.updated += 1;
-        } else {
-            outcome.copied += 1;
+        match transport.copy_file(&track.source_path, &dest, &track.source.stat) {
+            Ok(()) => {
+                let is_update = req
+                    .previous_manifest
+                    .iter()
+                    .any(|m| m.on_device_path == placement.rel_path);
+                if is_update {
+                    outcome.updated += 1;
+                } else {
+                    outcome.copied += 1;
+                }
+                written.insert(placement_index);
+                present.insert(placement_index);
+                manifest.push(manifest_entry(req, placement));
+            }
+            Err(error) if transport.can_continue_after_copy_error(&error) => {
+                outcome.copy_failures.push(SyncTrackFailure {
+                    track_id: track.track_id,
+                    source_path: track.source_path.clone(),
+                    on_device_path: dest,
+                    message: error.to_string(),
+                });
+            }
+            Err(error) => return Err(SyncError::io(&track.source_path, error)),
         }
-        written.insert(placement_index);
-        manifest.push(manifest_entry(req, placement));
         progress(SyncProgress {
             stage: SyncStage::Copying,
             completed: done + 1,
@@ -243,7 +256,15 @@ pub fn sync(
             completed: 0,
             total: 1,
         });
-        layout::finalize(req, transport, &base, &placements, &written, cancel)?;
+        layout::finalize(
+            req,
+            transport,
+            &base,
+            &placements,
+            &present,
+            &written,
+            cancel,
+        )?;
         progress(SyncProgress {
             stage,
             completed: 1,

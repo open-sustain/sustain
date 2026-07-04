@@ -112,6 +112,9 @@ fn allocate_unique_path(
 }
 
 /// Write the layout's index/database files after audio is in place.
+/// `present` holds the indices (into `placements`) that are known to exist
+/// on the device after the copy phase: unchanged files plus successful
+/// writes from this run. Recoverable copy failures are intentionally absent.
 /// `written` holds the indices (into `placements`) that were (re)copied
 /// this run, so the Pioneer writer can refresh only stale ANLZ files.
 pub(crate) fn finalize(
@@ -119,13 +122,16 @@ pub(crate) fn finalize(
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
+    present: &HashSet<usize>,
     written: &HashSet<usize>,
     cancel: &dyn Fn() -> bool,
 ) -> Result<(), SyncError> {
     match req.device.layout {
-        DeviceLayout::M3u => write_m3u_playlists(req, transport, base, placements),
+        DeviceLayout::M3u => write_m3u_playlists(req, transport, base, placements, present),
         DeviceLayout::FolderPerPlaylist => Ok(()),
-        DeviceLayout::Pioneer => write_pioneer(req, transport, base, placements, written, cancel),
+        DeviceLayout::Pioneer => {
+            write_pioneer(req, transport, base, placements, present, written, cancel)
+        }
     }
 }
 
@@ -276,6 +282,7 @@ fn write_m3u_playlists(
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
+    present: &HashSet<usize>,
 ) -> Result<(), SyncError> {
     // Android players auto-discover playlists where their relative entries
     // resolve, so the `.m3u8` is dropped inside the `Music/` tree with
@@ -298,10 +305,12 @@ fn write_m3u_playlists(
     // own location so each entry resolves next to the `.m3u8`.
     let path_for: HashMap<usize, &str> = placements
         .iter()
-        .map(|p| {
-            let rel = p.rel_path.as_str();
+        .enumerate()
+        .filter(|(index, _placement)| present.contains(index))
+        .map(|(_index, placement)| {
+            let rel = placement.rel_path.as_str();
             (
-                p.track_index,
+                placement.track_index,
                 rel.strip_prefix(&entry_prefix).unwrap_or(rel),
             )
         })
@@ -345,14 +354,17 @@ fn write_pioneer(
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
+    present: &HashSet<usize>,
     written: &HashSet<usize>,
     cancel: &dyn Fn() -> bool,
 ) -> Result<(), SyncError> {
     let assets = req.pioneer_assets()?;
-    // One placement per track, in `req.tracks` order, so a track's index
-    // is its PDB row index.
-    let mut pioneer_tracks = Vec::with_capacity(placements.len());
+    let mut pioneer_tracks = Vec::with_capacity(present.len());
+    let mut row_for: HashMap<usize, usize> = HashMap::new();
     for (placement_index, placement) in placements.iter().enumerate() {
+        if !present.contains(&placement_index) {
+            continue;
+        }
         let track = &req.tracks[placement.track_index];
         let track_assets = &assets.tracks[placement.track_index];
         let audio_path = format!("/{}", placement.rel_path);
@@ -397,6 +409,7 @@ fn write_pioneer(
                 .map_err(|error| SyncError::io(anlz_ext.as_str(), error))?;
         }
 
+        row_for.insert(placement.track_index, pioneer_tracks.len());
         pioneer_tracks.push(PioneerTrack {
             title: track.title.clone(),
             artist: track.artist.clone(),
@@ -420,14 +433,6 @@ fn write_pioneer(
         });
     }
 
-    // Map req.tracks index -> pioneer row index. With one placement per
-    // track in track order this is the identity, but build it explicitly
-    // so the mapping is robust.
-    let row_for: HashMap<usize, usize> = placements
-        .iter()
-        .enumerate()
-        .map(|(row, p)| (p.track_index, row))
-        .collect();
     let pioneer_playlists: Vec<PioneerPlaylist> = req
         .playlists
         .iter()

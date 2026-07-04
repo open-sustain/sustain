@@ -678,7 +678,8 @@ impl ApplicationRuntime {
                                     .to_owned(),
                             );
                         } else {
-                            let severity = if outcome.cancelled {
+                            let severity = if outcome.cancelled || !outcome.copy_failures.is_empty()
+                            {
                                 NotificationSeverity::Warning
                             } else {
                                 NotificationSeverity::Info
