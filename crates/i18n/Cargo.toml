@@ -16,7 +16,7 @@ gettext-rs = { version = "0.7.7", features = ["gettext-system"] }
 # Named-placeholder substitution over the looked-up translation. The translated
 # format string is data, so the standard `format!` macro cannot consume it;
 # `formatx!` applies `{name}` substitution at runtime against a `Display` value.
-formatx = "0.2.4"
+formatx = "0.3.0"
 
 [lints]
 workspace = true
