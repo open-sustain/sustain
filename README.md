@@ -164,6 +164,35 @@ It's also not where I want to be. Windows is a dying OS, and the direction Apple
 
 Seeing where Apple Music is today, there's probably room for a deshitified iTunes on macOS, and some users over there would likely appreciate it. Just not from me.
 
+## Acknowledgements
+
+Sustain exists because an enormous amount of work was freely shared before it.
+It builds on Rust, GTK, GStreamer, SQLite, lofty, Symphonia, and many other
+open-source projects. Its DSP core began as a trimmed, adapted subset of
+[stratum-dsp](https://github.com/HLLMR/stratum-dsp), with the exact provenance
+and Sustain-authored additions documented in
+[`crates/dsp/PROVENANCE.md`](crates/dsp/PROVENANCE.md). The complete dependency
+and licensing record is documented in
+[`docs/licensing.md`](docs/licensing.md) and
+[`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).
+
+The Pioneer/Rekordbox exporter deserves a specific acknowledgement. Although
+Sustain has its own writer, its implementation directly benefited from
+[Deep Symmetry's analysis of the PDB and ANLZ formats](https://djl-analysis.deepsymmetry.org/rekordbox-export-analysis/),
+the Kaitai format specifications and research collected in
+[`crate-digger`](https://github.com/Deep-Symmetry/crate-digger), and the Rust
+format model, parser, and serialization work in
+[`rekordcrate`](https://github.com/Holzhaus/rekordcrate).
+
+I filled the remaining hardware-specific gaps by testing directly against my
+XDJ, including reverse-engineering the ANLZ directory hash required to make
+generated waveforms appear on the hardware.
+
+Without all these people choosing to document, publish, and share their work,
+large parts of Sustain would either have taken vastly more effort or simply
+would not exist. I am immensely grateful to everyone whose work made mine
+possible.
+
 
 ## No Apple intellectual property
 
