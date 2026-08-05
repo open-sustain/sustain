@@ -22,15 +22,13 @@
 /// `audio_path` is the path relative to the drive root, starting with a
 /// leading slash (e.g. `/Contents/Artist/Album/01 Title.mp3`). The pair
 /// is deterministic: the same path always yields the same directory, so
-/// re-syncs address the same analysis folder.
+/// re-syncs address the same analysis folder. The path is hashed exactly as
+/// supplied; separators, case, and Unicode are not normalized.
 pub fn path_hash(audio_path: &str) -> (u16, u32) {
     let mut hash: u32 = 0;
 
-    for c in audio_path.chars() {
-        // Pioneer treats each character as a 16-bit UTF-16 code unit.
-        // Characters outside the BMP would need surrogate handling, but
-        // on-drive paths are sanitized to the BMP before hashing.
-        let code_unit = (c as u32) & 0xFFFF;
+    for code_unit in audio_path.encode_utf16() {
+        let code_unit = u32::from(code_unit);
         let temp = hash.wrapping_mul(0x5BC9).wrapping_add(code_unit);
         hash = temp.wrapping_mul(0x93B5).wrapping_add(code_unit);
     }
@@ -113,5 +111,12 @@ mod tests {
             anlz_file("/Contents/ARTISTTEST1/ALBUMTEST1/TITLETEST1.mp3", "EXT"),
             "/PIONEER/USBANLZ/P051/0001D603/ANLZ0000.EXT"
         );
+    }
+
+    #[test]
+    fn supplementary_plane_character_is_hashed_as_a_surrogate_pair() {
+        let path = "/Contents/Artist/Album/01 🧪.mp3";
+        assert_eq!(path_hash(path), (0x02D, 0x0002_6CD1));
+        assert_eq!(anlz_dir(path), "/PIONEER/USBANLZ/P02D/00026CD1");
     }
 }
