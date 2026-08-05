@@ -70,36 +70,35 @@ No Electron, no web wrappers. It’s built to be fast, lightweight, and play nic
 
 See [docs/features.md](docs/features.md) for the full reference.
 
-Implemented:
-- Library management with two modes — "Don't touch my files" or "Keep my library organized" (*iso-iTunes*)
-- Sidebar-driven navigation — LIBRARY (Music, Albums, Duplicates, Statistics) and PLAYLISTS — with a collapsible left column (*Sustain-native*)
+- Library management with two modes: "Don't touch my files" or "Keep my library organized" (*iso-iTunes*)
+- Sidebar-driven navigation: LIBRARY (Music, Albums, Duplicates, Statistics) and PLAYLISTS, with a collapsible left column (*Sustain-native*)
 - Dense, keyboard-friendly Music and playlist track tables, full-width album grid (*iso-iTunes*)
 - Playlists, smart playlists, and playlist folders (*iso-iTunes*)
 - 5-star ratings, play count, skip count, last played, last skipped (*iso-iTunes*)
 - Up Next queue with `Play Next` and `Add to Queue` (*iso-iTunes*), surfaced as a right-click Next-button popover with two-line artwork rows, drag-to-reorder, evict, and a bounded continuation peek (*Sustain-native*)
 - Real-time search, sortable and customizable columns (*iso-iTunes*)
-- Library-wide Statistics screen — genre and bitrate distributions with slash-delimited genre splitting, most-played and most-liked genres, release-year and year-added histograms (*Sustain-native*)
+- Library-wide Statistics screen: genre and bitrate distributions with slash-delimited genre splitting, most-played and most-liked genres, release-year and year-added histograms (*Sustain-native*)
 - Deferred duplicate detection and journaled consolidation with independent audio, metadata, and artwork choices (*iTunes-adjacent*)
 - Optional low-bitrate track replacement from a pasted YouTube URL via installed `yt-dlp` and FFmpeg tools in Debian installs (*Sustain-native*)
 - Background BPM and musical-key detection, with a tempo/harmony-aware smart-playlist rule engine (*Sustain-native*)
 - Background backfill of artwork, ID3 tags, and lyrics via MusicBrainz, Cover Art Archive, AcoustID, and LRClib (*iTunes-adjacent*)
-- Smart Shuffle that picks each next track as a continuation of the one playing — a local, transparent perceptual match, no cloud, no learning (*Sustain-native*)
-- Sync playlists, smart playlists, and artists to USB sticks, SD cards, and Android phones over MTP, incrementally — as a deduplicated `.m3u8` tree or one folder per selected source (*Sustain-native*)
-- **CDJ/XDJ-ready Rekordbox export** — writes the full Pioneer feature set to the drive (BPM, key, beat grids, waveforms and artwork) so the hardware reads it natively; the only Linux music app I know of that does this, not just copies files (*Sustain-native*)
-- Rip audio CDs straight into the library — MusicBrainz Disc ID lookup, embedded cover art, and FLAC / MP3 256 / MP3 320 encoding (*iso-iTunes*)
+- Smart Shuffle that picks each next track as a continuation of the one playing: a local, transparent perceptual match, no cloud, no learning (*Sustain-native*)
+- Sync playlists, smart playlists, and artists to USB sticks, SD cards, and Android phones over MTP, incrementally, as a deduplicated `.m3u8` tree or one folder per selected source (*Sustain-native*)
+- **CDJ/XDJ-ready Rekordbox export**: writes the full Pioneer feature set to the drive (BPM, key, beat grids, waveforms and artwork) so the hardware reads it natively; the only Linux music app I know of that does this, not just copies files (*Sustain-native*)
+- Rip audio CDs straight into the library: MusicBrainz Disc ID lookup, embedded cover art, and FLAC / MP3 256 / MP3 320 encoding (*iso-iTunes*)
 - Native light / dark theme and system accent color (*Sustain-native*)
 
 ## Install
 
 Pre-built artefacts are attached to each [GitHub release](https://github.com/open-sustain/sustain/releases).
 
-**Debian / Ubuntu (amd64 or arm64)** — the same `.deb` is built against Debian trixie's GTK 4.18 and is verified to install cleanly on Ubuntu 25.10 and Ubuntu 26.04 LTS.
+**Debian / Ubuntu (amd64 or arm64)**: the same `.deb` is built against Debian trixie's GTK 4.18 and is verified to install cleanly on Ubuntu 25.10 and Ubuntu 26.04 LTS.
 
 ```sh
 sudo apt install ./sustain_<version>_<arch>.deb
 ```
 
-**Any other Linux distribution (Fedora, openSUSE, Elementary, Zorin, Mint, …)** — install the Flatpak bundle from the same release. It runs against the `org.gnome.Platform//48` runtime and brings its own GTK 4 / GStreamer stack.
+**Any other Linux distribution (Fedora, openSUSE, Elementary, Zorin, Mint, …)**: install the Flatpak bundle from the same release. It runs against the `org.gnome.Platform//48` runtime and brings its own GTK 4 / GStreamer stack.
 
 ```sh
 flatpak install --user ./sustain.flatpak
@@ -125,7 +124,7 @@ cargo clippy --workspace --all-targets
 
 ### Running against a throwaway library
 
-By default — installed or via `cargo run` — Sustain reads and writes the
+By default, whether installed or run via `cargo run`, Sustain reads and writes the
 real user locations above. To work on a branch without touching the
 installed instance's library, settings, or artwork cache, isolate the
 dev instance with CLI flags (after `--`):
@@ -142,7 +141,7 @@ cargo run -p sustain-app -- --config /tmp/dev.toml --database /tmp/dev.sqlite
 `--local-scope` (alias `--dev`) is the recommended way to run against
 anything other than the installed user's real library. Explicit
 `--config` / `--database` win over `--local-scope`, and whenever any of
-these flags is present Sustain never falls back to the XDG locations —
+these flags is present Sustain never falls back to the XDG locations, so
 the instance is fully self-contained. The resolved paths are printed at
 startup. The single-instance lock keys off the resolved database path,
 so a dev instance and the installed one coexist.
@@ -196,4 +195,4 @@ possible.
 
 ## No Apple intellectual property
 
-This project was written from scratch in Rust, against GTK4 and GStreamer. No Apple source code was read, decompiled, disassembled, or reverse-engineered in the making of Sustain. No Apple binaries, icons, fonts, artwork, sound effects, or localized strings are bundled or redistributed here. The visual and behavioral inspiration comes entirely from my memory and taste as a long-time iTunes user — i.e. from the publicly observable user experience of the application, which is not protected by copyright under EU law (cf. CJEU C-406/10, *SAS Institute v. World Programming*). Sustain is not affiliated with, endorsed by, or connected to Apple Inc. in any way. "iTunes" and "Apple Music" are trademarks of Apple Inc., referenced here only descriptively.
+This project was written from scratch in Rust, against GTK4 and GStreamer. No Apple source code was read, decompiled, disassembled, or reverse-engineered in the making of Sustain. No Apple binaries, icons, fonts, artwork, sound effects, or localized strings are bundled or redistributed here. The visual and behavioral inspiration comes entirely from my memory and taste as a long-time iTunes user: the publicly observable user experience of the application, which is not protected by copyright under EU law (cf. CJEU C-406/10, *SAS Institute v. World Programming*). Sustain is not affiliated with, endorsed by, or connected to Apple Inc. in any way. "iTunes" and "Apple Music" are trademarks of Apple Inc., referenced here only descriptively.
