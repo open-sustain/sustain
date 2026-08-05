@@ -1263,6 +1263,74 @@ mod tests {
     }
 
     #[test]
+    fn search_replacement_restripes_rows_in_their_new_sorted_positions() {
+        let ran = crate::test_support::with_gtk(|| {
+            // In the initial sort, the first three store objects occupy only
+            // even display positions. Search reuses those objects for a
+            // three-row result whose display positions are 0, 1, and 2.
+            // GTK updates each ListItem's position without necessarily
+            // rebinding its cell, so tinting only from `bind` leaves all three
+            // rows carrying their pre-search even stripe.
+            let table = build_track_table(
+                vec![
+                    named_row(1, "A"),
+                    named_row(2, "C"),
+                    named_row(3, "E"),
+                    named_row(4, "B"),
+                    named_row(5, "D"),
+                ],
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let mut layout = read_current_layout(&table.table, &table.managed_columns);
+            layout.sort = Some(TrackColumnSort {
+                column_id: "track_name".to_owned(),
+                ascending: true,
+            });
+            table.apply_layout(&layout);
+
+            let window = gtk::Window::new();
+            window.set_default_size(700, 260);
+            window.set_child(Some(&table.widget()));
+            window.present();
+            drain_main_context();
+
+            table.replace_rows(vec![
+                named_row(1, "A"),
+                named_row(2, "B"),
+                named_row(3, "C"),
+            ]);
+            drain_main_context();
+
+            let root = window
+                .child()
+                .expect("window retains the mapped track table");
+            for (position, text) in ["A", "B", "C"].into_iter().enumerate() {
+                let cell =
+                    cell_containing_label(&root, text).expect("visible search-result cell exists");
+                assert_eq!(
+                    cell.has_css_class("track-table-row-even"),
+                    position % 2 == 0,
+                    "row {text} must be striped from visible position {position}"
+                );
+                assert_eq!(
+                    cell.has_css_class("track-table-row-odd"),
+                    position % 2 != 0,
+                    "row {text} must carry exactly one parity class"
+                );
+            }
+
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
     fn summary_values_reads_the_current_store_rows() {
         crate::test_support::with_gtk(|| {
             let table = build_track_table(Vec::new(), None, None, None, None, None);
@@ -1486,6 +1554,37 @@ mod tests {
             playlist_position: None,
             group_band: None,
         }
+    }
+
+    fn named_row(id: i64, track_name: &str) -> TrackTableRow {
+        let mut row = row(id);
+        row.track_name = track_name.to_owned();
+        row.track_name_sort_key = track_name.to_lowercase();
+        row
+    }
+
+    fn drain_main_context() {
+        let context = glib::MainContext::default();
+        let mut iterations = 0;
+        while context.iteration(false) && iterations < 200 {
+            iterations += 1;
+        }
+    }
+
+    fn cell_containing_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
+        if let Some(label) = root.downcast_ref::<gtk::Label>()
+            && label.text() == text
+        {
+            return root.parent();
+        }
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            if let Some(cell) = cell_containing_label(&widget, text) {
+                return Some(cell);
+            }
+            child = widget.next_sibling();
+        }
+        None
     }
 
     fn store_object_key(table: &TrackTable, position: u32) -> Option<usize> {

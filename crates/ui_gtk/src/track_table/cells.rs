@@ -627,6 +627,7 @@ fn install_cell_chrome(
     context_menu: Option<&TrackTableContextMenu>,
     row_reorder: Option<&RowReorderHooks>,
 ) {
+    install_cell_row_tint_sync(list_item, cell);
     install_cell_selection_sync(list_item, cell);
     if let Some(menu) = context_menu {
         menu.register_cell(list_item, cell);
@@ -635,6 +636,13 @@ fn install_cell_chrome(
     if let Some(hooks) = row_reorder {
         install_cell_drop_target(list_item, cell, hooks.clone());
     }
+}
+
+fn install_cell_row_tint_sync(list_item: &gtk::ListItem, cell: &gtk::Box) {
+    let cell_for_position = cell.clone();
+    list_item.connect_position_notify(move |list_item| {
+        apply_bound_row_tint(&cell_for_position, list_item);
+    });
 }
 
 /// Collect selected track ids from the table selection in model order.
