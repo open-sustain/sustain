@@ -14,7 +14,7 @@ path = "src/lib.rs"
 async-channel = "2"
 gtk.workspace = true
 hashlink = "0.11.0"
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 sustain-app-runtime = { path = "../app_runtime" }
 sustain-artwork = { path = "../artwork" }
 sustain-desktop = { path = "../desktop" }
