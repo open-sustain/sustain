@@ -1,0 +1,35 @@
+[package]
+name = "sustain-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = "0.4"
+sustain-domain = { path = "../crates/domain" }
+sustain-library-store = { path = "../crates/library_store" }
+
+[[bin]]
+name = "managed_path_plan"
+path = "fuzz_targets/managed_path_plan.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sqlite_track_roundtrip"
+path = "fuzz_targets/sqlite_track_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+# Keep libFuzzer and its nightly-only build out of Sustain's normal workspace
+# and commit gate. These targets are an explicitly-invoked maintenance tool.
+[workspace]
+members = ["."]
+resolver = "3"

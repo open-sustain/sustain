@@ -1,4 +1,8 @@
 /target/
+/fuzz/artifacts/
+/fuzz/corpus/
+/fuzz/coverage/
+/fuzz/target/
 /.cache/
 /screenshots/
 /test-library/
