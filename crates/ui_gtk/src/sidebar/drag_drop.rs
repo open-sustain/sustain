@@ -134,11 +134,9 @@ pub(super) fn attach_drag_and_drop(
             return false;
         };
         if let Some(track_ids) = parse_tracks_payload(&text) {
-            if target_accepts_tracks {
-                if let Some(callback) = on_tracks_drop.borrow().as_ref() {
-                    callback(item, track_ids);
-                    return true;
-                }
+            if target_accepts_tracks && let Some(callback) = on_tracks_drop.borrow().as_ref() {
+                callback(item, track_ids);
+                return true;
             }
             return false;
         }

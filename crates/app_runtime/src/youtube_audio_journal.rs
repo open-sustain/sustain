@@ -348,7 +348,7 @@ fn encode_relative_path(relative_path: &TrackRelativePath) -> String {
 }
 
 fn decode_relative_path(value: &str) -> Option<TrackRelativePath> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
     let bytes = value

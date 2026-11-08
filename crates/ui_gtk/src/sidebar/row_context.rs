@@ -419,12 +419,11 @@ fn remove_focus_controllers(entry: &gtk::Entry) {
         let Some(object) = controllers.item(index) else {
             continue;
         };
-        if object.downcast_ref::<gtk::EventControllerKey>().is_some()
-            || object.downcast_ref::<gtk::EventControllerFocus>().is_some()
+        if (object.downcast_ref::<gtk::EventControllerKey>().is_some()
+            || object.downcast_ref::<gtk::EventControllerFocus>().is_some())
+            && let Ok(controller) = object.downcast::<gtk::EventController>()
         {
-            if let Ok(controller) = object.downcast::<gtk::EventController>() {
-                to_remove.push(controller);
-            }
+            to_remove.push(controller);
         }
     }
     for controller in to_remove {

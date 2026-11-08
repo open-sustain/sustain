@@ -438,10 +438,10 @@ impl ApplicationRuntime {
         // through the same auto-advance machinery used by Eager
         // playback. Pure / Off shuffle queues short-circuit here
         // because `needs_lazy_pick` returns false for them.
-        if self.playback_queue.needs_lazy_pick() {
-            if let Some(picked_track_id) = self.pick_smart_shuffle_next() {
-                return self.play_adjacent_track(Some(picked_track_id));
-            }
+        if self.playback_queue.needs_lazy_pick()
+            && let Some(picked_track_id) = self.pick_smart_shuffle_next()
+        {
+            return self.play_adjacent_track(Some(picked_track_id));
         }
         self.play_adjacent_track(self.playback_queue.next_track_id())
     }

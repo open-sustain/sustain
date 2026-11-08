@@ -442,24 +442,24 @@ fn run_track(
 
     // A real audio source that cannot even be opened is a hard failure;
     // record it rather than silently reporting empty bands.
-    if entry.path.is_some() {
-        if let Err(err) = std::fs::File::open(&path) {
-            return TrackResult {
-                id: entry.id.clone(),
-                source,
-                tasks,
-                bpm: None,
-                beat_grid: None,
-                key: None,
-                acoustics: None,
-                waveform: None,
-                bpm_score: None,
-                grid_score: None,
-                key_score: None,
-                timings: None,
-                error: Some(format!("open failed: {err}")),
-            };
-        }
+    if entry.path.is_some()
+        && let Err(err) = std::fs::File::open(&path)
+    {
+        return TrackResult {
+            id: entry.id.clone(),
+            source,
+            tasks,
+            bpm: None,
+            beat_grid: None,
+            key: None,
+            acoustics: None,
+            waveform: None,
+            bpm_score: None,
+            grid_score: None,
+            key_score: None,
+            timings: None,
+            error: Some(format!("open failed: {err}")),
+        };
     }
 
     let analyzer = Analyzer::new(path, analysis_options, duration_hint);

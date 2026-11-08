@@ -1099,10 +1099,10 @@ fn apply_command(
             // resource-usage flip uses. A toggle-only change leaves the
             // pool alone. The dispatch loop recreates the pool with the
             // new window on its next iteration.
-            if state.settings.bpm_range != settings.bpm_range {
-                if let Some(p) = pool.take() {
-                    p.shutdown();
-                }
+            if state.settings.bpm_range != settings.bpm_range
+                && let Some(p) = pool.take()
+            {
+                p.shutdown();
             }
             state.settings = settings;
         }

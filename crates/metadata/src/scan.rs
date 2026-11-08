@@ -241,11 +241,11 @@ where
         // such a file is always parsed and re-records its mtime.
         let fingerprint =
             modified_at.and_then(|modified_at| ScanFingerprint::new(file_size_bytes, modified_at));
-        if let Some(fingerprint) = fingerprint {
-            if walk.known_fingerprints.get(&relative_path) == Some(&fingerprint) {
-                walk.scan.unchanged.push(relative_path);
-                return;
-            }
+        if let Some(fingerprint) = fingerprint
+            && walk.known_fingerprints.get(&relative_path) == Some(&fingerprint)
+        {
+            walk.scan.unchanged.push(relative_path);
+            return;
         }
 
         let initial_read = match self

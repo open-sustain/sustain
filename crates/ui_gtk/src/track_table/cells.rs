@@ -803,7 +803,7 @@ fn apply_bound_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
                 .ok()
                 .and_then(|row| row.group_band)
         });
-    if group_band.unwrap_or_else(|| list_item.position() % 2 == 0) {
+    if group_band.unwrap_or_else(|| list_item.position().is_multiple_of(2)) {
         cell.add_css_class("track-table-row-even");
     } else {
         cell.add_css_class("track-table-row-odd");

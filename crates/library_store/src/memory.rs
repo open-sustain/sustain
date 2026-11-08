@@ -747,11 +747,11 @@ impl LibraryStore for InMemoryLibraryStore {
                     continue;
                 }
                 let child = folders.get(&child_id).expect("iterated id exists in map");
-                if let Some(parent) = child.parent_folder_id {
-                    if deleted.contains(&parent) {
-                        deleted.insert(child_id);
-                        grew = true;
-                    }
+                if let Some(parent) = child.parent_folder_id
+                    && deleted.contains(&parent)
+                {
+                    deleted.insert(child_id);
+                    grew = true;
                 }
             }
             if !grew {

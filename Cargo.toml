@@ -29,7 +29,7 @@ resolver = "3"
 [workspace.package]
 version = "0.8.0-beta.5"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 license = "GPL-3.0-or-later"
 # Sustain ships as a Debian package, not a crates.io library. Every
 # crate in the workspace is private; this opts them all out of `cargo
@@ -41,9 +41,11 @@ publish = false
 gtk = { package = "gtk4", version = "0.10", features = ["v4_18"] }
 
 [workspace.lints.rust]
-# `deny` rather than `forbid` so a single, audited module
-# (`sustain_app_runtime::priority`) can opt in via `#![allow(unsafe_code)]`
-# to wrap the `setpriority` / `ioprio_set` Linux syscalls in safe Rust.
+# `deny` rather than `forbid` so two audited sites can opt in via
+# `allow(unsafe_code)` to wrap unsafe C APIs in safe Rust: the
+# `sustain_app_runtime::priority` module (`setpriority` / `ioprio_set`
+# Linux syscalls) and `sustain_i18n`'s `setlocale` call, made only once
+# the process is checked to be single-threaded.
 # Every other crate and module still rejects `unsafe`; the per-binary
 # `#![forbid(unsafe_code)]` in `crates/app/src/main.rs` reinforces that
 # the application binary itself ships no unsafe code.

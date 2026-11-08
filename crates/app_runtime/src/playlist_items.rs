@@ -227,12 +227,11 @@ impl ApplicationRuntime {
         let library_store = self.library_store()?;
         ensure_parent_folder_exists(library_store, target_parent_folder_id)?;
 
-        if let PlaylistItem::Folder(folder_id) = item {
-            if let Some(target) = target_parent_folder_id {
-                if folder_is_descendant_of(library_store, target, folder_id)? {
-                    return Err(ApplicationRuntimeError::PlaylistFolderWouldCycle);
-                }
-            }
+        if let PlaylistItem::Folder(folder_id) = item
+            && let Some(target) = target_parent_folder_id
+            && folder_is_descendant_of(library_store, target, folder_id)?
+        {
+            return Err(ApplicationRuntimeError::PlaylistFolderWouldCycle);
         }
 
         let source_parent = current_parent_of(library_store, item)?;

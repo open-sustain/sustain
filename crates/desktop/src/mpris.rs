@@ -59,9 +59,7 @@ use async_io::Timer;
 use futures_lite::FutureExt;
 use sustain_app_runtime::{PlaybackState, TrackId};
 use zbus::{
-    connection, interface,
-    object_server::InterfaceRef,
-    zvariant::{OwnedObjectPath, OwnedValue, Value},
+    OwnedObjectPath, OwnedVariant, Variant, connection, interface, object_server::InterfaceRef,
 };
 
 use crate::{DesktopError, DesktopResult, NowPlayingMetadata};
@@ -277,10 +275,10 @@ async fn build_connection(command_sink: Arc<MprisPlaybackSink>) -> zbus::Result<
         command_sink: Arc::clone(&command_sink),
     };
     let player = PlayerInterface::new(command_sink);
-    connection::Builder::session()?
-        .name(BUS_NAME)?
-        .serve_at(OBJECT_PATH, root)?
-        .serve_at(OBJECT_PATH, player)?
+    connection::Builder::session()
+        .name(BUS_NAME)
+        .serve_at(OBJECT_PATH, root)
+        .serve_at(OBJECT_PATH, player)
         .build()
         .await
 }
@@ -422,8 +420,8 @@ fn playback_track_id(state: &PlaybackState) -> Option<TrackId> {
     }
 }
 
-fn build_mpris_metadata(metadata: &NowPlayingMetadata) -> HashMap<String, OwnedValue> {
-    let mut map: HashMap<String, OwnedValue> = HashMap::new();
+fn build_mpris_metadata(metadata: &NowPlayingMetadata) -> HashMap<String, OwnedVariant> {
+    let mut map: HashMap<String, OwnedVariant> = HashMap::new();
 
     let track_id_path = metadata
         .track_id
@@ -431,30 +429,33 @@ fn build_mpris_metadata(metadata: &NowPlayingMetadata) -> HashMap<String, OwnedV
         .unwrap_or_else(|| OwnedObjectPath::try_from(TRACK_ID_NONE).unwrap_or_default());
     map.insert(
         "mpris:trackid".to_owned(),
-        owned_value(Value::from(track_id_path)),
+        owned_value(Variant::from(track_id_path)),
     );
 
     if let Some(duration) = metadata.duration {
         let micros = i64::try_from(duration.as_micros()).unwrap_or(i64::MAX);
-        map.insert("mpris:length".to_owned(), owned_value(Value::from(micros)));
+        map.insert(
+            "mpris:length".to_owned(),
+            owned_value(Variant::from(micros)),
+        );
     }
 
     if let Some(title) = metadata.title.as_deref().filter(|value| !value.is_empty()) {
         map.insert(
             "xesam:title".to_owned(),
-            owned_value(Value::from(title.to_owned())),
+            owned_value(Variant::from(title.to_owned())),
         );
     }
     if let Some(artist) = metadata.artist.as_deref().filter(|value| !value.is_empty()) {
         map.insert(
             "xesam:artist".to_owned(),
-            owned_value(Value::from(vec![artist.to_owned()])),
+            owned_value(Variant::from(vec![artist.to_owned()])),
         );
     }
     if let Some(album) = metadata.album.as_deref().filter(|value| !value.is_empty()) {
         map.insert(
             "xesam:album".to_owned(),
-            owned_value(Value::from(album.to_owned())),
+            owned_value(Variant::from(album.to_owned())),
         );
     }
     if let Some(album_artist) = metadata
@@ -464,27 +465,27 @@ fn build_mpris_metadata(metadata: &NowPlayingMetadata) -> HashMap<String, OwnedV
     {
         map.insert(
             "xesam:albumArtist".to_owned(),
-            owned_value(Value::from(vec![album_artist.to_owned()])),
+            owned_value(Variant::from(vec![album_artist.to_owned()])),
         );
     }
     if let Some(genre) = metadata.genre.as_deref().filter(|value| !value.is_empty()) {
         map.insert(
             "xesam:genre".to_owned(),
-            owned_value(Value::from(vec![genre.to_owned()])),
+            owned_value(Variant::from(vec![genre.to_owned()])),
         );
     }
     if let Some(track_number) = metadata.track_number {
         let value = i32::try_from(track_number).unwrap_or(i32::MAX);
         map.insert(
             "xesam:trackNumber".to_owned(),
-            owned_value(Value::from(value)),
+            owned_value(Variant::from(value)),
         );
     }
     if let Some(disc_number) = metadata.disc_number {
         let value = i32::try_from(disc_number).unwrap_or(i32::MAX);
         map.insert(
             "xesam:discNumber".to_owned(),
-            owned_value(Value::from(value)),
+            owned_value(Variant::from(value)),
         );
     }
 
@@ -501,15 +502,15 @@ fn track_object_path(track_id: TrackId) -> OwnedObjectPath {
         .unwrap_or_else(|_| OwnedObjectPath::try_from(TRACK_ID_NONE).unwrap_or_default())
 }
 
-fn owned_value(value: Value<'_>) -> OwnedValue {
-    // zbus 5's `Value::try_to_owned` is fallible only for unrepresentable
+fn owned_value(value: Variant<'_>) -> OwnedVariant {
+    // zbus's `Variant::try_to_owned` is fallible only for unrepresentable
     // variants (file descriptors, etc.); the variants we construct above
     // are all simple containers. Fall back to an empty string on the
     // theoretical error to keep the metadata dict well-typed rather than
     // panicking inside the publish path.
     value
         .try_to_owned()
-        .unwrap_or_else(|_| OwnedValue::from(zbus::zvariant::Str::from_static("")))
+        .unwrap_or_else(|_| OwnedVariant::from(zbus::Str::from_static("")))
 }
 
 struct RootInterface {
@@ -579,7 +580,7 @@ impl RootInterface {
 struct PlayerInterface {
     command_sink: Arc<MprisPlaybackSink>,
     playback_status: String,
-    metadata: HashMap<String, OwnedValue>,
+    metadata: HashMap<String, OwnedVariant>,
     /// Monotonic origin for the position baseline. `origin.elapsed()` is
     /// the clock fed to [`PositionTracker`]; it never runs backward and is
     /// immune to wall-clock adjustments.
@@ -647,7 +648,7 @@ impl PlayerInterface {
     }
 
     #[zbus(property)]
-    fn metadata(&self) -> HashMap<String, OwnedValue> {
+    fn metadata(&self) -> HashMap<String, OwnedVariant> {
         // zbus serializes the value, so this clone is unavoidable — the
         // dict is small (a handful of entries) and only sent on
         // PropertiesChanged plus explicit Get calls.

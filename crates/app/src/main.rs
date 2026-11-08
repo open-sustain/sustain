@@ -51,7 +51,9 @@ fn main() {
     // does not observe the process locale. The calls are O(1); the
     // (kilobyte-sized) catalog is mmapped lazily on first lookup during UI
     // construction.
-    sustain_i18n::init();
+    if let Err(error) = sustain_i18n::init() {
+        eprintln!("Sustain: {error}.");
+    }
     sustain_profiler::profile_startup!(startup_profile, "locale bound");
 
     // Resolve the config, database, and artwork-cache locations up front
@@ -170,10 +172,8 @@ fn main() {
                     "library services installed (track hydration deferred)"
                 );
             }
-            if was_freshly_created {
-                if let Err(error) = runtime.seed_default_smart_playlists() {
-                    eprintln!("Sustain: failed to seed default smart playlists ({error:?}).");
-                }
+            if was_freshly_created && let Err(error) = runtime.seed_default_smart_playlists() {
+                eprintln!("Sustain: failed to seed default smart playlists ({error:?}).");
             }
         }
         Err(sustain_library_store::StoreError::DatabaseAhead { current, supported }) => {

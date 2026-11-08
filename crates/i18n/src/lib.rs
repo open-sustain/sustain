@@ -44,6 +44,13 @@
 //! or thread creation. It binds the process locale to the environment and
 //! routes lookups to Sustain's installed catalogs. Locale state is
 //! process-global and is never mutated again.
+//!
+//! `setlocale` is the one `unsafe` call here: it rewrites process-global
+//! locale state and reads the environment unsynchronized, so it is sound
+//! only while no other thread runs. [`init`] checks that the process is
+//! single-threaded before calling it — with one thread, no other can start
+//! in between — which makes the audited `unsafe` block below sound by
+//! construction rather than by a caller's promise.
 
 use std::{ffi::OsString, path::PathBuf};
 
@@ -89,13 +96,31 @@ const LOCALE_DIR_OVERRIDE_ENV: &str = "SUSTAIN_LOCALE_DIR";
 /// (`LC_ALL` → `LC_MESSAGES` → `LANG`); `LANG=C` or an unsupported locale leaves
 /// the C locale active, under which every lookup returns its English message id
 /// unchanged.
-pub fn init() {
-    let locale_dir = locale_dir();
-
+///
+/// # Errors
+///
+/// [`ThreadsAlreadyRunning`] when the process already runs other threads:
+/// the locale cannot be adopted safely, so the C locale stays active and the
+/// interface shows its English text. The catalogs are bound either way.
+pub fn init() -> Result<(), ThreadsAlreadyRunning> {
     // Adopt the environment's locale. An unset/`C` environment leaves the C
     // locale active and lookups fall back to the English message ids.
-    gettextrs::setlocale(LocaleCategory::LcAll, "");
+    let adopted = process_is_single_threaded();
+    if adopted {
+        adopt_environment_locale();
+    }
 
+    bind_catalogs();
+    if adopted {
+        Ok(())
+    } else {
+        Err(ThreadsAlreadyRunning)
+    }
+}
+
+/// Route this process's lookups to Sustain's catalogs.
+fn bind_catalogs() {
+    let locale_dir = locale_dir();
     // The domain name and codeset are static, NUL-free byte strings, and a
     // locale directory path cannot contain an interior NUL on Unix; the only
     // documented failure of these calls is an interior NUL in an argument, so
@@ -107,6 +132,40 @@ pub fn init() {
         .expect("bind_textdomain_codeset only fails on an interior NUL in the domain or codeset");
     gettextrs::textdomain(TEXT_DOMAIN)
         .expect("textdomain only fails on an interior NUL in the domain");
+}
+
+/// [`init`] ran after another thread started, so the environment's locale
+/// was not adopted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ThreadsAlreadyRunning;
+
+impl std::fmt::Display for ThreadsAlreadyRunning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("other threads were already running, so the locale was left at C")
+    }
+}
+
+impl std::error::Error for ThreadsAlreadyRunning {}
+
+/// Whether this thread is the process's only one. Linux lists every thread
+/// of the process under `/proc/self/task`; when that cannot be read, the
+/// process is not known to be single-threaded.
+fn process_is_single_threaded() -> bool {
+    std::fs::read_dir("/proc/self/task").is_ok_and(|threads| threads.count() == 1)
+}
+
+/// `setlocale(LC_ALL, "")`. Call only from a single-threaded process.
+#[allow(
+    unsafe_code,
+    reason = "setlocale is unsafe only while other threads run; the caller checks there are none"
+)]
+fn adopt_environment_locale() {
+    // SAFETY: `init` calls this only after `process_is_single_threaded`
+    // found no other thread, and only this thread could start one. No
+    // thread can read the locale or the environment while this runs.
+    unsafe {
+        gettextrs::setlocale(LocaleCategory::LcAll, "");
+    }
 }
 
 /// Resolve the directory passed to `bindtextdomain` from the real environment

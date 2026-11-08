@@ -1023,7 +1023,7 @@ fn encode_path(path: &TrackRelativePath) -> String {
 
 fn decode_path(value: &str) -> ApplicationRuntimeResult<TrackRelativePath> {
     use std::os::unix::ffi::OsStringExt;
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
     }
     let bytes = value

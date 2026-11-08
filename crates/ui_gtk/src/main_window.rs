@@ -1814,10 +1814,10 @@ fn layout_for_selection(
         }
         _ => None,
     };
-    if let Some(scope) = override_scope {
-        if let Ok(Some(layout)) = runtime.load_track_column_layout(scope) {
-            return Some(layout);
-        }
+    if let Some(scope) = override_scope
+        && let Ok(Some(layout)) = runtime.load_track_column_layout(scope)
+    {
+        return Some(layout);
     }
     runtime
         .load_track_column_layout(TrackColumnLayoutScope::Default)

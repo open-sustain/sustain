@@ -1255,7 +1255,7 @@ fn bind_cell_chrome(cell: &gtk::Box, list_item: &gtk::ListItem) {
 fn apply_cd_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
     cell.remove_css_class("track-table-row-even");
     cell.remove_css_class("track-table-row-odd");
-    if list_item.position() % 2 == 0 {
+    if list_item.position().is_multiple_of(2) {
         cell.add_css_class("track-table-row-even");
     } else {
         cell.add_css_class("track-table-row-odd");

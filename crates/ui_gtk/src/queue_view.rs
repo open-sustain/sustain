@@ -670,7 +670,7 @@ fn apply_queue_missing_artwork(image: &gtk::Image) {
 fn apply_queue_row_tint(row: &gtk::Box, position: u32) {
     row.remove_css_class("queue-row-even");
     row.remove_css_class("queue-row-odd");
-    if position % 2 == 0 {
+    if position.is_multiple_of(2) {
         row.add_css_class("queue-row-even");
     } else {
         row.add_css_class("queue-row-odd");

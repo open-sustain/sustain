@@ -437,13 +437,12 @@ fn print_comparison(baseline: &Report, candidate: &Report) {
         baseline.tracks.iter().map(|t| (t.id.as_str(), t)).collect();
     let mut diverged = Vec::new();
     for cand in &candidate.tracks {
-        if let Some(base) = base_by_id.get(cand.id.as_str()) {
-            if base.bpm != cand.bpm
+        if let Some(base) = base_by_id.get(cand.id.as_str())
+            && (base.bpm != cand.bpm
                 || base.key != cand.key
-                || waveform_hash(base) != waveform_hash(cand)
-            {
-                diverged.push(cand.id.as_str());
-            }
+                || waveform_hash(base) != waveform_hash(cand))
+        {
+            diverged.push(cand.id.as_str());
         }
     }
     if diverged.is_empty() {

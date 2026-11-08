@@ -394,7 +394,7 @@ fn group_thousands(value: u32) -> String {
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     let len = digits.len();
     for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (len - index) % 3 == 0 {
+        if index > 0 && (len - index).is_multiple_of(3) {
             grouped.push(',');
         }
         grouped.push(ch);

@@ -126,10 +126,10 @@ pub fn catalog_langs(root: &Path) -> Result<Vec<String>, String> {
         let path = entry
             .map_err(|err| format!("cannot read an entry in {}: {err}", dir.display()))?
             .path();
-        if path.extension().is_some_and(|ext| ext == "po") {
-            if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
-                langs.push(stem.to_owned());
-            }
+        if path.extension().is_some_and(|ext| ext == "po")
+            && let Some(stem) = path.file_stem().and_then(|stem| stem.to_str())
+        {
+            langs.push(stem.to_owned());
         }
     }
     langs.sort();

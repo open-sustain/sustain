@@ -108,12 +108,11 @@ fn entry_source_strings(entry: &str) -> Vec<String> {
             if let Some(done) = current.take() {
                 strings.push(done);
             }
-        } else if trimmed.starts_with('"') {
-            if let Some(buffer) = current.as_mut() {
-                if let Some(content) = quoted_content(trimmed) {
-                    buffer.push_str(content);
-                }
-            }
+        } else if trimmed.starts_with('"')
+            && let Some(buffer) = current.as_mut()
+            && let Some(content) = quoted_content(trimmed)
+        {
+            buffer.push_str(content);
         }
     }
     if let Some(done) = current.take() {

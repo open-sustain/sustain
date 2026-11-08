@@ -14,7 +14,7 @@ path = "src/lib.rs"
 lofty = "0.24.0"
 # Linux fd-based atomic audio-file replacement: no-follow opens, exclusive
 # sibling staging, ownership/mode/xattr preservation, renameat, and fsync.
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.6", features = ["fs"] }
 sha2 = "0.11.0"
 sustain-artwork = { path = "../artwork" }
 sustain-domain = { path = "../domain" }

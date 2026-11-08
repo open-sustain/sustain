@@ -634,10 +634,10 @@ pub fn format_debug(debug: &PickDebug, track_label: impl Fn(TrackId) -> String) 
             _ => "outside pool".to_owned(),
         };
         lines.push(format!("      score {:+.3}  {pool}", entry.total_score));
-        if entry.chosen {
-            if let Some(reason) = leading_reason(entry) {
-                lines.push(format!("      picked — {reason}"));
-            }
+        if entry.chosen
+            && let Some(reason) = leading_reason(entry)
+        {
+            lines.push(format!("      picked — {reason}"));
         }
     }
     lines.join("\n")

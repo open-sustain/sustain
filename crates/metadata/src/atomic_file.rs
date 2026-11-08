@@ -29,8 +29,8 @@ use std::{
 use rustix::{
     fs::{
         AtFlags, CWD, FileType, Mode, OFlags, RenameFlags, Stat, XattrFlags, fchmod, fchown,
-        fgetxattr, flistxattr, fremovexattr, fsetxattr, fstat, fsync, openat, renameat_with,
-        statat, unlinkat,
+        fgetxattr, fgetxattr_query, flistxattr, flistxattr_query, fremovexattr, fsetxattr, fstat,
+        fsync, openat, renameat_with, statat, unlinkat,
     },
     io::Errno,
 };
@@ -347,7 +347,7 @@ fn ensure_readable_xattrs_match(
 }
 
 fn list_xattrs(file: &File) -> io::Result<Vec<CString>> {
-    let bytes = read_xattr_buffer(|buffer| flistxattr(file, buffer))?;
+    let bytes = read_xattr_buffer(|| flistxattr_query(file), |buffer| flistxattr(file, buffer))?;
     if bytes.is_empty() {
         return Ok(Vec::new());
     }
@@ -371,18 +371,24 @@ fn list_xattrs(file: &File) -> io::Result<Vec<CString>> {
 }
 
 fn read_xattr(file: &File, name: &CStr) -> io::Result<Option<Vec<u8>>> {
-    match read_xattr_buffer(|buffer| fgetxattr(file, name, buffer)) {
+    match read_xattr_buffer(
+        || fgetxattr_query(file, name),
+        |buffer| fgetxattr(file, name, buffer),
+    ) {
         Ok(value) => Ok(Some(value)),
         Err(error) if is_missing_xattr(&error) || is_unreadable_xattr(&error) => Ok(None),
         Err(error) => Err(error),
     }
 }
 
+/// Read a variable-length xattr value or name list: `query` its size, then
+/// `read` it into a buffer of that size, retrying when it grows in between.
 fn read_xattr_buffer(
+    mut query: impl FnMut() -> Result<usize, Errno>,
     mut read: impl FnMut(&mut [u8]) -> Result<usize, Errno>,
 ) -> io::Result<Vec<u8>> {
     for _ in 0..MAX_XATTR_READ_ATTEMPTS {
-        let required = match read(&mut []) {
+        let required = match query() {
             Ok(required) => required,
             Err(error) if is_unsupported_xattr(error) => return Ok(Vec::new()),
             Err(error) => return Err(error.into()),
