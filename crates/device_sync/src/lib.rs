@@ -187,6 +187,69 @@ mod tests {
         }
     }
 
+    /// A device that ignores letter case, as FAT32 and exFAT do: every
+    /// path names the file of its lowercase spelling.
+    struct CaseInsensitiveTransport(DeviceRoot);
+
+    fn folded(path: &DeviceRelativePath) -> DeviceRelativePath {
+        DeviceRelativePath::new(path.as_str().to_lowercase()).expect("lowercase keeps a path safe")
+    }
+
+    impl DeviceTransport for CaseInsensitiveTransport {
+        fn capacity(&self) -> io::Result<DeviceCapacity> {
+            self.0.capacity()
+        }
+
+        fn ensure_dir_all(&self, path: &DeviceRelativePath) -> io::Result<()> {
+            self.0.ensure_dir_all(&folded(path))
+        }
+
+        fn is_regular_file(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+            self.0.is_regular_file(&folded(path))
+        }
+
+        fn regular_file_len(&self, path: &DeviceRelativePath) -> io::Result<Option<u64>> {
+            self.0.regular_file_len(&folded(path))
+        }
+
+        fn read_to_string(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<String> {
+            self.0.read_to_string(&folded(path), limit)
+        }
+
+        fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {
+            self.0.write_file(&folded(path), bytes)
+        }
+
+        fn copy_file(
+            &self,
+            source_path: &Path,
+            path: &DeviceRelativePath,
+            expected: &SourceFileStat,
+        ) -> io::Result<()> {
+            self.0.copy_file(source_path, &folded(path), expected)
+        }
+
+        fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+            self.0.remove_file_if_exists(&folded(path))
+        }
+
+        fn remove_tree_if_exists(
+            &self,
+            path: &DeviceRelativePath,
+            cancel: &dyn Fn() -> bool,
+        ) -> io::Result<bool> {
+            self.0.remove_tree_if_exists(&folded(path), cancel)
+        }
+
+        fn cleanup_stale_temporary_files(
+            &self,
+            path: &DeviceRelativePath,
+            cancel: &dyn Fn() -> bool,
+        ) -> io::Result<()> {
+            self.0.cleanup_stale_temporary_files(&folded(path), cancel)
+        }
+    }
+
     fn request(
         fx: &Fixture,
         layout: DeviceLayout,
@@ -396,6 +459,53 @@ mod tests {
         let paths = placement_paths(&req);
         assert_eq!(paths.len(), 2);
         assert_all_unique(&paths);
+    }
+
+    #[test]
+    fn tree_layout_keeps_paths_that_differ_only_in_case_apart() {
+        // One file on a FAT32 or exFAT stick: the second track would
+        // overwrite the first. They share the first track's folders.
+        let tracks = vec![
+            named_track(1, "Intro", "Daft Punk", "Discovery"),
+            named_track(2, "intro", "daft punk", "discovery"),
+        ];
+        let req = plan_request(tracks, DeviceLayout::Pioneer, Vec::new(), Vec::new());
+        let paths = placement_paths(&req);
+        assert_eq!(
+            paths,
+            [
+                "Contents/Daft Punk/Discovery/Intro.mp3",
+                "Contents/Daft Punk/Discovery/intro (2).mp3",
+            ]
+        );
+    }
+
+    #[test]
+    fn folder_layout_keeps_playlists_that_differ_only_in_case_apart() {
+        let tracks = vec![
+            named_track(1, "One", "A", "B"),
+            named_track(2, "Two", "A", "B"),
+        ];
+        let playlists = vec![
+            SyncInputPlaylist {
+                name: "Techno".into(),
+                track_indices: vec![0],
+            },
+            SyncInputPlaylist {
+                name: "techno".into(),
+                track_indices: vec![1],
+            },
+        ];
+        let req = plan_request(
+            tracks,
+            DeviceLayout::FolderPerPlaylist,
+            playlists,
+            Vec::new(),
+        );
+        assert_eq!(
+            placement_paths(&req),
+            ["Techno/001 A - One.mp3", "techno (2)/001 A - Two.mp3"]
+        );
     }
 
     #[test]
@@ -745,6 +855,49 @@ mod tests {
         let second = run(fx.dest.path(), &req2);
         assert_eq!(second.copied, 0);
         assert_eq!(second.unchanged, 3);
+    }
+
+    #[test]
+    fn a_case_correction_keeps_the_track_on_a_case_insensitive_device() {
+        let mut fx = fixture(1);
+        fx.tracks[0].artist = "daft punk".into();
+        let device = || CaseInsensitiveTransport(transport(fx.dest.path()));
+        let first = sync(
+            &device(),
+            &prepared(&request(&fx, DeviceLayout::Pioneer, Vec::new(), true)),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("first sync");
+
+        // The old spelling is not stale: it is the file the new one names.
+        fx.tracks[0].artist = "Daft Punk".into();
+        let corrected = sync(
+            &device(),
+            &prepared(&request(&fx, DeviceLayout::Pioneer, first.manifest, true)),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("corrected sync");
+        assert_eq!((corrected.updated, corrected.removed), (1, 0));
+        assert_eq!(corrected.manifest.len(), 1);
+        let entry = &corrected.manifest[0];
+        assert_eq!(
+            entry.on_device_path.as_str(),
+            "Contents/Daft Punk/Album 2/01 Title 1.mp3"
+        );
+        assert_eq!(
+            device()
+                .regular_file_len(&entry.on_device_path)
+                .expect("read the device"),
+            Some(fx.tracks[0].source.stat.size_bytes),
+        );
+        let anlz = entry.anlz.as_ref().expect("the track keeps its analysis");
+        assert!(
+            device()
+                .is_regular_file(&anlz.dat_path)
+                .expect("read the device")
+        );
     }
 
     #[test]

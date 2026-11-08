@@ -30,10 +30,22 @@ fn device_base(req: &SyncRequest) -> DeviceRelativePath {
 
 struct Diff {
     to_write: Vec<usize>,
+    /// The placements in `to_write` that replace a file the manifest
+    /// already holds in their slot.
+    updates: HashSet<usize>,
     unchanged: Vec<usize>,
+    /// Manifest files whose slot a placement now claims under another
+    /// spelling (an artist or title whose case was corrected). A write
+    /// would land in the old directory entry and keep its old name, so
+    /// these go before the copies.
+    respelled: Vec<DeviceRelativePath>,
     removals: Vec<DeviceRelativePath>,
-    copy_count: usize,
-    update_count: usize,
+}
+
+impl Diff {
+    fn copy_count(&self) -> usize {
+        self.to_write.len() - self.updates.len()
+    }
 }
 
 fn compute_diff(
@@ -42,32 +54,55 @@ fn compute_diff(
     base: &DeviceRelativePath,
     placements: &[Placement],
 ) -> Result<Diff, SyncError> {
-    let prev: HashMap<&str, &str> = req
-        .previous_manifest
+    // Manifest entries by the device file they occupy: an entry from an
+    // export planned before paths were compared case-insensitively can
+    // share its file with another.
+    let mut occupants: HashMap<String, Vec<&SyncManifestEntry>> = HashMap::new();
+    for entry in &req.previous_manifest {
+        occupants
+            .entry(layout::device_path_key(entry.on_device_path.as_str()))
+            .or_default()
+            .push(entry);
+    }
+    let desired: HashSet<String> = placements
         .iter()
-        .map(|e| (e.on_device_path.as_str(), e.fingerprint.as_str()))
+        .map(|p| layout::device_path_key(p.rel_path.as_str()))
         .collect();
-    let desired: HashSet<&str> = placements.iter().map(|p| p.rel_path.as_str()).collect();
 
     let mut to_write = Vec::new();
+    let mut updates = HashSet::new();
     let mut unchanged = Vec::new();
-    let mut copy_count = 0;
-    let mut update_count = 0;
+    let mut respelled = Vec::new();
     for (index, placement) in placements.iter().enumerate() {
-        let known = prev.get(placement.rel_path.as_str());
+        let occupants = occupants
+            .get(&layout::device_path_key(placement.rel_path.as_str()))
+            .map_or(&[][..], Vec::as_slice);
+        let known = occupants
+            .iter()
+            .find(|e| e.on_device_path == placement.rel_path)
+            .map(|e| e.fingerprint.as_str());
+        let respelled_before = respelled.len();
+        respelled.extend(
+            occupants
+                .iter()
+                .filter(|e| e.on_device_path != placement.rel_path)
+                .map(|e| e.on_device_path.clone()),
+        );
+        let respelt = respelled.len() > respelled_before;
         let path = base.join(&placement.rel_path);
         let expected_size = req.tracks[placement.track_index].source.stat.size_bytes;
         let present = transport
             .regular_file_len(&path)
             .map_err(|error| SyncError::io(path.as_str(), error))?;
-        if known == Some(&placement.fingerprint.as_str()) && present == Some(expected_size) {
+        if !respelt
+            && known == Some(placement.fingerprint.as_str())
+            && present == Some(expected_size)
+        {
             unchanged.push(index);
         } else {
             to_write.push(index);
-            if known.is_some() {
-                update_count += 1;
-            } else {
-                copy_count += 1;
+            if !occupants.is_empty() {
+                updates.insert(index);
             }
         }
     }
@@ -75,16 +110,16 @@ fn compute_diff(
     let removals: Vec<DeviceRelativePath> = req
         .previous_manifest
         .iter()
-        .filter(|e| !desired.contains(e.on_device_path.as_str()))
+        .filter(|e| !desired.contains(&layout::device_path_key(e.on_device_path.as_str())))
         .map(|e| e.on_device_path.clone())
         .collect();
 
     Ok(Diff {
         to_write,
+        updates,
         unchanged,
+        respelled,
         removals,
-        copy_count,
-        update_count,
     })
 }
 
@@ -108,8 +143,8 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
         .sum();
     let genre_bytes = genre_breakdown(req, &placements);
     Ok(SyncPlan {
-        to_copy: diff.copy_count,
-        to_update: diff.update_count,
+        to_copy: diff.copy_count(),
+        to_update: diff.updates.len(),
         to_remove: diff.removals,
         unchanged: diff.unchanged.len(),
         bytes_to_copy,
@@ -222,6 +257,19 @@ pub fn sync(
     let mut written = 0_usize;
     let mut present: HashSet<usize> = diff.unchanged.iter().copied().collect();
 
+    // Files whose slot a placement now spells differently go first, and
+    // with their analysis pair unless an unchanged entry records it: they
+    // are part of writing those placements, so this is not a removal the
+    // caller confirms, and not a point to stop at.
+    let kept_anlz = recorded_anlz(&manifest);
+    for rel in &diff.respelled {
+        let anlz = previous_anlz
+            .get(rel)
+            .copied()
+            .filter(|anlz| !kept_anlz.contains(&anlz.dat_path));
+        remove_placement(transport, &base, rel, anlz)?;
+    }
+
     let total = diff.to_write.len();
     for (done, &placement_index) in diff.to_write.iter().enumerate() {
         if cancel() {
@@ -233,11 +281,7 @@ pub fn sync(
         let dest = base.join(&placement.rel_path);
         match transport.copy_file(&track.source_path, &dest, &track.source.stat) {
             Ok(()) => {
-                let is_update = req
-                    .previous_manifest
-                    .iter()
-                    .any(|m| m.on_device_path == placement.rel_path);
-                if is_update {
+                if diff.updates.contains(&placement_index) {
                     outcome.updated += 1;
                 } else {
                     outcome.copied += 1;
@@ -299,10 +343,7 @@ pub fn sync(
     if req.remove_stale && !diff.removals.is_empty() {
         // Analysis pairs the new manifest records are never deleted, even
         // if a (corrupt) stale entry names the same slot.
-        let kept_anlz: HashSet<DeviceRelativePath> = manifest
-            .iter()
-            .filter_map(|entry| entry.anlz.as_ref().map(|anlz| anlz.dat_path.clone()))
-            .collect();
+        let kept_anlz = recorded_anlz(&manifest);
         let remove_total = diff.removals.len();
         for (done, rel) in diff.removals.iter().enumerate() {
             if cancel() {
@@ -339,6 +380,14 @@ pub fn sync(
     outcome.manifest = manifest;
     outcome.manifest_is_authoritative = true;
     Ok(outcome)
+}
+
+/// The analysis files `manifest` records.
+fn recorded_anlz(manifest: &[SyncManifestEntry]) -> HashSet<DeviceRelativePath> {
+    manifest
+        .iter()
+        .filter_map(|entry| entry.anlz.as_ref().map(|anlz| anlz.dat_path.clone()))
+        .collect()
 }
 
 fn manifest_entry(

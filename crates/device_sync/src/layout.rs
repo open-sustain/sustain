@@ -71,14 +71,34 @@ pub(crate) fn plays(layout: DeviceLayout, track: &SyncInputTrack) -> bool {
     }
 }
 
+/// The identity of an on-device path. The filesystems a sync writes to —
+/// FAT32 and exFAT sticks, Android shared storage — ignore letter case,
+/// so two paths that differ only in case name one file. The planner and
+/// the differ compare device paths by this key, never by spelling.
+///
+/// Letters fold through their single-letter uppercase, the mapping
+/// exFAT's up-case table carries; a letter whose uppercase is several
+/// letters (`ß`) stays as it is, as it does on the device.
+pub(crate) fn device_path_key(path: &str) -> String {
+    path.chars()
+        .map(|letter| {
+            let mut upper = letter.to_uppercase();
+            match (upper.next(), upper.next()) {
+                (Some(single), None) => single,
+                _ => letter,
+            }
+        })
+        .collect()
+}
+
 /// Final guard before any filesystem mutation: every planned path must be
-/// unique. The allocators already guarantee this, so a duplicate here is a
+/// unique on the device. The allocators already guarantee this, so a duplicate here is a
 /// planner bug — fail closed with a typed error rather than letting the
 /// copy step and the manifest silently collapse two tracks onto one file.
 fn validate_unique(placements: &[Placement]) -> Result<(), SyncError> {
-    let mut seen: HashSet<&str> = HashSet::with_capacity(placements.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(placements.len());
     for placement in placements {
-        if !seen.insert(placement.rel_path.as_str()) {
+        if !seen.insert(device_path_key(placement.rel_path.as_str())) {
             return Err(SyncError::planning(format!(
                 "duplicate device placement path: {}",
                 placement.rel_path
@@ -88,8 +108,8 @@ fn validate_unique(placements: &[Placement]) -> Result<(), SyncError> {
     Ok(())
 }
 
-/// Allocate a unique on-device relative path `{dir}/{name}` for a track.
-/// The plain sanitized name is tried first; on collision it disambiguates
+/// Allocate a unique on-device relative path `{dir}/{name}` for a track;
+/// `used` holds the [`device_path_key`]s already taken. The plain sanitized name is tried first; on collision it disambiguates
 /// with the immutable track id, reserving room for the suffix before the
 /// length cap so truncation can never drop it. An extra counter covers the
 /// rare case where even the id-tagged name is already taken (sanitization
@@ -105,7 +125,7 @@ fn allocate_unique_path(
 ) -> Result<String, SyncError> {
     let name = crate::sanitize::filename(stem, extension, name_cap);
     let rel = format!("{dir}/{name}");
-    if used.insert(rel.clone()) {
+    if used.insert(device_path_key(&rel)) {
         return Ok(rel);
     }
     for attempt in 0..MAX_DISAMBIGUATION_ATTEMPTS {
@@ -116,7 +136,7 @@ fn allocate_unique_path(
         };
         let name = crate::sanitize::filename_with_suffix(stem, &suffix, extension, name_cap);
         let rel = format!("{dir}/{name}");
-        if used.insert(rel.clone()) {
+        if used.insert(device_path_key(&rel)) {
             return Ok(rel);
         }
     }
@@ -167,12 +187,14 @@ pub fn always_finalizes(layout: DeviceLayout) -> bool {
 
 fn tree_placements(req: &SyncRequest, root_dir: &str) -> Result<Vec<Placement>, SyncError> {
     let mut used: HashSet<String> = HashSet::new();
+    let mut spellings: HashMap<String, String> = HashMap::new();
     let mut placements = Vec::with_capacity(req.tracks.len());
     for (index, track) in req.tracks.iter().enumerate() {
         let artist =
             crate::sanitize::component(&track.artist, TREE_COMPONENT_CAP, "Unknown Artist");
         let album = crate::sanitize::component(&track.album, TREE_COMPONENT_CAP, "Unknown Album");
-        let dir = format!("{root_dir}/{artist}/{album}");
+        let artist_dir = first_spelling(&mut spellings, format!("{root_dir}/{artist}"));
+        let dir = first_spelling(&mut spellings, format!("{artist_dir}/{album}"));
         let rel = allocate_unique_path(
             &mut used,
             &dir,
@@ -189,6 +211,17 @@ fn tree_placements(req: &SyncRequest, root_dir: &str) -> Result<Vec<Placement>, 
         });
     }
     Ok(placements)
+}
+
+/// The spelling the plan already gave the directory `path` names on the
+/// device. Tracks tagged `Daft Punk` and `daft punk` share one folder on
+/// a case-insensitive filesystem, so they share one spelling in the plan
+/// too: the first one met.
+fn first_spelling(spellings: &mut HashMap<String, String>, path: String) -> String {
+    spellings
+        .entry(device_path_key(&path))
+        .or_insert(path)
+        .clone()
 }
 
 fn track_stem(track: &SyncInputTrack) -> String {
@@ -214,13 +247,15 @@ fn folder_placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
         );
 
         // Recover stable indices from the previous manifest so existing
-        // files keep their slot and only new tracks are appended.
-        let prefix = format!("{folder}/");
+        // files keep their slot and only new tracks are appended. The
+        // folder is matched as the device sees it, whatever its case.
+        let prefix = device_path_key(&format!("{folder}/"));
         let prior: HashMap<sustain_domain::TrackId, u32> = req
             .previous_manifest
             .iter()
             .filter_map(|entry| {
-                let rest = entry.on_device_path.as_str().strip_prefix(&prefix)?;
+                let path = device_path_key(entry.on_device_path.as_str());
+                let rest = path.strip_prefix(&prefix)?;
                 let file = rest.rsplit('/').next()?;
                 Some((entry.track_id, leading_number(file)?))
             })
@@ -280,13 +315,15 @@ fn leading_number(name: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// `base`, or `base (n)` when the device already holds that name in
+/// `used` (by [`device_path_key`]).
 fn unique_name(used: &mut HashSet<String>, base: String) -> String {
-    if used.insert(base.clone()) {
+    if used.insert(device_path_key(&base)) {
         return base;
     }
     for n in 2.. {
         let candidate = format!("{base} ({n})");
-        if used.insert(candidate.clone()) {
+        if used.insert(device_path_key(&candidate)) {
             return candidate;
         }
     }
