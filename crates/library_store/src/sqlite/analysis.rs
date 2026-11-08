@@ -43,7 +43,7 @@ pub(super) fn record_analysis(
     {
         transaction
             .execute(
-                FILL_TRACK_BPM_IF_NULL_SQL,
+                REPLACE_TRACK_BPM_UNLESS_SET_BY_USER_SQL,
                 params![i64::from(bpm.hundredths()), track_id.get()],
             )
             .map_err(StoreError::from)?;

@@ -34,13 +34,14 @@ pub use tag_mirror::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork,
 use query::{sort_tracks, track_matches_search};
 use schema::{
     DELETE_SMART_SHUFFLE_INDEX_SQL, DELETE_TRACK_BEAT_GRID_SQL, DELETE_TRACK_SYNCED_LYRICS_SQL,
-    FILL_TRACK_BPM_IF_NULL_SQL, FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, RECONCILE_SCANNED_TRACK_SQL,
-    SAVE_TRACK_SQL, SELECT_ALL_TRACK_ACOUSTICS_SQL, SELECT_ALL_TRACKS_SQL,
-    SELECT_SMART_SHUFFLE_INDEX_SQL, SELECT_TRACK_BEAT_GRID_SQL, SELECT_TRACK_BY_ID_SQL,
-    SELECT_TRACK_SYNCED_LYRICS_SQL, SELECT_TRACK_WAVEFORM_SQL, SELECT_TRACKS_NEEDING_ANALYSIS_SQL,
-    SELECT_TRACKS_NEEDING_ONLINE_SQL, UPSERT_SMART_SHUFFLE_INDEX_SQL, UPSERT_TRACK_ACOUSTICS_SQL,
-    UPSERT_TRACK_ANALYSIS_SQL, UPSERT_TRACK_BEAT_GRID_SQL, UPSERT_TRACK_ONLINE_STATUS_SQL,
-    UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
+    FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, RECONCILE_SCANNED_TRACK_SQL,
+    REPLACE_TRACK_BPM_UNLESS_SET_BY_USER_SQL, SAVE_TRACK_SQL, SELECT_ALL_TRACK_ACOUSTICS_SQL,
+    SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL, SELECT_TRACK_BEAT_GRID_SQL,
+    SELECT_TRACK_BY_ID_SQL, SELECT_TRACK_SYNCED_LYRICS_SQL, SELECT_TRACK_WAVEFORM_SQL,
+    SELECT_TRACKS_NEEDING_ANALYSIS_SQL, SELECT_TRACKS_NEEDING_ONLINE_SQL,
+    UPSERT_SMART_SHUFFLE_INDEX_SQL, UPSERT_TRACK_ACOUSTICS_SQL, UPSERT_TRACK_ANALYSIS_SQL,
+    UPSERT_TRACK_BEAT_GRID_SQL, UPSERT_TRACK_ONLINE_STATUS_SQL, UPSERT_TRACK_SYNCED_LYRICS_SQL,
+    UPSERT_TRACK_WAVEFORM_SQL,
 };
 use sqlite_rows::{
     blob_to_waveform_segments, build_limit, duration_to_seconds, limit_selection_name,
@@ -421,10 +422,12 @@ pub trait LibraryStore: Send + Sync {
     ///
     /// Writes the waveform BLOBs only when the waveform capability
     /// was requested and `analysis.waveform_detail` is non-empty.
-    /// Updates `tracks.bpm_hundredths` and `tracks.musical_key` **only when
-    /// those columns are currently NULL** — file-tag values from
-    /// import and explicit user edits win, the analyzer fills in
-    /// missing data rather than overriding existing data. The beat grid,
+    /// Replaces `tracks.bpm_hundredths` with the measured tempo unless the
+    /// user typed the BPM: a measurement supersedes a tag-imported or
+    /// earlier measured value, never the user's own. Updates
+    /// `tracks.musical_key` **only when it is currently NULL** — file-tag
+    /// values from import and explicit user edits win, the analyzer fills
+    /// in a missing key rather than overriding one. The beat grid,
     /// an analysis product rather than a library value, is replaced
     /// whenever the BPM capability ran — removed when the pass found
     /// none.

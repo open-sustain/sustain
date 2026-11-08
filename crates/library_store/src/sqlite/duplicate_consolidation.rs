@@ -61,7 +61,8 @@ fn update_survivor(connection: &Connection, track: &Track) -> StoreResult<()> {
                 lyrics = ?23,
                 file_size_bytes = ?24,
                 has_embedded_artwork = ?25,
-                file_modified_at_unix = NULL
+                file_modified_at_unix = NULL,
+                bpm_set_by_user = ?27
             WHERE id = ?26
             "#,
             params![
@@ -94,6 +95,7 @@ fn update_survivor(connection: &Connection, track: &Track) -> StoreResult<()> {
                     .transpose()?,
                 track.has_embedded_artwork,
                 track.id.get(),
+                metadata.bpm_set_by_user,
             ],
         )
         .map_err(StoreError::from)?;

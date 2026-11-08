@@ -549,9 +549,11 @@ the middle two minutes — rather than the opening seconds, where intros
 (especially in electronic music) are too sparse and tame to read a
 steady tempo from. That estimate settles the tempo to the beat; the beat
 tracker then measures it to the hundredth over the whole track (see
-*Beat grid* below). The estimate fills the track's BPM only when SQLite
-has no value for that field — analysis supplies missing data, it never
-overrides a value imported from a file tag or set by the user. The BPM
+*Beat grid* below). The measured tempo becomes the track's BPM, replacing
+one imported from a file tag or measured before — so the BPM always
+matches the beat grid. A BPM the user typed in Get Info or the BPM cell
+is theirs: analysis never replaces it, until they clear it. The
+measured BPM stays in the library and is not written to the file. The BPM
 column ships visible by default and feeds the `BPM` smart-playlist field
 for tempo-aware rules.
 
@@ -583,9 +585,9 @@ that fit every beat of the track at once, so the grid does not drift over
 a long track, and counts bars from where the timbre changes. Grids are
 stored in the library and exported to Pioneer drives. Long tracks (DJ
 mixes, classical movements, podcasts) get no grid, since no single tempo
-fits them. Tempo analysis never overwrites a BPM the library already
-holds. If that BPM disagrees with the grid by more than half a beat per
-minute, for example because the user corrected it, the grid is not
+fits them. Tempo analysis sets the track's BPM to the grid's tempo
+unless the user typed the BPM. If a typed BPM disagrees with the grid by
+more than half a beat per minute, the grid is not
 exported: an export shows no grid rather than one that contradicts the
 track's tempo. Against Rekordbox on the same 3,902 dance tracks, 67% of
 grids land within 20 ms of Rekordbox's beats across the whole track, and

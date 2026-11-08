@@ -78,6 +78,9 @@ fn initial_tags_from_tagged_file(
         bpm: tag
             .and_then(|tag| tag.get_string(bpm_item_key(tag.tag_type())))
             .and_then(parse_bpm),
+        // A BPM read from tags came from whichever tool wrote them, not
+        // from the user's hand in Sustain.
+        bpm_set_by_user: false,
         // A key tag that is not a key in any notation (free text, a URL)
         // is dropped here rather than imported as a value.
         key: tag

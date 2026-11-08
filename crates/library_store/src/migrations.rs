@@ -14,12 +14,13 @@ use crate::{
     StoreError, StoreResult,
     schema::{
         ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_BEAT_GRID_SQL,
-        ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_COLUMN_SORT_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
-        NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
+        ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL,
+        BACKFILL_GENERATED_SORT_FIELDS_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL,
+        STORE_BPM_IN_HUNDREDTHS_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 10;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 11;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -90,6 +91,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 10,
         description: "store each track's bit depth and rescan every file once to learn it",
         step: MigrationStep::Sql(ADD_TRACK_BIT_DEPTH_SQL),
+    },
+    Migration {
+        version: 11,
+        description: "remember which BPMs the user typed, and measure every other one again",
+        step: MigrationStep::Sql(ADD_TRACK_BPM_SET_BY_USER_SQL),
     },
 ];
 
@@ -821,9 +827,10 @@ mod tests {
                 .expect("track preserved");
             assert_eq!(hundredths, *expected, "{bpm:?}");
             assert_eq!((title.as_str(), key.as_str()), ("Title", "Am"));
-            // A cleared tempo is analyzed again; every other attempt stands.
-            let cleared = bpm.is_some() && expected.is_none();
-            let expected_bpm_attempt = if cleared { None } else { Some(10) };
+            // A cleared tempo is analyzed again, and so (version 11) is
+            // every held one; only a track that never had a BPM keeps its
+            // attempt.
+            let expected_bpm_attempt = if bpm.is_none() { Some(10) } else { None };
             assert_eq!(bpm_attempt, expected_bpm_attempt, "{bpm:?}");
             assert_eq!(key_attempt, Some(20));
         }
@@ -880,7 +887,7 @@ mod tests {
             user_version(&connection).expect("version"),
             CURRENT_SCHEMA_VERSION
         );
-        let (title, bpm, attempt): (String, i64, i64) = connection
+        let (title, bpm, attempt): (String, i64, Option<i64>) = connection
             .query_row(
                 "SELECT t.title, t.bpm_hundredths, a.bpm_attempted_at_unix \
                  FROM tracks t JOIN track_analysis a ON a.track_id = t.id",
@@ -888,7 +895,8 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .expect("track preserved");
-        assert_eq!((title.as_str(), bpm, attempt), ("Title", 12_886, 10));
+        // Version 11 forgets the attempt so the held BPM is measured again.
+        assert_eq!((title.as_str(), bpm, attempt), ("Title", 12_886, None));
         let grids: i64 = connection
             .query_row("SELECT COUNT(*) FROM track_beat_grid", [], |row| row.get(0))
             .expect("beat grid table");
@@ -974,6 +982,100 @@ mod tests {
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn upgrade_from_v10_marks_no_bpm_as_typed_and_measures_held_bpms_again() {
+        let connection = Connection::open_in_memory().expect("connection");
+        for sql in [
+            SCHEMA_SQL,
+            ADD_TRACK_COLUMN_SORT_SQL,
+            BACKFILL_GENERATED_SORT_FIELDS_SQL,
+            ADD_SYNC_DEVICE_ARTISTS_SQL,
+            NORMALIZE_EMPTY_TRACK_METADATA_SQL,
+            ADD_SYNC_MANIFEST_ANLZ_SQL,
+        ] {
+            connection
+                .execute_batch(sql)
+                .expect("schema up to version 6");
+        }
+        normalize_musical_keys(&connection).expect("schema version 7 migration");
+        for sql in [
+            STORE_BPM_IN_HUNDREDTHS_SQL,
+            ADD_TRACK_BEAT_GRID_SQL,
+            ADD_TRACK_BIT_DEPTH_SQL,
+        ] {
+            connection
+                .execute_batch(sql)
+                .expect("schema versions 8 to 10");
+        }
+        // Track 1 holds a BPM; track 2 was measured and found none.
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path, title, bpm_hundredths) \
+                     VALUES (1, x'61', 'Held', 6300), (2, x'62', 'Empty', NULL);
+                 INSERT INTO track_analysis \
+                     (track_id, bpm_attempted_at_unix, key_attempted_at_unix, analyzer_version) \
+                     VALUES (1, 1700000000, 1700000000, 13), (2, 1700000000, 1700000000, 13);",
+            )
+            .expect("seed tracks");
+        connection
+            .pragma_update(None, "user_version", 10)
+            .expect("set version");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        // Title, BPM, typed by the user, BPM attempt, key attempt.
+        type Row = (String, Option<i64>, bool, Option<i64>, Option<i64>);
+        let rows: Vec<Row> = connection
+            .prepare(
+                "SELECT t.title, t.bpm_hundredths, t.bpm_set_by_user, \
+                     a.bpm_attempted_at_unix, a.key_attempted_at_unix \
+                 FROM tracks t JOIN track_analysis a ON a.track_id = t.id ORDER BY t.id",
+            )
+            .expect("prepare")
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        // Values are kept; only the held BPM's attempt is forgotten, so
+        // its tempo is measured again and the measurement replaces it.
+        assert_eq!(
+            rows,
+            [
+                (
+                    "Held".to_owned(),
+                    Some(6300),
+                    false,
+                    None,
+                    Some(1_700_000_000)
+                ),
+                (
+                    "Empty".to_owned(),
+                    None,
+                    false,
+                    Some(1_700_000_000),
+                    Some(1_700_000_000)
+                ),
+            ]
+        );
+        assert!(
+            connection
+                .execute("UPDATE tracks SET bpm_set_by_user = 2 WHERE id = 1", [])
+                .is_err()
+        );
     }
 
     #[test]

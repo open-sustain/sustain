@@ -26,8 +26,8 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
 
     let bpm_row = build_switch_row(
         "BPM detection",
-        "Runs in the background on tracks missing a BPM value. \
-         Never modifies tracks that already have one.",
+        "Runs in the background and sets each track's BPM to the measured \
+         tempo. Never replaces a BPM you typed yourself.",
         initial.bpm,
     );
     let key_row = build_switch_row(

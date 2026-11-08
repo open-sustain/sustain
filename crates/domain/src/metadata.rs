@@ -21,6 +21,10 @@ pub struct TrackMetadata {
     pub year: Option<i32>,
     pub compilation: Option<bool>,
     pub bpm: Option<Bpm>,
+    /// Whether the user typed `bpm` in Sustain. Tempo analysis replaces
+    /// any other BPM — read from file tags or measured before — with its
+    /// own measurement, but never one the user set.
+    pub bpm_set_by_user: bool,
     pub key: Option<MusicalKey>,
     pub comments: Option<String>,
     pub lyrics: Option<String>,
@@ -126,6 +130,13 @@ impl TrackMetadata {
         apply_field_change(&mut self.year, &change.year);
         apply_field_change(&mut self.compilation, &change.compilation);
         apply_field_change(&mut self.bpm, &change.bpm);
+        match change.bpm {
+            FieldChange::Unchanged => {}
+            FieldChange::Set(_) => self.bpm_set_by_user = true,
+            // A cleared BPM is no value of the user's: analysis may
+            // measure one.
+            FieldChange::Clear => self.bpm_set_by_user = false,
+        }
         apply_field_change(&mut self.key, &change.key);
         apply_text_field_change(&mut self.comments, &change.comments);
         apply_text_field_change(&mut self.lyrics, &change.lyrics);
@@ -530,6 +541,40 @@ mod tests {
         metadata.fill_missing_generated_sort_fields();
 
         assert_eq!(metadata.artist_sort.as_deref(), Some("Beatles, The"));
+    }
+
+    #[test]
+    fn a_bpm_the_user_sets_is_marked_theirs_until_they_clear_it() {
+        let mut metadata = TrackMetadata {
+            bpm: Bpm::from_whole(63),
+            ..TrackMetadata::default()
+        };
+
+        metadata.apply_change(&MetadataChange {
+            title: FieldChange::Set("Retitled".to_owned()),
+            ..MetadataChange::default()
+        });
+        assert!(!metadata.bpm_set_by_user);
+
+        metadata.apply_change(&MetadataChange {
+            bpm: FieldChange::Set(Bpm::from_whole(126).expect("tempo")),
+            ..MetadataChange::default()
+        });
+        assert!(metadata.bpm_set_by_user);
+
+        metadata.fill_missing_from_change(&MetadataChange {
+            bpm: FieldChange::Set(Bpm::from_whole(90).expect("tempo")),
+            ..MetadataChange::default()
+        });
+        assert_eq!(metadata.bpm, Bpm::from_whole(126));
+        assert!(metadata.bpm_set_by_user);
+
+        metadata.apply_change(&MetadataChange {
+            bpm: FieldChange::Clear,
+            ..MetadataChange::default()
+        });
+        assert_eq!(metadata.bpm, None);
+        assert!(!metadata.bpm_set_by_user);
     }
 
     #[test]

@@ -503,6 +503,17 @@ ALTER TABLE tracks ADD COLUMN bit_depth INTEGER CHECK (bit_depth BETWEEN 1 AND 2
 UPDATE tracks SET file_modified_at_unix = NULL;
 "#;
 
+// Tempo analysis now replaces every BPM the user did not type. No record
+// says which existing BPMs the user typed, so every one starts as not
+// user-set; tracks whose tempo was already measured measure it again so
+// the measurement replaces the BPM their row kept from file tags.
+pub(super) const ADD_TRACK_BPM_SET_BY_USER_SQL: &str = r#"
+ALTER TABLE tracks ADD COLUMN bpm_set_by_user INTEGER NOT NULL DEFAULT 0
+    CHECK (bpm_set_by_user IN (0, 1));
+UPDATE track_analysis SET bpm_attempted_at_unix = NULL
+WHERE track_id IN (SELECT id FROM tracks WHERE bpm_hundredths IS NOT NULL);
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
@@ -610,6 +621,7 @@ const TRACK_COLUMNS: &[TrackColumn] = &[
     TrackColumn::stored_value("composer_sort"),
     TrackColumn::stored_value("file_modified_at_unix"),
     TrackColumn::stored_value("bit_depth"),
+    TrackColumn::stored_value("bpm_set_by_user"),
 ];
 
 pub(crate) mod track_column_index {
@@ -652,6 +664,7 @@ pub(crate) mod track_column_index {
     pub(crate) const COMPOSER_SORT: usize = 36;
     pub(crate) const FILE_MODIFIED_AT_UNIX: usize = 37;
     pub(crate) const BIT_DEPTH: usize = 38;
+    pub(crate) const BPM_SET_BY_USER: usize = 39;
 }
 
 pub(super) static SAVE_TRACK_SQL: LazyLock<String> = LazyLock::new(|| {
@@ -793,11 +806,11 @@ ON CONFLICT(track_id) DO UPDATE SET
     detail_segments = excluded.detail_segments
 "#;
 
-/// "Fill in `tracks.bpm_hundredths` only if it is currently NULL." Honors
-/// the rule that user-edited or tag-imported values win — the analyzer
-/// supplies missing data, it never overrides existing data.
-pub(super) const FILL_TRACK_BPM_IF_NULL_SQL: &str =
-    r#"UPDATE tracks SET bpm_hundredths = ?1 WHERE id = ?2 AND bpm_hundredths IS NULL"#;
+/// "Set `tracks.bpm_hundredths` to the measured tempo unless the user
+/// typed it." A measurement supersedes a BPM read from file tags or
+/// measured before, but never the user's own value.
+pub(super) const REPLACE_TRACK_BPM_UNLESS_SET_BY_USER_SQL: &str =
+    r#"UPDATE tracks SET bpm_hundredths = ?1 WHERE id = ?2 AND bpm_set_by_user = 0"#;
 
 pub(super) const FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL: &str =
     r#"UPDATE tracks SET musical_key = ?1 WHERE id = ?2 AND musical_key IS NULL"#;
@@ -1023,6 +1036,7 @@ mod tests {
                 "file_modified_at_unix",
             ),
             (track_column_index::BIT_DEPTH, "bit_depth"),
+            (track_column_index::BPM_SET_BY_USER, "bpm_set_by_user"),
         ];
 
         assert_eq!(TRACK_COLUMNS.len(), expected.len());

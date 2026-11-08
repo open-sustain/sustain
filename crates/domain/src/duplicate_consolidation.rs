@@ -554,7 +554,10 @@ fn copy_metadata_field(
         DuplicateMetadataField::DiscTotal => target.disc_total = source.disc_total,
         DuplicateMetadataField::Year => target.year = source.year,
         DuplicateMetadataField::Compilation => target.compilation = source.compilation,
-        DuplicateMetadataField::Bpm => target.bpm = source.bpm,
+        DuplicateMetadataField::Bpm => {
+            target.bpm = source.bpm;
+            target.bpm_set_by_user = source.bpm_set_by_user;
+        }
         DuplicateMetadataField::Key => target.key = source.key,
         DuplicateMetadataField::Comments => target.comments.clone_from(&source.comments),
         DuplicateMetadataField::Lyrics => target.lyrics.clone_from(&source.lyrics),
@@ -618,7 +621,7 @@ fn rewrite_playlist_entries(
 mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
-    use crate::{PlayStatistics, PlaylistId, Rating, TrackLocation, TrackRelativePath};
+    use crate::{Bpm, PlayStatistics, PlaylistId, Rating, TrackLocation, TrackRelativePath};
 
     use super::*;
 
@@ -698,6 +701,8 @@ mod tests {
         first.rating = Rating::new(3).expect("rating");
         first.statistics = statistics(2, 1, 200, 100);
         let mut second = track(2, "Artist", "Chosen", "Album", 220);
+        second.metadata.bpm = Bpm::from_whole(126);
+        second.metadata.bpm_set_by_user = true;
         second.rating = Rating::new(5).expect("rating");
         second.statistics = statistics(7, 4, 300, 150);
         let first_id = first.id;
@@ -733,6 +738,9 @@ mod tests {
 
         assert_eq!(plan.survivor.id, track_id(1));
         assert_eq!(plan.survivor.metadata.title.as_deref(), Some("Chosen"));
+        // A BPM the user typed stays theirs on the survivor.
+        assert_eq!(plan.survivor.metadata.bpm, Bpm::from_whole(126));
+        assert!(plan.survivor.metadata.bpm_set_by_user);
         assert_eq!(
             plan.survivor.metadata.duration,
             Some(Duration::from_secs(200))

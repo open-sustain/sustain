@@ -1059,7 +1059,7 @@ fn sqlite_store_cascade_deletes_rules_when_smart_playlist_deleted() {
 // -------- analysis storage --------
 
 /// Build a non-trivial `TrackAnalysis` with a handful of segments
-/// in each tier so blob round-trip and "fill if NULL" semantics
+/// in each tier so blob round-trip and the BPM/key write rules
 /// both have real data to act on.
 /// An analysis whose tempo, when it has one, comes with a grid of that
 /// tempo.
@@ -1251,20 +1251,27 @@ fn in_memory_record_analysis_keeps_the_latest_beat_grid() {
     run_record_analysis_keeps_the_latest_beat_grid(&InMemoryLibraryStore::new());
 }
 
-fn run_record_analysis_fills_tracks_columns_only_when_null(store: &dyn LibraryStore) {
-    // First track: no pre-existing BPM/key — analyzer fills both.
+fn run_record_analysis_replaces_bpms_the_user_did_not_type(store: &dyn LibraryStore) {
+    // No BPM or key yet: analysis fills both.
     let blank = track(1, "blank.flac");
     store.save_track(blank.clone()).expect("save blank");
 
-    // Second track: user-set BPM/key — analyzer must not clobber.
-    let mut taken = track(2, "taken.flac");
-    taken.metadata.bpm = Bpm::from_whole(95);
-    taken.metadata.key = Some(MusicalKey::AMinor);
-    store.save_track(taken.clone()).expect("save taken");
+    // BPM and key read from file tags: the measured tempo replaces the
+    // tag's BPM; the tag's key stays.
+    let mut tagged = track(2, "tagged.flac");
+    tagged.metadata.bpm = Bpm::from_whole(63);
+    tagged.metadata.key = Some(MusicalKey::AMinor);
+    store.save_track(tagged.clone()).expect("save tagged");
+
+    // A BPM the user typed: analysis leaves it.
+    let mut typed = track(3, "typed.flac");
+    typed.metadata.bpm = Bpm::from_whole(95);
+    typed.metadata.bpm_set_by_user = true;
+    store.save_track(typed.clone()).expect("save typed");
 
     // A measured tempo keeps its hundredths.
     let analysis = sample_analysis(Some(126.37), Some(MusicalKey::DMinor));
-    for id in [blank.id, taken.id] {
+    for id in [blank.id, tagged.id, typed.id] {
         store
             .record_analysis(
                 id,
@@ -1279,20 +1286,82 @@ fn run_record_analysis_fills_tracks_columns_only_when_null(store: &dyn LibrarySt
     assert_eq!(loaded_blank.metadata.bpm, Bpm::from_hundredths(12_637));
     assert_eq!(loaded_blank.metadata.key, Some(MusicalKey::DMinor));
 
-    let loaded_taken = store.track(taken.id).expect("load taken").expect("exists");
-    assert_eq!(loaded_taken.metadata.bpm, Bpm::from_whole(95));
-    assert_eq!(loaded_taken.metadata.key, Some(MusicalKey::AMinor));
+    let loaded_tagged = store
+        .track(tagged.id)
+        .expect("load tagged")
+        .expect("exists");
+    assert_eq!(loaded_tagged.metadata.bpm, Bpm::from_hundredths(12_637));
+    assert!(!loaded_tagged.metadata.bpm_set_by_user);
+    assert_eq!(loaded_tagged.metadata.key, Some(MusicalKey::AMinor));
+
+    let loaded_typed = store.track(typed.id).expect("load typed").expect("exists");
+    assert_eq!(loaded_typed.metadata.bpm, Bpm::from_whole(95));
+    assert!(loaded_typed.metadata.bpm_set_by_user);
 }
 
 #[test]
-fn sqlite_record_analysis_fills_tracks_columns_only_when_null() {
+fn sqlite_record_analysis_replaces_bpms_the_user_did_not_type() {
     let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_record_analysis_fills_tracks_columns_only_when_null(&store);
+    run_record_analysis_replaces_bpms_the_user_did_not_type(&store);
 }
 
 #[test]
-fn in_memory_record_analysis_fills_tracks_columns_only_when_null() {
-    run_record_analysis_fills_tracks_columns_only_when_null(&InMemoryLibraryStore::new());
+fn in_memory_record_analysis_replaces_bpms_the_user_did_not_type() {
+    run_record_analysis_replaces_bpms_the_user_did_not_type(&InMemoryLibraryStore::new());
+}
+
+fn run_a_bpm_edit_survives_analysis_until_the_user_clears_it(store: &dyn LibraryStore) {
+    let mut tagged = track(1, "tagged.flac");
+    tagged.metadata.bpm = Bpm::from_whole(63);
+    store.save_track(tagged.clone()).expect("save");
+    let analysis = sample_analysis(Some(126.37), None);
+    let analyze = || {
+        store
+            .record_analysis(
+                tagged.id,
+                &analysis,
+                AnalysisCapabilities::all(),
+                ctx(1_700_000_000),
+            )
+            .expect("record");
+        store
+            .track(tagged.id)
+            .expect("load")
+            .expect("exists")
+            .metadata
+    };
+    let edit = |bpm| {
+        store
+            .apply_track_metadata_change(
+                tagged.id,
+                &MetadataChange {
+                    bpm,
+                    ..MetadataChange::default()
+                },
+            )
+            .expect("edit");
+    };
+
+    edit(FieldChange::Set(Bpm::from_whole(128).expect("tempo")));
+    let after_edit = analyze();
+    assert_eq!(after_edit.bpm, Bpm::from_whole(128));
+    assert!(after_edit.bpm_set_by_user);
+
+    edit(FieldChange::Clear);
+    let after_clear = analyze();
+    assert_eq!(after_clear.bpm, Bpm::from_hundredths(12_637));
+    assert!(!after_clear.bpm_set_by_user);
+}
+
+#[test]
+fn sqlite_a_bpm_edit_survives_analysis_until_the_user_clears_it() {
+    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
+    run_a_bpm_edit_survives_analysis_until_the_user_clears_it(&store);
+}
+
+#[test]
+fn in_memory_a_bpm_edit_survives_analysis_until_the_user_clears_it() {
+    run_a_bpm_edit_survives_analysis_until_the_user_clears_it(&InMemoryLibraryStore::new());
 }
 
 fn run_tracks_needing_analysis_lists_only_un_attempted(store: &dyn LibraryStore) {
