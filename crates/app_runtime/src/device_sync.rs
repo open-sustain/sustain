@@ -50,6 +50,9 @@ pub struct DeviceAnalysisReadiness {
     pub missing_bpm: usize,
     pub missing_key: usize,
     pub missing_waveform: usize,
+    /// Tracks that will reach the player without a beat grid: none was
+    /// measured, or the library's BPM no longer agrees with it.
+    pub missing_beat_grid: usize,
     pub analyzable: usize,
 }
 
@@ -427,6 +430,10 @@ impl ApplicationRuntime {
             total,
             ..Default::default()
         };
+        let beat_grids = self
+            .library_store
+            .as_ref()
+            .and_then(|store| store.load_beat_grids(&track_ids).ok());
         for tid in &track_ids {
             if let Some(track) = self.library_track(*tid) {
                 if track.metadata.bpm.is_none() {
@@ -434,6 +441,14 @@ impl ApplicationRuntime {
                 }
                 if track.metadata.key.is_none() {
                     readiness.missing_key += 1;
+                }
+                if let Some(grids) = beat_grids.as_ref()
+                    && grids
+                        .get(tid)
+                        .and_then(|grid| grid.for_library_tempo(track.metadata.bpm))
+                        .is_none()
+                {
+                    readiness.missing_beat_grid += 1;
                 }
             }
         }
@@ -1402,6 +1417,81 @@ mod tests {
             sync_input_track(&lossy, path.clone(), source()).bit_depth,
             16
         );
+    }
+
+    #[test]
+    fn readiness_counts_tracks_the_player_will_get_without_a_grid() {
+        use sustain_domain::{BeatGrid, Bpm, TrackAnalysis, WaveformSegments};
+        use sustain_library_store::{AnalysisCapabilities, AnalysisContext};
+
+        let store = InMemoryLibraryStore::new();
+        let device = SyncDevice {
+            id: SyncDeviceId::new("xdj").expect("device id"),
+            label: "USB".to_owned(),
+            kind: DeviceKind::UsbDrive,
+            layout: DeviceLayout::Pioneer,
+            sub_path: DeviceRelativePath::root(),
+            files_per_folder_cap: FilesPerFolderCap::Unlimited,
+            volume_id: None,
+        };
+        store.save_sync_device(&device).expect("save device");
+        store
+            .save_device_artist_selection(&device.id, &["Artist A".to_owned()])
+            .expect("save artist selection");
+        let tempo = |hundredths| Bpm::from_hundredths(hundredths).expect("tempo");
+        let empty = WaveformSegments {
+            segment_duration_ms: 0.0,
+            segments: Vec::new(),
+        };
+        // 1: measured, so the grid agrees with the BPM analysis set.
+        // 2: measured, but the user typed half the tempo, so the grid no
+        // longer describes it. 3: never measured.
+        for (id, typed_bpm, measured) in [(1, None, true), (2, Some(6_400), true), (3, None, false)]
+        {
+            let mut track = library_track(id, &format!("{id}.mp3"), "Artist A");
+            track.metadata.bpm = typed_bpm.map(tempo);
+            track.metadata.bpm_set_by_user = typed_bpm.is_some();
+            store.save_track(track.clone()).expect("save track");
+            if measured {
+                let analysis = TrackAnalysis {
+                    bpm: Some(tempo(12_800)),
+                    key: None,
+                    beat_grid: Some(
+                        BeatGrid::new(tempo(12_800), std::time::Duration::ZERO, 1).expect("grid"),
+                    ),
+                    waveform_preview: empty.clone(),
+                    waveform_detail: empty.clone(),
+                    acoustics: None,
+                };
+                let bpm_only = AnalysisCapabilities {
+                    bpm: true,
+                    key: false,
+                    audio: false,
+                };
+                store
+                    .record_analysis(
+                        track.id,
+                        &analysis,
+                        bpm_only,
+                        AnalysisContext {
+                            analyzer_version: 1,
+                            now_unix: 0,
+                        },
+                    )
+                    .expect("record analysis");
+            }
+        }
+        let runtime = ApplicationRuntime::new()
+            .with_library_services(
+                std::sync::Arc::new(store),
+                std::sync::Arc::new(CountingMetadataService::default()),
+            )
+            .expect("library services");
+
+        let readiness = runtime.device_analysis_readiness(&device.id);
+        assert_eq!(readiness.total, 3);
+        assert_eq!(readiness.missing_bpm, 1);
+        assert_eq!(readiness.missing_beat_grid, 2);
     }
 
     #[test]

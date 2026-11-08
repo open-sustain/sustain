@@ -346,7 +346,7 @@ impl DeviceSyncPanel {
     }
 
     /// Fill (or refill) the Pioneer "Analysis" section: a status row per
-    /// metric — BPM / Key / Waveform. We surface only what is complete vs
+    /// metric — BPM / Key / Waveform / Beat grid. We surface only what is complete vs
     /// missing; a total count is noise here. The Analyse action lives in
     /// the bottom bar (see [`Self::refresh_bottom_bar`]).
     fn populate_pioneer_readiness(&self, section: &gtk::Box, device: &ConnectedDevice) {
@@ -356,6 +356,10 @@ impl DeviceSyncPanel {
         section.append(&analysis_status_row("BPM", readiness.missing_bpm));
         section.append(&analysis_status_row("Key", readiness.missing_key));
         section.append(&analysis_status_row("Waveform", readiness.missing_waveform));
+        section.append(&analysis_status_row(
+            "Beat grid",
+            readiness.missing_beat_grid,
+        ));
     }
 
     /// Refill every part of the view that derives from the current
@@ -542,9 +546,10 @@ impl DeviceSyncPanel {
 
         let runtime = self.runtime.borrow();
         let plan_state = runtime.device_sync_plan_state(device);
-        // Pioneer hardware reads BPM/key/waveforms from the export, so warn
-        // before syncing a selection that has gaps. Other layouts carry no
-        // such data, so the readiness is irrelevant and left at zero.
+        // Pioneer hardware reads BPM/key/waveforms/beat grids from the
+        // export, so warn before syncing a selection that has gaps. Other
+        // layouts carry no such data, so the readiness is irrelevant and
+        // left at zero.
         let is_pioneer = runtime
             .device_config(&device.id)
             .map(|config| config.layout == DeviceLayout::Pioneer)
@@ -685,6 +690,7 @@ impl DeviceSyncPanel {
                 missing_bpm: readiness.missing_bpm,
                 missing_key: readiness.missing_key,
                 missing_waveform: readiness.missing_waveform,
+                missing_beat_grid: readiness.missing_beat_grid,
                 remove_count,
             };
             sync.connect_clicked(move |_| {
@@ -1046,20 +1052,21 @@ fn occupation_bar(segments: Vec<BarSegment>, text: &str, over_capacity: bool) ->
 
 /// What the user should be told before a sync proceeds. A removal count
 /// (stale tracks that would be deleted — destructive) and the Pioneer
-/// analysis gaps (BPM/key/waveform the hardware will show as missing).
-/// Zero across the board means no dialog is needed.
+/// analysis gaps (BPM/key/waveform/beat grid the hardware will show as
+/// missing). Zero across the board means no dialog is needed.
 #[derive(Clone, Copy)]
 struct PreSyncWarnings {
     missing_bpm: usize,
     missing_key: usize,
     missing_waveform: usize,
+    missing_beat_grid: usize,
     remove_count: usize,
 }
 
 impl PreSyncWarnings {
-    /// Whether any selected track lacks BPM, key or waveform analysis.
+    /// Whether any selected track lacks BPM, key, waveform or beat grid.
     fn analysis_incomplete(&self) -> bool {
-        self.missing_bpm + self.missing_key + self.missing_waveform > 0
+        self.missing_bpm + self.missing_key + self.missing_waveform + self.missing_beat_grid > 0
     }
 
     /// Whether the sync warrants a confirmation modal at all.
@@ -1081,6 +1088,9 @@ impl PreSyncWarnings {
         }
         if self.missing_waveform > 0 {
             parts.push(format!("{} missing waveform", self.missing_waveform));
+        }
+        if self.missing_beat_grid > 0 {
+            parts.push(format!("{} missing beat grid", self.missing_beat_grid));
         }
         Some(format!(
             "Some selected tracks are not fully analysed ({}). They will still sync, \

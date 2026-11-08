@@ -7194,6 +7194,13 @@ impl LibraryStore for CallCountingLibraryStore {
         self.inner.load_beat_grid(track_id)
     }
 
+    fn load_beat_grids(
+        &self,
+        track_ids: &[TrackId],
+    ) -> StoreResult<std::collections::HashMap<TrackId, sustain_domain::BeatGrid>> {
+        self.inner.load_beat_grids(track_ids)
+    }
+
     fn load_all_acoustics(&self) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
         self.inner.load_all_acoustics()
     }

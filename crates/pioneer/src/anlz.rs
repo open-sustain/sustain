@@ -359,6 +359,53 @@ mod tests {
         assert_eq!(reported as usize, dat.len());
     }
 
+    /// The payload of the first `tag` section in an ANLZ file, walking
+    /// the section headers from the end of `PMAI`.
+    fn section<'a>(file: &'a [u8], tag: &[u8; 4]) -> Option<&'a [u8]> {
+        let field = |at: usize| {
+            u32::from_be_bytes([file[at], file[at + 1], file[at + 2], file[at + 3]]) as usize
+        };
+        let mut start = PMAI_HEADER_SIZE as usize;
+        while start < file.len() {
+            let (header_len, total_len) = (field(start + 4), field(start + 8));
+            if &file[start..start + 4] == tag {
+                return Some(&file[start + header_len..start + total_len]);
+            }
+            start += total_len;
+        }
+        None
+    }
+
+    /// The column height a `PWAV` byte draws: its low five bits.
+    fn pwav_height(byte: u8) -> u8 {
+        byte & 0x1F
+    }
+
+    #[test]
+    fn a_stored_waveform_reaches_the_dat_previews() {
+        let preview = tier(400);
+        let detail = tier(27_000);
+        let dat = dat_bytes(&input(&preview, &detail));
+        // A PWV2 byte is all height.
+        let pwav = section(&dat, b"PWAV").expect("PWAV");
+        assert_eq!(pwav.len(), 400);
+        assert!(pwav.iter().all(|&byte| pwav_height(byte) > 0));
+        let pwv2 = section(&dat, b"PWV2").expect("PWV2");
+        assert_eq!(pwv2.len(), 100);
+        assert!(pwv2.iter().all(|&byte| byte > 0));
+
+        // Silence, by contrast, draws flat.
+        let mut silent = tier(400);
+        for segment in &mut silent.segments {
+            segment.amplitude = 0;
+        }
+        let dat = dat_bytes(&input(&silent, &detail));
+        let pwav = section(&dat, b"PWAV").expect("PWAV");
+        assert!(pwav.iter().all(|&byte| pwav_height(byte) == 0));
+        let pwv2 = section(&dat, b"PWV2").expect("PWV2");
+        assert!(pwv2.iter().all(|&byte| byte == 0));
+    }
+
     #[test]
     fn ext_self_reports_length_and_has_detail_sections() {
         let preview = tier(400);

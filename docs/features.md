@@ -1048,8 +1048,11 @@ Three on-drive formats, chosen per device:
   own analysis pipeline and library, not re-read from the files. A track
   with no key, genre, artist or album is exported with that field unset,
   never with a placeholder value. The panel shows how many tracks in the
-  selection are missing BPM / key / waveform analysis and offers to run it
-  before export. Each track's embedded cover art is rendered to the 80×80 and
+  selection are missing BPM / key / waveform analysis or will reach the player
+  without a beat grid, and offers to run analysis before export. A grid is
+  left off a track whose library BPM no longer agrees with it (a BPM typed
+  to another metrical level), so the player never shows a grid that
+  contradicts the track's tempo. Each track's embedded cover art is rendered to the 80×80 and
   240×240 JPEG thumbnails the XDJ shows in its browse and now-playing screens,
   written under `PIONEER/Artwork/00001/` and linked from the database;
   identical covers (an album's shared art) are stored once. This is the full

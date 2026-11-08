@@ -226,9 +226,47 @@ pub(super) fn load_beat_grid(
     let Some(row) = rows.next().map_err(StoreError::from)? else {
         return Ok(None);
     };
-    let tempo: i64 = row.get(0).map_err(StoreError::from)?;
-    let first_beat_micros: i64 = row.get(1).map_err(StoreError::from)?;
-    let first_beat_number: i64 = row.get(2).map_err(StoreError::from)?;
+    beat_grid_from_row(track_id, row, 0).map(Some)
+}
+
+pub(super) fn load_beat_grids(
+    connection: &Connection,
+    track_ids: &[TrackId],
+) -> StoreResult<HashMap<TrackId, BeatGrid>> {
+    let mut grids = HashMap::with_capacity(track_ids.len());
+    for chunk in track_ids.chunks(FILTER_IN_LIST_CHUNK_SIZE) {
+        let placeholders = (1..=chunk.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT track_id, tempo_hundredths, first_beat_micros, first_beat_number
+FROM track_beat_grid
+WHERE track_id IN ({placeholders})"
+        );
+        let mut statement = connection.prepare(&sql).map_err(StoreError::from)?;
+        let mut rows = statement
+            .query(params_from_iter(chunk.iter().map(|id| id.get())))
+            .map_err(StoreError::from)?;
+        while let Some(row) = rows.next().map_err(StoreError::from)? {
+            let raw: i64 = row.get(0).map_err(StoreError::from)?;
+            let track_id = TrackId::new(raw).ok_or(StoreError::InvalidStoredId(raw))?;
+            grids.insert(track_id, beat_grid_from_row(track_id, row, 1)?);
+        }
+    }
+    Ok(grids)
+}
+
+/// Decode a `track_beat_grid` row whose tempo, first beat and first beat
+/// number start at column `first`.
+fn beat_grid_from_row(
+    track_id: TrackId,
+    row: &rusqlite::Row<'_>,
+    first: usize,
+) -> StoreResult<BeatGrid> {
+    let tempo: i64 = row.get(first).map_err(StoreError::from)?;
+    let first_beat_micros: i64 = row.get(first + 1).map_err(StoreError::from)?;
+    let first_beat_number: i64 = row.get(first + 2).map_err(StoreError::from)?;
     let invalid = || {
         StoreError::Database(format!(
             "beat grid of track {}: tempo {tempo}, first beat {first_beat_micros} µs, number {first_beat_number}",
@@ -243,9 +281,7 @@ pub(super) fn load_beat_grid(
         .map(Duration::from_micros)
         .map_err(|_| invalid())?;
     let first_beat_number = u8::try_from(first_beat_number).map_err(|_| invalid())?;
-    BeatGrid::new(tempo, first_beat, first_beat_number)
-        .map(Some)
-        .map_err(|_| invalid())
+    BeatGrid::new(tempo, first_beat, first_beat_number).map_err(|_| invalid())
 }
 
 pub(super) fn load_all_acoustics(

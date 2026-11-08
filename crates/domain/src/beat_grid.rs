@@ -79,6 +79,14 @@ impl BeatGrid {
         self.tempo.hundredths().abs_diff(bpm.hundredths()) <= 50
     }
 
+    /// This grid, if it describes a track whose library tempo is `bpm`.
+    /// A grid at a tempo the library does not state (the user changed
+    /// the BPM, or the track has none) would contradict the track's row;
+    /// a player is better off showing no grid.
+    pub fn for_library_tempo(self, bpm: Option<Bpm>) -> Option<Self> {
+        bpm.is_some_and(|bpm| self.agrees_with(bpm)).then_some(self)
+    }
+
     /// Time between consecutive beats.
     pub fn beat_interval(&self) -> Duration {
         beat_interval(self.tempo)
@@ -217,6 +225,14 @@ mod tests {
         assert!(grid.agrees_with(tempo(12_848)));
         assert!(!grid.agrees_with(tempo(12_849)));
         assert!(!grid.agrees_with(tempo(6_400)));
+    }
+
+    #[test]
+    fn a_grid_describes_only_a_library_tempo_it_agrees_with() {
+        let grid = BeatGrid::new(tempo(12_798), Duration::ZERO, 1).expect("grid");
+        assert_eq!(grid.for_library_tempo(Some(tempo(12_800))), Some(grid));
+        assert_eq!(grid.for_library_tempo(Some(tempo(6_400))), None);
+        assert_eq!(grid.for_library_tempo(None), None);
     }
 
     #[test]

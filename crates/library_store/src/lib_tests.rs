@@ -1251,6 +1251,45 @@ fn in_memory_record_analysis_keeps_the_latest_beat_grid() {
     run_record_analysis_keeps_the_latest_beat_grid(&InMemoryLibraryStore::new());
 }
 
+fn run_load_beat_grids_returns_the_grids_of_the_asked_tracks(store: &dyn LibraryStore) {
+    let gridded = track(1, "gridded.flac");
+    let other = track(2, "other.flac");
+    let bare = track(3, "bare.flac");
+    for track in [&gridded, &other, &bare] {
+        store.save_track(track.clone()).expect("save track");
+    }
+    let tempo_a = sample_analysis(Some(126.37), None);
+    let tempo_b = sample_analysis(Some(98.0), None);
+    for (track, analysis) in [(&gridded, &tempo_a), (&other, &tempo_b)] {
+        store
+            .record_analysis(
+                track.id,
+                analysis,
+                AnalysisCapabilities::all(),
+                ctx(1_700_000_000),
+            )
+            .expect("record analysis");
+    }
+
+    let grids = store
+        .load_beat_grids(&[gridded.id, bare.id])
+        .expect("load grids");
+    assert_eq!(grids.len(), 1);
+    assert_eq!(grids.get(&gridded.id).copied(), tempo_a.beat_grid);
+    assert!(store.load_beat_grids(&[]).expect("load none").is_empty());
+}
+
+#[test]
+fn sqlite_load_beat_grids_returns_the_grids_of_the_asked_tracks() {
+    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
+    run_load_beat_grids_returns_the_grids_of_the_asked_tracks(&store);
+}
+
+#[test]
+fn in_memory_load_beat_grids_returns_the_grids_of_the_asked_tracks() {
+    run_load_beat_grids_returns_the_grids_of_the_asked_tracks(&InMemoryLibraryStore::new());
+}
+
 fn run_record_analysis_replaces_bpms_the_user_did_not_type(store: &dyn LibraryStore) {
     // No BPM or key yet: analysis fills both.
     let blank = track(1, "blank.flac");

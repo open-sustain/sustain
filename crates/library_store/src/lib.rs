@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::Path,
     sync::{Mutex, MutexGuard},
 };
@@ -485,6 +485,11 @@ pub trait LibraryStore: Send + Sync {
     /// `None` when the track has not been tempo-analyzed yet or has no
     /// steady beat (a long track, a clip too short to hold one).
     fn load_beat_grid(&self, track_id: TrackId) -> StoreResult<Option<BeatGrid>>;
+
+    /// Load the beat grids of `track_ids` in one sweep, keyed by track;
+    /// tracks without a grid are absent. For counts over a whole device
+    /// selection, where a query per track would stall the caller.
+    fn load_beat_grids(&self, track_ids: &[TrackId]) -> StoreResult<HashMap<TrackId, BeatGrid>>;
 
     /// Load every track's acoustic features in one sweep, for the
     /// Smart Shuffle index rebuild. Tracks without an acoustics row

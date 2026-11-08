@@ -2,7 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Mutex, MutexGuard},
 };
 
@@ -1133,6 +1133,17 @@ impl LibraryStore for InMemoryLibraryStore {
             .map_err(|_| StoreError::StoreUnavailable)?
             .get(&track_id)
             .copied())
+    }
+
+    fn load_beat_grids(&self, track_ids: &[TrackId]) -> StoreResult<HashMap<TrackId, BeatGrid>> {
+        let beat_grids = self
+            .beat_grids
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        Ok(track_ids
+            .iter()
+            .filter_map(|id| beat_grids.get(id).map(|grid| (*id, *grid)))
+            .collect())
     }
 
     fn record_synced_lyrics(
