@@ -812,6 +812,11 @@ ON CONFLICT(track_id) DO UPDATE SET
 pub(super) const REPLACE_TRACK_BPM_UNLESS_SET_BY_USER_SQL: &str =
     r#"UPDATE tracks SET bpm_hundredths = ?1 WHERE id = ?2 AND bpm_set_by_user = 0"#;
 
+/// "Forget that this track's BPM was measured." The user cleared their
+/// BPM, so analysis must measure it again; key and audio stay attempted.
+pub(super) const FORGET_TRACK_BPM_ATTEMPT_SQL: &str =
+    r#"UPDATE track_analysis SET bpm_attempted_at_unix = NULL WHERE track_id = ?1"#;
+
 pub(super) const FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL: &str =
     r#"UPDATE tracks SET musical_key = ?1 WHERE id = ?2 AND musical_key IS NULL"#;
 

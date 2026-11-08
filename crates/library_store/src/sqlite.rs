@@ -131,8 +131,10 @@ impl LibraryStore for SqliteLibraryStore {
         track_id: TrackId,
         change: &MetadataChange,
     ) -> StoreResult<()> {
-        let connection = self.connection_guard()?;
-        tracks::apply_track_metadata_change(&connection, track_id, change)
+        let mut connection = self.connection_guard()?;
+        let transaction = connection.transaction().map_err(StoreError::from)?;
+        tracks::apply_track_metadata_change(&transaction, track_id, change)?;
+        transaction.commit().map_err(StoreError::from)
     }
 
     fn apply_track_metadata_change_and_enqueue_mirror(

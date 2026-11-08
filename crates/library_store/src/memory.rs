@@ -74,6 +74,25 @@ impl InMemoryLibraryStore {
         self.tracks.lock().map_err(|_| StoreError::StoreUnavailable)
     }
 
+    /// Mirror the SQL backend: an edit that clears the BPM forgets the
+    /// track's BPM analysis attempt so a measured tempo can fill it.
+    fn release_bpm_to_analysis_if_cleared(
+        &self,
+        track_id: TrackId,
+        change: &crate::MetadataChange,
+    ) -> StoreResult<()> {
+        if change.releases_bpm_to_analysis()
+            && let Some(book) = self
+                .analysis_bookkeeping
+                .lock()
+                .map_err(|_| StoreError::StoreUnavailable)?
+                .get_mut(&track_id)
+        {
+            book.bpm_attempted_at_unix = None;
+        }
+        Ok(())
+    }
+
     fn playlists_guard(&self) -> StoreResult<MutexGuard<'_, BTreeMap<PlaylistId, Playlist>>> {
         self.playlists
             .lock()
@@ -404,7 +423,7 @@ impl LibraryStore for InMemoryLibraryStore {
         if let Some(track) = self.tracks_guard()?.get_mut(&track_id) {
             track.metadata.apply_change(change);
         }
-        Ok(())
+        self.release_bpm_to_analysis_if_cleared(track_id, change)
     }
 
     fn apply_track_metadata_change_and_enqueue_mirror(
@@ -428,7 +447,7 @@ impl LibraryStore for InMemoryLibraryStore {
                 TagMirrorArtwork::Unchanged,
             );
         }
-        Ok(())
+        self.release_bpm_to_analysis_if_cleared(track_id, change)
     }
 
     fn fill_missing_track_metadata(
@@ -539,7 +558,7 @@ impl LibraryStore for InMemoryLibraryStore {
                 TagMirrorArtwork::Unchanged,
             );
         }
-        Ok(())
+        self.release_bpm_to_analysis_if_cleared(track_id, change)
     }
 
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()> {

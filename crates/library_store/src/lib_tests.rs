@@ -1330,24 +1330,47 @@ fn run_a_bpm_edit_survives_analysis_until_the_user_clears_it(store: &dyn Library
             .expect("exists")
             .metadata
     };
-    let edit = |bpm| {
+    let needs = |capabilities| {
         store
-            .apply_track_metadata_change(
-                tagged.id,
-                &MetadataChange {
-                    bpm,
-                    ..MetadataChange::default()
-                },
-            )
-            .expect("edit");
+            .filter_tracks_needing_analysis(&[tagged.id], capabilities, 1)
+            .expect("filter")
+    };
+    let tempo_only = AnalysisCapabilities {
+        bpm: true,
+        key: false,
+        audio: false,
+    };
+    let key_and_audio = AnalysisCapabilities {
+        bpm: false,
+        key: true,
+        audio: true,
+    };
+    let bpm_change = |bpm| MetadataChange {
+        bpm,
+        ..MetadataChange::default()
     };
 
-    edit(FieldChange::Set(Bpm::from_whole(128).expect("tempo")));
+    analyze();
+    store
+        .apply_track_metadata_change(
+            tagged.id,
+            &bpm_change(FieldChange::Set(Bpm::from_whole(128).expect("tempo"))),
+        )
+        .expect("edit");
+    assert!(
+        needs(tempo_only).is_empty(),
+        "a typed BPM needs no measuring"
+    );
     let after_edit = analyze();
     assert_eq!(after_edit.bpm, Bpm::from_whole(128));
     assert!(after_edit.bpm_set_by_user);
 
-    edit(FieldChange::Clear);
+    // Clearing goes through the Get Info path, which mirrors tags too.
+    store
+        .apply_track_metadata_change_and_enqueue_mirror(tagged.id, &bpm_change(FieldChange::Clear))
+        .expect("clear");
+    assert_eq!(needs(tempo_only), vec![tagged.id]);
+    assert!(needs(key_and_audio).is_empty());
     let after_clear = analyze();
     assert_eq!(after_clear.bpm, Bpm::from_hundredths(12_637));
     assert!(!after_clear.bpm_set_by_user);

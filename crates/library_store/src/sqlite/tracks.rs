@@ -274,7 +274,13 @@ pub(super) fn apply_track_metadata_change(
         return Ok(());
     };
     track.metadata.apply_change(change);
-    update_track_metadata(connection, track_id, &track.metadata)
+    update_track_metadata(connection, track_id, &track.metadata)?;
+    if change.releases_bpm_to_analysis() {
+        connection
+            .execute(FORGET_TRACK_BPM_ATTEMPT_SQL, params![track_id.get()])
+            .map_err(StoreError::from)?;
+    }
+    Ok(())
 }
 
 pub(super) fn fill_missing_track_metadata(

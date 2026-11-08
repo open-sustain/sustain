@@ -34,7 +34,7 @@ pub use tag_mirror::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork,
 use query::{sort_tracks, track_matches_search};
 use schema::{
     DELETE_SMART_SHUFFLE_INDEX_SQL, DELETE_TRACK_BEAT_GRID_SQL, DELETE_TRACK_SYNCED_LYRICS_SQL,
-    FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, RECONCILE_SCANNED_TRACK_SQL,
+    FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, FORGET_TRACK_BPM_ATTEMPT_SQL, RECONCILE_SCANNED_TRACK_SQL,
     REPLACE_TRACK_BPM_UNLESS_SET_BY_USER_SQL, SAVE_TRACK_SQL, SELECT_ALL_TRACK_ACOUSTICS_SQL,
     SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL, SELECT_TRACK_BEAT_GRID_SQL,
     SELECT_TRACK_BY_ID_SQL, SELECT_TRACK_SYNCED_LYRICS_SQL, SELECT_TRACK_WAVEFORM_SQL,
@@ -286,7 +286,10 @@ pub trait LibraryStore: Send + Sync {
         track_id: TrackId,
         statistics: &PlayStatistics,
     ) -> StoreResult<()>;
-    /// Apply only explicitly edited metadata fields.
+    /// Apply only explicitly edited metadata fields. A change that
+    /// clears the BPM also forgets the track's BPM analysis attempt, so
+    /// a measured tempo can take the user's place; every
+    /// `apply_track_metadata_change*` method shares this rule.
     fn apply_track_metadata_change(
         &self,
         track_id: TrackId,

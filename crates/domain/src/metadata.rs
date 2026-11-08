@@ -317,6 +317,15 @@ pub struct MetadataChange {
     pub composer_sort: FieldChange<String>,
 }
 
+impl MetadataChange {
+    /// Whether this change hands the track's BPM back to analysis: the
+    /// user cleared it, so the stored tempo is no longer theirs and a
+    /// measured one may take its place, even on a track analysed before.
+    pub fn releases_bpm_to_analysis(&self) -> bool {
+        matches!(self.bpm, FieldChange::Clear)
+    }
+}
+
 const GENERATED_SORT_ARTICLES: &[&str] = &["The", "A", "An"];
 
 fn generated_article_sort_name(display: &str) -> Option<String> {
