@@ -548,8 +548,10 @@ one-off runs alike. Detection reads a **centered** window of the track —
 the middle two minutes — rather than the opening seconds, where intros
 (especially in electronic music) are too sparse and tame to read a
 steady tempo from. That estimate settles the tempo to the beat; the beat
-tracker then measures it to the hundredth over the whole track (see
-*Beat grid* below). The measured tempo becomes the track's BPM, replacing
+tracker checks it against the kick, which catches a dotted or triplet
+figure mistaken for the beat (house reported at two thirds of its tempo),
+then measures it to the hundredth over the whole track (see *Beat grid*
+below). The measured tempo becomes the track's BPM, replacing
 one imported from a file tag or measured before — so the BPM always
 matches the beat grid. A BPM the user typed in Get Info or the BPM cell
 is theirs: analysis never replaces it, until they clear it. The

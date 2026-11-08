@@ -228,6 +228,13 @@ pub use waveform::WaveformTiers;
 /// Tempo, key and waveforms are untouched; every track re-attempts so its
 /// grid is placed again.
 ///
+/// Version 15: the tempogram's metrical level is checked against the
+/// faster levels it confuses with a figure of three or four beats (×3/2,
+/// ×4/3), and one replaces it where the kick lands clearly more squarely on
+/// its beats. On development dance material this turned 9 of 23 in-range
+/// metrical errors (house at two thirds of its tempo, mostly) into the
+/// right tempo and broke none. Key and waveforms are untouched.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -245,7 +252,7 @@ pub use waveform::WaveformTiers;
 /// byte-for-byte on the synthetic corpus, so stored values' meaning is
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
-pub const ANALYZER_VERSION: u32 = 14;
+pub const ANALYZER_VERSION: u32 = 15;
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
 /// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default
@@ -517,7 +524,7 @@ impl Analyzer {
     /// options.max_bpm]`. Returns `None` if the file cannot be decoded,
     /// is too short for analysis, or the DSP engine cannot produce a
     /// confident estimate.
-    fn tempogram_bpm(&self) -> Option<f32> {
+    fn tempogram_bpm(&self) -> Option<f64> {
         let stft = self.tempo_stft()?;
         let window = self.bpmkey_audio()?;
         let estimate = estimate_bpm_tempogram(
@@ -533,17 +540,19 @@ impl Analyzer {
             return None;
         }
         Some(octave_normalize(
-            estimate.bpm,
-            self.options.min_bpm,
-            self.options.max_bpm,
+            f64::from(estimate.bpm),
+            f64::from(self.options.min_bpm),
+            f64::from(self.options.max_bpm),
         ))
     }
 
     /// The track's tempo and, on a normal-length track, its beat grid.
     ///
     /// The tempogram of the centered BPM/key window estimates the tempo
-    /// to the beat and settles its metrical level; the beat tracker then
-    /// finds the tempo to the hundredth near that estimate, and the beats.
+    /// to the beat and, with the BPM range, its octave; the beat tracker
+    /// checks the estimate against the levels a comb confuses it with
+    /// (three beats against two, four against three), then finds the
+    /// tempo to the hundredth at that level, and the beats.
     /// A grid needs the whole track — it is one constant tempo and phase
     /// fitted to every beat — so this decodes the whole track (sharing
     /// the decode with [`Self::waveform`] and [`Self::acoustics`]). On a
@@ -562,7 +571,7 @@ impl Analyzer {
             self.full()?
         };
         let onsets = beat_tracking::Onsets::of(&region.samples, region.sample_rate)?;
-        let estimate = f64::from(self.tempogram_bpm()?);
+        let estimate = onsets.beat_level(self.tempogram_bpm()?, min_bpm, max_bpm);
         let bpm = onsets.tempo_near(estimate, min_bpm, max_bpm)?;
         let beat_grid = if self.is_long_track() {
             None
@@ -813,7 +822,7 @@ fn center_slice(region: &DecodedAudio, len_secs: f64) -> DecodedAudio {
 /// detected at a sub-bass periodicity (typically 60 BPM downbeat for
 /// a 120 BPM tune) get doubled into the main band; double-time
 /// detections (typically 200 BPM for a 100 BPM tune) get halved.
-fn octave_normalize(mut bpm: f32, min: f32, max: f32) -> f32 {
+fn octave_normalize(mut bpm: f64, min: f64, max: f64) -> f64 {
     if !(min > 0.0 && max > min && bpm > 0.0) {
         return bpm;
     }
@@ -1117,18 +1126,18 @@ mod tests {
     #[test]
     fn octave_normalize_doubles_subbass_tempo() {
         // 60 BPM with [70..170] window doubles to 120.
-        assert!((octave_normalize(60.0, 70.0, 170.0) - 120.0).abs() < f32::EPSILON);
+        assert!((octave_normalize(60.0, 70.0, 170.0) - 120.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn octave_normalize_halves_double_time() {
         // 200 BPM with [70..170] window halves to 100.
-        assert!((octave_normalize(200.0, 70.0, 170.0) - 100.0).abs() < f32::EPSILON);
+        assert!((octave_normalize(200.0, 70.0, 170.0) - 100.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn octave_normalize_passes_in_range_unchanged() {
-        assert!((octave_normalize(128.0, 70.0, 170.0) - 128.0).abs() < f32::EPSILON);
+        assert!((octave_normalize(128.0, 70.0, 170.0) - 128.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1136,7 +1145,7 @@ mod tests {
         // A track tagged 40 BPM in a narrow [60..70] window cannot be
         // doubled (80 > 70) — return what we have rather than spin
         // forever.
-        assert!((octave_normalize(40.0, 60.0, 70.0) - 40.0).abs() < f32::EPSILON);
+        assert!((octave_normalize(40.0, 60.0, 70.0) - 40.0).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -943,3 +943,44 @@ accumulate, no harmonic fan-out), so it is far cheaper than the binning pass.
 individually-measured layers; the GiantSteps mode/parallel boundary is still the
 priority. No DSP was tuned and no corpus-specific constant was introduced.
 
+
+## 2026-11-08 — tempo v15 (metrical level checked on the kick), private dance corpora
+
+Under #283. The tempogram's estimate settles the metrical level and the beat
+tracker measures the tempo at that level, so a tempogram that locks onto a figure
+longer than the beat (a dotted, 3-3-2 stab figure heard as the beat) reports two
+thirds or three quarters of the tempo. v15 checks the two faster levels that
+would undo such a lock (×3/2, ×4/3, when the BPM range holds them) on the kick
+envelope. A level replaces the estimate only where the kick's mean energy per
+beat, at that level's refined tempo and best phase, is at least 1.12 times the
+estimate's. **One variable changed:** the tempogram, the beat tracker's tempo and
+phase search, the grid and key are untouched (`ANALYZER_VERSION` 14 → 15).
+
+Why only faster levels: a kick that skips beats (syncopated, as in breakbeat,
+tek or dembow) can make a *slower* grid land on it more squarely than the beat's
+own. A first version that also tried ×2/3 and ×3/4 broke five tracks that way on
+the two sets below, all of them moves down. A kick can't fill every pulse of a
+faster level unless it really plays there.
+
+Why per-beat energy and not the coarse fold's peak: the fold bins each period
+into equal fractions, so a slower level's bins are wider in time and catch more
+of each kick, and drift over a whole track smears a faster level across more
+bins. A version scored on the fold's peak preferred slower levels for that
+reason alone.
+
+| Set | Tracks | Metrical errors before | Fixed | Broken | Notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Dance development subset | 959 | 33 (23 inside 76–155) | **9** | **0** | 8 house/electro at 2/3×, 1 at 3/4× |
+| Held-out random sample, all genres | 600 | 65 | 0 | 0 | one ambient track moved from one wrong tempo to another |
+
+The reference is rekordbox's tempo. Unlike the tempo-precision questions in
+#280, rekordbox is reliable on these metrical calls (its grids hold far better
+than Sustain's on #283's metrical category). Every level that won scored at
+least 1.24 times the estimate. Every check that did not scored at most 1.03.
+The margin sits between the two, so any margin in that gap gives the same
+result. Analysis time rises about 5 % per track: the kick is measured at up to
+two more levels.
+
+#283 stays open for the remaining in-range errors (on the dance subset: 2 at
+2/3×, 4 at 3/4×, 2 at 4/3×, 1 at 3/2×, 5 elsewhere) and for the range question
+(10 dance tracks above 155 BPM fold to half tempo by design).
