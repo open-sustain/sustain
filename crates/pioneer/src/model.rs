@@ -36,13 +36,19 @@ impl PioneerFileType {
 }
 
 /// One track to write into the PDB. Strings are the final values; paths
-/// are relative to the drive root and start with a leading slash.
+/// are relative to the drive root and start with a leading slash. An
+/// empty artist, album, genre, or composer is written as "unset" (row id
+/// 0), exactly as rekordbox does, never as a nameless entity row.
 #[derive(Clone, Debug)]
 pub struct PioneerTrack {
     pub title: String,
     pub artist: String,
     pub album: String,
     pub genre: Option<String>,
+    /// Composer, stored (as rekordbox does) as a row of the artist table.
+    pub composer: Option<String>,
+    /// Free-text comment. Truncated to rekordbox's limit by the writer.
+    pub comment: Option<String>,
     pub bpm: Option<f32>,
     pub key: Option<MusicalKey>,
     /// Track length in whole seconds.
@@ -50,6 +56,7 @@ pub struct PioneerTrack {
     /// Size of the audio file in bytes.
     pub file_size: u64,
     pub track_number: Option<u32>,
+    pub disc_number: Option<u32>,
     pub year: Option<u32>,
     /// 0 (unrated) through 5.
     pub rating: u8,

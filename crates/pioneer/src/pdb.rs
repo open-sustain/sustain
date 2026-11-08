@@ -1163,22 +1163,53 @@ impl Entities {
         };
         for track in tracks {
             intern(&mut e.artists, &mut e.artist_id, &track.artist);
+            if let Some(composer) = &track.composer {
+                intern(&mut e.artists, &mut e.artist_id, composer);
+            }
             intern(&mut e.albums, &mut e.album_id, &track.album);
             if let Some(genre) = &track.genre {
-                if !genre.is_empty() {
-                    intern(&mut e.genres, &mut e.genre_id, genre);
-                }
+                intern(&mut e.genres, &mut e.genre_id, genre);
             }
         }
         e
     }
+
+    fn artist(&self, name: &str) -> u32 {
+        lookup(&self.artist_id, name)
+    }
+
+    fn album(&self, name: &str) -> u32 {
+        lookup(&self.album_id, name)
+    }
+
+    fn genre(&self, name: &str) -> u32 {
+        lookup(&self.genre_id, name)
+    }
 }
 
+/// Register a non-blank entity name, assigning the next 1-based row id.
+/// Blank names are never interned: they reference row id 0 ("unset").
 fn intern(list: &mut Vec<String>, map: &mut HashMap<String, u32>, value: &str) {
-    if !map.contains_key(value) {
+    if !value.trim().is_empty() && !map.contains_key(value) {
         let id = (list.len() + 1) as u32;
         list.push(value.to_owned());
         map.insert(value.to_owned(), id);
+    }
+}
+
+/// Row id of an interned entity, or 0 ("unset") for a blank name.
+fn lookup(map: &HashMap<String, u32>, value: &str) -> u32 {
+    map.get(value).copied().unwrap_or(0)
+}
+
+/// Longest comment rekordbox writes into a track row, in characters; its
+/// own exports truncate longer comments to exactly this length.
+const MAX_COMMENT_CHARS: usize = 256;
+
+fn truncated_comment(comment: &str) -> &str {
+    match comment.char_indices().nth(MAX_COMMENT_CHARS) {
+        Some((end, _)) => &comment[..end],
+        None => comment,
     }
 }
 
@@ -1270,15 +1301,13 @@ fn track_row(
     analyze_date: &str,
 ) -> Vec<u8> {
     let track_id = (index + 1) as u32;
-    let artist_id = entities.artist_id.get(&track.artist).copied().unwrap_or(0);
-    let album_id = entities.album_id.get(&track.album).copied().unwrap_or(0);
-    let genre_id = track
-        .genre
-        .as_ref()
-        .and_then(|g| entities.genre_id.get(g))
-        .copied()
-        .unwrap_or(1);
-    let key_id = track.key.map(key::rekordbox_id).unwrap_or(1);
+    let artist_id = entities.artist(&track.artist);
+    let album_id = entities.album(&track.album);
+    let composer_id = track.composer.as_deref().map_or(0, |c| entities.artist(c));
+    let genre_id = track.genre.as_deref().map_or(0, |g| entities.genre(g));
+    // 0 is "no key": any real id would display (and harmonically filter)
+    // the track as that key on the player.
+    let key_id = track.key.map_or(0, key::rekordbox_id);
     let sample_rate = if track.sample_rate_hz == 0 {
         44_100
     } else {
@@ -1301,7 +1330,7 @@ fn track_row(
     // for hardware acceptance).
     u32_(&mut row, 0x0700);
     u32_(&mut row, sample_rate);
-    u32_(&mut row, 0); // composer_id
+    u32_(&mut row, composer_id);
     u32_(&mut row, track.file_size.min(u32::MAX as u64) as u32);
     u32_(&mut row, (track_id + 5) | 0x100); // u2 (waveform-ready flag in bit 8)
     u16(&mut row, 0xE5B6); // u3
@@ -1318,7 +1347,10 @@ fn track_row(
     u32_(&mut row, album_id);
     u32_(&mut row, artist_id);
     u32_(&mut row, track_id);
-    u16(&mut row, 0); // disc_number
+    u16(
+        &mut row,
+        track.disc_number.unwrap_or(0).min(u16::MAX as u32) as u16,
+    );
     u16(&mut row, 0); // play_count
     u16(
         &mut row,
@@ -1371,7 +1403,10 @@ fn track_row(
     add(13, &[0x03]);
     add(14, &encode(&track.device_anlz_path)); // analyze_path
     add(15, &encode(analyze_date)); // analyze_date
-    add(16, &[0x03]); // comment
+    add(
+        16,
+        &encode(truncated_comment(track.comment.as_deref().unwrap_or(""))),
+    ); // comment
     add(17, &encode(&track.title)); // title
     add(18, &[0x03]);
     add(19, &encode(filename)); // filename
@@ -1479,11 +1514,14 @@ mod tests {
             artist: artist.into(),
             album: album.into(),
             genre: Some("House".into()),
+            composer: None,
+            comment: None,
             bpm: Some(128.0),
             key: Some(sustain_domain::MusicalKey::AMinor),
             duration_secs: 200,
             file_size: 5_000_000,
             track_number: Some(n),
+            disc_number: None,
             year: Some(2020),
             rating: 4,
             bitrate_kbps: Some(320),
@@ -1681,6 +1719,102 @@ mod tests {
         assert_eq!(
             u32::from_le_bytes([row[0x48], row[0x49], row[0x4A], row[0x4B]]),
             1
+        );
+    }
+
+    fn row_u32(row: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes([
+            row[offset],
+            row[offset + 1],
+            row[offset + 2],
+            row[offset + 3],
+        ])
+    }
+
+    /// The track row's 21 string offsets start at 0x5E; index 16 is the
+    /// comment. Decodes the short-ASCII / long-ASCII forms `encode` emits
+    /// for ASCII content.
+    fn row_comment(row: &[u8]) -> String {
+        let offset = u16::from_le_bytes([row[0x5E + 32], row[0x5E + 33]]) as usize;
+        let flag = row[offset];
+        let bytes = if flag & 1 == 1 {
+            let len = (flag >> 1) as usize - 1;
+            &row[offset + 1..offset + 1 + len]
+        } else {
+            let total = u16::from_le_bytes([row[offset + 1], row[offset + 2]]) as usize;
+            &row[offset + 4..offset + total]
+        };
+        String::from_utf8(bytes.to_vec()).expect("ascii comment")
+    }
+
+    #[test]
+    fn missing_key_genre_artist_and_album_reference_row_zero() {
+        // A real row id would make the player display — and harmonically
+        // filter on — a key or genre the track does not have.
+        let mut t = track("T", "", "", 1);
+        t.key = None;
+        t.genre = None;
+        let entities = Entities::build(std::slice::from_ref(&t));
+        assert!(
+            entities.artists.is_empty(),
+            "blank artist must not be interned"
+        );
+        assert!(
+            entities.albums.is_empty(),
+            "blank album must not be interned"
+        );
+        assert!(entities.genres.is_empty());
+        let row = track_row(&t, &entities, 0, "2026-01-01");
+        assert_eq!(row_u32(&row, 0x20), 0, "key_id");
+        assert_eq!(row_u32(&row, 0x3C), 0, "genre_id");
+        assert_eq!(row_u32(&row, 0x40), 0, "album_id");
+        assert_eq!(row_u32(&row, 0x44), 0, "artist_id");
+        assert_eq!(row_u32(&row, 0x0C), 0, "composer_id");
+    }
+
+    #[test]
+    fn known_key_and_genre_reference_their_rows() {
+        let mut t = track("T", "Ar", "Al", 1);
+        t.key = Some(sustain_domain::MusicalKey::FsMinor);
+        let entities = Entities::build(std::slice::from_ref(&t));
+        let row = track_row(&t, &entities, 0, "2026-01-01");
+        let key_id = row_u32(&row, 0x20);
+        assert_eq!(crate::key::KEY_TABLE[key_id as usize - 1].1, "Gbm");
+        assert_eq!(entities.genres[row_u32(&row, 0x3C) as usize - 1], "House");
+    }
+
+    #[test]
+    fn composer_is_an_artist_row_and_disc_number_is_written() {
+        let mut t = track("T", "Performer", "Al", 1);
+        t.composer = Some("Writer".into());
+        t.disc_number = Some(2);
+        let entities = Entities::build(std::slice::from_ref(&t));
+        let row = track_row(&t, &entities, 0, "2026-01-01");
+        let composer_id = row_u32(&row, 0x0C);
+        assert_eq!(entities.artists[composer_id as usize - 1], "Writer");
+        assert_ne!(composer_id, row_u32(&row, 0x44));
+        assert_eq!(u16::from_le_bytes([row[0x4C], row[0x4D]]), 2);
+    }
+
+    #[test]
+    fn comment_is_truncated_to_rekordbox_limit() {
+        let mut t = track("T", "Ar", "Al", 1);
+        t.comment = Some("c".repeat(MAX_COMMENT_CHARS + 50));
+        let entities = Entities::build(std::slice::from_ref(&t));
+        let row = track_row(&t, &entities, 0, "2026-01-01");
+        assert_eq!(row_comment(&row), "c".repeat(MAX_COMMENT_CHARS));
+
+        t.comment = Some("Purchased at Beatport.com".into());
+        let row = track_row(&t, &entities, 0, "2026-01-01");
+        assert_eq!(row_comment(&row), "Purchased at Beatport.com");
+    }
+
+    #[test]
+    fn comment_truncation_respects_char_boundaries() {
+        let comment = "é".repeat(MAX_COMMENT_CHARS + 1);
+        assert_eq!(
+            truncated_comment(&comment).chars().count(),
+            MAX_COMMENT_CHARS
         );
     }
 

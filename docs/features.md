@@ -990,8 +990,10 @@ Three on-drive formats, chosen per device:
   (`ANLZ0000.DAT` / `.EXT`) under `PIONEER/USBANLZ/`. Each track carries its
   BPM, musical key, a constant-tempo beat grid, both monochrome and colour
   waveforms (the small browse preview and the full detailed overview), star
-  rating, genre and year — all from Sustain's own analysis pipeline and
-  library, not re-read from the files. The panel shows how many tracks in the
+  rating, genre, year, disc number, composer and comment — all from Sustain's
+  own analysis pipeline and library, not re-read from the files. A track
+  with no key, genre, artist or album is exported with that field unset,
+  never with a placeholder value. The panel shows how many tracks in the
   selection are missing BPM / key / waveform analysis and offers to run it
   before export. Each track's embedded cover art is rendered to the 80×80 and
   240×240 JPEG thumbnails the XDJ shows in its browse and now-playing screens,
