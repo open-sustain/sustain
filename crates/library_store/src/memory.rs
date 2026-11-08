@@ -937,13 +937,13 @@ impl LibraryStore for InMemoryLibraryStore {
                 .insert(track_id, acoustics);
         }
 
-        // Fill tracks.bpm / metadata.key only when currently empty —
+        // Fill metadata.bpm / metadata.key only when currently empty —
         // mirrors the SQL backend's "fill if NULL" semantic.
         let mut tracks = self.tracks_guard()?;
         if let Some(track) = tracks.get_mut(&track_id) {
             if capabilities.bpm
                 && let Some(bpm) = analysis.bpm
-                && let Some(bpm) = sustain_domain::validate_analysis_bpm(bpm)
+                && let Some(bpm) = sustain_domain::Bpm::from_f64(f64::from(bpm))
                 && track.metadata.bpm.is_none()
             {
                 track.metadata.bpm = Some(bpm);

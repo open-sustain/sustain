@@ -45,7 +45,7 @@ mod tests {
         path::{Path, PathBuf},
     };
     use sustain_domain::{
-        AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap,
+        AnlzRecord, Bpm, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap,
         SourceFileStat, SyncDevice, SyncDeviceId, TrackId,
     };
 
@@ -79,7 +79,7 @@ mod tests {
                 year: Some(2020),
                 duration_ms: 200_000,
                 rating: 3,
-                bpm: Some(128.0),
+                bpm: Bpm::from_whole(128),
                 key: Some(sustain_domain::MusicalKey::AMinor),
                 bitrate_kbps: Some(320),
                 sample_rate_hz: 44_100,
@@ -514,7 +514,7 @@ mod tests {
         assert_eq!(std::fs::read(&dat).expect("dat"), b"untouched");
 
         // New analysis reaches the device although the audio is unchanged.
-        fx.tracks[0].bpm = Some(124.0);
+        fx.tracks[0].bpm = Bpm::from_whole(124);
         let third = run(
             fx.dest.path(),
             &request(&fx, DeviceLayout::Pioneer, second.manifest.clone(), false),

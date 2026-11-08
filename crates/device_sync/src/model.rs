@@ -11,7 +11,7 @@
 use std::{ops::Deref, path::PathBuf};
 
 use sustain_domain::{
-    DeviceRelativePath, MusicalKey, SourceFileStat, SourceFingerprint, SyncDevice,
+    Bpm, DeviceRelativePath, MusicalKey, SourceFileStat, SourceFingerprint, SyncDevice,
     SyncManifestEntry, TrackContentHash, TrackId, WaveformSegments,
 };
 use sustain_pioneer::ArtworkSet;
@@ -81,7 +81,7 @@ pub struct SyncInputTrack {
     pub duration_ms: u32,
     /// 0 (unrated) through 5.
     pub rating: u8,
-    pub bpm: Option<f32>,
+    pub bpm: Option<Bpm>,
     pub key: Option<MusicalKey>,
     pub bitrate_kbps: Option<u32>,
     pub sample_rate_hz: u32,

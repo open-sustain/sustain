@@ -603,7 +603,6 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         ApplicationRuntimeError::InvalidSmartPlaylistRules => {
             "A smart playlist needs at least one rule."
         }
-        ApplicationRuntimeError::InvalidBpm => "BPM must be between 0 and 655.",
         ApplicationRuntimeError::PlaylistEntryNotFound
         | ApplicationRuntimeError::PlaylistNotFound => "The playlist could not be updated.",
         ApplicationRuntimeError::PlaylistFolderNotFound => {

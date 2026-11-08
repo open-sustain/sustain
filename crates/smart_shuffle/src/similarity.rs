@@ -100,10 +100,7 @@ fn dedup(mut tokens: Vec<String>) -> Vec<String> {
 /// super-linearly. Masked when either side lacks a BPM.
 pub fn tempo_similarity(seed: &Track, cand: &Track) -> Option<f32> {
     let (seed_bpm, cand_bpm) = (seed.metadata.bpm?, cand.metadata.bpm?);
-    if seed_bpm == 0 || cand_bpm == 0 {
-        return None;
-    }
-    let mut ratio = cand_bpm as f32 / seed_bpm as f32;
+    let mut ratio = (cand_bpm.as_f64() / seed_bpm.as_f64()) as f32;
     // Fold into [1/√2, √2] — the octave centred on 1.0 — so 2× / ½×
     // collapse onto a unison match.
     #[allow(
@@ -466,7 +463,8 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use sustain_domain::{
-        PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
+        Bpm, PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata,
+        TrackRelativePath,
     };
 
     use super::*;
@@ -495,7 +493,7 @@ mod tests {
 
     fn with_bpm(bpm: u32) -> Track {
         track(TrackMetadata {
-            bpm: Some(bpm),
+            bpm: Bpm::from_whole(bpm),
             ..TrackMetadata::default()
         })
     }

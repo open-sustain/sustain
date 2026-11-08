@@ -222,7 +222,9 @@ fn number_field_value(track: &Track, field: SmartPlaylistNumberField) -> Option<
             .duration
             .map(|duration| duration.as_secs() as i64),
         SmartPlaylistNumberField::BitrateKbps => track.metadata.bitrate_kbps.map(i64::from),
-        SmartPlaylistNumberField::Bpm => track.metadata.bpm.map(i64::from),
+        // Rule values are whole numbers, so a rule reads the tempo to the
+        // nearest whole beat: "BPM is 128" matches 127.5 up to 128.49.
+        SmartPlaylistNumberField::Bpm => track.metadata.bpm.map(|bpm| i64::from(bpm.whole())),
     }
 }
 

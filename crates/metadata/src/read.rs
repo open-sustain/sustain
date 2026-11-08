@@ -199,8 +199,8 @@ pub(crate) fn parse_flag(value: &str) -> Option<bool> {
     }
 }
 
-pub(crate) fn parse_bpm(value: &str) -> Option<u32> {
-    value.trim().parse::<u32>().ok().and_then(validate_bpm)
+pub(crate) fn parse_bpm(value: &str) -> Option<Bpm> {
+    Bpm::parse(value)
 }
 
 pub(crate) fn star_rating_value(rating: StarRating) -> u8 {

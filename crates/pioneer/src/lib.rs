@@ -22,6 +22,8 @@
 //! restructure, not a verbatim lift. See [`pdb`] and [`path_hash`] for
 //! the format details and provenance.
 
+use sustain_domain::Bpm;
+
 pub mod anlz;
 pub mod artwork;
 pub mod device_sql;
@@ -45,30 +47,24 @@ pub const PDB_RELATIVE_PATH: &str = "PIONEER/rekordbox/export.pdb";
 /// once under `Contents/Artist/Album/`).
 pub const CONTENTS_DIR: &str = "Contents";
 
-const MAX_TEMPO_CENTIBPM: f32 = u16::MAX as f32;
+// Every `Bpm` fits the 16-bit `tempo × 100` fields Pioneer formats use.
+const _: () = assert!(Bpm::MAX_WHOLE * 100 <= u16::MAX as u32);
 
-fn tempo_centibpm(bpm: f32) -> Option<u16> {
-    if !bpm.is_finite() || bpm <= 0.0 {
-        return None;
-    }
-    let centibpm = (bpm * 100.0).round();
-    if !(0.0..=MAX_TEMPO_CENTIBPM).contains(&centibpm) {
-        return None;
-    }
-    Some(centibpm as u16)
+/// `bpm` as the `tempo × 100` that PDB track rows and PQTZ beats carry.
+fn tempo_centibpm(bpm: Bpm) -> u16 {
+    bpm.hundredths() as u16
 }
 
 #[cfg(test)]
 mod tests {
-    use super::tempo_centibpm;
+    use super::{Bpm, tempo_centibpm};
 
     #[test]
-    fn tempo_centibpm_rejects_non_finite_or_out_of_range_values() {
-        assert_eq!(tempo_centibpm(f32::NAN), None);
-        assert_eq!(tempo_centibpm(0.0), None);
-        assert_eq!(tempo_centibpm(-1.0), None);
-        assert_eq!(tempo_centibpm(655.35), Some(u16::MAX));
-        assert_eq!(tempo_centibpm(655.36), None);
-        assert_eq!(tempo_centibpm(99_999.0), None);
+    fn tempo_centibpm_keeps_the_hundredths() {
+        let centibpm =
+            |hundredths| tempo_centibpm(Bpm::from_hundredths(hundredths).expect("tempo"));
+        assert_eq!(centibpm(11_886), 11_886);
+        assert_eq!(centibpm(65_500), 65_500);
+        assert_eq!(centibpm(1), 1);
     }
 }

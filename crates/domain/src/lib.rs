@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod acoustic;
+mod bpm;
 mod clock;
 mod command;
 mod device_sync;
@@ -31,6 +32,7 @@ mod track_column_layout;
 mod waveform;
 
 pub use acoustic::AcousticFeatures;
+pub use bpm::{Bpm, InvalidBpm};
 pub use clock::{Clock, MonotonicClock, SystemClock, SystemMonotonicClock};
 pub use command::{ApplicationCommand, ApplicationQuery};
 pub use device_sync::{
@@ -54,10 +56,7 @@ pub use library_statistics::{
 pub use managed_library::{
     ManagedTrackPathError, ManagedTrackPathInput, ManagedTrackPathPlan, ManagedTrackPathPlanner,
 };
-pub use metadata::{
-    FieldChange, MAX_BPM, MetadataChange, TrackAudioProperties, TrackMetadata, valid_bpm,
-    validate_analysis_bpm, validate_bpm,
-};
+pub use metadata::{FieldChange, MetadataChange, TrackAudioProperties, TrackMetadata};
 pub use musical_key::MusicalKey;
 pub use playback::{
     LazyPickContext, PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueEntry,

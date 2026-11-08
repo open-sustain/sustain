@@ -11,7 +11,7 @@
 //! place is what guarantees an inline edit writes the same thing the
 //! dialog would for the same input.
 
-use sustain_app_runtime::{FieldChange, MusicalKey};
+use sustain_app_runtime::{Bpm, FieldChange, MusicalKey};
 
 pub(crate) fn text_diff(initial: Option<&str>, current: &str) -> FieldChange<String> {
     let trimmed_current = current.trim();
@@ -40,43 +40,35 @@ pub(crate) fn text_diff_preserve_newlines(
 }
 
 pub(crate) fn number_diff(initial: Option<u32>, current: &str) -> FieldChange<u32> {
-    let trimmed = current.trim();
-    if trimmed.is_empty() {
-        return if initial.is_some() {
-            FieldChange::Clear
-        } else {
-            FieldChange::Unchanged
-        };
-    }
-    let Ok(parsed) = trimmed.parse::<u32>() else {
-        return FieldChange::Unchanged;
-    };
-    if Some(parsed) == initial {
-        FieldChange::Unchanged
-    } else {
-        FieldChange::Set(parsed)
-    }
+    parsed_diff(initial, current, |text| text.parse().ok())
 }
 
 /// Typed text is read with [`MusicalKey::parse`], so any common notation
 /// (`Am`, `A minor`, `8A`, `1m`) sets the key. Text that is not a key is
 /// left unchanged, like an unparsable number.
 pub(crate) fn key_diff(initial: Option<MusicalKey>, current: &str) -> FieldChange<MusicalKey> {
-    let trimmed = current.trim();
-    if trimmed.is_empty() {
-        return if initial.is_some() {
-            FieldChange::Clear
-        } else {
-            FieldChange::Unchanged
-        };
-    }
-    match MusicalKey::parse(trimmed) {
-        Some(key) if Some(key) != initial => FieldChange::Set(key),
-        _ => FieldChange::Unchanged,
-    }
+    parsed_diff(initial, current, MusicalKey::parse)
+}
+
+/// Typed text is read with [`Bpm::parse`], so a whole (`128`) or decimal
+/// (`118.86`) tempo sets the BPM. Text that is not a tempo is left
+/// unchanged, like an unparsable number.
+pub(crate) fn bpm_diff(initial: Option<Bpm>, current: &str) -> FieldChange<Bpm> {
+    parsed_diff(initial, current, Bpm::parse)
 }
 
 pub(crate) fn signed_number_diff(initial: Option<i32>, current: &str) -> FieldChange<i32> {
+    parsed_diff(initial, current, |text| text.parse().ok())
+}
+
+/// The change typed text makes to a field `parse` reads: blank text clears
+/// a value and leaves an empty field alone; text `parse` accepts sets it,
+/// unless it is the current value; text `parse` rejects changes nothing.
+fn parsed_diff<T: Copy + PartialEq>(
+    initial: Option<T>,
+    current: &str,
+    parse: impl FnOnce(&str) -> Option<T>,
+) -> FieldChange<T> {
     let trimmed = current.trim();
     if trimmed.is_empty() {
         return if initial.is_some() {
@@ -85,13 +77,9 @@ pub(crate) fn signed_number_diff(initial: Option<i32>, current: &str) -> FieldCh
             FieldChange::Unchanged
         };
     }
-    let Ok(parsed) = trimmed.parse::<i32>() else {
-        return FieldChange::Unchanged;
-    };
-    if Some(parsed) == initial {
-        FieldChange::Unchanged
-    } else {
-        FieldChange::Set(parsed)
+    match parse(trimmed) {
+        Some(value) if Some(value) != initial => FieldChange::Set(value),
+        _ => FieldChange::Unchanged,
     }
 }
 
@@ -106,10 +94,29 @@ pub(crate) fn bool_diff(initial: Option<bool>, current: bool) -> FieldChange<boo
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_diff, key_diff, number_diff, signed_number_diff, text_diff,
+        bool_diff, bpm_diff, key_diff, number_diff, signed_number_diff, text_diff,
         text_diff_preserve_newlines,
     };
-    use sustain_app_runtime::{FieldChange, MusicalKey};
+    use sustain_app_runtime::{Bpm, FieldChange, MusicalKey};
+
+    #[test]
+    fn bpm_diff_reads_whole_and_decimal_tempos_and_ignores_other_text() {
+        let tempo = Bpm::from_hundredths(11_886);
+        assert_eq!(bpm_diff(None, ""), FieldChange::Unchanged);
+        assert_eq!(bpm_diff(tempo, " "), FieldChange::Clear);
+        assert_eq!(bpm_diff(tempo, "118.86"), FieldChange::Unchanged);
+        assert_eq!(
+            bpm_diff(tempo, "128"),
+            FieldChange::Set(Bpm::from_whole(128).expect("tempo"))
+        );
+        assert_eq!(
+            bpm_diff(None, "124.5"),
+            FieldChange::Set(Bpm::from_hundredths(12_450).expect("tempo"))
+        );
+        for text in ["0", "656", "fast", "-120"] {
+            assert_eq!(bpm_diff(tempo, text), FieldChange::Unchanged, "{text:?}");
+        }
+    }
 
     #[test]
     fn key_diff_parses_notations_and_ignores_text_that_is_not_a_key() {

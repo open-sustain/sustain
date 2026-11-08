@@ -18,7 +18,7 @@ use std::{
 pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, ApplicationQuery, BackgroundJobsSettings,
-    BackgroundResourceUsage, BpmRange, CdEncodingProfile, CdReadMode, Clock,
+    BackgroundResourceUsage, Bpm, BpmRange, CdEncodingProfile, CdReadMode, Clock,
     DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath,
     DuplicateConsolidationRequest, DuplicateMatchMode, DuplicateMetadataField,
     DuplicateMetadataFieldSelection, DuplicateMetadataSelection, EncodingSettings, FieldChange,
@@ -192,7 +192,6 @@ pub enum ApplicationRuntimeError {
     InvalidPlaylistFolderName,
     InvalidSmartPlaylistName,
     InvalidSmartPlaylistRules,
-    InvalidBpm,
     BackgroundTaskRunning,
     PlaybackFailed,
     PlaybackServiceUnavailable,

@@ -661,8 +661,8 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use sustain_domain::{
-        PlayStatistics, Rating, SmartShuffleEntropy, Track, TrackId, TrackLocation, TrackMetadata,
-        TrackRelativePath,
+        Bpm, PlayStatistics, Rating, SmartShuffleEntropy, Track, TrackId, TrackLocation,
+        TrackMetadata, TrackRelativePath,
     };
 
     use super::{PickContext, PickMode, pick_next_track};
@@ -729,7 +729,7 @@ mod tests {
             7,
             TrackMetadata {
                 genre: Some("House".to_owned()),
-                bpm: Some(124),
+                bpm: Bpm::from_whole(124),
                 ..TrackMetadata::default()
             },
         );
@@ -739,7 +739,7 @@ mod tests {
                     i,
                     TrackMetadata {
                         genre: Some(if i % 2 == 0 { "House" } else { "Folk" }.to_owned()),
-                        bpm: Some(if i % 2 == 0 { 126 } else { 90 }),
+                        bpm: Bpm::from_whole(if i % 2 == 0 { 126 } else { 90 }),
                         ..TrackMetadata::default()
                     },
                 )
@@ -764,7 +764,7 @@ mod tests {
             100,
             TrackMetadata {
                 genre: Some("Ambient".to_owned()),
-                bpm: Some(80),
+                bpm: Bpm::from_whole(80),
                 ..TrackMetadata::default()
             },
         );
@@ -772,7 +772,7 @@ mod tests {
             200,
             TrackMetadata {
                 genre: Some("Ambient".to_owned()),
-                bpm: Some(80),
+                bpm: Bpm::from_whole(80),
                 ..TrackMetadata::default()
             },
         );
@@ -782,7 +782,7 @@ mod tests {
                 i + 1,
                 TrackMetadata {
                     genre: Some("Speedcore".to_owned()),
-                    bpm: Some(220),
+                    bpm: Bpm::from_whole(220),
                     ..TrackMetadata::default()
                 },
             ));

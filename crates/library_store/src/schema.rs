@@ -456,6 +456,25 @@ ALTER TABLE sync_manifest ADD COLUMN anlz_digest TEXT
     CHECK ((anlz_digest IS NULL) = (anlz_path IS NULL));
 "#;
 
+// Migration 8 keeps tempos to the hundredth of a beat. `bpm` held whole
+// beats, which rounds 118.86 to 119 and drifts a beat grid by more than
+// half a beat over five minutes; `bpm_hundredths` holds the tempo × 100,
+// the precision Pioneer players carry. Whole tempos convert exactly. A
+// stored 0 (some taggers' "unknown") or a value above 655 is not a tempo
+// Sustain can carry: it is cleared along with the track's BPM-analysis
+// attempt, so analysis fills it in (analysis never overwrites a stored
+// tempo, so an earlier attempt left the bad value in place).
+pub(super) const STORE_BPM_IN_HUNDREDTHS_SQL: &str = r#"
+ALTER TABLE tracks ADD COLUMN bpm_hundredths INTEGER;
+UPDATE tracks SET bpm_hundredths = bpm * 100
+WHERE typeof(bpm) = 'integer' AND bpm BETWEEN 1 AND 655;
+UPDATE track_analysis SET bpm_attempted_at_unix = NULL
+WHERE track_id IN (
+    SELECT id FROM tracks WHERE bpm IS NOT NULL AND bpm_hundredths IS NULL
+);
+ALTER TABLE tracks DROP COLUMN bpm;
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
@@ -548,7 +567,7 @@ const TRACK_COLUMNS: &[TrackColumn] = &[
     TrackColumn::stored_value("track_total"),
     TrackColumn::stored_value("disc_total"),
     TrackColumn::stored_value("compilation"),
-    TrackColumn::stored_value("bpm"),
+    TrackColumn::stored_value("bpm_hundredths"),
     TrackColumn::stored_value("musical_key"),
     TrackColumn::stored_value("comments"),
     TrackColumn::stored_value("sample_rate_hz"),
@@ -743,11 +762,11 @@ ON CONFLICT(track_id) DO UPDATE SET
     detail_segments = excluded.detail_segments
 "#;
 
-/// "Fill in `tracks.bpm` only if it is currently NULL." Honors the
-/// rule that user-edited or tag-imported values win — the analyzer
+/// "Fill in `tracks.bpm_hundredths` only if it is currently NULL." Honors
+/// the rule that user-edited or tag-imported values win — the analyzer
 /// supplies missing data, it never overrides existing data.
 pub(super) const FILL_TRACK_BPM_IF_NULL_SQL: &str =
-    r#"UPDATE tracks SET bpm = ?1 WHERE id = ?2 AND bpm IS NULL"#;
+    r#"UPDATE tracks SET bpm_hundredths = ?1 WHERE id = ?2 AND bpm_hundredths IS NULL"#;
 
 pub(super) const FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL: &str =
     r#"UPDATE tracks SET musical_key = ?1 WHERE id = ?2 AND musical_key IS NULL"#;
@@ -933,7 +952,7 @@ mod tests {
             (track_column_index::TRACK_TOTAL, "track_total"),
             (track_column_index::DISC_TOTAL, "disc_total"),
             (track_column_index::COMPILATION, "compilation"),
-            (track_column_index::BPM, "bpm"),
+            (track_column_index::BPM, "bpm_hundredths"),
             (track_column_index::MUSICAL_KEY, "musical_key"),
             (track_column_index::COMMENTS, "comments"),
             (track_column_index::SAMPLE_RATE_HZ, "sample_rate_hz"),

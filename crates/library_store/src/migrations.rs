@@ -15,10 +15,11 @@ use crate::{
     schema::{
         ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_COLUMN_SORT_SQL,
         BACKFILL_GENERATED_SORT_FIELDS_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL,
+        STORE_BPM_IN_HUNDREDTHS_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 7;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 8;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -74,6 +75,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 7,
         description: "normalize stored musical keys and drop text that is not a key",
         step: MigrationStep::Rust(normalize_musical_keys),
+    },
+    Migration {
+        version: 8,
+        description: "store tempos to the hundredth of a beat",
+        step: MigrationStep::Sql(STORE_BPM_IN_HUNDREDTHS_SQL),
     },
 ];
 
@@ -720,6 +726,104 @@ mod tests {
             })
             .expect("keyless track preserved");
         assert_eq!(keyless, None);
+    }
+
+    #[test]
+    fn upgrade_from_v7_stores_tempos_in_hundredths_and_clears_values_that_are_not_a_tempo() {
+        let connection = Connection::open_in_memory().expect("connection");
+        for sql in [
+            SCHEMA_SQL,
+            ADD_TRACK_COLUMN_SORT_SQL,
+            BACKFILL_GENERATED_SORT_FIELDS_SQL,
+            ADD_SYNC_DEVICE_ARTISTS_SQL,
+            NORMALIZE_EMPTY_TRACK_METADATA_SQL,
+            ADD_SYNC_MANIFEST_ANLZ_SQL,
+        ] {
+            connection
+                .execute_batch(sql)
+                .expect("schema up to version 6");
+        }
+        normalize_musical_keys(&connection).expect("schema version 7 migration");
+        // Values found in a real library: whole tempos, zeros, and tempos a
+        // tagger stored multiplied by 100.
+        let stored: [(Option<i64>, Option<i64>); 6] = [
+            (Some(128), Some(12_800)),
+            (Some(1), Some(100)),
+            (Some(655), Some(65_500)),
+            (Some(0), None),
+            (Some(12_488), None),
+            (None, None),
+        ];
+        for (index, (bpm, _)) in stored.iter().enumerate() {
+            let track_id = index as i64 + 1;
+            connection
+                .execute(
+                    "INSERT INTO tracks (id, relative_path, title, bpm, musical_key) \
+                     VALUES (?1, ?2, 'Title', ?3, 'Am')",
+                    rusqlite::params![track_id, vec![b'a' + index as u8], bpm],
+                )
+                .expect("seed track");
+            // Tempo analysis already ran on every track.
+            connection
+                .execute(
+                    "INSERT INTO track_analysis \
+                     (track_id, bpm_attempted_at_unix, key_attempted_at_unix, analyzer_version) \
+                     VALUES (?1, 10, 20, 1)",
+                    [track_id],
+                )
+                .expect("seed analysis attempt");
+        }
+        connection
+            .pragma_update(None, "user_version", 7)
+            .expect("set version");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        for (index, (bpm, expected)) in stored.iter().enumerate() {
+            let (hundredths, title, key, bpm_attempt, key_attempt): (
+                Option<i64>,
+                String,
+                String,
+                Option<i64>,
+                Option<i64>,
+            ) = connection
+                .query_row(
+                    "SELECT t.bpm_hundredths, t.title, t.musical_key, \
+                            a.bpm_attempted_at_unix, a.key_attempted_at_unix \
+                     FROM tracks t JOIN track_analysis a ON a.track_id = t.id \
+                     WHERE t.id = ?1",
+                    [index as i64 + 1],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .expect("track preserved");
+            assert_eq!(hundredths, *expected, "{bpm:?}");
+            assert_eq!((title.as_str(), key.as_str()), ("Title", "Am"));
+            // A cleared tempo is analyzed again; every other attempt stands.
+            let cleared = bpm.is_some() && expected.is_none();
+            let expected_bpm_attempt = if cleared { None } else { Some(10) };
+            assert_eq!(bpm_attempt, expected_bpm_attempt, "{bpm:?}");
+            assert_eq!(key_attempt, Some(20));
+        }
+        let columns: Vec<String> = connection
+            .prepare("SELECT name FROM pragma_table_info('tracks')")
+            .expect("table info")
+            .query_map([], |row| row.get(0))
+            .expect("columns")
+            .collect::<Result<_, _>>()
+            .expect("column names");
+        assert!(!columns.iter().any(|column| column == "bpm"));
     }
 
     #[test]

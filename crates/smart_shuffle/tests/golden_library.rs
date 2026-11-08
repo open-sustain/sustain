@@ -11,8 +11,8 @@
 use std::time::SystemTime;
 
 use sustain_domain::{
-    AcousticFeatures, PlayStatistics, Rating, SmartShuffleEntropy, Track, TrackId, TrackLocation,
-    TrackMetadata, TrackRelativePath,
+    AcousticFeatures, Bpm, PlayStatistics, Rating, SmartShuffleEntropy, Track, TrackId,
+    TrackLocation, TrackMetadata, TrackRelativePath,
 };
 use sustain_smart_shuffle::affinity::AffinityFeature;
 use sustain_smart_shuffle::{PickContext, SmartShuffleIndex, compute_affinity, pick_next_track};
@@ -27,7 +27,7 @@ fn track(id: i64, genre: &str, bpm: u32) -> Track {
         ),
         metadata: TrackMetadata {
             genre: Some(genre.to_owned()),
-            bpm: Some(bpm),
+            bpm: Bpm::from_whole(bpm),
             ..TrackMetadata::default()
         },
         rating: Rating::unrated(),

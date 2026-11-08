@@ -16,7 +16,7 @@ use lofty::{
     prelude::{Accessor, AudioFile, TaggedFileExt},
     tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType},
 };
-use sustain_domain::{FieldChange, MetadataChange, MusicalKey, TrackMetadata};
+use sustain_domain::{Bpm, FieldChange, MetadataChange, MusicalKey, TrackMetadata};
 
 use super::read::{parse_bpm, parse_flag, read_tagged_file, star_rating_value};
 use super::scan::{ScanFilesystem, StdScanFilesystem};
@@ -24,7 +24,7 @@ use super::{
     AudioFormat, InitialTagRead, InitialTags, LibraryScanner, LoftyMetadataService,
     MalformedTagError, MetadataError, MetadataRepair, MetadataResult, MetadataService, Rating,
     ScanFingerprint, apply_bool_change, apply_number_change, apply_text_change, apply_year_change,
-    atomic_write_via_rename, audio_format_from_path, bpm_item_key, hash_file_content,
+    atomic_write_via_rename, audio_format_from_path, bpm_item_key, bpm_tag_text, hash_file_content,
     lyrics_item_key, popularimeter_from_rating, repair_invalid_id3v2_languages,
     valid_embedded_picture,
 };
@@ -83,9 +83,19 @@ fn parse_flag_accepts_yes_no_case_insensitively() {
 }
 
 #[test]
-fn parse_bpm_rejects_values_outside_the_metadata_range() {
-    assert_eq!(parse_bpm("655"), Some(655));
+fn parse_bpm_reads_whole_and_decimal_tempos_within_range() {
+    assert_eq!(parse_bpm("655"), Bpm::from_whole(655));
+    assert_eq!(parse_bpm(" 118.86 "), Bpm::from_hundredths(11_886));
     assert_eq!(parse_bpm("656"), None);
+    assert_eq!(parse_bpm("0"), None);
+    assert_eq!(parse_bpm("fast"), None);
+}
+
+#[test]
+fn bpm_is_written_whole_to_integer_fields_and_exact_to_decimal_ones() {
+    let tempo = Bpm::from_hundredths(11_886).expect("tempo");
+    assert_eq!(bpm_tag_text(ItemKey::IntegerBpm, tempo), "119");
+    assert_eq!(bpm_tag_text(ItemKey::Bpm, tempo), "118.86");
 }
 
 #[test]
@@ -140,10 +150,21 @@ fn bpm_and_lyrics_keys_follow_the_container_format() {
 /// Write BPM and lyrics into a fresh `tag_type` tag exactly as
 /// `write_metadata` does, round-trip it through the container-specific
 /// representation — the lossy boundary lofty crosses on save + re-read,
-/// supplied by `to_container_and_back` — then assert both survive.
-fn assert_bpm_and_lyrics_round_trip(tag_type: TagType, to_container_and_back: impl Fn(Tag) -> Tag) {
+/// supplied by `to_container_and_back` — then assert both survive, the
+/// tempo to the precision the format holds (`expected_bpm`).
+fn assert_bpm_and_lyrics_round_trip(
+    tag_type: TagType,
+    expected_bpm: Option<Bpm>,
+    to_container_and_back: impl Fn(Tag) -> Tag,
+) {
     let mut tag = Tag::new(tag_type);
-    apply_number_change(&mut tag, bpm_item_key(tag_type), FieldChange::Set(127_u32));
+    let bpm_key = bpm_item_key(tag_type);
+    let tempo = Bpm::from_hundredths(12_745).expect("tempo");
+    apply_number_change(
+        &mut tag,
+        bpm_key,
+        FieldChange::Set(bpm_tag_text(bpm_key, tempo)),
+    );
     apply_text_change(
         &mut tag,
         lyrics_item_key(tag_type),
@@ -153,9 +174,8 @@ fn assert_bpm_and_lyrics_round_trip(tag_type: TagType, to_container_and_back: im
     let back = to_container_and_back(tag);
 
     assert_eq!(
-        back.get_string(bpm_item_key(tag_type))
-            .and_then(|value| value.trim().parse::<u32>().ok()),
-        Some(127),
+        back.get_string(bpm_key).and_then(parse_bpm),
+        expected_bpm,
         "bpm lost for {tag_type:?}"
     );
     assert_eq!(
@@ -172,11 +192,18 @@ fn bpm_and_lyrics_survive_a_container_round_trip_on_every_format() {
     // frame at all, so the value vanished on save and consolidation's
     // read-back verification could never match. Writing the key the format
     // actually defines makes both fields round-trip everywhere.
-    assert_bpm_and_lyrics_round_trip(TagType::Id3v2, |tag| Tag::from(Id3v2Tag::from(tag)));
-    assert_bpm_and_lyrics_round_trip(TagType::Mp4Ilst, |tag| Tag::from(Ilst::from(tag)));
-    assert_bpm_and_lyrics_round_trip(TagType::VorbisComments, |tag| {
-        Tag::from(VorbisComments::from(tag))
+    // ID3v2 and MP4 hold whole beats; Vorbis keeps the hundredths.
+    assert_bpm_and_lyrics_round_trip(TagType::Id3v2, Bpm::from_whole(127), |tag| {
+        Tag::from(Id3v2Tag::from(tag))
     });
+    assert_bpm_and_lyrics_round_trip(TagType::Mp4Ilst, Bpm::from_whole(127), |tag| {
+        Tag::from(Ilst::from(tag))
+    });
+    assert_bpm_and_lyrics_round_trip(
+        TagType::VorbisComments,
+        Bpm::from_hundredths(12_745),
+        |tag| Tag::from(VorbisComments::from(tag)),
+    );
 }
 
 fn assert_full_editable_metadata_round_trip(

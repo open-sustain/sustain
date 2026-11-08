@@ -420,7 +420,7 @@ pub trait LibraryStore: Send + Sync {
     ///
     /// Writes the waveform BLOBs only when the waveform capability
     /// was requested and `analysis.waveform_detail` is non-empty.
-    /// Updates `tracks.bpm` and `tracks.musical_key` **only when
+    /// Updates `tracks.bpm_hundredths` and `tracks.musical_key` **only when
     /// those columns are currently NULL** — file-tag values from
     /// import and explicit user edits win, the analyzer fills in
     /// missing data rather than overriding existing data.
@@ -435,7 +435,7 @@ pub trait LibraryStore: Send + Sync {
     /// Record a failed analysis attempt. Stamps the requested
     /// capabilities' `*_attempted_at_unix` so the scheduler does not
     /// keep retrying every cycle; does not touch
-    /// `tracks.bpm`/`musical_key` or the waveform table.
+    /// `tracks.bpm_hundredths`/`musical_key` or the waveform table.
     fn record_analysis_attempt_failure(
         &self,
         track_id: TrackId,

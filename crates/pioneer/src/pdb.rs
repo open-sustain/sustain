@@ -1315,9 +1315,7 @@ fn track_row(
     };
     let tempo = track
         .bpm
-        .and_then(crate::tempo_centibpm)
-        .map(u32::from)
-        .unwrap_or(0);
+        .map_or(0, |bpm| u32::from(crate::tempo_centibpm(bpm)));
 
     let mut row = Vec::with_capacity(0x88);
     let u16 = |row: &mut Vec<u8>, v: u16| row.extend_from_slice(&v.to_le_bytes());
@@ -1507,6 +1505,7 @@ fn write_file_header(
 mod tests {
     use super::*;
     use crate::model::PioneerFileType;
+    use sustain_domain::Bpm;
 
     fn track(title: &str, artist: &str, album: &str, n: u32) -> PioneerTrack {
         PioneerTrack {
@@ -1516,7 +1515,7 @@ mod tests {
             genre: Some("House".into()),
             composer: None,
             comment: None,
-            bpm: Some(128.0),
+            bpm: Bpm::from_whole(128),
             key: Some(sustain_domain::MusicalKey::AMinor),
             duration_secs: 200,
             file_size: 5_000_000,

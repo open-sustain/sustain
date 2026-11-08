@@ -31,8 +31,8 @@ use sha2::{Digest, Sha256};
 use sustain_artwork::{ArtworkPolicyError, MAX_ENCODED_ARTWORK_BYTES, validate_encoded_artwork};
 
 pub use sustain_domain::{
-    FieldChange, MetadataChange, MusicalKey, Rating, TrackContentHash, TrackMetadata,
-    TrackRelativePath, validate_bpm,
+    Bpm, FieldChange, MetadataChange, MusicalKey, Rating, TrackContentHash, TrackMetadata,
+    TrackRelativePath,
 };
 
 mod atomic_file;
@@ -312,7 +312,11 @@ impl MetadataService for LoftyMetadataService {
         apply_year_change(tag, change.year);
         apply_bool_change(tag, ItemKey::FlagCompilation, change.compilation);
         let bpm_key = bpm_item_key(tag.tag_type());
-        apply_number_change(tag, bpm_key, change.bpm);
+        apply_number_change(
+            tag,
+            bpm_key,
+            change.bpm.map(|bpm| bpm_tag_text(bpm_key, bpm)),
+        );
         apply_text_change(
             tag,
             ItemKey::InitialKey,
@@ -452,15 +456,26 @@ pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {
 /// container fields, and not every format defines both. ID3v2 only has
 /// the integer `TBPM` frame and MP4 the integer `tmpo` atom — neither
 /// maps [`ItemKey::Bpm`], so writing it there silently drops the value.
-/// Vorbis comments conversely only define a decimal `BPM` field. Sustain
-/// stores BPM as an integer, so prefer the integer key wherever the
-/// format maps it and fall back to the decimal key otherwise. Used for
-/// both reading and writing so the value round-trips on every format.
+/// Vorbis comments conversely only define a decimal `BPM` field. Prefer
+/// the integer key wherever the format maps it and fall back to the
+/// decimal key otherwise. Used for both reading and writing so the value
+/// round-trips on every format.
 fn bpm_item_key(tag_type: TagType) -> ItemKey {
     if ItemKey::IntegerBpm.map_key(tag_type).is_some() {
         ItemKey::IntegerBpm
     } else {
         ItemKey::Bpm
+    }
+}
+
+/// The text `bpm` is written as under `bpm_key`: whole beats in an integer
+/// field, which cannot hold a fraction, the exact tempo in a decimal one.
+/// The library keeps the exact tempo either way.
+fn bpm_tag_text(bpm_key: ItemKey, bpm: Bpm) -> String {
+    if bpm_key == ItemKey::IntegerBpm {
+        bpm.whole().to_string()
+    } else {
+        bpm.to_string()
     }
 }
 

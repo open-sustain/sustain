@@ -9,7 +9,7 @@ use std::{
 };
 
 use sustain_domain::{
-    AcousticFeatures, FieldChange, MetadataChange, PlayStatistics, PlaylistEntry, Rating,
+    AcousticFeatures, Bpm, FieldChange, MetadataChange, PlayStatistics, PlaylistEntry, Rating,
     SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistLimit,
     SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
     SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
@@ -135,6 +135,43 @@ fn sqlite_stored_key_that_is_not_a_short_code_is_rejected() {
         store.track(track.id),
         Err(super::StoreError::InvalidStoredEnum(
             "musical key: Amin".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn sqlite_bpm_round_trips_to_the_hundredth() {
+    let store = SqliteLibraryStore::open_in_memory().expect("store");
+    let mut track = track(1, "tempo.flac");
+    track.metadata.bpm = Bpm::from_hundredths(11_886);
+    store.save_track(track.clone()).expect("save track");
+
+    assert_eq!(
+        store
+            .track(track.id)
+            .expect("load")
+            .expect("exists")
+            .metadata
+            .bpm,
+        Bpm::from_hundredths(11_886)
+    );
+}
+
+#[test]
+fn sqlite_stored_bpm_that_is_not_a_tempo_is_rejected() {
+    let store = SqliteLibraryStore::open_in_memory().expect("store");
+    let track = track(1, "corrupt.flac");
+    store.save_track(track.clone()).expect("save track");
+    store
+        .connection_guard()
+        .expect("connection")
+        .execute("UPDATE tracks SET bpm_hundredths = 0 WHERE id = 1", [])
+        .expect("inject zero tempo");
+
+    assert_eq!(
+        store.track(track.id),
+        Err(super::StoreError::InvalidStoredEnum(
+            "bpm hundredths: 0".to_owned()
         ))
     );
 }
@@ -1159,11 +1196,12 @@ fn run_record_analysis_fills_tracks_columns_only_when_null(store: &dyn LibrarySt
 
     // Second track: user-set BPM/key — analyzer must not clobber.
     let mut taken = track(2, "taken.flac");
-    taken.metadata.bpm = Some(95);
+    taken.metadata.bpm = Bpm::from_whole(95);
     taken.metadata.key = Some(MusicalKey::AMinor);
     store.save_track(taken.clone()).expect("save taken");
 
-    let analysis = sample_analysis(Some(126.0), Some(MusicalKey::DMinor));
+    // A measured tempo keeps its hundredths.
+    let analysis = sample_analysis(Some(126.37), Some(MusicalKey::DMinor));
     for id in [blank.id, taken.id] {
         store
             .record_analysis(
@@ -1176,11 +1214,11 @@ fn run_record_analysis_fills_tracks_columns_only_when_null(store: &dyn LibrarySt
     }
 
     let loaded_blank = store.track(blank.id).expect("load blank").expect("exists");
-    assert_eq!(loaded_blank.metadata.bpm, Some(126));
+    assert_eq!(loaded_blank.metadata.bpm, Bpm::from_hundredths(12_637));
     assert_eq!(loaded_blank.metadata.key, Some(MusicalKey::DMinor));
 
     let loaded_taken = store.track(taken.id).expect("load taken").expect("exists");
-    assert_eq!(loaded_taken.metadata.bpm, Some(95));
+    assert_eq!(loaded_taken.metadata.bpm, Bpm::from_whole(95));
     assert_eq!(loaded_taken.metadata.key, Some(MusicalKey::AMinor));
 }
 

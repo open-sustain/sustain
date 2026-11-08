@@ -14,6 +14,7 @@
 //! payloads come from Sustain's own analysis.
 
 use sha2::{Digest, Sha256};
+use sustain_domain::Bpm;
 
 use crate::model::AnlzInput;
 use crate::waveform::{self, DETAIL_ENTRIES_PER_SECOND};
@@ -94,30 +95,27 @@ struct Beat {
 /// Lay a constant-tempo grid across the track. Returns no beats for
 /// very short clips (< 4 s), matching rekordbox, which leaves
 /// sound-effect-length files ungridded.
-fn beats(bpm: Option<f32>, duration_ms: u32) -> Vec<Beat> {
-    let Some(bpm) = bpm.filter(|b| *b > 0.0) else {
-        return Vec::new();
-    };
-    let Some(tempo) = crate::tempo_centibpm(bpm) else {
+fn beats(bpm: Option<Bpm>, duration_ms: u32) -> Vec<Beat> {
+    let Some(bpm) = bpm else {
         return Vec::new();
     };
     if duration_ms < 4000 {
         return Vec::new();
     }
-    let interval = 60_000.0 / bpm;
-    let mut out = Vec::new();
-    let mut time = 0.0f32;
-    let mut number = 1u16;
-    while (time as u32) < duration_ms {
-        out.push(Beat {
-            number,
+    let tempo = crate::tempo_centibpm(bpm);
+    let interval_ms = 60_000.0 / bpm.as_f64();
+    let beat_count = (f64::from(duration_ms) / interval_ms).ceil() as u32;
+    // Each beat's time is computed from its index, so rounding never
+    // accumulates along the track.
+    (0..beat_count)
+        .map(|index| (index, (f64::from(index) * interval_ms) as u32))
+        .take_while(|&(_, time_ms)| time_ms < duration_ms)
+        .map(|(index, time_ms)| Beat {
+            number: (index % 4) as u16 + 1,
             tempo,
-            time_ms: time as u32,
-        });
-        time += interval;
-        number = if number >= 4 { 1 } else { number + 1 };
-    }
-    out
+            time_ms,
+        })
+        .collect()
 }
 
 /// Serialize the `.DAT` file bytes for a track.
@@ -300,11 +298,26 @@ mod tests {
     fn input<'a>(preview: &'a WaveformSegments, detail: &'a WaveformSegments) -> AnlzInput<'a> {
         AnlzInput {
             device_audio_path: "/Contents/Artist/Album/01 Title.mp3",
-            bpm: Some(128.0),
+            bpm: Bpm::from_whole(128),
             duration_ms: 180_000,
             waveform_preview: preview,
             waveform_detail: detail,
         }
+    }
+
+    #[test]
+    fn beat_grid_carries_the_fractional_tempo_without_drift() {
+        let grid = beats(Bpm::from_hundredths(11_886), 600_000);
+        assert!(grid.iter().all(|beat| beat.tempo == 11_886));
+        // Beat 1000 lands at 1000 × 60 000 / 118.86 ms, not wherever
+        // a thousand accumulated intervals would put it.
+        assert_eq!(grid[1000].time_ms, 504_795);
+        assert_eq!(
+            grid[..5].iter().map(|beat| beat.number).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 1]
+        );
+        assert!(grid.last().expect("beats").time_ms < 600_000);
+        assert!(beats(None, 600_000).is_empty());
     }
 
     #[test]

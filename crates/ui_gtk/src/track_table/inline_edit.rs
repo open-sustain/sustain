@@ -35,7 +35,7 @@ use gtk::{gdk, glib, graphene};
 use sustain_app_runtime::{MetadataChange, TrackMetadata};
 
 use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
-use crate::metadata_diff::{key_diff, number_diff, signed_number_diff, text_diff};
+use crate::metadata_diff::{bpm_diff, key_diff, number_diff, signed_number_diff, text_diff};
 
 /// Fallback double-click interval when the display has no settings object.
 const DEFAULT_DOUBLE_CLICK_MS: i32 = 400;
@@ -90,7 +90,7 @@ impl EditableField {
             Self::Album => change.album = text_diff(initial.album.as_deref(), new_text),
             Self::Genre => change.genre = text_diff(initial.genre.as_deref(), new_text),
             Self::Year => change.year = signed_number_diff(initial.year, new_text),
-            Self::Bpm => change.bpm = number_diff(initial.bpm, new_text),
+            Self::Bpm => change.bpm = bpm_diff(initial.bpm, new_text),
             Self::Key => change.key = key_diff(initial.key, new_text),
             Self::TrackNumber => change.track_number = number_diff(initial.track_number, new_text),
         }
@@ -546,13 +546,14 @@ fn cell_origin_x(cell: &gtk::Box) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sustain_app_runtime::Bpm;
 
     fn metadata() -> TrackMetadata {
         TrackMetadata {
             title: Some("Song".to_owned()),
             artist: Some("Band".to_owned()),
             year: Some(1998),
-            bpm: Some(120),
+            bpm: Bpm::from_whole(120),
             track_number: Some(3),
             ..TrackMetadata::default()
         }

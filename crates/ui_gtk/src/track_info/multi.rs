@@ -4,7 +4,7 @@
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use sustain_app_runtime::{
-    ApplicationCommand, FieldChange, MetadataChange, MusicalKey, Track, TrackId,
+    ApplicationCommand, Bpm, FieldChange, MetadataChange, MusicalKey, Track, TrackId,
 };
 
 use crate::{
@@ -230,7 +230,7 @@ struct BatchInitialValues {
     disc_number: CommonValue<u32>,
     disc_total: CommonValue<u32>,
     compilation: CommonValue<bool>,
-    bpm: CommonValue<u32>,
+    bpm: CommonValue<Bpm>,
     key: CommonValue<MusicalKey>,
     comments: CommonValue<String>,
 }
@@ -285,7 +285,7 @@ struct BatchDetailsPage {
     disc_number: OptionalEntry<u32>,
     disc_total: OptionalEntry<u32>,
     compilation: OptionalBool,
-    bpm: OptionalEntry<u32>,
+    bpm: OptionalEntry<Bpm>,
     key: OptionalEntry<MusicalKey>,
     comments: OptionalTextView,
 }
@@ -430,7 +430,7 @@ impl BatchDetailsPage {
                 self.disc_total.selected_text(),
             )?,
             compilation: self.compilation.selected_value(),
-            bpm: number_change("BPM", &self.bpm.initial, self.bpm.selected_text())?,
+            bpm: bpm_change(&self.bpm.initial, self.bpm.selected_text())?,
             key: key_change(&self.key.initial, self.key.selected_text())?,
             comments: prose_change(&self.comments.initial, self.comments.selected_text()),
             ..MetadataChange::default()
@@ -601,32 +601,25 @@ fn text_change(initial: &CommonValue<String>, value: Option<String>) -> FieldCha
     }
 }
 
-/// Like [`number_change`], for a key in any notation
-/// [`MusicalKey::parse`] reads.
+/// A key in any notation [`MusicalKey::parse`] reads.
 fn key_change(
     initial: &CommonValue<MusicalKey>,
     value: Option<String>,
 ) -> Result<FieldChange<MusicalKey>, String> {
-    let Some(value) = value else {
-        return Ok(FieldChange::Unchanged);
-    };
-    let value = value.trim();
-    let current = if value.is_empty() {
-        None
-    } else {
-        Some(
-            MusicalKey::parse(value)
-                .ok_or_else(|| "Key must be a musical key, such as Am, F#, or 8A.".to_owned())?,
-        )
-    };
-    if initial.matches(&current) {
-        Ok(FieldChange::Unchanged)
-    } else {
-        match current {
-            None => Ok(FieldChange::Clear),
-            Some(value) => Ok(FieldChange::Set(value)),
-        }
-    }
+    parsed_change(initial, value, |text| {
+        MusicalKey::parse(text)
+            .ok_or_else(|| "Key must be a musical key, such as Am, F#, or 8A.".to_owned())
+    })
+}
+
+/// A whole or decimal tempo, as [`Bpm::parse`] reads it.
+fn bpm_change(
+    initial: &CommonValue<Bpm>,
+    value: Option<String>,
+) -> Result<FieldChange<Bpm>, String> {
+    parsed_change(initial, value, |text| {
+        text.parse::<Bpm>().map_err(|error| format!("{error}."))
+    })
 }
 
 fn prose_change(initial: &CommonValue<String>, value: Option<String>) -> FieldChange<String> {
@@ -652,18 +645,29 @@ fn number_change<T>(
 where
     T: Clone + Eq + std::str::FromStr,
 {
+    parsed_change(initial, value, |text| {
+        text.parse()
+            .map_err(|_| format!("{label} must be a whole number."))
+    })
+}
+
+/// The change an enabled batch entry makes: blank text clears the field,
+/// text `parse` reads sets it unless every track already holds that
+/// value, and text `parse` rejects is an error stating what the field
+/// accepts. A disabled entry (`value` is `None`) changes nothing.
+fn parsed_change<T: Clone + Eq>(
+    initial: &CommonValue<T>,
+    value: Option<String>,
+    parse: impl FnOnce(&str) -> Result<T, String>,
+) -> Result<FieldChange<T>, String> {
     let Some(value) = value else {
         return Ok(FieldChange::Unchanged);
     };
-    let value = value.trim().to_owned();
+    let value = value.trim();
     let current = if value.is_empty() {
         None
     } else {
-        Some(
-            value
-                .parse()
-                .map_err(|_| format!("{label} must be a whole number."))?,
-        )
+        Some(parse(value)?)
     };
     if initial.matches(&current) {
         Ok(FieldChange::Unchanged)

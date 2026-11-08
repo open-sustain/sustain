@@ -1164,7 +1164,7 @@ fn sync_input_track(track: &Track, source_path: PathBuf, source: SourceSnapshot)
         year: metadata.year.map(|y| y.max(0) as u32),
         duration_ms: metadata.duration.map(|d| d.as_millis() as u32).unwrap_or(0),
         rating: track.rating.stars(),
-        bpm: metadata.bpm.map(|b| b as f32),
+        bpm: metadata.bpm,
         key: metadata.key,
         bitrate_kbps: metadata.bitrate_kbps,
         sample_rate_hz: metadata.sample_rate_hz.unwrap_or(44_100),

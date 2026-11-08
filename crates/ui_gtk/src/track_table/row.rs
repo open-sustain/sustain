@@ -3,7 +3,7 @@
 
 use std::{path::Path, time::SystemTime};
 
-use sustain_app_runtime::{Track, TrackId, effective_sort_key, normalize_sort_text};
+use sustain_app_runtime::{Bpm, Track, TrackId, effective_sort_key, normalize_sort_text};
 
 use crate::util::non_empty_text;
 
@@ -67,7 +67,7 @@ pub(crate) struct TrackTableRow {
     pub(super) artist_sort_key: String,
     pub(super) album_sort_key: String,
     pub(crate) year: Option<i32>,
-    pub(crate) bpm: Option<u32>,
+    pub(crate) bpm: Option<Bpm>,
     pub(crate) music_key: Option<String>,
     pub(crate) bitrate_kbps: Option<u32>,
     pub(super) file_type: AudioFileType,

@@ -3,9 +3,7 @@
 
 use std::{path::Path, time::Duration};
 
-use crate::MusicalKey;
-
-pub const MAX_BPM: u32 = 655;
+use crate::{Bpm, MusicalKey};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrackMetadata {
@@ -22,7 +20,7 @@ pub struct TrackMetadata {
     pub disc_total: Option<u32>,
     pub year: Option<i32>,
     pub compilation: Option<bool>,
-    pub bpm: Option<u32>,
+    pub bpm: Option<Bpm>,
     pub key: Option<MusicalKey>,
     pub comments: Option<String>,
     pub lyrics: Option<String>,
@@ -254,41 +252,6 @@ impl TrackMetadata {
         );
         fill_missing_generated_sort_field(&mut self.composer_sort, self.composer.as_deref());
     }
-
-    pub const fn valid_bpm(value: u32) -> bool {
-        value <= MAX_BPM
-    }
-
-    pub const fn validate_bpm(value: u32) -> Option<u32> {
-        if Self::valid_bpm(value) {
-            Some(value)
-        } else {
-            None
-        }
-    }
-}
-
-pub const fn valid_bpm(value: u32) -> bool {
-    TrackMetadata::valid_bpm(value)
-}
-
-pub const fn validate_bpm(value: u32) -> Option<u32> {
-    TrackMetadata::validate_bpm(value)
-}
-
-/// Validate a raw BPM produced by audio analysis into a metadata BPM,
-/// rounding to the nearest integer and rejecting non-finite, negative,
-/// or out-of-range values. The single gate both `LibraryStore` backends
-/// apply before persisting an analyzer-derived BPM into track metadata.
-pub fn validate_analysis_bpm(bpm: f32) -> Option<u32> {
-    if !bpm.is_finite() || bpm < 0.0 {
-        return None;
-    }
-    let rounded = bpm.round();
-    if rounded > MAX_BPM as f32 {
-        return None;
-    }
-    validate_bpm(rounded as u32)
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -325,7 +288,7 @@ pub struct MetadataChange {
     pub disc_total: FieldChange<u32>,
     pub year: FieldChange<i32>,
     pub compilation: FieldChange<bool>,
-    pub bpm: FieldChange<u32>,
+    pub bpm: FieldChange<Bpm>,
     pub key: FieldChange<MusicalKey>,
     pub comments: FieldChange<String>,
     pub lyrics: FieldChange<String>,
@@ -460,7 +423,7 @@ mod tests {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::Path};
 
     use super::{FieldChange, MetadataChange, TrackMetadata};
-    use crate::MusicalKey;
+    use crate::{Bpm, MusicalKey};
 
     #[test]
     fn ensure_title_from_filename_promotes_stem_when_title_is_missing() {
@@ -742,7 +705,7 @@ mod tests {
             track_total: FieldChange::Set(12),
             disc_total: FieldChange::Set(2),
             compilation: FieldChange::Set(true),
-            bpm: FieldChange::Set(128),
+            bpm: FieldChange::Set(Bpm::from_whole(128).expect("tempo")),
             key: FieldChange::Set(MusicalKey::AMinor),
             comments: FieldChange::Set("Note".to_owned()),
             ..MetadataChange::default()
@@ -754,7 +717,7 @@ mod tests {
         assert_eq!(metadata.track_total, Some(12));
         assert_eq!(metadata.disc_total, Some(2));
         assert_eq!(metadata.compilation, Some(true));
-        assert_eq!(metadata.bpm, Some(128));
+        assert_eq!(metadata.bpm, Bpm::from_whole(128));
         assert_eq!(metadata.key, Some(MusicalKey::AMinor));
         assert_eq!(metadata.comments.as_deref(), Some("Note"));
     }
@@ -764,7 +727,7 @@ mod tests {
         let mut metadata = TrackMetadata {
             grouping: Some("Old group".to_owned()),
             compilation: Some(true),
-            bpm: Some(100),
+            bpm: Bpm::from_whole(100),
             ..TrackMetadata::default()
         };
         let change = MetadataChange {

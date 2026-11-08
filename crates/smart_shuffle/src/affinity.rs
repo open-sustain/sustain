@@ -255,7 +255,7 @@ pub fn compute_affinity(
 #[cfg(test)]
 mod tests {
     use sustain_domain::{
-        MusicalKey, PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata,
+        Bpm, MusicalKey, PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata,
         TrackRelativePath,
     };
 
@@ -290,7 +290,7 @@ mod tests {
         let cand = track(
             2,
             TrackMetadata {
-                bpm: Some(120),
+                bpm: Bpm::from_whole(120),
                 ..TrackMetadata::default()
             },
         );
@@ -333,7 +333,7 @@ mod tests {
     fn richer_agreement_scores_higher_than_thin_agreement() {
         let base = TrackMetadata {
             genre: Some("House".to_owned()),
-            bpm: Some(124),
+            bpm: Bpm::from_whole(124),
             key: Some(MusicalKey::AMinor),
             year: Some(2014),
             ..TrackMetadata::default()

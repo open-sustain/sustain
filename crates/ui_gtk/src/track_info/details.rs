@@ -11,7 +11,9 @@ use sustain_app_runtime::{
 
 use crate::date_format::format_system_time_short;
 
-use crate::metadata_diff::{bool_diff, key_diff, number_diff, signed_number_diff, text_diff};
+use crate::metadata_diff::{
+    bool_diff, bpm_diff, key_diff, number_diff, signed_number_diff, text_diff,
+};
 use crate::util::sync_rating_button;
 
 use super::{
@@ -294,7 +296,7 @@ impl DetailsPage {
             disc_total: number_diff(initial.disc_total, &self.disc_total.text()),
             year: signed_number_diff(initial.year, &self.year.text()),
             compilation: bool_diff(initial.compilation, self.compilation.is_active()),
-            bpm: number_diff(initial.bpm, &self.bpm.text()),
+            bpm: bpm_diff(initial.bpm, &self.bpm.text()),
             key: key_diff(initial.key, &self.key.text()),
             comments: text_diff(
                 initial.comments.as_deref(),

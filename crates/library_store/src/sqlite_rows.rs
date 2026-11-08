@@ -8,7 +8,7 @@ use std::{
 
 use rusqlite::{Connection, Row, params};
 use sustain_domain::{
-    MusicalKey, PlayStatistics, PlaylistEntry, SmartPlaylistBoolField, SmartPlaylistBoolRule,
+    Bpm, MusicalKey, PlayStatistics, PlaylistEntry, SmartPlaylistBoolField, SmartPlaylistBoolRule,
     SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
     SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
     SmartPlaylistRule, SmartPlaylistTextField, SmartPlaylistTextOperator, TrackLocation,
@@ -47,7 +47,7 @@ pub(crate) fn track_from_row(row: &Row<'_>) -> StoreResult<Track> {
             compilation: row
                 .get(track_column::COMPILATION)
                 .map_err(StoreError::from)?,
-            bpm: optional_u32(row, track_column::BPM)?,
+            bpm: optional_bpm(row, track_column::BPM)?,
             key: optional_musical_key(row, track_column::MUSICAL_KEY)?,
             comments: row.get(track_column::COMMENTS).map_err(StoreError::from)?,
             duration: duration_seconds.map(seconds_to_duration),
@@ -179,6 +179,21 @@ fn optional_u32(row: &Row<'_>, index: usize) -> StoreResult<Option<u32>> {
 fn optional_u8(row: &Row<'_>, index: usize) -> StoreResult<Option<u8>> {
     optional_i64(row, index)
         .map(|value| value.map(|value| value.clamp(0, i64::from(u8::MAX)) as u8))
+}
+
+/// Tempos are stored in hundredths of a beat per minute; a value outside
+/// the range a [`Bpm`] carries is a corrupt value.
+fn optional_bpm(row: &Row<'_>, index: usize) -> StoreResult<Option<Bpm>> {
+    optional_i64(row, index)?
+        .map(|hundredths| {
+            u32::try_from(hundredths)
+                .ok()
+                .and_then(Bpm::from_hundredths)
+                .ok_or_else(|| {
+                    StoreError::InvalidStoredEnum(format!("bpm hundredths: {hundredths}"))
+                })
+        })
+        .transpose()
 }
 
 /// Keys are stored as their canonical short code (migration 7 normalized

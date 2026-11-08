@@ -8,8 +8,8 @@ use std::{
 
 use sustain_artwork::validate_encoded_artwork;
 use sustain_domain::{
-    FieldChange, LibraryManagementMode, MetadataChange, PlaybackCommand, Rating, TrackId,
-    TrackLocation, TrackRelativePath, valid_bpm,
+    LibraryManagementMode, MetadataChange, PlaybackCommand, Rating, TrackId, TrackLocation,
+    TrackRelativePath,
 };
 use sustain_library_store::TagMirrorArtwork;
 use sustain_metadata::audio_format_from_path;
@@ -153,7 +153,6 @@ impl ApplicationRuntime {
         change: MetadataChange,
     ) -> ApplicationRuntimeResult<()> {
         self.ensure_no_background_library_task()?;
-        validate_metadata_change(&change)?;
         let library_store = self
             .library_store
             .clone()
@@ -472,15 +471,6 @@ impl ApplicationRuntime {
             }
         }
     }
-}
-
-fn validate_metadata_change(change: &MetadataChange) -> ApplicationRuntimeResult<()> {
-    if let FieldChange::Set(bpm) = change.bpm
-        && !valid_bpm(bpm)
-    {
-        return Err(ApplicationRuntimeError::InvalidBpm);
-    }
-    Ok(())
 }
 
 pub(crate) struct MissingTrackRelocationOutcome {

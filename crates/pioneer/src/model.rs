@@ -7,7 +7,7 @@
 //! playlist models into these flat structs, so the format code never
 //! reaches back into the library, the database, or the DSP pipeline.
 
-use sustain_domain::{MusicalKey, WaveformSegments};
+use sustain_domain::{Bpm, MusicalKey, WaveformSegments};
 
 /// Pioneer's file-type discriminant, written into each track row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,7 +49,7 @@ pub struct PioneerTrack {
     pub composer: Option<String>,
     /// Free-text comment. Truncated to rekordbox's limit by the writer.
     pub comment: Option<String>,
-    pub bpm: Option<f32>,
+    pub bpm: Option<Bpm>,
     pub key: Option<MusicalKey>,
     /// Track length in whole seconds.
     pub duration_secs: u32,
@@ -106,7 +106,7 @@ pub struct PioneerArtwork {
 pub struct AnlzInput<'a> {
     /// On-drive audio path, used for the PPTH section.
     pub device_audio_path: &'a str,
-    pub bpm: Option<f32>,
+    pub bpm: Option<Bpm>,
     pub duration_ms: u32,
     pub waveform_preview: &'a WaveformSegments,
     pub waveform_detail: &'a WaveformSegments,

@@ -539,11 +539,21 @@ and it applies to every analysis run, background sweeps and manual
 one-off runs alike. Detection reads a **centered** window of the track —
 the middle two minutes — rather than the opening seconds, where intros
 (especially in electronic music) are too sparse and tame to read a
-steady tempo from. The estimate fills `tracks.bpm` only when SQLite has
-no value for that field — analysis supplies missing data, it never
+steady tempo from. The estimate fills the track's BPM only when SQLite
+has no value for that field — analysis supplies missing data, it never
 overrides a value imported from a file tag or set by the user. The BPM
 column ships visible by default and feeds the `BPM` smart-playlist field
 for tempo-aware rules.
+
+Tempos are kept to the hundredth of a beat (`118.86`), the precision
+Pioneer players beat-match with, and display without needless digits
+(`128`, `124.5`). Tags, the Get Info dialog, and the BPM cell accept a
+whole or decimal tempo up to 655 BPM; a zero or out-of-range tag value is
+ignored at import, leaving the field for analysis. Edits mirror to the
+file as precisely as its format allows: Vorbis comments (FLAC, Ogg) keep
+the decimal, while ID3 `TBPM` (MP3, WAV) and MP4 `tmpo` hold whole beats
+and receive the nearest one — the library keeps the exact value either
+way. Smart-playlist BPM rules compare whole beats.
 
 Current validation snapshot, with the default 76–155 BPM band: every
 private-reference track whose labelled tempo falls inside the band lands
@@ -1001,7 +1011,7 @@ Three on-drive formats, chosen per device:
   track's waveform or grid. A track's pair is rewritten whenever its analysis
   changes, even when the audio file itself is unchanged, and left untouched
   otherwise; removing a track deletes only its own pair. Each track carries its
-  BPM, musical key, a constant-tempo beat grid, both monochrome and colour
+  BPM to the hundredth of a beat, musical key, a constant-tempo beat grid, both monochrome and colour
   waveforms (the small browse preview and the full detailed overview), star
   rating, genre, year, disc number, composer and comment — all from Sustain's
   own analysis pipeline and library, not re-read from the files. A track

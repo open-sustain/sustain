@@ -13,7 +13,7 @@ use std::{
 };
 
 use sustain_domain::{
-    DuplicateConsolidationRequest, DuplicateMatchMode, Track, TrackId, TrackRelativePath,
+    Bpm, DuplicateConsolidationRequest, DuplicateMatchMode, Track, TrackId, TrackRelativePath,
     duplicate_groups_with_acoustics, plan_duplicate_consolidation,
 };
 use sustain_library_store::LibraryStore;
@@ -643,6 +643,11 @@ fn verify_staged_tags(
     Ok(())
 }
 
+/// Whether two readings of a track carry the same editable metadata.
+///
+/// BPM compares in whole beats: ID3 `TBPM` and MP4 `tmpo` hold no
+/// fraction, so a tag written from a fractional library tempo reads back
+/// as its nearest whole beat.
 pub(crate) fn editable_metadata_matches(
     left: &sustain_domain::TrackMetadata,
     right: &sustain_domain::TrackMetadata,
@@ -660,7 +665,7 @@ pub(crate) fn editable_metadata_matches(
         && left.disc_total == right.disc_total
         && left.year == right.year
         && left.compilation == right.compilation
-        && left.bpm == right.bpm
+        && left.bpm.map(Bpm::whole) == right.bpm.map(Bpm::whole)
         && left.key == right.key
         && left.comments == right.comments
         && left.lyrics == right.lyrics
@@ -1053,6 +1058,25 @@ mod tests {
     use sustain_metadata::{InitialTags, MetadataError, MetadataResult};
 
     use super::*;
+
+    #[test]
+    fn editable_metadata_matches_compares_bpm_in_whole_beats() {
+        let with_bpm = |bpm| TrackMetadata {
+            bpm,
+            ..TrackMetadata::default()
+        };
+        let library = with_bpm(Bpm::from_hundredths(11_886));
+        // An ID3 or MP4 tag written from 118.86 reads back as 119.
+        assert!(editable_metadata_matches(
+            &with_bpm(Bpm::from_whole(119)),
+            &library
+        ));
+        assert!(!editable_metadata_matches(
+            &with_bpm(Bpm::from_whole(118)),
+            &library
+        ));
+        assert!(!editable_metadata_matches(&with_bpm(None), &library));
+    }
 
     #[test]
     fn consolidation_publishes_verified_survivor_then_removes_duplicate() {

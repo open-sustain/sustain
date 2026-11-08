@@ -35,12 +35,14 @@ pub(super) fn record_analysis(
     }
 
     if capabilities.bpm
-        && let Some(bpm) = analysis.bpm.and_then(sustain_domain::validate_analysis_bpm)
+        && let Some(bpm) = analysis
+            .bpm
+            .and_then(|bpm| sustain_domain::Bpm::from_f64(f64::from(bpm)))
     {
         transaction
             .execute(
                 FILL_TRACK_BPM_IF_NULL_SQL,
-                params![i64::from(bpm), track_id.get()],
+                params![i64::from(bpm.hundredths()), track_id.get()],
             )
             .map_err(StoreError::from)?;
     }
