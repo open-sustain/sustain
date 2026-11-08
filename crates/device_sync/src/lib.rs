@@ -434,6 +434,33 @@ mod tests {
         assert!(exts >= 2, "expected per-track ANLZ files, found {exts}");
     }
 
+    #[test]
+    fn pioneer_layout_leaves_off_formats_the_player_cannot_play() {
+        let mut fx = fixture(3);
+        fx.tracks[2].extension = "opus".into();
+        let opus_id = fx.tracks[2].track_id;
+
+        let outcome = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        assert_eq!((outcome.copied, outcome.unplayable), (2, 1));
+        assert!(
+            outcome
+                .manifest
+                .iter()
+                .all(|entry| entry.track_id != opus_id)
+        );
+        assert_eq!(walk_files(fx.dest.path().join("Contents")), 2);
+
+        // Other layouts copy every format.
+        let outcome = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::M3u, Vec::new(), false),
+        );
+        assert_eq!((outcome.copied, outcome.unplayable), (3, 0));
+    }
+
     /// Two tracks whose Pioneer audio paths hash to the same `USBANLZ`
     /// directory (a pair observed on a real rekordbox export).
     fn colliding_pioneer_fixture() -> Fixture {

@@ -184,6 +184,11 @@ pub fn sync(
 
     let mut outcome = SyncOutcome {
         unchanged: diff.unchanged.len(),
+        unplayable: req
+            .tracks
+            .iter()
+            .filter(|track| !layout::plays(req.device.layout, track))
+            .count(),
         ..SyncOutcome::default()
     };
     // Every present entry starts out with the analysis pair its previous

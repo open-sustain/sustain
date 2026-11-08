@@ -703,8 +703,19 @@ pub fn device_sync_outcome_text(outcome: &sustain_device_sync::SyncOutcome) -> S
         return format!("Sync stopped: {}.", parts.join(", "));
     }
     let changed = outcome.copied + outcome.updated;
+    let unplayable = (outcome.unplayable > 0).then(|| {
+        format!(
+            "{} {} left off: the device cannot play {}",
+            outcome.unplayable,
+            pluralize(outcome.unplayable, "track", "tracks"),
+            pluralize(outcome.unplayable, "its format", "their format")
+        )
+    });
     if changed == 0 && outcome.removed == 0 && outcome.copy_failures.is_empty() {
-        return "Device already up to date.".to_owned();
+        return match unplayable {
+            Some(unplayable) => format!("Device already up to date; {unplayable}."),
+            None => "Device already up to date.".to_owned(),
+        };
     }
     let mut parts = Vec::new();
     if outcome.copied > 0 {
@@ -726,9 +737,15 @@ pub fn device_sync_outcome_text(outcome: &sustain_device_sync::SyncOutcome) -> S
             outcome.copy_failures.len(),
             pluralize(outcome.copy_failures.len(), "track", "tracks")
         ));
-        format!("Sync partial: {}.", parts.join(", "))
+    }
+    let summary = if outcome.copy_failures.is_empty() {
+        format!("Sync complete: {}", parts.join(", "))
     } else {
-        format!("Sync complete: {}.", parts.join(", "))
+        format!("Sync partial: {}", parts.join(", "))
+    };
+    match unplayable {
+        Some(unplayable) => format!("{summary}; {unplayable}."),
+        None => format!("{summary}."),
     }
 }
 

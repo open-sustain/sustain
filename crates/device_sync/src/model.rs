@@ -306,6 +306,9 @@ pub struct SyncOutcome {
     pub unchanged: usize,
     /// Per-track copy failures that did not abort the whole sync.
     pub copy_failures: Vec<SyncTrackFailure>,
+    /// Selected tracks left off the device because its player cannot
+    /// play their format.
+    pub unplayable: usize,
     /// The new manifest to persist.
     pub manifest: Vec<SyncManifestEntry>,
     /// True once the engine has assembled a manifest representing the

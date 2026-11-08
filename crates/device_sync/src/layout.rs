@@ -24,7 +24,7 @@ use sustain_pioneer::{
     path_hash, pdb,
 };
 
-use crate::model::{Placement, PreparedSyncRequest, SyncError, SyncRequest};
+use crate::model::{Placement, PreparedSyncRequest, SyncError, SyncInputTrack, SyncRequest};
 use crate::transport::DeviceTransport;
 
 const MUSIC_DIR: &str = "Music";
@@ -48,13 +48,27 @@ const MAX_DISAMBIGUATION_ATTEMPTS: u32 = 10_000;
 /// or the final set still holds a duplicate path — never a silent
 /// overwrite.
 pub fn plan_placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
-    let placements = match req.device.layout {
+    let mut placements = match req.device.layout {
         DeviceLayout::M3u => tree_placements(req, MUSIC_DIR)?,
         DeviceLayout::Pioneer => tree_placements(req, CONTENTS_DIR)?,
         DeviceLayout::FolderPerPlaylist => folder_placements(req)?,
     };
+    placements.retain(|placement| plays(req.device.layout, &req.tracks[placement.track_index]));
     validate_unique(&placements)?;
     Ok(placements)
+}
+
+/// Whether the player a layout targets can play `track`. Pioneer players
+/// read only the formats rekordbox exports; anything else would sit in
+/// the player's browser and refuse to load. The other layouts feed
+/// players Sustain knows nothing about, so every track goes.
+pub(crate) fn plays(layout: DeviceLayout, track: &SyncInputTrack) -> bool {
+    match layout {
+        DeviceLayout::Pioneer => {
+            PioneerFileType::from_extension(&track.extension) != PioneerFileType::Unknown
+        }
+        DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => true,
+    }
 }
 
 /// Final guard before any filesystem mutation: every planned path must be
@@ -177,7 +191,7 @@ fn tree_placements(req: &SyncRequest, root_dir: &str) -> Result<Vec<Placement>, 
     Ok(placements)
 }
 
-fn track_stem(track: &crate::model::SyncInputTrack) -> String {
+fn track_stem(track: &SyncInputTrack) -> String {
     match track.track_number {
         Some(n) if n > 0 => format!("{n:02} {}", track.title),
         _ => track.title.clone(),

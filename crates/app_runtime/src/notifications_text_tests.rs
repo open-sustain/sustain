@@ -203,3 +203,26 @@ fn device_sync_outcome_reports_partial_copy_failures() {
         "Sync partial: 12 tracks added, 1 updated, 1 track failed."
     );
 }
+
+#[test]
+fn device_sync_outcome_names_tracks_the_device_cannot_play() {
+    let outcome = sustain_device_sync::SyncOutcome {
+        copied: 3,
+        unplayable: 2,
+        ..sustain_device_sync::SyncOutcome::default()
+    };
+    assert_eq!(
+        device_sync_outcome_text(&outcome),
+        "Sync complete: 3 tracks added; 2 tracks left off: the device cannot play their format."
+    );
+
+    let outcome = sustain_device_sync::SyncOutcome {
+        unchanged: 3,
+        unplayable: 1,
+        ..sustain_device_sync::SyncOutcome::default()
+    };
+    assert_eq!(
+        device_sync_outcome_text(&outcome),
+        "Device already up to date; 1 track left off: the device cannot play its format."
+    );
+}

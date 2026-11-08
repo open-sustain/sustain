@@ -564,8 +564,8 @@ because four deliberately-kept labels sit at or below the 76 BPM floor;
 GiantSteps Tempo scores 61.3% within +/-2 BPM because much of its fast
 160–185 BPM material is outside the shipped range and folds to half
 tempo. Those misses are range artefacts, not known tempogram defects.
-Against Rekordbox's own analysis of 597 dance tracks, 89.6% of tempos
-match to within 0.05 BPM and 95.2% to the whole beat.
+Against Rekordbox's own analysis of 3,902 dance tracks, 88.1% of tempos
+match to within 0.05 BPM and 95.1% to the whole beat.
 
 ### Beat grid — *Sustain-native*
 Tempo analysis also places a constant beat grid: every beat of the track
@@ -579,9 +579,9 @@ fits them. Tempo analysis never overwrites a BPM the library already
 holds. If that BPM disagrees with the grid by more than half a beat per
 minute, for example because the user corrected it, the grid is not
 exported: an export shows no grid rather than one that contradicts the
-track's tempo. Against Rekordbox on the same 597 dance tracks, 67% of
+track's tempo. Against Rekordbox on the same 3,902 dance tracks, 67% of
 grids land within 20 ms of Rekordbox's beats across the whole track, and
-the downbeat agrees on 77% of those. The rest mostly lock on the off-beat
+the downbeat agrees on 74% of those. The rest mostly lock on the off-beat
 or a quarter beat away.
 
 ### Musical key detection — *Sustain-native*
@@ -1049,7 +1049,10 @@ Three on-drive formats, chosen per device:
   MP3s, Pioneer players also play the encoder delay that other decoders
   drop. Sustain reads that delay from the file's LAME/Xing header and moves
   the beats and waveform by it, so the grid sits on the beats the player
-  plays. (Hot cues and memory cues are not written.)
+  plays. Only formats Pioneer players can play are exported: MP3, AAC/ALAC
+  (M4A), FLAC, WAV and AIFF. Tracks in any other format (Opus, Ogg Vorbis…)
+  are left off the drive, and the sync summary says how many. (Hot cues and
+  memory cues are not written.)
 
 Android phones are reached over **MTP** through the desktop's GVfs backend — the
 same path the file manager uses, so no special drivers or root access are needed.
