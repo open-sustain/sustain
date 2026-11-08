@@ -297,6 +297,28 @@ pub struct SyncManifestEntry {
     /// hash when known, else a size-based token). A change means the
     /// on-device copy is stale and must be rewritten.
     pub fingerprint: String,
+    /// The Pioneer analysis pair (`ANLZnnnn.DAT` / `.EXT`) this track
+    /// owns on the device, when the Pioneer layout last wrote or verified
+    /// it. `None` for other layouts, and for a track whose analysis files
+    /// are not (or no longer) known to be its own.
+    pub anlz: Option<AnlzRecord>,
+}
+
+/// Ownership record for one track's Pioneer analysis pair.
+///
+/// Several audio paths can hash to the same ANLZ directory, so the pair
+/// is addressed by an explicit slot (`ANLZ0000`, `ANLZ0001`, …) rather
+/// than derived from the audio path alone. The digest covers the exact
+/// bytes written, so a changed BPM, beat grid, or waveform is detected
+/// even when the audio file itself is unchanged.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnlzRecord {
+    /// The `.DAT` file's path, relative to the same base as
+    /// [`SyncManifestEntry::on_device_path`]; the `.EXT` sits beside it.
+    pub dat_path: DeviceRelativePath,
+    /// Lower-case hex SHA-256 identifying the exact `.DAT` and `.EXT`
+    /// bytes written to the slot.
+    pub digest: String,
 }
 
 /// A device's saved playlist selection: the ticked playlists and smart

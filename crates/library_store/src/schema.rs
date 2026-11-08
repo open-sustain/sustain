@@ -443,6 +443,19 @@ CREATE TABLE IF NOT EXISTS sync_device_artists (
 );
 "#;
 
+// Migration 6 records which Pioneer analysis pair each manifest entry owns.
+// rekordbox gives tracks whose paths hash to the same `USBANLZ` directory
+// distinct `ANLZ{NNNN}` slots; the manifest keeps the slot's `.DAT` path and
+// a digest of the bytes written there, so a sync rewrites a pair only when
+// its contents change and a removal deletes only the files its entry owns.
+// Both are NULL for entries written before the record existed (and for
+// layouts without analysis files); a path and its digest are set together.
+pub(super) const ADD_SYNC_MANIFEST_ANLZ_SQL: &str = r#"
+ALTER TABLE sync_manifest ADD COLUMN anlz_path TEXT;
+ALTER TABLE sync_manifest ADD COLUMN anlz_digest TEXT
+    CHECK ((anlz_digest IS NULL) = (anlz_path IS NULL));
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.

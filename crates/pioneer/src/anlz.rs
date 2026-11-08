@@ -13,6 +13,8 @@
 //! from the hardware-validated reference exporter; only the waveform
 //! payloads come from Sustain's own analysis.
 
+use sha2::{Digest, Sha256};
+
 use crate::model::AnlzInput;
 use crate::waveform::{self, DETAIL_ENTRIES_PER_SECOND};
 
@@ -259,6 +261,22 @@ pub fn ext_bytes(input: &AnlzInput) -> Vec<u8> {
     buf
 }
 
+/// Content identity of one analysis pair: lower-case hex SHA-256 over
+/// the `.DAT` length (so the two files cannot trade bytes), the `.DAT`
+/// bytes, then the `.EXT` bytes. The sync layer records it to detect when
+/// a track's analysis output changed even though its audio did not.
+pub fn pair_digest(dat: &[u8], ext: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update((dat.len() as u64).to_le_bytes());
+    hasher.update(dat);
+    hasher.update(ext);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +345,13 @@ mod tests {
         let num_beats =
             u32::from_be_bytes([dat[pos + 20], dat[pos + 21], dat[pos + 22], dat[pos + 23]]);
         assert_eq!(num_beats, 0);
+    }
+
+    #[test]
+    fn pair_digest_distinguishes_the_file_boundary() {
+        let a = pair_digest(b"ab", b"c");
+        assert_eq!(a.len(), 64);
+        assert_eq!(a, pair_digest(b"ab", b"c"));
+        assert_ne!(a, pair_digest(b"a", b"bc"));
     }
 }

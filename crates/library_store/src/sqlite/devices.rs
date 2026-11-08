@@ -6,8 +6,8 @@
 
 use super::*;
 use sustain_domain::{
-    DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PlaylistItem, SyncDevice,
-    SyncDeviceId, SyncManifestEntry,
+    AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PlaylistItem,
+    SyncDevice, SyncDeviceId, SyncManifestEntry,
 };
 
 pub(super) fn save_sync_device(connection: &Connection, device: &SyncDevice) -> StoreResult<()> {
@@ -202,12 +202,15 @@ pub(super) fn save_device_manifest(
         transaction
             .execute(
                 "INSERT INTO sync_manifest \
-                 (device_id, track_id, on_device_path, fingerprint) VALUES (?1, ?2, ?3, ?4)",
+                 (device_id, track_id, on_device_path, fingerprint, anlz_path, anlz_digest) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     id.as_str(),
                     entry.track_id.get(),
                     entry.on_device_path.as_str(),
                     entry.fingerprint,
+                    entry.anlz.as_ref().map(|anlz| anlz.dat_path.as_str()),
+                    entry.anlz.as_ref().map(|anlz| anlz.digest.as_str()),
                 ],
             )
             .map_err(StoreError::from)?;
@@ -221,8 +224,8 @@ pub(super) fn device_manifest(
 ) -> StoreResult<Vec<SyncManifestEntry>> {
     let mut statement = connection
         .prepare(
-            "SELECT track_id, on_device_path, fingerprint FROM sync_manifest \
-             WHERE device_id = ?1 ORDER BY on_device_path",
+            "SELECT track_id, on_device_path, fingerprint, anlz_path, anlz_digest \
+             FROM sync_manifest WHERE device_id = ?1 ORDER BY on_device_path",
         )
         .map_err(StoreError::from)?;
     let mut rows = statement
@@ -238,10 +241,28 @@ pub(super) fn device_manifest(
                 StoreError::InvalidStoredEnum(format!("device manifest path: {raw_on_device_path}"))
             })?;
         let fingerprint = row.get(2).map_err(StoreError::from)?;
+        let raw_anlz_path: Option<String> = row.get(3).map_err(StoreError::from)?;
+        let anlz_digest: Option<String> = row.get(4).map_err(StoreError::from)?;
+        let anlz = match (raw_anlz_path, anlz_digest) {
+            (Some(raw_path), Some(digest)) => {
+                let dat_path = DeviceRelativePath::new(raw_path.clone()).ok_or_else(|| {
+                    StoreError::InvalidStoredEnum(format!("device manifest anlz path: {raw_path}"))
+                })?;
+                Some(AnlzRecord { dat_path, digest })
+            }
+            (None, None) => None,
+            (path, _) => {
+                return Err(StoreError::InvalidStoredEnum(format!(
+                    "device manifest anlz record without {}: {on_device_path}",
+                    if path.is_some() { "digest" } else { "path" }
+                )));
+            }
+        };
         entries.push(SyncManifestEntry {
             track_id,
             on_device_path,
             fingerprint,
+            anlz,
         });
     }
     Ok(entries)
@@ -300,8 +321,8 @@ fn selection_from_columns(kind: i64, item_id: i64) -> StoreResult<PlaylistItem> 
 mod tests {
     use crate::{LibraryStore, SqliteLibraryStore, StoreError};
     use sustain_domain::{
-        DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PlaylistId, PlaylistItem,
-        SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, TrackId,
+        AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PlaylistId,
+        PlaylistItem, SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, TrackId,
     };
 
     fn device_path(path: &str) -> DeviceRelativePath {
@@ -395,11 +416,16 @@ mod tests {
                 track_id: TrackId::new(1).expect("id"),
                 on_device_path: device_path("Contents/A/B/1.mp3"),
                 fingerprint: "fp1".into(),
+                anlz: Some(AnlzRecord {
+                    dat_path: device_path("PIONEER/USBANLZ/P051/0001D603/ANLZ0001.DAT"),
+                    digest: "ab12".into(),
+                }),
             },
             SyncManifestEntry {
                 track_id: TrackId::new(2).expect("id"),
                 on_device_path: device_path("Contents/A/B/2.mp3"),
                 fingerprint: "fp2".into(),
+                anlz: None,
             },
         ];
         store
@@ -429,6 +455,7 @@ mod tests {
                     track_id: TrackId::new(1).expect("id"),
                     on_device_path: device_path("x"),
                     fingerprint: "f".into(),
+                    anlz: None,
                 }],
             )
             .expect("manifest");
@@ -486,6 +513,29 @@ mod tests {
             store.device_manifest(&d.id),
             Err(StoreError::InvalidStoredEnum(message))
                 if message == "device manifest path: ../../host-file"
+        ));
+    }
+
+    #[test]
+    fn unsafe_persisted_manifest_anlz_path_is_rejected() {
+        let store = SqliteLibraryStore::open_in_memory().expect("store");
+        let d = device("dev-unsafe-anlz");
+        store.save_sync_device(&d).expect("save");
+        store
+            .connection_guard()
+            .expect("connection")
+            .execute(
+                "INSERT INTO sync_manifest \
+                 (device_id, track_id, on_device_path, fingerprint, anlz_path, anlz_digest) \
+                 VALUES (?1, 1, 'Contents/a.mp3', 'fp', '../host.DAT', 'ab')",
+                rusqlite::params![d.id.as_str()],
+            )
+            .expect("inject unsafe anlz path");
+
+        assert!(matches!(
+            store.device_manifest(&d.id),
+            Err(StoreError::InvalidStoredEnum(message))
+                if message == "device manifest anlz path: ../host.DAT"
         ));
     }
 }

@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use sustain_domain::{DeviceKind, DeviceLayout, DeviceRelativePath, WaveformSegments};
+use sustain_domain::{AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, WaveformSegments};
 use sustain_pioneer::{
     AnlzInput, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz, artwork::ARTWORK_BUCKET,
     path_hash, pdb,
@@ -111,27 +111,33 @@ fn allocate_unique_path(
     )))
 }
 
+/// What [`finalize`] established on the device beyond the audio files.
+#[derive(Default)]
+pub(crate) struct Finalized {
+    /// The Pioneer analysis pair each present placement (by index into
+    /// `placements`) now owns, written or verified current this run.
+    pub(crate) anlz: HashMap<usize, AnlzRecord>,
+}
+
 /// Write the layout's index/database files after audio is in place.
 /// `present` holds the indices (into `placements`) that are known to exist
 /// on the device after the copy phase: unchanged files plus successful
 /// writes from this run. Recoverable copy failures are intentionally absent.
-/// `written` holds the indices (into `placements`) that were (re)copied
-/// this run, so the Pioneer writer can refresh only stale ANLZ files.
 pub(crate) fn finalize(
     req: &PreparedSyncRequest,
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
     present: &HashSet<usize>,
-    written: &HashSet<usize>,
     cancel: &dyn Fn() -> bool,
-) -> Result<(), SyncError> {
+) -> Result<Finalized, SyncError> {
     match req.device.layout {
-        DeviceLayout::M3u => write_m3u_playlists(req, transport, base, placements, present),
-        DeviceLayout::FolderPerPlaylist => Ok(()),
-        DeviceLayout::Pioneer => {
-            write_pioneer(req, transport, base, placements, present, written, cancel)
+        DeviceLayout::M3u => {
+            write_m3u_playlists(req, transport, base, placements, present)?;
+            Ok(Finalized::default())
         }
+        DeviceLayout::FolderPerPlaylist => Ok(Finalized::default()),
+        DeviceLayout::Pioneer => write_pioneer(req, transport, base, placements, present, cancel),
     }
 }
 
@@ -355,58 +361,100 @@ fn write_pioneer(
     base: &DeviceRelativePath,
     placements: &[Placement],
     present: &HashSet<usize>,
-    written: &HashSet<usize>,
     cancel: &dyn Fn() -> bool,
-) -> Result<(), SyncError> {
+) -> Result<Finalized, SyncError> {
     let assets = req.pioneer_assets()?;
-    let mut pioneer_tracks = Vec::with_capacity(present.len());
+    // Present placements in placement order: their PDB row order.
+    let exported: Vec<usize> = (0..placements.len())
+        .filter(|index| present.contains(index))
+        .collect();
+    let audio_paths: Vec<String> = exported
+        .iter()
+        .map(|&index| format!("/{}", placements[index].rel_path))
+        .collect();
+
+    // Analysis slots. Each exported track keeps the slot its previous
+    // record names; every slot still recorded for a track that is *not*
+    // exported is reserved, because its record (and possibly its audio)
+    // stays in the manifest — handing that slot to another track would
+    // make the record lie about the bytes on the device.
+    let previous: HashMap<&DeviceRelativePath, &AnlzRecord> = req
+        .previous_manifest
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .anlz
+                .as_ref()
+                .map(|anlz| (&entry.on_device_path, anlz))
+        })
+        .collect();
+    let exported_paths: HashSet<&DeviceRelativePath> = exported
+        .iter()
+        .map(|&index| &placements[index].rel_path)
+        .collect();
+    let recorded: Vec<Option<String>> = exported
+        .iter()
+        .map(|&index| {
+            previous
+                .get(&placements[index].rel_path)
+                .map(|anlz| format!("/{}", anlz.dat_path))
+        })
+        .collect();
+    let reserved: Vec<String> = previous
+        .iter()
+        .filter(|(path, _)| !exported_paths.contains(*path))
+        .map(|(_, anlz)| format!("/{}", anlz.dat_path))
+        .collect();
+    let slot_requests: Vec<(&str, Option<&str>)> = audio_paths
+        .iter()
+        .zip(&recorded)
+        .map(|(audio, recorded)| (audio.as_str(), recorded.as_deref()))
+        .collect();
+    let reserved: Vec<&str> = reserved.iter().map(String::as_str).collect();
+    let slots = path_hash::assign_slots(&slot_requests, &reserved)
+        .map_err(|error| SyncError::planning(error.to_string()))?;
+
+    let empty = WaveformSegments {
+        segment_duration_ms: 0.0,
+        segments: Vec::new(),
+    };
+    let mut finalized = Finalized::default();
+    let mut pioneer_tracks = Vec::with_capacity(exported.len());
     let mut row_for: HashMap<usize, usize> = HashMap::new();
-    for (placement_index, placement) in placements.iter().enumerate() {
-        if !present.contains(&placement_index) {
-            continue;
-        }
+    for ((&placement_index, audio_path), slot) in exported.iter().zip(&audio_paths).zip(&slots) {
+        let placement = &placements[placement_index];
         let track = &req.tracks[placement.track_index];
         let track_assets = &assets.tracks[placement.track_index];
-        let audio_path = format!("/{}", placement.rel_path);
-        let anlz_dat = path_hash::anlz_file(&audio_path, "DAT");
 
-        // Write ANLZ when the audio was (re)written this run or when the
-        // .EXT is missing on the device (out-of-band deletion / first run).
-        let anlz_dir_rel = DeviceRelativePath::new(
-            path_hash::anlz_dir(&audio_path)
-                .trim_start_matches('/')
-                .to_owned(),
-        )
-        .ok_or_else(|| SyncError::planning("Pioneer path hash generated an unsafe path"))?;
-        let anlz_dir = base.join(&anlz_dir_rel);
-        let anlz_ext = anlz_dir
-            .join_component("ANLZ0000.EXT")
-            .expect("static ANLZ filename is safe");
-        let needs_anlz = written.contains(&placement_index)
-            || !transport
-                .is_regular_file(&anlz_ext)
-                .map_err(|error| SyncError::io(anlz_ext.as_str(), error))?;
-        if needs_anlz {
-            let empty = WaveformSegments {
-                segment_duration_ms: 0.0,
-                segments: Vec::new(),
-            };
-            let input = AnlzInput {
-                device_audio_path: &audio_path,
-                bpm: track.bpm,
-                duration_ms: track.duration_ms,
-                waveform_preview: track_assets.waveform_preview.as_ref().unwrap_or(&empty),
-                waveform_detail: track_assets.waveform_detail.as_ref().unwrap_or(&empty),
-            };
-            let dat = anlz_dir
-                .join_component("ANLZ0000.DAT")
-                .expect("static ANLZ filename is safe");
+        // The pair is regenerated every run and written only when the
+        // device does not already hold exactly these bytes in this slot:
+        // a new BPM, grid, or waveform reaches the drive even though the
+        // audio file is unchanged, and an unchanged pair is not rewritten.
+        let input = AnlzInput {
+            device_audio_path: audio_path,
+            bpm: track.bpm,
+            duration_ms: track.duration_ms,
+            waveform_preview: track_assets.waveform_preview.as_ref().unwrap_or(&empty),
+            waveform_detail: track_assets.waveform_detail.as_ref().unwrap_or(&empty),
+        };
+        let dat_bytes = anlz::dat_bytes(&input);
+        let ext_bytes = anlz::ext_bytes(&input);
+        let record = AnlzRecord {
+            dat_path: drive_relative(&slot.dat_path())?,
+            digest: anlz::pair_digest(&dat_bytes, &ext_bytes),
+        };
+        let dat = base.join(&record.dat_path);
+        let ext = base.join(&drive_relative(&slot.ext_path())?);
+        let current = previous.get(&placement.rel_path) == Some(&&record)
+            && is_file(transport, &dat)?
+            && is_file(transport, &ext)?;
+        if !current {
             transport
-                .write_file(&dat, &anlz::dat_bytes(&input))
+                .write_file(&dat, &dat_bytes)
                 .map_err(|error| SyncError::io(dat.as_str(), error))?;
             transport
-                .write_file(&anlz_ext, &anlz::ext_bytes(&input))
-                .map_err(|error| SyncError::io(anlz_ext.as_str(), error))?;
+                .write_file(&ext, &ext_bytes)
+                .map_err(|error| SyncError::io(ext.as_str(), error))?;
         }
 
         row_for.insert(placement.track_index, pioneer_tracks.len());
@@ -431,9 +479,10 @@ fn write_pioneer(
             file_type: PioneerFileType::from_extension(&track.extension),
             artwork_id: track_assets.artwork_id,
             date_added: track.date_added.clone(),
-            device_audio_path: audio_path,
-            device_anlz_path: anlz_dat,
+            device_audio_path: audio_path.clone(),
+            device_anlz_path: slot.dat_path(),
         });
+        finalized.anlz.insert(placement_index, record);
     }
 
     let pioneer_playlists: Vec<PioneerPlaylist> = req
@@ -488,5 +537,17 @@ fn write_pioneer(
     transport
         .write_file(&pdb_path, &bytes)
         .map_err(|error| SyncError::io(pdb_path.as_str(), error))?;
-    Ok(())
+    Ok(finalized)
+}
+
+/// A drive-root Pioneer path (`/PIONEER/...`) as a device-relative path.
+pub(crate) fn drive_relative(path: &str) -> Result<DeviceRelativePath, SyncError> {
+    DeviceRelativePath::new(path.trim_start_matches('/').to_owned())
+        .ok_or_else(|| SyncError::planning("Pioneer path hash generated an unsafe path"))
+}
+
+fn is_file(transport: &dyn DeviceTransport, path: &DeviceRelativePath) -> Result<bool, SyncError> {
+    transport
+        .is_regular_file(path)
+        .map_err(|error| SyncError::io(path.as_str(), error))
 }

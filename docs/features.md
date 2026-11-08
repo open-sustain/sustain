@@ -987,7 +987,12 @@ Three on-drive formats, chosen per device:
   hardware (and Rekordbox itself) reads directly off the USB, not just copied
   audio. Sustain writes Pioneer's on-device database
   (`PIONEER/rekordbox/export.pdb`) plus per-track ANLZ analysis files
-  (`ANLZ0000.DAT` / `.EXT`) under `PIONEER/USBANLZ/`. Each track carries its
+  (`ANLZ0000.DAT` / `.EXT`) under `PIONEER/USBANLZ/`. Tracks whose paths
+  hash to the same analysis directory get their own numbered pair
+  (`ANLZ0001`, `ANLZ0002`, …) as Rekordbox does, so no track shows another
+  track's waveform or grid. A track's pair is rewritten whenever its analysis
+  changes, even when the audio file itself is unchanged, and left untouched
+  otherwise; removing a track deletes only its own pair. Each track carries its
   BPM, musical key, a constant-tempo beat grid, both monochrome and colour
   waveforms (the small browse preview and the full detailed overview), star
   rating, genre, year, disc number, composer and comment — all from Sustain's

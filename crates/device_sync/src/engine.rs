@@ -6,10 +6,10 @@
 //! write the layout's index/database files, and optionally remove stale
 //! files behind the caller's confirmation.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use sustain_domain::{DeviceLayout, DeviceRelativePath, SyncManifestEntry};
-use sustain_pioneer::path_hash;
+use sustain_domain::{AnlzRecord, DeviceLayout, DeviceRelativePath, SyncManifestEntry};
+use sustain_pioneer::path_hash::AnlzSlot;
 
 use crate::layout;
 use crate::model::{
@@ -42,7 +42,6 @@ fn compute_diff(
     base: &DeviceRelativePath,
     placements: &[Placement],
 ) -> Result<Diff, SyncError> {
-    use std::collections::HashMap;
     let prev: HashMap<&str, &str> = req
         .previous_manifest
         .iter()
@@ -125,7 +124,6 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
 /// Ordered largest first, ties broken by genre name for a deterministic
 /// (test-stable) result.
 fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreBytes> {
-    use std::collections::HashMap;
     let mut by_genre: HashMap<Option<String>, u64> = HashMap::new();
     for placement in placements {
         let track = &req.tracks[placement.track_index];
@@ -188,13 +186,35 @@ pub fn sync(
         unchanged: diff.unchanged.len(),
         ..SyncOutcome::default()
     };
-    // Unchanged files stay in the manifest as-is.
-    let mut manifest: Vec<SyncManifestEntry> = diff
-        .unchanged
+    // Every present entry starts out with the analysis pair its previous
+    // entry recorded: until finalize establishes a new one, that record
+    // still describes what is on the device (an audio rewrite does not
+    // touch the pair).
+    let previous_anlz: HashMap<&DeviceRelativePath, &AnlzRecord> = req
+        .previous_manifest
         .iter()
-        .map(|&i| manifest_entry(req, &placements[i]))
+        .filter_map(|entry| {
+            entry
+                .anlz
+                .as_ref()
+                .map(|anlz| (&entry.on_device_path, anlz))
+        })
         .collect();
-    let mut written: HashSet<usize> = HashSet::new();
+    let entry = |index: usize| {
+        let placement = &placements[index];
+        manifest_entry(
+            req,
+            placement,
+            previous_anlz
+                .get(&placement.rel_path)
+                .map(|&anlz| anlz.clone()),
+        )
+    };
+    // Unchanged files stay in the manifest as-is. `entry_placements` holds
+    // the placement index of each manifest entry, in step with `manifest`.
+    let mut manifest: Vec<SyncManifestEntry> = diff.unchanged.iter().map(|&i| entry(i)).collect();
+    let mut entry_placements: Vec<usize> = diff.unchanged.clone();
+    let mut written = 0_usize;
     let mut present: HashSet<usize> = diff.unchanged.iter().copied().collect();
 
     let total = diff.to_write.len();
@@ -217,9 +237,10 @@ pub fn sync(
                 } else {
                     outcome.copied += 1;
                 }
-                written.insert(placement_index);
+                written += 1;
                 present.insert(placement_index);
-                manifest.push(manifest_entry(req, placement));
+                manifest.push(entry(placement_index));
+                entry_placements.push(placement_index);
             }
             Err(error) if transport.can_continue_after_copy_error(&error) => {
                 outcome.copy_failures.push(SyncTrackFailure {
@@ -246,7 +267,7 @@ pub fn sync(
 
     // Index/database files. The Pioneer/m3u layouts rewrite these every
     // run because the selection (not just the audio) may have changed.
-    if layout::always_finalizes(req.device.layout) || !written.is_empty() {
+    if layout::always_finalizes(req.device.layout) || written > 0 {
         let stage = match req.device.layout {
             DeviceLayout::Pioneer => SyncStage::WritingDatabase,
             _ => SyncStage::WritingPlaylists,
@@ -256,15 +277,12 @@ pub fn sync(
             completed: 0,
             total: 1,
         });
-        layout::finalize(
-            req,
-            transport,
-            &base,
-            &placements,
-            &present,
-            &written,
-            cancel,
-        )?;
+        let mut finalized = layout::finalize(req, transport, &base, &placements, &present, cancel)?;
+        for (entry, index) in manifest.iter_mut().zip(&entry_placements) {
+            if let Some(anlz) = finalized.anlz.remove(index) {
+                entry.anlz = Some(anlz);
+            }
+        }
         progress(SyncProgress {
             stage,
             completed: 1,
@@ -274,6 +292,12 @@ pub fn sync(
 
     // Removals, only behind the caller's confirmation.
     if req.remove_stale && !diff.removals.is_empty() {
+        // Analysis pairs the new manifest records are never deleted, even
+        // if a (corrupt) stale entry names the same slot.
+        let kept_anlz: HashSet<DeviceRelativePath> = manifest
+            .iter()
+            .filter_map(|entry| entry.anlz.as_ref().map(|anlz| anlz.dat_path.clone()))
+            .collect();
         let remove_total = diff.removals.len();
         for (done, rel) in diff.removals.iter().enumerate() {
             if cancel() {
@@ -281,7 +305,11 @@ pub fn sync(
                 retain_unremoved_manifest_entries(req, &diff.removals[done..], &mut manifest);
                 break;
             }
-            remove_placement(req, transport, &base, rel, cancel)?;
+            let anlz = previous_anlz
+                .get(rel)
+                .copied()
+                .filter(|anlz| !kept_anlz.contains(&anlz.dat_path));
+            remove_placement(transport, &base, rel, anlz)?;
             outcome.removed += 1;
             progress(SyncProgress {
                 stage: SyncStage::Removing,
@@ -308,35 +336,42 @@ pub fn sync(
     Ok(outcome)
 }
 
-fn manifest_entry(req: &PreparedSyncRequest, placement: &Placement) -> SyncManifestEntry {
+fn manifest_entry(
+    req: &PreparedSyncRequest,
+    placement: &Placement,
+    anlz: Option<AnlzRecord>,
+) -> SyncManifestEntry {
     SyncManifestEntry {
         track_id: req.tracks[placement.track_index].track_id,
         on_device_path: placement.rel_path.clone(),
         fingerprint: placement.fingerprint.clone(),
+        anlz,
     }
 }
 
-/// Delete a stale file (and, for Pioneer, its orphaned ANLZ directory).
-/// Best-effort: a failed delete does not abort the sync.
+/// Delete a stale audio file and, when given, the Pioneer analysis pair
+/// its entry recorded. Only recorded files are touched: an analysis
+/// directory can hold other tracks' pairs, so it is never removed whole,
+/// and an entry without a record — or with one that does not name a slot
+/// inside the analysis tree — leaves the analysis tree alone.
 fn remove_placement(
-    req: &SyncRequest,
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     rel: &DeviceRelativePath,
-    cancel: &dyn Fn() -> bool,
+    anlz: Option<&AnlzRecord>,
 ) -> Result<(), SyncError> {
     let audio_path = base.join(rel);
     transport
         .remove_file_if_exists(&audio_path)
         .map_err(|error| SyncError::io(audio_path.as_str(), error))?;
-    if req.device.layout == DeviceLayout::Pioneer {
-        let anlz_dir = path_hash::anlz_dir(&format!("/{rel}"));
-        let anlz_dir = DeviceRelativePath::new(anlz_dir.trim_start_matches('/').to_owned())
-            .ok_or_else(|| SyncError::planning("Pioneer path hash generated an unsafe path"))?;
-        let anlz_path = base.join(&anlz_dir);
-        transport
-            .remove_tree_if_exists(&anlz_path, cancel)
-            .map_err(|error| SyncError::io(anlz_path.as_str(), error))?;
+    let slot = anlz.and_then(|anlz| AnlzSlot::from_dat_path(&format!("/{}", anlz.dat_path)));
+    if let Some(slot) = slot {
+        for path in [slot.dat_path(), slot.ext_path()] {
+            let path = base.join(&layout::drive_relative(&path)?);
+            transport
+                .remove_file_if_exists(&path)
+                .map_err(|error| SyncError::io(path.as_str(), error))?;
+        }
     }
     Ok(())
 }

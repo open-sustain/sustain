@@ -45,8 +45,8 @@ mod tests {
         path::{Path, PathBuf},
     };
     use sustain_domain::{
-        DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, SourceFileStat,
-        SyncDevice, SyncDeviceId, TrackId,
+        AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap,
+        SourceFileStat, SyncDevice, SyncDeviceId, TrackId,
     };
 
     struct Fixture {
@@ -400,6 +400,7 @@ mod tests {
             on_device_path: DeviceRelativePath::new("Mix/001 A - Only Track.mp3")
                 .expect("safe path"),
             fingerprint: "fp-7".into(),
+            anlz: None,
         }];
         let req = plan_request(tracks, DeviceLayout::FolderPerPlaylist, playlists, prev);
         let paths = placement_paths(&req);
@@ -418,6 +419,210 @@ mod tests {
         // At least one ANLZ .EXT was written under USBANLZ.
         let exts = walk_files(fx.dest.path().join("PIONEER/USBANLZ"));
         assert!(exts >= 2, "expected per-track ANLZ files, found {exts}");
+    }
+
+    /// Two tracks whose Pioneer audio paths hash to the same `USBANLZ`
+    /// directory (a pair observed on a real rekordbox export).
+    fn colliding_pioneer_fixture() -> Fixture {
+        let mut fx = fixture(2);
+        let rude_boy = &mut fx.tracks[0];
+        rude_boy.artist = "Rihanna".into();
+        rude_boy.album = "Rated R".into();
+        rude_boy.track_number = Some(8);
+        rude_boy.title = "Rude Boy".into();
+        rude_boy.extension = "flac".into();
+        let aquarius = &mut fx.tracks[1];
+        aquarius.artist = "Abel Ramos".into();
+        aquarius.album = String::new();
+        aquarius.track_number = None;
+        aquarius.title = "Aquarius (Randy Katana Remix)".into();
+        fx
+    }
+
+    fn anlz_of(manifest: &[sustain_domain::SyncManifestEntry], audio: &str) -> AnlzRecord {
+        manifest
+            .iter()
+            .find(|entry| entry.on_device_path.as_str() == audio)
+            .and_then(|entry| entry.anlz.clone())
+            .unwrap_or_else(|| panic!("{audio} records an analysis pair"))
+    }
+
+    /// The UTF-16BE audio path a `.DAT` file's `PPTH` section names.
+    fn names_audio_path(dat: &[u8], audio: &str) -> bool {
+        let utf16: Vec<u8> = format!("/{audio}")
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        dat.windows(utf16.len()).any(|window| window == utf16)
+    }
+
+    const RUDE_BOY: &str = "Contents/Rihanna/Rated R/08 Rude Boy.flac";
+    const AQUARIUS: &str = "Contents/Abel Ramos/Unknown Album/Aquarius (Randy Katana Remix).mp3";
+
+    #[test]
+    fn pioneer_colliding_tracks_own_distinct_anlz_slots() {
+        let fx = colliding_pioneer_fixture();
+        let outcome = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+
+        let rude_boy = anlz_of(&outcome.manifest, RUDE_BOY);
+        let aquarius = anlz_of(&outcome.manifest, AQUARIUS);
+        let (rude_boy_dir, _) = rude_boy.dat_path.as_str().rsplit_once('/').expect("dir");
+        let (aquarius_dir, _) = aquarius.dat_path.as_str().rsplit_once('/').expect("dir");
+        assert_eq!(rude_boy_dir, aquarius_dir, "the fixture paths collide");
+        assert!(rude_boy.dat_path.as_str().ends_with("/ANLZ0000.DAT"));
+        assert!(aquarius.dat_path.as_str().ends_with("/ANLZ0001.DAT"));
+        for (record, audio) in [(&rude_boy, RUDE_BOY), (&aquarius, AQUARIUS)] {
+            let dat = std::fs::read(fx.dest.path().join(record.dat_path.as_str())).expect("dat");
+            assert!(names_audio_path(&dat, audio), "{audio} owns its own pair");
+            let ext = fx
+                .dest
+                .path()
+                .join(record.dat_path.as_str().replace(".DAT", ".EXT"));
+            assert!(ext.is_file(), "{audio} has its .EXT");
+        }
+        let pdb = std::fs::read(fx.dest.path().join("PIONEER/rekordbox/export.pdb")).expect("pdb");
+        for record in [&rude_boy, &aquarius] {
+            let analyze_path = format!("/{}", record.dat_path);
+            assert!(
+                pdb.windows(analyze_path.len())
+                    .any(|window| window == analyze_path.as_bytes()),
+                "the PDB points at {analyze_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn pioneer_resync_rewrites_an_anlz_pair_only_when_its_bytes_change() {
+        let mut fx = colliding_pioneer_fixture();
+        let first = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        let record = anlz_of(&first.manifest, RUDE_BOY);
+        let dat = fx.dest.path().join(record.dat_path.as_str());
+        // A marker the engine would erase if it rewrote the pair.
+        std::fs::write(&dat, b"untouched").expect("mark dat");
+
+        let second = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, first.manifest.clone(), false),
+        );
+        assert_eq!(anlz_of(&second.manifest, RUDE_BOY), record);
+        assert_eq!(std::fs::read(&dat).expect("dat"), b"untouched");
+
+        // New analysis reaches the device although the audio is unchanged.
+        fx.tracks[0].bpm = Some(124.0);
+        let third = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, second.manifest.clone(), false),
+        );
+        assert_eq!(third.unchanged, 2);
+        let rewritten = anlz_of(&third.manifest, RUDE_BOY);
+        assert_eq!(rewritten.dat_path, record.dat_path, "the slot is sticky");
+        assert_ne!(rewritten.digest, record.digest);
+        assert!(names_audio_path(
+            &std::fs::read(&dat).expect("dat"),
+            RUDE_BOY
+        ));
+
+        // A missing file is restored even when the record matches.
+        let ext = dat.with_extension("EXT");
+        std::fs::remove_file(&ext).expect("remove ext");
+        let fourth = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, third.manifest.clone(), false),
+        );
+        assert_eq!(anlz_of(&fourth.manifest, RUDE_BOY), rewritten);
+        assert!(ext.is_file());
+    }
+
+    #[test]
+    fn pioneer_removal_deletes_only_the_removed_tracks_anlz_pair() {
+        let mut fx = colliding_pioneer_fixture();
+        let first = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        let removed = anlz_of(&first.manifest, RUDE_BOY);
+        let kept = anlz_of(&first.manifest, AQUARIUS);
+
+        fx.tracks.remove(0);
+        let second = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, first.manifest.clone(), true),
+        );
+        assert_eq!(second.removed, 1);
+        assert_eq!(anlz_of(&second.manifest, AQUARIUS), kept);
+        let removed_dat = fx.dest.path().join(removed.dat_path.as_str());
+        assert!(!removed_dat.exists());
+        assert!(!removed_dat.with_extension("EXT").exists());
+        let kept_dat = fx.dest.path().join(kept.dat_path.as_str());
+        assert!(names_audio_path(
+            &std::fs::read(&kept_dat).expect("dat"),
+            AQUARIUS
+        ));
+        assert!(kept_dat.with_extension("EXT").is_file());
+    }
+
+    #[test]
+    fn pioneer_stale_track_left_in_place_keeps_its_anlz_record() {
+        let mut fx = colliding_pioneer_fixture();
+        let first = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        let stale = anlz_of(&first.manifest, RUDE_BOY);
+
+        fx.tracks.remove(0);
+        let second = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, first.manifest.clone(), false),
+        );
+        assert_eq!(anlz_of(&second.manifest, RUDE_BOY), stale);
+        assert!(fx.dest.path().join(stale.dat_path.as_str()).is_file());
+    }
+
+    #[test]
+    fn pioneer_entry_without_anlz_record_never_deletes_analysis_files() {
+        let mut fx = colliding_pioneer_fixture();
+        let first = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        // A manifest written before entries recorded their pair.
+        let legacy: Vec<_> = first
+            .manifest
+            .iter()
+            .cloned()
+            .map(|entry| sustain_domain::SyncManifestEntry {
+                anlz: None,
+                ..entry
+            })
+            .collect();
+        let rude_boy_dat = fx
+            .dest
+            .path()
+            .join(anlz_of(&first.manifest, RUDE_BOY).dat_path.as_str());
+
+        fx.tracks.remove(0);
+        let second = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, legacy, true),
+        );
+        assert_eq!(second.removed, 1);
+        // The surviving track takes the lowest free slot, which the removed
+        // track's unrecorded pair occupied; nothing was deleted under it.
+        let aquarius = anlz_of(&second.manifest, AQUARIUS);
+        let aquarius_dat = fx.dest.path().join(aquarius.dat_path.as_str());
+        assert_eq!(aquarius_dat, rude_boy_dat);
+        assert!(names_audio_path(
+            &std::fs::read(&aquarius_dat).expect("dat"),
+            AQUARIUS
+        ));
+        assert!(aquarius_dat.with_extension("EXT").is_file());
     }
 
     #[test]

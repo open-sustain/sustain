@@ -12,12 +12,12 @@ use rusqlite::Connection;
 use crate::{
     StoreError, StoreResult,
     schema::{
-        ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_TRACK_COLUMN_SORT_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
-        NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL,
+        ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_COLUMN_SORT_SQL,
+        BACKFILL_GENERATED_SORT_FIELDS_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 5;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -51,6 +51,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 5,
         description: "normalize empty track metadata strings",
         sql: NORMALIZE_EMPTY_TRACK_METADATA_SQL,
+    },
+    Migration {
+        version: 6,
+        description: "record the Pioneer analysis pair each sync manifest entry owns",
+        sql: ADD_SYNC_MANIFEST_ANLZ_SQL,
     },
 ];
 
@@ -164,7 +169,10 @@ mod tests {
 
         apply_pending(&connection).expect("migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 5);
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(tables(&connection), EXPECTED_TABLES);
     }
 
@@ -175,7 +183,10 @@ mod tests {
 
         apply_pending(&connection).expect("second migrate");
 
-        assert_eq!(user_version(&connection).expect("version"), 5);
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(tables(&connection), EXPECTED_TABLES);
     }
 
@@ -199,7 +210,10 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 5);
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(tables(&connection), EXPECTED_TABLES);
         // The pre-existing layout row survives the migration untouched.
         let column_id: String = connection
@@ -249,7 +263,10 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 5);
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
         let generated: [Option<String>; 5] = connection
             .query_row(
                 "SELECT title_sort, artist_sort, album_sort, album_artist_sort, composer_sort \
@@ -329,7 +346,10 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 5);
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(tables(&connection), EXPECTED_TABLES);
         let selection: (String, i64) = connection
             .query_row(
@@ -394,7 +414,10 @@ mod tests {
 
         apply_pending(&connection).expect("upgrade");
 
-        assert_eq!(user_version(&connection).expect("version"), 5);
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
         let normalized: [Option<String>; 15] = connection
             .query_row(
                 "SELECT title, artist, album, album_artist, composer, genre, \
@@ -477,17 +500,89 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_from_v5_adds_manifest_anlz_record_and_preserves_entries() {
+        let connection = Connection::open_in_memory().expect("connection");
+        for sql in [
+            SCHEMA_SQL,
+            ADD_TRACK_COLUMN_SORT_SQL,
+            BACKFILL_GENERATED_SORT_FIELDS_SQL,
+            ADD_SYNC_DEVICE_ARTISTS_SQL,
+            NORMALIZE_EMPTY_TRACK_METADATA_SQL,
+        ] {
+            connection
+                .execute_batch(sql)
+                .expect("schema up to version 5");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO sync_devices \
+                 (id, label, kind, layout, sub_path, files_per_folder_cap, volume_id) \
+                 VALUES ('dev', 'USB', 0, 2, '', 0, NULL); \
+                 INSERT INTO sync_manifest (device_id, track_id, on_device_path, fingerprint) \
+                 VALUES ('dev', 7, 'Contents/A/B/1.mp3', 'fp');",
+            )
+            .expect("seed version 5 manifest");
+        connection
+            .pragma_update(None, "user_version", 5)
+            .expect("set version");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(tables(&connection), EXPECTED_TABLES);
+        let entry: (i64, String, String, Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT track_id, on_device_path, fingerprint, anlz_path, anlz_digest \
+                 FROM sync_manifest",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("manifest entry preserved");
+        assert_eq!(
+            entry,
+            (
+                7,
+                "Contents/A/B/1.mp3".to_owned(),
+                "fp".to_owned(),
+                None,
+                None
+            )
+        );
+        // A path without its digest (or the reverse) is rejected.
+        for (path, digest) in [(Some("PIONEER/x.DAT"), None), (None, Some("ab"))] {
+            let result = connection.execute(
+                "INSERT INTO sync_manifest \
+                 (device_id, track_id, on_device_path, fingerprint, anlz_path, anlz_digest) \
+                 VALUES ('dev', 8, 'Contents/A/B/2.mp3', 'fp', ?1, ?2)",
+                rusqlite::params![path, digest],
+            );
+            assert!(result.is_err(), "{path:?} / {digest:?}");
+        }
+    }
+
+    #[test]
     fn database_from_a_newer_build_is_rejected() {
         let connection = Connection::open_in_memory().expect("connection");
         connection
-            .pragma_update(None, "user_version", 6)
+            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION + 1)
             .expect("set version");
 
         assert_eq!(
             apply_pending(&connection),
             Err(StoreError::DatabaseAhead {
-                current: 6,
-                supported: 5,
+                current: CURRENT_SCHEMA_VERSION + 1,
+                supported: CURRENT_SCHEMA_VERSION,
             })
         );
     }
