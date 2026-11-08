@@ -1087,6 +1087,66 @@ mod tests {
         assert_eq!(outcome.manifest, first.manifest);
     }
 
+    #[test]
+    fn cancellation_mid_copy_keeps_tracking_the_files_left_on_the_device() {
+        let mut fx = fixture(4);
+        let mut first_request = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        first_request.tracks.truncate(3);
+        first_request.playlists[0].track_indices = vec![0, 1, 2];
+        let first = run(fx.dest.path(), &first_request);
+
+        // Track 1 is dropped (stale), track 4 is new and copied first, and
+        // the run stops before rewriting the changed track 3.
+        std::fs::write(&fx.tracks[2].source_path, b"edited audio").expect("edit source");
+        fx.tracks[2].source = SourceSnapshot::resolved(
+            resolve_source_fingerprint(&fx.tracks[2].source_path, None)
+                .expect("resolve edited source"),
+        );
+        let next = SyncRequest {
+            device: device(DeviceLayout::M3u),
+            tracks: vec![
+                fx.tracks[1].clone(),
+                fx.tracks[3].clone(),
+                fx.tracks[2].clone(),
+            ],
+            playlists: vec![SyncInputPlaylist {
+                name: "My Set".into(),
+                track_indices: vec![0, 1, 2],
+            }],
+            previous_manifest: first.manifest.clone(),
+            remove_stale: true,
+            export_date: "2026-01-01".into(),
+        };
+        let copied = std::cell::Cell::new(false);
+        let outcome = sync(
+            &transport(fx.dest.path()),
+            &prepared(&next),
+            &mut |progress| copied.set(progress.stage == SyncStage::Copying),
+            &|| copied.get(),
+        )
+        .expect("cancelled sync succeeds");
+        assert!(outcome.cancelled);
+        assert_eq!((outcome.copied, outcome.updated), (1, 0));
+
+        // Every file on the device stays in the manifest: track 2 as
+        // before, the one write, and the stale file and the unreached
+        // file under their previous entries.
+        let tracked: std::collections::HashSet<&str> = outcome
+            .manifest
+            .iter()
+            .map(|entry| entry.on_device_path.as_str())
+            .collect();
+        let on_device: std::collections::HashSet<&str> = first
+            .manifest
+            .iter()
+            .chain(&outcome.manifest)
+            .map(|entry| entry.on_device_path.as_str())
+            .filter(|path| fx.dest.path().join(path).is_file())
+            .collect();
+        assert_eq!(tracked, on_device);
+        assert_eq!(outcome.manifest.len(), 4);
+    }
+
     #[cfg(unix)]
     #[test]
     fn failed_stale_removal_aborts_the_sync() {

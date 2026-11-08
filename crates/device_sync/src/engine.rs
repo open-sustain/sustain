@@ -181,9 +181,11 @@ fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreByte
 /// Run the sync. `progress` is called as files are processed; `cancel`
 /// is polled cooperatively between files and lets a long copy stop early
 /// without corrupting the device. The returned manifest preserves files
-/// known to be present: unchanged files plus successful writes. Recoverable
-/// per-track copy failures are reported separately and excluded because the
-/// destination state is transport-dependent after a failed publication.
+/// known to be present: unchanged files, successful writes, and every
+/// previous file the run left alone — stale files kept or not reached, and
+/// files a cancelled run did not get to replace. Recoverable per-track copy
+/// failures are reported separately and excluded because the destination
+/// state is transport-dependent after a failed publication.
 pub fn sync(
     transport: &dyn DeviceTransport,
     req: &PreparedSyncRequest,
@@ -256,6 +258,15 @@ pub fn sync(
     let mut entry_placements: Vec<usize> = diff.unchanged.clone();
     let mut written = 0_usize;
     let mut present: HashSet<usize> = diff.unchanged.iter().copied().collect();
+    // What the run settled, so the previous entries it left alone can be
+    // carried over: the device keys of the placements it kept or tried to
+    // write, and the files it deleted.
+    let mut claimed: HashSet<String> = diff
+        .unchanged
+        .iter()
+        .map(|&index| layout::device_path_key(placements[index].rel_path.as_str()))
+        .collect();
+    let mut removed: HashSet<&DeviceRelativePath> = HashSet::new();
 
     // Files whose slot a placement now spells differently go first, and
     // with their analysis pair unless an unchanged entry records it: they
@@ -268,6 +279,7 @@ pub fn sync(
             .copied()
             .filter(|anlz| !kept_anlz.contains(&anlz.dat_path));
         remove_placement(transport, &base, rel, anlz)?;
+        removed.insert(rel);
     }
 
     let total = diff.to_write.len();
@@ -279,6 +291,7 @@ pub fn sync(
         let placement = &placements[placement_index];
         let track = &req.tracks[placement.track_index];
         let dest = base.join(&placement.rel_path);
+        claimed.insert(layout::device_path_key(placement.rel_path.as_str()));
         match transport.copy_file(&track.source_path, &dest, &track.source.stat) {
             Ok(()) => {
                 if diff.updates.contains(&placement_index) {
@@ -309,7 +322,7 @@ pub fn sync(
     }
 
     if outcome.cancelled {
-        outcome.manifest = manifest;
+        outcome.manifest = with_untouched_entries(req, manifest, &claimed, &removed);
         outcome.manifest_is_authoritative = true;
         return Ok(outcome);
     }
@@ -348,7 +361,6 @@ pub fn sync(
         for (done, rel) in diff.removals.iter().enumerate() {
             if cancel() {
                 outcome.cancelled = true;
-                retain_unremoved_manifest_entries(req, &diff.removals[done..], &mut manifest);
                 break;
             }
             let anlz = previous_anlz
@@ -356,6 +368,7 @@ pub fn sync(
                 .copied()
                 .filter(|anlz| !kept_anlz.contains(&anlz.dat_path));
             remove_placement(transport, &base, rel, anlz)?;
+            removed.insert(rel);
             outcome.removed += 1;
             progress(SyncProgress {
                 stage: SyncStage::Removing,
@@ -363,23 +376,35 @@ pub fn sync(
                 total: remove_total,
             });
         }
-    } else {
-        // Stale files left in place remain part of the manifest so the
-        // next sync still tracks them.
-        for rel in &diff.removals {
-            if let Some(entry) = req
-                .previous_manifest
-                .iter()
-                .find(|m| &m.on_device_path == rel)
-            {
-                manifest.push(entry.clone());
-            }
-        }
     }
 
-    outcome.manifest = manifest;
+    outcome.manifest = with_untouched_entries(req, manifest, &claimed, &removed);
     outcome.manifest_is_authoritative = true;
     Ok(outcome)
+}
+
+/// `manifest` with the previous entries the run left alone: a stale file
+/// kept without confirmation or not reached before a cancel, or a file a
+/// cancelled run did not get to replace, is still on the device, and the
+/// next sync must keep tracking it. `claimed` holds the device keys of the
+/// placements the run kept or tried to write, `removed` the files it
+/// deleted.
+fn with_untouched_entries(
+    req: &SyncRequest,
+    mut manifest: Vec<SyncManifestEntry>,
+    claimed: &HashSet<String>,
+    removed: &HashSet<&DeviceRelativePath>,
+) -> Vec<SyncManifestEntry> {
+    manifest.extend(
+        req.previous_manifest
+            .iter()
+            .filter(|entry| {
+                !removed.contains(&entry.on_device_path)
+                    && !claimed.contains(&layout::device_path_key(entry.on_device_path.as_str()))
+            })
+            .cloned(),
+    );
+    manifest
 }
 
 /// The analysis files `manifest` records.
@@ -428,20 +453,4 @@ fn remove_placement(
         }
     }
     Ok(())
-}
-
-fn retain_unremoved_manifest_entries(
-    req: &SyncRequest,
-    removals: &[DeviceRelativePath],
-    manifest: &mut Vec<SyncManifestEntry>,
-) {
-    for rel in removals {
-        if let Some(entry) = req
-            .previous_manifest
-            .iter()
-            .find(|entry| &entry.on_device_path == rel)
-        {
-            manifest.push(entry.clone());
-        }
-    }
 }
