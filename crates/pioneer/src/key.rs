@@ -43,7 +43,11 @@ pub fn rekordbox_id(key: MusicalKey) -> u32 {
 }
 
 /// The 24 `(id, name)` rows of the Pioneer `keys` table, in ID order.
-/// Names use rekordbox's spelling (e.g. `Am`, `Db`).
+/// Names are spelled exactly as rekordbox writes them — flats for every
+/// black key except F#/F#m (`Dbm`, `Ebm`, `F#m`, `Abm`, `Bbm`; `Db`, `Eb`,
+/// `F#`, `Ab`, `Bb`), as read from a rekordbox 6 export. rekordbox numbers
+/// its rows in first-use order, so players identify a key by this name,
+/// not by its ID.
 pub const KEY_TABLE: [(u32, &str); 24] = [
     (1, "Am"),
     (2, "Bbm"),
@@ -54,7 +58,7 @@ pub const KEY_TABLE: [(u32, &str); 24] = [
     (7, "Ebm"),
     (8, "Em"),
     (9, "Fm"),
-    (10, "Gbm"),
+    (10, "F#m"),
     (11, "Gm"),
     (12, "Abm"),
     (13, "A"),
@@ -66,7 +70,7 @@ pub const KEY_TABLE: [(u32, &str); 24] = [
     (19, "Eb"),
     (20, "E"),
     (21, "F"),
-    (22, "Gb"),
+    (22, "F#"),
     (23, "G"),
     (24, "Ab"),
 ];
@@ -84,6 +88,18 @@ mod tests {
             assert!(!seen[id as usize], "duplicate id {id}");
             seen[id as usize] = true;
         }
+    }
+
+    #[test]
+    fn key_names_are_rekordbox_spellings() {
+        let names: Vec<&str> = KEY_TABLE.iter().map(|(_, name)| *name).collect();
+        assert_eq!(
+            names,
+            [
+                "Am", "Bbm", "Bm", "Cm", "Dbm", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "Abm", "A",
+                "Bb", "B", "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab",
+            ]
+        );
     }
 
     #[test]

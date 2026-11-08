@@ -1779,7 +1779,7 @@ mod tests {
         let entities = Entities::build(std::slice::from_ref(&t));
         let row = track_row(&t, &entities, 0, "2026-01-01");
         let key_id = row_u32(&row, 0x20);
-        assert_eq!(crate::key::KEY_TABLE[key_id as usize - 1].1, "Gbm");
+        assert_eq!(crate::key::KEY_TABLE[key_id as usize - 1].1, "F#m");
         assert_eq!(entities.genres[row_u32(&row, 0x3C) as usize - 1], "House");
     }
 
