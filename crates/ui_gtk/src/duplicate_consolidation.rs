@@ -811,7 +811,7 @@ fn metadata_field_display(
             }
         }),
         DuplicateMetadataField::Bpm => metadata.bpm.map(|value| value.to_string()),
-        DuplicateMetadataField::Key => metadata.key.clone(),
+        DuplicateMetadataField::Key => metadata.key.map(|key| key.short_code().to_owned()),
         DuplicateMetadataField::Comments => metadata.comments.clone(),
         DuplicateMetadataField::Lyrics => metadata
             .lyrics

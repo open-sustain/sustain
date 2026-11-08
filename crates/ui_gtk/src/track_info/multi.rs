@@ -3,7 +3,9 @@
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
-use sustain_app_runtime::{ApplicationCommand, FieldChange, MetadataChange, Track, TrackId};
+use sustain_app_runtime::{
+    ApplicationCommand, FieldChange, MetadataChange, MusicalKey, Track, TrackId,
+};
 
 use crate::{
     LibraryChangedHolder, TrackRowChangedKind, TrackRowsChangedHolder,
@@ -229,7 +231,7 @@ struct BatchInitialValues {
     disc_total: CommonValue<u32>,
     compilation: CommonValue<bool>,
     bpm: CommonValue<u32>,
-    key: CommonValue<String>,
+    key: CommonValue<MusicalKey>,
     comments: CommonValue<String>,
 }
 
@@ -284,7 +286,7 @@ struct BatchDetailsPage {
     disc_total: OptionalEntry<u32>,
     compilation: OptionalBool,
     bpm: OptionalEntry<u32>,
-    key: OptionalEntry<String>,
+    key: OptionalEntry<MusicalKey>,
     comments: OptionalTextView,
 }
 
@@ -367,7 +369,7 @@ impl BatchDetailsPage {
             initial.bpm.clone(),
         );
         row += 1;
-        let key = OptionalEntry::text(&widget, row, "Key", initial.key.clone());
+        let key = OptionalEntry::new(&widget, row, "Key", gtk::Entry::new(), initial.key.clone());
         row += 1;
         key.entry.set_width_chars(8);
         key.entry.set_hexpand(false);
@@ -429,7 +431,7 @@ impl BatchDetailsPage {
             )?,
             compilation: self.compilation.selected_value(),
             bpm: number_change("BPM", &self.bpm.initial, self.bpm.selected_text())?,
-            key: text_change(&self.key.initial, self.key.selected_text()),
+            key: key_change(&self.key.initial, self.key.selected_text())?,
             comments: prose_change(&self.comments.initial, self.comments.selected_text()),
             ..MetadataChange::default()
         })
@@ -595,6 +597,34 @@ fn text_change(initial: &CommonValue<String>, value: Option<String>) -> FieldCha
         match current {
             None => FieldChange::Clear,
             Some(value) => FieldChange::Set(value),
+        }
+    }
+}
+
+/// Like [`number_change`], for a key in any notation
+/// [`MusicalKey::parse`] reads.
+fn key_change(
+    initial: &CommonValue<MusicalKey>,
+    value: Option<String>,
+) -> Result<FieldChange<MusicalKey>, String> {
+    let Some(value) = value else {
+        return Ok(FieldChange::Unchanged);
+    };
+    let value = value.trim();
+    let current = if value.is_empty() {
+        None
+    } else {
+        Some(
+            MusicalKey::parse(value)
+                .ok_or_else(|| "Key must be a musical key, such as Am, F#, or 8A.".to_owned())?,
+        )
+    };
+    if initial.matches(&current) {
+        Ok(FieldChange::Unchanged)
+    } else {
+        match current {
+            None => Ok(FieldChange::Clear),
+            Some(value) => Ok(FieldChange::Set(value)),
         }
     }
 }

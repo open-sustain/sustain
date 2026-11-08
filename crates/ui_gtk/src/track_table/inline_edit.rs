@@ -35,7 +35,7 @@ use gtk::{gdk, glib, graphene};
 use sustain_app_runtime::{MetadataChange, TrackMetadata};
 
 use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
-use crate::metadata_diff::{number_diff, signed_number_diff, text_diff};
+use crate::metadata_diff::{key_diff, number_diff, signed_number_diff, text_diff};
 
 /// Fallback double-click interval when the display has no settings object.
 const DEFAULT_DOUBLE_CLICK_MS: i32 = 400;
@@ -72,7 +72,7 @@ impl EditableField {
             Self::Genre => metadata.genre.clone().unwrap_or_default(),
             Self::Year => optional_to_string(metadata.year),
             Self::Bpm => optional_to_string(metadata.bpm),
-            Self::Key => metadata.key.clone().unwrap_or_default(),
+            Self::Key => optional_to_string(metadata.key),
             Self::TrackNumber => optional_to_string(metadata.track_number),
         }
     }
@@ -91,7 +91,7 @@ impl EditableField {
             Self::Genre => change.genre = text_diff(initial.genre.as_deref(), new_text),
             Self::Year => change.year = signed_number_diff(initial.year, new_text),
             Self::Bpm => change.bpm = number_diff(initial.bpm, new_text),
-            Self::Key => change.key = text_diff(initial.key.as_deref(), new_text),
+            Self::Key => change.key = key_diff(initial.key, new_text),
             Self::TrackNumber => change.track_number = number_diff(initial.track_number, new_text),
         }
         change

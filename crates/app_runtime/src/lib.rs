@@ -24,7 +24,7 @@ pub use sustain_domain::{
     DuplicateMetadataFieldSelection, DuplicateMetadataSelection, EncodingSettings, FieldChange,
     FilesPerFolderCap, GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LazyPickContext,
     LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange, MonotonicClock,
-    OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
+    MusicalKey, OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
     PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
     PlaybackSession, PlaybackSettings, PlaybackState, Playlist, PlaylistEntry, PlaylistFolder,
     PlaylistFolderId, PlaylistId, PlaylistItem, QualityBucket, QualityDistribution, QualityRange,

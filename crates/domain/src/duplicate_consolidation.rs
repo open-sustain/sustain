@@ -499,7 +499,7 @@ fn metadata_field_is_populated(metadata: &TrackMetadata, field: DuplicateMetadat
         DuplicateMetadataField::Year => metadata.year.is_some(),
         DuplicateMetadataField::Compilation => metadata.compilation.is_some(),
         DuplicateMetadataField::Bpm => metadata.bpm.is_some(),
-        DuplicateMetadataField::Key => populated_text(&metadata.key),
+        DuplicateMetadataField::Key => metadata.key.is_some(),
         DuplicateMetadataField::Comments => populated_text(&metadata.comments),
         DuplicateMetadataField::Lyrics => populated_text(&metadata.lyrics),
     }
@@ -555,7 +555,7 @@ fn copy_metadata_field(
         DuplicateMetadataField::Year => target.year = source.year,
         DuplicateMetadataField::Compilation => target.compilation = source.compilation,
         DuplicateMetadataField::Bpm => target.bpm = source.bpm,
-        DuplicateMetadataField::Key => target.key.clone_from(&source.key),
+        DuplicateMetadataField::Key => target.key = source.key,
         DuplicateMetadataField::Comments => target.comments.clone_from(&source.comments),
         DuplicateMetadataField::Lyrics => target.lyrics.clone_from(&source.lyrics),
     }

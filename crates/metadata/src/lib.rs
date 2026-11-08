@@ -31,8 +31,8 @@ use sha2::{Digest, Sha256};
 use sustain_artwork::{ArtworkPolicyError, MAX_ENCODED_ARTWORK_BYTES, validate_encoded_artwork};
 
 pub use sustain_domain::{
-    FieldChange, MetadataChange, Rating, TrackContentHash, TrackMetadata, TrackRelativePath,
-    validate_bpm,
+    FieldChange, MetadataChange, MusicalKey, Rating, TrackContentHash, TrackMetadata,
+    TrackRelativePath, validate_bpm,
 };
 
 mod atomic_file;
@@ -313,7 +313,11 @@ impl MetadataService for LoftyMetadataService {
         apply_bool_change(tag, ItemKey::FlagCompilation, change.compilation);
         let bpm_key = bpm_item_key(tag.tag_type());
         apply_number_change(tag, bpm_key, change.bpm);
-        apply_text_change(tag, ItemKey::InitialKey, change.key);
+        apply_text_change(
+            tag,
+            ItemKey::InitialKey,
+            change.key.map(|key| key.short_code().to_owned()),
+        );
         apply_text_change(tag, ItemKey::Comment, change.comments);
         let lyrics_key = lyrics_item_key(tag.tag_type());
         apply_text_change(tag, lyrics_key, change.lyrics);

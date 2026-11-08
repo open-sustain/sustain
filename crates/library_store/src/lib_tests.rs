@@ -94,6 +94,51 @@ fn sqlite_save_track_normalizes_empty_text_metadata() {
     assert_eq!(loaded.metadata.comments, None);
 }
 
+#[test]
+fn sqlite_track_key_round_trips_as_its_short_code() {
+    let store = SqliteLibraryStore::open_in_memory().expect("store");
+    let mut track = track(1, "keyed.flac");
+    track.metadata.key = Some(MusicalKey::FsMinor);
+    store.save_track(track.clone()).expect("save track");
+
+    let stored: String = store
+        .connection_guard()
+        .expect("connection")
+        .query_row("SELECT musical_key FROM tracks WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .expect("stored key");
+    assert_eq!(stored, "F#m");
+    assert_eq!(
+        store
+            .track(track.id)
+            .expect("load")
+            .expect("exists")
+            .metadata
+            .key,
+        Some(MusicalKey::FsMinor)
+    );
+}
+
+#[test]
+fn sqlite_stored_key_that_is_not_a_short_code_is_rejected() {
+    let store = SqliteLibraryStore::open_in_memory().expect("store");
+    let track = track(1, "corrupt.flac");
+    store.save_track(track.clone()).expect("save track");
+    store
+        .connection_guard()
+        .expect("connection")
+        .execute("UPDATE tracks SET musical_key = 'Amin' WHERE id = 1", [])
+        .expect("inject non-canonical key");
+
+    assert_eq!(
+        store.track(track.id),
+        Err(super::StoreError::InvalidStoredEnum(
+            "musical key: Amin".to_owned()
+        ))
+    );
+}
+
 fn run_availability_update_requires_matching_path(store: &dyn LibraryStore) {
     let original = track(1, "original.flac");
     store.save_track(original.clone()).expect("save track");
@@ -1115,7 +1160,7 @@ fn run_record_analysis_fills_tracks_columns_only_when_null(store: &dyn LibrarySt
     // Second track: user-set BPM/key — analyzer must not clobber.
     let mut taken = track(2, "taken.flac");
     taken.metadata.bpm = Some(95);
-    taken.metadata.key = Some("Am".to_string());
+    taken.metadata.key = Some(MusicalKey::AMinor);
     store.save_track(taken.clone()).expect("save taken");
 
     let analysis = sample_analysis(Some(126.0), Some(MusicalKey::DMinor));
@@ -1132,11 +1177,11 @@ fn run_record_analysis_fills_tracks_columns_only_when_null(store: &dyn LibrarySt
 
     let loaded_blank = store.track(blank.id).expect("load blank").expect("exists");
     assert_eq!(loaded_blank.metadata.bpm, Some(126));
-    assert_eq!(loaded_blank.metadata.key.as_deref(), Some("Dm"));
+    assert_eq!(loaded_blank.metadata.key, Some(MusicalKey::DMinor));
 
     let loaded_taken = store.track(taken.id).expect("load taken").expect("exists");
     assert_eq!(loaded_taken.metadata.bpm, Some(95));
-    assert_eq!(loaded_taken.metadata.key.as_deref(), Some("Am"));
+    assert_eq!(loaded_taken.metadata.key, Some(MusicalKey::AMinor));
 }
 
 #[test]

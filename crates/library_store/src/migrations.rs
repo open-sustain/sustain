@@ -8,6 +8,7 @@
 //! development databases must be deleted and rebuilt by scanning the library.
 
 use rusqlite::Connection;
+use sustain_domain::MusicalKey;
 
 use crate::{
     StoreError, StoreResult,
@@ -17,45 +18,62 @@ use crate::{
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 6;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Clone, Copy)]
 struct Migration {
     version: u32,
     description: &'static str,
-    sql: &'static str,
+    step: MigrationStep,
+}
+
+/// What a migration does, run inside the migration's transaction.
+#[derive(Clone, Copy)]
+enum MigrationStep {
+    /// A batch of SQL statements. The default: schema changes and value
+    /// rewrites that SQL can express.
+    Sql(&'static str),
+    /// A data rewrite that has to apply a domain rule SQL cannot express,
+    /// such as parsing free-form text. The rule must only ever produce
+    /// values every later build reads as valid.
+    Rust(fn(&Connection) -> rusqlite::Result<()>),
 }
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
         description: "initial alpha schema",
-        sql: SCHEMA_SQL,
+        step: MigrationStep::Sql(SCHEMA_SQL),
     },
     Migration {
         version: 2,
         description: "persist track table sort order per scope",
-        sql: ADD_TRACK_COLUMN_SORT_SQL,
+        step: MigrationStep::Sql(ADD_TRACK_COLUMN_SORT_SQL),
     },
     Migration {
         version: 3,
         description: "backfill generated sort fields",
-        sql: BACKFILL_GENERATED_SORT_FIELDS_SQL,
+        step: MigrationStep::Sql(BACKFILL_GENERATED_SORT_FIELDS_SQL),
     },
     Migration {
         version: 4,
         description: "persist per-device artist sync selections",
-        sql: ADD_SYNC_DEVICE_ARTISTS_SQL,
+        step: MigrationStep::Sql(ADD_SYNC_DEVICE_ARTISTS_SQL),
     },
     Migration {
         version: 5,
         description: "normalize empty track metadata strings",
-        sql: NORMALIZE_EMPTY_TRACK_METADATA_SQL,
+        step: MigrationStep::Sql(NORMALIZE_EMPTY_TRACK_METADATA_SQL),
     },
     Migration {
         version: 6,
         description: "record the Pioneer analysis pair each sync manifest entry owns",
-        sql: ADD_SYNC_MANIFEST_ANLZ_SQL,
+        step: MigrationStep::Sql(ADD_SYNC_MANIFEST_ANLZ_SQL),
+    },
+    Migration {
+        version: 7,
+        description: "normalize stored musical keys and drop text that is not a key",
+        step: MigrationStep::Rust(normalize_musical_keys),
     },
 ];
 
@@ -95,10 +113,12 @@ fn apply_pending_from_registry(
         connection
             .execute_batch("BEGIN IMMEDIATE;")
             .map_err(StoreError::from)?;
-        let outcome = connection
-            .execute_batch(migration.sql)
-            .and_then(|()| connection.pragma_update(None, "user_version", migration.version))
-            .and_then(|()| connection.execute_batch("COMMIT;"));
+        let outcome = match migration.step {
+            MigrationStep::Sql(sql) => connection.execute_batch(sql),
+            MigrationStep::Rust(rewrite) => rewrite(connection),
+        }
+        .and_then(|()| connection.pragma_update(None, "user_version", migration.version))
+        .and_then(|()| connection.execute_batch("COMMIT;"));
         if let Err(error) = outcome {
             let _ = connection.execute_batch("ROLLBACK;");
             return Err(StoreError::MigrationFailed {
@@ -106,6 +126,39 @@ fn apply_pending_from_registry(
                 description: migration.description,
                 detail: error.to_string(),
             });
+        }
+    }
+    Ok(())
+}
+
+/// Migration 7. Keys used to be stored as whatever text the file's key tag
+/// held: the same key in a dozen spellings (`Am`, `Amin`, `8A`, `A min`)
+/// and, now and then, text that is no key at all (a URL a ripper left
+/// behind). Every value is re-read with [`MusicalKey::parse`], the rule
+/// import now applies, and stored as its canonical short code. Text that
+/// is not a key is cleared together with the track's key-analysis
+/// attempt, so analysis fills the key in (it never overwrites a stored
+/// key, so an earlier attempt left the junk in place). Canonical
+/// short codes parse to themselves, so the rewrite is idempotent and its
+/// output is valid for every later build.
+fn normalize_musical_keys(connection: &Connection) -> rusqlite::Result<()> {
+    let mut select =
+        connection.prepare("SELECT id, musical_key FROM tracks WHERE musical_key IS NOT NULL")?;
+    let stored = select
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut update = connection.prepare("UPDATE tracks SET musical_key = ?1 WHERE id = ?2")?;
+    let mut forget_attempt = connection
+        .prepare("UPDATE track_analysis SET key_attempted_at_unix = NULL WHERE track_id = ?1")?;
+    for (id, text) in stored {
+        let canonical = MusicalKey::parse(&text).map(MusicalKey::short_code);
+        if canonical != Some(text.as_str()) {
+            update.execute(rusqlite::params![canonical, id])?;
+        }
+        if canonical.is_none() {
+            forget_attempt.execute([id])?;
         }
     }
     Ok(())
@@ -487,7 +540,8 @@ mod tests {
                 Some("Composer".to_owned()),
                 Some("Genre".to_owned()),
                 Some("Grouping".to_owned()),
-                Some("8A".to_owned()),
+                // Kept by migration 5, then normalized by migration 7.
+                Some("Am".to_owned()),
                 Some("  Real comment  ".to_owned()),
                 Some("line one\n".to_owned()),
                 Some(" Title Sort ".to_owned()),
@@ -572,6 +626,134 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_from_v6_normalizes_musical_keys_and_clears_text_that_is_not_a_key() {
+        let connection = Connection::open_in_memory().expect("connection");
+        for sql in [
+            SCHEMA_SQL,
+            ADD_TRACK_COLUMN_SORT_SQL,
+            BACKFILL_GENERATED_SORT_FIELDS_SQL,
+            ADD_SYNC_DEVICE_ARTISTS_SQL,
+            NORMALIZE_EMPTY_TRACK_METADATA_SQL,
+            ADD_SYNC_MANIFEST_ANLZ_SQL,
+        ] {
+            connection
+                .execute_batch(sql)
+                .expect("schema up to version 6");
+        }
+        // Spellings found in a real library, one per row.
+        let stored = [
+            ("Am", Some("Am")),
+            ("Amin", Some("Am")),
+            ("A#min", Some("Bbm")),
+            ("G#m", Some("Abm")),
+            ("D#", Some("Eb")),
+            ("G m", Some("Gm")),
+            ("Emaj", Some("E")),
+            ("8A", Some("Am")),
+            ("3B", Some("Db")),
+            ("F#m", Some("F#m")),
+            ("www.RnB4U.in", None),
+        ];
+        for (index, (text, _)) in stored.iter().enumerate() {
+            connection
+                .execute(
+                    "INSERT INTO tracks (id, relative_path, title, musical_key) \
+                     VALUES (?1, ?2, 'Title', ?3)",
+                    rusqlite::params![index as i64 + 1, vec![b'a' + index as u8], text],
+                )
+                .expect("seed track");
+        }
+        connection
+            .execute(
+                "INSERT INTO tracks (id, relative_path, musical_key) VALUES (100, x'7a', NULL)",
+                [],
+            )
+            .expect("seed keyless track");
+        // Key analysis already ran on the junk track and on a keyed one.
+        let junk_id = stored.len() as i64;
+        for track_id in [1, junk_id] {
+            connection
+                .execute(
+                    "INSERT INTO track_analysis \
+                     (track_id, bpm_attempted_at_unix, key_attempted_at_unix, analyzer_version) \
+                     VALUES (?1, 10, 20, 1)",
+                    [track_id],
+                )
+                .expect("seed analysis attempt");
+        }
+        connection
+            .pragma_update(None, "user_version", 6)
+            .expect("set version");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        let attempts = |track_id: i64| -> (Option<i64>, Option<i64>) {
+            connection
+                .query_row(
+                    "SELECT bpm_attempted_at_unix, key_attempted_at_unix \
+                     FROM track_analysis WHERE track_id = ?1",
+                    [track_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("analysis row")
+        };
+        assert_eq!(attempts(1), (Some(10), Some(20)));
+        assert_eq!(attempts(junk_id), (Some(10), None));
+        for (index, (text, expected)) in stored.iter().enumerate() {
+            let (key, title): (Option<String>, String) = connection
+                .query_row(
+                    "SELECT musical_key, title FROM tracks WHERE id = ?1",
+                    [index as i64 + 1],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("track preserved");
+            assert_eq!(key.as_deref(), *expected, "{text:?}");
+            assert_eq!(title, "Title");
+        }
+        let keyless: Option<String> = connection
+            .query_row("SELECT musical_key FROM tracks WHERE id = 100", [], |row| {
+                row.get(0)
+            })
+            .expect("keyless track preserved");
+        assert_eq!(keyless, None);
+    }
+
+    #[test]
+    fn failed_rust_migration_rolls_back_its_writes_and_version() {
+        fn write_then_fail(connection: &Connection) -> rusqlite::Result<()> {
+            connection.execute("INSERT INTO sentinel (id) VALUES (1)", [])?;
+            Err(rusqlite::Error::InvalidQuery)
+        }
+        let connection = Connection::open_in_memory().expect("connection");
+        let migrations = [
+            Migration {
+                version: 1,
+                description: "sentinel",
+                step: MigrationStep::Sql("CREATE TABLE sentinel (id INTEGER PRIMARY KEY);"),
+            },
+            Migration {
+                version: 2,
+                description: "broken rewrite",
+                step: MigrationStep::Rust(write_then_fail),
+            },
+        ];
+
+        assert!(matches!(
+            apply_pending_from_registry(&connection, &migrations),
+            Err(StoreError::MigrationFailed { version: 2, .. })
+        ));
+        assert_eq!(user_version(&connection).expect("version"), 1);
+        let rows: i64 = connection
+            .query_row("SELECT COUNT(*) FROM sentinel", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
     fn database_from_a_newer_build_is_rejected() {
         let connection = Connection::open_in_memory().expect("connection");
         connection
@@ -608,12 +790,14 @@ mod tests {
             Migration {
                 version: 1,
                 description: "sentinel",
-                sql: "CREATE TABLE sentinel (id INTEGER PRIMARY KEY);",
+                step: MigrationStep::Sql("CREATE TABLE sentinel (id INTEGER PRIMARY KEY);"),
             },
             Migration {
                 version: 2,
                 description: "broken",
-                sql: "CREATE TABLE should_roll_back (id INTEGER PRIMARY KEY); broken sql;",
+                step: MigrationStep::Sql(
+                    "CREATE TABLE should_roll_back (id INTEGER PRIMARY KEY); broken sql;",
+                ),
             },
         ];
 
@@ -638,12 +822,12 @@ mod tests {
             Migration {
                 version: 1,
                 description: "must not run",
-                sql: "CREATE TABLE must_not_exist (id INTEGER PRIMARY KEY);",
+                step: MigrationStep::Sql("CREATE TABLE must_not_exist (id INTEGER PRIMARY KEY);"),
             },
             Migration {
                 version: 2,
                 description: "pending",
-                sql: "CREATE TABLE pending (id INTEGER PRIMARY KEY);",
+                step: MigrationStep::Sql("CREATE TABLE pending (id INTEGER PRIMARY KEY);"),
             },
         ];
 

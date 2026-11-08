@@ -255,7 +255,8 @@ pub fn compute_affinity(
 #[cfg(test)]
 mod tests {
     use sustain_domain::{
-        PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
+        MusicalKey, PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata,
+        TrackRelativePath,
     };
 
     use super::{NEUTRAL_PRIOR, compute_affinity, total_affinity_weight};
@@ -333,7 +334,7 @@ mod tests {
         let base = TrackMetadata {
             genre: Some("House".to_owned()),
             bpm: Some(124),
-            key: Some("Am".to_owned()),
+            key: Some(MusicalKey::AMinor),
             year: Some(2014),
             ..TrackMetadata::default()
         };

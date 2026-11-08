@@ -23,8 +23,8 @@ use sustain_device_sync::{
     SyncProgress, SyncRequest, SyncStage, engine, resolve_source_fingerprint, source_file_stat,
 };
 use sustain_domain::{
-    DeviceLayout, DeviceRelativePath, FilesPerFolderCap, MusicalKey, Playlist, PlaylistItem,
-    SmartPlaylist, SyncDevice, SyncDeviceId, Track, TrackId, matching_tracks,
+    DeviceLayout, DeviceRelativePath, FilesPerFolderCap, Playlist, PlaylistItem, SmartPlaylist,
+    SyncDevice, SyncDeviceId, Track, TrackId, matching_tracks,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore};
 use sustain_metadata::MetadataService;
@@ -1165,10 +1165,7 @@ fn sync_input_track(track: &Track, source_path: PathBuf, source: SourceSnapshot)
         duration_ms: metadata.duration.map(|d| d.as_millis() as u32).unwrap_or(0),
         rating: track.rating.stars(),
         bpm: metadata.bpm.map(|b| b as f32),
-        key: metadata
-            .key
-            .as_deref()
-            .and_then(MusicalKey::from_short_code),
+        key: metadata.key,
         bitrate_kbps: metadata.bitrate_kbps,
         sample_rate_hz: metadata.sample_rate_hz.unwrap_or(44_100),
         bit_depth: 16,

@@ -11,7 +11,7 @@
 //! place is what guarantees an inline edit writes the same thing the
 //! dialog would for the same input.
 
-use sustain_app_runtime::FieldChange;
+use sustain_app_runtime::{FieldChange, MusicalKey};
 
 pub(crate) fn text_diff(initial: Option<&str>, current: &str) -> FieldChange<String> {
     let trimmed_current = current.trim();
@@ -58,6 +58,24 @@ pub(crate) fn number_diff(initial: Option<u32>, current: &str) -> FieldChange<u3
     }
 }
 
+/// Typed text is read with [`MusicalKey::parse`], so any common notation
+/// (`Am`, `A minor`, `8A`, `1m`) sets the key. Text that is not a key is
+/// left unchanged, like an unparsable number.
+pub(crate) fn key_diff(initial: Option<MusicalKey>, current: &str) -> FieldChange<MusicalKey> {
+    let trimmed = current.trim();
+    if trimmed.is_empty() {
+        return if initial.is_some() {
+            FieldChange::Clear
+        } else {
+            FieldChange::Unchanged
+        };
+    }
+    match MusicalKey::parse(trimmed) {
+        Some(key) if Some(key) != initial => FieldChange::Set(key),
+        _ => FieldChange::Unchanged,
+    }
+}
+
 pub(crate) fn signed_number_diff(initial: Option<i32>, current: &str) -> FieldChange<i32> {
     let trimmed = current.trim();
     if trimmed.is_empty() {
@@ -88,9 +106,23 @@ pub(crate) fn bool_diff(initial: Option<bool>, current: bool) -> FieldChange<boo
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_diff, number_diff, signed_number_diff, text_diff, text_diff_preserve_newlines,
+        bool_diff, key_diff, number_diff, signed_number_diff, text_diff,
+        text_diff_preserve_newlines,
     };
-    use sustain_app_runtime::FieldChange;
+    use sustain_app_runtime::{FieldChange, MusicalKey};
+
+    #[test]
+    fn key_diff_parses_notations_and_ignores_text_that_is_not_a_key() {
+        let am = Some(MusicalKey::AMinor);
+        assert_eq!(key_diff(None, ""), FieldChange::Unchanged);
+        assert_eq!(key_diff(am, " "), FieldChange::Clear);
+        assert_eq!(key_diff(am, "Am"), FieldChange::Unchanged);
+        assert_eq!(key_diff(am, "8A"), FieldChange::Unchanged);
+        assert_eq!(key_diff(am, "A minor"), FieldChange::Unchanged);
+        assert_eq!(key_diff(am, "8B"), FieldChange::Set(MusicalKey::CMajor));
+        assert_eq!(key_diff(None, "F#m"), FieldChange::Set(MusicalKey::FsMinor));
+        assert_eq!(key_diff(am, "www.example.com"), FieldChange::Unchanged);
+    }
 
     #[test]
     fn text_diff_preserves_unchanged_value() {

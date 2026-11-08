@@ -8,7 +8,7 @@ use std::{
 
 use rusqlite::{Connection, Row, params};
 use sustain_domain::{
-    PlayStatistics, PlaylistEntry, SmartPlaylistBoolField, SmartPlaylistBoolRule,
+    MusicalKey, PlayStatistics, PlaylistEntry, SmartPlaylistBoolField, SmartPlaylistBoolRule,
     SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
     SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
     SmartPlaylistRule, SmartPlaylistTextField, SmartPlaylistTextOperator, TrackLocation,
@@ -48,9 +48,7 @@ pub(crate) fn track_from_row(row: &Row<'_>) -> StoreResult<Track> {
                 .get(track_column::COMPILATION)
                 .map_err(StoreError::from)?,
             bpm: optional_u32(row, track_column::BPM)?,
-            key: row
-                .get(track_column::MUSICAL_KEY)
-                .map_err(StoreError::from)?,
+            key: optional_musical_key(row, track_column::MUSICAL_KEY)?,
             comments: row.get(track_column::COMMENTS).map_err(StoreError::from)?,
             duration: duration_seconds.map(seconds_to_duration),
             bitrate_kbps: optional_u32(row, track_column::BITRATE_KBPS)?,
@@ -181,6 +179,17 @@ fn optional_u32(row: &Row<'_>, index: usize) -> StoreResult<Option<u32>> {
 fn optional_u8(row: &Row<'_>, index: usize) -> StoreResult<Option<u8>> {
     optional_i64(row, index)
         .map(|value| value.map(|value| value.clamp(0, i64::from(u8::MAX)) as u8))
+}
+
+/// Keys are stored as their canonical short code (migration 7 normalized
+/// every older spelling), so anything else is a corrupt value.
+fn optional_musical_key(row: &Row<'_>, index: usize) -> StoreResult<Option<MusicalKey>> {
+    optional_string(row, index)?
+        .map(|code| {
+            MusicalKey::from_short_code(&code)
+                .ok_or_else(|| StoreError::InvalidStoredEnum(format!("musical key: {code}")))
+        })
+        .transpose()
 }
 
 pub(crate) fn optional_string(row: &Row<'_>, index: usize) -> StoreResult<Option<String>> {

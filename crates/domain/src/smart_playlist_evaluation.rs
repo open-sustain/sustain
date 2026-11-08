@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    SmartPlaylistBoolField, SmartPlaylistDateField, SmartPlaylistLimit,
+    MusicalKey, SmartPlaylistBoolField, SmartPlaylistDateField, SmartPlaylistLimit,
     SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
     SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
     SmartPlaylistTextOperator, Track, normalize_search_text,
@@ -206,7 +206,7 @@ fn text_field_value(track: &Track, field: SmartPlaylistTextField) -> Option<&str
             .path()
             .file_name()
             .and_then(|os_str| os_str.to_str()),
-        SmartPlaylistTextField::MusicalKey => track.metadata.key.as_deref(),
+        SmartPlaylistTextField::MusicalKey => track.metadata.key.map(MusicalKey::short_code),
     }
 }
 

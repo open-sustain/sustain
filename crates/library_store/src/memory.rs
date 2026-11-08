@@ -952,7 +952,7 @@ impl LibraryStore for InMemoryLibraryStore {
                 && let Some(key) = analysis.key
                 && track.metadata.key.is_none()
             {
-                track.metadata.key = Some(key.short_code().to_string());
+                track.metadata.key = Some(key);
             }
         }
         Ok(())

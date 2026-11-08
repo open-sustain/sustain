@@ -8,18 +8,11 @@
 /// pulling in symphonia/DSP dependencies.
 ///
 /// Discriminant order is chromatic, majors first (C..B), then minors
-/// (Cm..Bm). Enharmonic spellings collapse to the flat variant for
-/// black-key majors (Db/Eb/Gb/Ab/Bb) and the sharp variant for black-key
-/// minors (C#m/D#m... no, see below). This matches what most music tools
-/// surface to the user and avoids representing the same pitch class with
-/// two distinct enum values.
-///
-/// Minor-key spelling note: Cm/Dm/Em/Fm/Gm/Am/Bm use natural roots; the
-/// black-key minors use sharps for C#m and F#m (because their flat
-/// spellings Dbm/Gbm are extremely rare in printed music), and flats for
-/// Ebm/Abm/Bbm (the conventional jazz/classical spellings). The DM minor
-/// black-key with both common spellings is D#m/Ebm; we pick Ebm because
-/// it dominates jazz/rock chart usage.
+/// (Cm..Bm), so a key's pitch class is its index within its mode. Each
+/// pitch class has exactly one variant; [`Self::short_code`] spells it
+/// the way most music tools do: flats for the black-key majors
+/// (Db/Eb/Gb/Ab/Bb), and for the black-key minors C#m and F#m (whose
+/// flat spellings Dbm/Gbm are rare) next to Ebm, Abm and Bbm.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MusicalKey {
     CMajor,
@@ -146,14 +139,112 @@ impl MusicalKey {
         (self as u8) < 12
     }
 
-    /// Parse a `short_code` back into a key. Returns `None` for any
-    /// other input; callers that accept user-typed values should
-    /// normalize whitespace/case first.
+    /// Parse a `short_code` back into a key. Exact and case-sensitive:
+    /// this reads the canonical form Sustain itself stores. Text from
+    /// outside (file tags, user input) goes through [`Self::parse`].
     pub fn from_short_code(code: &str) -> Option<Self> {
         Self::ALL
             .iter()
             .find(|key| key.short_code() == code)
             .copied()
+    }
+
+    /// Parse a key written in any common notation, or `None` if the text
+    /// is not a key. Surrounding whitespace is ignored. Accepted:
+    ///
+    /// - note names: an upper-case root `A`–`G`, an optional accidental
+    ///   (`#`, `♯`, `b`, `♭`), optional whitespace, then a mode — nothing,
+    ///   `maj` or `major` for major; `m`, `min` or `minor` for minor (the
+    ///   words in any case, the lone `m` lower-case only, since `M` is
+    ///   used for major as often as for minor). Enharmonic spellings
+    ///   (`G#m`, `A#`, `Cb`, …) resolve to the same key as their usual
+    ///   spelling.
+    /// - Camelot codes `1A`–`12A` (minor) and `1B`–`12B` (major).
+    /// - Open Key codes `1m`–`12m` (minor) and `1d`–`12d` (major).
+    ///
+    /// Anything else — free text, a URL, a lower-case root (which some
+    /// notations use for minor and others do not) — is rejected rather
+    /// than guessed at.
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        Self::parse_wheel_code(text).or_else(|| Self::parse_note_name(text))
+    }
+
+    fn from_pitch_class(pitch_class: u8, minor: bool) -> Self {
+        Self::ALL[usize::from(pitch_class % 12) + if minor { 12 } else { 0 }]
+    }
+
+    /// Camelot (`8A`) and Open Key (`1m`) codes. Both walk the circle of
+    /// fifths, so position `n` is seven semitones above position `n - 1`.
+    fn parse_wheel_code(text: &str) -> Option<Self> {
+        let split = text.find(|c: char| !c.is_ascii_digit())?;
+        let (digits, letter) = text.split_at(split);
+        if digits.is_empty() || digits.len() > 2 {
+            return None;
+        }
+        let position: u8 = digits.parse().ok()?;
+        if !(1..=12).contains(&position) {
+            return None;
+        }
+        // Pitch class of position 1 and the mode, per notation and letter.
+        let (first, minor) = match letter {
+            "A" | "a" => (8, true),   // Camelot 1A = Abm
+            "B" | "b" => (11, false), // Camelot 1B = B
+            "m" | "M" => (9, true),   // Open Key 1m = Am
+            "d" | "D" => (0, false),  // Open Key 1d = C
+            _ => return None,
+        };
+        Some(Self::from_pitch_class(first + 7 * (position - 1), minor))
+    }
+
+    fn parse_note_name(text: &str) -> Option<Self> {
+        let mut chars = text.chars();
+        let natural = match chars.next()? {
+            'C' => 0,
+            'D' => 2,
+            'E' => 4,
+            'F' => 5,
+            'G' => 7,
+            'A' => 9,
+            'B' => 11,
+            _ => return None,
+        };
+        let rest = chars.as_str();
+        let (pitch_class, rest) = if let Some(rest) = rest
+            .strip_prefix('#')
+            .or_else(|| rest.strip_prefix('\u{266F}'))
+        {
+            (natural + 1, rest)
+        } else if let Some(rest) = rest
+            .strip_prefix('b')
+            .or_else(|| rest.strip_prefix('\u{266D}'))
+        {
+            (natural + 11, rest)
+        } else {
+            (natural, rest)
+        };
+        let mode = rest.trim_start();
+        let minor = if mode.is_empty()
+            || mode.eq_ignore_ascii_case("maj")
+            || mode.eq_ignore_ascii_case("major")
+        {
+            false
+        } else if mode == "m"
+            || mode.eq_ignore_ascii_case("min")
+            || mode.eq_ignore_ascii_case("minor")
+        {
+            true
+        } else {
+            return None;
+        };
+        Some(Self::from_pitch_class(pitch_class, minor))
+    }
+}
+
+/// Writes the [`MusicalKey::short_code`].
+impl std::fmt::Display for MusicalKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.short_code())
     }
 }
 
@@ -195,5 +286,121 @@ mod tests {
         assert_eq!(MusicalKey::from_short_code(""), None);
         assert_eq!(MusicalKey::from_short_code("H"), None);
         assert_eq!(MusicalKey::from_short_code("c"), None); // case-sensitive
+    }
+
+    #[test]
+    fn parse_accepts_every_canonical_short_code() {
+        for key in MusicalKey::ALL {
+            assert_eq!(MusicalKey::parse(key.short_code()), Some(key));
+        }
+    }
+
+    #[test]
+    fn parse_reads_note_names_in_common_spellings() {
+        use MusicalKey::*;
+        for (text, key) in [
+            ("Am", AMinor),
+            ("Amin", AMinor),
+            ("A min", AMinor),
+            ("A minor", AMinor),
+            ("A MINOR", AMinor),
+            ("A Minor", AMinor),
+            ("  Am\t", AMinor),
+            ("A", AMajor),
+            ("Amaj", AMajor),
+            ("A major", AMajor),
+            ("A Maj", AMajor),
+            ("G#m", AbMinor),
+            ("G♯m", AbMinor),
+            ("Abm", AbMinor),
+            ("A♭m", AbMinor),
+            ("A#min", BbMinor),
+            ("D#min", EbMinor),
+            ("Gbmin", FsMinor),
+            ("Dbmin", CsMinor),
+            ("C#maj", DbMajor),
+            ("D#", EbMajor),
+            ("F#", GbMajor),
+            ("Cb", BMajor),
+            ("B#", CMajor),
+            ("E#m", FMinor),
+            ("Fb", EMajor),
+        ] {
+            assert_eq!(MusicalKey::parse(text), Some(key), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn parse_reads_camelot_and_open_key_codes() {
+        use MusicalKey::*;
+        let camelot_minor = [
+            AbMinor, EbMinor, BbMinor, FMinor, CMinor, GMinor, DMinor, AMinor, EMinor, BMinor,
+            FsMinor, CsMinor,
+        ];
+        let camelot_major = [
+            BMajor, GbMajor, DbMajor, AbMajor, EbMajor, BbMajor, FMajor, CMajor, GMajor, DMajor,
+            AMajor, EMajor,
+        ];
+        let open_key_minor = [
+            AMinor, EMinor, BMinor, FsMinor, CsMinor, AbMinor, EbMinor, BbMinor, FMinor, CMinor,
+            GMinor, DMinor,
+        ];
+        let open_key_major = [
+            CMajor, GMajor, DMajor, AMajor, EMajor, BMajor, GbMajor, DbMajor, AbMajor, EbMajor,
+            BbMajor, FMajor,
+        ];
+        for position in 1..=12 {
+            let index = position - 1;
+            assert_eq!(
+                MusicalKey::parse(&format!("{position}A")),
+                Some(camelot_minor[index])
+            );
+            assert_eq!(
+                MusicalKey::parse(&format!("{position}B")),
+                Some(camelot_major[index])
+            );
+            assert_eq!(
+                MusicalKey::parse(&format!("{position}m")),
+                Some(open_key_minor[index])
+            );
+            assert_eq!(
+                MusicalKey::parse(&format!("{position}d")),
+                Some(open_key_major[index])
+            );
+        }
+        assert_eq!(MusicalKey::parse("08A"), Some(AMinor));
+        assert_eq!(MusicalKey::parse("8a"), Some(AMinor));
+        assert_eq!(MusicalKey::parse(" 12B "), Some(EMajor));
+    }
+
+    #[test]
+    fn parse_rejects_text_that_is_not_a_key() {
+        for text in [
+            "",
+            "   ",
+            "www.RnB4U.in",
+            "H",
+            "am",
+            "a",
+            "CM",
+            "C M",
+            "Cmm",
+            "C##",
+            "Cbb",
+            "C#b",
+            "C minorish",
+            "C-minor",
+            "0A",
+            "13A",
+            "123A",
+            "8C",
+            "8",
+            "A8",
+            "8A8",
+            "Am/8A",
+            "o",
+        ] {
+            assert_eq!(MusicalKey::parse(text), None, "{text:?}");
+        }
     }
 }

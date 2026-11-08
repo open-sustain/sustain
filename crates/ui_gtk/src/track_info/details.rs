@@ -5,11 +5,13 @@ use std::{cell::Cell, rc::Rc};
 
 use gtk::glib;
 use gtk::prelude::*;
-use sustain_app_runtime::{FieldChange, MetadataChange, PlayStatistics, Rating, TrackMetadata};
+use sustain_app_runtime::{
+    FieldChange, MetadataChange, MusicalKey, PlayStatistics, Rating, TrackMetadata,
+};
 
 use crate::date_format::format_system_time_short;
 
-use crate::metadata_diff::{bool_diff, number_diff, signed_number_diff, text_diff};
+use crate::metadata_diff::{bool_diff, key_diff, number_diff, signed_number_diff, text_diff};
 use crate::util::sync_rating_button;
 
 use super::{
@@ -113,7 +115,7 @@ impl DetailsPage {
         attach_field(&grid, row, "BPM", &bpm);
         row += 1;
 
-        let key = text_entry(initial.key.as_deref());
+        let key = text_entry(initial.key.map(MusicalKey::short_code));
         key.set_width_chars(8);
         key.set_hexpand(false);
         attach_field(&grid, row, "Key", &key);
@@ -258,7 +260,7 @@ impl DetailsPage {
         self.compilation
             .set_active(metadata.compilation.unwrap_or(false));
         set_optional_number(&self.bpm, metadata.bpm);
-        set_text(&self.key, metadata.key.as_deref());
+        set_text(&self.key, metadata.key.map(MusicalKey::short_code));
         self.comments
             .buffer()
             .set_text(metadata.comments.as_deref().unwrap_or_default());
@@ -293,7 +295,7 @@ impl DetailsPage {
             year: signed_number_diff(initial.year, &self.year.text()),
             compilation: bool_diff(initial.compilation, self.compilation.is_active()),
             bpm: number_diff(initial.bpm, &self.bpm.text()),
-            key: text_diff(initial.key.as_deref(), &self.key.text()),
+            key: key_diff(initial.key, &self.key.text()),
             comments: text_diff(
                 initial.comments.as_deref(),
                 &self.text_view_text(&self.comments),

@@ -16,9 +16,9 @@ use lofty::{
     prelude::{Accessor, AudioFile, TaggedFileExt},
     tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType},
 };
-use sustain_domain::{FieldChange, MetadataChange, TrackMetadata};
+use sustain_domain::{FieldChange, MetadataChange, MusicalKey, TrackMetadata};
 
-use super::read::{parse_bpm, parse_flag, star_rating_value};
+use super::read::{parse_bpm, parse_flag, read_tagged_file, star_rating_value};
 use super::scan::{ScanFilesystem, StdScanFilesystem};
 use super::{
     AudioFormat, InitialTagRead, InitialTags, LibraryScanner, LoftyMetadataService,
@@ -527,6 +527,57 @@ fn read_tags_normalizes_empty_text_fields_before_backfilling() {
     assert_eq!(exact.metadata.artist.as_deref(), Some("  Artist  "));
     assert_eq!(exact.metadata.grouping, None);
     assert_eq!(exact.metadata.comments, None);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn read_tags_parses_key_notations_and_drops_text_that_is_not_a_key() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    for (name, text, key) in [
+        ("camelot.mp3", "8A", Some(MusicalKey::AMinor)),
+        ("spelled.mp3", "F# min", Some(MusicalKey::FsMinor)),
+        ("junk.mp3", "www.RnB4U.in", None),
+    ] {
+        let path = root.join(name);
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.insert_text(ItemKey::InitialKey, text.to_owned());
+        let mut bytes = dump_id3v2(tag);
+        bytes.extend_from_slice(&mpeg_audio_frames(4));
+        fs::write(&path, bytes).expect("write fixture");
+
+        let initial = LoftyMetadataService
+            .read_initial_tags(&path)
+            .expect("read initial tags");
+        assert_eq!(initial.metadata.key, key, "{text:?}");
+    }
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn write_metadata_writes_the_key_short_code() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("key.mp3");
+    let mut bytes = dump_id3v2(Tag::new(TagType::Id3v2));
+    bytes.extend_from_slice(&mpeg_audio_frames(4));
+    fs::write(&path, bytes).expect("write fixture");
+
+    LoftyMetadataService
+        .write_metadata(
+            &path,
+            MetadataChange {
+                key: FieldChange::Set(MusicalKey::EbMinor),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("write key");
+
+    let tagged = read_tagged_file(&path).expect("re-read file");
+    let tag = tagged.primary_tag().expect("tag");
+    assert_eq!(tag.get_string(ItemKey::InitialKey), Some("Ebm"));
 
     fs::remove_dir_all(root).expect("remove test directory");
 }

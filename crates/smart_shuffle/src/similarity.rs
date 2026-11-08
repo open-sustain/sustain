@@ -183,10 +183,10 @@ const DATE_ADDED_SIGMA_DAYS: f32 = 180.0;
 /// position on the circle of fifths, so a key and its relative
 /// (C major ↔ A minor) land at the same harmonic place and score as a
 /// close, natural move — while a tritone apart (C ↔ F♯) scores far.
-/// Masked when either side's key is absent or unparseable.
+/// Masked when either side's key is absent.
 pub fn key_similarity(seed: &Track, cand: &Track) -> Option<f32> {
-    let seed_key = parse_key(seed.metadata.key.as_deref())?;
-    let cand_key = parse_key(cand.metadata.key.as_deref())?;
+    let seed_key = seed.metadata.key?;
+    let cand_key = cand.metadata.key?;
 
     let seed_pos = circle_of_fifths_position(seed_key);
     let cand_pos = circle_of_fifths_position(cand_key);
@@ -228,10 +228,6 @@ fn circle_of_fifths_position(key: MusicalKey) -> u32 {
         (pitch_class + 3) % 12
     };
     (major_pitch_class * 7) % 12
-}
-
-fn parse_key(value: Option<&str>) -> Option<MusicalKey> {
-    MusicalKey::from_short_code(value?.trim())
 }
 
 /// Same-artist relation, computed at pick time (never embedded or
@@ -504,9 +500,9 @@ mod tests {
         })
     }
 
-    fn with_key(key: &str) -> Track {
+    fn with_key(key: MusicalKey) -> Track {
         track(TrackMetadata {
-            key: Some(key.to_owned()),
+            key: Some(key),
             ..TrackMetadata::default()
         })
     }
@@ -586,10 +582,10 @@ mod tests {
 
     #[test]
     fn key_places_relatives_close_and_tritone_far() {
-        let c_major = with_key("C");
-        let a_minor = with_key("Am");
-        let fs_major = with_key("Gb"); // F#/Gb major, a tritone from C
-        let g_major = with_key("G");
+        let c_major = with_key(MusicalKey::CMajor);
+        let a_minor = with_key(MusicalKey::AMinor);
+        let fs_major = with_key(MusicalKey::GbMajor); // F#/Gb major, a tritone from C
+        let g_major = with_key(MusicalKey::GMajor);
 
         let relative = key_similarity(&c_major, &a_minor).expect("both keyed");
         let tritone = key_similarity(&c_major, &fs_major).expect("both keyed");

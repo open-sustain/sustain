@@ -4,7 +4,7 @@
 //! SQLite `LibraryStore` operations for the tracks table.
 
 use super::*;
-use sustain_domain::TrackMetadata;
+use sustain_domain::{MusicalKey, TrackMetadata};
 
 pub(super) fn save_track(connection: &Connection, track: &Track) -> StoreResult<()> {
     execute_full_track(connection, SAVE_TRACK_SQL.as_str(), track)
@@ -43,7 +43,7 @@ fn execute_full_track(connection: &Connection, sql: &str, track: &Track) -> Stor
                 metadata.disc_total.map(i64::from),
                 metadata.compilation,
                 metadata.bpm.map(i64::from),
-                metadata_text_param(&metadata.key),
+                metadata.key.map(MusicalKey::short_code),
                 metadata_text_param(&metadata.comments),
                 metadata.sample_rate_hz.map(i64::from),
                 metadata.channels.map(i64::from),
@@ -333,7 +333,7 @@ fn update_track_metadata(
                 metadata.year.map(i64::from),
                 metadata.compilation,
                 metadata.bpm.map(i64::from),
-                metadata_text_param(&metadata.key),
+                metadata.key.map(MusicalKey::short_code),
                 metadata_text_param(&metadata.comments),
                 metadata_text_param(&metadata.lyrics),
                 metadata_text_param(&metadata.title_sort),

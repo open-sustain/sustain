@@ -3,6 +3,8 @@
 
 use std::{path::Path, time::Duration};
 
+use crate::MusicalKey;
+
 pub const MAX_BPM: u32 = 655;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -21,7 +23,7 @@ pub struct TrackMetadata {
     pub year: Option<i32>,
     pub compilation: Option<bool>,
     pub bpm: Option<u32>,
-    pub key: Option<String>,
+    pub key: Option<MusicalKey>,
     pub comments: Option<String>,
     pub lyrics: Option<String>,
     /// "Sort as" names — the parallel fields some taggers write next to the
@@ -62,7 +64,6 @@ impl TrackMetadata {
         normalize_text_field(&mut self.composer);
         normalize_text_field(&mut self.grouping);
         normalize_text_field(&mut self.genre);
-        normalize_text_field(&mut self.key);
         normalize_text_field(&mut self.comments);
         normalize_text_field(&mut self.lyrics);
         normalize_text_field(&mut self.title_sort);
@@ -121,7 +122,7 @@ impl TrackMetadata {
         apply_field_change(&mut self.year, &change.year);
         apply_field_change(&mut self.compilation, &change.compilation);
         apply_field_change(&mut self.bpm, &change.bpm);
-        apply_text_field_change(&mut self.key, &change.key);
+        apply_field_change(&mut self.key, &change.key);
         apply_text_field_change(&mut self.comments, &change.comments);
         apply_text_field_change(&mut self.lyrics, &change.lyrics);
         apply_text_field_change(&mut self.title_sort, &change.title_sort);
@@ -186,7 +187,7 @@ impl TrackMetadata {
         fill_missing_field(&mut self.year, &change.year);
         fill_missing_field(&mut self.compilation, &change.compilation);
         fill_missing_field(&mut self.bpm, &change.bpm);
-        fill_missing_text_field(&mut self.key, &change.key);
+        fill_missing_field(&mut self.key, &change.key);
         fill_missing_text_field(&mut self.comments, &change.comments);
         fill_missing_text_field(&mut self.lyrics, &change.lyrics);
         fill_missing_text_field(&mut self.title_sort, &change.title_sort);
@@ -298,6 +299,17 @@ pub enum FieldChange<T> {
     Clear,
 }
 
+impl<T> FieldChange<T> {
+    /// Convert a `Set` value, keeping `Unchanged` and `Clear` as they are.
+    pub fn map<U>(self, convert: impl FnOnce(T) -> U) -> FieldChange<U> {
+        match self {
+            Self::Unchanged => FieldChange::Unchanged,
+            Self::Set(value) => FieldChange::Set(convert(value)),
+            Self::Clear => FieldChange::Clear,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MetadataChange {
     pub title: FieldChange<String>,
@@ -314,7 +326,7 @@ pub struct MetadataChange {
     pub year: FieldChange<i32>,
     pub compilation: FieldChange<bool>,
     pub bpm: FieldChange<u32>,
-    pub key: FieldChange<String>,
+    pub key: FieldChange<MusicalKey>,
     pub comments: FieldChange<String>,
     pub lyrics: FieldChange<String>,
     pub title_sort: FieldChange<String>,
@@ -448,6 +460,7 @@ mod tests {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::Path};
 
     use super::{FieldChange, MetadataChange, TrackMetadata};
+    use crate::MusicalKey;
 
     #[test]
     fn ensure_title_from_filename_promotes_stem_when_title_is_missing() {
@@ -730,7 +743,7 @@ mod tests {
             disc_total: FieldChange::Set(2),
             compilation: FieldChange::Set(true),
             bpm: FieldChange::Set(128),
-            key: FieldChange::Set("Am".to_owned()),
+            key: FieldChange::Set(MusicalKey::AMinor),
             comments: FieldChange::Set("Note".to_owned()),
             ..MetadataChange::default()
         };
@@ -742,7 +755,7 @@ mod tests {
         assert_eq!(metadata.disc_total, Some(2));
         assert_eq!(metadata.compilation, Some(true));
         assert_eq!(metadata.bpm, Some(128));
-        assert_eq!(metadata.key.as_deref(), Some("Am"));
+        assert_eq!(metadata.key, Some(MusicalKey::AMinor));
         assert_eq!(metadata.comments.as_deref(), Some("Note"));
     }
 

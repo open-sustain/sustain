@@ -561,6 +561,14 @@ field. The Music Key column ships hidden by default; surface it through
 the column selector. The same field is exposed to smart-playlist rules
 for harmony-aware sets.
 
+Keys read from file tags or typed into the Get Info dialog or a Key cell
+are accepted in any common notation — `Am`, `Amin`, `A minor`, `G#m`,
+`A♭m`, Camelot (`8A`) or Open Key (`1m`) — and stored as one canonical
+spelling (`Am`, `F#m`, `Eb`, …), so the same key is never split across
+spellings. A key tag that is not a key at all (free text, a URL) is
+ignored at import, leaving the field empty for analysis to fill; a typed
+value that is not a key leaves the field unchanged.
+
 The product target is harmonic compatibility for Pioneer/Rekordbox-style
 filtering rather than exact tonic+mode alone. The validation headline is
 therefore **strict-compatible** key rate: exact key, a fifth away, or the

@@ -128,7 +128,7 @@ impl TrackTableRow {
             album_sort_key,
             year: track.metadata.year,
             bpm: track.metadata.bpm,
-            music_key: non_empty_text(&track.metadata.key),
+            music_key: track.metadata.key.map(|key| key.short_code().to_owned()),
             bitrate_kbps: track.metadata.bitrate_kbps,
             file_type: AudioFileType::from_path(track.location.path()),
             duration_seconds: track

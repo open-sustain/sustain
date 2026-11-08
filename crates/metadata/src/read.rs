@@ -78,9 +78,11 @@ fn initial_tags_from_tagged_file(
         bpm: tag
             .and_then(|tag| tag.get_string(bpm_item_key(tag.tag_type())))
             .and_then(parse_bpm),
+        // A key tag that is not a key in any notation (free text, a URL)
+        // is dropped here rather than imported as a value.
         key: tag
             .and_then(|tag| tag.get_string(ItemKey::InitialKey))
-            .map(ToOwned::to_owned),
+            .and_then(MusicalKey::parse),
         comments: tag.and_then(|tag| tag.comment().map(|value| value.into_owned())),
         lyrics: tag
             .and_then(|tag| tag.get_string(lyrics_item_key(tag.tag_type())))

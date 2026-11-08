@@ -4,6 +4,7 @@
 //! Atomic SQLite half of user-confirmed duplicate consolidation.
 
 use super::*;
+use sustain_domain::MusicalKey;
 
 pub(super) fn commit(
     connection: &mut Connection,
@@ -84,7 +85,7 @@ fn update_survivor(connection: &Connection, track: &Track) -> StoreResult<()> {
                 metadata.disc_total.map(i64::from),
                 metadata.compilation,
                 metadata.bpm.map(i64::from),
-                metadata_text_param(&metadata.key),
+                metadata.key.map(MusicalKey::short_code),
                 metadata_text_param(&metadata.comments),
                 metadata_text_param(&metadata.lyrics),
                 track
