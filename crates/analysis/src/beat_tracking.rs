@@ -29,8 +29,9 @@
 //!    beats a player reproduces — the broadband comb finds the phase. A
 //!    comb cannot tell the beat from the off-beat when both are loud
 //!    (rolling bass lines, off-beat hats), so the phase and the phase
-//!    half a beat away are compared on the kick envelope: the kick plays
-//!    on the beat.
+//!    half a beat away are compared on the kick envelope, each by the
+//!    strongest kick within an eighth of a beat: the kick plays on the
+//!    beat, though not always at the broadband attack's exact instant.
 //! 3. **Bar phase.** Music changes at bar lines — chords, bass notes, new
 //!    parts entering. The spectrum of each beat is compared with the
 //!    previous beat's; the beat position, of the four, that carries the
@@ -88,6 +89,13 @@ const PHASE_STEPS: usize = 400;
 /// on synthetic onsets (kick, click, noise burst) — see the
 /// `grid_lands_on_*` tests.
 const ONSET_LEAD_SECS: f64 = 0.016;
+/// How far, in beats, from a candidate phase the kick envelope is read
+/// when telling the beat from the off-beat. The kick band's envelope
+/// does not peak where the broadband one does — a sub swelling after
+/// its click, a long frame on a low note — so it is read around the
+/// candidate, out to halfway to the quarter-beat between the beat and
+/// the off-beat: a sixteenth-note bass figure there belongs to neither.
+const KICK_PHASE_REACH: f64 = 0.125;
 /// A grid needs at least this many beats to measure anything.
 const MIN_BEATS: usize = 16;
 
@@ -174,12 +182,11 @@ impl Onsets {
         }
         let comb_peak = self.best_phase(&self.broadband, period, PHASE_STEPS);
         let off_beat = (comb_peak + period / 2.0) % period;
-        let peak =
-            if self.comb(&self.kick, period, off_beat) > self.comb(&self.kick, period, comb_peak) {
-                off_beat
-            } else {
-                comb_peak
-            };
+        let peak = if self.kick_near(off_beat, period) > self.kick_near(comb_peak, period) {
+            off_beat
+        } else {
+            comb_peak
+        };
         let first_beat = (peak + ONSET_LEAD_SECS).rem_euclid(period);
         let downbeat_index = self.downbeat_index(first_beat, period);
         let bar = usize::from(BEATS_PER_BAR);
@@ -191,6 +198,19 @@ impl Onsets {
         BeatGrid::new(tempo, first_beat, first_beat_number)
             .or_else(|_| BeatGrid::new(tempo, Duration::ZERO, first_beat_number))
             .ok()
+    }
+
+    /// The strongest kick-envelope comb at `period` within
+    /// [`KICK_PHASE_REACH`] of a beat at `phase`.
+    fn kick_near(&self, phase: f64, period: f64) -> f64 {
+        let step = period / PHASE_STEPS as f64;
+        let reach = (KICK_PHASE_REACH * PHASE_STEPS as f64).round() as usize;
+        (0..=2 * reach)
+            .map(|index| {
+                let offset = (index as f64 - reach as f64) * step;
+                self.comb(&self.kick, period, (phase + offset).rem_euclid(period))
+            })
+            .fold(f64::NEG_INFINITY, f64::max)
     }
 
     /// The candidate tempo whose period, folded over the kick envelope,
@@ -563,6 +583,51 @@ mod tests {
             .expect("grid");
         let error = phase_error_ms(grid.first_beat(), 0.25, 128.0);
         assert!(error.abs() < 3.0, "off by {error} ms");
+    }
+
+    /// `secs` of a sine at `freq` Hz, rising linearly over `attack_secs`
+    /// and decaying with time constant `decay_secs`.
+    fn tone(freq: f64, amplitude: f64, attack_secs: f64, decay_secs: f64, secs: f64) -> Vec<f32> {
+        (0..(secs * f64::from(SAMPLE_RATE)) as usize)
+            .map(|n| {
+                let t = n as f64 / f64::from(SAMPLE_RATE);
+                let envelope = (t / attack_secs).min(1.0) * (-t / decay_secs).exp();
+                (amplitude * envelope * (std::f64::consts::TAU * freq * t).sin()) as f32
+            })
+            .collect()
+    }
+
+    #[test]
+    fn grid_lands_on_a_slow_sub_kick_not_the_off_beat_bass() {
+        // A layered kick — a click, then a sub whose body swells over
+        // 35 ms — and a punchier, quieter bass note on every off-beat.
+        // The click places the broadband peak ahead of the sub's rise,
+        // so the kick band must be read around each candidate phase,
+        // not at it, or the off-beat bass outweighs a kick still
+        // swelling.
+        let bpm = 128.0;
+        let period = 60.0 / bpm;
+        let layered: Vec<f32> = hat()
+            .iter()
+            .chain(std::iter::repeat(&0.0))
+            .zip(tone(55.0, 0.9, 0.035, 0.15, 0.3))
+            .map(|(click, sub)| click + sub)
+            .collect();
+        let kicks = render(bpm, 0.25, 60.0, &layered, None);
+        let bass = render(
+            bpm,
+            0.25 + period / 2.0,
+            60.0,
+            &tone(80.0, 0.5, 0.002, 0.08, 0.2),
+            None,
+        );
+        let samples: Vec<f32> = kicks.iter().zip(&bass).map(|(k, b)| k + b).collect();
+        let onsets = Onsets::of(&samples, SAMPLE_RATE).expect("onsets");
+        let grid = onsets
+            .beat_grid(Bpm::from_hundredths(12_800).expect("tempo"))
+            .expect("grid");
+        let error = phase_error_ms(grid.first_beat(), 0.25, bpm);
+        assert!(error.abs() < 10.0, "off by {error} ms");
     }
 
     #[test]

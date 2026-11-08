@@ -220,6 +220,14 @@ pub use waveform::WaveformTiers;
 /// grid is stored beside it whatever it says, and consumers judge whether the
 /// two agree. Key and waveforms are untouched.
 ///
+/// Version 14: the grid's beat-or-off-beat choice reads the kick envelope
+/// within an eighth of a beat of each candidate phase instead of at it. A
+/// kick's low-band envelope can peak a few milliseconds away from the
+/// full-band attack the phase comes from (a sub swelling after its click),
+/// and read at the attack's exact instant it lost to an off-beat bass line.
+/// Tempo, key and waveforms are untouched; every track re-attempts so its
+/// grid is placed again.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -237,7 +245,7 @@ pub use waveform::WaveformTiers;
 /// byte-for-byte on the synthetic corpus, so stored values' meaning is
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
-pub const ANALYZER_VERSION: u32 = 13;
+pub const ANALYZER_VERSION: u32 = 14;
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
 /// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default
