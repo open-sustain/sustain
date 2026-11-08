@@ -39,6 +39,8 @@
 //! * [`fmak`] — adapt the FMAK / FMAKv2 key annotations + a Free Music
 //!   Archive audio root into a manifest (a second, independent key corpus;
 //!   audio stays external).
+//! * [`key_profiles`] — learn the key detector's profiles from labelled
+//!   audio, as `analysis-bench learn-key-profiles` prints them.
 //! * [`private`] — adapt the maintainer's private key/BPM `reference.toml` +
 //!   an audio root into a manifest (a real-audio reality check; audio,
 //!   source URLs, manifest, and results all stay external).
@@ -46,6 +48,7 @@
 pub mod fixtures;
 pub mod fmak;
 pub mod giantsteps;
+pub mod key_profiles;
 pub mod manifest;
 pub mod metrics;
 pub mod private;

@@ -8,9 +8,10 @@
 //! analysis-bench run             --manifest <toml> [--out <json>] [--fixtures <dir>] [--reproducible]
 //! analysis-bench gen             --manifest <toml> --out <dir>
 //! analysis-bench compare         --baseline <json> --candidate <json>
-//! analysis-bench adapt-giantsteps --dataset <tempo|key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
+//! analysis-bench adapt-giantsteps --dataset <tempo|key|mtg-key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
 //! analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
 //! analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>
+//! analysis-bench learn-key-profiles <manifest>...
 //! ```
 //!
 //! * `run` analyzes every track in a manifest and writes a JSON report
@@ -38,6 +39,9 @@
 //!   range. Reference rows with no audio under the root are reported and
 //!   excluded; provenance tiers (goldish/silver) are reported but not
 //!   embedded. This command never downloads.
+//! * `learn-key-profiles` learns the key detector's major and minor profiles
+//!   from the labelled audio of the given key manifests and prints them as
+//!   the arrays `sustain_dsp`'s key templates hold.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -45,6 +49,7 @@ use std::process::ExitCode;
 
 use sustain_analysis_bench::fmak::{self, AdaptOptions as FmakOptions, AdaptReport as FmakReport};
 use sustain_analysis_bench::giantsteps::{self, AdaptOptions, AdaptReport, Dataset};
+use sustain_analysis_bench::key_profiles;
 use sustain_analysis_bench::manifest::Manifest;
 use sustain_analysis_bench::private::{
     self, AdaptOptions as PrivateOptions, AdaptReport as PrivateReport,
@@ -56,9 +61,10 @@ usage:
   analysis-bench run             --manifest <toml> [--out <json>] [--fixtures <dir>] [--reproducible]
   analysis-bench gen             --manifest <toml> --out <dir>
   analysis-bench compare         --baseline <json> --candidate <json>
-  analysis-bench adapt-giantsteps --dataset <tempo|key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
+  analysis-bench adapt-giantsteps --dataset <tempo|key|mtg-key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
   analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
-  analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>";
+  analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>
+  analysis-bench learn-key-profiles <manifest>...";
 
 /// A CLI failure: either bad invocation (exit 2) or a runtime error (exit 1).
 enum CliError {
@@ -92,6 +98,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "adapt-giantsteps" => cmd_adapt_giantsteps(rest),
         "adapt-fmak" => cmd_adapt_fmak(rest),
         "adapt-private" => cmd_adapt_private(rest),
+        "learn-key-profiles" => cmd_learn_key_profiles(rest),
         other => Err(CliError::Usage(format!("unknown command {other:?}"))),
     }
 }
@@ -240,7 +247,7 @@ fn print_adapt_summary(report: &AdaptReport, dataset: Dataset, verified: bool) {
         "corpus {:?}: {} track(s), {} skipped (no ground truth)",
         report.corpus_id, report.track_count, report.skipped
     );
-    if dataset == Dataset::Key && report.key_unparseable > 0 {
+    if dataset != Dataset::Tempo && report.key_unparseable > 0 {
         eprintln!(
             "  {} key label(s) the scorer cannot parse — they will not be scored",
             report.key_unparseable
@@ -337,6 +344,34 @@ fn print_private_summary(report: &PrivateReport) {
 }
 
 /// Write an adapter's manifest TOML to `out`, creating the parent directory.
+fn cmd_learn_key_profiles(paths: &[String]) -> Result<(), CliError> {
+    if paths.is_empty() {
+        return Err(CliError::Usage("no manifest given".to_string()));
+    }
+    let manifests = paths
+        .iter()
+        .map(|path| {
+            Manifest::load(Path::new(path)).map_err(|err| CliError::Failure(format!("{err}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let total: usize = manifests.iter().map(|manifest| manifest.tracks.len()).sum();
+    let mut done = 0_usize;
+    let (profiles, report) = key_profiles::learn(&manifests, |_| {
+        done += 1;
+        if done.is_multiple_of(100) || done == total {
+            eprintln!("{done}/{total}");
+        }
+    });
+    eprintln!(
+        "learned from {} track(s); {} skipped (no key label, file or chroma)",
+        report.learned, report.skipped
+    );
+    let profiles = profiles
+        .ok_or_else(|| CliError::Failure("the manifests need tracks in both modes".to_string()))?;
+    print!("{}", profiles.to_rust());
+    Ok(())
+}
+
 fn write_manifest(out: &str, manifest_toml: &str) -> Result<(), CliError> {
     if let Some(parent) = Path::new(out)
         .parent()

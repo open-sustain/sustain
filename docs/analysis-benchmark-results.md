@@ -984,3 +984,57 @@ two more levels.
 #283 stays open for the remaining in-range errors (on the dance subset: 2 at
 2/3×, 4 at 3/4×, 2 at 4/3×, 1 at 3/2×, 5 elsewhere) and for the range question
 (10 dance tracks above 155 BPM fold to half tempo by design).
+
+## 2026-11-09 — key v15 (learned key profiles), public and private corpora
+
+Under #288. The detector correlates a track's mean chroma against 24 rotated
+templates. Until v15 the templates were Krumhansl–Kessler's probe-tone
+profiles, which describe what listeners hear in a key. v15 replaces them with
+profiles learned from what Sustain's own front end measures: each labelled
+track's mean chroma, scaled to sum one, rotated to its tonic and averaged per
+mode (`analysis-bench learn-key-profiles`). **One variable changed:** the HPSS
+and HPCP front end, the tuning estimate, the correlation and the
+circle-of-fifths tie-break are untouched (`ANALYZER_VERSION` 15, shared with
+the tempo change above; neither has shipped yet). BPM output is unchanged.
+
+The shipped profiles are learned from 3,485 human-labelled tracks: GiantSteps
+Key (604), GiantSteps MTG Key (1,159 confident single-key labels, new in this
+round) and FMAK `fma_medium` (1,722). Every public number below is therefore
+**held out**: each corpus is scored with profiles learned from the other two
+only. The rekordbox and private sets were never used for learning.
+
+| Set | Tracks | KK exact / strict | **learned exact / strict** |
+| --- | ---: | --- | --- |
+| GiantSteps Key (held out) | 604 | 44.5 / 64.7 % | **52.8 / 75.7 %** |
+| GiantSteps MTG Key (held out) | 1,159 | 39.0 / 53.8 % | **55.4 / 70.8 %** |
+| FMAK `fma_medium` (held out) | 1,722 | 49.8 / 72.6 % | **52.6 / 75.7 %** |
+| Maintainer library, agreement with rekordbox | 2,499 | 55.7 / 72.2 % | **60.0 / 81.2 %** |
+| — dance genres | | 57.7 / 72.1 % | **64.3 / 81.7 %** |
+| — other genres | | 53.9 / 72.4 % | **56.1 / 80.6 %** |
+| Private all-core | 26 | 69.2 / 96.2 % | 65.4 / 92.3 % |
+| Private goldish | 18 | 83.3 / 100 % | 77.8 / 100 % |
+| Private silver | 8 | 37.5 / 87.5 % | 37.5 / 75.0 % |
+
+Exact is tonic and mode; strict adds a fifth away and the relative key.
+rekordbox is not ground truth — on the same library the user's own tag keys
+agree with it at 85.5 % strict — but it is the reference an XDJ shows next to
+Sustain's key, and it is independent of the learning sets. The private set
+loses one strict track (26 tracks, so ±4 pp per track) while goldish holds
+100 % strict; every larger set gains 3 to 17 points strict.
+
+**Mode mix.** On the rekordbox set the predicted minor share is 73.7 % against
+rekordbox's 83.1 %. On GiantSteps Key it rises from 53.5 % to 69 % against
+84.6 % truth: closer, but still more than 10 pp short, so the minor lean of
+dance music is only partly recovered.
+
+**What did not help.** A synthetic Dorian and a harmonic-minor progression in
+A both read as A minor with either profile set, so the gain is not about
+raised sixths or sevenths; it comes from matching the chroma the front end
+really produces (overtones landing on the fifth, bass weight, peak spread). A
+minor-mode bias was tried and dropped: its best value depends on the corpus
+and is zero on the genre-broad FMAK set. Root, log and median aggregation of
+the chroma frames changed little.
+
+The profiles have to be learned again whenever the key front end changes; the
+command and the three manifests are listed in
+`crates/analysis_bench/README.md`.

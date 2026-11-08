@@ -1,17 +1,38 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Key templates for template-matching key detection
 //!
-//! Supports multiple template sets:
-//! - Krumhansl-Kessler (1982): Empirical profiles from listening experiments
-//! - Temperley (1999): Statistical profiles derived from musical corpus analysis
+//! The profiles are learned, not taken from listening tests: each is the
+//! average tonic-aligned chroma that tracks of that mode leave in Sustain's
+//! own key front end. Krumhansl–Kessler's probe-tone profiles, used until
+//! analyzer version 15, describe what listeners hear; the learned ones
+//! describe what the front end measures — the overtones of every note
+//! landing on its fifth, the weight of the bass, the spread of each
+//! spectral peak — so a key matches the chroma it really produces.
+//!
+//! # Provenance
+//!
+//! Learned by `analysis-bench learn-key-profiles` from 3,485 human-labelled
+//! tracks: GiantSteps Key (604, Beatport dance music), GiantSteps MTG Key
+//! (1,159 confident single-key labels, Beatport dance music) and FMAKv2's
+//! `fma_medium` subset (1,722, seventeen genres). See
+//! `docs/analysis-benchmark-corpora.md`. They must be learned again
+//! whenever the key front end (HPSS, HPCP, tuning) changes.
 //!
 //! # References
 //!
 //! - Krumhansl, C. L., & Kessler, E. J. (1982). Tracing the Dynamic Changes in Perceived
 //!   Tonal Organization in a Spatial Representation of Musical Keys. *Psychological Review*,
 //!   89(4), 334-368.
-//! - Temperley, D. (1999). What's key for key? The Krumhansl-Schmuckler key-finding algorithm
-//!   reconsidered. *Music Perception*, 17(1), 65-100.
+
+/// The major profile, tonic first (C major), scaled so the tonic is 1.
+const MAJOR_PROFILE: [f32; 12] = [
+    1.000, 0.246, 0.534, 0.275, 0.595, 0.578, 0.263, 0.810, 0.273, 0.514, 0.314, 0.393,
+];
+
+/// The minor profile, tonic first (C minor), scaled so the tonic is 1.
+const MINOR_PROFILE: [f32; 12] = [
+    1.000, 0.330, 0.456, 0.604, 0.343, 0.595, 0.311, 0.813, 0.465, 0.322, 0.541, 0.337,
+];
 
 /// Key templates for all 24 keys
 #[derive(Debug, Clone)]
@@ -24,98 +45,13 @@ pub struct KeyTemplates {
 }
 
 impl KeyTemplates {
-    /// Create new key templates with Krumhansl-Kessler profiles
-    ///
-    /// Templates are 12-element vectors representing the likelihood of each
-    /// semitone class (C, C#, D, ..., B) in that key.
-    ///
-    /// # Returns
-    ///
-    /// `KeyTemplates` with all 24 key profiles initialized
+    /// The 24 key templates: the learned major and minor profiles rotated
+    /// onto each tonic, L2-normalized.
     pub fn new() -> Self {
-        Self::new_krumhansl_kessler()
-    }
-
-    /// Create Krumhansl-Kessler templates
-    fn new_krumhansl_kessler() -> Self {
-        // Canonical Krumhansl-Kessler tonal profiles (1982), in [C, C#, D, ..., B] order.
-        // Source values are commonly published in this form:
-        //   - Major: C major profile
-        //   - Minor: C minor profile
-        //
-        // We rotate these base profiles to generate all keys.
-        let c_major = vec![
-            6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
-        ];
-
-        let c_minor = vec![
-            6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
-        ];
-
-        // Generate all 12 major keys by rotating C major
-        let mut major: [Vec<f32>; 12] = [
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-        ];
-
-        // Generate all 12 minor keys by rotating A minor
-        let mut minor: [Vec<f32>; 12] = [
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-            vec![0.0; 12],
-        ];
-
-        // Rotate templates for all 12 keys
-        for key_idx in 0..12 {
-            // Major keys: rotate C major template
-            // For key_idx, we want the template rotated so that the tonic is at key_idx
-            for semitone_idx in 0..12 {
-                major[key_idx][semitone_idx] = c_major[(semitone_idx + 12 - key_idx) % 12];
-            }
-
-            // Minor keys: rotate C-minor base profile (tonic at index 0) the same way we rotate major.
-            #[allow(clippy::needless_range_loop)]
-            for semitone_idx in 0..12 {
-                let source_idx = (semitone_idx + 12 - key_idx) % 12;
-                minor[key_idx][semitone_idx] = c_minor[source_idx];
-            }
+        Self {
+            major: std::array::from_fn(|tonic| rotated(&MAJOR_PROFILE, tonic)),
+            minor: std::array::from_fn(|tonic| rotated(&MINOR_PROFILE, tonic)),
         }
-
-        // L2-normalize each template so dot-products behave like cosine similarity against L2-normalized chroma.
-        fn l2_normalize(v: &mut [f32]) {
-            let norm = v.iter().map(|&x| x * x).sum::<f32>().sqrt();
-            if norm > 1e-12 {
-                for x in v.iter_mut() {
-                    *x /= norm;
-                }
-            }
-        }
-
-        for k in 0..12 {
-            l2_normalize(&mut major[k]);
-            l2_normalize(&mut minor[k]);
-        }
-
-        Self { major, minor }
     }
 
     /// Get template for major key
@@ -151,74 +87,57 @@ impl Default for KeyTemplates {
     }
 }
 
+/// `profile` (tonic first) rotated so its tonic sits on pitch class
+/// `tonic`, L2-normalized.
+fn rotated(profile: &[f32; 12], tonic: usize) -> Vec<f32> {
+    let mut template: Vec<f32> = (0..12)
+        .map(|pitch_class| profile[(pitch_class + 12 - tonic) % 12])
+        .collect();
+    let norm = template.iter().map(|&x| x * x).sum::<f32>().sqrt();
+    for x in &mut template {
+        *x /= norm;
+    }
+    template
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_key_templates_creation() {
+    fn every_template_is_a_unit_vector_peaking_on_its_tonic() {
         let templates = KeyTemplates::new();
-
-        // Check that all templates have 12 elements
-        for i in 0..12 {
-            assert_eq!(templates.major[i].len(), 12);
-            assert_eq!(templates.minor[i].len(), 12);
+        for tonic in 0..12 {
+            for template in [&templates.major[tonic], &templates.minor[tonic]] {
+                assert_eq!(template.len(), 12);
+                let norm = template.iter().map(|&x| x * x).sum::<f32>().sqrt();
+                assert!((norm - 1.0).abs() < 1e-6);
+                let peak = (0..12)
+                    .max_by(|&a, &b| template[a].total_cmp(&template[b]))
+                    .expect("twelve bins");
+                assert_eq!(peak, tonic);
+            }
         }
     }
 
     #[test]
-    fn test_c_major_template() {
+    fn the_third_tells_the_modes_apart() {
+        let templates = KeyTemplates::new();
+        // A major: C# (major third) over C (minor third); A minor the
+        // other way round.
+        let a_major = templates.get_major_template(9);
+        let a_minor = templates.get_minor_template(9);
+        assert!(a_major[1] > a_major[0]);
+        assert!(a_minor[0] > a_minor[1]);
+    }
+
+    #[test]
+    fn templates_are_rotations_of_one_profile() {
         let templates = KeyTemplates::new();
         let c_major = templates.get_major_template(0);
-
-        // C major should strongly emphasize C, E, G (tonic, major third, perfect fifth).
-        // With canonical K-K profiles (L2-normalized), absolute values are not tiny, so we test *relative* structure.
-        let tonic = c_major[0];
-        let third = c_major[4];
-        let fifth = c_major[7];
-
-        // Tonic should be the maximum (or tied within float epsilon).
-        let max = c_major.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        assert!((tonic - max).abs() < 1e-6);
-
-        // Third and fifth should be among the strongest components.
-        let mut sorted = c_major.to_vec();
-        sorted.sort_by(|a, b| b.partial_cmp(a).unwrap());
-        let top4_threshold = sorted[3];
-        assert!(third >= top4_threshold);
-        assert!(fifth >= top4_threshold);
-
-        // Strong preference over chromatic tones (e.g., C#, D#, F#, G#, A#)
-        let chromatic_avg = (c_major[1] + c_major[3] + c_major[6] + c_major[8] + c_major[10]) / 5.0;
-        assert!(tonic > chromatic_avg * 1.4);
-        assert!(third > chromatic_avg * 1.1);
-        assert!(fifth > chromatic_avg * 1.2);
-    }
-
-    #[test]
-    fn test_a_minor_template() {
-        let templates = KeyTemplates::new();
-        let a_minor = templates.get_minor_template(9); // A is index 9
-
-        // A minor should have high values for A, C, E (tonic, minor third, perfect fifth)
-        assert!(a_minor[9] > 0.1); // A (tonic)
-        assert!(a_minor[0] > 0.1); // C (minor third)
-        assert!(a_minor[4] > 0.1); // E (perfect fifth)
-    }
-
-    #[test]
-    fn test_template_rotation() {
-        let templates = KeyTemplates::new();
-
-        // C major and D major should be related by rotation
-        let _c_major = templates.get_major_template(0);
-        let d_major = templates.get_major_template(2); // D is 2 semitones above C
-
-        // D major should have high value at index 2 (D)
-        assert!(d_major[2] > 0.1);
-
-        // The pattern should be rotated
-        // C major's tonic (index 0) should correspond to D major's subdominant (index 10)
-        // This is a simplified check - the full relationship is more complex
+        let d_major = templates.get_major_template(2);
+        for pitch_class in 0..12 {
+            assert!((d_major[(pitch_class + 2) % 12] - c_major[pitch_class]).abs() < 1e-6);
+        }
     }
 }

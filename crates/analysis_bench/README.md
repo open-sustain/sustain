@@ -117,6 +117,16 @@ cargo run -p sustain-analysis-bench --release -- adapt-private \
   --audio     validation-data/private \
   --out       validation-data/private/private_pop_core.toml
 
+# Learn the key detector's major/minor profiles from key manifests and print
+# them as the arrays crates/dsp/src/features/key/templates.rs holds. Run it
+# again whenever the key front end (HPSS, HPCP, tuning) changes; the shipped
+# profiles come from the GiantSteps Key, GiantSteps MTG Key and FMAKv2
+# fma_medium manifests:
+cargo run -p sustain-analysis-bench --release -- learn-key-profiles \
+  crates/analysis_bench/corpora/giantsteps_key.toml \
+  validation-data/giantsteps/mtg_key.toml \
+  validation-data/fma/corpora/fmak_key_medium.toml
+
 # Before/after a DSP or decoder change (e.g. #172):
 cargo run -p sustain-analysis-bench --release -- compare \
   --baseline /tmp/before.json --candidate /tmp/after.json

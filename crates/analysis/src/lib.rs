@@ -233,7 +233,13 @@ pub use waveform::WaveformTiers;
 /// ×4/3), and one replaces it where the kick lands clearly more squarely on
 /// its beats. On development dance material this turned 9 of 23 in-range
 /// metrical errors (house at two thirds of its tempo, mostly) into the
-/// right tempo and broke none. Key and waveforms are untouched.
+/// right tempo and broke none. The key templates are no longer
+/// Krumhansl–Kessler's listening-test profiles but profiles learned from
+/// this front end's own chroma on 3,485 human-labelled tracks; on each of
+/// the three training corpora, held out in turn, strict key agreement
+/// rose by 3 to 17 points, and on 2,499 tracks of the maintainer's library
+/// agreement with rekordbox rose from 72.2 % to 81.2 % strict. Waveforms
+/// are untouched.
 ///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
@@ -586,6 +592,20 @@ impl Analyzer {
     /// the key detector's best match does not correspond to one of
     /// Sustain's 24 canonical [`MusicalKey`] variants.
     pub fn key(&self) -> Option<MusicalKey> {
+        let chroma = self.key_chroma()?;
+        let detection = detect_key(&chroma, &KeyTemplates::new()).ok()?;
+        let label = stratum_key_label(&detection.key);
+        map_stratum_key(&label)
+    }
+
+    /// The pitch-class frames [`Self::key`] is read from: the HPCP of the
+    /// key window's harmonic part, one 12-bin frame per hop. Returns
+    /// `None` if the file cannot be decoded or yields no frames.
+    ///
+    /// The key profiles are learned from these frames
+    /// (`analysis-bench learn-key-profiles`), so they match this front end
+    /// rather than an idealized one.
+    pub fn key_chroma(&self) -> Option<Vec<Vec<f32>>> {
         let stft = self.key_stft()?;
         let window = self.bpmkey_audio()?;
 
@@ -620,13 +640,7 @@ impl Analyzer {
         // rather than summing every bin, on the same band and pitch-class grid
         // the band-summed path used.
         let chroma = compute_hpcp(&harmonic, window.sample_rate, KEY_STFT_FRAME_SIZE).ok()?;
-        if chroma.is_empty() {
-            return None;
-        }
-        let templates = KeyTemplates::new();
-        let detection = detect_key(&chroma, &templates).ok()?;
-        let label = stratum_key_label(&detection.key);
-        map_stratum_key(&label)
+        (!chroma.is_empty()).then_some(chroma)
     }
 
     /// Both waveform tiers (preview + detail). Returns `None` if the

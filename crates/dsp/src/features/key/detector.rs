@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Key detection algorithm
 //!
-//! Matches chroma distribution against Krumhansl-Kessler templates to detect
-//! the musical key of an audio track.
-//!
-//! # Reference
-//!
-//! Krumhansl, C. L., & Kessler, E. J. (1982). Tracing the Dynamic Changes in Perceived
-//! Tonal Organization in a Spatial Representation of Musical Keys. *Psychological Review*,
-//! 89(4), 334-368.
+//! Matches the chroma distribution against the key templates (profiles
+//! learned from Sustain's own chroma, see [`super::templates`]) to detect the
+//! musical key of an audio track.
 
 use super::{
     compare_key_scores_desc, sort_key_scores_desc, templates::KeyTemplates, KeyDetectionResult,
@@ -19,14 +14,14 @@ use crate::error::AnalysisError;
 /// Detect musical key from chroma vectors
 ///
 /// Aggregates the chroma across all frames into a mean profile and correlates
-/// it with each of the 24 Krumhansl-Kessler key templates using the
+/// it with each of the 24 key templates using the
 /// Krumhansl-Schmuckler metric (mean-centered Pearson correlation). The
 /// highest-scoring key is selected.
 ///
 /// # Arguments
 ///
 /// * `chroma_vectors` - Vector of 12-element chroma vectors (one per frame)
-/// * `templates` - Key templates (Krumhansl-Kessler profiles)
+/// * `templates` - Key templates (see [`KeyTemplates`])
 ///
 /// # Returns
 ///

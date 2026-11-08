@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Key detection modules
 //!
-//! Detect musical key using Krumhansl-Kessler template matching.
+//! Detect musical key by matching chroma against learned key profiles.
 //!
 //! Trimmed for Sustain to the single-pass template detector. The upstream
 //! `key_changes` (segment-wise key-change tracking) and `key_clarity`

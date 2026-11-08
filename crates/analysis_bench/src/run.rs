@@ -587,6 +587,7 @@ fn synthetic_label(synthetic: &crate::fixtures::Synthetic) -> String {
         Synthetic::Ramp { .. } => "ramp",
         Synthetic::ClickTrain { .. } => "click_train",
         Synthetic::Triad { .. } => "triad",
+        Synthetic::Progression { .. } => "progression",
     };
     format!("synthetic:{kind}")
 }

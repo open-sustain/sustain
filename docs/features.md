@@ -615,16 +615,17 @@ value that is not a key leaves the field unchanged.
 The product target is harmonic compatibility for Pioneer/Rekordbox-style
 filtering rather than exact tonic+mode alone. The validation headline is
 therefore **strict-compatible** key rate: exact key, a fifth away, or the
-relative major/minor. At the current v12 analysis engine the recorded
-strict-compatible rates are 100.0% on the 18-track high-confidence
-private goldish set, 96.2% on the 26-track private all-core set, 72.6%
-on 1,723 FMAK `fma_medium` clips, and 64.7% on 604 GiantSteps Key
-tracks. Exact-key rates on the same sets are 77.8%, 65.4%, 49.8%, and
-44.5%. The HPCP front-end now does peak-based chroma with harmonic
-summation (v11) and global tuning estimation (v12); both public corpora
-improved again at v12 while the trusted goldish tier held. GiantSteps
-remains the watched caveat: its major/minor prediction mix still leans
-too far major, so future DSP work continues to track that mode boundary.
+relative major/minor. The detector matches the track's chroma against
+key profiles learned from what Sustain's own front end measures in 3,485
+human-labelled tracks, rather than against profiles from listening tests.
+Scored on each public corpus with profiles learned from the others, the
+strict-compatible rate is 75.7% on 604 GiantSteps Key tracks, 70.8% on
+1,159 GiantSteps MTG Key tracks and 75.7% on 1,722 FMAK `fma_medium`
+clips; on 2,499 tracks of the maintainer's library Sustain's key agrees
+strictly with rekordbox's on 81.2%. The 18-track high-confidence private
+goldish set stays at 100.0%. Dance music still leans minor more often
+than Sustain predicts, so the major/minor boundary remains the watched
+caveat.
 
 ### Audio analysis — *Sustain-native*
 A single heavy decode pass produces, as byproducts of the one decode,

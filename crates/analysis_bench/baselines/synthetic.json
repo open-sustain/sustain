@@ -5,7 +5,7 @@
     155.0
   ],
   "summary": {
-    "track_count": 12,
+    "track_count": 14,
     "error_count": 0,
     "bpm": {
       "scored": 4,
@@ -16,12 +16,12 @@
       }
     },
     "key": {
-      "scored": 3,
+      "scored": 5,
       "weighted_pct": 100.0,
       "strict_compatible_pct": 100.0,
       "loose_compatible_pct": 100.0,
       "categories": {
-        "correct": 3
+        "correct": 5
       }
     }
   },
@@ -78,7 +78,7 @@
         "key"
       ],
       "bpm": null,
-      "key": "A",
+      "key": "Am",
       "acoustics": {
         "integrated_lufs": -45.095444,
         "short_term_lufs_max": -45.091675,
@@ -109,7 +109,7 @@
         "key"
       ],
       "bpm": null,
-      "key": "A",
+      "key": "Am",
       "acoustics": {
         "integrated_lufs": -32.93875,
         "short_term_lufs_max": -32.937897,
@@ -445,6 +445,88 @@
         "detail_duration_ms": 6.6666665,
         "preview_hash": "091c30445a043392",
         "detail_hash": "00c281c1e4f07727"
+      },
+      "key_score": {
+        "ground_truth": "Am",
+        "category": "correct",
+        "score": 1.0
+      }
+    },
+    {
+      "id": "progression_a_dorian",
+      "source": "synthetic:progression",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm",
+        "key"
+      ],
+      "bpm": 90.0,
+      "beat_grid": {
+        "bpm": 90.0,
+        "first_beat_secs": 0.666,
+        "first_beat_number": 1
+      },
+      "key": "Am",
+      "acoustics": {
+        "integrated_lufs": -40.478745,
+        "short_term_lufs_max": -40.24475,
+        "loudness_range_lu": 0.3827362,
+        "onset_rate_hz": 14.416667,
+        "low_band_ratio": 0.017714523,
+        "mid_band_ratio": 0.9822743,
+        "high_band_ratio": 0.000011208116,
+        "low_band_variation": 1.0582007,
+        "tonalness": 0.99997765
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 3600,
+        "preview_duration_ms": 60.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "9b21e2f825a6113c",
+        "detail_hash": "cb0e7d14afd8fb68"
+      },
+      "key_score": {
+        "ground_truth": "Am",
+        "category": "correct",
+        "score": 1.0
+      }
+    },
+    {
+      "id": "progression_a_harmonic_minor",
+      "source": "synthetic:progression",
+      "tasks": [
+        "waveform",
+        "acoustics",
+        "bpm",
+        "key"
+      ],
+      "bpm": 150.01,
+      "beat_grid": {
+        "bpm": 150.01,
+        "first_beat_secs": 0.001001,
+        "first_beat_number": 2
+      },
+      "key": "Am",
+      "acoustics": {
+        "integrated_lufs": -39.91561,
+        "short_term_lufs_max": -38.695496,
+        "loudness_range_lu": 2.1041794,
+        "onset_rate_hz": 13.75,
+        "low_band_ratio": 0.017273974,
+        "mid_band_ratio": 0.9827184,
+        "high_band_ratio": 0.0000076071487,
+        "low_band_variation": 1.0066419,
+        "tonalness": 0.99998504
+      },
+      "waveform": {
+        "preview_segments": 400,
+        "detail_segments": 3600,
+        "preview_duration_ms": 60.0,
+        "detail_duration_ms": 6.6666665,
+        "preview_hash": "22afd2a6755a1e0c",
+        "detail_hash": "1c573aac1d84432f"
       },
       "key_score": {
         "ground_truth": "Am",

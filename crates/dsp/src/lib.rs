@@ -32,7 +32,7 @@
 //!   (peak-picking + squared-cosine pitch-class weighting); the chroma source
 //!   the key detector uses.
 //! * [`extract_chroma_from_spectrogram_with_options`] + [`detect_key`] +
-//!   [`KeyTemplates`] — chroma → Krumhansl-Kessler template key detection
+//!   [`KeyTemplates`] — chroma → key-profile template key detection
 //!   (returns [`KeyDetectionResult`] over [`Key`]). Key selection is
 //!   deterministic (a total-order sort with a fixed tiebreak). The vendored
 //!   band-summed chroma here remains available, but the key detector now reads

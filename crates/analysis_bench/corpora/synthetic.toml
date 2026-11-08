@@ -15,7 +15,7 @@
 
 [meta]
 corpus_id = "synthetic_v1"
-description = "Deterministic generated fixtures: silence, tones, ramp, metronomes, triads."
+description = "Deterministic generated fixtures: silence, tones, ramp, metronomes, triads, progressions."
 
 [options]
 # The generalist range the maintainer favours (covers the library's
@@ -89,4 +89,20 @@ key = "G"
 [[track]]
 id = "triad_a_minor"
 synthetic = { kind = "triad", root_pc = 9, minor = true, secs = 20.0 }
+key = "Am"
+
+# --- key: minor progressions that borrow major-key notes (#288) ---
+
+# A Dorian vamp, i–IV (Am–D): the raised sixth (F#) pulls toward D or G
+# major.
+[[track]]
+id = "progression_a_dorian"
+synthetic = { kind = "progression", chords = [[9, 0, 4], [2, 6, 9]], chord_secs = 2.0, secs = 24.0 }
+key = "Am"
+
+# A harmonic-minor cadence, i–iv–V–i (Am–Dm–E–Am): the raised seventh
+# (G#) pulls toward E or A major.
+[[track]]
+id = "progression_a_harmonic_minor"
+synthetic = { kind = "progression", chords = [[9, 0, 4], [2, 5, 9], [4, 8, 11], [9, 0, 4]], chord_secs = 2.0, secs = 24.0 }
 key = "Am"

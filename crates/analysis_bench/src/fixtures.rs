@@ -9,7 +9,8 @@
 //! committable (we commit the *recipe*, never the audio) and what backs
 //! the decoder/seek/mono/waveform determinism guarantee. Several variants
 //! also carry an exact, by-construction ground truth (a click train's BPM,
-//! a triad's key) so they double as a coarse accuracy smoke-check.
+//! a triad's or a progression's key) so they double as a coarse accuracy
+//! smoke-check.
 
 use std::io;
 use std::path::Path;
@@ -105,6 +106,20 @@ pub enum Synthetic {
         #[serde(default = "default_sample_rate")]
         sample_rate: u32,
     },
+    /// Chords held `chord_secs` each, in turn, repeating for `secs`; each
+    /// chord is a list of pitch classes (0 = C … 11 = B) sounded as summed
+    /// sines in the octave from C4. A progression can carry a key no
+    /// single triad shows: the raised sixth of a Dorian vamp, the raised
+    /// seventh of a harmonic-minor cadence. Ground truth: the key the
+    /// progression is written in.
+    Progression {
+        chords: Vec<Vec<u8>>,
+        chord_secs: f64,
+        #[serde(default = "default_secs")]
+        secs: f64,
+        #[serde(default = "default_sample_rate")]
+        sample_rate: u32,
+    },
 }
 
 /// Frequency of pitch class `pc` (0 = C) in the octave starting at C4
@@ -122,7 +137,8 @@ impl Synthetic {
             | Synthetic::Tone { sample_rate, .. }
             | Synthetic::Ramp { sample_rate, .. }
             | Synthetic::ClickTrain { sample_rate, .. }
-            | Synthetic::Triad { sample_rate, .. } => sample_rate,
+            | Synthetic::Triad { sample_rate, .. }
+            | Synthetic::Progression { sample_rate, .. } => sample_rate,
         }
     }
 
@@ -133,7 +149,8 @@ impl Synthetic {
             | Synthetic::Tone { secs, .. }
             | Synthetic::Ramp { secs, .. }
             | Synthetic::ClickTrain { secs, .. }
-            | Synthetic::Triad { secs, .. } => secs,
+            | Synthetic::Triad { secs, .. }
+            | Synthetic::Progression { secs, .. } => secs,
         }
     }
 
@@ -143,7 +160,7 @@ impl Synthetic {
             Synthetic::Silence { channels, .. }
             | Synthetic::Tone { channels, .. }
             | Synthetic::ClickTrain { channels, .. } => channels.max(1),
-            Synthetic::Ramp { .. } | Synthetic::Triad { .. } => 1,
+            Synthetic::Ramp { .. } | Synthetic::Triad { .. } | Synthetic::Progression { .. } => 1,
         }
     }
 
@@ -206,6 +223,32 @@ impl Synthetic {
                     .map(|i| {
                         let t = i as f64 / sample_rate;
                         let sum: f64 = freqs
+                            .iter()
+                            .map(|f| (std::f64::consts::TAU * f * t).sin())
+                            .sum();
+                        (scale * sum) as f32
+                    })
+                    .collect()
+            }
+            Synthetic::Progression {
+                ref chords,
+                chord_secs,
+                ..
+            } => {
+                let chords: Vec<Vec<f64>> = chords
+                    .iter()
+                    .map(|chord| chord.iter().map(|&pc| pitch_class_freq(pc)).collect())
+                    .collect();
+                let voices = chords.iter().map(Vec::len).max().unwrap_or(0);
+                if voices == 0 || chord_secs <= 0.0 {
+                    return vec![0.0; frame_count];
+                }
+                let scale = 0.5 / voices as f64;
+                (0..frame_count)
+                    .map(|i| {
+                        let t = i as f64 / sample_rate;
+                        let chord = &chords[(t / chord_secs) as usize % chords.len()];
+                        let sum: f64 = chord
                             .iter()
                             .map(|f| (std::f64::consts::TAU * f * t).sin())
                             .sum();
@@ -292,6 +335,43 @@ mod tests {
                 "expected a click at beat {beat}"
             );
         }
+    }
+
+    #[test]
+    fn a_progression_sounds_each_chord_in_turn() {
+        // One-note "chords" A then E, half a second each, twice over.
+        let progression = Synthetic::Progression {
+            chords: vec![vec![9], vec![4]],
+            chord_secs: 0.5,
+            secs: 2.0,
+            sample_rate: 8_000,
+        };
+        let frames = progression.mono_frames();
+        let a = sine(9, 8_000, 16_000);
+        let e = sine(4, 8_000, 16_000);
+        for (index, &sample) in frames.iter().enumerate() {
+            let expected = if (index / 4_000) % 2 == 0 {
+                a[index]
+            } else {
+                e[index]
+            };
+            assert!(
+                (sample - expected).abs() < 1e-6,
+                "sample {index}: {sample} != {expected}"
+            );
+        }
+    }
+
+    /// The pitch class `pc` from C4 as `progression` renders a one-note
+    /// chord: half amplitude.
+    fn sine(pc: u8, sample_rate: u32, frames: usize) -> Vec<f32> {
+        let freq = super::pitch_class_freq(pc);
+        (0..frames)
+            .map(|i| {
+                let t = i as f64 / f64::from(sample_rate);
+                (0.5 * (std::f64::consts::TAU * freq * t).sin()) as f32
+            })
+            .collect()
     }
 
     #[test]
