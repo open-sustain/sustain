@@ -518,6 +518,14 @@ MPRIS-aware lock screen all drive Sustain transparently. The bus name
 is derived from the resolved database path so dev and installed builds
 don't collide.
 
+### Pause when the audio output goes away — *iTunes-adjacent*
+When the device Sustain plays to disappears — Bluetooth headphones
+switched off or out of range — or another application's priority stream
+claims it, the sound server asks players to pause, and Sustain does,
+instead of carrying on through the laptop speakers. A notification says
+why the music stopped. Playback does not restart on its own when the
+device returns; press Play.
+
 ---
 
 ## Audio analysis

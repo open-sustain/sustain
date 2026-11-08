@@ -2753,6 +2753,50 @@ fn playback_backend_errors_keep_status_text_concise() {
 }
 
 #[test]
+fn a_pause_request_from_the_sound_server_pauses_playing_audio_and_says_why() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: PlaybackQueueRequest::Library,
+        }))
+        .expect("play");
+
+    runtime
+        .handle_playback_pause_request()
+        .expect("handle pause request");
+
+    assert!(matches!(
+        runtime.playback_state(),
+        PlaybackState::Paused { track_id: paused, .. } if paused == track_id(1)
+    ));
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("playback notification");
+    assert_eq!(notification.category, NotificationCategory::Playback);
+    assert!(notification.body.starts_with("Paused:"));
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn a_pause_request_while_nothing_plays_changes_nothing() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+
+    runtime
+        .handle_playback_pause_request()
+        .expect("handle pause request");
+
+    assert_eq!(runtime.playback_state(), PlaybackState::Stopped);
+    assert!(runtime.notifications().current_ephemeral().is_none());
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
 fn runtime_cycles_shuffle_mode_without_playback_service() {
     let mut runtime = ApplicationRuntime::new();
 

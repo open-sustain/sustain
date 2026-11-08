@@ -118,6 +118,26 @@ impl ApplicationRuntime {
         self.play_next_track()
     }
 
+    /// The sound server asked playback to pause — the output device went
+    /// away, or a stream with priority claimed it. Pausing through the
+    /// user's path keeps the listening session, the transport controls,
+    /// and MPRIS consistent; the notification says why the music stopped.
+    /// Nothing happens unless a track is actually playing. Playback does
+    /// not resume by itself when the device comes back: music suddenly
+    /// restarting is worse than a press of Play.
+    pub fn handle_playback_pause_request(&mut self) -> ApplicationRuntimeResult<()> {
+        if !matches!(self.playback_state(), PlaybackState::Playing { .. }) {
+            return Ok(());
+        }
+        self.pause_playback()?;
+        self.push_ephemeral_notification(
+            NotificationCategory::Playback,
+            NotificationSeverity::Info,
+            "Paused: the audio output was disconnected or taken by another application.".to_owned(),
+        );
+        Ok(())
+    }
+
     fn playback_backend_error_text(&self, error: &PlaybackBackendError) -> String {
         let Some(track_id) = error.track_id else {
             return "Playback failed. Skipping to the next track.".to_owned();

@@ -481,5 +481,11 @@ pub(super) fn install_playback_event_callback(
                     .handle_playback_backend_error(error);
                 playback_changed();
             }
+            PlaybackEvent::PauseRequested => {
+                let _ = runtime_for_callback
+                    .borrow_mut()
+                    .handle_playback_pause_request();
+                playback_changed();
+            }
         }));
 }

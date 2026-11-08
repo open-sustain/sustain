@@ -36,6 +36,12 @@ pub enum PlaybackEvent {
     /// A fatal backend failure surfaced after a play request was accepted,
     /// such as a decoder error discovered during preroll.
     FatalError(PlaybackBackendError),
+    /// The sound server asked the player to pause: the output device the
+    /// stream played to went away (headphones disconnected), or a stream
+    /// with priority claimed the device. The backend does not pause on
+    /// its own; the receiver decides, so the pause goes through the same
+    /// path as the user's.
+    PauseRequested,
 }
 
 pub type PlaybackEventCallback = Box<dyn Fn(PlaybackEvent)>;
@@ -204,6 +210,12 @@ impl GStreamerPlaybackService {
                                 track_id,
                                 position: Duration::ZERO,
                             });
+                        }
+                    }
+                    gst::MessageView::RequestState(_) if is_pause_request(message) => {
+                        let callback = bus_on_event.borrow().clone();
+                        if let Some(callback) = callback {
+                            callback(PlaybackEvent::PauseRequested);
                         }
                     }
                     gst::MessageView::Warning(warning) => {
@@ -384,6 +396,16 @@ fn message_source_is_playbin(message: &gst::MessageRef, playbin: &gst::Element) 
         .is_some_and(|source| source.as_ptr() == playbin.upcast_ref::<gst::Object>().as_ptr())
 }
 
+/// Whether `message` is the sound server asking for a pause. The audio
+/// sink relays it as a state request: `pulsesink` turns PulseAudio's (and
+/// PipeWire's) cork request into a request for `Paused`.
+fn is_pause_request(message: &gst::MessageRef) -> bool {
+    matches!(
+        message.view(),
+        gst::MessageView::RequestState(request) if request.requested_state() == gst::State::Paused
+    )
+}
+
 fn gst_error_message(error: &gst::message::Error) -> String {
     match error.debug() {
         Some(debug) => format!("{} ({debug})", error.error()),
@@ -422,7 +444,8 @@ mod tests {
 
     use super::{
         APPLICATION_ID, APPLICATION_NAME, NullPlaybackService, PULSE_STREAM_PROPERTIES_NAME,
-        PlaybackError, PlaybackService, PlaybackState, VolumePercent, pulse_stream_properties,
+        PlaybackError, PlaybackService, PlaybackState, VolumePercent, is_pause_request,
+        pulse_stream_properties,
     };
     use crate::TrackPlaybackSource;
 
@@ -531,6 +554,16 @@ mod tests {
                 .expect("media role property"),
             "music"
         );
+    }
+
+    #[test]
+    fn only_a_request_for_paused_is_a_pause_request() {
+        gst::init().expect("GStreamer init");
+        let request = |state| gst::message::RequestState::builder(state).build();
+
+        assert!(is_pause_request(&request(gst::State::Paused)));
+        assert!(!is_pause_request(&request(gst::State::Playing)));
+        assert!(!is_pause_request(&gst::message::Eos::new()));
     }
 
     fn positive_track_id() -> TrackId {
