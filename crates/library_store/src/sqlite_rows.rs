@@ -53,6 +53,7 @@ pub(crate) fn track_from_row(row: &Row<'_>) -> StoreResult<Track> {
             duration: duration_seconds.map(seconds_to_duration),
             bitrate_kbps: optional_u32(row, track_column::BITRATE_KBPS)?,
             sample_rate_hz: optional_u32(row, track_column::SAMPLE_RATE_HZ)?,
+            bit_depth: optional_u8(row, track_column::BIT_DEPTH)?,
             channels: optional_u8(row, track_column::CHANNELS)?,
             lyrics: row.get(track_column::LYRICS).map_err(StoreError::from)?,
             title_sort: row

@@ -42,6 +42,9 @@ pub struct TrackMetadata {
     pub duration: Option<Duration>,
     pub bitrate_kbps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
+    /// Bits per sample of a PCM-based stream (FLAC, ALAC, WAV, AIFF).
+    /// `None` for lossy formats, which have no fixed sample width.
+    pub bit_depth: Option<u8>,
     pub channels: Option<u8>,
 }
 
@@ -50,6 +53,7 @@ pub struct TrackAudioProperties {
     pub duration: Option<Duration>,
     pub bitrate_kbps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
+    pub bit_depth: Option<u8>,
     pub channels: Option<u8>,
 }
 
@@ -76,6 +80,7 @@ impl TrackMetadata {
             duration: self.duration,
             bitrate_kbps: self.bitrate_kbps,
             sample_rate_hz: self.sample_rate_hz,
+            bit_depth: self.bit_depth,
             channels: self.channels,
         }
     }
@@ -84,6 +89,7 @@ impl TrackMetadata {
         self.duration = properties.duration;
         self.bitrate_kbps = properties.bitrate_kbps;
         self.sample_rate_hz = properties.sample_rate_hz;
+        self.bit_depth = properties.bit_depth;
         self.channels = properties.channels;
     }
 
@@ -197,7 +203,7 @@ impl TrackMetadata {
     }
 
     /// Refresh the fields that describe the audio stream itself —
-    /// duration, bitrate, sample rate, channel count — from a freshly
+    /// duration, bitrate, sample rate, bit depth, channel count — from a freshly
     /// scanned copy, leaving every tag-derived field (title, artist,
     /// album, year, bpm, comments, …) untouched. Used during library
     /// rescan: per the persistence policy in AGENTS.md, SQLite is the
@@ -208,6 +214,7 @@ impl TrackMetadata {
         self.duration = scanned.duration;
         self.bitrate_kbps = scanned.bitrate_kbps;
         self.sample_rate_hz = scanned.sample_rate_hz;
+        self.bit_depth = scanned.bit_depth;
         self.channels = scanned.channels;
     }
 

@@ -493,6 +493,51 @@ fn write_metadata_blank_text_clears_existing_fields() {
 }
 
 #[test]
+fn read_initial_tags_reports_the_sample_width_of_pcm_and_none_for_lossy_audio() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let wav = root.join("hi-res.wav");
+    fs::write(&wav, pcm_wav(96_000, 24, 960)).expect("write wav fixture");
+    let mp3 = root.join("lossy.mp3");
+    fs::write(&mp3, mpeg_audio_frames(4)).expect("write mp3 fixture");
+
+    let wav_metadata = LoftyMetadataService
+        .read_initial_tags(&wav)
+        .expect("read wav")
+        .metadata;
+    assert_eq!(wav_metadata.bit_depth, Some(24));
+    assert_eq!(wav_metadata.sample_rate_hz, Some(96_000));
+    let mp3_metadata = LoftyMetadataService
+        .read_initial_tags(&mp3)
+        .expect("read mp3")
+        .metadata;
+    assert_eq!(mp3_metadata.bit_depth, None);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+/// A mono PCM WAV of `frames` silent samples.
+fn pcm_wav(sample_rate: u32, bits_per_sample: u16, frames: u32) -> Vec<u8> {
+    let block_align = bits_per_sample / 8;
+    let data_len = frames * u32::from(block_align);
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes()); // PCM
+    bytes.extend_from_slice(&1_u16.to_le_bytes()); // mono
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&(sample_rate * u32::from(block_align)).to_le_bytes());
+    bytes.extend_from_slice(&block_align.to_le_bytes());
+    bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_len.to_le_bytes());
+    bytes.resize(bytes.len() + data_len as usize, 0);
+    bytes
+}
+
+#[test]
 fn read_initial_tags_generates_missing_article_sort_fields() {
     let root = unique_test_directory();
     fs::create_dir_all(&root).expect("create test directory");

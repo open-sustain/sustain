@@ -259,6 +259,7 @@ fn run_scanner_merge_preserves_authoritative_fields(store: &dyn LibraryStore) {
     let mut scanned = authoritative.clone();
     scanned.metadata.title = Some("Tag title".to_owned());
     scanned.metadata.duration = Some(Duration::from_secs(90));
+    scanned.metadata.bit_depth = Some(24);
     scanned.rating = Rating::unrated();
     scanned.statistics.play_count = 0;
     scanned.file_size_bytes = Some(1234);
@@ -273,6 +274,7 @@ fn run_scanner_merge_preserves_authoritative_fields(store: &dyn LibraryStore) {
         .expect("track exists");
     assert_eq!(loaded.metadata.title.as_deref(), Some("User title"));
     assert_eq!(loaded.metadata.duration, Some(Duration::from_secs(90)));
+    assert_eq!(loaded.metadata.bit_depth, Some(24));
     assert_eq!(loaded.rating, Rating::new(5).expect("rating"));
     assert_eq!(loaded.statistics.play_count, 12);
     assert_eq!(loaded.file_size_bytes, Some(1234));
@@ -2789,6 +2791,7 @@ fn run_audio_replacement_preserves_library_fields_and_invalidates_derived_state(
         duration: Some(Duration::from_secs(181)),
         bitrate_kbps: Some(128),
         sample_rate_hz: Some(48_000),
+        bit_depth: Some(16),
         channels: Some(2),
     };
     store

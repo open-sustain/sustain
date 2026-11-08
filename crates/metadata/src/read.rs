@@ -108,6 +108,7 @@ fn initial_tags_from_tagged_file(
         duration: Some(properties.duration()),
         bitrate_kbps: properties.audio_bitrate().or(properties.overall_bitrate()),
         sample_rate_hz: properties.sample_rate(),
+        bit_depth: properties.bit_depth(),
         channels: properties.channels(),
     };
     metadata.normalize_text_fields();

@@ -85,6 +85,8 @@ pub struct SyncInputTrack {
     pub key: Option<MusicalKey>,
     pub bitrate_kbps: Option<u32>,
     pub sample_rate_hz: u32,
+    /// Bits per sample. Lossy formats have none and carry 16, the value
+    /// rekordbox writes for them.
     pub bit_depth: u16,
     pub source: SourceSnapshot,
     /// `YYYY-MM-DD` the track entered the library, for the Pioneer PDB.

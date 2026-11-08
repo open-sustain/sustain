@@ -14,12 +14,12 @@ use crate::{
     StoreError, StoreResult,
     schema::{
         ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_BEAT_GRID_SQL,
-        ADD_TRACK_COLUMN_SORT_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
+        ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_COLUMN_SORT_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
         NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 9;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 10;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -85,6 +85,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 9,
         description: "store each track's beat grid",
         step: MigrationStep::Sql(ADD_TRACK_BEAT_GRID_SQL),
+    },
+    Migration {
+        version: 10,
+        description: "store each track's bit depth and rescan every file once to learn it",
+        step: MigrationStep::Sql(ADD_TRACK_BIT_DEPTH_SQL),
     },
 ];
 
@@ -898,6 +903,75 @@ mod tests {
                     )
                     .is_err(),
                 "{tempo} {first_beat} {number}"
+            );
+        }
+    }
+
+    #[test]
+    fn upgrade_from_v9_adds_bit_depth_and_forgets_scan_fingerprints() {
+        let connection = Connection::open_in_memory().expect("connection");
+        for sql in [
+            SCHEMA_SQL,
+            ADD_TRACK_COLUMN_SORT_SQL,
+            BACKFILL_GENERATED_SORT_FIELDS_SQL,
+            ADD_SYNC_DEVICE_ARTISTS_SQL,
+            NORMALIZE_EMPTY_TRACK_METADATA_SQL,
+            ADD_SYNC_MANIFEST_ANLZ_SQL,
+        ] {
+            connection
+                .execute_batch(sql)
+                .expect("schema up to version 6");
+        }
+        normalize_musical_keys(&connection).expect("schema version 7 migration");
+        connection
+            .execute_batch(STORE_BPM_IN_HUNDREDTHS_SQL)
+            .expect("schema version 8 migration");
+        connection
+            .execute_batch(ADD_TRACK_BEAT_GRID_SQL)
+            .expect("schema version 9 migration");
+        connection
+            .execute(
+                "INSERT INTO tracks \
+                 (id, relative_path, title, sample_rate_hz, file_size_bytes, file_modified_at_unix) \
+                 VALUES (1, x'61', 'Title', 96000, 1234, 1700000000)",
+                [],
+            )
+            .expect("seed track");
+        connection
+            .pragma_update(None, "user_version", 9)
+            .expect("set version");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        let row: (String, i64, i64, Option<i64>, Option<i64>) = connection
+            .query_row(
+                "SELECT title, sample_rate_hz, file_size_bytes, file_modified_at_unix, bit_depth \
+                 FROM tracks WHERE id = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("track preserved");
+        // The fingerprint is forgotten so the next scan reads the file
+        // and learns its bit depth; everything else is kept.
+        assert_eq!(row, ("Title".to_owned(), 96_000, 1234, None, None));
+        for invalid in [0, 256] {
+            assert!(
+                connection
+                    .execute("UPDATE tracks SET bit_depth = ?1 WHERE id = 1", [invalid])
+                    .is_err(),
+                "{invalid}"
             );
         }
     }

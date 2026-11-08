@@ -56,6 +56,7 @@ fn execute_full_track(connection: &Connection, sql: &str, track: &Track) -> Stor
                 metadata_text_param(&metadata.album_artist_sort),
                 metadata_text_param(&metadata.composer_sort),
                 track.file_modified_at.and_then(system_time_to_unix),
+                metadata.bit_depth.map(i64::from),
             ],
         )
         .map(|_| ())
@@ -178,8 +179,9 @@ pub(super) fn replace_audio(
                 channels = ?6,
                 file_size_bytes = ?7,
                 has_embedded_artwork = ?8,
+                bit_depth = ?9,
                 file_modified_at_unix = NULL
-            WHERE id = ?9
+            WHERE id = ?10
             "#,
             params![
                 relative_path_bytes(&location.relative_path),
@@ -191,6 +193,7 @@ pub(super) fn replace_audio(
                 i64::try_from(file_size_bytes)
                     .map_err(|_| StoreError::Database("file size exceeds SQLite INTEGER".into()))?,
                 has_embedded_artwork,
+                audio_properties.bit_depth.map(i64::from),
                 track_id.get(),
             ],
         )

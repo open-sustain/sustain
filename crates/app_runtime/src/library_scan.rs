@@ -297,7 +297,7 @@ fn existing_scan_fingerprints(tracks: &[Track]) -> BTreeMap<TrackRelativePath, S
 // knows. Per the persistence policy in AGENTS.md, SQLite wins over file
 // tags for every value tied to an already-imported track: ratings,
 // play statistics, and every tag-derived metadata field. Audio-stream
-// properties (duration, bitrate, sample rate, channels) and the file
+// properties (duration, bitrate, sample rate, bit depth, channels) and the file
 // size are refreshed from the scan because they describe the bytes on
 // disk, not the user-managed library. For a brand-new file (no
 // existing row) the scanned values seed the initial state.

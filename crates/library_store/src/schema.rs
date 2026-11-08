@@ -493,6 +493,16 @@ CREATE TABLE track_beat_grid (
 );
 "#;
 
+// Migration 10 records each track's sample width. Existing rows cannot
+// know it without reading their file, so the migration also forgets each
+// row's scan fingerprint: the next scan then re-reads every file once and
+// refreshes its audio-stream properties, bit depth included, through the
+// ordinary rescan path. Tag-derived values are untouched by that rescan.
+pub(super) const ADD_TRACK_BIT_DEPTH_SQL: &str = r#"
+ALTER TABLE tracks ADD COLUMN bit_depth INTEGER CHECK (bit_depth BETWEEN 1 AND 255);
+UPDATE tracks SET file_modified_at_unix = NULL;
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
@@ -599,6 +609,7 @@ const TRACK_COLUMNS: &[TrackColumn] = &[
     TrackColumn::stored_value("album_artist_sort"),
     TrackColumn::stored_value("composer_sort"),
     TrackColumn::stored_value("file_modified_at_unix"),
+    TrackColumn::stored_value("bit_depth"),
 ];
 
 pub(crate) mod track_column_index {
@@ -640,6 +651,7 @@ pub(crate) mod track_column_index {
     pub(crate) const ALBUM_ARTIST_SORT: usize = 35;
     pub(crate) const COMPOSER_SORT: usize = 36;
     pub(crate) const FILE_MODIFIED_AT_UNIX: usize = 37;
+    pub(crate) const BIT_DEPTH: usize = 38;
 }
 
 pub(super) static SAVE_TRACK_SQL: LazyLock<String> = LazyLock::new(|| {
@@ -672,6 +684,7 @@ ON CONFLICT(id) DO UPDATE SET
     bitrate_kbps = excluded.bitrate_kbps,
     is_missing = excluded.is_missing,
     sample_rate_hz = excluded.sample_rate_hz,
+    bit_depth = excluded.bit_depth,
     channels = excluded.channels,
     file_size_bytes = excluded.file_size_bytes,
     has_embedded_artwork = excluded.has_embedded_artwork,
@@ -1009,6 +1022,7 @@ mod tests {
                 track_column_index::FILE_MODIFIED_AT_UNIX,
                 "file_modified_at_unix",
             ),
+            (track_column_index::BIT_DEPTH, "bit_depth"),
         ];
 
         assert_eq!(TRACK_COLUMNS.len(), expected.len());

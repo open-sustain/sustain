@@ -1182,7 +1182,7 @@ fn sync_input_track(track: &Track, source_path: PathBuf, source: SourceSnapshot)
         key: metadata.key,
         bitrate_kbps: metadata.bitrate_kbps,
         sample_rate_hz: metadata.sample_rate_hz.unwrap_or(44_100),
-        bit_depth: 16,
+        bit_depth: metadata.bit_depth.map_or(16, u16::from),
         source,
         date_added: track.statistics.date_added_at.map(|t| {
             unix_to_ymd(
@@ -1252,7 +1252,8 @@ mod tests {
 
     use super::{
         ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
-        DeviceSyncPlanState, build_worker_sync_request, prepare_sync_request, unix_to_ymd,
+        DeviceSyncPlanState, build_worker_sync_request, prepare_sync_request, sync_input_track,
+        unix_to_ymd,
     };
     use crate::ApplicationRuntime;
 
@@ -1380,6 +1381,27 @@ mod tests {
         assert_eq!(unix_to_ymd(1_700_000_000), "2023-11-14");
         // 2026-05-29 00:00:00 UTC
         assert_eq!(unix_to_ymd(1_780_012_800), "2026-05-29");
+    }
+
+    #[test]
+    fn sync_tracks_carry_the_library_bit_depth_and_lossy_tracks_carry_sixteen() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("track.flac");
+        std::fs::write(&path, b"audio").expect("source file");
+        let source = || SourceSnapshot::provisional(source_file_stat(&path).expect("stat"));
+
+        let mut hi_res = library_track(1, "track.flac", "Artist");
+        hi_res.metadata.bit_depth = Some(24);
+        let lossy = library_track(2, "track.flac", "Artist");
+
+        assert_eq!(
+            sync_input_track(&hi_res, path.clone(), source()).bit_depth,
+            24
+        );
+        assert_eq!(
+            sync_input_track(&lossy, path.clone(), source()).bit_depth,
+            16
+        );
     }
 
     #[test]
