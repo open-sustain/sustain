@@ -7,7 +7,9 @@
 //! playlist models into these flat structs, so the format code never
 //! reaches back into the library, the database, or the DSP pipeline.
 
-use sustain_domain::{Bpm, MusicalKey, WaveformSegments};
+use std::time::Duration;
+
+use sustain_domain::{BeatGrid, Bpm, MusicalKey, WaveformSegments};
 
 /// Pioneer's file-type discriminant, written into each track row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,13 +102,20 @@ pub struct PioneerArtwork {
 }
 
 /// Inputs the ANLZ serializer needs for one track. The waveform tiers
-/// are Sustain's own; the serializer resamples/repacks them into
-/// Pioneer's PWAV/PWV2/PWV3/PWV4/PWV5 encodings without touching audio.
+/// and the beat grid are Sustain's own, on Sustain's gapless timeline;
+/// the serializer moves them onto the player's timeline
+/// (`timeline_delay`) and repacks them into Pioneer's PQTZ and
+/// PWAV/PWV2/PWV3/PWV4/PWV5 encodings without touching audio.
 #[derive(Clone, Copy, Debug)]
 pub struct AnlzInput<'a> {
     /// On-drive audio path, used for the PPTH section.
     pub device_audio_path: &'a str,
-    pub bpm: Option<Bpm>,
+    /// The track's beats. `None` writes an empty grid: the player shows
+    /// no beat grid rather than a wrong one.
+    pub beat_grid: Option<BeatGrid>,
+    /// How far the player's timeline runs behind Sustain's for this file
+    /// ([`crate::timeline::device_delay`]).
+    pub timeline_delay: Duration,
     pub duration_ms: u32,
     pub waveform_preview: &'a WaveformSegments,
     pub waveform_detail: &'a WaveformSegments,

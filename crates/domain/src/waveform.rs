@@ -14,7 +14,7 @@
 //! count. Endianness is irrelevant because every field is a single
 //! `u8`.
 
-use crate::{AcousticFeatures, MusicalKey};
+use crate::{AcousticFeatures, BeatGrid, Bpm, MusicalKey};
 
 /// Fixed segment count for the preview waveform. Matches Pioneer's
 /// PWAV column count (so a future export crate does not have to
@@ -73,18 +73,16 @@ pub struct WaveformSegments {
 /// types it composes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrackAnalysis {
-    /// Detected tempo in beats per minute. `None` if BPM detection
-    /// was disabled, the file was too short, or the DSP engine could
-    /// not produce a confident value.
-    pub bpm: Option<f32>,
+    /// Detected tempo. `None` if BPM detection was disabled, the file
+    /// was too short, or the DSP engine could not produce a confident
+    /// value. When a beat grid was found this is the grid's tempo.
+    pub bpm: Option<Bpm>,
     /// Detected musical key. `None` if key detection was disabled or
     /// the DSP engine returned a value that did not match a known key.
     pub key: Option<MusicalKey>,
-    /// Beat positions in milliseconds from the start of the audio.
-    /// Reserved; the first revision of the DSP layer always returns
-    /// `None` here. The slot exists so storage code does not need to
-    /// grow when beatgrid extraction lands.
-    pub beatgrid: Option<BeatGrid>,
+    /// The track's beats. `None` if BPM detection was disabled or the
+    /// track has no steady beat to lay a constant grid on.
+    pub beat_grid: Option<BeatGrid>,
     /// Fixed-resolution overview ([`PREVIEW_SEGMENT_COUNT`] segments).
     pub waveform_preview: WaveformSegments,
     /// Time-resolution detail ([`DETAIL_SEGMENTS_PER_SECOND`]
@@ -94,18 +92,4 @@ pub struct TrackAnalysis {
     /// density, timbre, …). `None` when the acoustics capability was
     /// not requested or the DSP pass could not produce them.
     pub acoustics: Option<AcousticFeatures>,
-}
-
-/// Beat-grid information. Reserved; not populated by the DSP layer
-/// yet but the type exists so storage rows reserve the column.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BeatGrid {
-    /// BPM the beats were laid out against. Matches
-    /// [`TrackAnalysis::bpm`] in the common case but lives on the
-    /// grid itself so renderers do not need to read two fields.
-    pub bpm: f32,
-    /// Beat positions, in milliseconds from the start of audio.
-    pub beats: Vec<f32>,
-    /// Subset of `beats` marking the first beat of each bar.
-    pub downbeats: Vec<f32>,
 }

@@ -8,10 +8,10 @@
 //! these plain structs, so the engine never reaches into the library
 //! database or the DSP pipeline.
 
-use std::{ops::Deref, path::PathBuf};
+use std::{ops::Deref, path::PathBuf, time::Duration};
 
 use sustain_domain::{
-    Bpm, DeviceRelativePath, MusicalKey, SourceFileStat, SourceFingerprint, SyncDevice,
+    BeatGrid, Bpm, DeviceRelativePath, MusicalKey, SourceFileStat, SourceFingerprint, SyncDevice,
     SyncManifestEntry, TrackContentHash, TrackId, WaveformSegments,
 };
 use sustain_pioneer::ArtworkSet;
@@ -121,10 +121,22 @@ pub struct SyncRequest {
     pub export_date: String,
 }
 
+/// What Sustain measured about one track, for its Pioneer analysis files.
+/// Times are on Sustain's gapless timeline; `timeline_delay` moves them
+/// onto the player's.
+#[derive(Clone, Debug, Default)]
+pub struct PioneerTrackAnalysis {
+    pub waveform_preview: Option<WaveformSegments>,
+    pub waveform_detail: Option<WaveformSegments>,
+    pub beat_grid: Option<BeatGrid>,
+    /// How far the player's timeline runs behind Sustain's for this file
+    /// (`sustain_pioneer::timeline::device_delay`).
+    pub timeline_delay: Duration,
+}
+
 /// Worker-hydrated assets for one Pioneer track.
 pub struct PreparedPioneerTrackAssets {
-    pub(crate) waveform_preview: Option<WaveformSegments>,
-    pub(crate) waveform_detail: Option<WaveformSegments>,
+    pub(crate) analysis: PioneerTrackAnalysis,
     pub(crate) artwork_id: u32,
 }
 
@@ -144,18 +156,12 @@ impl PreparedPioneerAssets {
         Self::default()
     }
 
-    pub fn push_track(
-        &mut self,
-        waveform_preview: Option<WaveformSegments>,
-        waveform_detail: Option<WaveformSegments>,
-        cover_art: Option<&[u8]>,
-    ) {
+    pub fn push_track(&mut self, analysis: PioneerTrackAnalysis, cover_art: Option<&[u8]>) {
         let artwork_id = cover_art
             .and_then(|bytes| self.artwork.add(bytes).ok())
             .unwrap_or(0);
         self.tracks.push(PreparedPioneerTrackAssets {
-            waveform_preview,
-            waveform_detail,
+            analysis,
             artwork_id,
         });
     }

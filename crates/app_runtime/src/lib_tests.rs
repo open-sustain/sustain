@@ -6669,7 +6669,7 @@ fn request_run_skips_tracks_whose_capability_is_already_cached() {
     let empty_analysis = sustain_domain::TrackAnalysis {
         bpm: None,
         key: None,
-        beatgrid: None,
+        beat_grid: None,
         waveform_preview: sustain_domain::WaveformSegments {
             segment_duration_ms: 0.0,
             segments: Vec::new(),
@@ -7144,6 +7144,10 @@ impl LibraryStore for CallCountingLibraryStore {
 
     fn load_waveform(&self, track_id: TrackId) -> StoreResult<Option<StoredWaveform>> {
         self.inner.load_waveform(track_id)
+    }
+
+    fn load_beat_grid(&self, track_id: TrackId) -> StoreResult<Option<sustain_domain::BeatGrid>> {
+        self.inner.load_beat_grid(track_id)
     }
 
     fn load_all_acoustics(&self) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {

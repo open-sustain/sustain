@@ -428,14 +428,21 @@ fn write_pioneer(
 
         // The pair is regenerated every run and written only when the
         // device does not already hold exactly these bytes in this slot:
-        // a new BPM, grid, or waveform reaches the drive even though the
-        // audio file is unchanged, and an unchanged pair is not rewritten.
+        // a new grid or waveform reaches the drive even though the audio
+        // file is unchanged, and an unchanged pair is not rewritten.
+        let analysis = &track_assets.analysis;
         let input = AnlzInput {
             device_audio_path: audio_path,
-            bpm: track.bpm,
+            // A grid laid at a tempo the library no longer states (the
+            // user changed the BPM) would contradict the track's row:
+            // the player shows no grid rather than that one.
+            beat_grid: analysis
+                .beat_grid
+                .filter(|grid| track.bpm.is_some_and(|bpm| grid.agrees_with(bpm))),
+            timeline_delay: analysis.timeline_delay,
             duration_ms: track.duration_ms,
-            waveform_preview: track_assets.waveform_preview.as_ref().unwrap_or(&empty),
-            waveform_detail: track_assets.waveform_detail.as_ref().unwrap_or(&empty),
+            waveform_preview: analysis.waveform_preview.as_ref().unwrap_or(&empty),
+            waveform_detail: analysis.waveform_detail.as_ref().unwrap_or(&empty),
         };
         let dat_bytes = anlz::dat_bytes(&input);
         let ext_bytes = anlz::ext_bytes(&input);

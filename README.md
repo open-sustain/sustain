@@ -80,7 +80,7 @@ See [docs/features.md](docs/features.md) for the full reference.
 - Library-wide Statistics screen: genre and bitrate distributions with slash-delimited genre splitting, most-played and most-liked genres, release-year and year-added histograms (*Sustain-native*)
 - Deferred duplicate detection and journaled consolidation with independent audio, metadata, and artwork choices (*iTunes-adjacent*)
 - Optional low-bitrate track replacement from a pasted YouTube URL via installed `yt-dlp` and FFmpeg tools in Debian installs (*Sustain-native*)
-- Background BPM and musical-key detection, with a tempo/harmony-aware smart-playlist rule engine (*Sustain-native*)
+- Background BPM, beat-grid, and musical-key detection, with a tempo/harmony-aware smart-playlist rule engine (*Sustain-native*)
 - Background backfill of artwork, ID3 tags, and lyrics via MusicBrainz, Cover Art Archive, AcoustID, and LRClib (*iTunes-adjacent*)
 - Smart Shuffle that picks each next track as a continuation of the one playing: a local, transparent perceptual match, no cloud, no learning (*Sustain-native*)
 - Sync playlists, smart playlists, and artists to USB sticks, SD cards, and Android phones over MTP, incrementally, as a deduplicated `.m3u8` tree or one folder per selected source (*Sustain-native*)

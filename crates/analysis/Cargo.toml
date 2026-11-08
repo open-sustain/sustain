@@ -35,6 +35,9 @@ symphonia = { version = "0.6", features = [
 # spectrogram and a sample rate; returns BPM + a `Key` we map onto
 # sustain_domain::MusicalKey.
 sustain-dsp = { path = "../dsp" }
+# FFT for the beat tracker's onset envelopes (already the FFT the
+# vendored DSP core uses).
+rustfft = "6.2"
 # Digital biquad IIR filters for the 3-band split (low/mid/high) used
 # to produce per-segment frequency-band energies for the waveform.
 biquad = "0.6"

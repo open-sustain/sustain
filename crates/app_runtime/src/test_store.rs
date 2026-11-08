@@ -523,6 +523,10 @@ impl LibraryStore for FaultyStore {
         self.inner.load_waveform(track_id)
     }
 
+    fn load_beat_grid(&self, track_id: TrackId) -> StoreResult<Option<sustain_domain::BeatGrid>> {
+        self.inner.load_beat_grid(track_id)
+    }
+
     fn load_all_acoustics(&self) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
         self.sleep_read_delay();
         self.inner.load_all_acoustics()

@@ -13,8 +13,10 @@
 //! from the hardware-validated reference exporter; only the waveform
 //! payloads come from Sustain's own analysis.
 
+use std::time::Duration;
+
 use sha2::{Digest, Sha256};
-use sustain_domain::Bpm;
+use sustain_domain::BeatGrid;
 
 use crate::model::AnlzInput;
 use crate::waveform::{self, DETAIL_ENTRIES_PER_SECOND};
@@ -92,28 +94,20 @@ struct Beat {
     time_ms: u32,
 }
 
-/// Lay a constant-tempo grid across the track. Returns no beats for
-/// very short clips (< 4 s), matching rekordbox, which leaves
-/// sound-effect-length files ungridded.
-fn beats(bpm: Option<Bpm>, duration_ms: u32) -> Vec<Beat> {
-    let Some(bpm) = bpm else {
+/// The grid's beats on the player's timeline, up to the end of the track
+/// there, with times rounded to the millisecond as rekordbox writes them.
+fn beats(grid: Option<BeatGrid>, timeline_delay: Duration, duration_ms: u32) -> Vec<Beat> {
+    let Some(grid) = grid else {
         return Vec::new();
     };
-    if duration_ms < 4000 {
-        return Vec::new();
-    }
-    let tempo = crate::tempo_centibpm(bpm);
-    let interval_ms = 60_000.0 / bpm.as_f64();
-    let beat_count = (f64::from(duration_ms) / interval_ms).ceil() as u32;
-    // Each beat's time is computed from its index, so rounding never
-    // accumulates along the track.
-    (0..beat_count)
-        .map(|index| (index, (f64::from(index) * interval_ms) as u32))
-        .take_while(|&(_, time_ms)| time_ms < duration_ms)
-        .map(|(index, time_ms)| Beat {
-            number: (index % 4) as u16 + 1,
+    let grid = grid.delayed(timeline_delay);
+    let tempo = crate::tempo_centibpm(grid.tempo());
+    let end = Duration::from_millis(u64::from(duration_ms)) + timeline_delay;
+    grid.beats_before(end)
+        .map(|beat| Beat {
+            number: u16::from(beat.number),
             tempo,
-            time_ms,
+            time_ms: (beat.time.as_secs_f64() * 1_000.0).round() as u32,
         })
         .collect()
 }
@@ -124,9 +118,10 @@ pub fn dat_bytes(input: &AnlzInput) -> Vec<u8> {
         input.waveform_preview,
         input.waveform_detail,
         input.duration_ms,
+        input.timeline_delay,
     );
     let path_utf16 = encode_path_utf16_be(input.device_audio_path);
-    let grid = beats(input.bpm, input.duration_ms);
+    let grid = beats(input.beat_grid, input.timeline_delay, input.duration_ms);
 
     let ppth_len = PPTH_HEADER_SIZE + path_utf16.len() as u32;
     let pqtz_len = PQTZ_HEADER_SIZE + grid.len() as u32 * PQTZ_BEAT_ENTRY_SIZE;
@@ -196,6 +191,7 @@ pub fn ext_bytes(input: &AnlzInput) -> Vec<u8> {
         input.waveform_preview,
         input.waveform_detail,
         input.duration_ms,
+        input.timeline_delay,
     );
     let path_utf16 = encode_path_utf16_be(input.device_audio_path);
 
@@ -278,7 +274,7 @@ pub fn pair_digest(dat: &[u8], ext: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sustain_domain::{WaveformSegment, WaveformSegments};
+    use sustain_domain::{Bpm, WaveformSegment, WaveformSegments};
 
     fn tier(count: usize) -> WaveformSegments {
         WaveformSegments {
@@ -298,26 +294,59 @@ mod tests {
     fn input<'a>(preview: &'a WaveformSegments, detail: &'a WaveformSegments) -> AnlzInput<'a> {
         AnlzInput {
             device_audio_path: "/Contents/Artist/Album/01 Title.mp3",
-            bpm: Bpm::from_whole(128),
+            beat_grid: Some(grid(12_800, 200, 1)),
+            timeline_delay: Duration::ZERO,
             duration_ms: 180_000,
             waveform_preview: preview,
             waveform_detail: detail,
         }
     }
 
+    fn grid(tempo_hundredths: u32, first_beat_ms: u64, first_beat_number: u8) -> BeatGrid {
+        BeatGrid::new(
+            Bpm::from_hundredths(tempo_hundredths).expect("tempo"),
+            Duration::from_millis(first_beat_ms),
+            first_beat_number,
+        )
+        .expect("grid")
+    }
+
     #[test]
     fn beat_grid_carries_the_fractional_tempo_without_drift() {
-        let grid = beats(Bpm::from_hundredths(11_886), 600_000);
-        assert!(grid.iter().all(|beat| beat.tempo == 11_886));
-        // Beat 1000 lands at 1000 × 60 000 / 118.86 ms, not wherever
+        let beats = beats(Some(grid(11_886, 0, 1)), Duration::ZERO, 600_000);
+        assert!(beats.iter().all(|beat| beat.tempo == 11_886));
+        // Beat 1000 lands at 1000 × 60 000 / 118.86 ms (504 795.6), not wherever
         // a thousand accumulated intervals would put it.
-        assert_eq!(grid[1000].time_ms, 504_795);
+        assert_eq!(beats[1000].time_ms, 504_796);
         assert_eq!(
-            grid[..5].iter().map(|beat| beat.number).collect::<Vec<_>>(),
+            beats[..5]
+                .iter()
+                .map(|beat| beat.number)
+                .collect::<Vec<_>>(),
             [1, 2, 3, 4, 1]
         );
-        assert!(grid.last().expect("beats").time_ms < 600_000);
-        assert!(beats(None, 600_000).is_empty());
+        assert!(beats.last().expect("beats").time_ms < 600_000);
+        assert!(super::beats(None, Duration::ZERO, 600_000).is_empty());
+    }
+
+    #[test]
+    fn beat_grid_moves_onto_the_player_timeline() {
+        // 120 BPM from 400 ms, beat 3; the player runs 150 ms behind, so
+        // its first beat is the one before, at 50 ms, beat 2.
+        let beats = beats(
+            Some(grid(12_000, 400, 3)),
+            Duration::from_millis(150),
+            10_000,
+        );
+        assert_eq!(
+            beats[..3]
+                .iter()
+                .map(|beat| (beat.time_ms, beat.number))
+                .collect::<Vec<_>>(),
+            [(50, 2), (550, 3), (1_050, 4)]
+        );
+        // The player's track is longer by the delay; its beats run on.
+        assert_eq!(beats.last().expect("beats").time_ms, 10_050);
     }
 
     #[test]
@@ -344,11 +373,11 @@ mod tests {
     }
 
     #[test]
-    fn short_tracks_have_no_beatgrid() {
+    fn tracks_without_a_grid_write_an_empty_one() {
         let preview = tier(400);
         let detail = tier(300);
         let mut inp = input(&preview, &detail);
-        inp.duration_ms = 2000;
+        inp.beat_grid = None;
         let dat = dat_bytes(&inp);
         // PQTZ num_beats field is the 3rd u32 of the PQTZ body; find it.
         let pos = dat

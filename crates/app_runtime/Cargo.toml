@@ -40,6 +40,9 @@ sustain-domain = { path = "../domain" }
 sustain-library-store = { path = "../library_store" }
 sustain-metadata = { path = "../metadata" }
 sustain-metadata-remote = { path = "../metadata_remote" }
+# Pioneer timeline: where a player's decoder places the first sample,
+# read from each source while preparing a Pioneer export.
+sustain-pioneer = { path = "../pioneer" }
 sustain-playback = { path = "../playback" }
 sustain-search = { path = "../search" }
 sustain-smart-shuffle = { path = "../smart_shuffle" }

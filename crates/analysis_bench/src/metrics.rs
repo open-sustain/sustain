@@ -206,9 +206,117 @@ pub fn tempo_ratio_bucket(predicted: f64, reference: f64) -> &'static str {
     }
 }
 
+/// A constant beat grid as the bench compares it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grid {
+    /// Tempo the beats are laid out at.
+    pub bpm: f64,
+    /// Time of one beat, in seconds.
+    pub first_beat_secs: f64,
+    /// That beat's position in its bar, 1–4.
+    pub first_beat_number: u8,
+}
+
+impl Grid {
+    fn period(&self) -> f64 {
+        60.0 / self.bpm
+    }
+
+    /// Index (from the first beat) of the beat nearest `time`.
+    fn nearest_beat(&self, time: f64) -> i64 {
+        ((time - self.first_beat_secs) / self.period()).round() as i64
+    }
+
+    fn beat_time(&self, index: i64) -> f64 {
+        self.first_beat_secs + index as f64 * self.period()
+    }
+
+    fn beat_number(&self, index: i64) -> u8 {
+        (i64::from(self.first_beat_number) - 1 + index).rem_euclid(4) as u8 + 1
+    }
+}
+
+/// Phase errors at or under this many milliseconds count as on the beat:
+/// below the ~20 ms at which two percussive hits stop sounding as one.
+pub const GRID_ALIGNED_MS: f64 = 20.0;
+/// Tempos further apart than this ratio are a tempo error, not a phase
+/// one (0.1 %, about 0.13 BPM at 128 BPM).
+pub const GRID_TEMPO_TOLERANCE: f64 = 0.001;
+
+/// How a predicted grid relates to the reference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GridAgreement {
+    /// Same tempo; every probed beat within [`GRID_ALIGNED_MS`].
+    Aligned,
+    /// Same tempo, but locked half a beat away (on the off-beats).
+    OffBeat,
+    /// Same tempo, phase neither aligned nor off-beat.
+    Misaligned,
+    /// A different tempo: phase is meaningless.
+    TempoMismatch,
+}
+
+/// The outcome of comparing a predicted grid with the reference.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridComparison {
+    /// The verdict.
+    pub agreement: GridAgreement,
+    /// Signed phase error at the middle probe, in milliseconds (positive:
+    /// predicted beats come late), when the tempos match.
+    pub phase_error_ms: Option<f64>,
+    /// Whether the predicted bar position agrees, for aligned grids.
+    pub downbeat_correct: Option<bool>,
+}
+
+/// Compare `predicted` with `reference` at each probe time (seconds):
+/// for every probe, the reference beat nearest it against the predicted
+/// beat nearest that.
+pub fn compare_grids(predicted: Grid, reference: Grid, probes: &[f64]) -> GridComparison {
+    if (predicted.bpm / reference.bpm - 1.0).abs() > GRID_TEMPO_TOLERANCE || probes.is_empty() {
+        return GridComparison {
+            agreement: GridAgreement::TempoMismatch,
+            phase_error_ms: None,
+            downbeat_correct: None,
+        };
+    }
+    let errors: Vec<(f64, i64, i64)> = probes
+        .iter()
+        .map(|&probe| {
+            let reference_index = reference.nearest_beat(probe);
+            let beat = reference.beat_time(reference_index);
+            let predicted_index = predicted.nearest_beat(beat);
+            let error_ms = (predicted.beat_time(predicted_index) - beat) * 1_000.0;
+            (error_ms, reference_index, predicted_index)
+        })
+        .collect();
+    let (middle_error, reference_index, predicted_index) = errors[errors.len() / 2];
+    let half_beat_ms = reference.period() * 500.0;
+    let agreement = if errors
+        .iter()
+        .all(|(error, _, _)| error.abs() <= GRID_ALIGNED_MS)
+    {
+        GridAgreement::Aligned
+    } else if (middle_error.abs() - half_beat_ms).abs() <= GRID_ALIGNED_MS {
+        GridAgreement::OffBeat
+    } else {
+        GridAgreement::Misaligned
+    };
+    GridComparison {
+        agreement,
+        phase_error_ms: Some(middle_error),
+        downbeat_correct: (agreement == GridAgreement::Aligned).then(|| {
+            predicted.beat_number(predicted_index) == reference.beat_number(reference_index)
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{KeyCategory, KeyClass, evaluate_key, parse_key, tempo_ratio_bucket};
+    use super::{
+        Grid, GridAgreement, KeyCategory, KeyClass, compare_grids, evaluate_key, parse_key,
+        tempo_ratio_bucket,
+    };
     use sustain_domain::MusicalKey;
 
     fn key(tonic: u8, major: bool) -> KeyClass {
@@ -268,5 +376,36 @@ mod tests {
         // 100/120 ≈ 0.833 matches no metrical factor within tolerance.
         assert_eq!(tempo_ratio_bucket(100.0, 120.0), "other");
         assert_eq!(tempo_ratio_bucket(0.0, 120.0), "n/a");
+    }
+
+    fn grid(bpm: f64, first_beat_secs: f64, first_beat_number: u8) -> Grid {
+        Grid {
+            bpm,
+            first_beat_secs,
+            first_beat_number,
+        }
+    }
+
+    #[test]
+    fn grids_compare_by_phase_and_bar_position() {
+        let reference = grid(120.0, 0.2, 1);
+        let probes = [10.0, 60.0, 110.0];
+        // Ten milliseconds late, same bars — written from another beat.
+        let late = compare_grids(grid(120.0, 0.21 + 2.0, 1), reference, &probes);
+        assert_eq!(late.agreement, GridAgreement::Aligned);
+        assert!((late.phase_error_ms.expect("error") - 10.0).abs() < 1e-6);
+        assert_eq!(late.downbeat_correct, Some(true));
+        // One beat over: aligned, wrong bar position.
+        let shifted = compare_grids(grid(120.0, 0.7, 1), reference, &probes);
+        assert_eq!(shifted.agreement, GridAgreement::Aligned);
+        assert_eq!(shifted.downbeat_correct, Some(false));
+        // Half a beat over.
+        let off_beat = compare_grids(grid(120.0, 0.45, 1), reference, &probes);
+        assert_eq!(off_beat.agreement, GridAgreement::OffBeat);
+        assert_eq!(off_beat.downbeat_correct, None);
+        // A tempo 1 % off is not a phase question.
+        let tempo = compare_grids(grid(121.2, 0.2, 1), reference, &probes);
+        assert_eq!(tempo.agreement, GridAgreement::TempoMismatch);
+        assert_eq!(tempo.phase_error_ms, None);
     }
 }

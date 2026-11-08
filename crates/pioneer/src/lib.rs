@@ -31,6 +31,7 @@ pub mod key;
 pub mod model;
 pub mod path_hash;
 pub mod pdb;
+pub mod timeline;
 pub mod waveform;
 
 pub use artwork::{ArtworkError, ArtworkSet};

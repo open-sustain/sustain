@@ -22,7 +22,8 @@ use crate::fixtures::Synthetic;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Task {
-    /// Tempo detection ([`sustain_analysis::Analyzer::bpm`]).
+    /// Tempo detection and beat tracking
+    /// ([`sustain_analysis::Analyzer::tempo`]).
     Bpm,
     /// Key detection ([`sustain_analysis::Analyzer::key`]).
     Key,
@@ -95,6 +96,9 @@ pub struct TrackEntry {
     /// Ground-truth BPM, if known.
     #[serde(default)]
     pub bpm: Option<f64>,
+    /// Ground-truth beat grid, if known.
+    #[serde(default)]
+    pub beat_grid: Option<ReferenceGrid>,
     /// Ground-truth key, if known (any form [`crate::metrics::parse_key`]
     /// accepts).
     #[serde(default)]
@@ -103,6 +107,18 @@ pub struct TrackEntry {
     /// options, then to all capabilities.
     #[serde(default)]
     pub tasks: Option<Vec<Task>>,
+}
+
+/// A ground-truth constant beat grid, on the gapless decode timeline the
+/// analyzer measures (encoder delay and padding removed).
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct ReferenceGrid {
+    /// Tempo the beats are laid out at.
+    pub bpm: f64,
+    /// Time of any beat, in seconds; conventionally the first.
+    pub first_beat_secs: f64,
+    /// That beat's position in its bar, 1 (the downbeat) to 4.
+    pub first_beat_number: u8,
 }
 
 /// A malformed manifest.

@@ -13,13 +13,13 @@ use sustain_domain::MusicalKey;
 use crate::{
     StoreError, StoreResult,
     schema::{
-        ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_COLUMN_SORT_SQL,
-        BACKFILL_GENERATED_SORT_FIELDS_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL,
-        STORE_BPM_IN_HUNDREDTHS_SQL,
+        ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_BEAT_GRID_SQL,
+        ADD_TRACK_COLUMN_SORT_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
+        NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 8;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 9;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -80,6 +80,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 8,
         description: "store tempos to the hundredth of a beat",
         step: MigrationStep::Sql(STORE_BPM_IN_HUNDREDTHS_SQL),
+    },
+    Migration {
+        version: 9,
+        description: "store each track's beat grid",
+        step: MigrationStep::Sql(ADD_TRACK_BEAT_GRID_SQL),
     },
 ];
 
@@ -210,6 +215,7 @@ mod tests {
         "tag_mirror_outbox",
         "track_acoustics",
         "track_analysis",
+        "track_beat_grid",
         "track_column_layout_default",
         "track_column_layout_playlist_override",
         "track_column_layout_smart_playlist_override",
@@ -824,6 +830,76 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("column names");
         assert!(!columns.iter().any(|column| column == "bpm"));
+    }
+
+    #[test]
+    fn upgrade_from_v8_adds_an_empty_beat_grid_table_and_preserves_tracks() {
+        let connection = Connection::open_in_memory().expect("connection");
+        for sql in [
+            SCHEMA_SQL,
+            ADD_TRACK_COLUMN_SORT_SQL,
+            BACKFILL_GENERATED_SORT_FIELDS_SQL,
+            ADD_SYNC_DEVICE_ARTISTS_SQL,
+            NORMALIZE_EMPTY_TRACK_METADATA_SQL,
+            ADD_SYNC_MANIFEST_ANLZ_SQL,
+        ] {
+            connection
+                .execute_batch(sql)
+                .expect("schema up to version 6");
+        }
+        normalize_musical_keys(&connection).expect("schema version 7 migration");
+        connection
+            .execute_batch(STORE_BPM_IN_HUNDREDTHS_SQL)
+            .expect("schema version 8 migration");
+        connection
+            .execute(
+                "INSERT INTO tracks (id, relative_path, title, bpm_hundredths) \
+                 VALUES (1, x'61', 'Title', 12886)",
+                [],
+            )
+            .expect("seed track");
+        connection
+            .execute(
+                "INSERT INTO track_analysis \
+                 (track_id, bpm_attempted_at_unix, analyzer_version) VALUES (1, 10, 12)",
+                [],
+            )
+            .expect("seed analysis attempt");
+        connection
+            .pragma_update(None, "user_version", 8)
+            .expect("set version");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        let (title, bpm, attempt): (String, i64, i64) = connection
+            .query_row(
+                "SELECT t.title, t.bpm_hundredths, a.bpm_attempted_at_unix \
+                 FROM tracks t JOIN track_analysis a ON a.track_id = t.id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("track preserved");
+        assert_eq!((title.as_str(), bpm, attempt), ("Title", 12_886, 10));
+        let grids: i64 = connection
+            .query_row("SELECT COUNT(*) FROM track_beat_grid", [], |row| row.get(0))
+            .expect("beat grid table");
+        assert_eq!(grids, 0);
+        // The table only holds what describes a grid.
+        for (tempo, first_beat, number) in [(0, 0, 1), (12_800, -1, 1), (12_800, 0, 5)] {
+            assert!(
+                connection
+                    .execute(
+                        "INSERT INTO track_beat_grid VALUES (1, ?1, ?2, ?3)",
+                        [tempo, first_beat, number],
+                    )
+                    .is_err(),
+                "{tempo} {first_beat} {number}"
+            );
+        }
     }
 
     #[test]

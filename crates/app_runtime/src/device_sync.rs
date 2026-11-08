@@ -18,9 +18,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sustain_device_mtp::MtpTransport;
 use sustain_device_sync::{
-    ConnectedDevice, DeviceRoot, DeviceTarget, DeviceTransport, PreparedPioneerAssets,
-    PreparedSyncRequest, SourceSnapshot, SyncInputPlaylist, SyncInputTrack, SyncOutcome,
-    SyncProgress, SyncRequest, SyncStage, engine, resolve_source_fingerprint, source_file_stat,
+    ConnectedDevice, DeviceRoot, DeviceTarget, DeviceTransport, PioneerTrackAnalysis,
+    PreparedPioneerAssets, PreparedSyncRequest, SourceSnapshot, SyncInputPlaylist, SyncInputTrack,
+    SyncOutcome, SyncProgress, SyncRequest, SyncStage, engine, resolve_source_fingerprint,
+    source_file_stat,
 };
 use sustain_domain::{
     DeviceLayout, DeviceRelativePath, FilesPerFolderCap, Playlist, PlaylistItem, SmartPlaylist,
@@ -1055,6 +1056,11 @@ fn prepare_sync_request(
             let waveform = store.load_waveform(track.track_id).map_err(|error| {
                 sustain_device_sync::SyncError::Preparation(format!("{error:?}"))
             })?;
+            let beat_grid = store.load_beat_grid(track.track_id).map_err(|error| {
+                sustain_device_sync::SyncError::Preparation(format!("{error:?}"))
+            })?;
+            let timeline_delay = sustain_pioneer::timeline::device_delay(&track.source_path)
+                .map_err(|error| sustain_device_sync::SyncError::io(&track.source_path, error))?;
             if cancelled() {
                 return Ok(None);
             }
@@ -1069,7 +1075,15 @@ fn prepare_sync_request(
                 Some(waveform) => (Some(waveform.preview), Some(waveform.detail)),
                 None => (None, None),
             };
-            assets.push_track(waveform_preview, waveform_detail, cover_art.as_deref());
+            assets.push_track(
+                PioneerTrackAnalysis {
+                    waveform_preview,
+                    waveform_detail,
+                    beat_grid,
+                    timeline_delay,
+                },
+                cover_art.as_deref(),
+            );
         }
         progress(SyncProgress {
             stage: SyncStage::Preparing,

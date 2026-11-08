@@ -539,7 +539,9 @@ and it applies to every analysis run, background sweeps and manual
 one-off runs alike. Detection reads a **centered** window of the track —
 the middle two minutes — rather than the opening seconds, where intros
 (especially in electronic music) are too sparse and tame to read a
-steady tempo from. The estimate fills the track's BPM only when SQLite
+steady tempo from. That estimate settles the tempo to the beat; the beat
+tracker then measures it to the hundredth over the whole track (see
+*Beat grid* below). The estimate fills the track's BPM only when SQLite
 has no value for that field — analysis supplies missing data, it never
 overrides a value imported from a file tag or set by the user. The BPM
 column ships visible by default and feeds the `BPM` smart-playlist field
@@ -562,6 +564,25 @@ because four deliberately-kept labels sit at or below the 76 BPM floor;
 GiantSteps Tempo scores 61.3% within +/-2 BPM because much of its fast
 160–185 BPM material is outside the shipped range and folds to half
 tempo. Those misses are range artefacts, not known tempogram defects.
+Against Rekordbox's own analysis of 597 dance tracks, 89.6% of tempos
+match to within 0.05 BPM and 95.2% to the whole beat.
+
+### Beat grid — *Sustain-native*
+Tempo analysis also places a constant beat grid: every beat of the track
+at the measured tempo, numbered 1–4 within its bar. The tracker combs the
+track's onsets — the kick band and the full band — for the tempo and phase
+that fit every beat of the track at once, so the grid does not drift over
+a long track, and counts bars from where the timbre changes. Grids are
+stored in the library and exported to Pioneer drives. Long tracks (DJ
+mixes, classical movements, podcasts) get no grid, since no single tempo
+fits them. Tempo analysis never overwrites a BPM the library already
+holds. If that BPM disagrees with the grid by more than half a beat per
+minute, for example because the user corrected it, the grid is not
+exported: an export shows no grid rather than one that contradicts the
+track's tempo. Against Rekordbox on the same 597 dance tracks, 67% of
+grids land within 20 ms of Rekordbox's beats across the whole track, and
+the downbeat agrees on 77% of those. The rest mostly lock on the off-beat
+or a quarter beat away.
 
 ### Musical key detection — *Sustain-native*
 Estimates the song's tonal centre via chroma analysis over the same
@@ -1011,7 +1032,7 @@ Three on-drive formats, chosen per device:
   track's waveform or grid. A track's pair is rewritten whenever its analysis
   changes, even when the audio file itself is unchanged, and left untouched
   otherwise; removing a track deletes only its own pair. Each track carries its
-  BPM to the hundredth of a beat, musical key, a constant-tempo beat grid, both monochrome and colour
+  BPM to the hundredth of a beat, musical key, its beat grid, both monochrome and colour
   waveforms (the small browse preview and the full detailed overview), star
   rating, genre, year, disc number, composer and comment — all from Sustain's
   own analysis pipeline and library, not re-read from the files. A track
@@ -1024,7 +1045,11 @@ Three on-drive formats, chosen per device:
   identical covers (an album's shared art) are stored once. This is the full
   set of analysis data Pioneer gear normally only receives from Rekordbox
   itself — to the maintainer's knowledge, no other Linux application produces
-  it. (Hot cues and memory cues are not written.)
+  it. Grids and detailed waveforms are placed on the player's timeline: for
+  MP3s, Pioneer players also play the encoder delay that other decoders
+  drop. Sustain reads that delay from the file's LAME/Xing header and moves
+  the beats and waveform by it, so the grid sits on the beats the player
+  plays. (Hot cues and memory cues are not written.)
 
 Android phones are reached over **MTP** through the desktop's GVfs backend — the
 same path the file manager uses, so no special drivers or root access are needed.

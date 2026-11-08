@@ -22,6 +22,8 @@
 //! pass, so there is no resampling of audio here — only down/up-sampling
 //! of the segment arrays and bit-packing.
 
+use std::time::Duration;
+
 use sustain_domain::{WaveformSegment, WaveformSegments};
 
 /// Bytes-per-second of the Pioneer detail waveforms. Matches the
@@ -47,16 +49,26 @@ pub struct PioneerWaveforms {
 /// Build all five encodings. The detail tier's own timeline fixes the
 /// detail entry count. `duration_ms` is only a fallback when analysis
 /// data is absent and a silent waveform must still cover the track.
+///
+/// The detail encodings are moved onto the player's timeline: the
+/// `timeline_delay` the player renders before the track's first sample
+/// is prepended as silent entries, to the nearest entry (≤ 3.3 ms off).
+/// The previews are not moved — at 400 to 1 200 columns across a whole
+/// track, the delay (≤ ~80 ms) is a small fraction of one column.
 pub fn build(
     preview: &WaveformSegments,
     detail: &WaveformSegments,
     duration_ms: u32,
+    timeline_delay: Duration,
 ) -> PioneerWaveforms {
-    let detail_entries = detail_entry_count(detail, duration_ms);
+    let lead_in =
+        (timeline_delay.as_secs_f64() * f64::from(DETAIL_ENTRIES_PER_SECOND)).round() as usize;
+    let detail_entries = detail_entry_count(detail, duration_ms) + lead_in;
 
     let preview_400 = resample(&preview.segments, PWAV_COLUMNS);
     let preview_100 = resample(&preview.segments, PWV2_COLUMNS);
-    let detail_n = resample(&detail.segments, detail_entries);
+    let mut detail_n = vec![WaveformSegment::silent(); lead_in];
+    detail_n.extend(resample(&detail.segments, detail_entries - lead_in));
     let preview_1200 = resample(&detail.segments, PWV4_COLUMNS);
 
     PioneerWaveforms {
@@ -206,7 +218,7 @@ mod tests {
     fn encodings_have_expected_lengths() {
         let preview = tier(400, 200);
         let detail = tier(900, 200); // 6 s worth at 150/s
-        let wf = build(&preview, &detail, 6000);
+        let wf = build(&preview, &detail, 6000, Duration::ZERO);
         assert_eq!(wf.pwav.len(), 400);
         assert_eq!(wf.pwv2.len(), 100);
         assert_eq!(wf.detail_entries, 900);
@@ -221,7 +233,7 @@ mod tests {
             segment_duration_ms: 0.0,
             segments: Vec::new(),
         };
-        let wf = build(&empty, &empty, 2000);
+        let wf = build(&empty, &empty, 2000, Duration::ZERO);
         assert_eq!(wf.pwav.len(), 400);
         assert!(wf.pwav.iter().all(|&b| b == encode_mono(0, 5)));
         assert_eq!(wf.pwv3.len(), 300); // 2 s * 150
@@ -234,9 +246,21 @@ mod tests {
             segment_duration_ms: 1_000.0 / f32::from(DETAIL_ENTRIES_PER_SECOND),
             segments: vec![seg(200); 900],
         };
-        let wf = build(&preview, &detail, 8000);
+        let wf = build(&preview, &detail, 8000, Duration::ZERO);
         assert_eq!(wf.detail_entries, 900);
         assert_eq!(wf.pwv3.len(), 900);
+    }
+
+    #[test]
+    fn detail_moves_onto_the_player_timeline() {
+        let preview = tier(400, 200);
+        let detail = tier(900, 200);
+        // 51.2 ms rounds to 8 entries of 6.67 ms.
+        let wf = build(&preview, &detail, 6000, Duration::from_micros(51_200));
+        assert_eq!(wf.detail_entries, 908);
+        assert!(wf.pwv3[..8].iter().all(|&b| b == encode_mono(0, 7)));
+        assert!(wf.pwv3[8..].iter().all(|&b| b == encode_mono(200, 7)));
+        assert_eq!(wf.pwv5.len(), 908 * 2);
     }
 
     #[test]

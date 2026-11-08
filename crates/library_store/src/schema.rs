@@ -475,6 +475,24 @@ WHERE track_id IN (
 ALTER TABLE tracks DROP COLUMN bpm;
 "#;
 
+// Migration 9 stores each track's beat grid: one constant tempo (to the
+// hundredth of a beat), the first beat on the track's gapless decode
+// timeline (in microseconds, earlier than one beat interval), and that
+// beat's position in its 4-beat bar. Like track_waveform, a disposable
+// analysis product: the analyzer replaces it whenever it measures the
+// tempo, and replacing a track's audio removes it. Existing tracks have
+// no grid until the analyzer, whose version advances with this change,
+// measures them again.
+pub(super) const ADD_TRACK_BEAT_GRID_SQL: &str = r#"
+CREATE TABLE track_beat_grid (
+    track_id           INTEGER PRIMARY KEY
+                         REFERENCES tracks(id) ON DELETE CASCADE,
+    tempo_hundredths   INTEGER NOT NULL CHECK (tempo_hundredths BETWEEN 1 AND 65500),
+    first_beat_micros  INTEGER NOT NULL CHECK (first_beat_micros >= 0),
+    first_beat_number  INTEGER NOT NULL CHECK (first_beat_number BETWEEN 1 AND 4)
+);
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
@@ -770,6 +788,25 @@ pub(super) const FILL_TRACK_BPM_IF_NULL_SQL: &str =
 
 pub(super) const FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL: &str =
     r#"UPDATE tracks SET musical_key = ?1 WHERE id = ?2 AND musical_key IS NULL"#;
+
+pub(super) const UPSERT_TRACK_BEAT_GRID_SQL: &str = r#"
+INSERT INTO track_beat_grid (track_id, tempo_hundredths, first_beat_micros, first_beat_number)
+VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT(track_id) DO UPDATE SET
+    tempo_hundredths = excluded.tempo_hundredths,
+    first_beat_micros = excluded.first_beat_micros,
+    first_beat_number = excluded.first_beat_number
+"#;
+
+pub(super) const DELETE_TRACK_BEAT_GRID_SQL: &str = r#"
+DELETE FROM track_beat_grid WHERE track_id = ?1
+"#;
+
+pub(super) const SELECT_TRACK_BEAT_GRID_SQL: &str = r#"
+SELECT tempo_hundredths, first_beat_micros, first_beat_number
+FROM track_beat_grid
+WHERE track_id = ?1
+"#;
 
 pub(super) const SELECT_TRACK_WAVEFORM_SQL: &str = r#"
 SELECT

@@ -10,19 +10,18 @@
     "bpm": {
       "scored": 4,
       "within_tolerance_pct": 100.0,
-      "mean_abs_error": 1.0137443542480469,
+      "mean_abs_error": 0.002500000000001279,
       "ratio_buckets": {
         "1x": 4
       }
     },
     "key": {
       "scored": 3,
-      "weighted_pct": 66.66667,
-      "strict_compatible_pct": 66.66667,
-      "loose_compatible_pct": 66.66667,
+      "weighted_pct": 100.0,
+      "strict_compatible_pct": 100.0,
+      "loose_compatible_pct": 100.0,
       "categories": {
-        "correct": 2,
-        "other": 1
+        "correct": 3
       }
     }
   },
@@ -36,7 +35,7 @@
         "bpm",
         "key"
       ],
-      "bpm": 76.0,
+      "bpm": null,
       "key": "C",
       "acoustics": null,
       "waveform": {
@@ -57,7 +56,7 @@
         "bpm",
         "key"
       ],
-      "bpm": 76.0,
+      "bpm": null,
       "key": "C",
       "acoustics": null,
       "waveform": {
@@ -78,8 +77,8 @@
         "bpm",
         "key"
       ],
-      "bpm": 90.84320068359375,
-      "key": "Am",
+      "bpm": null,
+      "key": "A",
       "acoustics": {
         "integrated_lufs": -45.095444,
         "short_term_lufs_max": -45.091675,
@@ -109,8 +108,8 @@
         "bpm",
         "key"
       ],
-      "bpm": 80.0,
-      "key": "Am",
+      "bpm": null,
+      "key": "A",
       "acoustics": {
         "integrated_lufs": -32.93875,
         "short_term_lufs_max": -32.937897,
@@ -140,7 +139,7 @@
         "bpm",
         "key"
       ],
-      "bpm": 95.89004516601562,
+      "bpm": null,
       "key": "Gm",
       "acoustics": {
         "integrated_lufs": -40.735886,
@@ -171,8 +170,13 @@
         "bpm",
         "key"
       ],
-      "bpm": 90.84320068359375,
-      "key": "Bm",
+      "bpm": 90.01,
+      "beat_grid": {
+        "bpm": 90.01,
+        "first_beat_secs": 0.665927786,
+        "first_beat_number": 1
+      },
+      "key": "Ebm",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.628326,
@@ -194,7 +198,7 @@
       },
       "bpm_score": {
         "ground_truth": 90.0,
-        "abs_error": 0.84320068359375,
+        "abs_error": 0.010000000000005116,
         "within_tolerance": true,
         "ratio_bucket": "1x"
       }
@@ -208,8 +212,13 @@
         "bpm",
         "key"
       ],
-      "bpm": 118.0,
-      "key": "Bm",
+      "bpm": 120.0,
+      "beat_grid": {
+        "bpm": 120.0,
+        "first_beat_secs": 0.4985,
+        "first_beat_number": 3
+      },
+      "key": "Ebm",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.628326,
@@ -231,7 +240,7 @@
       },
       "bpm_score": {
         "ground_truth": 120.0,
-        "abs_error": 2.0,
+        "abs_error": 0.0,
         "within_tolerance": true,
         "ratio_bucket": "1x"
       }
@@ -246,7 +255,12 @@
         "key"
       ],
       "bpm": 128.0,
-      "key": "Bm",
+      "beat_grid": {
+        "bpm": 128.0,
+        "first_beat_secs": 0.467171875,
+        "first_beat_number": 1
+      },
+      "key": "Ebm",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.0484,
@@ -282,8 +296,13 @@
         "bpm",
         "key"
       ],
-      "bpm": 138.78822326660156,
-      "key": "Bm",
+      "bpm": 140.0,
+      "beat_grid": {
+        "bpm": 140.0,
+        "first_beat_secs": 0.427428571,
+        "first_beat_number": 4
+      },
+      "key": "Ebm",
       "acoustics": {
         "integrated_lufs": -41.628326,
         "short_term_lufs_max": -41.0484,
@@ -305,7 +324,7 @@
       },
       "bpm_score": {
         "ground_truth": 140.0,
-        "abs_error": 1.2117767333984375,
+        "abs_error": 0.0,
         "within_tolerance": true,
         "ratio_bucket": "1x"
       }
@@ -319,8 +338,13 @@
         "bpm",
         "key"
       ],
-      "bpm": 141.3116455078125,
-      "key": "Em",
+      "bpm": 143.94,
+      "beat_grid": {
+        "bpm": 143.94,
+        "first_beat_secs": 0.346345977,
+        "first_beat_number": 2
+      },
+      "key": "C",
       "acoustics": {
         "integrated_lufs": -42.235542,
         "short_term_lufs_max": -42.102737,
@@ -342,8 +366,8 @@
       },
       "key_score": {
         "ground_truth": "C",
-        "category": "other",
-        "score": 0.0
+        "category": "correct",
+        "score": 1.0
       }
     },
     {
@@ -355,7 +379,12 @@
         "bpm",
         "key"
       ],
-      "bpm": 78.22608947753906,
+      "bpm": 76.95,
+      "beat_grid": {
+        "bpm": 76.95,
+        "first_beat_secs": 0.051087719,
+        "first_beat_number": 2
+      },
       "key": "G",
       "acoustics": {
         "integrated_lufs": -38.641853,
@@ -391,7 +420,12 @@
         "bpm",
         "key"
       ],
-      "bpm": 83.27293395996094,
+      "bpm": 81.61,
+      "beat_grid": {
+        "bpm": 81.61,
+        "first_beat_secs": 0.111576522,
+        "first_beat_number": 4
+      },
       "key": "Am",
       "acoustics": {
         "integrated_lufs": -40.92018,

@@ -10,13 +10,13 @@ use sustain_artwork::validate_encoded_artwork;
 use sustain_domain::TrackAnalysis;
 
 use crate::{
-    AcousticFeatures, AnalysisCapabilities, AnalysisContext, LibraryStore, OnlineCapabilities,
-    OnlineContext, PendingTagMirror, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId,
-    PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, SourceFingerprint, StoreError,
-    StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork,
-    StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork,
-    TagMirrorKinds, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackLocation,
-    tag_mirror::sha256_hex,
+    AcousticFeatures, AnalysisCapabilities, AnalysisContext, BeatGrid, LibraryStore,
+    OnlineCapabilities, OnlineContext, PendingTagMirror, Playlist, PlaylistFolder,
+    PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId,
+    SourceFingerprint, StoreError, StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics,
+    StoredTagMirrorArtwork, StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry,
+    SyncedLyrics, TagMirrorArtwork, TagMirrorKinds, Track, TrackColumnLayout,
+    TrackColumnLayoutScope, TrackId, TrackLocation, tag_mirror::sha256_hex,
 };
 
 #[derive(Debug, Default)]
@@ -30,6 +30,7 @@ pub struct InMemoryLibraryStore {
     smart_playlist_layouts: Mutex<BTreeMap<SmartPlaylistId, TrackColumnLayout>>,
     analysis_bookkeeping: Mutex<BTreeMap<TrackId, AnalysisBookkeeping>>,
     waveforms: Mutex<BTreeMap<TrackId, StoredWaveform>>,
+    beat_grids: Mutex<BTreeMap<TrackId, BeatGrid>>,
     synced_lyrics: Mutex<BTreeMap<TrackId, StoredSyncedLyrics>>,
     online_bookkeeping: Mutex<BTreeMap<TrackId, OnlineBookkeeping>>,
     tag_mirror_outbox: Mutex<BTreeMap<TrackId, PendingTagMirror>>,
@@ -112,6 +113,15 @@ impl InMemoryLibraryStore {
                 .map_err(|_| StoreError::StoreUnavailable)?;
             for track_id in track_ids {
                 waveforms.remove(track_id);
+            }
+        }
+        {
+            let mut beat_grids = self
+                .beat_grids
+                .lock()
+                .map_err(|_| StoreError::StoreUnavailable)?;
+            for track_id in track_ids {
+                beat_grids.remove(track_id);
             }
         }
         {
@@ -326,6 +336,10 @@ impl LibraryStore for InMemoryLibraryStore {
             .map_err(|_| StoreError::StoreUnavailable)?
             .remove(&track_id);
         self.waveforms
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .remove(&track_id);
+        self.beat_grids
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?
             .remove(&track_id);
@@ -927,6 +941,17 @@ impl LibraryStore for InMemoryLibraryStore {
                 );
         }
 
+        if capabilities.bpm {
+            let mut beat_grids = self
+                .beat_grids
+                .lock()
+                .map_err(|_| StoreError::StoreUnavailable)?;
+            match analysis.beat_grid {
+                Some(grid) => beat_grids.insert(track_id, grid),
+                None => beat_grids.remove(&track_id),
+            };
+        }
+
         if capabilities.audio
             && let Some(acoustics) = analysis.acoustics
             && acoustics.all_finite()
@@ -943,7 +968,6 @@ impl LibraryStore for InMemoryLibraryStore {
         if let Some(track) = tracks.get_mut(&track_id) {
             if capabilities.bpm
                 && let Some(bpm) = analysis.bpm
-                && let Some(bpm) = sustain_domain::Bpm::from_f64(f64::from(bpm))
                 && track.metadata.bpm.is_none()
             {
                 track.metadata.bpm = Some(bpm);
@@ -1081,6 +1105,15 @@ impl LibraryStore for InMemoryLibraryStore {
             .map_err(|_| StoreError::StoreUnavailable)?
             .get(&track_id)
             .cloned())
+    }
+
+    fn load_beat_grid(&self, track_id: TrackId) -> StoreResult<Option<BeatGrid>> {
+        Ok(self
+            .beat_grids
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?
+            .get(&track_id)
+            .copied())
     }
 
     fn record_synced_lyrics(

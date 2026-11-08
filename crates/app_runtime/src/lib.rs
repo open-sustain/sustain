@@ -1335,13 +1335,14 @@ impl ApplicationRuntime {
                 } else {
                     (None, None)
                 };
-                // BPM and key are read off the same centered window — for
-                // free when the audio pass primed a region above, on their
-                // own decode otherwise. With the `audio ⇒ bpm ∧ key`
-                // settings invariant, an `audio` run always arrives here
-                // with both requested too.
-                let bpm = if capabilities.bpm {
-                    analyzer.bpm()
+                // The tempo and beat grid read the whole track (on long
+                // tracks, the centered window), reusing the audio pass's
+                // decode when it ran; key reads the centered window, sliced
+                // from whichever region is already decoded. With the
+                // `audio ⇒ bpm ∧ key` settings invariant, an `audio` run
+                // always arrives here with both requested too.
+                let tempo = if capabilities.bpm {
+                    analyzer.tempo()
                 } else {
                     None
                 };
@@ -1364,9 +1365,9 @@ impl ApplicationRuntime {
                     ),
                 };
                 Ok(sustain_analysis::TrackAnalysis {
-                    bpm,
+                    bpm: tempo.map(|tempo| tempo.bpm),
                     key,
-                    beatgrid: None,
+                    beat_grid: tempo.and_then(|tempo| tempo.beat_grid),
                     waveform_preview,
                     waveform_detail,
                     acoustics,

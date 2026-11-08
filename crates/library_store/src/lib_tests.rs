@@ -9,13 +9,13 @@ use std::{
 };
 
 use sustain_domain::{
-    AcousticFeatures, Bpm, FieldChange, MetadataChange, PlayStatistics, PlaylistEntry, Rating,
-    SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistLimit,
-    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
-    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
-    SmartPlaylistTextOperator, SortDirection, SourceFileStat, SourceFingerprint,
-    TrackAudioProperties, TrackContentHash, TrackLocation, TrackMetadata, TrackRelativePath,
-    TrackSort, TrackSortColumn,
+    AcousticFeatures, BeatGrid, Bpm, FieldChange, MetadataChange, PlayStatistics, PlaylistEntry,
+    Rating, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
+    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
+    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, SortDirection, SourceFileStat,
+    SourceFingerprint, TrackAudioProperties, TrackContentHash, TrackLocation, TrackMetadata,
+    TrackRelativePath, TrackSort, TrackSortColumn,
 };
 
 use sustain_domain::{
@@ -1059,7 +1059,10 @@ fn sqlite_store_cascade_deletes_rules_when_smart_playlist_deleted() {
 /// Build a non-trivial `TrackAnalysis` with a handful of segments
 /// in each tier so blob round-trip and "fill if NULL" semantics
 /// both have real data to act on.
-fn sample_analysis(bpm: Option<f32>, key: Option<MusicalKey>) -> TrackAnalysis {
+/// An analysis whose tempo, when it has one, comes with a grid of that
+/// tempo.
+fn sample_analysis(bpm: Option<f64>, key: Option<MusicalKey>) -> TrackAnalysis {
+    let bpm = bpm.map(|bpm| Bpm::from_f64(bpm).expect("valid tempo"));
     let preview = WaveformSegments {
         segment_duration_ms: 25.0,
         segments: (0..PREVIEW_SEGMENT_COUNT)
@@ -1085,7 +1088,9 @@ fn sample_analysis(bpm: Option<f32>, key: Option<MusicalKey>) -> TrackAnalysis {
     TrackAnalysis {
         bpm,
         key,
-        beatgrid: None,
+        beat_grid: bpm.map(|tempo| {
+            BeatGrid::new(tempo, Duration::from_micros(123_456), 2).expect("valid grid")
+        }),
         waveform_preview: preview,
         waveform_detail: detail,
         acoustics: None,
@@ -1187,6 +1192,61 @@ fn sqlite_record_analysis_ignores_non_finite_acoustics() {
 #[test]
 fn in_memory_record_analysis_ignores_non_finite_acoustics() {
     run_record_analysis_ignores_non_finite_acoustics(&InMemoryLibraryStore::new());
+}
+
+fn run_record_analysis_keeps_the_latest_beat_grid(store: &dyn LibraryStore) {
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+    assert_eq!(store.load_beat_grid(track.id), Ok(None));
+
+    let analysis = sample_analysis(Some(126.37), None);
+    store
+        .record_analysis(
+            track.id,
+            &analysis,
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_000),
+        )
+        .expect("record analysis");
+    assert_eq!(store.load_beat_grid(track.id), Ok(analysis.beat_grid));
+
+    // An analysis without the tempo capability leaves the grid alone.
+    let without_tempo = AnalysisCapabilities {
+        bpm: false,
+        key: true,
+        audio: true,
+    };
+    store
+        .record_analysis(
+            track.id,
+            &sample_analysis(None, None),
+            without_tempo,
+            ctx(1_700_000_001),
+        )
+        .expect("record analysis without tempo");
+    assert_eq!(store.load_beat_grid(track.id), Ok(analysis.beat_grid));
+
+    // A tempo analysis that finds no grid drops the stale one.
+    store
+        .record_analysis(
+            track.id,
+            &sample_analysis(None, None),
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_002),
+        )
+        .expect("record analysis without grid");
+    assert_eq!(store.load_beat_grid(track.id), Ok(None));
+}
+
+#[test]
+fn sqlite_record_analysis_keeps_the_latest_beat_grid() {
+    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
+    run_record_analysis_keeps_the_latest_beat_grid(&store);
+}
+
+#[test]
+fn in_memory_record_analysis_keeps_the_latest_beat_grid() {
+    run_record_analysis_keeps_the_latest_beat_grid(&InMemoryLibraryStore::new());
 }
 
 fn run_record_analysis_fills_tracks_columns_only_when_null(store: &dyn LibraryStore) {
@@ -2745,6 +2805,7 @@ fn run_audio_replacement_preserves_library_fields_and_invalidates_derived_state(
     assert_eq!(stored.has_embedded_artwork, Some(true));
     assert_eq!(stored.file_modified_at, None);
     assert_eq!(store.load_waveform(track.id), Ok(None));
+    assert_eq!(store.load_beat_grid(track.id), Ok(None));
     assert!(
         store
             .load_all_acoustics()

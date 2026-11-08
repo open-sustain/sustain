@@ -7,7 +7,7 @@
 //! [`Analyzer`] is the single public surface: a stateful,
 //! capability-driven analyzer that owns a single track and caches the
 //! decoded audio shared between bands. Callers pick exactly which bands
-//! they want by calling [`Analyzer::bpm`], [`Analyzer::key`],
+//! they want by calling [`Analyzer::tempo`], [`Analyzer::key`],
 //! [`Analyzer::acoustics`], and [`Analyzer::waveform`] independently —
 //! a method that is never called does zero work. This is the API the
 //! background scheduler uses, so toggling off (say) waveform generation
@@ -40,8 +40,21 @@
 //! The windows nest — the BPM/key window is always the centre of the
 //! acoustics window — so when `audio` analysis is enabled the acoustics
 //! decode is computed once and BPM/key slice their window out of it for
-//! free. BPM/key requested *without* audio decode only their own
-//! centered window.
+//! free. Key requested *without* audio decodes only its own centered
+//! window.
+//!
+//! ## Tempo and beat grid
+//!
+//! The tempogram over the centered window settles the tempo's metrical
+//! level to the beat. The beat tracker (`beat_tracking`) then measures
+//! the tempo to the hundredth near that estimate and places a constant
+//! beat grid, both by combing onset envelopes — kick band and full band
+//! — over the **whole** normal-length track: a grid is one tempo and
+//! phase fitted to every beat, and a window cannot see the drift a
+//! hundredth of a beat accumulates over minutes. Tempo therefore decodes
+//! the whole track, which the waveform and acoustics share when they are
+//! requested too. Long tracks get a tempo refined over the centered
+//! window and no grid.
 //!
 //! The Analyzer composes the vendored `sustain_dsp` primitives directly
 //! (chroma extractor for the STFT, period tempogram for BPM, key detector
@@ -61,6 +74,7 @@
 //! audio file.
 
 mod bands;
+mod beat_tracking;
 mod decode;
 mod waveform;
 
@@ -73,7 +87,7 @@ use std::path::PathBuf;
 // is the domain layer — the storage crate needs them but should not
 // pull in symphonia / stratum-dsp.
 pub use sustain_domain::{
-    AcousticFeatures, BeatGrid, DETAIL_SEGMENTS_PER_SECOND, MusicalKey, PREVIEW_SEGMENT_COUNT,
+    AcousticFeatures, BeatGrid, Bpm, DETAIL_SEGMENTS_PER_SECOND, MusicalKey, PREVIEW_SEGMENT_COUNT,
     TrackAnalysis, WaveformSegment, WaveformSegments,
 };
 
@@ -198,6 +212,14 @@ pub use waveform::WaveformTiers;
 /// unchanged. The detected key shifts for some tracks, which re-attempt under
 /// the same `FILL_*_IF_NULL` wipe-and-rescan policy. BPM is untouched.
 ///
+/// Version 13: tempo analysis also places a beat grid. The tempogram still
+/// picks the metrical level; a comb over onset envelopes then measures the
+/// tempo to the hundredth of a beat and phases the grid against the kick and
+/// full-band onsets. Every track re-attempts its tempo so that it gains a
+/// grid. A tempo the library already holds stays under `FILL_*_IF_NULL`; the
+/// grid is stored beside it whatever it says, and consumers judge whether the
+/// two agree. Key and waveforms are untouched.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -215,7 +237,7 @@ pub use waveform::WaveformTiers;
 /// byte-for-byte on the synthetic corpus, so stored values' meaning is
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
-pub const ANALYZER_VERSION: u32 = 12;
+pub const ANALYZER_VERSION: u32 = 13;
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
 /// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default
@@ -249,6 +271,16 @@ impl Default for AnalysisOptions {
             max_bpm: 155.0,
         }
     }
+}
+
+/// What [`Analyzer::tempo`] measures.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tempo {
+    /// The tempo, to the hundredth of a beat. When there is a grid, its
+    /// tempo.
+    pub bpm: Bpm,
+    /// The beats, when the whole track was measured.
+    pub beat_grid: Option<BeatGrid>,
 }
 
 /// Failure modes produced by the DSP pipeline. The per-band
@@ -393,18 +425,20 @@ const LOUDNESS_RANGE_GATE_LU: f32 = 20.0;
 /// * [`Self::acoustics`] uses the whole track on normal-length tracks
 ///   (sharing `full_audio` with the waveform) and a centered
 ///   `ACOUSTICS_LONG_WINDOW_SECS` decode on long tracks.
-/// * [`Self::bpm`] / [`Self::key`] share a centered `BPM_KEY_WINDOW_SECS`
-///   window but each compute their own STFT from it (BPM the 2048-point
+/// * [`Self::tempo`] uses the whole track on normal-length tracks for its
+///   beat tracking, sharing `full_audio` with the waveform.
+/// * [`Self::tempo`] / [`Self::key`] share a centered `BPM_KEY_WINDOW_SECS`
+///   window but each compute their own STFT from it (tempo the 2048-point
 ///   tempogram transform, key the 8192-point `KEY_STFT_FRAME_SIZE`). When
-///   a larger region is already in memory (the audio pass ran first), the
-///   window is sliced from its centre — no extra I/O. Otherwise it is
-///   decoded on its own.
+///   a larger region is already in memory, the window is sliced from its
+///   centre — no extra I/O. Otherwise it is decoded on its own.
 ///
 /// To get the free slice, a caller that wants everything should prime
 /// the larger region first: call [`Self::waveform`]/[`Self::acoustics`]
-/// before [`Self::bpm`]/[`Self::key`]. The production scheduler closure
-/// does exactly that. Calling BPM/key first is still correct, only
-/// slightly less efficient (the centered window is decoded separately).
+/// before [`Self::key`]. The production scheduler closure does exactly
+/// that. On a normal-length track [`Self::tempo`] primes the whole track
+/// itself. Calling key first is still correct, only slightly less
+/// efficient (the centered window is decoded separately).
 ///
 /// The `duration_hint` (the library's stored track duration) places the
 /// centered windows and classifies the track as normal vs. long without
@@ -470,11 +504,12 @@ impl Analyzer {
             .is_some_and(|d| d.as_secs_f64() > LONG_TRACK_THRESHOLD_SECS)
     }
 
-    /// Detected tempo in beats per minute, after octave normalization
-    /// to `[options.min_bpm, options.max_bpm]`. Returns `None` if the
-    /// file cannot be decoded, is too short for analysis, or the DSP
-    /// engine cannot produce a confident estimate.
-    pub fn bpm(&self) -> Option<f32> {
+    /// Tempogram tempo estimate of the centered BPM/key window, to the
+    /// beat, after octave normalization to `[options.min_bpm,
+    /// options.max_bpm]`. Returns `None` if the file cannot be decoded,
+    /// is too short for analysis, or the DSP engine cannot produce a
+    /// confident estimate.
+    fn tempogram_bpm(&self) -> Option<f32> {
         let stft = self.tempo_stft()?;
         let window = self.bpmkey_audio()?;
         let estimate = estimate_bpm_tempogram(
@@ -494,6 +529,39 @@ impl Analyzer {
             self.options.min_bpm,
             self.options.max_bpm,
         ))
+    }
+
+    /// The track's tempo and, on a normal-length track, its beat grid.
+    ///
+    /// The tempogram of the centered BPM/key window estimates the tempo
+    /// to the beat and settles its metrical level; the beat tracker then
+    /// finds the tempo to the hundredth near that estimate, and the beats.
+    /// A grid needs the whole track — it is one constant tempo and phase
+    /// fitted to every beat — so this decodes the whole track (sharing
+    /// the decode with [`Self::waveform`] and [`Self::acoustics`]). On a
+    /// long track — a DJ mix, a classical movement, a podcast — no
+    /// constant grid fits, so only the tempo is refined, over the
+    /// centered window. Returns `None` if the file cannot be decoded, is
+    /// too short, or has no measurable beat.
+    pub fn tempo(&self) -> Option<Tempo> {
+        let (min_bpm, max_bpm) = (
+            f64::from(self.options.min_bpm),
+            f64::from(self.options.max_bpm),
+        );
+        let region = if self.is_long_track() {
+            self.bpmkey_audio()?
+        } else {
+            self.full()?
+        };
+        let onsets = beat_tracking::Onsets::of(&region.samples, region.sample_rate)?;
+        let estimate = f64::from(self.tempogram_bpm()?);
+        let bpm = onsets.tempo_near(estimate, min_bpm, max_bpm)?;
+        let beat_grid = if self.is_long_track() {
+            None
+        } else {
+            onsets.beat_grid(bpm)
+        };
+        Some(Tempo { bpm, beat_grid })
     }
 
     /// Detected musical key. Returns `None` if the file cannot be
@@ -665,7 +733,7 @@ impl Analyzer {
     }
 
     /// Tempogram STFT of the centered BPM/key window, at `STFT_FRAME_SIZE`.
-    /// Used only by `bpm`; key has its own larger-frame spectrogram
+    /// Used only by `tempo`; key has its own larger-frame spectrogram
     /// (`key_stft`) so the two no longer share an STFT size.
     fn tempo_stft(&self) -> Option<&Vec<Vec<f32>>> {
         // Pull the decoded window out first: we cannot call
@@ -1097,7 +1165,7 @@ mod tests {
     #[test]
     fn analyzer_returns_none_for_missing_file() {
         // Capability-gating boils down to "the method that was not
-        // called did no work". Here we call only `bpm()` on a path
+        // called did no work". Here we call only `tempo()` on a path
         // that does not exist; the band-specific result is None and
         // the unrequested bands are never touched (a successful
         // `key()`/`waveform()` call would be impossible too, since
@@ -1109,7 +1177,7 @@ mod tests {
             AnalysisOptions::default(),
             None,
         );
-        assert_eq!(analyzer.bpm(), None);
+        assert_eq!(analyzer.tempo(), None);
         assert_eq!(analyzer.key(), None);
         assert!(analyzer.waveform().is_none());
     }

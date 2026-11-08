@@ -3,6 +3,10 @@
 
 //! SQLite `LibraryStore` operations for audio analysis, waveforms and acoustics.
 
+use std::time::Duration;
+
+use sustain_domain::Bpm;
+
 use super::*;
 
 pub(super) fn record_analysis(
@@ -35,9 +39,7 @@ pub(super) fn record_analysis(
     }
 
     if capabilities.bpm
-        && let Some(bpm) = analysis
-            .bpm
-            .and_then(|bpm| sustain_domain::Bpm::from_f64(f64::from(bpm)))
+        && let Some(bpm) = analysis.bpm
     {
         transaction
             .execute(
@@ -45,6 +47,24 @@ pub(super) fn record_analysis(
                 params![i64::from(bpm.hundredths()), track_id.get()],
             )
             .map_err(StoreError::from)?;
+    }
+
+    if capabilities.bpm {
+        match analysis.beat_grid {
+            Some(grid) => transaction.execute(
+                UPSERT_TRACK_BEAT_GRID_SQL,
+                params![
+                    track_id.get(),
+                    i64::from(grid.tempo().hundredths()),
+                    i64::try_from(grid.first_beat().as_micros()).map_err(|_| {
+                        StoreError::Database("beat grid first beat exceeds INTEGER".into())
+                    })?,
+                    i64::from(grid.first_beat_number()),
+                ],
+            ),
+            None => transaction.execute(DELETE_TRACK_BEAT_GRID_SQL, params![track_id.get()]),
+        }
+        .map_err(StoreError::from)?;
     }
 
     if capabilities.key
@@ -193,6 +213,41 @@ pub(super) fn load_waveform(
     }))
 }
 
+pub(super) fn load_beat_grid(
+    connection: &Connection,
+    track_id: TrackId,
+) -> StoreResult<Option<BeatGrid>> {
+    let mut statement = connection
+        .prepare(SELECT_TRACK_BEAT_GRID_SQL)
+        .map_err(StoreError::from)?;
+    let mut rows = statement
+        .query(params![track_id.get()])
+        .map_err(StoreError::from)?;
+    let Some(row) = rows.next().map_err(StoreError::from)? else {
+        return Ok(None);
+    };
+    let tempo: i64 = row.get(0).map_err(StoreError::from)?;
+    let first_beat_micros: i64 = row.get(1).map_err(StoreError::from)?;
+    let first_beat_number: i64 = row.get(2).map_err(StoreError::from)?;
+    let invalid = || {
+        StoreError::Database(format!(
+            "beat grid of track {}: tempo {tempo}, first beat {first_beat_micros} µs, number {first_beat_number}",
+            track_id.get()
+        ))
+    };
+    let tempo = u32::try_from(tempo)
+        .ok()
+        .and_then(Bpm::from_hundredths)
+        .ok_or_else(invalid)?;
+    let first_beat = u64::try_from(first_beat_micros)
+        .map(Duration::from_micros)
+        .map_err(|_| invalid())?;
+    let first_beat_number = u8::try_from(first_beat_number).map_err(|_| invalid())?;
+    BeatGrid::new(tempo, first_beat, first_beat_number)
+        .map(Some)
+        .map_err(|_| invalid())
+}
+
 pub(super) fn load_all_acoustics(
     connection: &Connection,
 ) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
@@ -276,4 +331,38 @@ fn upsert_track_analysis(
         )
         .map(|_| ())
         .map_err(StoreError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::{Connection, params};
+    use sustain_domain::TrackId;
+
+    use super::load_beat_grid;
+    use crate::{StoreError, migrations};
+
+    #[test]
+    fn a_stored_grid_that_describes_no_grid_is_an_error() {
+        let connection = Connection::open_in_memory().expect("connection");
+        migrations::apply_pending(&connection).expect("schema");
+        connection
+            .execute(
+                "INSERT INTO tracks (id, relative_path, title) VALUES (1, x'61', 'Title')",
+                [],
+            )
+            .expect("seed track");
+        // 120 BPM beats every 500 ms: a first beat at 500 ms is the second.
+        connection
+            .execute(
+                "INSERT INTO track_beat_grid VALUES (1, ?1, ?2, 1)",
+                params![12_000, 500_000],
+            )
+            .expect("seed grid");
+
+        let track_id = TrackId::new(1).expect("track id");
+        assert!(matches!(
+            load_beat_grid(&connection, track_id),
+            Err(StoreError::Database(_))
+        ));
+    }
 }

@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod acoustic;
+mod beat_grid;
 mod bpm;
 mod clock;
 mod command;
@@ -32,6 +33,7 @@ mod track_column_layout;
 mod waveform;
 
 pub use acoustic::AcousticFeatures;
+pub use beat_grid::{BEATS_PER_BAR, Beat, BeatGrid, InvalidBeatGrid};
 pub use bpm::{Bpm, InvalidBpm};
 pub use clock::{Clock, MonotonicClock, SystemClock, SystemMonotonicClock};
 pub use command::{ApplicationCommand, ApplicationQuery};
@@ -96,6 +98,6 @@ pub use track_column_layout::{
     TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
 pub use waveform::{
-    BeatGrid, DETAIL_SEGMENTS_PER_SECOND, PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment,
+    DETAIL_SEGMENTS_PER_SECOND, PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment,
     WaveformSegments,
 };

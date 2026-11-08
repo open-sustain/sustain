@@ -30,9 +30,9 @@ pub use identity::{
     read_marker_via_transport, write_marker, write_marker_via_transport,
 };
 pub use model::{
-    DeviceCapacity, GenreBytes, Placement, PreparedPioneerAssets, PreparedSyncRequest,
-    SourceSnapshot, SyncError, SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncPlan,
-    SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
+    DeviceCapacity, GenreBytes, PioneerTrackAnalysis, Placement, PreparedPioneerAssets,
+    PreparedSyncRequest, SourceSnapshot, SyncError, SyncInputPlaylist, SyncInputTrack, SyncOutcome,
+    SyncPlan, SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
 };
 pub use source::{ensure_source_unchanged, resolve_source_fingerprint, source_file_stat};
 pub use transport::{DeviceTarget, DeviceTransport, MtpTarget};
@@ -43,9 +43,10 @@ mod tests {
     use std::{
         io,
         path::{Path, PathBuf},
+        time::Duration,
     };
     use sustain_domain::{
-        AnlzRecord, Bpm, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap,
+        AnlzRecord, BeatGrid, Bpm, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap,
         SourceFileStat, SyncDevice, SyncDeviceId, TrackId,
     };
 
@@ -208,21 +209,33 @@ mod tests {
     /// Resolved fixtures always carry a content hash, so promoting a request
     /// to the mutating engine cannot fail; the helper unwraps for the tests.
     fn prepared(req: &SyncRequest) -> PreparedSyncRequest {
-        let pioneer_assets = if req.device.layout == DeviceLayout::Pioneer {
+        let analyses = vec![PioneerTrackAnalysis::default(); req.tracks.len()];
+        prepared_with(req, analyses)
+    }
+
+    /// `req` prepared with `analyses`, one per track, when it targets a
+    /// Pioneer layout.
+    fn prepared_with(
+        req: &SyncRequest,
+        analyses: Vec<PioneerTrackAnalysis>,
+    ) -> PreparedSyncRequest {
+        let pioneer_assets = (req.device.layout == DeviceLayout::Pioneer).then(|| {
             let mut assets = PreparedPioneerAssets::new();
-            for _ in &req.tracks {
-                assets.push_track(None, None, None);
+            for analysis in analyses {
+                assets.push_track(analysis, None);
             }
-            Some(assets)
-        } else {
-            None
-        };
+            assets
+        });
         PreparedSyncRequest::new(req.clone(), pioneer_assets)
             .expect("fixture sources are all resolved")
     }
 
     fn run(dest: &Path, req: &SyncRequest) -> SyncOutcome {
-        sync(&transport(dest), &prepared(req), &mut |_| {}, &|| false).expect("sync ok")
+        run_prepared(dest, &prepared(req))
+    }
+
+    fn run_prepared(dest: &Path, prepared: &PreparedSyncRequest) -> SyncOutcome {
+        sync(&transport(dest), prepared, &mut |_| {}, &|| false).expect("sync ok")
     }
 
     #[test]
@@ -514,10 +527,21 @@ mod tests {
         assert_eq!(std::fs::read(&dat).expect("dat"), b"untouched");
 
         // New analysis reaches the device although the audio is unchanged.
-        fx.tracks[0].bpm = Bpm::from_whole(124);
-        let third = run(
+        let tempo = Bpm::from_whole(124).expect("tempo");
+        fx.tracks[0].bpm = Some(tempo);
+        let analyses = vec![
+            PioneerTrackAnalysis {
+                beat_grid: Some(BeatGrid::new(tempo, Duration::ZERO, 1).expect("grid")),
+                ..PioneerTrackAnalysis::default()
+            },
+            PioneerTrackAnalysis::default(),
+        ];
+        let third = run_prepared(
             fx.dest.path(),
-            &request(&fx, DeviceLayout::Pioneer, second.manifest.clone(), false),
+            &prepared_with(
+                &request(&fx, DeviceLayout::Pioneer, second.manifest.clone(), false),
+                analyses.clone(),
+            ),
         );
         assert_eq!(third.unchanged, 2);
         let rewritten = anlz_of(&third.manifest, RUDE_BOY);
@@ -531,9 +555,12 @@ mod tests {
         // A missing file is restored even when the record matches.
         let ext = dat.with_extension("EXT");
         std::fs::remove_file(&ext).expect("remove ext");
-        let fourth = run(
+        let fourth = run_prepared(
             fx.dest.path(),
-            &request(&fx, DeviceLayout::Pioneer, third.manifest.clone(), false),
+            &prepared_with(
+                &request(&fx, DeviceLayout::Pioneer, third.manifest.clone(), false),
+                analyses,
+            ),
         );
         assert_eq!(anlz_of(&fourth.manifest, RUDE_BOY), rewritten);
         assert!(ext.is_file());
@@ -639,7 +666,7 @@ mod tests {
         ];
         let mut repeated_assets = PreparedPioneerAssets::new();
         for _ in 0..10_000 {
-            repeated_assets.push_track(None, None, Some(COVER_PNG));
+            repeated_assets.push_track(PioneerTrackAnalysis::default(), Some(COVER_PNG));
         }
         assert_eq!(repeated_assets.track_count(), 10_000);
         assert_eq!(
@@ -664,7 +691,7 @@ mod tests {
         };
         let mut assets = PreparedPioneerAssets::new();
         for _ in &req.tracks {
-            assets.push_track(None, None, Some(COVER_PNG));
+            assets.push_track(PioneerTrackAnalysis::default(), Some(COVER_PNG));
         }
         assert_eq!(assets.artwork_count(), 1);
         sync(

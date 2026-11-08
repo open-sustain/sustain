@@ -14,8 +14,8 @@ use std::{
 
 use sustain_analysis::{AnalysisError, AnalysisOptions, TrackAnalysis};
 use sustain_domain::{
-    AnalysisSettings, BackgroundResourceUsage, BpmRange, MusicalKey, PREVIEW_SEGMENT_COUNT, Track,
-    TrackLocation, TrackRelativePath, WaveformSegment, WaveformSegments,
+    AnalysisSettings, BackgroundResourceUsage, Bpm, BpmRange, MusicalKey, PREVIEW_SEGMENT_COUNT,
+    Track, TrackLocation, TrackRelativePath, WaveformSegment, WaveformSegments,
 };
 use sustain_library_store::{AnalysisCapabilities, InMemoryLibraryStore, LibraryStore, TrackId};
 use tempfile::TempDir;
@@ -57,9 +57,9 @@ fn fixed_clock(value: i64) -> UnixClockFn {
 fn ok_analyzer() -> AnalyzerFn {
     Arc::new(|_path, _caps, _opts, _duration| {
         Ok(TrackAnalysis {
-            bpm: Some(120.0),
+            bpm: Bpm::from_whole(120),
             key: Some(MusicalKey::CMajor),
-            beatgrid: None,
+            beat_grid: None,
             waveform_preview: WaveformSegments {
                 segment_duration_ms: 25.0,
                 segments: vec![WaveformSegment::silent(); PREVIEW_SEGMENT_COUNT],

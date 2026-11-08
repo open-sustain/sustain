@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sustain_analysis::{AcousticFeatures, AnalysisOptions, Analyzer, WaveformSegments};
 
-use crate::manifest::{Manifest, Options, Task, TrackEntry};
-use crate::metrics::{self, DEFAULT_BPM_TOLERANCE, KeyCategory};
+use crate::manifest::{Manifest, Options, ReferenceGrid, Task, TrackEntry};
+use crate::metrics::{self, DEFAULT_BPM_TOLERANCE, GridAgreement, KeyCategory};
 
 /// A complete benchmark report.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,6 +102,9 @@ pub struct TrackResult {
     pub tasks: Vec<Task>,
     /// Detected tempo (BPM), if the BPM capability ran and produced one.
     pub bpm: Option<f64>,
+    /// Detected beat grid, if the BPM capability ran and found one.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub beat_grid: Option<GridOutput>,
     /// Detected key as a short code (`Am`, `F#m`, …).
     pub key: Option<String>,
     /// Perceptual acoustic features.
@@ -111,6 +114,9 @@ pub struct TrackResult {
     /// BPM scoring vs ground truth.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub bpm_score: Option<BpmScore>,
+    /// Beat-grid scoring vs ground truth.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub grid_score: Option<GridScore>,
     /// Key scoring vs ground truth.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub key_score: Option<KeyScore>,
@@ -206,6 +212,31 @@ pub struct BpmScore {
     pub ratio_bucket: String,
 }
 
+/// A detected beat grid.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct GridOutput {
+    /// Tempo the beats are laid out at.
+    pub bpm: f64,
+    /// First beat, in seconds.
+    pub first_beat_secs: f64,
+    /// Its position in the bar, 1–4.
+    pub first_beat_number: u8,
+}
+
+/// Beat-grid score against ground truth.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct GridScore {
+    /// Aligned, off-beat, misaligned, tempo mismatch — or `None` when no
+    /// grid was detected.
+    pub agreement: Option<GridAgreement>,
+    /// Signed phase error mid-track (ms), when the tempos match.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub phase_error_ms: Option<f64>,
+    /// Whether bar positions agree, for aligned grids.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub downbeat_correct: Option<bool>,
+}
+
 /// Key score against ground truth.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyScore {
@@ -246,6 +277,10 @@ pub struct Summary {
     /// BPM aggregate, present when any track carried BPM ground truth.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub bpm: Option<BpmSummary>,
+    /// Beat-grid aggregate, present when any track carried a reference
+    /// grid.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub grid: Option<GridSummary>,
     /// Key aggregate, present when any track carried key ground truth.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub key: Option<KeySummary>,
@@ -265,6 +300,19 @@ pub struct BpmSummary {
     pub mean_abs_error: f64,
     /// Histogram of metrical ratio buckets.
     pub ratio_buckets: BTreeMap<String, usize>,
+}
+
+/// Aggregate beat-grid accuracy.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GridSummary {
+    /// Tracks with a reference grid.
+    pub scored: usize,
+    /// Percentage of scored tracks per agreement (`missing`: no grid).
+    pub agreement_pct: BTreeMap<String, f32>,
+    /// Median signed phase error of aligned grids (ms).
+    pub aligned_median_error_ms: Option<f64>,
+    /// Percentage of aligned grids whose bar positions agree.
+    pub downbeat_correct_pct: Option<f32>,
 }
 
 /// Aggregate key accuracy.
@@ -379,10 +427,12 @@ fn run_track(
                 source: "error".to_string(),
                 tasks,
                 bpm: None,
+                beat_grid: None,
                 key: None,
                 acoustics: None,
                 waveform: None,
                 bpm_score: None,
+                grid_score: None,
                 key_score: None,
                 timings: None,
                 error: Some(message),
@@ -399,10 +449,12 @@ fn run_track(
                 source,
                 tasks,
                 bpm: None,
+                beat_grid: None,
                 key: None,
                 acoustics: None,
                 waveform: None,
                 bpm_score: None,
+                grid_score: None,
                 key_score: None,
                 timings: None,
                 error: Some(format!("open failed: {err}")),
@@ -416,6 +468,7 @@ fn run_track(
     // first) so a full pass measures the same cache-sharing the
     // production scheduler gets.
     let mut bpm = None;
+    let mut beat_grid = None;
     let mut key = None;
     let mut acoustics = None;
     let mut waveform = None;
@@ -443,7 +496,14 @@ fn run_track(
                     .map(|features| Acoustics::from(&features));
             }
             Task::Bpm => {
-                bpm = analyzer.bpm().map(f64::from);
+                if let Some(tempo) = analyzer.tempo() {
+                    bpm = Some(tempo.bpm.as_f64());
+                    beat_grid = tempo.beat_grid.map(|grid| GridOutput {
+                        bpm: grid.tempo().as_f64(),
+                        first_beat_secs: grid.first_beat().as_secs_f64(),
+                        first_beat_number: grid.first_beat_number(),
+                    });
+                }
             }
             Task::Key => {
                 key = analyzer.key().map(|k| k.short_code().to_string());
@@ -460,6 +520,10 @@ fn run_track(
     }
 
     let bpm_score = entry.bpm.map(|gt| score_bpm(gt, bpm));
+    let grid_score = entry
+        .beat_grid
+        .zip(duration_hint)
+        .map(|(reference, duration)| score_grid(reference, beat_grid, duration));
     let key_score = entry
         .key
         .as_deref()
@@ -470,10 +534,12 @@ fn run_track(
         source,
         tasks,
         bpm,
+        beat_grid,
         key,
         acoustics,
         waveform,
         bpm_score,
+        grid_score,
         key_score,
         timings: (!reproducible).then_some(timings),
         error: None,
@@ -543,6 +609,41 @@ fn score_bpm(ground_truth: f64, predicted: Option<f64>) -> BpmScore {
     }
 }
 
+/// Score a detected grid against the reference, probing 10 %, 50 % and
+/// 90 % of the way through the track.
+fn score_grid(
+    reference: ReferenceGrid,
+    predicted: Option<GridOutput>,
+    duration: Duration,
+) -> GridScore {
+    let Some(predicted) = predicted else {
+        return GridScore {
+            agreement: None,
+            phase_error_ms: None,
+            downbeat_correct: None,
+        };
+    };
+    let secs = duration.as_secs_f64();
+    let comparison = metrics::compare_grids(
+        metrics::Grid {
+            bpm: predicted.bpm,
+            first_beat_secs: predicted.first_beat_secs,
+            first_beat_number: predicted.first_beat_number,
+        },
+        metrics::Grid {
+            bpm: reference.bpm,
+            first_beat_secs: reference.first_beat_secs,
+            first_beat_number: reference.first_beat_number,
+        },
+        &[secs * 0.1, secs * 0.5, secs * 0.9],
+    );
+    GridScore {
+        agreement: Some(comparison.agreement),
+        phase_error_ms: comparison.phase_error_ms,
+        downbeat_correct: comparison.downbeat_correct,
+    }
+}
+
 /// Score key against ground truth. Returns `None` when the ground-truth
 /// string is not a recognizable key (so a typo doesn't pollute the
 /// summary).
@@ -566,6 +667,7 @@ fn summarize(tracks: &[TrackResult], reproducible: bool) -> Summary {
         track_count: tracks.len(),
         error_count,
         bpm: summarize_bpm(tracks),
+        grid: summarize_grid(tracks),
         key: summarize_key(tracks),
         timing: (!reproducible).then(|| summarize_timing(tracks)),
     }
@@ -592,6 +694,44 @@ fn summarize_bpm(tracks: &[TrackResult]) -> Option<BpmSummary> {
         within_tolerance_pct: pct(within, scores.len()),
         mean_abs_error,
         ratio_buckets,
+    })
+}
+
+fn summarize_grid(tracks: &[TrackResult]) -> Option<GridSummary> {
+    let scores: Vec<&GridScore> = tracks
+        .iter()
+        .filter_map(|t| t.grid_score.as_ref())
+        .collect();
+    if scores.is_empty() {
+        return None;
+    }
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for score in &scores {
+        let label = match score.agreement {
+            None => "missing",
+            Some(GridAgreement::Aligned) => "aligned",
+            Some(GridAgreement::OffBeat) => "off_beat",
+            Some(GridAgreement::Misaligned) => "misaligned",
+            Some(GridAgreement::TempoMismatch) => "tempo_mismatch",
+        };
+        *counts.entry(label.to_string()).or_default() += 1;
+    }
+    let mut aligned_errors: Vec<f64> = scores
+        .iter()
+        .filter(|s| s.agreement == Some(GridAgreement::Aligned))
+        .filter_map(|s| s.phase_error_ms)
+        .collect();
+    aligned_errors.sort_by(f64::total_cmp);
+    let downbeats: Vec<bool> = scores.iter().filter_map(|s| s.downbeat_correct).collect();
+    Some(GridSummary {
+        scored: scores.len(),
+        agreement_pct: counts
+            .into_iter()
+            .map(|(label, count)| (label, pct(count, scores.len())))
+            .collect(),
+        aligned_median_error_ms: aligned_errors.get(aligned_errors.len() / 2).copied(),
+        downbeat_correct_pct: (!downbeats.is_empty())
+            .then(|| pct(downbeats.iter().filter(|&&ok| ok).count(), downbeats.len())),
     })
 }
 

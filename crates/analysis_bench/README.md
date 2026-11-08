@@ -167,6 +167,8 @@ duration_secs = 251.0   # optional; makes window placement deterministic
 bpm = 128.0             # optional ground truth
 key = "Am"              # optional ground truth (any common spelling)
 tasks = ["bpm"]         # optional per-track capability override
+# Optional ground-truth beat grid, on the gapless decode timeline:
+beat_grid = { bpm = 128.0, first_beat_secs = 0.112, first_beat_number = 1 }
 ```
 
 Synthetic `kind`s: `silence`, `tone` (`freq_hz`), `ramp`, `click_train`
@@ -181,6 +183,11 @@ Ported from the stratum-dsp validation suite (`validation/_metrics.py`,
 - **BPM** — absolute error, ±2 BPM accuracy, and metrical ratio buckets
   (`1x`, `2x`, `1/2x`, `3/2x`, `2/3x`, `4/3x`, `3/4x`, `other`) that surface
   octave/harmonic confusions instead of scoring them as plain misses.
+- **Beat grid** — probed at 10%, 50% and 90% of the track: `aligned` when
+  every probe's nearest predicted beat is within 20 ms of the reference beat,
+  `off_beat` when the grid sits half a beat away, `misaligned` otherwise, and
+  `tempo_mismatch` when the tempos differ by more than 0.1%. The downbeat is
+  scored on aligned grids.
 - **Key** — MIREX categories (`correct`, `fifth`, `relative`, `parallel`,
   `other`) with the standard weights (1.0 / 0.5 / 0.3 / 0.2 / 0.0), compared
   on pitch classes so enharmonic spellings never matter. From the category

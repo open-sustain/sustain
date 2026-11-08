@@ -421,6 +421,11 @@ impl LibraryStore for SqliteLibraryStore {
         analysis::load_waveform(&connection, track_id)
     }
 
+    fn load_beat_grid(&self, track_id: TrackId) -> StoreResult<Option<BeatGrid>> {
+        let connection = self.connection_guard()?;
+        analysis::load_beat_grid(&connection, track_id)
+    }
+
     fn load_all_acoustics(&self) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
         let connection = self.connection_guard()?;
         analysis::load_all_acoustics(&connection)

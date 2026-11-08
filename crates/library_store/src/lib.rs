@@ -10,7 +10,6 @@ use std::{
 };
 
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value as SqlValue};
-use sustain_domain::SmartPlaylistRuleSet;
 pub use sustain_domain::{
     AcousticFeatures, DuplicateConsolidationPlan, LibraryQuery, MetadataChange, PlayStatistics,
     Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist,
@@ -18,6 +17,7 @@ pub use sustain_domain::{
     TrackAnalysis, TrackAudioProperties, TrackColumnEntry, TrackColumnLayout,
     TrackColumnLayoutScope, TrackColumnSort, TrackId, TrackLocation, WaveformSegments,
 };
+use sustain_domain::{BeatGrid, SmartPlaylistRuleSet};
 pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 
 mod memory;
@@ -33,13 +33,14 @@ pub use tag_mirror::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork,
 
 use query::{sort_tracks, track_matches_search};
 use schema::{
-    DELETE_SMART_SHUFFLE_INDEX_SQL, DELETE_TRACK_SYNCED_LYRICS_SQL, FILL_TRACK_BPM_IF_NULL_SQL,
-    FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, RECONCILE_SCANNED_TRACK_SQL, SAVE_TRACK_SQL,
-    SELECT_ALL_TRACK_ACOUSTICS_SQL, SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL,
-    SELECT_TRACK_BY_ID_SQL, SELECT_TRACK_SYNCED_LYRICS_SQL, SELECT_TRACK_WAVEFORM_SQL,
-    SELECT_TRACKS_NEEDING_ANALYSIS_SQL, SELECT_TRACKS_NEEDING_ONLINE_SQL,
-    UPSERT_SMART_SHUFFLE_INDEX_SQL, UPSERT_TRACK_ACOUSTICS_SQL, UPSERT_TRACK_ANALYSIS_SQL,
-    UPSERT_TRACK_ONLINE_STATUS_SQL, UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
+    DELETE_SMART_SHUFFLE_INDEX_SQL, DELETE_TRACK_BEAT_GRID_SQL, DELETE_TRACK_SYNCED_LYRICS_SQL,
+    FILL_TRACK_BPM_IF_NULL_SQL, FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, RECONCILE_SCANNED_TRACK_SQL,
+    SAVE_TRACK_SQL, SELECT_ALL_TRACK_ACOUSTICS_SQL, SELECT_ALL_TRACKS_SQL,
+    SELECT_SMART_SHUFFLE_INDEX_SQL, SELECT_TRACK_BEAT_GRID_SQL, SELECT_TRACK_BY_ID_SQL,
+    SELECT_TRACK_SYNCED_LYRICS_SQL, SELECT_TRACK_WAVEFORM_SQL, SELECT_TRACKS_NEEDING_ANALYSIS_SQL,
+    SELECT_TRACKS_NEEDING_ONLINE_SQL, UPSERT_SMART_SHUFFLE_INDEX_SQL, UPSERT_TRACK_ACOUSTICS_SQL,
+    UPSERT_TRACK_ANALYSIS_SQL, UPSERT_TRACK_BEAT_GRID_SQL, UPSERT_TRACK_ONLINE_STATUS_SQL,
+    UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
 };
 use sqlite_rows::{
     blob_to_waveform_segments, build_limit, duration_to_seconds, limit_selection_name,
@@ -423,7 +424,10 @@ pub trait LibraryStore: Send + Sync {
     /// Updates `tracks.bpm_hundredths` and `tracks.musical_key` **only when
     /// those columns are currently NULL** — file-tag values from
     /// import and explicit user edits win, the analyzer fills in
-    /// missing data rather than overriding existing data.
+    /// missing data rather than overriding existing data. The beat grid,
+    /// an analysis product rather than a library value, is replaced
+    /// whenever the BPM capability ran — removed when the pass found
+    /// none.
     fn record_analysis(
         &self,
         track_id: TrackId,
@@ -470,6 +474,11 @@ pub trait LibraryStore: Send + Sync {
     /// when the track has not been waveform-analyzed yet (or analysis
     /// failed).
     fn load_waveform(&self, track_id: TrackId) -> StoreResult<Option<StoredWaveform>>;
+
+    /// Load the beat grid tempo analysis found for a track, if any.
+    /// `None` when the track has not been tempo-analyzed yet or has no
+    /// steady beat (a long track, a clip too short to hold one).
+    fn load_beat_grid(&self, track_id: TrackId) -> StoreResult<Option<BeatGrid>>;
 
     /// Load every track's acoustic features in one sweep, for the
     /// Smart Shuffle index rebuild. Tracks without an acoustics row
