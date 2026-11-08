@@ -12,13 +12,23 @@ path = "src/lib.rs"
 
 [dependencies]
 # Audio decoding. Format features cover the spread Sustain claims to
-# import — MP3, M4A/AAC, FLAC, Ogg/Vorbis, WAV. We do not enable
-# `isomp4` features that would bring in additional non-music codecs.
-# The PCM codec the WAV reader needs is supplied by symphonia's default
-# features, which this dependency keeps enabled (it does not set
-# `default-features = false`). 0.6 brings SIMD-by-default decode,
-# decode-from-non-owning-packets, and the hardened MP4/MKV demuxers.
-symphonia = { version = "0.6", features = ["mp3", "aac", "flac", "wav", "ogg", "vorbis"] }
+# import — MP3, M4A (AAC or Apple Lossless), FLAC, Ogg/Vorbis, WAV.
+# `isomp4` is the M4A container demuxer: without it no M4A file can be
+# opened, whatever codecs are enabled. The PCM codec the WAV reader
+# needs is supplied by symphonia's default features, which this
+# dependency keeps enabled (it does not set `default-features = false`).
+# 0.6 brings SIMD-by-default decode, decode-from-non-owning-packets, and
+# the hardened MP4/MKV demuxers.
+symphonia = { version = "0.6", features = [
+    "mp3",
+    "aac",
+    "alac",
+    "isomp4",
+    "flac",
+    "wav",
+    "ogg",
+    "vorbis",
+] }
 # BPM + key + STFT + spectral-flux onsets + BS.1770 loudness. Vendored,
 # trimmed minimal DSP core (was the published `stratum-dsp` crate; see
 # crates/dsp/PROVENANCE.md). Takes mono f32 samples / a magnitude

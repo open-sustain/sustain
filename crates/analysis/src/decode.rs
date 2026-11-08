@@ -386,6 +386,29 @@ mod tests {
         );
     }
 
+    /// One second of a 440 Hz sine in an M4A container — one fixture per
+    /// codec an M4A file carries (generated with ffmpeg; see `testdata/`).
+    fn assert_m4a_decodes(name: &str) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join(name);
+        let audio = decode_full(&path).expect("decode m4a");
+        assert_eq!(audio.sample_rate, 44_100);
+        let seconds = audio.samples.len() as f64 / 44_100.0;
+        assert!((seconds - 1.0).abs() < 0.05, "{name}: decoded {seconds} s");
+        let peak = audio
+            .samples
+            .iter()
+            .fold(0.0_f32, |peak, s| peak.max(s.abs()));
+        assert!(peak > 0.1, "{name}: decoded silence");
+    }
+
+    #[test]
+    fn decode_full_reads_aac_and_apple_lossless_m4a() {
+        assert_m4a_decodes("sine-aac.m4a");
+        assert_m4a_decodes("sine-alac.m4a");
+    }
+
     #[test]
     fn decode_window_from_zero_starts_at_the_top() {
         let dir = TempDir::new().expect("temp dir");
