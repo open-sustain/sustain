@@ -389,3 +389,25 @@ impl std::error::Error for SyncError {
         }
     }
 }
+
+/// A sync that stopped on an error, and what the device holds after it.
+#[derive(Debug)]
+pub struct SyncFailure {
+    pub error: SyncError,
+    /// The manifest to persist: the previous one when the run stopped
+    /// before touching the device, otherwise the files it kept or wrote
+    /// plus every previous file it left alone.
+    pub manifest: Vec<SyncManifestEntry>,
+}
+
+impl std::fmt::Display for SyncFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for SyncFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}

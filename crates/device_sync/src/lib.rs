@@ -31,8 +31,8 @@ pub use identity::{
 };
 pub use model::{
     DeviceCapacity, GenreBytes, PioneerTrackAnalysis, Placement, PreparedPioneerAssets,
-    PreparedSyncRequest, SourceSnapshot, SyncError, SyncInputPlaylist, SyncInputTrack, SyncOutcome,
-    SyncPlan, SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
+    PreparedSyncRequest, SourceSnapshot, SyncError, SyncFailure, SyncInputPlaylist, SyncInputTrack,
+    SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
 };
 pub use source::{ensure_source_unchanged, resolve_source_fingerprint, source_file_stat};
 pub use transport::{DeviceTarget, DeviceTransport, MtpTarget};
@@ -114,18 +114,34 @@ mod tests {
         DeviceRoot::open(dest).expect("open scratch device root")
     }
 
-    struct RecoverableCopyFailureTransport {
+    /// A device whose copy to `fail_path` fails, either as an error the
+    /// sync can carry on past (MTP's per-file failures) or as one that
+    /// stops it (a full or unplugged drive).
+    struct CopyFailureTransport {
         root: DeviceRoot,
         fail_path: DeviceRelativePath,
+        recoverable: bool,
     }
 
-    impl RecoverableCopyFailureTransport {
-        fn new(root: DeviceRoot, fail_path: DeviceRelativePath) -> Self {
-            Self { root, fail_path }
+    impl CopyFailureTransport {
+        fn recoverable(root: DeviceRoot, fail_path: DeviceRelativePath) -> Self {
+            Self {
+                root,
+                fail_path,
+                recoverable: true,
+            }
+        }
+
+        fn fatal(root: DeviceRoot, fail_path: DeviceRelativePath) -> Self {
+            Self {
+                root,
+                fail_path,
+                recoverable: false,
+            }
         }
     }
 
-    impl DeviceTransport for RecoverableCopyFailureTransport {
+    impl DeviceTransport for CopyFailureTransport {
         fn capacity(&self) -> io::Result<DeviceCapacity> {
             self.root.capacity()
         }
@@ -157,13 +173,13 @@ mod tests {
             expected: &SourceFileStat,
         ) -> io::Result<()> {
             if path == &self.fail_path {
-                return Err(io::Error::other("injected recoverable copy failure"));
+                return Err(io::Error::other("injected copy failure"));
             }
             self.root.copy_file(source_path, path, expected)
         }
 
         fn can_continue_after_copy_error(&self, _error: &io::Error) -> bool {
-            true
+            self.recoverable
         }
 
         fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
@@ -927,7 +943,7 @@ mod tests {
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
         let fail_path =
             DeviceRelativePath::new("Music/Artist 1/Album 1/02 Title 2.mp3").expect("safe path");
-        let transport = RecoverableCopyFailureTransport::new(transport(fx.dest.path()), fail_path);
+        let transport = CopyFailureTransport::recoverable(transport(fx.dest.path()), fail_path);
 
         let outcome = sync(&transport, &prepared(&req), &mut |_| {}, &|| false)
             .expect("recoverable copy failure does not abort");
@@ -1145,6 +1161,37 @@ mod tests {
             .collect();
         assert_eq!(tracked, on_device);
         assert_eq!(outcome.manifest.len(), 4);
+    }
+
+    #[test]
+    fn a_sync_stopped_by_an_error_keeps_tracking_the_files_it_wrote() {
+        let fx = fixture(3);
+        let mut first_request = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        first_request.tracks.truncate(1);
+        first_request.playlists[0].track_indices = vec![0];
+        let first = run(fx.dest.path(), &first_request);
+
+        // The drive fills up on the third track, after the second was
+        // written.
+        let grown = request(&fx, DeviceLayout::M3u, first.manifest, false);
+        let placements = crate::layout::plan_placements(&grown).expect("plan");
+        let transport =
+            CopyFailureTransport::fatal(transport(fx.dest.path()), placements[2].rel_path.clone());
+        let failure = sync(&transport, &prepared(&grown), &mut |_| {}, &|| false)
+            .expect_err("a fatal copy error stops the sync");
+        assert!(matches!(failure.error, SyncError::Io { .. }));
+        let tracked: Vec<TrackId> = failure.manifest.iter().map(|e| e.track_id).collect();
+        assert_eq!(tracked, vec![fx.tracks[0].track_id, fx.tracks[1].track_id]);
+
+        // So dropping the second track from the selection removes its file.
+        let shrunk = SyncRequest {
+            previous_manifest: failure.manifest,
+            remove_stale: true,
+            ..first_request
+        };
+        let outcome = run(fx.dest.path(), &shrunk);
+        assert_eq!(outcome.removed, 1);
+        assert_eq!(walk_files(fx.dest.path().join("Music")), 1);
     }
 
     #[cfg(unix)]
@@ -1365,7 +1412,10 @@ mod tests {
                 &mut |_| {},
                 &|| false
             ),
-            Err(SyncError::Empty)
+            Err(SyncFailure {
+                error: SyncError::Empty,
+                ..
+            })
         ));
     }
 

@@ -25,7 +25,7 @@ use sustain_device_sync::{
 };
 use sustain_domain::{
     DeviceLayout, DeviceRelativePath, FilesPerFolderCap, Playlist, PlaylistItem, SmartPlaylist,
-    SyncDevice, SyncDeviceId, Track, TrackId, matching_tracks,
+    SyncDevice, SyncDeviceId, SyncManifestEntry, Track, TrackId, matching_tracks,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore};
 use sustain_metadata::MetadataService;
@@ -33,7 +33,7 @@ use sustain_metadata::MetadataService;
 use crate::device_plan_scheduler::{
     DeviceMountIdentity, DevicePlanGeneration, DevicePlanResult, DevicePlanSnapshot,
 };
-use crate::device_sync_scheduler::{DeviceSyncEvent, DeviceSyncStartOutcome};
+use crate::device_sync_scheduler::{DeviceSyncEvent, DeviceSyncFailure, DeviceSyncStartOutcome};
 use crate::{
     AnalysisRunRequest, ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult,
     NotificationCategory, NotificationSeverity, notifications, track_artist_name,
@@ -681,11 +681,7 @@ impl ApplicationRuntime {
                 match completion.result {
                     Ok(outcome) => {
                         let manifest_saved = !outcome.manifest_is_authoritative
-                            || self.library_store.as_ref().is_some_and(|store| {
-                                store
-                                    .save_device_manifest(&completion.device_id, &outcome.manifest)
-                                    .is_ok()
-                            });
+                            || self.save_device_manifest(&completion.device_id, &outcome.manifest);
                         if !manifest_saved {
                             self.push_ephemeral_notification(
                                 NotificationCategory::DeviceSync,
@@ -707,17 +703,43 @@ impl ApplicationRuntime {
                             );
                         }
                     }
-                    Err(message) => {
+                    Err(failure) => {
+                        // A run that failed part-way still changed the
+                        // device; its manifest is what the next sync diffs
+                        // against.
+                        let manifest_saved = failure.manifest.as_ref().is_none_or(|manifest| {
+                            self.save_device_manifest(&completion.device_id, manifest)
+                        });
+                        let body = if manifest_saved {
+                            format!("Device sync failed: {}", failure.message)
+                        } else {
+                            format!(
+                                "Device sync failed: {}; could not save the on-device manifest.",
+                                failure.message
+                            )
+                        };
                         self.push_ephemeral_notification(
                             NotificationCategory::DeviceSync,
                             NotificationSeverity::Error,
-                            format!("Device sync failed: {message}"),
+                            body,
                         );
                     }
                 }
                 self.device_sync_scheduler.acknowledge_completion(run_id);
             }
         }
+    }
+
+    /// Persist `manifest` as what `device_id` holds. Returns whether it
+    /// was saved.
+    fn save_device_manifest(
+        &self,
+        device_id: &SyncDeviceId,
+        manifest: &[SyncManifestEntry],
+    ) -> bool {
+        self.library_store
+            .as_ref()
+            .is_some_and(|store| store.save_device_manifest(device_id, manifest).is_ok())
     }
 
     // --- Resolution helpers ---
@@ -797,7 +819,7 @@ impl DeviceSyncPreparation {
         self,
         progress: &mut dyn FnMut(SyncProgress),
         cancelled: &dyn Fn() -> bool,
-    ) -> Result<SyncOutcome, String> {
+    ) -> Result<SyncOutcome, DeviceSyncFailure> {
         let request = match build_worker_sync_request(
             self.store.as_ref(),
             &self.mount,
@@ -809,10 +831,12 @@ impl DeviceSyncPreparation {
         ) {
             Ok(Some(request)) => request,
             Ok(None) => return Ok(cancelled_outcome()),
-            Err(error) => return Err(error),
+            Err(error) => return Err(DeviceSyncFailure::before_device(error)),
         };
         if request.tracks.is_empty() {
-            return Err(sustain_device_sync::SyncError::Empty.to_string());
+            return Err(DeviceSyncFailure::before_device(
+                sustain_device_sync::SyncError::Empty.to_string(),
+            ));
         }
         let prepared = match prepare_sync_request(
             request,
@@ -823,12 +847,17 @@ impl DeviceSyncPreparation {
         ) {
             Ok(Some(request)) => request,
             Ok(None) => return Ok(cancelled_outcome()),
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(DeviceSyncFailure::before_device(error.to_string())),
         };
-        let transport = open_transport(&self.mount.target)
-            .map_err(|error| format!("could not open the device: {error}"))?;
-        engine::sync(transport.as_ref(), &prepared, progress, cancelled)
-            .map_err(|error| error.to_string())
+        let transport = open_transport(&self.mount.target).map_err(|error| {
+            DeviceSyncFailure::before_device(format!("could not open the device: {error}"))
+        })?;
+        Ok(engine::sync(
+            transport.as_ref(),
+            &prepared,
+            progress,
+            cancelled,
+        )?)
     }
 }
 

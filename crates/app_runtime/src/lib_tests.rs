@@ -115,6 +115,47 @@ fn device_sync_manifest_save_failure_surfaces_error_instead_of_success() {
 }
 
 #[test]
+fn a_failed_device_sync_saves_the_manifest_of_what_it_wrote() {
+    for (failure, saves) in [
+        (
+            crate::DeviceSyncFailure {
+                message: "No space left on device".to_owned(),
+                manifest: Some(Vec::new()),
+            },
+            1,
+        ),
+        (
+            crate::DeviceSyncFailure::before_device("could not open the device".to_owned()),
+            0,
+        ),
+    ] {
+        let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+        let mut runtime = ApplicationRuntime::new()
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+        let receiver = runtime.device_sync_event_receiver();
+        let device_id = SyncDeviceId::new("device-id").expect("device id");
+        let message = failure.message.clone();
+        assert!(matches!(
+            runtime
+                .device_sync_scheduler
+                .start_test_task(device_id, move |_progress, _cancel| Err(failure)),
+            crate::DeviceSyncStartOutcome::Started(_)
+        ));
+        runtime.apply_device_sync_event(receiver.recv_blocking().expect("completion"));
+
+        assert_eq!(store.device_manifest_calls(), saves);
+        let notification = runtime
+            .notifications()
+            .current_ephemeral()
+            .expect("failure notification");
+        assert_eq!(notification.severity, NotificationSeverity::Error);
+        assert!(notification.body.contains(&message));
+    }
+}
+
+#[test]
 fn device_sync_preparation_cancellation_preserves_saved_manifest() {
     let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));

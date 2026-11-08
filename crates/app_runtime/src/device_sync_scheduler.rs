@@ -16,8 +16,8 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 
-use sustain_device_sync::{SyncOutcome, SyncProgress};
-use sustain_domain::SyncDeviceId;
+use sustain_device_sync::{SyncFailure, SyncOutcome, SyncProgress};
+use sustain_domain::{SyncDeviceId, SyncManifestEntry};
 
 /// Monotonically increasing identity for one accepted device-sync run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,13 +36,42 @@ pub enum DeviceSyncEvent {
     },
 }
 
-/// The final result of a sync run. The error is stringified because the
-/// engine's `SyncError` carries non-`Clone` sources; the runtime only
-/// needs the message for its notification.
+/// The final result of a sync run.
 #[derive(Debug)]
 pub struct DeviceSyncCompletion {
     pub device_id: SyncDeviceId,
-    pub result: Result<SyncOutcome, String>,
+    pub result: Result<SyncOutcome, DeviceSyncFailure>,
+}
+
+/// A sync run that ended on an error. The error is stringified because the
+/// engine's `SyncError` carries non-`Clone` sources; the runtime only
+/// needs the message for its notification.
+#[derive(Debug)]
+pub struct DeviceSyncFailure {
+    pub message: String,
+    /// What the device holds after the run, once the engine got to it:
+    /// files it wrote before the error must stay tracked. `None` when the
+    /// run failed before reaching the device, keeping the saved manifest.
+    pub manifest: Option<Vec<SyncManifestEntry>>,
+}
+
+impl DeviceSyncFailure {
+    /// A failure before the run reached the device.
+    pub fn before_device(message: String) -> Self {
+        Self {
+            message,
+            manifest: None,
+        }
+    }
+}
+
+impl From<SyncFailure> for DeviceSyncFailure {
+    fn from(failure: SyncFailure) -> Self {
+        Self {
+            message: failure.error.to_string(),
+            manifest: Some(failure.manifest),
+        }
+    }
 }
 
 /// Typed result of asking the scheduler to start a run.
@@ -54,7 +83,10 @@ pub enum DeviceSyncStartOutcome {
 }
 
 type SyncTask = Box<
-    dyn FnOnce(&mut dyn FnMut(SyncProgress), &dyn Fn() -> bool) -> Result<SyncOutcome, String>
+    dyn FnOnce(
+            &mut dyn FnMut(SyncProgress),
+            &dyn Fn() -> bool,
+        ) -> Result<SyncOutcome, DeviceSyncFailure>
         + Send,
 >;
 
@@ -129,7 +161,7 @@ impl DeviceSyncScheduler {
         task: impl FnOnce(
             &mut dyn FnMut(SyncProgress),
             &dyn Fn() -> bool,
-        ) -> Result<SyncOutcome, String>
+        ) -> Result<SyncOutcome, DeviceSyncFailure>
         + Send
         + 'static,
     ) -> DeviceSyncStartOutcome {
@@ -237,7 +269,7 @@ impl DeviceSyncScheduler {
         task: impl FnOnce(
             &mut dyn FnMut(SyncProgress),
             &dyn Fn() -> bool,
-        ) -> Result<SyncOutcome, String>
+        ) -> Result<SyncOutcome, DeviceSyncFailure>
         + Send
         + 'static,
     ) -> DeviceSyncStartOutcome {
