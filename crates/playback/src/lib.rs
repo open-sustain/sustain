@@ -162,9 +162,6 @@ impl GStreamerPlaybackService {
         let playbin = gst::ElementFactory::make("playbin")
             .build()
             .map_err(|_| PlaybackError::BackendUnavailable)?;
-        if let Some(audio_sink) = pulse_audio_sink() {
-            playbin.set_property("audio-sink", &audio_sink);
-        }
 
         let state = Rc::new(RefCell::new(PlaybackState::Stopped));
         let on_event: Rc<RefCell<Option<SharedPlaybackEventCallback>>> =
@@ -252,6 +249,7 @@ impl PlaybackService for GStreamerPlaybackService {
         self.playbin
             .set_state(gst::State::Null)
             .map_err(|_| PlaybackError::PlaybackFailed)?;
+        install_stream_audio_sink(&self.playbin);
         self.playbin.set_property("uri", uri.as_str());
         self.state.replace(PlaybackState::Loading {
             track_id: source.track_id,
@@ -417,6 +415,21 @@ fn gst_warning_message(warning: &gst::message::Warning) -> String {
     match warning.debug() {
         Some(debug) => format!("{} ({debug})", warning.error()),
         None => warning.error().to_string(),
+    }
+}
+
+/// Gives the stream `playbin` is about to open an audio sink of its own.
+///
+/// A `pulsesink` records the device its stream connected to in its own
+/// `device` property and keeps it once stopped, so a reused sink opens
+/// every later stream pinned to that device: after the user changes the
+/// default output while nothing plays, playback would stay on the old
+/// device. A fresh sink connects each stream to the default output of
+/// the moment, and the sound server moves it along from there.
+/// `playbin` must be in `Null`; it carries its volume over to the sink.
+fn install_stream_audio_sink(playbin: &gst::Element) {
+    if let Some(audio_sink) = pulse_audio_sink() {
+        playbin.set_property("audio-sink", &audio_sink);
     }
 }
 
