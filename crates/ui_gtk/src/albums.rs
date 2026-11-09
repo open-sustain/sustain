@@ -91,7 +91,24 @@ pub(crate) struct AlbumsView {
     /// key off this — they are skipped while the view is dormant so the
     /// cost stays out of startup.
     activated: Rc<Cell<bool>>,
+    /// Whether the Albums page is the visible view. A built grid follows
+    /// library and search changes at once only while shown.
+    shown: Rc<Cell<bool>>,
+    /// What changed while the built grid was hidden, applied when it is
+    /// next shown.
+    hidden_changes: Rc<Cell<HiddenChanges>>,
     playing_track_id: Rc<Cell<Option<TrackId>>>,
+}
+
+/// What a hidden grid owes its next showing, the larger change covering
+/// the smaller.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum HiddenChanges {
+    None,
+    /// The search changed: filter the albums again.
+    Search,
+    /// The library changed: group the albums again, then filter them.
+    Library,
 }
 
 struct PendingAlbumScroll {
@@ -232,6 +249,8 @@ impl AlbumsView {
             artwork_loader,
             detail_generation: Rc::new(Cell::new(0)),
             activated: Rc::new(Cell::new(false)),
+            shown: Rc::new(Cell::new(false)),
+            hidden_changes: Rc::new(Cell::new(HiddenChanges::None)),
             playing_track_id: Rc::new(Cell::new(None)),
         }
     }
@@ -240,26 +259,50 @@ impl AlbumsView {
         self.scroller.clone()
     }
 
-    /// Build the grid for the first time. Called when the Albums tab is
-    /// selected, either by the user clicking the mode button or by a
-    /// reveal request that needs the view populated to find an album.
-    /// Idempotent: repeated calls are no-ops, so callers don't need to
-    /// track activation state themselves.
-    pub(crate) fn activate(&self) {
-        if self.activated.replace(true) {
+    /// Follow the Albums page being shown or hidden. Showing it brings the
+    /// grid up to date.
+    pub(crate) fn set_shown(&self, shown: bool) {
+        self.shown.set(shown);
+        if shown {
+            self.activate();
+        }
+    }
+
+    /// Bring the grid up to date: build it the first time, then apply what
+    /// changed while it was hidden. Called when the page is shown, and by a
+    /// reveal request that needs the current albums to find one.
+    fn activate(&self) {
+        if !self.activated.replace(true) {
+            self.hidden_changes.set(HiddenChanges::None);
+            self.install_layout_triggers();
+            self.regroup_and_apply_search();
             return;
         }
-        self.install_layout_triggers();
-        self.regroup_and_apply_search();
+        match self.hidden_changes.replace(HiddenChanges::None) {
+            HiddenChanges::None => {}
+            HiddenChanges::Search => self.apply_search(),
+            HiddenChanges::Library => self.regroup_and_apply_search(),
+        }
+    }
+
+    /// Defer `change` until the grid is next shown, if it is hidden.
+    /// Returns whether it was deferred.
+    fn defer_while_hidden(&self, change: HiddenChanges) -> bool {
+        if self.shown.get() {
+            return false;
+        }
+        self.hidden_changes
+            .set(self.hidden_changes.get().max(change));
+        true
     }
 
     /// Re-derive the album grid from the runtime's current library after a
-    /// full library change (scan/import/removal). While the view is dormant
-    /// this is a no-op — there is no snapshot to refresh and the first
-    /// activate() reads the runtime fresh — so a library change does not pay
-    /// for an off-screen regroup or any track clone.
+    /// full library change (scan/import/removal). Before the grid is first
+    /// built this is a no-op — the build reads the runtime fresh — and
+    /// while it is hidden the regroup waits until it is shown, so a library
+    /// change does not pay for an off-screen regroup or any track clone.
     pub(crate) fn replace_tracks(&self) {
-        if !self.activated.get() {
+        if !self.activated.get() || self.defer_while_hidden(HiddenChanges::Library) {
             return;
         }
         self.regroup_and_apply_search();
@@ -277,11 +320,11 @@ impl AlbumsView {
     /// time a background lyrics/tags/artwork/BPM/key/waveform job
     /// finished a single track.
     pub(crate) fn update_track(&self, track_id: TrackId) {
-        // While dormant there is no grouped state to patch: the runtime
-        // owns the authoritative track and the first activate() reads it
-        // fresh, so a background per-track update costs nothing here and a
-        // full sweep no longer scans an off-screen snapshot per track.
-        if !self.activated.get() {
+        // While dormant, or due a regroup, there is no grouped state worth
+        // patching: the runtime owns the authoritative track and the next
+        // grouping reads it fresh, so a background per-track update costs
+        // nothing here.
+        if !self.has_current_grouping() {
             return;
         }
 
@@ -334,7 +377,7 @@ impl AlbumsView {
     }
 
     pub(crate) fn refresh_track_artwork(&self, track_id: TrackId) {
-        if !self.activated.get() {
+        if !self.has_current_grouping() {
             return;
         }
         let album_key = {
@@ -357,10 +400,16 @@ impl AlbumsView {
             return;
         }
         *self.search_text.borrow_mut() = search_text;
-        if !self.activated.get() {
+        if !self.activated.get() || self.defer_while_hidden(HiddenChanges::Search) {
             return;
         }
         self.apply_search();
+    }
+
+    /// Whether the grouped albums reflect the library: the grid is built
+    /// and no regroup awaits its next showing.
+    fn has_current_grouping(&self) -> bool {
+        self.activated.get() && self.hidden_changes.get() != HiddenChanges::Library
     }
 
     pub(crate) fn visible_album_count(&self) -> usize {

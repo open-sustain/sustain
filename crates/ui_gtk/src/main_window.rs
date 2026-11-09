@@ -1497,9 +1497,7 @@ fn install_duplicates_view(
 fn install_albums_view_activator(content_stack: &gtk::Stack, albums_view: &AlbumsView) {
     let albums_view = albums_view.clone();
     content_stack.connect_visible_child_name_notify(move |stack| {
-        if stack.visible_child_name().as_deref() == Some(ALBUMS_VIEW) {
-            albums_view.activate();
-        }
+        albums_view.set_shown(stack.visible_child_name().as_deref() == Some(ALBUMS_VIEW));
     });
 }
 
