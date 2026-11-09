@@ -31,7 +31,7 @@ in the Flatpak.
 
 ## Summary
 
-- **Apache License 2.0** (`Apache-2.0`) — 156 crate(s)
+- **Apache License 2.0** (`Apache-2.0`) — 157 crate(s)
 - **MIT License** (`MIT`) — 54 crate(s)
 - **Unicode License v3** (`Unicode-3.0`) — 19 crate(s)
 - **Mozilla Public License 2.0** (`MPL-2.0`) — 16 crate(s)
@@ -3592,6 +3592,7 @@ limitations under the License.
 Applies to:
 
 - [hashlink 0.11.0](https://github.com/kyren/hashlink)
+- [hashlink 0.12.2](https://github.com/djc/hashlink)
 
 ```text
                               Apache License
@@ -6061,8 +6062,8 @@ The GNU General Public License does not permit incorporating your program into p
 
 Applies to:
 
-- [libsqlite3-sys 0.37.0](https://github.com/rusqlite/rusqlite)
-- [rusqlite 0.39.0](https://github.com/rusqlite/rusqlite)
+- [libsqlite3-sys 0.39.1](https://github.com/rusqlite/rusqlite)
+- [rusqlite 0.41.1](https://github.com/rusqlite/rusqlite)
 
 ```text
 Copyright (c) 2014 The rusqlite developers
