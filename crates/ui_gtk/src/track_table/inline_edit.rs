@@ -327,6 +327,13 @@ impl InlineEditController {
             if !list_item.is_selected() || list_item.item().as_ref() != Some(&armed_item) {
                 return;
             }
+            // The click focused the table. If focus has left it since, the
+            // user moved on (a shortcut opened the sidebar's rename entry,
+            // a click reached the search field) and the editor would pull
+            // focus, and their typing, back from there.
+            if !focus_within_table(&cell) {
+                return;
+            }
             controller.open_edit(field, &cell, &list_item);
         });
         *self.pending_open.borrow_mut() = Some(source);
@@ -605,6 +612,16 @@ fn cell_origin_x(cell: &gtk::Box) -> Option<f32> {
     Some(point.x())
 }
 
+/// Whether keyboard focus is inside the table that holds `cell`.
+fn focus_within_table(cell: &gtk::Box) -> bool {
+    let Some(table) = cell.ancestor(gtk::ColumnView::static_type()) else {
+        return false;
+    };
+    cell.root()
+        .and_then(|root| root.focus())
+        .is_some_and(|focus| focus == table || focus.is_ancestor(&table))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::TrackTableRow;
@@ -660,6 +677,76 @@ mod tests {
             EditableField::Year.metadata_change(&metadata, "2001").year,
             sustain_app_runtime::FieldChange::Set(2001)
         );
+    }
+
+    /// An armed edit opens only while focus stays in the table: once the
+    /// user has moved focus elsewhere, their typing goes there.
+    #[test]
+    fn an_armed_edit_opens_only_while_focus_stays_in_the_table() {
+        let ran = crate::test_support::with_gtk(|| {
+            let begin_edit: BeginEditCallback = Rc::new(|_, _| {
+                Some(EditSession {
+                    seed: String::new(),
+                    commit: Box::new(|_| {}),
+                })
+            });
+            let table = super::super::build_track_table(
+                vec![TrackTableRow::test_row(1)],
+                None,
+                None,
+                None,
+                None,
+                Some(begin_edit),
+            );
+            let elsewhere = gtk::Entry::new();
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            content.append(&table.widget());
+            content.append(&elsewhere);
+            let window = gtk::Window::new();
+            window.set_default_size(700, 260);
+            window.set_child(Some(&content));
+            window.present();
+            let context = glib::MainContext::default();
+            for _ in 0..200 {
+                if !context.iteration(false) {
+                    break;
+                }
+            }
+            table.selection.select_item(0, true);
+            let controller = table.inline_edit.clone().expect("inline editing table");
+            let (list_item, cell) = controller
+                .cells
+                .find_map_live(|entry| {
+                    let list_item = entry.list_item.upgrade()?;
+                    (entry.field == EditableField::Title && list_item.position() == 0)
+                        .then(|| Some((list_item, entry.cell.upgrade()?)))
+                        .flatten()
+                })
+                .expect("a realized title cell on the first row");
+            let opens_after_arming = |focus: &dyn Fn()| {
+                // The click that arms an edit focuses its row.
+                table
+                    .table
+                    .scroll_to(0, None, gtk::ListScrollFlags::FOCUS, None);
+                controller.arm_open(&list_item, &cell, EditableField::Title);
+                focus();
+                while controller.pending_open.borrow().is_some() {
+                    context.iteration(true);
+                }
+                let opened = controller.active.borrow().is_some();
+                controller.finish_active(FinishMode::Cancel);
+                opened
+            };
+
+            assert!(opens_after_arming(&|| {}));
+            assert!(!opens_after_arming(&|| {
+                elsewhere.grab_focus();
+            }));
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
     }
 
     /// The track each commit was bound to, and the committed text.
