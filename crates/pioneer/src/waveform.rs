@@ -13,10 +13,11 @@
 //! - **PWV2** — 100-byte tiny preview, 4-bit height.
 //! - **PWV3** — monochrome detail, one `whiteness:3 | height:5` byte per
 //!   entry at 150 entries/second. Drives needle search + jogwheel.
-//! - **PWV4** — 1200-entry colour preview, 6 bytes per entry
-//!   (`height,colour` for low/mid/high bands), 8-bit heights.
-//! - **PWV5** — colour detail, a 2-byte `rgb + height` pack per entry at
-//!   150 entries/second.
+//! - **PWV4** — 1200-entry colour preview, 6 bytes per entry: overall
+//!   level, its complement, low-half energy, then the low/mid/high band
+//!   energies, each 0–127.
+//! - **PWV5** — colour detail, one big-endian `rgb:9 | height:5` `u16`
+//!   per entry at 150 entries/second.
 //!
 //! The amplitudes are already normalized to the track peak by the DSP
 //! pass, so there is no resampling of audio here — only down/up-sampling
@@ -148,49 +149,62 @@ fn encode_mono(amplitude: u8, whiteness: u8) -> u8 {
     ((whiteness & 0x07) << 5) | (height & 0x1F)
 }
 
-/// PWV4: 6 bytes per entry — `[low_h, low_c, mid_h, mid_c, high_h,
-/// high_c]`. Heights are 8-bit (0–127); colours stay within the ranges
-/// rekordbox uses (low bright `0xE0–0xFF`, mid `0x01–0x30`, high
-/// `0x01–0x20`) and are driven by the band energies.
+/// PWV4: 6 bytes per entry, each a level in 0–127. Bytes 3, 4 and 5
+/// carry the low, mid and high band energies — the player derives both
+/// the column's colour and its height from them. Byte 2 carries the
+/// energy below ~10 kHz, here the louder of the low and mid bands.
+/// Bytes 0 and 1 are undocumented (dysentery's analysis sees them only
+/// tint the blue rendering); in rekordbox's own files byte 0 follows the
+/// overall level and byte 1 sits near its complement, `255 − byte 0`,
+/// which is what is written here.
 fn encode_pwv4(segments: &[WaveformSegment]) -> Vec<u8> {
     let mut out = Vec::with_capacity(segments.len() * 6);
     for seg in segments {
+        let level = scale(seg.amplitude, 127);
+        out.push(level);
+        out.push(255 - level);
+        out.push(scale(seg.low_band.max(seg.mid_band), 127));
         out.push(scale(seg.low_band, 127));
-        out.push(0xE0 + (seg.low_band >> 3)); // 0xE0..=0xFF
         out.push(scale(seg.mid_band, 127));
-        out.push(0x01 + (seg.mid_band >> 3)); // 0x01..=0x20
         out.push(scale(seg.high_band, 127));
-        out.push(0x01 + (seg.high_band >> 4)); // 0x01..=0x10
     }
     out
 }
 
-/// PWV5: 2 bytes per entry packing a 3-bit RGB colour and a 5-bit
-/// height (per `rekordbox_anlz.ksy`). Colour comes from the relative
-/// band balance, so low-heavy content reads warm and high-heavy content
-/// reads cool.
+/// PWV5: one big-endian `u16` per entry, `red:3 | green:3 | blue:3 |
+/// height:5 | unused:2` (crate-digger's ANLZ analysis). The height
+/// carries the loudness; the colour carries the band balance only.
 fn encode_pwv5(segments: &[WaveformSegment]) -> Vec<u8> {
     let mut out = Vec::with_capacity(segments.len() * 2);
     for seg in segments {
-        let height = scale(seg.amplitude, 31);
         let (red, green, blue) = band_colour(seg);
-        // byte0: blue[0:2] in bits 7-5, height in bits 4-0.
-        // byte1: red in 7-5, green in 4-2, blue[3:4] in 1-0.
-        let byte0 = ((blue & 0x07) << 5) | (height & 0x1F);
-        let byte1 = ((red & 0x07) << 5) | ((green & 0x07) << 2) | ((blue >> 3) & 0x03);
-        out.push(byte0);
-        out.push(byte1);
+        let height = scale(seg.amplitude, 31);
+        let entry = u16::from(red) << 13
+            | u16::from(green) << 10
+            | u16::from(blue) << 7
+            | u16::from(height) << 2;
+        out.extend_from_slice(&entry.to_be_bytes());
     }
     out
 }
 
-/// Map a segment's band energies to a 3-bit-per-channel RGB colour.
-/// Red tracks the low band, green the mid, blue the high.
+/// Map a segment's band balance to a 3-bit-per-channel RGB colour: red
+/// tracks the low band, green the mid, blue the high, and the strongest
+/// band takes full intensity. Rekordbox's colours are normalized the
+/// same way — their strongest channel sits at or near full intensity
+/// whatever the height — so quiet passages keep their hue instead of
+/// fading to black. A segment with no band energy has no colour.
 fn band_colour(seg: &WaveformSegment) -> (u8, u8, u8) {
+    let strongest = seg.low_band.max(seg.mid_band).max(seg.high_band);
+    if strongest == 0 {
+        return (0, 0, 0);
+    }
+    let channel =
+        |band: u8| ((u16::from(band) * 7 + u16::from(strongest) / 2) / u16::from(strongest)) as u8;
     (
-        scale(seg.low_band, 7),
-        scale(seg.mid_band, 7),
-        scale(seg.high_band, 7),
+        channel(seg.low_band),
+        channel(seg.mid_band),
+        channel(seg.high_band),
     )
 }
 
@@ -267,6 +281,56 @@ mod tests {
     fn mono_encoding_packs_height_and_whiteness() {
         assert_eq!(encode_mono(255, 7), 0xFF);
         assert_eq!(encode_mono(0, 5), 0xA0);
+    }
+
+    #[test]
+    fn colour_detail_packs_rgb_above_height() {
+        let loud_bass = WaveformSegment {
+            amplitude: 255,
+            low_band: 200,
+            mid_band: 100,
+            high_band: 0,
+        };
+        let entry = u16::from_be_bytes(
+            encode_pwv5(&[loud_bass])[..]
+                .try_into()
+                .expect("one entry is two bytes"),
+        );
+        assert_eq!(entry >> 13, 7, "red");
+        assert_eq!((entry >> 10) & 7, 4, "green");
+        assert_eq!((entry >> 7) & 7, 0, "blue");
+        assert_eq!((entry >> 2) & 0x1F, 31, "height");
+        assert_eq!(entry & 3, 0, "unused bits");
+    }
+
+    #[test]
+    fn colour_carries_band_balance_not_loudness() {
+        let quiet = WaveformSegment {
+            amplitude: 20,
+            low_band: 4,
+            mid_band: 2,
+            high_band: 1,
+        };
+        let loud = WaveformSegment {
+            amplitude: 240,
+            low_band: 200,
+            mid_band: 100,
+            high_band: 50,
+        };
+        assert_eq!(band_colour(&quiet), band_colour(&loud));
+        assert_eq!(band_colour(&loud).0, 7);
+        assert_eq!(band_colour(&WaveformSegment::silent()), (0, 0, 0));
+    }
+
+    #[test]
+    fn colour_preview_puts_band_levels_in_the_last_three_bytes() {
+        let column = WaveformSegment {
+            amplitude: 255,
+            low_band: 255,
+            mid_band: 102,
+            high_band: 51,
+        };
+        assert_eq!(encode_pwv4(&[column]), vec![127, 128, 127, 127, 50, 25]);
     }
 
     #[test]
