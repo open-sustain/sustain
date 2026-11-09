@@ -137,7 +137,7 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
             runtime.finish_library_hydration_publication();
             crate::start_background_schedulers(&mut runtime);
         }
-        sidebar.refresh_silently();
+        sidebar.refresh();
         update_play_pause_sensitivity(&titlebar, &runtime.borrow());
         run_once(&post_hydration_startup);
         if let Some(profile) = hydration_profile {

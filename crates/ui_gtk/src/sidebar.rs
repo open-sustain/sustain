@@ -687,19 +687,16 @@ impl PlaylistSidebar {
         menu.install_on(self.root.upcast_ref::<gtk::Widget>());
     }
 
+    /// Rebuild the tree from the runtime's playlists, folders, and smart
+    /// playlists, keeping the selected item selected.
+    ///
+    /// The selection callback fires only when the selection itself
+    /// changes — the selected item was deleted, so the sidebar falls back
+    /// to Music. A refresh that keeps the shown item does not announce it
+    /// again: that would rebuild its view, losing the scroll position,
+    /// selection, and column sort. A caller whose change alters what the
+    /// shown item displays (its name, its rules) updates that view itself.
     pub(crate) fn refresh(&self) {
-        self.refresh_with_selection_notification(true);
-    }
-
-    /// Rebuild the tree after deferred startup hydration without firing the
-    /// Music selection callback. Songs rows and their aggregate summary are
-    /// already being published incrementally; re-running that callback would
-    /// rematerialize the full table on the GTK thread.
-    pub(crate) fn refresh_silently(&self) {
-        self.refresh_with_selection_notification(false);
-    }
-
-    fn refresh_with_selection_notification(&self, notify_selection: bool) {
         let transient_active = self.active_transient_row.borrow().is_some();
         let previous = self.current_selection();
         let tree_model = build_tree_model(&self.runtime.borrow());
@@ -709,7 +706,7 @@ impl PlaylistSidebar {
         // notify handler would otherwise fire the callback up to twice
         // — each call rebuilds the playlists table, which dominates
         // refresh cost on a large library. Suspend, do the surgery,
-        // restore, and fire the callback exactly once with the final
+        // restore, and fire the callback at most once, with the final
         // selection.
         let suspended = self.on_selection_changed.borrow_mut().take();
         self.selection.set_model(Some(&tree_model));
@@ -732,14 +729,14 @@ impl PlaylistSidebar {
             }
         }
         *self.on_selection_changed.borrow_mut() = suspended;
-        if transient_active || !notify_selection {
-            // A transient view owns the content area, or deferred startup
-            // explicitly requested a quiet model refresh. Keep the current
-            // page shown rather than firing a selection callback.
+        let selection = self.current_selection();
+        if transient_active || selection == previous {
+            // A transient view owns the content area, or the shown item
+            // survived the rebuild: keep the current page as it is.
             return;
         }
         if let Some(callback) = self.on_selection_changed.borrow().as_ref() {
-            callback(self.current_selection());
+            callback(selection);
         }
     }
 }

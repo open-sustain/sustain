@@ -48,6 +48,14 @@ impl PlaylistsViewRefreshContext {
     pub(super) fn mark_dirty_and_was_dirty(&self) -> bool {
         self.playlists_dirty.replace(true)
     }
+
+    /// Show `item`'s current name in the header, after a rename of the
+    /// shown item. Its rows are unchanged, so the table is left alone.
+    pub(super) fn retitle(&self, runtime: &ApplicationRuntime, item: PlaylistItem) {
+        if let Some(title) = playlist_item_title(runtime, item) {
+            self.playlists_header.set_title(&title);
+        }
+    }
 }
 
 /// Mirror of `install_albums_view_activator` for the Playlists view.
@@ -155,31 +163,32 @@ fn playlists_header_state_for(
     selection: Option<SidebarSelection>,
     summary: TrackSummary,
 ) -> Option<PlaylistsHeaderState> {
-    let title = match selection {
-        Some(SidebarSelection::Item(PlaylistItem::Playlist(id))) => runtime
+    // Music / Albums selections do not render the playlists header at
+    // all (the stack shows a different child).
+    let Some(SidebarSelection::Item(item)) = selection else {
+        return None;
+    };
+    let title = playlist_item_title(runtime, item)?;
+    Some(PlaylistsHeaderState { title, summary })
+}
+
+/// The name the playlists header shows for a sidebar item. Folders
+/// aggregate their children in the sidebar but are not themselves a
+/// playable track set, so the header has nothing meaningful to show.
+fn playlist_item_title(runtime: &ApplicationRuntime, item: PlaylistItem) -> Option<String> {
+    match item {
+        PlaylistItem::Playlist(id) => runtime
             .playlists()
             .iter()
-            .find(|playlist| playlist.id == id)?
-            .name
-            .clone(),
-        Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(id))) => runtime
+            .find(|playlist| playlist.id == id)
+            .map(|playlist| playlist.name.clone()),
+        PlaylistItem::SmartPlaylist(id) => runtime
             .smart_playlists()
             .iter()
-            .find(|playlist| playlist.id == id)?
-            .name
-            .clone(),
-        // Folders aggregate their children in the sidebar but are not
-        // themselves a playable track set, so the header has nothing
-        // meaningful to show. Music / Albums selections do not render
-        // the playlists header at all (the stack shows a different
-        // child).
-        Some(SidebarSelection::Item(PlaylistItem::Folder(_)))
-        | Some(SidebarSelection::Music)
-        | Some(SidebarSelection::Albums)
-        | Some(SidebarSelection::Statistics)
-        | None => return None,
-    };
-    Some(PlaylistsHeaderState { title, summary })
+            .find(|playlist| playlist.id == id)
+            .map(|playlist| playlist.name.clone()),
+        PlaylistItem::Folder(_) => None,
+    }
 }
 
 pub(super) fn playlist_table_rows_for(

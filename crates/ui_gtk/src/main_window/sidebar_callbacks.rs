@@ -48,10 +48,12 @@ pub(super) fn sidebar_rename_callback(
     command_controller: &SharedCommandController,
     runtime: &SharedRuntime,
     sidebar: &PlaylistSidebar,
+    playlists_refresh: &PlaylistsViewRefreshContext,
 ) -> crate::sidebar::SidebarRenameCallback {
     let command_controller = command_controller.clone();
     let runtime = runtime.clone();
     let sidebar = sidebar.clone();
+    let playlists_refresh = playlists_refresh.clone();
 
     Rc::new(move |item, new_name| {
         let dispatched = match item {
@@ -86,6 +88,9 @@ pub(super) fn sidebar_rename_callback(
         };
         if dispatched {
             sidebar.refresh();
+            if sidebar.current_selection() == Some(SidebarSelection::Item(item)) {
+                playlists_refresh.retitle(&runtime.borrow(), item);
+            }
         }
     })
 }
@@ -95,11 +100,15 @@ pub(super) fn sidebar_edit_smart_playlist_callback(
     command_controller: &SharedCommandController,
     runtime: &SharedRuntime,
     sidebar: &PlaylistSidebar,
+    playlists_refresh: &PlaylistsViewRefreshContext,
+    current_search_text: &Rc<RefCell<String>>,
 ) -> crate::sidebar::SidebarEditSmartPlaylistCallback {
     let parent = parent.clone();
     let command_controller = command_controller.clone();
     let runtime = runtime.clone();
     let sidebar = sidebar.clone();
+    let playlists_refresh = playlists_refresh.clone();
+    let current_search_text = current_search_text.clone();
 
     Rc::new(move |smart_playlist_id| {
         let snapshot = runtime
@@ -111,11 +120,35 @@ pub(super) fn sidebar_edit_smart_playlist_callback(
         let Some((name, rules)) = snapshot else {
             return;
         };
-        let sidebar_for_saved = sidebar.clone();
+        let on_saved: Rc<dyn Fn()> = {
+            let runtime = runtime.clone();
+            let sidebar = sidebar.clone();
+            let playlists_refresh = playlists_refresh.clone();
+            let current_search_text = current_search_text.clone();
+            Rc::new(move || {
+                sidebar.refresh();
+                // New rules select new rows; rebuild the smart playlist's
+                // view if it is the one shown.
+                let selection = sidebar.current_selection();
+                if selection
+                    == Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(
+                        smart_playlist_id,
+                    )))
+                {
+                    let search_text = current_search_text.borrow().clone();
+                    refresh_playlists_view_if_visible(
+                        &runtime.borrow(),
+                        &playlists_refresh,
+                        selection,
+                        &search_text,
+                    );
+                }
+            })
+        };
         open_smart_playlist_editor(
             &parent,
             command_controller.clone(),
-            Rc::new(move || sidebar_for_saved.refresh()),
+            on_saved,
             SmartPlaylistEditorMode::Edit {
                 smart_playlist_id,
                 name,

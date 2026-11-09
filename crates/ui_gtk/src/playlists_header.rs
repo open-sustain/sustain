@@ -92,7 +92,7 @@ impl PlaylistsHeader {
     pub(crate) fn set_state(&self, state: Option<PlaylistsHeaderState>) {
         match state {
             Some(state) => {
-                self.title.set_text(&state.title);
+                self.set_title(&state.title);
                 self.set_summary(state.summary);
                 self.root.set_visible(true);
             }
@@ -100,6 +100,11 @@ impl PlaylistsHeader {
                 self.root.set_visible(false);
             }
         }
+    }
+
+    /// Show the shown item's name, after a rename that kept it selected.
+    pub(crate) fn set_title(&self, title: &str) {
+        self.title.set_text(title);
     }
 
     /// Show the summary of the rows the table now holds, after they

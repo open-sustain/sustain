@@ -601,8 +601,10 @@ pub(crate) fn build_main_window(
         &albums_view,
         &duplicates_view,
         &statistics_view,
+        &playlists_refresh,
         &sidebar,
         &titlebar,
+        &current_search_text,
         visible_summary_refresh.clone(),
     );
     install_track_availability_observer(&runtime, &songs_table, &playlists_table);
@@ -779,6 +781,7 @@ pub(crate) fn build_main_window(
         &command_controller,
         &runtime,
         &sidebar,
+        &playlists_refresh,
     ));
     sidebar.set_delete_callback(sidebar_delete_callback(&command_controller, &sidebar));
     sidebar.set_tracks_drop_callback(sidebar_tracks_drop_callback(
@@ -790,6 +793,8 @@ pub(crate) fn build_main_window(
         &command_controller,
         &runtime,
         &sidebar,
+        &playlists_refresh,
+        &current_search_text,
     ));
     sidebar.set_analysis_run_callback(sidebar_analysis_run_callback(&runtime));
     sidebar.set_online_run_callback(sidebar_online_run_callback(&runtime));
@@ -1599,8 +1604,10 @@ fn library_changed_callback(
     albums_view: &AlbumsView,
     duplicates_view: &DuplicatesView,
     statistics_view: &StatisticsView,
+    playlists_refresh: &PlaylistsViewRefreshContext,
     sidebar: &PlaylistSidebar,
     titlebar: &Titlebar,
+    current_search_text: &Rc<RefCell<String>>,
     visible_summary_refresh: VisibleSummaryRefreshCallback,
 ) -> LibraryChangedCallback {
     let runtime = runtime.clone();
@@ -1608,8 +1615,10 @@ fn library_changed_callback(
     let albums_view = albums_view.clone();
     let duplicates_view = duplicates_view.clone();
     let statistics_view = statistics_view.clone();
+    let playlists_refresh = playlists_refresh.clone();
     let sidebar = sidebar.clone();
     let titlebar = titlebar.clone();
+    let current_search_text = current_search_text.clone();
 
     Rc::new(move || {
         songs_refresh.refresh();
@@ -1623,12 +1632,15 @@ fn library_changed_callback(
         // next visit), so a scan/import does not pay for an off-screen
         // rebuild.
         statistics_view.refresh_if_visible();
-        // sidebar.refresh() rebuilds the sidebar tree-model and fires the
-        // selection callback exactly once. That callback owns the
-        // playlists view — it runs `refresh_playlists_view_if_visible`,
-        // so library_changed never needs to touch the playlists table
-        // directly.
-        sidebar.refresh();
+        // A scan leaves the playlist tree alone but can change any
+        // playlist's rows (tracks gone, smart rules newly matching).
+        let search_text = current_search_text.borrow().clone();
+        refresh_playlists_view_if_visible(
+            &runtime.borrow(),
+            &playlists_refresh,
+            sidebar.current_selection(),
+            &search_text,
+        );
         // A scan/import/removal can flip the library between empty and
         // non-empty, which decides whether the Play button can cold-start
         // anything.
