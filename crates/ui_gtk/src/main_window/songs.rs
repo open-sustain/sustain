@@ -106,14 +106,14 @@ mod tests {
             content_stack.set_visible_child_name(PLAYLISTS_VIEW);
             refresh.refresh();
             assert_eq!(
-                songs_table.summary_values().0,
+                songs_table.summary().track_count,
                 1,
                 "a hidden table waits to be shown"
             );
 
             content_stack.set_visible_child_name(SONGS_VIEW);
             assert_eq!(
-                songs_table.summary_values().0,
+                songs_table.summary().track_count,
                 0,
                 "showing the table rebuilds it"
             );

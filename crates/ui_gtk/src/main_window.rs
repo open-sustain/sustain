@@ -85,6 +85,7 @@ use super::{
         play_next_callback, playback_has_current_track_visibility, show_album_callback,
         show_in_folder_callback, track_has_album_visibility,
     },
+    track_summary::TrackSummary,
     track_table::{
         BeginEditCallback, EditSession, EditableField, RatingChangedCallback, RowDropPosition,
         RowReorderCallback, RowReorderDrop, TrackActivatedCallback, TrackTable, TrackTableRow,
@@ -247,14 +248,11 @@ pub(crate) fn build_main_window(
     );
     let status_bar = {
         let runtime_for_cancel = runtime.clone();
-        StatusBar::new(
-            &[],
-            Rc::new(move || {
-                runtime_for_cancel
-                    .borrow()
-                    .request_background_task_cancellation();
-            }),
-        )
+        StatusBar::new(Rc::new(move || {
+            runtime_for_cancel
+                .borrow()
+                .request_background_task_cancellation();
+        }))
     };
     let command_controller: SharedCommandController =
         Rc::new(UiCommandController::new(runtime.clone()));
@@ -583,6 +581,7 @@ pub(crate) fn build_main_window(
         &runtime,
         &content_stack,
         &status_bar,
+        &songs_table,
         &playlists_table,
         &current_search_text,
         device_panel.current_device_cell(),
@@ -727,13 +726,11 @@ pub(crate) fn build_main_window(
             current_search_text: current_search_text.clone(),
             command_controller: command_controller.clone(),
             runtime: runtime.clone(),
-            songs_table: songs_table.clone(),
             songs_refresh: songs_refresh.clone(),
             albums_view: albums_view.clone(),
             playlists_refresh: playlists_refresh.clone(),
             sidebar: sidebar.clone(),
             content_stack: content_stack.clone(),
-            status_bar: status_bar.clone(),
             visible_summary_refresh: visible_summary_refresh.clone(),
         },
     );
@@ -1699,6 +1696,7 @@ fn visible_summary_refresh_callback(
     runtime: &SharedRuntime,
     content_stack: &gtk::Stack,
     status_bar: &StatusBar,
+    songs_table: &TrackTable,
     playlists_table: &TrackTable,
     current_search_text: &Rc<RefCell<String>>,
     current_device: Rc<RefCell<Option<ConnectedDevice>>>,
@@ -1706,37 +1704,38 @@ fn visible_summary_refresh_callback(
     let runtime = runtime.clone();
     let content_stack = content_stack.clone();
     let status_bar = status_bar.clone();
+    let songs_table = songs_table.clone();
     let playlists_table = playlists_table.clone();
     let current_search_text = current_search_text.clone();
 
     Rc::new(move || {
-        // On the device view the summary reflects the device's selected
-        // (deduplicated) tracks, not whatever table was last shown.
-        if content_stack.visible_child_name().as_deref() == Some(DEVICES_VIEW) {
-            let runtime = runtime.borrow();
-            let honor_sort_tags = runtime.settings().library.honor_sort_tags;
-            let rows: Vec<TrackTableRow> = current_device
-                .borrow()
-                .as_ref()
-                .map(|device| {
-                    runtime
-                        .device_selected_tracks(&device.id)
-                        .iter()
-                        .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
-                        .collect()
-                })
-                .unwrap_or_default();
-            status_bar.update_summary(&rows);
-            return;
-        }
-        if content_stack.visible_child_name().as_deref() == Some(PLAYLISTS_VIEW) {
-            let (track_count, duration_seconds, size_bytes) = playlists_table.summary_values();
-            status_bar.update_summary_values(track_count, duration_seconds, size_bytes);
-            return;
-        }
-        let search_text = current_search_text.borrow().clone();
-        let rows = runtime_library_table_rows(&runtime.borrow(), &search_text);
-        status_bar.update_summary(&rows);
+        let summary = match content_stack.visible_child_name().as_deref() {
+            // The device's selected (deduplicated) tracks, not whatever
+            // table was last shown.
+            Some(DEVICES_VIEW) => {
+                let runtime = runtime.borrow();
+                current_device
+                    .borrow()
+                    .as_ref()
+                    .map(|device| {
+                        TrackSummary::of_tracks(&runtime.device_selected_tracks(&device.id))
+                    })
+                    .unwrap_or_default()
+            }
+            // A visible table is current: it shows exactly what to sum.
+            Some(SONGS_VIEW) => songs_table.summary(),
+            Some(PLAYLISTS_VIEW) => playlists_table.summary(),
+            // The Albums page and the other library pages: the library
+            // under the current search, summed without building its rows.
+            _ => {
+                let runtime = runtime.borrow();
+                let normalized = normalize_query(&current_search_text.borrow());
+                TrackSummary::of_tracks(runtime.library_tracks().iter().filter(|track| {
+                    normalized.is_empty() || runtime.search_matches(track.id, &normalized)
+                }))
+            }
+        };
+        status_bar.update_summary(summary);
     })
 }
 

@@ -60,6 +60,7 @@ mod titlebar;
 mod track_context;
 mod track_context_ops;
 mod track_info;
+mod track_summary;
 mod track_table;
 mod util;
 mod window_chrome;

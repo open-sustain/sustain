@@ -14,7 +14,7 @@ use sustain_app_runtime::{
 };
 
 use super::{STATUS_BAR_HEIGHT, SharedRuntime};
-use crate::track_table::TrackTableRow;
+use crate::track_summary::TrackSummary;
 
 pub(crate) type CancelBackgroundTaskCallback = Rc<dyn Fn()>;
 
@@ -37,10 +37,7 @@ pub(crate) struct StatusBar {
 }
 
 impl StatusBar {
-    pub(crate) fn new(
-        library_tracks: &[TrackTableRow],
-        on_cancel_background_task: CancelBackgroundTaskCallback,
-    ) -> Self {
+    pub(crate) fn new(on_cancel_background_task: CancelBackgroundTaskCallback) -> Self {
         let root = gtk::CenterBox::new();
         root.add_css_class("status-bar");
         root.set_height_request(STATUS_BAR_HEIGHT);
@@ -64,7 +61,7 @@ impl StatusBar {
             summary,
             lane,
         };
-        status_bar.update_summary(library_tracks);
+        status_bar.update_summary(TrackSummary::default());
         status_bar
     }
 
@@ -90,29 +87,11 @@ impl StatusBar {
         self.start_cluster.append(&button);
     }
 
-    pub(crate) fn update_summary(&self, library_tracks: &[TrackTableRow]) {
-        let duration_seconds = library_tracks
-            .iter()
-            .map(|track| track.duration_seconds)
-            .sum();
-        let size_bytes = library_tracks
-            .iter()
-            .map(|track| track.file_size_bytes)
-            .sum();
-
-        self.update_summary_values(library_tracks.len(), duration_seconds, size_bytes);
-    }
-
-    pub(crate) fn update_summary_values(
-        &self,
-        track_count: usize,
-        duration_seconds: u64,
-        size_bytes: u64,
-    ) {
+    pub(crate) fn update_summary(&self, summary: TrackSummary) {
         self.summary.set_text(&library_status_text(
-            track_count,
-            duration_seconds,
-            size_bytes,
+            summary.track_count,
+            summary.duration_seconds,
+            summary.size_bytes,
         ));
     }
 

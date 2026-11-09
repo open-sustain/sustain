@@ -107,9 +107,7 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
             .collect();
         (runtime.library_tracks().len(), rows)
     };
-    let visible_count = rows.len();
-    let duration_seconds: u64 = rows.iter().map(|row| row.duration_seconds).sum();
-    let size_bytes: u64 = rows.iter().map(|row| row.file_size_bytes).sum();
+    let summary = TrackSummary::of_rows(&rows);
     // Ordered up front, the rows stream in final order: the first batch is
     // already the top of the sorted list, and nothing reshuffles as it fills.
     songs_table.order_rows(&mut rows);
@@ -132,7 +130,7 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
         }
 
         if still_current && content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW) {
-            status_bar.update_summary_values(visible_count, duration_seconds, size_bytes);
+            status_bar.update_summary(summary);
         }
         {
             let mut runtime = runtime.borrow_mut();
@@ -145,7 +143,7 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
         if let Some(profile) = hydration_profile {
             sustain_profiler::profile!(
                 "hydrate: Songs rows published ({} visible / {} total) in {:.1}ms",
-                visible_count,
+                summary.track_count,
                 total_tracks,
                 profile.elapsed_ms()
             );

@@ -95,6 +95,20 @@ pub(crate) struct TrackTableRow {
 }
 
 impl TrackTableRow {
+    /// The row's duration column for `track`: whole seconds, 0 when unknown.
+    pub(crate) fn duration_seconds_of(track: &Track) -> u64 {
+        track
+            .metadata
+            .duration
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default()
+    }
+
+    /// The row's size column for `track`: 0 when unknown.
+    pub(crate) fn file_size_bytes_of(track: &Track) -> u64 {
+        track.file_size_bytes.unwrap_or(0)
+    }
+
     pub(crate) fn from_track(track: &Track, honor_sort_tags: bool) -> Self {
         let track_name = non_empty_text(&track.metadata.title)
             .or_else(|| file_stem_text(track.location.path()))
@@ -131,11 +145,7 @@ impl TrackTableRow {
             music_key: track.metadata.key.map(|key| key.short_code().to_owned()),
             bitrate_kbps: track.metadata.bitrate_kbps,
             file_type: AudioFileType::from_path(track.location.path()),
-            duration_seconds: track
-                .metadata
-                .duration
-                .map(|duration| duration.as_secs())
-                .unwrap_or_default(),
+            duration_seconds: Self::duration_seconds_of(track),
             rating: track.rating.stars(),
             plays: track.statistics.play_count,
             skips: track.statistics.skip_count,
@@ -143,7 +153,7 @@ impl TrackTableRow {
             last_skipped: track.statistics.last_skipped_at,
             date_added: track.statistics.date_added_at,
             track_number: track.metadata.track_number,
-            file_size_bytes: track.file_size_bytes.unwrap_or(0),
+            file_size_bytes: Self::file_size_bytes_of(track),
             is_missing: track.location.is_missing(),
             playlist_position: None,
             group_band: None,

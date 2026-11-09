@@ -11,6 +11,7 @@ use std::rc::Rc;
 use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackColumnSort, TrackId};
 
 use super::track_context::TrackRowContextMenu;
+use crate::track_summary::TrackSummary;
 use cells::{
     RatingBindings, StatusBindings, TextBindings, TrackTableContextMenu, build_filler_column,
     build_rating_cell_factory, build_status_column, build_text_cell_factory,
@@ -180,10 +181,8 @@ impl TrackTable {
             .refresh_all(self.playing_track_id.get());
     }
 
-    pub(crate) fn summary_values(&self) -> (usize, u64, u64) {
-        let mut track_count = 0usize;
-        let mut duration_seconds = 0u64;
-        let mut size_bytes = 0u64;
+    pub(crate) fn summary(&self) -> TrackSummary {
+        let mut summary = TrackSummary::default();
         for position in 0..self.store.n_items() {
             let Some(row_object) = self
                 .store
@@ -192,14 +191,11 @@ impl TrackTable {
             else {
                 continue;
             };
-            let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
-                continue;
-            };
-            track_count += 1;
-            duration_seconds += row.duration_seconds;
-            size_bytes += row.file_size_bytes;
+            if let Ok(row) = row_object.try_borrow::<TrackTableRow>() {
+                summary.add_row(&row);
+            }
         }
-        (track_count, duration_seconds, size_bytes)
+        summary
     }
 
     /// Insert structurally new rows at their sorted positions without
@@ -1480,7 +1476,14 @@ mod tests {
 
             table.replace_rows(vec![first, second]);
 
-            assert_eq!(table.summary_values(), (2, 183, 3_500));
+            assert_eq!(
+                table.summary(),
+                TrackSummary {
+                    track_count: 2,
+                    duration_seconds: 183,
+                    size_bytes: 3_500,
+                }
+            );
         });
     }
 

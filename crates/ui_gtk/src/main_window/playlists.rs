@@ -134,17 +134,13 @@ fn rebuild_playlists_view(
     let rows = playlist_table_rows_for(runtime, sidebar_selection, search_text);
     let row_count = rows.len();
     sustain_profiler::profile_mark!(rows_profile, "playlist rows built ({} rows)", row_count);
-    let summary = playlist_rows_summary(&rows);
+    let summary = TrackSummary::of_rows(&rows);
     playlists_header.set_state(playlists_header_state_for(
         runtime,
         sidebar_selection,
         summary,
     ));
-    status_bar.update_summary_values(
-        summary.track_count,
-        summary.duration_seconds,
-        summary.size_bytes,
-    );
+    status_bar.update_summary(summary);
     let replace_profile = sustain_profiler::ProfileScope::start();
     playlists_table.replace_rows(rows);
     sustain_profiler::profile_mark!(
@@ -154,25 +150,10 @@ fn rebuild_playlists_view(
     );
 }
 
-#[derive(Clone, Copy)]
-struct PlaylistRowsSummary {
-    track_count: usize,
-    duration_seconds: u64,
-    size_bytes: u64,
-}
-
-fn playlist_rows_summary(rows: &[TrackTableRow]) -> PlaylistRowsSummary {
-    PlaylistRowsSummary {
-        track_count: rows.len(),
-        duration_seconds: rows.iter().map(|row| row.duration_seconds).sum(),
-        size_bytes: rows.iter().map(|row| row.file_size_bytes).sum(),
-    }
-}
-
 fn playlists_header_state_for(
     runtime: &ApplicationRuntime,
     selection: Option<SidebarSelection>,
-    summary: PlaylistRowsSummary,
+    summary: TrackSummary,
 ) -> Option<PlaylistsHeaderState> {
     let title = match selection {
         Some(SidebarSelection::Item(PlaylistItem::Playlist(id))) => runtime

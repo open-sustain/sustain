@@ -28,13 +28,11 @@ pub(super) struct SearchWiringContext {
     pub(super) current_search_text: Rc<RefCell<String>>,
     pub(super) command_controller: SharedCommandController,
     pub(super) runtime: SharedRuntime,
-    pub(super) songs_table: TrackTable,
     pub(super) songs_refresh: SongsViewRefresh,
     pub(super) albums_view: AlbumsView,
     pub(super) playlists_refresh: PlaylistsViewRefreshContext,
     pub(super) sidebar: PlaylistSidebar,
     pub(super) content_stack: gtk::Stack,
-    pub(super) status_bar: StatusBar,
     pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
 }
 
@@ -43,13 +41,11 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
         current_search_text,
         command_controller,
         runtime,
-        songs_table,
         songs_refresh,
         albums_view,
         playlists_refresh,
         sidebar,
         content_stack,
-        status_bar,
         visible_summary_refresh,
     } = context;
     connect_titlebar_search(
@@ -82,11 +78,6 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
             sustain_profiler::profile_mark!(change_profile, "search: text changed phase");
 
             songs_refresh.refresh();
-            let songs_visible = songs_refresh.is_visible();
-            if songs_visible {
-                let (track_count, duration_seconds, size_bytes) = songs_table.summary_values();
-                status_bar.update_summary_values(track_count, duration_seconds, size_bytes);
-            }
 
             let albums_profile = sustain_profiler::ProfileScope::start();
             albums_view.set_search_text(new_text.clone());
@@ -110,7 +101,7 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
                 );
             }
 
-            if !songs_visible && !playlists_refreshed {
+            if !playlists_refreshed {
                 visible_summary_refresh();
             }
         }),
