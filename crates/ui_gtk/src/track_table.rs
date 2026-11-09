@@ -13,8 +13,8 @@ use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackColu
 use super::track_context::TrackRowContextMenu;
 use crate::track_summary::TrackSummary;
 use cells::{
-    RatingBindings, StatusBindings, TextBindings, TrackTableContextMenu, build_filler_column,
-    build_rating_cell_factory, build_status_column, build_text_cell_factory,
+    RatingBindings, RefreshScope, StatusBindings, TextBindings, TrackTableContextMenu,
+    build_filler_column, build_rating_cell_factory, build_status_column, build_text_cell_factory,
 };
 pub(crate) use cells::{new_cell_text, row_track_id};
 use columns::{TRACK_TABLE_COLUMNS, TrackTableColumn};
@@ -175,10 +175,14 @@ impl TrackTable {
     /// makes the cheap swap show the right data — so do not drop it when
     /// reworking either caller.
     fn refresh_bound_cells(&self) {
-        self.text_bindings.refresh_all();
-        self.rating_bindings.refresh_all();
+        self.refresh_cells(RefreshScope::AllRows);
+    }
+
+    fn refresh_cells(&self, scope: RefreshScope<'_>) {
+        self.text_bindings.refresh(scope);
+        self.rating_bindings.refresh(scope);
         self.status_bindings
-            .refresh_all(self.playing_track_id.get());
+            .refresh(scope, self.playing_track_id.get());
     }
 
     pub(crate) fn summary(&self) -> TrackSummary {
@@ -319,50 +323,23 @@ impl TrackTable {
     ///
     /// Returns `true` when a matching row was found and updated.
     pub(crate) fn update_row(&self, track_id: TrackId, new_row: TrackTableRow) -> bool {
-        let n_items = self.store.n_items();
-        for position in 0..n_items {
-            let Some(row_object) = self
-                .store
-                .item(position)
-                .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
-            else {
-                continue;
-            };
-            let matches = row_object
-                .try_borrow::<TrackTableRow>()
-                .map(|row| row.track_id == Some(track_id))
-                .unwrap_or(false);
-            if !matches {
-                continue;
-            }
-            // `BoxedAnyObject::borrow_mut` takes `&self`; the local
-            // `row_object` is shadowed-immutable, but the inner
-            // `RefCell` borrow is what we actually need.
-            row_object
-                .borrow_mut::<TrackTableRow>()
-                .update_track_data(&new_row);
-            self.text_bindings.refresh_track(track_id);
-            self.rating_bindings.refresh_track(track_id);
-            self.status_bindings.refresh(self.playing_track_id.get());
-            return true;
-        }
-        false
+        self.update_rows(&HashMap::from([(track_id, new_row)])) > 0
     }
 
     /// Updates every matching cached row in one store pass, without emitting
     /// `gio::ListModel::items-changed`.
     ///
-    /// Batch metadata edits can touch dozens or hundreds of rows at once. A
-    /// per-track loop over [`Self::update_row`] would rescan the visible model
-    /// and refresh bound cells once per track; this keeps the same
-    /// scroll-preserving mutation strategy while bounding the table work to one
-    /// scan and one visible-cell refresh.
+    /// Batch metadata edits can touch dozens or hundreds of rows at once, so
+    /// the table work is bounded to one store scan. Only the cells showing an
+    /// updated track are re-derived: a background analysis result updates
+    /// one track at a time, and must not redraw every realized row.
     pub(crate) fn update_rows(&self, new_rows: &HashMap<TrackId, TrackTableRow>) -> usize {
         if new_rows.is_empty() {
             return 0;
         }
 
         let mut updated = 0usize;
+        let mut updated_track_ids = HashSet::new();
         let n_items = self.store.n_items();
         for position in 0..n_items {
             let Some(row_object) = self
@@ -376,19 +353,20 @@ impl TrackTable {
                 Ok(row) => row.track_id,
                 Err(_) => continue,
             };
-            let Some(new_row) = track_id.and_then(|track_id| new_rows.get(&track_id)) else {
+            let Some((track_id, new_row)) =
+                track_id.and_then(|track_id| new_rows.get_key_value(&track_id))
+            else {
                 continue;
             };
             row_object
                 .borrow_mut::<TrackTableRow>()
                 .update_track_data(new_row);
             updated += 1;
+            updated_track_ids.insert(*track_id);
         }
 
         if updated > 0 {
-            self.text_bindings.refresh_all();
-            self.rating_bindings.refresh_all();
-            self.status_bindings.refresh(self.playing_track_id.get());
+            self.refresh_cells(RefreshScope::Tracks(&updated_track_ids));
         }
         updated
     }
@@ -456,7 +434,8 @@ impl TrackTable {
                 row.is_missing = now_missing;
             }
         }
-        self.status_bindings.refresh(self.playing_track_id.get());
+        self.status_bindings
+            .refresh_icons(self.playing_track_id.get());
     }
 
     /// Returns the [`TrackId`]s of the currently selected rows, in the
@@ -502,7 +481,7 @@ impl TrackTable {
             return;
         }
         self.playing_track_id.set(playing_track_id);
-        self.status_bindings.refresh(playing_track_id);
+        self.status_bindings.refresh_icons(playing_track_id);
     }
 
     /// Finds the row whose track matches `track_id` in the current sort order,
@@ -1457,6 +1436,50 @@ mod tests {
                     "row {text} must carry its new group band"
                 );
             }
+
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
+    fn update_rows_redraws_only_the_cells_of_updated_tracks() {
+        let ran = crate::test_support::with_gtk(|| {
+            let table = build_track_table(
+                vec![named_row(1, "A"), named_row(2, "B")],
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let window = gtk::Window::new();
+            window.set_default_size(700, 260);
+            window.set_child(Some(&table.widget()));
+            window.present();
+            drain_main_context();
+            let root = window
+                .child()
+                .expect("window retains the mapped track table");
+            // A probe: re-deriving row B's cell would overwrite it.
+            let untouched = cell_containing_text(&root, "B")
+                .and_then(|cell| cell.first_child())
+                .and_then(|text| text.downcast::<gtk::Inscription>().ok())
+                .expect("row B's name cell is realized");
+            untouched.set_text(Some("probe"));
+
+            table.update_rows(&HashMap::from([(
+                TrackId::new(1).expect("positive track id"),
+                named_row(1, "A2"),
+            )]));
+
+            assert!(
+                cell_containing_text(&root, "A2").is_some(),
+                "the updated track's cell shows its new data"
+            );
+            assert_eq!(untouched.text().as_deref(), Some("probe"));
 
             window.destroy();
         });

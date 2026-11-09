@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, collections::HashSet, rc::Rc};
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
@@ -148,6 +148,28 @@ struct TrackTableContextHit {
     list_item: gtk::ListItem,
 }
 
+/// Which bound cells a refresh re-derives from their row payload.
+#[derive(Clone, Copy)]
+pub(super) enum RefreshScope<'a> {
+    /// Every bound cell: payloads moved between list items — a re-sort, a
+    /// replacement swap — so any cell may now show another row.
+    AllRows,
+    /// The cells showing one of these tracks, whose payloads were updated
+    /// in place. No other cell's content changed.
+    Tracks(&'a HashSet<TrackId>),
+}
+
+impl RefreshScope<'_> {
+    fn includes(self, list_item: &gtk::ListItem) -> bool {
+        match self {
+            Self::AllRows => true,
+            Self::Tracks(track_ids) => {
+                row_track_id(list_item.item()).is_some_and(|track_id| track_ids.contains(&track_id))
+            }
+        }
+    }
+}
+
 struct StatusBinding {
     key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
@@ -172,7 +194,9 @@ impl CellBinding for StatusBinding {
 pub(super) struct StatusBindings(BindingRegistry<StatusBinding>);
 
 impl StatusBindings {
-    pub(super) fn refresh(&self, playing_track_id: Option<TrackId>) {
+    /// Re-derive every bound status icon: the playing track or a missing
+    /// flag changed, the row payloads did not.
+    pub(super) fn refresh_icons(&self, playing_track_id: Option<TrackId>) {
         self.0.for_each_live(|binding| {
             let (Some(list_item), Some(icon)) = (binding.list_item(), binding.icon.upgrade())
             else {
@@ -182,16 +206,18 @@ impl StatusBindings {
         });
     }
 
-    /// Re-derive every bound status cell after its row payload was swapped
-    /// in place: the icon and the row tint.
-    pub(super) fn refresh_all(&self, playing_track_id: Option<TrackId>) {
+    /// Re-derive the status cells in `scope` from their row payload: the
+    /// icon and the row tint.
+    pub(super) fn refresh(&self, scope: RefreshScope<'_>, playing_track_id: Option<TrackId>) {
         self.0.for_each_live(|binding| {
             let (Some(list_item), Some(icon)) = (binding.list_item(), binding.icon.upgrade())
             else {
                 return;
             };
-            refresh_status_icon(&list_item, &icon, playing_track_id);
-            retint_cell_of(&icon, &list_item);
+            if scope.includes(&list_item) {
+                refresh_status_icon(&list_item, &icon, playing_track_id);
+                retint_cell_of(&icon, &list_item);
+            }
         });
     }
 }
@@ -221,13 +247,17 @@ impl CellBinding for TextBinding {
 pub(super) struct TextBindings(BindingRegistry<TextBinding>);
 
 impl TextBindings {
-    pub(super) fn refresh_track(&self, track_id: TrackId) {
-        self.0
-            .for_each_live(|binding| refresh_text_binding(binding, track_id));
-    }
-
-    pub(super) fn refresh_all(&self) {
-        self.0.for_each_live(refresh_text_binding_value);
+    /// Re-derive the text cells in `scope` from their row payload.
+    pub(super) fn refresh(&self, scope: RefreshScope<'_>) {
+        self.0.for_each_live(|binding| {
+            let (Some(list_item), Some(text)) = (binding.list_item(), binding.text.upgrade())
+            else {
+                return;
+            };
+            if scope.includes(&list_item) {
+                refresh_text_cell(&list_item, &text, binding.column);
+            }
+        });
     }
 }
 
@@ -263,13 +293,18 @@ impl RatingBindings {
         });
     }
 
-    pub(super) fn refresh_track(&self, track_id: TrackId) {
-        self.0
-            .for_each_live(|binding| refresh_rating_binding(binding, track_id));
-    }
-
-    pub(super) fn refresh_all(&self) {
-        self.0.for_each_live(refresh_rating_binding_value);
+    /// Re-derive the rating cells in `scope` from their row payload.
+    pub(super) fn refresh(&self, scope: RefreshScope<'_>) {
+        self.0.for_each_live(|binding| {
+            let (Some(list_item), Some(rating_box)) =
+                (binding.list_item(), binding.rating_box.upgrade())
+            else {
+                return;
+            };
+            if scope.includes(&list_item) {
+                refresh_rating_cell(&list_item, &rating_box);
+            }
+        });
     }
 }
 
@@ -691,29 +726,7 @@ pub(crate) fn row_track_id(item: Option<glib::Object>) -> Option<TrackId> {
     row.track_id
 }
 
-fn refresh_text_binding(binding: &TextBinding, target_track_id: TrackId) {
-    let (Some(list_item), Some(text)) = (binding.list_item(), binding.text.upgrade()) else {
-        return;
-    };
-    let Some(row_object) = list_item
-        .item()
-        .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
-    else {
-        return;
-    };
-    let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
-        return;
-    };
-    if row.track_id != Some(target_track_id) {
-        return;
-    }
-    text.set_text(Some(&binding.column.text(&row)));
-}
-
-fn refresh_text_binding_value(binding: &TextBinding) {
-    let (Some(list_item), Some(text)) = (binding.list_item(), binding.text.upgrade()) else {
-        return;
-    };
+fn refresh_text_cell(list_item: &gtk::ListItem, text: &gtk::Inscription, column: TrackTableColumn) {
     let Some(row_object) = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
@@ -724,36 +737,12 @@ fn refresh_text_binding_value(binding: &TextBinding) {
     let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
         return;
     };
-    text.set_text(Some(&binding.column.text(&row)));
+    text.set_text(Some(&column.text(&row)));
     drop(row);
-    retint_cell_of(&text, &list_item);
+    retint_cell_of(text, list_item);
 }
 
-fn refresh_rating_binding(binding: &RatingBinding, target_track_id: TrackId) {
-    let Some(list_item) = binding.list_item() else {
-        return;
-    };
-    let Some(row_object) = list_item
-        .item()
-        .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
-    else {
-        return;
-    };
-    let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
-        return;
-    };
-    if row.track_id != Some(target_track_id) {
-        return;
-    }
-    let rating = row.rating;
-    drop(row);
-    refresh_rating_box(binding, rating);
-}
-
-fn refresh_rating_binding_value(binding: &RatingBinding) {
-    let Some(list_item) = binding.list_item() else {
-        return;
-    };
+fn refresh_rating_cell(list_item: &gtk::ListItem, rating_box: &gtk::Box) {
     let Some(row_object) = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
@@ -765,17 +754,8 @@ fn refresh_rating_binding_value(binding: &RatingBinding) {
     };
     let rating = row.rating;
     drop(row);
-    refresh_rating_box(binding, rating);
-    if let Some(rating_box) = binding.rating_box.upgrade() {
-        retint_cell_of(&rating_box, &list_item);
-    }
-}
-
-fn refresh_rating_box(binding: &RatingBinding, rating: u8) {
-    let Some(rating_box) = binding.rating_box.upgrade() else {
-        return;
-    };
-    sync_rating_buttons(&rating_box, rating);
+    sync_rating_buttons(rating_box, rating);
+    retint_cell_of(rating_box, list_item);
 }
 
 fn refresh_status_icon(
