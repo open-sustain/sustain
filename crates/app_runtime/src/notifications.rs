@@ -653,7 +653,6 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         }
         ApplicationRuntimeError::CdImportFailed => "The CD could not be imported.",
         ApplicationRuntimeError::CdImportNoTracksSelected => "Select at least one track to import.",
-        ApplicationRuntimeError::UnsupportedCommand(_) => "This action is not available yet.",
     }
 }
 

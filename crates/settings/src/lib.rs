@@ -22,7 +22,7 @@ pub use sustain_domain::{
     CdReadMode, DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, LibraryManagementMode,
     LibrarySettings, OnlineSettings, PlaybackSettings, PlaylistFolderId, PlaylistId, PlaylistItem,
     ShuffleMode, SmartPlaylistId, SmartShuffleEntropy, UiSettings, UiSidebarSelection,
-    UserSettings, VolumePercent,
+    UiWindowSize, UserSettings, VolumePercent,
 };
 
 pub type SettingsResult<T> = Result<T, SettingsError>;
@@ -393,6 +393,12 @@ struct UiSettingsDocument {
     sidebar_show_duplicates: bool,
     #[serde(default = "default_view_visible")]
     sidebar_show_statistics: bool,
+    #[serde(default)]
+    window_width: Option<u32>,
+    #[serde(default)]
+    window_height: Option<u32>,
+    #[serde(default)]
+    window_maximized: bool,
 }
 
 impl Default for UiSettingsDocument {
@@ -406,6 +412,9 @@ impl Default for UiSettingsDocument {
             playlists_section_collapsed: false,
             sidebar_show_duplicates: default_view_visible(),
             sidebar_show_statistics: default_view_visible(),
+            window_width: None,
+            window_height: None,
+            window_maximized: false,
         }
     }
 }
@@ -601,6 +610,9 @@ impl SettingsDocument {
                 playlists_section_collapsed: settings.ui.playlists_section_collapsed,
                 sidebar_show_duplicates: settings.ui.sidebar_show_duplicates,
                 sidebar_show_statistics: settings.ui.sidebar_show_statistics,
+                window_width: settings.ui.window_size.map(|size| size.width),
+                window_height: settings.ui.window_size.map(|size| size.height),
+                window_maximized: settings.ui.window_maximized,
             },
             analysis: AnalysisSettingsDocument {
                 bpm: settings.analysis.bpm,
@@ -647,6 +659,13 @@ impl SettingsDocument {
                 playlists_section_collapsed: self.ui.playlists_section_collapsed,
                 sidebar_show_duplicates: self.ui.sidebar_show_duplicates,
                 sidebar_show_statistics: self.ui.sidebar_show_statistics,
+                // A size is restored only whole and positive; anything
+                // else falls back to the default size.
+                window_size: match (self.ui.window_width, self.ui.window_height) {
+                    (Some(width @ 1..), Some(height @ 1..)) => Some(UiWindowSize { width, height }),
+                    _ => None,
+                },
+                window_maximized: self.ui.window_maximized,
             },
             // Normalize on load so a hand-edited config with
             // `audio = true, bpm = false` reaches the runtime as the
@@ -764,7 +783,7 @@ mod tests {
         CdEncodingProfile, CdReadMode, DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings,
         InMemorySettingsStore, LibraryManagementMode, OnlineSettings, PlaylistId, PlaylistItem,
         SettingsStore, ShuffleMode, SmartShuffleEntropy, TomlSettingsStore, UiSettings,
-        UiSidebarSelection, UserSettings, VolumePercent, atomic_replace,
+        UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent, atomic_replace,
         create_temporary_sibling_file,
     };
 
@@ -891,6 +910,11 @@ mod tests {
                 // persist rather than silently falling back to defaults.
                 sidebar_show_duplicates: false,
                 sidebar_show_statistics: false,
+                window_size: Some(UiWindowSize {
+                    width: 1440,
+                    height: 900,
+                }),
+                window_maximized: true,
             },
             ..UserSettings::default()
         };

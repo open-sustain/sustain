@@ -77,7 +77,7 @@ pub use settings::{
     AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, BpmRange, CdEncodingProfile,
     CdReadMode, DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, LibraryManagementMode,
     LibrarySettings, OnlineSettings, PlaybackSettings, SmartShuffleEntropy, UiSettings,
-    UiSidebarSelection, UserSettings,
+    UiSidebarSelection, UiWindowSize, UserSettings,
 };
 pub use smart_playlist::{
     SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,

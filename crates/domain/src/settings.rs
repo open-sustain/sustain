@@ -125,6 +125,19 @@ pub struct UiSettings {
     /// Whether the sidebar's Library → Statistics row is shown. On by
     /// default.
     pub sidebar_show_statistics: bool,
+    /// The main window's size when it is neither maximized nor full
+    /// screen. `None` until a session has ended: the window opens at its
+    /// default size.
+    pub window_size: Option<UiWindowSize>,
+    /// Whether the main window was maximized when the session ended.
+    pub window_maximized: bool,
+}
+
+/// A window size in logical pixels; both sides are positive.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UiWindowSize {
+    pub width: u32,
+    pub height: u32,
 }
 
 impl Default for UiSettings {
@@ -138,6 +151,8 @@ impl Default for UiSettings {
             playlists_section_collapsed: false,
             sidebar_show_duplicates: true,
             sidebar_show_statistics: true,
+            window_size: None,
+            window_maximized: false,
         }
     }
 }

@@ -26,7 +26,7 @@ use sustain_domain::{
     SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
     SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
     Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath, UiSettings,
-    UiSidebarSelection, UserSettings, VolumePercent,
+    UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent,
 };
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan,
@@ -2613,6 +2613,11 @@ fn runtime_saves_ui_settings_with_settings_store() {
         playlists_section_collapsed: false,
         sidebar_show_duplicates: false,
         sidebar_show_statistics: true,
+        window_size: Some(UiWindowSize {
+            width: 1280,
+            height: 800,
+        }),
+        window_maximized: false,
     };
 
     assert_eq!(runtime.save_ui_settings(ui.clone()), Ok(()));

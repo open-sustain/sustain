@@ -35,10 +35,11 @@ pub use sustain_domain::{
     SmartShuffleEntropy, SyncDevice, SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock,
     Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
     TrackColumnSort, TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
-    TrackRelativePath, UiSettings, UiSidebarSelection, UserSettings, VolumePercent, YearCount,
-    compare_optional_text, compute_library_statistics, default_duplicate_metadata_selection,
-    duplicate_audio_quality, effective_sort_key, highest_quality_duplicate_audio_track_ids,
-    matching_tracks, normalize_sort_text, track_matches_rule_set,
+    TrackRelativePath, UiSettings, UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent,
+    YearCount, compare_optional_text, compute_library_statistics,
+    default_duplicate_metadata_selection, duplicate_audio_quality, effective_sort_key,
+    highest_quality_duplicate_audio_track_ids, matching_tracks, normalize_sort_text,
+    track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
 pub use sustain_metadata::{
@@ -211,7 +212,6 @@ pub enum ApplicationRuntimeError {
     TrackReplacementUnsupported,
     TrackUnavailable,
     TrackTrashFailed,
-    UnsupportedCommand(ApplicationCommand),
 }
 
 pub use youtube_audio_downloader::YoutubeAudioDownloadResult;

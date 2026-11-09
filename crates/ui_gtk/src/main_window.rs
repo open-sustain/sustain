@@ -15,7 +15,7 @@ use sustain_app_runtime::{
     PlaybackCommand, PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState,
     Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
     TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, UiSettings,
-    UiSidebarSelection, normalize_query,
+    UiSidebarSelection, UiWindowSize, normalize_query,
 };
 
 use super::{
@@ -93,6 +93,12 @@ use super::{
     youtube_audio_replacement::{
         youtube_audio_replacement_callback, youtube_audio_replacement_visibility,
     },
+};
+
+/// The main window's size until a session has saved one.
+const DEFAULT_WINDOW_SIZE: UiWindowSize = UiWindowSize {
+    width: 1100,
+    height: 720,
 };
 
 mod mpris_bridge;
@@ -200,12 +206,17 @@ pub(crate) fn build_main_window(
     // is enabled. Keep them sparse: only phases that can plausibly grow
     // with library size or new features warrant a print. Per-callback
     // timings inside hot paths are intentionally absent.
+    let initial_ui_settings = runtime.borrow().settings().ui.clone();
+    let window_size = initial_ui_settings
+        .window_size
+        .unwrap_or(DEFAULT_WINDOW_SIZE);
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .decorated(false)
         .title("Sustain")
-        .default_width(1100)
-        .default_height(720)
+        .default_width(i32::try_from(window_size.width).unwrap_or(i32::MAX))
+        .default_height(i32::try_from(window_size.height).unwrap_or(i32::MAX))
+        .maximized(initial_ui_settings.window_maximized)
         .build();
     window.add_css_class("app-window");
     window.set_resizable(true);
@@ -214,7 +225,6 @@ pub(crate) fn build_main_window(
     install_app_css();
     install_accent_css();
 
-    let initial_ui_settings = runtime.borrow().settings().ui.clone();
     let initial_search_text = initial_ui_settings.search_text.trim().to_owned();
 
     // Shared current-search-text state. Captured by all view-rebuild paths
@@ -884,7 +894,7 @@ pub(crate) fn build_main_window(
     let runtime_for_close = runtime.clone();
     let sidebar_for_close = sidebar.clone();
     let collapse_controller_for_close = collapse_controller.clone();
-    window.connect_close_request(move |_window| {
+    window.connect_close_request(move |window| {
         songs_table_for_close.flush_pending_layout_save();
         playlists_table_for_close.flush_pending_layout_save();
         titlebar_for_close.flush_pending_volume_save();
@@ -895,6 +905,7 @@ pub(crate) fn build_main_window(
         // the close on a settings write.
         let current_ui = runtime_for_close.borrow().settings().ui.clone();
         let ui_to_save = ui_settings_from_widgets(
+            window,
             &titlebar_for_close,
             &sidebar_for_close,
             collapse_controller_for_close.is_collapsed(),
@@ -1499,6 +1510,7 @@ fn install_statistics_view_activator(content_stack: &gtk::Stack, statistics_view
 }
 
 fn ui_settings_from_widgets(
+    window: &gtk::ApplicationWindow,
     titlebar: &Titlebar,
     sidebar: &PlaylistSidebar,
     sidebar_collapsed: bool,
@@ -1527,6 +1539,17 @@ fn ui_settings_from_widgets(
         // unchanged — otherwise this close-time save would reset them.
         sidebar_show_duplicates: current.sidebar_show_duplicates,
         sidebar_show_statistics: current.sidebar_show_statistics,
+        // GTK keeps the default size at the size the window has when it
+        // is neither maximized nor full screen, so a maximized window
+        // still records the size it restores to.
+        window_size: match window.default_size() {
+            (width @ 1.., height @ 1..) => Some(UiWindowSize {
+                width: width.unsigned_abs(),
+                height: height.unsigned_abs(),
+            }),
+            _ => current.window_size,
+        },
+        window_maximized: window.is_maximized(),
     }
 }
 

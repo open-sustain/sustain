@@ -271,6 +271,10 @@ collapsed state, and the fold state of the LIBRARY and PLAYLISTS
 sections are restored on next launch. Transient views such as Duplicates
 and connected devices are deliberately not restored.
 
+### Window size — *iso-iTunes*
+The main window reopens at the size it had when it was closed, and maximized
+if it was maximized; un-maximizing it returns to the last un-maximized size.
+
 ---
 
 ## Playlists
