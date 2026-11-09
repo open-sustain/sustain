@@ -374,7 +374,10 @@ sleep 5"#,
 
     #[test]
     fn timed_out_download_kills_child_and_removes_staging_directory() {
-        let (_fixture, executable, record) = fake_yt_dlp("sleep 5");
+        // The runtime limit leaves the fake ample time to record its
+        // staging directory even on a loaded machine; the fake outlives
+        // the bound on the elapsed time, so meeting it proves the kill.
+        let (_fixture, executable, record) = fake_yt_dlp("sleep 30");
         let shutdown = AtomicBool::new(false);
         let started_at = Instant::now();
 
@@ -382,7 +385,7 @@ sleep 5"#,
             "https://youtu.be/abc",
             &shutdown,
             &executable,
-            Duration::from_millis(20),
+            Duration::from_secs(1),
             1024,
         );
 
@@ -390,7 +393,7 @@ sleep 5"#,
             matches!(result, Err(YoutubeAudioDownloadError::TimedOut)),
             "unexpected result: {result:?}"
         );
-        assert!(started_at.elapsed() < Duration::from_secs(2));
+        assert!(started_at.elapsed() < Duration::from_secs(10));
         assert!(!recorded_staging_directory(&record).exists());
     }
 
