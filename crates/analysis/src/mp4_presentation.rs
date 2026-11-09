@@ -23,8 +23,8 @@
 //! players do (see `decode`).
 //!
 //! When a file carries both records, `iTunSMPB` is honored, as FFmpeg
-//! does: it is the encoder's own account of its priming. (GStreamer 1.26
-//! skips the two added together when both skip frames.) Only the first
+//! does: it is the encoder's own account of its priming. (GStreamer 1.28
+//! skips the two added together, even when they agree.) Only the first
 //! edit that plays media counts: music files carry one. An empty edit
 //! before it, which would delay the media's start, is not honored.
 
