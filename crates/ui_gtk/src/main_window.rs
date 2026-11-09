@@ -29,8 +29,8 @@ use super::{
     SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW, SharedMprisService,
     SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
     SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
-    TrackRowChangedKind, TrackRowsChangedHolder, TrackUpdatedReceiver,
-    YoutubeAudioDownloadResultReceiver,
+    TrackRowChangedKind, TrackRowsChangedHolder, TrackUpdatedReceiver, TracksRemoved,
+    TracksRemovedCallback, TracksRemovedHolder, YoutubeAudioDownloadResultReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
@@ -145,9 +145,10 @@ use sidebar_callbacks::{
 };
 use songs::SongsViewRefresh;
 use track_callbacks::{
-    TrackRowChangedContext, begin_inline_edit_callback, playlist_row_reorder_callback,
-    playlist_track_context_actions, rating_changed_callback, track_context_actions,
-    track_row_changed_callback, track_rows_changed_callback,
+    TrackRowChangedContext, TracksRemovedContext, begin_inline_edit_callback,
+    playlist_row_reorder_callback, playlist_track_context_actions, rating_changed_callback,
+    track_context_actions, track_row_changed_callback, track_rows_changed_callback,
+    tracks_removed_callback,
 };
 
 /// Recompute the status-bar summary (track count, total duration) for
@@ -331,6 +332,7 @@ pub(crate) fn build_main_window(
     let library_changed_holder: LibraryChangedHolder = Rc::new(RefCell::new(None));
     let track_row_changed_holder: TrackRowChangedHolder = Rc::new(RefCell::new(None));
     let track_rows_changed_holder: TrackRowsChangedHolder = Rc::new(RefCell::new(None));
+    let tracks_removed_holder: TracksRemovedHolder = Rc::new(RefCell::new(None));
     let parent_window = window.clone().upcast::<gtk::Window>();
     let pending_located_playbacks: PendingLocatedPlaybacks = Rc::new(RefCell::new(HashMap::new()));
     let missing_track_relocation_completed = missing_track_relocation_completed_callback(
@@ -364,6 +366,7 @@ pub(crate) fn build_main_window(
         library_changed_holder.clone(),
         track_row_changed_holder.clone(),
         track_rows_changed_holder.clone(),
+        tracks_removed_holder.clone(),
         &artwork_loader,
     );
     let add_to_playlist_provider = add_to_playlist_provider(&runtime);
@@ -397,6 +400,7 @@ pub(crate) fn build_main_window(
         library_changed_holder.clone(),
         track_row_changed_holder.clone(),
         track_rows_changed_holder.clone(),
+        tracks_removed_holder.clone(),
         &artwork_loader,
         &sidebar,
     );
@@ -614,11 +618,25 @@ pub(crate) fn build_main_window(
     let track_row_changed = track_row_changed_callback(track_rows_changed.clone());
     track_row_changed_holder.replace(Some(track_row_changed));
     track_rows_changed_holder.replace(Some(track_rows_changed));
+    let tracks_removed = tracks_removed_callback(TracksRemovedContext {
+        runtime: &runtime,
+        songs_table: &songs_table,
+        albums_view: &albums_view,
+        duplicates_view: &duplicates_view,
+        statistics_view: &statistics_view,
+        playlists_table: &playlists_table,
+        playlists_refresh: &playlists_refresh,
+        sidebar: &sidebar,
+        titlebar: &titlebar,
+        visible_summary_refresh: visible_summary_refresh.clone(),
+        current_search_text: &current_search_text,
+    });
+    tracks_removed_holder.replace(Some(tracks_removed.clone()));
     install_metadata_writer_event_consumer(
         metadata_writer_event_rx,
         runtime.clone(),
         track_row_changed_holder.clone(),
-        library_changed_holder.clone(),
+        tracks_removed,
         missing_track_relocation_completed,
         artwork_loader.clone(),
     );

@@ -232,6 +232,83 @@ pub(super) fn track_rows_changed_callback(
     })
 }
 
+pub(super) struct TracksRemovedContext<'a> {
+    pub(super) runtime: &'a SharedRuntime,
+    pub(super) songs_table: &'a TrackTable,
+    pub(super) albums_view: &'a AlbumsView,
+    pub(super) duplicates_view: &'a DuplicatesView,
+    pub(super) statistics_view: &'a StatisticsView,
+    pub(super) playlists_table: &'a TrackTable,
+    pub(super) playlists_refresh: &'a PlaylistsViewRefreshContext,
+    pub(super) sidebar: &'a PlaylistSidebar,
+    pub(super) titlebar: &'a Titlebar,
+    pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
+    pub(super) current_search_text: &'a Rc<RefCell<String>>,
+}
+
+/// Contained refresh path for tracks leaving the library (#255). The track
+/// tables drop the removed rows in place, so the user keeps their scroll
+/// position and the rest of their selection; a library rebuild would send
+/// them back to the top.
+///
+/// The playlist table reflows only where membership can grow: a smart
+/// playlist may admit tracks the removed ones held out (a limit), and a
+/// consolidation points the removed tracks' playlist entries at the
+/// survivor.
+pub(super) fn tracks_removed_callback(ctx: TracksRemovedContext<'_>) -> TracksRemovedCallback {
+    let runtime = ctx.runtime.clone();
+    let songs_table = ctx.songs_table.clone();
+    let albums_view = ctx.albums_view.clone();
+    let duplicates_view = ctx.duplicates_view.clone();
+    let statistics_view = ctx.statistics_view.clone();
+    let playlists_table = ctx.playlists_table.clone();
+    let playlists_refresh = ctx.playlists_refresh.clone();
+    let sidebar = ctx.sidebar.clone();
+    let titlebar = ctx.titlebar.clone();
+    let visible_summary_refresh = ctx.visible_summary_refresh;
+    let current_search_text = ctx.current_search_text.clone();
+
+    Rc::new(move |removal: &TracksRemoved| {
+        if let Some(survivor_id) = removal.merged_into {
+            let survivor_row = {
+                let runtime = runtime.borrow();
+                let honor_sort_tags = runtime.settings().library.honor_sort_tags;
+                runtime
+                    .library_track(survivor_id)
+                    .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
+            };
+            if let Some(row) = survivor_row {
+                let rows = HashMap::from([(survivor_id, row)]);
+                songs_table.update_rows(&rows);
+                playlists_table.update_rows(&rows);
+            }
+        }
+        songs_table.remove_rows(&removal.track_ids);
+        playlists_table.remove_rows(&removal.track_ids);
+        let playlist_membership_may_grow = removal.merged_into.is_some()
+            || matches!(
+                sidebar.current_selection(),
+                Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(_)))
+            );
+        if playlist_membership_may_grow {
+            schedule_playlists_structural_refresh(
+                runtime.clone(),
+                playlists_refresh.clone(),
+                sidebar.clone(),
+                current_search_text.clone(),
+            );
+        }
+        // Album buckets, duplicate groups and statistics all aggregate over
+        // the library; each rebuilds only while on screen.
+        albums_view.replace_tracks();
+        duplicates_view.refresh_if_active();
+        statistics_view.refresh_if_visible();
+        // Removing the last tracks leaves the Play button nothing to start.
+        update_play_pause_sensitivity(&titlebar, &runtime.borrow());
+        visible_summary_refresh();
+    })
+}
+
 pub(super) fn track_row_changed_callback(
     track_rows_changed: TrackRowsChangedCallback,
 ) -> TrackRowChangedCallback {
@@ -288,6 +365,7 @@ pub(super) fn track_context_actions(
     library_changed_holder: LibraryChangedHolder,
     track_row_changed_holder: TrackRowChangedHolder,
     track_rows_changed_holder: TrackRowsChangedHolder,
+    tracks_removed_holder: TracksRemovedHolder,
     artwork_loader: &ArtworkLoader,
 ) -> TrackContextActionSet {
     TrackContextActionSet::new(vec![
@@ -321,16 +399,18 @@ pub(super) fn track_context_actions(
             command_controller,
             artwork_loader,
         )),
-        TrackContextAction::remove_from_library(track_mutation_callback(
+        TrackContextAction::remove_from_library(track_removal_callback(
+            runtime,
             command_controller,
             playback_changed.clone(),
-            library_changed_holder.clone(),
+            tracks_removed_holder.clone(),
             |track_id| ApplicationCommand::RemoveTrackFromLibrary { track_id },
         )),
-        TrackContextAction::move_to_trash(track_mutation_callback(
+        TrackContextAction::move_to_trash(track_removal_callback(
+            runtime,
             command_controller,
             playback_changed,
-            library_changed_holder,
+            tracks_removed_holder.clone(),
             |track_id| ApplicationCommand::MoveTrackToTrash { track_id },
         )),
     ])
@@ -346,6 +426,7 @@ pub(super) fn playlist_track_context_actions(
     library_changed_holder: LibraryChangedHolder,
     track_row_changed_holder: TrackRowChangedHolder,
     track_rows_changed_holder: TrackRowsChangedHolder,
+    tracks_removed_holder: TracksRemovedHolder,
     artwork_loader: &ArtworkLoader,
     sidebar: &PlaylistSidebar,
 ) -> TrackContextActionSet {
@@ -382,16 +463,18 @@ pub(super) fn playlist_track_context_actions(
             ),
             current_selection_is_regular_playlist(sidebar),
         ),
-        TrackContextAction::remove_from_library(track_mutation_callback(
+        TrackContextAction::remove_from_library(track_removal_callback(
+            runtime,
             command_controller,
             playback_changed.clone(),
-            library_changed_holder.clone(),
+            tracks_removed_holder.clone(),
             |track_id| ApplicationCommand::RemoveTrackFromLibrary { track_id },
         )),
-        TrackContextAction::move_to_trash(track_mutation_callback(
+        TrackContextAction::move_to_trash(track_removal_callback(
+            runtime,
             command_controller,
             playback_changed,
-            library_changed_holder,
+            tracks_removed_holder.clone(),
             |track_id| ApplicationCommand::MoveTrackToTrash { track_id },
         )),
     ])
@@ -552,18 +635,24 @@ fn current_selection_is_regular_playlist(sidebar: &PlaylistSidebar) -> TrackActi
     })
 }
 
-fn track_mutation_callback(
+/// Runs a library-removing command (Remove from Library, Move to Trash) on
+/// each selected track, then reports the tracks that actually left: a
+/// command can fail for some tracks of the selection and not others.
+fn track_removal_callback(
+    runtime: &SharedRuntime,
     command_controller: &SharedCommandController,
     playback_changed: PlaybackChangedCallback,
-    library_changed_holder: LibraryChangedHolder,
+    tracks_removed_holder: TracksRemovedHolder,
     command_builder: impl Fn(TrackId) -> ApplicationCommand + 'static,
 ) -> TrackActionCallback {
+    let runtime = runtime.clone();
     let command_controller = command_controller.clone();
 
     Rc::new(move |invocation: TrackActionInvocation| {
         let track_ids = invocation.selected_track_ids;
         let commands = track_ids
-            .into_iter()
+            .iter()
+            .copied()
             .map(&command_builder)
             .collect::<Vec<_>>();
         let result = command_controller.dispatch_batch(commands);
@@ -571,8 +660,21 @@ fn track_mutation_callback(
             return;
         }
         playback_changed();
-        if let Some(callback) = library_changed_holder.borrow().as_ref() {
-            callback();
+        let removed = {
+            let runtime = runtime.borrow();
+            track_ids
+                .into_iter()
+                .filter(|track_id| runtime.library_track(*track_id).is_none())
+                .collect::<HashSet<_>>()
+        };
+        if removed.is_empty() {
+            return;
+        }
+        if let Some(callback) = tracks_removed_holder.borrow().as_ref() {
+            callback(&TracksRemoved {
+                track_ids: removed,
+                merged_into: None,
+            });
         }
     })
 }

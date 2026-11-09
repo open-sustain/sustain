@@ -169,7 +169,7 @@ pub(super) fn install_metadata_writer_event_consumer(
     receiver: Option<MetadataWriterEventReceiver>,
     runtime: SharedRuntime,
     track_row_changed_holder: TrackRowChangedHolder,
-    library_changed_holder: LibraryChangedHolder,
+    tracks_removed: TracksRemovedCallback,
     relocation_completed: crate::missing_track::MissingTrackRelocationCompletedCallback,
     artwork_loader: ArtworkLoader,
 ) {
@@ -201,11 +201,14 @@ pub(super) fn install_metadata_writer_event_consumer(
                 | sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(_)
                 | sustain_app_runtime::MetadataWriterEvent::YoutubeAudioReplacement(_) => None,
             };
-            let library_changed = matches!(
-                &event,
-                sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(result)
-                    if result.outcome.is_ok()
-            );
+            let consolidated = match &event {
+                sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(result) => result
+                    .outcome
+                    .as_ref()
+                    .ok()
+                    .map(|result| (result.survivor_id, result.removed_track_ids.clone())),
+                _ => None,
+            };
             let duplicate_artwork_sources = match &event {
                 sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(result) => {
                     result.outcome.as_ref().ok().map(|result| {
@@ -235,8 +238,22 @@ pub(super) fn install_metadata_writer_event_consumer(
                     artwork_loader.invalidate(&source);
                 }
             }
-            if library_changed && let Some(callback) = library_changed_holder.borrow().as_ref() {
-                callback();
+            if let Some((survivor_id, removed_track_ids)) = consolidated {
+                // Report what the runtime's library now lacks: if it could
+                // not reload the consolidated library, nothing left it.
+                let track_ids = {
+                    let runtime = runtime.borrow();
+                    removed_track_ids
+                        .into_iter()
+                        .filter(|track_id| runtime.library_track(*track_id).is_none())
+                        .collect::<HashSet<_>>()
+                };
+                if !track_ids.is_empty() {
+                    tracks_removed(&TracksRemoved {
+                        track_ids,
+                        merged_into: Some(survivor_id),
+                    });
+                }
             }
         }
     });

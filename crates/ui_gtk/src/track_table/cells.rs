@@ -247,6 +247,18 @@ impl CellBinding for TextBinding {
 pub(super) struct TextBindings(BindingRegistry<TextBinding>);
 
 impl TextBindings {
+    /// The list item of the row whose text cells sit inside `widget`. GTK
+    /// does not expose which row holds keyboard focus; asking with the
+    /// focused row widget answers that.
+    pub(super) fn row_within(&self, widget: &gtk::Widget) -> Option<gtk::ListItem> {
+        self.0.find_map_live(|binding| {
+            let text = binding.text.upgrade()?;
+            text.is_ancestor(widget)
+                .then(|| binding.list_item())
+                .flatten()
+        })
+    }
+
     /// Re-derive the text cells in `scope` from their row payload.
     pub(super) fn refresh(&self, scope: RefreshScope<'_>) {
         self.0.for_each_live(|binding| {

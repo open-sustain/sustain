@@ -180,6 +180,19 @@ pub(crate) type TrackRowChangedHolder = Rc<RefCell<Option<TrackRowChangedCallbac
 pub(crate) type TrackRowsChangedCallback =
     Rc<dyn Fn(&[sustain_app_runtime::TrackId], TrackRowChangedKind)>;
 pub(crate) type TrackRowsChangedHolder = Rc<RefCell<Option<TrackRowsChangedCallback>>>;
+/// Tracks that have left the library, and the track they were merged into
+/// when they left by duplicate consolidation.
+pub(crate) struct TracksRemoved {
+    pub(crate) track_ids: std::collections::HashSet<sustain_app_runtime::TrackId>,
+    /// The consolidation survivor: its data changed, and playlist entries
+    /// of the removed tracks now point at it.
+    pub(crate) merged_into: Option<sustain_app_runtime::TrackId>,
+}
+/// Fired after tracks leave the library. Views drop their rows in place
+/// rather than rebuilding, so the user keeps their scroll position and the
+/// rest of their selection.
+pub(crate) type TracksRemovedCallback = Rc<dyn Fn(&TracksRemoved)>;
+pub(crate) type TracksRemovedHolder = Rc<RefCell<Option<TracksRemovedCallback>>>;
 /// Re-sync the `is_missing` flag on every loaded row from the
 /// runtime's view of the library, repaint visible status icons, and
 /// leave scroll/focus/selection untouched. Fired after operations

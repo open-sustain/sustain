@@ -371,6 +371,74 @@ impl TrackTable {
         updated
     }
 
+    /// Removes the rows of `track_ids`, one `items-changed` per contiguous
+    /// run, leaving every other row, the selection around them, and the
+    /// scroll position in place.
+    ///
+    /// Returns how many rows were removed.
+    pub(crate) fn remove_rows(&self, track_ids: &HashSet<TrackId>) -> u32 {
+        if track_ids.is_empty() {
+            return 0;
+        }
+        self.finish_edit_before_payload_swap();
+        let removes = |position: u32| {
+            row_track_id(self.store.item(position)).is_some_and(|id| track_ids.contains(&id))
+        };
+        self.move_focus_off_rows(removes);
+        let no_additions: &[glib::BoxedAnyObject] = &[];
+        let mut removed = 0;
+        // Walk from the back, so each splice leaves the positions before it
+        // untouched.
+        let mut run_end = self.store.n_items();
+        while run_end > 0 {
+            if !removes(run_end - 1) {
+                run_end -= 1;
+                continue;
+            }
+            let mut run_start = run_end - 1;
+            while run_start > 0 && removes(run_start - 1) {
+                run_start -= 1;
+            }
+            self.store
+                .splice(run_start, run_end - run_start, no_additions);
+            removed += run_end - run_start;
+            run_end = run_start;
+        }
+        removed
+    }
+
+    /// Hand keyboard focus to the nearest row `removes` spares — the next
+    /// one, else the previous one — when the focused row is about to go.
+    ///
+    /// GTK unparents a removed row widget; when that widget held focus, the
+    /// window refocuses the list from its start and scrolls it to the top.
+    /// Moving focus first keeps the user's place. The spared row above is
+    /// then pinned where it stands, so the gap closes from below, as in a
+    /// file manager.
+    fn move_focus_off_rows(&self, removes: impl Fn(u32) -> bool) {
+        let Some(focus) = self.table.root().and_then(|root| root.focus()) else {
+            return;
+        };
+        let Some(focused) = self.text_bindings.row_within(&focus) else {
+            return;
+        };
+        let focused = focused.position();
+        if focused == gtk::INVALID_LIST_POSITION || !removes(focused) {
+            return;
+        }
+        let below = (focused + 1..self.store.n_items()).find(|&position| !removes(position));
+        let above = (0..focused).rev().find(|&position| !removes(position));
+        let Some(next_focus) = below.or(above) else {
+            return;
+        };
+        self.table
+            .scroll_to(next_focus, None, gtk::ListScrollFlags::FOCUS, None);
+        if let (Some(_), Some(above)) = (below, above) {
+            self.table
+                .scroll_to(above, None, gtk::ListScrollFlags::NONE, None);
+        }
+    }
+
     /// Returns the subset of `candidates` currently represented in the table's
     /// underlying store. Performs one model scan regardless of candidate count.
     pub(crate) fn contained_track_ids(&self, candidates: &HashSet<TrackId>) -> HashSet<TrackId> {
@@ -1486,6 +1554,26 @@ mod tests {
         if !ran {
             eprintln!("skipped GTK widget test: no display available");
         }
+    }
+
+    #[test]
+    fn remove_rows_keeps_the_other_rows_and_their_selection() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table((1..=6).map(row).collect(), None, None, None, None, None);
+            table.selection.select_item(1, false);
+            table.selection.select_item(4, false);
+            let ids = |ids: &[i64]| {
+                ids.iter()
+                    .map(|id| TrackId::new(*id).expect("positive track id"))
+                    .collect::<Vec<_>>()
+            };
+
+            let removed = table.remove_rows(&ids(&[1, 3, 4, 6]).into_iter().collect());
+
+            assert_eq!(removed, 4);
+            assert_eq!(table.ordered_track_ids(), ids(&[2, 5]));
+            assert_eq!(table.selected_track_ids(), ids(&[2, 5]));
+        });
     }
 
     #[test]
