@@ -75,6 +75,9 @@ pub(crate) struct AlbumsView {
     pending_scroll_album: Rc<RefCell<Option<PendingAlbumScroll>>>,
     visible_columns: Rc<Cell<usize>>,
     last_width: Rc<Cell<i32>>,
+    /// Whether a layout sync is queued for the next frame; see
+    /// [`Self::queue_layout_sync`].
+    layout_sync_queued: Rc<Cell<bool>>,
     artwork_loader: ArtworkLoader,
     /// Monotonic generation bumped every time the album-detail panel is
     /// (re)built. The detail's artwork request snapshot-captures it and
@@ -84,9 +87,9 @@ pub(crate) struct AlbumsView {
     /// detail.
     detail_generation: Rc<Cell<u64>>,
     /// Switches from `false` to `true` the first time `activate()` is
-    /// called. Tile construction, grouping, and the width-watcher tick
-    /// callback all key off this — they are skipped while the view is
-    /// dormant so the cost stays out of startup.
+    /// called. Tile construction, grouping, and the layout triggers all
+    /// key off this — they are skipped while the view is dormant so the
+    /// cost stays out of startup.
     activated: Rc<Cell<bool>>,
     playing_track_id: Rc<Cell<Option<TrackId>>>,
 }
@@ -188,7 +191,7 @@ impl AlbumsView {
         scroller.set_vexpand(true);
         scroller.set_hexpand(true);
         // Rows are rebuilt around the current allocation. Allowing temporary
-        // horizontal overflow lets the scroller shrink first; the width watcher
+        // horizontal overflow lets the scroller shrink first; the layout sync
         // then recomputes a smaller column count on the next frame.
         scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
         scroller.set_propagate_natural_width(false);
@@ -225,6 +228,7 @@ impl AlbumsView {
             pending_scroll_album: Rc::new(RefCell::new(None)),
             visible_columns: Rc::new(Cell::new(1)),
             last_width: Rc::new(Cell::new(0)),
+            layout_sync_queued: Rc::new(Cell::new(false)),
             artwork_loader,
             detail_generation: Rc::new(Cell::new(0)),
             activated: Rc::new(Cell::new(false)),
@@ -245,7 +249,7 @@ impl AlbumsView {
         if self.activated.replace(true) {
             return;
         }
-        self.install_width_watcher();
+        self.install_layout_triggers();
         self.regroup_and_apply_search();
     }
 
@@ -494,6 +498,7 @@ impl AlbumsView {
         self.pending_scroll_album
             .borrow_mut()
             .replace(PendingAlbumScroll { album_key });
+        self.queue_layout_sync();
     }
 
     fn scroll_pending_album_if_ready(&self) {
@@ -524,17 +529,53 @@ impl AlbumsView {
         self.pending_scroll_album.borrow_mut().take();
     }
 
-    fn install_width_watcher(&self) {
+    /// Sync the grid's layout whenever its geometry can have changed: a
+    /// scroll, a resize — the viewport reconfigures both adjustments on
+    /// every allocation that changes them — or the page being shown.
+    ///
+    /// The sync is event-driven so an idle grid costs nothing: syncing on
+    /// every frame kept the frame clock running and relaid out the grid
+    /// at the display's refresh rate, visible or not.
+    fn install_layout_triggers(&self) {
+        let hadjustment = self.scroller.hadjustment();
+        let vadjustment = self.scroller.vadjustment();
+        for adjustment in [&hadjustment, &vadjustment] {
+            let view = self.clone();
+            adjustment.connect_changed(move |_| view.queue_layout_sync());
+        }
+        let view = self.clone();
+        vadjustment.connect_value_changed(move |_| view.queue_layout_sync());
+        let view = self.clone();
+        self.scroller.connect_map(move |_| view.queue_layout_sync());
+        // A font, scaling or theme change resizes the detail panel without
+        // touching the viewport.
+        let view = self.clone();
+        gtk::Settings::for_display(&self.scroller.display())
+            .connect_notify_local(None, move |_, _| view.queue_layout_sync());
+    }
+
+    /// Sync the layout at the next frame, once however many triggers fire
+    /// before it. Deferred rather than immediate because the adjustments
+    /// signal from inside the viewport's allocation, where row widgets
+    /// must not be moved or resized.
+    fn queue_layout_sync(&self) {
+        if self.layout_sync_queued.replace(true) {
+            return;
+        }
         let view = self.clone();
         self.scroller.add_tick_callback(move |scroller, _clock| {
-            view.sync_columns_for_width(scroller.width());
-            view.update_visible_rows();
-            if view.pending_scroll_album.borrow().is_some() {
-                view.scroll_pending_album_if_ready();
-            }
-
-            glib::ControlFlow::Continue
+            view.layout_sync_queued.set(false);
+            view.sync_layout(scroller.width());
+            glib::ControlFlow::Break
         });
+    }
+
+    fn sync_layout(&self, width: i32) {
+        self.sync_columns_for_width(width);
+        self.update_visible_rows();
+        if self.pending_scroll_album.borrow().is_some() {
+            self.scroll_pending_album_if_ready();
+        }
     }
 
     fn sync_columns_for_width(&self, width: i32) {
@@ -571,11 +612,21 @@ impl AlbumsView {
         self.render_row_position(&row_shell, row_position, refresh);
     }
 
+    /// Realize the rows in view and place every row. The rows below the
+    /// detail panel are placed around its height, which is known only
+    /// once the panel is realized for the current width: when that height
+    /// differs from what the placement assumed, place them again.
     fn update_visible_rows(&self) {
         if !self.activated.get() || self.scroller.width() <= 0 {
             return;
         }
-        self.sync_realized_detail_height();
+        self.place_visible_rows();
+        if self.remeasure_detail_height() {
+            self.place_visible_rows();
+        }
+    }
+
+    fn place_visible_rows(&self) {
         let width = self.scroller.width();
         let layouts = self.row_layouts();
         let total_height = layouts
@@ -681,23 +732,30 @@ impl AlbumsView {
         ALBUM_DETAIL_TOP_GAP + ALBUM_DETAIL_ARROW_HEIGHT + panel_height + ALBUM_DETAIL_ARROW_HEIGHT
     }
 
-    fn sync_realized_detail_height(&self) {
-        let Some(detail_position) = self.selected_detail_position() else {
-            self.measured_detail_height.set(0);
-            return;
+    /// Measure the realized detail panel and return whether its height
+    /// changed. The grid allocates each row its minimum size, so the
+    /// measurement holds before the panel is allocated at all.
+    fn remeasure_detail_height(&self) -> bool {
+        let height = match self.selected_detail_position() {
+            None => 0,
+            Some(detail_position) => {
+                let Some(detail_shell) = self.realized_rows.borrow().get(&detail_position).cloned()
+                else {
+                    return false;
+                };
+                detail_shell.preferred_size().0.height()
+            }
         };
-        let Some(detail_shell) = self.realized_rows.borrow().get(&detail_position).cloned() else {
-            return;
-        };
-        let height = detail_shell.height();
-        if height > 0 && height != self.measured_detail_height.get() {
-            self.measured_detail_height.set(height);
-        }
+        self.measured_detail_height.replace(height) != height
     }
 
     fn realize_row(&self, row_position: usize, y: i32, width: i32) {
         if let Some(row_shell) = self.realized_rows.borrow().get(&row_position).cloned() {
-            self.content.move_(&row_shell, 0.0, f64::from(y));
+            // Moving a child relays out the whole grid, even to where it
+            // already is.
+            if self.content.child_position(&row_shell) != (0.0, f64::from(y)) {
+                self.content.move_(&row_shell, 0.0, f64::from(y));
+            }
             row_shell.set_size_request(width, -1);
             self.render_row_position(&row_shell, row_position, AlbumRowRefresh::Rebind);
             return;
@@ -900,6 +958,9 @@ impl AlbumsView {
             }
             AlbumListRow::Detail { album_key } => {
                 self.render_detail_row(row, &album_key, refresh);
+                // New content can change the panel's height: place the
+                // rows around it again.
+                self.queue_layout_sync();
             }
         }
     }
