@@ -1089,3 +1089,36 @@ small next to the tempo search; it was not timed separately.
 A synthetic fixture pins the case: a kick on beat 1 and on the off-beats
 after 2 and 3, a snare on 2 and 4. The kick-only vote puts the grid on the
 off-beat; the kick and mid vote puts it on the beat.
+
+## 2026-11-09 — beat-grid baseline on human annotations (v15)
+
+The first in-bench run of the human beat references, scored by
+`compare_with_beats` (see the harness README). Commit `80ef637`, clean tree,
+`ANALYZER_VERSION` 15, the default 76–155 BPM range, 30 s clips. The numbers
+match the scratch evaluation behind #281 and #282. Ballroom has the same 299
+phase-scored clips. GTZAN has 456 against 455, the one-clip difference coming
+from the eighth-of-a-beat aligned threshold.
+
+| Set | Clips | Aligned | Off-beat | Misaligned | Tempo mismatch | Unsteady | No grid |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ballroom | 523 | 52.0 % | 4.8 % | 0.4 % | 32.5 % | 10.3 % | 0 |
+| GTZAN | 933 | 46.7 % | 2.0 % | 0.2 % | 37.1 % | 13.1 % | 0.9 % |
+
+Most tempo mismatches are tempos outside the range: 141 of 170 on Ballroom
+(quicksteps, sambas and jives above 155 BPM), and 231 of 346 on GTZAN. The
+other 115 GTZAN mismatches are in range, mostly classical and jazz, plus 7
+clips read at half or double tempo. Unsteady clips are mostly live
+recordings whose tempo drifts. Of the grids that hold a tempo, 91 % (Ballroom)
+and 95 % (GTZAN) sit on the beat. Aligned grids sit a median of +6.9 ms
+(Ballroom) and −12.2 ms (GTZAN) from the annotated beats.
+
+Downbeat, on aligned grids whose annotated bars hold on the grid:
+
+| Set | Scored | Correct | Bar 1 beat late | 2 beats | 1 beat early |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Ballroom | 272 | 42.3 % | 45 | 51 | 61 |
+| GTZAN | 434 | 49.3 % | 60 | 87 | 73 |
+
+This is the reference a downbeat change (#282) is judged by. A bar that starts
+a beat early is the most common Ballroom error, as on rekordbox's dance
+references; on GTZAN a bar two beats off (on beat 3) is.
