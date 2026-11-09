@@ -5,8 +5,8 @@
 //!
 //! Sustain measures every time — beats, waveform entries — on the
 //! *gapless* timeline: the audio a decoder renders once it has dropped
-//! the encoder's delay. Pioneer players drop nothing. For most files the
-//! two agree, but an MP3 that carries a Xing/Info header frame starts
+//! the encoder's delay. Pioneer players drop no MP3 delay. For most files
+//! the two agree, but an MP3 that carries a Xing/Info header frame starts
 //! later on the player, by an amount set by the encoder that wrote it:
 //!
 //! * **LAME** (and LAME-compatible encoders): the 529-sample decoder
@@ -23,6 +23,9 @@
 //! cross-correlated with Sustain's decode of the same files, and the
 //! measured delays clustered on the rules within a few samples. The
 //! FFmpeg exception is an empirical finding; its cause is not known.
+//! FLAC measured no delay. So did AAC in MP4: on 354 such files,
+//! rekordbox's waveforms lined up with a FLAC copy of the same recording,
+//! so the player drops the encoder's priming as Sustain's decoder does.
 
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};

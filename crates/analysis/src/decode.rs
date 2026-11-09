@@ -17,6 +17,13 @@
 //! the handful of formats that cannot seek. All formats Sustain imports
 //! (FLAC, MP3, M4A/AAC, Ogg/Vorbis, WAV) seek.
 //!
+//! Both decode the track's *presented* audio. An MP4 file records which
+//! of its decoded frames to present, leaving out the AAC encoder's
+//! priming and padding; Symphonia does not apply the record, so the
+//! decoder does (`mp4_presentation`). Every other format Sustain imports
+//! is presented as Symphonia decodes it: its MP3 and Vorbis decoders trim
+//! their own delay.
+//!
 //! The decoder is loaded by symphonia's default registry; only the
 //! codecs enabled in `Cargo.toml`'s `symphonia` features are actually
 //! linked. Unsupported codecs surface as `AnalysisError::DecoderError`.
@@ -26,12 +33,13 @@ use std::path::Path;
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::well_known::FORMAT_ID_ISOMP4;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::Time;
 
-use crate::AnalysisError;
+use crate::{AnalysisError, mp4_presentation};
 
 /// One contiguous block of mono `f32` samples plus the rate they were
 /// captured at. Multi-channel sources are averaged down to mono so
@@ -141,27 +149,44 @@ fn decode_region(path: &Path, region: Region) -> Result<DecodedAudio, AnalysisEr
         (track_id, sample_rate, decoder)
     };
 
+    // The presented span of the decoded frames: `lead` frames to drop
+    // before it, and its length when the container records one.
+    let presentation = if format.format_info().format == FORMAT_ID_ISOMP4 {
+        mp4_presentation::read(path, track_id).map_err(|err| AnalysisError::DecoderError {
+            path: path_label.clone(),
+            message: format!("read the MP4 presentation: {err}"),
+        })?
+    } else {
+        None
+    };
+    let lead = presentation.map_or(0, |span| span.lead_frames(sample_rate));
+    let presented = presentation.and_then(|span| span.frame_count(sample_rate));
+
     // Plan the collection bounds for this region. `skip_samples` is the
-    // mono-sample lead-in to discard when we could not seek; `max_samples`
-    // caps how many mono samples we keep.
+    // mono-sample lead-in to discard, the presentation's and, when we
+    // could not seek, the window's; `max_samples` caps how many mono
+    // samples we keep.
     let (skip_samples, max_samples) = match region {
-        Region::Full => (0_usize, None),
+        Region::Full => (lead, presented),
         Region::Window {
             start_secs,
             len_secs,
         } => {
+            let start = (start_secs * sample_rate as f64) as usize;
             let len = (len_secs * sample_rate as f64) as usize;
+            let len = presented.map_or(len, |presented| len.min(presented.saturating_sub(start)));
             let max = Some(len.max(1));
+            let decoded_start_secs = start_secs + lead as f64 / sample_rate as f64;
             if start_secs <= 0.0 {
-                (0, max)
-            } else if seek_to(&mut *format, &mut *decoder, track_id, start_secs) {
+                (lead, max)
+            } else if seek_to(&mut *format, &mut *decoder, track_id, decoded_start_secs) {
                 // Seek landed; decode forward from there with no lead-in
                 // to drop.
                 (0, max)
             } else {
                 // Seek unsupported: decode from the top and drop the
                 // lead-in as mono samples stream in.
-                ((start_secs * sample_rate as f64) as usize, max)
+                (lead + start, max)
             }
         }
     };
@@ -407,6 +432,54 @@ mod tests {
     fn decode_full_reads_aac_and_apple_lossless_m4a() {
         assert_m4a_decodes("sine-aac.m4a");
         assert_m4a_decodes("sine-alac.m4a");
+    }
+
+    /// A 2 ms burst half a second into one second of silence, in AAC,
+    /// with the encoder's priming recorded by an edit list or by iTunes'
+    /// `iTunSMPB` (see `testdata/`). GStreamer plays the burst's first
+    /// sample above 0.3 at frame 22,054 of 44,100 in both.
+    fn burst_onset_and_length(name: &str, region: Option<(f64, f64)>) -> (usize, usize) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join(name);
+        let audio = match region {
+            None => decode_full(&path),
+            Some((start_secs, len_secs)) => decode_window(&path, start_secs, len_secs),
+        }
+        .expect("decode m4a");
+        let onset = audio
+            .samples
+            .iter()
+            .position(|sample| sample.abs() > 0.3)
+            .expect("the burst");
+        (onset, audio.samples.len())
+    }
+
+    #[test]
+    fn aac_m4a_decodes_without_the_encoder_priming() {
+        for name in ["click-aac.m4a", "click-aac-itunsmpb.m4a"] {
+            let (onset, len) = burst_onset_and_length(name, None);
+            assert!(
+                onset.abs_diff(22_054) <= 8,
+                "{name}: burst at frame {onset}"
+            );
+            assert_eq!(len, 44_100, "{name}: presented length");
+        }
+    }
+
+    #[test]
+    fn aac_m4a_window_starts_on_the_presented_timeline() {
+        let (onset, len) = burst_onset_and_length("click-aac.m4a", Some((0.25, 10.0)));
+        // A seek lands on the AAC packet holding the target, up to 1,024
+        // frames early.
+        let expected = 22_054 - 11_025;
+        assert!(
+            expected <= onset + 8 && onset <= expected + 1_024 + 8,
+            "burst at frame {onset} of the window, expected ~{expected}"
+        );
+        // The window stops at the end of the presented audio, not of the
+        // padding.
+        assert!(len <= 44_100 - 11_025 + 1_024, "window of {len} frames");
     }
 
     #[test]

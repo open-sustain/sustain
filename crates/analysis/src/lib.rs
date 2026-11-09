@@ -76,6 +76,7 @@
 mod bands;
 mod beat_tracking;
 mod decode;
+mod mp4_presentation;
 mod waveform;
 
 use std::cell::OnceCell;
@@ -238,8 +239,11 @@ pub use waveform::WaveformTiers;
 /// this front end's own chroma on 3,485 human-labelled tracks; on each of
 /// the three training corpora, held out in turn, strict key agreement
 /// rose by 3 to 17 points, and on 2,499 tracks of the maintainer's library
-/// agreement with rekordbox rose from 72.2 % to 81.2 % strict. Waveforms
-/// are untouched.
+/// agreement with rekordbox rose from 72.2 % to 81.2 % strict. AAC files
+/// in an MP4 container are decoded without the encoder's priming, as the
+/// container records it and as GStreamer and Pioneer players present them
+/// (`mp4_presentation`); their beats and waveforms had sat 23 to 48 ms
+/// late. Other files' waveforms are untouched.
 ///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
