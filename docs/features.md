@@ -1061,7 +1061,11 @@ Three on-drive formats, chosen per device:
   contradicts the track's tempo. Each track's embedded cover art is rendered to the 80×80 and
   240×240 JPEG thumbnails the XDJ shows in its browse and now-playing screens,
   written under `PIONEER/Artwork/00001/` and linked from the database;
-  identical covers (an album's shared art) are stored once. This is the full
+  identical covers (an album's shared art) are stored once. A drive that
+  carries no player display settings gets rekordbox's defaults with the
+  waveform colour set to RGB, so players show the colour waveforms rather
+  than their BLUE monochrome default; settings already on the drive —
+  changed on a player or written by rekordbox — are never overwritten. This is the full
   set of analysis data Pioneer gear normally only receives from Rekordbox
   itself — to the maintainer's knowledge, no other Linux application produces
   it. Grids and detailed waveforms are placed on the player's timeline: for

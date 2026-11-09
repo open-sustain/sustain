@@ -8,13 +8,13 @@
 //! A self-contained re-derivation of the Pioneer DeviceSQL export
 //! format consumed by CDJ/XDJ hardware and Rekordbox: the `export.pdb`
 //! track database, the `ANLZ0000.DAT`/`.EXT` analysis files, the
-//! waveform encodings, the cover-art thumbnails, and the path-hash that
-//! addresses a track's analysis directory. Beyond Sustain's neutral
-//! value types ([`sustain_domain`]) its only weight is image decoding
-//! for the [`artwork`] thumbnails — no DSP, no audio decoding, no
-//! storage — so the format lives in isolation and is driven by callers
-//! that translate Sustain's library model into the flat [`model`]
-//! inputs.
+//! waveform encodings, the player display settings file, the cover-art
+//! thumbnails, and the path-hash that addresses a track's analysis
+//! directory. Beyond Sustain's neutral value types ([`sustain_domain`])
+//! its only weight is image decoding for the [`artwork`] thumbnails — no
+//! DSP, no audio decoding, no storage — so the format lives in isolation
+//! and is driven by callers that translate Sustain's library model into
+//! the flat [`model`] inputs.
 //!
 //! The byte-level layout, the reverse-engineered page-header formulas,
 //! and the constant field values are preserved from the maintainer's
@@ -26,6 +26,7 @@ use sustain_domain::Bpm;
 
 pub mod anlz;
 pub mod artwork;
+pub mod device_setting;
 pub mod device_sql;
 pub mod key;
 pub mod model;

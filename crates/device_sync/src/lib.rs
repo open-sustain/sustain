@@ -561,6 +561,31 @@ mod tests {
     }
 
     #[test]
+    fn pioneer_layout_seeds_colour_waveform_settings_but_keeps_existing_ones() {
+        let fx = fixture(1);
+        let settings = fx.dest.path().join("PIONEER/DEVSETTING.DAT");
+        run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        assert_eq!(
+            std::fs::read(&settings).expect("settings seeded"),
+            sustain_pioneer::device_setting::colour_waveform_bytes()
+        );
+
+        // Settings changed on a player (or by rekordbox) survive a resync.
+        std::fs::write(&settings, b"set on the player").expect("player settings");
+        run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        assert_eq!(
+            std::fs::read(&settings).expect("settings"),
+            b"set on the player"
+        );
+    }
+
+    #[test]
     fn pioneer_layout_leaves_off_formats_the_player_cannot_play() {
         let mut fx = fixture(3);
         fx.tracks[2].extension = "opus".into();

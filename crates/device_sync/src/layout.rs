@@ -21,7 +21,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use sustain_domain::{AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, WaveformSegments};
 use sustain_pioneer::{
     AnlzInput, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz, artwork::ARTWORK_BUCKET,
-    path_hash, pdb,
+    device_setting, path_hash, pdb,
 };
 
 use crate::model::{Placement, PreparedSyncRequest, SyncError, SyncInputTrack, SyncRequest};
@@ -592,6 +592,19 @@ fn write_pioneer(
     transport
         .write_file(&pdb_path, &bytes)
         .map_err(|error| SyncError::io(pdb_path.as_str(), error))?;
+
+    // Without a settings file, players show the waveforms in BLUE
+    // monochrome. A drive that has one keeps it: from then on the
+    // settings belong to whoever set them, on a player or in rekordbox.
+    let settings_path = base.join(
+        &DeviceRelativePath::new(device_setting::DEVSETTING_RELATIVE_PATH)
+            .expect("static Pioneer settings path is safe"),
+    );
+    if !is_file(transport, &settings_path)? {
+        transport
+            .write_file(&settings_path, &device_setting::colour_waveform_bytes())
+            .map_err(|error| SyncError::io(settings_path.as_str(), error))?;
+    }
     Ok(finalized)
 }
 
