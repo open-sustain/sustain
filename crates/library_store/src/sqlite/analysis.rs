@@ -11,6 +11,7 @@ use super::*;
 
 pub(super) fn record_analysis(
     connection: &mut Connection,
+    waveform_cache: &WaveformCacheStatus,
     track_id: TrackId,
     analysis: &TrackAnalysis,
     capabilities: AnalysisCapabilities,
@@ -21,22 +22,16 @@ pub(super) fn record_analysis(
     }
     let transaction = connection.transaction().map_err(StoreError::from)?;
 
-    upsert_track_analysis(&transaction, track_id, capabilities, context)?;
-
-    if capabilities.audio && !analysis.waveform_detail.segments.is_empty() {
-        transaction
-            .execute(
-                UPSERT_TRACK_WAVEFORM_SQL,
-                params![
-                    track_id.get(),
-                    f64::from(analysis.waveform_preview.segment_duration_ms),
-                    waveform_segments_to_blob(&analysis.waveform_preview.segments),
-                    f64::from(analysis.waveform_detail.segment_duration_ms),
-                    waveform_segments_to_blob(&analysis.waveform_detail.segments),
-                ],
-            )
-            .map_err(StoreError::from)?;
-    }
+    let waveform = (!analysis.waveform_detail.segments.is_empty())
+        .then_some((&analysis.waveform_preview, &analysis.waveform_detail));
+    record_attempt(
+        &transaction,
+        waveform_cache,
+        track_id,
+        capabilities,
+        context,
+        waveform,
+    )?;
 
     if capabilities.bpm
         && let Some(bpm) = analysis.bpm
@@ -105,7 +100,8 @@ pub(super) fn record_analysis(
 }
 
 pub(super) fn record_analysis_attempt_failure(
-    connection: &Connection,
+    connection: &mut Connection,
+    waveform_cache: &WaveformCacheStatus,
     track_id: TrackId,
     capabilities: AnalysisCapabilities,
     context: AnalysisContext,
@@ -113,11 +109,68 @@ pub(super) fn record_analysis_attempt_failure(
     if capabilities.is_empty() {
         return Ok(());
     }
-    upsert_track_analysis(connection, track_id, capabilities, context)
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    record_attempt(
+        &transaction,
+        waveform_cache,
+        track_id,
+        capabilities,
+        context,
+        None,
+    )?;
+    transaction.commit().map_err(StoreError::from)
+}
+
+/// Stamp an attempt at `capabilities` and, for an audio attempt, record
+/// its waveform outcome under a fresh token — while the cache is
+/// available: an in-memory stand-in would only grow for nothing.
+fn record_attempt(
+    connection: &Connection,
+    waveform_cache: &WaveformCacheStatus,
+    track_id: TrackId,
+    capabilities: AnalysisCapabilities,
+    context: AnalysisContext,
+    waveform: Option<(&WaveformSegments, &WaveformSegments)>,
+) -> StoreResult<()> {
+    let audio_attempt_token = if capabilities.audio {
+        let token: i64 = connection
+            .query_row("SELECT random()", [], |row| row.get(0))
+            .map_err(StoreError::from)?;
+        Some(token)
+    } else {
+        None
+    };
+    upsert_track_analysis(
+        connection,
+        track_id,
+        capabilities,
+        context,
+        audio_attempt_token,
+    )?;
+    if let Some(token) = audio_attempt_token
+        && waveform_cache.is_available()
+    {
+        let (preview, detail) = waveform.unzip();
+        connection
+            .execute(
+                UPSERT_TRACK_WAVEFORM_SQL,
+                params![
+                    track_id.get(),
+                    token,
+                    preview.map(|preview| f64::from(preview.segment_duration_ms)),
+                    preview.map(|preview| waveform_segments_to_blob(&preview.segments)),
+                    detail.map(|detail| f64::from(detail.segment_duration_ms)),
+                    detail.map(|detail| waveform_segments_to_blob(&detail.segments)),
+                ],
+            )
+            .map_err(StoreError::from)?;
+    }
+    Ok(())
 }
 
 pub(super) fn tracks_needing_analysis(
     connection: &Connection,
+    waveform_cache: &WaveformCacheStatus,
     capabilities: AnalysisCapabilities,
     analyzer_version: u32,
     limit: usize,
@@ -135,6 +188,7 @@ pub(super) fn tracks_needing_analysis(
             i64::from(capabilities.audio),
             i64::from(analyzer_version),
             limit as i64,
+            i64::from(waveform_cache.is_available()),
         ])
         .map_err(StoreError::from)?;
     let mut ids = Vec::new();
@@ -148,6 +202,7 @@ pub(super) fn tracks_needing_analysis(
 
 pub(super) fn filter_tracks_needing_analysis(
     connection: &Connection,
+    waveform_cache: &WaveformCacheStatus,
     track_ids: &[TrackId],
     capabilities: AnalysisCapabilities,
     analyzer_version: u32,
@@ -165,6 +220,7 @@ pub(super) fn filter_tracks_needing_analysis(
         params.push(SqlValue::Integer(i64::from(capabilities.key)));
         params.push(SqlValue::Integer(i64::from(capabilities.audio)));
         params.push(SqlValue::Integer(i64::from(analyzer_version)));
+        params.push(SqlValue::Integer(i64::from(waveform_cache.is_available())));
         let mut rows = statement
             .query(params_from_iter(params.iter()))
             .map_err(StoreError::from)?;
@@ -328,6 +384,7 @@ fn build_filter_tracks_needing_analysis_sql(id_count: usize) -> String {
     let key = id_count + 2;
     let audio = id_count + 3;
     let version = id_count + 4;
+    let cache_available = id_count + 5;
     format!(
         "SELECT t.id FROM tracks t
 LEFT JOIN track_analysis ta ON ta.track_id = t.id
@@ -336,7 +393,11 @@ WHERE t.is_missing = 0
   AND (
         (?{bpm} = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.analyzer_version < ?{version}))
      OR (?{key} = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.analyzer_version < ?{version}))
-     OR (?{audio} = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.analyzer_version < ?{version}))
+     OR (?{audio} = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.analyzer_version < ?{version}
+                     OR (?{cache_available} = 1 AND NOT EXISTS (
+                            SELECT 1 FROM waveform_cache.track_waveform w
+                            WHERE w.track_id = t.id
+                              AND w.audio_attempt_token = ta.audio_attempt_token))))
       )"
     )
 }
@@ -350,6 +411,7 @@ fn upsert_track_analysis(
     track_id: TrackId,
     capabilities: AnalysisCapabilities,
     context: AnalysisContext,
+    audio_attempt_token: Option<i64>,
 ) -> StoreResult<()> {
     let bpm_at = capabilities.bpm.then_some(context.now_unix);
     let key_at = capabilities.key.then_some(context.now_unix);
@@ -362,6 +424,7 @@ fn upsert_track_analysis(
                 bpm_at,
                 key_at,
                 audio_at,
+                audio_attempt_token,
                 i64::from(context.analyzer_version),
             ],
         )

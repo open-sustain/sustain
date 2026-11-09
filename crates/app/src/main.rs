@@ -139,10 +139,20 @@ fn main() {
     };
 
     sustain_profiler::profile_startup!(startup_profile, "settings store opened");
-    match sustain_library_store::SqliteLibraryStore::open(&paths.database) {
+    match sustain_library_store::SqliteLibraryStore::open(&paths.database, &paths.cache_dir) {
         Ok(library_store) => {
             sustain_profiler::profile_startup!(startup_profile, "SQLite store opened");
             let was_freshly_created = library_store.was_freshly_created();
+            if let sustain_library_store::WaveformCacheStatus::Unavailable { reason } =
+                library_store.waveform_cache_status()
+            {
+                eprintln!("Sustain: waveform cache unavailable ({reason}).");
+                runtime.push_ephemeral_notification(
+                    sustain_app_runtime::NotificationCategory::WaveformCache,
+                    sustain_app_runtime::NotificationSeverity::Warning,
+                    sustain_app_runtime::waveform_cache_unavailable_text().to_owned(),
+                );
+            }
             // The force-backfill command iterates every track immediately, so
             // it needs the library hydrated synchronously; the UI prefers the
             // deferred path for a responsive cold start.

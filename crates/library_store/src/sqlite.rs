@@ -380,7 +380,14 @@ impl LibraryStore for SqliteLibraryStore {
         context: AnalysisContext,
     ) -> StoreResult<()> {
         let mut connection = self.connection_guard()?;
-        analysis::record_analysis(&mut connection, track_id, analysis, capabilities, context)
+        analysis::record_analysis(
+            &mut connection,
+            &self.waveform_cache,
+            track_id,
+            analysis,
+            capabilities,
+            context,
+        )
     }
 
     fn record_analysis_attempt_failure(
@@ -389,8 +396,14 @@ impl LibraryStore for SqliteLibraryStore {
         capabilities: AnalysisCapabilities,
         context: AnalysisContext,
     ) -> StoreResult<()> {
-        let connection = self.connection_guard()?;
-        analysis::record_analysis_attempt_failure(&connection, track_id, capabilities, context)
+        let mut connection = self.connection_guard()?;
+        analysis::record_analysis_attempt_failure(
+            &mut connection,
+            &self.waveform_cache,
+            track_id,
+            capabilities,
+            context,
+        )
     }
 
     fn tracks_needing_analysis(
@@ -400,7 +413,13 @@ impl LibraryStore for SqliteLibraryStore {
         limit: usize,
     ) -> StoreResult<Vec<TrackId>> {
         let connection = self.connection_guard()?;
-        analysis::tracks_needing_analysis(&connection, capabilities, analyzer_version, limit)
+        analysis::tracks_needing_analysis(
+            &connection,
+            &self.waveform_cache,
+            capabilities,
+            analyzer_version,
+            limit,
+        )
     }
 
     fn filter_tracks_needing_analysis(
@@ -412,6 +431,7 @@ impl LibraryStore for SqliteLibraryStore {
         let connection = self.connection_guard()?;
         analysis::filter_tracks_needing_analysis(
             &connection,
+            &self.waveform_cache,
             track_ids,
             capabilities,
             analyzer_version,

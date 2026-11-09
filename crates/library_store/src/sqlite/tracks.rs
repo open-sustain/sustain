@@ -208,7 +208,6 @@ pub(super) fn replace_audio(
     for sql in [
         "DELETE FROM track_analysis WHERE track_id = ?1",
         "DELETE FROM track_acoustics WHERE track_id = ?1",
-        "DELETE FROM track_waveform WHERE track_id = ?1",
         "DELETE FROM track_beat_grid WHERE track_id = ?1",
         "DELETE FROM source_fingerprint_cache WHERE track_id = ?1",
     ] {

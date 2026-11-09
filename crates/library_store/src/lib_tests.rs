@@ -480,11 +480,13 @@ fn sqlite_store_reports_freshly_created_only_on_first_open() {
     std::fs::create_dir_all(&dir).expect("create test directory");
     let path = dir.join("library.sqlite");
 
-    let first = SqliteLibraryStore::open(&path).expect("open creates the database file");
+    let first =
+        SqliteLibraryStore::open(&path, dir.join("cache")).expect("open creates the database file");
     assert!(first.was_freshly_created());
     drop(first);
 
-    let second = SqliteLibraryStore::open(&path).expect("reopen existing database");
+    let second =
+        SqliteLibraryStore::open(&path, dir.join("cache")).expect("reopen existing database");
     assert!(!second.was_freshly_created());
     drop(second);
 
@@ -598,14 +600,16 @@ fn sqlite_store_round_trips_non_utf8_relative_paths_byte_for_byte() {
     };
 
     {
-        let store = SqliteLibraryStore::open(&db_path).expect("open library database");
+        let store =
+            SqliteLibraryStore::open(&db_path, root.join("cache")).expect("open library database");
         assert_eq!(store.save_track(first_track.clone()), Ok(()));
         // Distinct bytes must not collide on the UNIQUE constraint.
         assert_eq!(store.save_track(second_track.clone()), Ok(()));
     }
 
     // Restart: reopen the database and reload from disk.
-    let store = SqliteLibraryStore::open(&db_path).expect("reopen library database");
+    let store =
+        SqliteLibraryStore::open(&db_path, root.join("cache")).expect("reopen library database");
     let loaded = store.tracks().expect("reload tracks");
     assert_eq!(loaded.len(), 2, "two distinct non-utf8 paths stay two rows");
     assert_eq!(loaded, vec![first_track, second_track]);
@@ -1675,6 +1679,202 @@ fn sqlite_cascade_delete_clears_analysis_rows() {
         )
         .expect("record again");
     assert!(matches!(store.load_waveform(t.id), Ok(Some(_))));
+}
+
+/// A file-backed store in `dir`, its waveform cache in `dir/cache`.
+fn open_store_in(dir: &std::path::Path) -> SqliteLibraryStore {
+    SqliteLibraryStore::open(dir.join("library.sqlite"), dir.join("cache")).expect("open store")
+}
+
+fn waveform_cache_file(dir: &std::path::Path) -> PathBuf {
+    dir.join("cache").join("waveform-cache.sqlite")
+}
+
+fn audio_only() -> AnalysisCapabilities {
+    AnalysisCapabilities {
+        bpm: false,
+        key: false,
+        audio: true,
+    }
+}
+
+fn needs_audio_analysis(store: &dyn LibraryStore, track_id: TrackId) -> bool {
+    let needing = store
+        .tracks_needing_analysis(audio_only(), 1, 10)
+        .expect("query");
+    let filtered = store
+        .filter_tracks_needing_analysis(&[track_id], audio_only(), 1)
+        .expect("filter");
+    assert_eq!(needing.contains(&track_id), filtered.contains(&track_id));
+    filtered.contains(&track_id)
+}
+
+/// A store in a fresh directory holding track 1, analysed once.
+fn analysed_store_in(label: &str) -> (PathBuf, TrackId) {
+    let dir = unique_store_test_directory(label);
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    let store = open_store_in(&dir);
+    let t = track(1, "a.flac");
+    store.save_track(t.clone()).expect("save");
+    store
+        .record_analysis(
+            t.id,
+            &sample_analysis(Some(120.0), Some(MusicalKey::CMajor)),
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_000),
+        )
+        .expect("record");
+    (dir, t.id)
+}
+
+#[test]
+fn sqlite_waveforms_persist_in_the_waveform_cache() {
+    let (dir, id) = analysed_store_in("waveform_cache_persist");
+    assert!(waveform_cache_file(&dir).is_file());
+
+    let store = open_store_in(&dir);
+    assert!(store.waveform_cache_status().is_available());
+    assert!(matches!(store.load_waveform(id), Ok(Some(_))));
+    assert!(!needs_audio_analysis(&store, id));
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn sqlite_lost_waveform_cache_analyses_audio_again() {
+    let (dir, id) = analysed_store_in("waveform_cache_lost");
+    std::fs::remove_dir_all(dir.join("cache")).expect("wipe the cache");
+
+    let store = open_store_in(&dir);
+    assert_eq!(store.load_waveform(id), Ok(None));
+    assert!(needs_audio_analysis(&store, id));
+    // Only audio analysis produces waveforms.
+    let bpm_and_key = AnalysisCapabilities {
+        audio: false,
+        ..AnalysisCapabilities::all()
+    };
+    assert_eq!(
+        store.tracks_needing_analysis(bpm_and_key, 1, 10),
+        Ok(Vec::new())
+    );
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn sqlite_restored_library_ignores_waveforms_of_later_attempts() {
+    let (dir, id) = analysed_store_in("waveform_cache_restore");
+    let library = dir.join("library.sqlite");
+    let backup = dir.join("backup.sqlite");
+    std::fs::copy(&library, &backup).expect("back the library up");
+    {
+        let store = open_store_in(&dir);
+        store
+            .record_analysis(
+                id,
+                &sample_analysis(Some(121.0), Some(MusicalKey::CMajor)),
+                AnalysisCapabilities::all(),
+                ctx(1_700_000_000),
+            )
+            .expect("analyse again");
+    }
+    std::fs::copy(&backup, &library).expect("restore the backup");
+
+    let store = open_store_in(&dir);
+    assert_eq!(store.load_waveform(id), Ok(None));
+    assert!(needs_audio_analysis(&store, id));
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn sqlite_audio_attempts_without_a_waveform_are_not_retried() {
+    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
+    let long = track(1, "long.flac");
+    let broken = track(2, "broken.flac");
+    store.save_track(long.clone()).expect("save");
+    store.save_track(broken.clone()).expect("save");
+    let mut analysis = sample_analysis(Some(120.0), None);
+    analysis.waveform_preview.segments.clear();
+    analysis.waveform_detail.segments.clear();
+
+    store
+        .record_analysis(long.id, &analysis, audio_only(), ctx(1_700_000_000))
+        .expect("record");
+    store
+        .record_analysis_attempt_failure(broken.id, audio_only(), ctx(1_700_000_000))
+        .expect("record failure");
+
+    for id in [long.id, broken.id] {
+        assert_eq!(store.load_waveform(id), Ok(None));
+        assert!(!needs_audio_analysis(&store, id));
+    }
+}
+
+#[test]
+fn sqlite_corrupt_waveform_cache_is_recreated() {
+    let (dir, id) = analysed_store_in("waveform_cache_corrupt");
+    std::fs::write(waveform_cache_file(&dir), vec![0x5a; 8192]).expect("corrupt the cache");
+
+    let store = open_store_in(&dir);
+    assert!(store.waveform_cache_status().is_available());
+    assert!(needs_audio_analysis(&store, id));
+    store
+        .record_analysis(
+            id,
+            &sample_analysis(Some(120.0), None),
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_000),
+        )
+        .expect("record");
+    assert!(matches!(store.load_waveform(id), Ok(Some(_))));
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn sqlite_waveform_cache_of_another_format_is_emptied() {
+    let (dir, id) = analysed_store_in("waveform_cache_format");
+    {
+        let cache = rusqlite::Connection::open(waveform_cache_file(&dir)).expect("open cache");
+        cache
+            .pragma_update(None, "user_version", 999)
+            .expect("set version");
+    }
+
+    let store = open_store_in(&dir);
+    assert!(store.waveform_cache_status().is_available());
+    assert_eq!(store.load_waveform(id), Ok(None));
+    assert!(needs_audio_analysis(&store, id));
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn sqlite_unopenable_waveform_cache_leaves_the_library_usable() {
+    let dir = unique_store_test_directory("waveform_cache_unopenable");
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    // A file where the cache directory should be.
+    std::fs::write(dir.join("cache"), b"").expect("block the cache directory");
+
+    let store = open_store_in(&dir);
+    assert!(!store.waveform_cache_status().is_available());
+    let t = track(1, "a.flac");
+    store.save_track(t.clone()).expect("save");
+    assert!(needs_audio_analysis(&store, t.id));
+    store
+        .record_analysis(
+            t.id,
+            &sample_analysis(Some(120.0), None),
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_000),
+        )
+        .expect("record");
+    // Nothing is kept, and analysis does not chase what cannot be kept.
+    assert_eq!(store.load_waveform(t.id), Ok(None));
+    assert!(!needs_audio_analysis(&store, t.id));
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 fn run_partial_capability_record_preserves_other_attempts(store: &dyn LibraryStore) {
@@ -3047,7 +3247,7 @@ fn sqlite_tag_mirror_artwork_survives_reopen_and_is_collected_after_completion()
     let bytes = valid_test_artwork();
 
     let artwork = {
-        let store = SqliteLibraryStore::open(&database).expect("open store");
+        let store = SqliteLibraryStore::open(&database, dir.join("cache")).expect("open store");
         store.save_track(track.clone()).expect("save track");
         let artwork = store
             .publish_tag_mirror_artwork(&bytes)
@@ -3064,7 +3264,7 @@ fn sqlite_tag_mirror_artwork_survives_reopen_and_is_collected_after_completion()
         .join(format!("sha256-{}", artwork.digest()));
     assert!(blob_path.is_file());
 
-    let store = SqliteLibraryStore::open(&database).expect("reopen store");
+    let store = SqliteLibraryStore::open(&database, dir.join("cache")).expect("reopen store");
     let pending = store.tag_mirrors_due(0, 10).expect("reload outbox");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].artwork, TagMirrorArtwork::Set(artwork.clone()));

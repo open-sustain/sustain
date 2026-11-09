@@ -27,9 +27,11 @@ mod schema;
 mod sqlite;
 mod sqlite_rows;
 mod tag_mirror;
+mod waveform_cache;
 
 pub use memory::InMemoryLibraryStore;
 pub use tag_mirror::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork, TagMirrorKinds};
+pub use waveform_cache::WaveformCacheStatus;
 
 use query::{sort_tracks, track_matches_search};
 use schema::{
@@ -662,14 +664,15 @@ pub struct SqliteLibraryStore {
     connection: Mutex<Connection>,
     tag_mirror_blobs: tag_mirror::TagMirrorBlobStore,
     freshly_created: bool,
+    waveform_cache: WaveformCacheStatus,
 }
 
 impl SqliteLibraryStore {
-    pub fn open_default() -> StoreResult<Self> {
-        Self::open(default_database_path().ok_or(StoreError::StoreUnavailable)?)
-    }
-
-    pub fn open(path: impl AsRef<Path>) -> StoreResult<Self> {
+    /// Open the library database at `path`, with its waveform cache in
+    /// `cache_dir`, the directory Sustain caches derived data in. A cache
+    /// that cannot be opened does not keep the library from opening; see
+    /// [`WaveformCacheStatus`].
+    pub fn open(path: impl AsRef<Path>, cache_dir: impl AsRef<Path>) -> StoreResult<Self> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -686,22 +689,28 @@ impl SqliteLibraryStore {
             connection,
             tag_mirror::TagMirrorBlobStore::new(blob_root),
             freshly_created,
+            Some(&cache_dir.as_ref().join(waveform_cache::FILE_NAME)),
         )
     }
 
+    /// An in-memory library, with an in-memory waveform cache.
     pub fn open_in_memory() -> StoreResult<Self> {
         let connection = Connection::open_in_memory().map_err(StoreError::from)?;
         Self::from_connection(
             connection,
             tag_mirror::TagMirrorBlobStore::new_ephemeral(),
             true,
+            None,
         )
     }
 
+    /// `waveform_cache_path` is the cache file to attach; `None` attaches
+    /// an in-memory cache.
     fn from_connection(
         connection: Connection,
         tag_mirror_blobs: tag_mirror::TagMirrorBlobStore,
         freshly_created: bool,
+        waveform_cache_path: Option<&Path>,
     ) -> StoreResult<Self> {
         // SQLite silently ignores WAL on `:memory:` databases, so tests
         // keep working without a special case here.
@@ -713,13 +722,24 @@ impl SqliteLibraryStore {
                 "#,
             )
             .map_err(StoreError::from)?;
-        let store = Self {
+        migrations::apply_pending(&connection)?;
+        // After the migrations: the cache's trigger watches `tracks`.
+        let waveform_cache = match waveform_cache_path {
+            Some(path) => waveform_cache::attach_file(&connection, path),
+            None => waveform_cache::attach_in_memory(&connection),
+        }
+        .map_err(StoreError::from)?;
+        Ok(Self {
             connection: Mutex::new(connection),
             tag_mirror_blobs,
             freshly_created,
-        };
-        store.migrate()?;
-        Ok(store)
+            waveform_cache,
+        })
+    }
+
+    /// Whether analysis waveforms persist across sessions.
+    pub fn waveform_cache_status(&self) -> &WaveformCacheStatus {
+        &self.waveform_cache
     }
 
     // True when this open() call brought the database file into
@@ -734,11 +754,6 @@ impl SqliteLibraryStore {
         self.connection
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)
-    }
-
-    fn migrate(&self) -> StoreResult<()> {
-        let connection = self.connection_guard()?;
-        migrations::apply_pending(&connection)
     }
 }
 

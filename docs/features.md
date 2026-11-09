@@ -645,11 +645,12 @@ key. The pass scales to track length: a normal-length track is measured
 whole, while a **long** track (over 15 minutes — classical movements, DJ
 mixes, podcasts) has its acoustics measured over a centered 8-minute
 sample and skips the waveform entirely, keeping the working set bounded
-instead of decoding a multi-hour file into memory. The preview backs the
-playback seek bar; the detail waveform is held in SQLite for future
-DJ-export targets; the acoustic features are stored per track and cached
-into the Smart Shuffle index. Because they all come from one decode, a
-single toggle governs the whole pass.
+instead of decoding a multi-hour file into memory. Both waveforms feed
+Pioneer exports. They live in a waveform cache beside the artwork cache,
+out of the library database, and a track whose waveform the cache lost
+is simply analysed again. The acoustic features are stored per track
+and cached into the Smart Shuffle index. Because they all come from one
+decode, a single toggle governs the whole pass.
 
 ### Background analysis scheduler — *Sustain-native*
 The Analysis tab in Preferences exposes three toggles — BPM / Key /

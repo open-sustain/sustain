@@ -159,7 +159,7 @@ pub use notifications::{
     library_consolidation_outcome_text, library_consolidation_running_text,
     library_import_outcome_text, library_import_progress_text, library_import_running_text,
     library_path_change_outcome_text, library_scan_outcome_text, library_scan_running_text,
-    runtime_error_text,
+    runtime_error_text, waveform_cache_unavailable_text,
 };
 
 pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;

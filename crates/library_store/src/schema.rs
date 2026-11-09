@@ -514,6 +514,17 @@ UPDATE track_analysis SET bpm_attempted_at_unix = NULL
 WHERE track_id IN (SELECT id FROM tracks WHERE bpm_hundredths IS NOT NULL);
 "#;
 
+// Waveforms are derived data, gigabytes of it for a large library, so they
+// move out of the library into the waveform cache (`waveform_cache.rs`);
+// stored waveforms are not carried over, analysis measures them again.
+// Every audio attempt now draws a token the cache row must match, which
+// ties a cached waveform to the attempt that produced it. No row has one
+// yet, so no cached waveform counts until its track's audio is analysed.
+pub(super) const MOVE_WAVEFORMS_TO_CACHE_SQL: &str = r#"
+DROP TABLE track_waveform;
+ALTER TABLE track_analysis ADD COLUMN audio_attempt_token INTEGER;
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
@@ -743,13 +754,15 @@ INSERT INTO track_analysis (
     bpm_attempted_at_unix,
     key_attempted_at_unix,
     audio_attempted_at_unix,
+    audio_attempt_token,
     analyzer_version
 )
-VALUES (?1, ?2, ?3, ?4, ?5)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 ON CONFLICT(track_id) DO UPDATE SET
     bpm_attempted_at_unix = COALESCE(excluded.bpm_attempted_at_unix, bpm_attempted_at_unix),
     key_attempted_at_unix = COALESCE(excluded.key_attempted_at_unix, key_attempted_at_unix),
     audio_attempted_at_unix = COALESCE(excluded.audio_attempted_at_unix, audio_attempted_at_unix),
+    audio_attempt_token = COALESCE(excluded.audio_attempt_token, audio_attempt_token),
     analyzer_version = excluded.analyzer_version
 "#;
 
@@ -790,16 +803,20 @@ SELECT track_id, integrated_lufs, short_term_lufs_max, loudness_range_lu,
 FROM track_acoustics
 "#;
 
+/// Record the waveform outcome of the audio attempt holding token ?2:
+/// the segments, or NULL in all four columns when it produced none.
 pub(super) const UPSERT_TRACK_WAVEFORM_SQL: &str = r#"
-INSERT INTO track_waveform (
+INSERT INTO waveform_cache.track_waveform (
     track_id,
+    audio_attempt_token,
     preview_segment_duration_ms,
     preview_segments,
     detail_segment_duration_ms,
     detail_segments
 )
-VALUES (?1, ?2, ?3, ?4, ?5)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 ON CONFLICT(track_id) DO UPDATE SET
+    audio_attempt_token = excluded.audio_attempt_token,
     preview_segment_duration_ms = excluded.preview_segment_duration_ms,
     preview_segments = excluded.preview_segments,
     detail_segment_duration_ms = excluded.detail_segment_duration_ms,
@@ -839,14 +856,17 @@ FROM track_beat_grid
 WHERE track_id = ?1
 "#;
 
+/// The waveform of a track's latest audio attempt, if it produced one.
 pub(super) const SELECT_TRACK_WAVEFORM_SQL: &str = r#"
 SELECT
-    preview_segment_duration_ms,
-    preview_segments,
-    detail_segment_duration_ms,
-    detail_segments
-FROM track_waveform
-WHERE track_id = ?1
+    w.preview_segment_duration_ms,
+    w.preview_segments,
+    w.detail_segment_duration_ms,
+    w.detail_segments
+FROM track_analysis ta
+JOIN waveform_cache.track_waveform w
+  ON w.track_id = ta.track_id AND w.audio_attempt_token = ta.audio_attempt_token
+WHERE ta.track_id = ?1 AND w.detail_segments IS NOT NULL
 "#;
 
 /// Upsert the synced-lyrics JSON for a track. Source is a short
@@ -948,12 +968,15 @@ pub(super) const DELETE_SMART_SHUFFLE_INDEX_SQL: &str =
 /// "Find tracks needing analysis." Returns track IDs that are not
 /// marked missing AND have at least one of the requested capabilities
 /// either un-attempted (NULL timestamp) or stamped by an older
-/// analyzer_version. Bound parameters in order:
+/// analyzer_version — or, for audio, whose latest attempt's waveform
+/// outcome the waveform cache does not hold. Bound parameters in order:
 ///   ?1 = include_bpm        (1 or 0)
 ///   ?2 = include_key        (1 or 0)
 ///   ?3 = include_audio      (1 or 0)
 ///   ?4 = current analyzer_version
 ///   ?5 = LIMIT
+///   ?6 = waveform cache available (1 or 0); an unavailable cache holds
+///        nothing worth analysing for
 pub(super) const SELECT_TRACKS_NEEDING_ANALYSIS_SQL: &str = r#"
 SELECT t.id
 FROM tracks t
@@ -962,7 +985,11 @@ WHERE t.is_missing = 0
   AND (
         (?1 = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.analyzer_version < ?4))
      OR (?2 = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.analyzer_version < ?4))
-     OR (?3 = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.analyzer_version < ?4))
+     OR (?3 = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.analyzer_version < ?4
+                     OR (?6 = 1 AND NOT EXISTS (
+                            SELECT 1 FROM waveform_cache.track_waveform w
+                            WHERE w.track_id = t.id
+                              AND w.audio_attempt_token = ta.audio_attempt_token))))
       )
 ORDER BY t.id
 LIMIT ?5

@@ -93,6 +93,9 @@ pub enum NotificationCategory {
     /// the in-memory preference still took effect; the user only needs to
     /// know it will not survive a restart.
     Settings,
+    /// The waveform cache could not be opened at startup, so analysis
+    /// waveforms are not kept this session. Always ephemeral.
+    WaveformCache,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -527,6 +530,10 @@ pub fn library_consolidation_outcome_text(summary: &LibraryConsolidationSummary)
 
 pub fn managed_library_cleanup_failed_text() -> &'static str {
     "Some empty managed-library folders could not be removed."
+}
+
+pub fn waveform_cache_unavailable_text() -> &'static str {
+    "The waveform cache could not be opened. Waveforms will not be kept this session."
 }
 
 pub fn metadata_write_retry_text() -> &'static str {

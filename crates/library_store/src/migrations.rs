@@ -15,12 +15,12 @@ use crate::{
     schema::{
         ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_BEAT_GRID_SQL,
         ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL,
-        BACKFILL_GENERATED_SORT_FIELDS_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL,
-        STORE_BPM_IN_HUNDREDTHS_SQL,
+        BACKFILL_GENERATED_SORT_FIELDS_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
+        NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 11;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 12;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -96,6 +96,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 11,
         description: "remember which BPMs the user typed, and measure every other one again",
         step: MigrationStep::Sql(ADD_TRACK_BPM_SET_BY_USER_SQL),
+    },
+    Migration {
+        version: 12,
+        description: "move waveforms out of the library into the waveform cache",
+        step: MigrationStep::Sql(MOVE_WAVEFORMS_TO_CACHE_SQL),
     },
 ];
 
@@ -235,7 +240,6 @@ mod tests {
         "track_column_sort_smart_playlist_override",
         "track_online_status",
         "track_synced_lyrics",
-        "track_waveform",
         "tracks",
     ];
 
@@ -1075,6 +1079,50 @@ mod tests {
             connection
                 .execute("UPDATE tracks SET bpm_set_by_user = 2 WHERE id = 1", [])
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn upgrade_from_v11_drops_stored_waveforms_and_keeps_analysis_bookkeeping() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..11]).expect("schema version 11");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path, title) VALUES (1, x'61', 'Analysed');
+                 INSERT INTO track_analysis \
+                     (track_id, audio_attempted_at_unix, analyzer_version) \
+                     VALUES (1, 1700000000, 15);
+                 INSERT INTO track_waveform VALUES (1, 25.0, x'01020304', 6.6, x'01020304');",
+            )
+            .expect("seed an analysed track");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        let waveform_tables: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'track_waveform'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(waveform_tables, 0);
+        // The attempt is kept; it holds no token yet, so no cached
+        // waveform can count for it until its audio is analysed again.
+        let (title, attempted, token): (String, Option<i64>, Option<i64>) = connection
+            .query_row(
+                "SELECT t.title, a.audio_attempted_at_unix, a.audio_attempt_token \
+                 FROM tracks t JOIN track_analysis a ON a.track_id = t.id",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("analysed track");
+        assert_eq!(
+            (title.as_str(), attempted, token),
+            ("Analysed", Some(1_700_000_000), None)
         );
     }
 
