@@ -14,7 +14,7 @@ use super::{
 };
 use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
 use crate::track_context::TrackRowContextMenu;
-use crate::util::sync_rating_button;
+use crate::util::{set_exclusive_css_class, sync_rating_button};
 
 const MAX_RATING: u8 = 5;
 const STATUS_COLUMN_WIDTH: i32 = 26;
@@ -199,7 +199,7 @@ impl StatusBindings {
 struct TextBinding {
     key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
-    label: glib::WeakRef<gtk::Label>,
+    text: glib::WeakRef<gtk::Inscription>,
     column: TrackTableColumn,
 }
 
@@ -213,7 +213,7 @@ impl CellBinding for TextBinding {
     }
 
     fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.label.upgrade().is_some()
+        self.list_item.upgrade().is_some() && self.text.upgrade().is_some()
     }
 }
 
@@ -311,15 +311,8 @@ pub(super) fn build_text_cell_factory(
             reorder_for_setup.as_ref(),
         );
 
-        let label = gtk::Label::new(None);
-        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        label.set_hexpand(true);
-        label.set_valign(gtk::Align::Center);
-        label.set_margin_start(8);
-        label.set_margin_end(8);
-        label.set_xalign(column.xalign());
-
-        cell.append(&label);
+        let text = new_cell_text(column.xalign());
+        cell.append(&text);
         list_item.set_child(Some(&cell));
 
         // Editable columns on an inline-editing table arm a click gesture
@@ -331,7 +324,7 @@ pub(super) fn build_text_cell_factory(
         bindings_for_setup.0.push(TextBinding {
             key: list_item_key(list_item),
             list_item: list_item.downgrade(),
-            label: label.downgrade(),
+            text: text.downgrade(),
             column,
         });
     });
@@ -369,9 +362,9 @@ pub(super) fn build_text_cell_factory(
         apply_bound_row_tint(&cell, list_item);
         sync_row_selection_class(&cell, list_item.is_selected());
 
-        let Some(label) = cell
+        let Some(text) = cell
             .first_child()
-            .and_then(|child| child.downcast::<gtk::Label>().ok())
+            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
         else {
             return;
         };
@@ -385,7 +378,7 @@ pub(super) fn build_text_cell_factory(
             return;
         };
 
-        label.set_text(&column.text(&row));
+        text.set_text(Some(&column.text(&row)));
     });
 
     factory
@@ -617,8 +610,8 @@ fn build_filler_factory(
 /// `track-table-cell` styling, fill expansion, and the row chrome wired
 /// through [`install_cell_chrome`] (selection sync, context-menu
 /// registration, drag source, reorder drop target). Each factory then
-/// appends its own content — a label, rating stars, a status icon, or
-/// nothing for the filler column.
+/// appends its own content — a [`new_cell_text`], rating stars, a status
+/// icon, or nothing for the filler column.
 fn new_track_cell(
     list_item: &gtk::ListItem,
     context_menu: Option<&TrackTableContextMenu>,
@@ -632,6 +625,26 @@ fn new_track_cell(
     cell.set_valign(gtk::Align::Fill);
     install_cell_chrome(list_item, &cell, context_menu, row_reorder);
     cell
+}
+
+/// The text of a table cell, ellipsized at the end and aligned to
+/// `xalign`.
+///
+/// A `GtkInscription`, never a `GtkLabel`: a label's size follows its
+/// text, so every text change queues a resize, and GTK re-measures every
+/// realized row — about 200 of them, visible or not — on the next frame.
+/// An inscription's size comes from its line count alone, so a text change
+/// only redraws it. A whole-library search re-texts every realized cell,
+/// and with labels that relayout was the largest cost of the keystroke.
+pub(crate) fn new_cell_text(xalign: f32) -> gtk::Inscription {
+    let text = gtk::Inscription::new(None);
+    text.set_text_overflow(gtk::InscriptionOverflow::EllipsizeEnd);
+    text.set_hexpand(true);
+    text.set_valign(gtk::Align::Center);
+    text.set_margin_start(8);
+    text.set_margin_end(8);
+    text.set_xalign(xalign);
+    text
 }
 
 fn install_cell_chrome(
@@ -679,7 +692,7 @@ pub(crate) fn row_track_id(item: Option<glib::Object>) -> Option<TrackId> {
 }
 
 fn refresh_text_binding(binding: &TextBinding, target_track_id: TrackId) {
-    let (Some(list_item), Some(label)) = (binding.list_item(), binding.label.upgrade()) else {
+    let (Some(list_item), Some(text)) = (binding.list_item(), binding.text.upgrade()) else {
         return;
     };
     let Some(row_object) = list_item
@@ -694,26 +707,26 @@ fn refresh_text_binding(binding: &TextBinding, target_track_id: TrackId) {
     if row.track_id != Some(target_track_id) {
         return;
     }
-    label.set_text(&binding.column.text(&row));
+    text.set_text(Some(&binding.column.text(&row)));
 }
 
 fn refresh_text_binding_value(binding: &TextBinding) {
-    let (Some(list_item), Some(label)) = (binding.list_item(), binding.label.upgrade()) else {
+    let (Some(list_item), Some(text)) = (binding.list_item(), binding.text.upgrade()) else {
         return;
     };
     let Some(row_object) = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
     else {
-        label.set_text("");
+        text.set_text(None);
         return;
     };
     let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
         return;
     };
-    label.set_text(&binding.column.text(&row));
+    text.set_text(Some(&binding.column.text(&row)));
     drop(row);
-    retint_cell_of(&label, &list_item);
+    retint_cell_of(&text, &list_item);
 }
 
 fn refresh_rating_binding(binding: &RatingBinding, target_track_id: TrackId) {
@@ -782,31 +795,49 @@ fn refresh_status_icon(
         return;
     };
 
-    icon.remove_css_class("track-table-status-playing");
-    icon.remove_css_class("track-table-status-missing");
-
-    if row.is_missing {
-        icon.set_icon_name(Some(STATUS_ICON_MISSING));
-        icon.add_css_class("track-table-status-missing");
-        icon.set_visible(true);
-        return;
-    }
-
-    if matches!(
+    let shown = if row.is_missing {
+        Some((STATUS_ICON_MISSING, "track-table-status-missing"))
+    } else if matches!(
         (row.track_id, playing_track_id),
         (Some(track_id), Some(playing_id)) if track_id == playing_id
     ) {
-        icon.set_icon_name(Some(STATUS_ICON_PLAYING));
-        icon.add_css_class("track-table-status-playing");
-        icon.set_visible(true);
-        return;
+        Some((STATUS_ICON_PLAYING, "track-table-status-playing"))
+    } else {
+        None
+    };
+    drop(row);
+    match shown {
+        Some((icon_name, class)) => show_status_icon(icon, icon_name, class),
+        None => clear_status_icon(icon),
     }
+}
 
-    clear_status_icon(icon);
+const STATUS_ICON_CLASSES: [&str; 2] = ["track-table-status-missing", "track-table-status-playing"];
+
+/// Show `icon_name` styled by `class`. Only what differs from the icon's
+/// current state is touched: setting an icon name re-resolves the icon
+/// and resizes the image even when the name is unchanged.
+fn show_status_icon(icon: &gtk::Image, icon_name: &str, class: &str) {
+    for other in STATUS_ICON_CLASSES
+        .into_iter()
+        .filter(|other| *other != class)
+    {
+        icon.remove_css_class(other);
+    }
+    icon.add_css_class(class);
+    if icon.icon_name().as_deref() != Some(icon_name) {
+        icon.set_icon_name(Some(icon_name));
+    }
+    icon.set_visible(true);
 }
 
 fn clear_status_icon(icon: &gtk::Image) {
-    icon.set_icon_name(None);
+    for class in STATUS_ICON_CLASSES {
+        icon.remove_css_class(class);
+    }
+    if icon.icon_name().is_some() {
+        icon.set_icon_name(None);
+    }
     icon.set_visible(false);
 }
 
@@ -822,8 +853,6 @@ fn retint_cell_of(content: &impl IsA<gtk::Widget>, list_item: &gtk::ListItem) {
 }
 
 fn apply_bound_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
-    cell.remove_css_class("track-table-row-even");
-    cell.remove_css_class("track-table-row-odd");
     let group_band = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
@@ -833,9 +862,9 @@ fn apply_bound_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
                 .and_then(|row| row.group_band)
         });
     if group_band.unwrap_or_else(|| list_item.position().is_multiple_of(2)) {
-        cell.add_css_class("track-table-row-even");
+        set_exclusive_css_class(cell, "track-table-row-even", "track-table-row-odd");
     } else {
-        cell.add_css_class("track-table-row-odd");
+        set_exclusive_css_class(cell, "track-table-row-odd", "track-table-row-even");
     }
 }
 

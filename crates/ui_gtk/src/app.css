@@ -828,7 +828,7 @@ listview.playlist-sidebar-list > row:focus {
 }
 
 /* Inline cell editor. A single click on an editable cell of the
-   already-selected Songs row swaps the cell's label for this entry.
+   already-selected Songs row swaps the cell's text for this entry.
    Trimmed to the row height so opening it doesn't jolt the row; it keeps
    the standard entry background and accent focus ring so the active
    field reads clearly even over a selected row's accent fill. */

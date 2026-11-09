@@ -11,11 +11,11 @@ use std::rc::Rc;
 use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackColumnSort, TrackId};
 
 use super::track_context::TrackRowContextMenu;
-pub(crate) use cells::row_track_id;
 use cells::{
     RatingBindings, StatusBindings, TextBindings, TrackTableContextMenu, build_filler_column,
     build_rating_cell_factory, build_status_column, build_text_cell_factory,
 };
+pub(crate) use cells::{new_cell_text, row_track_id};
 use columns::{TRACK_TABLE_COLUMNS, TrackTableColumn};
 use drag_drop::{RowDropCellRegistry, RowReorderHooks};
 pub(crate) use empty_row_painter::EmptyRowPainter;
@@ -1403,7 +1403,7 @@ mod tests {
                 .expect("window retains the mapped track table");
             for (position, text) in ["A", "B", "C"].into_iter().enumerate() {
                 let cell =
-                    cell_containing_label(&root, text).expect("visible search-result cell exists");
+                    cell_containing_text(&root, text).expect("visible search-result cell exists");
                 assert_eq!(
                     cell.has_css_class("track-table-row-even"),
                     position % 2 == 0,
@@ -1452,7 +1452,7 @@ mod tests {
                 .child()
                 .expect("window retains the mapped track table");
             for text in ["A", "B"] {
-                let cell = cell_containing_label(&root, text).expect("visible cell exists");
+                let cell = cell_containing_text(&root, text).expect("visible cell exists");
                 assert!(
                     cell.has_css_class("track-table-row-odd")
                         && !cell.has_css_class("track-table-row-even"),
@@ -1705,15 +1705,15 @@ mod tests {
         }
     }
 
-    fn cell_containing_label(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
-        if let Some(label) = root.downcast_ref::<gtk::Label>()
-            && label.text() == text
+    fn cell_containing_text(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
+        if let Some(inscription) = root.downcast_ref::<gtk::Inscription>()
+            && inscription.text().as_deref() == Some(text)
         {
             return root.parent();
         }
         let mut child = root.first_child();
         while let Some(widget) = child {
-            if let Some(cell) = cell_containing_label(&widget, text) {
+            if let Some(cell) = cell_containing_text(&widget, text) {
                 return Some(cell);
             }
             child = widget.next_sibling();

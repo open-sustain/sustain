@@ -53,13 +53,23 @@ pub(crate) fn display_artist(metadata: &TrackMetadata) -> String {
 /// / `rating-star-empty` CSS classes. Shared by the track table cells and the
 /// track-info detail page so both style identically.
 pub(crate) fn sync_rating_button(button: &gtk::Button, star: u8, rating: u8) {
-    button.remove_css_class("rating-star-filled");
-    button.remove_css_class("rating-star-empty");
     if star <= rating {
         button.set_label(FILLED_STAR);
-        button.add_css_class("rating-star-filled");
+        set_exclusive_css_class(button, "rating-star-filled", "rating-star-empty");
     } else {
         button.set_label(EMPTY_STAR);
-        button.add_css_class("rating-star-empty");
+        set_exclusive_css_class(button, "rating-star-empty", "rating-star-filled");
+    }
+}
+
+/// Gives `widget` the CSS class `class` and takes away `other`, its
+/// mutually exclusive counterpart. Every class change restyles the widget,
+/// so a widget that already carries `class` is left untouched: refreshing
+/// hundreds of realized cells to the state they already show must not
+/// restyle each of them.
+pub(crate) fn set_exclusive_css_class(widget: &impl IsA<gtk::Widget>, class: &str, other: &str) {
+    if !widget.has_css_class(class) {
+        widget.remove_css_class(other);
+        widget.add_css_class(class);
     }
 }

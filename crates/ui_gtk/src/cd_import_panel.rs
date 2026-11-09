@@ -41,7 +41,9 @@ use gtk::{gdk, gdk_pixbuf, gio, glib};
 use sustain_app_runtime::{CdImportRequest, CdTrackOverride, DiscRelease, TocSnapshot};
 
 use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
-use crate::track_table::{EditSession, EditableField, EmptyRowPainter, InlineEditController};
+use crate::track_table::{
+    EditSession, EditableField, EmptyRowPainter, InlineEditController, new_cell_text,
+};
 use crate::{SharedRuntime, TITLEBAR_HEIGHT};
 
 const FALLBACK_ALBUM: &str = "Audio CD";
@@ -119,14 +121,14 @@ impl CdRow {
     }
 }
 
-/// A realized title/artist label, refreshed when the chosen release or a
+/// A realized title/artist cell text, refreshed when the chosen release or a
 /// user override changes its displayed value. Mirrors the Songs table's
 /// `TextBindings`: weak references, pruned lazily on walks (see
 /// `cell_registry`).
 struct CdTextBinding {
     key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
-    label: glib::WeakRef<gtk::Label>,
+    text: glib::WeakRef<gtk::Inscription>,
     field: EditableField,
 }
 
@@ -140,7 +142,7 @@ impl CellBinding for CdTextBinding {
     }
 
     fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.label.upgrade().is_some()
+        self.list_item.upgrade().is_some() && self.text.upgrade().is_some()
     }
 }
 
@@ -150,17 +152,16 @@ struct CdTextBindings(BindingRegistry<CdTextBinding>);
 impl CdTextBindings {
     fn refresh(&self) {
         self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(label)) = (binding.list_item(), binding.label.upgrade())
+            let (Some(list_item), Some(text)) = (binding.list_item(), binding.text.upgrade())
             else {
                 return;
             };
             let field = binding.field;
-            let text = list_item_cd_row(&list_item, |row| match field {
+            let value = list_item_cd_row(&list_item, |row| match field {
                 EditableField::Artist => row.display_artist(),
                 _ => row.display_title(),
-            })
-            .unwrap_or_default();
-            label.set_text(&text);
+            });
+            text.set_text(value.as_deref());
         });
     }
 }
@@ -1029,14 +1030,9 @@ fn build_cd_number_factory() -> gtk::SignalListItemFactory {
         };
         let cell = new_cell();
         install_cd_cell_selection_sync(list_item, &cell);
-        let label = gtk::Label::new(None);
-        label.add_css_class("dim-label");
-        label.set_xalign(1.0);
-        label.set_hexpand(true);
-        label.set_valign(gtk::Align::Center);
-        label.set_margin_start(8);
-        label.set_margin_end(8);
-        cell.append(&label);
+        let text = new_cell_text(1.0);
+        text.add_css_class("dim-label");
+        cell.append(&text);
         list_item.set_child(Some(&cell));
     });
     factory.connect_bind(move |_factory, item| {
@@ -1050,15 +1046,13 @@ fn build_cd_number_factory() -> gtk::SignalListItemFactory {
             return;
         };
         bind_cell_chrome(&cell, list_item);
-        let Some(label) = cell
+        let Some(text) = cell
             .first_child()
-            .and_then(|child| child.downcast::<gtk::Label>().ok())
+            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
         else {
             return;
         };
-        let text =
-            list_item_cd_row(list_item, |row| format!("{:02}", row.number)).unwrap_or_default();
-        label.set_text(&text);
+        text.set_text(list_item_cd_row(list_item, |row| format!("{:02}", row.number)).as_deref());
     });
     factory
 }
@@ -1071,14 +1065,9 @@ fn build_cd_duration_factory() -> gtk::SignalListItemFactory {
         };
         let cell = new_cell();
         install_cd_cell_selection_sync(list_item, &cell);
-        let label = gtk::Label::new(None);
-        label.add_css_class("dim-label");
-        label.set_xalign(1.0);
-        label.set_hexpand(true);
-        label.set_valign(gtk::Align::Center);
-        label.set_margin_start(8);
-        label.set_margin_end(8);
-        cell.append(&label);
+        let text = new_cell_text(1.0);
+        text.add_css_class("dim-label");
+        cell.append(&text);
         list_item.set_child(Some(&cell));
     });
     factory.connect_bind(move |_factory, item| {
@@ -1092,15 +1081,13 @@ fn build_cd_duration_factory() -> gtk::SignalListItemFactory {
             return;
         };
         bind_cell_chrome(&cell, list_item);
-        let Some(label) = cell
+        let Some(text) = cell
             .first_child()
-            .and_then(|child| child.downcast::<gtk::Label>().ok())
+            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
         else {
             return;
         };
-        let text =
-            list_item_cd_row(list_item, |row| format_duration(row.duration)).unwrap_or_default();
-        label.set_text(&text);
+        text.set_text(list_item_cd_row(list_item, |row| format_duration(row.duration)).as_deref());
     });
     factory
 }
@@ -1121,14 +1108,8 @@ fn build_cd_text_factory(
         let cell = new_cell();
         install_cd_cell_selection_sync(list_item, &cell);
 
-        let label = gtk::Label::new(None);
-        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        label.set_hexpand(true);
-        label.set_valign(gtk::Align::Center);
-        label.set_margin_start(8);
-        label.set_margin_end(8);
-        label.set_xalign(0.0);
-        cell.append(&label);
+        let text = new_cell_text(0.0);
+        cell.append(&text);
         list_item.set_child(Some(&cell));
 
         // Same inline-edit interaction as the Songs table: a click on an
@@ -1138,7 +1119,7 @@ fn build_cd_text_factory(
         bindings_setup.0.push(CdTextBinding {
             key: list_item_key(list_item),
             list_item: list_item.downgrade(),
-            label: label.downgrade(),
+            text: text.downgrade(),
             field,
         });
     });
@@ -1168,18 +1149,17 @@ fn build_cd_text_factory(
             return;
         };
         bind_cell_chrome(&cell, list_item);
-        let Some(label) = cell
+        let Some(text) = cell
             .first_child()
-            .and_then(|child| child.downcast::<gtk::Label>().ok())
+            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
         else {
             return;
         };
-        let text = list_item_cd_row(list_item, |row| match field {
+        let value = list_item_cd_row(list_item, |row| match field {
             EditableField::Artist => row.display_artist(),
             _ => row.display_title(),
-        })
-        .unwrap_or_default();
-        label.set_text(&text);
+        });
+        text.set_text(value.as_deref());
     });
 
     factory

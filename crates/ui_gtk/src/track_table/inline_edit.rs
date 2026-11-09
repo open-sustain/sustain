@@ -138,7 +138,7 @@ struct ActiveEdit {
     commit: Box<dyn FnOnce(String)>,
     list_item: gtk::ListItem,
     cell: gtk::Box,
-    label: gtk::Label,
+    text: gtk::Inscription,
     entry: gtk::Entry,
 }
 
@@ -389,9 +389,9 @@ impl InlineEditController {
         let Some(EditSession { seed, commit }) = (self.begin_edit)(&item, field) else {
             return;
         };
-        let Some(label) = cell
+        let Some(text) = cell
             .first_child()
-            .and_then(|child| child.downcast::<gtk::Label>().ok())
+            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
         else {
             return;
         };
@@ -400,9 +400,9 @@ impl InlineEditController {
         entry.add_css_class("track-table-inline-edit");
         entry.set_hexpand(true);
         entry.set_text(&seed);
-        gtk::prelude::EditableExt::set_alignment(&entry, label.xalign());
+        gtk::prelude::EditableExt::set_alignment(&entry, text.xalign());
 
-        label.set_visible(false);
+        text.set_visible(false);
         cell.append(&entry);
 
         // Install the entry's controllers — crucially the focus controller —
@@ -418,7 +418,7 @@ impl InlineEditController {
             commit,
             list_item: list_item.clone(),
             cell: cell.clone(),
-            label,
+            text,
             entry: entry.clone(),
         });
 
@@ -498,7 +498,7 @@ impl InlineEditController {
         }
     }
 
-    /// End the active edit (if any), restoring the cell's label and — for
+    /// End the active edit (if any), restoring the cell's text and — for
     /// [`FinishMode::Commit`] — writing the typed value. Returns the ended
     /// session's cell so callers (Tab) can locate the row it belonged to.
     ///
@@ -513,7 +513,7 @@ impl InlineEditController {
         if active.entry.parent().is_some() {
             active.cell.remove(&active.entry);
         }
-        active.label.set_visible(true);
+        active.text.set_visible(true);
         if mode == FinishMode::Commit {
             self.pending_commits.borrow_mut().push_back(PendingCommit {
                 commit: active.commit,
