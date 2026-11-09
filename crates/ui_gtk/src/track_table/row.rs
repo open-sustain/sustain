@@ -185,7 +185,7 @@ fn file_stem_text(path: &Path) -> Option<String> {
 #[cfg(test)]
 impl TrackTableRow {
     /// A bare row for track `id`, named "Track {id}", for table tests.
-    pub(super) fn test_row(id: i64) -> Self {
+    pub(crate) fn test_row(id: i64) -> Self {
         Self {
             track_id: TrackId::new(id),
             track_name: format!("Track {id}"),

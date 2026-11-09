@@ -8,9 +8,9 @@ use super::*;
 
 /// Wires the topbar SearchEntry to a debounced callback that re-filters
 /// all three content pages (Music, Albums, Playlists) plus the
-/// status-bar summary against the new query. All three are rebuilt on
-/// each fire so that switching pages mid-query never shows stale
-/// unfiltered content.
+/// status-bar summary against the new query. The visible page rebuilds
+/// at once; a hidden one rebuilds when it is next shown, so switching
+/// pages mid-query never shows stale unfiltered content.
 ///
 /// Filtering follows the agreed product semantics:
 /// - Music view filters across the 7 track-level fields covered by
@@ -29,6 +29,7 @@ pub(super) struct SearchWiringContext {
     pub(super) command_controller: SharedCommandController,
     pub(super) runtime: SharedRuntime,
     pub(super) songs_table: TrackTable,
+    pub(super) songs_refresh: SongsViewRefresh,
     pub(super) albums_view: AlbumsView,
     pub(super) playlists_refresh: PlaylistsViewRefreshContext,
     pub(super) sidebar: PlaylistSidebar,
@@ -43,6 +44,7 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
         command_controller,
         runtime,
         songs_table,
+        songs_refresh,
         albums_view,
         playlists_refresh,
         sidebar,
@@ -79,30 +81,12 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
 
             sustain_profiler::profile_mark!(change_profile, "search: text changed phase");
 
-            let songs_rows_profile = sustain_profiler::ProfileScope::start();
-            let songs_rows = runtime_library_table_rows(&runtime.borrow(), &new_text);
-            let songs_row_count = songs_rows.len();
-            sustain_profiler::profile_mark!(
-                songs_rows_profile,
-                "search: Songs rows built ({} rows)",
-                songs_row_count
-            );
-            // Share one pass: when Songs is the visible view, summarize
-            // the rows we just built (count + duration + size) instead
-            // of re-filtering and re-materializing the whole table for
-            // the status bar. Other views fall back to the generic
-            // refresh below, which derives the right rows for them.
-            let songs_visible = content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW);
+            songs_refresh.refresh();
+            let songs_visible = songs_refresh.is_visible();
             if songs_visible {
-                status_bar.update_summary(&songs_rows);
+                let (track_count, duration_seconds, size_bytes) = songs_table.summary_values();
+                status_bar.update_summary_values(track_count, duration_seconds, size_bytes);
             }
-            let songs_replace_profile = sustain_profiler::ProfileScope::start();
-            songs_table.replace_rows(songs_rows);
-            sustain_profiler::profile_mark!(
-                songs_replace_profile,
-                "search: Songs table replace_rows ({} rows)",
-                songs_row_count
-            );
 
             let albums_profile = sustain_profiler::ProfileScope::start();
             albums_view.set_search_text(new_text.clone());

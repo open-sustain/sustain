@@ -109,6 +109,7 @@ mod result_consumers;
 mod search;
 mod sidebar_callbacks;
 mod sidebar_collapse;
+mod songs;
 mod track_callbacks;
 
 pub(crate) use sidebar_collapse::SidebarCollapseController;
@@ -141,6 +142,7 @@ use sidebar_callbacks::{
     sidebar_online_busy_query, sidebar_online_run_callback, sidebar_rename_callback,
     sidebar_selection_changed_callback, sidebar_tracks_drop_callback,
 };
+use songs::SongsViewRefresh;
 use track_callbacks::{
     TrackRowChangedContext, begin_inline_edit_callback, playlist_row_reorder_callback,
     playlist_track_context_actions, rating_changed_callback, track_context_actions,
@@ -561,6 +563,8 @@ pub(crate) fn build_main_window(
         &playlists_dirty,
     );
     install_playlists_view_activator(&playlists_refresh, &runtime, &sidebar, &current_search_text);
+    let songs_refresh =
+        SongsViewRefresh::install(&content_stack, &songs_table, &runtime, &current_search_text);
     sustain_profiler::profile_mark!(window_profile, "content stack + activators installed");
     // The Play button's behaviour depends on the visible view, which now
     // exists. One shared closure drives both the button and the Space
@@ -586,14 +590,13 @@ pub(crate) fn build_main_window(
     device_panel.set_summary_refresh(visible_summary_refresh.clone());
     let library_changed = library_changed_callback(
         &runtime,
-        &songs_table,
+        &songs_refresh,
         &albums_view,
         &duplicates_view,
         &statistics_view,
         &sidebar,
         &titlebar,
         visible_summary_refresh.clone(),
-        &current_search_text,
     );
     install_cd_import_requested(&cd_import_panel, &runtime, library_changed.clone());
     install_track_availability_observer(&runtime, &songs_table, &playlists_table);
@@ -725,6 +728,7 @@ pub(crate) fn build_main_window(
             command_controller: command_controller.clone(),
             runtime: runtime.clone(),
             songs_table: songs_table.clone(),
+            songs_refresh: songs_refresh.clone(),
             albums_view: albums_view.clone(),
             playlists_refresh: playlists_refresh.clone(),
             sidebar: sidebar.clone(),
@@ -769,6 +773,7 @@ pub(crate) fn build_main_window(
     let import_completed = library_import_completed_callback(
         &runtime,
         &songs_table,
+        &songs_refresh,
         &albums_view,
         &duplicates_view,
         &statistics_view,
@@ -1562,28 +1567,24 @@ fn ui_settings_from_widgets(
 #[allow(clippy::too_many_arguments)]
 fn library_changed_callback(
     runtime: &SharedRuntime,
-    songs_table: &TrackTable,
+    songs_refresh: &SongsViewRefresh,
     albums_view: &AlbumsView,
     duplicates_view: &DuplicatesView,
     statistics_view: &StatisticsView,
     sidebar: &PlaylistSidebar,
     titlebar: &Titlebar,
     visible_summary_refresh: VisibleSummaryRefreshCallback,
-    current_search_text: &Rc<RefCell<String>>,
 ) -> LibraryChangedCallback {
     let runtime = runtime.clone();
-    let songs_table = songs_table.clone();
+    let songs_refresh = songs_refresh.clone();
     let albums_view = albums_view.clone();
     let duplicates_view = duplicates_view.clone();
     let statistics_view = statistics_view.clone();
     let sidebar = sidebar.clone();
     let titlebar = titlebar.clone();
-    let current_search_text = current_search_text.clone();
 
     Rc::new(move || {
-        let search_text = current_search_text.borrow().clone();
-        let rows = runtime_library_table_rows(&runtime.borrow(), &search_text);
-        songs_table.replace_rows(rows);
+        songs_refresh.refresh();
         // AlbumsView re-derives the visible album set from the runtime's
         // current library using the search text it already holds, so we
         // pass no track snapshot and need not call set_search_text here.
@@ -1612,6 +1613,7 @@ fn library_changed_callback(
 fn library_import_completed_callback(
     runtime: &SharedRuntime,
     songs_table: &TrackTable,
+    songs_refresh: &SongsViewRefresh,
     albums_view: &AlbumsView,
     duplicates_view: &DuplicatesView,
     statistics_view: &StatisticsView,
@@ -1622,6 +1624,7 @@ fn library_import_completed_callback(
 ) -> LibraryImportCompletedCallback {
     let runtime = runtime.clone();
     let songs_table = songs_table.clone();
+    let songs_refresh = songs_refresh.clone();
     let albums_view = albums_view.clone();
     let duplicates_view = duplicates_view.clone();
     let statistics_view = statistics_view.clone();
@@ -1633,12 +1636,18 @@ fn library_import_completed_callback(
         if imported_tracks.is_empty() {
             return;
         }
-        let search_text = current_search_text.borrow().clone();
-        let rows = {
-            let runtime = runtime.borrow();
-            imported_library_table_rows(&runtime, imported_tracks, &search_text)
-        };
-        songs_table.append_rows(rows);
+        // Inserting keeps a visible table's scroll and selection; a hidden
+        // one rebuilds when next shown anyway.
+        if songs_refresh.is_visible() {
+            let search_text = current_search_text.borrow().clone();
+            let rows = {
+                let runtime = runtime.borrow();
+                imported_library_table_rows(&runtime, imported_tracks, &search_text)
+            };
+            songs_table.append_rows(rows);
+        } else {
+            songs_refresh.refresh();
+        }
         albums_view.replace_tracks();
         duplicates_view.refresh_if_active();
         statistics_view.refresh_if_visible();
