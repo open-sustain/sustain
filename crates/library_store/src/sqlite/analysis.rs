@@ -391,9 +391,9 @@ LEFT JOIN track_analysis ta ON ta.track_id = t.id
 WHERE t.is_missing = 0
   AND t.id IN ({id_placeholders})
   AND (
-        (?{bpm} = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.analyzer_version < ?{version}))
-     OR (?{key} = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.analyzer_version < ?{version}))
-     OR (?{audio} = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.analyzer_version < ?{version}
+        (?{bpm} = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.bpm_analyzer_version   < ?{version}))
+     OR (?{key} = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.key_analyzer_version   < ?{version}))
+     OR (?{audio} = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?{version}
                      OR (?{cache_available} = 1 AND NOT EXISTS (
                             SELECT 1 FROM waveform_cache.track_waveform w
                             WHERE w.track_id = t.id
@@ -413,19 +413,20 @@ fn upsert_track_analysis(
     context: AnalysisContext,
     audio_attempt_token: Option<i64>,
 ) -> StoreResult<()> {
-    let bpm_at = capabilities.bpm.then_some(context.now_unix);
-    let key_at = capabilities.key.then_some(context.now_unix);
-    let audio_at = capabilities.audio.then_some(context.now_unix);
+    let at = |covered: bool| covered.then_some(context.now_unix);
+    let version = |covered: bool| covered.then_some(i64::from(context.analyzer_version));
     connection
         .execute(
             UPSERT_TRACK_ANALYSIS_SQL,
             params![
                 track_id.get(),
-                bpm_at,
-                key_at,
-                audio_at,
+                at(capabilities.bpm),
+                at(capabilities.key),
+                at(capabilities.audio),
                 audio_attempt_token,
-                i64::from(context.analyzer_version),
+                version(capabilities.bpm),
+                version(capabilities.key),
+                version(capabilities.audio),
             ],
         )
         .map(|_| ())

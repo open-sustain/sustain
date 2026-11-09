@@ -17,10 +17,11 @@ use crate::{
         ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL,
         BACKFILL_GENERATED_SORT_FIELDS_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
         NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
+        VERSION_ANALYSIS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 12;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 13;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -101,6 +102,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 12,
         description: "move waveforms out of the library into the waveform cache",
         step: MigrationStep::Sql(MOVE_WAVEFORMS_TO_CACHE_SQL),
+    },
+    Migration {
+        version: 13,
+        description: "version analysis attempts per capability",
+        step: MigrationStep::Sql(VERSION_ANALYSIS_PER_CAPABILITY_SQL),
     },
 ];
 
@@ -1123,6 +1129,38 @@ mod tests {
         assert_eq!(
             (title.as_str(), attempted, token),
             ("Analysed", Some(1_700_000_000), None)
+        );
+    }
+
+    #[test]
+    fn upgrade_from_v12_versions_each_attempted_capability() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..12]).expect("schema version 12");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path) VALUES (1, x'61');
+                 INSERT INTO track_analysis \
+                     (track_id, bpm_attempted_at_unix, audio_attempted_at_unix, analyzer_version) \
+                     VALUES (1, 1700000000, 1700000000, 15);",
+            )
+            .expect("seed an analysed track");
+
+        apply_pending(&connection).expect("upgrade");
+
+        let versions: (Option<i64>, Option<i64>, Option<i64>) = connection
+            .query_row(
+                "SELECT bpm_analyzer_version, key_analyzer_version, audio_analyzer_version \
+                 FROM track_analysis",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("versions");
+        // Key was never attempted, so it has no version.
+        assert_eq!(versions, (Some(15), None, Some(15)));
+        assert!(
+            connection
+                .prepare("SELECT analyzer_version FROM track_analysis")
+                .is_err()
         );
     }
 

@@ -44,15 +44,47 @@ pub struct InMemoryLibraryStore {
     device_manifests: Mutex<BTreeMap<SyncDeviceId, Vec<SyncManifestEntry>>>,
 }
 
-/// In-memory mirror of one `track_analysis` row. Mirrors the SQLite
-/// COALESCE semantics: an unsupplied `*_attempted_at_unix` keeps its
-/// previous value rather than reverting to `None`.
+/// In-memory mirror of one `track_analysis` row: each capability's
+/// latest attempt. Mirrors the SQLite COALESCE semantics: a capability
+/// an attempt did not cover keeps its previous attempt.
 #[derive(Clone, Copy, Debug, Default)]
 struct AnalysisBookkeeping {
-    bpm_attempted_at_unix: Option<i64>,
-    key_attempted_at_unix: Option<i64>,
-    audio_attempted_at_unix: Option<i64>,
+    bpm: Option<AnalysisAttempt>,
+    key: Option<AnalysisAttempt>,
+    audio: Option<AnalysisAttempt>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AnalysisAttempt {
     analyzer_version: u32,
+}
+
+impl AnalysisBookkeeping {
+    fn record_attempt(&mut self, capabilities: AnalysisCapabilities, context: AnalysisContext) {
+        let attempt = Some(AnalysisAttempt {
+            analyzer_version: context.analyzer_version,
+        });
+        if capabilities.bpm {
+            self.bpm = attempt;
+        }
+        if capabilities.key {
+            self.key = attempt;
+        }
+        if capabilities.audio {
+            self.audio = attempt;
+        }
+    }
+
+    /// Whether any of `capabilities` was never attempted, or last
+    /// attempted by an analyzer older than `analyzer_version`.
+    fn needs_analysis(&self, capabilities: AnalysisCapabilities, analyzer_version: u32) -> bool {
+        let stale = |attempt: Option<AnalysisAttempt>| {
+            attempt.is_none_or(|attempt| attempt.analyzer_version < analyzer_version)
+        };
+        (capabilities.bpm && stale(self.bpm))
+            || (capabilities.key && stale(self.key))
+            || (capabilities.audio && stale(self.audio))
+    }
 }
 
 /// In-memory mirror of one `track_online_status` row. Same COALESCE
@@ -88,7 +120,7 @@ impl InMemoryLibraryStore {
                 .map_err(|_| StoreError::StoreUnavailable)?
                 .get_mut(&track_id)
         {
-            book.bpm_attempted_at_unix = None;
+            book.bpm = None;
         }
         Ok(())
     }
@@ -934,17 +966,10 @@ impl LibraryStore for InMemoryLibraryStore {
             .analysis_bookkeeping
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?;
-        let entry = bookkeeping.entry(track_id).or_default();
-        if capabilities.bpm {
-            entry.bpm_attempted_at_unix = Some(context.now_unix);
-        }
-        if capabilities.key {
-            entry.key_attempted_at_unix = Some(context.now_unix);
-        }
-        if capabilities.audio {
-            entry.audio_attempted_at_unix = Some(context.now_unix);
-        }
-        entry.analyzer_version = context.analyzer_version;
+        bookkeeping
+            .entry(track_id)
+            .or_default()
+            .record_attempt(capabilities, context);
         drop(bookkeeping);
 
         if capabilities.audio && !analysis.waveform_detail.segments.is_empty() {
@@ -1014,17 +1039,10 @@ impl LibraryStore for InMemoryLibraryStore {
             .analysis_bookkeeping
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?;
-        let entry = bookkeeping.entry(track_id).or_default();
-        if capabilities.bpm {
-            entry.bpm_attempted_at_unix = Some(context.now_unix);
-        }
-        if capabilities.key {
-            entry.key_attempted_at_unix = Some(context.now_unix);
-        }
-        if capabilities.audio {
-            entry.audio_attempted_at_unix = Some(context.now_unix);
-        }
-        entry.analyzer_version = context.analyzer_version;
+        bookkeeping
+            .entry(track_id)
+            .or_default()
+            .record_attempt(capabilities, context);
         Ok(())
     }
 
@@ -1051,16 +1069,7 @@ impl LibraryStore for InMemoryLibraryStore {
                 continue;
             }
             let book = bookkeeping.get(track_id).copied().unwrap_or_default();
-            let needs_bpm = capabilities.bpm
-                && (book.bpm_attempted_at_unix.is_none()
-                    || book.analyzer_version < analyzer_version);
-            let needs_key = capabilities.key
-                && (book.key_attempted_at_unix.is_none()
-                    || book.analyzer_version < analyzer_version);
-            let needs_audio = capabilities.audio
-                && (book.audio_attempted_at_unix.is_none()
-                    || book.analyzer_version < analyzer_version);
-            if needs_bpm || needs_key || needs_audio {
+            if book.needs_analysis(capabilities, analyzer_version) {
                 out.push(*track_id);
             }
         }
@@ -1090,16 +1099,7 @@ impl LibraryStore for InMemoryLibraryStore {
                 continue;
             }
             let book = bookkeeping.get(track_id).copied().unwrap_or_default();
-            let needs_bpm = capabilities.bpm
-                && (book.bpm_attempted_at_unix.is_none()
-                    || book.analyzer_version < analyzer_version);
-            let needs_key = capabilities.key
-                && (book.key_attempted_at_unix.is_none()
-                    || book.analyzer_version < analyzer_version);
-            let needs_audio = capabilities.audio
-                && (book.audio_attempted_at_unix.is_none()
-                    || book.analyzer_version < analyzer_version);
-            if needs_bpm || needs_key || needs_audio {
+            if book.needs_analysis(capabilities, analyzer_version) {
                 out.push(*track_id);
             }
         }

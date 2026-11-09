@@ -525,6 +525,24 @@ DROP TABLE track_waveform;
 ALTER TABLE track_analysis ADD COLUMN audio_attempt_token INTEGER;
 "#;
 
+// Each capability keeps the version of the analyzer that last attempted
+// it; one shared version let an attempt at one capability pass the others
+// off as current. Each starts from the shared version, the best record
+// there is of what last measured it.
+pub(super) const VERSION_ANALYSIS_PER_CAPABILITY_SQL: &str = r#"
+ALTER TABLE track_analysis ADD COLUMN bpm_analyzer_version INTEGER;
+ALTER TABLE track_analysis ADD COLUMN key_analyzer_version INTEGER;
+ALTER TABLE track_analysis ADD COLUMN audio_analyzer_version INTEGER;
+UPDATE track_analysis SET
+    bpm_analyzer_version =
+        CASE WHEN bpm_attempted_at_unix IS NOT NULL THEN analyzer_version END,
+    key_analyzer_version =
+        CASE WHEN key_attempted_at_unix IS NOT NULL THEN analyzer_version END,
+    audio_analyzer_version =
+        CASE WHEN audio_attempted_at_unix IS NOT NULL THEN analyzer_version END;
+ALTER TABLE track_analysis DROP COLUMN analyzer_version;
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
@@ -748,6 +766,9 @@ ORDER BY id
 /// or `NULL` (if it did not) — `COALESCE` preserves whatever value
 /// was already stored in that column, so a BPM-only re-analysis does
 /// not clobber the waveform's "attempted" timestamp.
+/// Stamp an attempt. ?2–?4 are the attempt time for each capability the
+/// attempt covered and NULL for the others, ?6–?8 likewise the analyzer
+/// version; COALESCE keeps an uncovered capability's previous attempt.
 pub(super) const UPSERT_TRACK_ANALYSIS_SQL: &str = r#"
 INSERT INTO track_analysis (
     track_id,
@@ -755,15 +776,19 @@ INSERT INTO track_analysis (
     key_attempted_at_unix,
     audio_attempted_at_unix,
     audio_attempt_token,
-    analyzer_version
+    bpm_analyzer_version,
+    key_analyzer_version,
+    audio_analyzer_version
 )
-VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
 ON CONFLICT(track_id) DO UPDATE SET
     bpm_attempted_at_unix = COALESCE(excluded.bpm_attempted_at_unix, bpm_attempted_at_unix),
     key_attempted_at_unix = COALESCE(excluded.key_attempted_at_unix, key_attempted_at_unix),
     audio_attempted_at_unix = COALESCE(excluded.audio_attempted_at_unix, audio_attempted_at_unix),
     audio_attempt_token = COALESCE(excluded.audio_attempt_token, audio_attempt_token),
-    analyzer_version = excluded.analyzer_version
+    bpm_analyzer_version = COALESCE(excluded.bpm_analyzer_version, bpm_analyzer_version),
+    key_analyzer_version = COALESCE(excluded.key_analyzer_version, key_analyzer_version),
+    audio_analyzer_version = COALESCE(excluded.audio_analyzer_version, audio_analyzer_version)
 "#;
 
 /// Upsert a track's acoustic features. Overwrites on re-analysis (the
@@ -967,8 +992,8 @@ pub(super) const DELETE_SMART_SHUFFLE_INDEX_SQL: &str =
 
 /// "Find tracks needing analysis." Returns track IDs that are not
 /// marked missing AND have at least one of the requested capabilities
-/// either un-attempted (NULL timestamp) or stamped by an older
-/// analyzer_version — or, for audio, whose latest attempt's waveform
+/// either un-attempted (NULL timestamp) or last attempted by an older
+/// analyzer — or, for audio, whose latest attempt's waveform
 /// outcome the waveform cache does not hold. Bound parameters in order:
 ///   ?1 = include_bpm        (1 or 0)
 ///   ?2 = include_key        (1 or 0)
@@ -983,9 +1008,9 @@ FROM tracks t
 LEFT JOIN track_analysis ta ON ta.track_id = t.id
 WHERE t.is_missing = 0
   AND (
-        (?1 = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.analyzer_version < ?4))
-     OR (?2 = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.analyzer_version < ?4))
-     OR (?3 = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.analyzer_version < ?4
+        (?1 = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.bpm_analyzer_version   < ?4))
+     OR (?2 = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.key_analyzer_version   < ?4))
+     OR (?3 = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?4
                      OR (?6 = 1 AND NOT EXISTS (
                             SELECT 1 FROM waveform_cache.track_waveform w
                             WHERE w.track_id = t.id

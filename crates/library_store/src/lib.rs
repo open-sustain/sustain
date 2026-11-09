@@ -186,11 +186,11 @@ pub struct StoredWaveform {
     pub detail: WaveformSegments,
 }
 
-/// Per-attempt facts the storage layer stamps onto `track_analysis`
-/// alongside the capability timestamps. `analyzer_version` is the
-/// watermark the scheduler compares against to invalidate stale rows
-/// after a DSP change; `now_unix` is the wall clock at the moment the
-/// attempt completed.
+/// Per-attempt facts the storage layer stamps onto `track_analysis` for
+/// each capability the attempt covered. `analyzer_version` is the
+/// watermark the scheduler compares a capability's last attempt against
+/// to invalidate it after a DSP change; `now_unix` is the wall clock at
+/// the moment the attempt completed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AnalysisContext {
     pub analyzer_version: u32,

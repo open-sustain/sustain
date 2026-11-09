@@ -1877,6 +1877,66 @@ fn sqlite_unopenable_waveform_cache_leaves_the_library_usable() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+fn run_single_capability_attempt_leaves_the_others_stale(store: &dyn LibraryStore) {
+    let t = track(1, "a.flac");
+    store.save_track(t.clone()).expect("save");
+    store
+        .record_analysis(
+            t.id,
+            &sample_analysis(Some(120.0), Some(MusicalKey::CMajor)),
+            AnalysisCapabilities::all(),
+            ctx(1_000),
+        )
+        .expect("analyse everything at version 1");
+    let bpm_only = AnalysisCapabilities {
+        bpm: true,
+        key: false,
+        audio: false,
+    };
+    store
+        .record_analysis(
+            t.id,
+            &sample_analysis(Some(121.0), None),
+            bpm_only,
+            AnalysisContext {
+                analyzer_version: 2,
+                now_unix: 2_000,
+            },
+        )
+        .expect("measure the tempo again at version 2");
+
+    let needing = |capabilities| {
+        store
+            .tracks_needing_analysis(capabilities, 2, 10)
+            .expect("query")
+    };
+    assert_eq!(needing(bpm_only), Vec::new());
+    for stale in [
+        AnalysisCapabilities {
+            key: true,
+            ..AnalysisCapabilities::none()
+        },
+        audio_only(),
+    ] {
+        assert_eq!(needing(stale), vec![t.id]);
+        assert_eq!(
+            store.filter_tracks_needing_analysis(&[t.id], stale, 2),
+            Ok(vec![t.id])
+        );
+    }
+}
+
+#[test]
+fn sqlite_single_capability_attempt_leaves_the_others_stale() {
+    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
+    run_single_capability_attempt_leaves_the_others_stale(&store);
+}
+
+#[test]
+fn in_memory_single_capability_attempt_leaves_the_others_stale() {
+    run_single_capability_attempt_leaves_the_others_stale(&InMemoryLibraryStore::new());
+}
+
 fn run_partial_capability_record_preserves_other_attempts(store: &dyn LibraryStore) {
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
