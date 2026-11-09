@@ -338,9 +338,9 @@ impl TrackTable {
             // `BoxedAnyObject::borrow_mut` takes `&self`; the local
             // `row_object` is shadowed-immutable, but the inner
             // `RefCell` borrow is what we actually need.
-            let mut row = row_object.borrow_mut::<TrackTableRow>();
-            *row = new_row;
-            drop(row);
+            row_object
+                .borrow_mut::<TrackTableRow>()
+                .update_track_data(&new_row);
             self.text_bindings.refresh_track(track_id);
             self.rating_bindings.refresh_track(track_id);
             self.status_bindings.refresh(self.playing_track_id.get());
@@ -379,7 +379,9 @@ impl TrackTable {
             let Some(new_row) = track_id.and_then(|track_id| new_rows.get(&track_id)) else {
                 continue;
             };
-            *row_object.borrow_mut::<TrackTableRow>() = new_row.clone();
+            row_object
+                .borrow_mut::<TrackTableRow>()
+                .update_track_data(new_row);
             updated += 1;
         }
 
@@ -1296,7 +1298,7 @@ fn to_gtk_ordering(ordering: CmpOrdering) -> gtk::Ordering {
 }
 
 /// Sort comparator wired to the status column when a row-reorder hook is
-/// present. Orders by [`TrackTableRow::playlist_position`] so rows from a
+/// present. Orders by [`row::RowPlacement::playlist_position`] so rows from a
 /// regular playlist lay out in the playlist's authoritative
 /// [`sustain_app_runtime::PlaylistEntry::position`] order. Rows without a
 /// playlist position (Songs / Library / Smart Playlist views) compare equal
@@ -1312,7 +1314,7 @@ fn compare_playlist_position_objects(left: &glib::Object, right: &glib::Object) 
 fn playlist_position_from_object(object: &glib::Object) -> Option<u32> {
     let row_object = object.downcast_ref::<glib::BoxedAnyObject>()?;
     let row = row_object.try_borrow::<TrackTableRow>().ok()?;
-    row.playlist_position
+    row.placement.playlist_position
 }
 
 #[cfg(test)]
@@ -1673,6 +1675,33 @@ mod tests {
                 presented, expected,
                 "the sorted view must present the new play order synchronously"
             );
+        });
+    }
+
+    /// A track's data changing in place — a rating, a background BPM — must
+    /// not cost its row the place it holds in the displayed playlist, or
+    /// returning to play order would sink the row to the bottom.
+    #[test]
+    fn update_rows_keeps_each_row_in_its_playlist_place() {
+        crate::test_support::with_gtk(|| {
+            let reorder: RowReorderCallback = Rc::new(|_| false);
+            let table = build_track_table(Vec::new(), None, None, None, Some(reorder), None);
+            table.replace_rows(
+                (1..=3)
+                    .map(|id| row(id).with_playlist_position(Some(id as u32)))
+                    .collect(),
+            );
+            sort_by(&table, "track_name", false);
+            let mut rated = row(1);
+            rated.rating = 5;
+
+            table.update_rows(&HashMap::from([(
+                TrackId::new(1).expect("positive track id"),
+                rated,
+            )]));
+            table.apply_playlist_default_sort();
+
+            assert_eq!(table.ordered_track_ids(), track_ids(&[1, 2, 3]));
         });
     }
 

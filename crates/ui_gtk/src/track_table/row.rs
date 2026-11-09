@@ -81,6 +81,14 @@ pub(crate) struct TrackTableRow {
     pub(crate) track_number: Option<u32>,
     pub(crate) file_size_bytes: u64,
     pub(crate) is_missing: bool,
+    pub(crate) placement: RowPlacement,
+}
+
+/// Where a row sits in the table that shows it, as opposed to the track it
+/// shows. An in-place update of the track's data keeps the placement: the
+/// track is still at the same place in the same playlist or group.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RowPlacement {
     /// Authoritative position of this track inside the currently-displayed
     /// regular playlist, mirrored straight from
     /// [`sustain_app_runtime::PlaylistEntry::position`]. `None` for any row
@@ -155,19 +163,26 @@ impl TrackTableRow {
             track_number: track.metadata.track_number,
             file_size_bytes: Self::file_size_bytes_of(track),
             is_missing: track.location.is_missing(),
-            playlist_position: None,
-            group_band: None,
+            placement: RowPlacement::default(),
         }
     }
 
     pub(crate) fn with_playlist_position(mut self, playlist_position: Option<u32>) -> Self {
-        self.playlist_position = playlist_position;
+        self.placement.playlist_position = playlist_position;
         self
     }
 
     pub(crate) fn with_group_band(mut self, group_band: bool) -> Self {
-        self.group_band = Some(group_band);
+        self.placement.group_band = Some(group_band);
         self
+    }
+
+    /// Show `updated`'s track data while keeping this row's placement.
+    pub(super) fn update_track_data(&mut self, updated: &TrackTableRow) {
+        *self = Self {
+            placement: self.placement,
+            ..updated.clone()
+        };
     }
 }
 
@@ -222,8 +237,7 @@ impl TrackTableRow {
             track_number: None,
             file_size_bytes: 0,
             is_missing: false,
-            playlist_position: None,
-            group_band: None,
+            placement: RowPlacement::default(),
         }
     }
 }

@@ -859,7 +859,7 @@ fn apply_bound_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
         .and_then(|row| {
             row.try_borrow::<TrackTableRow>()
                 .ok()
-                .and_then(|row| row.group_band)
+                .and_then(|row| row.placement.group_band)
         });
     if group_band.unwrap_or_else(|| list_item.position().is_multiple_of(2)) {
         set_exclusive_css_class(cell, "track-table-row-even", "track-table-row-odd");

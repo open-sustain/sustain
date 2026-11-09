@@ -36,9 +36,10 @@ pub(super) enum SortKey {
 impl SortKey {
     fn compare(self, left: &TrackTableRow, right: &TrackTableRow) -> Ordering {
         match self {
-            Self::PlaylistPosition => {
-                compare_playlist_positions(left.playlist_position, right.playlist_position)
-            }
+            Self::PlaylistPosition => compare_playlist_positions(
+                left.placement.playlist_position,
+                right.placement.playlist_position,
+            ),
             Self::Column(column) => column.compare(left, right),
         }
     }
