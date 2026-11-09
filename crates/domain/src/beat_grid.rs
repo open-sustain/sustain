@@ -100,8 +100,10 @@ impl BeatGrid {
         let interval = self.beat_interval().as_secs_f64();
         let shifted = (self.first_beat + delay).as_secs_f64();
         let mut beats_before = (shifted / interval).floor();
-        let mut first_beat = Duration::from_secs_f64(shifted - beats_before * interval);
-        // Rounding can land the remainder on the interval itself.
+        // Rounding can leave the remainder a hair below zero, when the
+        // quotient rounds up onto a whole beat — that beat is the first —
+        // or land it on the interval itself.
+        let mut first_beat = Duration::from_secs_f64((shifted - beats_before * interval).max(0.0));
         if first_beat >= self.beat_interval() {
             beats_before += 1.0;
             first_beat = Duration::ZERO;
@@ -260,6 +262,18 @@ mod tests {
         assert_eq!(
             (bars.first_beat(), bars.first_beat_number()),
             (millis(400), 1)
+        );
+    }
+
+    #[test]
+    fn delaying_onto_a_whole_beat_starts_the_grid_there() {
+        // 1,025 beats at 60.07 BPM: the quotient rounds up onto exactly
+        // 1,025 and leaves the remainder a rounding error below zero.
+        let grid = BeatGrid::new(tempo(6_007), Duration::ZERO, 1).expect("grid");
+        let delayed = grid.delayed(grid.beat_interval() * 1_025);
+        assert_eq!(
+            (delayed.first_beat(), delayed.first_beat_number()),
+            (Duration::ZERO, 4)
         );
     }
 }
