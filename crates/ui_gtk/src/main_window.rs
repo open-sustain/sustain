@@ -469,7 +469,6 @@ pub(crate) fn build_main_window(
         &runtime,
         &sidebar,
         &playlists_table_holder,
-        &current_search_text,
     );
     let playlist_track_activated = playlist_track_activated_callback(
         &command_controller,

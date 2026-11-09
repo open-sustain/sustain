@@ -1857,6 +1857,30 @@ mod tests {
         });
     }
 
+    /// A drag reorder renumbers the playlist; the rows follow in place and
+    /// the dragged rows stay selected where they were dropped.
+    #[test]
+    fn rows_follow_a_playlist_reorder_with_their_selection() {
+        crate::test_support::with_gtk(|| {
+            let reorder: RowReorderCallback = Rc::new(|_| false);
+            let table = build_track_table(Vec::new(), None, None, None, Some(reorder), None);
+            table.apply_playlist_default_sort();
+            table.replace_rows(
+                (1..=4)
+                    .map(|id| row(id).with_playlist_position(Some(id as u32 - 1)))
+                    .collect(),
+            );
+            table.selection.select_item(0, true);
+
+            // Track 1 dropped after track 3.
+            table.set_playlist_positions(&track_ids(&[2, 3, 1, 4]).into_iter().zip(0..).collect());
+            table.sort_current_rows();
+
+            assert_eq!(table.ordered_track_ids(), track_ids(&[2, 3, 1, 4]));
+            assert_eq!(table.selected_track_ids(), track_ids(&[1]));
+        });
+    }
+
     fn sort_by(table: &TrackTable, column_id: &str, ascending: bool) {
         let mut layout = read_current_layout(&table.table, &table.managed_columns);
         layout.sort = Some(TrackColumnSort {

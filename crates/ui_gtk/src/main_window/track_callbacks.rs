@@ -342,20 +342,8 @@ pub(super) fn playlist_entries_changed_callback(
                 track_ids,
             } if shows(*playlist_id) => {
                 playlists_table.remove_rows(track_ids);
-                let positions = runtime
-                    .borrow()
-                    .playlists()
-                    .iter()
-                    .find(|playlist| playlist.id == *playlist_id)
-                    .map(|playlist| {
-                        playlist
-                            .entries
-                            .iter()
-                            .map(|entry| (entry.track_id, entry.position))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                playlists_table.set_playlist_positions(&positions);
+                playlists_table
+                    .set_playlist_positions(&playlist_entry_positions(&runtime, *playlist_id));
             }
             PlaylistEntriesChange::Added(playlist_id) if shows(*playlist_id) => {
                 // Insert just the entries the table lacks; tracks the
@@ -375,6 +363,27 @@ pub(super) fn playlist_entries_changed_callback(
         // A device syncing the playlist now selects other tracks.
         visible_summary_refresh();
     })
+}
+
+/// Each track's position in a regular playlist, as the runtime numbers
+/// its entries.
+fn playlist_entry_positions(
+    runtime: &SharedRuntime,
+    playlist_id: PlaylistId,
+) -> HashMap<TrackId, u32> {
+    runtime
+        .borrow()
+        .playlists()
+        .iter()
+        .find(|playlist| playlist.id == playlist_id)
+        .map(|playlist| {
+            playlist
+                .entries
+                .iter()
+                .map(|entry| (entry.track_id, entry.position))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub(super) fn track_row_changed_callback(
@@ -556,14 +565,12 @@ pub(super) fn playlist_track_context_actions(
 /// this dispatches `MovePlaylistEntries` so the runtime/SQLite are the
 /// source of truth.
 ///
-/// Post-dispatch the callback rebuilds **only** the playlists table —
+/// Post-dispatch the callback touches **only** the playlists table —
 /// nothing in the library, the album set, or the sidebar tree changes
-/// when a playlist's internal order is shuffled. Calling the global
-/// `library_changed` here (the previous approach) re-built the songs
-/// table's entire `gio::ListStore` (10k rows + re-sort), the albums
-/// view's groupings, and the sidebar — visible as a 1–2 s freeze after
-/// every drop. The narrow refresh below touches only the rows the user
-/// is looking at, so the new order appears in the next frame.
+/// when a playlist's internal order is shuffled. Its rows take the
+/// playlist's new numbering and move in place, carrying the selection
+/// with them, so the dropped rows stay selected where the user put them
+/// and the view does not jump.
 ///
 /// `new_position` is the insertion index in the playlist's *post-removal*
 /// entries list (see `ApplicationCommand::MovePlaylistEntries`), so the
@@ -574,13 +581,11 @@ pub(super) fn playlist_row_reorder_callback(
     runtime: &SharedRuntime,
     sidebar: &PlaylistSidebar,
     playlists_table_holder: &Rc<RefCell<Option<TrackTable>>>,
-    current_search_text: &Rc<RefCell<String>>,
 ) -> RowReorderCallback {
     let command_controller = command_controller.clone();
     let runtime = runtime.clone();
     let sidebar = sidebar.clone();
     let playlists_table_holder = playlists_table_holder.clone();
-    let current_search_text = current_search_text.clone();
 
     Rc::new(move |drop: RowReorderDrop| -> bool {
         let Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id))) =
@@ -618,17 +623,10 @@ pub(super) fn playlist_row_reorder_callback(
             return false;
         }
 
-        // Targeted rebuild — only the playlist view. Library / albums /
-        // sidebar are untouched because a reorder doesn't mutate any of
-        // the state those views derive from.
         if let Some(playlists_table) = playlists_table_holder.borrow().as_ref() {
-            let search_text = current_search_text.borrow().clone();
-            let rows = playlist_table_rows_for(
-                &runtime.borrow(),
-                sidebar.current_selection(),
-                &search_text,
-            );
-            playlists_table.replace_rows(rows);
+            playlists_table
+                .set_playlist_positions(&playlist_entry_positions(&runtime, playlist_id));
+            playlists_table.sort_current_rows();
         }
         true
     })
