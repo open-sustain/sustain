@@ -114,8 +114,8 @@ truth:
 ## Acquisition rules
 
 - Keep benchmark **audio out of git** unless redistribution rights are
-  explicit. Store corpora under a documented external path (e.g.
-  `~/sustain-validation-data/<corpus_id>/`), never inside the repo.
+  explicit. Store corpora under the gitignored `validation-data/<corpus_id>/`
+  workspace at the repository root, never in tracked paths.
 - Record, per corpus, before any result is cited: source URL, access date,
   version/commit/DOI, local path, **separate** audio and annotation
   licenses, redistribution policy, file count after filters, per-file or
@@ -136,7 +136,7 @@ Once a corpus's audio + annotations are local and its manifest is built
 ```bash
 cargo run -p sustain-analysis-bench --release -- run \
   --manifest crates/analysis_bench/corpora/giantsteps_tempo.toml \
-  --out      ~/sustain-validation-data/results/giantsteps_tempo.json
+  --out      validation-data/giantsteps/results/giantsteps_tempo.json
 ```
 
 Record alongside the result: the harness commit (`git rev-parse HEAD`),
@@ -181,12 +181,12 @@ Clone the dataset **outside** the Sustain working tree.
      --out     crates/analysis_bench/corpora/giantsteps_key.toml
    ```
 
-4. Run the harness and record the result **outside** the repo:
+4. Run the harness and record the result in the gitignored workspace:
 
    ```bash
    cargo run -p sustain-analysis-bench --release -- run \
      --manifest crates/analysis_bench/corpora/giantsteps_key.toml \
-     --out      ~/sustain-validation-data/results/giantsteps_key.json
+     --out      validation-data/giantsteps/results/giantsteps_key.json
    ```
 
 GiantSteps MTG Key (`giantsteps-mtg-key-dataset @ fd7b8c5`) adapts the
