@@ -399,7 +399,7 @@ fn inline_edit_changed_kind(field: EditableField) -> TrackRowChangedKind {
     }
 }
 
-fn schedule_playlists_structural_refresh(
+pub(super) fn schedule_playlists_structural_refresh(
     runtime: SharedRuntime,
     playlists_refresh: PlaylistsViewRefreshContext,
     sidebar: PlaylistSidebar,

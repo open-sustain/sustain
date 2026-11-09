@@ -148,8 +148,9 @@ use songs::SongsViewRefresh;
 use track_callbacks::{
     PlaylistEntriesChangedContext, TrackRowChangedContext, TracksRemovedContext,
     begin_inline_edit_callback, playlist_entries_changed_callback, playlist_row_reorder_callback,
-    playlist_track_context_actions, rating_changed_callback, track_context_actions,
-    track_row_changed_callback, track_rows_changed_callback, tracks_removed_callback,
+    playlist_track_context_actions, rating_changed_callback, schedule_playlists_structural_refresh,
+    track_context_actions, track_row_changed_callback, track_rows_changed_callback,
+    tracks_removed_callback,
 };
 
 /// Recompute the status-bar summary (track count, total duration) for
@@ -605,7 +606,6 @@ pub(crate) fn build_main_window(
         &titlebar,
         visible_summary_refresh.clone(),
     );
-    install_cd_import_requested(&cd_import_panel, &runtime, library_changed.clone());
     install_track_availability_observer(&runtime, &songs_table, &playlists_table);
     let track_rows_changed = track_rows_changed_callback(TrackRowChangedContext {
         runtime: &runtime,
@@ -805,11 +805,13 @@ pub(crate) fn build_main_window(
         &albums_view,
         &duplicates_view,
         &statistics_view,
+        &playlists_refresh,
         &sidebar,
         &titlebar,
         visible_summary_refresh.clone(),
         &current_search_text,
     );
+    install_cd_import_requested(&cd_import_panel, &runtime, import_completed.clone());
     let import_requested = library_import_requested_callback(&runtime, import_completed);
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
     // Re-applies the Views toggles to the live UI the instant they
@@ -1425,7 +1427,7 @@ enum CdImportWorkerEvent {
 fn install_cd_import_requested(
     cd_import_panel: &CdImportPanel,
     runtime: &SharedRuntime,
-    library_changed: LibraryChangedCallback,
+    import_completed: LibraryImportCompletedCallback,
 ) {
     let runtime = runtime.clone();
     let panel = cd_import_panel.clone();
@@ -1450,7 +1452,7 @@ fn install_cd_import_requested(
             });
             let _sent = tx.send(CdImportWorkerEvent::Finished(outcome));
         });
-        poll_cd_import(rx, runtime.clone(), panel.clone(), library_changed.clone());
+        poll_cd_import(rx, runtime.clone(), panel.clone(), import_completed.clone());
     });
     cd_import_panel.set_import_requested_callback(callback);
 }
@@ -1459,7 +1461,7 @@ fn poll_cd_import(
     rx: std::sync::mpsc::Receiver<CdImportWorkerEvent>,
     runtime: SharedRuntime,
     cd_import_panel: CdImportPanel,
-    library_changed: LibraryChangedCallback,
+    import_completed: LibraryImportCompletedCallback,
 ) {
     glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
         let mut latest_progress = None;
@@ -1491,8 +1493,9 @@ fn poll_cd_import(
         match finished {
             Some(Ok(result)) => {
                 let imported = result.summary.imported_tracks;
+                let imported_tracks = result.tracks.clone();
                 runtime.borrow_mut().apply_cd_import_result(result);
-                library_changed();
+                import_completed(&imported_tracks);
                 cd_import_panel.finish_import_display(imported);
                 cd_import_panel.refresh_import_sensitivity();
                 glib::ControlFlow::Break
@@ -1643,6 +1646,7 @@ fn library_import_completed_callback(
     albums_view: &AlbumsView,
     duplicates_view: &DuplicatesView,
     statistics_view: &StatisticsView,
+    playlists_refresh: &PlaylistsViewRefreshContext,
     sidebar: &PlaylistSidebar,
     titlebar: &Titlebar,
     visible_summary_refresh: VisibleSummaryRefreshCallback,
@@ -1654,6 +1658,7 @@ fn library_import_completed_callback(
     let albums_view = albums_view.clone();
     let duplicates_view = duplicates_view.clone();
     let statistics_view = statistics_view.clone();
+    let playlists_refresh = playlists_refresh.clone();
     let sidebar = sidebar.clone();
     let titlebar = titlebar.clone();
     let current_search_text = current_search_text.clone();
@@ -1677,7 +1682,19 @@ fn library_import_completed_callback(
         albums_view.replace_tracks();
         duplicates_view.refresh_if_active();
         statistics_view.refresh_if_visible();
-        sidebar.refresh();
+        // New tracks join no regular playlist, but a smart one may admit
+        // them.
+        if matches!(
+            sidebar.current_selection(),
+            Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(_)))
+        ) {
+            schedule_playlists_structural_refresh(
+                runtime.clone(),
+                playlists_refresh.clone(),
+                sidebar.clone(),
+                current_search_text.clone(),
+            );
+        }
         update_play_pause_sensitivity(&titlebar, &runtime.borrow());
         visible_summary_refresh();
     })
