@@ -526,10 +526,29 @@ impl TrackRowContextMenu {
         // and inherited application actions from the anchor hierarchy.
         popover.set_menu_model(Some(&menu));
 
+        // Closing the menu returns keyboard focus to where it was when the
+        // menu opened. GTK hands it to the popover's parent, a cell box that
+        // cannot take it, which would leave focus on a hidden menu item while
+        // the chosen action runs. `closed` is emitted before that action, so
+        // a removal finds focus on the row it is removing.
+        let focus_before = popover_parent
+            .as_ref()
+            .root()
+            .and_then(|root| root.focus())
+            .map(|widget| widget.downgrade());
         let popover_for_close = popover.clone();
         let invocation_state = self.invocation_state.clone();
         let action_scope = popover_parent.as_ref().downgrade();
-        popover.connect_closed(move |_| {
+        popover.connect_closed(move |popover| {
+            let focus_in_menu = popover
+                .root()
+                .and_then(|root| root.focus())
+                .is_none_or(|focus| focus.is_ancestor(popover));
+            if focus_in_menu
+                && let Some(focus_before) = focus_before.as_ref().and_then(|weak| weak.upgrade())
+            {
+                focus_before.grab_focus();
+            }
             let invocation_state = invocation_state.clone();
             let action_scope = action_scope.clone();
             let local_action_group = local_action_group.clone();
@@ -1188,6 +1207,58 @@ mod tests {
                 .popdown();
 
             let ctx = glib::MainContext::default();
+            while ctx.iteration(false) {}
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    /// A chosen action runs with keyboard focus back where it was before the
+    /// menu opened, not on the hidden menu item: a removal must find the
+    /// focused row to move focus off it.
+    #[test]
+    fn chosen_action_runs_with_focus_returned_from_the_menu() {
+        let ran = crate::test_support::with_gtk(|| {
+            let window = gtk::Window::new();
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            let focused_before = gtk::Button::with_label("row");
+            let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            content.append(&focused_before);
+            content.append(&anchor);
+            window.set_child(Some(&content));
+            window.present();
+            let ctx = glib::MainContext::default();
+            while ctx.iteration(false) {}
+            focused_before.grab_focus();
+
+            let focus_during_action = Rc::new(RefCell::new(None));
+            let record_focus = {
+                let window = window.clone();
+                let focus_during_action = focus_during_action.clone();
+                Rc::new(move |_invocation: TrackActionInvocation| {
+                    focus_during_action.replace(gtk::prelude::GtkWindowExt::focus(&window));
+                })
+            };
+            let menu = TrackRowContextMenu::new(
+                TrackContextActionSet::new(vec![TrackContextAction::copy_files(record_focus)]),
+                window.clone(),
+                TrackContextInvocationState::default(),
+            );
+
+            menu.popup_at(vec![track_id(4)], vec![track_id(4)], &anchor, 0.0, 0.0);
+            let popover = descendant_of_type(anchor.upcast_ref(), "GtkPopoverMenu")
+                .expect("track context popover was parented to the anchor");
+            let copy =
+                descendant_of_type(&popover, "GtkModelButton").expect("generated Copy button");
+            copy.grab_focus();
+            assert!(copy.activate(), "model button accepted activation");
+
+            assert_eq!(
+                focus_during_action.borrow().as_ref(),
+                Some(focused_before.upcast_ref::<gtk::Widget>())
+            );
             while ctx.iteration(false) {}
             window.destroy();
         });
