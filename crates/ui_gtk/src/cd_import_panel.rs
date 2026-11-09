@@ -41,7 +41,7 @@ use gtk::{gdk, gdk_pixbuf, gio, glib};
 use sustain_app_runtime::{CdImportRequest, CdTrackOverride, DiscRelease, TocSnapshot};
 
 use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
-use crate::track_table::{EditableField, EmptyRowPainter, InlineEditController};
+use crate::track_table::{EditSession, EditableField, EmptyRowPainter, InlineEditController};
 use crate::{SharedRuntime, TITLEBAR_HEIGHT};
 
 const FALLBACK_ALBUM: &str = "Audio CD";
@@ -347,32 +347,35 @@ impl CdImportPanel {
         let suppress_check_toggle = Rc::new(Cell::new(false));
 
         let inline_edit = {
-            let seed = Rc::new(move |object: &glib::Object, field: EditableField| {
-                with_cd_row(object, |row| match field {
-                    EditableField::Artist => row.display_artist(),
-                    _ => row.display_title(),
-                })
-            });
             let commit_bindings = text_bindings.clone();
-            let commit = Rc::new(
-                move |object: &glib::Object, field: EditableField, new_text: String| {
-                    let applied = with_cd_row(object, |row| match field {
-                        EditableField::Artist => {
-                            *row.override_artist.borrow_mut() = Some(new_text);
-                        }
-                        EditableField::Title => {
-                            *row.override_title.borrow_mut() = Some(new_text);
-                        }
-                        _ => {}
-                    });
-                    if applied.is_none() {
-                        return false;
-                    }
-                    commit_bindings.refresh();
-                    true
+            InlineEditController::new(Rc::new(
+                move |object: &glib::Object, field: EditableField| {
+                    // A CD row is its own object: the panel never moves
+                    // rows between objects, so the session binds to it.
+                    let seed = with_cd_row(object, |row| match field {
+                        EditableField::Artist => row.display_artist(),
+                        _ => row.display_title(),
+                    })?;
+                    let object = object.clone();
+                    let commit_bindings = commit_bindings.clone();
+                    let commit = move |new_text: String| {
+                        with_cd_row(&object, |row| match field {
+                            EditableField::Artist => {
+                                *row.override_artist.borrow_mut() = Some(new_text);
+                            }
+                            EditableField::Title => {
+                                *row.override_title.borrow_mut() = Some(new_text);
+                            }
+                            _ => {}
+                        });
+                        commit_bindings.refresh();
+                    };
+                    Some(EditSession {
+                        seed,
+                        commit: Box::new(commit),
+                    })
                 },
-            );
-            InlineEditController::new(crate::track_table::InlineEditHooks { seed, commit })
+            ))
         };
 
         table.append_column(&fixed_column(

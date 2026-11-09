@@ -26,6 +26,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::VecDeque,
     rc::Rc,
     time::Duration,
 };
@@ -102,24 +103,26 @@ fn optional_to_string<T: ToString>(value: Option<T>) -> String {
     value.map(|value| value.to_string()).unwrap_or_default()
 }
 
-/// Reads the current value of an editable field for the row's bound model
-/// object, returning `None` if it cannot be resolved. The controller is
-/// table-agnostic: it hands back the `ListItem`'s item and the caller
-/// downcasts it to its own row type — a library row keyed by `TrackId`, a
-/// CD-import row keyed by track number, and so on.
-pub(crate) type CellEditSeedCallback = Rc<dyn Fn(&glib::Object, EditableField) -> Option<String>>;
-/// Commits an edited field for the row's bound model object. Returns `true`
-/// when the editor should close (the value was written, or it was a no-op),
-/// `false` to keep it open (a dispatch failure).
-pub(crate) type CellEditCommitCallback = Rc<dyn Fn(&glib::Object, EditableField, String) -> bool>;
-
-/// The two callbacks a table needs to support inline editing. Tables that
-/// do not opt in pass `None`.
-#[derive(Clone)]
-pub(crate) struct InlineEditHooks {
-    pub(crate) seed: CellEditSeedCallback,
-    pub(crate) commit: CellEditCommitCallback,
+/// An edit session on one row, bound to that row when the editor opens.
+///
+/// The commit closes over the row's identity (a library row's `TrackId`, a
+/// CD-import row's own object), never over the cell's list item: a table may
+/// move another row under an open editor (a re-sort, a search swapping
+/// payloads in place), and the typed value must still land on the row it
+/// was typed for.
+pub(crate) struct EditSession {
+    /// The field's current value, to seed the editor with.
+    pub(crate) seed: String,
+    /// Writes the typed value to the row the session was opened on.
+    pub(crate) commit: Box<dyn FnOnce(String)>,
 }
+
+/// Opens an edit session for `field` on the row's bound model object, or
+/// returns `None` if the row cannot be edited. The controller is
+/// table-agnostic: it hands over the `ListItem`'s item and the callback
+/// downcasts it to its own row type. Tables that do not opt in to inline
+/// editing pass `None` instead of a callback.
+pub(crate) type BeginEditCallback = Rc<dyn Fn(&glib::Object, EditableField) -> Option<EditSession>>;
 
 /// What to do with the in-progress edit when it ends.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -132,10 +135,23 @@ enum FinishMode {
 /// widgets for the (short) duration of the edit.
 struct ActiveEdit {
     field: EditableField,
+    commit: Box<dyn FnOnce(String)>,
     list_item: gtk::ListItem,
     cell: gtk::Box,
     label: gtk::Label,
     entry: gtk::Entry,
+}
+
+/// A committed value waiting for its write.
+struct PendingCommit {
+    commit: Box<dyn FnOnce(String)>,
+    text: String,
+}
+
+/// Where an ended edit session was open.
+struct FinishedEdit {
+    field: EditableField,
+    list_item: gtk::ListItem,
 }
 
 /// A realized editable cell, used to find the row's other editable cells
@@ -176,27 +192,29 @@ struct OrderedCell {
 ///
 /// The controller is table-agnostic: it identifies a row by the
 /// `gtk::ListItem`'s bound model object (recycle-safe by object identity)
-/// and leaves interpreting that object to the [`InlineEditHooks`]. The same
+/// and leaves interpreting that object to the [`BeginEditCallback`]. The same
 /// machinery therefore drives the Songs/Playlist tables and the CD-import
 /// table, so the macOS-style "click an already-selected cell to edit"
 /// interaction stays identical everywhere.
 #[derive(Clone)]
 pub(crate) struct InlineEditController {
-    hooks: InlineEditHooks,
+    begin_edit: BeginEditCallback,
     active: Rc<RefCell<Option<ActiveEdit>>>,
+    pending_commits: Rc<RefCell<VecDeque<PendingCommit>>>,
     cells: BindingRegistry<EditableCellEntry>,
     pending_open: Rc<RefCell<Option<glib::SourceId>>>,
     double_click_ms: i32,
 }
 
 impl InlineEditController {
-    pub(crate) fn new(hooks: InlineEditHooks) -> Self {
+    pub(crate) fn new(begin_edit: BeginEditCallback) -> Self {
         let double_click_ms = gtk::Settings::default()
             .map(|settings| settings.gtk_double_click_time())
             .unwrap_or(DEFAULT_DOUBLE_CLICK_MS);
         Self {
-            hooks,
+            begin_edit,
             active: Rc::new(RefCell::new(None)),
+            pending_commits: Rc::default(),
             cells: BindingRegistry::default(),
             pending_open: Rc::new(RefCell::new(None)),
             double_click_ms,
@@ -328,6 +346,25 @@ impl InlineEditController {
         }
     }
 
+    /// Commit and close any open edit and drop an armed one, ahead of the
+    /// table swapping row payloads in place. A swap moves another row under
+    /// the editor without unbinding its cell; the editor must not stay open
+    /// over a row it was not opened on, and an armed open must not open on
+    /// one.
+    pub(crate) fn finish_before_payload_swap(&self) {
+        self.cancel_pending();
+        self.finish_active(FinishMode::Commit);
+    }
+
+    /// Commit any open edit and write every pending commit now. Call this
+    /// from the window-close handler: the main loop that would run the
+    /// writes stops with the window.
+    pub(crate) fn flush(&self) {
+        self.cancel_pending();
+        self.finish_active(FinishMode::Commit);
+        self.run_pending_commits();
+    }
+
     fn cancel_pending(&self) {
         if let Some(source) = self.pending_open.borrow_mut().take() {
             source.remove();
@@ -349,7 +386,7 @@ impl InlineEditController {
         }
         self.finish_active(FinishMode::Commit);
 
-        let Some(seed) = (self.hooks.seed)(&item, field) else {
+        let Some(EditSession { seed, commit }) = (self.begin_edit)(&item, field) else {
             return;
         };
         let Some(label) = cell
@@ -378,6 +415,7 @@ impl InlineEditController {
 
         *self.active.borrow_mut() = Some(ActiveEdit {
             field,
+            commit,
             list_item: list_item.clone(),
             cell: cell.clone(),
             label,
@@ -462,20 +500,44 @@ impl InlineEditController {
 
     /// End the active edit (if any), restoring the cell's label and — for
     /// [`FinishMode::Commit`] — writing the typed value. Returns the ended
-    /// session so callers (Tab) can locate the row it belonged to.
-    fn finish_active(&self, mode: FinishMode) -> Option<ActiveEdit> {
+    /// session's cell so callers (Tab) can locate the row it belonged to.
+    ///
+    /// The write is queued and runs from the main loop (or [`Self::flush`]),
+    /// never inside the call that ended the edit: an edit also ends inside
+    /// model changes (a cell unbinding during a splice, a re-sort), whose
+    /// callers may hold the runtime borrowed that the write goes through.
+    /// The session is bound to its row, so the deferred write cannot land
+    /// on another one.
+    fn finish_active(&self, mode: FinishMode) -> Option<FinishedEdit> {
         let active = self.active.borrow_mut().take()?;
         if active.entry.parent().is_some() {
             active.cell.remove(&active.entry);
         }
         active.label.set_visible(true);
-        if mode == FinishMode::Commit
-            && let Some(item) = active.list_item.item()
-        {
-            let text = active.entry.text().to_string();
-            (self.hooks.commit)(&item, active.field, text);
+        if mode == FinishMode::Commit {
+            self.pending_commits.borrow_mut().push_back(PendingCommit {
+                commit: active.commit,
+                text: active.entry.text().to_string(),
+            });
+            let controller = self.clone();
+            glib::idle_add_local_once(move || controller.run_pending_commits());
         }
-        Some(active)
+        Some(FinishedEdit {
+            field: active.field,
+            list_item: active.list_item,
+        })
+    }
+
+    /// Write the queued commits, oldest first.
+    fn run_pending_commits(&self) {
+        loop {
+            // Released before the write runs: a write may end another edit.
+            let next = self.pending_commits.borrow_mut().pop_front();
+            let Some(PendingCommit { commit, text }) = next else {
+                break;
+            };
+            commit(text);
+        }
     }
 
     /// Commit the current edit and open the next (Tab) or previous
@@ -545,8 +607,9 @@ fn cell_origin_x(cell: &gtk::Box) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::TrackTableRow;
     use super::*;
-    use sustain_app_runtime::Bpm;
+    use sustain_app_runtime::{Bpm, TrackId};
 
     fn metadata() -> TrackMetadata {
         TrackMetadata {
@@ -597,5 +660,92 @@ mod tests {
             EditableField::Year.metadata_change(&metadata, "2001").year,
             sustain_app_runtime::FieldChange::Set(2001)
         );
+    }
+
+    /// The track each commit was bound to, and the committed text.
+    type Commits = Rc<RefCell<Vec<(Option<TrackId>, String)>>>;
+
+    #[test]
+    fn a_re_sort_commits_the_open_edit_to_the_track_it_was_opened_on() {
+        let ran = crate::test_support::with_gtk(|| {
+            let commits: Commits = Rc::default();
+            let commits_for_hook = commits.clone();
+            let begin_edit: BeginEditCallback = Rc::new(move |item, _field| {
+                let track_id = item
+                    .downcast_ref::<glib::BoxedAnyObject>()
+                    .and_then(|object| object.try_borrow::<TrackTableRow>().ok()?.track_id);
+                let commits = commits_for_hook.clone();
+                Some(EditSession {
+                    seed: String::new(),
+                    commit: Box::new(move |text| commits.borrow_mut().push((track_id, text))),
+                })
+            });
+            let mut first = TrackTableRow::test_row(1);
+            first.track_name_sort_key = "b".to_owned();
+            let mut second = TrackTableRow::test_row(2);
+            second.track_name_sort_key = "a".to_owned();
+            let table = super::super::build_track_table(
+                vec![first, second],
+                None,
+                None,
+                None,
+                None,
+                Some(begin_edit),
+            );
+            let window = gtk::Window::new();
+            window.set_default_size(700, 260);
+            window.set_child(Some(&table.widget()));
+            window.present();
+            let context = glib::MainContext::default();
+            for _ in 0..200 {
+                if !context.iteration(false) {
+                    break;
+                }
+            }
+
+            // Open a title editor on track 1, the first row.
+            let controller = table.inline_edit.clone().expect("inline editing table");
+            let (list_item, cell) = controller
+                .cells
+                .find_map_live(|entry| {
+                    let list_item = entry.list_item.upgrade()?;
+                    (entry.field == EditableField::Title && list_item.position() == 0)
+                        .then(|| Some((list_item, entry.cell.upgrade()?)))
+                        .flatten()
+                })
+                .expect("a realized title cell on the first row");
+            controller.open_edit(EditableField::Title, &cell, &list_item);
+            let entry = controller
+                .active
+                .borrow()
+                .as_ref()
+                .map(|active| active.entry.clone())
+                .expect("an open editor");
+            entry.set_text("Renamed");
+
+            // Sorting by name moves track 2 into the edited row.
+            let mut layout =
+                super::super::read_current_layout(&table.table, &table.managed_columns);
+            layout.sort = Some(sustain_app_runtime::TrackColumnSort {
+                column_id: "track_name".to_owned(),
+                ascending: true,
+            });
+            table.apply_layout(&layout);
+            assert!(
+                commits.borrow().is_empty(),
+                "the write waits for the main loop, outside the re-sort"
+            );
+            controller.flush();
+
+            assert_eq!(
+                commits.borrow().as_slice(),
+                [(TrackId::new(1), "Renamed".to_owned())],
+                "the edit lands on the track it was opened on"
+            );
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
     }
 }

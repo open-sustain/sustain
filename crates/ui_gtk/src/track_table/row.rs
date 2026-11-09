@@ -181,3 +181,39 @@ fn file_stem_text(path: &Path) -> Option<String> {
         .filter(|file_stem| !file_stem.is_empty())
         .map(ToOwned::to_owned)
 }
+
+#[cfg(test)]
+impl TrackTableRow {
+    /// A bare row for track `id`, named "Track {id}", for table tests.
+    pub(super) fn test_row(id: i64) -> Self {
+        Self {
+            track_id: TrackId::new(id),
+            track_name: format!("Track {id}"),
+            artist: String::new(),
+            album: String::new(),
+            genre: String::new(),
+            has_lyrics: false,
+            // Sort keys are stored pre-collated (`normalize_sort_text`).
+            track_name_sort_key: format!("track {id}"),
+            artist_sort_key: String::new(),
+            album_sort_key: String::new(),
+            year: None,
+            bpm: None,
+            music_key: None,
+            bitrate_kbps: None,
+            file_type: AudioFileType::Unknown,
+            duration_seconds: 0,
+            rating: 0,
+            plays: 0,
+            skips: 0,
+            last_played: None,
+            last_skipped: None,
+            date_added: None,
+            track_number: None,
+            file_size_bytes: 0,
+            is_missing: false,
+            playlist_position: None,
+            group_band: None,
+        }
+    }
+}

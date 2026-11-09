@@ -18,8 +18,8 @@ use crate::{
     SharedRuntime,
     track_context::TrackRowContextMenu,
     track_table::{
-        InlineEditHooks, RatingChangedCallback, TrackActivatedCallback, TrackTable, TrackTableRow,
-        build_track_table,
+        BeginEditCallback, RatingChangedCallback, TrackActivatedCallback, TrackTable,
+        TrackTableRow, build_track_table,
     },
 };
 
@@ -30,7 +30,7 @@ pub(crate) struct DuplicatesView {
     context_menu: TrackRowContextMenu,
     track_activated: TrackActivatedCallback,
     rating_changed: RatingChangedCallback,
-    inline_edit: InlineEditHooks,
+    inline_edit: BeginEditCallback,
     runtime: SharedRuntime,
     strict: gtk::Switch,
     status: gtk::Label,
@@ -44,7 +44,7 @@ impl DuplicatesView {
         context_menu: TrackRowContextMenu,
         track_activated: TrackActivatedCallback,
         rating_changed: RatingChangedCallback,
-        inline_edit: InlineEditHooks,
+        inline_edit: BeginEditCallback,
     ) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.set_hexpand(true);
@@ -142,6 +142,14 @@ impl DuplicatesView {
         };
         if let Some(table) = self.table.borrow().as_ref() {
             table.update_row(track_id, row);
+        }
+    }
+
+    /// See [`TrackTable::flush_pending_edits`].
+    pub(crate) fn flush_pending_edits(&self) {
+        let table = self.table.borrow().clone();
+        if let Some(table) = table {
+            table.flush_pending_edits();
         }
     }
 

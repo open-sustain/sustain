@@ -181,6 +181,19 @@ impl StatusBindings {
             refresh_status_icon(&list_item, &icon, playing_track_id);
         });
     }
+
+    /// Re-derive every bound status cell after its row payload was swapped
+    /// in place: the icon and the row tint.
+    pub(super) fn refresh_all(&self, playing_track_id: Option<TrackId>) {
+        self.0.for_each_live(|binding| {
+            let (Some(list_item), Some(icon)) = (binding.list_item(), binding.icon.upgrade())
+            else {
+                return;
+            };
+            refresh_status_icon(&list_item, &icon, playing_track_id);
+            retint_cell_of(&icon, &list_item);
+        });
+    }
 }
 
 struct TextBinding {
@@ -699,6 +712,8 @@ fn refresh_text_binding_value(binding: &TextBinding) {
         return;
     };
     label.set_text(&binding.column.text(&row));
+    drop(row);
+    retint_cell_of(&label, &list_item);
 }
 
 fn refresh_rating_binding(binding: &RatingBinding, target_track_id: TrackId) {
@@ -738,6 +753,9 @@ fn refresh_rating_binding_value(binding: &RatingBinding) {
     let rating = row.rating;
     drop(row);
     refresh_rating_box(binding, rating);
+    if let Some(rating_box) = binding.rating_box.upgrade() {
+        retint_cell_of(&rating_box, &list_item);
+    }
 }
 
 fn refresh_rating_box(binding: &RatingBinding, rating: u8) {
@@ -790,6 +808,17 @@ fn refresh_status_icon(
 fn clear_status_icon(icon: &gtk::Image) {
     icon.set_icon_name(None);
     icon.set_visible(false);
+}
+
+/// Re-apply the row tint to the track cell holding `content`, whose row
+/// payload may have changed in place (a Duplicates group band, say).
+fn retint_cell_of(content: &impl IsA<gtk::Widget>, list_item: &gtk::ListItem) {
+    if let Some(cell) = content
+        .parent()
+        .and_then(|parent| parent.downcast::<gtk::Box>().ok())
+    {
+        apply_bound_row_tint(&cell, list_item);
+    }
 }
 
 fn apply_bound_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {

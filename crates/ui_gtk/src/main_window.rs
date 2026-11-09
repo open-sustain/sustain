@@ -14,8 +14,8 @@ use sustain_app_runtime::{
     CdImportProgress, CdImportRequest, CdImportResult, DeviceTarget, MetadataChange,
     PlaybackCommand, PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState,
     Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
-    TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, UiSettings,
-    UiSidebarSelection, UiWindowSize, normalize_query,
+    TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackMetadata,
+    UiSettings, UiSidebarSelection, UiWindowSize, normalize_query,
 };
 
 use super::{
@@ -86,8 +86,9 @@ use super::{
         show_in_folder_callback, track_has_album_visibility,
     },
     track_table::{
-        EditableField, InlineEditHooks, RatingChangedCallback, RowDropPosition, RowReorderCallback,
-        RowReorderDrop, TrackActivatedCallback, TrackTable, TrackTableRow, build_track_table,
+        BeginEditCallback, EditSession, EditableField, RatingChangedCallback, RowDropPosition,
+        RowReorderCallback, RowReorderDrop, TrackActivatedCallback, TrackTable, TrackTableRow,
+        build_track_table,
     },
     window_chrome::{install_resize_handles, install_window_state_chrome},
     youtube_audio_replacement::{
@@ -141,7 +142,7 @@ use sidebar_callbacks::{
     sidebar_selection_changed_callback, sidebar_tracks_drop_callback,
 };
 use track_callbacks::{
-    TrackRowChangedContext, inline_edit_hooks, playlist_row_reorder_callback,
+    TrackRowChangedContext, begin_inline_edit_callback, playlist_row_reorder_callback,
     playlist_track_context_actions, rating_changed_callback, track_context_actions,
     track_row_changed_callback, track_rows_changed_callback,
 };
@@ -417,7 +418,7 @@ pub(crate) fn build_main_window(
     );
     let rating_changed =
         rating_changed_callback(&command_controller, track_row_changed_holder.clone());
-    let songs_inline_edit = inline_edit_hooks(
+    let songs_inline_edit = begin_inline_edit_callback(
         &runtime,
         &command_controller,
         track_row_changed_holder.clone(),
@@ -449,7 +450,7 @@ pub(crate) fn build_main_window(
         context_menu,
         library_track_activated.clone(),
         rating_changed.clone(),
-        inline_edit_hooks(
+        begin_inline_edit_callback(
             &runtime,
             &command_controller,
             track_row_changed_holder.clone(),
@@ -478,7 +479,7 @@ pub(crate) fn build_main_window(
     // callback reflows the view; otherwise it refreshes the row in place.
     // The drag-to-reorder handle lives on the status column, so it does not
     // contend with the text columns' edit gesture (#158).
-    let playlists_inline_edit = inline_edit_hooks(
+    let playlists_inline_edit = begin_inline_edit_callback(
         &runtime,
         &command_controller,
         track_row_changed_holder.clone(),
@@ -886,15 +887,20 @@ pub(crate) fn build_main_window(
     shadow_gutter.append(&window_frame);
     window.set_child(Some(&shadow_gutter));
 
-    // Any debounced save scheduled within the debounce window of shutdown
-    // would otherwise be lost: the timer's main loop never gets to fire.
+    // Any debounced save scheduled within the debounce window of shutdown,
+    // and any inline edit still open or waiting for its write, would
+    // otherwise be lost: the main loop that runs them stops with the window.
     let songs_table_for_close = songs_table.clone();
     let playlists_table_for_close = playlists_table.clone();
+    let duplicates_view_for_close = duplicates_view.clone();
     let titlebar_for_close = titlebar.clone();
     let runtime_for_close = runtime.clone();
     let sidebar_for_close = sidebar.clone();
     let collapse_controller_for_close = collapse_controller.clone();
     window.connect_close_request(move |window| {
+        songs_table_for_close.flush_pending_edits();
+        playlists_table_for_close.flush_pending_edits();
+        duplicates_view_for_close.flush_pending_edits();
         songs_table_for_close.flush_pending_layout_save();
         playlists_table_for_close.flush_pending_layout_save();
         titlebar_for_close.flush_pending_volume_save();

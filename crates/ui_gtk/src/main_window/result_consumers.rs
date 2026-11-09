@@ -94,70 +94,45 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
     } = publication;
     let hydration_profile = sustain_profiler::ProfileScope::start();
     let normalized_search = normalize_query(&current_search_text.borrow());
-    let (total_tracks, honor_sort_tags) = {
+    let (total_tracks, mut rows) = {
         let runtime = runtime.borrow();
-        (
-            runtime.library_tracks().len(),
-            runtime.settings().library.honor_sort_tags,
-        )
+        let honor_sort_tags = runtime.settings().library.honor_sort_tags;
+        let rows: Vec<_> = runtime
+            .library_tracks()
+            .iter()
+            .filter(|track| {
+                normalized_search.is_empty() || runtime.search_matches(track.id, &normalized_search)
+            })
+            .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
+            .collect();
+        (runtime.library_tracks().len(), rows)
     };
-    // Stream the rows in without an active sort, then settle them once at the
-    // end (see reapply below). With the sort live, each batch would merge into
-    // sorted position and reshuffle the visible list on every idle tick.
-    let detached_sort = Rc::new(RefCell::new(songs_table.detach_sort_for_bulk_load()));
+    let visible_count = rows.len();
+    let duration_seconds: u64 = rows.iter().map(|row| row.duration_seconds).sum();
+    let size_bytes: u64 = rows.iter().map(|row| row.file_size_bytes).sum();
+    // Ordered up front, the rows stream in final order: the first batch is
+    // already the top of the sorted list, and nothing reshuffles as it fills.
+    songs_table.order_rows(&mut rows);
     let generation = songs_table.begin_progressive_replace();
-    let cursor = Rc::new(Cell::new(0usize));
-    let visible_count = Rc::new(Cell::new(0usize));
-    let duration_seconds = Rc::new(Cell::new(0u64));
-    let size_bytes = Rc::new(Cell::new(0u64));
+    let mut pending_rows = rows.into_iter();
 
     glib::idle_add_local(move || {
-        let start = cursor.get();
-        let end = (start + INITIAL_LIBRARY_ROWS_BATCH_SIZE).min(total_tracks);
-        let rows: Vec<_> = {
-            let runtime = runtime.borrow();
-            runtime.library_tracks()[start..end]
-                .iter()
-                .filter(|track| {
-                    normalized_search.is_empty()
-                        || runtime.search_matches(track.id, &normalized_search)
-                })
-                .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
-                .collect()
-        };
-        visible_count.set(visible_count.get() + rows.len());
-        duration_seconds.set(
-            duration_seconds.get() + rows.iter().map(|track| track.duration_seconds).sum::<u64>(),
-        );
-        size_bytes
-            .set(size_bytes.get() + rows.iter().map(|track| track.file_size_bytes).sum::<u64>());
-        let still_current = songs_table.append_progressive_rows(generation, rows);
-        cursor.set(end);
-        if still_current && end < total_tracks {
+        let batch: Vec<_> = pending_rows
+            .by_ref()
+            .take(INITIAL_LIBRARY_ROWS_BATCH_SIZE)
+            .collect();
+        let still_current = songs_table.append_progressive_rows(generation, batch);
+        if still_current && pending_rows.len() > 0 {
             return glib::ControlFlow::Continue;
         }
-
-        // Settle the streamed rows into the persisted order in a single pass.
-        // Runs on supersession too, so a search that took over mid-load still
-        // ends up with the sorter reattached over its own results.
-        songs_table.reapply_sort(detached_sort.borrow_mut().take());
-
-        // Re-anchor the freshly-published view at the top (#201). Without this,
-        // GTK keeps the row it tracked while the list filled unsorted — track
-        // id 1 — in view, and the reapply above drags the viewport to wherever
-        // that row now sorts (~90% down on a Date-Added-style sort). Only the
-        // authoritative initial load steers the scroll; a search that
-        // superseded it owns its own view.
+        // A header click while the rows streamed in sorted only the rows
+        // published by then; settle the full set.
         if still_current {
-            songs_table.scroll_to_top();
+            songs_table.sort_current_rows();
         }
 
         if still_current && content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW) {
-            status_bar.update_summary_values(
-                visible_count.get(),
-                duration_seconds.get(),
-                size_bytes.get(),
-            );
+            status_bar.update_summary_values(visible_count, duration_seconds, size_bytes);
         }
         {
             let mut runtime = runtime.borrow_mut();
@@ -170,7 +145,7 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
         if let Some(profile) = hydration_profile {
             sustain_profiler::profile!(
                 "hydrate: Songs rows published ({} visible / {} total) in {:.1}ms",
-                visible_count.get(),
+                visible_count,
                 total_tracks,
                 profile.elapsed_ms()
             );

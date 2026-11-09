@@ -12,71 +12,61 @@ use crate::TrackRowsChangedCallback;
 
 use super::*;
 
-/// Builds the seed/commit pair the Songs table uses for inline cell
-/// editing. The seed reads the field's authoritative value straight from
-/// the runtime (so Title is seeded with the real tag, not the file-stem
-/// fallback the row displays). The commit funnels through the exact same
-/// `UpdateMetadata` write path the File Info dialog uses — SQLite stays
-/// authoritative and the file tags are mirrored — then refreshes just the
-/// affected row, like the rating click does.
-pub(super) fn inline_edit_hooks(
+/// Opens inline edit sessions for the library track tables. A session is
+/// bound to the row's `TrackId` when it opens. It is seeded with the
+/// field's authoritative value from the runtime (so Title is seeded with
+/// the real tag, not the file-stem fallback the row displays). Its commit
+/// funnels through the exact same `UpdateMetadata` write path the File Info
+/// dialog uses — SQLite stays authoritative and the file tags are mirrored —
+/// then refreshes just the affected row, like the rating click does.
+pub(super) fn begin_inline_edit_callback(
     runtime: &SharedRuntime,
     command_controller: &SharedCommandController,
     track_row_changed_holder: TrackRowChangedHolder,
-) -> InlineEditHooks {
-    let seed = {
-        let runtime = runtime.clone();
-        Rc::new(move |object: &glib::Object, field: EditableField| {
-            let track_id = crate::track_table::row_track_id(Some(object.clone()))?;
-            runtime
-                .borrow()
-                .library_tracks()
-                .iter()
-                .find(|track| track.id == track_id)
-                .map(|track| field.seed_value(&track.metadata))
-        })
-    };
-
-    let commit = {
+) -> BeginEditCallback {
+    let runtime = runtime.clone();
+    let command_controller = command_controller.clone();
+    Rc::new(move |object: &glib::Object, field: EditableField| {
+        let track_id = crate::track_table::row_track_id(Some(object.clone()))?;
+        let seed =
+            track_metadata(&runtime, track_id).map(|metadata| field.seed_value(&metadata))?;
         let runtime = runtime.clone();
         let command_controller = command_controller.clone();
-        Rc::new(
-            move |object: &glib::Object, field: EditableField, new_text: String| {
-                let Some(track_id) = crate::track_table::row_track_id(Some(object.clone())) else {
-                    return false;
-                };
-                let initial = {
-                    let runtime = runtime.borrow();
-                    runtime
-                        .library_tracks()
-                        .iter()
-                        .find(|track| track.id == track_id)
-                        .map(|track| track.metadata.clone())
-                };
-                let Some(initial) = initial else {
-                    return false;
-                };
-                let change = field.metadata_change(&initial, &new_text);
-                if change == MetadataChange::default() {
-                    // Re-typed the same value, or an unparsable number: no
-                    // write needed. Report success so the editor just closes.
-                    return true;
-                }
-                if !command_controller.dispatch_succeeded(ApplicationCommand::UpdateMetadata {
-                    track_id,
-                    change: Box::new(change),
-                }) {
-                    return false;
-                }
-                if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-                    callback(track_id, inline_edit_changed_kind(field));
-                }
-                true
-            },
-        )
-    };
+        let track_row_changed_holder = track_row_changed_holder.clone();
+        let commit = move |new_text: String| {
+            // The track may have left the library while the editor was open.
+            let Some(initial) = track_metadata(&runtime, track_id) else {
+                return;
+            };
+            let change = field.metadata_change(&initial, &new_text);
+            if change == MetadataChange::default() {
+                // Re-typed the same value, or an unparsable number: no write.
+                return;
+            }
+            if !command_controller.dispatch_succeeded(ApplicationCommand::UpdateMetadata {
+                track_id,
+                change: Box::new(change),
+            }) {
+                return;
+            }
+            if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
+                callback(track_id, inline_edit_changed_kind(field));
+            }
+        };
+        Some(EditSession {
+            seed,
+            commit: Box::new(commit),
+        })
+    })
+}
 
-    InlineEditHooks { seed, commit }
+fn track_metadata(runtime: &SharedRuntime, track_id: TrackId) -> Option<TrackMetadata> {
+    runtime
+        .borrow()
+        .library_tracks()
+        .iter()
+        .find(|track| track.id == track_id)
+        .map(|track| track.metadata.clone())
 }
 
 pub(super) fn rating_changed_callback(
