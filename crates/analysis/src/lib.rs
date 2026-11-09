@@ -34,8 +34,8 @@
 //!   entirely** (the caller checks [`Analyzer::is_long_track`]). A
 //!   whole-track decode of a two-hour file is gigabytes of working set
 //!   for a feature that, at that length, is a coarse smear nobody
-//!   scrubs; the high-detail, device-specific waveforms a Pioneer
-//!   export needs are computed on demand by that export, not here.
+//!   scrubs. A Pioneer export of such a track therefore carries no
+//!   waveform either (#291).
 //!
 //! The windows nest — the BPM/key window is always the centre of the
 //! acoustics window — so when `audio` analysis is enabled the acoustics

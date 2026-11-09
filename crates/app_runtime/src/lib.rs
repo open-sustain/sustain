@@ -1322,8 +1322,8 @@ impl ApplicationRuntime {
                 // the waveform entirely — a whole-track decode of a
                 // multi-hour file is gigabytes of working set for what, at
                 // that length, is a coarse smear; their acoustics come
-                // from a centered sample instead, and the device-specific
-                // Pioneer waveforms are generated on demand by that export.
+                // from a centered sample instead, and their Pioneer export
+                // carries no waveform (#291).
                 let (waveform, acoustics) = if capabilities.audio {
                     let waveform = if analyzer.is_long_track() {
                         None
