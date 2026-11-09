@@ -243,7 +243,9 @@ pub use waveform::WaveformTiers;
 /// in an MP4 container are decoded without the encoder's priming, as the
 /// container records it and as GStreamer and Pioneer players present them
 /// (`mp4_presentation`); their beats and waveforms had sat 23 to 48 ms
-/// late. Other files' waveforms are untouched.
+/// late. Other files' waveforms are untouched. Silence, whose chroma holds
+/// no tonal evidence, has no key; it used to come out C major, the first
+/// key in tie-break order.
 ///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
@@ -592,12 +594,13 @@ impl Analyzer {
     }
 
     /// Detected musical key. Returns `None` if the file cannot be
-    /// decoded, the chroma extraction produces no usable frames, or
-    /// the key detector's best match does not correspond to one of
+    /// decoded, the chroma extraction produces no usable frames, the
+    /// chroma holds no tonal evidence (silence), or the key detector's
+    /// best match does not correspond to one of
     /// Sustain's 24 canonical [`MusicalKey`] variants.
     pub fn key(&self) -> Option<MusicalKey> {
         let chroma = self.key_chroma()?;
-        let detection = detect_key(&chroma, &KeyTemplates::new()).ok()?;
+        let detection = detect_key(&chroma, &KeyTemplates::new()).ok().flatten()?;
         let label = stratum_key_label(&detection.key);
         map_stratum_key(&label)
     }

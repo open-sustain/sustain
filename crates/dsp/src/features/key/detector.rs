@@ -25,7 +25,9 @@ use crate::error::AnalysisError;
 ///
 /// # Returns
 ///
-/// Key detection result with:
+/// `None` when the chroma carries no tonal evidence — silence, or a
+/// profile flat across the pitch classes — since no key is better than
+/// any other. Otherwise a key detection result with:
 /// - Detected key (major or minor, 0-11)
 /// - Confidence score (0.0-1.0)
 /// - All 24 key scores (ranked)
@@ -45,15 +47,15 @@ use crate::error::AnalysisError;
 /// let samples = vec![0.0f32; 44100 * 5];
 /// let chroma_vectors = extract_chroma(&samples, 44100, 2048, 512)?;
 /// let templates = KeyTemplates::new();
-/// let result = detect_key(&chroma_vectors, &templates)?;
-///
-/// println!("Detected key: {:?}, confidence: {:.2}", result.key, result.confidence);
+/// if let Some(result) = detect_key(&chroma_vectors, &templates)? {
+///     println!("Detected key: {:?}, confidence: {:.2}", result.key, result.confidence);
+/// }
 /// # Ok::<(), stratum_dsp::AnalysisError>(())
 /// ```
 pub fn detect_key(
     chroma_vectors: &[Vec<f32>],
     templates: &KeyTemplates,
-) -> Result<KeyDetectionResult, AnalysisError> {
+) -> Result<Option<KeyDetectionResult>, AnalysisError> {
     detect_key_weighted(chroma_vectors, templates, None)
 }
 
@@ -61,11 +63,12 @@ pub fn detect_key(
 ///
 /// This is a small but important upgrade over simple averaging: weighting allows the caller to
 /// emphasize frames with stronger/cleaner tonality (e.g., suppress percussive/noisy frames).
+/// `None` when no tonal evidence remains, as for [`detect_key`].
 pub fn detect_key_weighted(
     chroma_vectors: &[Vec<f32>],
     templates: &KeyTemplates,
     frame_weights: Option<&[f32]>,
-) -> Result<KeyDetectionResult, AnalysisError> {
+) -> Result<Option<KeyDetectionResult>, AnalysisError> {
     log::debug!(
         "Detecting key from {} chroma vectors (weighted={})",
         chroma_vectors.len(),
@@ -120,21 +123,19 @@ pub fn detect_key_weighted(
     // cleaner frames) rather than weighting independent per-frame matches.
     //
     // With no usable signal — no frame carries weight, or the mean chroma is
-    // perfectly flat — there is no tonal evidence: every score is zero, the
-    // ranking falls back to the deterministic key order, and the confidence
-    // below is zero. We never fabricate a tonal decision from noise.
-    let mean = mean_chroma(chroma_vectors, frame_weights).filter(|m| has_tonal_variance(m));
+    // perfectly flat — there is no tonal evidence and no key: every template
+    // correlates alike, and any winner would be the tie-break order's.
+    let Some(mean) = mean_chroma(chroma_vectors, frame_weights).filter(|m| has_tonal_variance(m))
+    else {
+        return Ok(None);
+    };
     let mut scores: Vec<(Key, f32)> = Vec::with_capacity(24);
     for key_idx in 0..12 {
-        let score = mean.as_ref().map_or(0.0, |m| {
-            pearson_correlation(m, templates.get_major_template(key_idx))
-        });
+        let score = pearson_correlation(&mean, templates.get_major_template(key_idx));
         scores.push((Key::Major(key_idx), score));
     }
     for key_idx in 0..12 {
-        let score = mean.as_ref().map_or(0.0, |m| {
-            pearson_correlation(m, templates.get_minor_template(key_idx))
-        });
+        let score = pearson_correlation(&mean, templates.get_minor_template(key_idx));
         scores.push((Key::Minor(key_idx), score));
     }
 
@@ -154,18 +155,12 @@ pub fn detect_key_weighted(
         .fold(f32::NEG_INFINITY, f32::max);
     let min_raw = scores.iter().map(|(_, s)| *s).fold(f32::INFINITY, f32::min);
     let range = max_raw - min_raw;
-    if range > 1e-9 {
-        for (_, s) in scores.iter_mut() {
-            *s = (*s - min_raw) / range;
-        }
-    } else {
-        // A flat field — no key is meaningfully better than any other. Zero
-        // every score so confidence collapses to zero rather than inventing a
-        // winner from float noise; the deterministic sort still yields a
-        // stable key.
-        for (_, s) in scores.iter_mut() {
-            *s = 0.0;
-        }
+    // A field this flat — every key matching alike — is no evidence either.
+    if range <= 1e-9 {
+        return Ok(None);
+    }
+    for (_, s) in scores.iter_mut() {
+        *s = (*s - min_raw) / range;
     }
 
     // Step 1.75: Circle-of-fifths distance weighting (optional refinement)
@@ -249,8 +244,7 @@ pub fn detect_key_weighted(
     let (final_key, final_score) = scores[0];
 
     // Confidence is the top key's margin over the next-best key, on the shared
-    // [0, 1] scale. It is zero when there is no tonal evidence (the flat field
-    // above), so a flat or signal-less track never reports spurious certainty.
+    // [0, 1] scale.
     let best_other = scores
         .iter()
         .find(|(k, _)| *k != final_key)
@@ -274,12 +268,12 @@ pub fn detect_key_weighted(
         confidence
     );
 
-    Ok(KeyDetectionResult {
+    Ok(Some(KeyDetectionResult {
         key: final_key,
         confidence,
         all_scores: scores,
         top_keys,
-    })
+    }))
 }
 
 /// Mean chroma across all frames, optionally frame-weighted. Returns `None`
@@ -395,7 +389,9 @@ mod tests {
         chroma[0] = 1.0; // C
         chroma[4] = 1.0; // E
         chroma[7] = 1.0; // G
-        let detection = detect_key(&frames(&chroma, 10), &templates).unwrap();
+        let detection = detect_key(&frames(&chroma, 10), &templates)
+            .unwrap()
+            .expect("a key");
         assert_eq!(detection.key, Key::Major(0), "got {:?}", detection.key);
         assert!(!detection.top_keys.is_empty() && detection.top_keys.len() <= 3);
         assert_eq!(detection.all_scores.len(), 24);
@@ -409,7 +405,9 @@ mod tests {
         let templates = KeyTemplates::new();
         for key_idx in 0..12 {
             let profile = templates.get_major_template(key_idx).to_vec();
-            let detection = detect_key(&frames(&profile, 8), &templates).unwrap();
+            let detection = detect_key(&frames(&profile, 8), &templates)
+                .unwrap()
+                .expect("a key");
             assert_eq!(
                 detection.key,
                 Key::Major(key_idx),
@@ -426,7 +424,9 @@ mod tests {
         let templates = KeyTemplates::new();
         for key_idx in 0..12 {
             let profile = templates.get_minor_template(key_idx).to_vec();
-            let detection = detect_key(&frames(&profile, 8), &templates).unwrap();
+            let detection = detect_key(&frames(&profile, 8), &templates)
+                .unwrap()
+                .expect("a key");
             assert_eq!(
                 detection.key,
                 Key::Minor(key_idx),
@@ -437,17 +437,25 @@ mod tests {
     }
 
     #[test]
-    fn flat_chroma_has_zero_confidence_and_finite_scores() {
+    fn flat_chroma_has_no_key() {
         // A perfectly flat distribution carries no tonal evidence: the
-        // detector must not invent a winner from float noise. Scores stay
-        // finite, confidence is zero, and the key is the deterministic
-        // fallback (C major sorts first).
+        // detector must not invent a winner from float noise.
         let templates = KeyTemplates::new();
-        let detection = detect_key(&frames(&[0.1f32; 12], 10), &templates).unwrap();
-        assert_eq!(detection.confidence, 0.0);
-        assert_eq!(detection.key, Key::Major(0));
-        assert_eq!(detection.all_scores.len(), 24);
-        assert!(detection.all_scores.iter().all(|(_, s)| s.is_finite()));
+        assert!(matches!(
+            detect_key(&frames(&[0.1f32; 12], 10), &templates),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn silence_has_no_key() {
+        // Silence leaves every pitch class empty, which is no more C major
+        // than any other key.
+        let templates = KeyTemplates::new();
+        assert!(matches!(
+            detect_key(&frames(&[0.0f32; 12], 10), &templates),
+            Ok(None)
+        ));
     }
 
     #[test]
@@ -457,7 +465,9 @@ mod tests {
         let chroma = vec![
             0.4, 0.05, 0.2, 0.02, 0.3, 0.1, 0.03, 0.35, 0.04, 0.15, 0.02, 0.08,
         ];
-        let detection = detect_key(&frames(&chroma, 12), &templates).unwrap();
+        let detection = detect_key(&frames(&chroma, 12), &templates)
+            .unwrap()
+            .expect("a key");
         assert!(detection.confidence.is_finite());
         assert!((0.0..=1.0).contains(&detection.confidence));
         assert_eq!(detection.all_scores.len(), 24);
@@ -466,16 +476,16 @@ mod tests {
     }
 
     #[test]
-    fn zero_weights_yield_finite_zero_confidence() {
+    fn zero_weights_yield_no_key() {
         // All-zero frame weights leave no usable signal; the detector must
-        // return a finite, zero-confidence result rather than dividing by zero
-        // or producing NaN.
+        // report no key rather than dividing by zero or producing NaN.
         let templates = KeyTemplates::new();
         let chroma_vectors = frames(&[0.2f32; 12], 10);
         let weights = vec![0.0f32; 10];
-        let detection = detect_key_weighted(&chroma_vectors, &templates, Some(&weights)).unwrap();
-        assert_eq!(detection.confidence, 0.0);
-        assert!(detection.all_scores.iter().all(|(_, s)| s.is_finite()));
+        assert!(matches!(
+            detect_key_weighted(&chroma_vectors, &templates, Some(&weights)),
+            Ok(None)
+        ));
     }
 
     #[test]
@@ -488,7 +498,9 @@ mod tests {
         let a_minor = templates.get_minor_template(9).to_vec();
         let chroma_vectors = vec![c_major, a_minor.clone(), a_minor];
         let weights = vec![1.0f32, 0.0, 0.0];
-        let detection = detect_key_weighted(&chroma_vectors, &templates, Some(&weights)).unwrap();
+        let detection = detect_key_weighted(&chroma_vectors, &templates, Some(&weights))
+            .unwrap()
+            .expect("a key");
         assert_eq!(detection.key, Key::Major(0));
     }
 }

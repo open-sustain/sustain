@@ -33,7 +33,8 @@
 //!   the key detector uses.
 //! * [`extract_chroma_from_spectrogram_with_options`] + [`detect_key`] +
 //!   [`KeyTemplates`] — chroma → key-profile template key detection
-//!   (returns [`KeyDetectionResult`] over [`Key`]). Key selection is
+//!   (returns a [`KeyDetectionResult`] over [`Key`], or none when the chroma
+//!   holds no tonal evidence). Key selection is
 //!   deterministic (a total-order sort with a fixed tiebreak). The vendored
 //!   band-summed chroma here remains available, but the key detector now reads
 //!   its profile from [`compute_hpcp`].
@@ -56,7 +57,7 @@
 //! let bpm = estimate_bpm_tempogram(&stft, 44_100, 512, 70.0, 170.0, 1.0)?;
 //! let chroma = extract_chroma_from_spectrogram_with_options(&stft, 44_100, 2048, true, 0.5)?;
 //! let key = detect_key(&chroma, &KeyTemplates::new())?;
-//! println!("{:.1} BPM, key {:?}", bpm.bpm, key.key);
+//! println!("{:.1} BPM, key {:?}", bpm.bpm, key.map(|key| key.key));
 //! # Ok::<(), sustain_dsp::AnalysisError>(())
 //! ```
 
