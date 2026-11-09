@@ -22,6 +22,10 @@ JKU mirror). A first full baseline was recorded 2026-06-13 — see
 reproduce or extend it, see
 [Acquiring and adapting GiantSteps](#acquiring-and-adapting-giantsteps-tempo--key).
 
+Ballroom and GTZAN, with human beat and bar annotations, are the beat-grid
+corpora (`analysis-bench adapt-beat-annotations`). See
+[Acquiring and adapting Ballroom and GTZAN beats](#acquiring-and-adapting-ballroom-and-gtzan-beats).
+
 FMAK / FMAKv2 is the second key corpus with a shipped adapter
 (`analysis-bench adapt-fmak`) — an independent, genre-broad cross-check on
 GiantSteps Key. Its audio is the Free Music Archive, downloaded separately;
@@ -36,21 +40,22 @@ comparable to that work.
 
 ## What the Sustain harness can score today
 
-The harness measures four bands and scores the two with a clean
-ground-truth contract:
+The harness measures four bands and scores three of them against ground
+truth:
 
 - **BPM** — ±2 BPM accuracy, mean absolute error, and metrical ratio
   buckets (`1x`, `2x`, `1/2x`, …) that surface octave confusions instead of
   scoring them as plain misses.
 - **Key** — MIREX categories (`correct`, `fifth`, `relative`, `parallel`,
   `other`) on pitch classes, so enharmonic spellings never matter.
+- **Beat grid** — the constant grid's phase (aligned, off-beat, misaligned)
+  and its downbeat's offset in beats, against either a reference grid or
+  beats a person marked. Annotated beats that follow no constant tempo are
+  reported as `unsteady`, not scored. This is not the beat F-measure of the
+  beat-tracking literature: Sustain lays out one constant grid per track,
+  and the question is whether that grid is right.
 - **Acoustics** and **waveform** are recorded per track for stability/diff,
   but have no external ground-truth scoring.
-
-It does **not** yet score a beat grid (beat/downbeat F-measure). Corpora
-whose value is beat/downbeat annotation are therefore deferred until a
-beat-grid task exists in the harness — listing them as "available" would
-imply a metric we cannot compute.
 
 ## Validation tiers
 
@@ -62,8 +67,8 @@ imply a metric we cannot compute.
 - **Tier 2 — DJ/EDM**: GiantSteps Tempo (BPM) and GiantSteps Key (key) —
   the closest match to Sustain's DJ-leaning workflows, and the highest
   priority once acquired.
-- **Tier 3 — beat/downbeat/grid**: Ballroom, Harmonix Set, Beat This.
-  **Deferred** — no beat-grid metric in the harness yet.
+- **Tier 3 — beat/downbeat/grid**: Ballroom and GTZAN (adapter shipped),
+  Harmonix Set and Beat This (deferred).
 - **Tier 4 — loops / short audio**: Freesound Loop Dataset (FSL10K).
 - **Tier 5 — private reality check**: the maintainer's own library, by
   `path` from a gitignored manifest. Best product sanity; never committed
@@ -79,7 +84,8 @@ imply a metric we cannot compute.
 | FMAK / FMAKv2 | 1 | `key` | FMAKv2 [Zenodo `12759100`](https://zenodo.org/records/12759100) (`fmakv2.csv`, md5 `3b2d16784ffbda850c8ddf0519478bfd`); orig. FMAK [Zenodo `10719859`](https://zenodo.org/records/10719859) | **CC BY 4.0** (annotations) | FMA audio, **per-track CC licenses** — not redistributed; downloaded as an `fma_*` archive from [mdeff/fma](https://github.com/mdeff/fma) (per-archive SHA1), kept external | **Adapter shipped** (`adapt-fmak`): maps `fmakv2.csv` (`track_id`,`key_and_mode`) → per-track `key` against an FMA audio root (`<id6[..3]>/<id6>.mp3`); annotated tracks absent from the chosen archive subset are reported and excluded. Expert song-level key/mode, 5,489 tracks / 17 genres / 24 keys — an independent second key corpus to cross-check GiantSteps. **Partial baseline recorded** (`fma_medium` subset, 1,723/5,489 covered) — see [results](analysis-benchmark-results.md); full FMAK (`fma_large`) run still pending. |
 | FMA Small | 1 | `bpm` (sanity) | <https://github.com/mdeff/fma> | metadata CC BY 4.0; code MIT | per-track artist licenses | Echonest tempo labels are weak → development/tuning only, **not** final accuracy claims. Keep tuning runs separate from validation runs. |
 | Freesound Loop (FSL10K) | 4 | `bpm`, `key` | <https://zenodo.org/records/3967852> | per-sound CC (see `FSL10K/metadata.json`) | downloadable from Zenodo | 9,455 loops with tempo/key/genre. Short-audio robustness; user/tag-derived BPM needs caveat-aware scoring. |
-| Ballroom | 3 | — (beat grid) | <https://github.com/CPJKU/BallroomAnnotations> | annotation repo only | audio archive **external** | **Deferred**: no beat-grid metric yet. Revisit when a beat task lands; pin repo tag + archive checksum. |
+| Ballroom | 3 | `bpm` (beat grid) | annotations [CPJKU/BallroomAnnotations](https://github.com/CPJKU/BallroomAnnotations) @ `1db0891`; audio MTG `data1.tar.gz` (md5 `2872a3e52070bc342a4510a95e2fa0b8`, as the annotation README gives it) | none declared; the authors ask to cite Krebs, Böck & Widmer (ISMIR 2013) | `https://mtg.upf.edu/ismir2004/contest/tempoContest/data1.tar.gz`, 698 clips of 30 s, external, never committed | **Adapter shipped** (`adapt-beat-annotations --corpus ballroom`): 523 clips counted in fours, 175 waltzes excluded. The annotation README lists four exact and nine recording duplicates, which stay in. |
+| GTZAN beats | 3 | `bpm` (beat grid) | annotations [TempoBeatDownbeat/gtzan_tempo_beat](https://github.com/TempoBeatDownbeat/gtzan_tempo_beat) @ `fd9cafd` (Marchand & Peeters); audio `genres.tar.gz` from the [`marsyas/gtzan`](https://huggingface.co/datasets/marsyas/gtzan) mirror (md5 `4c13f740bb9d223a1d74d4a7f78ca336` as downloaded 2026-11-09) | none declared | 1,000 clips of 30 s over ten genres, external, never committed | **Adapter shipped** (`adapt-beat-annotations --corpus gtzan`): 933 clips counted in fours; 60 in other meters, 6 annotated without bars and 1 unannotated excluded. GTZAN's known faults (repeated excerpts, mislabelled genres) do not affect beat annotations but are a caveat for per-genre figures. |
 | Harmonix Set | 3 | — (beat grid) | <https://github.com/urinieto/harmonixset> | annotations MIT | audio **indirect/external** | **Deferred**: beat/downbeat/segment value, no harness metric yet. |
 | Beat This | research | — | <https://zenodo.org/records/13922116> | Zenodo package | mel spectrograms, **no audio for many sets** | Literature comparison only; not a sample-in audio corpus. |
 | Sustain private | 5 | `bpm`, `key` | local library only | n/a | local, **never committed** | **Adapter shipped** (`adapt-private`): maps a private `reference.toml` (rich hand-curated key/BPM ground truth) + an audio root → a gitignored manifest pinned to the shipped BPM range; provenance tiers (goldish/silver) reported, not embedded. Reality-check baseline **recorded 2026-06-13** (26 tracks, 18 goldish + 8 silver) — see [results](analysis-benchmark-results.md). See "Tier 5" below. |
@@ -98,8 +104,10 @@ imply a metric we cannot compute.
   predicted major/minor **mode mix** is watched so a compatible-rate gain that
   collapses mode is caught. See the "Product key-quality target" in
   [`analysis-dsp-roadmap.md`](analysis-dsp-roadmap.md) for the thresholds.
-- **Beat grid**: not computed yet — out of scope until the harness grows a
-  beat-grid task; do not claim beat quality beyond the synthetic fixtures.
+- **Beat grid**: the aligned and off-beat shares, and the downbeat's correct
+  rate with its offset distribution, on the human-annotated corpora. Against
+  rekordbox's grids the same figures measure agreement, not accuracy: an
+  analyzer change is not accepted on agreement with rekordbox alone.
 - **No silent label trust**: weak labels (Echonest tempo, loop tags) are for
   tuning, kept separate from final validation claims.
 
@@ -256,6 +264,39 @@ results stay out of git. Record the harness commit,
 tracks were excluded for missing audio), and the headline metrics alongside the
 result, per the policy above — recorded runs live in
 [`analysis-benchmark-results.md`](analysis-benchmark-results.md).
+
+## Acquiring and adapting Ballroom and GTZAN beats
+
+The two corpora are the human reference for beat grids: every beat of every
+clip was marked by a person, with its position in the bar. Both are 30 s
+clips, so a downbeat has only about fifteen bars of evidence, fewer than in a
+whole track.
+
+1. Get the annotations at the pinned commits:
+
+   ```bash
+   git clone https://github.com/CPJKU/BallroomAnnotations validation-data/ballroom/BallroomAnnotations
+   git -C validation-data/ballroom/BallroomAnnotations checkout 1db0891
+   git clone https://github.com/TempoBeatDownbeat/gtzan_tempo_beat validation-data/gtzan/gtzan_tempo_beat
+   git -C validation-data/gtzan/gtzan_tempo_beat checkout fd9cafd
+   ```
+
+2. Download the audio, verify it and extract it:
+
+   ```bash
+   curl -L -o validation-data/ballroom/data1.tar.gz \
+     https://mtg.upf.edu/ismir2004/contest/tempoContest/data1.tar.gz
+   echo '2872a3e52070bc342a4510a95e2fa0b8  validation-data/ballroom/data1.tar.gz' | md5sum -c -
+   tar -xzf validation-data/ballroom/data1.tar.gz -C validation-data/ballroom   # → BallroomData/<style>/<stem>.wav
+   curl -L -o validation-data/gtzan/genres.tar.gz \
+     https://huggingface.co/datasets/marsyas/gtzan/resolve/main/data/genres.tar.gz
+   echo '4c13f740bb9d223a1d74d4a7f78ca336  validation-data/gtzan/genres.tar.gz' | md5sum -c -
+   tar -xzf validation-data/gtzan/genres.tar.gz -C validation-data/gtzan        # → genres/<genre>/<genre>.<nnnnn>.wav
+   ```
+
+3. Adapt and run, as the harness README shows (`adapt-beat-annotations`, then
+   `run`). Each clip carries its annotated beats inline, so the manifests are
+   large but need nothing else.
 
 ## Tier 5 — private reality check (adapter shipped, baseline recorded)
 

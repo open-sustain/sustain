@@ -11,6 +11,7 @@
 //! analysis-bench adapt-giantsteps --dataset <tempo|key|mtg-key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
 //! analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
 //! analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>
+//! analysis-bench adapt-beat-annotations --corpus <ballroom|gtzan> --annotations <dir> --audio <dir> --out <toml>
 //! analysis-bench learn-key-profiles <manifest>...
 //! ```
 //!
@@ -39,6 +40,10 @@
 //!   range. Reference rows with no audio under the root are reported and
 //!   excluded; provenance tiers (goldish/silver) are reported but not
 //!   embedded. This command never downloads.
+//! * `adapt-beat-annotations` turns the Ballroom or GTZAN audio plus a
+//!   checkout of its human beat annotations into a (gitignored) manifest
+//!   whose clips carry their annotated beats, keeping the clips counted in
+//!   fours. This command never downloads.
 //! * `learn-key-profiles` learns the key detector's major and minor profiles
 //!   from the labelled audio of the given key manifests and prints them as
 //!   the arrays `sustain_dsp`'s key templates hold.
@@ -47,6 +52,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use sustain_analysis_bench::beat_annotations::{self, BeatCorpus};
 use sustain_analysis_bench::fmak::{self, AdaptOptions as FmakOptions, AdaptReport as FmakReport};
 use sustain_analysis_bench::giantsteps::{self, AdaptOptions, AdaptReport, Dataset};
 use sustain_analysis_bench::key_profiles;
@@ -64,6 +70,7 @@ usage:
   analysis-bench adapt-giantsteps --dataset <tempo|key|mtg-key> --repo <dir> --audio <dir> --out <toml> [--no-md5]
   analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
   analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>
+  analysis-bench adapt-beat-annotations --corpus <ballroom|gtzan> --annotations <dir> --audio <dir> --out <toml>
   analysis-bench learn-key-profiles <manifest>...";
 
 /// A CLI failure: either bad invocation (exit 2) or a runtime error (exit 1).
@@ -98,6 +105,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "adapt-giantsteps" => cmd_adapt_giantsteps(rest),
         "adapt-fmak" => cmd_adapt_fmak(rest),
         "adapt-private" => cmd_adapt_private(rest),
+        "adapt-beat-annotations" => cmd_adapt_beat_annotations(rest),
         "learn-key-profiles" => cmd_learn_key_profiles(rest),
         other => Err(CliError::Usage(format!("unknown command {other:?}"))),
     }
@@ -344,6 +352,44 @@ fn print_private_summary(report: &PrivateReport) {
 }
 
 /// Write an adapter's manifest TOML to `out`, creating the parent directory.
+fn cmd_adapt_beat_annotations(args: &[String]) -> Result<(), CliError> {
+    let args = Args::parse(args)?;
+    let corpus = args.required("corpus")?;
+    let corpus = BeatCorpus::parse(corpus)
+        .ok_or_else(|| CliError::Usage(format!("unknown corpus {corpus:?} (ballroom or gtzan)")))?;
+    let options = beat_annotations::AdaptOptions {
+        corpus,
+        annotations: PathBuf::from(args.required("annotations")?),
+        audio_dir: PathBuf::from(args.required("audio")?),
+    };
+    let report =
+        beat_annotations::adapt(&options).map_err(|err| CliError::Failure(format!("{err}")))?;
+    write_manifest(args.required("out")?, &report.manifest_toml)?;
+    eprintln!(
+        "corpus {:?}: {} clip(s) emitted from {} found",
+        report.corpus_id, report.track_count, report.clips
+    );
+    if report.other_meter > 0 {
+        eprintln!(
+            "  {} clip(s) excluded — bars not of four beats",
+            report.other_meter
+        );
+    }
+    if report.unannotated > 0 {
+        eprintln!(
+            "  {} clip(s) excluded — no annotation file",
+            report.unannotated
+        );
+    }
+    if report.unpositioned > 0 {
+        eprintln!(
+            "  {} clip(s) excluded — beats annotated without bars",
+            report.unpositioned
+        );
+    }
+    Ok(())
+}
+
 fn cmd_learn_key_profiles(paths: &[String]) -> Result<(), CliError> {
     if paths.is_empty() {
         return Err(CliError::Usage("no manifest given".to_string()));
@@ -407,6 +453,27 @@ fn print_run_summary(report: &Report) {
             bpm.within_tolerance_pct, bpm.scored, bpm.mean_abs_error
         );
     }
+    if let Some(grid) = &report.summary.grid {
+        let agreements: Vec<String> = grid
+            .agreement_pct
+            .iter()
+            .map(|(label, pct)| format!("{label} {pct:.1}%"))
+            .collect();
+        eprintln!(
+            "  GRID: {} over {} scored",
+            agreements.join(", "),
+            grid.scored
+        );
+        if let (Some(correct), Some(offsets)) = (grid.downbeat_correct_pct, grid.downbeat_offsets) {
+            eprintln!(
+                "  DOWNBEAT: {correct:.1}% correct over {} aligned; bar late by 1/2/3 beats: {}/{}/{}",
+                offsets.iter().sum::<usize>(),
+                offsets[1],
+                offsets[2],
+                offsets[3],
+            );
+        }
+    }
     if let Some(key) = &report.summary.key {
         eprintln!(
             "  KEY: {:.1}% strict-compatible (correct+fifth+relative), \
@@ -433,6 +500,17 @@ fn print_comparison(baseline: &Report, candidate: &Report) {
         .map(|b| b.within_tolerance_pct);
     if let (Some(b), Some(c)) = (base_bpm, cand_bpm) {
         println!("BPM within ±2:  {b:.1}% -> {c:.1}%  ({:+.1})", c - b);
+    }
+    let aligned = |report: &Report| {
+        let grid = report.summary.grid.as_ref()?;
+        Some(grid.agreement_pct.get("aligned").copied().unwrap_or(0.0))
+    };
+    if let (Some(b), Some(c)) = (aligned(baseline), aligned(candidate)) {
+        println!("GRID aligned:   {b:.1}% -> {c:.1}%  ({:+.1})", c - b);
+    }
+    let downbeat = |report: &Report| report.summary.grid.as_ref()?.downbeat_correct_pct;
+    if let (Some(b), Some(c)) = (downbeat(baseline), downbeat(candidate)) {
+        println!("DOWNBEAT:       {b:.1}% -> {c:.1}%  ({:+.1})", c - b);
     }
     // Strict harmonic-compatible rate is the product headline; derive it from
     // each report's category histogram so an older baseline (recorded before
@@ -467,13 +545,14 @@ fn print_comparison(baseline: &Report, candidate: &Report) {
         _ => println!("(one or both reports omit timing — run without --reproducible)"),
     }
 
-    // Per-track output divergences: BPM/key/waveform-hash changes.
+    // Per-track output divergences: BPM/grid/key/waveform-hash changes.
     let base_by_id: BTreeMap<&str, &TrackResult> =
         baseline.tracks.iter().map(|t| (t.id.as_str(), t)).collect();
     let mut diverged = Vec::new();
     for cand in &candidate.tracks {
         if let Some(base) = base_by_id.get(cand.id.as_str())
             && (base.bpm != cand.bpm
+                || base.beat_grid != cand.beat_grid
                 || base.key != cand.key
                 || waveform_hash(base) != waveform_hash(cand))
         {

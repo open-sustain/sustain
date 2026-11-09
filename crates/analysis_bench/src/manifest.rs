@@ -6,15 +6,17 @@
 //! A manifest lists tracks to analyze. Each track is either a
 //! deterministically generated [`Synthetic`] fixture (committable, CI-safe)
 //! or a `path` to real audio (kept in a *gitignored* manifest — we never
-//! commit private audio). Ground-truth `bpm` / `key`, when present, turn a
-//! run into a scored evaluation; absent, the run still records outputs and
-//! timings as a baseline.
+//! commit private audio). Ground truth — `bpm`, `key`, and a beat grid
+//! (`beat_grid` or annotated `beats`) — turns a run into a scored
+//! evaluation; absent, the run still records outputs and timings as a
+//! baseline.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::fixtures::Synthetic;
+use crate::metrics::AnnotatedBeat;
 
 /// One analyzer capability. Selecting a subset is the point of the
 /// capability-gated pipeline: a BPM-only run must not pay for key, chroma,
@@ -99,6 +101,11 @@ pub struct TrackEntry {
     /// Ground-truth beat grid, if known.
     #[serde(default)]
     pub beat_grid: Option<ReferenceGrid>,
+    /// Beats a person marked, `[secs, position]` each, in time order — the
+    /// other form of grid ground truth, for music whose beats a constant
+    /// grid only approximates. Exclusive with `beat_grid`.
+    #[serde(default)]
+    pub beats: Option<Vec<AnnotatedBeat>>,
     /// Ground-truth key, if known (any form [`crate::metrics::parse_key`]
     /// accepts).
     #[serde(default)]
@@ -148,6 +155,14 @@ pub enum ManifestError {
         /// Offending track id.
         id: String,
     },
+    /// A track's beat-grid ground truth is unusable.
+    #[error("track {id:?}: {problem}")]
+    Beats {
+        /// Offending track id.
+        id: String,
+        /// What is wrong with it.
+        problem: &'static str,
+    },
 }
 
 impl Manifest {
@@ -157,15 +172,21 @@ impl Manifest {
             path: path.display().to_string(),
             source,
         })?;
-        let manifest: Manifest = toml::from_str(&text).map_err(|source| ManifestError::Parse {
-            path: path.display().to_string(),
+        Self::parse(&text, &path.display().to_string())
+    }
+
+    /// Parse and validate manifest TOML; `origin` names it in errors.
+    pub fn parse(text: &str, origin: &str) -> Result<Self, ManifestError> {
+        let manifest: Manifest = toml::from_str(text).map_err(|source| ManifestError::Parse {
+            path: origin.to_string(),
             source,
         })?;
         manifest.validate()?;
         Ok(manifest)
     }
 
-    /// Reject tracks that do not name exactly one source.
+    /// Reject tracks that do not name exactly one source, or whose
+    /// annotated beats cannot be scored.
     fn validate(&self) -> Result<(), ManifestError> {
         for track in &self.tracks {
             if track.path.is_some() == track.synthetic.is_some() {
@@ -173,9 +194,42 @@ impl Manifest {
                     id: track.id.clone(),
                 });
             }
+            let problem = track
+                .beats
+                .as_deref()
+                .and_then(|beats| annotated_beats_problem(beats, track.beat_grid.is_some()));
+            if let Some(problem) = problem {
+                return Err(ManifestError::Beats {
+                    id: track.id.clone(),
+                    problem,
+                });
+            }
         }
         Ok(())
     }
+}
+
+/// What makes `beats` unusable as a track's ground truth, if anything.
+pub(crate) fn annotated_beats_problem(
+    beats: &[AnnotatedBeat],
+    has_grid: bool,
+) -> Option<&'static str> {
+    if has_grid {
+        return Some("at most one of `beat_grid` or `beats` is allowed");
+    }
+    if beats.len() < 2 {
+        return Some("`beats` needs at least two beats to have a tempo");
+    }
+    if beats.iter().any(|beat| !beat.secs.is_finite()) {
+        return Some("`beats` times must be finite");
+    }
+    if beats.windows(2).any(|pair| pair[1].secs <= pair[0].secs) {
+        return Some("`beats` must be in strictly increasing time order");
+    }
+    if beats.iter().any(|beat| !(1..=4).contains(&beat.position)) {
+        return Some("`beats` bar positions must be 1 to 4");
+    }
+    None
 }
 
 impl TrackEntry {
@@ -229,6 +283,43 @@ mod tests {
             manifest.tracks[1].effective_tasks(&manifest.options),
             vec![Task::Bpm]
         );
+    }
+
+    #[test]
+    fn parses_annotated_beats() {
+        let src = r#"
+            [meta]
+            corpus_id = "demo"
+            [[track]]
+            id = "clip"
+            path = "/music/clip.wav"
+            beats = [[0.5, 3], [1.0, 4], [1.5, 1]]
+        "#;
+        let manifest: Manifest = toml::from_str(src).expect("parse");
+        manifest.validate().expect("valid");
+        let beats = manifest.tracks[0].beats.as_ref().expect("beats");
+        assert_eq!(beats.len(), 3);
+        assert_eq!((beats[2].secs, beats[2].position), (1.5, 1));
+    }
+
+    #[test]
+    fn rejects_unusable_annotated_beats() {
+        for (beats, extra) in [
+            ("[[0.5, 1]]", ""),
+            ("[[0.5, 1], [0.5, 2]]", ""),
+            ("[[0.5, 1], [1.0, 5]]", ""),
+            (
+                "[[0.5, 1], [1.0, 2]]",
+                "beat_grid = { bpm = 120.0, first_beat_secs = 0.5, first_beat_number = 1 }",
+            ),
+        ] {
+            let src = format!(
+                "[meta]\ncorpus_id = \"demo\"\n[[track]]\nid = \"clip\"\n\
+                 path = \"/music/clip.wav\"\nbeats = {beats}\n{extra}\n"
+            );
+            let manifest: Manifest = toml::from_str(&src).expect("parse");
+            assert!(manifest.validate().is_err(), "{beats} {extra}");
+        }
     }
 
     #[test]

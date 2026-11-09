@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use sustain_analysis::{AcousticFeatures, AnalysisOptions, Analyzer, WaveformSegments};
 
 use crate::manifest::{Manifest, Options, ReferenceGrid, Task, TrackEntry};
-use crate::metrics::{self, DEFAULT_BPM_TOLERANCE, GridAgreement, KeyCategory};
+use crate::metrics::{self, AnnotatedBeat, DEFAULT_BPM_TOLERANCE, GridAgreement, KeyCategory};
 
 /// A complete benchmark report.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -213,7 +213,7 @@ pub struct BpmScore {
 }
 
 /// A detected beat grid.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GridOutput {
     /// Tempo the beats are laid out at.
     pub bpm: f64,
@@ -226,15 +226,27 @@ pub struct GridOutput {
 /// Beat-grid score against ground truth.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct GridScore {
-    /// Aligned, off-beat, misaligned, tempo mismatch — or `None` when no
-    /// grid was detected.
+    /// Aligned, off-beat, misaligned, tempo mismatch, unsteady — or
+    /// `None` when no grid was detected.
     pub agreement: Option<GridAgreement>,
-    /// Signed phase error mid-track (ms), when the tempos match.
+    /// Signed phase error (ms), when the tempos match: mid-track against a
+    /// reference grid, the mean against annotated beats.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub phase_error_ms: Option<f64>,
-    /// Whether bar positions agree, for aligned grids.
+    /// For aligned grids, how many beats after the reference's downbeat
+    /// the predicted bar starts (0 when the bars agree).
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub downbeat_correct: Option<bool>,
+    pub downbeat_offset: Option<u8>,
+}
+
+impl From<metrics::GridComparison> for GridScore {
+    fn from(comparison: metrics::GridComparison) -> Self {
+        Self {
+            agreement: Some(comparison.agreement),
+            phase_error_ms: comparison.phase_error_ms,
+            downbeat_offset: comparison.downbeat_offset,
+        }
+    }
 }
 
 /// Key score against ground truth.
@@ -311,8 +323,13 @@ pub struct GridSummary {
     pub agreement_pct: BTreeMap<String, f32>,
     /// Median signed phase error of aligned grids (ms).
     pub aligned_median_error_ms: Option<f64>,
-    /// Percentage of aligned grids whose bar positions agree.
+    /// Percentage of the aligned grids with a downbeat verdict whose bars
+    /// agree with the reference's.
     pub downbeat_correct_pct: Option<f32>,
+    /// Aligned grids by downbeat offset: index `k` counts the grids whose
+    /// bar starts `k` beats after the reference's (3: a beat early).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub downbeat_offsets: Option<[usize; 4]>,
 }
 
 /// Aggregate key accuracy.
@@ -520,10 +537,11 @@ fn run_track(
     }
 
     let bpm_score = entry.bpm.map(|gt| score_bpm(gt, bpm));
-    let grid_score = entry
-        .beat_grid
-        .zip(duration_hint)
-        .map(|(reference, duration)| score_grid(reference, beat_grid, duration));
+    let grid_score = match (&entry.beats, entry.beat_grid.zip(duration_hint)) {
+        (Some(beats), _) => Some(score_beats(beats, beat_grid)),
+        (None, Some((reference, duration))) => Some(score_grid(reference, beat_grid, duration)),
+        (None, None) => None,
+    };
     let key_score = entry
         .key
         .as_deref()
@@ -610,6 +628,23 @@ fn score_bpm(ground_truth: f64, predicted: Option<f64>) -> BpmScore {
     }
 }
 
+/// The score of a track that has grid ground truth but no detected grid.
+const MISSING_GRID: GridScore = GridScore {
+    agreement: None,
+    phase_error_ms: None,
+    downbeat_offset: None,
+};
+
+impl From<GridOutput> for metrics::Grid {
+    fn from(grid: GridOutput) -> Self {
+        Self {
+            bpm: grid.bpm,
+            first_beat_secs: grid.first_beat_secs,
+            first_beat_number: grid.first_beat_number,
+        }
+    }
+}
+
 /// Score a detected grid against the reference, probing 10 %, 50 % and
 /// 90 % of the way through the track.
 fn score_grid(
@@ -618,31 +653,27 @@ fn score_grid(
     duration: Duration,
 ) -> GridScore {
     let Some(predicted) = predicted else {
-        return GridScore {
-            agreement: None,
-            phase_error_ms: None,
-            downbeat_correct: None,
-        };
+        return MISSING_GRID;
     };
     let secs = duration.as_secs_f64();
-    let comparison = metrics::compare_grids(
-        metrics::Grid {
-            bpm: predicted.bpm,
-            first_beat_secs: predicted.first_beat_secs,
-            first_beat_number: predicted.first_beat_number,
-        },
-        metrics::Grid {
-            bpm: reference.bpm,
-            first_beat_secs: reference.first_beat_secs,
-            first_beat_number: reference.first_beat_number,
-        },
+    let reference = metrics::Grid {
+        bpm: reference.bpm,
+        first_beat_secs: reference.first_beat_secs,
+        first_beat_number: reference.first_beat_number,
+    };
+    metrics::compare_grids(
+        predicted.into(),
+        reference,
         &[secs * 0.1, secs * 0.5, secs * 0.9],
-    );
-    GridScore {
-        agreement: Some(comparison.agreement),
-        phase_error_ms: comparison.phase_error_ms,
-        downbeat_correct: comparison.downbeat_correct,
-    }
+    )
+    .into()
+}
+
+/// Score a detected grid against beats a person marked.
+fn score_beats(beats: &[AnnotatedBeat], predicted: Option<GridOutput>) -> GridScore {
+    predicted.map_or(MISSING_GRID, |predicted| {
+        metrics::compare_with_beats(predicted.into(), beats).into()
+    })
 }
 
 /// Score key against ground truth. Returns `None` when the ground-truth
@@ -714,6 +745,7 @@ fn summarize_grid(tracks: &[TrackResult]) -> Option<GridSummary> {
             Some(GridAgreement::OffBeat) => "off_beat",
             Some(GridAgreement::Misaligned) => "misaligned",
             Some(GridAgreement::TempoMismatch) => "tempo_mismatch",
+            Some(GridAgreement::Unsteady) => "unsteady",
         };
         *counts.entry(label.to_string()).or_default() += 1;
     }
@@ -723,7 +755,11 @@ fn summarize_grid(tracks: &[TrackResult]) -> Option<GridSummary> {
         .filter_map(|s| s.phase_error_ms)
         .collect();
     aligned_errors.sort_by(f64::total_cmp);
-    let downbeats: Vec<bool> = scores.iter().filter_map(|s| s.downbeat_correct).collect();
+    let mut downbeat_offsets = [0_usize; 4];
+    for offset in scores.iter().filter_map(|s| s.downbeat_offset) {
+        downbeat_offsets[usize::from(offset)] += 1;
+    }
+    let downbeats: usize = downbeat_offsets.iter().sum();
     Some(GridSummary {
         scored: scores.len(),
         agreement_pct: counts
@@ -731,8 +767,8 @@ fn summarize_grid(tracks: &[TrackResult]) -> Option<GridSummary> {
             .map(|(label, count)| (label, pct(count, scores.len())))
             .collect(),
         aligned_median_error_ms: aligned_errors.get(aligned_errors.len() / 2).copied(),
-        downbeat_correct_pct: (!downbeats.is_empty())
-            .then(|| pct(downbeats.iter().filter(|&&ok| ok).count(), downbeats.len())),
+        downbeat_correct_pct: (downbeats > 0).then(|| pct(downbeat_offsets[0], downbeats)),
+        downbeat_offsets: (downbeats > 0).then_some(downbeat_offsets),
     })
 }
 

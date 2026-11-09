@@ -9,7 +9,8 @@
 //! [`sustain_analysis::Analyzer`] over a manifest of tracks, records the
 //! outputs and per-band timings, and (where the manifest carries ground
 //! truth) scores them with the standard MIR metrics — BPM ±tolerance and
-//! metrical ratio buckets, MIREX-weighted key categories. Recording a
+//! metrical ratio buckets, MIREX-weighted key categories — and beat grids
+//! for phase and downbeat. Recording a
 //! baseline of the *current* implementation is the precondition for
 //! reworking the DSP: we never change the analyzer blind.
 //!
@@ -41,10 +42,14 @@
 //!   audio stays external).
 //! * [`key_profiles`] — learn the key detector's profiles from labelled
 //!   audio, as `analysis-bench learn-key-profiles` prints them.
+//! * [`beat_annotations`] — adapt the Ballroom and GTZAN clips + their human
+//!   beat and bar annotations into manifests (the human beat-grid reference;
+//!   audio stays external).
 //! * [`private`] — adapt the maintainer's private key/BPM `reference.toml` +
 //!   an audio root into a manifest (a real-audio reality check; audio,
 //!   source URLs, manifest, and results all stay external).
 
+pub mod beat_annotations;
 pub mod fixtures;
 pub mod fmak;
 pub mod giantsteps;

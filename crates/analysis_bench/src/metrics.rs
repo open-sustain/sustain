@@ -14,6 +14,11 @@
 //! * **Key** — MIREX-style categories with the standard weights
 //!   (correct 1.0, fifth 0.5, relative 0.3, parallel 0.2, other 0.0), on
 //!   pitch classes so enharmonic spellings never matter.
+//!
+//! Beat grids are Sustain's own: a constant grid is compared either with
+//! another constant grid ([`compare_grids`]) or with beats a person marked
+//! ([`compare_with_beats`]), for its phase and the bar position of its
+//! downbeats.
 
 use serde::{Deserialize, Serialize};
 use sustain_domain::MusicalKey;
@@ -247,7 +252,7 @@ pub const GRID_TEMPO_TOLERANCE: f64 = 0.001;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GridAgreement {
-    /// Same tempo; every probed beat within [`GRID_ALIGNED_MS`].
+    /// Same tempo, on the reference's beats.
     Aligned,
     /// Same tempo, but locked half a beat away (on the off-beats).
     OffBeat,
@@ -255,6 +260,10 @@ pub enum GridAgreement {
     Misaligned,
     /// A different tempo: phase is meaningless.
     TempoMismatch,
+    /// The annotated beats follow no constant tempo (a live performance
+    /// speeding up, a rubato), so no constant grid can be judged against
+    /// them.
+    Unsteady,
 }
 
 /// The outcome of comparing a predicted grid with the reference.
@@ -262,23 +271,39 @@ pub enum GridAgreement {
 pub struct GridComparison {
     /// The verdict.
     pub agreement: GridAgreement,
-    /// Signed phase error at the middle probe, in milliseconds (positive:
-    /// predicted beats come late), when the tempos match.
+    /// Signed phase error, in milliseconds (positive: predicted beats come
+    /// late), when the tempos match.
     pub phase_error_ms: Option<f64>,
-    /// Whether the predicted bar position agrees, for aligned grids.
-    pub downbeat_correct: Option<bool>,
+    /// For aligned grids, how many beats after the reference's downbeat
+    /// the predicted bar starts: 0 when the bars agree, 3 when the
+    /// predicted bar starts a beat early. `None` when the reference's own
+    /// bars are not steady on the grid.
+    pub downbeat_offset: Option<u8>,
+}
+
+impl GridComparison {
+    fn tempo_mismatch() -> Self {
+        Self {
+            agreement: GridAgreement::TempoMismatch,
+            phase_error_ms: None,
+            downbeat_offset: None,
+        }
+    }
+}
+
+/// How many beats after the reference's downbeat a grid's bar starts,
+/// from the two bar positions of one beat (each 1–4).
+fn downbeat_offset(reference_position: u8, predicted_position: u8) -> u8 {
+    (i16::from(reference_position) - i16::from(predicted_position)).rem_euclid(4) as u8
 }
 
 /// Compare `predicted` with `reference` at each probe time (seconds):
 /// for every probe, the reference beat nearest it against the predicted
 /// beat nearest that.
+/// Aligned means every probed beat within [`GRID_ALIGNED_MS`].
 pub fn compare_grids(predicted: Grid, reference: Grid, probes: &[f64]) -> GridComparison {
     if (predicted.bpm / reference.bpm - 1.0).abs() > GRID_TEMPO_TOLERANCE || probes.is_empty() {
-        return GridComparison {
-            agreement: GridAgreement::TempoMismatch,
-            phase_error_ms: None,
-            downbeat_correct: None,
-        };
+        return GridComparison::tempo_mismatch();
     }
     let errors: Vec<(f64, i64, i64)> = probes
         .iter()
@@ -305,17 +330,120 @@ pub fn compare_grids(predicted: Grid, reference: Grid, probes: &[f64]) -> GridCo
     GridComparison {
         agreement,
         phase_error_ms: Some(middle_error),
-        downbeat_correct: (agreement == GridAgreement::Aligned).then(|| {
-            predicted.beat_number(predicted_index) == reference.beat_number(reference_index)
+        downbeat_offset: (agreement == GridAgreement::Aligned).then(|| {
+            downbeat_offset(
+                reference.beat_number(reference_index),
+                predicted.beat_number(predicted_index),
+            )
         }),
+    }
+}
+
+/// A beat a person marked: its time, and its position in the bar, 1 (the
+/// downbeat) to 4. Written `[secs, position]` in a manifest.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "(f64, u8)", into = "(f64, u8)")]
+pub struct AnnotatedBeat {
+    /// Time of the beat, in seconds.
+    pub secs: f64,
+    /// Its position in the bar, 1–4.
+    pub position: u8,
+}
+
+impl From<(f64, u8)> for AnnotatedBeat {
+    fn from((secs, position): (f64, u8)) -> Self {
+        Self { secs, position }
+    }
+}
+
+impl From<AnnotatedBeat> for (f64, u8) {
+    fn from(beat: AnnotatedBeat) -> Self {
+        (beat.secs, beat.position)
+    }
+}
+
+/// A grid whose period is further than this ratio from the annotated
+/// beats' median interval has another tempo (4 %: the tolerance of the
+/// standard "Acc1" tempo accuracy).
+pub const ANNOTATED_TEMPO_TOLERANCE: f64 = 0.04;
+/// Annotated beats whose phases against the grid cohere less than this
+/// (their mean resultant length, 1 when every beat sits at the same
+/// phase) follow no constant tempo. 0.9 allows a spread of about 0.07 of
+/// a beat, 35 ms at 120 BPM: a person's tapping, not a tempo change.
+pub const ANNOTATED_MIN_COHERENCE: f64 = 0.9;
+/// Within this fraction of a beat of the annotated beats is aligned, and
+/// within it of the off-beat is off-beat: the eighth of a beat either side
+/// that belongs to the beat rather than to the quarter-beat between.
+pub const ANNOTATED_PHASE_REACH: f64 = 0.125;
+/// The bars agree with the grid's when at least this share of the
+/// annotated beats give the same bar offset.
+pub const ANNOTATED_BAR_AGREEMENT: f64 = 0.75;
+
+/// Compare `predicted` with beats a person marked. The tempo must match
+/// the beats' median interval; the phase is the beats' mean phase against
+/// the grid, so a person's timing averages out; the downbeat is the bar
+/// offset most annotated beats agree on.
+pub fn compare_with_beats(predicted: Grid, beats: &[AnnotatedBeat]) -> GridComparison {
+    let mut intervals: Vec<f64> = beats
+        .windows(2)
+        .map(|pair| pair[1].secs - pair[0].secs)
+        .collect();
+    intervals.sort_by(f64::total_cmp);
+    let period = predicted.period();
+    let Some(&median) = intervals.get(intervals.len() / 2) else {
+        return GridComparison::tempo_mismatch();
+    };
+    if (period / median - 1.0).abs() > ANNOTATED_TEMPO_TOLERANCE {
+        return GridComparison::tempo_mismatch();
+    }
+    let (sin, cos) = beats.iter().fold((0.0, 0.0), |(sin, cos), beat| {
+        let angle = std::f64::consts::TAU * (beat.secs - predicted.first_beat_secs) / period;
+        (sin + angle.sin(), cos + angle.cos())
+    });
+    let coherence = sin.hypot(cos) / beats.len() as f64;
+    if coherence < ANNOTATED_MIN_COHERENCE {
+        return GridComparison {
+            agreement: GridAgreement::Unsteady,
+            phase_error_ms: None,
+            downbeat_offset: None,
+        };
+    }
+    // Where the annotated beats sit after the grid's, in beats.
+    let lag = sin.atan2(cos) / std::f64::consts::TAU;
+    let agreement = if lag.abs() <= ANNOTATED_PHASE_REACH {
+        GridAgreement::Aligned
+    } else if lag.abs() >= 0.5 - ANNOTATED_PHASE_REACH {
+        GridAgreement::OffBeat
+    } else {
+        GridAgreement::Misaligned
+    };
+    let downbeat_offset = (agreement == GridAgreement::Aligned)
+        .then(|| {
+            let mut votes = [0_usize; 4];
+            for beat in beats {
+                let position = predicted.beat_number(predicted.nearest_beat(beat.secs));
+                votes[usize::from(downbeat_offset(beat.position, position))] += 1;
+            }
+            let (offset, &count) = votes
+                .iter()
+                .enumerate()
+                .max_by_key(|&(_, count)| count)
+                .expect("four offsets");
+            (count as f64 >= ANNOTATED_BAR_AGREEMENT * beats.len() as f64).then_some(offset as u8)
+        })
+        .flatten();
+    GridComparison {
+        agreement,
+        phase_error_ms: Some(-lag * period * 1_000.0),
+        downbeat_offset,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Grid, GridAgreement, KeyCategory, KeyClass, compare_grids, evaluate_key, parse_key,
-        tempo_ratio_bucket,
+        AnnotatedBeat, Grid, GridAgreement, KeyCategory, KeyClass, compare_grids,
+        compare_with_beats, evaluate_key, parse_key, tempo_ratio_bucket,
     };
     use sustain_domain::MusicalKey;
 
@@ -394,18 +522,78 @@ mod tests {
         let late = compare_grids(grid(120.0, 0.21 + 2.0, 1), reference, &probes);
         assert_eq!(late.agreement, GridAgreement::Aligned);
         assert!((late.phase_error_ms.expect("error") - 10.0).abs() < 1e-6);
-        assert_eq!(late.downbeat_correct, Some(true));
-        // One beat over: aligned, wrong bar position.
+        assert_eq!(late.downbeat_offset, Some(0));
+        // One beat later, still numbered 1: aligned, the bar a beat late.
         let shifted = compare_grids(grid(120.0, 0.7, 1), reference, &probes);
         assert_eq!(shifted.agreement, GridAgreement::Aligned);
-        assert_eq!(shifted.downbeat_correct, Some(false));
+        assert_eq!(shifted.downbeat_offset, Some(1));
+        // Numbered 2 on the reference's downbeat: the bar a beat early.
+        let early = compare_grids(grid(120.0, 0.2, 2), reference, &probes);
+        assert_eq!(early.downbeat_offset, Some(3));
         // Half a beat over.
         let off_beat = compare_grids(grid(120.0, 0.45, 1), reference, &probes);
         assert_eq!(off_beat.agreement, GridAgreement::OffBeat);
-        assert_eq!(off_beat.downbeat_correct, None);
+        assert_eq!(off_beat.downbeat_offset, None);
         // A tempo 1 % off is not a phase question.
         let tempo = compare_grids(grid(121.2, 0.2, 1), reference, &probes);
         assert_eq!(tempo.agreement, GridAgreement::TempoMismatch);
         assert_eq!(tempo.phase_error_ms, None);
+    }
+
+    /// Annotated beats at `bpm` from `first_secs`, the first at bar
+    /// position `first_position`, each nudged by the matching `jitter`
+    /// (seconds, cycled) as a person's tapping would be.
+    fn tapped(bpm: f64, first_secs: f64, first_position: u8, count: usize) -> Vec<AnnotatedBeat> {
+        let jitter = [0.012, -0.008, 0.0, -0.015, 0.006];
+        (0..count)
+            .map(|index| AnnotatedBeat {
+                secs: first_secs + index as f64 * 60.0 / bpm + jitter[index % jitter.len()],
+                position: ((usize::from(first_position) - 1 + index) % 4 + 1) as u8,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn annotated_beats_judge_phase_and_bars() {
+        let beats = tapped(120.0, 0.5, 1, 60);
+        let aligned = compare_with_beats(grid(120.0, 0.51, 1), &beats);
+        assert_eq!(aligned.agreement, GridAgreement::Aligned);
+        assert_eq!(aligned.downbeat_offset, Some(0));
+        let error = aligned.phase_error_ms.expect("error");
+        assert!((error - 10.0).abs() < 5.0, "{error}");
+        // The grid's bar starts on the annotated beat 4: a beat early.
+        let early = compare_with_beats(grid(120.0, 0.5 + 1.5, 1), &beats);
+        assert_eq!(early.downbeat_offset, Some(3));
+        let off_beat = compare_with_beats(grid(120.0, 0.75, 1), &beats);
+        assert_eq!(off_beat.agreement, GridAgreement::OffBeat);
+        assert_eq!(off_beat.downbeat_offset, None);
+        let quarter = compare_with_beats(grid(120.0, 0.625, 1), &beats);
+        assert_eq!(quarter.agreement, GridAgreement::Misaligned);
+        // 5 % slower than the beats' tempo.
+        let slower = compare_with_beats(grid(114.0, 0.5, 1), &beats);
+        assert_eq!(slower.agreement, GridAgreement::TempoMismatch);
+    }
+
+    #[test]
+    fn annotated_beats_that_drift_are_unsteady() {
+        // Thirty beats at 120 BPM, then thirty at 126: no constant grid
+        // holds both halves.
+        let mut beats = tapped(120.0, 0.5, 1, 30);
+        let resume = beats[29].secs + 60.0 / 126.0;
+        beats.extend(tapped(126.0, resume, 3, 30));
+        let comparison = compare_with_beats(grid(123.0, 0.5, 1), &beats);
+        assert_eq!(comparison.agreement, GridAgreement::Unsteady);
+    }
+
+    #[test]
+    fn bars_that_do_not_hold_on_the_grid_give_no_downbeat() {
+        // A bar of two beats halfway through shifts every later bar.
+        let mut beats = tapped(120.0, 0.5, 1, 32);
+        for beat in &mut beats[16..] {
+            beat.position = (beat.position + 1) % 4 + 1;
+        }
+        let comparison = compare_with_beats(grid(120.0, 0.5, 1), &beats);
+        assert_eq!(comparison.agreement, GridAgreement::Aligned);
+        assert_eq!(comparison.downbeat_offset, None);
     }
 }

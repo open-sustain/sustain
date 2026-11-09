@@ -58,7 +58,7 @@ regression.
   also yields a coarse accuracy figure — but **this tier does not make
   accuracy claims.**
 - **Tiers 1–4 — public reference corpora**: GiantSteps Tempo/Key, FMAK,
-  Freesound Loop, and friends — the real external quality signal. These are
+  Ballroom and GTZAN beats, Freesound Loop, and friends — the real external quality signal. These are
   acquired locally (audio never committed) and scored per the registry in
   [`docs/analysis-benchmark-corpora.md`](../../docs/analysis-benchmark-corpora.md),
   which records each corpus's source, licenses, checksums, and the tasks it
@@ -116,6 +116,21 @@ cargo run -p sustain-analysis-bench --release -- adapt-private \
   --reference validation-data/private/reference.toml \
   --audio     validation-data/private \
   --out       validation-data/private/private_pop_core.toml
+
+# Adapt the Ballroom or GTZAN clips and a checkout of their human beat
+# annotations (CPJKU/BallroomAnnotations, TempoBeatDownbeat/gtzan_tempo_beat)
+# into a gitignored manifest. Each clip carries its annotated beats; clips
+# whose bars are not of four beats are reported and excluded:
+cargo run -p sustain-analysis-bench --release -- adapt-beat-annotations \
+  --corpus      ballroom \
+  --annotations validation-data/ballroom/BallroomAnnotations \
+  --audio       validation-data/ballroom/BallroomData \
+  --out         validation-data/beats/ballroom_beats.toml
+cargo run -p sustain-analysis-bench --release -- adapt-beat-annotations \
+  --corpus      gtzan \
+  --annotations validation-data/gtzan/gtzan_tempo_beat \
+  --audio       validation-data/gtzan/genres \
+  --out         validation-data/beats/gtzan_beats.toml
 
 # Learn the key detector's major/minor profiles from key manifests and print
 # them as the arrays crates/dsp/src/features/key/templates.rs holds. Run it
@@ -179,6 +194,13 @@ key = "Am"              # optional ground truth (any common spelling)
 tasks = ["bpm"]         # optional per-track capability override
 # Optional ground-truth beat grid, on the gapless decode timeline:
 beat_grid = { bpm = 128.0, first_beat_secs = 0.112, first_beat_number = 1 }
+
+# Or, instead of `beat_grid`, the beats a person marked, each
+# [seconds, position in the bar 1-4], in time order:
+[[track]]
+id = "clip_0001"
+path = "/home/me/corpus/clip.wav"
+beats = [[0.30, 1], [0.78, 2], [1.26, 3], [1.74, 4], [2.22, 1]]
 ```
 
 Synthetic `kind`s: `silence`, `tone` (`freq_hz`), `ramp`, `click_train`
@@ -193,11 +215,24 @@ Ported from the stratum-dsp validation suite (`validation/_metrics.py`,
 - **BPM** — absolute error, ±2 BPM accuracy, and metrical ratio buckets
   (`1x`, `2x`, `1/2x`, `3/2x`, `2/3x`, `4/3x`, `3/4x`, `other`) that surface
   octave/harmonic confusions instead of scoring them as plain misses.
-- **Beat grid** — probed at 10%, 50% and 90% of the track: `aligned` when
-  every probe's nearest predicted beat is within 20 ms of the reference beat,
-  `off_beat` when the grid sits half a beat away, `misaligned` otherwise, and
-  `tempo_mismatch` when the tempos differ by more than 0.1%. The downbeat is
-  scored on aligned grids.
+- **Beat grid** against a reference grid — probed at 10%, 50% and 90% of the
+  track: `aligned` when every probe's nearest predicted beat is within 20 ms
+  of the reference beat, `off_beat` when the grid sits half a beat away,
+  `misaligned` otherwise, and `tempo_mismatch` when the tempos differ by more
+  than 0.1%.
+- **Beat grid** against annotated beats — `tempo_mismatch` when the grid's
+  period is more than 4% from the beats' median interval (the "Acc1"
+  tolerance); `unsteady` when the beats do not hold one phase on the grid
+  (mean resultant length under 0.9: live tempo drift), since a constant grid
+  cannot be judged against them; otherwise the beats' mean phase on the grid
+  is `aligned` within an eighth of a beat, `off_beat` within an eighth of the
+  half beat, and `misaligned` in between.
+- **Downbeat**, on aligned grids: how many beats after the reference's
+  downbeat the grid's bar starts — 0 when the bars agree, 3 when the grid's
+  bar starts a beat early. The summary gives the correct rate and the count
+  per offset. Against annotated beats, the offset is the one at least 75% of
+  the beats agree on; bars that do not hold on the grid (an inserted
+  two-beat bar) give none.
 - **Key** — MIREX categories (`correct`, `fifth`, `relative`, `parallel`,
   `other`) with the standard weights (1.0 / 0.5 / 0.3 / 0.2 / 0.0), compared
   on pitch classes so enharmonic spellings never matter. From the category
