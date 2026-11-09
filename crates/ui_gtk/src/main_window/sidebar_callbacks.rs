@@ -373,10 +373,10 @@ fn selection_profile_kind(selection: Option<SidebarSelection>) -> &'static str {
 
 pub(super) fn sidebar_tracks_drop_callback(
     command_controller: &SharedCommandController,
-    library_changed_holder: &LibraryChangedHolder,
+    playlist_entries_changed_holder: &PlaylistEntriesChangedHolder,
 ) -> crate::sidebar::SidebarTracksDropCallback {
     let command_controller = command_controller.clone();
-    let library_changed_holder = library_changed_holder.clone();
+    let playlist_entries_changed_holder = playlist_entries_changed_holder.clone();
 
     Rc::new(move |target, track_ids| {
         let PlaylistItem::Playlist(playlist_id) = target else {
@@ -393,8 +393,8 @@ pub(super) fn sidebar_tracks_drop_callback(
         if !dispatched {
             return;
         }
-        if let Some(callback) = library_changed_holder.borrow().as_ref() {
-            callback();
+        if let Some(callback) = playlist_entries_changed_holder.borrow().as_ref() {
+            callback(&PlaylistEntriesChange::Added(playlist_id));
         }
     })
 }

@@ -13,9 +13,9 @@ use gtk::{gio, glib};
 use sustain_app_runtime::{
     CdImportProgress, CdImportRequest, CdImportResult, DeviceTarget, MetadataChange,
     PlaybackCommand, PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState,
-    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
-    TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackMetadata,
-    UiSettings, UiSidebarSelection, UiWindowSize, normalize_query,
+    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating,
+    ShuffleMode, TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
+    TrackMetadata, UiSettings, UiSidebarSelection, UiWindowSize, normalize_query,
 };
 
 use super::{
@@ -25,7 +25,8 @@ use super::{
     DevicePlanResultReceiver, DeviceSyncEventReceiver, LibraryChangedCallback,
     LibraryChangedHolder, LibraryHydrationResultReceiver, MetadataWriterEventReceiver,
     MprisCommandReceiver, MtpDiscoveryResultReceiver, OnlineProgressReceiver,
-    OpticalDiscoveryResultReceiver, PLAYLISTS_VIEW, PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH,
+    OpticalDiscoveryResultReceiver, PLAYLISTS_VIEW, PlaybackChangedCallback, PlaylistEntriesChange,
+    PlaylistEntriesChangedCallback, PlaylistEntriesChangedHolder, SIDEBAR_DEFAULT_WIDTH,
     SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW, SharedMprisService,
     SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
     SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
@@ -145,10 +146,10 @@ use sidebar_callbacks::{
 };
 use songs::SongsViewRefresh;
 use track_callbacks::{
-    TrackRowChangedContext, TracksRemovedContext, begin_inline_edit_callback,
-    playlist_row_reorder_callback, playlist_track_context_actions, rating_changed_callback,
-    track_context_actions, track_row_changed_callback, track_rows_changed_callback,
-    tracks_removed_callback,
+    PlaylistEntriesChangedContext, TrackRowChangedContext, TracksRemovedContext,
+    begin_inline_edit_callback, playlist_entries_changed_callback, playlist_row_reorder_callback,
+    playlist_track_context_actions, rating_changed_callback, track_context_actions,
+    track_row_changed_callback, track_rows_changed_callback, tracks_removed_callback,
 };
 
 /// Recompute the status-bar summary (track count, total duration) for
@@ -333,6 +334,7 @@ pub(crate) fn build_main_window(
     let track_row_changed_holder: TrackRowChangedHolder = Rc::new(RefCell::new(None));
     let track_rows_changed_holder: TrackRowsChangedHolder = Rc::new(RefCell::new(None));
     let tracks_removed_holder: TracksRemovedHolder = Rc::new(RefCell::new(None));
+    let playlist_entries_changed_holder: PlaylistEntriesChangedHolder = Rc::new(RefCell::new(None));
     let parent_window = window.clone().upcast::<gtk::Window>();
     let pending_located_playbacks: PendingLocatedPlaybacks = Rc::new(RefCell::new(HashMap::new()));
     let missing_track_relocation_completed = missing_track_relocation_completed_callback(
@@ -371,7 +373,7 @@ pub(crate) fn build_main_window(
     );
     let add_to_playlist_provider = add_to_playlist_provider(&runtime);
     let add_to_playlist_callback =
-        add_to_playlist_callback(&command_controller, &runtime, &library_changed_holder);
+        add_to_playlist_callback(&command_controller, &playlist_entries_changed_holder);
     let context_menu = TrackRowContextMenu::new(
         context_actions,
         parent_window.clone(),
@@ -401,6 +403,7 @@ pub(crate) fn build_main_window(
         track_row_changed_holder.clone(),
         track_rows_changed_holder.clone(),
         tracks_removed_holder.clone(),
+        playlist_entries_changed_holder.clone(),
         &artwork_loader,
         &sidebar,
     );
@@ -587,6 +590,7 @@ pub(crate) fn build_main_window(
         &status_bar,
         &songs_table,
         &playlists_table,
+        &playlists_header,
         &current_search_text,
         device_panel.current_device_cell(),
     );
@@ -632,6 +636,15 @@ pub(crate) fn build_main_window(
         current_search_text: &current_search_text,
     });
     tracks_removed_holder.replace(Some(tracks_removed.clone()));
+    playlist_entries_changed_holder.replace(Some(playlist_entries_changed_callback(
+        PlaylistEntriesChangedContext {
+            runtime: &runtime,
+            playlists_table: &playlists_table,
+            sidebar: &sidebar,
+            visible_summary_refresh: visible_summary_refresh.clone(),
+            current_search_text: &current_search_text,
+        },
+    )));
     install_metadata_writer_event_consumer(
         metadata_writer_event_rx,
         runtime.clone(),
@@ -771,7 +784,7 @@ pub(crate) fn build_main_window(
     sidebar.set_delete_callback(sidebar_delete_callback(&command_controller, &sidebar));
     sidebar.set_tracks_drop_callback(sidebar_tracks_drop_callback(
         &command_controller,
-        &library_changed_holder,
+        &playlist_entries_changed_holder,
     ));
     sidebar.set_edit_smart_playlist_callback(sidebar_edit_smart_playlist_callback(
         &window,
@@ -1708,12 +1721,14 @@ fn install_track_availability_observer(
         }));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn visible_summary_refresh_callback(
     runtime: &SharedRuntime,
     content_stack: &gtk::Stack,
     status_bar: &StatusBar,
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
+    playlists_header: &PlaylistsHeader,
     current_search_text: &Rc<RefCell<String>>,
     current_device: Rc<RefCell<Option<ConnectedDevice>>>,
 ) -> VisibleSummaryRefreshCallback {
@@ -1722,6 +1737,7 @@ fn visible_summary_refresh_callback(
     let status_bar = status_bar.clone();
     let songs_table = songs_table.clone();
     let playlists_table = playlists_table.clone();
+    let playlists_header = playlists_header.clone();
     let current_search_text = current_search_text.clone();
 
     Rc::new(move || {
@@ -1740,7 +1756,12 @@ fn visible_summary_refresh_callback(
             }
             // A visible table is current: it shows exactly what to sum.
             Some(SONGS_VIEW) => songs_table.summary(),
-            Some(PLAYLISTS_VIEW) => playlists_table.summary(),
+            // The playlist header sums the same rows.
+            Some(PLAYLISTS_VIEW) => {
+                let summary = playlists_table.summary();
+                playlists_header.set_summary(summary);
+                summary
+            }
             // The Albums page and the other library pages: the library
             // under the current search, summed without building its rows.
             _ => {

@@ -309,6 +309,74 @@ pub(super) fn tracks_removed_callback(ctx: TracksRemovedContext<'_>) -> TracksRe
     })
 }
 
+pub(super) struct PlaylistEntriesChangedContext<'a> {
+    pub(super) runtime: &'a SharedRuntime,
+    pub(super) playlists_table: &'a TrackTable,
+    pub(super) sidebar: &'a PlaylistSidebar,
+    pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
+    pub(super) current_search_text: &'a Rc<RefCell<String>>,
+}
+
+/// Contained refresh path for a playlist's track list changing. The
+/// library is untouched, so the Songs, Albums and Duplicates views and the
+/// sidebar keep their state; only a table showing that playlist changes,
+/// and in place: its rows come and go while the user keeps their scroll
+/// position and selection.
+pub(super) fn playlist_entries_changed_callback(
+    ctx: PlaylistEntriesChangedContext<'_>,
+) -> PlaylistEntriesChangedCallback {
+    let runtime = ctx.runtime.clone();
+    let playlists_table = ctx.playlists_table.clone();
+    let sidebar = ctx.sidebar.clone();
+    let visible_summary_refresh = ctx.visible_summary_refresh;
+    let current_search_text = ctx.current_search_text.clone();
+
+    Rc::new(move |change: &PlaylistEntriesChange| {
+        let shown = sidebar.current_selection();
+        let shows = |playlist_id: PlaylistId| {
+            shown == Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id)))
+        };
+        match change {
+            PlaylistEntriesChange::Removed {
+                playlist_id,
+                track_ids,
+            } if shows(*playlist_id) => {
+                playlists_table.remove_rows(track_ids);
+                let positions = runtime
+                    .borrow()
+                    .playlists()
+                    .iter()
+                    .find(|playlist| playlist.id == *playlist_id)
+                    .map(|playlist| {
+                        playlist
+                            .entries
+                            .iter()
+                            .map(|entry| (entry.track_id, entry.position))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                playlists_table.set_playlist_positions(&positions);
+            }
+            PlaylistEntriesChange::Added(playlist_id) if shows(*playlist_id) => {
+                // Insert just the entries the table lacks; tracks the
+                // playlist already held were not added again.
+                let mut rows = playlist_table_rows_for(
+                    &runtime.borrow(),
+                    shown,
+                    &current_search_text.borrow(),
+                );
+                let candidates = rows.iter().filter_map(|row| row.track_id).collect();
+                let present = playlists_table.contained_track_ids(&candidates);
+                rows.retain(|row| row.track_id.is_some_and(|id| !present.contains(&id)));
+                playlists_table.append_rows(rows);
+            }
+            PlaylistEntriesChange::Removed { .. } | PlaylistEntriesChange::Added(_) => {}
+        }
+        // A device syncing the playlist now selects other tracks.
+        visible_summary_refresh();
+    })
+}
+
 pub(super) fn track_row_changed_callback(
     track_rows_changed: TrackRowsChangedCallback,
 ) -> TrackRowChangedCallback {
@@ -427,6 +495,7 @@ pub(super) fn playlist_track_context_actions(
     track_row_changed_holder: TrackRowChangedHolder,
     track_rows_changed_holder: TrackRowsChangedHolder,
     tracks_removed_holder: TracksRemovedHolder,
+    playlist_entries_changed_holder: PlaylistEntriesChangedHolder,
     artwork_loader: &ArtworkLoader,
     sidebar: &PlaylistSidebar,
 ) -> TrackContextActionSet {
@@ -459,7 +528,7 @@ pub(super) fn playlist_track_context_actions(
             remove_from_playlist_callback(
                 command_controller,
                 sidebar,
-                library_changed_holder.clone(),
+                playlist_entries_changed_holder,
             ),
             current_selection_is_regular_playlist(sidebar),
         ),
@@ -603,7 +672,7 @@ fn compute_playlist_reorder_position(
 fn remove_from_playlist_callback(
     command_controller: &SharedCommandController,
     sidebar: &PlaylistSidebar,
-    library_changed_holder: LibraryChangedHolder,
+    playlist_entries_changed_holder: PlaylistEntriesChangedHolder,
 ) -> TrackActionCallback {
     let command_controller = command_controller.clone();
     let sidebar = sidebar.clone();
@@ -617,10 +686,13 @@ fn remove_from_playlist_callback(
         };
         if command_controller.dispatch_succeeded(ApplicationCommand::RemoveTracksFromPlaylist {
             playlist_id,
-            track_ids,
-        }) && let Some(callback) = library_changed_holder.borrow().as_ref()
+            track_ids: track_ids.clone(),
+        }) && let Some(callback) = playlist_entries_changed_holder.borrow().as_ref()
         {
-            callback();
+            callback(&PlaylistEntriesChange::Removed {
+                playlist_id,
+                track_ids: track_ids.into_iter().collect(),
+            });
         }
     })
 }

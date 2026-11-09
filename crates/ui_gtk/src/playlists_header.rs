@@ -11,16 +11,15 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 
-use crate::TITLEBAR_HEIGHT;
 use crate::status_bar::{duration_text, pluralize};
+use crate::{TITLEBAR_HEIGHT, track_summary::TrackSummary};
 
 /// Snapshot of what the header should display. Computed once per refresh
 /// alongside the table rows; `None` means "no playable selection — hide
 /// the header entirely".
 pub(crate) struct PlaylistsHeaderState {
     pub(crate) title: String,
-    pub(crate) track_count: usize,
-    pub(crate) duration_seconds: u64,
+    pub(crate) summary: TrackSummary,
 }
 
 #[derive(Clone)]
@@ -94,14 +93,20 @@ impl PlaylistsHeader {
         match state {
             Some(state) => {
                 self.title.set_text(&state.title);
-                self.subtitle
-                    .set_text(&summary_text(state.track_count, state.duration_seconds));
+                self.set_summary(state.summary);
                 self.root.set_visible(true);
             }
             None => {
                 self.root.set_visible(false);
             }
         }
+    }
+
+    /// Show the summary of the rows the table now holds, after they
+    /// changed in place under an unchanged selection.
+    pub(crate) fn set_summary(&self, summary: TrackSummary) {
+        self.subtitle
+            .set_text(&summary_text(summary.track_count, summary.duration_seconds));
     }
 
     pub(crate) fn connect_play(&self, callback: Rc<dyn Fn()>) {

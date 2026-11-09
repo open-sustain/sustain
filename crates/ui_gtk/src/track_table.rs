@@ -407,6 +407,24 @@ impl TrackTable {
         removed
     }
 
+    /// Mirror each row's play-order position from `positions` after the
+    /// displayed playlist renumbered its entries. Renumbering keeps the
+    /// entries' relative order, so no row moves and none is redrawn.
+    pub(crate) fn set_playlist_positions(&self, positions: &HashMap<TrackId, u32>) {
+        for position in 0..self.store.n_items() {
+            let Some(row_object) = self
+                .store
+                .item(position)
+                .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+            else {
+                continue;
+            };
+            let mut row = row_object.borrow_mut::<TrackTableRow>();
+            row.placement.playlist_position =
+                row.track_id.and_then(|id| positions.get(&id).copied());
+        }
+    }
+
     /// Hand keyboard focus to the nearest row `removes` spares — the next
     /// one, else the previous one — when the focused row is about to go.
     ///
@@ -1813,6 +1831,29 @@ mod tests {
             table.apply_playlist_default_sort();
 
             assert_eq!(table.ordered_track_ids(), track_ids(&[1, 2, 3]));
+        });
+    }
+
+    /// A playlist renumbers its entries when some leave. The rows that stay
+    /// must take the new numbers, or a track appended afterwards would sort
+    /// above a row still holding a higher, stale number.
+    #[test]
+    fn rows_left_by_a_removal_take_the_playlist_renumbering() {
+        crate::test_support::with_gtk(|| {
+            let reorder: RowReorderCallback = Rc::new(|_| false);
+            let table = build_track_table(Vec::new(), None, None, None, Some(reorder), None);
+            table.apply_playlist_default_sort();
+            table.replace_rows(
+                (1..=4)
+                    .map(|id| row(id).with_playlist_position(Some(id as u32 - 1)))
+                    .collect(),
+            );
+
+            table.remove_rows(&track_ids(&[1, 2]).into_iter().collect());
+            table.set_playlist_positions(&track_ids(&[3, 4]).into_iter().zip(0..).collect());
+            table.append_rows(vec![row(5).with_playlist_position(Some(2))]);
+
+            assert_eq!(table.ordered_track_ids(), track_ids(&[3, 4, 5]));
         });
     }
 

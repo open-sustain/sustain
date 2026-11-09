@@ -179,11 +179,7 @@ fn playlists_header_state_for(
         | Some(SidebarSelection::Statistics)
         | None => return None,
     };
-    Some(PlaylistsHeaderState {
-        title,
-        track_count: summary.track_count,
-        duration_seconds: summary.duration_seconds,
-    })
+    Some(PlaylistsHeaderState { title, summary })
 }
 
 pub(super) fn playlist_table_rows_for(
@@ -280,12 +276,10 @@ pub(super) fn add_to_playlist_provider(runtime: &SharedRuntime) -> AddToPlaylist
 
 pub(super) fn add_to_playlist_callback(
     command_controller: &SharedCommandController,
-    runtime: &SharedRuntime,
-    library_changed_holder: &LibraryChangedHolder,
+    playlist_entries_changed_holder: &PlaylistEntriesChangedHolder,
 ) -> AddToPlaylistCallback {
     let command_controller = command_controller.clone();
-    let runtime = runtime.clone();
-    let library_changed_holder = library_changed_holder.clone();
+    let playlist_entries_changed_holder = playlist_entries_changed_holder.clone();
 
     Rc::new(move |playlist_id, track_ids| {
         if track_ids.is_empty() {
@@ -299,12 +293,8 @@ pub(super) fn add_to_playlist_callback(
         if !dispatched {
             return;
         }
-        // Library state itself is unchanged, but the currently-displayed
-        // playlist may now be longer — re-fire library_changed so the table
-        // and sidebar refresh.
-        let _ = runtime.borrow();
-        if let Some(callback) = library_changed_holder.borrow().as_ref() {
-            callback();
+        if let Some(callback) = playlist_entries_changed_holder.borrow().as_ref() {
+            callback(&PlaylistEntriesChange::Added(playlist_id));
         }
     })
 }

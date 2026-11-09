@@ -193,6 +193,19 @@ pub(crate) struct TracksRemoved {
 /// rest of their selection.
 pub(crate) type TracksRemovedCallback = Rc<dyn Fn(&TracksRemoved)>;
 pub(crate) type TracksRemovedHolder = Rc<RefCell<Option<TracksRemovedCallback>>>;
+/// A change to the track list of one regular playlist. The library itself
+/// is untouched, so only a view of that playlist has anything to redraw.
+pub(crate) enum PlaylistEntriesChange {
+    /// Tracks were appended to the playlist.
+    Added(sustain_app_runtime::PlaylistId),
+    /// Every entry of these tracks left the playlist.
+    Removed {
+        playlist_id: sustain_app_runtime::PlaylistId,
+        track_ids: std::collections::HashSet<sustain_app_runtime::TrackId>,
+    },
+}
+pub(crate) type PlaylistEntriesChangedCallback = Rc<dyn Fn(&PlaylistEntriesChange)>;
+pub(crate) type PlaylistEntriesChangedHolder = Rc<RefCell<Option<PlaylistEntriesChangedCallback>>>;
 /// Re-sync the `is_missing` flag on every loaded row from the
 /// runtime's view of the library, repaint visible status icons, and
 /// leave scroll/focus/selection untouched. Fired after operations
