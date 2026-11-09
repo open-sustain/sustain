@@ -78,7 +78,7 @@ fn handle_mpris_command(
             return;
         }
         MprisCommand::Quit => {
-            app.quit();
+            crate::quit_application(app);
             return;
         }
         MprisCommand::PlayPause => PlaybackCommand::TogglePlayPause,

@@ -484,6 +484,16 @@ pub fn run(
     runtime_guard.shutdown_metadata_writer();
 }
 
+/// Quit by closing every window. Each window's close handler runs — the
+/// main window's saves the UI session — and the application ends with
+/// its last window. [`gtk::prelude::GtkApplicationExt`]'s `quit` would
+/// end the main loop without running them.
+pub(crate) fn quit_application(app: &gtk::Application) {
+    for window in app.windows() {
+        window.close();
+    }
+}
+
 pub(crate) fn start_background_schedulers(runtime: &mut ApplicationRuntime) {
     if let Err(error) = runtime.start_analysis_scheduler() {
         // The only legitimate failure here is "no library store installed",

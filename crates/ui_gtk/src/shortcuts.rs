@@ -416,7 +416,7 @@ fn install_quit(context: &GlobalShortcutContext) {
     let app = context.app.downgrade();
     install_action(&context.app, QUIT, move || {
         if let Some(app) = app.upgrade() {
-            app.quit();
+            crate::quit_application(&app);
         }
     });
 }
