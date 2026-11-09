@@ -21,7 +21,12 @@ pub(super) struct MarqueeLabel {
     canvas: gtk::DrawingArea,
     draw_model: MarqueeDrawModel,
     x_position: Rc<Cell<f64>>,
+    /// Set while the pointer hovers the now-playing area: the line holds
+    /// at its start so it can be read.
     paused: Rc<Cell<bool>>,
+    /// The scroll timer, running only while the line scrolls. A line that
+    /// fits, truncates, or is paused costs nothing between changes.
+    animation: Rc<RefCell<Option<glib::SourceId>>>,
     /// Pixels advanced per animation frame; set per line so the title and
     /// artist marquees scroll at different rates (issue #116).
     speed: f64,
@@ -30,6 +35,8 @@ pub(super) struct MarqueeLabel {
     /// scrolls. Shared (`Rc`) so the title line can shrink the cap while
     /// the Lyrics chip shares its row and restore it when it doesn't.
     max_width: Rc<Cell<i32>>,
+    /// The width the viewport was last sized to by [`Self::resize_to_text`].
+    viewport_width: Rc<Cell<i32>>,
     /// How overflowing text behaves. Shared (`Rc`) with the draw model so
     /// a flip takes effect on the next frame. The title line switches to
     /// [`MarqueeOverflow::Truncate`] while the inline Lyrics chip shares
@@ -61,7 +68,7 @@ struct MarqueeDrawModel {
 }
 
 impl MarqueeLabel {
-    pub(super) fn new(css_class: &str, paused: Rc<Cell<bool>>, speed: f64, max_width: i32) -> Self {
+    pub(super) fn new(css_class: &str, speed: f64, max_width: i32) -> Self {
         // Width starts at zero and is sized to the text on every
         // `set_text`; the marquee hugs its content so an inline neighbour
         // (the LCD chip strip) can sit right at the title's trailing edge.
@@ -99,18 +106,18 @@ impl MarqueeLabel {
 
         root.set_child(Some(&canvas));
 
-        let marquee = Self {
+        Self {
             root,
             canvas,
             draw_model,
             x_position,
-            paused,
+            paused: Rc::new(Cell::new(false)),
+            animation: Rc::new(RefCell::new(None)),
             speed,
             max_width: Rc::new(Cell::new(max_width)),
+            viewport_width: Rc::new(Cell::new(0)),
             overflow,
-        };
-        marquee.install_animation();
-        marquee
+        }
     }
 
     pub(super) fn widget(&self) -> gtk::Overlay {
@@ -124,8 +131,8 @@ impl MarqueeLabel {
 
         self.draw_model.text.replace(text.to_owned());
         self.resize_to_text(text);
-        self.reset_to_start();
-        self.canvas.queue_draw();
+        self.x_position.set(0.0);
+        self.sync_animation();
     }
 
     /// Adjust the viewport cap (e.g. shrink the title to make room for the
@@ -138,6 +145,7 @@ impl MarqueeLabel {
         self.max_width.set(max_width);
         let text = self.draw_model.text.borrow().clone();
         self.resize_to_text(&text);
+        self.sync_animation();
     }
 
     /// Switch how overflowing text behaves. The title line truncates while
@@ -148,56 +156,73 @@ impl MarqueeLabel {
             return;
         }
         self.overflow.set(overflow);
-        self.reset_to_start();
+        self.x_position.set(0.0);
+        self.sync_animation();
+    }
+
+    /// Hold the line at its start (paused) or let it scroll again.
+    pub(super) fn set_paused(&self, paused: bool) {
+        if self.paused.get() == paused {
+            return;
+        }
+        self.paused.set(paused);
+        self.x_position.set(0.0);
+        self.sync_animation();
     }
 
     /// Size the viewport to hug `text` up to the current `max_width`.
     /// Text wider than the cap keeps the capped width and scrolls; the
-    /// stored `text_width` drives the overflow decision in [`Self::advance`].
+    /// stored widths drive the overflow decision in [`Self::sync_animation`].
     fn resize_to_text(&self, text: &str) {
         let measured = measure_marquee_text_width(text, self.draw_model.style);
         self.draw_model.text_width.set(measured);
         let viewport = (measured.ceil() as i32).clamp(0, self.max_width.get());
+        self.viewport_width.set(viewport);
         self.canvas.set_content_width(viewport);
         self.canvas.set_size_request(viewport, MARQUEE_HEIGHT);
         self.root.set_size_request(viewport, MARQUEE_HEIGHT);
     }
 
-    pub(super) fn reset_to_start(&self) {
-        self.x_position.set(0.0);
+    /// Bring the edge fade and the scroll timer in line with the text,
+    /// viewport, overflow behaviour and pause state, and redraw. Called on
+    /// each of their changes, so nothing polls while the line holds still.
+    fn sync_animation(&self) {
+        let overflows =
+            self.draw_model.text_width.get() > f64::from(self.viewport_width.get()) + 1.0;
+        let scrolls = match self.overflow.get() {
+            MarqueeOverflow::Scroll => overflows && !self.paused.get(),
+            // Hold the text still; fade its right edge when it overflows so
+            // the cut-off against the inline chip is soft rather than hard.
+            MarqueeOverflow::Truncate => false,
+        };
+        self.draw_model.fade_active.set(match self.overflow.get() {
+            MarqueeOverflow::Scroll => scrolls,
+            MarqueeOverflow::Truncate => overflows,
+        });
+
+        let mut animation = self.animation.borrow_mut();
+        if scrolls {
+            if animation.is_none() {
+                let marquee = self.clone();
+                *animation = Some(glib::timeout_add_local(
+                    Duration::from_millis(MARQUEE_FRAME_MS),
+                    move || {
+                        marquee.advance();
+                        glib::ControlFlow::Continue
+                    },
+                ));
+            }
+        } else {
+            if let Some(source) = animation.take() {
+                source.remove();
+            }
+            self.x_position.set(0.0);
+        }
         self.canvas.queue_draw();
     }
 
-    fn install_animation(&self) {
-        let marquee = self.clone();
-        glib::timeout_add_local(Duration::from_millis(MARQUEE_FRAME_MS), move || {
-            marquee.advance();
-            glib::ControlFlow::Continue
-        });
-    }
-
     fn advance(&self) {
-        let viewport_width = self.canvas.width();
         let text_width = self.draw_model.text_width.get();
-        let overflows = viewport_width > 0 && text_width > f64::from(viewport_width) + 1.0;
-
-        if self.overflow.get() == MarqueeOverflow::Truncate {
-            // Hold the text still; fade its right edge when it overflows so
-            // the cut-off against the inline chip is soft rather than hard.
-            self.draw_model.fade_active.set(overflows);
-            self.reset_to_start();
-            return;
-        }
-
-        let should_scroll = overflows && !self.paused.get();
-
-        self.draw_model.fade_active.set(should_scroll);
-
-        if !should_scroll {
-            self.reset_to_start();
-            return;
-        }
-
         let mut x_position = self.x_position.get() - self.speed;
         if x_position <= -text_width - MARQUEE_LOOP_GAP {
             x_position = 0.0;
@@ -284,7 +309,6 @@ fn draw_marquee_text(
 ) {
     let text = draw_model.text.borrow();
     if text.is_empty() {
-        draw_model.text_width.set(0.0);
         return;
     }
 
@@ -311,12 +335,13 @@ fn draw_marquee_text(
         let _result = context.restore();
         return;
     };
-    let measured_width = extents.x_advance().max(0.0);
-    draw_model.text_width.set(measured_width);
-
+    // The width measured when the text was set, so the drawing agrees with
+    // the overflow decision that starts and stops the scroll timer.
+    let measured_width = draw_model.text_width.get();
     let overflows = measured_width > f64::from(width) + 1.0;
     // An overflowing line anchors to its scroll position (0 when
-    // truncating, since `advance` holds it there); a fitting line centres.
+    // truncating, since `sync_animation` holds it there); a fitting line
+    // centres.
     let x = if overflows {
         draw_model.x_position.get()
     } else {
@@ -384,4 +409,45 @@ fn set_text_source(
 fn draw_text_at(context: &cairo::Context, text: &str, x: f64, y: f64) {
     context.move_to(x, y);
     let _result = context.show_text(text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LONG_TEXT: &str = "A title far too long to fit in a twenty-pixel viewport";
+
+    impl MarqueeLabel {
+        fn is_animating(&self) -> bool {
+            self.animation.borrow().is_some()
+        }
+    }
+
+    #[test]
+    fn only_an_overflowing_unpaused_scrolling_line_runs_its_timer() {
+        crate::test_support::with_gtk(|| {
+            let marquee = MarqueeLabel::new("now-playing-title", 1.0, 20);
+            assert!(!marquee.is_animating(), "an empty line holds still");
+
+            marquee.set_text("Hi");
+            assert!(!marquee.is_animating(), "a fitting line holds still");
+
+            marquee.set_text(LONG_TEXT);
+            assert!(marquee.is_animating(), "an overflowing line scrolls");
+
+            marquee.set_paused(true);
+            assert!(!marquee.is_animating(), "a paused line holds still");
+            marquee.set_paused(false);
+            assert!(marquee.is_animating(), "an unpaused line scrolls again");
+
+            marquee.set_overflow_behavior(MarqueeOverflow::Truncate);
+            assert!(!marquee.is_animating(), "a truncating line holds still");
+            marquee.set_overflow_behavior(MarqueeOverflow::Scroll);
+            assert!(marquee.is_animating());
+
+            marquee.set_max_width(10_000);
+            assert!(!marquee.is_animating(), "a line that now fits holds still");
+            assert_eq!(marquee.x_position.get(), 0.0, "and sits at its start");
+        });
+    }
 }

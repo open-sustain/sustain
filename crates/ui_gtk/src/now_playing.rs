@@ -209,16 +209,13 @@ impl NowPlayingView {
         details.set_hexpand(true);
         details.set_vexpand(true);
 
-        let marquee_paused = Rc::new(Cell::new(false));
         let title = MarqueeLabel::new(
             "now-playing-title",
-            marquee_paused.clone(),
             MARQUEE_SPEED_TITLE,
             MARQUEE_VIEWPORT_WIDTH,
         );
         let artist_album = MarqueeLabel::new(
             "now-playing-artist",
-            marquee_paused.clone(),
             MARQUEE_SPEED_ARTIST,
             MARQUEE_VIEWPORT_WIDTH,
         );
@@ -284,7 +281,7 @@ impl NowPlayingView {
         stack.set_visible_child_name(EMPTY_STACK_NAME);
         area.append(&stack);
 
-        install_hover_pause(&area, &title, &artist_album, marquee_paused);
+        install_hover_pause(&area, &title, &artist_album);
 
         let view = Self {
             runtime: runtime.clone(),
@@ -890,24 +887,20 @@ fn empty_state_view() -> gtk::Box {
     container
 }
 
-fn install_hover_pause(
-    area: &gtk::Box,
-    title: &MarqueeLabel,
-    artist_album: &MarqueeLabel,
-    marquee_paused: Rc<Cell<bool>>,
-) {
+fn install_hover_pause(area: &gtk::Box, title: &MarqueeLabel, artist_album: &MarqueeLabel) {
     let motion = gtk::EventControllerMotion::new();
     let title_for_enter = title.clone();
     let artist_album_for_enter = artist_album.clone();
-    let marquee_paused_for_enter = marquee_paused.clone();
     motion.connect_enter(move |_motion, _x, _y| {
-        marquee_paused_for_enter.set(true);
-        title_for_enter.reset_to_start();
-        artist_album_for_enter.reset_to_start();
+        title_for_enter.set_paused(true);
+        artist_album_for_enter.set_paused(true);
     });
 
+    let title = title.clone();
+    let artist_album = artist_album.clone();
     motion.connect_leave(move |_motion| {
-        marquee_paused.set(false);
+        title.set_paused(false);
+        artist_album.set_paused(false);
     });
     area.add_controller(motion);
 }
