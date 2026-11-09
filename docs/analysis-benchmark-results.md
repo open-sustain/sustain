@@ -1038,3 +1038,54 @@ the chroma frames changed little.
 The profiles have to be learned again whenever the key front end changes; the
 command and the three manifests are listed in
 `crates/analysis_bench/README.md`.
+
+## 2026-11-09 — beat phase v15 (kick and mid vote), human and rekordbox references
+
+Under #281. The broadband comb finds a phase, but cannot tell the beat from
+the off-beat when both are loud. Until now the kick envelope alone decided
+between the phase and the phase half a beat away. That holds for a
+four-on-the-floor kick, but not for the many songs whose kick is
+syncopated onto the off-beats while the snare keeps the backbeat. v15 also
+reads a mid-band envelope (bands centered in 400–1,500 Hz, where the snare's
+crack and the voice's syllables land), the same way: the strongest onsets
+within an eighth of a beat of each candidate. The two bands' on/off contrasts
+multiply. A band's loudness does not count, only how strongly it prefers one
+phase. **One variable changed:** the tempo, the comb's phase search and the
+bar phase are untouched. `ANALYZER_VERSION` stays 15, which is unreleased.
+
+Human beat annotations come from GTZAN (Marchand's beat/downbeat
+annotations) and Ballroom (CPJKU annotations), both 30 s clips. A clip is
+phase-scored when Sustain's tempo is within 4 % of the annotated beats and
+the annotated beats sit at one phase of Sustain's grid (circular coherence
+R ≥ 0.9). Aligned means within a tenth of a beat of the annotations; half
+means more than four tenths away (the off-beat).
+
+| Set | Clips | Phase-scored | Aligned before | Aligned after | Half-beat before | Half-beat after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| GTZAN | 933 | 455 | 81.3 % | **95.2 %** | 18.0 % | **4.2 %** |
+| Ballroom | 523 | 299 | 78.6 % | **91.0 %** | 20.7 % | **8.4 %** |
+
+On GTZAN 64 clips move from the off-beat to the beat and 1 the other way. On
+Ballroom it is 38 and 1. By GTZAN genre, the half-beat rate falls from 30 to
+10 % in hip-hop, 25 to 0 % in pop and 29 to 6 % in rock. On Ballroom it falls
+from 37 to 12 % in cha-cha-cha.
+
+Agreement with rekordbox's grids (within 20 ms at 10, 50 and 90 % of the
+track) on the two sets used for #283:
+
+| Set | Tracks | Aligned before | Aligned after | Off-beat before | Off-beat after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Dance development subset | 959 | 329 | **343** | 78 | **62** |
+| Held-out random sample, all genres | 600 | 295 | **301** | 30 | **25** |
+
+Dance music, the case the kick-only vote was made for, does not regress:
+on the dance subset 19 tracks move from rekordbox's off-beat onto its beat
+and 5 the other way. On the held-out sample it is 11 and 5. Between
+misaligned and the off-beat, 3 dance tracks move one way and 5 the other,
+plus 1 held-out track; none of these is a phase win or loss. The cost is
+one more onset envelope per track and two more phase readings per grid,
+small next to the tempo search; it was not timed separately.
+
+A synthetic fixture pins the case: a kick on beat 1 and on the off-beats
+after 2 and 3, a snare on 2 and 4. The kick-only vote puts the grid on the
+off-beat; the kick and mid vote puts it on the beat.

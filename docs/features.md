@@ -584,7 +584,10 @@ Tempo analysis also places a constant beat grid: every beat of the track
 at the measured tempo, numbered 1–4 within its bar. The tracker combs the
 track's onsets — the kick band and the full band — for the tempo and phase
 that fit every beat of the track at once, so the grid does not drift over
-a long track, and counts bars from where the timbre changes. Grids are
+a long track. The kick and the snare-and-voice band then tell the beat
+from the off-beat, so a song whose kick is syncopated onto the off-beats
+still gets its grid on the backbeat. Bars are counted from where the
+timbre changes. Grids are
 stored in the library and exported to Pioneer drives. Long tracks (DJ
 mixes, classical movements, podcasts) get no grid, since no single tempo
 fits them. Tempo analysis sets the track's BPM to the grid's tempo

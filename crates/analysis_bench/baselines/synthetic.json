@@ -341,8 +341,8 @@
       "bpm": 143.94,
       "beat_grid": {
         "bpm": 143.94,
-        "first_beat_secs": 0.346345977,
-        "first_beat_number": 2
+        "first_beat_secs": 0.137925802,
+        "first_beat_number": 4
       },
       "key": "C",
       "acoustics": {
@@ -382,8 +382,8 @@
       "bpm": 76.95,
       "beat_grid": {
         "bpm": 76.95,
-        "first_beat_secs": 0.051087719,
-        "first_beat_number": 2
+        "first_beat_secs": 0.440951267,
+        "first_beat_number": 4
       },
       "key": "G",
       "acoustics": {

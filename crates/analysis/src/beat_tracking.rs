@@ -5,11 +5,14 @@
 //! which of them start a bar.
 //!
 //! Everything reads onset envelopes — how sharply the spectrum gains
-//! energy, frame to frame — in two bands:
+//! energy, frame to frame — in three bands:
 //!
-//! * the **kick band** (up to `KICK_BAND_MAX_HZ`), where the beat of
-//!   dance music lives and the hi-hats and off-beat stabs that mislead a
-//!   broadband tracker do not;
+//! * the **kick band** (`KICK_BAND_HZ`), where the beat of dance music
+//!   lives and the hi-hats and off-beat stabs that mislead a broadband
+//!   tracker do not;
+//! * the **mid band** (`MID_BAND_HZ`), where the snare's crack and the
+//!   voice's syllables land — on the beat, in the songs whose kick plays
+//!   around it;
 //! * the **broadband** envelope, whose sharper attacks place a beat more
 //!   precisely once its tempo is known.
 //!
@@ -34,9 +37,13 @@
 //!    beats a player reproduces — the broadband comb finds the phase. A
 //!    comb cannot tell the beat from the off-beat when both are loud
 //!    (rolling bass lines, off-beat hats), so the phase and the phase
-//!    half a beat away are compared on the kick envelope, each by the
-//!    strongest kick within an eighth of a beat: the kick plays on the
-//!    beat, though not always at the broadband attack's exact instant.
+//!    half a beat away are compared on the kick and the mid envelopes,
+//!    each read as its strongest onsets within an eighth of a beat: they
+//!    play on the beat, though not always at the broadband attack's exact
+//!    instant. Each band's contrast — how many times stronger it is at
+//!    one phase than at the other — multiplies into the verdict, so a
+//!    dance track's four-on-the-floor kick carries it, and a song's
+//!    snare and voice outvote a kick syncopated onto the off-beats.
 //! 3. **Bar phase.** Music changes at bar lines — chords, bass notes, new
 //!    parts entering. The spectrum of each beat is compared with the
 //!    previous beat's; the beat position, of the four, that carries the
@@ -58,8 +65,10 @@ const HOP_DIVISOR: usize = 8;
 const BAND_COUNT: usize = 24;
 const LOWEST_BAND_HZ: f64 = 30.0;
 const HIGHEST_BAND_HZ: f64 = 16_000.0;
-/// Bands whose upper edge is at most this make up the kick band.
-const KICK_BAND_MAX_HZ: f64 = 250.0;
+/// The bands centered in this range (Hz) make up the kick band.
+const KICK_BAND_HZ: (f64, f64) = (0.0, 250.0);
+/// The bands centered in this range (Hz) make up the mid band.
+const MID_BAND_HZ: (f64, f64) = (400.0, 1_500.0);
 /// Gain applied before log compression of band energies: it sets where
 /// the compression knee sits relative to full-scale audio.
 const BAND_ENERGY_GAIN: f32 = 1_000.0;
@@ -108,13 +117,13 @@ const PHASE_STEPS: usize = 400;
 /// on synthetic onsets (kick, click, noise burst) — see the
 /// `grid_lands_on_*` tests.
 const ONSET_LEAD_SECS: f64 = 0.016;
-/// How far, in beats, from a candidate phase the kick envelope is read
-/// when telling the beat from the off-beat. The kick band's envelope
+/// How far, in beats, from a candidate phase the kick and mid envelopes
+/// are read when telling the beat from the off-beat. A band's envelope
 /// does not peak where the broadband one does — a sub swelling after
 /// its click, a long frame on a low note — so it is read around the
 /// candidate, out to halfway to the quarter-beat between the beat and
-/// the off-beat: a sixteenth-note bass figure there belongs to neither.
-const KICK_PHASE_REACH: f64 = 0.125;
+/// the off-beat: a sixteenth-note figure there belongs to neither.
+const PHASE_VOTE_REACH: f64 = 0.125;
 /// A grid needs at least this many beats to measure anything.
 const MIN_BEATS: usize = 16;
 
@@ -127,6 +136,7 @@ pub(crate) struct Onsets {
     /// Length of the analysed audio.
     duration_secs: f64,
     kick: Vec<f32>,
+    mid: Vec<f32>,
     broadband: Vec<f32>,
     /// Log-compressed energy per band, per frame.
     bands: Vec<[f32; BAND_COUNT]>,
@@ -144,17 +154,14 @@ impl Onsets {
         }
         let bands = band_energies(samples, sample_rate, frame_len, hop, scale);
         let edges = band_edges(sample_rate);
-        let kick_bands = edges
-            .windows(2)
-            .take_while(|edge| edge[1] <= KICK_BAND_MAX_HZ)
-            .count();
         let frame_rate = f64::from(sample_rate) / hop as f64;
         let detrend_len = (frame_rate * DETREND_SECS).round() as usize;
         Some(Self {
             frame_rate,
             origin_secs: (frame_len / 2) as f64 / f64::from(sample_rate),
             duration_secs: samples.len() as f64 / f64::from(sample_rate),
-            kick: envelope(&bands, 0..kick_bands, detrend_len),
+            kick: envelope(&bands, bands_centered_in(&edges, KICK_BAND_HZ), detrend_len),
+            mid: envelope(&bands, bands_centered_in(&edges, MID_BAND_HZ), detrend_len),
             broadband: envelope(&bands, 0..BAND_COUNT, detrend_len),
             bands,
         })
@@ -225,7 +232,19 @@ impl Onsets {
         }
         let comb_peak = self.best_phase(&self.broadband, period, PHASE_STEPS);
         let off_beat = (comb_peak + period / 2.0) % period;
-        let peak = if self.kick_near(off_beat, period) > self.kick_near(comb_peak, period) {
+        // The product of each band's onsets at one phase against the
+        // product at the other: whether the contrasts, multiplied, favour
+        // the off-beat. A band silent at both phases has no say.
+        let (mut at_peak, mut at_off_beat) = (1.0, 1.0);
+        for envelope in [&self.kick, &self.mid] {
+            let on = self.strongest_near(envelope, comb_peak, period);
+            let off = self.strongest_near(envelope, off_beat, period);
+            if on + off > 0.0 {
+                at_peak *= on;
+                at_off_beat *= off;
+            }
+        }
+        let peak = if at_off_beat > at_peak {
             off_beat
         } else {
             comb_peak
@@ -243,15 +262,15 @@ impl Onsets {
             .ok()
     }
 
-    /// The strongest kick-envelope comb at `period` within
-    /// [`KICK_PHASE_REACH`] of a beat at `phase`.
-    fn kick_near(&self, phase: f64, period: f64) -> f64 {
+    /// The strongest comb over `envelope` at `period` within
+    /// [`PHASE_VOTE_REACH`] of a beat at `phase`.
+    fn strongest_near(&self, envelope: &[f32], phase: f64, period: f64) -> f64 {
         let step = period / PHASE_STEPS as f64;
-        let reach = (KICK_PHASE_REACH * PHASE_STEPS as f64).round() as usize;
+        let reach = (PHASE_VOTE_REACH * PHASE_STEPS as f64).round() as usize;
         (0..=2 * reach)
             .map(|index| {
                 let offset = (index as f64 - reach as f64) * step;
-                self.comb(&self.kick, period, (phase + offset).rem_euclid(period))
+                self.comb(envelope, period, (phase + offset).rem_euclid(period))
             })
             .fold(f64::NEG_INFINITY, f64::max)
     }
@@ -420,6 +439,18 @@ fn band_edges(sample_rate: u32) -> [f64; BAND_COUNT + 1] {
     edges
 }
 
+/// The bands whose center — the geometric mean of their edges, the
+/// middle of a log-spaced band — lies within `(low, high)` Hz.
+fn bands_centered_in(
+    edges: &[f64; BAND_COUNT + 1],
+    (low, high): (f64, f64),
+) -> std::ops::Range<usize> {
+    let centers = edges.windows(2).map(|edge| (edge[0] * edge[1]).sqrt());
+    let first = centers.clone().take_while(|&center| center < low).count();
+    let end = centers.take_while(|&center| center <= high).count();
+    first..end.max(first)
+}
+
 /// Log-compressed band energies of every frame. Frames are transformed
 /// two at a time — one as the real part, the other as the imaginary part
 /// of a single complex FFT — and separated by conjugate symmetry.
@@ -530,7 +561,7 @@ mod tests {
 
     use sustain_domain::Bpm;
 
-    use super::Onsets;
+    use super::{BAND_COUNT, KICK_BAND_HZ, MID_BAND_HZ, Onsets, band_edges, bands_centered_in};
 
     const SAMPLE_RATE: u32 = 44_100;
 
@@ -715,6 +746,57 @@ mod tests {
             .expect("grid");
         let error = phase_error_ms(grid.first_beat(), 0.25, bpm);
         assert!(error.abs() < 10.0, "off by {error} ms");
+    }
+
+    /// A snare: a noise burst over a short 900 Hz crack.
+    fn snare() -> Vec<f32> {
+        hat()
+            .iter()
+            .chain(std::iter::repeat(&0.0))
+            .zip(tone(900.0, 0.4, 0.001, 0.04, 0.15))
+            .map(|(noise, crack)| noise + crack)
+            .collect()
+    }
+
+    #[test]
+    fn grid_lands_on_the_backbeat_not_a_syncopated_kick() {
+        // A song's groove: the kick on beat 1 and on the off-beats after
+        // 2 and 3, the snare on 2 and 4. Off the beat the kick plays
+        // twice a bar to once on it; the snare decides.
+        let bpm = 96.0;
+        let period = 60.0 / bpm;
+        let first = 0.25;
+        let hit =
+            |hit: &[f32], beat: f64| render(bpm / 4.0, first + beat * period, 60.0, hit, None);
+        let layers = [
+            hit(&kick(), 0.0),
+            hit(&kick(), 1.5),
+            hit(&kick(), 2.5),
+            hit(&snare(), 1.0),
+            hit(&snare(), 3.0),
+        ];
+        let samples: Vec<f32> = (0..layers[0].len())
+            .map(|n| layers.iter().map(|layer| layer[n]).sum())
+            .collect();
+        let onsets = Onsets::of(&samples, SAMPLE_RATE).expect("onsets");
+        let grid = onsets
+            .beat_grid(Bpm::from_hundredths(9_600).expect("tempo"))
+            .expect("grid");
+        let error = phase_error_ms(grid.first_beat(), first, bpm);
+        assert!(error.abs() < 10.0, "off by {error} ms");
+    }
+
+    #[test]
+    fn bands_are_picked_by_their_center() {
+        let edges = band_edges(SAMPLE_RATE);
+        for (low, high) in [KICK_BAND_HZ, MID_BAND_HZ] {
+            let picked = bands_centered_in(&edges, (low, high));
+            assert!(!picked.is_empty());
+            for band in 0..BAND_COUNT {
+                let center = (edges[band] * edges[band + 1]).sqrt();
+                assert_eq!(picked.contains(&band), (low..=high).contains(&center));
+            }
+        }
     }
 
     #[test]
