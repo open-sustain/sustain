@@ -20,17 +20,10 @@ use super::*;
 /// - Playlist view filters within the currently selected playlist /
 ///   smart playlist, again on track fields.
 ///
-/// Debouncing: rebuilding the visible track table on every keystroke is
-/// expensive — not because of the in-memory filter (microseconds) but
-/// because [`TrackTable::replace_rows`] rewrites the underlying
-/// `gio::ListStore`, which fires GTK list-model events that the sorter
-/// and selection model both have to process. The same effect shows up
-/// on the album grid. We therefore cancel any in-flight rebuild and
-/// schedule a fresh one [`SEARCH_REBUILD_DEBOUNCE`] in the future on
-/// every keystroke, collapsing a typing burst into one rebuild when
-/// the user pauses. The raw SearchEntry text is saved on close as part of
-/// the UI session, so closing inside the debounce window preserves the query
-/// even if the last rebuild never runs.
+/// Debouncing belongs to the search entry alone: its search delay (see
+/// `titlebar`) restarts on every keystroke, so a typing burst arrives here
+/// as one change, and each change rebuilds at once. A second timer here
+/// would only add its delay to every search.
 pub(super) struct SearchWiringContext {
     pub(super) current_search_text: Rc<RefCell<String>>,
     pub(super) command_controller: SharedCommandController,
@@ -57,8 +50,6 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
         status_bar,
         visible_summary_refresh,
     } = context;
-    let pending_rebuild: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
-
     connect_titlebar_search(
         titlebar,
         Rc::new(move |new_text| {
@@ -70,10 +61,9 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
 
             // Clearing the search widens the play queue back to the current
             // view, so auto-advance resumes through the full list instead of
-            // stopping at the end of the now-gone filtered set (#78). Done
-            // immediately — it is cheap and must not wait on the table-rebuild
-            // debounce below. The runtime no-ops when nothing is playing or
-            // the playing track is not in the widened view.
+            // stopping at the end of the now-gone filtered set (#78). The
+            // runtime no-ops when nothing is playing or the playing track is
+            // not in the widened view.
             if new_text.trim().is_empty() {
                 let request = repopulate_request_for_visible_view(
                     &runtime.borrow(),
@@ -87,86 +77,58 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
                 }
             }
 
-            // Cancel any pending rebuild scheduled for the previous
-            // keystroke; only the most recent query should run.
-            if let Some(previous) = pending_rebuild.borrow_mut().take() {
-                previous.remove();
-            }
             sustain_profiler::profile_mark!(change_profile, "search: text changed phase");
 
-            let runtime = runtime.clone();
-            let songs_table = songs_table.clone();
-            let albums_view = albums_view.clone();
-            let playlists_refresh = playlists_refresh.clone();
-            let sidebar = sidebar.clone();
-            let content_stack = content_stack.clone();
-            let status_bar = status_bar.clone();
-            let visible_summary_refresh = visible_summary_refresh.clone();
-            let pending_rebuild_clear = pending_rebuild.clone();
-            let source_id = glib::timeout_add_local_once(SEARCH_REBUILD_DEBOUNCE, move || {
-                pending_rebuild_clear.borrow_mut().take();
+            let songs_rows_profile = sustain_profiler::ProfileScope::start();
+            let songs_rows = runtime_library_table_rows(&runtime.borrow(), &new_text);
+            let songs_row_count = songs_rows.len();
+            sustain_profiler::profile_mark!(
+                songs_rows_profile,
+                "search: Songs rows built ({} rows)",
+                songs_row_count
+            );
+            // Share one pass: when Songs is the visible view, summarize
+            // the rows we just built (count + duration + size) instead
+            // of re-filtering and re-materializing the whole table for
+            // the status bar. Other views fall back to the generic
+            // refresh below, which derives the right rows for them.
+            let songs_visible = content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW);
+            if songs_visible {
+                status_bar.update_summary(&songs_rows);
+            }
+            let songs_replace_profile = sustain_profiler::ProfileScope::start();
+            songs_table.replace_rows(songs_rows);
+            sustain_profiler::profile_mark!(
+                songs_replace_profile,
+                "search: Songs table replace_rows ({} rows)",
+                songs_row_count
+            );
 
-                let songs_rows_profile = sustain_profiler::ProfileScope::start();
-                let songs_rows = runtime_library_table_rows(&runtime.borrow(), &new_text);
-                let songs_row_count = songs_rows.len();
+            let albums_profile = sustain_profiler::ProfileScope::start();
+            albums_view.set_search_text(new_text.clone());
+            sustain_profiler::profile_mark!(
+                albums_profile,
+                "search: Albums view update phase ({} albums)",
+                albums_view.visible_album_count()
+            );
+
+            let playlists_profile = sustain_profiler::ProfileScope::start();
+            let playlists_refreshed = refresh_playlists_view_if_visible(
+                &runtime.borrow(),
+                &playlists_refresh,
+                sidebar.current_selection(),
+                &new_text,
+            );
+            if playlists_refreshed {
                 sustain_profiler::profile_mark!(
-                    songs_rows_profile,
-                    "search: Songs rows built ({} rows)",
-                    songs_row_count
+                    playlists_profile,
+                    "search: Playlists view update phase"
                 );
-                // Share one pass: when Songs is the visible view, summarize
-                // the rows we just built (count + duration + size) instead
-                // of re-filtering and re-materializing the whole table for
-                // the status bar. Other views fall back to the generic
-                // refresh below, which derives the right rows for them.
-                let songs_visible =
-                    content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW);
-                if songs_visible {
-                    status_bar.update_summary(&songs_rows);
-                }
-                let songs_replace_profile = sustain_profiler::ProfileScope::start();
-                songs_table.replace_rows(songs_rows);
-                sustain_profiler::profile_mark!(
-                    songs_replace_profile,
-                    "search: Songs table replace_rows ({} rows)",
-                    songs_row_count
-                );
+            }
 
-                let albums_profile = sustain_profiler::ProfileScope::start();
-                albums_view.set_search_text(new_text.clone());
-                sustain_profiler::profile_mark!(
-                    albums_profile,
-                    "search: Albums view update phase ({} albums)",
-                    albums_view.visible_album_count()
-                );
-
-                let playlists_profile = sustain_profiler::ProfileScope::start();
-                let playlists_refreshed = refresh_playlists_view_if_visible(
-                    &runtime.borrow(),
-                    &playlists_refresh,
-                    sidebar.current_selection(),
-                    &new_text,
-                );
-                if playlists_refreshed {
-                    sustain_profiler::profile_mark!(
-                        playlists_profile,
-                        "search: Playlists view update phase"
-                    );
-                }
-
-                if !songs_visible && !playlists_refreshed {
-                    visible_summary_refresh();
-                }
-            });
-            *pending_rebuild.borrow_mut() = Some(source_id);
+            if !songs_visible && !playlists_refreshed {
+                visible_summary_refresh();
+            }
         }),
     );
 }
-
-/// Debounce window for search-driven view rebuilds. 100ms is short enough
-/// that a single keystroke followed by a pause feels instantaneous, and
-/// long enough to swallow a burst of typing at any realistic speed
-/// (40ms per keystroke at 25 WPM, ~20ms at very fast typing) into one
-/// rebuild when the user stops.
-pub(super) const SEARCH_REBUILD_DEBOUNCE: std::time::Duration =
-    std::time::Duration::from_millis(100);
