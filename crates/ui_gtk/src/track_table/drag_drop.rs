@@ -24,15 +24,11 @@ pub(super) struct RowReorderHooks {
 }
 
 impl RowReorderHooks {
-    /// Whether the rows show in play order. Under any other sort the row
-    /// order no longer matches the playlist's, so a drop between two rows
-    /// has no consistent insertion point.
+    /// Whether the rows show in play order, first track first. Under any
+    /// other sort — the play order reversed included — a drop above or
+    /// below a row would not land where its stripe shows.
     fn is_play_order_active(&self, table: &gtk::ColumnView) -> bool {
-        table
-            .sorter()
-            .and_downcast::<gtk::ColumnViewSorter>()
-            .and_then(|sorter| sorter.primary_sort_column())
-            .is_some_and(|active| active == self.play_order_column)
+        super::status_sort_is_active(table, &self.play_order_column)
     }
 }
 
@@ -101,8 +97,8 @@ fn drop_point(table: &gtk::ColumnView, x: f64, y: f64) -> Option<(TableCell, Row
 /// reorder callback (see `main_window::playlist_row_reorder_callback`)
 /// authoritatively guards on the sidebar's current selection.
 ///
-/// The table rejects the drag — no stripe, no drop — while any column but
-/// the play-order one sorts it: the user returns to play order by clicking
+/// The table rejects the drag — no stripe, no drop — unless it shows play
+/// order, first track first: the user returns to play order by clicking
 /// that column's header before reordering. This mirrors the iTunes 11
 /// contract: drag-reorder is only meaningful in manual-order view.
 pub(super) fn install_row_reorder_drop_target(table: &gtk::ColumnView, hooks: RowReorderHooks) {

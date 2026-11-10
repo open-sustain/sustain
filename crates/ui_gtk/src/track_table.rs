@@ -958,6 +958,8 @@ fn read_current_sort(
     })
 }
 
+/// Whether `table` shows play order, first track first: its primary sort is
+/// the status column, ascending.
 fn status_sort_is_active(table: &gtk::ColumnView, status_column: &gtk::ColumnViewColumn) -> bool {
     let Some(column_sorter) = table
         .sorter()
@@ -1829,6 +1831,28 @@ mod tests {
 
             assert_eq!(table.ordered_track_ids(), track_ids(&[2, 3, 1, 4]));
             assert_eq!(table.selected_track_ids(), track_ids(&[1]));
+        });
+    }
+
+    /// Only play order, first track first, takes row drops: reversed, a
+    /// drop above a row would land below it.
+    #[test]
+    fn only_forward_play_order_counts_as_play_order() {
+        crate::test_support::with_gtk(|| {
+            let reorder: RowReorderCallback = Rc::new(|_| false);
+            let table = build_track_table(Vec::new(), None, None, None, Some(reorder), None);
+            let shows_play_order = || status_sort_is_active(&table.table, &table.status_column);
+
+            table.apply_playlist_default_sort();
+            assert!(shows_play_order());
+
+            table
+                .table
+                .sort_by_column(Some(&table.status_column), gtk::SortType::Descending);
+            assert!(!shows_play_order(), "reversed play order");
+
+            sort_by(&table, "track_name", true);
+            assert!(!shows_play_order(), "another column");
         });
     }
 
