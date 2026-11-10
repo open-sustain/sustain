@@ -14,7 +14,9 @@
 //! tests) and delegates every method to it, overriding only the
 //! persistence writes tests need to observe. Each override consults a
 //! toggle the test flips and counts its invocations so a test can assert
-//! the expected failure or ordering contract.
+//! the expected failure or ordering contract. A test can also run its
+//! own code inside the analysis sweep query, to interleave a command
+//! with the supervisor at that exact point.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -55,7 +57,13 @@ pub(crate) struct FaultyStore {
     /// Artificial latency injected into `tracks` and `load_all_acoustics`,
     /// in milliseconds. Zero (the default) is a no-op.
     read_delay_millis: AtomicU64,
+    /// Run by every `tracks_needing_analysis` call before it queries
+    /// the inner store.
+    analysis_sweep_hook: Mutex<Option<AnalysisSweepHook>>,
 }
+
+/// Test code [`FaultyStore`] runs inside its analysis sweep query.
+type AnalysisSweepHook = Box<dyn Fn() + Send>;
 
 impl FaultyStore {
     pub(crate) fn new(inner: Arc<dyn LibraryStore>) -> Self {
@@ -77,7 +85,17 @@ impl FaultyStore {
             flush_durable_calls: AtomicU32::new(0),
             operation_log: Mutex::new(Vec::new()),
             read_delay_millis: AtomicU64::new(0),
+            analysis_sweep_hook: Mutex::new(None),
         }
+    }
+
+    /// Run `hook` inside every later `tracks_needing_analysis` call,
+    /// before the inner store is queried.
+    pub(crate) fn run_in_analysis_sweeps(&self, hook: impl Fn() + Send + 'static) {
+        *self
+            .analysis_sweep_hook
+            .lock()
+            .expect("faulty-store analysis sweep hook lock is available") = Some(Box::new(hook));
     }
 
     pub(crate) fn set_read_delay(&self, delay: Duration) {
@@ -505,6 +523,13 @@ impl LibraryStore for FaultyStore {
         analyzer_version: u32,
         limit: usize,
     ) -> StoreResult<Vec<TrackId>> {
+        let hook = self
+            .analysis_sweep_hook
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)?;
+        if let Some(hook) = hook.as_ref() {
+            hook();
+        }
         self.inner
             .tracks_needing_analysis(capabilities, analyzer_version, limit)
     }

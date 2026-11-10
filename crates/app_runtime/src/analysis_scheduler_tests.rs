@@ -1110,6 +1110,100 @@ fn explicit_run_drains_ahead_of_background_sweep() {
 }
 
 #[test]
+fn explicit_run_arriving_mid_dispatch_goes_first() {
+    // The supervisor takes in commands between two dispatches. An
+    // explicit run it takes in there replaces the background work in
+    // `pending`, and must itself be what is dispatched next.
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let inner: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let faulty = Arc::new(FaultyStore::new(inner));
+    for index in 0..4_i64 {
+        let mut track = touch_in(&library_root, &format!("bg_{index:02}.flac"));
+        track.id = TrackId::new(index + 1).expect("non-zero");
+        faulty.save_track(track).expect("save background track");
+    }
+    let mut explicit_track = touch_in(&library_root, "explicit.flac");
+    explicit_track.id = TrackId::new(99).expect("non-zero");
+    faulty
+        .save_track(explicit_track.clone())
+        .expect("save explicit");
+
+    // The first sweep query counts the run's total; the second fills
+    // `pending`, and is held until the explicit run has been sent, so
+    // the supervisor takes it in once it starts dispatching that batch.
+    let (entered_tx, entered_rx) = std_mpsc::channel::<()>();
+    let (release_tx, release_rx) = std_mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let sweeps = AtomicU32::new(0);
+    faulty.run_in_analysis_sweeps(move || {
+        if sweeps.fetch_add(1, Ordering::SeqCst) == 1 {
+            entered_tx.send(()).expect("test waits for the sweep");
+            release_rx
+                .lock()
+                .expect("lock release")
+                .recv()
+                .expect("test releases the sweep");
+        }
+    });
+
+    let analyzed: Arc<Mutex<Vec<(String, AnalysisCapabilities)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let analyzed_for_closure = analyzed.clone();
+    let analyzer: AnalyzerFn = Arc::new(move |path, caps, opts, duration| {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        analyzed_for_closure
+            .lock()
+            .expect("lock")
+            .push((stem, caps));
+        ok_analyzer()(path, caps, opts, duration)
+    });
+
+    let (sink, rx) = capturing_sink();
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        analyzer,
+        sink,
+        fixed_clock(1),
+        store,
+        AnalysisSettings {
+            bpm: true,
+            key: false,
+            audio: false,
+            bpm_range: BpmRange::default(),
+        },
+        Some(library_root),
+    ));
+
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("supervisor fills its pending batch");
+    let key_only = AnalysisCapabilities {
+        bpm: false,
+        key: true,
+        audio: false,
+    };
+    scheduler.request_explicit_run(vec![explicit_track.id], key_only);
+    release_tx.send(()).expect("sweep waits for its release");
+
+    let _tick = wait_for(
+        &rx,
+        Duration::from_secs(5),
+        |progress| matches!(progress, SchedulerProgress::Tick { completed, .. } if *completed >= 1),
+    );
+    let first = analyzed.lock().expect("lock").first().cloned();
+    assert_eq!(first, Some(("explicit".to_owned(), key_only)));
+
+    scheduler.shutdown();
+}
+
+#[test]
 fn configured_bpm_range_reaches_the_analyzer() {
     // The BPM detection range is a DSP tunable resolved from the
     // analysis settings and baked into each worker at spawn. A

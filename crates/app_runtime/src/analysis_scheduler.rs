@@ -777,7 +777,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         //    dispatches with its own capability mask — background
         //    items use the live settings, explicit items use
         //    whatever the right-click submitted.
-        while let Some(&item) = pending.front() {
+        loop {
             // Re-check commands between dispatch attempts so a
             // capability toggle or resource-usage flip mid-batch
             // applies promptly. `command_drain_step` returns false
@@ -794,7 +794,12 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                 // the work_tx clone above and this iteration.
                 break;
             }
+            // An explicit run the command drain just took in reorders
+            // `pending`, so the item to dispatch is read only now.
             prioritize_explicit_work(&mut state, &mut pending, &in_flight);
+            let Some(&item) = pending.front() else {
+                break;
+            };
 
             // Resolve capabilities: explicit items keep what the user
             // submitted; background items snap to the live settings so
