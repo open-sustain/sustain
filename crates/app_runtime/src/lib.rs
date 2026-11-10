@@ -1749,7 +1749,7 @@ impl ApplicationRuntime {
             }
         }
         let mut genres: Vec<String> = unique.into_iter().collect();
-        genres.sort_by_key(|genre| genre.to_lowercase());
+        genres.sort_by_cached_key(|genre| genre.to_lowercase());
         genres
     }
 
@@ -1764,7 +1764,7 @@ impl ApplicationRuntime {
             }
         }
         let mut artists: Vec<String> = unique.into_iter().collect();
-        artists.sort_by_key(|artist| artist.to_lowercase());
+        artists.sort_by_cached_key(|artist| artist.to_lowercase());
         artists
     }
 
