@@ -301,24 +301,19 @@ fn first_playable_track_for_queue(
     runtime: &ApplicationRuntime,
     queue: &PlaybackQueueRequest,
 ) -> Option<TrackId> {
-    let library = runtime.library_tracks();
+    let is_available = |track: &Track| !track.location.is_missing();
     match queue {
-        PlaybackQueueRequest::Library => library
+        PlaybackQueueRequest::Library => runtime
+            .library_tracks()
             .iter()
-            .find(|track| !track.location.is_missing())
+            .find(|track| is_available(track))
             .map(|track| track.id),
         PlaybackQueueRequest::Explicit {
             ordered_track_ids, ..
-        } => {
-            let missing: HashMap<TrackId, bool> = library
-                .iter()
-                .map(|track| (track.id, track.location.is_missing()))
-                .collect();
-            ordered_track_ids
-                .iter()
-                .copied()
-                .find(|id| matches!(missing.get(id), Some(false)))
-        }
+        } => ordered_track_ids
+            .iter()
+            .copied()
+            .find(|id| runtime.library_track(*id).is_some_and(is_available)),
     }
 }
 

@@ -220,19 +220,13 @@ pub(super) fn playlist_table_rows_for(
             else {
                 return Vec::new();
             };
-            let tracks_by_id: HashMap<TrackId, &Track> = runtime
-                .library_tracks()
-                .iter()
-                .map(|track| (track.id, track))
-                .collect();
             let mut entries: Vec<&PlaylistEntry> = playlist.entries.iter().collect();
             entries.sort_by_key(|entry| entry.position);
             entries
                 .into_iter()
                 .filter_map(|entry| {
-                    tracks_by_id
-                        .get(&entry.track_id)
-                        .copied()
+                    runtime
+                        .library_track(entry.track_id)
                         .cloned()
                         .map(|track| (track, Some(entry.position)))
                 })
