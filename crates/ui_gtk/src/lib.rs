@@ -460,6 +460,7 @@ pub fn run(
                     cd_lookup_rx,
                     library_hydration_result_rx,
                 },
+                activate_profile,
             );
             if let Some(profile) = activate_profile {
                 sustain_profiler::profile!(

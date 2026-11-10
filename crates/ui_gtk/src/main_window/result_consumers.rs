@@ -26,6 +26,9 @@ pub(super) struct LibraryHydrationResultConsumerContext {
     pub(super) content_stack: gtk::Stack,
     pub(super) current_search_text: Rc<RefCell<String>>,
     pub(super) post_hydration_startup: PostHydrationStartup,
+    /// The clock of the `activate:` startup landmarks, first idle among
+    /// them, when profiling.
+    pub(super) launch_profile: Option<sustain_profiler::ProfileScope>,
 }
 
 struct InitialLibraryRowsPublication {
@@ -37,6 +40,7 @@ struct InitialLibraryRowsPublication {
     content_stack: gtk::Stack,
     current_search_text: Rc<RefCell<String>>,
     post_hydration_startup: PostHydrationStartup,
+    launch_profile: Option<sustain_profiler::ProfileScope>,
 }
 
 /// Adopt the runtime snapshot loaded after first idle, then publish its Songs
@@ -55,6 +59,7 @@ pub(super) fn install_library_hydration_result_consumer(
         content_stack,
         current_search_text,
         post_hydration_startup,
+        launch_profile,
     } = context;
     let Some(receiver) = receiver else {
         return;
@@ -64,10 +69,21 @@ pub(super) fn install_library_hydration_result_consumer(
             return;
         };
         if !runtime.borrow_mut().apply_library_hydration_result(result) {
+            if let Some(profile) = launch_profile {
+                sustain_profiler::profile!(
+                    "activate: library hydration failed at {:.1}ms",
+                    profile.elapsed_ms()
+                );
+            }
             run_once(&post_hydration_startup);
             return;
         }
-        sustain_profiler::profile!("hydrate: SQLite snapshot adopted; publishing Songs rows");
+        if let Some(profile) = launch_profile {
+            sustain_profiler::profile!(
+                "activate: library snapshot adopted at {:.1}ms; publishing Songs rows",
+                profile.elapsed_ms()
+            );
+        }
         publish_initial_library_rows(InitialLibraryRowsPublication {
             runtime,
             songs_table,
@@ -77,6 +93,7 @@ pub(super) fn install_library_hydration_result_consumer(
             content_stack,
             current_search_text,
             post_hydration_startup,
+            launch_profile,
         });
     });
 }
@@ -91,6 +108,7 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
         content_stack,
         current_search_text,
         post_hydration_startup,
+        launch_profile,
     } = publication;
     let hydration_profile = sustain_profiler::ProfileScope::start();
     let normalized_search = normalize_query(&current_search_text.borrow());
@@ -140,12 +158,21 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
         sidebar.refresh();
         update_play_pause_sensitivity(&titlebar, &runtime.borrow());
         run_once(&post_hydration_startup);
-        if let Some(profile) = hydration_profile {
+        // The library is usable from here on: Songs holds its rows in
+        // order, and searching, editing and playing are open.
+        if let (Some(launch), Some(publication)) = (launch_profile, hydration_profile) {
+            let published = if still_current {
+                format!(
+                    "{} visible / {} total Songs rows published",
+                    summary.track_count, total_tracks
+                )
+            } else {
+                "Songs rows superseded by a newer view".to_owned()
+            };
             sustain_profiler::profile!(
-                "hydrate: Songs rows published ({} visible / {} total) in {:.1}ms",
-                summary.track_count,
-                total_tracks,
-                profile.elapsed_ms()
+                "activate: library usable at {:.1}ms ({published} in {:.1}ms)",
+                launch.elapsed_ms(),
+                publication.elapsed_ms()
             );
         }
         glib::ControlFlow::Break

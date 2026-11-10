@@ -189,6 +189,7 @@ pub(crate) fn build_main_window(
     artwork_cache_dir: PathBuf,
     database_path: PathBuf,
     receivers: MainWindowAsyncReceivers,
+    launch_profile: Option<sustain_profiler::ProfileScope>,
 ) -> BuiltMainWindow {
     let MainWindowAsyncReceivers {
         mpris_command_rx,
@@ -752,6 +753,7 @@ pub(crate) fn build_main_window(
         content_stack: content_stack.clone(),
         current_search_text: current_search_text.clone(),
         post_hydration_startup: deferred_startup.post_hydration_startup(),
+        launch_profile,
     });
     install_search_wiring(
         &titlebar,
