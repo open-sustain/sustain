@@ -636,7 +636,7 @@ pub(super) fn playlist_row_reorder_callback(
 /// post-removal insertion index for `MovePlaylistEntries`.
 ///
 /// Returns `None` when the target row is not in the playlist (shouldn't
-/// happen for in-table drops, but the row id is opaque to the cell-level
+/// happen for in-table drops, but the row id is opaque to the table's
 /// drop target and is worth validating before dispatching), or when every
 /// dragged track is the target row itself.
 fn compute_playlist_reorder_position(

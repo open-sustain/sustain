@@ -13,12 +13,12 @@ use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackColu
 use super::track_context::TrackRowContextMenu;
 use crate::track_summary::TrackSummary;
 use cells::{
-    RatingBindings, RefreshScope, StatusBindings, TextBindings, TrackTableContextMenu,
-    build_filler_column, build_rating_cell_factory, build_status_column, build_text_cell_factory,
+    RatingBindings, RefreshScope, StatusBindings, TextBindings, build_filler_column,
+    build_rating_cell_factory, build_status_column, build_text_cell_factory, install_context_menu,
 };
 pub(crate) use cells::{new_cell_text, row_track_id};
 use columns::{TRACK_TABLE_COLUMNS, TrackTableColumn};
-use drag_drop::{RowDropCellRegistry, RowReorderHooks};
+use drag_drop::{RowReorderHooks, install_row_reorder_drop_target, install_tracks_drag_source};
 pub(crate) use empty_row_painter::EmptyRowPainter;
 pub(crate) use inline_edit::{BeginEditCallback, EditSession, EditableField, InlineEditController};
 use order::{RowOrder, SortKey, apply_permutation, compare_playlist_positions};
@@ -31,6 +31,7 @@ mod empty_row_painter;
 mod inline_edit;
 mod order;
 mod row;
+mod track_cell;
 
 pub(crate) type TrackActivatedCallback = Rc<dyn Fn(TrackId)>;
 pub(crate) type RatingChangedCallback = Rc<dyn Fn(TrackId, Rating) -> bool>;
@@ -1020,62 +1021,27 @@ pub(crate) fn build_track_table(
     scroller.set_vexpand(true);
     scroller.set_hexpand(true);
 
-    let context_menu =
-        context_menu.map(|menu| TrackTableContextMenu::new(menu, selection.clone(), table.clone()));
-    if let Some(context_menu) = &context_menu {
-        context_menu.install_controller();
+    // A table offering track actions also lets its tracks be dragged out.
+    if let Some(menu) = context_menu {
+        install_context_menu(&table, menu, selection.clone());
+        install_tracks_drag_source(&table, &selection);
     }
 
-    // Late-bound back reference broken on purpose: the hooks' play-order-
-    // sort predicate needs to compare against the status column, and the
-    // status column's cell factories need the hooks installed at setup time
-    // (so each status cell becomes a drop target). The predicate reads
-    // through this RefCell, which we populate the instant build_status_column
-    // returns. Cell setup runs strictly after build_track_table finishes
-    // installing the selection model below, so the predicate is never asked
-    // before the cell is filled.
-    let status_column_for_pred: Rc<RefCell<Option<gtk::ColumnViewColumn>>> =
-        Rc::new(RefCell::new(None));
-
-    let row_reorder_hooks = row_reorder.map(|callback| {
-        let table_for_pred = table.clone();
-        let status_column_for_pred = status_column_for_pred.clone();
-        let is_play_order_active: Rc<dyn Fn() -> bool> = Rc::new(move || {
-            let Some(sorter) = table_for_pred.sorter() else {
-                return false;
-            };
-            let Some(column_sorter) = sorter.downcast_ref::<gtk::ColumnViewSorter>() else {
-                return false;
-            };
-            let Some(active) = column_sorter.primary_sort_column() else {
-                return false;
-            };
-            status_column_for_pred
-                .borrow()
-                .as_ref()
-                .is_some_and(|target| &active == target)
-        });
-        RowReorderHooks {
-            drop: callback,
-            is_play_order_active,
-            cells: RowDropCellRegistry::default(),
-        }
-    });
-
-    let status_column = build_status_column(
-        playing_track_id.clone(),
-        status_bindings.clone(),
-        context_menu.clone(),
-        row_reorder_hooks.clone(),
-    );
-    *status_column_for_pred.borrow_mut() = Some(status_column.clone());
-    if row_reorder_hooks.is_some() {
+    let status_column = build_status_column(playing_track_id.clone(), status_bindings.clone());
+    if let Some(drop) = row_reorder {
         // The status column doubles as the play-order sort. Installing the
         // CustomSorter here makes clicking its header equivalent to "sort
         // by manual order" — matching the iTunes 11 leftmost column — and
         // gives apply_playlist_default_sort() a column to point at.
         let playlist_position_sorter = gtk::CustomSorter::new(compare_playlist_position_objects);
         status_column.set_sorter(Some(&playlist_position_sorter));
+        install_row_reorder_drop_target(
+            &table,
+            RowReorderHooks {
+                drop,
+                play_order_column: status_column.clone(),
+            },
+        );
     }
     table.append_column(&status_column);
 
@@ -1089,9 +1055,7 @@ pub(crate) fn build_track_table(
             &header_menu,
             text_bindings.clone(),
             rating_bindings.clone(),
-            context_menu.clone(),
             rating_changed.clone(),
-            row_reorder_hooks.clone(),
             inline_edit.clone(),
         );
         let action = gio::SimpleAction::new_stateful(
@@ -1119,10 +1083,7 @@ pub(crate) fn build_track_table(
             column: table_column,
         });
     }
-    table.append_column(&build_filler_column(
-        context_menu.clone(),
-        row_reorder_hooks.clone(),
-    ));
+    table.append_column(&build_filler_column());
 
     table.insert_action_group("columns", Some(&column_actions));
 
@@ -1281,27 +1242,18 @@ fn install_layout_change_listeners(
         });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_table_column(
     column: TrackTableColumn,
     header_menu: &gio::Menu,
     text_bindings: TextBindings,
     rating_bindings: RatingBindings,
-    context_menu: Option<TrackTableContextMenu>,
     rating_changed: Option<RatingChangedCallback>,
-    row_reorder: Option<RowReorderHooks>,
     inline_edit: Option<InlineEditController>,
 ) -> gtk::ColumnViewColumn {
     let factory = if column == TrackTableColumn::Rating {
-        build_rating_cell_factory(rating_bindings, context_menu, rating_changed, row_reorder)
+        build_rating_cell_factory(rating_bindings, rating_changed)
     } else {
-        build_text_cell_factory(
-            column,
-            text_bindings,
-            context_menu,
-            row_reorder,
-            inline_edit,
-        )
+        build_text_cell_factory(column, text_bindings, inline_edit)
     };
     let table_column = gtk::ColumnViewColumn::new(Some(column.title()), Some(factory));
     table_column.set_resizable(true);
@@ -1895,11 +1847,11 @@ mod tests {
         ids.iter().filter_map(|&id| TrackId::new(id)).collect()
     }
 
-    /// A row's cells must go with the row. Each cell carries controllers
-    /// — drag source, drop target, context menu, rating clicks, inline
-    /// edit clicks — and none
-    /// of them may hold the cell or its list item, or every row a shorter
-    /// list drops stays alive behind the table.
+    /// A row's cells must go with the row. Cells carry controllers and
+    /// signal handlers — rating clicks, inline edit clicks, the row's tint
+    /// and selection — and none of them may hold the cell or its list
+    /// item, or every row a shorter list drops stays alive behind the
+    /// table.
     #[test]
     fn cells_of_rows_that_leave_the_table_are_released() {
         let ran = crate::test_support::with_gtk(|| {

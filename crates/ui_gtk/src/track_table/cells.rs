@@ -7,7 +7,7 @@ use gtk::prelude::*;
 use gtk::{gdk, glib};
 use sustain_app_runtime::{Rating, TrackId};
 
-use super::drag_drop::{RowReorderHooks, install_cell_drag_source, install_cell_drop_target};
+use super::track_cell::TrackCell;
 use super::{
     RatingChangedCallback, columns::TrackTableColumn, inline_edit::InlineEditController,
     row::TrackTableRow,
@@ -22,124 +22,52 @@ const STATUS_ICON_SIZE: i32 = 14;
 const STATUS_ICON_PLAYING: &str = "audio-volume-high-symbolic";
 const STATUS_ICON_MISSING: &str = "dialog-warning-symbolic";
 
-#[derive(Clone)]
-pub(super) struct TrackTableContextMenu {
+/// Pop `menu` up for the selected tracks on a secondary click on a row of
+/// `table`, first selecting the clicked row if it is not part of the
+/// selection.
+pub(super) fn install_context_menu(
+    table: &gtk::ColumnView,
     menu: TrackRowContextMenu,
     selection: gtk::MultiSelection,
-    popover_parent: glib::WeakRef<gtk::ColumnView>,
-    cells: BindingRegistry<TrackTableContextCell>,
-}
+) {
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_SECONDARY);
+    gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
 
-impl TrackTableContextMenu {
-    pub(super) fn new(
-        menu: TrackRowContextMenu,
-        selection: gtk::MultiSelection,
-        popover_parent: gtk::ColumnView,
-    ) -> Self {
-        Self {
-            menu,
-            selection,
-            popover_parent: popover_parent.downgrade(),
-            cells: BindingRegistry::default(),
+    gesture.connect_released(move |gesture, _n_press, x, y| {
+        let Some(table) = gesture.widget().and_downcast::<gtk::ColumnView>() else {
+            return;
+        };
+        let Some(cell) = TrackCell::at(&table, x, y) else {
+            return;
+        };
+        let Some(list_item) = cell.list_item() else {
+            return;
+        };
+
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        let position = list_item.position();
+        if position == gtk::INVALID_LIST_POSITION {
+            return;
         }
-    }
-
-    pub(super) fn install_controller(&self) {
-        let gesture = gtk::GestureClick::new();
-        gesture.set_button(gdk::BUTTON_SECONDARY);
-        gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
-
-        let context = self.clone();
-        gesture.connect_released(move |gesture, _n_press, x, y| {
-            let Some(popover_parent) = context.popover_parent.upgrade() else {
-                return;
-            };
-            let Some(hit) = context.cell_at(popover_parent.upcast_ref(), x, y) else {
-                return;
-            };
-
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            let position = hit.list_item.position();
-            if position == gtk::INVALID_LIST_POSITION {
-                return;
-            }
-            if !context.selection.is_selected(position) {
-                context.selection.select_item(position, true);
-            }
-
-            let track_ids = collect_selected_track_ids(&context.selection);
-            if track_ids.is_empty() {
-                return;
-            }
-            context.menu.popup_at_parent(
-                track_ids,
-                context.ordered_track_ids(),
-                &popover_parent,
-                &hit.widget,
-                x,
-                y,
-            );
-        });
-        if let Some(popover_parent) = self.popover_parent.upgrade() {
-            popover_parent.add_controller(gesture);
+        if !selection.is_selected(position) {
+            selection.select_item(position, true);
         }
-    }
 
-    fn register_cell(&self, list_item: &gtk::ListItem, cell: &gtk::Box) {
-        self.cells.push(TrackTableContextCell {
-            widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
-            list_item: list_item.downgrade(),
-        });
-    }
-
-    fn ordered_track_ids(&self) -> Vec<TrackId> {
-        super::ordered_track_ids(&self.selection)
-    }
-
-    fn cell_at(&self, event_widget: &gtk::Widget, x: f64, y: f64) -> Option<TrackTableContextHit> {
-        let mut current = event_widget.pick(x, y, gtk::PickFlags::DEFAULT);
-        while let Some(widget) = current {
-            if let Some(hit) = self.list_item_for_widget(&widget) {
-                return Some(hit);
-            }
-            current = widget.parent();
+        let track_ids = collect_selected_track_ids(&selection);
+        if track_ids.is_empty() {
+            return;
         }
-        None
-    }
-
-    fn list_item_for_widget(&self, widget: &gtk::Widget) -> Option<TrackTableContextHit> {
-        self.cells.find_map_live(|cell| {
-            let registered = cell.widget.upgrade()?;
-            if registered == *widget {
-                Some(TrackTableContextHit {
-                    widget: registered,
-                    list_item: cell.list_item.upgrade()?,
-                })
-            } else {
-                None
-            }
-        })
-    }
-}
-
-struct TrackTableContextCell {
-    widget: glib::WeakRef<gtk::Widget>,
-    list_item: glib::WeakRef<gtk::ListItem>,
-}
-
-impl CellBinding for TrackTableContextCell {
-    fn list_item(&self) -> Option<gtk::ListItem> {
-        self.list_item.upgrade()
-    }
-
-    fn is_live(&self) -> bool {
-        self.widget.upgrade().is_some() && self.list_item.upgrade().is_some()
-    }
-}
-
-struct TrackTableContextHit {
-    widget: gtk::Widget,
-    list_item: gtk::ListItem,
+        menu.popup_at_parent(
+            track_ids,
+            super::ordered_track_ids(&selection),
+            &table,
+            &cell,
+            x,
+            y,
+        );
+    });
+    table.add_controller(gesture);
 }
 
 /// Which bound cells a refresh re-derives from their row payload.
@@ -293,10 +221,8 @@ impl RatingBindings {
 pub(super) fn build_status_column(
     playing_track_id: Rc<Cell<Option<TrackId>>>,
     bindings: StatusBindings,
-    context_menu: Option<TrackTableContextMenu>,
-    row_reorder: Option<RowReorderHooks>,
 ) -> gtk::ColumnViewColumn {
-    let factory = build_status_cell_factory(playing_track_id, bindings, context_menu, row_reorder);
+    let factory = build_status_cell_factory(playing_track_id, bindings);
     let table_column = gtk::ColumnViewColumn::new(None, Some(factory));
     table_column.set_resizable(false);
     table_column.set_fixed_width(STATUS_COLUMN_WIDTH);
@@ -307,13 +233,9 @@ pub(super) fn build_status_column(
 pub(super) fn build_text_cell_factory(
     column: TrackTableColumn,
     bindings: TextBindings,
-    context_menu: Option<TrackTableContextMenu>,
-    row_reorder: Option<RowReorderHooks>,
     inline_edit: Option<InlineEditController>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
-    let context_for_setup = context_menu.clone();
-    let reorder_for_setup = row_reorder.clone();
     let inline_edit_for_setup = inline_edit.clone();
     let editable_field = column.editable_field();
     let bindings_for_setup = bindings.clone();
@@ -322,11 +244,7 @@ pub(super) fn build_text_cell_factory(
             return;
         };
 
-        let cell = new_track_cell(
-            list_item,
-            context_for_setup.as_ref(),
-            reorder_for_setup.as_ref(),
-        );
+        let cell = new_track_cell(list_item);
 
         let text = new_cell_text(column.xalign());
         cell.append(&text);
@@ -335,7 +253,7 @@ pub(super) fn build_text_cell_factory(
         // Editable columns on an inline-editing table arm a click gesture
         // and join the row's editable-cell registry (used for Tab hops).
         if let (Some(controller), Some(field)) = (inline_edit_for_setup.as_ref(), editable_field) {
-            controller.register_editable_cell(list_item, &cell, field);
+            controller.register_editable_cell(list_item, cell.upcast_ref(), field);
         }
 
         bindings_for_setup.0.push(TextBinding {
@@ -358,21 +276,18 @@ pub(super) fn build_text_cell_factory(
         let Some(cell) = item
             .downcast_ref::<gtk::ListItem>()
             .and_then(|list_item| list_item.child())
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
+            .and_downcast::<TrackCell>()
         else {
             return;
         };
-        controller.finish_if_editing_cell(&cell);
+        controller.finish_if_editing_cell(cell.upcast_ref());
     });
 
     factory.connect_bind(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(cell) = list_item
-            .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
-        else {
+        let Some(cell) = list_item.child().and_downcast::<TrackCell>() else {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
@@ -402,25 +317,17 @@ pub(super) fn build_text_cell_factory(
 
 pub(super) fn build_rating_cell_factory(
     bindings: RatingBindings,
-    context_menu: Option<TrackTableContextMenu>,
     rating_changed: Option<RatingChangedCallback>,
-    row_reorder: Option<RowReorderHooks>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
-    let context_for_setup = context_menu.clone();
     let rating_changed_for_setup = rating_changed;
-    let reorder_for_setup = row_reorder.clone();
     let bindings_for_setup = bindings;
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
 
-        let cell = new_track_cell(
-            list_item,
-            context_for_setup.as_ref(),
-            reorder_for_setup.as_ref(),
-        );
+        let cell = new_track_cell(list_item);
         let stars = RatingStars::new();
         stars.set_margin_start(6);
         stars.set_margin_end(6);
@@ -453,7 +360,7 @@ pub(super) fn build_rating_cell_factory(
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(cell) = list_item.child().and_downcast::<gtk::Box>() else {
+        let Some(cell) = list_item.child().and_downcast::<TrackCell>() else {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
@@ -466,12 +373,8 @@ pub(super) fn build_rating_cell_factory(
     factory
 }
 
-pub(super) fn build_filler_column(
-    context_menu: Option<TrackTableContextMenu>,
-    row_reorder: Option<RowReorderHooks>,
-) -> gtk::ColumnViewColumn {
-    let table_column =
-        gtk::ColumnViewColumn::new(None, Some(build_filler_factory(context_menu, row_reorder)));
+pub(super) fn build_filler_column() -> gtk::ColumnViewColumn {
+    let table_column = gtk::ColumnViewColumn::new(None, Some(build_filler_factory()));
     table_column.set_expand(true);
     table_column.set_resizable(false);
     table_column.set_visible(true);
@@ -481,24 +384,16 @@ pub(super) fn build_filler_column(
 fn build_status_cell_factory(
     playing_track_id: Rc<Cell<Option<TrackId>>>,
     bindings: StatusBindings,
-    context_menu: Option<TrackTableContextMenu>,
-    row_reorder: Option<RowReorderHooks>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
     let bindings_for_setup = bindings.clone();
-    let context_for_setup = context_menu.clone();
-    let reorder_for_setup = row_reorder.clone();
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
 
-        let cell = new_track_cell(
-            list_item,
-            context_for_setup.as_ref(),
-            reorder_for_setup.as_ref(),
-        );
+        let cell = new_track_cell(list_item);
 
         let icon = gtk::Image::new();
         icon.set_pixel_size(STATUS_ICON_SIZE);
@@ -521,10 +416,7 @@ fn build_status_cell_factory(
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(cell) = list_item
-            .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
-        else {
+        let Some(cell) = list_item.child().and_downcast::<TrackCell>() else {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
@@ -542,23 +434,14 @@ fn build_status_cell_factory(
     factory
 }
 
-fn build_filler_factory(
-    context_menu: Option<TrackTableContextMenu>,
-    row_reorder: Option<RowReorderHooks>,
-) -> gtk::SignalListItemFactory {
+fn build_filler_factory() -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
-    let context_for_setup = context_menu.clone();
-    let reorder_for_setup = row_reorder.clone();
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
 
-        let cell = new_track_cell(
-            list_item,
-            context_for_setup.as_ref(),
-            reorder_for_setup.as_ref(),
-        );
+        let cell = new_track_cell(list_item);
         list_item.set_child(Some(&cell));
     });
 
@@ -566,10 +449,7 @@ fn build_filler_factory(
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(cell) = list_item
-            .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
-        else {
+        let Some(cell) = list_item.child().and_downcast::<TrackCell>() else {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
@@ -579,24 +459,14 @@ fn build_filler_factory(
     factory
 }
 
-/// Builds the `gtk::Box` every track-table cell factory shares: the
-/// `track-table-cell` styling, fill expansion, and the row chrome wired
-/// through [`install_cell_chrome`] (selection sync, context-menu
-/// registration, drag source, reorder drop target). Each factory then
-/// appends its own content — a [`new_cell_text`], rating stars, a status
-/// icon, or nothing for the filler column.
-fn new_track_cell(
-    list_item: &gtk::ListItem,
-    context_menu: Option<&TrackTableContextMenu>,
-    row_reorder: Option<&RowReorderHooks>,
-) -> gtk::Box {
-    let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    cell.add_css_class("track-table-cell");
-    cell.set_hexpand(true);
-    cell.set_vexpand(false);
-    cell.set_halign(gtk::Align::Fill);
-    cell.set_valign(gtk::Align::Fill);
-    install_cell_chrome(list_item, &cell, context_menu, row_reorder);
+/// The [`TrackCell`] every track-table cell factory shares, kept tinted
+/// and marked selected along with its row. Each factory then appends its
+/// own content — a [`new_cell_text`], rating stars, a status icon, or
+/// nothing for the filler column.
+fn new_track_cell(list_item: &gtk::ListItem) -> TrackCell {
+    let cell = TrackCell::new(list_item);
+    install_cell_row_tint_sync(list_item, &cell);
+    install_cell_selection_sync(list_item, &cell);
     cell
 }
 
@@ -620,24 +490,7 @@ pub(crate) fn new_cell_text(xalign: f32) -> gtk::Inscription {
     text
 }
 
-fn install_cell_chrome(
-    list_item: &gtk::ListItem,
-    cell: &gtk::Box,
-    context_menu: Option<&TrackTableContextMenu>,
-    row_reorder: Option<&RowReorderHooks>,
-) {
-    install_cell_row_tint_sync(list_item, cell);
-    install_cell_selection_sync(list_item, cell);
-    if let Some(menu) = context_menu {
-        menu.register_cell(list_item, cell);
-        install_cell_drag_source(list_item, cell, &menu.selection);
-    }
-    if let Some(hooks) = row_reorder {
-        install_cell_drop_target(list_item, cell, hooks.clone());
-    }
-}
-
-fn install_cell_row_tint_sync(list_item: &gtk::ListItem, cell: &gtk::Box) {
+fn install_cell_row_tint_sync(list_item: &gtk::ListItem, cell: &TrackCell) {
     let cell_for_position = cell.clone();
     list_item.connect_position_notify(move |list_item| {
         apply_bound_row_tint(&cell_for_position, list_item);
@@ -760,15 +613,12 @@ fn clear_status_icon(icon: &gtk::Image) {
 /// Re-apply the row tint to the track cell holding `content`, whose row
 /// payload may have changed in place (a Duplicates group band, say).
 fn retint_cell_of(content: &impl IsA<gtk::Widget>, list_item: &gtk::ListItem) {
-    if let Some(cell) = content
-        .parent()
-        .and_then(|parent| parent.downcast::<gtk::Box>().ok())
-    {
+    if let Some(cell) = content.parent().and_downcast::<TrackCell>() {
         apply_bound_row_tint(&cell, list_item);
     }
 }
 
-fn apply_bound_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
+fn apply_bound_row_tint(cell: &TrackCell, list_item: &gtk::ListItem) {
     let group_band = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
@@ -784,7 +634,7 @@ fn apply_bound_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
     }
 }
 
-fn install_cell_selection_sync(list_item: &gtk::ListItem, cell: &gtk::Box) {
+fn install_cell_selection_sync(list_item: &gtk::ListItem, cell: &TrackCell) {
     let cell_for_selection = cell.clone();
     list_item.connect_selected_notify(move |list_item| {
         sync_row_selection_class(&cell_for_selection, list_item.is_selected());
@@ -792,7 +642,7 @@ fn install_cell_selection_sync(list_item: &gtk::ListItem, cell: &gtk::Box) {
     sync_row_selection_class(cell, list_item.is_selected());
 }
 
-fn sync_row_selection_class(cell: &gtk::Box, selected: bool) {
+fn sync_row_selection_class(cell: &TrackCell, selected: bool) {
     if selected {
         cell.add_css_class("track-table-row-selected");
     } else {

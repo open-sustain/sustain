@@ -903,15 +903,14 @@ columnview.track-table listview row:not(:selected):focus .track-table-row-odd {
 
 /* Within-playlist drag-reorder drop indicator. A 2px accent stripe painted
    via inset box-shadow — above when the drop will land before the row,
-   below when after. Each cell carries its own stripe (the ColumnView has
-   no per-row widget without a custom row factory), but the shared
-   RowDropCellRegistry applies the class to every cell in the target row
-   on each motion event, so the visible stripe spans the full row. */
-.track-table-cell.track-row-drop-above {
+   below when after. The class sits on the target row; each cell paints
+   its stretch of the stripe, since the cells' own backgrounds cover the
+   row's. */
+.track-table listview row.track-row-drop-above .track-table-cell {
     box-shadow: inset 0 2px 0 0 @theme_selected_bg_color;
 }
 
-.track-table-cell.track-row-drop-below {
+.track-table listview row.track-row-drop-below .track-table-cell {
     box-shadow: inset 0 -2px 0 0 @theme_selected_bg_color;
 }
 

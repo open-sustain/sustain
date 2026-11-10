@@ -1,198 +1,165 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
 
 use super::cells::{collect_selected_track_ids, row_track_id};
+use super::track_cell::TrackCell;
 use super::{RowDropPosition, RowReorderCallback, RowReorderDrop};
 use crate::sidebar::{parse_tracks_payload, tracks_drag_payload};
 
 const ROW_DROP_ABOVE_CSS_CLASS: &str = "track-row-drop-above";
 const ROW_DROP_BELOW_CSS_CLASS: &str = "track-row-drop-below";
 
-/// Bundle the playlist track table threads through every cell so cell-level
-/// drop targets can dispatch the runtime command ([`RowReorderHooks::drop`]),
-/// gate themselves on the play-order sort being active
-/// ([`RowReorderHooks::is_play_order_active`]), and coordinate a single
-/// row-spanning visual indicator across all cells in the target row
-/// ([`RowReorderHooks::cells`]). Empty / `None` on tables that don't opt
-/// into within-table row reordering (Songs view, Albums tracklist).
-#[derive(Clone)]
+/// What the playlist track table needs to reorder its rows by drag and
+/// drop: the runtime command a drop dispatches, and the play-order column,
+/// whose sort is the only one a drop position means anything in. `None`
+/// on tables that don't reorder their rows (Songs view, Albums tracklist).
 pub(super) struct RowReorderHooks {
     pub(super) drop: RowReorderCallback,
-    pub(super) is_play_order_active: Rc<dyn Fn() -> bool>,
-    pub(super) cells: RowDropCellRegistry,
+    pub(super) play_order_column: gtk::ColumnViewColumn,
 }
 
-/// Registry of every drop-target cell currently realised in the playlist
-/// track table, used so a motion event on one cell can paint the indicator
-/// stripe across all sibling cells in the same row. `ListItem::position`
-/// (re-read live, not cached at register time) identifies which cells belong
-/// to the target row; entries with a dead widget or list_item weak ref are
-/// pruned on the next walk. Prune-on-walk (rather than an eager per-cell
-/// unregister at teardown) is part of the #226 playlist-switch fix — eager
-/// teardown of every drop cell was one of the costs behind the multi-second
-/// freeze, so keep this registry weak and self-pruning.
+impl RowReorderHooks {
+    /// Whether the rows show in play order. Under any other sort the row
+    /// order no longer matches the playlist's, so a drop between two rows
+    /// has no consistent insertion point.
+    fn is_play_order_active(&self, table: &gtk::ColumnView) -> bool {
+        table
+            .sorter()
+            .and_downcast::<gtk::ColumnViewSorter>()
+            .and_then(|sorter| sorter.primary_sort_column())
+            .is_some_and(|active| active == self.play_order_column)
+    }
+}
+
+/// The row a drop would land next to, marked by a stripe along its top or
+/// bottom edge. The mark is a CSS class on the row widget, which every
+/// cell of the row picks up (see `app.css`).
 ///
-/// Painting is deduped: GTK fires `connect_motion` for every pixel of cursor
-/// movement, so without a guard a steady cursor over one row would still
-/// trigger O(cells) CSS class mutations per pixel, and GTK's style engine
-/// would re-cascade every cell on every change. The `current_target` cell
-/// records the last `(row_position, drop_position)` painted; repeated calls
-/// for the same target return early without touching CSS.
-#[derive(Clone, Default)]
-pub(super) struct RowDropCellRegistry {
-    cells: Rc<RefCell<Vec<RowDropCellEntry>>>,
-    current_target: Rc<Cell<Option<(u32, RowDropPosition)>>>,
+/// Drag motion arrives for every pixel the pointer moves, so the marked
+/// row and edge are kept to skip restyling while they stay the same.
+#[derive(Default)]
+struct RowDropIndicator {
+    marked: RefCell<Option<(glib::WeakRef<gtk::Widget>, RowDropPosition)>>,
 }
 
-struct RowDropCellEntry {
-    widget: glib::WeakRef<gtk::Widget>,
-    list_item: glib::WeakRef<gtk::ListItem>,
-}
-
-impl RowDropCellRegistry {
-    fn register(&self, list_item: &gtk::ListItem, cell: &gtk::Box) {
-        self.cells.borrow_mut().push(RowDropCellEntry {
-            widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
-            list_item: list_item.downgrade(),
-        });
-    }
-
-    fn clear_all(&self) {
-        if self.current_target.get().is_none() {
+impl RowDropIndicator {
+    fn mark(&self, row: &gtk::Widget, position: RowDropPosition) {
+        let mut marked = self.marked.borrow_mut();
+        if let Some((marked_row, marked_position)) = marked.as_ref()
+            && marked_row.upgrade().as_ref() == Some(row)
+            && *marked_position == position
+        {
             return;
         }
-        self.current_target.set(None);
-        let mut cells = self.cells.borrow_mut();
-        cells.retain(|entry| {
-            entry.widget.upgrade().is_some() && entry.list_item.upgrade().is_some()
-        });
-        for entry in cells.iter() {
-            let Some(widget) = entry.widget.upgrade() else {
-                continue;
-            };
-            widget.remove_css_class(ROW_DROP_ABOVE_CSS_CLASS);
-            widget.remove_css_class(ROW_DROP_BELOW_CSS_CLASS);
+        if let Some((marked_row, _)) = marked.take() {
+            clear_row_drop_classes(marked_row.upgrade().as_ref());
         }
-    }
-
-    fn paint_row(&self, row_position: u32, drop: RowDropPosition) {
-        if self.current_target.get() == Some((row_position, drop)) {
-            return;
-        }
-        // The previous target — if any — must shed its class before the new
-        // one gets painted. Doing this here (instead of leaning on
-        // `clear_all` to walk every cell again) keeps motion to a single
-        // pass over the registry.
-        let previous_class =
-            self.current_target
-                .get()
-                .map(|(_, previous_drop)| match previous_drop {
-                    RowDropPosition::Above => ROW_DROP_ABOVE_CSS_CLASS,
-                    RowDropPosition::Below => ROW_DROP_BELOW_CSS_CLASS,
-                });
-        let new_class = match drop {
-            RowDropPosition::Above => ROW_DROP_ABOVE_CSS_CLASS,
-            RowDropPosition::Below => ROW_DROP_BELOW_CSS_CLASS,
+        let (class, other) = match position {
+            RowDropPosition::Above => (ROW_DROP_ABOVE_CSS_CLASS, ROW_DROP_BELOW_CSS_CLASS),
+            RowDropPosition::Below => (ROW_DROP_BELOW_CSS_CLASS, ROW_DROP_ABOVE_CSS_CLASS),
         };
-        let mut cells = self.cells.borrow_mut();
-        cells.retain(|entry| {
-            entry.widget.upgrade().is_some() && entry.list_item.upgrade().is_some()
-        });
-        for entry in cells.iter() {
-            let (Some(widget), Some(list_item)) =
-                (entry.widget.upgrade(), entry.list_item.upgrade())
-            else {
-                continue;
-            };
-            if let Some(previous) = previous_class {
-                widget.remove_css_class(previous);
-            }
-            if list_item.position() == row_position {
-                widget.add_css_class(new_class);
-            }
+        row.remove_css_class(other);
+        row.add_css_class(class);
+        *marked = Some((row.downgrade(), position));
+    }
+
+    fn clear(&self) {
+        if let Some((marked_row, _)) = self.marked.take() {
+            clear_row_drop_classes(marked_row.upgrade().as_ref());
         }
-        self.current_target.set(Some((row_position, drop)));
     }
 }
 
-/// [`RowDropCellRegistry`] in [`RowReorderHooks`], so the visual matches
-/// what the user expects.
+fn clear_row_drop_classes(row: Option<&gtk::Widget>) {
+    if let Some(row) = row {
+        row.remove_css_class(ROW_DROP_ABOVE_CSS_CLASS);
+        row.remove_css_class(ROW_DROP_BELOW_CSS_CLASS);
+    }
+}
+
+/// Where a drop on `table` at `(x, y)` would land: the cell under the
+/// pointer, and whether the pointer is in the upper or lower half of it.
+fn drop_point(table: &gtk::ColumnView, x: f64, y: f64) -> Option<(TrackCell, RowDropPosition)> {
+    let cell = TrackCell::at(table, x, y)?;
+    let point = table.compute_point(&cell, &graphene::Point::new(x as f32, y as f32))?;
+    let position = drop_position_from_offset(f64::from(point.y()), cell.height());
+    Some((cell, position))
+}
+
+/// Make `table` take drops of its own rows, dispatched to
+/// [`RowReorderHooks::drop`] with the row the pointer is on and the half
+/// of it, and marked while the drag moves by a stripe on that row.
 ///
 /// The drop is parsed from the same `tracks:<ids>` payload
-/// [`tracks_drag_payload`] emits, so cross-source drags (e.g. dragging from
-/// the Songs view into a selected playlist) cannot accidentally enter this
-/// path — they originate from a different table whose drag source does not
-/// stamp the playlist context anyway, and the reorder callback (see
-/// `main_window::playlist_row_reorder_callback`) authoritatively guards on
-/// the sidebar's current selection.
+/// [`tracks_drag_payload`] emits. A drag from another table (e.g. the
+/// Songs view into a selected playlist) carries the same payload; the
+/// reorder callback (see `main_window::playlist_row_reorder_callback`)
+/// authoritatively guards on the sidebar's current selection.
 ///
-/// Motion and drop are additionally gated on
-/// [`RowReorderHooks::is_play_order_active`]: when the user has clicked any
-/// header other than the status column, the table's row order no longer
-/// matches `PlaylistEntry::position` and a drag-reorder gesture would have
-/// no consistent insertion point. In that state the target rejects the
-/// drag (no indicator, no drop event) — the user must click the status
-/// column header to return to play-order before reordering. This mirrors
-/// the iTunes 11 contract: drag-reorder is only meaningful in manual-order
-/// view.
-pub(super) fn install_cell_drop_target(
-    list_item: &gtk::ListItem,
-    cell: &gtk::Box,
-    hooks: RowReorderHooks,
-) {
-    hooks.cells.register(list_item, cell);
-
-    // The drag source advertises COPY (see install_cell_drag_source), and a
-    // drop target must accept at least one action the source offers — only
-    // the intersection of source/target masks actually fires connect_drop.
-    // Accepting MOVE | COPY keeps us forward-compatible if a future caller
-    // switches the drag source to MOVE.
+/// The table rejects the drag — no stripe, no drop — while any column but
+/// the play-order one sorts it: the user returns to play order by clicking
+/// that column's header before reordering. This mirrors the iTunes 11
+/// contract: drag-reorder is only meaningful in manual-order view.
+pub(super) fn install_row_reorder_drop_target(table: &gtk::ColumnView, hooks: RowReorderHooks) {
+    // The drag source advertises COPY (see install_tracks_drag_source), and
+    // a drop target must accept at least one action the source offers —
+    // only the intersection of source/target masks actually fires
+    // connect_drop. Accepting MOVE | COPY keeps us forward-compatible if a
+    // future caller switches the drag source to MOVE.
     let drop_target = gtk::DropTarget::new(
         glib::Type::STRING,
         gdk::DragAction::MOVE | gdk::DragAction::COPY,
     );
     drop_target.set_preload(true);
 
-    let list_item_for_motion = list_item.downgrade();
+    let hooks = Rc::new(hooks);
+    let indicator = Rc::new(RowDropIndicator::default());
+
     let hooks_for_motion = hooks.clone();
-    drop_target.connect_motion(move |target, _x, y| {
-        let (Some(list_item), Some(cell)) = (list_item_for_motion.upgrade(), target.widget())
-        else {
+    let indicator_for_motion = indicator.clone();
+    drop_target.connect_motion(move |target, x, y| {
+        let Some(table) = target.widget().and_downcast::<gtk::ColumnView>() else {
             return gdk::DragAction::empty();
         };
-        if !(hooks_for_motion.is_play_order_active)() {
-            hooks_for_motion.cells.clear_all();
-            return gdk::DragAction::empty();
+        let marked_row = hooks_for_motion
+            .is_play_order_active(&table)
+            .then(|| drop_point(&table, x, y))
+            .flatten()
+            .and_then(|(cell, position)| {
+                let list_item = cell.list_item()?;
+                if drop_would_self_target(target, &list_item) {
+                    return None;
+                }
+                Some((cell.row()?, position))
+            });
+        match marked_row {
+            Some((row, position)) => {
+                indicator_for_motion.mark(&row, position);
+                gdk::DragAction::COPY
+            }
+            None => {
+                indicator_for_motion.clear();
+                gdk::DragAction::empty()
+            }
         }
-        if drop_would_self_target(target, &list_item) {
-            hooks_for_motion.cells.clear_all();
-            return gdk::DragAction::empty();
-        }
-        let position = drop_position_from_offset(y, cell.height());
-        hooks_for_motion
-            .cells
-            .paint_row(list_item.position(), position);
-        gdk::DragAction::COPY
     });
 
-    let hooks_for_leave = hooks.clone();
+    let indicator_for_leave = indicator.clone();
     drop_target.connect_leave(move |_target| {
-        hooks_for_leave.cells.clear_all();
+        indicator_for_leave.clear();
     });
 
-    let list_item_for_drop = list_item.downgrade();
-    let hooks_for_drop = hooks;
-    drop_target.connect_drop(move |target, value, _x, y| {
-        hooks_for_drop.cells.clear_all();
-        if !(hooks_for_drop.is_play_order_active)() {
+    drop_target.connect_drop(move |target, value, x, y| {
+        indicator.clear();
+        let Some(table) = target.widget().and_downcast::<gtk::ColumnView>() else {
+            return false;
+        };
+        if !hooks.is_play_order_active(&table) {
             return false;
         }
         let Ok(text) = value.get::<String>() else {
@@ -201,10 +168,13 @@ pub(super) fn install_cell_drop_target(
         let Some(dragged_track_ids) = parse_tracks_payload(&text) else {
             return false;
         };
-        let (Some(list_item), Some(cell)) = (list_item_for_drop.upgrade(), target.widget()) else {
+        let Some((cell, position)) = drop_point(&table, x, y) else {
             return false;
         };
-        let Some(target_track_id) = row_track_id(list_item.item()) else {
+        let Some(target_track_id) = cell
+            .list_item()
+            .and_then(|list_item| row_track_id(list_item.item()))
+        else {
             return false;
         };
         if dragged_track_ids.contains(&target_track_id) {
@@ -214,15 +184,14 @@ pub(super) fn install_cell_drop_target(
             // command.
             return false;
         }
-        let position = drop_position_from_offset(y, cell.height());
-        (hooks_for_drop.drop)(RowReorderDrop {
+        (hooks.drop)(RowReorderDrop {
             dragged_track_ids,
             target_track_id,
             position,
         })
     });
 
-    cell.add_controller(drop_target);
+    table.add_controller(drop_target);
 }
 
 pub(super) fn drop_position_from_offset(y: f64, height: i32) -> RowDropPosition {
@@ -256,30 +225,33 @@ fn drop_would_self_target(target: &gtk::DropTarget, list_item: &gtk::ListItem) -
     track_ids.contains(&target_track_id)
 }
 
-pub(super) fn install_cell_drag_source(
-    list_item: &gtk::ListItem,
-    cell: &gtk::Box,
-    selection: &gtk::MultiSelection,
-) {
+/// Make `table`'s rows draggable: a drag from a row carries the selected
+/// tracks when the row is selected, and the row's own track otherwise.
+pub(super) fn install_tracks_drag_source(table: &gtk::ColumnView, selection: &gtk::MultiSelection) {
     let drag_source = gtk::DragSource::new();
     drag_source.set_actions(gdk::DragAction::COPY);
     drag_source.set_button(gdk::BUTTON_PRIMARY);
 
-    let list_item = list_item.downgrade();
     let selection = selection.clone();
-    drag_source.connect_prepare(move |source, _x, _y| {
-        let cell = source.widget()?;
-        prepare_tracks_drag(source, &list_item.upgrade()?, &selection, &cell)
+    drag_source.connect_prepare(move |source, x, y| {
+        let table = source.widget().and_downcast::<gtk::ColumnView>()?;
+        let Some(cell) = TrackCell::at(&table, x, y) else {
+            // A press off the rows — on a header, a scrollbar — never
+            // drags tracks; stop asking for the rest of this press.
+            source.set_state(gtk::EventSequenceState::Denied);
+            return None;
+        };
+        prepare_tracks_drag(source, &cell, &selection)
     });
-    cell.add_controller(drag_source);
+    table.add_controller(drag_source);
 }
 
 fn prepare_tracks_drag(
     source: &gtk::DragSource,
-    list_item: &gtk::ListItem,
+    cell: &TrackCell,
     selection: &gtk::MultiSelection,
-    hit_widget: &gtk::Widget,
 ) -> Option<gdk::ContentProvider> {
+    let list_item = cell.list_item()?;
     let position = list_item.position();
     let row_track_id = row_track_id(list_item.item())?;
 
@@ -297,7 +269,7 @@ fn prepare_tracks_drag(
         return None;
     }
 
-    if let Some(paintable) = build_drag_paintable(hit_widget, position, selection) {
+    if let Some(paintable) = build_drag_paintable(cell, position, selection) {
         source.set_icon(Some(&paintable), 0, 0);
     }
 
@@ -316,10 +288,10 @@ fn prepare_tracks_drag(
 /// is returned as a graceful fallback (the icon will still follow the cursor;
 /// it just won't show the stack).
 ///
-/// 1. [`find_listview_row`] assumes the ColumnView's row container has the CSS
-///    node name `row`. Stable in GTK4 today but not a contract — if a future
-///    GTK reworks the listview hierarchy, `find_listview_row` would return
-///    `None` and we fall straight back to a missing-icon `None` here.
+/// 1. [`TrackCell::row`] assumes the ColumnView's row container has the CSS
+///    node name `row`. GTK documents that node, but if a future GTK
+///    reworks the listview hierarchy, `TrackCell::row` would return `None`
+///    and we fall straight back to a missing-icon `None` here.
 /// 2. [`visible_selected_row_widgets`] assumes sibling order in the row
 ///    container matches position order. True for `ListBase` virtualization in
 ///    GTK4, but there is no public per-widget position API to verify it; if
@@ -329,12 +301,12 @@ fn prepare_tracks_drag(
 ///    live listview. WidgetPaintable is designed for this, but if a future
 ///    GTK refuses to paint widgets mid-virtualization, the composite returns
 ///    `None` and we fall back to the single-row paintable below.
-pub(super) fn build_drag_paintable(
-    cell: &gtk::Widget,
+fn build_drag_paintable(
+    cell: &TrackCell,
     originating_position: u32,
     selection: &gtk::MultiSelection,
 ) -> Option<gdk::Paintable> {
-    let origin_row = find_listview_row(cell)?;
+    let origin_row = cell.row()?;
 
     if originating_position == gtk::INVALID_LIST_POSITION
         || !selection.is_selected(originating_position)
@@ -350,23 +322,6 @@ pub(super) fn build_drag_paintable(
 
     compose_stacked_row_paintable(&selected_rows)
         .or_else(|| Some(gtk::WidgetPaintable::new(Some(&origin_row)).upcast()))
-}
-
-/// Walk up the cell's parent chain to the ColumnView row container.
-///
-/// Risk: this depends on GTK4's convention that the row container has CSS
-/// node name `row`. If a future GTK renames or restructures the listview
-/// hierarchy this returns `None` and the drag falls back to no icon (cursor
-/// without preview). Caller is responsible for the fallback.
-fn find_listview_row(cell: &gtk::Widget) -> Option<gtk::Widget> {
-    let mut current: Option<gtk::Widget> = cell.parent();
-    while let Some(widget) = current {
-        if widget.css_name() == "row" {
-            return Some(widget);
-        }
-        current = widget.parent();
-    }
-    None
 }
 
 /// Walk the row container's children in both directions from `origin`, gathering
