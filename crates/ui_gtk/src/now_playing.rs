@@ -611,11 +611,7 @@ impl NowPlayingView {
             let Some(next_track_id) = runtime.playback_queue_next_track_id() else {
                 return;
             };
-            runtime
-                .library_tracks()
-                .iter()
-                .find(|track| track.id == next_track_id)
-                .cloned()
+            runtime.library_track(next_track_id).cloned()
         };
         let Some(next_track) = next_track else {
             return;

@@ -150,9 +150,7 @@ pub(crate) fn track_has_album_visibility(runtime: &SharedRuntime) -> TrackAction
         };
         let runtime_borrow = runtime.borrow();
         runtime_borrow
-            .library_tracks()
-            .iter()
-            .find(|track| track.id == track_id)
+            .library_track(track_id)
             .and_then(|track| track.metadata.album.as_deref())
             .map(|album| !album.trim().is_empty())
             .unwrap_or(false)
@@ -179,13 +177,11 @@ pub(crate) fn show_in_folder_callback(
 
 fn absolute_paths_for_tracks(runtime: &SharedRuntime, track_ids: &[TrackId]) -> Vec<PathBuf> {
     let runtime_borrow = runtime.borrow();
-    let tracks = runtime_borrow.library_tracks();
     track_ids
         .iter()
         .filter_map(|track_id| {
-            tracks
-                .iter()
-                .find(|track| track.id == *track_id)
+            runtime_borrow
+                .library_track(*track_id)
                 .and_then(|track| runtime_borrow.absolute_track_path(track))
         })
         .collect()

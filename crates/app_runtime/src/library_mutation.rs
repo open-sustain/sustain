@@ -130,9 +130,8 @@ impl ApplicationRuntime {
             .clone()
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
         let track_index = self
-            .library_tracks
-            .iter()
-            .position(|track| track.id == track_id && !track.location.is_missing())
+            .library_track_index(track_id)
+            .filter(|&index| !self.library_tracks[index].location.is_missing())
             .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
         // Apply the authoritative row and durable mirror intent in one
         // transaction so a crash cannot lose the courtesy file-tag write.
@@ -158,9 +157,8 @@ impl ApplicationRuntime {
             .clone()
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
         let track_index = self
-            .library_tracks
-            .iter()
-            .position(|track| track.id == track_id && !track.location.is_missing())
+            .library_track_index(track_id)
+            .filter(|&index| !self.library_tracks[index].location.is_missing())
             .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
         let managed_rename_needed = self.settings.library.management_mode
             == LibraryManagementMode::CopyAddedFilesIntoLibrary
@@ -232,11 +230,8 @@ impl ApplicationRuntime {
             validate_encoded_artwork(bytes)
                 .map_err(|_| ApplicationRuntimeError::ArtworkRejected)?;
         }
-        let _track = self
-            .library_tracks
-            .iter()
-            .find(|track| track.id == track_id && !track.location.is_missing())
-            .cloned()
+        self.library_track(track_id)
+            .filter(|track| !track.location.is_missing())
             .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
         let library_store = self
             .library_store
@@ -272,9 +267,8 @@ impl ApplicationRuntime {
     pub(super) fn fetch_artwork(&self, track_id: TrackId) -> ApplicationRuntimeResult<()> {
         self.ensure_no_background_library_task()?;
         let track = self
-            .library_tracks
-            .iter()
-            .find(|track| track.id == track_id && !track.location.is_missing())
+            .library_track(track_id)
+            .filter(|track| !track.location.is_missing())
             .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
         let fetcher = self
             .artwork_fetcher()
@@ -299,9 +293,7 @@ impl ApplicationRuntime {
             .clone()
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
         let track_index = self
-            .library_tracks
-            .iter()
-            .position(|track| track.id == track_id)
+            .library_track_index(track_id)
             .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
 
         let mut track = self.library_tracks[track_index].clone();
@@ -376,9 +368,7 @@ impl ApplicationRuntime {
     ) -> ApplicationRuntimeResult<()> {
         self.ensure_no_conflicting_library_mutation()?;
         let track = self
-            .library_tracks
-            .iter()
-            .find(|track| track.id == track_id)
+            .library_track(track_id)
             .cloned()
             .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
 

@@ -63,9 +63,7 @@ pub(super) fn begin_inline_edit_callback(
 fn track_metadata(runtime: &SharedRuntime, track_id: TrackId) -> Option<TrackMetadata> {
     runtime
         .borrow()
-        .library_tracks()
-        .iter()
-        .find(|track| track.id == track_id)
+        .library_track(track_id)
         .map(|track| track.metadata.clone())
 }
 

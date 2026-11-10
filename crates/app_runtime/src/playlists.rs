@@ -214,14 +214,9 @@ impl ApplicationRuntime {
     }
 
     fn ensure_tracks_are_in_library(&self, track_ids: &[TrackId]) -> ApplicationRuntimeResult<()> {
-        let library_track_ids = self
-            .library_tracks
-            .iter()
-            .map(|track| track.id)
-            .collect::<BTreeSet<_>>();
         if track_ids
             .iter()
-            .all(|track_id| library_track_ids.contains(track_id))
+            .all(|track_id| self.library_track(*track_id).is_some())
         {
             Ok(())
         } else {

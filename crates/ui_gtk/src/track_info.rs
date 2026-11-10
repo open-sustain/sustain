@@ -296,11 +296,7 @@ enum Direction {
 
 fn load_track(runtime: &SharedRuntime, track_id: TrackId) -> Option<LoadedTrack> {
     let runtime = runtime.borrow();
-    let track = runtime
-        .library_tracks()
-        .iter()
-        .find(|track| track.id == track_id)?
-        .clone();
+    let track = runtime.library_track(track_id)?.clone();
     let absolute_path = runtime.absolute_track_path(&track);
     let artwork_source = absolute_path.as_ref().map(|absolute| {
         ArtworkSource::embedded_track(track.location.path().to_path_buf(), absolute.clone())

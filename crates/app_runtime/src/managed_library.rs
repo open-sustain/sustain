@@ -192,12 +192,9 @@ impl ApplicationRuntime {
         // status column on those rows without the cost of a full
         // table rebuild.
         let flipped_availability = result.tracks.iter().any(|incoming| {
-            self.library_tracks
-                .iter()
-                .find(|existing| existing.id == incoming.id)
-                .is_some_and(|existing| {
-                    existing.location.is_missing() != incoming.location.is_missing()
-                })
+            self.library_track(incoming.id).is_some_and(|existing| {
+                existing.location.is_missing() != incoming.location.is_missing()
+            })
         });
         replace_library_track_locations_by_id(&mut self.library_tracks, result.tracks);
         self.rebuild_search_index();
@@ -563,16 +560,15 @@ pub(crate) struct ManagedMissingTrackRelocationOutcome {
     pub(crate) empty_directory_cleanup_failed: bool,
 }
 
+/// Adopt the locations of `updated_tracks` into `library_tracks`, which is
+/// sorted by id.
 fn replace_library_track_locations_by_id(library_tracks: &mut [Track], updated_tracks: Vec<Track>) {
     for updated_track in updated_tracks {
-        if let Some(track) = library_tracks
-            .iter_mut()
-            .find(|track| track.id == updated_track.id)
+        if let Ok(index) = library_tracks.binary_search_by_key(&updated_track.id, |track| track.id)
         {
-            track.location = updated_track.location;
+            library_tracks[index].location = updated_track.location;
         }
     }
-    library_tracks.sort_by_key(|track| track.id);
 }
 
 #[cfg(test)]

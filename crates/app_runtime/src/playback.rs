@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
@@ -143,9 +143,7 @@ impl ApplicationRuntime {
             return "Playback failed. Skipping to the next track.".to_owned();
         };
         let track_name = self
-            .library_tracks
-            .iter()
-            .find(|track| track.id == track_id)
+            .library_track(track_id)
             .and_then(track_display_name)
             .unwrap_or_else(|| format!("#{}", track_id.get()));
 
@@ -319,9 +317,7 @@ impl ApplicationRuntime {
         // here, the fallible filesystem probe sees the file again, the
         // flag flips back to Available, and playback proceeds.
         let recorded_missing = self
-            .library_tracks
-            .iter()
-            .find(|track| track.id == track_id)
+            .library_track(track_id)
             .map(|track| track.location.is_missing())
             .unwrap_or(false);
         match (probe(&source.path), recorded_missing) {
@@ -350,9 +346,7 @@ impl ApplicationRuntime {
         // session and can decide skip eligibility correctly, instead
         // of racing the 1 Hz tick that would otherwise create it.
         let duration = self
-            .library_tracks
-            .iter()
-            .find(|track| track.id == track_id)
+            .library_track(track_id)
             .and_then(|track| track.metadata.duration)
             .unwrap_or(Duration::ZERO);
         self.start_playback_session(track_id, duration);
@@ -372,9 +366,7 @@ impl ApplicationRuntime {
         track_id: TrackId,
     ) -> ApplicationRuntimeResult<TrackPlaybackSource> {
         let track = self
-            .library_tracks
-            .iter()
-            .find(|track| track.id == track_id)
+            .library_track(track_id)
             .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
         let path = self
             .absolute_track_path(track)
@@ -406,11 +398,7 @@ impl ApplicationRuntime {
         track_id: TrackId,
         availability: TrackAvailability,
     ) -> ApplicationRuntimeResult<()> {
-        let Some(index) = self
-            .library_tracks
-            .iter()
-            .position(|track| track.id == track_id)
-        else {
+        let Some(index) = self.library_track_index(track_id) else {
             return Ok(());
         };
         if self.library_tracks[index].location.availability == availability {
@@ -474,24 +462,16 @@ impl ApplicationRuntime {
     fn pick_smart_shuffle_next(&mut self) -> Option<TrackId> {
         let context = self.playback_queue.lazy_pick_context()?;
 
-        // Resolve pool / history ids to live `&Track`s through a map
-        // built once per transition. The candidate pool is the whole
-        // library, so a linear `find` per id would be quadratic at the
-        // 10 000-track scale the performance budget targets.
-        let by_id: HashMap<TrackId, &Track> = self
-            .library_tracks
-            .iter()
-            .map(|track| (track.id, track))
-            .collect();
-
-        let seed = by_id.get(&context.seed_track_id).copied()?;
+        // The candidate pool is the whole library, so each id resolves to
+        // its live `&Track` by the keyed lookup rather than a linear scan.
+        let seed = self.library_track(context.seed_track_id)?;
         // Candidate pool: every library track, minus missing files so
         // the picker never proposes something we cannot play. The
         // picker itself drops the seed and applies the guards.
         let candidate_refs: Vec<&Track> = context
             .candidate_pool
             .iter()
-            .filter_map(|track_id| by_id.get(track_id).copied())
+            .filter_map(|track_id| self.library_track(*track_id))
             .filter(|track| !track.location.is_missing())
             .collect();
         // Played history, most-recent-last, resolved to tracks for the
@@ -499,7 +479,7 @@ impl ApplicationRuntime {
         let history_refs: Vec<&Track> = context
             .played_history
             .iter()
-            .filter_map(|track_id| by_id.get(track_id).copied())
+            .filter_map(|track_id| self.library_track(*track_id))
             .collect();
 
         let pick_context = PickContext {
@@ -513,8 +493,7 @@ impl ApplicationRuntime {
 
         if let Some(debug) = debug {
             let label = |track_id: TrackId| -> String {
-                by_id
-                    .get(&track_id)
+                self.library_track(track_id)
                     .and_then(|track| track.metadata.title.clone())
                     .unwrap_or_else(|| format!("#{}", track_id.get()))
             };
@@ -601,9 +580,7 @@ impl ApplicationRuntime {
             return;
         }
         let duration = self
-            .library_tracks
-            .iter()
-            .find(|track| track.id == track_id)
+            .library_track(track_id)
             .and_then(|track| track.metadata.duration)
             .unwrap_or(Duration::ZERO);
         self.start_playback_session_at(track_id, duration, now);
@@ -733,11 +710,7 @@ impl ApplicationRuntime {
     where
         F: FnOnce(&mut sustain_domain::PlayStatistics),
     {
-        let Some(track_index) = self
-            .library_tracks
-            .iter()
-            .position(|track| track.id == track_id)
-        else {
+        let Some(track_index) = self.library_track_index(track_id) else {
             return Ok(());
         };
         let mut updated = self.library_tracks[track_index].clone();

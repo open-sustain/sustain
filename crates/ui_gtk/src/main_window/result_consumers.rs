@@ -621,10 +621,7 @@ fn artwork_source_for_track(
     track_id: TrackId,
 ) -> Option<crate::artwork_loader::ArtworkSource> {
     let runtime = runtime.borrow();
-    let track = runtime
-        .library_tracks()
-        .iter()
-        .find(|track| track.id == track_id)?;
+    let track = runtime.library_track(track_id)?;
     let absolute = runtime.absolute_track_path(track)?;
     let cache_path = track.location.path().to_path_buf();
     Some(crate::artwork_loader::ArtworkSource::embedded_track(

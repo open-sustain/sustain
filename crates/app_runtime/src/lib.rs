@@ -1773,10 +1773,16 @@ impl ApplicationRuntime {
     /// keyed path for per-track UI refreshes that must not rescan the whole
     /// library.
     pub fn library_track(&self, track_id: TrackId) -> Option<&Track> {
+        self.library_track_index(track_id)
+            .map(|index| &self.library_tracks[index])
+    }
+
+    /// Where `track_id` sits in `library_tracks`, found the way
+    /// [`Self::library_track`] finds it.
+    fn library_track_index(&self, track_id: TrackId) -> Option<usize> {
         self.library_tracks
             .binary_search_by_key(&track_id, |track| track.id)
             .ok()
-            .map(|index| &self.library_tracks[index])
     }
 
     /// Test a library track against an already-normalized query (see
@@ -2068,21 +2074,15 @@ impl ApplicationRuntime {
         // Keep the search document current with the reloaded metadata (an
         // online enrichment pass can rewrite title/artist/etc).
         self.search_index.insert(&refreshed);
-        if let Some(slot) = self
+        match self
             .library_tracks
-            .iter_mut()
-            .find(|track| track.id == track_id)
+            .binary_search_by_key(&track_id, |track| track.id)
         {
-            *slot = refreshed;
-        } else {
+            Ok(index) => self.library_tracks[index] = refreshed,
             // Track became visible to the store between the original
             // load and now. Insert in id-sort order so the slice
             // contract holds.
-            let insertion = self
-                .library_tracks
-                .binary_search_by_key(&track_id, |track| track.id)
-                .unwrap_or_else(|index| index);
-            self.library_tracks.insert(insertion, refreshed);
+            Err(insertion) => self.library_tracks.insert(insertion, refreshed),
         }
         self.fire_track_data_observer(track_id);
     }
@@ -2162,11 +2162,7 @@ impl ApplicationRuntime {
     pub fn now_playing(&self) -> NowPlaying {
         let state = self.playback_state();
         let track = playback::playback_track_id(&state)
-            .and_then(|track_id| {
-                self.library_tracks
-                    .iter()
-                    .find(|track| track.id == track_id)
-            })
+            .and_then(|track_id| self.library_track(track_id))
             .cloned();
 
         NowPlaying {
@@ -2532,11 +2528,7 @@ impl ApplicationRuntime {
             // caller rebuild.
             return SmartPlaylistTrackStatus::RequiresFullRebuild;
         }
-        let Some(track) = self
-            .library_tracks
-            .iter()
-            .find(|track| track.id == track_id)
-        else {
+        let Some(track) = self.library_track(track_id) else {
             return SmartPlaylistTrackStatus::Excluded;
         };
         if track_matches_rule_set(track, &smart_playlist.rules, self.clock.now()) {
