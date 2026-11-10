@@ -16,7 +16,9 @@ use sustain_app_runtime::{
 
 use crate::{
     SharedRuntime,
+    main_window::VisibleSummaryRefreshCallback,
     track_context::TrackRowContextMenu,
+    track_summary::TrackSummary,
     track_table::{
         BeginEditCallback, RatingChangedCallback, RowSetUpdate, TrackActivatedCallback, TrackTable,
         TrackTableRow, build_track_table,
@@ -40,6 +42,7 @@ pub(crate) struct DuplicatesView {
     /// before its result arrived.
     replace_pending: Rc<Cell<bool>>,
     active: Rc<Cell<bool>>,
+    on_summary_refresh: Rc<RefCell<Option<VisibleSummaryRefreshCallback>>>,
 }
 
 impl DuplicatesView {
@@ -83,6 +86,7 @@ impl DuplicatesView {
             generation: Rc::new(Cell::new(0)),
             replace_pending: Rc::new(Cell::new(false)),
             active: Rc::new(Cell::new(false)),
+            on_summary_refresh: Rc::new(RefCell::new(None)),
         };
         let view_for_toggle = view.clone();
         view.strict.connect_active_notify(move |_| {
@@ -112,6 +116,21 @@ impl DuplicatesView {
         if self.active.get() {
             self.scan(RowSetUpdate::Reconcile);
         }
+    }
+
+    /// Install the callback that recomputes the status-bar summary. The
+    /// view fires it whenever a scan changes its rows.
+    pub(crate) fn set_summary_refresh(&self, refresh: VisibleSummaryRefreshCallback) {
+        self.on_summary_refresh.replace(Some(refresh));
+    }
+
+    /// The tracks the view shows: the members of every duplicate group.
+    pub(crate) fn summary(&self) -> TrackSummary {
+        self.table
+            .borrow()
+            .as_ref()
+            .map(TrackTable::summary)
+            .unwrap_or_default()
     }
 
     pub(crate) fn selected_track_ids(&self) -> Vec<sustain_app_runtime::TrackId> {
@@ -269,6 +288,10 @@ impl DuplicatesView {
                     RowSetUpdate::Reconcile
                 };
                 self.ensure_table().show_rows(rows, update);
+                let refresh = self.on_summary_refresh.borrow().clone();
+                if let Some(refresh) = refresh {
+                    refresh();
+                }
                 self.status.set_text(&format!(
                     "{} duplicate group(s), {} track(s).",
                     groups.len(),

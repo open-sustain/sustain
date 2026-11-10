@@ -593,10 +593,12 @@ pub(crate) fn build_main_window(
         &songs_table,
         &playlists_table,
         &playlists_header,
+        &duplicates_view,
         &current_search_text,
         device_panel.current_device_cell(),
     );
     device_panel.set_summary_refresh(visible_summary_refresh.clone());
+    duplicates_view.set_summary_refresh(visible_summary_refresh.clone());
     let library_changed = library_changed_callback(
         &runtime,
         &songs_refresh,
@@ -1761,6 +1763,7 @@ fn visible_summary_refresh_callback(
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
     playlists_header: &PlaylistsHeader,
+    duplicates_view: &DuplicatesView,
     current_search_text: &Rc<RefCell<String>>,
     current_device: Rc<RefCell<Option<ConnectedDevice>>>,
 ) -> VisibleSummaryRefreshCallback {
@@ -1770,6 +1773,7 @@ fn visible_summary_refresh_callback(
     let songs_table = songs_table.clone();
     let playlists_table = playlists_table.clone();
     let playlists_header = playlists_header.clone();
+    let duplicates_view = duplicates_view.clone();
     let current_search_text = current_search_text.clone();
 
     Rc::new(move || {
@@ -1794,6 +1798,8 @@ fn visible_summary_refresh_callback(
                 playlists_header.set_summary(summary);
                 summary
             }
+            // The duplicate groups, which the search does not filter.
+            Some(DUPLICATES_VIEW) => duplicates_view.summary(),
             // The Albums page and the other library pages: the library
             // under the current search, summed without building its rows.
             _ => {
