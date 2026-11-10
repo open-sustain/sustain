@@ -19,7 +19,6 @@ mod playback;
 mod playback_session;
 mod playlist;
 mod playlist_folder;
-mod query;
 mod rating;
 mod settings;
 mod smart_playlist;
@@ -36,7 +35,7 @@ pub use acoustic::AcousticFeatures;
 pub use beat_grid::{BEATS_PER_BAR, Beat, BeatGrid, InvalidBeatGrid};
 pub use bpm::{Bpm, InvalidBpm};
 pub use clock::{Clock, MonotonicClock, SystemClock, SystemMonotonicClock};
-pub use command::{ApplicationCommand, ApplicationQuery};
+pub use command::ApplicationCommand;
 pub use device_sync::{
     AnlzRecord, DeviceArtistSelection, DeviceKind, DeviceLayout, DeviceRelativePath,
     DeviceSelection, FilesPerFolderCap, SyncDevice, SyncDeviceId, SyncManifestEntry,
@@ -68,10 +67,6 @@ pub use playback::{
 pub use playback_session::PlaybackSession;
 pub use playlist::{Playlist, PlaylistEntry};
 pub use playlist_folder::{PlaylistFolder, PlaylistItem};
-pub use query::{
-    LibraryQuery, SortDirection, TrackSort, TrackSortColumn, compare_optional_text,
-    effective_sort_key,
-};
 pub use rating::Rating;
 pub use settings::{
     AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, BpmRange, CdEncodingProfile,
@@ -89,7 +84,9 @@ pub use smart_playlist_defaults::default_smart_playlists;
 pub use smart_playlist_evaluation::{matching_tracks, track_matches_rule, track_matches_rule_set};
 pub use statistics::PlayStatistics;
 pub use synced_lyrics::{SyncedLyrics, SyncedLyricsLine};
-pub use text::{normalize_search_text, normalize_sort_text};
+pub use text::{
+    compare_optional_text, effective_sort_key, normalize_search_text, normalize_sort_text,
+};
 pub use track::{
     SourceFileStat, SourceFingerprint, Track, TrackAvailability, TrackContentHash, TrackLocation,
     TrackRelativePath,

@@ -241,3 +241,52 @@ impl TrackTableRow {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use sustain_app_runtime::{
+        PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
+    };
+
+    use super::TrackTableRow;
+
+    #[test]
+    fn text_columns_sort_by_sort_tags_only_while_honoring_them() {
+        let track = Track {
+            id: TrackId::new(1).expect("positive track id"),
+            location: TrackLocation::available(
+                TrackRelativePath::new(PathBuf::from("1.flac")).expect("valid relative path"),
+            ),
+            metadata: TrackMetadata {
+                title: Some("Été".to_owned()),
+                artist: Some("The Beatles".to_owned()),
+                artist_sort: Some("Beatles, The".to_owned()),
+                album: Some("Abbey Road".to_owned()),
+                album_sort: Some("   ".to_owned()),
+                ..TrackMetadata::default()
+            },
+            rating: Rating::default(),
+            statistics: PlayStatistics::default(),
+            file_size_bytes: None,
+            has_embedded_artwork: None,
+            file_modified_at: None,
+        };
+
+        let honoring = TrackTableRow::from_track(&track, true);
+        assert_eq!(honoring.artist, "The Beatles", "the display name stays");
+        assert_eq!(honoring.artist_sort_key, "beatles, the");
+        assert_eq!(
+            honoring.album_sort_key, "abbey road",
+            "a blank sort tag falls back to the display name"
+        );
+        assert_eq!(
+            honoring.track_name_sort_key, "été",
+            "sort keys fold case but keep accents"
+        );
+
+        let ignoring = TrackTableRow::from_track(&track, false);
+        assert_eq!(ignoring.artist_sort_key, "the beatles");
+    }
+}

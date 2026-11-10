@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 
 use crate::{
-    DeviceLayout, DuplicateConsolidationRequest, FilesPerFolderCap, LibraryQuery, MetadataChange,
+    DeviceLayout, DuplicateConsolidationRequest, FilesPerFolderCap, MetadataChange,
     PlaybackCommand, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylistId,
     SmartPlaylistRuleSet, SyncDeviceId, TrackId, UserSettings,
 };
@@ -175,26 +175,5 @@ pub enum ApplicationCommand {
     /// export's "analyse the missing ones" action.
     AnalyzeDeviceTracks {
         device_id: SyncDeviceId,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ApplicationQuery {
-    ListTracks(LibraryQuery),
-    ListPlaylists,
-    TrackDetails(TrackId),
-    SearchTracks {
-        search_text: String,
-    },
-    PlayStatistics(TrackId),
-    CurrentPlaybackState,
-    Settings,
-    TotalDuration(LibraryQuery),
-    SelectionDuration {
-        track_ids: Vec<TrackId>,
-    },
-    PlaybackPosition {
-        track_id: TrackId,
-        position: Duration,
     },
 }

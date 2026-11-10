@@ -13,9 +13,8 @@ use sustain_domain::{
     Rating, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
     SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
     SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SortDirection, SourceFileStat,
-    SourceFingerprint, TrackAudioProperties, TrackContentHash, TrackLocation, TrackMetadata,
-    TrackRelativePath, TrackSort, TrackSortColumn,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, SourceFileStat, SourceFingerprint,
+    TrackAudioProperties, TrackContentHash, TrackLocation, TrackMetadata, TrackRelativePath,
 };
 
 use sustain_domain::{
@@ -25,8 +24,8 @@ use sustain_domain::{
 
 use super::{
     AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan, InMemoryLibraryStore,
-    LibraryQuery, LibraryStore, OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder,
-    PlaylistFolderId, SmartPlaylist, SmartPlaylistId, SqliteLibraryStore, StoredSmartShuffleIndex,
+    LibraryStore, OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId,
+    SmartPlaylist, SmartPlaylistId, SqliteLibraryStore, StoredSmartShuffleIndex,
     StoredSyncedLyrics, StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry,
     TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
@@ -462,13 +461,6 @@ fn sqlite_store_round_trips_repeated_playlist_entries() {
 }
 
 #[test]
-fn library_query_remains_a_domain_input_type() {
-    let query = LibraryQuery::all().sorted_by(TrackSort::default());
-
-    assert_eq!(query, LibraryQuery::default());
-}
-
-#[test]
 fn sqlite_store_reports_freshly_created_only_on_first_open() {
     let dir = std::env::temp_dir().join(format!(
         "sustain_freshness_{}",
@@ -705,50 +697,6 @@ fn sqlite_store_deletes_playlists() {
 
     assert_eq!(store.playlist(playlist.id), Ok(None));
     assert_eq!(store.playlists(), Ok(Vec::new()));
-}
-
-#[test]
-fn library_query_can_select_tracks_in_playlist_order() {
-    let store = InMemoryLibraryStore::new();
-    let first = track(1, "first.flac");
-    let second = track(2, "second.flac");
-    let playlist = playlist(1, "Favorites", vec![entry(1, 2, 0), entry(1, 1, 1)]);
-
-    assert_eq!(store.save_track(first.clone()), Ok(()));
-    assert_eq!(store.save_track(second.clone()), Ok(()));
-    assert_eq!(store.save_playlist(playlist.clone()), Ok(()));
-
-    assert_eq!(
-        store.tracks_matching(LibraryQuery::all().in_playlist(playlist.id)),
-        Ok(vec![second, first])
-    );
-}
-
-#[test]
-fn library_query_filters_and_sorts_tracks() {
-    let store = InMemoryLibraryStore::new();
-    let mut first = track(1, "first.flac");
-    first.metadata.title = Some("Beta".to_owned());
-    first.metadata.artist = Some("Massive Attack".to_owned());
-    let mut second = track(2, "second.flac");
-    second.metadata.title = Some("Alpha".to_owned());
-    second.metadata.artist = Some("Massive Attack".to_owned());
-    let mut third = track(3, "third.flac");
-    third.metadata.title = Some("Ignored".to_owned());
-    third.metadata.artist = Some("Other".to_owned());
-
-    assert_eq!(store.save_track(first.clone()), Ok(()));
-    assert_eq!(store.save_track(second.clone()), Ok(()));
-    assert_eq!(store.save_track(third), Ok(()));
-
-    let query = LibraryQuery::all()
-        .with_search_text("massive")
-        .sorted_by(TrackSort {
-            column: TrackSortColumn::Title,
-            direction: SortDirection::Ascending,
-        });
-
-    assert_eq!(store.tracks_matching(query), Ok(vec![second, first]));
 }
 
 #[test]

@@ -4,15 +4,15 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::Path,
     sync::{Mutex, MutexGuard},
 };
 
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value as SqlValue};
 pub use sustain_domain::{
-    AcousticFeatures, DuplicateConsolidationPlan, LibraryQuery, MetadataChange, PlayStatistics,
-    Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist,
+    AcousticFeatures, DuplicateConsolidationPlan, MetadataChange, PlayStatistics, Playlist,
+    PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist,
     SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track,
     TrackAnalysis, TrackAudioProperties, TrackColumnEntry, TrackColumnLayout,
     TrackColumnLayoutScope, TrackColumnSort, TrackId, TrackLocation, WaveformSegments,
@@ -22,7 +22,6 @@ pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 
 mod memory;
 mod migrations;
-mod query;
 mod schema;
 mod sqlite;
 mod sqlite_rows;
@@ -33,7 +32,6 @@ pub use memory::InMemoryLibraryStore;
 pub use tag_mirror::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork, TagMirrorKinds};
 pub use waveform_cache::WaveformCacheStatus;
 
-use query::{sort_tracks, track_matches_search};
 use schema::{
     DELETE_SMART_SHUFFLE_INDEX_SQL, DELETE_TRACK_BEAT_GRID_SQL, DELETE_TRACK_SYNCED_LYRICS_SQL,
     FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL, FORGET_TRACK_BPM_ATTEMPT_SQL, RECONCILE_SCANNED_TRACK_SQL,
@@ -629,34 +627,6 @@ pub trait LibraryStore: Send + Sync {
 
     /// Load a device's on-device manifest.
     fn device_manifest(&self, id: &SyncDeviceId) -> StoreResult<Vec<SyncManifestEntry>>;
-
-    fn tracks_matching(&self, query: LibraryQuery) -> StoreResult<Vec<Track>> {
-        let mut tracks = if let Some(playlist_id) = query.playlist_id {
-            let Some(playlist) = self.playlist(playlist_id)? else {
-                return Ok(Vec::new());
-            };
-            let tracks_by_id = self
-                .tracks()?
-                .into_iter()
-                .map(|track| (track.id, track))
-                .collect::<BTreeMap<_, _>>();
-
-            playlist
-                .entries
-                .into_iter()
-                .filter_map(|entry| tracks_by_id.get(&entry.track_id).cloned())
-                .collect()
-        } else {
-            self.tracks()?
-        };
-
-        if let Some(search_text) = query.search_text.as_deref() {
-            tracks.retain(|track| track_matches_search(track, search_text));
-        }
-
-        sort_tracks(&mut tracks, query.sort, query.honor_sort_tags);
-        Ok(tracks)
-    }
 }
 
 #[derive(Debug)]

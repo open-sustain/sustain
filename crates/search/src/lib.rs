@@ -3,18 +3,14 @@
 
 #![forbid(unsafe_code)]
 
-use std::cmp::Ordering;
 use std::collections::HashMap;
 
-pub use sustain_domain::{
-    LibraryQuery, SortDirection, Track, TrackId, TrackSort, TrackSortColumn, compare_optional_text,
-    normalize_search_text,
-};
+use sustain_domain::{Track, TrackId, normalize_search_text};
 
 /// Joins a track's searchable fields in its precomputed document. Chosen
 /// because a single-line search query never contains it, so
-/// `document.contains(query)` can never span two fields — preserving the
-/// "matches some single field" semantics of the per-field scan it replaced.
+/// `document.contains(query)` can never span two fields: a track matches
+/// when one of its fields contains the query.
 const FIELD_SEPARATOR: char = '\n';
 
 /// A precomputed, normalized search document per track, keyed by id.
@@ -79,24 +75,6 @@ pub fn normalize_query(query: &str) -> String {
     normalize_search_text(query)
 }
 
-pub fn filter_tracks_by_search_text(tracks: &[Track], search_text: &str) -> Vec<Track> {
-    let normalized_search = normalize_query(search_text);
-    if normalized_search.is_empty() {
-        return tracks.to_vec();
-    }
-
-    tracks
-        .iter()
-        .filter(|track| build_document(track).contains(&normalized_search))
-        .cloned()
-        .collect()
-}
-
-pub fn track_matches_search_text(track: &Track, search_text: &str) -> bool {
-    let normalized_search = normalize_query(search_text);
-    normalized_search.is_empty() || build_document(track).contains(&normalized_search)
-}
-
 /// Album-level search: matches against the album's title, artist, and year.
 /// Used by the Albums grid view, which intentionally does NOT search track
 /// titles — typing a track title in Albums view returning no albums is the
@@ -120,59 +98,9 @@ pub fn album_matches_search_text(
         .any(|field| normalize_query(field).contains(&normalized_search))
 }
 
-pub fn sort_tracks(mut tracks: Vec<Track>, sort: TrackSort) -> Vec<Track> {
-    if sort.column == TrackSortColumn::PlaylistPosition {
-        return tracks;
-    }
-
-    tracks.sort_by(|left, right| compare_tracks(left, right, sort));
-    tracks
-}
-
-fn compare_tracks(left: &Track, right: &Track, sort: TrackSort) -> Ordering {
-    let ordering = match sort.column {
-        TrackSortColumn::PlaylistPosition => Ordering::Equal,
-        TrackSortColumn::Title => compare_optional_text(
-            left.metadata.title.as_deref(),
-            right.metadata.title.as_deref(),
-        ),
-        TrackSortColumn::Artist => compare_optional_text(
-            left.metadata.artist.as_deref(),
-            right.metadata.artist.as_deref(),
-        ),
-        TrackSortColumn::Album => compare_optional_text(
-            left.metadata.album.as_deref(),
-            right.metadata.album.as_deref(),
-        ),
-        TrackSortColumn::Genre => compare_optional_text(
-            left.metadata.genre.as_deref(),
-            right.metadata.genre.as_deref(),
-        ),
-        TrackSortColumn::Rating => left.rating.cmp(&right.rating),
-        TrackSortColumn::PlayCount => left.statistics.play_count.cmp(&right.statistics.play_count),
-        TrackSortColumn::LastPlayed => left
-            .statistics
-            .last_played_at
-            .cmp(&right.statistics.last_played_at),
-        TrackSortColumn::Duration => left.metadata.duration.cmp(&right.metadata.duration),
-        TrackSortColumn::DateAdded => left
-            .statistics
-            .date_added_at
-            .cmp(&right.statistics.date_added_at),
-    };
-
-    let ordering = match sort.direction {
-        SortDirection::Ascending => ordering,
-        SortDirection::Descending => ordering.reverse(),
-    };
-
-    ordering.then_with(|| left.id.cmp(&right.id))
-}
-
 /// Build a track's normalized search document: each non-empty searchable
 /// field, trimmed and lowercased, joined by [`FIELD_SEPARATOR`]. This is
-/// the single source of truth for "what text a track is searchable by",
-/// shared by [`SearchIndex`] and the free match functions.
+/// the single source of truth for "what text a track is searchable by".
 fn build_document(track: &Track) -> String {
     let metadata = &track.metadata;
     let mut document = String::new();
@@ -212,30 +140,32 @@ mod tests {
         PlayStatistics, Rating, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
     };
 
-    use super::{
-        SearchIndex, album_matches_search_text, filter_tracks_by_search_text, normalize_query,
-        sort_tracks, track_matches_search_text,
-    };
+    use super::{SearchIndex, album_matches_search_text, normalize_query};
     use crate::Track;
-    use crate::{SortDirection, TrackSort, TrackSortColumn};
 
     #[test]
-    fn index_matches_the_same_fields_as_the_free_function() {
+    fn index_matches_every_searchable_field() {
         let mut track = track(1, "Angel", "Massive Attack");
         track.metadata.album = Some("Mezzanine".to_owned());
+        track.metadata.album_artist = Some("Various Artists".to_owned());
+        track.metadata.composer = Some("Robert Del Naja".to_owned());
         track.metadata.genre = Some("Trip Hop".to_owned());
-        track.location = track_location("Massive Attack/track.flac");
+        track.location = track_location("Bristol/track.flac");
+        let index = index_of(std::slice::from_ref(&track));
 
-        let mut index = SearchIndex::new();
-        index.insert(&track);
-
-        for query in ["angel", "MEZZANINE", "trip hop", "massive attack"] {
+        for query in [
+            "angel",
+            "massive attack",
+            "mezzanine",
+            "various",
+            "del naja",
+            "trip hop",
+            "bristol",
+        ] {
             assert!(
                 index.matches(track.id, &normalize_query(query)),
                 "index should match {query:?}"
             );
-            // Parity with the per-track free function it replaces.
-            assert!(track_matches_search_text(&track, query));
         }
         assert!(!index.matches(track.id, &normalize_query("portishead")));
     }
@@ -280,65 +210,56 @@ mod tests {
     #[test]
     fn index_does_not_match_a_query_spanning_two_fields() {
         // "attack" (artist) and "mezzanine" (album) are distinct fields; a
-        // query straddling them must not match, matching the per-field
-        // semantics of the scan the index replaced.
+        // query straddling them must not match: a track matches when one of
+        // its fields contains the query.
         let mut track = track(1, "Angel", "Massive Attack");
         track.metadata.album = Some("Mezzanine".to_owned());
-        let mut index = SearchIndex::new();
-        index.insert(&track);
+        let index = index_of(std::slice::from_ref(&track));
         assert!(!index.matches(track.id, &normalize_query("attack mezzanine")));
     }
 
     #[test]
-    fn blank_search_returns_all_tracks() {
-        let tracks = vec![track(1, "Angel", "Massive Attack")];
-
-        assert_eq!(filter_tracks_by_search_text(&tracks, "   "), tracks);
+    fn a_blank_query_normalizes_to_no_search() {
+        // Callers skip the index for an empty normalized query and keep
+        // every track.
+        assert!(normalize_query("   ").is_empty());
+        assert_eq!(normalize_query("  Massive Attack  "), "massive attack");
     }
 
     #[test]
-    fn search_matches_track_title_case_insensitively() {
+    fn index_matches_case_insensitively() {
         let track = track(1, "Angel", "Massive Attack");
+        let index = index_of(std::slice::from_ref(&track));
 
-        assert!(track_matches_search_text(&track, "angel"));
-        assert!(track_matches_search_text(&track, "ANGEL"));
+        assert!(index.matches(track.id, &normalize_query("angel")));
+        assert!(index.matches(track.id, &normalize_query("ANGEL")));
     }
 
     #[test]
-    fn search_folds_accents_in_queries_and_indexed_fields() {
+    fn index_folds_accents_in_queries_and_indexed_fields() {
         let track = track(1, "Déjà Vu", "Beyoncé");
-        let mut index = SearchIndex::new();
-        index.insert(&track);
+        let index = index_of(std::slice::from_ref(&track));
 
         for query in ["deja vu", "déjà vu", "beyonce", "BEYONCÉ"] {
-            assert!(track_matches_search_text(&track, query));
             assert!(index.matches(track.id, &normalize_query(query)));
         }
     }
 
     #[test]
-    fn search_matches_artist_album_genre_and_path() {
-        let mut track = track(1, "Untitled", "Unknown");
-        track.metadata.album = Some("Mezzanine".to_owned());
-        track.metadata.genre = Some("Trip Hop".to_owned());
-        track.location = track_location("Massive Attack/track.flac");
-
-        assert!(track_matches_search_text(&track, "mezzanine"));
-        assert!(track_matches_search_text(&track, "trip hop"));
-        assert!(track_matches_search_text(&track, "massive attack"));
-    }
-
-    #[test]
-    fn search_excludes_tracks_without_a_matching_field() {
+    fn index_keeps_only_tracks_with_a_matching_field() {
         let tracks = vec![
             track(1, "Angel", "Massive Attack"),
             track(2, "Roads", "Portishead"),
         ];
+        let index = index_of(&tracks);
+        let query = normalize_query("port");
 
-        assert_eq!(
-            filter_tracks_by_search_text(&tracks, "port"),
-            vec![track(2, "Roads", "Portishead")]
-        );
+        let matching: Vec<TrackId> = tracks
+            .iter()
+            .map(|track| track.id)
+            .filter(|track_id| index.matches(*track_id, &query))
+            .collect();
+        assert_eq!(matching, vec![track_id(2)]);
     }
 
     #[test]
@@ -414,68 +335,10 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn sort_orders_tracks_by_text_columns_case_insensitively() {
-        let tracks = vec![
-            track(1, "zebra", "Artist"),
-            track(2, "Alpha", "Artist"),
-            track(3, "middle", "Artist"),
-        ];
-
-        assert_eq!(
-            sort_tracks(
-                tracks,
-                TrackSort {
-                    column: TrackSortColumn::Title,
-                    direction: SortDirection::Ascending
-                }
-            ),
-            vec![
-                track(2, "Alpha", "Artist"),
-                track(3, "middle", "Artist"),
-                track(1, "zebra", "Artist")
-            ]
-        );
-    }
-
-    #[test]
-    fn sort_supports_descending_rating() {
-        let mut low = track(1, "Low", "Artist");
-        low.rating = rating(1);
-        let mut high = track(2, "High", "Artist");
-        high.rating = rating(5);
-
-        assert_eq!(
-            sort_tracks(
-                vec![low.clone(), high.clone()],
-                TrackSort {
-                    column: TrackSortColumn::Rating,
-                    direction: SortDirection::Descending
-                }
-            ),
-            vec![high, low]
-        );
-    }
-
-    #[test]
-    fn sort_orders_tracks_by_date_added_chronologically() {
-        use std::time::{Duration, UNIX_EPOCH};
-
-        let mut older = track(1, "Older", "Artist");
-        older.statistics.date_added_at = Some(UNIX_EPOCH + Duration::from_secs(1_000));
-        let mut newer = track(2, "Newer", "Artist");
-        newer.statistics.date_added_at = Some(UNIX_EPOCH + Duration::from_secs(2_000));
-
-        assert_eq!(
-            sort_tracks(
-                vec![newer.clone(), older.clone()],
-                TrackSort {
-                    column: TrackSortColumn::DateAdded,
-                    direction: SortDirection::Ascending
-                }
-            ),
-            vec![older, newer]
-        );
+    fn index_of(tracks: &[Track]) -> SearchIndex {
+        let mut index = SearchIndex::new();
+        index.rebuild(tracks);
+        index
     }
 
     fn track(id: i64, title: &str, artist: &str) -> Track {
@@ -499,13 +362,6 @@ mod tests {
         match TrackId::new(value) {
             Some(track_id) => track_id,
             None => unreachable!("test helper only constructs positive ids"),
-        }
-    }
-
-    fn rating(stars: u8) -> Rating {
-        match Rating::new(stars) {
-            Some(rating) => rating,
-            None => unreachable!("test helper only constructs valid ratings"),
         }
     }
 

@@ -13,8 +13,8 @@ use super::*;
 /// pages mid-query never shows stale unfiltered content.
 ///
 /// Filtering follows the agreed product semantics:
-/// - Music view filters across the 7 track-level fields covered by
-///   [`sustain_app_runtime::track_matches_search_text`].
+/// - Music view filters across the 7 track-level fields each track's
+///   [`sustain_app_runtime::SearchIndex`] document holds.
 /// - Albums view filters by album-level fields only (title, artist,
 ///   year) via [`AlbumsView::set_search_text`].
 /// - Playlist view filters within the currently selected playlist /

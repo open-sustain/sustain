@@ -17,12 +17,12 @@ use std::{
 
 pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
-    AnalysisSettings, ApplicationCommand, ApplicationQuery, BackgroundJobsSettings,
-    BackgroundResourceUsage, Bpm, BpmRange, CdEncodingProfile, CdReadMode, Clock,
-    DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath,
-    DuplicateConsolidationRequest, DuplicateMatchMode, DuplicateMetadataField,
-    DuplicateMetadataFieldSelection, DuplicateMetadataSelection, EncodingSettings, FieldChange,
-    FilesPerFolderCap, GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LazyPickContext,
+    AnalysisSettings, ApplicationCommand, BackgroundJobsSettings, BackgroundResourceUsage, Bpm,
+    BpmRange, CdEncodingProfile, CdReadMode, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount,
+    DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest,
+    DuplicateMatchMode, DuplicateMetadataField, DuplicateMetadataFieldSelection,
+    DuplicateMetadataSelection, EncodingSettings, FieldChange, FilesPerFolderCap,
+    GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LazyPickContext,
     LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange, MonotonicClock,
     MusicalKey, OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
     PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
@@ -51,10 +51,7 @@ pub use sustain_metadata_remote::{
 };
 use sustain_playback::PlaybackService;
 pub use sustain_playback::{PlaybackBackendError, PlaybackEvent, PlaybackEventCallback};
-pub use sustain_search::{
-    SearchIndex, album_matches_search_text, filter_tracks_by_search_text, normalize_query,
-    track_matches_search_text,
-};
+pub use sustain_search::{SearchIndex, album_matches_search_text, normalize_query};
 use sustain_settings::SettingsStore;
 
 pub mod analysis_scheduler;
