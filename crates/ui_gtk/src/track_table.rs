@@ -1006,10 +1006,10 @@ pub(crate) fn build_track_table(
     let status_bindings = StatusBindings::default();
     let text_bindings = TextBindings::default();
     let rating_bindings = RatingBindings::default();
-    // One controller per table coordinates every editable cell's click
-    // gesture and the single open edit session. `None` on tables that did
+    // One controller per table coordinates the edit click on its editable
+    // cells and the single open edit session. `None` on tables that did
     // not opt into inline editing (everything but the Songs view today).
-    let inline_edit = inline_edit.map(InlineEditController::new);
+    let inline_edit = inline_edit.map(|begin_edit| InlineEditController::new(&table, begin_edit));
 
     // The store holds the rows in display order; see the `order` module for
     // why no `SortListModel` sits in between.

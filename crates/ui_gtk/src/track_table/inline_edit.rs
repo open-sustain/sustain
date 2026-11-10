@@ -24,12 +24,7 @@
 //! proceed. This is the standard desktop rename-vs-open disambiguation,
 //! driven by the system's own `gtk-double-click-time`.
 
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    rc::Rc,
-    time::Duration,
-};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
@@ -172,6 +167,13 @@ impl CellBinding for EditableCellEntry {
     }
 }
 
+/// The editable cell a press on an already-selected row landed on.
+struct PressedCell {
+    list_item: glib::WeakRef<gtk::ListItem>,
+    cell: glib::WeakRef<TableCell>,
+    field: EditableField,
+}
+
 /// An editable cell at a known horizontal offset, used to order a row's
 /// editable cells left-to-right for Tab navigation (so the order follows
 /// the user's current column arrangement and skips hidden columns).
@@ -202,25 +204,28 @@ pub(crate) struct InlineEditController {
 }
 
 impl InlineEditController {
-    pub(crate) fn new(begin_edit: BeginEditCallback) -> Self {
+    /// The inline editing of `table`, whose editable cells register with
+    /// [`Self::register_editable_cell`].
+    pub(crate) fn new(table: &gtk::ColumnView, begin_edit: BeginEditCallback) -> Self {
         let double_click_ms = gtk::Settings::default()
             .map(|settings| settings.gtk_double_click_time())
             .unwrap_or(DEFAULT_DOUBLE_CLICK_MS);
-        Self {
+        let controller = Self {
             begin_edit,
             active: Rc::new(RefCell::new(None)),
             pending_commits: Rc::default(),
             cells: BindingRegistry::default(),
             pending_open: Rc::new(RefCell::new(None)),
             double_click_ms,
-        }
+        };
+        controller.install_click_gesture(table);
+        controller
     }
 
-    /// Register a realized editable cell and install its click gesture.
-    /// Called once per cell widget at factory setup time. There is no
-    /// unregister: the registry prunes dead entries lazily (see
-    /// `cell_registry`), and an open editor on a cell leaving service is
-    /// committed by the factory's unbind hook.
+    /// Register a realized editable cell. Called once per cell widget at
+    /// factory setup time. There is no unregister: the registry prunes
+    /// dead entries lazily (see `cell_registry`), and an open editor on a
+    /// cell leaving service is committed by the factory's unbind hook.
     pub(crate) fn register_editable_cell(
         &self,
         list_item: &gtk::ListItem,
@@ -232,63 +237,84 @@ impl InlineEditController {
             cell: cell.downgrade(),
             field,
         });
-        self.install_click_gesture(list_item, cell, field);
     }
 
-    fn install_click_gesture(
-        &self,
-        list_item: &gtk::ListItem,
-        cell: &TableCell,
-        field: EditableField,
-    ) {
+    /// The registered editable cell `cell`, with its row and field.
+    fn editable_cell(&self, cell: &TableCell) -> Option<(gtk::ListItem, EditableField)> {
+        self.cells.find_map_live(|entry| {
+            if entry.cell.upgrade().as_ref() != Some(cell) {
+                return None;
+            }
+            Some((entry.list_item.upgrade()?, entry.field))
+        })
+    }
+
+    fn install_click_gesture(&self, table: &gtk::ColumnView) {
         let gesture = gtk::GestureClick::new();
         gesture.set_button(gdk::BUTTON_PRIMARY);
-        // Default (bubble) phase. The cell sits *inside* GTK's per-row
-        // selection widget, and bubble events travel leaf→root, so this
-        // descendant handler runs before the row selects itself. Reading
-        // `is_selected()` in `pressed` therefore reports whether the row
-        // was already selected *before* this click — the signal the
-        // edit-start rule needs. We never claim the gesture, so selection
-        // and double-click activation are untouched.
-        let was_already_selected = Rc::new(Cell::new(false));
+        // Capture phase: the table sees the press before the row it lands
+        // on, which selects itself only on release. Reading `is_selected()`
+        // on press therefore reports whether the row was already selected
+        // *before* this click — the signal the edit-start rule needs. The
+        // gesture never claims, so selection and double-click activation
+        // are untouched; a widget inside the cell that claims the press
+        // (the open editor, a drag) cancels it before its release.
+        gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
 
-        let was_selected_press = was_already_selected.clone();
-        let list_item_press = list_item.downgrade();
+        // The editable cell of an already-selected row a plain press landed
+        // on, which its release arms an edit on.
+        let pressed: Rc<RefCell<Option<PressedCell>>> = Rc::default();
+
+        let pressed_on_press = pressed.clone();
         let controller_press = self.clone();
-        gesture.connect_pressed(move |gesture, n_press, _x, _y| {
+        gesture.connect_pressed(move |gesture, n_press, x, y| {
+            pressed_on_press.borrow_mut().take();
             if n_press >= 2 {
                 // Second press of a double-click: drop the armed edit and
                 // let GTK activate the row (play).
                 controller_press.cancel_pending();
-                was_selected_press.set(false);
                 return;
             }
             let modifiers = gesture.current_event_state();
-            let plain = !modifiers.contains(gdk::ModifierType::CONTROL_MASK)
-                && !modifiers.contains(gdk::ModifierType::SHIFT_MASK);
-            let already_selected = list_item_press
-                .upgrade()
-                .is_some_and(|item| item.is_selected());
-            was_selected_press.set(plain && already_selected);
-        });
-
-        let was_selected_release = was_already_selected;
-        let list_item_release = list_item.downgrade();
-        let cell_release = cell.downgrade();
-        let controller_release = self.clone();
-        gesture.connect_released(move |_gesture, n_press, _x, _y| {
-            if n_press != 1 || !was_selected_release.get() {
+            if modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::SHIFT_MASK)
+            {
                 return;
             }
-            let (Some(list_item), Some(cell)) =
-                (list_item_release.upgrade(), cell_release.upgrade())
+            let Some(cell) = gesture
+                .widget()
+                .and_then(|table| TableCell::at(&table, x, y))
             else {
                 return;
             };
-            controller_release.arm_open(&list_item, &cell, field);
+            let Some((list_item, field)) = controller_press.editable_cell(&cell) else {
+                return;
+            };
+            if list_item.is_selected() {
+                *pressed_on_press.borrow_mut() = Some(PressedCell {
+                    list_item: list_item.downgrade(),
+                    cell: cell.downgrade(),
+                    field,
+                });
+            }
         });
 
-        cell.add_controller(gesture);
+        let controller_release = self.clone();
+        gesture.connect_released(move |_gesture, n_press, _x, _y| {
+            let Some(pressed) = pressed.borrow_mut().take() else {
+                return;
+            };
+            if n_press != 1 {
+                return;
+            }
+            let (Some(list_item), Some(cell)) =
+                (pressed.list_item.upgrade(), pressed.cell.upgrade())
+            else {
+                return;
+            };
+            controller_release.arm_open(&list_item, &cell, pressed.field);
+        });
+
+        table.add_controller(gesture);
     }
 
     /// Arm an edit to open after one double-click interval, cancelling any

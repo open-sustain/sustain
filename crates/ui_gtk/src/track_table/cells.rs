@@ -247,8 +247,8 @@ pub(super) fn build_text_cell_factory(
         let cell = new_track_text_cell(list_item, column.xalign());
         list_item.set_child(Some(&cell));
 
-        // Editable columns on an inline-editing table arm a click gesture
-        // and join the row's editable-cell registry (used for Tab hops).
+        // Editable columns on an inline-editing table register their cells,
+        // which the table's edit click and Tab hops look up.
         if let (Some(controller), Some(field)) = (inline_edit_for_setup.as_ref(), editable_field) {
             controller.register_editable_cell(list_item, &cell, field);
         }

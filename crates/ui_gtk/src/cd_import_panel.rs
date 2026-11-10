@@ -338,8 +338,9 @@ impl CdImportPanel {
 
         let inline_edit = {
             let commit_bindings = text_bindings.clone();
-            InlineEditController::new(Rc::new(
-                move |object: &glib::Object, field: EditableField| {
+            InlineEditController::new(
+                &table,
+                Rc::new(move |object: &glib::Object, field: EditableField| {
                     // A CD row is its own object: the panel never moves
                     // rows between objects, so the session binds to it.
                     let seed = with_cd_row(object, |row| match field {
@@ -364,8 +365,8 @@ impl CdImportPanel {
                         seed,
                         commit: Box::new(commit),
                     })
-                },
-            ))
+                }),
+            )
         };
 
         table.append_column(&fixed_column(
