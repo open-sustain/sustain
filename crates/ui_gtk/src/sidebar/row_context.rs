@@ -9,6 +9,7 @@ use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, OnlineCapability, OnlineRunRequest, PlaylistItem,
 };
 
+use super::model::SidebarItem;
 use super::{
     AnalysisEnabledQueryHolder, AnalysisRunCallbackHolder, DeleteCallbackHolder,
     EditSmartPlaylistCallbackHolder, OnlineBusyQueryHolder, OnlineRunCallbackHolder,
@@ -357,19 +358,24 @@ fn commit_rename(
     }
 }
 
+/// Wire a row's rename entry once, when the row is set up. The list
+/// rebinds the row to other items as it scrolls and updates, so the
+/// handlers read the item the row shows when they fire.
 pub(super) fn attach_rename_entry_signals(
     entry: &gtk::Entry,
     name_stack: &gtk::Stack,
     label: &gtk::Label,
-    item: PlaylistItem,
+    list_item: &gtk::ListItem,
     on_rename: RenameCallbackHolder,
 ) {
-    remove_focus_controllers(entry);
-
     let name_stack_for_activate = name_stack.clone();
     let label_for_activate = label.clone();
+    let list_item_for_activate = list_item.downgrade();
     let on_rename_for_activate = on_rename.clone();
     entry.connect_activate(move |entry| {
+        let Some(item) = bound_playlist_item(&list_item_for_activate) else {
+            return;
+        };
         commit_rename(
             &name_stack_for_activate,
             &label_for_activate,
@@ -397,38 +403,35 @@ pub(super) fn attach_rename_entry_signals(
     let name_stack_for_focus = name_stack.clone();
     let label_for_focus = label.clone();
     let entry_for_focus = entry.clone();
-    let on_rename_for_focus = on_rename.clone();
+    let list_item_for_focus = list_item.downgrade();
     focus_controller.connect_leave(move |_controller| {
-        if name_stack_for_focus.visible_child_name().as_deref() == Some("entry") {
-            commit_rename(
-                &name_stack_for_focus,
-                &label_for_focus,
-                &entry_for_focus,
-                item,
-                &on_rename_for_focus,
-            );
+        if name_stack_for_focus.visible_child_name().as_deref() != Some("entry") {
+            return;
         }
+        let Some(item) = bound_playlist_item(&list_item_for_focus) else {
+            return;
+        };
+        commit_rename(
+            &name_stack_for_focus,
+            &label_for_focus,
+            &entry_for_focus,
+            item,
+            &on_rename,
+        );
     });
     entry.add_controller(focus_controller);
 }
 
-fn remove_focus_controllers(entry: &gtk::Entry) {
-    let controllers = entry.observe_controllers();
-    let mut to_remove: Vec<gtk::EventController> = Vec::new();
-    for index in 0..controllers.n_items() {
-        let Some(object) = controllers.item(index) else {
-            continue;
-        };
-        if (object.downcast_ref::<gtk::EventControllerKey>().is_some()
-            || object.downcast_ref::<gtk::EventControllerFocus>().is_some())
-            && let Ok(controller) = object.downcast::<gtk::EventController>()
-        {
-            to_remove.push(controller);
-        }
-    }
-    for controller in to_remove {
-        entry.remove_controller(&controller);
-    }
+/// The playlist item a sidebar row is bound to right now.
+fn bound_playlist_item(list_item: &glib::WeakRef<gtk::ListItem>) -> Option<PlaylistItem> {
+    let row = list_item
+        .upgrade()?
+        .item()
+        .and_downcast::<gtk::TreeListRow>()?;
+    let inner = row.item()?;
+    let boxed = inner.downcast_ref::<glib::BoxedAnyObject>()?;
+    let sidebar_item = boxed.try_borrow::<SidebarItem>().ok()?;
+    Some(sidebar_item.item)
 }
 
 fn confirm_and_delete(
@@ -483,7 +486,11 @@ fn confirm_and_delete(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+        time::Duration,
+    };
 
     use gtk::prelude::*;
     use gtk::{gio, glib};
@@ -495,8 +502,9 @@ mod tests {
     use super::{
         ANALYZE_ALL_ACTION, ANALYZE_AUDIO_ACTION, ANALYZE_BPM_ACTION, ANALYZE_KEY_ACTION,
         RETRIEVE_ALL_ACTION, RETRIEVE_ARTWORK_ACTION, RETRIEVE_LYRICS_ACTION, RETRIEVE_TAGS_ACTION,
-        ROW_CONTEXT_ACTION_GROUP, SidebarRowContext, playlist_row_context_popover,
-        popup_row_context_menu, row_context_menu_model,
+        ROW_CONTEXT_ACTION_GROUP, RenameCallbackHolder, SidebarItem, SidebarRowContext,
+        attach_rename_entry_signals, playlist_row_context_popover, popup_row_context_menu,
+        row_context_menu_model,
     };
 
     #[test]
@@ -745,6 +753,144 @@ mod tests {
 
             let ctx = glib::MainContext::default();
             while ctx.iteration(false) {}
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
+    fn a_row_rebound_to_another_item_renames_only_that_item() {
+        let ran = crate::test_support::with_gtk(|| {
+            let renamed: Rc<RefCell<Vec<(PlaylistItem, String)>>> = Rc::default();
+            let renamed_for_callback = renamed.clone();
+            let on_rename: RenameCallbackHolder = Rc::new(RefCell::new(Some(Rc::new(
+                move |item: PlaylistItem, name: String| {
+                    renamed_for_callback.borrow_mut().push((item, name));
+                },
+            ))));
+            let factory = gtk::SignalListItemFactory::new();
+            factory.connect_setup(move |_factory, list_item| {
+                let list_item = list_item
+                    .downcast_ref::<gtk::ListItem>()
+                    .expect("a list item");
+                let name_stack = gtk::Stack::new();
+                let label = gtk::Label::new(None);
+                let entry = gtk::Entry::new();
+                name_stack.add_named(&label, Some("label"));
+                name_stack.add_named(&entry, Some("entry"));
+                list_item.set_child(Some(&name_stack));
+                attach_rename_entry_signals(
+                    &entry,
+                    &name_stack,
+                    &label,
+                    list_item,
+                    on_rename.clone(),
+                );
+            });
+            factory.connect_bind(|_factory, list_item| {
+                let list_item = list_item
+                    .downcast_ref::<gtk::ListItem>()
+                    .expect("a list item");
+                let name = list_item
+                    .item()
+                    .and_downcast::<gtk::TreeListRow>()
+                    .and_then(|row| row.item())
+                    .and_downcast::<glib::BoxedAnyObject>()
+                    .expect("a sidebar row")
+                    .borrow::<SidebarItem>()
+                    .name
+                    .clone();
+                let name_stack = list_item
+                    .child()
+                    .and_downcast::<gtk::Stack>()
+                    .expect("the row's name stack");
+                name_stack
+                    .child_by_name("label")
+                    .and_downcast::<gtk::Label>()
+                    .expect("the row's label")
+                    .set_text(&name);
+                name_stack.set_visible_child_name("label");
+            });
+            let sidebar_row = |id: i64, name: &str| {
+                glib::BoxedAnyObject::new(SidebarItem {
+                    name: name.to_owned(),
+                    item: PlaylistItem::Playlist(playlist_id(id)),
+                })
+            };
+            // More rows than a list keeps widgets for, so scrolling to the
+            // end hands the top rows' widgets on to other items.
+            let store = gio::ListStore::new::<glib::BoxedAnyObject>();
+            for id in 1..=1000 {
+                store.append(&sidebar_row(id, &format!("Row {id}")));
+            }
+            let tree = gtk::TreeListModel::new(store, false, false, |_| None);
+            let list_view =
+                gtk::ListView::new(Some(gtk::NoSelection::new(Some(tree))), Some(factory));
+            let scrolled = gtk::ScrolledWindow::new();
+            scrolled.set_child(Some(&list_view));
+            let window = gtk::Window::new();
+            window.set_default_size(200, 300);
+            window.set_child(Some(&scrolled));
+            window.present();
+            let settle = || {
+                let context = glib::MainContext::default();
+                for _ in 0..200 {
+                    if !context.iteration(false) {
+                        break;
+                    }
+                }
+            };
+            settle();
+            // Not the first row: the list keeps the widget of the row its
+            // keyboard focus is on, which starts there.
+            let name_stack = list_view
+                .first_child()
+                .and_then(|row| row.next_sibling())
+                .and_then(|row| row.first_child())
+                .and_downcast::<gtk::Stack>()
+                .expect("a bound row");
+            let label = name_stack
+                .child_by_name("label")
+                .and_downcast::<gtk::Label>()
+                .expect("the row's label");
+            assert_eq!(label.text(), "Row 2");
+
+            list_view.scroll_to(999, gtk::ListScrollFlags::NONE, None);
+            let context = glib::MainContext::default();
+            let timed_out = Rc::new(Cell::new(false));
+            let timed_out_for_timer = timed_out.clone();
+            let timer = glib::timeout_add_local_once(Duration::from_secs(5), move || {
+                timed_out_for_timer.set(true)
+            });
+            while label.text() == "Row 2" && !timed_out.get() {
+                context.iteration(true);
+            }
+            if !timed_out.get() {
+                timer.remove();
+            }
+            let shown_id: i64 = label
+                .text()
+                .strip_prefix("Row ")
+                .and_then(|id| id.parse().ok())
+                .expect("the widget shows another row");
+            assert_ne!(shown_id, 2, "the list hands the widget on to another item");
+            let entry = name_stack
+                .child_by_name("entry")
+                .and_downcast::<gtk::Entry>()
+                .expect("the row's rename entry");
+            name_stack.set_visible_child_name("entry");
+            entry.set_text("Renamed");
+            entry.emit_activate();
+
+            assert_eq!(
+                *renamed.borrow(),
+                vec![(
+                    PlaylistItem::Playlist(playlist_id(shown_id)),
+                    "Renamed".to_owned()
+                )]
+            );
             window.destroy();
         });
         if !ran {

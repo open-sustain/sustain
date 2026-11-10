@@ -1121,7 +1121,7 @@ fn build_row_factory(
 ) -> gtk::SignalListItemFactory {
     let current_indicator: SharedDropIndicator = Rc::new(RefCell::new(None));
     let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_factory, list_item| {
+    factory.connect_setup(move |_factory, list_item| {
         let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
@@ -1163,6 +1163,8 @@ fn build_row_factory(
         expander.add_css_class("playlist-sidebar-row");
         expander.set_child(Some(&row));
         list_item.set_child(Some(&expander));
+
+        attach_rename_entry_signals(&entry, &name_stack, &label, list_item, on_rename.clone());
     });
 
     factory.connect_bind(move |_factory, list_item| {
@@ -1256,14 +1258,6 @@ fn build_row_factory(
                 online_busy_query: online_busy_query.clone(),
             },
         );
-        attach_rename_entry_signals(
-            &entry,
-            &name_stack,
-            &label,
-            playlist_item,
-            on_rename.clone(),
-        );
-
         // If a caller armed `arm_pending_rename` for this item, immediately
         // enter rename mode now that the row is bound and its widgets exist.
         let should_rename = {
