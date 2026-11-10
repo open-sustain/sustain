@@ -39,7 +39,9 @@
 //!    toggle off.
 //!
 //! The explicit queue is drained first on every refill, then any
-//! remaining slack is filled from the background query.
+//! remaining slack is filled from the background query. An explicit
+//! run that arrives mid-batch ends the batch's background part, so it
+//! waits for the track in progress only, as in the analysis scheduler.
 
 use std::{
     collections::VecDeque,
@@ -365,6 +367,12 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                     return;
                 }
                 apply_command(command, &mut state);
+            }
+            // The batch runs its explicit items first, so only background
+            // items are left behind here; unstamped, they come back with
+            // the next sweep.
+            if !item.is_explicit && !state.explicit_queue.is_empty() {
+                break;
             }
 
             // Resolve dispatch capabilities: explicit items keep what

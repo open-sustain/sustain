@@ -1647,3 +1647,103 @@ fn explicit_run_processes_tracks_with_global_settings_off() {
 
     scheduler.shutdown();
 }
+
+#[test]
+fn explicit_run_arriving_mid_batch_goes_before_the_remaining_background_tracks() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    // Four tracks the background lyrics sweep wants, in one batch.
+    for id in 1..=4 {
+        let mut track = track_with_metadata(temp.path(), &format!("background-{id}.flac"));
+        track.id = TrackId::new(id).expect("non-zero");
+        store.save_track(track).expect("save");
+    }
+    // A track the sweep leaves alone (its lyrics are complete), that the
+    // user then asks artwork for.
+    let mut explicit = track_with_metadata(temp.path(), "explicit.flac");
+    explicit.id = TrackId::new(5).expect("non-zero");
+    explicit.metadata.lyrics = Some("Existing".to_owned());
+    store.save_track(explicit.clone()).expect("save");
+    store
+        .record_synced_lyrics(
+            explicit.id,
+            &SyncedLyrics::parse_lrc("[00:01.00]Existing").expect("parse"),
+            "test",
+        )
+        .expect("seed synced");
+
+    let remote = Arc::new(
+        StubRemote::default()
+            .with_lyrics(Ok(Some(FetchedLyrics {
+                plain: Some("Plain".to_owned()),
+                synced_lrc: None,
+            })))
+            .with_artwork(Ok(Some(FetchedArtwork {
+                bytes: valid_artwork(),
+                release_mbid: "release".to_owned(),
+            }))),
+    );
+    let metadata = Arc::new(StubMetadata::default());
+    let (sink, _rx) = capturing_sink();
+
+    // The first processed track holds the worker until the explicit run
+    // is queued, so the run lands in the middle of the batch.
+    let (first_tx, first_rx) = std_mpsc::channel::<()>();
+    let (resume_tx, resume_rx) = std_mpsc::channel::<()>();
+    let resume_rx = Mutex::new(resume_rx);
+    let (processed_tx, processed_rx) = std_mpsc::channel::<TrackId>();
+    let track_updated: super::TrackUpdatedSink = Arc::new(move |id| {
+        if first_tx.send(()).is_ok() {
+            let _ = resume_rx.lock().expect("resume lock").recv();
+        }
+        let _ = processed_tx.send(id);
+    });
+
+    let (_writer, tag_writer) = spawn_tag_writer(metadata, store.clone(), temp.path());
+    let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
+        remote_service: remote,
+        tag_writer,
+        library_store: store,
+        progress: sink,
+        track_updated: Some(track_updated),
+        clock: fixed_clock(1),
+        initial_settings: OnlineSettings {
+            artwork: false,
+            tags: false,
+            lyrics: true,
+        },
+        library_path: Some(temp.path().to_path_buf()),
+        provider_version: 1,
+    });
+
+    first_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the first background track is processed");
+    // Later tracks run straight through.
+    drop(first_rx);
+    scheduler.request_explicit_run(
+        vec![explicit.id],
+        OnlineCapabilities {
+            artwork: true,
+            tags: false,
+            lyrics: false,
+        },
+    );
+    resume_tx.send(()).expect("resume the worker");
+
+    let processed: Vec<TrackId> = (0..2)
+        .map(|_| {
+            processed_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("a processed track")
+        })
+        .collect();
+    assert_ne!(processed[0], explicit.id);
+    assert_eq!(
+        processed[1], explicit.id,
+        "the explicit run goes before the batch's remaining background tracks"
+    );
+
+    scheduler.shutdown();
+}
