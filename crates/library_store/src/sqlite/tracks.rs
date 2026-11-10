@@ -380,6 +380,22 @@ pub(super) fn track(connection: &Connection, track_id: TrackId) -> StoreResult<O
         .transpose()
 }
 
+pub(super) fn track_id_at(
+    connection: &Connection,
+    relative_path: &TrackRelativePath,
+) -> StoreResult<Option<TrackId>> {
+    let raw = connection
+        .query_row(
+            "SELECT id FROM tracks WHERE relative_path = ?1",
+            params![relative_path_bytes(relative_path)],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(StoreError::from)?;
+    raw.map(|raw| TrackId::new(raw).ok_or(StoreError::InvalidStoredId(raw)))
+        .transpose()
+}
+
 pub(super) fn tracks(connection: &Connection) -> StoreResult<Vec<Track>> {
     let mut statement = connection
         .prepare(SELECT_ALL_TRACKS_SQL.as_str())

@@ -794,16 +794,17 @@ fn plan_destination(
     source_size: u64,
     content_hash: &TrackContentHash,
 ) -> ApplicationRuntimeResult<PlannedManagedDestination> {
-    for _attempt in 0..10_000 {
-        let plan = planner
-            .plan(
-                ManagedTrackPathInput {
-                    metadata,
-                    source_path,
-                },
-                occupied_paths,
-            )
-            .map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
+    let candidates = planner
+        .candidates(ManagedTrackPathInput {
+            metadata,
+            source_path,
+        })
+        .map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
+    for candidate in candidates {
+        let plan = candidate.map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
+        if occupied_paths.contains(&plan.relative_path) {
+            continue;
+        }
         let candidate = library_path.join(plan.relative_path.as_path());
         if candidate.exists() {
             // Disk-anchored strict-exact guard. The hash-based dedup
@@ -820,7 +821,6 @@ fn plan_destination(
             if destination_holds_identical_content(&candidate, source_size, content_hash) {
                 return Ok(PlannedManagedDestination::AlreadyPresent);
             }
-            occupied_paths.insert(plan.relative_path);
             continue;
         }
         occupied_paths.insert(plan.relative_path.clone());

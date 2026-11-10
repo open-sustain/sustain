@@ -20,9 +20,9 @@ use crate::{
     artwork_fetcher::{ArtworkFetchRequest, query_from_metadata},
     freedesktop_trash,
     managed_library::{
-        file_ops::open_regular_file_if_present, metadata_change_affects_managed_path,
-        prune_empty_ancestor_directories_for_sources, relocate_managed_missing_track,
-        retarget_managed_metadata,
+        file_ops::open_regular_file_if_present, held_by_another_track,
+        metadata_change_affects_managed_path, prune_empty_ancestor_directories_for_sources,
+        relocate_managed_missing_track, retarget_managed_metadata,
     },
     playback::playback_track_id,
 };
@@ -487,22 +487,16 @@ pub(crate) fn relocate_missing_track_with_store(
 ) -> ApplicationRuntimeResult<MissingTrackRelocationOutcome> {
     let (replacement_path, replacement_file_size_bytes) =
         validate_missing_track_replacement(replacement_path)?;
-    let existing_tracks = library_store
-        .tracks()
-        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-    let track = existing_tracks
-        .iter()
-        .find(|track| track.id == track_id && track.location.is_missing())
-        .cloned()
+    let track = library_store
+        .track(track_id)
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
+        .filter(|track| track.location.is_missing())
         .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
 
     match management_mode {
         LibraryManagementMode::ReferenceFilesInPlace => {
             let relative_path = relative_replacement_path(&replacement_path, library_path)?;
-            if existing_tracks.iter().any(|existing_track| {
-                existing_track.id != track_id
-                    && existing_track.location.relative_path == relative_path
-            }) {
+            if held_by_another_track(library_store, &relative_path, track_id)? {
                 return Err(ApplicationRuntimeError::TrackReplacementAlreadyInLibrary);
             }
             let mut updated_track = track;

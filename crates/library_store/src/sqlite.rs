@@ -194,6 +194,11 @@ impl LibraryStore for SqliteLibraryStore {
         tracks::track(&connection, track_id)
     }
 
+    fn track_id_at(&self, relative_path: &TrackRelativePath) -> StoreResult<Option<TrackId>> {
+        let connection = self.connection_guard()?;
+        tracks::track_id_at(&connection, relative_path)
+    }
+
     fn tracks(&self) -> StoreResult<Vec<Track>> {
         let connection = self.connection_guard()?;
         tracks::tracks(&connection)

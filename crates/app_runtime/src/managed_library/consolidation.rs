@@ -17,9 +17,10 @@ use std::{
 };
 
 use sustain_domain::{
-    ManagedTrackPathInput, ManagedTrackPathPlanner, Track, TrackAvailability, TrackId,
-    TrackLocation, TrackRelativePath,
+    ManagedTrackPathInput, ManagedTrackPathPlan, ManagedTrackPathPlanner, Track, TrackAvailability,
+    TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
 };
+use sustain_library_store::LibraryStore;
 
 use crate::{
     ApplicationRuntimeError, ApplicationRuntimeResult, LibraryConsolidationResult,
@@ -32,6 +33,7 @@ use super::file_ops::{
     open_regular_file, probe_regular_file, prune_empty_ancestor_directories_for_sources,
     rollback_file_move,
 };
+use super::held_by_another_track;
 use super::journal::{
     PreparedConsolidationRecovery, open_consolidation_recovery_source,
     prepare_consolidation_recovery, recover_library_consolidation_journal,
@@ -272,16 +274,15 @@ fn plan_library_consolidation(
             Err(_) => return Err(ApplicationRuntimeError::LibraryConsolidationFailed),
         };
 
-        occupied_paths.remove(&source_relative_path);
         let plan = plan_consolidation_destination(
             &planner,
-            &mut occupied_paths,
             library_path,
             &source_path,
             &track.metadata,
             &source_relative_path,
+            |path| Ok(path != &source_relative_path && occupied_paths.contains(path)),
         )?;
-        occupied_paths.insert(source_relative_path.clone());
+        occupied_paths.insert(plan.relative_path.clone());
 
         if plan.relative_path == source_relative_path {
             already_organized_tracks += 1;
@@ -316,7 +317,7 @@ fn plan_library_consolidation(
 
 pub(super) fn plan_managed_track_retarget(
     library_path: &Path,
-    existing_tracks: &[Track],
+    library_store: &dyn LibraryStore,
     track: Track,
 ) -> ApplicationRuntimeResult<Option<PlannedLibraryConsolidationMove>> {
     let recovery = prepare_consolidation_recovery(library_path)?;
@@ -325,20 +326,13 @@ pub(super) fn plan_managed_track_retarget(
     let source = open_regular_file(&source_path)
         .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
 
-    let planner = ManagedTrackPathPlanner::default();
-    let mut occupied_paths = existing_tracks
-        .iter()
-        .filter(|existing_track| existing_track.id != track.id)
-        .map(|existing_track| existing_track.location.relative_path.clone())
-        .collect::<BTreeSet<_>>();
-
     let plan = plan_consolidation_destination(
-        &planner,
-        &mut occupied_paths,
+        &ManagedTrackPathPlanner::default(),
         library_path,
         &source_path,
         &track.metadata,
         &source_relative_path,
+        |path| held_by_another_track(library_store, path, track.id),
     )?;
     if plan.relative_path == source_relative_path {
         return Ok(None);
@@ -364,7 +358,7 @@ pub(super) fn plan_managed_track_retarget(
 
 pub(super) fn plan_managed_missing_track_relocation(
     library_path: &Path,
-    existing_tracks: &[Track],
+    library_store: &dyn LibraryStore,
     mut track: Track,
     source_path: &Path,
     source_relative_path: Option<&TrackRelativePath>,
@@ -374,20 +368,13 @@ pub(super) fn plan_managed_missing_track_relocation(
     let source = open_regular_file(source_path)
         .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
 
-    let planner = ManagedTrackPathPlanner::default();
-    let mut occupied_paths = existing_tracks
-        .iter()
-        .filter(|existing_track| existing_track.id != track.id)
-        .map(|existing_track| existing_track.location.relative_path.clone())
-        .collect::<BTreeSet<_>>();
-
     let plan = plan_missing_track_destination(
-        &planner,
-        &mut occupied_paths,
+        &ManagedTrackPathPlanner::default(),
         library_path,
         source_path,
         &track.metadata,
         source_relative_path,
+        |path| held_by_another_track(library_store, path, track.id),
     )?;
     track.location = TrackLocation::available(plan.relative_path.clone());
     let Some(source_relative_path) = source_relative_path else {
@@ -416,64 +403,65 @@ pub(super) fn plan_managed_missing_track_relocation(
     ))
 }
 
+/// The first managed path for a track that `held_by_another_track` does
+/// not rule out and no other file occupies on disk. The track's current
+/// path is its own, file and all.
 fn plan_consolidation_destination(
     planner: &ManagedTrackPathPlanner,
-    occupied_paths: &mut BTreeSet<TrackRelativePath>,
     library_path: &Path,
     source_path: &Path,
-    metadata: &sustain_domain::TrackMetadata,
+    metadata: &TrackMetadata,
     current_relative_path: &TrackRelativePath,
-) -> ApplicationRuntimeResult<sustain_domain::ManagedTrackPathPlan> {
-    for _attempt in 0..10_000 {
-        let plan = planner
-            .plan(
-                ManagedTrackPathInput {
-                    metadata,
-                    source_path,
-                },
-                occupied_paths,
-            )
-            .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
-        if &plan.relative_path == current_relative_path {
-            occupied_paths.insert(plan.relative_path.clone());
-            return Ok(plan);
-        }
-        if library_path.join(plan.relative_path.as_path()).exists() {
-            occupied_paths.insert(plan.relative_path);
+    mut held_by_another_track: impl FnMut(&TrackRelativePath) -> ApplicationRuntimeResult<bool>,
+) -> ApplicationRuntimeResult<ManagedTrackPathPlan> {
+    let candidates = planner
+        .candidates(ManagedTrackPathInput {
+            metadata,
+            source_path,
+        })
+        .map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+    for candidate in candidates {
+        let plan = candidate.map_err(|_| ApplicationRuntimeError::LibraryConsolidationFailed)?;
+        if held_by_another_track(&plan.relative_path)? {
             continue;
         }
-        occupied_paths.insert(plan.relative_path.clone());
-        return Ok(plan);
+        if &plan.relative_path == current_relative_path
+            || !library_path.join(plan.relative_path.as_path()).exists()
+        {
+            return Ok(plan);
+        }
     }
 
     Err(ApplicationRuntimeError::LibraryConsolidationFailed)
 }
 
+/// The first managed path for a missing track's replacement that
+/// `held_by_another_track` does not rule out and no other file occupies on
+/// disk. A replacement already inside the library may keep its own path.
 fn plan_missing_track_destination(
     planner: &ManagedTrackPathPlanner,
-    occupied_paths: &mut BTreeSet<TrackRelativePath>,
     library_path: &Path,
     source_path: &Path,
-    metadata: &sustain_domain::TrackMetadata,
+    metadata: &TrackMetadata,
     source_relative_path: Option<&TrackRelativePath>,
-) -> ApplicationRuntimeResult<sustain_domain::ManagedTrackPathPlan> {
-    for _attempt in 0..10_000 {
-        let plan = planner
-            .plan(
-                ManagedTrackPathInput {
-                    metadata,
-                    source_path,
-                },
-                occupied_paths,
-            )
-            .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+    mut held_by_another_track: impl FnMut(&TrackRelativePath) -> ApplicationRuntimeResult<bool>,
+) -> ApplicationRuntimeResult<ManagedTrackPathPlan> {
+    let candidates = planner
+        .candidates(ManagedTrackPathInput {
+            metadata,
+            source_path,
+        })
+        .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+    for candidate in candidates {
+        let plan = candidate.map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
+        if held_by_another_track(&plan.relative_path)? {
+            continue;
+        }
         if source_relative_path == Some(&plan.relative_path)
             || !library_path.join(plan.relative_path.as_path()).exists()
         {
-            occupied_paths.insert(plan.relative_path.clone());
             return Ok(plan);
         }
-        occupied_paths.insert(plan.relative_path);
     }
 
     Err(ApplicationRuntimeError::TrackRelocationFailed)

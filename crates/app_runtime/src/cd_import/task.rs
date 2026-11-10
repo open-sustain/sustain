@@ -300,18 +300,17 @@ fn plan_destination(
     metadata: &TrackMetadata,
     source_hint: &Path,
 ) -> ApplicationRuntimeResult<TrackRelativePath> {
-    for _attempt in 0..10_000 {
-        let plan = planner
-            .plan(
-                ManagedTrackPathInput {
-                    metadata,
-                    source_path: source_hint,
-                },
-                occupied,
-            )
-            .map_err(|_| ApplicationRuntimeError::CdImportFailed)?;
-        if library_path.join(plan.relative_path.as_path()).exists() {
-            occupied.insert(plan.relative_path);
+    let candidates = planner
+        .candidates(ManagedTrackPathInput {
+            metadata,
+            source_path: source_hint,
+        })
+        .map_err(|_| ApplicationRuntimeError::CdImportFailed)?;
+    for candidate in candidates {
+        let plan = candidate.map_err(|_| ApplicationRuntimeError::CdImportFailed)?;
+        if occupied.contains(&plan.relative_path)
+            || library_path.join(plan.relative_path.as_path()).exists()
+        {
             continue;
         }
         occupied.insert(plan.relative_path.clone());

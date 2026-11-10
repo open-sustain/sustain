@@ -319,6 +319,18 @@ pub(super) fn metadata_change_affects_managed_path(change: &MetadataChange) -> b
         || !matches!(change.compilation, FieldChange::Unchanged)
 }
 
+/// Whether a library track other than `track_id` is stored at `path`.
+pub(crate) fn held_by_another_track(
+    library_store: &dyn sustain_library_store::LibraryStore,
+    path: &TrackRelativePath,
+    track_id: TrackId,
+) -> ApplicationRuntimeResult<bool> {
+    let holder = library_store
+        .track_id_at(path)
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+    Ok(holder.is_some_and(|holder| holder != track_id))
+}
+
 pub(crate) fn retarget_managed_metadata(
     library_path: &Path,
     library_store: &dyn sustain_library_store::LibraryStore,
@@ -359,9 +371,6 @@ fn retarget_managed_metadata_with_persist(
         managed_library_filesystem_validator,
     )?;
 
-    let existing_tracks = library_store
-        .tracks()
-        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
     let mut track = library_store
         .track(track_id)
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
@@ -371,7 +380,7 @@ fn retarget_managed_metadata_with_persist(
     }
     track.metadata.apply_change(change);
 
-    let plan = plan_managed_track_retarget(library_path, &existing_tracks, track)?;
+    let plan = plan_managed_track_retarget(library_path, library_store, track)?;
     let Some(planned_move) = plan else {
         library_store
             .apply_track_metadata_change_and_enqueue_mirror(track_id, change)
@@ -443,9 +452,6 @@ pub(crate) fn relocate_managed_missing_track(
 
     let canonical_library_path = fs::canonicalize(library_path)
         .map_err(|_| ApplicationRuntimeError::TrackRelocationFailed)?;
-    let existing_tracks = library_store
-        .tracks()
-        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
     let track = library_store
         .track(track_id)
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
@@ -458,17 +464,15 @@ pub(crate) fn relocate_managed_missing_track(
         .strip_prefix(&canonical_library_path)
         .ok()
         .and_then(|relative| TrackRelativePath::new(relative.to_path_buf()));
-    if source_relative_path.as_ref().is_some_and(|relative_path| {
-        existing_tracks.iter().any(|existing_track| {
-            existing_track.id != track_id && existing_track.location.relative_path == *relative_path
-        })
-    }) {
+    if let Some(relative_path) = &source_relative_path
+        && held_by_another_track(library_store, relative_path, track_id)?
+    {
         return Err(ApplicationRuntimeError::TrackReplacementAlreadyInLibrary);
     }
 
     let (updated_track, planned_move) = plan_managed_missing_track_relocation(
         &canonical_library_path,
-        &existing_tracks,
+        library_store,
         track,
         replacement_path,
         source_relative_path.as_ref(),

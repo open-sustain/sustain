@@ -2,7 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::{
-    collections::BTreeSet,
+    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -12,6 +12,9 @@ const DEFAULT_MAX_COMPONENT_BYTES: usize = 120;
 const UNKNOWN_ARTIST: &str = "Unknown Artist";
 const UNKNOWN_ALBUM: &str = "Unknown Album";
 const UNTITLED: &str = "Untitled";
+/// How many paths [`ManagedTrackPathPlanner::candidates`] offers a track:
+/// its canonical path and the variants numbered 2 to this.
+const CANDIDATE_COUNT: u32 = 9_999;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ManagedTrackPathInput<'a> {
@@ -32,7 +35,6 @@ pub struct ManagedTrackPathPlan {
 pub enum ManagedTrackPathError {
     MissingFileExtension,
     ComponentLimitTooSmall,
-    CollisionSpaceExhausted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,17 +57,22 @@ impl ManagedTrackPathPlanner {
         }
     }
 
-    pub fn plan(
+    /// The paths a track described by `input` may take in a managed
+    /// library: its canonical path first, then the numbered variants
+    /// (`" 2"`, `" 3"`, …) in order. A caller takes the first candidate
+    /// that is free wherever it has to be free — among the library's
+    /// tracks, on disk — so the planner never needs the whole library.
+    pub fn candidates(
         &self,
         input: ManagedTrackPathInput<'_>,
-        occupied_paths: &BTreeSet<TrackRelativePath>,
-    ) -> Result<ManagedTrackPathPlan, ManagedTrackPathError> {
+    ) -> Result<ManagedTrackPathCandidates, ManagedTrackPathError> {
         let extension = input
             .source_path
             .extension()
             .and_then(|extension| extension.to_str())
             .filter(|extension| !extension.trim().is_empty())
-            .ok_or(ManagedTrackPathError::MissingFileExtension)?;
+            .ok_or(ManagedTrackPathError::MissingFileExtension)?
+            .to_owned();
 
         let artist_component = sanitize_component(
             first_present([
@@ -101,45 +108,76 @@ impl ManagedTrackPathPlanner {
             sanitize_optional_component(input.metadata.artist.as_deref(), self.max_component_bytes);
         let file_stem = file_stem(input.metadata, &title, track_artist.as_deref());
 
-        for collision_suffix in std::iter::once(None).chain((2..10_000).map(Some)) {
-            let file_name = self.file_name_with_suffix(&file_stem, extension, collision_suffix)?;
-            let relative_path = TrackRelativePath::new(
-                PathBuf::from(&artist_component)
-                    .join(&album_component)
-                    .join(&file_name),
-            )
-            .ok_or(ManagedTrackPathError::ComponentLimitTooSmall)?;
+        Ok(ManagedTrackPathCandidates {
+            max_component_bytes: self.max_component_bytes,
+            artist_component,
+            album_component,
+            file_stem,
+            extension,
+            numbers: 1..CANDIDATE_COUNT + 1,
+        })
+    }
+}
 
-            if !occupied_paths.contains(&relative_path) {
-                return Ok(ManagedTrackPathPlan {
-                    relative_path,
-                    artist_component,
-                    album_component,
-                    file_name,
-                    collision_suffix,
-                });
-            }
-        }
+/// The candidate paths of one track, from
+/// [`ManagedTrackPathPlanner::candidates`].
+pub struct ManagedTrackPathCandidates {
+    max_component_bytes: usize,
+    artist_component: String,
+    album_component: String,
+    file_stem: String,
+    extension: String,
+    /// The candidates still to give: 1 is the canonical path, and any
+    /// other number `n` its variant `" n"`.
+    numbers: Range<u32>,
+}
 
-        Err(ManagedTrackPathError::CollisionSpaceExhausted)
+impl Iterator for ManagedTrackPathCandidates {
+    type Item = Result<ManagedTrackPathPlan, ManagedTrackPathError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let number = self.numbers.next()?;
+        let collision_suffix = (number > 1).then_some(number);
+        Some(self.candidate(collision_suffix))
+    }
+}
+
+impl ManagedTrackPathCandidates {
+    fn candidate(
+        &self,
+        collision_suffix: Option<u32>,
+    ) -> Result<ManagedTrackPathPlan, ManagedTrackPathError> {
+        let file_name = self.file_name_with_suffix(collision_suffix)?;
+        let relative_path = TrackRelativePath::new(
+            PathBuf::from(&self.artist_component)
+                .join(&self.album_component)
+                .join(&file_name),
+        )
+        .ok_or(ManagedTrackPathError::ComponentLimitTooSmall)?;
+        Ok(ManagedTrackPathPlan {
+            relative_path,
+            artist_component: self.artist_component.clone(),
+            album_component: self.album_component.clone(),
+            file_name,
+            collision_suffix,
+        })
     }
 
     fn file_name_with_suffix(
         &self,
-        stem: &str,
-        extension: &str,
         collision_suffix: Option<u32>,
     ) -> Result<String, ManagedTrackPathError> {
         let suffix = collision_suffix
             .map(|suffix| format!(" {suffix}"))
             .unwrap_or_default();
+        let extension = &self.extension;
         let reserved_bytes = suffix.len() + 1 + extension.len();
         let available_stem_bytes = self
             .max_component_bytes
             .checked_sub(reserved_bytes)
             .filter(|available| *available > 0)
             .ok_or(ManagedTrackPathError::ComponentLimitTooSmall)?;
-        let stem = truncate_utf8_to_max_bytes(stem, available_stem_bytes);
+        let stem = truncate_utf8_to_max_bytes(&self.file_stem, available_stem_bytes);
         Ok(format!("{stem}{suffix}.{extension}"))
     }
 }
@@ -418,6 +456,32 @@ mod tests {
     }
 
     #[test]
+    fn candidates_offer_the_canonical_path_then_its_numbered_variants() {
+        let metadata = TrackMetadata {
+            title: Some("Song".to_owned()),
+            artist: Some("Artist".to_owned()),
+            album: Some("Album".to_owned()),
+            ..TrackMetadata::default()
+        };
+
+        let file_names = ManagedTrackPathPlanner::default()
+            .candidates(ManagedTrackPathInput {
+                metadata: &metadata,
+                source_path: Path::new("source.flac"),
+            })
+            .expect("candidates")
+            .map(|candidate| candidate.expect("candidate").file_name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(file_names.len(), 9_999);
+        assert_eq!(file_names[..3], ["Song.flac", "Song 2.flac", "Song 3.flac"]);
+        assert_eq!(
+            file_names.last().map(String::as_str),
+            Some("Song 9999.flac")
+        );
+    }
+
+    #[test]
     fn planner_truncates_long_components_without_splitting_utf8() {
         let planner = ManagedTrackPathPlanner::new(16);
         let metadata = TrackMetadata {
@@ -428,13 +492,13 @@ mod tests {
         };
 
         let plan = planner
-            .plan(
-                ManagedTrackPathInput {
-                    metadata: &metadata,
-                    source_path: Path::new("source.flac"),
-                },
-                &BTreeSet::new(),
-            )
+            .candidates(ManagedTrackPathInput {
+                metadata: &metadata,
+                source_path: Path::new("source.flac"),
+            })
+            .expect("candidates")
+            .next()
+            .expect("a candidate")
             .expect("planned");
 
         assert!(plan.artist_component.len() <= 16);
@@ -451,18 +515,23 @@ mod tests {
         assert_eq!(error, ManagedTrackPathError::MissingFileExtension);
     }
 
+    /// The first candidate not in `occupied_paths`.
     fn plan(
         metadata: &TrackMetadata,
         source_path: &str,
         occupied_paths: &BTreeSet<TrackRelativePath>,
     ) -> Result<super::ManagedTrackPathPlan, ManagedTrackPathError> {
-        ManagedTrackPathPlanner::default().plan(
-            ManagedTrackPathInput {
+        ManagedTrackPathPlanner::default()
+            .candidates(ManagedTrackPathInput {
                 metadata,
                 source_path: Path::new(source_path),
-            },
-            occupied_paths,
-        )
+            })?
+            .find(|candidate| {
+                candidate
+                    .as_ref()
+                    .map_or(true, |plan| !occupied_paths.contains(&plan.relative_path))
+            })
+            .expect("a free candidate")
     }
 
     fn relative_path(path: &str) -> TrackRelativePath {

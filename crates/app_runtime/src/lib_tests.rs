@@ -3712,6 +3712,63 @@ fn managed_metadata_update_moves_file_when_planned_path_changes() {
 }
 
 #[test]
+fn managed_metadata_update_skips_a_path_another_track_holds_without_its_file() {
+    // The canonical path belongs to a track whose file is missing: the disk
+    // has nothing there, yet the path is the other track's.
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    std::fs::write(root.join("loose.flac"), b"audio bytes").expect("write fake track");
+
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    assert_eq!(
+        store.save_track(test_track(track_id(1), "Artist/Album/Song.flac")),
+        Ok(())
+    );
+    let moving_id = track_id(2);
+    assert_eq!(
+        store.save_track(test_track(moving_id, "loose.flac")),
+        Ok(())
+    );
+    let mut settings = UserSettings::with_library_path(Some(root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(
+                store.clone(),
+                Arc::new(RecordingMetadataService::new(false)),
+            )
+            .expect("library services initialize");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateMetadata {
+            track_id: moving_id,
+            change: Box::new(MetadataChange {
+                title: FieldChange::Set("Song".to_owned()),
+                artist: FieldChange::Set("Artist".to_owned()),
+                album: FieldChange::Set("Album".to_owned()),
+                ..MetadataChange::default()
+            }),
+        }),
+        Ok(())
+    );
+
+    assert_eq!(
+        std::fs::read(root.join("Artist/Album/Song 2.flac")).expect("moved file"),
+        b"audio bytes"
+    );
+    assert_eq!(
+        store
+            .track(moving_id)
+            .expect("load moved track")
+            .map(|track| track.location.relative_path.to_path_buf()),
+        Some(PathBuf::from("Artist/Album/Song 2.flac"))
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
 fn managed_metadata_update_keeps_file_in_place_for_non_path_fields() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
@@ -7221,6 +7278,10 @@ impl LibraryStore for CallCountingLibraryStore {
             .track
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.track(track_id)
+    }
+
+    fn track_id_at(&self, relative_path: &TrackRelativePath) -> StoreResult<Option<TrackId>> {
+        self.inner.track_id_at(relative_path)
     }
 
     fn tracks(&self) -> StoreResult<Vec<Track>> {

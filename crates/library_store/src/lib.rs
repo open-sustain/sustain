@@ -15,7 +15,8 @@ pub use sustain_domain::{
     PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist,
     SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track,
     TrackAnalysis, TrackAudioProperties, TrackColumnEntry, TrackColumnLayout,
-    TrackColumnLayoutScope, TrackColumnSort, TrackId, TrackLocation, WaveformSegments,
+    TrackColumnLayoutScope, TrackColumnSort, TrackId, TrackLocation, TrackRelativePath,
+    WaveformSegments,
 };
 use sustain_domain::{BeatGrid, SmartPlaylistRuleSet};
 pub use sustain_domain::{SourceFileStat, SourceFingerprint};
@@ -332,6 +333,8 @@ pub trait LibraryStore: Send + Sync {
     fn commit_duplicate_consolidation(&self, plan: &DuplicateConsolidationPlan) -> StoreResult<()>;
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()>;
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>>;
+    /// The track whose file is at `relative_path`, if any.
+    fn track_id_at(&self, relative_path: &TrackRelativePath) -> StoreResult<Option<TrackId>>;
     fn tracks(&self) -> StoreResult<Vec<Track>>;
     /// Force previously committed rows through the persistent-store
     /// durability boundary. Managed-library relocation keeps its external

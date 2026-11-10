@@ -546,6 +546,31 @@ fn deleting_a_missing_track_is_a_no_op() {
 }
 
 #[test]
+fn track_id_at_finds_the_track_stored_at_a_path() {
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    store.save_track(track(1, "a.flac")).expect("save");
+    store.save_track(track(2, "b.flac")).expect("save");
+
+    assert_eq!(
+        store.track_id_at(&relative_path("b.flac")),
+        Ok(Some(track_id(2)))
+    );
+    assert_eq!(store.track_id_at(&relative_path("c.flac")), Ok(None));
+
+    store
+        .update_track_location(
+            track_id(2),
+            &TrackLocation::available(relative_path("c.flac")),
+        )
+        .expect("move");
+    assert_eq!(store.track_id_at(&relative_path("b.flac")), Ok(None));
+    assert_eq!(
+        store.track_id_at(&relative_path("c.flac")),
+        Ok(Some(track_id(2)))
+    );
+}
+
+#[test]
 fn sqlite_store_saves_and_loads_playlists() {
     let store = SqliteLibraryStore::open_in_memory().expect("open in-memory sqlite store");
     let track = track(2, "a.flac");

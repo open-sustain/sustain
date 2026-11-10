@@ -3,7 +3,7 @@
 
 //! Verified publication of a staged YouTube audio replacement.
 
-use std::{collections::BTreeSet, fs, path::Path, time::Duration};
+use std::{fs, path::Path, time::Duration};
 
 use sustain_domain::{
     LibraryManagementMode, ManagedTrackPathInput, ManagedTrackPathPlanner, Track, TrackLocation,
@@ -245,13 +245,10 @@ pub(crate) fn replace_track_audio_from_youtube(
 ) -> ApplicationRuntimeResult<YoutubeAudioReplacementOutcome> {
     let canonical_root = fs::canonicalize(library_root)
         .map_err(|_| ApplicationRuntimeError::LibraryPathUnavailable)?;
-    let tracks = store
-        .tracks()
-        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-    let track = tracks
-        .iter()
-        .find(|track| track.id == track_id && !track.location.is_missing())
-        .cloned()
+    let track = store
+        .track(track_id)
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
+        .filter(|track| !track.location.is_missing())
         .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
     ensure_track_is_eligible(&track)?;
     let original_path = track.location.absolute_path(&canonical_root);
@@ -291,7 +288,7 @@ pub(crate) fn replace_track_audio_from_youtube(
     let destination_relative_path = replacement_destination(
         &canonical_root,
         management_mode,
-        &tracks,
+        store,
         &track,
         &staged.path,
     )?;
@@ -395,26 +392,39 @@ fn validate_downloaded_audio(
     Ok(())
 }
 
+/// Where the replacement of `track` goes: the first candidate path that no
+/// library track, the original included, holds and no file occupies.
 fn replacement_destination(
     library_root: &Path,
     management_mode: LibraryManagementMode,
-    tracks: &[Track],
+    store: &dyn LibraryStore,
     track: &Track,
     staged_path: &Path,
 ) -> ApplicationRuntimeResult<TrackRelativePath> {
     match management_mode {
         LibraryManagementMode::ReferenceFilesInPlace => {
-            side_by_side_destination(library_root, tracks, track, staged_path)
+            side_by_side_destination(library_root, store, track, staged_path)
         }
         LibraryManagementMode::CopyAddedFilesIntoLibrary => {
-            managed_destination(library_root, tracks, track, staged_path)
+            managed_destination(library_root, store, track, staged_path)
         }
     }
 }
 
+fn is_free(
+    library_root: &Path,
+    store: &dyn LibraryStore,
+    relative: &TrackRelativePath,
+) -> ApplicationRuntimeResult<bool> {
+    let holder = store
+        .track_id_at(relative)
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+    Ok(holder.is_none() && !relative.resolve(library_root).exists())
+}
+
 fn side_by_side_destination(
     library_root: &Path,
-    tracks: &[Track],
+    store: &dyn LibraryStore,
     track: &Track,
     staged_path: &Path,
 ) -> ApplicationRuntimeResult<TrackRelativePath> {
@@ -439,11 +449,7 @@ fn side_by_side_destination(
         let relative =
             TrackRelativePath::new(parent.join(format!("{stem} (YouTube){suffix}.{extension}")))
                 .ok_or(ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
-        if !tracks
-            .iter()
-            .any(|existing| existing.location.relative_path == relative)
-            && !relative.resolve(library_root).exists()
-        {
+        if is_free(library_root, store, &relative)? {
             return Ok(relative);
         }
     }
@@ -452,29 +458,21 @@ fn side_by_side_destination(
 
 fn managed_destination(
     library_root: &Path,
-    tracks: &[Track],
+    store: &dyn LibraryStore,
     track: &Track,
     staged_path: &Path,
 ) -> ApplicationRuntimeResult<TrackRelativePath> {
-    let planner = ManagedTrackPathPlanner::default();
-    let mut occupied = tracks
-        .iter()
-        .map(|track| track.location.relative_path.clone())
-        .collect::<BTreeSet<_>>();
-    for _ in 0..10_000 {
-        let plan = planner
-            .plan(
-                ManagedTrackPathInput {
-                    metadata: &track.metadata,
-                    source_path: staged_path,
-                },
-                &occupied,
-            )
-            .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
-        if !plan.relative_path.resolve(library_root).exists() {
+    let candidates = ManagedTrackPathPlanner::default()
+        .candidates(ManagedTrackPathInput {
+            metadata: &track.metadata,
+            source_path: staged_path,
+        })
+        .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
+    for candidate in candidates {
+        let plan = candidate.map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
+        if is_free(library_root, store, &plan.relative_path)? {
             return Ok(plan.relative_path);
         }
-        occupied.insert(plan.relative_path);
     }
     Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed)
 }
@@ -542,15 +540,13 @@ mod tests {
     fn reference_mode_publishes_side_by_side_using_downloaded_extension() {
         let root = tempfile::tempdir().expect("tempdir");
         let track = sample_track();
+        let store = sustain_library_store::SqliteLibraryStore::open_in_memory().expect("store");
+        store.save_track(track.clone()).expect("save track");
         fs::write(root.path().join("old (YouTube).opus"), b"occupied").expect("write collision");
 
-        let relative = side_by_side_destination(
-            root.path(),
-            std::slice::from_ref(&track),
-            &track,
-            Path::new("/staged/audio.opus"),
-        )
-        .expect("destination");
+        let relative =
+            side_by_side_destination(root.path(), &store, &track, Path::new("/staged/audio.opus"))
+                .expect("destination");
 
         assert_eq!(relative.as_path(), Path::new("old (YouTube) 2.opus"));
     }

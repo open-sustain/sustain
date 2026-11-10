@@ -30,7 +30,7 @@ use sustain_library_store::{
     StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
     SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, Track,
     TrackAnalysis, TrackAudioProperties, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
-    TrackLocation,
+    TrackLocation, TrackRelativePath,
 };
 
 /// A [`LibraryStore`] that delegates to an inner store but can be told
@@ -397,6 +397,10 @@ impl LibraryStore for FaultyStore {
             ));
         }
         self.inner.track(track_id)
+    }
+
+    fn track_id_at(&self, relative_path: &TrackRelativePath) -> StoreResult<Option<TrackId>> {
+        self.inner.track_id_at(relative_path)
     }
 
     fn tracks(&self) -> StoreResult<Vec<Track>> {
