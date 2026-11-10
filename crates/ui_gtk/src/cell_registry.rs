@@ -5,10 +5,9 @@
 //!
 //! Several views need to find their realized cells again after creation:
 //! the track table refreshes status icons, text values, and rating stars
-//! in place, context menus hit-test the cell under a right-click, and
-//! inline editing hops between a row's editable cells on Tab. Each keeps a
-//! registry of per-cell bindings, and they all share the lifecycle
-//! implemented here.
+//! in place, and inline editing hops between a row's editable cells on
+//! Tab. Each keeps a registry of per-cell bindings, and they all share
+//! the lifecycle implemented here.
 //!
 //! Bindings keep only weak widget references. GTK can tear down thousands
 //! of cached cells when a large playlist shrinks to a small one; making
@@ -19,12 +18,11 @@
 //! teardown) brings back the multi-second freeze, so keep the registries
 //! weak and do not re-add an eager teardown path.
 //!
-//! Registries that are walked rarely (a context menu's hit-test runs only
-//! on right-click, the editable-cell walk only on Tab) would accumulate
-//! dead bindings without bound across playlist switches, so [`push`] also
-//! sweeps dead bindings once the registry grows past a watermark —
-//! amortized O(1) per registration, never tied to a single cell's
-//! teardown.
+//! Registries that are walked rarely (the editable-cell walk runs only on
+//! Tab) would accumulate dead bindings without bound across playlist
+//! switches, so [`push`] also sweeps dead bindings once the registry grows
+//! past a watermark — amortized O(1) per registration, never tied to a
+//! single cell's teardown.
 //!
 //! [`push`]: BindingRegistry::push
 

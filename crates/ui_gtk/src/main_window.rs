@@ -484,8 +484,9 @@ pub(crate) fn build_main_window(
     // Edits route through the same `UpdateMetadata` + `track_row_changed`
     // path: for a smart playlist whose membership the edit changes, the
     // callback reflows the view; otherwise it refreshes the row in place.
-    // The drag-to-reorder handle lives on the status column, so it does not
-    // contend with the text columns' edit gesture (#158).
+    // Dragging rows to reorder them does not contend with the edit click:
+    // the click never claims its press, and a drag starts only once the
+    // pointer moves past the drag threshold (#158).
     let playlists_inline_edit = begin_inline_edit_callback(
         &runtime,
         &command_controller,
