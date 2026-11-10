@@ -942,8 +942,10 @@ mod tests {
             store.tag_mirrors_due(i64::MAX, 10).expect("pending").len(),
             1
         );
+        // The retry is due a wall-clock second or two after the failure;
+        // the bound only has to outlast that on a loaded machine.
         assert_eq!(
-            recv_result(&result_rx, Duration::from_secs(3)).outcome,
+            recv_result(&result_rx, Duration::from_secs(10)).outcome,
             MetadataWriteOutcome::Succeeded
         );
         assert!(
