@@ -15,13 +15,13 @@ use crate::{
     schema::{
         ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_BEAT_GRID_SQL,
         ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL,
-        BACKFILL_GENERATED_SORT_FIELDS_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
-        NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
-        VERSION_ANALYSIS_PER_CAPABILITY_SQL,
+        BACKFILL_GENERATED_SORT_FIELDS_SQL, INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL,
+        MOVE_WAVEFORMS_TO_CACHE_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL,
+        STORE_BPM_IN_HUNDREDTHS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 13;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 14;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -107,6 +107,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 13,
         description: "version analysis attempts per capability",
         step: MigrationStep::Sql(VERSION_ANALYSIS_PER_CAPABILITY_SQL),
+    },
+    Migration {
+        version: 14,
+        description: "index playlist entries by track",
+        step: MigrationStep::Sql(INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL),
     },
 ];
 
@@ -1162,6 +1167,42 @@ mod tests {
                 .prepare("SELECT analyzer_version FROM track_analysis")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn upgrade_from_v13_finds_a_tracks_playlist_entries_by_index() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..13]).expect("schema version 13");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path) VALUES (1, x'61'), (2, x'62');
+                 INSERT INTO playlists (id, name) VALUES (1, 'Mix');
+                 INSERT INTO playlist_entries (playlist_id, track_id, position) \
+                     VALUES (1, 1, 0), (1, 2, 1);",
+            )
+            .expect("seed a playlist");
+
+        apply_pending(&connection).expect("upgrade");
+
+        let plan: String = connection
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT 1 FROM playlist_entries WHERE track_id = 1",
+                [],
+                |row| row.get(3),
+            )
+            .expect("query plan");
+        assert!(plan.contains("playlist_entries_by_track"), "{plan}");
+        connection
+            .execute("DELETE FROM tracks WHERE id = 1", [])
+            .expect("remove a track");
+        let left: Vec<i64> = connection
+            .prepare("SELECT track_id FROM playlist_entries ORDER BY position")
+            .expect("prepare")
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("entries");
+        assert_eq!(left, vec![2]);
     }
 
     #[test]

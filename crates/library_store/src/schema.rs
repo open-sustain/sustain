@@ -543,6 +543,13 @@ UPDATE track_analysis SET
 ALTER TABLE track_analysis DROP COLUMN analyzer_version;
 "#;
 
+// Removing a track removes its playlist entries with it, and without an
+// index on the track SQLite found them by reading every playlist entry,
+// once per track removed.
+pub(super) const INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL: &str = r#"
+CREATE INDEX playlist_entries_by_track ON playlist_entries (track_id);
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
