@@ -7,13 +7,13 @@ use gtk::prelude::*;
 use gtk::{gdk, glib};
 use sustain_app_runtime::{Rating, TrackId};
 
-use super::track_cell::TrackCell;
 use super::{
     RatingChangedCallback, columns::TrackTableColumn, inline_edit::InlineEditController,
     row::TrackTableRow,
 };
 use crate::cell_registry::{BindingRegistry, CellBinding};
 use crate::rating_stars::RatingStars;
+use crate::table_cell::TableCell;
 use crate::track_context::TrackRowContextMenu;
 use crate::util::set_exclusive_css_class;
 
@@ -38,7 +38,7 @@ pub(super) fn install_context_menu(
         let Some(table) = gesture.widget().and_downcast::<gtk::ColumnView>() else {
             return;
         };
-        let Some(cell) = TrackCell::at(&table, x, y) else {
+        let Some(cell) = TableCell::at(&table, x, y) else {
             return;
         };
         let Some(list_item) = cell.list_item() else {
@@ -141,7 +141,7 @@ impl StatusBindings {
 
 struct TextBinding {
     list_item: glib::WeakRef<gtk::ListItem>,
-    text: glib::WeakRef<gtk::Inscription>,
+    cell: glib::WeakRef<TableCell>,
     column: TrackTableColumn,
 }
 
@@ -151,7 +151,7 @@ impl CellBinding for TextBinding {
     }
 
     fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.text.upgrade().is_some()
+        self.list_item.upgrade().is_some() && self.cell.upgrade().is_some()
     }
 }
 
@@ -164,8 +164,8 @@ impl TextBindings {
     /// focused row widget answers that.
     pub(super) fn row_within(&self, widget: &gtk::Widget) -> Option<gtk::ListItem> {
         self.0.find_map_live(|binding| {
-            let text = binding.text.upgrade()?;
-            text.is_ancestor(widget)
+            let cell = binding.cell.upgrade()?;
+            cell.is_ancestor(widget)
                 .then(|| binding.list_item())
                 .flatten()
         })
@@ -174,12 +174,12 @@ impl TextBindings {
     /// Re-derive the text cells in `scope` from their row payload.
     pub(super) fn refresh(&self, scope: RefreshScope<'_>) {
         self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(text)) = (binding.list_item(), binding.text.upgrade())
+            let (Some(list_item), Some(cell)) = (binding.list_item(), binding.cell.upgrade())
             else {
                 return;
             };
             if scope.includes(&list_item) {
-                refresh_text_cell(&list_item, &text, binding.column);
+                refresh_text_cell(&list_item, &cell, binding.column);
             }
         });
     }
@@ -244,21 +244,18 @@ pub(super) fn build_text_cell_factory(
             return;
         };
 
-        let cell = new_track_cell(list_item);
-
-        let text = new_cell_text(column.xalign());
-        cell.append(&text);
+        let cell = new_track_text_cell(list_item, column.xalign());
         list_item.set_child(Some(&cell));
 
         // Editable columns on an inline-editing table arm a click gesture
         // and join the row's editable-cell registry (used for Tab hops).
         if let (Some(controller), Some(field)) = (inline_edit_for_setup.as_ref(), editable_field) {
-            controller.register_editable_cell(list_item, cell.upcast_ref(), field);
+            controller.register_editable_cell(list_item, &cell, field);
         }
 
         bindings_for_setup.0.push(TextBinding {
             list_item: list_item.downgrade(),
-            text: text.downgrade(),
+            cell: cell.downgrade(),
             column,
         });
     });
@@ -276,29 +273,23 @@ pub(super) fn build_text_cell_factory(
         let Some(cell) = item
             .downcast_ref::<gtk::ListItem>()
             .and_then(|list_item| list_item.child())
-            .and_downcast::<TrackCell>()
+            .and_downcast::<TableCell>()
         else {
             return;
         };
-        controller.finish_if_editing_cell(cell.upcast_ref());
+        controller.finish_if_editing_cell(&cell);
     });
 
     factory.connect_bind(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(cell) = list_item.child().and_downcast::<TrackCell>() else {
+        let Some(cell) = list_item.child().and_downcast::<TableCell>() else {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
         sync_row_selection_class(&cell, list_item.is_selected());
 
-        let Some(text) = cell
-            .first_child()
-            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
-        else {
-            return;
-        };
         let Some(row_object) = list_item
             .item()
             .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
@@ -309,7 +300,7 @@ pub(super) fn build_text_cell_factory(
             return;
         };
 
-        text.set_text(Some(&column.text(&row)));
+        cell.set_text(&column.text(&row));
     });
 
     factory
@@ -360,7 +351,7 @@ pub(super) fn build_rating_cell_factory(
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(cell) = list_item.child().and_downcast::<TrackCell>() else {
+        let Some(cell) = list_item.child().and_downcast::<TableCell>() else {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
@@ -416,7 +407,7 @@ fn build_status_cell_factory(
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(cell) = list_item.child().and_downcast::<TrackCell>() else {
+        let Some(cell) = list_item.child().and_downcast::<TableCell>() else {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
@@ -449,7 +440,7 @@ fn build_filler_factory() -> gtk::SignalListItemFactory {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(cell) = list_item.child().and_downcast::<TrackCell>() else {
+        let Some(cell) = list_item.child().and_downcast::<TableCell>() else {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
@@ -459,38 +450,26 @@ fn build_filler_factory() -> gtk::SignalListItemFactory {
     factory
 }
 
-/// The [`TrackCell`] every track-table cell factory shares, kept tinted
-/// and marked selected along with its row. Each factory then appends its
-/// own content — a [`new_cell_text`], rating stars, a status icon, or
-/// nothing for the filler column.
-fn new_track_cell(list_item: &gtk::ListItem) -> TrackCell {
-    let cell = TrackCell::new(list_item);
+/// A track-table cell that shows the widget its factory appends — rating
+/// stars, a status icon, or nothing for the filler column.
+fn new_track_cell(list_item: &gtk::ListItem) -> TableCell {
+    track_cell(list_item, TableCell::new(list_item))
+}
+
+/// A track-table cell that shows a text aligned to `xalign`.
+fn new_track_text_cell(list_item: &gtk::ListItem, xalign: f32) -> TableCell {
+    track_cell(list_item, TableCell::with_text(list_item, xalign))
+}
+
+/// `cell`, kept tinted and marked selected along with its row.
+fn track_cell(list_item: &gtk::ListItem, cell: TableCell) -> TableCell {
+    cell.add_css_class("track-table-cell");
     install_cell_row_tint_sync(list_item, &cell);
     install_cell_selection_sync(list_item, &cell);
     cell
 }
 
-/// The text of a table cell, ellipsized at the end and aligned to
-/// `xalign`.
-///
-/// A `GtkInscription`, never a `GtkLabel`: a label's size follows its
-/// text, so every text change queues a resize, and GTK re-measures every
-/// realized row — about 200 of them, visible or not — on the next frame.
-/// An inscription's size comes from its line count alone, so a text change
-/// only redraws it. A whole-library search re-texts every realized cell,
-/// and with labels that relayout was the largest cost of the keystroke.
-pub(crate) fn new_cell_text(xalign: f32) -> gtk::Inscription {
-    let text = gtk::Inscription::new(None);
-    text.set_text_overflow(gtk::InscriptionOverflow::EllipsizeEnd);
-    text.set_hexpand(true);
-    text.set_valign(gtk::Align::Center);
-    text.set_margin_start(8);
-    text.set_margin_end(8);
-    text.set_xalign(xalign);
-    text
-}
-
-fn install_cell_row_tint_sync(list_item: &gtk::ListItem, cell: &TrackCell) {
+fn install_cell_row_tint_sync(list_item: &gtk::ListItem, cell: &TableCell) {
     let cell_for_position = cell.clone();
     list_item.connect_position_notify(move |list_item| {
         apply_bound_row_tint(&cell_for_position, list_item);
@@ -517,20 +496,20 @@ pub(crate) fn row_track_id(item: Option<glib::Object>) -> Option<TrackId> {
     row.track_id
 }
 
-fn refresh_text_cell(list_item: &gtk::ListItem, text: &gtk::Inscription, column: TrackTableColumn) {
+fn refresh_text_cell(list_item: &gtk::ListItem, cell: &TableCell, column: TrackTableColumn) {
     let Some(row_object) = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
     else {
-        text.set_text(None);
+        cell.set_text("");
         return;
     };
     let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
         return;
     };
-    text.set_text(Some(&column.text(&row)));
+    cell.set_text(&column.text(&row));
     drop(row);
-    retint_cell_of(text, list_item);
+    apply_bound_row_tint(cell, list_item);
 }
 
 fn row_rating(item: Option<glib::Object>) -> Rating {
@@ -613,12 +592,12 @@ fn clear_status_icon(icon: &gtk::Image) {
 /// Re-apply the row tint to the track cell holding `content`, whose row
 /// payload may have changed in place (a Duplicates group band, say).
 fn retint_cell_of(content: &impl IsA<gtk::Widget>, list_item: &gtk::ListItem) {
-    if let Some(cell) = content.parent().and_downcast::<TrackCell>() {
+    if let Some(cell) = content.parent().and_downcast::<TableCell>() {
         apply_bound_row_tint(&cell, list_item);
     }
 }
 
-fn apply_bound_row_tint(cell: &TrackCell, list_item: &gtk::ListItem) {
+fn apply_bound_row_tint(cell: &TableCell, list_item: &gtk::ListItem) {
     let group_band = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
@@ -634,7 +613,7 @@ fn apply_bound_row_tint(cell: &TrackCell, list_item: &gtk::ListItem) {
     }
 }
 
-fn install_cell_selection_sync(list_item: &gtk::ListItem, cell: &TrackCell) {
+fn install_cell_selection_sync(list_item: &gtk::ListItem, cell: &TableCell) {
     let cell_for_selection = cell.clone();
     list_item.connect_selected_notify(move |list_item| {
         sync_row_selection_class(&cell_for_selection, list_item.is_selected());
@@ -642,7 +621,7 @@ fn install_cell_selection_sync(list_item: &gtk::ListItem, cell: &TrackCell) {
     sync_row_selection_class(cell, list_item.is_selected());
 }
 
-fn sync_row_selection_class(cell: &TrackCell, selected: bool) {
+fn sync_row_selection_class(cell: &TableCell, selected: bool) {
     if selected {
         cell.add_css_class("track-table-row-selected");
     } else {

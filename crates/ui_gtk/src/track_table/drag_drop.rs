@@ -7,9 +7,9 @@ use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
 
 use super::cells::{collect_selected_track_ids, row_track_id};
-use super::track_cell::TrackCell;
 use super::{RowDropPosition, RowReorderCallback, RowReorderDrop};
 use crate::sidebar::{parse_tracks_payload, tracks_drag_payload};
+use crate::table_cell::TableCell;
 
 const ROW_DROP_ABOVE_CSS_CLASS: &str = "track-row-drop-above";
 const ROW_DROP_BELOW_CSS_CLASS: &str = "track-row-drop-below";
@@ -84,8 +84,8 @@ fn clear_row_drop_classes(row: Option<&gtk::Widget>) {
 
 /// Where a drop on `table` at `(x, y)` would land: the cell under the
 /// pointer, and whether the pointer is in the upper or lower half of it.
-fn drop_point(table: &gtk::ColumnView, x: f64, y: f64) -> Option<(TrackCell, RowDropPosition)> {
-    let cell = TrackCell::at(table, x, y)?;
+fn drop_point(table: &gtk::ColumnView, x: f64, y: f64) -> Option<(TableCell, RowDropPosition)> {
+    let cell = TableCell::at(table, x, y)?;
     let point = table.compute_point(&cell, &graphene::Point::new(x as f32, y as f32))?;
     let position = drop_position_from_offset(f64::from(point.y()), cell.height());
     Some((cell, position))
@@ -235,7 +235,7 @@ pub(super) fn install_tracks_drag_source(table: &gtk::ColumnView, selection: &gt
     let selection = selection.clone();
     drag_source.connect_prepare(move |source, x, y| {
         let table = source.widget().and_downcast::<gtk::ColumnView>()?;
-        let Some(cell) = TrackCell::at(&table, x, y) else {
+        let Some(cell) = TableCell::at(&table, x, y) else {
             // A press off the rows — on a header, a scrollbar — never
             // drags tracks; stop asking for the rest of this press.
             source.set_state(gtk::EventSequenceState::Denied);
@@ -248,7 +248,7 @@ pub(super) fn install_tracks_drag_source(table: &gtk::ColumnView, selection: &gt
 
 fn prepare_tracks_drag(
     source: &gtk::DragSource,
-    cell: &TrackCell,
+    cell: &TableCell,
     selection: &gtk::MultiSelection,
 ) -> Option<gdk::ContentProvider> {
     let list_item = cell.list_item()?;
@@ -288,9 +288,9 @@ fn prepare_tracks_drag(
 /// is returned as a graceful fallback (the icon will still follow the cursor;
 /// it just won't show the stack).
 ///
-/// 1. [`TrackCell::row`] assumes the ColumnView's row container has the CSS
+/// 1. [`TableCell::row`] assumes the ColumnView's row container has the CSS
 ///    node name `row`. GTK documents that node, but if a future GTK
-///    reworks the listview hierarchy, `TrackCell::row` would return `None`
+///    reworks the listview hierarchy, `TableCell::row` would return `None`
 ///    and we fall straight back to a missing-icon `None` here.
 /// 2. [`visible_selected_row_widgets`] assumes sibling order in the row
 ///    container matches position order. True for `ListBase` virtualization in
@@ -302,7 +302,7 @@ fn prepare_tracks_drag(
 ///    GTK refuses to paint widgets mid-virtualization, the composite returns
 ///    `None` and we fall back to the single-row paintable below.
 fn build_drag_paintable(
-    cell: &TrackCell,
+    cell: &TableCell,
     originating_position: u32,
     selection: &gtk::MultiSelection,
 ) -> Option<gdk::Paintable> {

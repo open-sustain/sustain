@@ -12,11 +12,11 @@ use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackColu
 
 use super::track_context::TrackRowContextMenu;
 use crate::track_summary::TrackSummary;
+pub(crate) use cells::row_track_id;
 use cells::{
     RatingBindings, RefreshScope, StatusBindings, TextBindings, build_filler_column,
     build_rating_cell_factory, build_status_column, build_text_cell_factory, install_context_menu,
 };
-pub(crate) use cells::{new_cell_text, row_track_id};
 use columns::{TRACK_TABLE_COLUMNS, TrackTableColumn};
 use drag_drop::{RowReorderHooks, install_row_reorder_drop_target, install_tracks_drag_source};
 pub(crate) use empty_row_painter::EmptyRowPainter;
@@ -31,7 +31,6 @@ mod empty_row_painter;
 mod inline_edit;
 mod order;
 mod row;
-mod track_cell;
 
 pub(crate) type TrackActivatedCallback = Rc<dyn Fn(TrackId)>;
 pub(crate) type RatingChangedCallback = Rc<dyn Fn(TrackId, Rating) -> bool>;
@@ -1339,6 +1338,7 @@ mod tests {
     use sustain_app_runtime::TrackId;
 
     use super::*;
+    use crate::table_cell::TableCell;
     use crate::track_context::{TrackContextActionSet, TrackContextInvocationState};
 
     #[test]
@@ -1503,11 +1503,9 @@ mod tests {
                 .child()
                 .expect("window retains the mapped track table");
             // A probe: re-deriving row B's cell would overwrite it.
-            let untouched = cell_containing_text(&root, "B")
-                .and_then(|cell| cell.first_child())
-                .and_then(|text| text.downcast::<gtk::Inscription>().ok())
-                .expect("row B's name cell is realized");
-            untouched.set_text(Some("probe"));
+            let untouched =
+                cell_containing_text(&root, "B").expect("row B's name cell is realized");
+            untouched.set_text("probe");
 
             table.update_rows(&HashMap::from([(
                 TrackId::new(1).expect("positive track id"),
@@ -1518,7 +1516,7 @@ mod tests {
                 cell_containing_text(&root, "A2").is_some(),
                 "the updated track's cell shows its new data"
             );
-            assert_eq!(untouched.text().as_deref(), Some("probe"));
+            assert_eq!(untouched.text(), "probe");
 
             window.destroy();
         });
@@ -1932,11 +1930,11 @@ mod tests {
         }
     }
 
-    fn cell_containing_text(root: &gtk::Widget, text: &str) -> Option<gtk::Widget> {
-        if let Some(inscription) = root.downcast_ref::<gtk::Inscription>()
-            && inscription.text().as_deref() == Some(text)
+    fn cell_containing_text(root: &gtk::Widget, text: &str) -> Option<TableCell> {
+        if let Some(cell) = root.downcast_ref::<TableCell>()
+            && cell.text() == text
         {
-            return root.parent();
+            return Some(cell.clone());
         }
         let mut child = root.first_child();
         while let Some(widget) = child {

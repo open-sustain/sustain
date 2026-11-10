@@ -41,9 +41,8 @@ use gtk::{gdk, gdk_pixbuf, gio, glib};
 use sustain_app_runtime::{CdImportRequest, CdTrackOverride, DiscRelease, TocSnapshot};
 
 use crate::cell_registry::{BindingRegistry, CellBinding};
-use crate::track_table::{
-    EditSession, EditableField, EmptyRowPainter, InlineEditController, new_cell_text,
-};
+use crate::table_cell::TableCell;
+use crate::track_table::{EditSession, EditableField, EmptyRowPainter, InlineEditController};
 use crate::{SharedRuntime, TITLEBAR_HEIGHT};
 
 const FALLBACK_ALBUM: &str = "Audio CD";
@@ -127,7 +126,7 @@ impl CdRow {
 /// `cell_registry`).
 struct CdTextBinding {
     list_item: glib::WeakRef<gtk::ListItem>,
-    text: glib::WeakRef<gtk::Inscription>,
+    cell: glib::WeakRef<TableCell>,
     field: EditableField,
 }
 
@@ -137,7 +136,7 @@ impl CellBinding for CdTextBinding {
     }
 
     fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.text.upgrade().is_some()
+        self.list_item.upgrade().is_some() && self.cell.upgrade().is_some()
     }
 }
 
@@ -147,7 +146,7 @@ struct CdTextBindings(BindingRegistry<CdTextBinding>);
 impl CdTextBindings {
     fn refresh(&self) {
         self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(text)) = (binding.list_item(), binding.text.upgrade())
+            let (Some(list_item), Some(cell)) = (binding.list_item(), binding.cell.upgrade())
             else {
                 return;
             };
@@ -156,7 +155,7 @@ impl CdTextBindings {
                 EditableField::Artist => row.display_artist(),
                 _ => row.display_title(),
             });
-            text.set_text(value.as_deref());
+            cell.set_text(value.as_deref().unwrap_or_default());
         });
     }
 }
@@ -860,13 +859,20 @@ fn fixed_column(
     column
 }
 
-fn new_cell() -> gtk::Box {
-    let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+/// A cell that shows the widgets appended to it.
+fn new_cell(list_item: &gtk::ListItem) -> TableCell {
+    cd_cell(list_item, TableCell::new(list_item))
+}
+
+/// A cell that shows a text aligned to `xalign`.
+fn new_text_cell(list_item: &gtk::ListItem, xalign: f32) -> TableCell {
+    cd_cell(list_item, TableCell::with_text(list_item, xalign))
+}
+
+/// `cell`, marked selected along with its row.
+fn cd_cell(list_item: &gtk::ListItem, cell: TableCell) -> TableCell {
     cell.add_css_class("track-table-cell");
-    cell.set_hexpand(true);
-    cell.set_vexpand(true);
-    cell.set_halign(gtk::Align::Fill);
-    cell.set_valign(gtk::Align::Fill);
+    install_cd_cell_selection_sync(list_item, &cell);
     cell
 }
 
@@ -878,8 +884,7 @@ fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFac
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let cell = new_cell();
-        install_cd_cell_selection_sync(list_item, &cell);
+        let cell = new_cell(list_item);
 
         let spinner = gtk::Spinner::new();
         spinner.set_halign(gtk::Align::Center);
@@ -927,7 +932,7 @@ fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFac
         };
         let Some(cell) = list_item
             .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
+            .and_then(|child| child.downcast::<TableCell>().ok())
         else {
             return;
         };
@@ -956,8 +961,7 @@ fn build_cd_check_factory(
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let cell = new_cell();
-        install_cd_cell_selection_sync(list_item, &cell);
+        let cell = new_cell(list_item);
 
         let check = gtk::CheckButton::new();
         check.add_css_class("cd-import-track-check");
@@ -994,7 +998,7 @@ fn build_cd_check_factory(
         };
         let Some(cell) = list_item
             .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
+            .and_then(|child| child.downcast::<TableCell>().ok())
         else {
             return;
         };
@@ -1020,11 +1024,8 @@ fn build_cd_number_factory() -> gtk::SignalListItemFactory {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let cell = new_cell();
-        install_cd_cell_selection_sync(list_item, &cell);
-        let text = new_cell_text(1.0);
-        text.add_css_class("dim-label");
-        cell.append(&text);
+        let cell = new_text_cell(list_item, 1.0);
+        cell.add_css_class("dim-text");
         list_item.set_child(Some(&cell));
     });
     factory.connect_bind(move |_factory, item| {
@@ -1033,18 +1034,14 @@ fn build_cd_number_factory() -> gtk::SignalListItemFactory {
         };
         let Some(cell) = list_item
             .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
+            .and_then(|child| child.downcast::<TableCell>().ok())
         else {
             return;
         };
         bind_cell_chrome(&cell, list_item);
-        let Some(text) = cell
-            .first_child()
-            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
-        else {
-            return;
-        };
-        text.set_text(list_item_cd_row(list_item, |row| format!("{:02}", row.number)).as_deref());
+        cell.set_text(
+            &list_item_cd_row(list_item, |row| format!("{:02}", row.number)).unwrap_or_default(),
+        );
     });
     factory
 }
@@ -1055,11 +1052,8 @@ fn build_cd_duration_factory() -> gtk::SignalListItemFactory {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let cell = new_cell();
-        install_cd_cell_selection_sync(list_item, &cell);
-        let text = new_cell_text(1.0);
-        text.add_css_class("dim-label");
-        cell.append(&text);
+        let cell = new_text_cell(list_item, 1.0);
+        cell.add_css_class("dim-text");
         list_item.set_child(Some(&cell));
     });
     factory.connect_bind(move |_factory, item| {
@@ -1068,18 +1062,14 @@ fn build_cd_duration_factory() -> gtk::SignalListItemFactory {
         };
         let Some(cell) = list_item
             .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
+            .and_then(|child| child.downcast::<TableCell>().ok())
         else {
             return;
         };
         bind_cell_chrome(&cell, list_item);
-        let Some(text) = cell
-            .first_child()
-            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
-        else {
-            return;
-        };
-        text.set_text(list_item_cd_row(list_item, |row| format_duration(row.duration)).as_deref());
+        cell.set_text(
+            &list_item_cd_row(list_item, |row| format_duration(row.duration)).unwrap_or_default(),
+        );
     });
     factory
 }
@@ -1097,11 +1087,7 @@ fn build_cd_text_factory(
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let cell = new_cell();
-        install_cd_cell_selection_sync(list_item, &cell);
-
-        let text = new_cell_text(0.0);
-        cell.append(&text);
+        let cell = new_text_cell(list_item, 0.0);
         list_item.set_child(Some(&cell));
 
         // Same inline-edit interaction as the Songs table: a click on an
@@ -1110,7 +1096,7 @@ fn build_cd_text_factory(
 
         bindings_setup.0.push(CdTextBinding {
             list_item: list_item.downgrade(),
-            text: text.downgrade(),
+            cell: cell.downgrade(),
             field,
         });
     });
@@ -1122,7 +1108,7 @@ fn build_cd_text_factory(
         let Some(cell) = item
             .downcast_ref::<gtk::ListItem>()
             .and_then(|list_item| list_item.child())
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
+            .and_then(|child| child.downcast::<TableCell>().ok())
         else {
             return;
         };
@@ -1135,22 +1121,16 @@ fn build_cd_text_factory(
         };
         let Some(cell) = list_item
             .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
+            .and_then(|child| child.downcast::<TableCell>().ok())
         else {
             return;
         };
         bind_cell_chrome(&cell, list_item);
-        let Some(text) = cell
-            .first_child()
-            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
-        else {
-            return;
-        };
         let value = list_item_cd_row(list_item, |row| match field {
             EditableField::Artist => row.display_artist(),
             _ => row.display_title(),
         });
-        text.set_text(value.as_deref());
+        cell.set_text(value.as_deref().unwrap_or_default());
     });
 
     factory
@@ -1162,8 +1142,7 @@ fn build_cd_filler_factory() -> gtk::SignalListItemFactory {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let cell = new_cell();
-        install_cd_cell_selection_sync(list_item, &cell);
+        let cell = new_cell(list_item);
         list_item.set_child(Some(&cell));
     });
     factory.connect_bind(move |_factory, item| {
@@ -1172,7 +1151,7 @@ fn build_cd_filler_factory() -> gtk::SignalListItemFactory {
         };
         let Some(cell) = list_item
             .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
+            .and_then(|child| child.downcast::<TableCell>().ok())
         else {
             return;
         };
@@ -1186,7 +1165,7 @@ fn status_widgets_of(item: &glib::Object) -> Option<(gtk::Spinner, gtk::Image)> 
     let cell = item
         .downcast_ref::<gtk::ListItem>()?
         .child()?
-        .downcast::<gtk::Box>()
+        .downcast::<TableCell>()
         .ok()?;
     let spinner = cell.first_child()?.downcast::<gtk::Spinner>().ok()?;
     let icon = spinner.next_sibling()?.downcast::<gtk::Image>().ok()?;
@@ -1213,7 +1192,7 @@ fn render_cd_status(spinner: &gtk::Spinner, icon: &gtk::Image, status: CdRipStat
     }
 }
 
-fn install_cd_cell_selection_sync(list_item: &gtk::ListItem, cell: &gtk::Box) {
+fn install_cd_cell_selection_sync(list_item: &gtk::ListItem, cell: &TableCell) {
     let cell_for_selection = cell.clone();
     list_item.connect_selected_notify(move |list_item| {
         sync_cd_selection_class(&cell_for_selection, list_item.is_selected());
@@ -1221,12 +1200,12 @@ fn install_cd_cell_selection_sync(list_item: &gtk::ListItem, cell: &gtk::Box) {
     sync_cd_selection_class(cell, list_item.is_selected());
 }
 
-fn bind_cell_chrome(cell: &gtk::Box, list_item: &gtk::ListItem) {
+fn bind_cell_chrome(cell: &TableCell, list_item: &gtk::ListItem) {
     apply_cd_row_tint(cell, list_item);
     sync_cd_selection_class(cell, list_item.is_selected());
 }
 
-fn apply_cd_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
+fn apply_cd_row_tint(cell: &TableCell, list_item: &gtk::ListItem) {
     cell.remove_css_class("track-table-row-even");
     cell.remove_css_class("track-table-row-odd");
     if list_item.position().is_multiple_of(2) {
@@ -1236,7 +1215,7 @@ fn apply_cd_row_tint(cell: &gtk::Box, list_item: &gtk::ListItem) {
     }
 }
 
-fn sync_cd_selection_class(cell: &gtk::Box, selected: bool) {
+fn sync_cd_selection_class(cell: &TableCell, selected: bool) {
     if selected {
         cell.add_css_class("track-table-row-selected");
     } else {

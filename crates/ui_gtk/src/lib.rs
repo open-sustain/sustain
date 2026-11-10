@@ -55,6 +55,7 @@ mod smart_playlist_editor;
 mod statistics;
 mod status_bar;
 mod suggestion_entry;
+mod table_cell;
 #[cfg(test)]
 mod test_support;
 mod titlebar;

@@ -144,14 +144,6 @@ fn accent_css(palette: AccentPalette) -> String {
         .track-table-cell.track-table-row-selected {{
             background-color: {background};
             background-image: none;
-        }}
-
-        columnview.track-table listview row:selected .track-table-cell > label,
-        columnview.track-table listview row:selected .track-table-cell > image,
-        columnview.track-table listview row:selected .track-table-cell rating-stars,
-        .track-table-cell.track-table-row-selected > label,
-        .track-table-cell.track-table-row-selected > image,
-        .track-table-cell.track-table-row-selected rating-stars {{
             color: {foreground};
         }}
 

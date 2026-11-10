@@ -37,6 +37,7 @@ use sustain_app_runtime::{MetadataChange, TrackMetadata};
 
 use crate::cell_registry::{BindingRegistry, CellBinding};
 use crate::metadata_diff::{bpm_diff, key_diff, number_diff, signed_number_diff, text_diff};
+use crate::table_cell::TableCell;
 
 /// Fallback double-click interval when the display has no settings object.
 const DEFAULT_DOUBLE_CLICK_MS: i32 = 400;
@@ -137,8 +138,7 @@ struct ActiveEdit {
     field: EditableField,
     commit: Box<dyn FnOnce(String)>,
     list_item: gtk::ListItem,
-    cell: gtk::Box,
-    text: gtk::Inscription,
+    cell: TableCell,
     entry: gtk::Entry,
 }
 
@@ -158,7 +158,7 @@ struct FinishedEdit {
 /// when Tab hops between them. Pruned lazily when its widgets die.
 struct EditableCellEntry {
     list_item: glib::WeakRef<gtk::ListItem>,
-    cell: glib::WeakRef<gtk::Box>,
+    cell: glib::WeakRef<TableCell>,
     field: EditableField,
 }
 
@@ -178,7 +178,7 @@ impl CellBinding for EditableCellEntry {
 struct OrderedCell {
     field: EditableField,
     list_item: gtk::ListItem,
-    cell: gtk::Box,
+    cell: TableCell,
     x: f32,
 }
 
@@ -224,7 +224,7 @@ impl InlineEditController {
     pub(crate) fn register_editable_cell(
         &self,
         list_item: &gtk::ListItem,
-        cell: &gtk::Box,
+        cell: &TableCell,
         field: EditableField,
     ) {
         self.cells.push(EditableCellEntry {
@@ -238,7 +238,7 @@ impl InlineEditController {
     fn install_click_gesture(
         &self,
         list_item: &gtk::ListItem,
-        cell: &gtk::Box,
+        cell: &TableCell,
         field: EditableField,
     ) {
         let gesture = gtk::GestureClick::new();
@@ -294,7 +294,7 @@ impl InlineEditController {
     /// Arm an edit to open after one double-click interval, cancelling any
     /// previously armed open. See the module docs for why the delay is
     /// required.
-    fn arm_open(&self, list_item: &gtk::ListItem, cell: &gtk::Box, field: EditableField) {
+    fn arm_open(&self, list_item: &gtk::ListItem, cell: &TableCell, field: EditableField) {
         self.cancel_pending();
 
         // The row's bound item at arm time. GTK reuses `ListItem` slots and
@@ -336,7 +336,7 @@ impl InlineEditController {
     /// Commit and close the open edit if it belongs to `cell`. Called when
     /// a cell unbinds (scrolls off / is recycled) so an open editor is
     /// never left stranded in a cell about to be reused for another row.
-    pub(crate) fn finish_if_editing_cell(&self, cell: &gtk::Box) {
+    pub(crate) fn finish_if_editing_cell(&self, cell: &TableCell) {
         let editing_this = self
             .active
             .borrow()
@@ -375,7 +375,7 @@ impl InlineEditController {
     /// Open the editor on `cell` for `field`. Commits any other in-progress
     /// edit first, and is a no-op if this exact cell is already being
     /// edited.
-    fn open_edit(&self, field: EditableField, cell: &gtk::Box, list_item: &gtk::ListItem) {
+    fn open_edit(&self, field: EditableField, cell: &TableCell, list_item: &gtk::ListItem) {
         let Some(item) = list_item.item() else {
             return;
         };
@@ -390,20 +390,11 @@ impl InlineEditController {
         let Some(EditSession { seed, commit }) = (self.begin_edit)(&item, field) else {
             return;
         };
-        let Some(text) = cell
-            .first_child()
-            .and_then(|child| child.downcast::<gtk::Inscription>().ok())
-        else {
-            return;
-        };
 
         let entry = gtk::Entry::new();
         entry.add_css_class("track-table-inline-edit");
-        entry.set_hexpand(true);
         entry.set_text(&seed);
-        gtk::prelude::EditableExt::set_alignment(&entry, text.xalign());
-
-        text.set_visible(false);
+        gtk::prelude::EditableExt::set_alignment(&entry, cell.xalign());
         cell.append(&entry);
 
         // Install the entry's controllers — crucially the focus controller —
@@ -419,7 +410,6 @@ impl InlineEditController {
             commit,
             list_item: list_item.clone(),
             cell: cell.clone(),
-            text,
             entry: entry.clone(),
         });
 
@@ -511,10 +501,7 @@ impl InlineEditController {
     /// on another one.
     fn finish_active(&self, mode: FinishMode) -> Option<FinishedEdit> {
         let active = self.active.borrow_mut().take()?;
-        if active.entry.parent().is_some() {
-            active.cell.remove(&active.entry);
-        }
-        active.text.set_visible(true);
+        active.cell.remove(&active.entry);
         if mode == FinishMode::Commit {
             self.pending_commits.borrow_mut().push_back(PendingCommit {
                 commit: active.commit,
@@ -597,7 +584,7 @@ impl InlineEditController {
 
 /// The cell's left edge in the toplevel's coordinate space, used only to
 /// order sibling cells. `None` if the cell is not currently rooted/realized.
-fn cell_origin_x(cell: &gtk::Box) -> Option<f32> {
+fn cell_origin_x(cell: &TableCell) -> Option<f32> {
     let root = cell.root()?;
     let point = cell.compute_point(
         root.upcast_ref::<gtk::Widget>(),
@@ -607,7 +594,7 @@ fn cell_origin_x(cell: &gtk::Box) -> Option<f32> {
 }
 
 /// Whether keyboard focus is inside the table that holds `cell`.
-fn focus_within_table(cell: &gtk::Box) -> bool {
+fn focus_within_table(cell: &TableCell) -> bool {
     let Some(table) = cell.ancestor(gtk::ColumnView::static_type()) else {
         return false;
     };

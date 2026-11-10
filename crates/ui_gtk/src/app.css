@@ -881,23 +881,18 @@ columnview.track-table listview row:not(:selected):focus .track-table-row-odd {
     background-color: transparent;
 }
 
-/* Selected-row background goes on the cell box. Selected-row
-   foreground is scoped to the text widgets inside the cell so the
-   color does not cascade into popovers parented to the cell (which
-   would inherit @theme_selected_fg_color and render white-on-white
-   menu items). */
+/* Secondary text, such as a CD's track numbers and durations. A
+   selected row shows it in the full selection foreground. */
+.track-table-cell.dim-text {
+    color: alpha(currentColor, 0.55);
+}
+
+/* The selected-row colors go on the cell, which draws its text in its
+   own color. */
 .track-table listview row:selected .track-table-cell,
 .track-table-cell.track-table-row-selected {
     background-color: @theme_selected_bg_color;
     border-bottom-color: transparent;
-}
-
-.track-table listview row:selected .track-table-cell > label,
-.track-table listview row:selected .track-table-cell > image,
-.track-table listview row:selected .track-table-cell rating-stars,
-.track-table-cell.track-table-row-selected > label,
-.track-table-cell.track-table-row-selected > image,
-.track-table-cell.track-table-row-selected rating-stars {
     color: @theme_selected_fg_color;
 }
 
@@ -1006,6 +1001,12 @@ popover.queue-popover > contents {
 rating-stars {
     color: alpha(@theme_fg_color, 0.86);
     min-height: 28px;
+}
+
+/* A selected row's stars take the row's selection foreground. */
+.track-table listview row:selected .track-table-cell rating-stars,
+.track-table-cell.track-table-row-selected rating-stars {
+    color: inherit;
 }
 
 .track-table-status-icon {
