@@ -707,10 +707,7 @@ impl ApplicationRuntime {
         track_id: TrackId,
         at: SystemTime,
     ) -> ApplicationRuntimeResult<()> {
-        self.mutate_track_statistics(track_id, |statistics| {
-            statistics.play_count = statistics.play_count.saturating_add(1);
-            statistics.last_played_at = Some(at);
-        })
+        self.mutate_track_statistics(track_id, |statistics| statistics.record_play(at))
     }
 
     fn commit_skip_increment(
@@ -718,10 +715,7 @@ impl ApplicationRuntime {
         track_id: TrackId,
         at: SystemTime,
     ) -> ApplicationRuntimeResult<()> {
-        self.mutate_track_statistics(track_id, |statistics| {
-            statistics.skip_count = statistics.skip_count.saturating_add(1);
-            statistics.last_skipped_at = Some(at);
-        })
+        self.mutate_track_statistics(track_id, |statistics| statistics.record_skip(at))
     }
 
     // Applies the given mutation to a track's in-memory statistics,

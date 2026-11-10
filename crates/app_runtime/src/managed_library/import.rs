@@ -325,10 +325,7 @@ impl LibraryImportContext<'_> {
                 location: TrackLocation::available(plan.relative_path),
                 metadata,
                 rating,
-                statistics: PlayStatistics {
-                    date_added_at: Some(SystemTime::now()),
-                    ..PlayStatistics::default()
-                },
+                statistics: PlayStatistics::added_at(SystemTime::now()),
                 file_size_bytes: Some(source_size),
                 has_embedded_artwork: Some(has_embedded_artwork),
                 // The first scan after import fingerprints the file and
@@ -586,10 +583,7 @@ impl LibraryImportContext<'_> {
                 location: TrackLocation::available(relative_path),
                 metadata,
                 rating,
-                statistics: PlayStatistics {
-                    date_added_at: Some(SystemTime::now()),
-                    ..PlayStatistics::default()
-                },
+                statistics: PlayStatistics::added_at(SystemTime::now()),
                 file_size_bytes,
                 has_embedded_artwork: Some(has_embedded_artwork),
                 // Recorded by the first post-import scan; see above (#71).

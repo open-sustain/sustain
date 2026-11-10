@@ -335,10 +335,7 @@ fn track_from_scanned_track(
                 location: TrackLocation::available(scanned_track.relative_path),
                 metadata: scanned_track.metadata,
                 rating: scanned_track.rating,
-                statistics: PlayStatistics {
-                    date_added_at: Some(SystemTime::now()),
-                    ..PlayStatistics::default()
-                },
+                statistics: PlayStatistics::added_at(SystemTime::now()),
                 file_size_bytes: scanned_track.file_size_bytes,
                 has_embedded_artwork: Some(scanned_track.has_embedded_artwork),
                 file_modified_at: scanned_track.file_modified_at,

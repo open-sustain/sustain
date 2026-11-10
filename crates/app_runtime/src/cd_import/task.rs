@@ -181,10 +181,7 @@ impl WorkerContext<'_> {
                 location: TrackLocation::available(destination_relative.clone()),
                 metadata,
                 rating: sustain_domain::Rating::unrated(),
-                statistics: PlayStatistics {
-                    date_added_at: Some(SystemTime::now()),
-                    ..PlayStatistics::default()
-                },
+                statistics: PlayStatistics::added_at(SystemTime::now()),
                 file_size_bytes,
                 has_embedded_artwork: Some(has_embedded_artwork),
                 file_modified_at: None,
