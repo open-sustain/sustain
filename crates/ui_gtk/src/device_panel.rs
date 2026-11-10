@@ -15,6 +15,8 @@
 //! lane, so the panel never schedules its own timers or pokes the status
 //! bar.
 
+mod checklist;
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -28,6 +30,7 @@ use sustain_app_runtime::{
 
 use crate::SharedRuntime;
 use crate::command_controller::SharedCommandController;
+use checklist::{ChecklistEntry, checklist};
 
 /// Recomputes the status-bar track/duration/size summary for the device
 /// view. Supplied by the main window, which knows the status bar.
@@ -412,21 +415,25 @@ impl DeviceSyncPanel {
         let runtime = self.runtime.borrow();
         let selected: std::collections::HashSet<PlaylistItem> =
             runtime.device_selection(&device.id).into_iter().collect();
-
-        let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        let mut entries: Vec<(PlaylistItem, gtk::CheckButton)> = Vec::new();
-        for playlist in runtime.playlists() {
-            let item = PlaylistItem::Playlist(playlist.id);
-            let check = playlist_check(&playlist.name, PLAYLIST_ICON, selected.contains(&item));
-            list.append(&check);
-            entries.push((item, check));
-        }
-        for smart in runtime.smart_playlists() {
-            let item = PlaylistItem::SmartPlaylist(smart.id);
-            let check = playlist_check(&smart.name, SMART_PLAYLIST_ICON, selected.contains(&item));
-            list.append(&check);
-            entries.push((item, check));
-        }
+        let entries: Vec<ChecklistEntry<PlaylistItem>> = runtime
+            .playlists()
+            .iter()
+            .map(|playlist| ChecklistEntry {
+                key: PlaylistItem::Playlist(playlist.id),
+                name: playlist.name.clone(),
+                icon: PLAYLIST_ICON,
+            })
+            .chain(
+                runtime
+                    .smart_playlists()
+                    .iter()
+                    .map(|smart| ChecklistEntry {
+                        key: PlaylistItem::SmartPlaylist(smart.id),
+                        name: smart.name.clone(),
+                        icon: SMART_PLAYLIST_ICON,
+                    }),
+            )
+            .collect();
         drop(runtime);
 
         if entries.is_empty() {
@@ -438,39 +445,24 @@ impl DeviceSyncPanel {
             return container;
         }
 
-        let entries = Rc::new(entries);
-        for (_, check) in entries.iter() {
-            let panel = self.clone();
-            let device = device.clone();
-            let entries = entries.clone();
-            check.connect_toggled(move |_| {
-                let selection: Vec<PlaylistItem> = entries
-                    .iter()
-                    .filter(|(_, check)| check.is_active())
-                    .map(|(item, _)| *item)
-                    .collect();
-                if panel.command_controller.dispatch_succeeded(
-                    ApplicationCommand::SetDeviceSelection {
-                        device_id: device.id.clone(),
-                        selection,
-                    },
-                ) {
-                    panel.request_plan(&device);
-                }
-                // The new selection changes occupation, the Sync action,
-                // the Pioneer readiness counts and the status-bar summary —
-                // refresh all of them in place, never touching this
-                // checklist.
-                panel.refresh_selection_derived(&device);
-                panel.fire_summary_refresh();
-            });
-        }
-
-        let scroller = gtk::ScrolledWindow::new();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_vexpand(true);
-        scroller.set_child(Some(&list));
-        container.append(&scroller);
+        let panel = self.clone();
+        let device = device.clone();
+        container.append(&checklist(entries, selected, move |selection| {
+            if panel
+                .command_controller
+                .dispatch_succeeded(ApplicationCommand::SetDeviceSelection {
+                    device_id: device.id.clone(),
+                    selection,
+                })
+            {
+                panel.request_plan(&device);
+            }
+            // The new selection changes occupation, the Sync action, the
+            // Pioneer readiness counts and the status-bar summary — refresh
+            // all of them in place, never touching this checklist.
+            panel.refresh_selection_derived(&device);
+            panel.fire_summary_refresh();
+        }));
         container
     }
 
@@ -485,14 +477,15 @@ impl DeviceSyncPanel {
             .device_artist_selection(&device.id)
             .into_iter()
             .collect();
-
-        let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        let mut entries: Vec<(String, gtk::CheckButton)> = Vec::new();
-        for artist in runtime.distinct_artists() {
-            let check = playlist_check(&artist, ARTIST_ICON, selected.contains(&artist));
-            list.append(&check);
-            entries.push((artist, check));
-        }
+        let entries: Vec<ChecklistEntry<String>> = runtime
+            .distinct_artists()
+            .into_iter()
+            .map(|artist| ChecklistEntry {
+                name: artist.clone(),
+                key: artist,
+                icon: ARTIST_ICON,
+            })
+            .collect();
         drop(runtime);
 
         if entries.is_empty() {
@@ -506,35 +499,20 @@ impl DeviceSyncPanel {
             return container;
         }
 
-        let entries = Rc::new(entries);
-        for (_, check) in entries.iter() {
-            let panel = self.clone();
-            let device = device.clone();
-            let entries = entries.clone();
-            check.connect_toggled(move |_| {
-                let artists: Vec<String> = entries
-                    .iter()
-                    .filter(|(_, check)| check.is_active())
-                    .map(|(artist, _)| artist.clone())
-                    .collect();
-                if panel.command_controller.dispatch_succeeded(
-                    ApplicationCommand::SetDeviceArtistSelection {
-                        device_id: device.id.clone(),
-                        artists,
-                    },
-                ) {
-                    panel.request_plan(&device);
-                }
-                panel.refresh_selection_derived(&device);
-                panel.fire_summary_refresh();
-            });
-        }
-
-        let scroller = gtk::ScrolledWindow::new();
-        scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scroller.set_vexpand(true);
-        scroller.set_child(Some(&list));
-        container.append(&scroller);
+        let panel = self.clone();
+        let device = device.clone();
+        container.append(&checklist(entries, selected, move |artists| {
+            if panel.command_controller.dispatch_succeeded(
+                ApplicationCommand::SetDeviceArtistSelection {
+                    device_id: device.id.clone(),
+                    artists,
+                },
+            ) {
+                panel.request_plan(&device);
+            }
+            panel.refresh_selection_derived(&device);
+            panel.fire_summary_refresh();
+        }));
         container
     }
 
@@ -785,22 +763,6 @@ const SETTINGS_COLUMN_WIDTH: i32 = 260;
 const PLAYLIST_ICON: &str = "view-list-symbolic";
 const SMART_PLAYLIST_ICON: &str = "emblem-system-symbolic";
 const ARTIST_ICON: &str = "avatar-default-symbolic";
-
-/// A checklist row: a check button whose child is the playlist's icon
-/// (normal vs smart, matching the sidebar) followed by its name.
-fn playlist_check(name: &str, icon: &str, active: bool) -> gtk::CheckButton {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.append(&gtk::Image::from_icon_name(icon));
-    let label = gtk::Label::new(Some(name));
-    label.set_xalign(0.0);
-    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    row.append(&label);
-
-    let check = gtk::CheckButton::new();
-    check.set_child(Some(&row));
-    check.set_active(active);
-    check
-}
 
 /// One coloured run of the occupation bar, as a fraction of the device
 /// capacity. The tint is resolved at draw time so the meter tracks the

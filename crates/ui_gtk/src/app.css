@@ -1071,6 +1071,27 @@ columnview.track-table listview row:selected .track-table-status-missing,
     background-color: alpha(@theme_fg_color, 0.05);
 }
 
+/* The checklists are list views, so only their visible rows exist. Strip
+   Adwaita's list chrome, its view colours included, so they read as plain
+   check rows on the card, 2px apart. */
+listview.device-sync-checklist,
+listview.device-sync-checklist > row,
+listview.device-sync-checklist > row:hover,
+listview.device-sync-checklist > row:active,
+listview.device-sync-checklist > row:focus {
+    background: none;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    color: inherit;
+    min-height: 0;
+    padding: 0;
+}
+
+listview.device-sync-checklist > row {
+    padding-bottom: 2px;
+}
+
 /* --- CD import page (#25). All colours are theme-derived so the page
    reads correctly in both light and dark; the Import button inherits the
    system accent via the built-in `.suggested-action` class. --- */
