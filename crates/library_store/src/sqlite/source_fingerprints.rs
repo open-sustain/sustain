@@ -64,7 +64,8 @@ pub(super) fn save_source_fingerprint(
             INSERT INTO source_fingerprint_cache (
                 track_id, device, inode, size_bytes, modified_at_ns, changed_at_ns, sha256
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+            WHERE EXISTS (SELECT 1 FROM tracks WHERE id = ?1)
             ON CONFLICT(track_id) DO UPDATE SET
                 device = excluded.device,
                 inode = excluded.inode,

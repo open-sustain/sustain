@@ -576,7 +576,9 @@ pub trait LibraryStore: Send + Sync {
     /// Load the disposable SHA-256 cache entry for a source track.
     fn source_fingerprint(&self, track_id: TrackId) -> StoreResult<Option<SourceFingerprint>>;
 
-    /// Replace the disposable SHA-256 cache entry for a source track.
+    /// Replace the disposable SHA-256 cache entry for a source track. A
+    /// track that has left the library meanwhile has nothing to cache, so
+    /// the entry is dropped rather than refused.
     fn save_source_fingerprint(
         &self,
         track_id: TrackId,

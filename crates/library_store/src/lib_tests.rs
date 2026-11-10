@@ -2556,6 +2556,29 @@ fn duplicate_consolidation_commits_survivor_playlist_and_cache_changes() {
 }
 
 #[test]
+fn a_source_fingerprint_for_a_track_no_longer_in_the_library_is_dropped() {
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+
+    assert_eq!(
+        store.save_source_fingerprint(
+            track_id(7),
+            &SourceFingerprint {
+                stat: SourceFileStat {
+                    device: 1,
+                    inode: 2,
+                    size_bytes: 9,
+                    modified_at_ns: 3,
+                    changed_at_ns: 4,
+                },
+                content_hash: TrackContentHash::new("a".repeat(64)).expect("hash"),
+            },
+        ),
+        Ok(())
+    );
+    assert_eq!(store.source_fingerprint(track_id(7)), Ok(None));
+}
+
+#[test]
 fn managed_retarget_commits_metadata_location_and_outbox_together() {
     let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "loose.flac");
