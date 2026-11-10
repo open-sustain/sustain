@@ -41,7 +41,7 @@ pub use sustain_domain::{
     highest_quality_duplicate_audio_track_ids, matching_tracks, normalize_sort_text,
     track_matches_rule_set,
 };
-use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities};
+use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities, StoreError};
 pub use sustain_metadata::{
     AudioFormat, MalformedTagError, MetadataError, MetadataService, ScanFailure,
 };
@@ -111,6 +111,7 @@ mod smart_playlists;
 pub mod smart_shuffle_scheduler;
 #[cfg(test)]
 mod test_store;
+mod track_reconciliation;
 mod youtube_audio_downloader;
 mod youtube_audio_journal;
 mod youtube_audio_replacement;
@@ -497,8 +498,13 @@ pub struct ApplicationRuntime {
     // `TrackId`; the UI shell drains the channel on the main loop and
     // calls [`Self::apply_track_updated`], which reloads the row from
     // the library store, replaces it in `library_tracks`, and fires
-    // [`Self::track_data_observer`] so visible widgets repaint.
+    // [`Self::track_data_observer`] so visible widgets repaint. A
+    // failed reload is announced on it again, by
+    // `track_reconciliation`.
     track_updated_sink: Option<async_channel::Sender<TrackId>>,
+    // The tracks [`Self::apply_track_updated`] could not read back yet,
+    // announced again on `track_updated_sink` until it can.
+    track_reconciliation: track_reconciliation::TrackReconciliation,
     clock: Arc<dyn Clock>,
     monotonic_clock: Arc<dyn MonotonicClock>,
     notifications: NotificationCenter,
@@ -761,6 +767,7 @@ impl ApplicationRuntime {
             smart_shuffle_index: None,
             smart_shuffle_metadata: None,
             track_updated_sink: None,
+            track_reconciliation: track_reconciliation::TrackReconciliation::default(),
             clock: Arc::new(SystemClock),
             monotonic_clock: Arc::new(SystemMonotonicClock::new()),
             notifications: NotificationCenter::new(),
@@ -2034,7 +2041,10 @@ impl ApplicationRuntime {
     /// `track_data_observer` so visible widgets can repaint just
     /// that row. No-op when the track has vanished from the store
     /// between push and drain — the next library_changed pass will
-    /// pick up the deletion.
+    /// pick up the deletion. A failed read keeps the track for a
+    /// retry, announced again on the track-updated sink after a
+    /// backoff, and shows a notification until every such track has
+    /// been read back.
     pub fn apply_track_updated(&mut self, track_id: TrackId) {
         let Some(store) = self.library_store.as_deref() else {
             return;
@@ -2043,10 +2053,18 @@ impl ApplicationRuntime {
         // analysis sweep emits one event per persisted per-track update;
         // re-reading and scanning every row here would be ~O(n^2) decodes
         // on the GTK thread.
-        let refreshed = match store.track(track_id).ok().flatten() {
-            Some(track) => track,
-            None => return,
+        let refreshed = match store.track(track_id) {
+            Ok(Some(track)) => track,
+            Ok(None) => {
+                self.track_reconciled(track_id);
+                return;
+            }
+            Err(error) => {
+                self.track_reconciliation_failed(track_id, &error);
+                return;
+            }
         };
+        self.track_reconciled(track_id);
         // Keep the search document current with the reloaded metadata (an
         // online enrichment pass can rewrite title/artist/etc).
         self.search_index.insert(&refreshed);
@@ -2067,6 +2085,38 @@ impl ApplicationRuntime {
             self.library_tracks.insert(insertion, refreshed);
         }
         self.fire_track_data_observer(track_id);
+    }
+
+    fn track_reconciliation_failed(&mut self, track_id: TrackId, error: &StoreError) {
+        let sink = self.track_updated_sink.as_ref();
+        if self.track_reconciliation.read_failed(track_id, sink) {
+            eprintln!(
+                "Sustain: could not read track {} back from the library database: {error:?}",
+                track_id.get()
+            );
+        }
+        if self.track_reconciliation.notification().is_none() {
+            let id = self.push_persistent_notification(
+                NotificationCategory::TrackReconciliation,
+                NotificationSeverity::Warning,
+                notifications::track_reconciliation_retry_text().to_owned(),
+                false,
+            );
+            self.track_reconciliation.set_notification(Some(id));
+        }
+    }
+
+    /// Resolve `track_id` once read back or found gone. Tracks are left
+    /// unresolved only while their notification shows, so without one
+    /// there is nothing to resolve.
+    fn track_reconciled(&mut self, track_id: TrackId) {
+        let Some(id) = self.track_reconciliation.notification() else {
+            return;
+        };
+        if self.track_reconciliation.resolved(track_id) {
+            self.track_reconciliation.set_notification(None);
+            self.dismiss_notification(id);
+        }
     }
 
     pub fn playback_state(&self) -> PlaybackState {

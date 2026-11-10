@@ -6264,6 +6264,151 @@ fn apply_track_updated_reloads_from_store_and_fires_observer() {
     std::fs::remove_dir_all(root).expect("remove test library");
 }
 
+/// A runtime over `store` that announces track updates on the returned
+/// receiver, for the track-reconciliation tests.
+fn reconciling_runtime(
+    store: Arc<crate::test_store::FaultyStore>,
+) -> (ApplicationRuntime, async_channel::Receiver<TrackId>) {
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    let (sink, announced) = async_channel::unbounded();
+    runtime.set_track_updated_sink(sink);
+    (runtime, announced)
+}
+
+fn retitle(store: &dyn LibraryStore, track_id: TrackId, title: &str) {
+    store
+        .apply_track_metadata_change(
+            track_id,
+            &MetadataChange {
+                title: FieldChange::Set(title.to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("retitle in the store");
+}
+
+fn library_title(runtime: &ApplicationRuntime, track_id: TrackId) -> Option<String> {
+    runtime
+        .library_track(track_id)
+        .and_then(|track| track.metadata.title.clone())
+}
+
+fn reconciliation_notifications(runtime: &ApplicationRuntime) -> usize {
+    runtime
+        .notifications()
+        .persistent_stack()
+        .iter()
+        .filter(|notification| notification.category == NotificationCategory::TrackReconciliation)
+        .count()
+}
+
+/// The next id the runtime announces on its track-updated sink.
+fn next_announced(announced: &async_channel::Receiver<TrackId>) -> TrackId {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Ok(track_id) = announced.try_recv() {
+            return track_id;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no track announced within 5 s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_failed_track_read_back_is_retried_and_adopts_the_latest_change() {
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store
+        .save_track(test_track(track_id(1), "a.flac"))
+        .expect("seed");
+    let (mut runtime, announced) = reconciling_runtime(store.clone());
+
+    retitle(store.as_ref(), track_id(1), "Committed");
+    store.set_fail_track_read(true);
+    runtime.apply_track_updated(track_id(1));
+    runtime.apply_track_updated(track_id(1));
+
+    assert_eq!(library_title(&runtime, track_id(1)), None);
+    assert_eq!(
+        reconciliation_notifications(&runtime),
+        1,
+        "repeated failures share one notification"
+    );
+
+    // A newer change lands before the retry; the retry reads it, not the
+    // one whose announcement failed.
+    retitle(store.as_ref(), track_id(1), "Newer");
+    store.set_fail_track_read(false);
+    let retried = next_announced(&announced);
+    assert_eq!(retried, track_id(1));
+    runtime.apply_track_updated(retried);
+
+    assert_eq!(
+        library_title(&runtime, track_id(1)).as_deref(),
+        Some("Newer")
+    );
+    assert_eq!(reconciliation_notifications(&runtime), 0);
+    assert!(
+        announced.is_empty(),
+        "the coalesced failures are retried once"
+    );
+}
+
+#[test]
+fn a_retried_track_deleted_meanwhile_is_resolved_without_coming_back() {
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store
+        .save_track(test_track(track_id(1), "a.flac"))
+        .expect("seed");
+    let (mut runtime, announced) = reconciling_runtime(store.clone());
+
+    store.set_fail_track_read(true);
+    runtime.apply_track_updated(track_id(1));
+    store.set_fail_track_read(false);
+    runtime
+        .handle_command(ApplicationCommand::RemoveTrackFromLibrary {
+            track_id: track_id(1),
+        })
+        .expect("remove the track");
+
+    let retried = next_announced(&announced);
+    runtime.apply_track_updated(retried);
+
+    assert!(runtime.library_track(track_id(1)).is_none());
+    assert_eq!(reconciliation_notifications(&runtime), 0);
+}
+
+#[test]
+fn a_track_read_that_keeps_failing_keeps_being_retried() {
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store
+        .save_track(test_track(track_id(1), "a.flac"))
+        .expect("seed");
+    let (mut runtime, announced) = reconciling_runtime(store.clone());
+
+    store.set_fail_track_read(true);
+    runtime.apply_track_updated(track_id(1));
+    let retried = next_announced(&announced);
+    runtime.apply_track_updated(retried);
+
+    assert_eq!(reconciliation_notifications(&runtime), 1);
+    assert_eq!(
+        next_announced(&announced),
+        track_id(1),
+        "a failed retry schedules the next one"
+    );
+}
+
 #[test]
 fn apply_track_updated_performs_one_keyed_lookup_and_no_full_scan() {
     use std::sync::atomic::Ordering;

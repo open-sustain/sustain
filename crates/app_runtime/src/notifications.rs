@@ -96,6 +96,9 @@ pub enum NotificationCategory {
     /// The waveform cache could not be opened at startup, so analysis
     /// waveforms are not kept this session. Always ephemeral.
     WaveformCache,
+    /// Committed changes to tracks could not be read back from the
+    /// library database. Persistent while any such track is retried.
+    TrackReconciliation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -538,6 +541,10 @@ pub fn waveform_cache_unavailable_text() -> &'static str {
 
 pub fn metadata_write_retry_text() -> &'static str {
     "Some changes could not be mirrored to audio files. Sustain will retry."
+}
+
+pub fn track_reconciliation_retry_text() -> &'static str {
+    "Some track changes could not be read from the library database. Sustain will retry."
 }
 
 /// Outcome string emitted after the user changes their library path.

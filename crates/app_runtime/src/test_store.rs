@@ -46,6 +46,7 @@ pub(crate) struct FaultyStore {
     fail_save_tracks: AtomicBool,
     fail_save_tracks_on_call: AtomicU32,
     fail_flush_durable: AtomicBool,
+    fail_track_read: AtomicBool,
     availability_path_replacement: Mutex<Option<TrackLocation>>,
     record_analysis_calls: AtomicU32,
     attempt_failure_calls: AtomicU32,
@@ -76,6 +77,7 @@ impl FaultyStore {
             fail_save_tracks: AtomicBool::new(false),
             fail_save_tracks_on_call: AtomicU32::new(0),
             fail_flush_durable: AtomicBool::new(false),
+            fail_track_read: AtomicBool::new(false),
             availability_path_replacement: Mutex::new(None),
             record_analysis_calls: AtomicU32::new(0),
             attempt_failure_calls: AtomicU32::new(0),
@@ -136,6 +138,10 @@ impl FaultyStore {
 
     pub(crate) fn set_fail_flush_durable(&self, on: bool) {
         self.fail_flush_durable.store(on, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_fail_track_read(&self, on: bool) {
+        self.fail_track_read.store(on, Ordering::SeqCst);
     }
 
     pub(crate) fn replace_path_before_next_availability_update(&self, location: TrackLocation) {
@@ -385,6 +391,11 @@ impl LibraryStore for FaultyStore {
     }
 
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>> {
+        if self.fail_track_read.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected track read failure".to_owned(),
+            ));
+        }
         self.inner.track(track_id)
     }
 
