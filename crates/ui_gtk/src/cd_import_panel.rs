@@ -976,7 +976,7 @@ fn build_cd_check_factory(
         check.set_valign(gtk::Align::Center);
         check.set_hexpand(true);
 
-        let list_item_for_toggle = list_item.clone();
+        let list_item_for_toggle = list_item.downgrade();
         let store_for_toggle = store.clone();
         let runtime_for_toggle = runtime.clone();
         let button_for_toggle = import_button.clone();
@@ -985,7 +985,10 @@ fn build_cd_check_factory(
             if suppress_for_toggle.get() {
                 return;
             }
-            let _ = list_item_cd_row(&list_item_for_toggle, |row| {
+            let Some(list_item) = list_item_for_toggle.upgrade() else {
+                return;
+            };
+            let _ = list_item_cd_row(&list_item, |row| {
                 row.selected.set(check.is_active());
             });
             button_for_toggle.set_sensitive(import_allowed(&store_for_toggle, &runtime_for_toggle));

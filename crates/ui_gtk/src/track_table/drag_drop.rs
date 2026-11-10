@@ -162,10 +162,10 @@ pub(super) fn install_cell_drop_target(
     drop_target.set_preload(true);
 
     let list_item_for_motion = list_item.downgrade();
-    let cell_for_motion = cell.clone();
     let hooks_for_motion = hooks.clone();
     drop_target.connect_motion(move |target, _x, y| {
-        let Some(list_item) = list_item_for_motion.upgrade() else {
+        let (Some(list_item), Some(cell)) = (list_item_for_motion.upgrade(), target.widget())
+        else {
             return gdk::DragAction::empty();
         };
         if !(hooks_for_motion.is_play_order_active)() {
@@ -176,7 +176,7 @@ pub(super) fn install_cell_drop_target(
             hooks_for_motion.cells.clear_all();
             return gdk::DragAction::empty();
         }
-        let position = drop_position_from_offset(y, cell_for_motion.height());
+        let position = drop_position_from_offset(y, cell.height());
         hooks_for_motion
             .cells
             .paint_row(list_item.position(), position);
@@ -189,9 +189,8 @@ pub(super) fn install_cell_drop_target(
     });
 
     let list_item_for_drop = list_item.downgrade();
-    let cell_for_drop = cell.clone();
     let hooks_for_drop = hooks;
-    drop_target.connect_drop(move |_target, value, _x, y| {
+    drop_target.connect_drop(move |target, value, _x, y| {
         hooks_for_drop.cells.clear_all();
         if !(hooks_for_drop.is_play_order_active)() {
             return false;
@@ -202,7 +201,7 @@ pub(super) fn install_cell_drop_target(
         let Some(dragged_track_ids) = parse_tracks_payload(&text) else {
             return false;
         };
-        let Some(list_item) = list_item_for_drop.upgrade() else {
+        let (Some(list_item), Some(cell)) = (list_item_for_drop.upgrade(), target.widget()) else {
             return false;
         };
         let Some(target_track_id) = row_track_id(list_item.item()) else {
@@ -215,7 +214,7 @@ pub(super) fn install_cell_drop_target(
             // command.
             return false;
         }
-        let position = drop_position_from_offset(y, cell_for_drop.height());
+        let position = drop_position_from_offset(y, cell.height());
         (hooks_for_drop.drop)(RowReorderDrop {
             dragged_track_ids,
             target_track_id,
@@ -266,16 +265,11 @@ pub(super) fn install_cell_drag_source(
     drag_source.set_actions(gdk::DragAction::COPY);
     drag_source.set_button(gdk::BUTTON_PRIMARY);
 
-    let list_item = list_item.clone();
+    let list_item = list_item.downgrade();
     let selection = selection.clone();
-    let cell_for_prepare = cell.clone();
     drag_source.connect_prepare(move |source, _x, _y| {
-        prepare_tracks_drag(
-            source,
-            &list_item,
-            &selection,
-            cell_for_prepare.upcast_ref(),
-        )
+        let cell = source.widget()?;
+        prepare_tracks_drag(source, &list_item.upgrade()?, &selection, &cell)
     });
     cell.add_controller(drag_source);
 }

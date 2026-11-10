@@ -494,9 +494,8 @@ fn install_queue_row_drag(row: &gtk::Box, list_item: &gtk::ListItem) {
         ))
     });
 
-    let row_for_icon = row.clone();
-    drag_source.connect_drag_begin(move |source, _| {
-        let paintable = gtk::WidgetPaintable::new(Some(&row_for_icon));
+    drag_source.connect_drag_begin(|source, _| {
+        let paintable = gtk::WidgetPaintable::new(source.widget().as_ref());
         source.set_icon(Some(&paintable), 0, 0);
     });
 
@@ -507,31 +506,35 @@ fn install_queue_row_drop(row: &gtk::Box, list_item: &gtk::ListItem, ctx: &Queue
     let drop_target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
     drop_target.set_preload(true);
 
-    let row_for_motion = row.clone();
     let item_for_motion = list_item.downgrade();
     drop_target.connect_motion(move |target, _, y| {
         if peek_queue_payload(target).is_none() {
             return gdk::DragAction::empty();
         }
-        let Some(list_item) = item_for_motion.upgrade() else {
+        let (Some(list_item), Some(row)) = (item_for_motion.upgrade(), target.widget()) else {
             return gdk::DragAction::empty();
         };
         if !queue_row_entry(list_item.item()).is_some_and(PlaybackQueueEntry::is_curated) {
             return gdk::DragAction::empty();
         }
-        set_queue_drop_indicator(&row_for_motion, drop_after(&row_for_motion, y));
+        set_queue_drop_indicator(&row, drop_after(&row, y));
         gdk::DragAction::MOVE
     });
 
-    let row_for_leave = row.clone();
-    drop_target.connect_leave(move |_| clear_queue_drop_indicator(&row_for_leave));
+    drop_target.connect_leave(|target| {
+        if let Some(row) = target.widget() {
+            clear_queue_drop_indicator(&row);
+        }
+    });
 
-    let row_for_drop = row.clone();
     let list_item = list_item.downgrade();
     let command_controller = ctx.command_controller.clone();
     let on_mutated = ctx.on_mutated.clone();
-    drop_target.connect_drop(move |_, value, _, y| {
-        clear_queue_drop_indicator(&row_for_drop);
+    drop_target.connect_drop(move |target, value, _, y| {
+        let Some(row) = target.widget() else {
+            return false;
+        };
+        clear_queue_drop_indicator(&row);
         let Ok(text) = value.get::<String>() else {
             return false;
         };
@@ -551,7 +554,7 @@ fn install_queue_row_drop(row: &gtk::Box, list_item: &gtk::ListItem, ctx: &Queue
         if dragged == target_id {
             return false;
         }
-        let place_after = drop_after(&row_for_drop, y);
+        let place_after = drop_after(&row, y);
         if command_controller.dispatch_succeeded(ApplicationCommand::Playback(
             PlaybackCommand::ReorderQueue {
                 track_id: dragged,
@@ -710,11 +713,11 @@ fn queue_row_entry(item: Option<glib::Object>) -> Option<PlaybackQueueEntry> {
     Some(*entry)
 }
 
-fn drop_after(row: &gtk::Box, y: f64) -> bool {
+fn drop_after(row: &gtk::Widget, y: f64) -> bool {
     y > f64::from(row.height()) / 2.0
 }
 
-fn set_queue_drop_indicator(row: &gtk::Box, place_after: bool) {
+fn set_queue_drop_indicator(row: &gtk::Widget, place_after: bool) {
     row.remove_css_class("queue-row-drop-above");
     row.remove_css_class("queue-row-drop-below");
     if place_after {
@@ -724,7 +727,7 @@ fn set_queue_drop_indicator(row: &gtk::Box, place_after: bool) {
     }
 }
 
-fn clear_queue_drop_indicator(row: &gtk::Box) {
+fn clear_queue_drop_indicator(row: &gtk::Widget) {
     row.remove_css_class("queue-row-drop-above");
     row.remove_css_class("queue-row-drop-below");
 }

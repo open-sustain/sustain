@@ -463,12 +463,12 @@ pub(super) fn build_rating_cell_factory(
             button.add_css_class("flat");
             button.add_css_class("rating-star");
 
-            let list_item_for_click = list_item.clone();
-            let rating_box_for_click = rating_box.clone();
+            let list_item_for_click = list_item.downgrade();
             let rating_changed_for_click = rating_changed_for_setup.clone();
-            button.connect_clicked(move |_| {
+            button.connect_clicked(move |button| {
                 let Some(row_object) = list_item_for_click
-                    .item()
+                    .upgrade()
+                    .and_then(|list_item| list_item.item())
                     .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
                 else {
                     return;
@@ -489,8 +489,10 @@ pub(super) fn build_rating_cell_factory(
                     return;
                 };
 
-                if rating_changed(track_id, rating) {
-                    sync_rating_buttons(&rating_box_for_click, new_rating);
+                if rating_changed(track_id, rating)
+                    && let Some(rating_box) = button.parent().and_downcast::<gtk::Box>()
+                {
+                    sync_rating_buttons(&rating_box, new_rating);
                 }
             });
 

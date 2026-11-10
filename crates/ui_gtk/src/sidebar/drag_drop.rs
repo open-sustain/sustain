@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use sustain_app_runtime::{PlaylistFolderId, PlaylistId, PlaylistItem, SmartPlaylistId, TrackId};
 
+use super::model::bound_playlist_item;
 use super::{MoveCallbackHolder, TracksDropCallbackHolder};
 
 pub(super) type SharedDropIndicator = Rc<RefCell<Option<gtk::Widget>>>;
@@ -49,31 +47,25 @@ pub(crate) fn drop_position_from_motion(
     }
 }
 
+/// Wire a row's drag source and drop target once, when the row is set
+/// up. Both act on the item the row shows when the drag happens.
 pub(super) fn attach_drag_and_drop(
     row: &gtk::Widget,
-    item: PlaylistItem,
+    list_item: &gtk::ListItem,
     on_move: MoveCallbackHolder,
     on_tracks_drop: TracksDropCallbackHolder,
     current_indicator: SharedDropIndicator,
 ) {
-    remove_drag_and_drop_controllers(row);
-
     let drag_source = gtk::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE);
+    let list_item_for_prepare = list_item.downgrade();
     drag_source.connect_prepare(move |_source, _x, _y| {
+        let item = bound_playlist_item(&list_item_for_prepare)?;
         Some(gdk::ContentProvider::for_value(
             &drag_payload(item).to_value(),
         ))
     });
     row.add_controller(drag_source);
-
-    let target_is_folder = matches!(item, PlaylistItem::Folder(_));
-    let target_accepts_tracks = matches!(item, PlaylistItem::Playlist(_));
-    let current_position: Rc<Cell<DropPosition>> = Rc::new(Cell::new(if target_is_folder {
-        DropPosition::Into
-    } else {
-        DropPosition::Above
-    }));
 
     let drop_target = gtk::DropTarget::new(
         glib::Type::STRING,
@@ -81,60 +73,54 @@ pub(super) fn attach_drag_and_drop(
     );
     drop_target.set_preload(true);
 
-    let row_for_motion = row.clone();
-    let current_position_for_motion = current_position.clone();
+    let list_item_for_motion = list_item.downgrade();
     let current_indicator_for_motion = current_indicator.clone();
     drop_target.connect_motion(move |target, _x, y| {
-        let kind = peek_drag_kind(target);
-        match kind {
-            Some(DragKind::Tracks) if target_accepts_tracks => {
-                if current_position_for_motion.get() != DropPosition::Into {
-                    current_position_for_motion.set(DropPosition::Into);
-                }
-                set_drop_indicator(
-                    &row_for_motion,
-                    DropPosition::Into,
-                    &current_indicator_for_motion,
-                );
+        let (Some(row), Some(item)) = (target.widget(), bound_playlist_item(&list_item_for_motion))
+        else {
+            return gdk::DragAction::empty();
+        };
+        match peek_drag_kind(target) {
+            Some(DragKind::Tracks) if accepts_tracks(item) => {
+                set_drop_indicator(&row, DropPosition::Into, &current_indicator_for_motion);
                 gdk::DragAction::COPY
             }
-            Some(DragKind::Tracks) => {
-                clear_drop_indicator(&row_for_motion, &current_indicator_for_motion);
-                gdk::DragAction::empty()
-            }
             Some(DragKind::PlaylistItem) => {
-                let row_height = row_for_motion.height() as f64;
-                let position = drop_position_from_motion(y, row_height, target_is_folder);
-                if current_position_for_motion.get() != position {
-                    current_position_for_motion.set(position);
-                }
-                set_drop_indicator(&row_for_motion, position, &current_indicator_for_motion);
+                let position = drop_position_from_motion(y, row.height() as f64, is_folder(item));
+                set_drop_indicator(&row, position, &current_indicator_for_motion);
                 gdk::DragAction::MOVE
             }
-            None => {
-                clear_drop_indicator(&row_for_motion, &current_indicator_for_motion);
+            Some(DragKind::Tracks) | None => {
+                clear_drop_indicator(&row, &current_indicator_for_motion);
                 gdk::DragAction::empty()
             }
         }
     });
 
-    let row_for_leave = row.clone();
     let current_indicator_for_leave = current_indicator.clone();
-    drop_target.connect_leave(move |_target| {
-        clear_drop_indicator(&row_for_leave, &current_indicator_for_leave);
+    drop_target.connect_leave(move |target| {
+        if let Some(row) = target.widget() {
+            clear_drop_indicator(&row, &current_indicator_for_leave);
+        }
     });
 
-    let row_for_drop = row.clone();
-    let current_position_for_drop = current_position.clone();
+    let list_item_for_drop = list_item.downgrade();
     let current_indicator_for_drop = current_indicator;
-    drop_target.connect_drop(move |_target, value, _x, _y| {
-        clear_drop_indicator(&row_for_drop, &current_indicator_for_drop);
-        let position = current_position_for_drop.get();
+    drop_target.connect_drop(move |target, value, _x, y| {
+        let Some(row) = target.widget() else {
+            return false;
+        };
+        clear_drop_indicator(&row, &current_indicator_for_drop);
+        let Some(item) = bound_playlist_item(&list_item_for_drop) else {
+            return false;
+        };
         let Ok(text) = value.get::<String>() else {
             return false;
         };
         if let Some(track_ids) = parse_tracks_payload(&text) {
-            if target_accepts_tracks && let Some(callback) = on_tracks_drop.borrow().as_ref() {
+            if accepts_tracks(item)
+                && let Some(callback) = on_tracks_drop.borrow().as_ref()
+            {
                 callback(item, track_ids);
                 return true;
             }
@@ -146,12 +132,23 @@ pub(super) fn attach_drag_and_drop(
         if source_item == item {
             return false;
         }
+        let position = drop_position_from_motion(y, row.height() as f64, is_folder(item));
         if let Some(callback) = on_move.borrow().as_ref() {
             callback(source_item, item, position);
         }
         true
     });
     row.add_controller(drop_target);
+}
+
+fn is_folder(item: PlaylistItem) -> bool {
+    matches!(item, PlaylistItem::Folder(_))
+}
+
+/// Only regular playlists take dropped tracks; a smart playlist's tracks
+/// follow from its rules, and a folder holds no tracks.
+fn accepts_tracks(item: PlaylistItem) -> bool {
+    matches!(item, PlaylistItem::Playlist(_))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -207,27 +204,6 @@ fn clear_indicator_classes(row: &gtk::Widget) {
     row.remove_css_class("sidebar-drop-above");
     row.remove_css_class("sidebar-drop-below");
     row.remove_css_class("sidebar-drop-into");
-}
-
-fn remove_drag_and_drop_controllers(widget: &gtk::Widget) {
-    let controllers = widget.observe_controllers();
-    let mut to_remove: Vec<gtk::EventController> = Vec::new();
-    for index in 0..controllers.n_items() {
-        let Some(object) = controllers.item(index) else {
-            continue;
-        };
-        let is_drag_or_drop = object.downcast_ref::<gtk::DragSource>().is_some()
-            || object.downcast_ref::<gtk::DropTarget>().is_some();
-        if !is_drag_or_drop {
-            continue;
-        }
-        if let Ok(controller) = object.downcast::<gtk::EventController>() {
-            to_remove.push(controller);
-        }
-    }
-    for controller in to_remove {
-        widget.remove_controller(&controller);
-    }
 }
 
 fn drag_payload(item: PlaylistItem) -> String {

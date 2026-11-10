@@ -131,6 +131,32 @@ pub(super) fn row_position(rows: &impl IsA<gio::ListModel>, target: PlaylistItem
     })
 }
 
+/// The sidebar item a list row is bound to right now. Row controllers
+/// hold their list item weakly, since the item owns the row's widgets.
+pub(super) fn bound_sidebar_item(list_item: &glib::WeakRef<gtk::ListItem>) -> Option<SidebarItem> {
+    let object = bound_row_object(list_item)?;
+    let boxed = object.downcast_ref::<glib::BoxedAnyObject>()?;
+    boxed
+        .try_borrow::<SidebarItem>()
+        .ok()
+        .map(|item| item.clone())
+}
+
+/// The playlist item a list row is bound to right now.
+pub(super) fn bound_playlist_item(
+    list_item: &glib::WeakRef<gtk::ListItem>,
+) -> Option<PlaylistItem> {
+    playlist_item_of(&bound_row_object(list_item)?)
+}
+
+fn bound_row_object(list_item: &glib::WeakRef<gtk::ListItem>) -> Option<glib::Object> {
+    list_item
+        .upgrade()?
+        .item()
+        .and_downcast::<gtk::TreeListRow>()?
+        .item()
+}
+
 /// The playlist item a tree row's inner object stands for.
 pub(super) fn playlist_item_of(object: &glib::Object) -> Option<PlaylistItem> {
     let boxed = object.downcast_ref::<glib::BoxedAnyObject>()?;

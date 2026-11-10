@@ -11,7 +11,7 @@ use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, OnlineCapability, OnlineRunRequest, PlaylistItem,
 };
 
-use super::model::playlist_item_of;
+use super::model::{bound_playlist_item, bound_sidebar_item};
 use super::{
     AnalysisEnabledQueryHolder, AnalysisRunCallbackHolder, DeleteCallbackHolder,
     EditSmartPlaylistCallbackHolder, OnlineBusyQueryHolder, OnlineRunCallbackHolder,
@@ -32,10 +32,19 @@ const RETRIEVE_ARTWORK_ACTION: &str = "retrieve-artwork";
 const RETRIEVE_ALL_ACTION: &str = "retrieve-all";
 static NEXT_ROW_CONTEXT_MENU_SERIAL: AtomicU64 = AtomicU64::new(0);
 
+/// What a row's context menu acts on: the item the row shows when the
+/// menu opens, and the row's actions.
 #[derive(Clone)]
 pub(super) struct SidebarRowContext {
     pub(super) item: PlaylistItem,
     pub(super) current_name: String,
+    pub(super) actions: SidebarRowActions,
+}
+
+/// A sidebar row's rename widgets and the sidebar's playlist callbacks,
+/// shared by every item the row shows.
+#[derive(Clone)]
+pub(super) struct SidebarRowActions {
     pub(super) name_stack: gtk::Stack,
     pub(super) label: gtk::Label,
     pub(super) entry: gtk::Entry,
@@ -47,39 +56,29 @@ pub(super) struct SidebarRowContext {
     pub(super) online_busy_query: OnlineBusyQueryHolder,
 }
 
-pub(super) fn attach_row_context_menu(row: &gtk::Widget, context: SidebarRowContext) {
-    remove_secondary_gestures(row);
-
+/// Wire a row's context menu once, when the row is set up. The menu
+/// acts on the item the row shows when it opens.
+pub(super) fn attach_row_context_menu(
+    row: &gtk::Widget,
+    list_item: &gtk::ListItem,
+    actions: SidebarRowActions,
+) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(gdk::BUTTON_SECONDARY);
-    let row_widget = row.clone();
+    let list_item = list_item.downgrade();
     gesture.connect_pressed(move |gesture, _n_press, x, y| {
+        let (Some(row), Some(shown)) = (gesture.widget(), bound_sidebar_item(&list_item)) else {
+            return;
+        };
         gesture.set_state(gtk::EventSequenceState::Claimed);
-        popup_row_context_menu(&row_widget, context.clone(), x, y);
+        let context = SidebarRowContext {
+            item: shown.item,
+            current_name: shown.name,
+            actions: actions.clone(),
+        };
+        popup_row_context_menu(&row, context, x, y);
     });
     row.add_controller(gesture);
-}
-
-fn remove_secondary_gestures(widget: &gtk::Widget) {
-    let controllers = widget.observe_controllers();
-    let mut to_remove: Vec<gtk::EventController> = Vec::new();
-    for index in 0..controllers.n_items() {
-        let Some(object) = controllers.item(index) else {
-            continue;
-        };
-        let Some(gesture) = object.downcast_ref::<gtk::GestureClick>() else {
-            continue;
-        };
-        if gesture.button() != gdk::BUTTON_SECONDARY {
-            continue;
-        }
-        if let Ok(controller) = object.downcast::<gtk::EventController>() {
-            to_remove.push(controller);
-        }
-    }
-    for controller in to_remove {
-        widget.remove_controller(&controller);
-    }
 }
 
 fn popup_row_context_menu(anchor: &gtk::Widget, context: SidebarRowContext, x: f64, y: f64) {
@@ -130,7 +129,7 @@ fn row_context_menu_model(
     let menu = gio::Menu::new();
 
     if let PlaylistItem::SmartPlaylist(smart_playlist_id) = context.item {
-        let on_edit = context.on_edit_smart_playlist.clone();
+        let on_edit = context.actions.on_edit_smart_playlist.clone();
         add_local_action(action_group, EDIT_ACTION, true, move || {
             if let Some(callback) = on_edit.borrow().as_ref() {
                 callback(smart_playlist_id);
@@ -139,9 +138,9 @@ fn row_context_menu_model(
         append_local_action_item(&menu, "Edit\u{2026}", local_action_group, EDIT_ACTION);
     }
 
-    let name_stack_for_rename = context.name_stack.clone();
-    let label_for_rename = context.label.clone();
-    let entry_for_rename = context.entry.clone();
+    let name_stack_for_rename = context.actions.name_stack.clone();
+    let label_for_rename = context.actions.label.clone();
+    let entry_for_rename = context.actions.entry.clone();
     add_local_action(action_group, RENAME_ACTION, true, move || {
         begin_rename(&name_stack_for_rename, &label_for_rename, &entry_for_rename);
     });
@@ -150,7 +149,7 @@ fn row_context_menu_model(
     let anchor_for_delete = anchor.clone();
     let item_for_delete = context.item;
     let current_name_for_delete = context.current_name.clone();
-    let on_delete_for_delete = context.on_delete.clone();
+    let on_delete_for_delete = context.actions.on_delete.clone();
     add_local_action(action_group, DELETE_ACTION, true, move || {
         confirm_and_delete(
             &anchor_for_delete,
@@ -197,6 +196,7 @@ fn analyze_submenu_model(
     let model = gio::Menu::new();
     let analysis_globally_on = |capability: AnalysisCapability| -> bool {
         context
+            .actions
             .analysis_enabled_query
             .borrow()
             .as_ref()
@@ -210,7 +210,7 @@ fn analyze_submenu_model(
         (ANALYZE_AUDIO_ACTION, "Audio", AnalysisCapability::Audio),
     ] {
         let item = context.item;
-        let on_analysis_run = context.on_analysis_run.clone();
+        let on_analysis_run = context.actions.on_analysis_run.clone();
         add_local_action(
             action_group,
             action_name,
@@ -226,7 +226,7 @@ fn analyze_submenu_model(
 
     let all = gio::Menu::new();
     let item = context.item;
-    let on_analysis_run = context.on_analysis_run.clone();
+    let on_analysis_run = context.actions.on_analysis_run.clone();
     add_local_action(action_group, ANALYZE_ALL_ACTION, true, move || {
         if let Some(callback) = on_analysis_run.borrow().as_ref() {
             callback(item, AnalysisRunRequest::All);
@@ -250,6 +250,7 @@ fn retrieve_submenu_model(
 ) -> gio::Menu {
     let model = gio::Menu::new();
     let online_busy = context
+        .actions
         .online_busy_query
         .borrow()
         .as_ref()
@@ -266,7 +267,7 @@ fn retrieve_submenu_model(
         ),
     ] {
         let item = context.item;
-        let on_online_run = context.on_online_run.clone();
+        let on_online_run = context.actions.on_online_run.clone();
         add_local_action(action_group, action_name, !online_busy, move || {
             if let Some(callback) = on_online_run.borrow().as_ref() {
                 callback(item, OnlineRunRequest::Single(capability));
@@ -277,7 +278,7 @@ fn retrieve_submenu_model(
 
     let all = gio::Menu::new();
     let item = context.item;
-    let on_online_run = context.on_online_run.clone();
+    let on_online_run = context.actions.on_online_run.clone();
     add_local_action(action_group, RETRIEVE_ALL_ACTION, !online_busy, move || {
         if let Some(callback) = on_online_run.borrow().as_ref() {
             callback(item, OnlineRunRequest::All);
@@ -379,7 +380,8 @@ fn commit_rename(
 
 /// Wire a row's rename entry once, when the row is set up. The list
 /// rebinds the row to other items as it scrolls and updates, so the
-/// handlers read the item the row shows when they fire.
+/// handlers read the item the row shows when they fire. They hold the
+/// entry's stack and label weakly: the stack owns the entry.
 pub(super) fn attach_rename_entry_signals(
     entry: &gtk::Entry,
     name_stack: &gtk::Stack,
@@ -387,67 +389,62 @@ pub(super) fn attach_rename_entry_signals(
     list_item: &gtk::ListItem,
     on_rename: RenameCallbackHolder,
 ) {
+    let name_stack = name_stack.downgrade();
+    let label = label.downgrade();
+    let list_item = list_item.downgrade();
+
     let name_stack_for_activate = name_stack.clone();
     let label_for_activate = label.clone();
-    let list_item_for_activate = list_item.downgrade();
+    let list_item_for_activate = list_item.clone();
     let on_rename_for_activate = on_rename.clone();
     entry.connect_activate(move |entry| {
-        let Some(item) = bound_playlist_item(&list_item_for_activate) else {
+        let (Some(name_stack), Some(label), Some(item)) = (
+            name_stack_for_activate.upgrade(),
+            label_for_activate.upgrade(),
+            bound_playlist_item(&list_item_for_activate),
+        ) else {
             return;
         };
-        commit_rename(
-            &name_stack_for_activate,
-            &label_for_activate,
-            entry,
-            item,
-            &on_rename_for_activate,
-        );
+        commit_rename(&name_stack, &label, entry, item, &on_rename_for_activate);
     });
 
     let key_controller = gtk::EventControllerKey::new();
     let name_stack_for_escape = name_stack.clone();
     let label_for_escape = label.clone();
-    let entry_for_escape = entry.clone();
-    key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-        if key == gdk::Key::Escape {
-            cancel_rename(&name_stack_for_escape, &label_for_escape, &entry_for_escape);
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+    key_controller.connect_key_pressed(move |controller, key, _keycode, _state| {
+        if key != gdk::Key::Escape {
+            return glib::Propagation::Proceed;
         }
+        let (Some(name_stack), Some(label), Some(entry)) = (
+            name_stack_for_escape.upgrade(),
+            label_for_escape.upgrade(),
+            controller.widget().and_downcast::<gtk::Entry>(),
+        ) else {
+            return glib::Propagation::Proceed;
+        };
+        cancel_rename(&name_stack, &label, &entry);
+        glib::Propagation::Stop
     });
     entry.add_controller(key_controller);
 
     let focus_controller = gtk::EventControllerFocus::new();
-    let name_stack_for_focus = name_stack.clone();
-    let label_for_focus = label.clone();
-    let entry_for_focus = entry.clone();
-    let list_item_for_focus = list_item.downgrade();
-    focus_controller.connect_leave(move |_controller| {
-        if name_stack_for_focus.visible_child_name().as_deref() != Some("entry") {
-            return;
-        }
-        let Some(item) = bound_playlist_item(&list_item_for_focus) else {
+    focus_controller.connect_leave(move |controller| {
+        let (Some(name_stack), Some(label), Some(entry)) = (
+            name_stack.upgrade(),
+            label.upgrade(),
+            controller.widget().and_downcast::<gtk::Entry>(),
+        ) else {
             return;
         };
-        commit_rename(
-            &name_stack_for_focus,
-            &label_for_focus,
-            &entry_for_focus,
-            item,
-            &on_rename,
-        );
+        if name_stack.visible_child_name().as_deref() != Some("entry") {
+            return;
+        }
+        let Some(item) = bound_playlist_item(&list_item) else {
+            return;
+        };
+        commit_rename(&name_stack, &label, &entry, item, &on_rename);
     });
     entry.add_controller(focus_controller);
-}
-
-/// The playlist item a sidebar row is bound to right now.
-fn bound_playlist_item(list_item: &glib::WeakRef<gtk::ListItem>) -> Option<PlaylistItem> {
-    let row = list_item
-        .upgrade()?
-        .item()
-        .and_downcast::<gtk::TreeListRow>()?;
-    playlist_item_of(&row.item()?)
 }
 
 fn confirm_and_delete(
@@ -518,7 +515,7 @@ mod tests {
     use super::{
         ANALYZE_ALL_ACTION, ANALYZE_AUDIO_ACTION, ANALYZE_BPM_ACTION, ANALYZE_KEY_ACTION,
         RETRIEVE_ALL_ACTION, RETRIEVE_ARTWORK_ACTION, RETRIEVE_LYRICS_ACTION, RETRIEVE_TAGS_ACTION,
-        ROW_CONTEXT_ACTION_GROUP, RenameCallbackHolder, SidebarRowContext,
+        ROW_CONTEXT_ACTION_GROUP, RenameCallbackHolder, SidebarRowActions, SidebarRowContext,
         attach_rename_entry_signals, playlist_row_context_popover, popup_row_context_menu,
         row_context_menu_model,
     };
@@ -633,11 +630,13 @@ mod tests {
             let received = Rc::new(RefCell::new(None));
             let received_for_callback = received.clone();
             context
+                .actions
                 .on_analysis_run
                 .replace(Some(Rc::new(move |item, request| {
                     received_for_callback.replace(Some((item, request)));
                 })));
             context
+                .actions
                 .analysis_enabled_query
                 .replace(Some(Rc::new(|capability| {
                     capability == AnalysisCapability::Bpm
@@ -684,7 +683,10 @@ mod tests {
     fn playlist_row_context_retrieve_actions_disable_while_busy() {
         let ran = crate::test_support::with_gtk(|| {
             let context = row_context(PlaylistItem::SmartPlaylist(smart_playlist_id(13)));
-            context.online_busy_query.replace(Some(Rc::new(|| true)));
+            context
+                .actions
+                .online_busy_query
+                .replace(Some(Rc::new(|| true)));
 
             let action_group = gio::SimpleActionGroup::new();
             let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -712,11 +714,15 @@ mod tests {
             let received = Rc::new(RefCell::new(None));
             let received_for_callback = received.clone();
             context
+                .actions
                 .on_online_run
                 .replace(Some(Rc::new(move |item, request| {
                     received_for_callback.replace(Some((item, request)));
                 })));
-            context.online_busy_query.replace(Some(Rc::new(|| false)));
+            context
+                .actions
+                .online_busy_query
+                .replace(Some(Rc::new(|| false)));
 
             let action_group = gio::SimpleActionGroup::new();
             let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -926,15 +932,17 @@ mod tests {
         SidebarRowContext {
             item,
             current_name: "Playlist".to_owned(),
-            name_stack,
-            label,
-            entry,
-            on_delete: Rc::new(RefCell::new(None)),
-            on_edit_smart_playlist: Rc::new(RefCell::new(None)),
-            on_analysis_run: Rc::new(RefCell::new(None)),
-            on_online_run: Rc::new(RefCell::new(None)),
-            analysis_enabled_query: Rc::new(RefCell::new(None)),
-            online_busy_query: Rc::new(RefCell::new(None)),
+            actions: SidebarRowActions {
+                name_stack,
+                label,
+                entry,
+                on_delete: Rc::new(RefCell::new(None)),
+                on_edit_smart_playlist: Rc::new(RefCell::new(None)),
+                on_analysis_run: Rc::new(RefCell::new(None)),
+                on_online_run: Rc::new(RefCell::new(None)),
+                analysis_enabled_query: Rc::new(RefCell::new(None)),
+                online_busy_query: Rc::new(RefCell::new(None)),
+            },
         }
     }
 

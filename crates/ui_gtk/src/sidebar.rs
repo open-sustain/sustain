@@ -27,7 +27,7 @@ pub(crate) use drag_drop::{DropPosition, parse_tracks_payload, tracks_drag_paylo
 use drag_drop::{SharedDropIndicator, attach_drag_and_drop};
 use model::{SidebarItem, SidebarTree, row_position, select_item, selected_item};
 use row_context::{
-    SidebarRowContext, attach_rename_entry_signals, attach_row_context_menu, begin_rename,
+    SidebarRowActions, attach_rename_entry_signals, attach_row_context_menu, begin_rename,
 };
 
 pub(crate) type SidebarSelectionChangedCallback = Rc<dyn Fn(Option<SidebarSelection>)>;
@@ -1212,6 +1212,28 @@ fn build_row_factory(
         list_item.set_child(Some(&expander));
 
         attach_rename_entry_signals(&entry, &name_stack, &label, list_item, on_rename.clone());
+        attach_drag_and_drop(
+            expander.upcast_ref(),
+            list_item,
+            on_move.clone(),
+            on_tracks_drop.clone(),
+            current_indicator.clone(),
+        );
+        attach_row_context_menu(
+            expander.upcast_ref(),
+            list_item,
+            SidebarRowActions {
+                name_stack,
+                label,
+                entry,
+                on_delete: on_delete.clone(),
+                on_edit_smart_playlist: on_edit_smart_playlist.clone(),
+                on_analysis_run: on_analysis_run.clone(),
+                on_online_run: on_online_run.clone(),
+                analysis_enabled_query: analysis_enabled_query.clone(),
+                online_busy_query: online_busy_query.clone(),
+            },
+        );
     });
 
     factory.connect_bind(move |_factory, list_item| {
@@ -1282,29 +1304,6 @@ fn build_row_factory(
         entry.set_text(&label_text);
         name_stack.set_visible_child_name("label");
 
-        attach_drag_and_drop(
-            expander.upcast_ref::<gtk::Widget>(),
-            playlist_item,
-            on_move.clone(),
-            on_tracks_drop.clone(),
-            current_indicator.clone(),
-        );
-        attach_row_context_menu(
-            expander.upcast_ref::<gtk::Widget>(),
-            SidebarRowContext {
-                item: playlist_item,
-                current_name: label_text.clone(),
-                name_stack: name_stack.clone(),
-                label: label.clone(),
-                entry: entry.clone(),
-                on_delete: on_delete.clone(),
-                on_edit_smart_playlist: on_edit_smart_playlist.clone(),
-                on_analysis_run: on_analysis_run.clone(),
-                on_online_run: on_online_run.clone(),
-                analysis_enabled_query: analysis_enabled_query.clone(),
-                online_busy_query: online_busy_query.clone(),
-            },
-        );
         // If a caller armed `arm_pending_rename` for this item, immediately
         // enter rename mode now that the row is bound and its widgets exist.
         let should_rename = {
@@ -1360,5 +1359,102 @@ fn clamp_sidebar_width(content_area: &gtk::Paned) {
     let clamped_width = current_width.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
     if clamped_width != current_width {
         content_area.set_position(clamped_width);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gtk::prelude::*;
+    use gtk::{gio, glib};
+    use sustain_app_runtime::{PlaylistId, PlaylistItem};
+
+    use super::build_row_factory;
+    use super::model::SidebarItem;
+
+    /// A row's widgets must go with the row. The rename entry, the drag
+    /// source, the drop target, and the context-menu gesture are wired
+    /// once per row and none of them may hold the row or its list item,
+    /// or every row the sidebar drops stays alive behind it.
+    #[test]
+    fn widgets_of_rows_that_leave_the_sidebar_are_released() {
+        let ran = crate::test_support::with_gtk(|| {
+            let factory = build_row_factory(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            );
+            let store = gio::ListStore::new::<glib::BoxedAnyObject>();
+            for id in 1..=300 {
+                store.append(&glib::BoxedAnyObject::new(SidebarItem {
+                    name: format!("Playlist {id}"),
+                    item: PlaylistItem::Playlist(PlaylistId::new(id).expect("positive id")),
+                }));
+            }
+            let tree = gtk::TreeListModel::new(store.clone(), false, false, |_| None);
+            let list_view =
+                gtk::ListView::new(Some(gtk::NoSelection::new(Some(tree))), Some(factory));
+            let scrolled = gtk::ScrolledWindow::new();
+            scrolled.set_child(Some(&list_view));
+            let window = gtk::Window::new();
+            window.set_default_size(200, 300);
+            window.set_child(Some(&scrolled));
+            window.present();
+            drain_main_context();
+
+            let list_root: &gtk::Widget = list_view.upcast_ref();
+            let mut widgets = Vec::new();
+            collect_descendants(list_root, &mut widgets);
+            assert!(
+                widgets.len() > 300,
+                "the sidebar built widgets for its visible rows"
+            );
+
+            store.splice(1, store.n_items() - 1, &[] as &[glib::Object]);
+            drain_main_context();
+
+            let detached_alive = widgets
+                .iter()
+                .filter_map(glib::WeakRef::upgrade)
+                .filter(|widget| !widget.is_ancestor(list_root))
+                .count();
+            assert_eq!(
+                detached_alive, 0,
+                "widgets of the rows that left the sidebar must be released"
+            );
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    fn drain_main_context() {
+        let context = glib::MainContext::default();
+        for _ in 0..200 {
+            if !context.iteration(false) {
+                break;
+            }
+        }
+    }
+
+    /// Every widget under `root`, except a `GtkEntry`'s internals: GTK
+    /// 4.24 never frees the text widget of a finalized entry, whatever
+    /// holds the entry.
+    fn collect_descendants(root: &gtk::Widget, widgets: &mut Vec<glib::WeakRef<gtk::Widget>>) {
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            widgets.push(widget.downgrade());
+            if !widget.is::<gtk::Entry>() {
+                collect_descendants(&widget, widgets);
+            }
+            child = widget.next_sibling();
+        }
     }
 }

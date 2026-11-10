@@ -1387,6 +1387,7 @@ mod tests {
     use sustain_app_runtime::TrackId;
 
     use super::*;
+    use crate::track_context::{TrackContextActionSet, TrackContextInvocationState};
 
     #[test]
     fn append_rows_adds_to_existing_store_without_replacement() {
@@ -1892,6 +1893,72 @@ mod tests {
 
     fn track_ids(ids: &[i64]) -> Vec<TrackId> {
         ids.iter().filter_map(|&id| TrackId::new(id)).collect()
+    }
+
+    /// A row's cells must go with the row. Each cell carries controllers
+    /// — drag source, drop target, context menu, rating clicks, inline
+    /// edit clicks — and none
+    /// of them may hold the cell or its list item, or every row a shorter
+    /// list drops stays alive behind the table.
+    #[test]
+    fn cells_of_rows_that_leave_the_table_are_released() {
+        let ran = crate::test_support::with_gtk(|| {
+            let window = gtk::Window::new();
+            let context_menu = TrackRowContextMenu::new(
+                TrackContextActionSet::new(Vec::new()),
+                window.clone(),
+                TrackContextInvocationState::default(),
+            );
+            let rating_changed: RatingChangedCallback = Rc::new(|_, _| true);
+            let reorder: RowReorderCallback = Rc::new(|_| false);
+            let begin_edit: BeginEditCallback = Rc::new(|_, _| None);
+            let table = build_track_table(
+                (1..=300).map(row).collect(),
+                None,
+                Some(context_menu),
+                Some(rating_changed),
+                Some(reorder),
+                Some(begin_edit),
+            );
+            window.set_default_size(700, 400);
+            window.set_child(Some(&table.widget()));
+            window.present();
+            drain_main_context();
+
+            let table_root: &gtk::Widget = table.table.upcast_ref();
+            let mut widgets = Vec::new();
+            collect_descendants(table_root, &mut widgets);
+            assert!(
+                widgets.len() > 300,
+                "the table built cell widgets for its visible rows"
+            );
+
+            table.replace_rows(vec![row(1)]);
+            drain_main_context();
+
+            let detached_alive = widgets
+                .iter()
+                .filter_map(glib::WeakRef::upgrade)
+                .filter(|widget| !widget.is_ancestor(table_root))
+                .count();
+            assert_eq!(
+                detached_alive, 0,
+                "widgets of the rows that left the table must be released"
+            );
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    fn collect_descendants(root: &gtk::Widget, widgets: &mut Vec<glib::WeakRef<gtk::Widget>>) {
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            widgets.push(widget.downgrade());
+            collect_descendants(&widget, widgets);
+            child = widget.next_sibling();
+        }
     }
 
     fn row(id: i64) -> TrackTableRow {
