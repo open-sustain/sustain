@@ -139,10 +139,47 @@ impl StatisticsView {
 /// calendar cannot place (before the Unix epoch). Backs the year-added
 /// bucketing; the release-year axis needs no calendar (it is already a
 /// plain year).
+///
+/// It runs once per library track, and GLib's local-time conversion looks
+/// the time zone up on every call, so the year comes from UTC arithmetic
+/// wherever the two cannot differ. A UTC offset stays within a day, so only
+/// an instant on a UTC 31 December or 1 January can fall in another local
+/// year; only those take the local-time conversion.
 fn local_year(time: SystemTime) -> Option<i32> {
     let seconds = time.duration_since(UNIX_EPOCH).ok()?;
     let seconds = i64::try_from(seconds.as_secs()).ok()?;
-    Some(glib::DateTime::from_unix_local(seconds).ok()?.year())
+    let (year, month, day) = utc_date(seconds.div_euclid(SECONDS_PER_DAY))?;
+    if matches!((month, day), (12, 31) | (1, 1)) {
+        return Some(glib::DateTime::from_unix_local(seconds).ok()?.year());
+    }
+    Some(year)
+}
+
+const SECONDS_PER_DAY: i64 = 86_400;
+
+/// The proleptic Gregorian `(year, month, day)` of the day `days` days
+/// after 1970-01-01, or `None` past the range of an `i32` year (Howard
+/// Hinnant's `civil_from_days`).
+fn utc_date(days: i64) -> Option<(i32, u32, u32)> {
+    let shifted = days.checked_add(719_468)?;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    Some((
+        i32::try_from(year).ok()?,
+        u32::try_from(month).ok()?,
+        u32::try_from(day).ok()?,
+    ))
 }
 
 /// `"<count> (<pct>%)"` — a count alongside its share of `total`. Used by
@@ -428,7 +465,46 @@ fn section(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+
+    #[test]
+    fn utc_date_matches_glib_across_the_calendar() {
+        // Every day from the epoch to 2200, through leap and century years.
+        for days in 0..84_000 {
+            let utc = glib::DateTime::from_unix_utc(days * SECONDS_PER_DAY).expect("valid instant");
+            assert_eq!(
+                utc_date(days),
+                Some((
+                    utc.year(),
+                    u32::try_from(utc.month()).expect("month"),
+                    u32::try_from(utc.day_of_month()).expect("day"),
+                )),
+                "day {days}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_year_matches_the_local_calendar_around_new_year() {
+        // Every hour of the two days either side of each UTC new year,
+        // where the local year can differ, and a few instants in between.
+        for year in [1999, 2000, 2016, 2024, 2025, 2026] {
+            let new_year = glib::DateTime::from_utc(year, 1, 1, 0, 0, 0.0)
+                .expect("valid date")
+                .to_unix();
+            for hour in -48..=48 {
+                let seconds = new_year + hour * 3_600;
+                let time = UNIX_EPOCH + Duration::from_secs(seconds.unsigned_abs());
+                let local = glib::DateTime::from_unix_local(seconds).expect("valid instant");
+                assert_eq!(local_year(time), Some(local.year()), "{seconds}");
+            }
+            let mid_year =
+                UNIX_EPOCH + Duration::from_secs((new_year + 180 * 86_400).unsigned_abs());
+            assert_eq!(local_year(mid_year), Some(year));
+        }
+    }
 
     #[test]
     fn count_share_text_pairs_count_with_rounded_percent() {
