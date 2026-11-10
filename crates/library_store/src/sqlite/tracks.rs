@@ -396,6 +396,18 @@ pub(super) fn track_id_at(
         .transpose()
 }
 
+/// Whether `track_id` is in the library. A background result that
+/// arrives for a track removed meanwhile has nothing to attach to.
+pub(super) fn is_in_library(connection: &Connection, track_id: TrackId) -> StoreResult<bool> {
+    connection
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM tracks WHERE id = ?1)",
+            params![track_id.get()],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::from)
+}
+
 pub(super) fn tracks(connection: &Connection) -> StoreResult<Vec<Track>> {
     let mut statement = connection
         .prepare(SELECT_ALL_TRACKS_SQL.as_str())

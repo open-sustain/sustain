@@ -146,7 +146,8 @@ fn enqueue(
                 track_id, mirror_metadata, mirror_rating, artwork_action,
                 artwork_digest, artwork_size_bytes, generation
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+            SELECT ?1, ?2, ?3, ?4, ?5, ?6, 1
+            WHERE EXISTS (SELECT 1 FROM tracks WHERE id = ?1)
             ON CONFLICT(track_id) DO UPDATE SET
                 mirror_metadata = MAX(tag_mirror_outbox.mirror_metadata, excluded.mirror_metadata),
                 mirror_rating = MAX(tag_mirror_outbox.mirror_rating, excluded.mirror_rating),

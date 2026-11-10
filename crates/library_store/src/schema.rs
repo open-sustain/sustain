@@ -894,12 +894,14 @@ JOIN waveform_cache.track_waveform w
 WHERE ta.track_id = ?1 AND w.detail_segments IS NOT NULL
 "#;
 
-/// Upsert the synced-lyrics JSON for a track. Source is a short
-/// provider tag (e.g. `"lrclib"`) kept so a later diagnostic can
-/// answer "where did this come from?" without consulting logs.
+/// Upsert the synced-lyrics JSON for a track still in the library.
+/// Source is a short provider tag (e.g. `"lrclib"`) kept so a later
+/// diagnostic can answer "where did this come from?" without consulting
+/// logs.
 pub(super) const UPSERT_TRACK_SYNCED_LYRICS_SQL: &str = r#"
 INSERT INTO track_synced_lyrics (track_id, lines_json, source)
-VALUES (?1, ?2, ?3)
+SELECT ?1, ?2, ?3
+WHERE EXISTS (SELECT 1 FROM tracks WHERE id = ?1)
 ON CONFLICT(track_id) DO UPDATE SET
     lines_json = excluded.lines_json,
     source     = excluded.source
@@ -914,11 +916,11 @@ WHERE track_id = ?1
 pub(super) const DELETE_TRACK_SYNCED_LYRICS_SQL: &str =
     r#"DELETE FROM track_synced_lyrics WHERE track_id = ?1"#;
 
-/// Upsert into `track_online_status`. Each `*_attempted_at_unix`
-/// parameter is either the timestamp (capability ran this pass) or
-/// `NULL` (capability not requested this pass) — `COALESCE`
-/// preserves the existing value so a lyrics-only pass does not
-/// clobber the artwork attempt timestamp.
+/// Upsert into `track_online_status` for a track still in the library.
+/// Each `*_attempted_at_unix` parameter is either the timestamp
+/// (capability ran this pass) or `NULL` (capability not requested this
+/// pass) — `COALESCE` preserves the existing value so a lyrics-only pass
+/// does not clobber the artwork attempt timestamp.
 pub(super) const UPSERT_TRACK_ONLINE_STATUS_SQL: &str = r#"
 INSERT INTO track_online_status (
     track_id,
@@ -927,7 +929,8 @@ INSERT INTO track_online_status (
     lyrics_attempted_at_unix,
     provider_version
 )
-VALUES (?1, ?2, ?3, ?4, ?5)
+SELECT ?1, ?2, ?3, ?4, ?5
+WHERE EXISTS (SELECT 1 FROM tracks WHERE id = ?1)
 ON CONFLICT(track_id) DO UPDATE SET
     artwork_attempted_at_unix = COALESCE(excluded.artwork_attempted_at_unix, artwork_attempted_at_unix),
     tags_attempted_at_unix    = COALESCE(excluded.tags_attempted_at_unix,    tags_attempted_at_unix),

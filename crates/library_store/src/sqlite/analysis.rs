@@ -21,6 +21,9 @@ pub(super) fn record_analysis(
         return Ok(());
     }
     let transaction = connection.transaction().map_err(StoreError::from)?;
+    if !super::tracks::is_in_library(&transaction, track_id)? {
+        return Ok(());
+    }
 
     let waveform = (!analysis.waveform_detail.segments.is_empty())
         .then_some((&analysis.waveform_preview, &analysis.waveform_detail));
@@ -110,6 +113,9 @@ pub(super) fn record_analysis_attempt_failure(
         return Ok(());
     }
     let transaction = connection.transaction().map_err(StoreError::from)?;
+    if !super::tracks::is_in_library(&transaction, track_id)? {
+        return Ok(());
+    }
     record_attempt(
         &transaction,
         waveform_cache,

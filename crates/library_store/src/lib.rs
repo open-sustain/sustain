@@ -434,7 +434,8 @@ pub trait LibraryStore: Send + Sync {
     /// in a missing key rather than overriding one. The beat grid,
     /// an analysis product rather than a library value, is replaced
     /// whenever the BPM capability ran — removed when the pass found
-    /// none.
+    /// none. A track that has left the library meanwhile has nothing to
+    /// record, so the pass is dropped rather than refused.
     fn record_analysis(
         &self,
         track_id: TrackId,
@@ -447,6 +448,7 @@ pub trait LibraryStore: Send + Sync {
     /// capabilities' `*_attempted_at_unix` so the scheduler does not
     /// keep retrying every cycle; does not touch
     /// `tracks.bpm_hundredths`/`musical_key` or the waveform table.
+    /// Dropped for a track that has left the library meanwhile.
     fn record_analysis_attempt_failure(
         &self,
         track_id: TrackId,
@@ -501,7 +503,8 @@ pub trait LibraryStore: Send + Sync {
     /// entry — synced lyrics are a single-shot store-or-replace, not
     /// a merge. Passing an empty [`SyncedLyrics`] is a no-op and
     /// leaves any existing row untouched (call [`Self::clear_synced_lyrics`]
-    /// to delete instead).
+    /// to delete instead). Dropped for a track that has left the library
+    /// meanwhile.
     fn record_synced_lyrics(
         &self,
         track_id: TrackId,
@@ -523,7 +526,8 @@ pub trait LibraryStore: Send + Sync {
     /// preserve their previous value. This is the only write the
     /// online scheduler makes regardless of whether the underlying
     /// provider returned data — "attempted but found nothing" must
-    /// be recorded so the scheduler does not retry every cycle.
+    /// be recorded so the scheduler does not retry every cycle. Dropped
+    /// for a track that has left the library meanwhile.
     fn record_online_attempt(
         &self,
         track_id: TrackId,

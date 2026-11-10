@@ -2579,6 +2579,48 @@ fn a_source_fingerprint_for_a_track_no_longer_in_the_library_is_dropped() {
 }
 
 #[test]
+fn background_results_for_a_track_no_longer_in_the_library_are_dropped() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let gone = track_id(7);
+
+    assert_eq!(
+        store.record_analysis(
+            gone,
+            &sample_analysis(Some(126.0), Some(MusicalKey::DMinor)),
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_000),
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        store.record_analysis_attempt_failure(
+            gone,
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_000)
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        store.record_online_attempt(gone, OnlineCapabilities::all(), online_ctx(1_700_000_000)),
+        Ok(())
+    );
+    assert_eq!(
+        store.record_synced_lyrics(gone, &sample_synced_lyrics(), "lrclib"),
+        Ok(())
+    );
+    assert_eq!(
+        store.enqueue_tag_mirror_artwork(gone, TagMirrorArtwork::Clear),
+        Ok(())
+    );
+
+    assert_eq!(store.load_waveform(gone), Ok(None));
+    assert_eq!(store.load_beat_grid(gone), Ok(None));
+    assert_eq!(store.load_all_acoustics(), Ok(Vec::new()));
+    assert_eq!(store.load_synced_lyrics(gone), Ok(None));
+    assert_eq!(store.tag_mirrors_due(i64::MAX, 10), Ok(Vec::new()));
+}
+
+#[test]
 fn managed_retarget_commits_metadata_location_and_outbox_together() {
     let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "loose.flac");
