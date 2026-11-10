@@ -196,7 +196,9 @@ pub fn compute_library_statistics(
 /// Normalise a track's genre tag into grouping keys. Slash-delimited tags
 /// split into equal-weighted genre components; empty components are ignored.
 /// A tag with no usable component still contributes to the untagged bucket.
-fn genre_keys(track: &Track) -> Vec<Option<String>> {
+/// The keys borrow from the track: the aggregations count every track of
+/// the library, and own a genre name only once it is ranked.
+fn genre_keys(track: &Track) -> Vec<Option<&str>> {
     let Some(raw) = track.metadata.genre.as_deref() else {
         return vec![None];
     };
@@ -204,20 +206,20 @@ fn genre_keys(track: &Track) -> Vec<Option<String>> {
     let mut genres = Vec::new();
     for genre in raw.split('/') {
         let genre = genre.trim();
-        if genre.is_empty() || genres.iter().any(|existing: &String| existing == genre) {
+        if genre.is_empty() || genres.contains(&Some(genre)) {
             continue;
         }
-        genres.push(genre.to_owned());
+        genres.push(Some(genre));
     }
 
     if genres.is_empty() {
         vec![None]
     } else {
-        genres.into_iter().map(Some).collect()
+        genres
     }
 }
 
-fn weighted_genres(track: &Track) -> Vec<(Option<String>, f64)> {
+fn weighted_genres(track: &Track) -> Vec<(Option<&str>, f64)> {
     let keys = genre_keys(track);
     let weight = 1.0 / keys.len() as f64;
     keys.into_iter().map(|genre| (genre, weight)).collect()
@@ -240,7 +242,7 @@ fn genre_tiebreak(left: &Option<String>, right: &Option<String>) -> std::cmp::Or
 }
 
 fn genre_distribution(tracks: &[Track]) -> GenreDistribution {
-    let mut counts: HashMap<Option<String>, f64> = HashMap::new();
+    let mut counts: HashMap<Option<&str>, f64> = HashMap::new();
     for track in tracks {
         for (genre, weight) in weighted_genres(track) {
             *counts.entry(genre).or_insert(0.0) += weight;
@@ -250,7 +252,7 @@ fn genre_distribution(tracks: &[Track]) -> GenreDistribution {
     let mut ranked: Vec<GenreShare> = counts
         .into_iter()
         .map(|(genre, track_weight)| GenreShare {
-            genre,
+            genre: genre.map(str::to_owned),
             track_weight,
         })
         .collect();
@@ -302,7 +304,7 @@ fn quality_distribution(tracks: &[Track]) -> QualityDistribution {
 }
 
 fn most_played_genres(tracks: &[Track]) -> Vec<GenrePlayCount> {
-    let mut totals: HashMap<Option<String>, f64> = HashMap::new();
+    let mut totals: HashMap<Option<&str>, f64> = HashMap::new();
     for track in tracks {
         for (genre, weight) in weighted_genres(track) {
             *totals.entry(genre).or_insert(0.0) += track.statistics.play_count as f64 * weight;
@@ -313,7 +315,7 @@ fn most_played_genres(tracks: &[Track]) -> Vec<GenrePlayCount> {
         // A genre nobody has played is not "most played".
         .filter(|(_, total)| *total > 0.0)
         .map(|(genre, total_play_count)| GenrePlayCount {
-            genre,
+            genre: genre.map(str::to_owned),
             total_play_count,
         })
         .collect();
@@ -329,7 +331,7 @@ fn most_liked_genres(tracks: &[Track]) -> Vec<GenreRating> {
     // (sum of stars, rated-track weight) per genre, over rated
     // tracks only — zero-star tracks are excluded per the project's
     // rating-as-exclusion convention.
-    let mut sums: HashMap<Option<String>, (f64, f64)> = HashMap::new();
+    let mut sums: HashMap<Option<&str>, (f64, f64)> = HashMap::new();
     for track in tracks {
         let stars = track.rating.stars();
         if stars == 0 {
@@ -345,7 +347,7 @@ fn most_liked_genres(tracks: &[Track]) -> Vec<GenreRating> {
     let mut ranked: Vec<GenreRating> = sums
         .into_iter()
         .map(|(genre, (star_sum, rated_track_weight))| GenreRating {
-            genre,
+            genre: genre.map(str::to_owned),
             total_stars: star_sum,
             average_stars: star_sum / rated_track_weight,
             rated_track_weight,
