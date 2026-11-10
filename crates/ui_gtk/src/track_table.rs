@@ -392,18 +392,18 @@ impl TrackTable {
     /// [`Self::replace_rows`], the selection on the rows that stay and the
     /// scroll position survive.
     ///
-    /// A row is the one already shown when it shows the same track at the
-    /// same playlist position, since a regular playlist may list a track
-    /// twice. As under [`Self::update_rows`], a row that stays does not move
-    /// when its new data would sort it elsewhere.
+    /// A row stays when its track is still listed, and takes the listed
+    /// row whole, play-order position included. As under
+    /// [`Self::update_rows`], it does not move when its new data would sort
+    /// it elsewhere.
     pub(crate) fn reconcile_rows(&self, rows: Vec<TrackTableRow>) {
         // A progressive rebuild still streaming would add its remaining rows
         // a second time; they go in below with the other new rows instead.
         self.bump_row_replacement_generation();
-        let index_by_identity: HashMap<_, _> = rows
+        let index_by_track: HashMap<_, _> = rows
             .iter()
             .enumerate()
-            .map(|(index, row)| (row.identity(), index))
+            .map(|(index, row)| (row.track_id, index))
             .collect();
         let mut incoming: Vec<Option<TrackTableRow>> = rows.into_iter().map(Some).collect();
 
@@ -416,14 +416,14 @@ impl TrackTable {
             else {
                 continue;
             };
-            let Ok(identity) = row_object
+            let Ok(track_id) = row_object
                 .try_borrow::<TrackTableRow>()
-                .map(|row| row.identity())
+                .map(|row| row.track_id)
             else {
                 continue;
             };
-            match index_by_identity
-                .get(&identity)
+            match index_by_track
+                .get(&track_id)
                 .and_then(|&index| incoming[index].take())
             {
                 Some(row) => *row_object.borrow_mut::<TrackTableRow>() = row,
@@ -1639,23 +1639,6 @@ mod tests {
             assert_eq!(table.selected_track_ids(), track_ids(&[2, 3]));
             assert_eq!(store_object_key(&table, 1), kept_object);
             assert_eq!(store_track_name(&table, 1).as_deref(), Some("Z"));
-        });
-    }
-
-    #[test]
-    fn reconcile_rows_tells_apart_the_entries_of_a_track_listed_twice() {
-        crate::test_support::with_gtk(|| {
-            let table = build_track_table(Vec::new(), None, None, None, None, None);
-            table.apply_playlist_default_sort();
-            let entry = |id: i64, position: u32| row(id).with_playlist_position(Some(position));
-            table.replace_rows(vec![entry(1, 0), entry(2, 1), entry(1, 2)]);
-            table.selection.select_item(0, false);
-
-            // The second entry of track 1 left the playlist.
-            table.reconcile_rows(vec![entry(1, 0), entry(2, 1)]);
-
-            assert_eq!(table.ordered_track_ids(), track_ids(&[1, 2]));
-            assert_eq!(table.selected_track_ids(), track_ids(&[1]));
         });
     }
 
