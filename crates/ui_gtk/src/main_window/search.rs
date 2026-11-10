@@ -93,7 +93,7 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
                 &playlists_refresh,
                 sidebar.current_selection(),
                 &new_text,
-                PlaylistRowsUpdate::Replace,
+                RowSetUpdate::Replace,
             );
             if playlists_refreshed {
                 sustain_profiler::profile_mark!(

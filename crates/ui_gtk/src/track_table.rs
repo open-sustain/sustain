@@ -33,6 +33,18 @@ mod order;
 mod row;
 
 pub(crate) type TrackActivatedCallback = Rc<dyn Fn(TrackId)>;
+
+/// How a table takes a rebuilt row set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RowSetUpdate {
+    /// Another row set — another playlist, another search: the rows start
+    /// over, at the top with nothing selected ([`TrackTable::replace_rows`]).
+    Replace,
+    /// The same row set after its tracks changed under the user: the rows
+    /// that stay keep their selection and the table its scroll position
+    /// ([`TrackTable::reconcile_rows`]).
+    Reconcile,
+}
 pub(crate) type RatingChangedCallback = Rc<dyn Fn(TrackId, Rating) -> bool>;
 pub(crate) type LayoutChangedCallback = Rc<dyn Fn(TrackColumnLayout)>;
 
@@ -159,6 +171,14 @@ impl TrackTable {
 
         self.refresh_bound_cells();
         self.scroll_to_top();
+    }
+
+    /// Show `rows` as `update` asks.
+    pub(crate) fn show_rows(&self, rows: Vec<TrackTableRow>, update: RowSetUpdate) {
+        match update {
+            RowSetUpdate::Replace => self.replace_rows(rows),
+            RowSetUpdate::Reconcile => self.reconcile_rows(rows),
+        }
     }
 
     fn finish_edit_before_payload_swap(&self) {
@@ -388,22 +408,25 @@ impl TrackTable {
     /// Bring the table to exactly `rows` while keeping the user's place: a
     /// row already shown takes its new data where it stands, a row no longer
     /// listed leaves as under [`Self::remove_rows`], and a new row goes in at
-    /// its sorted position as under [`Self::append_rows`]. Unlike
+    /// its sorted position as under [`Self::append_rows`] — or, in a table
+    /// without a sort, which shows its rows in the order they are listed,
+    /// right after the row it follows in `rows`. Unlike
     /// [`Self::replace_rows`], the selection on the rows that stay and the
     /// scroll position survive.
     ///
     /// A row stays when its track is still listed, and takes the listed
-    /// row whole, play-order position included. As under
+    /// row whole, play-order position and group band included. As under
     /// [`Self::update_rows`], it does not move when its new data would sort
     /// it elsewhere.
     pub(crate) fn reconcile_rows(&self, rows: Vec<TrackTableRow>) {
         // A progressive rebuild still streaming would add its remaining rows
         // a second time; they go in below with the other new rows instead.
         self.bump_row_replacement_generation();
-        let index_by_track: HashMap<_, _> = rows
+        let listed_track_ids: Vec<Option<TrackId>> = rows.iter().map(|row| row.track_id).collect();
+        let index_by_track: HashMap<_, _> = listed_track_ids
             .iter()
             .enumerate()
-            .map(|(index, row)| (row.track_id, index))
+            .map(|(index, track_id)| (*track_id, index))
             .collect();
         let mut incoming: Vec<Option<TrackTableRow>> = rows.into_iter().map(Some).collect();
 
@@ -436,8 +459,50 @@ impl TrackTable {
         if !leaving.is_empty() {
             self.remove_rows_where(|position| leaving.contains(&position));
         }
-        self.append_rows(incoming.into_iter().flatten().collect());
+        if self.row_order().is_unsorted() {
+            self.insert_rows_in_listed_order(listed_track_ids.into_iter().zip(incoming));
+        } else {
+            self.append_rows(incoming.into_iter().flatten().collect());
+        }
         self.refresh_bound_cells();
+    }
+
+    /// Insert the rows of `listed` that are present — the ones the table
+    /// lacks; the others it shows already — each run of them right after
+    /// the shown row it follows in `listed`, or first when it follows none.
+    fn insert_rows_in_listed_order(
+        &self,
+        listed: impl IntoIterator<Item = (Option<TrackId>, Option<TrackTableRow>)>,
+    ) {
+        let position_by_track: HashMap<Option<TrackId>, u32> = (0..self.store.n_items())
+            .map(|position| (row_track_id(self.store.item(position)), position))
+            .collect();
+        let mut insertions: Vec<(u32, Vec<glib::BoxedAnyObject>)> = Vec::new();
+        let mut run: Vec<glib::BoxedAnyObject> = Vec::new();
+        let mut after_shown = 0;
+        for (track_id, row) in listed {
+            match row {
+                Some(row) => run.push(glib::BoxedAnyObject::new(row)),
+                None => {
+                    if !run.is_empty() {
+                        insertions.push((after_shown, std::mem::take(&mut run)));
+                    }
+                    if let Some(position) = position_by_track.get(&track_id) {
+                        after_shown = position + 1;
+                    }
+                }
+            }
+        }
+        if !run.is_empty() {
+            insertions.push((after_shown, run));
+        }
+        // Each run follows a different shown row, so the positions are
+        // distinct; splicing from the back leaves the positions before
+        // each splice untouched.
+        insertions.sort_by_key(|(position, _)| std::cmp::Reverse(*position));
+        for (position, objects) in insertions {
+            self.store.splice(position, 0, &objects);
+        }
     }
 
     /// Removes the rows at the positions `removes` picks, one
@@ -1639,6 +1704,23 @@ mod tests {
             assert_eq!(table.selected_track_ids(), track_ids(&[2, 3]));
             assert_eq!(store_object_key(&table, 1), kept_object);
             assert_eq!(store_track_name(&table, 1).as_deref(), Some("Z"));
+        });
+    }
+
+    #[test]
+    fn reconcile_rows_without_a_sort_follows_the_listed_order() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(Vec::new(), None, None, None, None, None);
+            table.disable_sorting_and_column_reordering();
+            table.replace_rows((1..=6).map(row).collect());
+            table.selection.select_item(4, true);
+
+            // The group of 3 and 4 is gone; 7 joins the first group, 8 the
+            // last, and 9 comes first.
+            table.reconcile_rows([9, 1, 2, 7, 5, 6, 8].into_iter().map(row).collect());
+
+            assert_eq!(table.ordered_track_ids(), track_ids(&[9, 1, 2, 7, 5, 6, 8]));
+            assert_eq!(table.selected_track_ids(), track_ids(&[5]));
         });
     }
 

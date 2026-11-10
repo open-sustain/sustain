@@ -93,23 +93,10 @@ pub(super) fn install_playlists_view_activator(
             &refresh_context.status_bar,
             sidebar.current_selection(),
             &search_text,
-            PlaylistRowsUpdate::Replace,
+            RowSetUpdate::Replace,
         );
         refresh_context.playlists_dirty.set(false);
     });
-}
-
-/// How the playlists table takes the rows built for it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PlaylistRowsUpdate {
-    /// Another playlist or another search: the rows start over, at the top
-    /// with nothing selected ([`TrackTable::replace_rows`]).
-    Replace,
-    /// Tracks changed under the shown playlist — a smart playlist admitting
-    /// or dropping tracks as their data changes, tracks leaving the library:
-    /// the rows that stay keep their selection and the table its scroll
-    /// position ([`TrackTable::reconcile_rows`]).
-    Reconcile,
 }
 
 /// Rebuild the playlists table only when the user is actually looking
@@ -122,7 +109,7 @@ pub(super) fn refresh_playlists_view_if_visible(
     refresh_context: &PlaylistsViewRefreshContext,
     sidebar_selection: Option<SidebarSelection>,
     search_text: &str,
-    update: PlaylistRowsUpdate,
+    update: RowSetUpdate,
 ) -> bool {
     if refresh_context.is_visible() {
         rebuild_playlists_view(
@@ -153,7 +140,7 @@ fn rebuild_playlists_view(
     status_bar: &StatusBar,
     sidebar_selection: Option<SidebarSelection>,
     search_text: &str,
-    update: PlaylistRowsUpdate,
+    update: RowSetUpdate,
 ) {
     let rows_profile = sustain_profiler::ProfileScope::start();
     let rows = playlist_table_rows_for(runtime, sidebar_selection, search_text);
@@ -167,10 +154,7 @@ fn rebuild_playlists_view(
     ));
     status_bar.update_summary(summary);
     let show_profile = sustain_profiler::ProfileScope::start();
-    match update {
-        PlaylistRowsUpdate::Replace => playlists_table.replace_rows(rows),
-        PlaylistRowsUpdate::Reconcile => playlists_table.reconcile_rows(rows),
-    }
+    playlists_table.show_rows(rows, update);
     sustain_profiler::profile_mark!(
         show_profile,
         "playlist table rows shown ({update:?}, {} rows)",

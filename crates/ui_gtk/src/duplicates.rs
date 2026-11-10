@@ -18,7 +18,7 @@ use crate::{
     SharedRuntime,
     track_context::TrackRowContextMenu,
     track_table::{
-        BeginEditCallback, RatingChangedCallback, TrackActivatedCallback, TrackTable,
+        BeginEditCallback, RatingChangedCallback, RowSetUpdate, TrackActivatedCallback, TrackTable,
         TrackTableRow, build_track_table,
     },
 };
@@ -35,6 +35,10 @@ pub(crate) struct DuplicatesView {
     strict: gtk::Switch,
     status: gtk::Label,
     generation: Rc<Cell<u64>>,
+    /// Whether the next scan result must replace the rows rather than
+    /// reconcile them: a scan that asked for a fresh start was superseded
+    /// before its result arrived.
+    replace_pending: Rc<Cell<bool>>,
     active: Rc<Cell<bool>>,
 }
 
@@ -77,12 +81,13 @@ impl DuplicatesView {
             strict,
             status,
             generation: Rc::new(Cell::new(0)),
+            replace_pending: Rc::new(Cell::new(false)),
             active: Rc::new(Cell::new(false)),
         };
         let view_for_toggle = view.clone();
         view.strict.connect_active_notify(move |_| {
             if view_for_toggle.active.get() {
-                view_for_toggle.scan();
+                view_for_toggle.scan(RowSetUpdate::Replace);
             }
         });
         view
@@ -95,15 +100,17 @@ impl DuplicatesView {
     pub(crate) fn set_active(&self, active: bool) {
         let was_active = self.active.replace(active);
         if active && !was_active {
-            self.scan();
+            self.scan(RowSetUpdate::Replace);
         } else if !active && was_active {
             self.generation.set(self.generation.get().wrapping_add(1));
         }
     }
 
+    /// Rescan after the library changed under the view — a merge, a
+    /// removal, an edit — keeping the user's place in the groups.
     pub(crate) fn refresh_if_active(&self) {
         if self.active.get() {
-            self.scan();
+            self.scan(RowSetUpdate::Reconcile);
         }
     }
 
@@ -172,8 +179,11 @@ impl DuplicatesView {
         table
     }
 
-    fn scan(&self) {
+    fn scan(&self, update: RowSetUpdate) {
         self.ensure_table();
+        if update == RowSetUpdate::Replace {
+            self.replace_pending.set(true);
+        }
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
         self.status.set_text("Scanning for duplicate tracks...");
@@ -253,7 +263,12 @@ impl DuplicatesView {
                     rows
                 };
                 let row_count = rows.len();
-                self.ensure_table().replace_rows(rows);
+                let update = if self.replace_pending.replace(false) {
+                    RowSetUpdate::Replace
+                } else {
+                    RowSetUpdate::Reconcile
+                };
+                self.ensure_table().show_rows(rows, update);
                 self.status.set_text(&format!(
                     "{} duplicate group(s), {} track(s).",
                     groups.len(),

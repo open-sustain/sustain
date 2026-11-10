@@ -428,7 +428,7 @@ pub(super) fn schedule_playlists_structural_refresh(
             &playlists_refresh,
             sidebar.current_selection(),
             &search_text,
-            PlaylistRowsUpdate::Reconcile,
+            RowSetUpdate::Reconcile,
         );
     });
 }

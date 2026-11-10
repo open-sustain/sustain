@@ -141,7 +141,7 @@ pub(super) fn sidebar_edit_smart_playlist_callback(
                         &playlists_refresh,
                         selection,
                         &search_text,
-                        PlaylistRowsUpdate::Replace,
+                        RowSetUpdate::Replace,
                     );
                 }
             })
@@ -385,7 +385,7 @@ pub(super) fn sidebar_selection_changed_callback(
                 &playlists_refresh,
                 selection,
                 &search_text,
-                PlaylistRowsUpdate::Replace,
+                RowSetUpdate::Replace,
             )
         };
         if !playlists_refreshed {
