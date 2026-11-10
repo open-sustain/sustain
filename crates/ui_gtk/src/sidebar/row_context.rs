@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gtk::prelude::*;
@@ -9,7 +11,7 @@ use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, OnlineCapability, OnlineRunRequest, PlaylistItem,
 };
 
-use super::model::SidebarItem;
+use super::model::playlist_item_of;
 use super::{
     AnalysisEnabledQueryHolder, AnalysisRunCallbackHolder, DeleteCallbackHolder,
     EditSmartPlaylistCallbackHolder, OnlineBusyQueryHolder, OnlineRunCallbackHolder,
@@ -322,15 +324,32 @@ fn delete_label_for(item: PlaylistItem) -> &'static str {
 pub(super) fn begin_rename(name_stack: &gtk::Stack, label: &gtk::Label, entry: &gtk::Entry) {
     entry.set_text(&label.text());
     name_stack.set_visible_child_name("entry");
+    focus_once_laid_out(entry);
+}
 
-    // When begin_rename is called from a closing popover (right-click "Rename")
-    // or from connect_bind after a refresh, focus is still in flight and a
-    // synchronous grab_focus loses the race. Defer to the next idle so the
-    // entry actually receives the cursor.
-    let entry = entry.clone();
-    glib::idle_add_local_once(move || {
-        entry.grab_focus();
-        entry.select_region(0, -1);
+/// Give the rename entry the cursor at the end of the next frame, once
+/// that frame has laid the entry's row out. Not synchronously: a closing
+/// popover (right-click "Rename") still has focus in flight. And not
+/// before layout: focusing a list row scrolls it into view, and GTK
+/// estimates a row it never allocated at zero height, so a row just
+/// appended at the bottom edge would be scrolled to sit just out of view.
+fn focus_once_laid_out(entry: &gtk::Entry) {
+    // A tick callback is the frame hook that also works on a row being
+    // bound, which is not yet in the window. It runs ahead of its frame's
+    // layout, so it hands the focus on to that frame's after-paint.
+    entry.add_tick_callback(|entry, clock| {
+        let handler: Rc<Cell<Option<glib::SignalHandlerId>>> = Rc::default();
+        let entry = entry.clone();
+        let handler_for_paint = handler.clone();
+        let id = clock.connect_after_paint(move |clock| {
+            if let Some(id) = handler_for_paint.take() {
+                clock.disconnect(id);
+            }
+            entry.grab_focus();
+            entry.select_region(0, -1);
+        });
+        handler.set(Some(id));
+        glib::ControlFlow::Break
     });
 }
 
@@ -428,10 +447,7 @@ fn bound_playlist_item(list_item: &glib::WeakRef<gtk::ListItem>) -> Option<Playl
         .upgrade()?
         .item()
         .and_downcast::<gtk::TreeListRow>()?;
-    let inner = row.item()?;
-    let boxed = inner.downcast_ref::<glib::BoxedAnyObject>()?;
-    let sidebar_item = boxed.try_borrow::<SidebarItem>().ok()?;
-    Some(sidebar_item.item)
+    playlist_item_of(&row.item()?)
 }
 
 fn confirm_and_delete(
@@ -502,10 +518,11 @@ mod tests {
     use super::{
         ANALYZE_ALL_ACTION, ANALYZE_AUDIO_ACTION, ANALYZE_BPM_ACTION, ANALYZE_KEY_ACTION,
         RETRIEVE_ALL_ACTION, RETRIEVE_ARTWORK_ACTION, RETRIEVE_LYRICS_ACTION, RETRIEVE_TAGS_ACTION,
-        ROW_CONTEXT_ACTION_GROUP, RenameCallbackHolder, SidebarItem, SidebarRowContext,
+        ROW_CONTEXT_ACTION_GROUP, RenameCallbackHolder, SidebarRowContext,
         attach_rename_entry_signals, playlist_row_context_popover, popup_row_context_menu,
         row_context_menu_model,
     };
+    use crate::sidebar::model::SidebarItem;
 
     #[test]
     fn playlist_row_context_popover_uses_nested_submenus() {

@@ -25,7 +25,7 @@ mod row_context;
 
 pub(crate) use drag_drop::{DropPosition, parse_tracks_payload, tracks_drag_payload};
 use drag_drop::{SharedDropIndicator, attach_drag_and_drop};
-use model::{SidebarItem, build_tree_model, select_item, selected_item};
+use model::{SidebarItem, SidebarTree, row_position, select_item, selected_item};
 use row_context::{
     SidebarRowContext, attach_rename_entry_signals, attach_row_context_menu, begin_rename,
 };
@@ -126,7 +126,9 @@ enum LibraryRowState {
 #[derive(Clone)]
 pub(crate) struct PlaylistSidebar {
     root: gtk::Box,
+    tree: Rc<SidebarTree>,
     selection: gtk::SingleSelection,
+    list_view: gtk::ListView,
     music_row: gtk::Box,
     albums_row: gtk::Box,
     duplicates_row: gtk::Box,
@@ -221,8 +223,8 @@ impl PlaylistSidebar {
         let (playlists_header, playlists_caret) = build_disclosure_section_header("Playlists");
         root.append(&playlists_header);
 
-        let tree_model = build_tree_model(&runtime.borrow());
-        let selection = gtk::SingleSelection::new(Some(tree_model));
+        let tree = Rc::new(SidebarTree::new(&runtime.borrow()));
+        let selection = gtk::SingleSelection::new(Some(tree.model().clone()));
         selection.set_autoselect(false);
         selection.set_can_unselect(true);
 
@@ -360,7 +362,9 @@ impl PlaylistSidebar {
 
         Self {
             root,
+            tree,
             selection,
+            list_view,
             music_row,
             albums_row,
             duplicates_row,
@@ -631,8 +635,8 @@ impl PlaylistSidebar {
 
     /// Arm an inline rename for `item` on the next bind that matches it.
     /// Designed for the "create then immediately name" flow: callers set this
-    /// before calling [`Self::refresh`], so the new row enters edit mode the moment
-    /// it is bound.
+    /// before calling [`Self::refresh`], which brings the new row into view,
+    /// so it enters edit mode the moment it is bound.
     pub(crate) fn arm_pending_rename(&self, item: PlaylistItem) {
         *self.pending_rename.borrow_mut() = Some(item);
     }
@@ -699,17 +703,18 @@ impl PlaylistSidebar {
     pub(crate) fn refresh(&self) {
         let transient_active = self.active_transient_row.borrow().is_some();
         let previous = self.current_selection();
-        let tree_model = build_tree_model(&self.runtime.borrow());
-        // Suppress the selection callback while we swap the model and
-        // restore the previous selection. `set_model` and `select_item`
-        // each emit `selected_notify` synchronously, and the connected
-        // notify handler would otherwise fire the callback up to twice
-        // — each call rebuilds the playlists table, which dominates
-        // refresh cost on a large library. Suspend, do the surgery,
-        // restore, and fire the callback at most once, with the final
-        // selection.
+        let rename = *self.pending_rename.borrow();
+        // Suppress the selection callback while we update the tree and
+        // restore the previous selection. A splice over the selected row
+        // and `select_item` each emit `selected_notify` synchronously, and
+        // the connected notify handler would otherwise fire the callback
+        // up to twice — each call rebuilds the playlists table, which
+        // dominates refresh cost on a large library. Suspend, do the
+        // surgery, restore, and fire the callback at most once, with the
+        // final selection.
+        let row_focus_taken = self.take_row_focus();
         let suspended = self.on_selection_changed.borrow_mut().take();
-        self.selection.set_model(Some(&tree_model));
+        self.tree.update(&self.runtime.borrow());
         match previous {
             Some(SidebarSelection::Item(item)) => {
                 self.library_state.set(LibraryRowState::None);
@@ -729,6 +734,15 @@ impl PlaylistSidebar {
             }
         }
         *self.on_selection_changed.borrow_mut() = suspended;
+        if row_focus_taken {
+            // GTK's focus tracker kept the focused row's position through
+            // the update, so this lands on the same row, or on the one
+            // that took a removed row's place, without scrolling.
+            self.list_view.grab_focus();
+        }
+        if let Some(item) = rename {
+            self.reveal_rename(item);
+        }
         let selection = self.current_selection();
         if transient_active || selection == previous {
             // A transient view owns the content area, or the shown item
@@ -738,6 +752,39 @@ impl PlaylistSidebar {
         if let Some(callback) = self.on_selection_changed.borrow().as_ref() {
             callback(selection);
         }
+    }
+
+    /// Scroll the row of a rename armed for this refresh into view. The
+    /// update may have bound the row, opening its entry, already; a row
+    /// far from the shown ones gets bound by the scroll. An item the tree
+    /// does not show disarms the rename, lest a later scroll open one the
+    /// user no longer expects.
+    fn reveal_rename(&self, item: PlaylistItem) {
+        match row_position(self.tree.model(), item) {
+            Some(position) => {
+                self.list_view
+                    .scroll_to(position, gtk::ListScrollFlags::NONE, None);
+            }
+            None => *self.pending_rename.borrow_mut() = None,
+        }
+    }
+
+    /// Take keyboard focus off the playlist list, ahead of a tree update
+    /// that may replace the focused row: GTK refocuses a list from its
+    /// start, scrolling it to the top, when the focused row goes away.
+    /// Returns whether the list held focus.
+    fn take_row_focus(&self) -> bool {
+        let Some(root) = self.list_view.root() else {
+            return false;
+        };
+        if !root
+            .focus()
+            .is_some_and(|focus| focus.is_ancestor(&self.list_view))
+        {
+            return false;
+        }
+        root.set_focus(None::<&gtk::Widget>);
+        true
     }
 }
 
