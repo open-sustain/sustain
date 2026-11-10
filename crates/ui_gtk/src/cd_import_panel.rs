@@ -131,12 +131,10 @@ struct CdTextBinding {
 }
 
 impl CellBinding for CdTextBinding {
-    fn list_item(&self) -> Option<gtk::ListItem> {
-        self.list_item.upgrade()
-    }
+    type Live = (gtk::ListItem, TableCell);
 
-    fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.cell.upgrade().is_some()
+    fn upgrade(&self) -> Option<Self::Live> {
+        Some((self.list_item.upgrade()?, self.cell.upgrade()?))
     }
 }
 
@@ -145,11 +143,7 @@ struct CdTextBindings(BindingRegistry<CdTextBinding>);
 
 impl CdTextBindings {
     fn refresh(&self) {
-        self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(cell)) = (binding.list_item(), binding.cell.upgrade())
-            else {
-                return;
-            };
+        self.0.for_each_live(|binding, (list_item, cell)| {
             let field = binding.field;
             let value = list_item_cd_row(&list_item, |row| match field {
                 EditableField::Artist => row.display_artist(),
@@ -169,14 +163,14 @@ struct CdStatusBinding {
 }
 
 impl CellBinding for CdStatusBinding {
-    fn list_item(&self) -> Option<gtk::ListItem> {
-        self.list_item.upgrade()
-    }
+    type Live = (gtk::ListItem, gtk::Spinner, gtk::Image);
 
-    fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some()
-            && self.spinner.upgrade().is_some()
-            && self.icon.upgrade().is_some()
+    fn upgrade(&self) -> Option<Self::Live> {
+        Some((
+            self.list_item.upgrade()?,
+            self.spinner.upgrade()?,
+            self.icon.upgrade()?,
+        ))
     }
 }
 
@@ -185,14 +179,7 @@ struct CdStatusBindings(BindingRegistry<CdStatusBinding>);
 
 impl CdStatusBindings {
     fn refresh(&self) {
-        self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(spinner), Some(icon)) = (
-                binding.list_item(),
-                binding.spinner.upgrade(),
-                binding.icon.upgrade(),
-            ) else {
-                return;
-            };
+        self.0.for_each_live(|_, (list_item, spinner, icon)| {
             let status = list_item_cd_row(&list_item, |row| row.status.get())
                 .unwrap_or(CdRipStatus::Pending);
             render_cd_status(&spinner, &icon, status);

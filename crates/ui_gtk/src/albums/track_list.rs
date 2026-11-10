@@ -307,13 +307,8 @@ impl AlbumTrackContextMenu {
     }
 
     fn list_item_for_widget(&self, widget: &gtk::Widget) -> Option<gtk::ListItem> {
-        self.rows.find_map_live(|row| {
-            let registered = row.widget.upgrade()?;
-            if registered == *widget {
-                row.list_item.upgrade()
-            } else {
-                None
-            }
+        self.rows.find_map_live(|_, (registered, list_item)| {
+            (registered == *widget).then_some(list_item)
         })
     }
 }
@@ -324,12 +319,10 @@ struct AlbumTrackContextRow {
 }
 
 impl CellBinding for AlbumTrackContextRow {
-    fn list_item(&self) -> Option<gtk::ListItem> {
-        self.list_item.upgrade()
-    }
+    type Live = (gtk::Widget, gtk::ListItem);
 
-    fn is_live(&self) -> bool {
-        self.widget.upgrade().is_some() && self.list_item.upgrade().is_some()
+    fn upgrade(&self) -> Option<Self::Live> {
+        Some((self.widget.upgrade()?, self.list_item.upgrade()?))
     }
 }
 

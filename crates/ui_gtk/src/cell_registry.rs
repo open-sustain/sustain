@@ -12,7 +12,9 @@
 //! Bindings keep only weak widget references. GTK can tear down thousands
 //! of cached cells when a large playlist shrinks to a small one; making
 //! the registries self-pruning lets that teardown stay inside GTK instead
-//! of firing one Sustain cleanup callback per cell. This weak,
+//! of firing one Sustain cleanup callback per cell. A walk upgrades each
+//! binding's references once, drops the bindings that no longer upgrade
+//! and visits the others with the upgraded widgets. This weak,
 //! prune-on-walk design is part of the #226 playlist-switch fix:
 //! reintroducing per-cell `teardown` removal (a registry scan on every
 //! teardown) brings back the multi-second freeze, so keep the registries
@@ -32,21 +34,20 @@ use std::{
 };
 
 /// One realized cell tracked by a [`BindingRegistry`]. Each cell kind
-/// parameterises the registry with its own payload — the widgets it
-/// refreshes plus any per-cell state — and answers the registry's two
-/// questions: which list item the cell occupies, and whether the binding
-/// is still worth keeping.
+/// parameterises the registry with its own payload — weak references to
+/// the list item and widgets it refreshes, plus any per-cell state — and
+/// upgrades those references for each visit.
 pub(crate) trait CellBinding {
-    /// The list item the cell occupies, if it is still alive.
-    fn list_item(&self) -> Option<gtk::ListItem>;
+    /// The binding's list item and widgets, held strongly for one visit.
+    type Live;
 
-    /// Whether the binding's widgets still exist. A binding whose widgets
-    /// were destroyed can never matter again and is dropped by the next
-    /// walk or watermark sweep. A binding that is merely unbound (its cell
-    /// is pooled for recycling) must report `true`: visitors tolerate the
-    /// missing item, and the binding resumes service when GTK rebinds the
-    /// cell.
-    fn is_live(&self) -> bool;
+    /// The binding's list item and widgets, or `None` once any of them is
+    /// gone: such a binding can never matter again and is dropped by the
+    /// walk or watermark sweep that finds it so. A binding that is merely
+    /// unbound (its cell is pooled for recycling) still upgrades: visitors
+    /// tolerate the missing item, and the binding resumes service when GTK
+    /// rebinds the cell.
+    fn upgrade(&self) -> Option<Self::Live>;
 }
 
 /// Floor for the sweep watermark, so small registries never bother.
@@ -61,8 +62,8 @@ struct RegistryInner<T> {
 }
 
 /// The lifecycle every cell registry shares: a cell pushes its binding in
-/// once, at setup, and walks prune dead bindings before visiting the
-/// survivors. Cheaply cloneable; clones share one registry.
+/// once, at setup, and walks visit the live bindings while pruning the
+/// dead ones. Cheaply cloneable; clones share one registry.
 pub(crate) struct BindingRegistry<T>(Rc<RegistryInner<T>>);
 
 impl<T> Clone for BindingRegistry<T> {
@@ -89,28 +90,44 @@ impl<T: CellBinding> BindingRegistry<T> {
         }
     }
 
-    /// Prunes dead bindings, then visits each survivor. The borrow is held
-    /// across the visit, so `visit` must not re-enter the registry.
-    pub(crate) fn for_each_live(&self, mut visit: impl FnMut(&T)) {
+    /// Visits each live binding with its upgraded widgets, pruning the
+    /// dead ones in the same pass. The borrow is held across the visit, so
+    /// `visit` must not re-enter the registry.
+    pub(crate) fn for_each_live(&self, mut visit: impl FnMut(&T, T::Live)) {
         let mut bindings = self.0.bindings.borrow_mut();
-        self.sweep(&mut bindings);
-        for binding in bindings.iter() {
-            visit(binding);
-        }
+        bindings.retain(|binding| match binding.upgrade() {
+            Some(live) => {
+                visit(binding, live);
+                true
+            }
+            None => false,
+        });
+        self.rearm_sweep(bindings.len());
     }
 
-    /// Prunes dead bindings, then returns the first `find` hit among the
-    /// survivors. The borrow is held across the search, so `find` must not
-    /// re-enter the registry.
-    pub(crate) fn find_map_live<R>(&self, find: impl FnMut(&T) -> Option<R>) -> Option<R> {
-        let mut bindings = self.0.bindings.borrow_mut();
-        self.sweep(&mut bindings);
-        bindings.iter().find_map(find)
+    /// The first `find` hit among the live bindings, pruning the dead ones
+    /// in the same pass. The borrow is held across the search, so `find`
+    /// must not re-enter the registry.
+    pub(crate) fn find_map_live<R>(
+        &self,
+        mut find: impl FnMut(&T, T::Live) -> Option<R>,
+    ) -> Option<R> {
+        let mut found = None;
+        self.for_each_live(|binding, live| {
+            if found.is_none() {
+                found = find(binding, live);
+            }
+        });
+        found
     }
 
     fn sweep(&self, bindings: &mut Vec<T>) {
-        bindings.retain(T::is_live);
-        self.0.sweep_at.set((bindings.len() * 2).max(MIN_SWEEP_LEN));
+        bindings.retain(|binding| binding.upgrade().is_some());
+        self.rearm_sweep(bindings.len());
+    }
+
+    fn rearm_sweep(&self, len: usize) {
+        self.0.sweep_at.set((len * 2).max(MIN_SWEEP_LEN));
     }
 }
 
@@ -133,12 +150,10 @@ mod tests {
     }
 
     impl CellBinding for FakeBinding {
-        fn list_item(&self) -> Option<gtk::ListItem> {
-            None
-        }
+        type Live = ();
 
-        fn is_live(&self) -> bool {
-            self.live.get()
+        fn upgrade(&self) -> Option<()> {
+            self.live.get().then_some(())
         }
     }
 
@@ -152,7 +167,7 @@ mod tests {
         registry.push(FakeBinding::new(3, &live));
 
         let mut visited = Vec::new();
-        registry.for_each_live(|binding| visited.push(binding.id));
+        registry.for_each_live(|binding, ()| visited.push(binding.id));
         assert_eq!(visited, vec![1, 3]);
         assert_eq!(registry.0.bindings.borrow().len(), 2);
     }
@@ -164,9 +179,9 @@ mod tests {
         registry.push(FakeBinding::new(1, &live));
         registry.push(FakeBinding::new(2, &live));
 
-        let hit = registry.find_map_live(|binding| (binding.id == 2).then_some("hit"));
+        let hit = registry.find_map_live(|binding, ()| (binding.id == 2).then_some("hit"));
         assert_eq!(hit, Some("hit"));
-        let miss = registry.find_map_live(|binding| (binding.id == 9).then_some("hit"));
+        let miss = registry.find_map_live(|binding, ()| (binding.id == 9).then_some("hit"));
         assert_eq!(miss, None);
     }
 
@@ -191,7 +206,7 @@ mod tests {
         );
 
         let mut visited = Vec::new();
-        registry.for_each_live(|binding| visited.push(binding.id));
+        registry.for_each_live(|binding, ()| visited.push(binding.id));
         assert_eq!(visited, vec![0], "the live binding survives every sweep");
     }
 }

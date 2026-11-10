@@ -98,12 +98,10 @@ struct StatusBinding {
 }
 
 impl CellBinding for StatusBinding {
-    fn list_item(&self) -> Option<gtk::ListItem> {
-        self.list_item.upgrade()
-    }
+    type Live = (gtk::ListItem, gtk::Image);
 
-    fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.icon.upgrade().is_some()
+    fn upgrade(&self) -> Option<Self::Live> {
+        Some((self.list_item.upgrade()?, self.icon.upgrade()?))
     }
 }
 
@@ -114,11 +112,7 @@ impl StatusBindings {
     /// Re-derive every bound status icon: the playing track or a missing
     /// flag changed, the row payloads did not.
     pub(super) fn refresh_icons(&self, playing_track_id: Option<TrackId>) {
-        self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(icon)) = (binding.list_item(), binding.icon.upgrade())
-            else {
-                return;
-            };
+        self.0.for_each_live(|_, (list_item, icon)| {
             refresh_status_icon(&list_item, &icon, playing_track_id);
         });
     }
@@ -126,11 +120,7 @@ impl StatusBindings {
     /// Re-derive the status cells in `scope` from their row payload: the
     /// icon and the row tint.
     pub(super) fn refresh(&self, scope: RefreshScope<'_>, playing_track_id: Option<TrackId>) {
-        self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(icon)) = (binding.list_item(), binding.icon.upgrade())
-            else {
-                return;
-            };
+        self.0.for_each_live(|_, (list_item, icon)| {
             if scope.includes(&list_item) {
                 refresh_status_icon(&list_item, &icon, playing_track_id);
                 retint_cell_of(&icon, &list_item);
@@ -146,12 +136,10 @@ struct TextBinding {
 }
 
 impl CellBinding for TextBinding {
-    fn list_item(&self) -> Option<gtk::ListItem> {
-        self.list_item.upgrade()
-    }
+    type Live = (gtk::ListItem, TableCell);
 
-    fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.cell.upgrade().is_some()
+    fn upgrade(&self) -> Option<Self::Live> {
+        Some((self.list_item.upgrade()?, self.cell.upgrade()?))
     }
 }
 
@@ -163,21 +151,13 @@ impl TextBindings {
     /// does not expose which row holds keyboard focus; asking with the
     /// focused row widget answers that.
     pub(super) fn row_within(&self, widget: &gtk::Widget) -> Option<gtk::ListItem> {
-        self.0.find_map_live(|binding| {
-            let cell = binding.cell.upgrade()?;
-            cell.is_ancestor(widget)
-                .then(|| binding.list_item())
-                .flatten()
-        })
+        self.0
+            .find_map_live(|_, (list_item, cell)| cell.is_ancestor(widget).then_some(list_item))
     }
 
     /// Re-derive the text cells in `scope` from their row payload.
     pub(super) fn refresh(&self, scope: RefreshScope<'_>) {
-        self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(cell)) = (binding.list_item(), binding.cell.upgrade())
-            else {
-                return;
-            };
+        self.0.for_each_live(|binding, (list_item, cell)| {
             if scope.includes(&list_item) {
                 refresh_text_cell(&list_item, &cell, binding.column);
             }
@@ -191,12 +171,10 @@ struct RatingBinding {
 }
 
 impl CellBinding for RatingBinding {
-    fn list_item(&self) -> Option<gtk::ListItem> {
-        self.list_item.upgrade()
-    }
+    type Live = (gtk::ListItem, RatingStars);
 
-    fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.stars.upgrade().is_some()
+    fn upgrade(&self) -> Option<Self::Live> {
+        Some((self.list_item.upgrade()?, self.stars.upgrade()?))
     }
 }
 
@@ -206,11 +184,7 @@ pub(super) struct RatingBindings(BindingRegistry<RatingBinding>);
 impl RatingBindings {
     /// Re-derive the rating cells in `scope` from their row payload.
     pub(super) fn refresh(&self, scope: RefreshScope<'_>) {
-        self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(stars)) = (binding.list_item(), binding.stars.upgrade())
-            else {
-                return;
-            };
+        self.0.for_each_live(|_, (list_item, stars)| {
             if scope.includes(&list_item) {
                 refresh_rating_cell(&list_item, &stars);
             }

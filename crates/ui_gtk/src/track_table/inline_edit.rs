@@ -158,12 +158,10 @@ struct EditableCellEntry {
 }
 
 impl CellBinding for EditableCellEntry {
-    fn list_item(&self) -> Option<gtk::ListItem> {
-        self.list_item.upgrade()
-    }
+    type Live = (gtk::ListItem, TableCell);
 
-    fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.cell.upgrade().is_some()
+    fn upgrade(&self) -> Option<Self::Live> {
+        Some((self.list_item.upgrade()?, self.cell.upgrade()?))
     }
 }
 
@@ -241,11 +239,8 @@ impl InlineEditController {
 
     /// The registered editable cell `cell`, with its row and field.
     fn editable_cell(&self, cell: &TableCell) -> Option<(gtk::ListItem, EditableField)> {
-        self.cells.find_map_live(|entry| {
-            if entry.cell.upgrade().as_ref() != Some(cell) {
-                return None;
-            }
-            Some((entry.list_item.upgrade()?, entry.field))
+        self.cells.find_map_live(|entry, (list_item, registered)| {
+            (registered == *cell).then_some((list_item, entry.field))
         })
     }
 
@@ -585,11 +580,7 @@ impl InlineEditController {
     /// naturally.
     fn editable_cells_at(&self, position: u32) -> Vec<OrderedCell> {
         let mut ordered: Vec<OrderedCell> = Vec::new();
-        self.cells.for_each_live(|entry| {
-            let (Some(list_item), Some(cell)) = (entry.list_item.upgrade(), entry.cell.upgrade())
-            else {
-                return;
-            };
+        self.cells.for_each_live(|entry, (list_item, cell)| {
             if list_item.position() != position {
                 return;
             }
@@ -723,11 +714,9 @@ mod tests {
             let controller = table.inline_edit.clone().expect("inline editing table");
             let (list_item, cell) = controller
                 .cells
-                .find_map_live(|entry| {
-                    let list_item = entry.list_item.upgrade()?;
+                .find_map_live(|entry, (list_item, cell)| {
                     (entry.field == EditableField::Title && list_item.position() == 0)
-                        .then(|| Some((list_item, entry.cell.upgrade()?)))
-                        .flatten()
+                        .then_some((list_item, cell))
                 })
                 .expect("a realized title cell on the first row");
             let opens_after_arming = |focus: &dyn Fn()| {
@@ -801,11 +790,9 @@ mod tests {
             let controller = table.inline_edit.clone().expect("inline editing table");
             let (list_item, cell) = controller
                 .cells
-                .find_map_live(|entry| {
-                    let list_item = entry.list_item.upgrade()?;
+                .find_map_live(|entry, (list_item, cell)| {
                     (entry.field == EditableField::Title && list_item.position() == 0)
-                        .then(|| Some((list_item, entry.cell.upgrade()?)))
-                        .flatten()
+                        .then_some((list_item, cell))
                 })
                 .expect("a realized title cell on the first row");
             controller.open_edit(EditableField::Title, &cell, &list_item);
