@@ -49,7 +49,7 @@ pub(crate) struct AlbumsView {
     context_menu: TrackRowContextMenu,
     locate_missing_track: LocateMissingTrackCallback,
     /// All grouped albums from the most recent group pass, unfiltered.
-    /// `albums` (below) is derived from this by `apply_search`. Empty
+    /// `albums` (below) is derived from this by `filter_albums`. Empty
     /// until the view is activated.
     all_albums: Rc<RefCell<Vec<AlbumViewModel>>>,
     /// Albums currently shown in the grid, after the active search filter.
@@ -419,6 +419,13 @@ impl AlbumsView {
     /// Re-derive `albums` from `all_albums` according to the active search,
     /// clear selection, and rebuild the virtual row model.
     fn apply_search(&self) {
+        self.filter_albums();
+        self.selected_album.borrow_mut().take();
+        self.pending_scroll_album.borrow_mut().take();
+        self.rebuild_rows();
+    }
+
+    fn filter_albums(&self) {
         let search_text = self.search_text.borrow().clone();
         let filtered: Vec<AlbumViewModel> = self
             .all_albums
@@ -430,15 +437,17 @@ impl AlbumsView {
             .cloned()
             .collect();
         *self.albums.borrow_mut() = filtered;
-        self.selected_album.borrow_mut().take();
-        self.pending_scroll_album.borrow_mut().take();
-        self.rebuild_rows();
     }
 
     /// Group the stashed tracks into albums and re-derive the visible
     /// set under the current search filter. The width snapshot keeps
     /// the column count consistent with whatever size the scroller
     /// happened to reach before activation.
+    ///
+    /// The library changed under the user, who did not ask to leave the
+    /// album they opened: it stays open while it still exists. A pending
+    /// "Show Album" scroll likewise stands, and drops itself if its album
+    /// is gone.
     fn regroup_and_apply_search(&self) {
         {
             let runtime = self.runtime.borrow();
@@ -447,7 +456,22 @@ impl AlbumsView {
         }
         self.visible_columns
             .set(columns_for_width(self.scroller.width()));
-        self.apply_search();
+        self.filter_albums();
+        let selection_is_gone = self
+            .selected_album
+            .borrow()
+            .as_ref()
+            .is_some_and(|selected| {
+                !self
+                    .albums
+                    .borrow()
+                    .iter()
+                    .any(|album| album.key == *selected)
+            });
+        if selection_is_gone {
+            self.selected_album.borrow_mut().take();
+        }
+        self.rebuild_rows();
     }
 
     /// Resolve the cold-start play request for the Albums view: the
