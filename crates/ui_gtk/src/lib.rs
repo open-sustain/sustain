@@ -46,6 +46,7 @@ mod now_playing;
 mod playlists_header;
 mod preferences;
 mod queue_view;
+mod rating_stars;
 mod shortcuts;
 mod shuffle_icon;
 mod sidebar;

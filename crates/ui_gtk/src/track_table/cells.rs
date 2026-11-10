@@ -12,11 +12,11 @@ use super::{
     RatingChangedCallback, columns::TrackTableColumn, inline_edit::InlineEditController,
     row::TrackTableRow,
 };
-use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
+use crate::cell_registry::{BindingRegistry, CellBinding};
+use crate::rating_stars::RatingStars;
 use crate::track_context::TrackRowContextMenu;
-use crate::util::{set_exclusive_css_class, sync_rating_button};
+use crate::util::set_exclusive_css_class;
 
-const MAX_RATING: u8 = 5;
 const STATUS_COLUMN_WIDTH: i32 = 26;
 const STATUS_ICON_SIZE: i32 = 14;
 const STATUS_ICON_PLAYING: &str = "audio-volume-high-symbolic";
@@ -87,7 +87,6 @@ impl TrackTableContextMenu {
 
     fn register_cell(&self, list_item: &gtk::ListItem, cell: &gtk::Box) {
         self.cells.push(TrackTableContextCell {
-            key: list_item_key(list_item),
             widget: cell.clone().upcast::<gtk::Widget>().downgrade(),
             list_item: list_item.downgrade(),
         });
@@ -124,16 +123,11 @@ impl TrackTableContextMenu {
 }
 
 struct TrackTableContextCell {
-    key: usize,
     widget: glib::WeakRef<gtk::Widget>,
     list_item: glib::WeakRef<gtk::ListItem>,
 }
 
 impl CellBinding for TrackTableContextCell {
-    fn key(&self) -> usize {
-        self.key
-    }
-
     fn list_item(&self) -> Option<gtk::ListItem> {
         self.list_item.upgrade()
     }
@@ -171,16 +165,11 @@ impl RefreshScope<'_> {
 }
 
 struct StatusBinding {
-    key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
     icon: glib::WeakRef<gtk::Image>,
 }
 
 impl CellBinding for StatusBinding {
-    fn key(&self) -> usize {
-        self.key
-    }
-
     fn list_item(&self) -> Option<gtk::ListItem> {
         self.list_item.upgrade()
     }
@@ -223,17 +212,12 @@ impl StatusBindings {
 }
 
 struct TextBinding {
-    key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
     text: glib::WeakRef<gtk::Inscription>,
     column: TrackTableColumn,
 }
 
 impl CellBinding for TextBinding {
-    fn key(&self) -> usize {
-        self.key
-    }
-
     fn list_item(&self) -> Option<gtk::ListItem> {
         self.list_item.upgrade()
     }
@@ -274,22 +258,17 @@ impl TextBindings {
 }
 
 struct RatingBinding {
-    key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
-    rating_box: glib::WeakRef<gtk::Box>,
+    stars: glib::WeakRef<RatingStars>,
 }
 
 impl CellBinding for RatingBinding {
-    fn key(&self) -> usize {
-        self.key
-    }
-
     fn list_item(&self) -> Option<gtk::ListItem> {
         self.list_item.upgrade()
     }
 
     fn is_live(&self) -> bool {
-        self.list_item.upgrade().is_some() && self.rating_box.upgrade().is_some()
+        self.list_item.upgrade().is_some() && self.stars.upgrade().is_some()
     }
 }
 
@@ -297,24 +276,15 @@ impl CellBinding for RatingBinding {
 pub(super) struct RatingBindings(BindingRegistry<RatingBinding>);
 
 impl RatingBindings {
-    fn register(&self, list_item: &gtk::ListItem, rating_box: &gtk::Box) {
-        self.0.replace(RatingBinding {
-            key: list_item_key(list_item),
-            list_item: list_item.downgrade(),
-            rating_box: rating_box.downgrade(),
-        });
-    }
-
     /// Re-derive the rating cells in `scope` from their row payload.
     pub(super) fn refresh(&self, scope: RefreshScope<'_>) {
         self.0.for_each_live(|binding| {
-            let (Some(list_item), Some(rating_box)) =
-                (binding.list_item(), binding.rating_box.upgrade())
+            let (Some(list_item), Some(stars)) = (binding.list_item(), binding.stars.upgrade())
             else {
                 return;
             };
             if scope.includes(&list_item) {
-                refresh_rating_cell(&list_item, &rating_box);
+                refresh_rating_cell(&list_item, &stars);
             }
         });
     }
@@ -369,7 +339,6 @@ pub(super) fn build_text_cell_factory(
         }
 
         bindings_for_setup.0.push(TextBinding {
-            key: list_item_key(list_item),
             list_item: list_item.downgrade(),
             text: text.downgrade(),
             column,
@@ -441,6 +410,7 @@ pub(super) fn build_rating_cell_factory(
     let context_for_setup = context_menu.clone();
     let rating_changed_for_setup = rating_changed;
     let reorder_for_setup = row_reorder.clone();
+    let bindings_for_setup = bindings;
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
@@ -451,91 +421,46 @@ pub(super) fn build_rating_cell_factory(
             context_for_setup.as_ref(),
             reorder_for_setup.as_ref(),
         );
-        let rating_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        rating_box.add_css_class("rating-stars");
-        rating_box.set_margin_start(6);
-        rating_box.set_margin_end(6);
-        rating_box.set_halign(gtk::Align::End);
-        rating_box.set_valign(gtk::Align::Center);
-
-        for star in 1..=MAX_RATING {
-            let button = gtk::Button::with_label("");
-            button.add_css_class("flat");
-            button.add_css_class("rating-star");
-
-            let list_item_for_click = list_item.downgrade();
-            let rating_changed_for_click = rating_changed_for_setup.clone();
-            button.connect_clicked(move |button| {
-                let Some(row_object) = list_item_for_click
+        let stars = RatingStars::new();
+        stars.set_margin_start(6);
+        stars.set_margin_end(6);
+        stars.set_halign(gtk::Align::End);
+        stars.set_valign(gtk::Align::Center);
+        if let Some(rating_changed) = rating_changed_for_setup.clone() {
+            let list_item = list_item.downgrade();
+            stars.connect_rating_chosen(move |stars, rating| {
+                let Some(track_id) = list_item
                     .upgrade()
-                    .and_then(|list_item| list_item.item())
-                    .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+                    .and_then(|list_item| row_track_id(list_item.item()))
                 else {
                     return;
                 };
-                let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
-                    return;
-                };
-                let Some(track_id) = row.track_id else {
-                    return;
-                };
-                let new_rating = rating_after_click(row.rating, star);
-                drop(row);
-
-                let Some(rating) = Rating::new(new_rating) else {
-                    return;
-                };
-                let Some(rating_changed) = rating_changed_for_click.as_ref() else {
-                    return;
-                };
-
-                if rating_changed(track_id, rating)
-                    && let Some(rating_box) = button.parent().and_downcast::<gtk::Box>()
-                {
-                    sync_rating_buttons(&rating_box, new_rating);
+                if rating_changed(track_id, rating) {
+                    stars.set_rating(rating);
                 }
             });
-
-            rating_box.append(&button);
         }
 
-        cell.append(&rating_box);
+        cell.append(&stars);
         list_item.set_child(Some(&cell));
+        bindings_for_setup.0.push(RatingBinding {
+            list_item: list_item.downgrade(),
+            stars: stars.downgrade(),
+        });
     });
 
-    let bindings_for_bind = bindings.clone();
-    factory.connect_bind(move |_factory, item| {
+    factory.connect_bind(|_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let Some(cell) = list_item
-            .child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
-        else {
+        let Some(cell) = list_item.child().and_downcast::<gtk::Box>() else {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
         sync_row_selection_class(&cell, list_item.is_selected());
-
-        let Some(row_object) = list_item
-            .item()
-            .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
-        else {
-            return;
-        };
-        let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
-            return;
-        };
-        let rating = row.rating;
-        drop(row);
-        let Some(rating_box) = cell
-            .first_child()
-            .and_then(|child| child.downcast::<gtk::Box>().ok())
-        else {
-            return;
-        };
-        sync_rating_buttons(&rating_box, rating);
-        bindings_for_bind.register(list_item, &rating_box);
+        if let Some(stars) = cell.first_child().and_downcast::<RatingStars>() {
+            stars.set_rating(row_rating(list_item.item()));
+        }
     });
 
     factory
@@ -586,7 +511,6 @@ fn build_status_cell_factory(
         list_item.set_child(Some(&cell));
 
         bindings_for_setup.0.push(StatusBinding {
-            key: list_item_key(list_item),
             list_item: list_item.downgrade(),
             icon: icon.downgrade(),
         });
@@ -756,20 +680,18 @@ fn refresh_text_cell(list_item: &gtk::ListItem, text: &gtk::Inscription, column:
     retint_cell_of(text, list_item);
 }
 
-fn refresh_rating_cell(list_item: &gtk::ListItem, rating_box: &gtk::Box) {
-    let Some(row_object) = list_item
-        .item()
-        .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
-    else {
-        return;
-    };
-    let Ok(row) = row_object.try_borrow::<TrackTableRow>() else {
-        return;
-    };
-    let rating = row.rating;
-    drop(row);
-    sync_rating_buttons(rating_box, rating);
-    retint_cell_of(rating_box, list_item);
+fn row_rating(item: Option<glib::Object>) -> Rating {
+    item.and_downcast::<glib::BoxedAnyObject>()
+        .and_then(|row_object| {
+            let row = row_object.try_borrow::<TrackTableRow>().ok()?;
+            Rating::new(row.rating)
+        })
+        .unwrap_or_else(Rating::unrated)
+}
+
+fn refresh_rating_cell(list_item: &gtk::ListItem, stars: &RatingStars) {
+    stars.set_rating(row_rating(list_item.item()));
+    retint_cell_of(stars, list_item);
 }
 
 fn refresh_status_icon(
@@ -878,47 +800,9 @@ fn sync_row_selection_class(cell: &gtk::Box, selected: bool) {
     }
 }
 
-fn sync_rating_buttons(rating_box: &gtk::Box, rating: u8) {
-    let mut star = 1;
-    let mut child = rating_box.first_child();
-    while let Some(widget) = child {
-        let next_child = widget.next_sibling();
-        if let Ok(button) = widget.downcast::<gtk::Button>() {
-            sync_rating_button(&button, star, rating);
-            star += 1;
-        }
-        child = next_child;
-    }
-}
-
-fn rating_after_click(current_rating: u8, clicked_star: u8) -> u8 {
-    let clicked_star = clicked_star.min(MAX_RATING);
-    if current_rating == clicked_star {
-        0
-    } else {
-        clicked_star
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::{RowDropPosition, drag_drop::drop_position_from_offset};
-    use super::*;
-
-    #[test]
-    fn clicking_a_different_star_sets_that_rating() {
-        assert_eq!(rating_after_click(2, 4), 4);
-    }
-
-    #[test]
-    fn clicking_the_current_rating_clears_rating_to_zero() {
-        assert_eq!(rating_after_click(4, 4), 0);
-    }
-
-    #[test]
-    fn rating_clicks_are_clamped_to_five_stars() {
-        assert_eq!(rating_after_click(0, 9), 5);
-    }
 
     #[test]
     fn drop_position_splits_row_height_in_half() {

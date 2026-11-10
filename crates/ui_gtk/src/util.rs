@@ -6,11 +6,6 @@
 use gtk::prelude::*;
 use sustain_app_runtime::{Track, TrackMetadata};
 
-/// Unicode glyph for an unfilled rating star.
-const EMPTY_STAR: &str = "☆";
-/// Unicode glyph for a filled rating star.
-const FILLED_STAR: &str = "★";
-
 /// Returns the trimmed text of an optional string field, or `None` when the
 /// value is absent or blank once trimmed. Used by the view models to fall back
 /// to placeholder text for missing metadata.
@@ -46,20 +41,6 @@ pub(crate) fn display_title(track: &Track) -> String {
 /// now-playing tile which leaves the line empty.
 pub(crate) fn display_artist(metadata: &TrackMetadata) -> String {
     non_empty_text(&metadata.artist).unwrap_or_else(|| "Unknown Artist".to_owned())
-}
-
-/// Renders one rating-star button at position `star` against the current
-/// `rating`: sets the filled/empty glyph and toggles the `rating-star-filled`
-/// / `rating-star-empty` CSS classes. Shared by the track table cells and the
-/// track-info detail page so both style identically.
-pub(crate) fn sync_rating_button(button: &gtk::Button, star: u8, rating: u8) {
-    if star <= rating {
-        button.set_label(FILLED_STAR);
-        set_exclusive_css_class(button, "rating-star-filled", "rating-star-empty");
-    } else {
-        button.set_label(EMPTY_STAR);
-        set_exclusive_css_class(button, "rating-star-empty", "rating-star-filled");
-    }
 }
 
 /// Gives `widget` the CSS class `class` and takes away `other`, its

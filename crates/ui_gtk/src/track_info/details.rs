@@ -14,7 +14,7 @@ use crate::date_format::format_system_time_short;
 use crate::metadata_diff::{
     bool_diff, bpm_diff, key_diff, number_diff, signed_number_diff, text_diff,
 };
-use crate::util::sync_rating_button;
+use crate::rating_stars::RatingStars;
 
 use super::{
     NUMBER_ENTRY_WIDTH_CHARS, PAIR_ENTRY_WIDTH_CHARS,
@@ -40,8 +40,7 @@ pub(super) struct DetailsPage {
     bpm: gtk::Entry,
     key: gtk::Entry,
     comments: gtk::TextView,
-    rating_widget: gtk::Box,
-    rating: Rc<Cell<u8>>,
+    rating: RatingStars,
     play_count_reset: Rc<Cell<bool>>,
     play_count_label: gtk::Label,
     reset_button: gtk::Button,
@@ -123,21 +122,11 @@ impl DetailsPage {
         attach_field(&grid, row, "Key", &key);
         row += 1;
 
-        let rating_widget = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        let rating = Rc::new(Cell::new(initial_rating.stars()));
-        for star in 1u8..=5 {
-            let button = rating_star_button(star);
-            sync_rating_button(&button, star, rating.get());
-            let rating_state = rating.clone();
-            let parent_box = rating_widget.clone();
-            button.connect_clicked(move |_| {
-                let next = next_rating(rating_state.get(), star);
-                rating_state.set(next);
-                refresh_rating_buttons(&parent_box, next);
-            });
-            rating_widget.append(&button);
-        }
-        attach_field(&grid, row, "Rating", &rating_widget);
+        let rating = RatingStars::new();
+        rating.set_halign(gtk::Align::Start);
+        rating.set_rating(initial_rating);
+        rating.connect_rating_chosen(RatingStars::set_rating);
+        attach_field(&grid, row, "Rating", &rating);
         row += 1;
 
         // Statistics block: counts on the left, dates underneath.
@@ -230,7 +219,6 @@ impl DetailsPage {
             bpm,
             key,
             comments,
-            rating_widget,
             rating,
             play_count_reset,
             play_count_label,
@@ -267,8 +255,7 @@ impl DetailsPage {
             .buffer()
             .set_text(metadata.comments.as_deref().unwrap_or_default());
 
-        self.rating.set(rating.stars());
-        refresh_rating_buttons(&self.rating_widget, rating.stars());
+        self.rating.set_rating(rating);
         self.play_count_reset.set(false);
         self.reset_button.set_sensitive(true);
         self.play_count_label
@@ -308,7 +295,7 @@ impl DetailsPage {
     }
 
     pub(super) fn current_rating(&self) -> Rating {
-        Rating::new(self.rating.get()).unwrap_or_else(Rating::unrated)
+        self.rating.rating()
     }
 
     pub(super) fn play_count_reset_requested(&self) -> bool {
@@ -329,48 +316,8 @@ fn set_optional_number<T: ToString>(entry: &gtk::Entry, value: Option<T>) {
     entry.set_text(&value.map(|value| value.to_string()).unwrap_or_default());
 }
 
-fn rating_star_button(star: u8) -> gtk::Button {
-    let button = gtk::Button::new();
-    button.add_css_class("flat");
-    button.add_css_class("track-info-rating-star");
-    button.set_focusable(false);
-    button.set_tooltip_text(Some(&format!(
-        "{star} star{}",
-        if star == 1 { "" } else { "s" }
-    )));
-    button
-}
-
-fn refresh_rating_buttons(parent: &gtk::Box, rating: u8) {
-    let mut child = parent.first_child();
-    let mut star: u8 = 1;
-    while let Some(widget) = child {
-        if let Some(button) = widget.downcast_ref::<gtk::Button>() {
-            sync_rating_button(button, star, rating);
-        }
-        child = widget.next_sibling();
-        star += 1;
-    }
-}
-
-fn next_rating(current: u8, clicked: u8) -> u8 {
-    if current == clicked { 0 } else { clicked }
-}
-
 fn format_stat_date(value: Option<std::time::SystemTime>) -> String {
     value
         .and_then(format_system_time_short)
         .unwrap_or_else(|| "Never".to_owned())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::next_rating;
-
-    #[test]
-    fn next_rating_toggles_off_when_clicking_current_star() {
-        assert_eq!(next_rating(3, 3), 0);
-        assert_eq!(next_rating(3, 4), 4);
-        assert_eq!(next_rating(0, 2), 2);
-    }
 }

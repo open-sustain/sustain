@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     PlaybackChangedCallback,
-    cell_registry::{BindingRegistry, CellBinding, list_item_key},
+    cell_registry::{BindingRegistry, CellBinding},
     command_controller::SharedCommandController,
     missing_track::{LocateMissingTrackCallback, play_track_or_offer_locate},
     track_context::TrackRowContextMenu,
@@ -290,7 +290,6 @@ impl AlbumTrackContextMenu {
 
     fn register_row(&self, list_item: &gtk::ListItem, row: &gtk::Box) {
         self.rows.push(AlbumTrackContextRow {
-            key: list_item_key(list_item),
             widget: row.clone().upcast::<gtk::Widget>().downgrade(),
             list_item: list_item.downgrade(),
         });
@@ -320,16 +319,11 @@ impl AlbumTrackContextMenu {
 }
 
 struct AlbumTrackContextRow {
-    key: usize,
     widget: glib::WeakRef<gtk::Widget>,
     list_item: glib::WeakRef<gtk::ListItem>,
 }
 
 impl CellBinding for AlbumTrackContextRow {
-    fn key(&self) -> usize {
-        self.key
-    }
-
     fn list_item(&self) -> Option<gtk::ListItem> {
         self.list_item.upgrade()
     }

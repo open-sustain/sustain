@@ -35,7 +35,7 @@ use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
 use sustain_app_runtime::{MetadataChange, TrackMetadata};
 
-use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
+use crate::cell_registry::{BindingRegistry, CellBinding};
 use crate::metadata_diff::{bpm_diff, key_diff, number_diff, signed_number_diff, text_diff};
 
 /// Fallback double-click interval when the display has no settings object.
@@ -157,17 +157,12 @@ struct FinishedEdit {
 /// A realized editable cell, used to find the row's other editable cells
 /// when Tab hops between them. Pruned lazily when its widgets die.
 struct EditableCellEntry {
-    key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
     cell: glib::WeakRef<gtk::Box>,
     field: EditableField,
 }
 
 impl CellBinding for EditableCellEntry {
-    fn key(&self) -> usize {
-        self.key
-    }
-
     fn list_item(&self) -> Option<gtk::ListItem> {
         self.list_item.upgrade()
     }
@@ -233,7 +228,6 @@ impl InlineEditController {
         field: EditableField,
     ) {
         self.cells.push(EditableCellEntry {
-            key: list_item_key(list_item),
             list_item: list_item.downgrade(),
             cell: cell.downgrade(),
             field,

@@ -33,19 +33,12 @@ use std::{
     rc::Rc,
 };
 
-use gtk::prelude::ObjectType;
-
 /// One realized cell tracked by a [`BindingRegistry`]. Each cell kind
 /// parameterises the registry with its own payload — the widgets it
 /// refreshes plus any per-cell state — and answers the registry's two
-/// questions: which list-item slot the cell occupies, and whether the
-/// binding is still worth keeping.
+/// questions: which list item the cell occupies, and whether the binding
+/// is still worth keeping.
 pub(crate) trait CellBinding {
-    /// Stable identity of the binding's list-item slot (its pointer
-    /// value), used by [`BindingRegistry::replace`] to drop a superseded
-    /// registration for the same slot.
-    fn key(&self) -> usize;
-
     /// The list item the cell occupies, if it is still alive.
     fn list_item(&self) -> Option<gtk::ListItem>;
 
@@ -70,11 +63,8 @@ struct RegistryInner<T> {
 }
 
 /// The lifecycle every cell registry shares: a cell pushes its binding in
-/// at setup (or re-registers on bind via [`replace`]), and walks prune
-/// dead bindings before visiting the survivors. Cheaply cloneable; clones
-/// share one registry.
-///
-/// [`replace`]: BindingRegistry::replace
+/// once, at setup, and walks prune dead bindings before visiting the
+/// survivors. Cheaply cloneable; clones share one registry.
 pub(crate) struct BindingRegistry<T>(Rc<RegistryInner<T>>);
 
 impl<T> Clone for BindingRegistry<T> {
@@ -95,19 +85,6 @@ impl<T> Default for BindingRegistry<T> {
 impl<T: CellBinding> BindingRegistry<T> {
     pub(crate) fn push(&self, binding: T) {
         let mut bindings = self.0.bindings.borrow_mut();
-        bindings.push(binding);
-        if bindings.len() >= self.0.sweep_at.get() {
-            self.sweep(&mut bindings);
-        }
-    }
-
-    /// Replaces any binding already registered for this list-item slot.
-    /// Rating cells re-register on every bind as the cell is recycled, so
-    /// a stale entry for the same slot must not pile up.
-    pub(crate) fn replace(&self, binding: T) {
-        let key = binding.key();
-        let mut bindings = self.0.bindings.borrow_mut();
-        bindings.retain(|existing| existing.key() != key);
         bindings.push(binding);
         if bindings.len() >= self.0.sweep_at.get() {
             self.sweep(&mut bindings);
@@ -139,37 +116,25 @@ impl<T: CellBinding> BindingRegistry<T> {
     }
 }
 
-/// The registry key for a cell occupying `list_item`: the list item's
-/// pointer value. GTK may reuse a freed list item's address for a new one,
-/// which is harmless here — the key is only used to *replace* a stale
-/// registration for the same slot.
-pub(crate) fn list_item_key(list_item: &gtk::ListItem) -> usize {
-    list_item.as_ptr() as usize
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     struct FakeBinding {
-        key: usize,
+        id: usize,
         live: Rc<Cell<bool>>,
     }
 
     impl FakeBinding {
-        fn new(key: usize, live: &Rc<Cell<bool>>) -> Self {
+        fn new(id: usize, live: &Rc<Cell<bool>>) -> Self {
             Self {
-                key,
+                id,
                 live: Rc::clone(live),
             }
         }
     }
 
     impl CellBinding for FakeBinding {
-        fn key(&self) -> usize {
-            self.key
-        }
-
         fn list_item(&self) -> Option<gtk::ListItem> {
             None
         }
@@ -189,22 +154,9 @@ mod tests {
         registry.push(FakeBinding::new(3, &live));
 
         let mut visited = Vec::new();
-        registry.for_each_live(|binding| visited.push(binding.key()));
+        registry.for_each_live(|binding| visited.push(binding.id));
         assert_eq!(visited, vec![1, 3]);
         assert_eq!(registry.0.bindings.borrow().len(), 2);
-    }
-
-    #[test]
-    fn replace_drops_the_previous_binding_for_the_same_slot() {
-        let registry = BindingRegistry::default();
-        let live = Rc::new(Cell::new(true));
-        registry.push(FakeBinding::new(1, &live));
-        registry.replace(FakeBinding::new(1, &live));
-        registry.replace(FakeBinding::new(2, &live));
-
-        let mut visited = Vec::new();
-        registry.for_each_live(|binding| visited.push(binding.key()));
-        assert_eq!(visited, vec![1, 2]);
     }
 
     #[test]
@@ -214,9 +166,9 @@ mod tests {
         registry.push(FakeBinding::new(1, &live));
         registry.push(FakeBinding::new(2, &live));
 
-        let hit = registry.find_map_live(|binding| (binding.key() == 2).then_some("hit"));
+        let hit = registry.find_map_live(|binding| (binding.id == 2).then_some("hit"));
         assert_eq!(hit, Some("hit"));
-        let miss = registry.find_map_live(|binding| (binding.key() == 9).then_some("hit"));
+        let miss = registry.find_map_live(|binding| (binding.id == 9).then_some("hit"));
         assert_eq!(miss, None);
     }
 
@@ -230,8 +182,8 @@ mod tests {
         // grow without bound as cells are torn down and recreated across
         // playlist switches.
         registry.push(FakeBinding::new(0, &live));
-        for key in 1..=10 * MIN_SWEEP_LEN {
-            registry.push(FakeBinding::new(key, &dead));
+        for id in 1..=10 * MIN_SWEEP_LEN {
+            registry.push(FakeBinding::new(id, &dead));
         }
 
         let len = registry.0.bindings.borrow().len();
@@ -241,7 +193,7 @@ mod tests {
         );
 
         let mut visited = Vec::new();
-        registry.for_each_live(|binding| visited.push(binding.key()));
+        registry.for_each_live(|binding| visited.push(binding.id));
         assert_eq!(visited, vec![0], "the live binding survives every sweep");
     }
 }

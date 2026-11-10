@@ -40,7 +40,7 @@ use gtk::{gdk, gdk_pixbuf, gio, glib};
 
 use sustain_app_runtime::{CdImportRequest, CdTrackOverride, DiscRelease, TocSnapshot};
 
-use crate::cell_registry::{BindingRegistry, CellBinding, list_item_key};
+use crate::cell_registry::{BindingRegistry, CellBinding};
 use crate::track_table::{
     EditSession, EditableField, EmptyRowPainter, InlineEditController, new_cell_text,
 };
@@ -126,17 +126,12 @@ impl CdRow {
 /// `TextBindings`: weak references, pruned lazily on walks (see
 /// `cell_registry`).
 struct CdTextBinding {
-    key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
     text: glib::WeakRef<gtk::Inscription>,
     field: EditableField,
 }
 
 impl CellBinding for CdTextBinding {
-    fn key(&self) -> usize {
-        self.key
-    }
-
     fn list_item(&self) -> Option<gtk::ListItem> {
         self.list_item.upgrade()
     }
@@ -169,17 +164,12 @@ impl CdTextBindings {
 /// A realized status cell, refreshed as a rip progresses. Weak references,
 /// pruned lazily on walks (see `cell_registry`).
 struct CdStatusBinding {
-    key: usize,
     list_item: glib::WeakRef<gtk::ListItem>,
     spinner: glib::WeakRef<gtk::Spinner>,
     icon: glib::WeakRef<gtk::Image>,
 }
 
 impl CellBinding for CdStatusBinding {
-    fn key(&self) -> usize {
-        self.key
-    }
-
     fn list_item(&self) -> Option<gtk::ListItem> {
         self.list_item.upgrade()
     }
@@ -915,7 +905,6 @@ fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFac
         list_item.set_child(Some(&cell));
 
         bindings_setup.0.push(CdStatusBinding {
-            key: list_item_key(list_item),
             list_item: list_item.downgrade(),
             spinner: spinner.downgrade(),
             icon: icon.downgrade(),
@@ -1120,7 +1109,6 @@ fn build_cd_text_factory(
         inline_setup.register_editable_cell(list_item, &cell, field);
 
         bindings_setup.0.push(CdTextBinding {
-            key: list_item_key(list_item),
             list_item: list_item.downgrade(),
             text: text.downgrade(),
             field,

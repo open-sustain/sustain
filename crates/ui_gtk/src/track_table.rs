@@ -302,7 +302,7 @@ impl TrackTable {
     ///
     /// Used by single-track mutations whose cell widgets already update
     /// themselves on click (the rating stars are the canonical case —
-    /// see `sync_rating_buttons` in the cells module). The visual
+    /// the cell sets its stars once the change is accepted). The visual
     /// update has already happened on the rendered widget; this call
     /// just keeps the row data the cell factory will re-bind to (when
     /// the user scrolls away and back, or when GTK re-binds for any
