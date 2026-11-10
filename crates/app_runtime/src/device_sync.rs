@@ -1291,7 +1291,7 @@ mod tests {
         PlayStatistics, Rating, SyncDevice, SyncDeviceId, Track, TrackId, TrackLocation,
         TrackMetadata, TrackRelativePath,
     };
-    use sustain_library_store::{InMemoryLibraryStore, LibraryStore};
+    use sustain_library_store::{LibraryStore, SqliteLibraryStore};
     use sustain_metadata::{InitialTags, MetadataResult, MetadataService};
 
     use super::{
@@ -1370,6 +1370,19 @@ mod tests {
         fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
             Ok(())
         }
+    }
+
+    /// A store holding a library track for each track of `request`: a sync's
+    /// tracks come from the library.
+    fn store_with_tracks_of(request: &SyncRequest) -> SqliteLibraryStore {
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+        for track in &request.tracks {
+            let id = track.track_id.get();
+            store
+                .save_track(library_track(id, &format!("{id}.mp3"), &track.artist))
+                .expect("save library track");
+        }
+        store
     }
 
     fn pioneer_request(source_paths: &[&Path]) -> SyncRequest {
@@ -1453,7 +1466,7 @@ mod tests {
         use sustain_domain::{BeatGrid, Bpm, TrackAnalysis, WaveformSegments};
         use sustain_library_store::{AnalysisCapabilities, AnalysisContext};
 
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         let device = SyncDevice {
             id: SyncDeviceId::new("xdj").expect("device id"),
             label: "USB".to_owned(),
@@ -1529,7 +1542,7 @@ mod tests {
         std::fs::write(temp.path().join("artist-track.mp3"), b"audio").expect("source file");
         std::fs::write(temp.path().join("other-track.mp3"), b"audio").expect("source file");
 
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         let device = SyncDevice {
             id: SyncDeviceId::new("artist-device").expect("device id"),
             label: "USB".to_owned(),
@@ -1618,7 +1631,7 @@ mod tests {
         std::fs::write(&first, b"first source").expect("write first source");
         std::fs::write(&second, b"second source").expect("write second source");
         let request = pioneer_request(&[&first, &second]);
-        let store = InMemoryLibraryStore::new();
+        let store = store_with_tracks_of(&request);
         let metadata = CountingMetadataService::default();
         let mut ticks = Vec::new();
 
@@ -1664,7 +1677,7 @@ mod tests {
         std::fs::write(&first, b"first source").expect("write first source");
         std::fs::write(&second, b"second source").expect("write second source");
         let request = pioneer_request(&[&first, &second]);
-        let store = InMemoryLibraryStore::new();
+        let store = store_with_tracks_of(&request);
         let metadata = CountingMetadataService::default();
         let mut ticks = Vec::new();
 

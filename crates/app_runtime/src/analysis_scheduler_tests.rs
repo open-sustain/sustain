@@ -17,7 +17,7 @@ use sustain_domain::{
     AnalysisSettings, BackgroundResourceUsage, Bpm, BpmRange, MusicalKey, PREVIEW_SEGMENT_COUNT,
     Track, TrackLocation, TrackRelativePath, WaveformSegment, WaveformSegments,
 };
-use sustain_library_store::{AnalysisCapabilities, InMemoryLibraryStore, LibraryStore, TrackId};
+use sustain_library_store::{AnalysisCapabilities, LibraryStore, SqliteLibraryStore, TrackId};
 use tempfile::TempDir;
 
 use super::{
@@ -146,7 +146,8 @@ fn scheduler_processes_pending_tracks_with_settings_enabled() {
     let library_root = temp.path().to_path_buf();
     let track = touch_in(&library_root, "alpha.flac");
 
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(track.clone()).expect("save track");
 
     let (sink, rx) = capturing_sink();
@@ -191,7 +192,8 @@ fn scheduler_records_failures_without_clobbering_run() {
     let library_root = temp.path().to_path_buf();
     let track = touch_in(&library_root, "broken.flac");
 
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(track.clone()).expect("save");
 
     let (sink, rx) = capturing_sink();
@@ -242,7 +244,8 @@ fn scheduler_records_failures_without_clobbering_run() {
 fn scheduler_progress_denominator_does_not_slide_when_pool_grows_mid_run() {
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for (id, relative) in [(1, "first.flac"), (2, "second.flac")] {
         let mut track = touch_in(&library_root, relative);
         track.id = TrackId::new(id).expect("track id");
@@ -302,7 +305,8 @@ fn rejected_record_analysis_halts_without_false_completion() {
     let library_root = temp.path().to_path_buf();
     let track = touch_in(&library_root, "alpha.flac");
 
-    let inner: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let faulty = Arc::new(FaultyStore::new(inner));
     faulty.save_track(track).expect("save");
     faulty.set_fail_record_analysis(true);
@@ -368,7 +372,8 @@ fn rejected_failure_stamp_halts_the_sweep() {
     let library_root = temp.path().to_path_buf();
     let track = touch_in(&library_root, "broken.flac");
 
-    let inner: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let faulty = Arc::new(FaultyStore::new(inner));
     faulty.save_track(track).expect("save");
     faulty.set_fail_attempt_failure(true);
@@ -407,7 +412,8 @@ fn rejected_failure_stamp_halts_the_sweep() {
 #[test]
 fn scheduler_idles_when_settings_disabled() {
     let temp = TempDir::new().expect("temp dir");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = touch_in(temp.path(), "alpha.flac");
     store.save_track(track).expect("save");
 
@@ -453,7 +459,8 @@ fn settings_change_resumes_a_blocked_scheduler() {
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
     let track = touch_in(&library_root, "alpha.flac");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(track).expect("save");
 
     let (sink, rx) = capturing_sink();
@@ -499,7 +506,8 @@ fn toggling_capabilities_off_stops_the_running_scheduler() {
     // toggle, even though many were pending.
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for i in 0..32 {
         let relative = format!("track_{i:02}.flac");
         let mut track = touch_in(&library_root, &relative);
@@ -594,7 +602,8 @@ fn shutdown_returns_after_join() {
     // Smoke test: a scheduler that never gets work should still
     // shut down promptly. Regression guard against the supervisor
     // blocking on recv past the shutdown nudge.
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let (sink, _rx) = capturing_sink();
     let scheduler = AnalysisScheduler::start(deterministic_config(
         ok_analyzer(),
@@ -617,7 +626,8 @@ fn track_updated_sink_fires_after_successful_analysis() {
     let library_root = temp.path().to_path_buf();
     let track = touch_in(&library_root, "alpha.flac");
 
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(track.clone()).expect("save track");
 
     let (notify_tx, notify_rx) = std_mpsc::channel::<sustain_domain::TrackId>();
@@ -658,7 +668,8 @@ fn resource_usage_change_respawns_pool_without_losing_work() {
     // draining the queue under the new preset.
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for i in 0..8 {
         let relative = format!("track_{i:02}.flac");
         let mut track = touch_in(&library_root, &relative);
@@ -722,7 +733,8 @@ fn analyzer_receives_the_live_capability_mask() {
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
     let track = touch_in(&library_root, "alpha.flac");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(track.clone()).expect("save track");
 
     let observed: Arc<Mutex<Option<AnalysisCapabilities>>> = Arc::new(Mutex::new(None));
@@ -789,7 +801,8 @@ fn streaming_dispatch_keeps_workers_fed_across_batch_boundary() {
     // per-track slowdown the stub introduces.
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
 
     let track_count = (super::BATCH_SIZE as i64) * 3;
     for i in 0..track_count {
@@ -906,7 +919,8 @@ fn explicit_run_processes_tracks_with_global_settings_off() {
     track_a.id = TrackId::new(11).expect("non-zero");
     let mut track_b = touch_in(&library_root, "b.flac");
     track_b.id = TrackId::new(22).expect("non-zero");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(track_a.clone()).expect("save");
     store.save_track(track_b.clone()).expect("save");
 
@@ -973,7 +987,8 @@ fn explicit_run_drains_ahead_of_background_sweep() {
 
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
 
     // More background tracks than the one-worker pool can have in
     // flight. That leaves undispatched pending work for the explicit
@@ -1118,7 +1133,8 @@ fn explicit_run_arriving_mid_dispatch_goes_first() {
 
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
-    let inner: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let faulty = Arc::new(FaultyStore::new(inner));
     for index in 0..4_i64 {
         let mut track = touch_in(&library_root, &format!("bg_{index:02}.flac"));
@@ -1216,7 +1232,8 @@ fn configured_bpm_range_reaches_the_analyzer() {
     let library_root = temp.path().to_path_buf();
     let track = touch_in(&library_root, "tempo.flac");
 
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(track).expect("save track");
 
     let observed: Arc<Mutex<Vec<AnalysisOptions>>> = Arc::new(Mutex::new(Vec::new()));

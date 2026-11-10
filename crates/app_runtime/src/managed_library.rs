@@ -584,7 +584,7 @@ mod tests {
         FieldChange, MetadataChange, PlayStatistics, Rating, Track, TrackLocation, TrackMetadata,
         TrackRelativePath,
     };
-    use sustain_library_store::{InMemoryLibraryStore, LibraryStore, StoreError};
+    use sustain_library_store::{LibraryStore, SqliteLibraryStore, StoreError};
 
     use super::{
         ApplicationRuntimeError, ManagedLibraryFilesystemValidator,
@@ -600,7 +600,7 @@ mod tests {
             .expect("create source parent");
         fs::write(&source_path, b"audio").expect("write source");
 
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         let track = Track {
             id: track_id(1),
             location: TrackLocation::available(source_relative_path.clone()),

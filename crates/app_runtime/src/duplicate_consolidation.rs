@@ -1054,7 +1054,7 @@ mod tests {
     use std::{fs, path::Path, time::SystemTime};
 
     use sustain_domain::{PlayStatistics, Rating, TrackLocation, TrackMetadata, TrackRelativePath};
-    use sustain_library_store::{InMemoryLibraryStore, LibraryStore};
+    use sustain_library_store::{LibraryStore, SqliteLibraryStore};
     use sustain_metadata::{InitialTags, MetadataError, MetadataResult};
 
     use super::*;
@@ -1084,7 +1084,7 @@ mod tests {
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("keep.flac"), b"audio").expect("write survivor");
         fs::write(root.join("remove.flac"), b"duplicate").expect("write duplicate");
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         let survivor = track(1, "keep.flac", "Old");
         let metadata_reference = track(2, "remove.flac", "Chosen");
         store.save_track(survivor).expect("save survivor");
@@ -1172,7 +1172,7 @@ mod tests {
         )
         .expect("remove original");
         fs::write(root.join("keep.flac"), b"external replacement").expect("replace externally");
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         store.save_track(survivor).expect("save survivor");
         store.save_track(removed).expect("save removed");
 
@@ -1194,7 +1194,7 @@ mod tests {
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("keep.flac"), b"audio").expect("write survivor");
         fs::write(root.join("remove.flac"), b"duplicate").expect("write duplicate");
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         store
             .save_track(track(1, "keep.flac", "Old"))
             .expect("save survivor");
@@ -1238,7 +1238,7 @@ mod tests {
         // The survivor exists; the duplicate's row claims it is present
         // (`is_missing` was never set) but its file is gone from disk (#126).
         fs::write(root.join("keep.flac"), b"audio").expect("write survivor");
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         store
             .save_track(track(1, "keep.flac", "Old"))
             .expect("save survivor");

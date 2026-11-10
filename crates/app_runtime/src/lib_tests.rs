@@ -30,11 +30,11 @@ use sustain_domain::{
 };
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan,
-    InMemoryLibraryStore, LibraryStore, OnlineCapabilities, OnlineContext, PendingTagMirror,
-    PlaylistFolder, SourceFingerprint, SqliteLibraryStore, StoreError, StoreResult,
-    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
-    SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, TrackAnalysis,
-    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
+    LibraryStore, OnlineCapabilities, OnlineContext, PendingTagMirror, PlaylistFolder,
+    SourceFingerprint, SqliteLibraryStore, StoreError, StoreResult, StoredSmartShuffleIndex,
+    StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform, SyncDevice, SyncDeviceId,
+    SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, TrackAnalysis, TrackColumnEntry,
+    TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
 use sustain_metadata::{
     InitialTagRead, InitialTags, LibraryScan, MalformedTagError, MetadataChange, MetadataError,
@@ -80,7 +80,8 @@ fn runtime_accepts_settings_command() {
 
 #[test]
 fn device_sync_manifest_save_failure_surfaces_error_instead_of_success() {
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     store.set_fail_device_manifest(true);
     let mut runtime = ApplicationRuntime::new()
@@ -129,7 +130,8 @@ fn a_failed_device_sync_saves_the_manifest_of_what_it_wrote() {
             0,
         ),
     ] {
-        let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        let backing: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
         let store = Arc::new(crate::test_store::FaultyStore::new(backing));
         let mut runtime = ApplicationRuntime::new()
             .with_library_services(store.clone(), Arc::new(TestMetadataService))
@@ -157,7 +159,8 @@ fn a_failed_device_sync_saves_the_manifest_of_what_it_wrote() {
 
 #[test]
 fn device_sync_preparation_cancellation_preserves_saved_manifest() {
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
@@ -191,7 +194,8 @@ fn device_sync_preparation_cancellation_preserves_saved_manifest() {
 
 #[test]
 fn stale_device_sync_completion_is_ignored() {
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
@@ -460,7 +464,7 @@ fn runtime_scans_library_with_services() {
     let track_path = root.join("track.mp3");
     std::fs::write(&track_path, b"not real audio").expect("write fake track");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let metadata_service = Arc::new(TestMetadataService);
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, metadata_service)
@@ -486,7 +490,7 @@ fn runtime_scans_library_with_services() {
 
 #[test]
 fn deferred_library_hydration_loads_after_start_and_gates_mutations_until_publication() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = test_track(track_id(1), "loaded-later.flac");
     assert_eq!(store.save_track(track.clone()), Ok(()));
     let mut runtime = ApplicationRuntime::new();
@@ -558,7 +562,7 @@ fn deferred_library_hydration_failure_surfaces_persistent_error() {
 
     let counts = Arc::new(StoreCallCounts::default());
     let store: Arc<dyn LibraryStore> = Arc::new(CallCountingLibraryStore {
-        inner: InMemoryLibraryStore::new(),
+        inner: SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"),
         counts: counts.clone(),
         statistics_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
         tracks_failures_remaining: std::sync::atomic::AtomicUsize::new(1),
@@ -598,7 +602,7 @@ fn cancelled_scan_preserves_existing_tracks_without_marking_them_missing() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let existing_track = test_track(track_id(1), "leftover.mp3");
     assert_eq!(store.save_track(existing_track.clone()), Ok(()));
 
@@ -829,7 +833,7 @@ fn runtime_scan_preserves_existing_track_identity_for_known_location() {
     std::fs::write(&track_path, b"not real audio").expect("write fake track");
 
     let track_id = track_id(7);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut existing_track = test_track(track_id, "track.mp3");
     existing_track.statistics.play_count = 12;
     assert_eq!(store.save_track(existing_track), Ok(()));
@@ -925,7 +929,7 @@ fn runtime_scan_preserves_existing_track_identity_after_library_root_changes() {
     std::fs::write(&track_path, b"not real audio").expect("write fake track");
 
     let track_id = track_id(11);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut existing_track = test_track(track_id, relative_path);
     existing_track.statistics.play_count = 22;
     assert_eq!(store.save_track(existing_track), Ok(()));
@@ -986,7 +990,8 @@ fn managed_import_copies_external_files_into_planned_library_path() {
     std::fs::create_dir_all(&external_root).expect("create external root");
     let source_path = external_root.join("source.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write external source");
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
@@ -1054,7 +1059,8 @@ fn managed_import_repairs_owned_staging_copy_not_external_source() {
     std::fs::create_dir_all(&external_root).expect("create external root");
     let source_path = external_root.join("source.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write external source");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let metadata_service = Arc::new(RepairingImportMetadataService::default());
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
@@ -1115,7 +1121,8 @@ fn managed_import_save_tracks_failure_rolls_back_copied_files() {
     std::fs::create_dir_all(&external_root).expect("create external root");
     let source_path = external_root.join("source.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write external source");
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     store.set_fail_save_tracks(true);
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
@@ -1163,7 +1170,8 @@ fn managed_import_flush_durable_failure_keeps_copied_files() {
     std::fs::create_dir_all(&external_root).expect("create external root");
     let source_path = external_root.join("source.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write external source");
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     store.set_fail_flush_durable(true);
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
@@ -1212,7 +1220,8 @@ fn managed_import_commits_large_batches_in_bounded_chunks_with_stable_progress()
     std::fs::create_dir_all(&library_root).expect("create library root");
     std::fs::create_dir_all(&external_root).expect("create external root");
     let source_paths = write_numbered_flac_sources(&external_root, 65);
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
@@ -1273,7 +1282,8 @@ fn managed_import_save_failure_after_committed_chunk_keeps_committed_tracks() {
     std::fs::create_dir_all(&library_root).expect("create library root");
     std::fs::create_dir_all(&external_root).expect("create external root");
     let source_paths = write_numbered_flac_sources(&external_root, 33);
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     store.set_fail_save_tracks_on_call(2);
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
@@ -1323,7 +1333,7 @@ fn managed_import_revalidates_root_before_worker_filesystem_mutation() {
     std::fs::create_dir_all(&external_root).expect("create external root");
     let source_path = external_root.join("source.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write external source");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
     let validator = ManagedLibraryFilesystemValidator::fail_after(
@@ -1376,7 +1386,7 @@ fn managed_import_skips_duplicate_content_hashes_in_same_batch() {
     std::fs::write(&second_source, b"same audio").expect("write second source");
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime =
         ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
             .expect("load settings")
@@ -1419,7 +1429,8 @@ fn cancelling_managed_import_keeps_completed_tracks_and_reports_progress() {
     std::fs::write(&second_source, b"second audio").expect("write second source");
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     let mut runtime =
         ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
@@ -1477,7 +1488,7 @@ fn managed_import_lazily_hashes_same_size_existing_tracks_for_duplicates() {
 
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let existing_track = test_track(track_id(7), "existing.flac");
     assert_eq!(store.save_track(existing_track.clone()), Ok(()));
     let mut runtime =
@@ -1531,7 +1542,7 @@ fn managed_import_skips_strict_exact_duplicate_already_on_disk_without_a_row() {
 
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime =
         ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
             .expect("load settings")
@@ -1575,7 +1586,8 @@ fn unmanaged_external_import_indexes_library_files_in_place() {
     std::fs::create_dir_all(&library_root).expect("create library root");
     let source_path = library_root.join("source.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write source");
-    let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let store = Arc::new(crate::test_store::FaultyStore::new(backing));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(library_root.clone())),
@@ -1624,7 +1636,7 @@ fn unmanaged_external_import_rejects_files_outside_library_path() {
     std::fs::create_dir_all(&external_root).expect("create external root");
     let source_path = external_root.join("source.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write source");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(library_root.clone())),
     )))
@@ -1655,7 +1667,7 @@ fn managed_consolidation_moves_existing_tracks_to_planned_paths() {
     std::fs::write(&source_path, b"audio bytes").expect("write existing file");
 
     let track_id = track_id(21);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = test_track(track_id, "Loose/Album/loose.flac");
     track.metadata.artist = Some("Artist".to_owned());
     track.metadata.album = Some("Album".to_owned());
@@ -1726,7 +1738,7 @@ fn auto_resume_preparation_revalidates_already_configured_managed_root() {
     std::fs::create_dir_all(&library_root).expect("create library root");
     let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime =
         ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
             .expect("load settings")
@@ -1762,7 +1774,7 @@ fn managed_consolidation_revalidates_root_before_worker_filesystem_mutation() {
     let source_path = library_root.join("loose.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write existing file");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = test_track(track_id(25), "loose.flac");
     track.metadata.title = Some("Song".to_owned());
     assert_eq!(store.save_track(track), Ok(()));
@@ -1889,7 +1901,7 @@ fn disabling_managed_mode_requests_consolidation_cancellation() {
     let source_path = library_root.join("loose.flac");
     std::fs::write(&source_path, b"audio bytes").expect("write existing file");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = test_track(track_id(22), "loose.flac");
     track.metadata.title = Some("Song".to_owned());
     assert_eq!(store.save_track(track), Ok(()));
@@ -1968,7 +1980,7 @@ fn consolidation_journal_recovery_retargets_moved_tracks_on_startup() {
     )
     .expect("write journal");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track_id = track_id(23);
     assert_eq!(
         store.save_track(test_track(track_id, "Loose/Album/loose.flac")),
@@ -2071,7 +2083,7 @@ fn managed_path_change_rejects_incompatible_root_before_persist_or_reconciliatio
     std::fs::create_dir_all(&new_root).expect("create new root");
     std::fs::write(old_root.join("track.flac"), b"audio").expect("write old track");
     let track_id = track_id(26);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
     let mut settings = UserSettings::with_library_path(Some(old_root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
@@ -2130,7 +2142,7 @@ fn update_settings_does_not_re_stat_existing_tracks_when_path_is_unchanged() {
     std::fs::write(&track_path, b"audio bytes").expect("write track");
 
     let track_id = track_id(7);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
 
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
@@ -2175,7 +2187,7 @@ fn update_settings_re_stats_existing_tracks_when_library_path_changes() {
     // non-existent file under `new_root`.
     std::fs::write(old_root.join("vanished.flac"), b"audio").expect("write vanished file");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let present_id = track_id(101);
     let vanished_id = track_id(102);
     assert_eq!(
@@ -2236,7 +2248,7 @@ fn update_settings_re_stats_existing_tracks_when_library_path_changes() {
 fn library_path_change_probe_failure_preserves_existing_availability() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let id = track_id(103);
     assert_eq!(store.save_track(test_track(id, "track.flac")), Ok(()));
     let mut runtime = ApplicationRuntime::new()
@@ -2281,7 +2293,7 @@ fn play_track_flips_is_missing_when_file_has_vanished() {
     let track_path = library_root.join("ghost.flac");
     std::fs::write(&track_path, b"audio").expect("write track");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let id = track_id(33);
     assert_eq!(store.save_track(test_track(id, "ghost.flac")), Ok(()));
 
@@ -2327,7 +2339,7 @@ fn play_track_recovers_availability_when_file_reappears() {
     let track_path = library_root.join("returning.flac");
     std::fs::write(&track_path, b"audio").expect("write track");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let id = track_id(34);
     assert_eq!(store.save_track(test_track(id, "returning.flac")), Ok(()));
 
@@ -2376,7 +2388,7 @@ fn play_track_recovers_availability_when_file_reappears() {
 fn play_track_probe_failure_does_not_create_a_missing_marker() {
     let library_root = unique_test_directory();
     std::fs::create_dir_all(&library_root).expect("create library root");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let id = track_id(35);
     assert_eq!(store.save_track(test_track(id, "unresolved.flac")), Ok(()));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
@@ -2424,7 +2436,7 @@ fn reference_relocation_preserves_authoritative_track_identity_and_library_data(
     missing.file_size_bytes = Some(12);
     missing.has_embedded_artwork = Some(true);
     missing.file_modified_at = Some(std::time::SystemTime::UNIX_EPOCH);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(missing.clone()).expect("seed missing row");
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(root.clone())),
@@ -2468,7 +2480,7 @@ fn reference_relocation_rejects_a_path_attached_to_another_track() {
     let missing_id = track_id(37);
     let mut missing = test_track(missing_id, "missing.flac");
     missing.location = missing_track_location("missing.flac");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(missing).expect("seed missing row");
     store
         .save_track(test_track(track_id(38), "existing.flac"))
@@ -2507,7 +2519,7 @@ fn managed_relocation_copies_external_replacement_into_owned_layout() {
     missing.metadata.album = Some("Album".to_owned());
     missing.metadata.title = Some("Title".to_owned());
     missing.metadata.track_number = Some(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store.save_track(missing).expect("seed missing row");
     let mut settings = UserSettings::with_library_path(Some(root.clone()));
     settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
@@ -2547,7 +2559,7 @@ fn runtime_scan_keeps_missing_tracks_visible() {
     std::fs::create_dir_all(&root).expect("create test library");
 
     let track_id = track_id(9);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(
         store.save_track(test_track(track_id, "missing.mp3")),
         Ok(())
@@ -2628,7 +2640,16 @@ fn runtime_saves_ui_settings_with_settings_store() {
 #[test]
 fn runtime_caches_loaded_track_column_layouts() {
     let counts = Arc::new(StoreCallCounts::default());
-    let inner = InMemoryLibraryStore::new();
+    let inner = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    inner
+        .save_playlist(Playlist {
+            id: playlist_id(1),
+            name: "Favorites".to_owned(),
+            parent_folder_id: None,
+            position: 0,
+            entries: Vec::new(),
+        })
+        .expect("seed playlist");
     let scope = TrackColumnLayoutScope::Playlist(playlist_id(1));
     let layout = sample_track_column_layout();
     inner
@@ -2656,7 +2677,7 @@ fn runtime_caches_loaded_track_column_layouts() {
 fn runtime_caches_missing_track_column_layouts() {
     let counts = Arc::new(StoreCallCounts::default());
     let store: Arc<dyn LibraryStore> = Arc::new(CallCountingLibraryStore::new(
-        InMemoryLibraryStore::new(),
+        SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"),
         counts.clone(),
     ));
     let runtime = ApplicationRuntime::new()
@@ -2677,7 +2698,7 @@ fn runtime_caches_missing_track_column_layouts() {
 fn runtime_track_column_layout_save_updates_the_hot_path_cache() {
     let counts = Arc::new(StoreCallCounts::default());
     let store: Arc<dyn LibraryStore> = Arc::new(CallCountingLibraryStore::new(
-        InMemoryLibraryStore::new(),
+        SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"),
         counts.clone(),
     ));
     let runtime = ApplicationRuntime::new()
@@ -2726,7 +2747,7 @@ fn runtime_plays_tracks_through_playback_service() {
     std::fs::write(root.join("track.flac"), b"not real audio").expect("write fake track");
 
     let track_id = positive_track_id();
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = Track {
         id: track_id,
         location: track_location("track.flac"),
@@ -2985,7 +3006,7 @@ fn runtime_play_next_track_skips_missing_tracks() {
     std::fs::write(root.join("first.flac"), b"not real audio").expect("write first track");
     std::fs::write(root.join("third.flac"), b"not real audio").expect("write third track");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let first_track = test_track(track_id(1), "first.flac");
     let mut missing_track = test_track(track_id(2), "missing.flac");
     missing_track.location = missing_track_location("missing.flac");
@@ -3033,7 +3054,7 @@ fn three_track_playback_runtime(root: &std::path::Path) -> ApplicationRuntime {
     for name in ["a.flac", "b.flac", "c.flac"] {
         std::fs::write(root.join(name), b"not real audio").expect("write track");
     }
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for (id, name) in [(1, "a.flac"), (2, "b.flac"), (3, "c.flac")] {
         assert_eq!(store.save_track(test_track(track_id(id), name)), Ok(()));
     }
@@ -3309,7 +3330,7 @@ fn runtime_play_previous_track_skips_missing_tracks() {
     std::fs::write(root.join("first.flac"), b"not real audio").expect("write first track");
     std::fs::write(root.join("third.flac"), b"not real audio").expect("write third track");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let first_track = test_track(track_id(1), "first.flac");
     let mut missing_track = test_track(track_id(2), "missing.flac");
     missing_track.location = missing_track_location("missing.flac");
@@ -3359,7 +3380,7 @@ fn runtime_set_rating_writes_metadata_and_updates_store_cache() {
     std::fs::write(&track_path, b"not real audio").expect("write fake track");
 
     let track_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
     let metadata_service = Arc::new(RecordingMetadataService::new(false));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
@@ -3404,7 +3425,7 @@ fn runtime_set_rating_applies_optimistic_update_and_reports_tag_write_failure() 
     std::fs::write(&track_path, b"not real audio").expect("write fake track");
 
     let track_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
     let metadata_service = Arc::new(RecordingMetadataService::new(true));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
@@ -3474,7 +3495,7 @@ fn runtime_rejects_invalid_artwork_before_submitting_tag_write() {
     std::fs::write(root.join("track.flac"), b"not real audio").expect("write fake track");
 
     let track_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
     let metadata_service = Arc::new(RecordingMetadataService::new(false));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
@@ -3504,7 +3525,7 @@ fn runtime_update_metadata_writes_tags_and_updates_store_cache() {
     std::fs::write(&track_path, b"not real audio").expect("write fake track");
 
     let track_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = test_track(track_id, "track.flac");
     track.metadata.title = Some("Old".to_owned());
     track.metadata.artist = Some("Artist".to_owned());
@@ -3562,7 +3583,7 @@ fn metadata_edit_updates_the_search_index_immediately() {
     std::fs::write(root.join("track.flac"), b"not real audio").expect("write fake track");
 
     let track_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     // Path is neutral ("track.flac") so the title is the only carrier of
     // "Before"/"After" in the search document.
     let mut track = test_track(track_id, "track.flac");
@@ -3609,7 +3630,7 @@ fn managed_metadata_update_moves_file_when_planned_path_changes() {
     std::fs::write(&source_path, b"audio bytes").expect("write fake track");
 
     let track_id = track_id(31);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = test_track(track_id, "loose.flac");
     track.metadata.title = Some("Old".to_owned());
     track.metadata.artist = Some("Old Artist".to_owned());
@@ -3700,7 +3721,7 @@ fn managed_metadata_update_keeps_file_in_place_for_non_path_fields() {
     std::fs::write(&track_path, b"audio bytes").expect("write fake track");
 
     let track_id = track_id(32);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = test_track(track_id, "Artist/Album/01 Song.flac");
     track.metadata.title = Some("Song".to_owned());
     track.metadata.artist = Some("Artist".to_owned());
@@ -3758,7 +3779,7 @@ fn runtime_update_metadata_applies_optimistic_update_and_reports_tag_write_failu
     std::fs::write(&track_path, b"not real audio").expect("write fake track");
 
     let track_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = test_track(track_id, "track.flac");
     track.metadata.title = Some("Old".to_owned());
     assert_eq!(store.save_track(track), Ok(()));
@@ -3868,7 +3889,7 @@ fn metadata_write_retry_notice_is_aggregated_until_every_failed_track_succeeds()
 #[test]
 fn deferred_missing_metadata_write_clears_warning_and_refreshes_availability() {
     let track_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(
         store.save_track(test_track(track_id, "missing.flac")),
         Ok(())
@@ -3918,7 +3939,7 @@ fn runtime_removes_tracks_from_library_and_stops_playback() {
     std::fs::write(root.join("track.flac"), b"not real audio").expect("write fake track");
 
     let removed_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(
         store.save_track(test_track(removed_id, "track.flac")),
         Ok(())
@@ -3971,7 +3992,7 @@ fn move_to_trash_removes_track_and_underlying_file_after_backend_success() {
     std::fs::write(&track_path, b"not real audio").expect("write fake track");
 
     let trashed_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(
         store.save_track(test_track(trashed_id, "track.flac")),
         Ok(())
@@ -4004,7 +4025,7 @@ fn move_to_trash_removes_track_and_underlying_file_after_backend_success() {
 #[test]
 fn managed_metadata_retarget_event_reloads_sqlite_and_surfaces_failure() {
     let track_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = test_track(track_id, "loose.flac");
     track.metadata.title = Some("Old".to_owned());
     assert_eq!(store.save_track(track), Ok(()));
@@ -4099,7 +4120,7 @@ fn pending_managed_metadata_retarget_blocks_structural_library_operations_only()
     let track_path = root.join("track.flac");
     std::fs::write(&track_path, b"not real audio").expect("write fake track");
     let track_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(root.clone())),
@@ -4171,7 +4192,7 @@ fn runtime_move_to_trash_succeeds_when_file_is_already_missing() {
     std::fs::create_dir_all(&root).expect("create test library");
 
     let trashed_id = track_id(1);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut missing = test_track(trashed_id, "absent.flac");
     missing.location = missing_track_location("absent.flac");
     assert_eq!(store.save_track(missing), Ok(()));
@@ -4198,7 +4219,7 @@ fn runtime_move_to_trash_succeeds_when_file_is_already_missing() {
 
 #[test]
 fn runtime_creates_renames_and_deletes_playlists() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4239,7 +4260,7 @@ fn runtime_creates_renames_and_deletes_playlists() {
 
 #[test]
 fn runtime_updates_playlist_entries_in_store_and_cache() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for id in [1, 2, 3] {
         assert_eq!(
             store.save_track(test_track(track_id(id), &format!("track-{id}.flac"))),
@@ -4308,7 +4329,7 @@ fn runtime_updates_playlist_entries_in_store_and_cache() {
 
 #[test]
 fn runtime_move_playlist_entries_relocates_a_contiguous_block_atomically() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for id in 1..=5 {
         assert_eq!(
             store.save_track(test_track(track_id(id), &format!("track-{id}.flac"))),
@@ -4419,7 +4440,7 @@ fn runtime_move_playlist_entries_relocates_a_contiguous_block_atomically() {
 
 #[test]
 fn runtime_move_playlist_entries_rejects_empty_track_list() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let playlist_id = playlist_id(1);
     assert_eq!(
         store.save_playlist(Playlist {
@@ -4447,7 +4468,7 @@ fn runtime_move_playlist_entries_rejects_empty_track_list() {
 
 #[test]
 fn runtime_rejects_blank_playlist_names() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4463,7 +4484,7 @@ fn runtime_rejects_blank_playlist_names() {
 
 #[test]
 fn runtime_creates_renames_and_deletes_playlist_folders() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4499,7 +4520,7 @@ fn runtime_creates_renames_and_deletes_playlist_folders() {
 
 #[test]
 fn runtime_rejects_blank_playlist_folder_names() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4515,7 +4536,7 @@ fn runtime_rejects_blank_playlist_folder_names() {
 
 #[test]
 fn runtime_rejects_creating_folder_under_missing_parent() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4531,7 +4552,7 @@ fn runtime_rejects_creating_folder_under_missing_parent() {
 
 #[test]
 fn deleting_a_folder_cascades_and_reloads_runtime_state() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4574,7 +4595,7 @@ fn deleting_a_folder_cascades_and_reloads_runtime_state() {
 
 #[test]
 fn runtime_creates_updates_and_deletes_smart_playlists() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4626,7 +4647,7 @@ fn smart_playlist_track_status_distinguishes_included_excluded_and_unknowable() 
     //      (single-track inspection can't reason about eviction).
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
 
     let matching = Track {
         id: track_id(1),
@@ -4711,7 +4732,7 @@ fn smart_playlist_track_status_distinguishes_included_excluded_and_unknowable() 
 
 #[test]
 fn seeding_default_smart_playlists_installs_the_starter_set() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4745,7 +4766,7 @@ fn smart_playlist_evaluation_uses_injected_clock() {
     use std::time::{Duration, SystemTime};
 
     let last_played = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
 
     let mut track = test_track(track_id(1), "track.flac");
     track.statistics.last_played_at = Some(last_played);
@@ -4842,7 +4863,7 @@ fn advance_playback_tick(
 
 #[test]
 fn runtime_rejects_smart_playlist_without_rules() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4864,7 +4885,7 @@ fn runtime_rejects_smart_playlist_without_rules() {
 
 #[test]
 fn new_siblings_get_distinct_positions_across_types() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4896,7 +4917,7 @@ fn new_siblings_get_distinct_positions_across_types() {
 
 #[test]
 fn moving_a_playlist_within_its_folder_reorders_siblings() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4935,7 +4956,7 @@ fn moving_a_playlist_within_its_folder_reorders_siblings() {
 
 #[test]
 fn moving_a_playlist_across_folders_resequences_both_sides() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -4996,7 +5017,7 @@ fn moving_a_playlist_across_folders_resequences_both_sides() {
 
 #[test]
 fn moving_a_folder_into_its_own_descendant_is_rejected() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -5302,7 +5323,7 @@ impl MetadataService for RecordingMetadataService {
 fn force_backfill_rewrites_present_tracks_and_skips_missing() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut present_a = test_track(track_id(1), "a.flac");
     present_a.rating = Rating::new(4).expect("valid rating");
     let present_b = test_track(track_id(2), "b.flac");
@@ -5355,7 +5376,7 @@ fn force_backfill_rewrites_present_tracks_and_skips_missing() {
 fn force_backfill_records_failures_without_aborting() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for id in [1, 2] {
         assert_eq!(
             store.save_track(test_track(track_id(id), &format!("track{id}.flac"))),
@@ -5384,7 +5405,7 @@ fn force_backfill_records_failures_without_aborting() {
 
 #[test]
 fn force_backfill_requires_a_configured_library_path() {
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     assert_eq!(store.save_track(test_track(track_id(1), "a.flac")), Ok(()));
     let runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(None),
@@ -5405,7 +5426,7 @@ fn on_playback_tick_registers_play_after_threshold() {
     std::fs::create_dir_all(&root).expect("create test library");
     std::fs::write(root.join("song.flac"), b"not real audio").expect("write fake track");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let id = track_id(1);
     let mut track = test_track(id, "song.flac");
     track.metadata.duration = Some(std::time::Duration::from_secs(60));
@@ -5497,7 +5518,7 @@ fn delayed_playback_tick_accounts_real_monotonic_interval() {
     std::fs::create_dir_all(&root).expect("create test library");
     std::fs::write(root.join("song.flac"), b"not real audio").expect("write fake track");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let id = track_id(1);
     let mut track = test_track(id, "song.flac");
     track.metadata.duration = Some(std::time::Duration::from_secs(60));
@@ -5535,7 +5556,7 @@ fn pause_and_seek_forward_do_not_count_as_listening() {
     std::fs::create_dir_all(&root).expect("create test library");
     std::fs::write(root.join("song.flac"), b"not real audio").expect("write fake track");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let id = track_id(1);
     let mut track = test_track(id, "song.flac");
     track.metadata.duration = Some(std::time::Duration::from_secs(60));
@@ -5608,7 +5629,7 @@ fn failed_play_registration_retries_after_stop_without_double_incrementing() {
     std::fs::create_dir_all(&root).expect("create test library");
     std::fs::write(root.join("song.flac"), b"not real audio").expect("write fake track");
 
-    let inner = InMemoryLibraryStore::new();
+    let inner = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let id = track_id(1);
     let mut track = test_track(id, "song.flac");
     track.metadata.duration = Some(std::time::Duration::from_secs(60));
@@ -5696,7 +5717,7 @@ fn registering_a_play_fires_track_data_observer() {
     std::fs::create_dir_all(&root).expect("create test library");
     std::fs::write(root.join("song.flac"), b"not real audio").expect("write fake track");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let id = track_id(1);
     let mut track = test_track(id, "song.flac");
     track.metadata.duration = Some(std::time::Duration::from_secs(60));
@@ -5764,7 +5785,7 @@ fn skip_current_track_registers_skip_before_play_threshold() {
     std::fs::write(root.join("a.flac"), b"audio").expect("write a");
     std::fs::write(root.join("b.flac"), b"audio").expect("write b");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut a = test_track(track_id(1), "a.flac");
     a.metadata.duration = Some(std::time::Duration::from_secs(60));
     let mut b = test_track(track_id(2), "b.flac");
@@ -5841,7 +5862,7 @@ fn skip_current_track_does_not_register_skip_after_play_threshold() {
     std::fs::write(root.join("a.flac"), b"audio").expect("write a");
     std::fs::write(root.join("b.flac"), b"audio").expect("write b");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut a = test_track(track_id(1), "a.flac");
     a.metadata.duration = Some(std::time::Duration::from_secs(60));
     let b = test_track(track_id(2), "b.flac");
@@ -5905,7 +5926,7 @@ fn play_next_track_never_registers_skip() {
     std::fs::write(root.join("a.flac"), b"audio").expect("write a");
     std::fs::write(root.join("b.flac"), b"audio").expect("write b");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut a = test_track(track_id(1), "a.flac");
     a.metadata.duration = Some(std::time::Duration::from_secs(60));
     let b = test_track(track_id(2), "b.flac");
@@ -5967,7 +5988,7 @@ fn on_playback_tick_does_not_accumulate_when_stopped() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(root.clone())),
     )))
@@ -5997,7 +6018,7 @@ fn play_track_starts_session_immediately_so_rapid_skip_counts() {
     std::fs::write(root.join("a.flac"), b"audio").expect("write a");
     std::fs::write(root.join("b.flac"), b"audio").expect("write b");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut a = test_track(track_id(1), "a.flac");
     a.metadata.duration = Some(std::time::Duration::from_secs(60));
     let b = test_track(track_id(2), "b.flac");
@@ -6049,7 +6070,7 @@ fn rapid_double_skip_does_not_double_count() {
     std::fs::write(root.join("b.flac"), b"audio").expect("write b");
     std::fs::write(root.join("c.flac"), b"audio").expect("write c");
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut a = test_track(track_id(1), "a.flac");
     a.metadata.duration = Some(std::time::Duration::from_secs(60));
     let mut b = test_track(track_id(2), "b.flac");
@@ -6186,7 +6207,8 @@ fn apply_track_updated_reloads_from_store_and_fires_observer() {
     std::fs::create_dir_all(&root).expect("create test library");
     std::fs::write(root.join("a.flac"), b"audio").expect("write a");
 
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut original = test_track(track_id(1), "a.flac");
     original.metadata.title = Some("Before".to_owned());
     store.save_track(original.clone()).expect("seed");
@@ -6246,7 +6268,7 @@ fn apply_track_updated_reloads_from_store_and_fires_observer() {
 fn apply_track_updated_performs_one_keyed_lookup_and_no_full_scan() {
     use std::sync::atomic::Ordering;
 
-    let inner = InMemoryLibraryStore::new();
+    let inner = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     inner
         .save_track(test_track(track_id(7), "a.flac"))
         .expect("seed inner store");
@@ -6284,7 +6306,8 @@ fn apply_track_updated_performs_one_keyed_lookup_and_no_full_scan() {
 
 #[test]
 fn library_track_keyed_lookup_finds_by_id_and_reports_absence() {
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for id in [1, 2, 3] {
         store
             .save_track(test_track(track_id(id), &format!("track-{id}.flac")))
@@ -6305,7 +6328,8 @@ fn library_track_keyed_lookup_finds_by_id_and_reports_absence() {
 }
 
 fn runtime_with_one_track(library_path: Option<PathBuf>) -> ApplicationRuntime {
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store
         .save_track(test_track(track_id(1), "a.flac"))
         .expect("seed track");
@@ -6360,7 +6384,8 @@ fn move_to_trash_prunes_empty_folders_only_in_managed_mode() {
         .expect("create track parent");
     std::fs::write(&track_path, b"audio").expect("write track");
     let track_id = track_id(1);
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store
         .save_track(test_track(track_id, "Loose/Album/song.flac"))
         .expect("seed track");
@@ -6576,7 +6601,7 @@ fn request_run_decides_per_global_setting_and_target() {
     // on the runtime accepts the request and forwards the full
     // mask to the scheduler (the explicit run is the user's
     // override for the bundle case).
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
 
     let track = Track {
         id: track_id(1),
@@ -6741,7 +6766,7 @@ fn request_run_skips_tracks_whose_capability_is_already_cached() {
     // `online_run_is_a_force_path_that_does_not_pre_filter`.)
     use sustain_library_store::{AnalysisCapabilities, AnalysisContext};
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = Track {
         id: track_id(1),
         location: track_location("t.flac"),
@@ -6828,7 +6853,7 @@ fn online_run_is_a_force_path_that_does_not_pre_filter() {
     // tests.
     use sustain_library_store::{OnlineCapabilities, OnlineContext};
 
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = Track {
         id: track_id(1),
         location: track_location("t.flac"),
@@ -6885,18 +6910,18 @@ struct StoreCallCounts {
 
 /// A transparent [`LibraryStore`] decorator that counts `track` and
 /// `tracks` calls and delegates everything else to an inner
-/// [`InMemoryLibraryStore`]. It lets a test prove `apply_track_updated`
+/// [`SqliteLibraryStore`]. It lets a test prove `apply_track_updated`
 /// reloads a single row by keyed id rather than decoding the whole
 /// library.
 struct CallCountingLibraryStore {
-    inner: InMemoryLibraryStore,
+    inner: SqliteLibraryStore,
     counts: Arc<StoreCallCounts>,
     statistics_failures_remaining: std::sync::atomic::AtomicUsize,
     tracks_failures_remaining: std::sync::atomic::AtomicUsize,
 }
 
 impl CallCountingLibraryStore {
-    fn new(inner: InMemoryLibraryStore, counts: Arc<StoreCallCounts>) -> Self {
+    fn new(inner: SqliteLibraryStore, counts: Arc<StoreCallCounts>) -> Self {
         Self {
             inner,
             counts,
@@ -7388,7 +7413,9 @@ fn smart_shuffle_rebuild_request_does_not_block_the_caller_on_store_reads() {
     // A track is hydrated into the runtime with the store responding
     // instantly, so `library_tracks` is populated and the in-memory
     // emptiness guard passes.
-    let faulty = Arc::new(FaultyStore::new(Arc::new(InMemoryLibraryStore::new())));
+    let faulty = Arc::new(FaultyStore::new(Arc::new(
+        SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"),
+    )));
     faulty
         .save_track(test_track(track_id(1), "alpha.flac"))
         .expect("seed track");

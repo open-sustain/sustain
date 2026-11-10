@@ -20,7 +20,6 @@ pub use sustain_domain::{
 use sustain_domain::{BeatGrid, SmartPlaylistRuleSet};
 pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 
-mod memory;
 mod migrations;
 mod schema;
 mod sqlite;
@@ -28,7 +27,6 @@ mod sqlite_rows;
 mod tag_mirror;
 mod waveform_cache;
 
-pub use memory::InMemoryLibraryStore;
 pub use tag_mirror::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork, TagMirrorKinds};
 pub use waveform_cache::WaveformCacheStatus;
 

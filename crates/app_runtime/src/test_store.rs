@@ -10,7 +10,7 @@
 //! Exercising that needs a store that succeeds normally but can be told
 //! to fail a specific write on demand.
 //!
-//! [`FaultyStore`] wraps a real backing store (the in-memory one in
+//! [`FaultyStore`] wraps a real backing store (an in-memory SQLite one in
 //! tests) and delegates every method to it, overriding only the
 //! persistence writes tests need to observe. Each override consults a
 //! toggle the test flips and counts its invocations so a test can assert

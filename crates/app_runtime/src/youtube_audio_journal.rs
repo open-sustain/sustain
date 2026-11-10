@@ -376,7 +376,7 @@ mod tests {
     use sustain_domain::{
         PlayStatistics, Rating, Track, TrackAudioProperties, TrackLocation, TrackMetadata,
     };
-    use sustain_library_store::InMemoryLibraryStore;
+    use sustain_library_store::SqliteLibraryStore;
 
     #[test]
     fn recovery_rejects_symlink_journal() {
@@ -385,7 +385,10 @@ mod tests {
         symlink(external.path(), journal_path(root.path())).expect("create journal symlink");
 
         assert_eq!(
-            recover_youtube_replacement_journal(root.path(), &InMemoryLibraryStore::new()),
+            recover_youtube_replacement_journal(
+                root.path(),
+                &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store")
+            ),
             Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed)
         );
     }
@@ -397,7 +400,10 @@ mod tests {
             .expect("create journal FIFO");
 
         assert_eq!(
-            recover_youtube_replacement_journal(root.path(), &InMemoryLibraryStore::new()),
+            recover_youtube_replacement_journal(
+                root.path(),
+                &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store")
+            ),
             Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed)
         );
     }
@@ -476,7 +482,7 @@ mod tests {
 
     struct Fixture {
         root: tempfile::TempDir,
-        store: InMemoryLibraryStore,
+        store: SqliteLibraryStore,
         original_path: PathBuf,
         replacement_path: PathBuf,
     }
@@ -498,7 +504,7 @@ mod tests {
             let replacement_content_hash =
                 hash_file_content(&replacement_path).expect("replacement content hash");
             fs::remove_file(&replacement_path).expect("reserve unpublished replacement path");
-            let store = InMemoryLibraryStore::new();
+            let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
             let track_id = TrackId::new(1).expect("track id");
             store
                 .save_track(Track {

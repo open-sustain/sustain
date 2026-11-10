@@ -882,7 +882,7 @@ mod tests {
     };
 
     use sustain_domain::{Rating, Track, TrackLocation, TrackRelativePath};
-    use sustain_library_store::InMemoryLibraryStore;
+    use sustain_library_store::SqliteLibraryStore;
     use sustain_metadata::{InitialTags, MetadataResult};
 
     use super::*;
@@ -894,7 +894,8 @@ mod tests {
         std::fs::write(root.join("track.flac"), b"audio").expect("write track");
 
         let track_id = TrackId::new(1).expect("track id");
-        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        let store: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
         store
             .save_track(Track {
                 id: track_id,
@@ -971,7 +972,8 @@ mod tests {
         std::fs::write(root.join("track.flac"), b"audio").expect("write track");
 
         let track_id = TrackId::new(1).expect("track id");
-        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        let store: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
         store
             .save_track(Track {
                 id: track_id,
@@ -1043,7 +1045,8 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create library root");
 
         let track_id = TrackId::new(1).expect("track id");
-        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        let store: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
         store
             .save_track(Track {
                 id: track_id,
@@ -1145,7 +1148,8 @@ mod tests {
         std::fs::write(root.join("relocated.flac"), b"audio").expect("write relocated track");
 
         let track_id = TrackId::new(1).expect("track id");
-        let backing: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        let backing: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
         backing
             .save_track(Track {
                 id: track_id,
@@ -1215,7 +1219,8 @@ mod tests {
         std::fs::write(root.join("Loose/Album/loose.flac"), b"audio").expect("write track");
 
         let track_id = TrackId::new(1).expect("track id");
-        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        let store: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
         store
             .save_track(Track {
                 id: track_id,
@@ -1336,7 +1341,8 @@ mod tests {
         std::fs::write(&replacement, b"replacement audio").expect("write replacement");
 
         let track_id = TrackId::new(1).expect("track id");
-        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        let store: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
         store
             .save_track(Track {
                 id: track_id,
@@ -1414,7 +1420,8 @@ mod tests {
         std::fs::write(root.join("loose.flac"), b"audio").expect("write track");
 
         let track_id = TrackId::new(1).expect("track id");
-        let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+        let store: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
         store
             .save_track(Track {
                 id: track_id,

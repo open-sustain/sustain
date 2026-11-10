@@ -180,7 +180,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use sustain_domain::{PlayStatistics, Rating, Track, TrackLocation, TrackMetadata};
-    use sustain_library_store::{InMemoryLibraryStore, LibraryStore};
+    use sustain_library_store::{LibraryStore, SqliteLibraryStore};
 
     use super::*;
 
@@ -220,7 +220,7 @@ mod tests {
         fs::write(&staging, b"staged").expect("write staging");
         write_pending(&root, &destination, &staging).expect("write journal");
 
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         recover(&root, &store).expect("recover");
 
         assert!(!destination.exists(), "orphan published file is removed");
@@ -239,7 +239,7 @@ mod tests {
         fs::write(&destination, b"audio").expect("write dest");
         write_pending(&root, &destination, &staging).expect("write journal");
 
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         store
             .save_track(track_at("Artist/Album/01 Song.flac"))
             .expect("seed row");
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn recover_is_a_noop_without_a_journal() {
         let root = unique_root();
-        let store = InMemoryLibraryStore::new();
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
         recover(&root, &store).expect("recover");
         assert!(!journal_path(&root).exists());
         fs::remove_dir_all(root).expect("cleanup");

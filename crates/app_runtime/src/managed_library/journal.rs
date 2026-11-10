@@ -759,7 +759,7 @@ mod tests {
     use sustain_domain::{
         PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
     };
-    use sustain_library_store::{InMemoryLibraryStore, LibraryStore};
+    use sustain_library_store::{LibraryStore, SqliteLibraryStore};
 
     use super::{
         CONSOLIDATION_JOURNAL_FILE_NAME, CONSOLIDATION_JOURNAL_HEADER,
@@ -985,7 +985,7 @@ mod tests {
 
     struct Fixture {
         root: PathBuf,
-        store: InMemoryLibraryStore,
+        store: SqliteLibraryStore,
         track_id: TrackId,
         source_relative: TrackRelativePath,
         destination_relative: TrackRelativePath,
@@ -1006,7 +1006,7 @@ mod tests {
             fs::write(&source_path, b"audio bytes").expect("write source");
             let source_metadata = fs::metadata(&source_path).expect("source metadata");
             let track_id = TrackId::new(1).expect("track id");
-            let store = InMemoryLibraryStore::new();
+            let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
             store
                 .save_track(test_track(track_id, source_relative.clone()))
                 .expect("seed track");

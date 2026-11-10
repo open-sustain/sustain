@@ -17,7 +17,7 @@ use sustain_cd_import::{
     CdEncoder, CdImportError, EncodeProgress, EncodeRequest, OpticalProbe, RawTocTrack, TocSnapshot,
 };
 use sustain_domain::{CdEncodingProfile, CdReadMode, Track, TrackMetadata};
-use sustain_library_store::{InMemoryLibraryStore, LibraryStore};
+use sustain_library_store::{LibraryStore, SqliteLibraryStore};
 use sustain_metadata::{InitialTags, MetadataResult, MetadataService};
 
 use super::{
@@ -187,7 +187,7 @@ impl MetadataService for FakeMetadata {
 
 struct Harness {
     root: PathBuf,
-    store: Arc<InMemoryLibraryStore>,
+    store: Arc<SqliteLibraryStore>,
     probe: Arc<FakeProbe>,
     encoder: Arc<FakeEncoder>,
     cancellation: Arc<AtomicBool>,
@@ -210,7 +210,7 @@ impl Harness {
         let cancellation = Arc::new(AtomicBool::new(false));
         let harness = Self {
             root: unique_root(),
-            store: Arc::new(InMemoryLibraryStore::new()),
+            store: Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store")),
             probe: Arc::new(probe),
             encoder: Arc::new(FakeEncoder::new(cancellation.clone())),
             cancellation,
@@ -480,7 +480,7 @@ impl SettingsStore for StubSettingsStore {
 fn runtime_with(
     root: &Path,
     mode: LibraryManagementMode,
-    store: Arc<InMemoryLibraryStore>,
+    store: Arc<SqliteLibraryStore>,
     probe: Arc<FakeProbe>,
     encoder: Arc<FakeEncoder>,
 ) -> ApplicationRuntime {
@@ -545,7 +545,7 @@ fn track_override_replaces_fields_but_ignores_blank_ones() {
 fn running_cd_import_excludes_other_mutations_and_joins_global_cancellation() {
     let root = unique_root();
     let disc = snapshot("disc-a");
-    let store = Arc::new(InMemoryLibraryStore::new());
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let probe = Arc::new(FakeProbe::holding(disc.clone()));
     let cancellation = Arc::new(AtomicBool::new(false));
     let encoder = Arc::new(FakeEncoder::new(cancellation));
@@ -591,7 +591,7 @@ fn both_library_modes_place_ripped_files_beneath_the_library_root() {
     ] {
         let root = unique_root();
         let disc = snapshot("disc-a");
-        let store = Arc::new(InMemoryLibraryStore::new());
+        let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
         let probe = Arc::new(FakeProbe::holding(disc.clone()));
         let cancellation = Arc::new(AtomicBool::new(false));
         let encoder = Arc::new(FakeEncoder::new(cancellation));

@@ -23,44 +23,21 @@ use sustain_domain::{
 };
 
 use super::{
-    AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan, InMemoryLibraryStore,
-    LibraryStore, OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId,
-    SmartPlaylist, SmartPlaylistId, SqliteLibraryStore, StoredSmartShuffleIndex,
-    StoredSyncedLyrics, StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry,
-    TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
+    AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan, LibraryStore,
+    OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId, SmartPlaylist,
+    SmartPlaylistId, SqliteLibraryStore, StoredSmartShuffleIndex, StoredSyncedLyrics,
+    StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry, TrackColumnLayout,
+    TrackColumnLayoutScope, TrackColumnSort,
 };
 use crate::{PlaylistId, StoreResult, TrackId};
 use sustain_domain::SyncedLyricsLine;
 
 #[test]
-fn in_memory_store_starts_empty() {
-    let store = InMemoryLibraryStore::new();
+fn a_new_store_is_empty() {
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
 
     assert_eq!(store.tracks(), Ok(Vec::new()));
     assert_eq!(store.playlists(), Ok(Vec::new()));
-}
-
-#[test]
-fn in_memory_store_saves_and_loads_tracks() {
-    let store = InMemoryLibraryStore::new();
-    let track = track(1, "a.flac");
-
-    assert_eq!(store.save_track(track.clone()), Ok(()));
-
-    assert_eq!(store.track(track.id), Ok(Some(track.clone())));
-    assert_eq!(store.tracks(), Ok(vec![track]));
-}
-
-#[test]
-fn in_memory_store_rejects_whole_row_replacement_by_id() {
-    let store = InMemoryLibraryStore::new();
-    let first = track(1, "old.flac");
-    let replacement = track(1, "new.flac");
-
-    assert_eq!(store.save_track(first.clone()), Ok(()));
-    assert!(store.save_track(replacement).is_err());
-
-    assert_eq!(store.track(first.id), Ok(Some(first)));
 }
 
 #[test]
@@ -175,7 +152,9 @@ fn sqlite_stored_bpm_that_is_not_a_tempo_is_rejected() {
     );
 }
 
-fn run_availability_update_requires_matching_path(store: &dyn LibraryStore) {
+#[test]
+fn availability_update_requires_matching_path() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let original = track(1, "original.flac");
     store.save_track(original.clone()).expect("save track");
 
@@ -222,30 +201,8 @@ fn run_availability_update_requires_matching_path(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_availability_update_requires_matching_path() {
-    run_availability_update_requires_matching_path(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_availability_update_requires_matching_path() {
-    run_availability_update_requires_matching_path(&InMemoryLibraryStore::new());
-}
-
-#[test]
-fn sqlite_scanner_merge_preserves_authoritative_fields() {
-    run_scanner_merge_preserves_authoritative_fields(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_scanner_merge_preserves_authoritative_fields() {
-    run_scanner_merge_preserves_authoritative_fields(&InMemoryLibraryStore::new());
-}
-
-fn run_scanner_merge_preserves_authoritative_fields(store: &dyn LibraryStore) {
+fn scanner_merge_preserves_authoritative_fields() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut authoritative = track(1, "a.flac");
     authoritative.metadata.title = Some("User title".to_owned());
     authoritative.metadata.duration = Some(Duration::from_secs(60));
@@ -281,18 +238,8 @@ fn run_scanner_merge_preserves_authoritative_fields(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_online_fill_preserves_existing_values() {
-    run_online_fill_preserves_existing_values(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_online_fill_preserves_existing_values() {
-    run_online_fill_preserves_existing_values(&InMemoryLibraryStore::new());
-}
-
-fn run_online_fill_preserves_existing_values(store: &dyn LibraryStore) {
+fn online_fill_preserves_existing_values() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut authoritative = track(1, "a.flac");
     authoritative.metadata.title = Some("User title".to_owned());
     authoritative.rating = Rating::new(4).expect("rating");
@@ -321,18 +268,8 @@ fn run_online_fill_preserves_existing_values(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_online_fill_generates_missing_sort_fields() {
-    run_online_fill_generates_missing_sort_fields(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_online_fill_generates_missing_sort_fields() {
-    run_online_fill_generates_missing_sort_fields(&InMemoryLibraryStore::new());
-}
-
-fn run_online_fill_generates_missing_sort_fields(store: &dyn LibraryStore) {
+fn online_fill_generates_missing_sort_fields() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "a.flac");
     store.save_track(track.clone()).expect("seed row");
 
@@ -355,18 +292,8 @@ fn run_online_fill_generates_missing_sort_fields(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_metadata_edit_refreshes_generated_sort_fields() {
-    run_metadata_edit_refreshes_generated_sort_fields(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_metadata_edit_refreshes_generated_sort_fields() {
-    run_metadata_edit_refreshes_generated_sort_fields(&InMemoryLibraryStore::new());
-}
-
-fn run_metadata_edit_refreshes_generated_sort_fields(store: &dyn LibraryStore) {
+fn metadata_edit_refreshes_generated_sort_fields() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut track = track(1, "a.flac");
     track.metadata.artist = Some("The Beatles".to_owned());
     track.metadata.fill_missing_generated_sort_fields();
@@ -391,18 +318,8 @@ fn run_metadata_edit_refreshes_generated_sort_fields(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_metadata_edit_preserves_explicit_sort_fields() {
-    run_metadata_edit_preserves_explicit_sort_fields(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_metadata_edit_preserves_explicit_sort_fields() {
-    run_metadata_edit_preserves_explicit_sort_fields(&InMemoryLibraryStore::new());
-}
-
-fn run_metadata_edit_preserves_explicit_sort_fields(store: &dyn LibraryStore) {
+fn metadata_edit_preserves_explicit_sort_fields() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut track = track(1, "a.flac");
     track.metadata.artist = Some("The Beatles".to_owned());
     track.metadata.artist_sort = Some("Beatles, The".to_owned());
@@ -421,29 +338,6 @@ fn run_metadata_edit_preserves_explicit_sort_fields(store: &dyn LibraryStore) {
     let loaded = store.track(track.id).expect("load").expect("track exists");
     assert_eq!(loaded.metadata.artist.as_deref(), Some("The Beach Boys"));
     assert_eq!(loaded.metadata.artist_sort.as_deref(), Some("Beatles, The"));
-}
-
-#[test]
-fn in_memory_store_saves_and_loads_playlists() {
-    let store = InMemoryLibraryStore::new();
-    let playlist = playlist(1, "Favorites", vec![entry(1, 2, 0)]);
-
-    assert_eq!(store.save_playlist(playlist.clone()), Ok(()));
-
-    assert_eq!(store.playlist(playlist.id), Ok(Some(playlist.clone())));
-    assert_eq!(store.playlists(), Ok(vec![playlist]));
-}
-
-#[test]
-fn in_memory_store_deletes_playlists() {
-    let store = InMemoryLibraryStore::new();
-    let playlist = playlist(1, "Favorites", Vec::new());
-
-    assert_eq!(store.save_playlist(playlist.clone()), Ok(()));
-    assert_eq!(store.delete_playlist(playlist.id), Ok(()));
-
-    assert_eq!(store.playlist(playlist.id), Ok(None));
-    assert_eq!(store.playlists(), Ok(Vec::new()));
 }
 
 #[test]
@@ -622,29 +516,6 @@ fn sqlite_store_round_trips_non_utf8_relative_paths_byte_for_byte() {
 }
 
 #[test]
-fn in_memory_store_deletes_tracks_and_clears_playlist_entries() {
-    let store = InMemoryLibraryStore::new();
-    let first_track = track(1, "a.flac");
-    let other_track = track(2, "b.flac");
-    let stored_playlist = playlist(1, "Favorites", vec![entry(1, 1, 0), entry(1, 2, 1)]);
-
-    assert_eq!(store.save_track(first_track.clone()), Ok(()));
-    assert_eq!(store.save_track(other_track.clone()), Ok(()));
-    assert_eq!(store.save_playlist(stored_playlist.clone()), Ok(()));
-
-    assert_eq!(store.delete_track(first_track.id), Ok(()));
-    assert_eq!(store.track(first_track.id), Ok(None));
-    assert_eq!(store.tracks(), Ok(vec![other_track]));
-
-    let stored = store
-        .playlist(stored_playlist.id)
-        .expect("playlist loads")
-        .expect("playlist exists");
-    assert_eq!(stored.entries.len(), 1);
-    assert_eq!(stored.entries[0].track_id, track_id(2));
-}
-
-#[test]
 fn sqlite_store_deletes_tracks_and_cascades_to_playlist_entries() {
     let store = SqliteLibraryStore::open_in_memory().expect("open in-memory sqlite store");
     let first_track = track(1, "a.flac");
@@ -669,7 +540,7 @@ fn sqlite_store_deletes_tracks_and_cascades_to_playlist_entries() {
 
 #[test]
 fn deleting_a_missing_track_is_a_no_op() {
-    let store = InMemoryLibraryStore::new();
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
 
     assert_eq!(store.delete_track(track_id(42)), Ok(()));
 }
@@ -716,17 +587,6 @@ fn sqlite_store_persists_playlist_folder_membership_and_position() {
         .expect("playlist exists");
     assert_eq!(loaded.parent_folder_id, Some(folder.id));
     assert_eq!(loaded.position, 3);
-}
-
-#[test]
-fn in_memory_store_saves_and_loads_folders() {
-    let store = InMemoryLibraryStore::new();
-    let folder = folder(1, "Mixes", None, 0);
-
-    assert_eq!(store.save_playlist_folder(folder.clone()), Ok(()));
-
-    assert_eq!(store.playlist_folder(folder.id), Ok(Some(folder.clone())));
-    assert_eq!(store.playlist_folders(), Ok(vec![folder]));
 }
 
 #[test]
@@ -792,31 +652,8 @@ fn sqlite_store_cascade_deletes_folder_and_contents() {
 }
 
 #[test]
-fn in_memory_store_cascade_deletes_folder_and_contents() {
-    let store = InMemoryLibraryStore::new();
-    let folder = folder(1, "Mixes", None, 0);
-    let child_folder = folder_with_id(2, "Long Drives", Some(folder.id), 0);
-    let mut child_playlist = playlist(1, "Late Night", Vec::new());
-    child_playlist.parent_folder_id = Some(folder.id);
-    let child_smart =
-        smart_playlist_with_rules(1, "Recent", Some(folder.id), 0, simple_text_rule_set());
-
-    assert_eq!(store.save_playlist_folder(folder.clone()), Ok(()));
-    assert_eq!(store.save_playlist_folder(child_folder.clone()), Ok(()));
-    assert_eq!(store.save_playlist(child_playlist.clone()), Ok(()));
-    assert_eq!(store.save_smart_playlist(child_smart.clone()), Ok(()));
-
-    assert_eq!(store.delete_playlist_folder(folder.id), Ok(()));
-
-    assert_eq!(store.playlist_folder(folder.id), Ok(None));
-    assert_eq!(store.playlist_folder(child_folder.id), Ok(None));
-    assert_eq!(store.playlist(child_playlist.id), Ok(None));
-    assert_eq!(store.smart_playlist(child_smart.id), Ok(None));
-}
-
-#[test]
-fn in_memory_store_saves_and_loads_smart_playlists() {
-    let store = InMemoryLibraryStore::new();
+fn sqlite_store_saves_and_loads_smart_playlists() {
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let smart = smart_playlist_with_rules(1, "Recent", None, 0, simple_text_rule_set());
 
     assert_eq!(store.save_smart_playlist(smart.clone()), Ok(()));
@@ -1074,7 +911,9 @@ fn ctx(now_unix: i64) -> AnalysisContext {
     }
 }
 
-fn run_record_analysis_round_trips_waveform_bytes(store: &dyn LibraryStore) {
+#[test]
+fn record_analysis_round_trips_waveform_bytes() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "a.flac");
     store.save_track(track.clone()).expect("save track");
 
@@ -1100,7 +939,9 @@ fn run_record_analysis_round_trips_waveform_bytes(store: &dyn LibraryStore) {
     );
 }
 
-fn run_record_analysis_ignores_non_finite_acoustics(store: &dyn LibraryStore) {
+#[test]
+fn record_analysis_ignores_non_finite_acoustics() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "a.flac");
     store.save_track(track.clone()).expect("save track");
     let mut analysis = sample_analysis(Some(126.0), Some(MusicalKey::DMinor));
@@ -1127,28 +968,8 @@ fn run_record_analysis_ignores_non_finite_acoustics(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_record_analysis_round_trips_waveform_bytes() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_record_analysis_round_trips_waveform_bytes(&store);
-}
-
-#[test]
-fn in_memory_record_analysis_round_trips_waveform_bytes() {
-    run_record_analysis_round_trips_waveform_bytes(&InMemoryLibraryStore::new());
-}
-
-#[test]
-fn sqlite_record_analysis_ignores_non_finite_acoustics() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_record_analysis_ignores_non_finite_acoustics(&store);
-}
-
-#[test]
-fn in_memory_record_analysis_ignores_non_finite_acoustics() {
-    run_record_analysis_ignores_non_finite_acoustics(&InMemoryLibraryStore::new());
-}
-
-fn run_record_analysis_keeps_the_latest_beat_grid(store: &dyn LibraryStore) {
+fn record_analysis_keeps_the_latest_beat_grid() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "a.flac");
     store.save_track(track.clone()).expect("save track");
     assert_eq!(store.load_beat_grid(track.id), Ok(None));
@@ -1193,17 +1014,8 @@ fn run_record_analysis_keeps_the_latest_beat_grid(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_record_analysis_keeps_the_latest_beat_grid() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_record_analysis_keeps_the_latest_beat_grid(&store);
-}
-
-#[test]
-fn in_memory_record_analysis_keeps_the_latest_beat_grid() {
-    run_record_analysis_keeps_the_latest_beat_grid(&InMemoryLibraryStore::new());
-}
-
-fn run_load_beat_grids_returns_the_grids_of_the_asked_tracks(store: &dyn LibraryStore) {
+fn load_beat_grids_returns_the_grids_of_the_asked_tracks() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let gridded = track(1, "gridded.flac");
     let other = track(2, "other.flac");
     let bare = track(3, "bare.flac");
@@ -1232,17 +1044,8 @@ fn run_load_beat_grids_returns_the_grids_of_the_asked_tracks(store: &dyn Library
 }
 
 #[test]
-fn sqlite_load_beat_grids_returns_the_grids_of_the_asked_tracks() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_load_beat_grids_returns_the_grids_of_the_asked_tracks(&store);
-}
-
-#[test]
-fn in_memory_load_beat_grids_returns_the_grids_of_the_asked_tracks() {
-    run_load_beat_grids_returns_the_grids_of_the_asked_tracks(&InMemoryLibraryStore::new());
-}
-
-fn run_record_analysis_replaces_bpms_the_user_did_not_type(store: &dyn LibraryStore) {
+fn record_analysis_replaces_bpms_the_user_did_not_type() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     // No BPM or key yet: analysis fills both.
     let blank = track(1, "blank.flac");
     store.save_track(blank.clone()).expect("save blank");
@@ -1291,17 +1094,8 @@ fn run_record_analysis_replaces_bpms_the_user_did_not_type(store: &dyn LibrarySt
 }
 
 #[test]
-fn sqlite_record_analysis_replaces_bpms_the_user_did_not_type() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_record_analysis_replaces_bpms_the_user_did_not_type(&store);
-}
-
-#[test]
-fn in_memory_record_analysis_replaces_bpms_the_user_did_not_type() {
-    run_record_analysis_replaces_bpms_the_user_did_not_type(&InMemoryLibraryStore::new());
-}
-
-fn run_a_bpm_edit_survives_analysis_until_the_user_clears_it(store: &dyn LibraryStore) {
+fn a_bpm_edit_survives_analysis_until_the_user_clears_it() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut tagged = track(1, "tagged.flac");
     tagged.metadata.bpm = Bpm::from_whole(63);
     store.save_track(tagged.clone()).expect("save");
@@ -1368,17 +1162,8 @@ fn run_a_bpm_edit_survives_analysis_until_the_user_clears_it(store: &dyn Library
 }
 
 #[test]
-fn sqlite_a_bpm_edit_survives_analysis_until_the_user_clears_it() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_a_bpm_edit_survives_analysis_until_the_user_clears_it(&store);
-}
-
-#[test]
-fn in_memory_a_bpm_edit_survives_analysis_until_the_user_clears_it() {
-    run_a_bpm_edit_survives_analysis_until_the_user_clears_it(&InMemoryLibraryStore::new());
-}
-
-fn run_tracks_needing_analysis_lists_only_un_attempted(store: &dyn LibraryStore) {
+fn tracks_needing_analysis_lists_only_un_attempted() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     // 3 tracks, 1 missing, 1 already waveform-analyzed.
     let alpha = track(1, "alpha.flac");
     let mut beta = track(2, "beta.flac");
@@ -1420,17 +1205,8 @@ fn run_tracks_needing_analysis_lists_only_un_attempted(store: &dyn LibraryStore)
 }
 
 #[test]
-fn sqlite_tracks_needing_analysis_lists_only_un_attempted() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_tracks_needing_analysis_lists_only_un_attempted(&store);
-}
-
-#[test]
-fn in_memory_tracks_needing_analysis_lists_only_un_attempted() {
-    run_tracks_needing_analysis_lists_only_un_attempted(&InMemoryLibraryStore::new());
-}
-
-fn run_filter_tracks_needing_analysis_drops_cached_and_missing(store: &dyn LibraryStore) {
+fn filter_tracks_needing_analysis_drops_cached_and_missing() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     // Same setup as `run_tracks_needing_analysis_lists_only_un_attempted`
     // but exercised through the bulk-filter path: caller passes the
     // full set of ids it cares about (mirroring a per-playlist
@@ -1530,17 +1306,8 @@ fn run_filter_tracks_needing_analysis_drops_cached_and_missing(store: &dyn Libra
 }
 
 #[test]
-fn sqlite_filter_tracks_needing_analysis_drops_cached_and_missing() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_filter_tracks_needing_analysis_drops_cached_and_missing(&store);
-}
-
-#[test]
-fn in_memory_filter_tracks_needing_analysis_drops_cached_and_missing() {
-    run_filter_tracks_needing_analysis_drops_cached_and_missing(&InMemoryLibraryStore::new());
-}
-
-fn run_failed_attempt_prevents_immediate_retry(store: &dyn LibraryStore) {
+fn failed_attempt_prevents_immediate_retry() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "a.flac");
     store.save_track(track.clone()).expect("save");
 
@@ -1585,17 +1352,6 @@ fn run_failed_attempt_prevents_immediate_retry(store: &dyn LibraryStore) {
         )
         .expect("query v2");
     assert_eq!(needs_v2, vec![track.id]);
-}
-
-#[test]
-fn sqlite_failed_attempt_prevents_immediate_retry() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_failed_attempt_prevents_immediate_retry(&store);
-}
-
-#[test]
-fn in_memory_failed_attempt_prevents_immediate_retry() {
-    run_failed_attempt_prevents_immediate_retry(&InMemoryLibraryStore::new());
 }
 
 #[test]
@@ -1825,7 +1581,9 @@ fn sqlite_unopenable_waveform_cache_leaves_the_library_usable() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-fn run_single_capability_attempt_leaves_the_others_stale(store: &dyn LibraryStore) {
+#[test]
+fn single_capability_attempt_leaves_the_others_stale() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
     store
@@ -1875,17 +1633,8 @@ fn run_single_capability_attempt_leaves_the_others_stale(store: &dyn LibraryStor
 }
 
 #[test]
-fn sqlite_single_capability_attempt_leaves_the_others_stale() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_single_capability_attempt_leaves_the_others_stale(&store);
-}
-
-#[test]
-fn in_memory_single_capability_attempt_leaves_the_others_stale() {
-    run_single_capability_attempt_leaves_the_others_stale(&InMemoryLibraryStore::new());
-}
-
-fn run_partial_capability_record_preserves_other_attempts(store: &dyn LibraryStore) {
+fn partial_capability_record_preserves_other_attempts() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
 
@@ -1957,17 +1706,6 @@ fn run_partial_capability_record_preserves_other_attempts(store: &dyn LibrarySto
 }
 
 #[test]
-fn sqlite_partial_capability_record_preserves_other_attempts() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_partial_capability_record_preserves_other_attempts(&store);
-}
-
-#[test]
-fn in_memory_partial_capability_record_preserves_other_attempts() {
-    run_partial_capability_record_preserves_other_attempts(&InMemoryLibraryStore::new());
-}
-
-#[test]
 fn empty_capabilities_record_is_no_op() {
     let store = SqliteLibraryStore::open_in_memory().expect("open");
     let t = track(1, "a.flac");
@@ -2025,7 +1763,9 @@ fn sample_synced_lyrics() -> SyncedLyrics {
     }
 }
 
-fn run_record_and_load_synced_lyrics_round_trips(store: &dyn LibraryStore) {
+#[test]
+fn record_and_load_synced_lyrics_round_trips() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
     let lyrics = sample_synced_lyrics();
@@ -2042,17 +1782,8 @@ fn run_record_and_load_synced_lyrics_round_trips(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_record_and_load_synced_lyrics_round_trips() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open");
-    run_record_and_load_synced_lyrics_round_trips(&store);
-}
-
-#[test]
-fn in_memory_record_and_load_synced_lyrics_round_trips() {
-    run_record_and_load_synced_lyrics_round_trips(&InMemoryLibraryStore::new());
-}
-
-fn run_record_synced_lyrics_replaces_previous(store: &dyn LibraryStore) {
+fn record_synced_lyrics_replaces_previous() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
     store
@@ -2077,17 +1808,8 @@ fn run_record_synced_lyrics_replaces_previous(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_record_synced_lyrics_replaces_previous() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open");
-    run_record_synced_lyrics_replaces_previous(&store);
-}
-
-#[test]
-fn in_memory_record_synced_lyrics_replaces_previous() {
-    run_record_synced_lyrics_replaces_previous(&InMemoryLibraryStore::new());
-}
-
-fn run_record_synced_lyrics_empty_is_no_op(store: &dyn LibraryStore) {
+fn record_synced_lyrics_empty_is_no_op() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
     store
@@ -2106,17 +1828,8 @@ fn run_record_synced_lyrics_empty_is_no_op(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_record_synced_lyrics_empty_is_no_op() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open");
-    run_record_synced_lyrics_empty_is_no_op(&store);
-}
-
-#[test]
-fn in_memory_record_synced_lyrics_empty_is_no_op() {
-    run_record_synced_lyrics_empty_is_no_op(&InMemoryLibraryStore::new());
-}
-
-fn run_clear_synced_lyrics_removes_row(store: &dyn LibraryStore) {
+fn clear_synced_lyrics_removes_row() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
     store
@@ -2126,17 +1839,6 @@ fn run_clear_synced_lyrics_removes_row(store: &dyn LibraryStore) {
     assert_eq!(store.load_synced_lyrics(t.id), Ok(None));
     // Clearing again is a no-op.
     store.clear_synced_lyrics(t.id).expect("clear again");
-}
-
-#[test]
-fn sqlite_clear_synced_lyrics_removes_row() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open");
-    run_clear_synced_lyrics_removes_row(&store);
-}
-
-#[test]
-fn in_memory_clear_synced_lyrics_removes_row() {
-    run_clear_synced_lyrics_removes_row(&InMemoryLibraryStore::new());
 }
 
 #[test]
@@ -2171,7 +1873,9 @@ fn online_ctx(now_unix: i64) -> OnlineContext {
     }
 }
 
-fn run_record_online_attempt_marks_only_requested_capabilities(store: &dyn LibraryStore) {
+#[test]
+fn record_online_attempt_marks_only_requested_capabilities() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
 
@@ -2222,17 +1926,8 @@ fn run_record_online_attempt_marks_only_requested_capabilities(store: &dyn Libra
 }
 
 #[test]
-fn sqlite_record_online_attempt_marks_only_requested_capabilities() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open");
-    run_record_online_attempt_marks_only_requested_capabilities(&store);
-}
-
-#[test]
-fn in_memory_record_online_attempt_marks_only_requested_capabilities() {
-    run_record_online_attempt_marks_only_requested_capabilities(&InMemoryLibraryStore::new());
-}
-
-fn run_filter_tracks_needing_online_drops_attempted_missing_and_embedded(store: &dyn LibraryStore) {
+fn filter_tracks_needing_online_drops_attempted_missing_and_embedded() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     // 4 tracks:
     //   alpha   - never attempted, no embedded artwork
     //   beta    - missing on disk
@@ -2309,19 +2004,8 @@ fn run_filter_tracks_needing_online_drops_attempted_missing_and_embedded(store: 
 }
 
 #[test]
-fn sqlite_filter_tracks_needing_online_drops_attempted_missing_and_embedded() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open in-memory");
-    run_filter_tracks_needing_online_drops_attempted_missing_and_embedded(&store);
-}
-
-#[test]
-fn in_memory_filter_tracks_needing_online_drops_attempted_missing_and_embedded() {
-    run_filter_tracks_needing_online_drops_attempted_missing_and_embedded(
-        &InMemoryLibraryStore::new(),
-    );
-}
-
-fn run_online_attempts_partial_capability_preserves_other(store: &dyn LibraryStore) {
+fn online_attempts_partial_capability_preserves_other() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
 
@@ -2382,17 +2066,8 @@ fn run_online_attempts_partial_capability_preserves_other(store: &dyn LibrarySto
 }
 
 #[test]
-fn sqlite_online_attempts_partial_capability_preserves_other() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open");
-    run_online_attempts_partial_capability_preserves_other(&store);
-}
-
-#[test]
-fn in_memory_online_attempts_partial_capability_preserves_other() {
-    run_online_attempts_partial_capability_preserves_other(&InMemoryLibraryStore::new());
-}
-
-fn run_online_query_skips_missing_tracks(store: &dyn LibraryStore) {
+fn online_query_skips_missing_tracks() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let present = track(1, "present.flac");
     let mut missing = track(2, "missing.flac");
     missing.location = missing
@@ -2408,17 +2083,8 @@ fn run_online_query_skips_missing_tracks(store: &dyn LibraryStore) {
 }
 
 #[test]
-fn sqlite_online_query_skips_missing_tracks() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open");
-    run_online_query_skips_missing_tracks(&store);
-}
-
-#[test]
-fn in_memory_online_query_skips_missing_tracks() {
-    run_online_query_skips_missing_tracks(&InMemoryLibraryStore::new());
-}
-
-fn run_online_query_invalidates_stale_provider_version(store: &dyn LibraryStore) {
+fn online_query_invalidates_stale_provider_version() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let t = track(1, "a.flac");
     store.save_track(t.clone()).expect("save");
     store
@@ -2470,17 +2136,8 @@ fn run_online_query_invalidates_stale_provider_version(store: &dyn LibraryStore)
 }
 
 #[test]
-fn sqlite_online_query_invalidates_stale_provider_version() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open");
-    run_online_query_invalidates_stale_provider_version(&store);
-}
-
-#[test]
-fn in_memory_online_query_invalidates_stale_provider_version() {
-    run_online_query_invalidates_stale_provider_version(&InMemoryLibraryStore::new());
-}
-
-fn run_online_query_excludes_tracks_with_embedded_artwork(store: &dyn LibraryStore) {
+fn online_query_excludes_tracks_with_embedded_artwork() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut with_art = track(1, "with_art.flac");
     with_art.has_embedded_artwork = Some(true);
     let mut without_art = track(2, "without_art.flac");
@@ -2520,17 +2177,6 @@ fn run_online_query_excludes_tracks_with_embedded_artwork(store: &dyn LibrarySto
         .expect("query");
     needs_lyrics.sort();
     assert_eq!(needs_lyrics, vec![with_art.id, without_art.id, unknown.id]);
-}
-
-#[test]
-fn sqlite_online_query_excludes_tracks_with_embedded_artwork() {
-    let store = SqliteLibraryStore::open_in_memory().expect("open");
-    run_online_query_excludes_tracks_with_embedded_artwork(&store);
-}
-
-#[test]
-fn in_memory_online_query_excludes_tracks_with_embedded_artwork() {
-    run_online_query_excludes_tracks_with_embedded_artwork(&InMemoryLibraryStore::new());
 }
 
 #[test]
@@ -2710,27 +2356,6 @@ fn sample_layout() -> TrackColumnLayout {
 }
 
 #[test]
-fn in_memory_store_layout_round_trips_for_each_scope() {
-    let store = InMemoryLibraryStore::new();
-    let layout = sample_layout();
-
-    for scope in [
-        TrackColumnLayoutScope::Default,
-        TrackColumnLayoutScope::Playlist(playlist_id(1)),
-        TrackColumnLayoutScope::SmartPlaylist(smart_id(2)),
-    ] {
-        assert_eq!(store.load_track_column_layout(scope), Ok(None));
-        assert_eq!(store.save_track_column_layout(scope, &layout), Ok(()));
-        assert_eq!(
-            store.load_track_column_layout(scope),
-            Ok(Some(layout.clone()))
-        );
-        assert_eq!(store.delete_track_column_layout(scope), Ok(()));
-        assert_eq!(store.load_track_column_layout(scope), Ok(None));
-    }
-}
-
-#[test]
 fn sqlite_store_layout_round_trips_for_each_scope() {
     let store = SqliteLibraryStore::open_in_memory().expect("open in-memory sqlite store");
     let playlist = playlist(1, "Favorites", Vec::new());
@@ -2841,102 +2466,8 @@ fn sqlite_store_smart_playlist_layout_cascades_on_smart_playlist_delete() {
 }
 
 #[test]
-fn in_memory_store_playlist_layout_cleared_on_playlist_delete() {
-    let store = InMemoryLibraryStore::new();
-    let playlist = playlist(1, "Favorites", Vec::new());
-    assert_eq!(store.save_playlist(playlist.clone()), Ok(()));
-    let scope = TrackColumnLayoutScope::Playlist(playlist.id);
-    assert_eq!(
-        store.save_track_column_layout(scope, &sample_layout()),
-        Ok(())
-    );
-
-    assert_eq!(store.delete_playlist(playlist.id), Ok(()));
-
-    assert_eq!(store.load_track_column_layout(scope), Ok(None));
-}
-
-#[test]
-fn sqlite_tag_mirror_outbox_coalesces_latest_canonical_projection() {
-    run_tag_mirror_outbox_coalesces_latest_canonical_projection(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_tag_mirror_outbox_coalesces_latest_canonical_projection() {
-    run_tag_mirror_outbox_coalesces_latest_canonical_projection(&InMemoryLibraryStore::new());
-}
-
-#[test]
-fn sqlite_managed_retarget_commits_metadata_location_and_outbox_together() {
-    run_managed_retarget_commits_metadata_location_and_outbox_together(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_managed_retarget_commits_metadata_location_and_outbox_together() {
-    run_managed_retarget_commits_metadata_location_and_outbox_together(&InMemoryLibraryStore::new());
-}
-
-#[test]
-fn sqlite_relocation_resets_source_observations_and_queues_canonical_mirrors() {
-    run_relocation_resets_source_observations_and_queues_canonical_mirrors(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_relocation_resets_source_observations_and_queues_canonical_mirrors() {
-    run_relocation_resets_source_observations_and_queues_canonical_mirrors(
-        &InMemoryLibraryStore::new(),
-    );
-}
-
-#[test]
-fn sqlite_audio_replacement_preserves_library_fields_and_invalidates_derived_state() {
-    run_audio_replacement_preserves_library_fields_and_invalidates_derived_state(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_audio_replacement_preserves_library_fields_and_invalidates_derived_state() {
-    run_audio_replacement_preserves_library_fields_and_invalidates_derived_state(
-        &InMemoryLibraryStore::new(),
-    );
-}
-
-#[test]
-fn sqlite_track_delete_cascades_tag_mirror_outbox() {
-    run_track_delete_cascades_tag_mirror_outbox(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_track_delete_cascades_tag_mirror_outbox() {
-    run_track_delete_cascades_tag_mirror_outbox(&InMemoryLibraryStore::new());
-}
-
-#[test]
-fn sqlite_duplicate_consolidation_commits_survivor_playlist_and_cache_changes() {
-    run_duplicate_consolidation_commits_survivor_playlist_and_cache_changes(
-        &SqliteLibraryStore::open_in_memory().expect("store"),
-    );
-}
-
-#[test]
-fn in_memory_duplicate_consolidation_commits_survivor_playlist_and_cache_changes() {
-    run_duplicate_consolidation_commits_survivor_playlist_and_cache_changes(
-        &InMemoryLibraryStore::new(),
-    );
-}
-
-fn run_duplicate_consolidation_commits_survivor_playlist_and_cache_changes(
-    store: &dyn LibraryStore,
-) {
+fn duplicate_consolidation_commits_survivor_playlist_and_cache_changes() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut survivor = track(1, "keep.flac");
     survivor.metadata.title = Some("Old".to_owned());
     let removed = track(2, "remove.flac");
@@ -2999,7 +2530,9 @@ fn run_duplicate_consolidation_commits_survivor_playlist_and_cache_changes(
     assert_eq!(store.source_fingerprint(track_id(2)), Ok(None));
 }
 
-fn run_managed_retarget_commits_metadata_location_and_outbox_together(store: &dyn LibraryStore) {
+#[test]
+fn managed_retarget_commits_metadata_location_and_outbox_together() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "loose.flac");
     store.save_track(track.clone()).expect("save track");
     store
@@ -3029,9 +2562,9 @@ fn run_managed_retarget_commits_metadata_location_and_outbox_together(store: &dy
     assert!(pending[0].kinds.rating);
 }
 
-fn run_relocation_resets_source_observations_and_queues_canonical_mirrors(
-    store: &dyn LibraryStore,
-) {
+#[test]
+fn relocation_resets_source_observations_and_queues_canonical_mirrors() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut track = track(1, "missing.flac");
     track.location = TrackLocation::missing(relative_path("missing.flac"));
     track.file_size_bytes = Some(9);
@@ -3071,9 +2604,9 @@ fn run_relocation_resets_source_observations_and_queues_canonical_mirrors(
     assert!(mirrors[0].kinds.rating);
 }
 
-fn run_audio_replacement_preserves_library_fields_and_invalidates_derived_state(
-    store: &dyn LibraryStore,
-) {
+#[test]
+fn audio_replacement_preserves_library_fields_and_invalidates_derived_state() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut track = track(1, "old.mp3");
     track.metadata.title = Some("Precious title".to_owned());
     track.metadata.duration = Some(Duration::from_secs(180));
@@ -3164,7 +2697,9 @@ fn run_audio_replacement_preserves_library_fields_and_invalidates_derived_state(
     );
 }
 
-fn run_track_delete_cascades_tag_mirror_outbox(store: &dyn LibraryStore) {
+#[test]
+fn track_delete_cascades_tag_mirror_outbox() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "a.flac");
     store.save_track(track.clone()).expect("save track");
     store
@@ -3175,7 +2710,9 @@ fn run_track_delete_cascades_tag_mirror_outbox(store: &dyn LibraryStore) {
     assert!(store.tag_mirrors_due(0, 10).expect("cascade").is_empty());
 }
 
-fn run_tag_mirror_outbox_coalesces_latest_canonical_projection(store: &dyn LibraryStore) {
+#[test]
+fn tag_mirror_outbox_coalesces_latest_canonical_projection() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "a.flac");
     store.save_track(track.clone()).expect("save track");
     store

@@ -21,9 +21,7 @@ use std::{
 use sustain_domain::{
     MetadataChange, OnlineSettings, Rating, SyncedLyrics, Track, TrackLocation, TrackRelativePath,
 };
-use sustain_library_store::{
-    InMemoryLibraryStore, LibraryStore, OnlineCapabilities, SqliteLibraryStore, TrackId,
-};
+use sustain_library_store::{LibraryStore, OnlineCapabilities, SqliteLibraryStore, TrackId};
 use sustain_metadata::{InitialTags, MetadataError, MetadataResult, MetadataService};
 use sustain_metadata_remote::{
     FetchedArtwork, FetchedLyrics, RemoteError, RemoteMetadataService, RemoteResult, TrackMatch,
@@ -304,7 +302,8 @@ fn track_with_metadata(library_root: &Path, relative: &str) -> Track {
 #[test]
 fn scheduler_idles_with_no_capabilities_enabled() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     store
         .save_track(track_with_metadata(temp.path(), "alpha.flac"))
         .expect("save");
@@ -341,7 +340,8 @@ fn scheduler_idles_with_no_capabilities_enabled() {
 #[test]
 fn lyrics_capability_pulls_and_persists() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = track_with_metadata(temp.path(), "alpha.flac");
     store.save_track(track.clone()).expect("save");
 
@@ -413,7 +413,8 @@ fn lyrics_capability_pulls_and_persists() {
 #[test]
 fn lyrics_skipped_when_both_plain_and_synced_already_present() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = track_with_metadata(temp.path(), "alpha.flac");
     track.metadata.lyrics = Some("Existing".to_owned());
     store.save_track(track.clone()).expect("save");
@@ -472,7 +473,8 @@ fn lyrics_skipped_when_both_plain_and_synced_already_present() {
 #[test]
 fn artwork_capability_skips_when_embedded_present() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = track_with_metadata(temp.path(), "alpha.flac");
     // The scan-time bit is the contract here: when the file
     // already carries a picture, `tracks_needing_online` must
@@ -530,7 +532,8 @@ fn explicit_artwork_run_skips_track_with_embedded_artwork() {
     // track only reaches the worker via the explicit queue — and it
     // must still be skipped (issue #61).
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = track_with_metadata(temp.path(), "alpha.flac");
     track.has_embedded_artwork = Some(true);
     store.save_track(track.clone()).expect("save");
@@ -586,7 +589,8 @@ fn explicit_artwork_run_skips_track_with_embedded_artwork() {
 #[test]
 fn artwork_capability_fetches_and_writes_when_missing() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = track_with_metadata(temp.path(), "alpha.flac");
     store.save_track(track.clone()).expect("save");
 
@@ -635,7 +639,8 @@ fn artwork_capability_fetches_and_writes_when_missing() {
 #[test]
 fn artwork_capability_rejects_invalid_remote_bytes_without_writing() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = track_with_metadata(temp.path(), "alpha.flac");
     store.save_track(track).expect("save");
 
@@ -676,7 +681,8 @@ fn rejected_online_attempt_stamp_halts_the_sweep() {
     use crate::test_store::FaultyStore;
 
     let temp = TempDir::new().expect("temp");
-    let inner: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let faulty = Arc::new(FaultyStore::new(inner));
     let track = track_with_metadata(temp.path(), "alpha.flac");
     faulty.save_track(track).expect("save");
@@ -749,7 +755,8 @@ fn rejected_online_attempt_stamp_halts_the_sweep() {
 #[test]
 fn remote_error_records_attempt_and_is_not_retried() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = track_with_metadata(temp.path(), "alpha.flac");
     store.save_track(track.clone()).expect("save");
 
@@ -802,7 +809,8 @@ fn remote_error_records_attempt_and_is_not_retried() {
 #[test]
 fn toggling_capabilities_off_stops_the_running_worker() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for i in 0..16 {
         let relative = format!("track_{i:02}.flac");
         let mut t = track_with_metadata(temp.path(), &relative);
@@ -888,7 +896,8 @@ fn tags_fill_recording_level_fields_when_album_is_missing_but_skip_positional() 
     use sustain_metadata_remote::{GenreCandidate, TrackMatchRelease, TrackMatchSource};
 
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = track_with_metadata(temp.path(), "alpha.flac");
     track.metadata.artist = Some("Existing Artist".to_owned());
     track.metadata.title = Some("Existing Title".to_owned());
@@ -976,7 +985,8 @@ fn tags_fill_recording_level_fields_when_album_is_missing_but_skip_positional() 
 /// The caller keeps its own `Arc<StubRemote>` clone to assert on the
 /// call counters.
 fn run_single_track_tags(library_root: &Path, track: Track, remote: Arc<StubRemote>) -> Track {
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track_id = track.id;
     store.save_track(track).expect("save");
     let (sink, rx) = capturing_sink();
@@ -1120,7 +1130,8 @@ fn tags_fill_positional_fields_only_when_album_matches_a_matched_release() {
     use sustain_metadata_remote::{GenreCandidate, TrackMatchRelease, TrackMatchSource};
 
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut track = track_with_metadata(temp.path(), "alpha.flac");
     track.metadata.album = Some("Mezzanine".to_owned());
     store.save_track(track.clone()).expect("save");
@@ -1292,7 +1303,8 @@ fn genre_prefers_a_candidate_already_present_in_the_library() {
     use sustain_metadata_remote::{GenreCandidate, TrackMatchSource};
 
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     // Seed an unrelated track carrying "House" so the library
     // exposes it through distinct_genres().
     let mut seed = track_with_metadata(temp.path(), "seed.flac");
@@ -1360,7 +1372,8 @@ fn genre_prefers_a_candidate_already_present_in_the_library() {
 #[test]
 fn track_updated_sink_fires_after_successful_lyrics_persist() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = track_with_metadata(temp.path(), "alpha.flac");
     store.save_track(track.clone()).expect("save");
 
@@ -1409,7 +1422,8 @@ fn track_updated_sink_fires_after_successful_lyrics_persist() {
 #[test]
 fn rate_limited_lyrics_does_not_stamp_attempt_so_track_stays_eligible() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = track_with_metadata(temp.path(), "alpha.flac");
     store.save_track(track.clone()).expect("save");
 
@@ -1471,7 +1485,8 @@ fn rate_limited_lyrics_does_not_stamp_attempt_so_track_stays_eligible() {
 #[test]
 fn rate_limited_in_one_capability_still_stamps_other_completed_capabilities() {
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = track_with_metadata(temp.path(), "alpha.flac");
     store.save_track(track.clone()).expect("save");
 
@@ -1548,7 +1563,8 @@ fn rate_limited_in_one_capability_still_stamps_other_completed_capabilities() {
 
 #[test]
 fn shutdown_returns_after_join() {
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let remote = Arc::new(StubRemote::default());
     let metadata = Arc::new(StubMetadata::default());
     let (sink, _rx) = capturing_sink();
@@ -1583,7 +1599,8 @@ fn explicit_run_processes_tracks_with_global_settings_off() {
     // global lyrics toggle is off — the user explicitly asked
     // for it on this playlist.
     let temp = TempDir::new().expect("temp");
-    let store: Arc<dyn LibraryStore> = Arc::new(InMemoryLibraryStore::new());
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let track = track_with_metadata(temp.path(), "alpha.flac");
     store.save_track(track.clone()).expect("save");
 
