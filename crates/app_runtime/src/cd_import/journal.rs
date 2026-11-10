@@ -111,12 +111,10 @@ fn destination_has_row(
     else {
         return Ok(false);
     };
-    let tracks = library_store
-        .tracks()
-        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-    Ok(tracks
-        .iter()
-        .any(|track| track.location.relative_path == relative))
+    library_store
+        .track_id_at(&relative)
+        .map(|track_id| track_id.is_some())
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
 }
 
 fn append_path(buffer: &mut Vec<u8>, path: &Path) {
