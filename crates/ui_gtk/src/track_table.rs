@@ -380,11 +380,73 @@ impl TrackTable {
         if track_ids.is_empty() {
             return 0;
         }
-        self.finish_edit_before_payload_swap();
-        let removes = |position: u32| {
+        self.remove_rows_where(|position| {
             row_track_id(self.store.item(position)).is_some_and(|id| track_ids.contains(&id))
-        };
-        self.move_focus_off_rows(removes);
+        })
+    }
+
+    /// Bring the table to exactly `rows` while keeping the user's place: a
+    /// row already shown takes its new data where it stands, a row no longer
+    /// listed leaves as under [`Self::remove_rows`], and a new row goes in at
+    /// its sorted position as under [`Self::append_rows`]. Unlike
+    /// [`Self::replace_rows`], the selection on the rows that stay and the
+    /// scroll position survive.
+    ///
+    /// A row is the one already shown when it shows the same track at the
+    /// same playlist position, since a regular playlist may list a track
+    /// twice. As under [`Self::update_rows`], a row that stays does not move
+    /// when its new data would sort it elsewhere.
+    pub(crate) fn reconcile_rows(&self, rows: Vec<TrackTableRow>) {
+        // A progressive rebuild still streaming would add its remaining rows
+        // a second time; they go in below with the other new rows instead.
+        self.bump_row_replacement_generation();
+        let index_by_identity: HashMap<_, _> = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| (row.identity(), index))
+            .collect();
+        let mut incoming: Vec<Option<TrackTableRow>> = rows.into_iter().map(Some).collect();
+
+        let mut leaving = HashSet::new();
+        for position in 0..self.store.n_items() {
+            let Some(row_object) = self
+                .store
+                .item(position)
+                .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
+            else {
+                continue;
+            };
+            let Ok(identity) = row_object
+                .try_borrow::<TrackTableRow>()
+                .map(|row| row.identity())
+            else {
+                continue;
+            };
+            match index_by_identity
+                .get(&identity)
+                .and_then(|&index| incoming[index].take())
+            {
+                Some(row) => *row_object.borrow_mut::<TrackTableRow>() = row,
+                None => {
+                    leaving.insert(position);
+                }
+            }
+        }
+
+        if !leaving.is_empty() {
+            self.remove_rows_where(|position| leaving.contains(&position));
+        }
+        self.append_rows(incoming.into_iter().flatten().collect());
+        self.refresh_bound_cells();
+    }
+
+    /// Removes the rows at the positions `removes` picks, one
+    /// `items-changed` per contiguous run, keeping focus, the selection
+    /// around them and the scroll position as [`Self::remove_rows`]
+    /// describes.
+    fn remove_rows_where(&self, removes: impl Fn(u32) -> bool) -> u32 {
+        self.finish_edit_before_payload_swap();
+        self.move_focus_off_rows(&removes);
         let no_additions: &[glib::BoxedAnyObject] = &[];
         let mut removed = 0;
         // Walk from the back, so each splice leaves the positions before it
@@ -1544,6 +1606,56 @@ mod tests {
             assert_eq!(removed, 4);
             assert_eq!(table.ordered_track_ids(), ids(&[2, 5]));
             assert_eq!(table.selected_track_ids(), ids(&[2, 5]));
+        });
+    }
+
+    #[test]
+    fn reconcile_rows_keeps_the_rows_that_stay_and_their_selection() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(Vec::new(), None, None, None, None, None);
+            sort_by(&table, "track_name", true);
+            table.replace_rows(vec![
+                named_row(1, "A"),
+                named_row(2, "C"),
+                named_row(3, "E"),
+                named_row(4, "G"),
+            ]);
+            table.selection.select_item(1, false);
+            table.selection.select_item(2, false);
+            let kept_object = store_object_key(&table, 1);
+
+            table.reconcile_rows(vec![
+                named_row(2, "Z"),
+                named_row(3, "E"),
+                named_row(5, "F"),
+                named_row(6, "B"),
+            ]);
+
+            assert_eq!(
+                table.ordered_track_ids(),
+                track_ids(&[6, 2, 3, 5]),
+                "a row that stays keeps its place; a new one goes in sorted"
+            );
+            assert_eq!(table.selected_track_ids(), track_ids(&[2, 3]));
+            assert_eq!(store_object_key(&table, 1), kept_object);
+            assert_eq!(store_track_name(&table, 1).as_deref(), Some("Z"));
+        });
+    }
+
+    #[test]
+    fn reconcile_rows_tells_apart_the_entries_of_a_track_listed_twice() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(Vec::new(), None, None, None, None, None);
+            table.apply_playlist_default_sort();
+            let entry = |id: i64, position: u32| row(id).with_playlist_position(Some(position));
+            table.replace_rows(vec![entry(1, 0), entry(2, 1), entry(1, 2)]);
+            table.selection.select_item(0, false);
+
+            // The second entry of track 1 left the playlist.
+            table.reconcile_rows(vec![entry(1, 0), entry(2, 1)]);
+
+            assert_eq!(table.ordered_track_ids(), track_ids(&[1, 2]));
+            assert_eq!(table.selected_track_ids(), track_ids(&[1]));
         });
     }
 

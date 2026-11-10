@@ -177,6 +177,13 @@ impl TrackTableRow {
         self
     }
 
+    /// What makes this row the same row across rebuilds of its table: its
+    /// track, and its place in a regular playlist, which may list the track
+    /// more than once.
+    pub(super) fn identity(&self) -> (Option<TrackId>, Option<u32>) {
+        (self.track_id, self.placement.playlist_position)
+    }
+
     /// Show `updated`'s track data while keeping this row's placement.
     pub(super) fn update_track_data(&mut self, updated: &TrackTableRow) {
         *self = Self {

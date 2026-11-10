@@ -124,8 +124,9 @@ use playback::{
     update_play_pause_sensitivity,
 };
 use playlists::{
-    PlaylistsViewRefreshContext, add_to_playlist_callback, add_to_playlist_provider,
-    install_playlists_view_activator, playlist_table_rows_for, refresh_playlists_view_if_visible,
+    PlaylistRowsUpdate, PlaylistsViewRefreshContext, add_to_playlist_callback,
+    add_to_playlist_provider, install_playlists_view_activator, playlist_table_rows_for,
+    refresh_playlists_view_if_visible,
 };
 use result_consumers::{
     ArtworkFetchResultConsumerContext, LibraryHydrationResultConsumerContext,
@@ -1643,6 +1644,7 @@ fn library_changed_callback(
             &playlists_refresh,
             sidebar.current_selection(),
             &search_text,
+            PlaylistRowsUpdate::Replace,
         );
         // A scan/import/removal can flip the library between empty and
         // non-empty, which decides whether the Play button can cold-start

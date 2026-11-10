@@ -183,9 +183,8 @@ pub(super) fn track_rows_changed_callback(
                 // either already matches or already doesn't) the
                 // set is unchanged and only the row's data needs to
                 // repaint. Use the runtime's per-track status check
-                // to tell the two apart and avoid the
-                // `replace_rows` that would scroll the user back to
-                // the top of a large library on every track update.
+                // to tell the two apart, and re-evaluate the whole
+                // smart playlist only when its rows may change.
                 let visible_track_ids = playlists_table.contained_track_ids(&changed_track_ids);
                 let membership_changed = {
                     let runtime_borrow = runtime.borrow();
@@ -406,6 +405,9 @@ fn inline_edit_changed_kind(field: EditableField) -> TrackRowChangedKind {
     }
 }
 
+/// Re-derive the shown playlist's rows on the next idle, once for a burst
+/// of track changes, keeping the user's place in the table; a hidden view
+/// is rebuilt on its next visit.
 pub(super) fn schedule_playlists_structural_refresh(
     runtime: SharedRuntime,
     playlists_refresh: PlaylistsViewRefreshContext,
@@ -426,6 +428,7 @@ pub(super) fn schedule_playlists_structural_refresh(
             &playlists_refresh,
             sidebar.current_selection(),
             &search_text,
+            PlaylistRowsUpdate::Reconcile,
         );
     });
 }
