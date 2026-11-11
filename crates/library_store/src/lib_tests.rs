@@ -23,11 +23,11 @@ use sustain_domain::{
 };
 
 use super::{
-    AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan, LibraryStore,
-    OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId, SmartPlaylist,
-    SmartPlaylistId, SqliteLibraryStore, StoredSmartShuffleIndex, StoredSyncedLyrics,
-    StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry, TrackColumnLayout,
-    TrackColumnLayoutScope, TrackColumnSort,
+    AnalysisCapabilities, AnalysisContext, AnalyzerVersions, DuplicateConsolidationPlan,
+    LibraryStore, OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId,
+    SmartPlaylist, SmartPlaylistId, SqliteLibraryStore, StoredSmartShuffleIndex,
+    StoredSyncedLyrics, StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry,
+    TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
 use crate::{PlaylistId, StoreResult, TrackId};
 use sustain_domain::SyncedLyricsLine;
@@ -958,12 +958,23 @@ fn finite_acoustics() -> AcousticFeatures {
     }
 }
 
-/// Standard context used by analysis tests: analyzer_version 1
+/// Standard context used by analysis tests: every analyzer at version 1
 /// plus caller-supplied wall-clock.
 fn ctx(now_unix: i64) -> AnalysisContext {
     AnalysisContext {
-        analyzer_version: 1,
+        versions: VERSIONS,
         now_unix,
+    }
+}
+
+/// The analyzer versions most analysis tests run under.
+const VERSIONS: AnalyzerVersions = every_analyzer_at(1);
+
+const fn every_analyzer_at(version: u32) -> AnalyzerVersions {
+    AnalyzerVersions {
+        bpm: version,
+        key: version,
+        audio: version,
     }
 }
 
@@ -1177,7 +1188,7 @@ fn a_bpm_edit_survives_analysis_until_the_user_clears_it() {
     };
     let needs = |capabilities| {
         store
-            .filter_tracks_needing_analysis(&[tagged.id], capabilities, 1)
+            .filter_tracks_needing_analysis(&[tagged.id], capabilities, VERSIONS)
             .expect("filter")
     };
     let tempo_only = AnalysisCapabilities {
@@ -1245,7 +1256,7 @@ fn a_key_edit_survives_analysis_until_the_user_clears_it() {
     };
     let needs = |capabilities| {
         store
-            .filter_tracks_needing_analysis(&[tagged.id], capabilities, 1)
+            .filter_tracks_needing_analysis(&[tagged.id], capabilities, VERSIONS)
             .expect("filter")
     };
     let key_only = AnalysisCapabilities {
@@ -1318,7 +1329,7 @@ fn tracks_needing_analysis_lists_only_un_attempted() {
                 key: false,
                 audio: true,
             },
-            1,
+            VERSIONS,
             100,
         )
         .expect("query");
@@ -1370,7 +1381,7 @@ fn filter_tracks_needing_analysis_drops_cached_and_missing() {
                 key: false,
                 audio: true,
             },
-            1,
+            VERSIONS,
         )
         .expect("filter");
     assert_eq!(filtered, vec![alpha.id]);
@@ -1386,14 +1397,14 @@ fn filter_tracks_needing_analysis_drops_cached_and_missing() {
                 key: false,
                 audio: false,
             },
-            1,
+            VERSIONS,
         )
         .expect("filter");
     assert_eq!(filtered_bpm, vec![alpha.id, gamma.id]);
 
     // Empty capability mask -> empty result, regardless of input.
     let filtered_empty = store
-        .filter_tracks_needing_analysis(&all_ids, AnalysisCapabilities::default(), 1)
+        .filter_tracks_needing_analysis(&all_ids, AnalysisCapabilities::default(), VERSIONS)
         .expect("filter");
     assert!(filtered_empty.is_empty());
 
@@ -1406,7 +1417,7 @@ fn filter_tracks_needing_analysis_drops_cached_and_missing() {
                 key: true,
                 audio: true,
             },
-            1,
+            VERSIONS,
         )
         .expect("filter");
     assert!(filtered_no_ids.is_empty());
@@ -1421,7 +1432,7 @@ fn filter_tracks_needing_analysis_drops_cached_and_missing() {
                 key: false,
                 audio: true,
             },
-            2,
+            every_analyzer_at(2),
         )
         .expect("filter");
     assert_eq!(filtered_v2, vec![alpha.id, gamma.id]);
@@ -1452,13 +1463,13 @@ fn failed_attempt_prevents_immediate_retry() {
                 key: false,
                 audio: false,
             },
-            1,
+            VERSIONS,
             100,
         )
         .expect("query");
     assert!(
         needs.is_empty(),
-        "failed attempts should not requeue at same analyzer_version"
+        "failed attempts should not requeue at the same analyzer versions"
     );
 
     // But a version bump re-enrolls the track.
@@ -1469,7 +1480,7 @@ fn failed_attempt_prevents_immediate_retry() {
                 key: false,
                 audio: false,
             },
-            2,
+            every_analyzer_at(2),
             100,
         )
         .expect("query v2");
@@ -1526,10 +1537,10 @@ fn audio_only() -> AnalysisCapabilities {
 
 fn needs_audio_analysis(store: &dyn LibraryStore, track_id: TrackId) -> bool {
     let needing = store
-        .tracks_needing_analysis(audio_only(), 1, 10)
+        .tracks_needing_analysis(audio_only(), VERSIONS, 10)
         .expect("query");
     let filtered = store
-        .filter_tracks_needing_analysis(&[track_id], audio_only(), 1)
+        .filter_tracks_needing_analysis(&[track_id], audio_only(), VERSIONS)
         .expect("filter");
     assert_eq!(needing.contains(&track_id), filtered.contains(&track_id));
     filtered.contains(&track_id)
@@ -1580,7 +1591,7 @@ fn sqlite_lost_waveform_cache_analyses_audio_again() {
         ..AnalysisCapabilities::all()
     };
     assert_eq!(
-        store.tracks_needing_analysis(bpm_and_key, 1, 10),
+        store.tracks_needing_analysis(bpm_and_key, VERSIONS, 10),
         Ok(Vec::new())
     );
     drop(store);
@@ -1727,7 +1738,7 @@ fn single_capability_attempt_leaves_the_others_stale() {
             &sample_analysis(Some(121.0), None),
             bpm_only,
             AnalysisContext {
-                analyzer_version: 2,
+                versions: every_analyzer_at(2),
                 now_unix: 2_000,
             },
         )
@@ -1735,7 +1746,7 @@ fn single_capability_attempt_leaves_the_others_stale() {
 
     let needing = |capabilities| {
         store
-            .tracks_needing_analysis(capabilities, 2, 10)
+            .tracks_needing_analysis(capabilities, every_analyzer_at(2), 10)
             .expect("query")
     };
     assert_eq!(needing(bpm_only), Vec::new());
@@ -1748,10 +1759,64 @@ fn single_capability_attempt_leaves_the_others_stale() {
     ] {
         assert_eq!(needing(stale), vec![t.id]);
         assert_eq!(
-            store.filter_tracks_needing_analysis(&[t.id], stale, 2),
+            store.filter_tracks_needing_analysis(&[t.id], stale, every_analyzer_at(2)),
             Ok(vec![t.id])
         );
     }
+}
+
+#[test]
+fn a_key_analyzer_bump_re_enrolls_only_key() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let t = track(1, "a.flac");
+    store.save_track(t.clone()).expect("save");
+    store
+        .record_analysis(
+            t.id,
+            &sample_analysis(Some(120.0), Some(MusicalKey::CMajor)),
+            AnalysisCapabilities::all(),
+            ctx(1_000),
+        )
+        .expect("analyse everything at version 1");
+    let key_bumped = AnalyzerVersions { key: 2, ..VERSIONS };
+    let key_only = AnalysisCapabilities {
+        key: true,
+        ..AnalysisCapabilities::none()
+    };
+
+    let needing = |capabilities| {
+        store
+            .tracks_needing_analysis(capabilities, key_bumped, 10)
+            .expect("query")
+    };
+    assert_eq!(needing(AnalysisCapabilities::all()), vec![t.id]);
+    assert_eq!(needing(key_only), vec![t.id]);
+    for current in [
+        AnalysisCapabilities {
+            bpm: true,
+            ..AnalysisCapabilities::none()
+        },
+        audio_only(),
+    ] {
+        assert_eq!(needing(current), Vec::new());
+        assert_eq!(
+            store.filter_tracks_needing_analysis(&[t.id], current, key_bumped),
+            Ok(Vec::new())
+        );
+    }
+
+    store
+        .record_analysis(
+            t.id,
+            &sample_analysis(None, Some(MusicalKey::AMinor)),
+            key_only,
+            AnalysisContext {
+                versions: key_bumped,
+                now_unix: 2_000,
+            },
+        )
+        .expect("measure the key again at version 2");
+    assert_eq!(needing(AnalysisCapabilities::all()), Vec::new());
 }
 
 #[test]
@@ -1796,7 +1861,7 @@ fn partial_capability_record_preserves_other_attempts() {
                 key: false,
                 audio: false,
             },
-            1,
+            VERSIONS,
             10,
         )
         .expect("q bpm");
@@ -1807,7 +1872,7 @@ fn partial_capability_record_preserves_other_attempts() {
                 key: false,
                 audio: true,
             },
-            1,
+            VERSIONS,
             10,
         )
         .expect("q wave");
@@ -1818,7 +1883,7 @@ fn partial_capability_record_preserves_other_attempts() {
                 key: true,
                 audio: false,
             },
-            1,
+            VERSIONS,
             10,
         )
         .expect("q key");
@@ -1843,7 +1908,7 @@ fn empty_capabilities_record_is_no_op() {
         .expect("no-op");
     // No bookkeeping row → track is still listed as needing analysis.
     let needs = store
-        .tracks_needing_analysis(AnalysisCapabilities::all(), 1, 10)
+        .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 10)
         .expect("query");
     assert_eq!(needs, vec![t.id]);
     assert_eq!(store.load_waveform(t.id), Ok(None));
@@ -2878,7 +2943,7 @@ fn audio_replacement_preserves_library_fields_and_invalidates_derived_state() {
     assert_eq!(store.load_smart_shuffle_index(), Ok(None));
     assert_eq!(
         store
-            .tracks_needing_analysis(AnalysisCapabilities::all(), 1, 10)
+            .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 10)
             .expect("tracks needing analysis"),
         vec![track.id]
     );

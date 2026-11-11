@@ -29,12 +29,12 @@ use sustain_domain::{
     UiSettings, UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent,
 };
 use sustain_library_store::{
-    AcousticFeatures, AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan,
-    LibraryStore, OnlineCapabilities, OnlineContext, PendingTagMirror, PlaylistFolder,
-    SourceFingerprint, SqliteLibraryStore, StoreError, StoreResult, StoredSmartShuffleIndex,
-    StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform, SyncDevice, SyncDeviceId,
-    SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, TrackAnalysis, TrackColumnEntry,
-    TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
+    AcousticFeatures, AnalysisCapabilities, AnalysisContext, AnalyzerVersions,
+    DuplicateConsolidationPlan, LibraryStore, OnlineCapabilities, OnlineContext, PendingTagMirror,
+    PlaylistFolder, SourceFingerprint, SqliteLibraryStore, StoreError, StoreResult,
+    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
+    SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, TrackAnalysis,
+    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
 use sustain_metadata::{
     InitialTagRead, InitialTags, LibraryScan, MalformedTagError, MetadataChange, MetadataError,
@@ -7135,7 +7135,7 @@ fn request_run_skips_tracks_whose_capability_is_already_cached() {
             },
             AnalysisContext {
                 now_unix: 100,
-                analyzer_version: sustain_analysis::ANALYZER_VERSION,
+                versions: sustain_analysis::ANALYZER_VERSIONS,
             },
         )
         .expect("record bpm");
@@ -7577,21 +7577,21 @@ impl LibraryStore for CallCountingLibraryStore {
     fn tracks_needing_analysis(
         &self,
         capabilities: AnalysisCapabilities,
-        analyzer_version: u32,
+        versions: AnalyzerVersions,
         limit: usize,
     ) -> StoreResult<Vec<TrackId>> {
         self.inner
-            .tracks_needing_analysis(capabilities, analyzer_version, limit)
+            .tracks_needing_analysis(capabilities, versions, limit)
     }
 
     fn filter_tracks_needing_analysis(
         &self,
         track_ids: &[TrackId],
         capabilities: AnalysisCapabilities,
-        analyzer_version: u32,
+        versions: AnalyzerVersions,
     ) -> StoreResult<Vec<TrackId>> {
         self.inner
-            .filter_tracks_needing_analysis(track_ids, capabilities, analyzer_version)
+            .filter_tracks_needing_analysis(track_ids, capabilities, versions)
     }
 
     fn load_waveform(&self, track_id: TrackId) -> StoreResult<Option<StoredWaveform>> {

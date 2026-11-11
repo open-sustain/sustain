@@ -25,13 +25,13 @@ use std::time::Duration;
 use sustain_domain::DeviceRelativePath;
 
 use sustain_library_store::{
-    AcousticFeatures, AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan,
-    LibraryStore, MetadataChange, OnlineCapabilities, OnlineContext, PendingTagMirror,
-    PlayStatistics, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating,
-    SmartPlaylist, SmartPlaylistId, SourceFingerprint, StoreError, StoreResult,
-    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
-    SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, Track,
-    TrackAnalysis, TrackAudioProperties, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
+    AcousticFeatures, AnalysisCapabilities, AnalysisContext, AnalyzerVersions,
+    DuplicateConsolidationPlan, LibraryStore, MetadataChange, OnlineCapabilities, OnlineContext,
+    PendingTagMirror, PlayStatistics, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId,
+    PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, SourceFingerprint, StoreError,
+    StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork,
+    StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork,
+    Track, TrackAnalysis, TrackAudioProperties, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
     TrackLocation, TrackRelativePath,
 };
 
@@ -541,7 +541,7 @@ impl LibraryStore for FaultyStore {
     fn tracks_needing_analysis(
         &self,
         capabilities: AnalysisCapabilities,
-        analyzer_version: u32,
+        versions: AnalyzerVersions,
         limit: usize,
     ) -> StoreResult<Vec<TrackId>> {
         let hook = self
@@ -552,17 +552,17 @@ impl LibraryStore for FaultyStore {
             hook();
         }
         self.inner
-            .tracks_needing_analysis(capabilities, analyzer_version, limit)
+            .tracks_needing_analysis(capabilities, versions, limit)
     }
 
     fn filter_tracks_needing_analysis(
         &self,
         track_ids: &[TrackId],
         capabilities: AnalysisCapabilities,
-        analyzer_version: u32,
+        versions: AnalyzerVersions,
     ) -> StoreResult<Vec<TrackId>> {
         self.inner
-            .filter_tracks_needing_analysis(track_ids, capabilities, analyzer_version)
+            .filter_tracks_needing_analysis(track_ids, capabilities, versions)
     }
 
     fn load_waveform(&self, track_id: TrackId) -> StoreResult<Option<StoredWaveform>> {

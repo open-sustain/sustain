@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod acoustic;
+mod analyzer_versions;
 mod beat_grid;
 mod bpm;
 mod clock;
@@ -33,6 +34,7 @@ mod track_column_layout;
 mod waveform;
 
 pub use acoustic::AcousticFeatures;
+pub use analyzer_versions::AnalyzerVersions;
 pub use beat_grid::{BEATS_PER_BAR, Beat, BeatGrid, InvalidBeatGrid};
 pub use bpm::{Bpm, InvalidBpm};
 pub use clock::{Clock, MonotonicClock, SystemClock, SystemMonotonicClock};

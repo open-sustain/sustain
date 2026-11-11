@@ -419,7 +419,7 @@ impl LibraryStore for SqliteLibraryStore {
     fn tracks_needing_analysis(
         &self,
         capabilities: AnalysisCapabilities,
-        analyzer_version: u32,
+        versions: AnalyzerVersions,
         limit: usize,
     ) -> StoreResult<Vec<TrackId>> {
         let connection = self.connection_guard()?;
@@ -427,7 +427,7 @@ impl LibraryStore for SqliteLibraryStore {
             &connection,
             &self.waveform_cache,
             capabilities,
-            analyzer_version,
+            versions,
             limit,
         )
     }
@@ -436,7 +436,7 @@ impl LibraryStore for SqliteLibraryStore {
         &self,
         track_ids: &[TrackId],
         capabilities: AnalysisCapabilities,
-        analyzer_version: u32,
+        versions: AnalyzerVersions,
     ) -> StoreResult<Vec<TrackId>> {
         let connection = self.connection_guard()?;
         analysis::filter_tracks_needing_analysis(
@@ -444,7 +444,7 @@ impl LibraryStore for SqliteLibraryStore {
             &self.waveform_cache,
             track_ids,
             capabilities,
-            analyzer_version,
+            versions,
         )
     }
 

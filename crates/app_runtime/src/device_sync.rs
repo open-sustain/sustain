@@ -453,18 +453,18 @@ impl ApplicationRuntime {
             }
         }
         if let Some(store) = self.library_store.as_ref() {
-            let version = sustain_analysis::ANALYZER_VERSION;
+            let versions = sustain_analysis::ANALYZER_VERSIONS;
             let audio_only = AnalysisCapabilities {
                 bpm: false,
                 key: false,
                 audio: true,
             };
             readiness.missing_waveform = store
-                .filter_tracks_needing_analysis(&track_ids, audio_only, version)
+                .filter_tracks_needing_analysis(&track_ids, audio_only, versions)
                 .map(|v| v.len())
                 .unwrap_or(0);
             readiness.analyzable = store
-                .filter_tracks_needing_analysis(&track_ids, AnalysisCapabilities::all(), version)
+                .filter_tracks_needing_analysis(&track_ids, AnalysisCapabilities::all(), versions)
                 .map(|v| v.len())
                 .unwrap_or(0);
         }
@@ -1534,7 +1534,7 @@ mod tests {
                         &analysis,
                         bpm_only,
                         AnalysisContext {
-                            analyzer_version: 1,
+                            versions: sustain_analysis::ANALYZER_VERSIONS,
                             now_unix: 0,
                         },
                     )

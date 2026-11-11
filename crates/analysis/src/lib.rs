@@ -88,8 +88,8 @@ use std::path::PathBuf;
 // is the domain layer — the storage crate needs them but should not
 // pull in symphonia / stratum-dsp.
 pub use sustain_domain::{
-    AcousticFeatures, BeatGrid, Bpm, DETAIL_SEGMENTS_PER_SECOND, MusicalKey, PREVIEW_SEGMENT_COUNT,
-    TrackAnalysis, WaveformSegment, WaveformSegments,
+    AcousticFeatures, AnalyzerVersions, BeatGrid, Bpm, DETAIL_SEGMENTS_PER_SECOND, MusicalKey,
+    PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment, WaveformSegments,
 };
 
 use std::time::Duration;
@@ -103,13 +103,16 @@ use sustain_dsp::{
 
 pub use waveform::WaveformTiers;
 
-/// Monotonically-increasing identifier for the DSP algorithms in this
-/// crate. Bumped centrally when a change to the band split, BPM/key
-/// engine, or waveform encoding would invalidate previously-stored
-/// `track_analysis` rows. The storage layer compares stored rows
-/// against this value to decide whether a track should be re-queued
-/// by the runtime scheduler — no migration code, just a version
-/// bump that the scheduler walks past in the background.
+/// The version of the DSP behind each analysis capability. A
+/// capability's version is bumped when a change to its algorithm would
+/// invalidate the values stored for it. The storage layer compares each
+/// capability's stored attempt against its version to decide whether a
+/// track should be re-queued by the runtime scheduler — no migration
+/// code, just a version bump the scheduler walks past in the
+/// background, measuring again only the capability that changed.
+///
+/// Up to version 15 the three capabilities shared one version, and
+/// every change advanced all three:
 ///
 /// Version 2: the BPM and key bands now route through
 /// `stratum_dsp::features::*` directly via [`Analyzer`] instead of
@@ -264,7 +267,11 @@ pub use waveform::WaveformTiers;
 /// byte-for-byte on the synthetic corpus, so stored values' meaning is
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
-pub const ANALYZER_VERSION: u32 = 15;
+pub const ANALYZER_VERSIONS: AnalyzerVersions = AnalyzerVersions {
+    bpm: 15,
+    key: 15,
+    audio: 15,
+};
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
 /// shipped BPM-detection preset — 76–155 BPM, the `BpmRange` default

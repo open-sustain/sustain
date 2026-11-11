@@ -178,7 +178,7 @@ pub(super) fn tracks_needing_analysis(
     connection: &Connection,
     waveform_cache: &WaveformCacheStatus,
     capabilities: AnalysisCapabilities,
-    analyzer_version: u32,
+    versions: AnalyzerVersions,
     limit: usize,
 ) -> StoreResult<Vec<TrackId>> {
     if capabilities.is_empty() {
@@ -192,7 +192,9 @@ pub(super) fn tracks_needing_analysis(
             i64::from(capabilities.bpm),
             i64::from(capabilities.key),
             i64::from(capabilities.audio),
-            i64::from(analyzer_version),
+            i64::from(versions.bpm),
+            i64::from(versions.key),
+            i64::from(versions.audio),
             limit as i64,
             i64::from(waveform_cache.is_available()),
         ])
@@ -211,7 +213,7 @@ pub(super) fn filter_tracks_needing_analysis(
     waveform_cache: &WaveformCacheStatus,
     track_ids: &[TrackId],
     capabilities: AnalysisCapabilities,
-    analyzer_version: u32,
+    versions: AnalyzerVersions,
 ) -> StoreResult<Vec<TrackId>> {
     if capabilities.is_empty() || track_ids.is_empty() {
         return Ok(Vec::new());
@@ -225,7 +227,9 @@ pub(super) fn filter_tracks_needing_analysis(
         params.push(SqlValue::Integer(i64::from(capabilities.bpm)));
         params.push(SqlValue::Integer(i64::from(capabilities.key)));
         params.push(SqlValue::Integer(i64::from(capabilities.audio)));
-        params.push(SqlValue::Integer(i64::from(analyzer_version)));
+        params.push(SqlValue::Integer(i64::from(versions.bpm)));
+        params.push(SqlValue::Integer(i64::from(versions.key)));
+        params.push(SqlValue::Integer(i64::from(versions.audio)));
         params.push(SqlValue::Integer(i64::from(waveform_cache.is_available())));
         let mut rows = statement
             .query(params_from_iter(params.iter()))
@@ -389,17 +393,19 @@ fn build_filter_tracks_needing_analysis_sql(id_count: usize) -> String {
     let bpm = id_count + 1;
     let key = id_count + 2;
     let audio = id_count + 3;
-    let version = id_count + 4;
-    let cache_available = id_count + 5;
+    let bpm_version = id_count + 4;
+    let key_version = id_count + 5;
+    let audio_version = id_count + 6;
+    let cache_available = id_count + 7;
     format!(
         "SELECT t.id FROM tracks t
 LEFT JOIN track_analysis ta ON ta.track_id = t.id
 WHERE t.is_missing = 0
   AND t.id IN ({id_placeholders})
   AND (
-        (?{bpm} = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.bpm_analyzer_version   < ?{version}))
-     OR (?{key} = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.key_analyzer_version   < ?{version}))
-     OR (?{audio} = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?{version}
+        (?{bpm} = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.bpm_analyzer_version   < ?{bpm_version}))
+     OR (?{key} = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.key_analyzer_version   < ?{key_version}))
+     OR (?{audio} = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?{audio_version}
                      OR (?{cache_available} = 1 AND NOT EXISTS (
                             SELECT 1 FROM waveform_cache.track_waveform w
                             WHERE w.track_id = t.id
@@ -420,7 +426,7 @@ fn upsert_track_analysis(
     audio_attempt_token: Option<i64>,
 ) -> StoreResult<()> {
     let at = |covered: bool| covered.then_some(context.now_unix);
-    let version = |covered: bool| covered.then_some(i64::from(context.analyzer_version));
+    let version = |covered: bool, version: u32| covered.then_some(i64::from(version));
     connection
         .execute(
             UPSERT_TRACK_ANALYSIS_SQL,
@@ -430,9 +436,9 @@ fn upsert_track_analysis(
                 at(capabilities.key),
                 at(capabilities.audio),
                 audio_attempt_token,
-                version(capabilities.bpm),
-                version(capabilities.key),
-                version(capabilities.audio),
+                version(capabilities.bpm, context.versions.bpm),
+                version(capabilities.key, context.versions.key),
+                version(capabilities.audio, context.versions.audio),
             ],
         )
         .map(|_| ())

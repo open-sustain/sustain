@@ -17,12 +17,21 @@ use sustain_domain::{
     AnalysisSettings, BackgroundResourceUsage, Bpm, BpmRange, MusicalKey, PREVIEW_SEGMENT_COUNT,
     Track, TrackLocation, TrackRelativePath, WaveformSegment, WaveformSegments,
 };
-use sustain_library_store::{AnalysisCapabilities, LibraryStore, SqliteLibraryStore, TrackId};
+use sustain_library_store::{
+    AnalysisCapabilities, AnalyzerVersions, LibraryStore, SqliteLibraryStore, TrackId,
+};
 use tempfile::TempDir;
 
 use super::{
     AnalysisScheduler, AnalysisSchedulerConfig, AnalyzerFn, ProgressSink, SchedulerProgress,
     UnixClockFn,
+};
+
+/// The analyzer versions the scheduler tests run under.
+const VERSIONS: AnalyzerVersions = AnalyzerVersions {
+    bpm: 1,
+    key: 1,
+    audio: 1,
 };
 
 /// Place an empty file inside `library_root` at `relative` so the
@@ -136,7 +145,7 @@ fn deterministic_config(
         // in a predictable order regardless of host core count.
         initial_resource_usage: BackgroundResourceUsage::Innocuous,
         library_path,
-        analyzer_version: 1,
+        analyzer_versions: VERSIONS,
     }
 }
 
@@ -177,9 +186,9 @@ fn scheduler_processes_pending_tracks_with_settings_enabled() {
     }
 
     // Track should now be ineligible for re-analysis at the same
-    // analyzer_version.
+    // analyzer versions.
     let still_pending = store
-        .tracks_needing_analysis(AnalysisCapabilities::all(), 1, 100)
+        .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 100)
         .expect("query");
     assert!(still_pending.is_empty(), "track should be marked attempted");
 
@@ -223,7 +232,7 @@ fn scheduler_records_failures_without_clobbering_run() {
     }
 
     // The failure attempt should be stamped so the track does not
-    // re-queue at the same analyzer_version.
+    // re-queue at the same analyzer versions.
     let pending = store
         .tracks_needing_analysis(
             AnalysisCapabilities {
@@ -231,7 +240,7 @@ fn scheduler_records_failures_without_clobbering_run() {
                 key: false,
                 audio: false,
             },
-            1,
+            VERSIONS,
             10,
         )
         .expect("query");
@@ -344,7 +353,7 @@ fn rejected_record_analysis_halts_without_false_completion() {
         "scheduler must not retry a rejected write in a hot loop"
     );
     let pending = store
-        .tracks_needing_analysis(AnalysisCapabilities::all(), 1, 10)
+        .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 10)
         .expect("query");
     assert_eq!(pending.len(), 1, "the unpersisted track is still pending");
 
@@ -357,7 +366,7 @@ fn rejected_record_analysis_halts_without_false_completion() {
     });
     assert!(matches!(tick, SchedulerProgress::Tick { completed: 1, .. }));
     let pending = store
-        .tracks_needing_analysis(AnalysisCapabilities::all(), 1, 10)
+        .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 10)
         .expect("query");
     assert!(pending.is_empty(), "track persisted after recovery");
 
@@ -567,7 +576,7 @@ fn toggling_capabilities_off_stops_the_running_scheduler() {
                 key: false,
                 audio: true,
             },
-            1,
+            VERSIONS,
             100,
         )
         .expect("query")
@@ -580,7 +589,7 @@ fn toggling_capabilities_off_stops_the_running_scheduler() {
                 key: false,
                 audio: true,
             },
-            1,
+            VERSIONS,
             100,
         )
         .expect("query")
@@ -650,7 +659,7 @@ fn track_updated_sink_fires_after_successful_analysis() {
         },
         initial_resource_usage: BackgroundResourceUsage::Innocuous,
         library_path: Some(library_root),
-        analyzer_version: 1,
+        analyzer_versions: VERSIONS,
     });
 
     let observed = notify_rx
@@ -707,7 +716,7 @@ fn resource_usage_change_respawns_pool_without_losing_work() {
     });
 
     let still_pending = store
-        .tracks_needing_analysis(AnalysisCapabilities::all(), 1, 100)
+        .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 100)
         .expect("query");
     assert!(
         still_pending.is_empty(),

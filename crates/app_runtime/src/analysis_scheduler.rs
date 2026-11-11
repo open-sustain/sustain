@@ -74,7 +74,9 @@ use std::{
 
 use sustain_analysis::{AnalysisError, AnalysisOptions, TrackAnalysis};
 use sustain_domain::{AnalysisSettings, BackgroundResourceUsage, TrackId};
-use sustain_library_store::{AnalysisCapabilities, AnalysisContext, LibraryStore};
+use sustain_library_store::{
+    AnalysisCapabilities, AnalysisContext, AnalyzerVersions, LibraryStore,
+};
 
 use crate::priority::{self, IoPriorityClass, NiceLevel};
 
@@ -177,7 +179,7 @@ pub struct AnalysisSchedulerConfig {
     pub initial_settings: AnalysisSettings,
     pub initial_resource_usage: BackgroundResourceUsage,
     pub library_path: Option<PathBuf>,
-    pub analyzer_version: u32,
+    pub analyzer_versions: AnalyzerVersions,
 }
 
 #[derive(Clone, Debug)]
@@ -527,7 +529,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         initial_settings,
         initial_resource_usage,
         library_path,
-        analyzer_version,
+        analyzer_versions,
     } = config;
 
     let mut state = SupervisorState {
@@ -668,7 +670,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         };
 
         if state.total.is_none() {
-            match snapshot_run_total(&state, &library_store, bg_capabilities, analyzer_version) {
+            match snapshot_run_total(&state, &library_store, bg_capabilities, analyzer_versions) {
                 Ok(total) => state.total = Some(total),
                 Err(_) => {
                     if let Some(p) = pool.take() {
@@ -726,7 +728,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                 let limit = room.saturating_add(in_flight.len());
                 match library_store.tracks_needing_analysis(
                     bg_capabilities,
-                    analyzer_version,
+                    analyzer_versions,
                     limit,
                 ) {
                     Ok(fresh) => {
@@ -824,7 +826,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
             };
             let absolute_path = track.location.absolute_path(&library_path);
             let context = AnalysisContext {
-                analyzer_version,
+                versions: analyzer_versions,
                 now_unix: (clock)(),
             };
             let work_item = WorkItem {
@@ -1019,7 +1021,7 @@ fn snapshot_run_total(
     state: &SupervisorState,
     library_store: &Arc<dyn LibraryStore>,
     capabilities: AnalysisCapabilities,
-    analyzer_version: u32,
+    analyzer_versions: AnalyzerVersions,
 ) -> sustain_library_store::StoreResult<u32> {
     let mut track_ids: HashSet<TrackId> = state
         .explicit_queue
@@ -1029,7 +1031,7 @@ fn snapshot_run_total(
     if !capabilities.is_empty() {
         track_ids.extend(library_store.tracks_needing_analysis(
             capabilities,
-            analyzer_version,
+            analyzer_versions,
             i64::MAX as usize,
         )?);
     }

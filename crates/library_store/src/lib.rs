@@ -11,8 +11,8 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value as SqlValue};
 pub use sustain_domain::{
-    AcousticFeatures, DuplicateConsolidationPlan, MetadataChange, PlayStatistics, Playlist,
-    PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist,
+    AcousticFeatures, AnalyzerVersions, DuplicateConsolidationPlan, MetadataChange, PlayStatistics,
+    Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylist,
     SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track,
     TrackAnalysis, TrackAudioProperties, TrackColumnEntry, TrackColumnLayout,
     TrackColumnLayoutScope, TrackColumnSort, TrackId, TrackLocation, TrackRelativePath,
@@ -117,7 +117,7 @@ impl From<rusqlite::Error> for StoreError {
 /// stored. On the read path (`tracks_needing_analysis`) a track
 /// qualifies as needing analysis if **any** of the requested
 /// capabilities is either un-attempted (NULL) or stamped by an older
-/// `analyzer_version`.
+/// version of its analyzer (see [`AnalyzerVersions`]).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AnalysisCapabilities {
     pub bpm: bool,
@@ -213,13 +213,13 @@ pub struct StoredWaveform {
 }
 
 /// Per-attempt facts the storage layer stamps onto `track_analysis` for
-/// each capability the attempt covered. `analyzer_version` is the
-/// watermark the scheduler compares a capability's last attempt against
-/// to invalidate it after a DSP change; `now_unix` is the wall clock at
-/// the moment the attempt completed.
+/// each capability the attempt covered: the version of the analyzer that
+/// measured it, the watermark the scheduler compares a capability's last
+/// attempt against to invalidate it after a DSP change, and `now_unix`,
+/// the wall clock at the moment the attempt completed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AnalysisContext {
-    pub analyzer_version: u32,
+    pub versions: AnalyzerVersions,
     pub now_unix: i64,
 }
 
@@ -491,7 +491,7 @@ pub trait LibraryStore: Send + Sync {
     fn tracks_needing_analysis(
         &self,
         capabilities: AnalysisCapabilities,
-        analyzer_version: u32,
+        versions: AnalyzerVersions,
         limit: usize,
     ) -> StoreResult<Vec<TrackId>>;
 
@@ -505,7 +505,7 @@ pub trait LibraryStore: Send + Sync {
         &self,
         track_ids: &[TrackId],
         capabilities: AnalysisCapabilities,
-        analyzer_version: u32,
+        versions: AnalyzerVersions,
     ) -> StoreResult<Vec<TrackId>>;
 
     /// Load the stored waveform for a track, if any. Returns `None`

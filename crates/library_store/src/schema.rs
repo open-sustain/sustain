@@ -1030,9 +1030,11 @@ pub(super) const DELETE_SMART_SHUFFLE_INDEX_SQL: &str =
 ///   ?1 = include_bpm        (1 or 0)
 ///   ?2 = include_key        (1 or 0)
 ///   ?3 = include_audio      (1 or 0)
-///   ?4 = current analyzer_version
-///   ?5 = LIMIT
-///   ?6 = waveform cache available (1 or 0); an unavailable cache holds
+///   ?4 = current BPM analyzer version
+///   ?5 = current key analyzer version
+///   ?6 = current audio analyzer version
+///   ?7 = LIMIT
+///   ?8 = waveform cache available (1 or 0); an unavailable cache holds
 ///        nothing worth analysing for
 pub(super) const SELECT_TRACKS_NEEDING_ANALYSIS_SQL: &str = r#"
 SELECT t.id
@@ -1041,15 +1043,15 @@ LEFT JOIN track_analysis ta ON ta.track_id = t.id
 WHERE t.is_missing = 0
   AND (
         (?1 = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.bpm_analyzer_version   < ?4))
-     OR (?2 = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.key_analyzer_version   < ?4))
-     OR (?3 = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?4
-                     OR (?6 = 1 AND NOT EXISTS (
+     OR (?2 = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.key_analyzer_version   < ?5))
+     OR (?3 = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?6
+                     OR (?8 = 1 AND NOT EXISTS (
                             SELECT 1 FROM waveform_cache.track_waveform w
                             WHERE w.track_id = t.id
                               AND w.audio_attempt_token = ta.audio_attempt_token))))
       )
 ORDER BY t.id
-LIMIT ?5
+LIMIT ?7
 "#;
 
 fn indented_track_column_names(indent: &str) -> String {

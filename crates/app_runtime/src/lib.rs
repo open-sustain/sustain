@@ -1417,7 +1417,7 @@ impl ApplicationRuntime {
                 initial_settings: self.settings.analysis,
                 initial_resource_usage: self.settings.background_jobs.resource_usage,
                 library_path: self.settings.library.path.clone(),
-                analyzer_version: sustain_analysis::ANALYZER_VERSION,
+                analyzer_versions: sustain_analysis::ANALYZER_VERSIONS,
             },
         );
         self.analysis_scheduler = Some(scheduler);
@@ -2670,7 +2670,7 @@ impl ApplicationRuntime {
         let filtered = match library_store.filter_tracks_needing_analysis(
             &track_ids,
             capabilities,
-            sustain_analysis::ANALYZER_VERSION,
+            sustain_analysis::ANALYZER_VERSIONS,
         ) {
             Ok(filtered) => filtered,
             Err(_) => return RunDecision::SchedulerUnavailable,

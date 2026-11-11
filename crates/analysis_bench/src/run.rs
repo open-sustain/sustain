@@ -44,8 +44,8 @@ pub struct Report {
 pub struct Env {
     /// `sustain-analysis-bench` package version.
     pub bench_version: String,
-    /// `sustain_analysis::ANALYZER_VERSION` the outputs were produced under.
-    pub analyzer_version: u32,
+    /// `sustain_analysis::ANALYZER_VERSIONS` the outputs were produced under.
+    pub analyzer_versions: sustain_analysis::AnalyzerVersions,
     /// Build profile, `"debug"` or `"release"`.
     pub profile: String,
     /// Short git commit, if the working tree is a git checkout.
@@ -72,7 +72,7 @@ impl Env {
     fn capture() -> Self {
         Self {
             bench_version: env!("CARGO_PKG_VERSION").to_string(),
-            analyzer_version: sustain_analysis::ANALYZER_VERSION,
+            analyzer_versions: sustain_analysis::ANALYZER_VERSIONS,
             profile: if cfg!(debug_assertions) {
                 "debug"
             } else {
