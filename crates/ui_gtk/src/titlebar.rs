@@ -11,9 +11,10 @@ use gtk::prelude::*;
 use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, PlaybackState, VolumePercent};
 
 use super::{
-    MEDIA_ICON_SIZE, NOW_PLAYING_HORIZONTAL_MARGIN, PlaybackChangedCallback, SharedRuntime,
-    TITLEBAR_CONTROL_HEIGHT, TITLEBAR_HEIGHT, TITLEBAR_LEFT_PADDING, TITLEBAR_RIGHT_PADDING,
-    VOLUME_MAGNET_THRESHOLD, VOLUME_WIDTH, command_controller::SharedCommandController,
+    MEDIA_ICON_SIZE, NOW_PLAYING_HORIZONTAL_MARGIN, NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_WIDTH,
+    PlaybackChangedCallback, SharedRuntime, TITLEBAR_CONTROL_HEIGHT, TITLEBAR_HEIGHT,
+    TITLEBAR_LEFT_PADDING, TITLEBAR_RIGHT_PADDING, VOLUME_MAGNET_THRESHOLD, VOLUME_MIN_WIDTH,
+    VOLUME_WIDTH, command_controller::SharedCommandController, flexible_width::FlexibleWidth,
 };
 
 /// Debounce window for persisting the playback volume to TOML.
@@ -24,6 +25,12 @@ use super::{
 /// stops moving. A pending save is flushed synchronously on window close so a
 /// last-second adjustment is never lost.
 const VOLUME_SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The search entry's width, in characters, when the window has room.
+const SEARCH_WIDTH_CHARS: i32 = 24;
+
+/// How narrow the search entry gets in a narrow window, in characters.
+const SEARCH_MIN_WIDTH_CHARS: i32 = 8;
 
 pub(crate) type SearchChangedCallback = Rc<dyn Fn(String)>;
 type VolumeSaveCallback = Rc<dyn Fn(VolumePercent)>;
@@ -43,6 +50,9 @@ pub(crate) struct Titlebar {
 }
 
 pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercent) -> Titlebar {
+    // In a narrow window the volume slider and the search entry give way
+    // first, down to their minimums, and the now-playing area after them:
+    // the center box shrinks its center child last.
     let topbar = gtk::CenterBox::new();
     topbar.add_css_class("titlebar");
     topbar.set_hexpand(true);
@@ -63,7 +73,6 @@ pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercen
     let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
     volume.add_css_class("volume-slider");
     volume.set_value(initial_volume.as_scalar());
-    volume.set_width_request(VOLUME_WIDTH);
     volume.set_height_request(TITLEBAR_CONTROL_HEIGHT);
     volume.set_draw_value(false);
     volume.set_tooltip_text(Some("Volume"));
@@ -74,13 +83,14 @@ pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercen
     let volume_controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     volume_controls.set_valign(gtk::Align::Center);
     volume_controls.append(&low_volume_icon);
-    volume_controls.append(&volume);
+    volume_controls.append(&FlexibleWidth::new(&volume, VOLUME_MIN_WIDTH, VOLUME_WIDTH));
     volume_controls.append(&high_volume_icon);
 
     let search = gtk::SearchEntry::new();
     search.add_css_class("topbar-search");
     search.set_placeholder_text(Some("Search"));
-    search.set_width_chars(24);
+    search.set_width_chars(SEARCH_MIN_WIDTH_CHARS);
+    search.set_max_width_chars(SEARCH_WIDTH_CHARS);
     search.set_valign(gtk::Align::Center);
     // The search's only debounce: views rebuild as soon as this fires.
     // GTK's default search delay (150ms) fires partway through a typed word
@@ -108,6 +118,9 @@ pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercen
     right_controls.append(&window_controls);
 
     topbar.set_start_widget(Some(&left_controls));
+    let now_playing = FlexibleWidth::new(&now_playing, NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_WIDTH);
+    now_playing.set_margin_start(NOW_PLAYING_HORIZONTAL_MARGIN);
+    now_playing.set_margin_end(NOW_PLAYING_HORIZONTAL_MARGIN);
     topbar.set_center_widget(Some(&now_playing));
     topbar.set_end_widget(Some(&right_controls));
 

@@ -36,6 +36,7 @@ mod date_format;
 mod device_panel;
 mod duplicate_consolidation;
 mod duplicates;
+mod flexible_width;
 mod frame_profile;
 mod leading_icon;
 mod library_consolidation;
@@ -79,6 +80,8 @@ const NOW_PLAYING_HORIZONTAL_MARGIN: i32 = TITLEBAR_HEIGHT / 2;
 const NOW_PLAYING_ICON_SIZE: i32 = 16;
 const NOW_PLAYING_SIDE_WIDTH: i32 = 58;
 const NOW_PLAYING_WIDTH: i32 = 600;
+/// How narrow the now-playing area gets in a narrow window.
+const NOW_PLAYING_MIN_WIDTH: i32 = NOW_PLAYING_WIDTH * 2 / 3;
 const PREFERENCES_WIDTH: i32 = 560;
 const SMART_PLAYLIST_EDITOR_WIDTH: i32 = 620;
 const SMART_PLAYLIST_EDITOR_HEIGHT: i32 = 360;
@@ -89,6 +92,8 @@ const SIDEBAR_MIN_WIDTH: i32 = 150;
 const SIDEBAR_MAX_WIDTH: i32 = 300;
 const STATUS_BAR_HEIGHT: i32 = 28;
 const VOLUME_WIDTH: i32 = 192;
+/// How narrow the volume slider gets in a narrow window.
+const VOLUME_MIN_WIDTH: i32 = VOLUME_WIDTH / 2;
 const VOLUME_MAGNET_THRESHOLD: f64 = 0.90;
 const WINDOW_SHADOW_MARGIN: i32 = 24;
 /// Fixed reverse-DNS id of the installed `.desktop` entry / icon theme name.

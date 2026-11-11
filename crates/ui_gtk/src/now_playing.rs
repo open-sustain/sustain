@@ -144,11 +144,9 @@ impl NowPlayingView {
     ) -> Self {
         let area = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         area.add_css_class("now-playing-area");
-        area.set_size_request(super::NOW_PLAYING_WIDTH, TITLEBAR_HEIGHT);
+        // The title bar sets its width.
+        area.set_height_request(TITLEBAR_HEIGHT);
         area.set_hexpand(false);
-        area.set_halign(gtk::Align::Center);
-        area.set_margin_start(super::NOW_PLAYING_HORIZONTAL_MARGIN);
-        area.set_margin_end(super::NOW_PLAYING_HORIZONTAL_MARGIN);
         area.set_valign(gtk::Align::Fill);
 
         let artwork_box = gtk::Overlay::new();
@@ -859,11 +857,11 @@ fn metadata_box(
     let title_row = gtk::Box::new(gtk::Orientation::Horizontal, MARQUEE_CHIP_GAP);
     title_row.set_halign(gtk::Align::Center);
     title_row.set_valign(gtk::Align::Center);
-    title_row.append(&title.widget());
+    title_row.append(title.widget());
     title_row.append(lyrics_chip);
 
     metadata.append(&title_row);
-    metadata.append(&artist_album.widget());
+    metadata.append(artist_album.widget());
     metadata
 }
 
