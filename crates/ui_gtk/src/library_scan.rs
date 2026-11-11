@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{path::PathBuf, rc::Rc, sync::mpsc, time::Duration};
+use std::{path::PathBuf, rc::Rc};
 
 use gtk::glib;
 use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
@@ -40,42 +40,37 @@ pub(crate) fn library_scan_requested_callback(
             }
         };
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = async_channel::bounded(1);
         std::thread::spawn(move || {
-            let _sent = tx.send(run_library_scan_task(task));
+            let _sent = tx.send_blocking(run_library_scan_task(task));
         });
 
-        poll_library_scan(rx, runtime.clone(), library_changed.clone());
+        apply_library_scan_outcome(rx, runtime.clone(), library_changed.clone());
         Ok(())
     })
 }
 
-fn poll_library_scan(
-    rx: mpsc::Receiver<Result<super::LibraryScanResult, ApplicationRuntimeError>>,
+/// Apply the scan's outcome once its worker delivers it. A worker that
+/// ends without delivering one has failed the scan.
+fn apply_library_scan_outcome(
+    rx: async_channel::Receiver<Result<super::LibraryScanResult, ApplicationRuntimeError>>,
     runtime: SharedRuntime,
     library_changed: LibraryChangedCallback,
 ) {
-    glib::timeout_add_local(Duration::from_millis(100), move || match rx.try_recv() {
-        Ok(Ok(result)) => {
-            runtime.borrow_mut().apply_library_scan_result(result);
-            library_changed();
-            glib::ControlFlow::Break
-        }
-        Ok(Err(error)) => {
-            runtime.borrow_mut().fail_library_scan(error);
-            glib::ControlFlow::Break
-        }
-        Err(mpsc::TryRecvError::Empty) => {
-            // The runtime's notification observer republishes the
-            // "Cancelling..." state on every cancellation-flag flip;
-            // we no longer need to poke the widget from here.
-            glib::ControlFlow::Continue
-        }
-        Err(mpsc::TryRecvError::Disconnected) => {
-            runtime
-                .borrow_mut()
-                .fail_library_scan(ApplicationRuntimeError::LibraryScanFailed);
-            glib::ControlFlow::Break
+    glib::MainContext::default().spawn_local(async move {
+        match rx.recv().await {
+            Ok(Ok(result)) => {
+                runtime.borrow_mut().apply_library_scan_result(result);
+                library_changed();
+            }
+            Ok(Err(error)) => {
+                runtime.borrow_mut().fail_library_scan(error);
+            }
+            Err(_) => {
+                runtime
+                    .borrow_mut()
+                    .fail_library_scan(ApplicationRuntimeError::LibraryScanFailed);
+            }
         }
     });
 }

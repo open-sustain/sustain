@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{rc::Rc, sync::mpsc, time::Duration};
+use std::rc::Rc;
 
 use gtk::glib;
 use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
@@ -69,12 +69,12 @@ pub(crate) fn library_consolidation_requested_callback(
             }
         };
 
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = async_channel::bounded(1);
         std::thread::spawn(move || {
-            let _sent = tx.send(run_library_consolidation_task(task));
+            let _sent = tx.send_blocking(run_library_consolidation_task(task));
         });
 
-        poll_library_consolidation(rx, runtime.clone());
+        apply_library_consolidation_outcome(rx, runtime.clone());
         Ok(())
     })
 }
@@ -89,27 +89,27 @@ pub(crate) fn library_consolidation_requested_callback(
 // `library_changed()` here would force the songs table, albums view,
 // sidebar tree, and playlists table to rebuild for nothing — measured
 // at multiple seconds of `replace_rows` work on a 10k library.
-fn poll_library_consolidation(
-    rx: mpsc::Receiver<Result<super::LibraryConsolidationResult, ApplicationRuntimeError>>,
+//
+// A worker that ends without delivering an outcome has failed the pass.
+fn apply_library_consolidation_outcome(
+    rx: async_channel::Receiver<Result<super::LibraryConsolidationResult, ApplicationRuntimeError>>,
     runtime: SharedRuntime,
 ) {
-    glib::timeout_add_local(Duration::from_millis(100), move || match rx.try_recv() {
-        Ok(Ok(result)) => {
-            runtime
-                .borrow_mut()
-                .apply_library_consolidation_result(result);
-            glib::ControlFlow::Break
-        }
-        Ok(Err(error)) => {
-            runtime.borrow_mut().fail_library_consolidation(error);
-            glib::ControlFlow::Break
-        }
-        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-        Err(mpsc::TryRecvError::Disconnected) => {
-            runtime
-                .borrow_mut()
-                .fail_library_consolidation(ApplicationRuntimeError::LibraryConsolidationFailed);
-            glib::ControlFlow::Break
+    glib::MainContext::default().spawn_local(async move {
+        match rx.recv().await {
+            Ok(Ok(result)) => {
+                runtime
+                    .borrow_mut()
+                    .apply_library_consolidation_result(result);
+            }
+            Ok(Err(error)) => {
+                runtime.borrow_mut().fail_library_consolidation(error);
+            }
+            Err(_) => {
+                runtime.borrow_mut().fail_library_consolidation(
+                    ApplicationRuntimeError::LibraryConsolidationFailed,
+                );
+            }
         }
     });
 }

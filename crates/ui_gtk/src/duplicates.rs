@@ -4,14 +4,13 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::mpsc,
-    time::Duration,
 };
 
 use gtk::glib;
 use gtk::prelude::*;
 use sustain_app_runtime::{
-    DuplicateMatchMode, NotificationCategory, NotificationSeverity, runtime_error_text,
+    ApplicationRuntimeError, DuplicateMatchMode, NotificationCategory, NotificationSeverity,
+    runtime_error_text,
 };
 
 use crate::{
@@ -224,11 +223,11 @@ impl DuplicatesView {
             }
         };
 
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let (sender, receiver) = async_channel::bounded(1);
         if std::thread::Builder::new()
             .name("sustain-duplicate-groups".to_owned())
             .spawn(move || {
-                let _ = sender.send(task.run());
+                let _ = sender.send_blocking(task.run());
             })
             .is_err()
         {
@@ -242,18 +241,16 @@ impl DuplicatesView {
         }
 
         let view = self.clone();
-        glib::timeout_add_local(Duration::from_millis(16), move || {
-            let result = match receiver.try_recv() {
-                Ok(result) => result,
-                Err(mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    Err(sustain_app_runtime::ApplicationRuntimeError::LibraryStoreFailed)
-                }
-            };
+        glib::MainContext::default().spawn_local(async move {
+            // A worker that ends without delivering groups has failed the
+            // scan.
+            let result = receiver
+                .recv()
+                .await
+                .unwrap_or(Err(ApplicationRuntimeError::LibraryStoreFailed));
             if view.active.get() && view.generation.get() == generation {
                 view.apply_groups(result);
             }
-            glib::ControlFlow::Break
         });
     }
 
