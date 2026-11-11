@@ -103,6 +103,11 @@ impl ProgressHitArea {
         }
 
         let clamped = fraction.clamp(0.0, 1.0);
+        // The now-playing refresh sets the position every second, paused
+        // or stopped too: an unchanged one must not draw a frame.
+        if self.has_track.get() == has_track && self.position_fraction.get() == clamped {
+            return;
+        }
         self.has_track.set(has_track);
         self.position_fraction.set(clamped);
         self.progress.set_fraction(clamped);

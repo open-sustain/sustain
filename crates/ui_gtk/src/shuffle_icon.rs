@@ -149,12 +149,14 @@ impl ShuffleShineIcon {
         } else {
             self.remove_css_class("now-playing-side-icon-active");
         }
+        // A change of class restyles and so redraws the icon, and the
+        // shine draws its own sweeps: a mode applied again, as the
+        // now-playing refresh does every second, draws nothing.
         if shine {
             self.start_shine();
         } else {
             self.stop_shine();
         }
-        self.queue_draw();
     }
 
     fn reload_paintable(&self) {
