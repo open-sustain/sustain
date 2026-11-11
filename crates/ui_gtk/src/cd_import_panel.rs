@@ -849,18 +849,17 @@ fn fixed_column(
 
 /// A cell that shows the widgets appended to it.
 fn new_cell(list_item: &gtk::ListItem) -> TableCell {
-    cd_cell(list_item, TableCell::new(list_item))
+    cd_cell(TableCell::new(list_item))
 }
 
 /// A cell that shows a text aligned to `xalign`.
 fn new_text_cell(list_item: &gtk::ListItem, xalign: f32) -> TableCell {
-    cd_cell(list_item, TableCell::with_text(list_item, xalign))
+    cd_cell(TableCell::with_text(list_item, xalign))
 }
 
-/// `cell`, marked selected along with its row.
-fn cd_cell(list_item: &gtk::ListItem, cell: TableCell) -> TableCell {
+/// `cell`, styled as a track-table cell.
+fn cd_cell(cell: TableCell) -> TableCell {
     cell.add_css_class("track-table-cell");
-    install_cd_cell_selection_sync(list_item, &cell);
     cell
 }
 
@@ -924,7 +923,7 @@ fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFac
         else {
             return;
         };
-        bind_cell_chrome(&cell, list_item);
+        apply_cd_row_tint(&cell, list_item);
         let Some((spinner, icon)) = status_widgets_of(item) else {
             return;
         };
@@ -990,7 +989,7 @@ fn build_cd_check_factory(
         else {
             return;
         };
-        bind_cell_chrome(&cell, list_item);
+        apply_cd_row_tint(&cell, list_item);
         let Some(check) = cell
             .first_child()
             .and_then(|child| child.downcast::<gtk::CheckButton>().ok())
@@ -1026,7 +1025,7 @@ fn build_cd_number_factory() -> gtk::SignalListItemFactory {
         else {
             return;
         };
-        bind_cell_chrome(&cell, list_item);
+        apply_cd_row_tint(&cell, list_item);
         cell.set_text(
             &list_item_cd_row(list_item, |row| format!("{:02}", row.number)).unwrap_or_default(),
         );
@@ -1054,7 +1053,7 @@ fn build_cd_duration_factory() -> gtk::SignalListItemFactory {
         else {
             return;
         };
-        bind_cell_chrome(&cell, list_item);
+        apply_cd_row_tint(&cell, list_item);
         cell.set_text(
             &list_item_cd_row(list_item, |row| format_duration(row.duration)).unwrap_or_default(),
         );
@@ -1113,7 +1112,7 @@ fn build_cd_text_factory(
         else {
             return;
         };
-        bind_cell_chrome(&cell, list_item);
+        apply_cd_row_tint(&cell, list_item);
         let value = list_item_cd_row(list_item, |row| match field {
             EditableField::Artist => row.display_artist(),
             _ => row.display_title(),
@@ -1143,7 +1142,7 @@ fn build_cd_filler_factory() -> gtk::SignalListItemFactory {
         else {
             return;
         };
-        bind_cell_chrome(&cell, list_item);
+        apply_cd_row_tint(&cell, list_item);
     });
     factory
 }
@@ -1180,19 +1179,6 @@ fn render_cd_status(spinner: &gtk::Spinner, icon: &gtk::Image, status: CdRipStat
     }
 }
 
-fn install_cd_cell_selection_sync(list_item: &gtk::ListItem, cell: &TableCell) {
-    let cell_for_selection = cell.clone();
-    list_item.connect_selected_notify(move |list_item| {
-        sync_cd_selection_class(&cell_for_selection, list_item.is_selected());
-    });
-    sync_cd_selection_class(cell, list_item.is_selected());
-}
-
-fn bind_cell_chrome(cell: &TableCell, list_item: &gtk::ListItem) {
-    apply_cd_row_tint(cell, list_item);
-    sync_cd_selection_class(cell, list_item.is_selected());
-}
-
 fn apply_cd_row_tint(cell: &TableCell, list_item: &gtk::ListItem) {
     cell.remove_css_class("track-table-row-even");
     cell.remove_css_class("track-table-row-odd");
@@ -1200,14 +1186,6 @@ fn apply_cd_row_tint(cell: &TableCell, list_item: &gtk::ListItem) {
         cell.add_css_class("track-table-row-even");
     } else {
         cell.add_css_class("track-table-row-odd");
-    }
-}
-
-fn sync_cd_selection_class(cell: &TableCell, selected: bool) {
-    if selected {
-        cell.add_css_class("track-table-row-selected");
-    } else {
-        cell.remove_css_class("track-table-row-selected");
     }
 }
 

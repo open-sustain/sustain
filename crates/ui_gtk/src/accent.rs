@@ -140,15 +140,13 @@ fn accent_css(palette: AccentPalette) -> String {
 
         columnview.track-table listview row:selected .track-table-cell,
         columnview.track-table listview row:selected .track-table-cell.track-table-row-even,
-        columnview.track-table listview row:selected .track-table-cell.track-table-row-odd,
-        .track-table-cell.track-table-row-selected {{
+        columnview.track-table listview row:selected .track-table-cell.track-table-row-odd {{
             background-color: {background};
             background-image: none;
             color: {foreground};
         }}
 
-        columnview.track-table listview row:selected .track-table-status-playing,
-        .track-table-cell.track-table-row-selected .track-table-status-playing {{
+        columnview.track-table listview row:selected .track-table-status-playing {{
             color: {foreground};
         }}
 
@@ -267,7 +265,7 @@ mod tests {
         let css = accent_css(accent_palette("green"));
 
         assert!(css.contains(".now-playing-side-icon-active"));
-        assert!(css.contains(".track-table-cell.track-table-row-selected"));
+        assert!(css.contains("row:selected .track-table-cell"));
         assert!(css.contains(".track-table-status-playing"));
         assert!(css.contains("#3a944a"));
     }

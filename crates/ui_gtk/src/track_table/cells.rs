@@ -262,7 +262,6 @@ pub(super) fn build_text_cell_factory(
             return;
         };
         apply_bound_row_tint(&cell, list_item);
-        sync_row_selection_class(&cell, list_item.is_selected());
 
         let Some(row_object) = list_item
             .item()
@@ -329,7 +328,6 @@ pub(super) fn build_rating_cell_factory(
             return;
         };
         apply_bound_row_tint(&cell, list_item);
-        sync_row_selection_class(&cell, list_item.is_selected());
         if let Some(stars) = cell.first_child().and_downcast::<RatingStars>() {
             stars.set_rating(row_rating(list_item.item()));
         }
@@ -385,7 +383,6 @@ fn build_status_cell_factory(
             return;
         };
         apply_bound_row_tint(&cell, list_item);
-        sync_row_selection_class(&cell, list_item.is_selected());
 
         let Some(icon) = cell
             .first_child()
@@ -418,7 +415,6 @@ fn build_filler_factory() -> gtk::SignalListItemFactory {
             return;
         };
         apply_bound_row_tint(&cell, list_item);
-        sync_row_selection_class(&cell, list_item.is_selected());
     });
 
     factory
@@ -435,11 +431,11 @@ fn new_track_text_cell(list_item: &gtk::ListItem, xalign: f32) -> TableCell {
     track_cell(list_item, TableCell::with_text(list_item, xalign))
 }
 
-/// `cell`, kept tinted and marked selected along with its row.
+/// `cell`, kept tinted along with its row. A selected row needs nothing
+/// from its cells: the stylesheet reads the row's own `:selected` state.
 fn track_cell(list_item: &gtk::ListItem, cell: TableCell) -> TableCell {
     cell.add_css_class("track-table-cell");
     install_cell_row_tint_sync(list_item, &cell);
-    install_cell_selection_sync(list_item, &cell);
     cell
 }
 
@@ -584,22 +580,6 @@ fn apply_bound_row_tint(cell: &TableCell, list_item: &gtk::ListItem) {
         set_exclusive_css_class(cell, "track-table-row-even", "track-table-row-odd");
     } else {
         set_exclusive_css_class(cell, "track-table-row-odd", "track-table-row-even");
-    }
-}
-
-fn install_cell_selection_sync(list_item: &gtk::ListItem, cell: &TableCell) {
-    let cell_for_selection = cell.clone();
-    list_item.connect_selected_notify(move |list_item| {
-        sync_row_selection_class(&cell_for_selection, list_item.is_selected());
-    });
-    sync_row_selection_class(cell, list_item.is_selected());
-}
-
-fn sync_row_selection_class(cell: &TableCell, selected: bool) {
-    if selected {
-        cell.add_css_class("track-table-row-selected");
-    } else {
-        cell.remove_css_class("track-table-row-selected");
     }
 }
 

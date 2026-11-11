@@ -889,8 +889,7 @@ columnview.track-table listview row:not(:selected):focus .track-table-row-odd {
 
 /* The selected-row colors go on the cell, which draws its text in its
    own color. */
-.track-table listview row:selected .track-table-cell,
-.track-table-cell.track-table-row-selected {
+.track-table listview row:selected .track-table-cell {
     background-color: @theme_selected_bg_color;
     border-bottom-color: transparent;
     color: @theme_selected_fg_color;
@@ -1004,8 +1003,7 @@ rating-stars {
 }
 
 /* A selected row's stars take the row's selection foreground. */
-.track-table listview row:selected .track-table-cell rating-stars,
-.track-table-cell.track-table-row-selected rating-stars {
+.track-table listview row:selected .track-table-cell rating-stars {
     color: inherit;
 }
 
@@ -1017,8 +1015,7 @@ rating-stars {
     color: #e66100;
 }
 
-columnview.track-table listview row:selected .track-table-status-missing,
-.track-table-cell.track-table-row-selected .track-table-status-missing {
+columnview.track-table listview row:selected .track-table-status-missing {
     color: @theme_selected_fg_color;
 }
 
