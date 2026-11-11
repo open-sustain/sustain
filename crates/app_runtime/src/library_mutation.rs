@@ -2,6 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -309,23 +310,29 @@ impl ApplicationRuntime {
         Ok(())
     }
 
-    pub(super) fn remove_track_from_library(
+    /// Remove `track_ids` from the library, all or none, leaving their
+    /// files on disk.
+    pub(super) fn remove_tracks_from_library(
         &mut self,
-        track_id: TrackId,
+        track_ids: &[TrackId],
     ) -> ApplicationRuntimeResult<()> {
         self.ensure_no_conflicting_library_mutation()?;
-        self.stop_playback_if_playing(track_id);
+        let removed = track_ids.iter().copied().collect::<HashSet<_>>();
+        self.stop_playback_if_playing_any(&removed);
         let library_store = self
             .library_store
             .as_ref()
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
         library_store
-            .delete_track(track_id)
+            .delete_tracks(track_ids)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        self.library_tracks.retain(|track| track.id != track_id);
-        self.search_index.remove(track_id);
-        self.playback_queue.remove_track(track_id);
-        self.dismiss_all_metadata_write_warnings(track_id);
+        self.library_tracks
+            .retain(|track| !removed.contains(&track.id));
+        self.playback_queue.remove_tracks(&removed);
+        for track_id in removed {
+            self.search_index.remove(track_id);
+            self.dismiss_all_metadata_write_warnings(track_id);
+        }
         Ok(())
     }
 
@@ -407,14 +414,18 @@ impl ApplicationRuntime {
             }
         }
 
-        self.remove_track_from_library(track_id)
+        self.remove_tracks_from_library(&[track_id])
     }
 
     pub(crate) fn stop_playback_if_playing(&mut self, track_id: TrackId) {
+        self.stop_playback_if_playing_any(&HashSet::from([track_id]));
+    }
+
+    fn stop_playback_if_playing_any(&mut self, track_ids: &HashSet<TrackId>) {
         let Some(service) = self.playback_service.as_deref() else {
             return;
         };
-        if playback_track_id(&service.state()) == Some(track_id) {
+        if playback_track_id(&service.state()).is_some_and(|playing| track_ids.contains(&playing)) {
             let _ = self.handle_playback_command(PlaybackCommand::Stop);
         }
     }

@@ -189,6 +189,11 @@ impl LibraryStore for SqliteLibraryStore {
         tracks::delete_track(&connection, track_id)
     }
 
+    fn delete_tracks(&self, track_ids: &[TrackId]) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        tracks::delete_tracks(&mut connection, track_ids)
+    }
+
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>> {
         let connection = self.connection_guard()?;
         tracks::track(&connection, track_id)

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
+use std::collections::HashSet;
+
 use crate::TrackId;
 
 use super::{
@@ -675,6 +677,36 @@ fn upcoming_preview_includes_all_curated_entries_and_caps_continuation() {
             PlaybackQueueEntryKind::Continuation,
         ]
     );
+}
+
+#[test]
+fn remove_tracks_drops_every_given_track_from_the_queue() {
+    let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
+
+    queue.remove_tracks(&HashSet::from([track_id(1), track_id(2)]));
+
+    assert_eq!(queue.ordered_track_ids(), &[track_id(3)]);
+    assert_eq!(queue.play_order_track_ids(), &[track_id(3)]);
+    assert_eq!(queue.current_track_id(), None);
+}
+
+#[test]
+fn remove_tracks_keeps_the_lazy_cursor_on_the_current_track() {
+    let mut queue = queue_with_options(
+        track_id(1),
+        PlaybackOptions {
+            shuffle_mode: ShuffleMode::Smart,
+            repeat_mode: RepeatMode::Off,
+        },
+    );
+    assert!(queue.lazy_append_pick(track_id(3)));
+    assert!(queue.move_to_track(track_id(3)));
+
+    queue.remove_tracks(&HashSet::from([track_id(1)]));
+
+    assert_eq!(queue.play_order_track_ids(), &[track_id(3)]);
+    assert_eq!(queue.current_track_id(), Some(track_id(3)));
+    assert_eq!(queue.previous_track_id(), None);
 }
 
 #[test]

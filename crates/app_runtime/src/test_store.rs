@@ -386,6 +386,10 @@ impl LibraryStore for FaultyStore {
         self.inner.delete_track(track_id)
     }
 
+    fn delete_tracks(&self, track_ids: &[TrackId]) -> StoreResult<()> {
+        self.inner.delete_tracks(track_ids)
+    }
+
     fn commit_duplicate_consolidation(&self, plan: &DuplicateConsolidationPlan) -> StoreResult<()> {
         self.inner.commit_duplicate_consolidation(plan)
     }

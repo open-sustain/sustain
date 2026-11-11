@@ -371,6 +371,14 @@ pub(super) fn delete_track(connection: &Connection, track_id: TrackId) -> StoreR
         .map_err(StoreError::from)
 }
 
+pub(super) fn delete_tracks(connection: &mut Connection, track_ids: &[TrackId]) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    for track_id in track_ids {
+        delete_track(&transaction, *track_id)?;
+    }
+    transaction.commit().map_err(StoreError::from)
+}
+
 pub(super) fn track(connection: &Connection, track_id: TrackId) -> StoreResult<Option<Track>> {
     let mut statement = connection
         .prepare(SELECT_TRACK_BY_ID_SQL.as_str())

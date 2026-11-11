@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
+use std::collections::HashSet;
+
 use crate::{PlaylistId, TrackId};
 
 use super::{PlaybackOptions, RepeatMode, ShuffleMode, shuffle::shuffled_track_ids};
@@ -417,21 +419,25 @@ impl PlaybackQueue {
         self.replace_ordered_track_ids(ordered_track_ids, available_track_ids, shuffle_seed);
     }
 
-    pub fn remove_track(&mut self, track_id: TrackId) {
+    /// Drop `track_ids` from the queue — tracks that left the library.
+    pub fn remove_tracks(&mut self, track_ids: &HashSet<TrackId>) {
         self.ordered_track_ids
-            .retain(|candidate| *candidate != track_id);
-        if self.current_track_id == Some(track_id) {
+            .retain(|candidate| !track_ids.contains(candidate));
+        if self
+            .current_track_id
+            .is_some_and(|current| track_ids.contains(&current))
+        {
             self.current_track_id = None;
         }
         match &mut self.layout {
             PlaybackQueueLayout::Eager { play_order } => {
-                play_order.retain(|entry| entry.track_id != track_id);
+                remove_entries(play_order, track_ids);
             }
             PlaybackQueueLayout::Lazy {
                 played_history,
                 cursor,
             } => {
-                remove_entries_and_reanchor_cursor(played_history, cursor, &[track_id]);
+                remove_entries_and_reanchor_cursor(played_history, cursor, track_ids);
             }
         }
     }
@@ -449,10 +455,11 @@ impl PlaybackQueue {
         if to_insert.is_empty() {
             return false;
         }
+        let moved = to_insert.iter().copied().collect::<HashSet<_>>();
 
         match &mut self.layout {
             PlaybackQueueLayout::Eager { play_order } => {
-                remove_entries(play_order, &to_insert);
+                remove_entries(play_order, &moved);
                 let Some(index) = entry_position(play_order, current_track_id) else {
                     return false;
                 };
@@ -462,7 +469,7 @@ impl PlaybackQueue {
                 played_history,
                 cursor,
             } => {
-                remove_entries_and_reanchor_cursor(played_history, cursor, &to_insert);
+                remove_entries_and_reanchor_cursor(played_history, cursor, &moved);
                 let insertion = cursor.saturating_add(1).min(played_history.len());
                 insert_curated(played_history, insertion, &to_insert);
             }
@@ -484,10 +491,11 @@ impl PlaybackQueue {
         if to_append.is_empty() {
             return false;
         }
+        let moved = to_append.iter().copied().collect::<HashSet<_>>();
 
         match &mut self.layout {
             PlaybackQueueLayout::Eager { play_order } => {
-                remove_entries(play_order, &to_append);
+                remove_entries(play_order, &moved);
                 let Some(current) = entry_position(play_order, current_track_id) else {
                     return false;
                 };
@@ -498,7 +506,7 @@ impl PlaybackQueue {
                 played_history,
                 cursor,
             } => {
-                remove_entries_and_reanchor_cursor(played_history, cursor, &to_append);
+                remove_entries_and_reanchor_cursor(played_history, cursor, &moved);
                 let insertion = curated_tail(played_history, cursor.saturating_add(1));
                 insert_curated(played_history, insertion, &to_append);
             }
@@ -578,7 +586,11 @@ impl PlaybackQueue {
                 // The track is strictly after the cursor (it was upcoming),
                 // so removing it never shifts the cursor's target; the
                 // clamp below only defends the in-range invariant.
-                remove_entries_and_reanchor_cursor(played_history, cursor, &[track_id]);
+                remove_entries_and_reanchor_cursor(
+                    played_history,
+                    cursor,
+                    &HashSet::from([track_id]),
+                );
             }
         }
         true
@@ -811,29 +823,29 @@ fn eager_play_order(
 }
 
 fn queue_candidates(track_ids: &[TrackId], current_track_id: TrackId) -> Vec<TrackId> {
-    let mut candidates = Vec::with_capacity(track_ids.len());
-    for track_id in track_ids {
-        if *track_id != current_track_id && !candidates.contains(track_id) {
-            candidates.push(*track_id);
-        }
-    }
-    candidates
+    let mut seen = HashSet::with_capacity(track_ids.len());
+    track_ids
+        .iter()
+        .copied()
+        .filter(|track_id| *track_id != current_track_id && seen.insert(*track_id))
+        .collect()
 }
 
 fn insert_curated(order: &mut Vec<PlaybackQueueEntry>, insertion: usize, track_ids: &[TrackId]) {
-    for (offset, track_id) in track_ids.iter().enumerate() {
-        order.insert(insertion + offset, PlaybackQueueEntry::curated(*track_id));
-    }
+    order.splice(
+        insertion..insertion,
+        track_ids.iter().copied().map(PlaybackQueueEntry::curated),
+    );
 }
 
-fn remove_entries(order: &mut Vec<PlaybackQueueEntry>, track_ids: &[TrackId]) {
+fn remove_entries(order: &mut Vec<PlaybackQueueEntry>, track_ids: &HashSet<TrackId>) {
     order.retain(|entry| !track_ids.contains(&entry.track_id));
 }
 
 fn remove_entries_and_reanchor_cursor(
     order: &mut Vec<PlaybackQueueEntry>,
     cursor: &mut usize,
-    track_ids: &[TrackId],
+    track_ids: &HashSet<TrackId>,
 ) {
     let removed_before_cursor = order
         .iter()

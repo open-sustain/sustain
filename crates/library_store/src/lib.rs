@@ -332,6 +332,8 @@ pub trait LibraryStore: Send + Sync {
     /// atomically.
     fn commit_duplicate_consolidation(&self, plan: &DuplicateConsolidationPlan) -> StoreResult<()>;
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()>;
+    /// Atomically delete a batch of library rows.
+    fn delete_tracks(&self, track_ids: &[TrackId]) -> StoreResult<()>;
     fn track(&self, track_id: TrackId) -> StoreResult<Option<Track>>;
     /// The track whose file is at `relative_path`, if any.
     fn track_id_at(&self, relative_path: &TrackRelativePath) -> StoreResult<Option<TrackId>>;

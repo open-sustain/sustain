@@ -148,8 +148,8 @@ impl ApplicationRuntime {
             ApplicationCommand::ScanLibrary { library_path } => {
                 self.scan_library(library_path)?;
             }
-            ApplicationCommand::RemoveTrackFromLibrary { track_id } => {
-                self.remove_track_from_library(track_id)?;
+            ApplicationCommand::RemoveTracksFromLibrary { track_ids } => {
+                self.remove_tracks_from_library(&track_ids)?;
             }
             ApplicationCommand::MoveTrackToTrash { track_id } => {
                 self.move_track_to_trash(track_id)?;

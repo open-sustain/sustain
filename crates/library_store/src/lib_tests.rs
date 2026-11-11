@@ -546,6 +546,37 @@ fn deleting_a_missing_track_is_a_no_op() {
 }
 
 #[test]
+fn deleting_tracks_removes_the_batch_and_its_playlist_entries() {
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let kept = track(2, "b.flac");
+    store
+        .save_tracks(&[track(1, "a.flac"), kept.clone(), track(3, "c.flac")])
+        .expect("save tracks");
+    let stored_playlist = playlist(
+        1,
+        "Favorites",
+        vec![entry(1, 1, 0), entry(1, 2, 1), entry(1, 3, 2)],
+    );
+    store
+        .save_playlist(stored_playlist.clone())
+        .expect("save playlist");
+
+    assert_eq!(store.delete_tracks(&[track_id(1), track_id(3)]), Ok(()));
+
+    assert_eq!(store.tracks(), Ok(vec![kept]));
+    let stored = store
+        .playlist(stored_playlist.id)
+        .expect("playlist loads")
+        .expect("playlist exists");
+    let entries = stored
+        .entries
+        .iter()
+        .map(|entry| entry.track_id)
+        .collect::<Vec<_>>();
+    assert_eq!(entries, [track_id(2)]);
+}
+
+#[test]
 fn track_id_at_finds_the_track_stored_at_a_path() {
     let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     store.save_track(track(1, "a.flac")).expect("save");

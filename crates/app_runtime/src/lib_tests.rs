@@ -399,7 +399,9 @@ fn runtime_handles_every_application_command_intentionally() {
             Err(ApplicationRuntimeError::LibraryServicesUnavailable),
         ),
         (
-            ApplicationCommand::RemoveTrackFromLibrary { track_id },
+            ApplicationCommand::RemoveTracksFromLibrary {
+                track_ids: vec![track_id],
+            },
             Err(ApplicationRuntimeError::LibraryServicesUnavailable),
         ),
         (
@@ -4024,8 +4026,8 @@ fn runtime_removes_tracks_from_library_and_stops_playback() {
         Ok(())
     );
     assert_eq!(
-        runtime.handle_command(ApplicationCommand::RemoveTrackFromLibrary {
-            track_id: removed_id,
+        runtime.handle_command(ApplicationCommand::RemoveTracksFromLibrary {
+            track_ids: vec![removed_id],
         }),
         Ok(())
     );
@@ -4037,6 +4039,53 @@ fn runtime_removes_tracks_from_library_and_stops_playback() {
         runtime.notifications().persistent_stack().is_empty(),
         "removing a track also removes it from the aggregate mirror warning"
     );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn runtime_removes_a_batch_of_tracks_from_library_and_queue() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    for name in ["a.flac", "b.flac", "c.flac"] {
+        std::fs::write(root.join(name), b"not real audio").expect("write fake track");
+    }
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let kept = test_track(track_id(1), "a.flac");
+    store
+        .save_tracks(&[
+            kept.clone(),
+            test_track(track_id(2), "b.flac"),
+            test_track(track_id(3), "c.flac"),
+        ])
+        .expect("save tracks");
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize")
+    .with_playback_service(Box::new(NullPlaybackService::new()));
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: PlaybackQueueRequest::Library,
+        })),
+        Ok(())
+    );
+    assert_eq!(runtime.playback_queue_next_track_id(), Some(track_id(2)));
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::RemoveTracksFromLibrary {
+            track_ids: vec![track_id(3), track_id(2)],
+        }),
+        Ok(())
+    );
+
+    assert_eq!(runtime.library_tracks(), std::slice::from_ref(&kept));
+    assert_eq!(store.tracks(), Ok(vec![kept]));
+    assert_eq!(runtime.playback_queue_current_track_id(), Some(track_id(1)));
+    assert_eq!(runtime.playback_queue_next_track_id(), None);
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }
@@ -4200,7 +4249,9 @@ fn pending_managed_metadata_retarget_blocks_structural_library_operations_only()
         Err(ApplicationRuntimeError::BackgroundTaskRunning)
     ));
     assert_eq!(
-        runtime.handle_command(ApplicationCommand::RemoveTrackFromLibrary { track_id }),
+        runtime.handle_command(ApplicationCommand::RemoveTracksFromLibrary {
+            track_ids: vec![track_id],
+        }),
         Err(ApplicationRuntimeError::BackgroundTaskRunning)
     );
     assert_eq!(
@@ -6431,8 +6482,8 @@ fn a_retried_track_deleted_meanwhile_is_resolved_without_coming_back() {
     runtime.apply_track_updated(track_id(1));
     store.set_fail_track_read(false);
     runtime
-        .handle_command(ApplicationCommand::RemoveTrackFromLibrary {
-            track_id: track_id(1),
+        .handle_command(ApplicationCommand::RemoveTracksFromLibrary {
+            track_ids: vec![track_id(1)],
         })
         .expect("remove the track");
 
@@ -7267,6 +7318,10 @@ impl LibraryStore for CallCountingLibraryStore {
 
     fn delete_track(&self, track_id: TrackId) -> StoreResult<()> {
         self.inner.delete_track(track_id)
+    }
+
+    fn delete_tracks(&self, track_ids: &[TrackId]) -> StoreResult<()> {
+        self.inner.delete_tracks(track_ids)
     }
 
     fn commit_duplicate_consolidation(&self, plan: &DuplicateConsolidationPlan) -> StoreResult<()> {

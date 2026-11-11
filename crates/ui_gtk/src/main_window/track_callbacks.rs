@@ -482,14 +482,14 @@ pub(super) fn track_context_actions(
             command_controller,
             playback_changed.clone(),
             tracks_removed_holder.clone(),
-            |track_id| ApplicationCommand::RemoveTrackFromLibrary { track_id },
+            remove_from_library_commands,
         )),
         TrackContextAction::move_to_trash(track_removal_callback(
             runtime,
             command_controller,
             playback_changed,
             tracks_removed_holder.clone(),
-            |track_id| ApplicationCommand::MoveTrackToTrash { track_id },
+            move_to_trash_commands,
         )),
     ])
 }
@@ -547,14 +547,14 @@ pub(super) fn playlist_track_context_actions(
             command_controller,
             playback_changed.clone(),
             tracks_removed_holder.clone(),
-            |track_id| ApplicationCommand::RemoveTrackFromLibrary { track_id },
+            remove_from_library_commands,
         )),
         TrackContextAction::move_to_trash(track_removal_callback(
             runtime,
             command_controller,
             playback_changed,
             tracks_removed_holder.clone(),
-            |track_id| ApplicationCommand::MoveTrackToTrash { track_id },
+            move_to_trash_commands,
         )),
     ])
 }
@@ -709,24 +709,35 @@ fn current_selection_is_regular_playlist(sidebar: &PlaylistSidebar) -> TrackActi
 /// Runs a library-removing command (Remove from Library, Move to Trash) on
 /// each selected track, then reports the tracks that actually left: a
 /// command can fail for some tracks of the selection and not others.
+/// One command for the whole selection: the library drops it in a single
+/// transaction.
+fn remove_from_library_commands(track_ids: &[TrackId]) -> Vec<ApplicationCommand> {
+    vec![ApplicationCommand::RemoveTracksFromLibrary {
+        track_ids: track_ids.to_vec(),
+    }]
+}
+
+/// One command per track: each file is trashed, or kept, on its own.
+fn move_to_trash_commands(track_ids: &[TrackId]) -> Vec<ApplicationCommand> {
+    track_ids
+        .iter()
+        .map(|&track_id| ApplicationCommand::MoveTrackToTrash { track_id })
+        .collect()
+}
+
 fn track_removal_callback(
     runtime: &SharedRuntime,
     command_controller: &SharedCommandController,
     playback_changed: PlaybackChangedCallback,
     tracks_removed_holder: TracksRemovedHolder,
-    command_builder: impl Fn(TrackId) -> ApplicationCommand + 'static,
+    commands: fn(&[TrackId]) -> Vec<ApplicationCommand>,
 ) -> TrackActionCallback {
     let runtime = runtime.clone();
     let command_controller = command_controller.clone();
 
     Rc::new(move |invocation: TrackActionInvocation| {
         let track_ids = invocation.selected_track_ids;
-        let commands = track_ids
-            .iter()
-            .copied()
-            .map(&command_builder)
-            .collect::<Vec<_>>();
-        let result = command_controller.dispatch_batch(commands);
+        let result = command_controller.dispatch_batch(commands(&track_ids));
         if result.succeeded == 0 {
             return;
         }

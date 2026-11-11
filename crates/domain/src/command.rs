@@ -95,8 +95,10 @@ pub enum ApplicationCommand {
     FetchArtwork {
         track_id: TrackId,
     },
-    RemoveTrackFromLibrary {
-        track_id: TrackId,
+    /// Remove tracks from the library, all or none. Their files stay on
+    /// disk.
+    RemoveTracksFromLibrary {
+        track_ids: Vec<TrackId>,
     },
     MoveTrackToTrash {
         track_id: TrackId,
