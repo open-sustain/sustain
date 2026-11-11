@@ -99,12 +99,21 @@ impl ArtworkRepository {
             .unwrap_or_default()
     }
 
+    /// Advance `source`'s generation, then drop its disk row. A worker
+    /// stores a decode only while its generation is still current, checked
+    /// under the disk cache's own lock (see [`ArtworkDiskCache::store`]): a
+    /// store that checked before the advance lands before the delete, and
+    /// one that checks after it stores nothing. The generation lock itself
+    /// is never held across disk work, so the main thread reading a
+    /// generation never waits on a worker's write.
     pub(super) fn invalidate(&self, source: &ArtworkSource) {
-        let Ok(mut generations) = self.source_generations.lock() else {
-            return;
-        };
-        let generation = generations.entry(source.clone()).or_default();
-        *generation = generation.saturating_add(1);
+        {
+            let Ok(mut generations) = self.source_generations.lock() else {
+                return;
+            };
+            let generation = generations.entry(source.clone()).or_default();
+            *generation = generation.saturating_add(1);
+        }
         if let Some(disk_cache) = &self.disk_cache {
             disk_cache.delete(source);
         }
@@ -127,12 +136,10 @@ impl ArtworkRepository {
             ArtworkSource::EmbeddedTrack { file_path, .. } => {
                 let bytes = self.metadata_service.read_artwork(file_path).ok().flatten();
                 let decoded = decode_artwork(bytes, variant);
-                let generations = self.source_generations.lock().ok();
-                if generations.as_ref().is_some_and(|generations| {
-                    generations.get(source).copied().unwrap_or_default() == generation
-                }) && let (Some(cache), Some(fingerprint)) = (&self.disk_cache, fingerprint)
-                {
-                    cache.store(source, fingerprint, &decoded.cache_entry);
+                if let (Some(cache), Some(fingerprint)) = (&self.disk_cache, fingerprint) {
+                    cache.store(source, fingerprint, &decoded.cache_entry, || {
+                        self.source_generation(source) == generation
+                    });
                 }
                 decoded.artwork
             }
@@ -395,17 +402,24 @@ impl ArtworkDiskCache {
         );
     }
 
+    /// Store `cached` for `source` if `still_current` holds, asked while
+    /// the cache is locked: nothing else reaches the cache between that
+    /// answer and the write.
     fn store(
         &self,
         source: &ArtworkSource,
         fingerprint: ArtworkFileFingerprint,
         cached: &CachedArtwork,
+        still_current: impl FnOnce() -> bool,
     ) {
         let (source_kind, source_key) = source.cache_key();
         let connection = match self.connection.lock() {
             Ok(connection) => connection,
             Err(_) => return,
         };
+        if !still_current() {
+            return;
+        }
         let palette = cached.palette;
         let background = palette.map(|palette| palette.background);
         let foreground = palette.map(|palette| palette.foreground);
@@ -730,6 +744,29 @@ mod tests {
     ];
 
     #[test]
+    fn a_decode_superseded_before_its_store_is_not_cached() {
+        let (_dir, cache) = test_cache();
+        let source = test_source();
+        let fingerprint = test_fingerprint();
+
+        cache.store(
+            &source,
+            fingerprint,
+            &CachedArtwork {
+                tile_png: Some(VALID_PNG.to_vec()),
+                ..cached_metadata()
+            },
+            || false,
+        );
+
+        assert!(
+            cache
+                .load(&source, fingerprint, ArtworkVariant::Tile)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn cache_merges_tile_and_detail_variants_for_same_fingerprint() {
         let (_dir, cache) = test_cache();
         let source = test_source();
@@ -742,6 +779,7 @@ mod tests {
                 tile_png: Some(VALID_PNG.to_vec()),
                 ..cached_metadata()
             },
+            || true,
         );
         assert!(
             cache
@@ -757,6 +795,7 @@ mod tests {
                 detail_png: Some(VALID_PNG.to_vec()),
                 ..cached_metadata()
             },
+            || true,
         );
 
         let tile = cache
@@ -786,6 +825,7 @@ mod tests {
                 detail_png: Some(vec![0; MAX_ENCODED_ARTWORK_BYTES + 1]),
                 ..cached_metadata()
             },
+            || true,
         );
 
         assert!(
@@ -814,6 +854,7 @@ mod tests {
                 tile_png: Some(VALID_PNG.to_vec()),
                 ..cached_metadata()
             },
+            || true,
         );
         set_updated_at(&cache, &source, 1);
 
@@ -845,6 +886,7 @@ mod tests {
                     detail_png: Some(VALID_PNG.to_vec()),
                     ..cached_metadata()
                 },
+                || true,
             );
         }
 
