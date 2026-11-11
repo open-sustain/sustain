@@ -11,7 +11,7 @@ use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, OnlineCapability, OnlineRunRequest, PlaylistItem,
 };
 
-use super::model::{bound_playlist_item, bound_sidebar_item};
+use super::model::{bound_playlist_item, bound_tree_node};
 use super::{
     AnalysisEnabledQueryHolder, AnalysisRunCallbackHolder, DeleteCallbackHolder,
     EditSmartPlaylistCallbackHolder, OnlineBusyQueryHolder, OnlineRunCallbackHolder,
@@ -67,7 +67,7 @@ pub(super) fn attach_row_context_menu(
     gesture.set_button(gdk::BUTTON_SECONDARY);
     let list_item = list_item.downgrade();
     gesture.connect_pressed(move |gesture, _n_press, x, y| {
-        let (Some(row), Some(shown)) = (gesture.widget(), bound_sidebar_item(&list_item)) else {
+        let (Some(row), Some(shown)) = (gesture.widget(), bound_tree_node(&list_item)) else {
             return;
         };
         gesture.set_state(gtk::EventSequenceState::Claimed);
@@ -519,7 +519,7 @@ mod tests {
         attach_rename_entry_signals, playlist_row_context_popover, popup_row_context_menu,
         row_context_menu_model,
     };
-    use crate::sidebar::model::SidebarItem;
+    use sustain_app_runtime::PlaylistTreeNode;
 
     #[test]
     fn playlist_row_context_popover_uses_nested_submenus() {
@@ -822,7 +822,7 @@ mod tests {
                     .and_then(|row| row.item())
                     .and_downcast::<glib::BoxedAnyObject>()
                     .expect("a sidebar row")
-                    .borrow::<SidebarItem>()
+                    .borrow::<PlaylistTreeNode>()
                     .name
                     .clone();
                 let name_stack = list_item
@@ -837,7 +837,7 @@ mod tests {
                 name_stack.set_visible_child_name("label");
             });
             let sidebar_row = |id: i64, name: &str| {
-                glib::BoxedAnyObject::new(SidebarItem {
+                glib::BoxedAnyObject::new(PlaylistTreeNode {
                     name: name.to_owned(),
                     item: PlaylistItem::Playlist(playlist_id(id)),
                 })

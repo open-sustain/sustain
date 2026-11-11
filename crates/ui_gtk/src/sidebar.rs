@@ -11,7 +11,7 @@ use gtk::{gdk, glib};
 
 use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, ConnectedDevice, DeviceKind, DeviceTarget,
-    OnlineRunRequest, PlaylistItem, SmartPlaylistId, TocSnapshot, TrackId,
+    OnlineRunRequest, PlaylistItem, PlaylistTreeNode, SmartPlaylistId, TocSnapshot, TrackId,
 };
 
 use super::{
@@ -25,7 +25,8 @@ mod row_context;
 
 pub(crate) use drag_drop::{DropPosition, parse_tracks_payload, tracks_drag_payload};
 use drag_drop::{SharedDropIndicator, attach_drag_and_drop};
-use model::{SidebarItem, SidebarTree, row_position, select_item, selected_item};
+pub(crate) use model::playlist_item_icon;
+use model::{SidebarTree, row_position, select_item, selected_item};
 use row_context::{
     SidebarRowActions, attach_rename_entry_signals, attach_row_context_menu, begin_rename,
 };
@@ -1305,12 +1306,12 @@ fn build_row_factory(
         let Some(boxed) = inner_object.downcast_ref::<glib::BoxedAnyObject>() else {
             return;
         };
-        let Ok(sidebar_item) = boxed.try_borrow::<SidebarItem>() else {
+        let Ok(sidebar_item) = boxed.try_borrow::<PlaylistTreeNode>() else {
             return;
         };
         let playlist_item = sidebar_item.item;
         let label_text = sidebar_item.name.clone();
-        let icon_name = sidebar_item.icon_name();
+        let icon_name = playlist_item_icon(sidebar_item.item);
         drop(sidebar_item);
 
         let Some(row_widget) = expander.child() else {
@@ -1415,8 +1416,8 @@ mod tests {
     use gtk::{gio, glib};
     use sustain_app_runtime::{ApplicationRuntime, PlaylistId, PlaylistItem};
 
-    use super::model::SidebarItem;
     use super::{PlaylistSidebar, SidebarSelection, build_row_factory};
+    use sustain_app_runtime::PlaylistTreeNode;
 
     /// A row's widgets must go with the row. The rename entry, the drag
     /// source, the drop target, and the context-menu gesture are wired
@@ -1439,7 +1440,7 @@ mod tests {
             );
             let store = gio::ListStore::new::<glib::BoxedAnyObject>();
             for id in 1..=300 {
-                store.append(&glib::BoxedAnyObject::new(SidebarItem {
+                store.append(&glib::BoxedAnyObject::new(PlaylistTreeNode {
                     name: format!("Playlist {id}"),
                     item: PlaylistItem::Playlist(PlaylistId::new(id).expect("positive id")),
                 }));

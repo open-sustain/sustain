@@ -27,19 +27,19 @@ pub use sustain_domain::{
     MusicalKey, OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
     PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
     PlaybackSession, PlaybackSettings, PlaybackState, Playlist, PlaylistEntry, PlaylistFolder,
-    PlaylistFolderId, PlaylistId, PlaylistItem, QualityBucket, QualityDistribution, QualityRange,
-    Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule,
-    SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection,
-    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
-    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
-    SmartShuffleEntropy, SyncDevice, SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock,
-    Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
-    TrackColumnSort, TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
-    TrackRelativePath, UiSettings, UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent,
-    YearCount, compare_optional_text, compute_library_statistics,
-    default_duplicate_metadata_selection, duplicate_audio_quality, effective_sort_key,
-    highest_quality_duplicate_audio_track_ids, matching_tracks, normalize_sort_text,
-    track_matches_rule_set,
+    PlaylistFolderId, PlaylistId, PlaylistItem, PlaylistTree, PlaylistTreeNode, QualityBucket,
+    QualityDistribution, QualityRange, Rating, RepeatMode, ShuffleMode, SmartPlaylist,
+    SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistId,
+    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
+    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice,
+    SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock, Track, TrackAvailability,
+    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort, TrackContentHash,
+    TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource, TrackRelativePath, UiSettings,
+    UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent, YearCount,
+    compare_optional_text, compute_library_statistics, default_duplicate_metadata_selection,
+    duplicate_audio_quality, effective_sort_key, highest_quality_duplicate_audio_track_ids,
+    matching_tracks, normalize_sort_text, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities, StoreError};
 pub use sustain_metadata::{
@@ -1817,6 +1817,16 @@ impl ApplicationRuntime {
 
     pub fn smart_playlists(&self) -> &[SmartPlaylist] {
         &self.smart_playlists
+    }
+
+    /// The folders, playlists, and smart playlists as the user arranged
+    /// them.
+    pub fn playlist_tree(&self) -> PlaylistTree {
+        PlaylistTree::new(
+            &self.playlist_folders,
+            &self.playlists,
+            &self.smart_playlists,
+        )
     }
 
     pub fn last_scan_library_path(&self) -> Option<&Path> {

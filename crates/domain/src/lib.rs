@@ -19,6 +19,7 @@ mod playback;
 mod playback_session;
 mod playlist;
 mod playlist_folder;
+mod playlist_tree;
 mod rating;
 mod settings;
 mod smart_playlist;
@@ -68,6 +69,7 @@ pub use playback::{
 pub use playback_session::PlaybackSession;
 pub use playlist::{Playlist, PlaylistEntry};
 pub use playlist_folder::{PlaylistFolder, PlaylistItem};
+pub use playlist_tree::{PlaylistTree, PlaylistTreeNode};
 pub use rating::Rating;
 pub use settings::{
     AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, BpmRange, CdEncodingProfile,

@@ -3,107 +3,22 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     rc::Rc,
 };
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use sustain_app_runtime::{
-    ApplicationRuntime, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistItem, SmartPlaylist,
+    ApplicationRuntime, PlaylistFolderId, PlaylistItem, PlaylistTree, PlaylistTreeNode,
 };
 
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct SidebarItem {
-    pub(super) name: String,
-    pub(super) item: PlaylistItem,
-}
-
-impl SidebarItem {
-    pub(super) fn icon_name(&self) -> &'static str {
-        match self.item {
-            PlaylistItem::Folder(_) => "folder-symbolic",
-            PlaylistItem::Playlist(_) => "view-list-symbolic",
-            PlaylistItem::SmartPlaylist(_) => "emblem-system-symbolic",
-        }
-    }
-}
-
-#[derive(Default)]
-struct SidebarSnapshot {
-    items_by_parent: BTreeMap<Option<PlaylistFolderId>, Vec<SidebarItem>>,
-}
-
-impl SidebarSnapshot {
-    fn from_runtime(runtime: &ApplicationRuntime) -> Self {
-        Self::build(
-            runtime.playlist_folders(),
-            runtime.playlists(),
-            runtime.smart_playlists(),
-        )
-    }
-
-    fn build(
-        folders: &[PlaylistFolder],
-        playlists: &[Playlist],
-        smart_playlists: &[SmartPlaylist],
-    ) -> Self {
-        let mut items_by_parent: BTreeMap<Option<PlaylistFolderId>, Vec<(u32, SidebarItem)>> =
-            BTreeMap::new();
-
-        for folder in folders {
-            items_by_parent
-                .entry(folder.parent_folder_id)
-                .or_default()
-                .push((
-                    folder.position,
-                    SidebarItem {
-                        name: folder.name.clone(),
-                        item: PlaylistItem::Folder(folder.id),
-                    },
-                ));
-        }
-        for playlist in playlists {
-            items_by_parent
-                .entry(playlist.parent_folder_id)
-                .or_default()
-                .push((
-                    playlist.position,
-                    SidebarItem {
-                        name: playlist.name.clone(),
-                        item: PlaylistItem::Playlist(playlist.id),
-                    },
-                ));
-        }
-        for smart in smart_playlists {
-            items_by_parent
-                .entry(smart.parent_folder_id)
-                .or_default()
-                .push((
-                    smart.position,
-                    SidebarItem {
-                        name: smart.name.clone(),
-                        item: PlaylistItem::SmartPlaylist(smart.id),
-                    },
-                ));
-        }
-
-        let items_by_parent = items_by_parent
-            .into_iter()
-            .map(|(parent, mut bucket)| {
-                bucket.sort_by_key(|(position, _)| *position);
-                (parent, bucket.into_iter().map(|(_, item)| item).collect())
-            })
-            .collect();
-
-        Self { items_by_parent }
-    }
-
-    fn items_under(&self, parent: Option<PlaylistFolderId>) -> &[SidebarItem] {
-        self.items_by_parent
-            .get(&parent)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+/// The icon a sidebar row, or any other list of playlists, shows for `item`.
+pub(crate) fn playlist_item_icon(item: PlaylistItem) -> &'static str {
+    match item {
+        PlaylistItem::Folder(_) => "folder-symbolic",
+        PlaylistItem::Playlist(_) => "view-list-symbolic",
+        PlaylistItem::SmartPlaylist(_) => "emblem-system-symbolic",
     }
 }
 
@@ -133,11 +48,13 @@ pub(super) fn row_position(rows: &impl IsA<gio::ListModel>, target: PlaylistItem
 
 /// The sidebar item a list row is bound to right now. Row controllers
 /// hold their list item weakly, since the item owns the row's widgets.
-pub(super) fn bound_sidebar_item(list_item: &glib::WeakRef<gtk::ListItem>) -> Option<SidebarItem> {
+pub(super) fn bound_tree_node(
+    list_item: &glib::WeakRef<gtk::ListItem>,
+) -> Option<PlaylistTreeNode> {
     let object = bound_row_object(list_item)?;
     let boxed = object.downcast_ref::<glib::BoxedAnyObject>()?;
     boxed
-        .try_borrow::<SidebarItem>()
+        .try_borrow::<PlaylistTreeNode>()
         .ok()
         .map(|item| item.clone())
 }
@@ -160,7 +77,7 @@ fn bound_row_object(list_item: &glib::WeakRef<gtk::ListItem>) -> Option<glib::Ob
 /// The playlist item a tree row's inner object stands for.
 pub(super) fn playlist_item_of(object: &glib::Object) -> Option<PlaylistItem> {
     let boxed = object.downcast_ref::<glib::BoxedAnyObject>()?;
-    let sidebar_item = boxed.try_borrow::<SidebarItem>().ok()?;
+    let sidebar_item = boxed.try_borrow::<PlaylistTreeNode>().ok()?;
     Some(sidebar_item.item)
 }
 
@@ -170,7 +87,7 @@ pub(super) fn playlist_item_of(object: &glib::Object) -> Option<PlaylistItem> {
 pub(super) struct SidebarTree {
     model: gtk::TreeListModel,
     root: gio::ListStore,
-    snapshot: Rc<RefCell<SidebarSnapshot>>,
+    snapshot: Rc<RefCell<PlaylistTree>>,
     /// The child store of each folder whose row is expanded. The tree
     /// creates one when a folder expands and drops it when it collapses.
     folder_stores: Rc<RefCell<HashMap<PlaylistFolderId, glib::WeakRef<gio::ListStore>>>>,
@@ -178,19 +95,19 @@ pub(super) struct SidebarTree {
 
 impl SidebarTree {
     pub(super) fn new(runtime: &ApplicationRuntime) -> Self {
-        Self::with_snapshot(SidebarSnapshot::from_runtime(runtime))
+        Self::with_snapshot(runtime.playlist_tree())
     }
 
-    fn with_snapshot(snapshot: SidebarSnapshot) -> Self {
+    fn with_snapshot(snapshot: PlaylistTree) -> Self {
         let snapshot = Rc::new(RefCell::new(snapshot));
-        let root = list_store_for(snapshot.borrow().items_under(None));
+        let root = list_store_for(snapshot.borrow().children(None));
         let folder_stores: Rc<RefCell<HashMap<_, glib::WeakRef<gio::ListStore>>>> = Rc::default();
         let model = {
             let snapshot = snapshot.clone();
             let folder_stores = folder_stores.clone();
             gtk::TreeListModel::new(root.clone(), false, true, move |object| {
                 let folder_id = folder_of(object)?;
-                let store = list_store_for(snapshot.borrow().items_under(Some(folder_id)));
+                let store = list_store_for(snapshot.borrow().children(Some(folder_id)));
                 folder_stores
                     .borrow_mut()
                     .insert(folder_id, store.downgrade());
@@ -213,14 +130,14 @@ impl SidebarTree {
     /// smart playlists. Each level changes by one splice over the span
     /// that differs, so rows outside it keep their widgets.
     pub(super) fn update(&self, runtime: &ApplicationRuntime) {
-        self.apply(SidebarSnapshot::from_runtime(runtime));
+        self.apply(runtime.playlist_tree());
     }
 
-    fn apply(&self, snapshot: SidebarSnapshot) {
+    fn apply(&self, snapshot: PlaylistTree) {
         let collapsed = self.collapsed_folders();
         *self.snapshot.borrow_mut() = snapshot;
 
-        let root_items = self.snapshot.borrow().items_under(None).to_vec();
+        let root_items = self.snapshot.borrow().children(None).to_vec();
         splice_to(&self.root, &root_items);
         // Folders the root splice (re)created built their stores from the
         // new snapshot; the ones it kept still hold the old contents.
@@ -233,7 +150,7 @@ impl SidebarTree {
                 .collect()
         };
         for (folder_id, store) in expanded_folders {
-            let items = self.snapshot.borrow().items_under(Some(folder_id)).to_vec();
+            let items = self.snapshot.borrow().children(Some(folder_id)).to_vec();
             splice_to(&store, &items);
         }
 
@@ -274,7 +191,7 @@ fn folder_of(object: &glib::Object) -> Option<PlaylistFolderId> {
     }
 }
 
-fn list_store_for(items: &[SidebarItem]) -> gio::ListStore {
+fn list_store_for(items: &[PlaylistTreeNode]) -> gio::ListStore {
     let store = gio::ListStore::new::<glib::BoxedAnyObject>();
     for item in items {
         store.append(&glib::BoxedAnyObject::new(item.clone()));
@@ -285,13 +202,13 @@ fn list_store_for(items: &[SidebarItem]) -> gio::ListStore {
 /// Make `store` hold `target` with a single splice: the leading and
 /// trailing items it already shares with `target` stay, the span between
 /// them is replaced.
-fn splice_to(store: &gio::ListStore, target: &[SidebarItem]) {
-    let current: Vec<SidebarItem> = store
+fn splice_to(store: &gio::ListStore, target: &[PlaylistTreeNode]) {
+    let current: Vec<PlaylistTreeNode> = store
         .iter::<glib::BoxedAnyObject>()
         .filter_map(Result::ok)
         .filter_map(|boxed| {
             boxed
-                .try_borrow::<SidebarItem>()
+                .try_borrow::<PlaylistTreeNode>()
                 .ok()
                 .map(|item| item.clone())
         })
@@ -310,8 +227,8 @@ fn splice_to(store: &gio::ListStore, target: &[SidebarItem]) {
 /// The span of `current` to replace, and the span of `target` to replace
 /// it with, leaving the longest shared prefix and suffix in place.
 fn differing_span(
-    current: &[SidebarItem],
-    target: &[SidebarItem],
+    current: &[PlaylistTreeNode],
+    target: &[PlaylistTreeNode],
 ) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
     let prefix = current
         .iter()
@@ -332,10 +249,7 @@ fn differing_span(
 
 #[cfg(test)]
 mod tests {
-    use sustain_app_runtime::{
-        PlaylistId, SmartPlaylistId, SmartPlaylistMatchKind, SmartPlaylistRule,
-        SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
-    };
+    use sustain_app_runtime::{Playlist, PlaylistFolder, PlaylistId};
 
     use super::*;
 
@@ -363,75 +277,8 @@ mod tests {
         }
     }
 
-    fn smart_playlist(
-        id: i64,
-        name: &str,
-        parent: Option<PlaylistFolderId>,
-        position: u32,
-    ) -> SmartPlaylist {
-        SmartPlaylist {
-            id: SmartPlaylistId::new(id).expect("positive smart playlist id"),
-            name: name.to_owned(),
-            parent_folder_id: parent,
-            position,
-            rules: SmartPlaylistRuleSet {
-                match_kind: SmartPlaylistMatchKind::All,
-                rules: vec![SmartPlaylistRule::Text {
-                    field: SmartPlaylistTextField::Genre,
-                    operator: SmartPlaylistTextOperator::Is,
-                    value: "Trip-Hop".to_owned(),
-                }],
-                limit: None,
-            },
-        }
-    }
-
-    #[test]
-    fn snapshot_groups_items_by_parent_and_orders_them_by_position() {
-        let root_folder = folder(1, "Mixes", None, 1);
-        let root_playlist = playlist(1, "Drive", None, 0);
-        let root_smart = smart_playlist(1, "Recent", None, 2);
-        let nested_playlist = playlist(2, "Inside", Some(root_folder.id), 0);
-
-        let snapshot = SidebarSnapshot::build(
-            std::slice::from_ref(&root_folder),
-            &[root_playlist.clone(), nested_playlist.clone()],
-            std::slice::from_ref(&root_smart),
-        );
-
-        let root_items: Vec<PlaylistItem> = snapshot
-            .items_under(None)
-            .iter()
-            .map(|item| item.item)
-            .collect();
-        assert_eq!(
-            root_items,
-            vec![
-                PlaylistItem::Playlist(root_playlist.id),
-                PlaylistItem::Folder(root_folder.id),
-                PlaylistItem::SmartPlaylist(root_smart.id),
-            ]
-        );
-
-        let nested_items: Vec<PlaylistItem> = snapshot
-            .items_under(Some(root_folder.id))
-            .iter()
-            .map(|item| item.item)
-            .collect();
-        assert_eq!(
-            nested_items,
-            vec![PlaylistItem::Playlist(nested_playlist.id)]
-        );
-
-        assert!(
-            snapshot
-                .items_under(Some(PlaylistFolderId::new(999).expect("positive id")))
-                .is_empty()
-        );
-    }
-
-    fn named(item: PlaylistItem, name: &str) -> SidebarItem {
-        SidebarItem {
+    fn named(item: PlaylistItem, name: &str) -> PlaylistTreeNode {
+        PlaylistTreeNode {
             name: name.to_owned(),
             item,
         }
@@ -475,7 +322,7 @@ mod tests {
             .filter_map(|position| tree.model().row(position)?.item())
             .filter_map(|object| {
                 let boxed = object.downcast::<glib::BoxedAnyObject>().ok()?;
-                let name = boxed.try_borrow::<SidebarItem>().ok()?.name.clone();
+                let name = boxed.try_borrow::<PlaylistTreeNode>().ok()?.name.clone();
                 Some(name)
             })
             .collect()
@@ -490,7 +337,7 @@ mod tests {
             let mixes = folder(1, "Mixes", None, 1);
             let snapshot = |inside_name: &str, other_position: u32, four_position: u32| {
                 let other = folder(2, "Other", None, other_position);
-                SidebarSnapshot::build(
+                PlaylistTree::new(
                     &[mixes.clone(), other.clone()],
                     &[
                         playlist(1, "One", None, 0),

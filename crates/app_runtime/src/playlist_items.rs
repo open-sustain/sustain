@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use sustain_domain::{PlaylistFolderId, PlaylistItem};
+use sustain_domain::{PlaylistFolderId, PlaylistItem, PlaylistTree};
 use sustain_library_store::LibraryStore;
 
 use crate::{ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult};
-
-#[derive(Clone, Debug)]
-pub(crate) struct Sibling {
-    pub item: PlaylistItem,
-    pub position: u32,
-}
 
 pub(crate) fn ensure_parent_folder_exists(
     library_store: &dyn LibraryStore,
@@ -30,10 +24,12 @@ pub(crate) fn ensure_parent_folder_exists(
     }
 }
 
+/// The items directly in `parent_folder_id`, in the order the user arranged
+/// them.
 pub(crate) fn siblings_in_folder(
     library_store: &dyn LibraryStore,
     parent_folder_id: Option<PlaylistFolderId>,
-) -> ApplicationRuntimeResult<Vec<Sibling>> {
+) -> ApplicationRuntimeResult<Vec<PlaylistItem>> {
     let folders = library_store
         .playlist_folders()
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
@@ -43,37 +39,11 @@ pub(crate) fn siblings_in_folder(
     let smart_playlists = library_store
         .smart_playlists()
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-
-    let mut siblings = Vec::new();
-    for folder in folders
-        .into_iter()
-        .filter(|folder| folder.parent_folder_id == parent_folder_id)
-    {
-        siblings.push(Sibling {
-            item: PlaylistItem::Folder(folder.id),
-            position: folder.position,
-        });
-    }
-    for playlist in playlists
-        .into_iter()
-        .filter(|playlist| playlist.parent_folder_id == parent_folder_id)
-    {
-        siblings.push(Sibling {
-            item: PlaylistItem::Playlist(playlist.id),
-            position: playlist.position,
-        });
-    }
-    for smart in smart_playlists
-        .into_iter()
-        .filter(|smart| smart.parent_folder_id == parent_folder_id)
-    {
-        siblings.push(Sibling {
-            item: PlaylistItem::SmartPlaylist(smart.id),
-            position: smart.position,
-        });
-    }
-    siblings.sort_by_key(|sibling| (sibling.position, playlist_item_sort_key(sibling.item)));
-    Ok(siblings)
+    Ok(PlaylistTree::new(&folders, &playlists, &smart_playlists)
+        .children(parent_folder_id)
+        .iter()
+        .map(|node| node.item)
+        .collect())
 }
 
 pub(crate) fn next_sibling_position(
@@ -93,12 +63,12 @@ pub(crate) fn compact_sibling_positions(
 
 fn apply_positions(
     library_store: &dyn LibraryStore,
-    siblings: &[Sibling],
+    siblings: &[PlaylistItem],
     parent_folder_id: Option<PlaylistFolderId>,
 ) -> ApplicationRuntimeResult<()> {
     for (index, sibling) in siblings.iter().enumerate() {
         let new_position = index as u32;
-        update_item_placement(library_store, sibling.item, parent_folder_id, new_position)?;
+        update_item_placement(library_store, *sibling, parent_folder_id, new_position)?;
     }
     Ok(())
 }
@@ -157,14 +127,6 @@ fn update_item_placement(
         }
     }
     Ok(())
-}
-
-fn playlist_item_sort_key(item: PlaylistItem) -> (u8, i64) {
-    match item {
-        PlaylistItem::Folder(id) => (0, id.get()),
-        PlaylistItem::Playlist(id) => (1, id.get()),
-        PlaylistItem::SmartPlaylist(id) => (2, id.get()),
-    }
 }
 
 fn current_parent_of(
@@ -237,35 +199,24 @@ impl ApplicationRuntime {
         let source_parent = current_parent_of(library_store, item)?;
 
         if source_parent == target_parent_folder_id {
-            let mut siblings: Vec<Sibling> = siblings_in_folder(library_store, source_parent)?
+            let mut siblings: Vec<PlaylistItem> = siblings_in_folder(library_store, source_parent)?
                 .into_iter()
-                .filter(|sibling| sibling.item != item)
+                .filter(|sibling| *sibling != item)
                 .collect();
             let target_index = (position as usize).min(siblings.len());
-            siblings.insert(
-                target_index,
-                Sibling {
-                    item,
-                    position: target_index as u32,
-                },
-            );
+            siblings.insert(target_index, item);
             apply_positions(library_store, &siblings, source_parent)?;
         } else {
-            let source_siblings: Vec<Sibling> = siblings_in_folder(library_store, source_parent)?
-                .into_iter()
-                .filter(|sibling| sibling.item != item)
-                .collect();
+            let source_siblings: Vec<PlaylistItem> =
+                siblings_in_folder(library_store, source_parent)?
+                    .into_iter()
+                    .filter(|sibling| *sibling != item)
+                    .collect();
             apply_positions(library_store, &source_siblings, source_parent)?;
 
             let mut target_siblings = siblings_in_folder(library_store, target_parent_folder_id)?;
             let target_index = (position as usize).min(target_siblings.len());
-            target_siblings.insert(
-                target_index,
-                Sibling {
-                    item,
-                    position: target_index as u32,
-                },
-            );
+            target_siblings.insert(target_index, item);
             apply_positions(library_store, &target_siblings, target_parent_folder_id)?;
         }
 

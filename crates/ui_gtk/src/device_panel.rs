@@ -30,6 +30,7 @@ use sustain_app_runtime::{
 
 use crate::SharedRuntime;
 use crate::command_controller::SharedCommandController;
+use crate::sidebar::playlist_item_icon;
 use checklist::{ChecklistEntry, checklist};
 
 /// Recomputes the status-bar track/duration/size summary for the device
@@ -415,24 +416,18 @@ impl DeviceSyncPanel {
         let runtime = self.runtime.borrow();
         let selected: std::collections::HashSet<PlaylistItem> =
             runtime.device_selection(&device.id).into_iter().collect();
+        // The sidebar's order, folders left out: a folder is not synced
+        // itself, only the playlists in it.
         let entries: Vec<ChecklistEntry<PlaylistItem>> = runtime
-            .playlists()
-            .iter()
-            .map(|playlist| ChecklistEntry {
-                key: PlaylistItem::Playlist(playlist.id),
-                name: playlist.name.clone(),
-                icon: PLAYLIST_ICON,
+            .playlist_tree()
+            .depth_first()
+            .into_iter()
+            .filter(|node| !matches!(node.item, PlaylistItem::Folder(_)))
+            .map(|node| ChecklistEntry {
+                key: node.item,
+                name: node.name.clone(),
+                icon: playlist_item_icon(node.item),
             })
-            .chain(
-                runtime
-                    .smart_playlists()
-                    .iter()
-                    .map(|smart| ChecklistEntry {
-                        key: PlaylistItem::SmartPlaylist(smart.id),
-                        name: smart.name.clone(),
-                        icon: SMART_PLAYLIST_ICON,
-                    }),
-            )
             .collect();
         drop(runtime);
 
@@ -759,9 +754,6 @@ fn analysis_status_row(name: &str, missing: usize) -> gtk::Box {
 /// Width of the right-hand settings column.
 const SETTINGS_COLUMN_WIDTH: i32 = 260;
 
-/// Sidebar-consistent icons for the two playlist kinds in the checklist.
-const PLAYLIST_ICON: &str = "view-list-symbolic";
-const SMART_PLAYLIST_ICON: &str = "emblem-system-symbolic";
 const ARTIST_ICON: &str = "avatar-default-symbolic";
 
 /// One coloured run of the occupation bar, as a fraction of the device
