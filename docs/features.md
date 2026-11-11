@@ -614,9 +614,9 @@ the downbeat agrees on 74% of those. The rest mostly lock on the off-beat
 or a quarter beat away.
 
 ### Musical key detection — *Sustain-native*
-Estimates the song's tonal centre via chroma analysis over the same
-centered window as BPM, and stores one of the 24 major/minor labels as
-the track's key when it has none. Sustain remembers where each key came
+Estimates the song's tonal centre via chroma analysis over the whole
+track (the centered two minutes of a track over 15 minutes), and stores
+one of the 24 major/minor labels as the track's key when it has none. Sustain remembers where each key came
 from: a key it measured is measured again when the detector improves,
 while a key imported from the file's tags or typed in Get Info or a Key
 cell is kept, until the user clears it. Unlike the BPM, a tagged key is
@@ -644,12 +644,11 @@ regression over the 24 keys, from what Sustain's own front end measures in
 learned from the others, the strict-compatible rate is 79.8% on 604
 GiantSteps Key tracks, 74.8% on 1,159 GiantSteps MTG Key tracks and 75.6%
 on 1,722 FMAK `fma_medium` clips. rekordbox is a reference rather than
-ground truth, and the bar is to be at least as accurate as it is: on 2,499
+ground truth, and the bar is to be at least as accurate as it is: on 2,500
 tracks of the maintainer's library Sustain's key agrees strictly with
-rekordbox's on 83.9%, but on the 115 of them whose files carry a key tag,
+rekordbox's on 85.7%, but on the 115 of them whose files carry a key tag,
 rekordbox still matches the tag more often (87.0% strict against
-Sustain's 82.6%). The 18-track high-confidence private goldish set stays
-at 100.0%.
+Sustain's 84.3%).
 
 ### Audio analysis — *Sustain-native*
 A single heavy decode pass produces, as byproducts of the one decode,

@@ -15,12 +15,17 @@
 //!
 //! ## Analysis windows
 //!
-//! BPM and key are read off a **centered** window — the middle
-//! `BPM_KEY_WINDOW_SECS` of the track — not the opening seconds. The
-//! intro of a track (especially electronic music) is the least
+//! The tempo's metrical level is read off a **centered** window — the
+//! middle `BPM_KEY_WINDOW_SECS` of the track — not the opening seconds.
+//! The intro of a track (especially electronic music) is the least
 //! representative part: sparse, tame, often beatless. The middle is
-//! where the groove and the tonal centre actually live. The window is
-//! seeked to, so even on a long file we never decode the lead-in.
+//! where the groove actually lives. The window is seeked to, so even on
+//! a long file we never decode the lead-in.
+//!
+//! The key reads the **whole** normal-length track, so it does not hang
+//! on which section the middle falls in, a segment of at most
+//! `KEY_SEGMENT_SECS` at a time; a long track's key is read off the
+//! centered window.
 //!
 //! Tracks are tiered by length to keep the working set bounded:
 //!
@@ -40,8 +45,8 @@
 //! The windows nest — the BPM/key window is always the centre of the
 //! acoustics window — so when `audio` analysis is enabled the acoustics
 //! decode is computed once and BPM/key slice their window out of it for
-//! free. Key requested *without* audio decodes only its own centered
-//! window.
+//! free. On a normal-length track tempo and key decode the whole track,
+//! which they share with the audio pass.
 //!
 //! ## Tempo and beat grid
 //!
@@ -258,14 +263,18 @@ pub use waveform::WaveformTiers;
 /// chroma is weighed by each key's template — 24 weights, one vector per
 /// mode rotated onto each tonic, learned from the same 3,485
 /// human-labelled tracks (`analysis-bench learn-key-weights`). The
-/// circle-of-fifths bonus is gone: it never changed which key won. The
-/// front end is unchanged. Scored on each public corpus with weights
-/// learned from the other two, exact agreement rose from 52.8 to 61.1 %
-/// on GiantSteps Key and from 55.4 to 58.0 % on GiantSteps MTG Key, and
-/// held at 52 % on FMAK; on 2,499 tracks of the maintainer's library
-/// agreement with rekordbox rose from 81.2 % to 83.9 % strict. Every key
-/// is measured again; one Sustain measured replaces the stored one, a key
-/// imported or typed is kept. BPM and audio are untouched.
+/// circle-of-fifths bonus is gone: it never changed which key won.
+/// Scored on each public corpus with weights learned from the other two,
+/// exact agreement rose from 52.8 to 61.1 % on GiantSteps Key and from
+/// 55.4 to 58.0 % on GiantSteps MTG Key, and held at 52 % on FMAK. The
+/// key also reads the whole of a normal-length track rather than its
+/// centered two minutes, in two-minute segments (`KEY_SEGMENT_SECS`). On
+/// 2,500 tracks of the maintainer's library the two together raise strict
+/// agreement with rekordbox from 81.2 % to 85.7 %, and on the 115 whose
+/// files carry a key tag, strict agreement with the tag from 82.6 % to
+/// 84.3 %. Every key is measured again; one Sustain measured replaces the
+/// stored one, a key imported or typed is kept. BPM and audio are
+/// untouched.
 ///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
@@ -358,13 +367,13 @@ pub enum AnalysisError {
     DspFailed { path: String, message: String },
 }
 
-/// Length (seconds) of the centered window BPM and key are measured
-/// over. Long enough for a reliable tempogram + chroma estimate, short
-/// enough that the working set stays bounded and the window stays
-/// inside a single musical section (so a track that changes key or
-/// tempo does not smear). Matches the upstream
-/// rhythmbox-to-pioneer-xdj-exporter figure, now centered rather than
-/// taken from the opening.
+/// Length (seconds) of the centered window the tempogram measures the
+/// tempo's metrical level over, and the key is read from on long tracks.
+/// Long enough for a reliable tempogram + chroma estimate, short enough
+/// that the working set stays bounded and the window stays inside a
+/// single musical section (so a track that changes tempo does not
+/// smear). Matches the upstream rhythmbox-to-pioneer-xdj-exporter
+/// figure, now centered rather than taken from the opening.
 const BPM_KEY_WINDOW_SECS: f64 = 120.0;
 
 /// Track length (seconds) above which a track is treated as *long*:
@@ -415,6 +424,13 @@ const KEY_STFT_FRAME_SIZE: usize = 8192;
 /// front-end carries no hop tuning of its own.
 const KEY_STFT_HOP_SIZE: usize = KEY_STFT_FRAME_SIZE / 4;
 
+/// Longest stretch of audio (seconds) the key chroma is computed over at
+/// once. The key reads the whole of a normal-length track, one segment
+/// at a time, so its spectrogram never outgrows that of one segment. Two
+/// minutes, the length of the centered window the key was read from
+/// before, keeps the working set where it was.
+const KEY_SEGMENT_SECS: f64 = 120.0;
+
 /// HPSS harmonic-estimate median window, as a **time span** (seconds). The
 /// harmonic-percussive separation that runs before chroma takes the median of
 /// each frequency bin over this span to estimate the sustained (harmonic)
@@ -464,11 +480,10 @@ const LOUDNESS_RANGE_GATE_LU: f32 = 20.0;
 
 /// Capability-driven, stateful analyzer for one audio file. Cheap to
 /// construct — the constructor does no I/O — and caches the decoded
-/// regions the band methods share, so a caller that requests both BPM
-/// and key pays for only one decode of the shared window (each then
+/// regions the band methods share, so a caller that requests BPM, key
+/// and audio analysis pays for one decode of the track (each band then
 /// computes its own STFT — the tempogram's short frame and key's larger
-/// one), and a caller that also requests audio analysis pays for the
-/// acoustics decode and slices the BPM/key window out of it for free.
+/// one).
 ///
 /// The caches are lazy and region-keyed:
 ///
@@ -478,18 +493,15 @@ const LOUDNESS_RANGE_GATE_LU: f32 = 20.0;
 ///   `ACOUSTICS_LONG_WINDOW_SECS` decode on long tracks.
 /// * [`Self::tempo`] uses the whole track on normal-length tracks for its
 ///   beat tracking, sharing `full_audio` with the waveform.
-/// * [`Self::tempo`] / [`Self::key`] share a centered `BPM_KEY_WINDOW_SECS`
-///   window but each compute their own STFT from it (tempo the 2048-point
-///   tempogram transform, key the 8192-point `KEY_STFT_FRAME_SIZE`). When
-///   a larger region is already in memory, the window is sliced from its
-///   centre — no extra I/O. Otherwise it is decoded on its own.
-///
-/// To get the free slice, a caller that wants everything should prime
-/// the larger region first: call [`Self::waveform`]/[`Self::acoustics`]
-/// before [`Self::key`]. The production scheduler closure does exactly
-/// that. On a normal-length track [`Self::tempo`] primes the whole track
-/// itself. Calling key first is still correct, only slightly less
-/// efficient (the centered window is decoded separately).
+/// * [`Self::key`] uses the whole track on normal-length tracks, sharing
+///   `full_audio` with the waveform, and computes its 8192-point
+///   `KEY_STFT_FRAME_SIZE` spectrogram one `KEY_SEGMENT_SECS` segment at
+///   a time.
+/// * [`Self::tempo`] estimates its metrical level over a centered
+///   `BPM_KEY_WINDOW_SECS` window, and on long tracks [`Self::key`]
+///   reads the same window. When a larger region is already in memory,
+///   the window is sliced from its centre — no extra I/O. Otherwise it is
+///   decoded on its own.
 ///
 /// The `duration_hint` (the library's stored track duration) places the
 /// centered windows and classifies the track as normal vs. long without
@@ -519,9 +531,6 @@ pub struct Analyzer {
     bpmkey_audio: OnceCell<Option<DecodedAudio>>,
     /// Spectrogram for the tempogram, computed at `STFT_FRAME_SIZE`.
     tempo_stft: OnceCell<Option<Vec<Vec<f32>>>>,
-    /// Spectrogram for chroma/key, computed at `KEY_STFT_FRAME_SIZE` —
-    /// a larger frame than the tempogram for low-register pitch resolution.
-    key_stft: OnceCell<Option<Vec<Vec<f32>>>>,
 }
 
 impl Analyzer {
@@ -543,7 +552,6 @@ impl Analyzer {
             acoustics_window: OnceCell::new(),
             bpmkey_audio: OnceCell::new(),
             tempo_stft: OnceCell::new(),
-            key_stft: OnceCell::new(),
         }
     }
 
@@ -643,44 +651,23 @@ impl Analyzer {
     }
 
     /// The pitch-class frames [`Self::key`] is read from: the HPCP of the
-    /// key window's harmonic part, one 12-bin frame per hop. Returns
-    /// `None` if the file cannot be decoded or yields no frames.
+    /// harmonic part of the whole track, one 12-bin frame per hop, on a
+    /// normal-length track, and of the centered BPM/key window on a long
+    /// one. Returns `None` if the file cannot be decoded or yields no
+    /// frames.
+    ///
+    /// The whole track is read so the key does not depend on which section
+    /// the middle two minutes fall in — a breakdown, a bridge, a long
+    /// intro. It is read in segments of at most `KEY_SEGMENT_SECS`, each
+    /// with its own spectrogram, so the working set stays that of one
+    /// segment however long the track.
     fn key_chroma(&self) -> Option<Vec<Vec<f32>>> {
-        let stft = self.key_stft()?;
-        let window = self.bpmkey_audio()?;
-
-        // Suppress percussive/broadband energy before chroma. The HPSS median
-        // windows are physical spans, converted to odd kernel lengths at this
-        // track's sample rate and the key STFT's resolution so the span — not a
-        // frame/bin count — is what stays fixed across sample rates.
-        let sample_rate = window.sample_rate as f32;
-        let freq_res = sample_rate / KEY_STFT_FRAME_SIZE as f32;
-        let time_kernel = odd_kernel(
-            KEY_HPSS_HARMONIC_SPAN_SECS,
-            KEY_STFT_HOP_SIZE as f32 / sample_rate,
-        );
-        let freq_kernel = odd_kernel(KEY_HPSS_PERCUSSIVE_SPAN_HZ, freq_res);
-
-        // Chroma only reads up to `CHROMA_FMAX_HZ`, so HPSS only needs that
-        // band (plus the percussive median's half-window, so the top retained
-        // bin keeps its neighbors). Restricting the spectrogram to it keeps the
-        // separation off the high-frequency bins chroma discards. The prefix
-        // slice preserves bin→frequency indexing, so chroma's output is
-        // identical to running it on the full transform.
-        let cutoff_bin = ((CHROMA_FMAX_HZ / freq_res).ceil() as usize + freq_kernel / 2 + 1)
-            .min(stft.first().map_or(0, Vec::len));
-        let banded: Vec<Vec<f32>> = stft
-            .iter()
-            .map(|frame| frame[..cutoff_bin].to_vec())
-            .collect();
-        let harmonic = emphasize_harmonic(&banded, time_kernel, freq_kernel).ok()?;
-
-        // Core HPCP: derive the pitch-class profile from the spectrum's peaks
-        // (peak-picking + QIFFT interpolation + squared-cosine weighting)
-        // rather than summing every bin, on the same band and pitch-class grid
-        // the band-summed path used.
-        let chroma = compute_hpcp(&harmonic, window.sample_rate, KEY_STFT_FRAME_SIZE).ok()?;
-        (!chroma.is_empty()).then_some(chroma)
+        let region = if self.is_long_track() {
+            self.bpmkey_audio()?
+        } else {
+            self.full()?
+        };
+        segmented_key_chroma(&region.samples, region.sample_rate)
     }
 
     /// Both waveform tiers (preview + detail). Returns `None` if the
@@ -822,26 +809,6 @@ impl Analyzer {
         self.tempo_stft.get().and_then(|cached| cached.as_ref())
     }
 
-    /// Chroma/key STFT of the centered BPM/key window, at
-    /// `KEY_STFT_FRAME_SIZE`. The larger frame gives chroma the
-    /// low-register frequency resolution the short tempogram frame lacks
-    /// (see `KEY_STFT_FRAME_SIZE`). Shares the decoded window with the
-    /// tempogram — one decode — but never the spectrogram.
-    fn key_stft(&self) -> Option<&Vec<Vec<f32>>> {
-        // Same borrow dance as `tempo_stft`: resolve the window before
-        // touching the cell.
-        if self.key_stft.get().is_none() {
-            let computed = match self.bpmkey_audio() {
-                Some(audio) => {
-                    compute_stft(&audio.samples, KEY_STFT_FRAME_SIZE, KEY_STFT_HOP_SIZE).ok()
-                }
-                None => None,
-            };
-            let _ = self.key_stft.set(computed);
-        }
-        self.key_stft.get().and_then(|cached| cached.as_ref())
-    }
-
     /// Start offset (seconds) that centers a `len_secs` window in the
     /// track, from the duration hint. With no hint, window from the
     /// start (`0.0`) — centering needs a length.
@@ -887,6 +854,64 @@ fn octave_normalize(mut bpm: f64, min: f64, max: f64) -> f64 {
         bpm /= 2.0;
     }
     bpm
+}
+
+/// The key chroma of `samples`, computed one [`key_segments`] segment
+/// at a time and concatenated. `None` if no segment yields a frame.
+fn segmented_key_chroma(samples: &[f32], sample_rate: u32) -> Option<Vec<Vec<f32>>> {
+    let chroma: Vec<Vec<f32>> = key_segments(samples, sample_rate)
+        .filter_map(|segment| segment_key_chroma(segment, sample_rate))
+        .flatten()
+        .collect();
+    (!chroma.is_empty()).then_some(chroma)
+}
+
+/// `samples` cut into the fewest equal segments of at most
+/// `KEY_SEGMENT_SECS`. Equal, so the last is no sliver too short to
+/// analyse.
+fn key_segments(samples: &[f32], sample_rate: u32) -> std::slice::Chunks<'_, f32> {
+    let longest = ((KEY_SEGMENT_SECS * f64::from(sample_rate)) as usize).max(1);
+    let segments = samples.len().div_ceil(longest).max(1);
+    samples.chunks(samples.len().div_ceil(segments).max(1))
+}
+
+/// The key chroma of one segment of audio: its HPCP frames, computed on
+/// the harmonic part of its own key spectrogram. `None` if the segment is
+/// too short for a spectrogram frame or the DSP fails.
+fn segment_key_chroma(samples: &[f32], sample_rate: u32) -> Option<Vec<Vec<f32>>> {
+    let stft = compute_stft(samples, KEY_STFT_FRAME_SIZE, KEY_STFT_HOP_SIZE).ok()?;
+    if stft.is_empty() {
+        return None;
+    }
+
+    // Suppress percussive/broadband energy before chroma. The HPSS median
+    // windows are physical spans, converted to odd kernel lengths at this
+    // track's sample rate and the key STFT's resolution so the span — not a
+    // frame/bin count — is what stays fixed across sample rates.
+    let rate = sample_rate as f32;
+    let freq_res = rate / KEY_STFT_FRAME_SIZE as f32;
+    let time_kernel = odd_kernel(KEY_HPSS_HARMONIC_SPAN_SECS, KEY_STFT_HOP_SIZE as f32 / rate);
+    let freq_kernel = odd_kernel(KEY_HPSS_PERCUSSIVE_SPAN_HZ, freq_res);
+
+    // Chroma only reads up to `CHROMA_FMAX_HZ`, so HPSS only needs that
+    // band (plus the percussive median's half-window, so the top retained
+    // bin keeps its neighbors). Restricting the spectrogram to it keeps the
+    // separation off the high-frequency bins chroma discards. The prefix
+    // slice preserves bin→frequency indexing, so chroma's output is
+    // identical to running it on the full transform.
+    let cutoff_bin = ((CHROMA_FMAX_HZ / freq_res).ceil() as usize + freq_kernel / 2 + 1)
+        .min(stft.first().map_or(0, Vec::len));
+    let banded: Vec<Vec<f32>> = stft
+        .iter()
+        .map(|frame| frame[..cutoff_bin].to_vec())
+        .collect();
+    let harmonic = emphasize_harmonic(&banded, time_kernel, freq_kernel).ok()?;
+
+    // Core HPCP: derive the pitch-class profile from the spectrum's peaks
+    // (peak-picking + QIFFT interpolation + squared-cosine weighting)
+    // rather than summing every bin, on the same band and pitch-class grid
+    // the band-summed path used.
+    compute_hpcp(&harmonic, sample_rate, KEY_STFT_FRAME_SIZE).ok()
 }
 
 /// Convert a physical span into an **odd** median-filter kernel length (≥ 1) at
@@ -1170,8 +1195,8 @@ fn map_stratum_key(name: &str) -> Option<MusicalKey> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisOptions, Analyzer, BPM_KEY_WINDOW_SECS, map_stratum_key, octave_normalize,
-        stratum_key_label,
+        AnalysisOptions, Analyzer, BPM_KEY_WINDOW_SECS, KEY_STFT_HOP_SIZE, key_segments,
+        map_stratum_key, octave_normalize, segmented_key_chroma, stratum_key_label,
     };
     use std::path::PathBuf;
     use std::time::Duration;
@@ -1298,6 +1323,41 @@ mod tests {
         // No hint → window from the start.
         let unknown = Analyzer::new(&path, opts, None);
         assert_eq!(unknown.window_start(BPM_KEY_WINDOW_SECS), 0.0);
+    }
+
+    #[test]
+    fn key_segments_cover_the_track_in_equal_bounded_parts() {
+        let rate = 100;
+        let lengths = |secs: usize| -> Vec<usize> {
+            key_segments(&vec![0.0; secs * rate], rate as u32)
+                .map(<[f32]>::len)
+                .collect()
+        };
+        assert_eq!(lengths(90), vec![9_000]);
+        assert_eq!(lengths(120), vec![12_000]);
+        assert_eq!(lengths(121), vec![6_050, 6_050]);
+        assert_eq!(lengths(300), vec![10_000, 10_000, 10_000]);
+        assert!(lengths(0).is_empty());
+    }
+
+    #[test]
+    fn key_chroma_reads_every_segment() {
+        // An A for 100 s, then a C for 150 s: two segments of 125 s. The
+        // chroma holds both notes, the C a longer time, so neither segment
+        // is skipped.
+        let rate = 11_025_u32;
+        let tone = |freq: f32, secs: f32| {
+            (0..(secs * rate as f32) as usize)
+                .map(move |i| 0.5 * (std::f32::consts::TAU * freq * i as f32 / rate as f32).sin())
+        };
+        let samples: Vec<f32> = tone(440.0, 100.0).chain(tone(523.25, 150.0)).collect();
+        let chroma = segmented_key_chroma(&samples, rate).expect("chroma");
+        let total =
+            |pitch_class: usize| -> f32 { chroma.iter().map(|frame| frame[pitch_class]).sum() };
+        let (a, c) = (total(9), total(0));
+        assert!(a > 0.0 && c > a, "A {a}, C {c}");
+        let frames_per_second = rate as f32 / KEY_STFT_HOP_SIZE as f32;
+        assert!(chroma.len() as f32 > 240.0 * frames_per_second);
     }
 
     #[test]

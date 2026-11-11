@@ -1134,9 +1134,10 @@ vector per mode, rotated onto each tonic, fitted as a multinomial logistic
 regression over the 24 keys with a small ridge penalty
 (`analysis-bench learn-key-weights`, Newton's method). The confidence is
 the winning key's probability. The circle-of-fifths bonus is removed: on
-5,984 tracks it never changed the winner. **One variable changed:** the
-HPSS, HPCP and tuning front end and the centered 120 s window are
-untouched. Key analyzer version 16; BPM and audio stay at 15, and since
+5,984 tracks it never changed the winner. **One variable changed** in the
+tables below: the HPSS, HPCP and tuning front end and the centered 120 s
+window are untouched; reading the whole track, which v16 also ships, is
+measured on its own under *Whole track*. Key analyzer version 16; BPM and audio stay at 15, and since
 analyzer versions are now per capability, only the key is measured again.
 
 The weights are learned from the same 3,485 human-labelled tracks as v15.
@@ -1187,9 +1188,29 @@ training; a mode bias. A bass-band HPCP (25–110 Hz) as a second feature group
 gains 2 to 5 exact on the public sets but nothing on the library, and the
 8192-point STFT under-resolves that band; it is not shipped.
 
-**Next lever.** Reading the key from the whole track rather than the
-centered 120 s, measured on dumped chroma with v16 weights: 65.8 / 83.9 %
-→ 68.1 / 86.0 % against rekordbox, and 68.7 / 82.6 % → 73.0 / 84.3 %
-against the tag keys. The public clips are shorter than the window, so they
-cannot confirm it. Shipping it needs the key chroma computed over bounded
-segments rather than one whole-track spectrogram.
+### Whole track
+
+The shipped v16 also reads the key from the whole of a track up to 15
+minutes long, instead of the centered 120 s it shares with BPM; longer
+tracks keep the centered window. The track is cut into equal segments of at
+most 120 s (`KEY_SEGMENT_SECS`), each with its own spectrogram, HPSS and
+HPCP, so the working set stays that of one 120 s window; the frames of
+every segment are pooled before the log shares are taken. Weights are the
+same. Measured with the release `analysis-bench` binary:
+
+| Against | Tracks | rekordbox | v16 centered | **v16 whole track** |
+| --- | ---: | --- | --- | --- |
+| rekordbox | 2,500 | — | 65.8 / 83.9 % | **67.8 / 85.7 %** |
+| Tag keys | 115 | 76.5 / 87.0 % | 68.7 / 82.6 % | **72.2 / 84.3 %** |
+| Beatport keys (TKEY) | 38 | 76.3 / 84.2 % | 71.1 / 78.9 % | **76.3 / 81.6 %** |
+
+The public clips are shorter than one segment, so their numbers are
+unchanged. Against the tag keys rekordbox stays ahead, by 4.3 exact and
+2.7 strict points; on the Beatport keys Sustain now matches it exactly
+and trails by one track strict.
+
+**Cost.** The key task alone on 300 library tracks: 235 s CPU and
+157 MB peak RSS centered, 665 s CPU and 285 MB whole track, about 2.8×
+the key's CPU. The extra memory is the decoded track, which a full run
+decodes for tempo anyway; the analysis runs in the background at low
+priority.
