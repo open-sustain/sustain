@@ -6,12 +6,14 @@
 //! while it sits idle, but for a lone frame slow enough to be seen, such
 //! as the first frame of a view the user just switched to.
 //!
-//! Each frame clock cycle runs its phases in order: update, layout, paint.
-//! The recorder's handlers run after GTK's own for each phase, so the time
-//! from one phase's handler to the next is what GTK spent in the later
-//! phase: measuring layout (style, size allocation, list rows bound) apart
-//! from paint (snapshot and render) tells a frame that does too much
-//! layout work from one that draws too much.
+//! Each frame clock cycle runs the phases it was asked for in order:
+//! update, layout, paint, all between a `before-paint` and an
+//! `after-paint` it always runs. The recorder's handlers run after GTK's
+//! own for each phase, so the time from one phase's handler to the next is
+//! what GTK spent in the later phase: measuring layout (style, size
+//! allocation, list rows bound) apart from paint (snapshot and render)
+//! tells a frame that does too much layout work from one that draws too
+//! much. A phase a cycle skips took no time in it.
 
 use std::{
     cell::RefCell,
@@ -86,23 +88,49 @@ impl FrameSpan {
     }
 }
 
-#[derive(Default)]
-struct FrameRecorder {
+/// When the phases of the frame clock cycle under way ended.
+struct CyclePhases {
+    started: Instant,
     update_done: Option<Instant>,
     layout_done: Option<Instant>,
+    paint_done: Option<Instant>,
+}
+
+#[derive(Default)]
+struct FrameRecorder {
+    cycle: Option<CyclePhases>,
     last_paint_done: Option<Instant>,
     span: Option<FrameSpan>,
 }
 
 impl FrameRecorder {
-    fn paint_done(&mut self, now: Instant) {
-        let (Some(update_done), Some(layout_done)) =
-            (self.update_done.take(), self.layout_done.take())
-        else {
+    fn cycle_started(&mut self, now: Instant) {
+        self.cycle = Some(CyclePhases {
+            started: now,
+            update_done: None,
+            layout_done: None,
+            paint_done: None,
+        });
+    }
+
+    fn phase_done(&mut self, phase: fn(&mut CyclePhases) -> &mut Option<Instant>, now: Instant) {
+        if let Some(cycle) = self.cycle.as_mut() {
+            *phase(cycle) = Some(now);
+        }
+    }
+
+    /// Record the cycle that just ended, if it drew a frame.
+    fn cycle_ended(&mut self) {
+        let Some(cycle) = self.cycle.take() else {
             return;
         };
-        let previous_paint_done = self.last_paint_done.replace(now);
-        let interval = previous_paint_done.map(|previous| now.duration_since(previous));
+        let Some(paint_done) = cycle.paint_done else {
+            return;
+        };
+        let update_done = cycle.update_done.unwrap_or(cycle.started);
+        let layout_done = cycle.layout_done.unwrap_or(update_done);
+        let previous_paint_done = self.last_paint_done.replace(paint_done);
+        let interval = previous_paint_done.map(|previous| paint_done.duration_since(previous));
         let continues_run = interval.is_some_and(|interval| interval < RUN_PAUSE);
         if !continues_run {
             // The run before the pause ends with the frame that preceded it.
@@ -114,15 +142,15 @@ impl FrameRecorder {
             }
         }
 
-        let span = self.span.get_or_insert_with(|| FrameSpan::new(now));
+        let span = self.span.get_or_insert_with(|| FrameSpan::new(paint_done));
         span.add(
             interval.filter(|_| continues_run),
             layout_done - update_done,
-            now - layout_done,
+            paint_done - layout_done,
         );
-        if now - span.started_at >= SUMMARY_SPAN {
-            span.report(now);
-            self.span = Some(FrameSpan::new(now));
+        if paint_done - span.started_at >= SUMMARY_SPAN {
+            span.report(paint_done);
+            self.span = Some(FrameSpan::new(paint_done));
         }
     }
 }
@@ -142,16 +170,30 @@ pub(crate) fn install(window: &gtk::ApplicationWindow) {
             return;
         };
         let recorder = Rc::new(RefCell::new(FrameRecorder::default()));
+        let on_before_paint = recorder.clone();
+        frame_clock.connect_before_paint(move |_| {
+            on_before_paint.borrow_mut().cycle_started(Instant::now());
+        });
         let on_update = recorder.clone();
         frame_clock.connect_update(move |_| {
-            on_update.borrow_mut().update_done = Some(Instant::now());
+            on_update
+                .borrow_mut()
+                .phase_done(|cycle| &mut cycle.update_done, Instant::now());
         });
         let on_layout = recorder.clone();
         frame_clock.connect_layout(move |_| {
-            on_layout.borrow_mut().layout_done = Some(Instant::now());
+            on_layout
+                .borrow_mut()
+                .phase_done(|cycle| &mut cycle.layout_done, Instant::now());
         });
+        let on_paint = recorder.clone();
         frame_clock.connect_paint(move |_| {
-            recorder.borrow_mut().paint_done(Instant::now());
+            on_paint
+                .borrow_mut()
+                .phase_done(|cycle| &mut cycle.paint_done, Instant::now());
+        });
+        frame_clock.connect_after_paint(move |_| {
+            recorder.borrow_mut().cycle_ended();
         });
     });
 }
