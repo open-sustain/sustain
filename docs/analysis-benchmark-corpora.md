@@ -199,7 +199,7 @@ Swap `--dataset key` and the key repo for `tempo` and the tempo repo to
 build the BPM corpus (`annotations_v2/tempo/*.bpm`; tracks annotated `0.0`
 are reported and skipped). The generated `corpora/giantsteps_*.toml` is
 gitignored — it names local audio paths — and audio and results stay
-external. Record the harness commit, `ANALYZER_VERSION`, `corpus_id`, and
+external. Record the harness commit, `ANALYZER_VERSIONS`, `corpus_id`, and
 headline metrics alongside the result, per the policy above — the recorded
 runs live in
 [`analysis-benchmark-results.md`](analysis-benchmark-results.md).
@@ -339,7 +339,7 @@ audio root into a gitignored harness manifest.
    ```
 
 3. Quote only the aggregate metrics and the provenance (harness commit,
-   `ANALYZER_VERSION`, tier split) when reporting — never the per-track paths,
+   `ANALYZER_VERSIONS`, tier split) when reporting — never the per-track paths,
    titles, source URLs, or the manifest. The gold/silver split is recovered at
    analysis time by joining result `id`s back to the reference's `confidence`
    column. Recorded runs live in

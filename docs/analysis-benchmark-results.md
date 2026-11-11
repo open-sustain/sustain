@@ -7,7 +7,7 @@ is the *plan* (sources, licences, acquisition, metrics); this file is the
 *record* of actual runs.
 
 **What is committed here:** only aggregate, reproducible facts — the run
-date, the harness commit, `ANALYZER_VERSION`, the BPM range, the pinned
+date, the harness commit, `ANALYZER_VERSIONS`, the BPM range, the pinned
 dataset commits, scored counts, MD5 status, and the headline metrics, plus
 any finding the run exposed. **Not** committed: audio, the generated
 per-track manifests (they name local audio paths and are gitignored), local
@@ -1122,3 +1122,74 @@ Downbeat, on aligned grids whose annotated bars hold on the grid:
 This is the reference a downbeat change (#282) is judged by. A bar that starts
 a beat early is the most common Ballroom error, as on rekordbox's dance
 references; on GTZAN a bar two beats off (on beat 3) is.
+
+## 2026-11-11 — key v16 (learned key weights), public and private corpora
+
+Under #288. Until v16 the detector correlated a track's mean chroma with 24
+templates, the mean tonic-aligned chroma of each mode (v15). A correlation
+asks which template the chroma resembles, not which pitch classes tell a key
+from its neighbours. v16 reads the log share each pitch class takes of the
+chroma and weighs it by each key's template; the templates are one weight
+vector per mode, rotated onto each tonic, fitted as a multinomial logistic
+regression over the 24 keys with a small ridge penalty
+(`analysis-bench learn-key-weights`, Newton's method). The confidence is
+the winning key's probability. The circle-of-fifths bonus is removed: on
+5,984 tracks it never changed the winner. **One variable changed:** the
+HPSS, HPCP and tuning front end and the centered 120 s window are
+untouched. Key analyzer version 16; BPM and audio stay at 15, and since
+analyzer versions are now per capability, only the key is measured again.
+
+The weights are learned from the same 3,485 human-labelled tracks as v15.
+Public numbers are **held out**: each corpus is scored with weights learned
+from the other two. The rekordbox and private sets were never used for
+learning. A Python fit on dumped chroma matches the Rust learner's weights
+to within 0.03, and the release binary reproduces the dumped-chroma scores
+on the private set track for track.
+
+| Set | Tracks | v15 exact / strict | **v16 exact / strict** |
+| --- | ---: | --- | --- |
+| GiantSteps Key (held out) | 604 | 52.8 / 75.7 % | **61.1 / 79.8 %** |
+| GiantSteps MTG Key (held out) | 1,159 | 55.4 / 70.8 % | **58.0 / 74.8 %** |
+| FMAK `fma_medium` (held out) | 1,722 | 52.6 / 75.7 % | 52.1 / 75.6 % |
+| Maintainer library, agreement with rekordbox | 2,499 | 60.0 / 81.2 % | **65.8 / 83.9 %** |
+| — dance genres | | 64.3 / 81.7 % | **69.5 / 84.8 %** |
+| — other genres | | 56.1 / 80.6 % | **62.4 / 83.1 %** |
+| Private all-core | 26 | 65.4 / 92.3 % | 61.5 / 88.5 % |
+| Private goldish | 18 | 77.8 / 100 % | 77.8 / 100 % |
+| Private silver | 8 | 37.5 / 75.0 % | 25.0 / 62.5 % |
+
+Exact is tonic and mode; strict adds a fifth away and the relative key. The
+private set loses one exact and one strict track, both silver
+(low-confidence references); goldish is unchanged.
+
+**rekordbox is a reference, not ground truth.** The product bar is accuracy
+at least as good as rekordbox's, not agreement with it. On the tracks of the
+maintainer's library whose files carry a key tag, the tag is the only key
+available that neither Sustain nor rekordbox computed:
+
+| Against | Tracks | rekordbox | v15 | v16 |
+| --- | ---: | --- | --- | --- |
+| Tag keys | 115 | 76.5 / 87.0 % | 66.1 / 82.6 % | 68.7 / 82.6 % |
+| Beatport keys (TKEY) | 38 | 76.3 / 84.2 % | 73.7 / 84.2 % | 71.1 / 78.9 % |
+
+Both sets are small (one track is 0.9 and 2.6 pp) and their keys come from
+other tools as much as from people, but both put rekordbox ahead of
+Sustain: the bar is not met yet.
+
+**Mode mix.** v16 overshoots where v15 fell short: on the rekordbox set the
+predicted minor share is 90.4 % against rekordbox's 83.1 % (v15: 73.7 %),
+and on GiantSteps Key 82.0 % against 84.6 % truth (v15: 69 %).
+
+**What did not help**, all within ±0.5 pp held out: an equivariant
+multilayer perceptron in place of the linear model; frame weighting; triad,
+co-occurrence and onset statistics of the chroma frames; mode-balanced
+training; a mode bias. A bass-band HPCP (25–110 Hz) as a second feature group
+gains 2 to 5 exact on the public sets but nothing on the library, and the
+8192-point STFT under-resolves that band; it is not shipped.
+
+**Next lever.** Reading the key from the whole track rather than the
+centered 120 s, measured on dumped chroma with v16 weights: 65.8 / 83.9 %
+→ 68.1 / 86.0 % against rekordbox, and 68.7 / 82.6 % → 73.0 / 84.3 %
+against the tag keys. The public clips are shorter than the window, so they
+cannot confirm it. Shipping it needs the key chroma computed over bounded
+segments rather than one whole-track spectrogram.

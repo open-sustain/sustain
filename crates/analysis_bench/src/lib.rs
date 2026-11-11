@@ -40,8 +40,8 @@
 //! * [`fmak`] — adapt the FMAK / FMAKv2 key annotations + a Free Music
 //!   Archive audio root into a manifest (a second, independent key corpus;
 //!   audio stays external).
-//! * [`key_profiles`] — learn the key detector's profiles from labelled
-//!   audio, as `analysis-bench learn-key-profiles` prints them.
+//! * [`key_weights`] — learn the key detector's weights from labelled
+//!   audio, as `analysis-bench learn-key-weights` prints them.
 //! * [`beat_annotations`] — adapt the Ballroom and GTZAN clips + their human
 //!   beat and bar annotations into manifests (the human beat-grid reference;
 //!   audio stays external).
@@ -53,7 +53,7 @@ pub mod beat_annotations;
 pub mod fixtures;
 pub mod fmak;
 pub mod giantsteps;
-pub mod key_profiles;
+pub mod key_weights;
 pub mod manifest;
 pub mod metrics;
 pub mod private;

@@ -32,7 +32,8 @@
 //!   (peak-picking + squared-cosine pitch-class weighting); the chroma source
 //!   the key detector uses.
 //! * [`extract_chroma_from_spectrogram_with_options`] + [`detect_key`] +
-//!   [`KeyTemplates`] — chroma → key-profile template key detection
+//!   [`KeyTemplates`] — chroma → key detection by learned templates weighing
+//!   the [`pitch_class_log_shares`]
 //!   (returns a [`KeyDetectionResult`] over [`Key`], or none when the chroma
 //!   holds no tonal evidence). Key selection is
 //!   deterministic (a total-order sort with a fixed tiebreak). The vendored
@@ -75,7 +76,7 @@ pub use features::chroma::extractor::{
 };
 pub use features::chroma::hpcp::compute_hpcp;
 pub use features::chroma::hpss::emphasize_harmonic;
-pub use features::key::detector::detect_key;
+pub use features::key::detector::{detect_key, pitch_class_log_shares};
 pub use features::key::templates::KeyTemplates;
 pub use features::key::KeyDetectionResult;
 pub use features::onset::spectral_flux::detect_spectral_flux_onsets;

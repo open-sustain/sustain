@@ -12,7 +12,7 @@
 //! analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
 //! analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>
 //! analysis-bench adapt-beat-annotations --corpus <ballroom|gtzan> --annotations <dir> --audio <dir> --out <toml>
-//! analysis-bench learn-key-profiles <manifest>...
+//! analysis-bench learn-key-weights <manifest>...
 //! ```
 //!
 //! * `run` analyzes every track in a manifest and writes a JSON report
@@ -44,7 +44,7 @@
 //!   checkout of its human beat annotations into a (gitignored) manifest
 //!   whose clips carry their annotated beats, keeping the clips counted in
 //!   fours. This command never downloads.
-//! * `learn-key-profiles` learns the key detector's major and minor profiles
+//! * `learn-key-weights` learns the key detector's major and minor weights
 //!   from the labelled audio of the given key manifests and prints them as
 //!   the arrays `sustain_dsp`'s key templates hold.
 
@@ -55,7 +55,7 @@ use std::process::ExitCode;
 use sustain_analysis_bench::beat_annotations::{self, BeatCorpus};
 use sustain_analysis_bench::fmak::{self, AdaptOptions as FmakOptions, AdaptReport as FmakReport};
 use sustain_analysis_bench::giantsteps::{self, AdaptOptions, AdaptReport, Dataset};
-use sustain_analysis_bench::key_profiles;
+use sustain_analysis_bench::key_weights;
 use sustain_analysis_bench::manifest::Manifest;
 use sustain_analysis_bench::private::{
     self, AdaptOptions as PrivateOptions, AdaptReport as PrivateReport,
@@ -71,7 +71,7 @@ usage:
   analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
   analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>
   analysis-bench adapt-beat-annotations --corpus <ballroom|gtzan> --annotations <dir> --audio <dir> --out <toml>
-  analysis-bench learn-key-profiles <manifest>...";
+  analysis-bench learn-key-weights <manifest>...";
 
 /// A CLI failure: either bad invocation (exit 2) or a runtime error (exit 1).
 enum CliError {
@@ -106,7 +106,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "adapt-fmak" => cmd_adapt_fmak(rest),
         "adapt-private" => cmd_adapt_private(rest),
         "adapt-beat-annotations" => cmd_adapt_beat_annotations(rest),
-        "learn-key-profiles" => cmd_learn_key_profiles(rest),
+        "learn-key-weights" => cmd_learn_key_weights(rest),
         other => Err(CliError::Usage(format!("unknown command {other:?}"))),
     }
 }
@@ -390,7 +390,7 @@ fn cmd_adapt_beat_annotations(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn cmd_learn_key_profiles(paths: &[String]) -> Result<(), CliError> {
+fn cmd_learn_key_weights(paths: &[String]) -> Result<(), CliError> {
     if paths.is_empty() {
         return Err(CliError::Usage("no manifest given".to_string()));
     }
@@ -402,19 +402,19 @@ fn cmd_learn_key_profiles(paths: &[String]) -> Result<(), CliError> {
         .collect::<Result<Vec<_>, _>>()?;
     let total: usize = manifests.iter().map(|manifest| manifest.tracks.len()).sum();
     let mut done = 0_usize;
-    let (profiles, report) = key_profiles::learn(&manifests, |_| {
+    let (weights, report) = key_weights::learn(&manifests, |_| {
         done += 1;
         if done.is_multiple_of(100) || done == total {
             eprintln!("{done}/{total}");
         }
     });
     eprintln!(
-        "learned from {} track(s); {} skipped (no key label, file or chroma)",
+        "learned from {} track(s); {} skipped (no key label, file or tonal chroma)",
         report.learned, report.skipped
     );
-    let profiles = profiles
+    let weights = weights
         .ok_or_else(|| CliError::Failure("the manifests need tracks in both modes".to_string()))?;
-    print!("{}", profiles.to_rust());
+    print!("{}", weights.to_rust());
     Ok(())
 }
 

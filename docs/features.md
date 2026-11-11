@@ -623,8 +623,8 @@ cell is kept, until the user clears it. Unlike the BPM, a tagged key is
 not replaced: a person or a dedicated tool set it, and may know better.
 The measured key stays in the library and is not written to the file; a
 key the user typed is mirrored to it. The Music Key column ships hidden
-by default; surface it through the column selector. The same field is exposed to smart-playlist rules
-for harmony-aware sets.
+by default; surface it through the column selector. The same field is
+exposed to smart-playlist rules for harmony-aware sets.
 
 Keys read from file tags or typed into the Get Info dialog or a Key cell
 are accepted in any common notation — `Am`, `Amin`, `A minor`, `G#m`,
@@ -637,17 +637,19 @@ value that is not a key leaves the field unchanged.
 The product target is harmonic compatibility for Pioneer/Rekordbox-style
 filtering rather than exact tonic+mode alone. The validation headline is
 therefore **strict-compatible** key rate: exact key, a fifth away, or the
-relative major/minor. The detector matches the track's chroma against
-key profiles learned from what Sustain's own front end measures in 3,485
-human-labelled tracks, rather than against profiles from listening tests.
-Scored on each public corpus with profiles learned from the others, the
-strict-compatible rate is 75.7% on 604 GiantSteps Key tracks, 70.8% on
-1,159 GiantSteps MTG Key tracks and 75.7% on 1,722 FMAK `fma_medium`
-clips; on 2,499 tracks of the maintainer's library Sustain's key agrees
-strictly with rekordbox's on 81.2%. The 18-track high-confidence private
-goldish set stays at 100.0%. Dance music still leans minor more often
-than Sustain predicts, so the major/minor boundary remains the watched
-caveat.
+relative major/minor. The detector weighs the share each pitch class
+takes of the track's chroma with key templates learned, as a logistic
+regression over the 24 keys, from what Sustain's own front end measures in
+3,485 human-labelled tracks. Scored on each public corpus with weights
+learned from the others, the strict-compatible rate is 79.8% on 604
+GiantSteps Key tracks, 74.8% on 1,159 GiantSteps MTG Key tracks and 75.6%
+on 1,722 FMAK `fma_medium` clips. rekordbox is a reference rather than
+ground truth, and the bar is to be at least as accurate as it is: on 2,499
+tracks of the maintainer's library Sustain's key agrees strictly with
+rekordbox's on 83.9%, but on the 115 of them whose files carry a key tag,
+rekordbox still matches the tag more often (87.0% strict against
+Sustain's 82.6%). The 18-track high-confidence private goldish set stays
+at 100.0%.
 
 ### Audio analysis — *Sustain-native*
 A single heavy decode pass produces, as byproducts of the one decode,

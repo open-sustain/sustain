@@ -98,7 +98,7 @@ use decode::{DecodedAudio, decode_full, decode_window};
 use sustain_dsp::{
     CHROMA_FMAX_HZ, KeyTemplates, NormalizationConfig, NormalizationMethod, compute_hpcp,
     compute_stft, detect_key, detect_spectral_flux_onsets, emphasize_harmonic,
-    estimate_bpm_tempogram, normalize,
+    estimate_bpm_tempogram, normalize, pitch_class_log_shares,
 };
 
 pub use waveform::WaveformTiers;
@@ -250,6 +250,23 @@ pub use waveform::WaveformTiers;
 /// no tonal evidence, has no key; it used to come out C major, the first
 /// key in tie-break order.
 ///
+/// From here on each capability has its own version.
+///
+/// Key version 16: the key is the one a learned multinomial logistic
+/// regression finds most probable, rather than the template correlating
+/// best with the mean chroma. The log share each pitch class takes of the
+/// chroma is weighed by each key's template — 24 weights, one vector per
+/// mode rotated onto each tonic, learned from the same 3,485
+/// human-labelled tracks (`analysis-bench learn-key-weights`). The
+/// circle-of-fifths bonus is gone: it never changed which key won. The
+/// front end is unchanged. Scored on each public corpus with weights
+/// learned from the other two, exact agreement rose from 52.8 to 61.1 %
+/// on GiantSteps Key and from 55.4 to 58.0 % on GiantSteps MTG Key, and
+/// held at 52 % on FMAK; on 2,499 tracks of the maintainer's library
+/// agreement with rekordbox rose from 81.2 % to 83.9 % strict. Every key
+/// is measured again; one Sustain measured replaces the stored one, a key
+/// imported or typed is kept. BPM and audio are untouched.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -269,7 +286,7 @@ pub use waveform::WaveformTiers;
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
 pub const ANALYZER_VERSIONS: AnalyzerVersions = AnalyzerVersions {
     bpm: 15,
-    key: 15,
+    key: 16,
     audio: 15,
 };
 
@@ -612,14 +629,23 @@ impl Analyzer {
         map_stratum_key(&label)
     }
 
+    /// What [`Self::key`] is read from: the log share each pitch class
+    /// takes of the key window's chroma (see
+    /// [`sustain_dsp::pitch_class_log_shares`]). Returns `None` if the file
+    /// cannot be decoded, yields no chroma frames, or its chroma holds no
+    /// tonal evidence (silence).
+    ///
+    /// The key templates are learned from these
+    /// (`analysis-bench learn-key-weights`), so they match this front end
+    /// rather than an idealized one.
+    pub fn key_log_shares(&self) -> Option<[f32; 12]> {
+        pitch_class_log_shares(&self.key_chroma()?).ok().flatten()
+    }
+
     /// The pitch-class frames [`Self::key`] is read from: the HPCP of the
     /// key window's harmonic part, one 12-bin frame per hop. Returns
     /// `None` if the file cannot be decoded or yields no frames.
-    ///
-    /// The key profiles are learned from these frames
-    /// (`analysis-bench learn-key-profiles`), so they match this front end
-    /// rather than an idealized one.
-    pub fn key_chroma(&self) -> Option<Vec<Vec<f32>>> {
+    fn key_chroma(&self) -> Option<Vec<Vec<f32>>> {
         let stft = self.key_stft()?;
         let window = self.bpmkey_audio()?;
 

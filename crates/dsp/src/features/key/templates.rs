@@ -1,17 +1,25 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Key templates for template-matching key detection
 //!
-//! The profiles are learned, not taken from listening tests: each is the
-//! average tonic-aligned chroma that tracks of that mode leave in Sustain's
-//! own key front end. Krumhansl–Kessler's probe-tone profiles, used until
-//! analyzer version 15, describe what listeners hear; the learned ones
-//! describe what the front end measures — the overtones of every note
-//! landing on its fifth, the weight of the bass, the spread of each
-//! spectral peak — so a key matches the chroma it really produces.
+//! A key's template weighs the log share each pitch class takes of a
+//! track's chroma (see [`super::detector`]); the key whose weighted sum is
+//! highest wins. The weights are learned, not taken from listening tests:
+//! they are the multinomial logistic regression that best tells the 24 keys
+//! apart on labelled tracks, as Sustain's own key front end measures them —
+//! the overtones of every note landing on its fifth, the weight of the
+//! bass, the spread of each spectral peak. One weight vector per mode is
+//! learned, tonic first, and rotated onto each tonic, so every key of a mode
+//! is told apart by the same rule.
+//!
+//! Until analyzer version 15 the templates were profiles correlated with the
+//! mean chroma: Krumhansl–Kessler's probe-tone ratings, then the mean
+//! tonic-aligned chroma of each mode. A correlation only asks which profile
+//! the chroma resembles; the learned weights also know which pitch classes
+//! tell one key from its neighbours.
 //!
 //! # Provenance
 //!
-//! Learned by `analysis-bench learn-key-profiles` from 3,485 human-labelled
+//! Learned by `analysis-bench learn-key-weights` from 3,485 human-labelled
 //! tracks: GiantSteps Key (604, Beatport dance music), GiantSteps MTG Key
 //! (1,159 confident single-key labels, Beatport dance music) and FMAKv2's
 //! `fma_medium` subset (1,722, seventeen genres). See
@@ -24,14 +32,14 @@
 //!   Tonal Organization in a Spatial Representation of Musical Keys. *Psychological Review*,
 //!   89(4), 334-368.
 
-/// The major profile, tonic first (C major), scaled so the tonic is 1.
-const MAJOR_PROFILE: [f32; 12] = [
-    1.000, 0.246, 0.534, 0.275, 0.595, 0.578, 0.263, 0.810, 0.273, 0.514, 0.314, 0.393,
+/// The major weights, tonic first (C major).
+const MAJOR_WEIGHTS: [f32; 12] = [
+    2.758, -1.247, -0.216, -1.026, 1.264, 0.423, -0.850, 1.254, -0.593, -0.366, -0.836, -0.334,
 ];
 
-/// The minor profile, tonic first (C minor), scaled so the tonic is 1.
-const MINOR_PROFILE: [f32; 12] = [
-    1.000, 0.330, 0.456, 0.604, 0.343, 0.595, 0.311, 0.813, 0.465, 0.322, 0.541, 0.337,
+/// The minor weights, tonic first (C minor).
+const MINOR_WEIGHTS: [f32; 12] = [
+    2.911, -0.952, -0.412, 1.033, -0.314, -0.751, -0.541, 1.214, -0.266, -1.348, -0.135, -0.669,
 ];
 
 /// Key templates for all 24 keys
@@ -45,12 +53,12 @@ pub struct KeyTemplates {
 }
 
 impl KeyTemplates {
-    /// The 24 key templates: the learned major and minor profiles rotated
-    /// onto each tonic, L2-normalized.
+    /// The 24 key templates: the learned major and minor weights rotated
+    /// onto each tonic.
     pub fn new() -> Self {
         Self {
-            major: std::array::from_fn(|tonic| rotated(&MAJOR_PROFILE, tonic)),
-            minor: std::array::from_fn(|tonic| rotated(&MINOR_PROFILE, tonic)),
+            major: std::array::from_fn(|tonic| rotated(&MAJOR_WEIGHTS, tonic)),
+            minor: std::array::from_fn(|tonic| rotated(&MINOR_WEIGHTS, tonic)),
         }
     }
 
@@ -87,17 +95,12 @@ impl Default for KeyTemplates {
     }
 }
 
-/// `profile` (tonic first) rotated so its tonic sits on pitch class
-/// `tonic`, L2-normalized.
-fn rotated(profile: &[f32; 12], tonic: usize) -> Vec<f32> {
-    let mut template: Vec<f32> = (0..12)
-        .map(|pitch_class| profile[(pitch_class + 12 - tonic) % 12])
-        .collect();
-    let norm = template.iter().map(|&x| x * x).sum::<f32>().sqrt();
-    for x in &mut template {
-        *x /= norm;
-    }
-    template
+/// `weights` (tonic first) rotated so the tonic's weight sits on pitch
+/// class `tonic`.
+fn rotated(weights: &[f32; 12], tonic: usize) -> Vec<f32> {
+    (0..12)
+        .map(|pitch_class| weights[(pitch_class + 12 - tonic) % 12])
+        .collect()
 }
 
 #[cfg(test)]
@@ -105,13 +108,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_template_is_a_unit_vector_peaking_on_its_tonic() {
+    fn every_template_weighs_its_tonic_most() {
         let templates = KeyTemplates::new();
         for tonic in 0..12 {
             for template in [&templates.major[tonic], &templates.minor[tonic]] {
                 assert_eq!(template.len(), 12);
-                let norm = template.iter().map(|&x| x * x).sum::<f32>().sqrt();
-                assert!((norm - 1.0).abs() < 1e-6);
                 let peak = (0..12)
                     .max_by(|&a, &b| template[a].total_cmp(&template[b]))
                     .expect("twelve bins");
@@ -132,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn templates_are_rotations_of_one_profile() {
+    fn templates_are_rotations_of_one_weight_vector() {
         let templates = KeyTemplates::new();
         let c_major = templates.get_major_template(0);
         let d_major = templates.get_major_template(2);

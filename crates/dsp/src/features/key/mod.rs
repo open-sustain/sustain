@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Key detection modules
 //!
-//! Detect musical key by matching chroma against learned key profiles.
+//! Detect musical key by weighing chroma with learned key templates.
 //!
 //! Trimmed for Sustain to the single-pass template detector. The upstream
 //! `key_changes` (segment-wise key-change tracking) and `key_clarity`
@@ -42,10 +42,10 @@ pub struct KeyDetectionResult {
     /// Detected key (best match)
     pub key: Key,
 
-    /// Confidence score (0.0-1.0)
+    /// The detected key's probability (0.0-1.0)
     pub confidence: f32,
 
-    /// All 24 key scores (ranked, highest first)
+    /// All 24 keys' probabilities (ranked, highest first; they sum to one)
     pub all_scores: Vec<(Key, f32)>,
 
     /// Top N keys with scores (default: top 3)

@@ -132,12 +132,12 @@ cargo run -p sustain-analysis-bench --release -- adapt-beat-annotations \
   --audio       validation-data/gtzan/genres \
   --out         validation-data/beats/gtzan_beats.toml
 
-# Learn the key detector's major/minor profiles from key manifests and print
+# Learn the key detector's major/minor weights from key manifests and print
 # them as the arrays crates/dsp/src/features/key/templates.rs holds. Run it
 # again whenever the key front end (HPSS, HPCP, tuning) changes; the shipped
-# profiles come from the GiantSteps Key, GiantSteps MTG Key and FMAKv2
+# weights come from the GiantSteps Key, GiantSteps MTG Key and FMAKv2
 # fma_medium manifests:
-cargo run -p sustain-analysis-bench --release -- learn-key-profiles \
+cargo run -p sustain-analysis-bench --release -- learn-key-weights \
   crates/analysis_bench/corpora/giantsteps_key.toml \
   validation-data/giantsteps/mtg_key.toml \
   validation-data/fma/corpora/fmak_key_medium.toml
@@ -152,7 +152,7 @@ cargo run -p sustain-analysis-bench -- gen \
 ```
 
 A full `run` captures an `env` block recording the build profile, the
-`ANALYZER_VERSION`, the host, and — for provenance — the short git commit and
+`ANALYZER_VERSIONS`, the host, and — for provenance — the short git commit and
 a `git_dirty` flag. **Record reference baselines only from a clean working
 tree** (`git status --porcelain` empty): the commit hash alone names HEAD and
 cannot reveal uncommitted edits, so a dirty-tree run would label its outputs
