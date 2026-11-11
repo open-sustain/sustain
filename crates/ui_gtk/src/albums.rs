@@ -87,6 +87,13 @@ pub(crate) struct AlbumsView {
     /// display-wide, so a stale install would mis-tint the current
     /// detail.
     detail_generation: Rc<Cell<u64>>,
+    /// The album-detail panel last built, and what it shows. Rows hand
+    /// the detail position to one another as the grid scrolls; the row
+    /// that takes it adopts this panel rather than building another,
+    /// which would also install and remove its display-wide palette
+    /// provider, each a restyle of the whole window. Kept until a panel
+    /// for another album, column count or playing track replaces it.
+    detail_panel: Rc<RefCell<Option<AlbumDetailPanel>>>,
     /// Switches from `false` to `true` the first time `activate()` is
     /// called. Tile construction, grouping, and the layout triggers all
     /// key off this — they are skipped while the view is dormant so the
@@ -122,6 +129,11 @@ struct AlbumDetailKey {
     selected_column: usize,
     columns: usize,
     playing_track_id: Option<TrackId>,
+}
+
+struct AlbumDetailPanel {
+    key: AlbumDetailKey,
+    widget: gtk::Overlay,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -252,6 +264,7 @@ impl AlbumsView {
             layout_sync_queued: Rc::new(Cell::new(false)),
             artwork_loader,
             detail_generation: Rc::new(Cell::new(0)),
+            detail_panel: Rc::new(RefCell::new(None)),
             activated: Rc::new(Cell::new(false)),
             shown: Rc::new(Cell::new(false)),
             hidden_changes: Rc::new(Cell::new(HiddenChanges::None)),
@@ -865,7 +878,7 @@ impl AlbumsView {
         };
         self.content.remove(&row_shell);
         if let Some(mut row) = self.row_widgets.borrow_mut().remove(&widget_id(&row_shell)) {
-            row.set_detail(None, None);
+            row.set_detail(None);
             row.bound_row = None;
             row.bound_generation = 0;
             self.row_pool.borrow_mut().push(row);
@@ -1076,7 +1089,7 @@ impl AlbumsView {
         refresh: AlbumRowRefresh<'_>,
     ) {
         row.show_tiles();
-        row.set_detail(None, None);
+        row.set_detail(None);
         row.ensure_slot_count(columns, self);
         let selected_album = self.selected_album.borrow().clone();
         for (offset, slot) in row.slots.iter_mut().enumerate() {
@@ -1125,11 +1138,28 @@ impl AlbumsView {
             playing_track_id: self.playing_track_id.get(),
         };
         let force_rebuild = refresh.refreshes_detail_for(&album.key);
-        if force_rebuild || row.detail_key.as_ref() != Some(&detail_key) {
+        let built = self
+            .detail_panel
+            .borrow()
+            .as_ref()
+            .filter(|panel| !force_rebuild && panel.key == detail_key)
+            .map(|panel| panel.widget.clone());
+        let detail = built.unwrap_or_else(|| {
             let detail = self.album_detail(&album, selected_column, columns);
             detail.set_margin_top(ALBUM_DETAIL_TOP_GAP);
-            row.set_detail(Some(detail), Some(detail_key));
-        }
+            let previous = self.detail_panel.replace(Some(AlbumDetailPanel {
+                key: detail_key,
+                widget: detail.clone(),
+            }));
+            // Out of whichever row held it, so it goes when dropped.
+            if let Some(previous) = previous
+                && let Some(holder) = previous.widget.parent().and_downcast::<gtk::Box>()
+            {
+                holder.remove(&previous.widget);
+            }
+            detail
+        });
+        row.set_detail(Some(&detail));
     }
 
     fn detail_album(
@@ -1365,8 +1395,10 @@ struct AlbumRowWidgets {
     tile_row: gtk::Box,
     empty_state: gtk::Label,
     slots: Vec<AlbumTileSlot>,
+    /// The album-detail panel this row last showed. The panel moves on
+    /// to whichever row takes the detail position, so this row may no
+    /// longer hold it.
     detail: Option<gtk::Overlay>,
-    detail_key: Option<AlbumDetailKey>,
     bound_row: Option<AlbumListRow>,
     bound_generation: u64,
 }
@@ -1393,7 +1425,6 @@ impl AlbumRowWidgets {
             empty_state,
             slots: Vec::new(),
             detail: None,
-            detail_key: None,
             bound_row: None,
             bound_generation: 0,
         }
@@ -1410,7 +1441,7 @@ impl AlbumRowWidgets {
     fn show_empty_state(&mut self) {
         self.tile_row.set_visible(false);
         self.empty_state.set_visible(true);
-        self.set_detail(None, None);
+        self.set_detail(None);
     }
 
     fn show_tiles(&self) {
@@ -1423,15 +1454,26 @@ impl AlbumRowWidgets {
         self.tile_row.set_visible(false);
     }
 
-    fn set_detail(&mut self, detail: Option<gtk::Overlay>, detail_key: Option<AlbumDetailKey>) {
-        if let Some(previous) = self.detail.take() {
+    /// Show `detail` below the row, taking it from the row that showed it
+    /// before, or show none.
+    fn set_detail(&mut self, detail: Option<&gtk::Overlay>) {
+        let shell = self.shell.upcast_ref::<gtk::Widget>();
+        if let Some(previous) = self.detail.take()
+            && Some(&previous) != detail
+            && previous.parent().as_ref() == Some(shell)
+        {
             self.shell.remove(&previous);
         }
-        if let Some(detail) = detail {
-            self.shell.append(&detail);
-            self.detail = Some(detail);
+        let Some(detail) = detail else {
+            return;
+        };
+        if detail.parent().as_ref() != Some(shell) {
+            if let Some(holder) = detail.parent().and_downcast::<gtk::Box>() {
+                holder.remove(detail);
+            }
+            self.shell.append(detail);
         }
-        self.detail_key = detail_key;
+        self.detail = Some(detail.clone());
     }
 }
 
@@ -1932,8 +1974,8 @@ mod tests {
     use super::{
         ALBUM_GRID_COLUMN_SPACING, ALBUM_GRID_MARGIN, ALBUM_TILE_COVER_SIZE,
         ALBUM_TILE_COVER_SIZE_EXPANDED, ALBUM_TILE_MIN_WIDTH, ALBUM_TILE_WIDTH, AlbumKey,
-        AlbumListRow, AlbumViewModel, RowReassignment, album_list_row_at, album_list_rows,
-        album_row_count, align_widget_to_viewport_top, apply_cover_texture,
+        AlbumListRow, AlbumRowWidgets, AlbumViewModel, RowReassignment, album_list_row_at,
+        album_list_rows, album_row_count, align_widget_to_viewport_top, apply_cover_texture,
         build_album_tile_content, build_cover_widget, columns_for_width,
         detail_position_for_tile_row, insert_row_store_item, reassign_realized_rows,
         remove_row_store_item, replace_row_store, replace_row_store_item,
@@ -2196,6 +2238,29 @@ mod tests {
                 "target row should be aligned to the viewport top"
             );
             window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
+    fn the_detail_panel_moves_to_the_row_that_takes_the_detail_position() {
+        let ran = crate::test_support::with_gtk(|| {
+            let panel = gtk::Overlay::new();
+            let mut departing = AlbumRowWidgets::new();
+            let mut entering = AlbumRowWidgets::new();
+
+            departing.set_detail(Some(&panel));
+            entering.set_detail(Some(&panel));
+            assert_eq!(panel.parent().as_ref(), Some(entering.shell.upcast_ref()));
+
+            // The row it left no longer holds it, and lets it be.
+            departing.set_detail(None);
+            assert_eq!(panel.parent().as_ref(), Some(entering.shell.upcast_ref()));
+
+            entering.set_detail(None);
+            assert!(panel.parent().is_none());
         });
         if !ran {
             eprintln!("skipped GTK widget test: no display available");
