@@ -4,6 +4,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
+    ops::Range,
     rc::Rc,
 };
 
@@ -187,6 +188,9 @@ const ALBUM_DETAIL_HEADER_HEIGHT_ESTIMATE: i32 = 56;
 const ALBUM_DETAIL_VERTICAL_PADDING: i32 = 64;
 const ALBUM_DETAIL_TRACK_ROW_HEIGHT: i32 = 32;
 const ALBUM_SCROLL_REALIZE_BUFFER_PX: f64 = 400.0;
+/// Departed rows kept realized beyond the viewport, ready for the next row
+/// a scroll brings in; see [`reassign_realized_rows`].
+const ALBUM_SPARE_ROWS: usize = 2;
 
 impl AlbumsView {
     pub(crate) fn new(
@@ -713,24 +717,26 @@ impl AlbumsView {
         let visible_top = adjustment.value() - ALBUM_SCROLL_REALIZE_BUFFER_PX;
         let visible_bottom =
             adjustment.value() + adjustment.page_size() + ALBUM_SCROLL_REALIZE_BUFFER_PX;
-        let visible_positions: std::collections::HashSet<_> = layouts
-            .iter()
-            .filter_map(|(position, y, height)| {
-                let top = f64::from(*y);
-                let bottom = f64::from(*y + *height);
-                (bottom >= visible_top && top <= visible_bottom).then_some(*position)
-            })
-            .collect();
+        let visible = visible_row_range(&layouts, visible_top, visible_bottom);
 
-        let realized_positions: Vec<_> = self.realized_rows.borrow().keys().copied().collect();
-        for position in realized_positions {
-            if !visible_positions.contains(&position) {
-                self.release_row(position);
+        let reassignment = reassign_realized_rows(
+            self.realized_rows.borrow().keys().copied(),
+            visible.clone(),
+            layouts.len(),
+        );
+        {
+            let mut realized_rows = self.realized_rows.borrow_mut();
+            for (departing_position, entering_position) in reassignment.handoffs {
+                if let Some(row_shell) = realized_rows.remove(&departing_position) {
+                    realized_rows.insert(entering_position, row_shell);
+                }
             }
         }
-
+        for position in reassignment.released {
+            self.release_row(position);
+        }
         for (position, y, _height) in layouts {
-            if visible_positions.contains(&position) {
+            if visible.contains(&position) || self.realized_rows.borrow().contains_key(&position) {
                 self.realize_row(position, y, width);
             }
         }
@@ -1697,6 +1703,75 @@ fn remove_row_store_item(store: &gio::ListStore, position: usize) {
     }
 }
 
+/// Positions of the rows in `layouts` that overlap `top..=bottom`.
+fn visible_row_range(layouts: &[(usize, i32, i32)], top: f64, bottom: f64) -> Range<usize> {
+    let mut visible = layouts.iter().filter_map(|(position, y, height)| {
+        (f64::from(*y + *height) >= top && f64::from(*y) <= bottom).then_some(*position)
+    });
+    match visible.next() {
+        Some(first) => first..visible.next_back().unwrap_or(first) + 1,
+        None => 0..0,
+    }
+}
+
+/// How the realized rows follow the viewport to a new `visible` range.
+#[derive(Debug, PartialEq)]
+struct RowReassignment {
+    /// `(departing, entering)`: the shell realized for a departing row is
+    /// moved to and rebound for an entering row.
+    handoffs: Vec<(usize, usize)>,
+    /// Departing rows whose shells leave the grid.
+    released: Vec<usize>,
+}
+
+/// Plan how the shells `realized` for some rows follow the viewport to
+/// `visible`, among `row_count` rows.
+///
+/// The grid keeps a constant set of shells while it scrolls: adding a shell
+/// to the grid or removing one shifts every other shell's position among its
+/// siblings, and GTK then revalidates the style of every widget in every
+/// row. So each row scrolling in takes the shell of a row scrolling out —
+/// the farthest from the viewport — and up to [`ALBUM_SPARE_ROWS`] of the
+/// nearest departing rows stay realized: rows enter and leave the viewport
+/// at different scroll offsets, and a spare covers the row that enters
+/// before another has left. Rows that no longer exist are released first.
+fn reassign_realized_rows(
+    realized: impl IntoIterator<Item = usize>,
+    visible: Range<usize>,
+    row_count: usize,
+) -> RowReassignment {
+    let mut realized: Vec<usize> = realized.into_iter().collect();
+    realized.sort_unstable();
+    let mut departing: Vec<usize> = realized
+        .iter()
+        .copied()
+        .filter(|position| !visible.contains(position))
+        .collect();
+    // Nearest existing row first, rows that no longer exist last.
+    departing.sort_by_key(|&position| {
+        let distance = if position < visible.start {
+            visible.start - position
+        } else {
+            position + 1 - visible.end
+        };
+        (position >= row_count, distance)
+    });
+
+    let handoffs = visible
+        .filter(|position| realized.binary_search(position).is_err())
+        .map_while(|entering| departing.pop().map(|departing| (departing, entering)))
+        .collect();
+    let spares = departing
+        .iter()
+        .take_while(|&&position| position < row_count)
+        .count()
+        .min(ALBUM_SPARE_ROWS);
+    RowReassignment {
+        handoffs,
+        released: departing.split_off(spares),
+    }
+}
+
 /// Shift a position-keyed map's keys down by one after the underlying
 /// list removed the row at `removed_position`. The caller is expected to
 /// have dropped the entry for the removed position itself.
@@ -1857,9 +1932,10 @@ mod tests {
     use super::{
         ALBUM_GRID_COLUMN_SPACING, ALBUM_GRID_MARGIN, ALBUM_TILE_COVER_SIZE,
         ALBUM_TILE_COVER_SIZE_EXPANDED, ALBUM_TILE_MIN_WIDTH, ALBUM_TILE_WIDTH, AlbumKey,
-        AlbumListRow, AlbumViewModel, album_list_row_at, album_list_rows, album_row_count,
-        align_widget_to_viewport_top, apply_cover_texture, build_album_tile_content,
-        build_cover_widget, columns_for_width, detail_position_for_tile_row, insert_row_store_item,
+        AlbumListRow, AlbumViewModel, RowReassignment, album_list_row_at, album_list_rows,
+        album_row_count, align_widget_to_viewport_top, apply_cover_texture,
+        build_album_tile_content, build_cover_widget, columns_for_width,
+        detail_position_for_tile_row, insert_row_store_item, reassign_realized_rows,
         remove_row_store_item, replace_row_store, replace_row_store_item,
         shift_positions_after_insertion, shift_positions_after_removal,
         tile_list_position_for_tile_row,
@@ -2002,6 +2078,58 @@ mod tests {
         assert_eq!(
             positions,
             [(0, "tiles-0"), (2, "tiles-1"), (3, "tiles-2")].into()
+        );
+    }
+
+    #[test]
+    fn scrolling_keeps_the_set_of_realized_rows() {
+        // A row leaving the viewport before another enters stays realized
+        // as a spare...
+        assert_eq!(
+            reassign_realized_rows(10..20, 11..20, 100),
+            RowReassignment {
+                handoffs: vec![],
+                released: vec![],
+            }
+        );
+        // ...and a row entering takes the farthest departing row's shell,
+        // keeping the nearest as spares.
+        assert_eq!(
+            reassign_realized_rows(10..22, 13..23, 100),
+            RowReassignment {
+                handoffs: vec![(10, 22)],
+                released: vec![],
+            }
+        );
+        // Departing rows beyond the spare allowance leave the grid.
+        assert_eq!(
+            reassign_realized_rows(0..20, 0..10, 100),
+            RowReassignment {
+                handoffs: vec![],
+                released: vec![12, 13, 14, 15, 16, 17, 18, 19],
+            }
+        );
+    }
+
+    #[test]
+    fn a_jump_moves_realized_rows_to_the_new_viewport() {
+        assert_eq!(
+            reassign_realized_rows(0..12, 50..60, 100),
+            RowReassignment {
+                handoffs: (0..10).zip(50..60).collect(),
+                released: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn rows_that_no_longer_exist_are_released_first() {
+        assert_eq!(
+            reassign_realized_rows([0, 1, 2, 7, 8], 0..4, 5),
+            RowReassignment {
+                handoffs: vec![(8, 3)],
+                released: vec![7],
+            }
         );
     }
 
