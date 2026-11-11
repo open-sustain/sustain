@@ -16,7 +16,7 @@ use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
     NotificationSeverity, YoutubeAudioDownloadResult, freedesktop_trash,
     managed_library::file_ops::{copy_file_verified, open_regular_file},
-    metadata_writer::full_metadata_mirror,
+    metadata_writer::metadata_mirror,
     youtube_audio_downloader::{
         MAX_YOUTUBE_REPLACEMENT_DURATION, StagedYoutubeAudio, YoutubeAudioDownloadError,
     },
@@ -265,7 +265,7 @@ pub(crate) fn replace_track_audio_from_youtube(
         .read_artwork(&original_path)
         .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
     metadata_service
-        .write_metadata(&staged.path, full_metadata_mirror(&track.metadata))
+        .write_metadata(&staged.path, metadata_mirror(&track.metadata))
         .and_then(|()| metadata_service.write_rating(&staged.path, track.rating))
         .and_then(|()| metadata_service.write_artwork(&staged.path, artwork.clone()))
         .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;

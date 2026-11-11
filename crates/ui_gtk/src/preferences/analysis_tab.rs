@@ -32,8 +32,8 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
     );
     let key_row = build_switch_row(
         "Key detection",
-        "Runs in the background on tracks missing a musical key. \
-         Never modifies tracks that already have one.",
+        "Runs in the background and sets each track's key to the measured \
+         key. Never replaces a key you typed yourself.",
         initial.key,
     );
     let audio_row = build_switch_row(

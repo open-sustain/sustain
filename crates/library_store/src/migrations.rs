@@ -15,13 +15,14 @@ use crate::{
     schema::{
         ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_BEAT_GRID_SQL,
         ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL,
-        BACKFILL_GENERATED_SORT_FIELDS_SQL, INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL,
-        MOVE_WAVEFORMS_TO_CACHE_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL,
-        STORE_BPM_IN_HUNDREDTHS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
+        ADD_TRACK_KEY_SET_BY_USER_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
+        INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
+        NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
+        VERSION_ANALYSIS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 14;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 15;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -112,6 +113,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 14,
         description: "index playlist entries by track",
         step: MigrationStep::Sql(INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL),
+    },
+    Migration {
+        version: 15,
+        description: "remember which keys the user typed, and measure every other one again",
+        step: MigrationStep::Sql(ADD_TRACK_KEY_SET_BY_USER_SQL),
     },
 ];
 
@@ -739,7 +745,9 @@ mod tests {
                 )
                 .expect("analysis row")
         };
-        assert_eq!(attempts(1), (Some(10), Some(20)));
+        // The junk key is cleared and measured again, and so (version 15)
+        // is the held one.
+        assert_eq!(attempts(1), (Some(10), None));
         assert_eq!(attempts(junk_id), (Some(10), None));
         for (index, (text, expected)) in stored.iter().enumerate() {
             let (key, title): (Option<String>, String) = connection
@@ -844,10 +852,10 @@ mod tests {
             assert_eq!((title.as_str(), key.as_str()), ("Title", "Am"));
             // A cleared tempo is analyzed again, and so (version 11) is
             // every held one; only a track that never had a BPM keeps its
-            // attempt.
+            // attempt. Every track holds a key, measured again (version 15).
             let expected_bpm_attempt = if bpm.is_none() { Some(10) } else { None };
             assert_eq!(bpm_attempt, expected_bpm_attempt, "{bpm:?}");
-            assert_eq!(key_attempt, Some(20));
+            assert_eq!(key_attempt, None);
         }
         let columns: Vec<String> = connection
             .prepare("SELECT name FROM pragma_table_info('tracks')")
@@ -1203,6 +1211,78 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("entries");
         assert_eq!(left, vec![2]);
+    }
+
+    #[test]
+    fn upgrade_from_v14_marks_no_key_as_typed_and_measures_held_keys_again() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..14]).expect("schema version 14");
+        // Track 1 holds a key; track 2 was measured and found none.
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path, title, musical_key) \
+                     VALUES (1, x'61', 'Held', 'Am'), (2, x'62', 'Empty', NULL);
+                 INSERT INTO track_analysis \
+                     (track_id, bpm_attempted_at_unix, key_attempted_at_unix, \
+                      bpm_analyzer_version, key_analyzer_version) \
+                     VALUES (1, 1700000000, 1700000000, 15, 15), \
+                            (2, 1700000000, 1700000000, 15, 15);",
+            )
+            .expect("seed tracks");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        // Title, key, typed by the user, BPM attempt, key attempt.
+        type Row = (String, Option<String>, bool, Option<i64>, Option<i64>);
+        let rows: Vec<Row> = connection
+            .prepare(
+                "SELECT t.title, t.musical_key, t.key_set_by_user, \
+                     a.bpm_attempted_at_unix, a.key_attempted_at_unix \
+                 FROM tracks t JOIN track_analysis a ON a.track_id = t.id ORDER BY t.id",
+            )
+            .expect("prepare")
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows");
+        // Values are kept; only the held key's attempt is forgotten, so
+        // its key is measured again and the measurement replaces it.
+        assert_eq!(
+            rows,
+            [
+                (
+                    "Held".to_owned(),
+                    Some("Am".to_owned()),
+                    false,
+                    Some(1_700_000_000),
+                    None
+                ),
+                (
+                    "Empty".to_owned(),
+                    None,
+                    false,
+                    Some(1_700_000_000),
+                    Some(1_700_000_000)
+                ),
+            ]
+        );
+        assert!(
+            connection
+                .execute("UPDATE tracks SET key_set_by_user = 2 WHERE id = 1", [])
+                .is_err()
+        );
     }
 
     #[test]

@@ -550,6 +550,18 @@ pub(super) const INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL: &str = r#"
 CREATE INDEX playlist_entries_by_track ON playlist_entries (track_id);
 "#;
 
+// Key analysis now replaces every key the user did not type, as tempo
+// analysis does BPMs (migration 11). No record says which existing keys
+// the user typed, so every one starts as not user-set; tracks whose key
+// was already measured measure it again so the measurement replaces the
+// key their row kept from file tags or an older analyzer.
+pub(super) const ADD_TRACK_KEY_SET_BY_USER_SQL: &str = r#"
+ALTER TABLE tracks ADD COLUMN key_set_by_user INTEGER NOT NULL DEFAULT 0
+    CHECK (key_set_by_user IN (0, 1));
+UPDATE track_analysis SET key_attempted_at_unix = NULL
+WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
@@ -658,6 +670,7 @@ const TRACK_COLUMNS: &[TrackColumn] = &[
     TrackColumn::stored_value("file_modified_at_unix"),
     TrackColumn::stored_value("bit_depth"),
     TrackColumn::stored_value("bpm_set_by_user"),
+    TrackColumn::stored_value("key_set_by_user"),
 ];
 
 pub(crate) mod track_column_index {
@@ -701,6 +714,7 @@ pub(crate) mod track_column_index {
     pub(crate) const FILE_MODIFIED_AT_UNIX: usize = 37;
     pub(crate) const BIT_DEPTH: usize = 38;
     pub(crate) const BPM_SET_BY_USER: usize = 39;
+    pub(crate) const KEY_SET_BY_USER: usize = 40;
 }
 
 pub(super) static SAVE_TRACK_SQL: LazyLock<String> = LazyLock::new(|| {
@@ -866,8 +880,16 @@ pub(super) const REPLACE_TRACK_BPM_UNLESS_SET_BY_USER_SQL: &str =
 pub(super) const FORGET_TRACK_BPM_ATTEMPT_SQL: &str =
     r#"UPDATE track_analysis SET bpm_attempted_at_unix = NULL WHERE track_id = ?1"#;
 
-pub(super) const FILL_TRACK_MUSICAL_KEY_IF_NULL_SQL: &str =
-    r#"UPDATE tracks SET musical_key = ?1 WHERE id = ?2 AND musical_key IS NULL"#;
+/// "Set `tracks.musical_key` to the measured key unless the user typed
+/// it." A measurement supersedes a key read from file tags or measured
+/// before, but never the user's own value.
+pub(super) const REPLACE_TRACK_MUSICAL_KEY_UNLESS_SET_BY_USER_SQL: &str =
+    r#"UPDATE tracks SET musical_key = ?1 WHERE id = ?2 AND key_set_by_user = 0"#;
+
+/// "Forget that this track's key was measured." The user cleared their
+/// key, so analysis must measure it again; BPM and audio stay attempted.
+pub(super) const FORGET_TRACK_KEY_ATTEMPT_SQL: &str =
+    r#"UPDATE track_analysis SET key_attempted_at_unix = NULL WHERE track_id = ?1"#;
 
 pub(super) const UPSERT_TRACK_BEAT_GRID_SQL: &str = r#"
 INSERT INTO track_beat_grid (track_id, tempo_hundredths, first_beat_micros, first_beat_number)
@@ -1104,6 +1126,7 @@ mod tests {
             ),
             (track_column_index::BIT_DEPTH, "bit_depth"),
             (track_column_index::BPM_SET_BY_USER, "bpm_set_by_user"),
+            (track_column_index::KEY_SET_BY_USER, "key_set_by_user"),
         ];
 
         assert_eq!(TRACK_COLUMNS.len(), expected.len());

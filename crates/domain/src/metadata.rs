@@ -26,6 +26,10 @@ pub struct TrackMetadata {
     /// own measurement, but never one the user set.
     pub bpm_set_by_user: bool,
     pub key: Option<MusicalKey>,
+    /// Whether the user typed `key` in Sustain. Key analysis replaces any
+    /// other key — read from file tags or measured before — with its own
+    /// measurement, but never one the user set.
+    pub key_set_by_user: bool,
     pub comments: Option<String>,
     pub lyrics: Option<String>,
     /// "Sort as" names — the parallel fields some taggers write next to the
@@ -138,6 +142,13 @@ impl TrackMetadata {
             FieldChange::Clear => self.bpm_set_by_user = false,
         }
         apply_field_change(&mut self.key, &change.key);
+        match change.key {
+            FieldChange::Unchanged => {}
+            FieldChange::Set(_) => self.key_set_by_user = true,
+            // A cleared key is no value of the user's: analysis may
+            // measure one.
+            FieldChange::Clear => self.key_set_by_user = false,
+        }
         apply_text_field_change(&mut self.comments, &change.comments);
         apply_text_field_change(&mut self.lyrics, &change.lyrics);
         apply_text_field_change(&mut self.title_sort, &change.title_sort);
@@ -323,6 +334,12 @@ impl MetadataChange {
     /// measured one may take its place, even on a track analysed before.
     pub fn releases_bpm_to_analysis(&self) -> bool {
         matches!(self.bpm, FieldChange::Clear)
+    }
+
+    /// Whether this change hands the track's key back to analysis, as
+    /// [`Self::releases_bpm_to_analysis`] does its BPM.
+    pub fn releases_key_to_analysis(&self) -> bool {
+        matches!(self.key, FieldChange::Clear)
     }
 }
 
@@ -550,6 +567,36 @@ mod tests {
         metadata.fill_missing_generated_sort_fields();
 
         assert_eq!(metadata.artist_sort.as_deref(), Some("Beatles, The"));
+    }
+
+    #[test]
+    fn a_key_the_user_sets_is_marked_theirs_until_they_clear_it() {
+        let a_minor = MusicalKey::from_short_code("Am").expect("key");
+        let mut metadata = TrackMetadata {
+            key: Some(a_minor),
+            ..TrackMetadata::default()
+        };
+
+        let set = MetadataChange {
+            key: FieldChange::Set(MusicalKey::from_short_code("C").expect("key")),
+            ..MetadataChange::default()
+        };
+        metadata.fill_missing_from_change(&set);
+        assert_eq!(metadata.key, Some(a_minor));
+        assert!(!metadata.key_set_by_user);
+
+        metadata.apply_change(&set);
+        assert!(metadata.key_set_by_user);
+        assert!(!set.releases_key_to_analysis());
+
+        let clear = MetadataChange {
+            key: FieldChange::Clear,
+            ..MetadataChange::default()
+        };
+        metadata.apply_change(&clear);
+        assert_eq!(metadata.key, None);
+        assert!(!metadata.key_set_by_user);
+        assert!(clear.releases_key_to_analysis());
     }
 
     #[test]

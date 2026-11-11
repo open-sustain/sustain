@@ -717,7 +717,7 @@ fn mirror_one(
     let outcome = (|| {
         if pending.kinds.metadata {
             metadata_service
-                .write_metadata(&path, full_metadata_mirror(&track.metadata))
+                .write_metadata(&path, metadata_mirror(&track.metadata))
                 .map_err(metadata_error)?;
             replaced_file = true;
         }
@@ -773,7 +773,8 @@ fn read_artwork(
         .map_err(store_error)
 }
 
-pub(crate) fn full_metadata_mirror(metadata: &TrackMetadata) -> MetadataChange {
+/// The library's metadata as the change that writes it to a track's file.
+pub(crate) fn metadata_mirror(metadata: &TrackMetadata) -> MetadataChange {
     MetadataChange {
         title: mirror_field(&metadata.title),
         artist: mirror_field(&metadata.artist),
@@ -788,8 +789,8 @@ pub(crate) fn full_metadata_mirror(metadata: &TrackMetadata) -> MetadataChange {
         disc_total: mirror_field(&metadata.disc_total),
         year: mirror_field(&metadata.year),
         compilation: mirror_field(&metadata.compilation),
-        bpm: mirror_field(&metadata.bpm),
-        key: mirror_field(&metadata.key),
+        bpm: mirror_analysed_field(&metadata.bpm, metadata.bpm_set_by_user),
+        key: mirror_analysed_field(&metadata.key, metadata.key_set_by_user),
         comments: mirror_field(&metadata.comments),
         lyrics: mirror_field(&metadata.lyrics),
         title_sort: mirror_field(&metadata.title_sort),
@@ -804,6 +805,17 @@ fn mirror_field<T: Clone>(value: &Option<T>) -> FieldChange<T> {
     match value {
         Some(value) => FieldChange::Set(value.clone()),
         None => FieldChange::Clear,
+    }
+}
+
+/// A field analysis measures too. The file gets the user's own value, or
+/// loses the field when the library holds none; a value the user did not
+/// type, measured or read from the file in the first place, is left as
+/// the file holds it, so a measurement never overwrites another tool's.
+fn mirror_analysed_field<T: Clone>(value: &Option<T>, set_by_user: bool) -> FieldChange<T> {
+    match value {
+        Some(_) if !set_by_user => FieldChange::Unchanged,
+        _ => mirror_field(value),
     }
 }
 
@@ -1592,6 +1604,36 @@ mod tests {
                 .push(path.to_path_buf());
             Ok(())
         }
+    }
+
+    #[test]
+    fn the_mirror_writes_only_the_users_own_tempo_and_key() {
+        let measured = TrackMetadata {
+            title: Some("Title".to_owned()),
+            bpm: sustain_domain::Bpm::from_whole(128),
+            key: Some(sustain_domain::MusicalKey::AMinor),
+            ..TrackMetadata::default()
+        };
+        let mirror = metadata_mirror(&measured);
+        assert_eq!(mirror.title, FieldChange::Set("Title".to_owned()));
+        assert_eq!(mirror.bpm, FieldChange::Unchanged);
+        assert_eq!(mirror.key, FieldChange::Unchanged);
+
+        let typed = TrackMetadata {
+            bpm_set_by_user: true,
+            key_set_by_user: true,
+            ..measured
+        };
+        let mirror = metadata_mirror(&typed);
+        assert_eq!(mirror.bpm, FieldChange::Set(typed.bpm.expect("tempo")));
+        assert_eq!(
+            mirror.key,
+            FieldChange::Set(sustain_domain::MusicalKey::AMinor)
+        );
+
+        let mirror = metadata_mirror(&TrackMetadata::default());
+        assert_eq!(mirror.bpm, FieldChange::Clear);
+        assert_eq!(mirror.key, FieldChange::Clear);
     }
 
     fn valid_artwork() -> Vec<u8> {

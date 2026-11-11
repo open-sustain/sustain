@@ -52,6 +52,9 @@ pub(crate) fn track_from_row(row: &Row<'_>) -> StoreResult<Track> {
                 .get(track_column::BPM_SET_BY_USER)
                 .map_err(StoreError::from)?,
             key: optional_musical_key(row, track_column::MUSICAL_KEY)?,
+            key_set_by_user: row
+                .get(track_column::KEY_SET_BY_USER)
+                .map_err(StoreError::from)?,
             comments: row.get(track_column::COMMENTS).map_err(StoreError::from)?,
             duration: duration_seconds.map(seconds_to_duration),
             bitrate_kbps: optional_u32(row, track_column::BITRATE_KBPS)?,

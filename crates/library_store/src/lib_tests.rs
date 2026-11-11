@@ -1100,23 +1100,24 @@ fn load_beat_grids_returns_the_grids_of_the_asked_tracks() {
 }
 
 #[test]
-fn record_analysis_replaces_bpms_the_user_did_not_type() {
+fn record_analysis_replaces_values_the_user_did_not_type() {
     let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     // No BPM or key yet: analysis fills both.
     let blank = track(1, "blank.flac");
     store.save_track(blank.clone()).expect("save blank");
 
-    // BPM and key read from file tags: the measured tempo replaces the
-    // tag's BPM; the tag's key stays.
+    // BPM and key read from file tags: the measurement replaces both.
     let mut tagged = track(2, "tagged.flac");
     tagged.metadata.bpm = Bpm::from_whole(63);
     tagged.metadata.key = Some(MusicalKey::AMinor);
     store.save_track(tagged.clone()).expect("save tagged");
 
-    // A BPM the user typed: analysis leaves it.
+    // A BPM and key the user typed: analysis leaves them.
     let mut typed = track(3, "typed.flac");
     typed.metadata.bpm = Bpm::from_whole(95);
     typed.metadata.bpm_set_by_user = true;
+    typed.metadata.key = Some(MusicalKey::AMinor);
+    typed.metadata.key_set_by_user = true;
     store.save_track(typed.clone()).expect("save typed");
 
     // A measured tempo keeps its hundredths.
@@ -1142,11 +1143,14 @@ fn record_analysis_replaces_bpms_the_user_did_not_type() {
         .expect("exists");
     assert_eq!(loaded_tagged.metadata.bpm, Bpm::from_hundredths(12_637));
     assert!(!loaded_tagged.metadata.bpm_set_by_user);
-    assert_eq!(loaded_tagged.metadata.key, Some(MusicalKey::AMinor));
+    assert_eq!(loaded_tagged.metadata.key, Some(MusicalKey::DMinor));
+    assert!(!loaded_tagged.metadata.key_set_by_user);
 
     let loaded_typed = store.track(typed.id).expect("load typed").expect("exists");
     assert_eq!(loaded_typed.metadata.bpm, Bpm::from_whole(95));
     assert!(loaded_typed.metadata.bpm_set_by_user);
+    assert_eq!(loaded_typed.metadata.key, Some(MusicalKey::AMinor));
+    assert!(loaded_typed.metadata.key_set_by_user);
 }
 
 #[test]
@@ -1215,6 +1219,68 @@ fn a_bpm_edit_survives_analysis_until_the_user_clears_it() {
     let after_clear = analyze();
     assert_eq!(after_clear.bpm, Bpm::from_hundredths(12_637));
     assert!(!after_clear.bpm_set_by_user);
+}
+
+#[test]
+fn a_key_edit_survives_analysis_until_the_user_clears_it() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let mut tagged = track(1, "tagged.flac");
+    tagged.metadata.key = Some(MusicalKey::AMinor);
+    store.save_track(tagged.clone()).expect("save");
+    let analysis = sample_analysis(None, Some(MusicalKey::DMinor));
+    let analyze = || {
+        store
+            .record_analysis(
+                tagged.id,
+                &analysis,
+                AnalysisCapabilities::all(),
+                ctx(1_700_000_000),
+            )
+            .expect("record");
+        store
+            .track(tagged.id)
+            .expect("load")
+            .expect("exists")
+            .metadata
+    };
+    let needs = |capabilities| {
+        store
+            .filter_tracks_needing_analysis(&[tagged.id], capabilities, 1)
+            .expect("filter")
+    };
+    let key_only = AnalysisCapabilities {
+        bpm: false,
+        key: true,
+        audio: false,
+    };
+    let tempo_and_audio = AnalysisCapabilities {
+        bpm: true,
+        key: false,
+        audio: true,
+    };
+    let key_change = |key| MetadataChange {
+        key,
+        ..MetadataChange::default()
+    };
+
+    assert_eq!(analyze().key, Some(MusicalKey::DMinor));
+    store
+        .apply_track_metadata_change(tagged.id, &key_change(FieldChange::Set(MusicalKey::GMajor)))
+        .expect("edit");
+    assert!(needs(key_only).is_empty(), "a typed key needs no measuring");
+    let after_edit = analyze();
+    assert_eq!(after_edit.key, Some(MusicalKey::GMajor));
+    assert!(after_edit.key_set_by_user);
+
+    // Clearing goes through the Get Info path, which mirrors tags too.
+    store
+        .apply_track_metadata_change_and_enqueue_mirror(tagged.id, &key_change(FieldChange::Clear))
+        .expect("clear");
+    assert_eq!(needs(key_only), vec![tagged.id]);
+    assert!(needs(tempo_and_audio).is_empty());
+    let after_clear = analyze();
+    assert_eq!(after_clear.key, Some(MusicalKey::DMinor));
+    assert!(!after_clear.key_set_by_user);
 }
 
 #[test]

@@ -33,7 +33,7 @@ use crate::{
             remove_regular_file_matching_capability,
         },
     },
-    metadata_writer::full_metadata_mirror,
+    metadata_writer::metadata_mirror,
     notifications::runtime_error_text,
 };
 
@@ -341,10 +341,7 @@ fn run_pre_commit(
     )
     .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     metadata_service
-        .write_metadata(
-            &stage_path,
-            full_metadata_mirror(&preliminary.survivor.metadata),
-        )
+        .write_metadata(&stage_path, metadata_mirror(&preliminary.survivor.metadata))
         .and_then(|()| metadata_service.write_rating(&stage_path, preliminary.survivor.rating))
         .and_then(|()| metadata_service.write_artwork(&stage_path, artwork.clone()))
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;

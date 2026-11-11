@@ -4,8 +4,8 @@
 //! Force-backfill: rewrite every library track's file tags from the
 //! authoritative SQLite values.
 //!
-//! SQLite is the source of truth for every editable field; the per-edit
-//! path mirrors a *changed* field back to the file as a courtesy. A
+//! SQLite is the source of truth for every editable field; an edit
+//! mirrors the track's metadata back to the file as a courtesy. A
 //! library consolidated from external sources (e.g. Rhythmbox / iTunes XML
 //! history) can hold rich SQLite metadata whose files were never written.
 //! This one-shot pass rewrites every track's tags from SQLite, reusing the
@@ -14,7 +14,7 @@
 //! touched, and listening statistics are never written to files. Driven by
 //! the `sustain --force-backfill` CLI command (#143).
 
-use crate::metadata_writer::full_metadata_mirror;
+use crate::metadata_writer::metadata_mirror;
 use crate::{ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, Track};
 
 /// What happened to one track during a force-backfill pass.
@@ -91,7 +91,7 @@ impl ApplicationRuntime {
             } else {
                 let path = root.join(track.location.relative_path.as_path());
                 match metadata_service
-                    .write_metadata(&path, full_metadata_mirror(&track.metadata))
+                    .write_metadata(&path, metadata_mirror(&track.metadata))
                     .and_then(|()| metadata_service.write_rating(&path, track.rating))
                 {
                     Ok(()) => {

@@ -59,6 +59,7 @@ fn execute_full_track(connection: &Connection, sql: &str, track: &Track) -> Stor
                 track.file_modified_at.and_then(system_time_to_unix),
                 metadata.bit_depth.map(i64::from),
                 metadata.bpm_set_by_user,
+                metadata.key_set_by_user,
             ])
         })
         .map(|_| ())
@@ -281,6 +282,11 @@ pub(super) fn apply_track_metadata_change(
             .execute(FORGET_TRACK_BPM_ATTEMPT_SQL, params![track_id.get()])
             .map_err(StoreError::from)?;
     }
+    if change.releases_key_to_analysis() {
+        connection
+            .execute(FORGET_TRACK_KEY_ATTEMPT_SQL, params![track_id.get()])
+            .map_err(StoreError::from)?;
+    }
     Ok(())
 }
 
@@ -327,7 +333,8 @@ fn update_track_metadata(
                 album_sort = ?21,
                 album_artist_sort = ?22,
                 composer_sort = ?23,
-                bpm_set_by_user = ?24
+                bpm_set_by_user = ?24,
+                key_set_by_user = ?25
             WHERE id = ?1
             "#,
             params![
@@ -355,6 +362,7 @@ fn update_track_metadata(
                 metadata_text_param(&metadata.album_artist_sort),
                 metadata_text_param(&metadata.composer_sort),
                 metadata.bpm_set_by_user,
+                metadata.key_set_by_user,
             ],
         )
         .map(|_| ())

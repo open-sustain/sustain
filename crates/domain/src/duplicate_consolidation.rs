@@ -558,7 +558,10 @@ fn copy_metadata_field(
             target.bpm = source.bpm;
             target.bpm_set_by_user = source.bpm_set_by_user;
         }
-        DuplicateMetadataField::Key => target.key = source.key,
+        DuplicateMetadataField::Key => {
+            target.key = source.key;
+            target.key_set_by_user = source.key_set_by_user;
+        }
         DuplicateMetadataField::Comments => target.comments.clone_from(&source.comments),
         DuplicateMetadataField::Lyrics => target.lyrics.clone_from(&source.lyrics),
     }
