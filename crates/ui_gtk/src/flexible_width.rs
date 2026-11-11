@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-//! One child, given the width it takes when there is room apart from the
-//! narrowest it may get when there is not.
+//! One child, or blank space, given the width it takes when there is room
+//! apart from the narrowest it may get when there is not.
 //!
 //! A size request or a CSS `min-width` sets a widget's minimum, and the
 //! natural width only follows from its content. A top-bar control that
@@ -54,10 +54,10 @@ mod imp {
         }
 
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
-            let Some(child) = self.obj().first_child() else {
-                return (0, 0, -1, -1);
-            };
-            let measured = child.measure(orientation, for_size);
+            let measured = self
+                .obj()
+                .first_child()
+                .map_or((0, 0, -1, -1), |child| child.measure(orientation, for_size));
             if orientation == gtk::Orientation::Vertical {
                 return measured;
             }
@@ -93,6 +93,16 @@ impl FlexibleWidth {
         flexible_width
     }
 
+    /// Blank space, `natural` pixels wide when there is room and down to
+    /// `minimum` when there is not.
+    pub(crate) fn space(minimum: i32, natural: i32) -> Self {
+        let space: Self = glib::Object::new();
+        let imp = space.imp();
+        imp.minimum.set(minimum);
+        imp.natural.set(natural);
+        space
+    }
+
     /// Change the width taken when there is room.
     pub(crate) fn set_natural_width(&self, natural: i32) {
         if self.imp().natural.replace(natural) != natural {
@@ -111,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    fn it_gives_its_child_a_natural_width_apart_from_its_minimum() {
+    fn it_gives_a_natural_width_apart_from_its_minimum() {
         let ran = crate::test_support::with_gtk(|| {
             let child = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             child.set_size_request(20, 10);
@@ -124,6 +134,8 @@ mod tests {
             // A child that needs more than the bounds widens them.
             child.set_size_request(120, 10);
             assert_eq!(widths(&flexible), (120, 120));
+
+            assert_eq!(widths(&FlexibleWidth::space(12, 36)), (12, 36));
         });
         if !ran {
             eprintln!("skipped GTK widget test: no display available");

@@ -11,9 +11,9 @@ use gtk::prelude::*;
 use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, PlaybackState, VolumePercent};
 
 use super::{
-    MEDIA_ICON_SIZE, NOW_PLAYING_HORIZONTAL_MARGIN, NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_WIDTH,
-    PlaybackChangedCallback, SharedRuntime, TITLEBAR_CONTROL_HEIGHT, TITLEBAR_HEIGHT,
-    TITLEBAR_LEFT_PADDING, TITLEBAR_RIGHT_PADDING, VOLUME_MAGNET_THRESHOLD, VOLUME_MIN_WIDTH,
+    MEDIA_ICON_SIZE, NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_WIDTH, PlaybackChangedCallback,
+    SharedRuntime, TITLEBAR_CONTROL_HEIGHT, TITLEBAR_GAP, TITLEBAR_HEIGHT, TITLEBAR_LEFT_PADDING,
+    TITLEBAR_MIN_GAP, TITLEBAR_RIGHT_PADDING, VOLUME_MAGNET_THRESHOLD, VOLUME_MIN_WIDTH,
     VOLUME_WIDTH, command_controller::SharedCommandController, flexible_width::FlexibleWidth,
 };
 
@@ -50,9 +50,10 @@ pub(crate) struct Titlebar {
 }
 
 pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercent) -> Titlebar {
-    // In a narrow window the volume slider and the search entry give way
-    // first, down to their minimums, and the now-playing area after them:
-    // the center box shrinks its center child last.
+    // In a narrow window the blank spaces, the volume slider and the
+    // search entry give way first, down to their minimums, and the
+    // now-playing area after them: the center box shrinks its center child
+    // last. A wide window shows each at its full width.
     let topbar = gtk::CenterBox::new();
     topbar.add_css_class("titlebar");
     topbar.set_hexpand(true);
@@ -103,12 +104,13 @@ pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercen
 
     let left_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     left_controls.set_valign(gtk::Align::Center);
-    left_controls.set_margin_start(NOW_PLAYING_HORIZONTAL_MARGIN);
-    left_controls.set_margin_end(NOW_PLAYING_HORIZONTAL_MARGIN);
     left_controls.append(&previous);
     left_controls.append(&play_pause);
     left_controls.append(&next);
-    left_controls.append(&horizontal_spacer(TITLEBAR_LEFT_PADDING / 2));
+    left_controls.append(&FlexibleWidth::space(
+        TITLEBAR_MIN_GAP,
+        TITLEBAR_LEFT_PADDING / 2,
+    ));
     left_controls.append(&volume_controls);
 
     let right_controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -117,12 +119,22 @@ pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercen
     right_controls.append(&horizontal_spacer(TITLEBAR_RIGHT_PADDING));
     right_controls.append(&window_controls);
 
-    topbar.set_start_widget(Some(&left_controls));
+    // The gaps around the now-playing area belong to the sides, so they
+    // give way before it does. The controls on the start side keep a gap
+    // of their own from the now-playing area's.
+    let start = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    start.append(&titlebar_gap());
+    start.append(&left_controls);
+    start.append(&titlebar_gap());
+    start.append(&titlebar_gap());
+    let end = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    end.append(&titlebar_gap());
+    end.append(&right_controls);
+
+    topbar.set_start_widget(Some(&start));
     let now_playing = FlexibleWidth::new(&now_playing, NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_WIDTH);
-    now_playing.set_margin_start(NOW_PLAYING_HORIZONTAL_MARGIN);
-    now_playing.set_margin_end(NOW_PLAYING_HORIZONTAL_MARGIN);
     topbar.set_center_widget(Some(&now_playing));
-    topbar.set_end_widget(Some(&right_controls));
+    topbar.set_end_widget(Some(&end));
 
     let handle = gtk::WindowHandle::new();
     handle.set_child(Some(&topbar));
@@ -344,6 +356,11 @@ pub(crate) fn sync_play_pause_icon(icon: &gtk::Image, state: &PlaybackState) {
     }
 }
 
+/// One of the top bar's blank spaces around the now-playing area.
+fn titlebar_gap() -> FlexibleWidth {
+    FlexibleWidth::space(TITLEBAR_MIN_GAP, TITLEBAR_GAP)
+}
+
 fn horizontal_spacer(width: i32) -> gtk::Box {
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_width_request(width);
@@ -395,7 +412,27 @@ fn set_titlebar_control_height(control: &gtk::Button) {
 
 #[cfg(test)]
 mod tests {
-    use super::magnetized_volume_value;
+    use super::*;
+
+    #[test]
+    fn the_top_bar_fits_half_a_full_hd_screen() {
+        let ran = crate::test_support::with_gtk(|| {
+            let now_playing = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let titlebar =
+                build_titlebar(now_playing, VolumePercent::from_clamped(VolumePercent::MAX));
+            let (minimum, natural, _, _) =
+                titlebar.widget.measure(gtk::Orientation::Horizontal, -1);
+            assert!(minimum <= 1920 / 2, "minimum width {minimum}");
+            // A wide window still shows everything at its full width.
+            assert!(
+                natural >= NOW_PLAYING_WIDTH + 2 * VOLUME_WIDTH,
+                "natural width {natural}"
+            );
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
 
     #[test]
     fn volume_values_in_top_guard_range_snap_to_unity() {

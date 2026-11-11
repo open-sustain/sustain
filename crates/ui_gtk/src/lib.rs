@@ -76,12 +76,16 @@ const TITLEBAR_LEFT_PADDING: i32 = 48;
 const TITLEBAR_RIGHT_PADDING: i32 = 0;
 const TITLEBAR_CONTROL_HEIGHT: i32 = 42;
 const MEDIA_ICON_SIZE: i32 = 32;
-const NOW_PLAYING_HORIZONTAL_MARGIN: i32 = TITLEBAR_HEIGHT / 2;
+/// The blank space either side of the now-playing area and at the top
+/// bar's start edge.
+const TITLEBAR_GAP: i32 = TITLEBAR_HEIGHT / 2;
+/// How narrow the top bar's blank spaces get in a narrow window.
+const TITLEBAR_MIN_GAP: i32 = 12;
 const NOW_PLAYING_ICON_SIZE: i32 = 16;
 const NOW_PLAYING_SIDE_WIDTH: i32 = 58;
 const NOW_PLAYING_WIDTH: i32 = 600;
 /// How narrow the now-playing area gets in a narrow window.
-const NOW_PLAYING_MIN_WIDTH: i32 = NOW_PLAYING_WIDTH * 2 / 3;
+const NOW_PLAYING_MIN_WIDTH: i32 = NOW_PLAYING_WIDTH / 2;
 const PREFERENCES_WIDTH: i32 = 560;
 const SMART_PLAYLIST_EDITOR_WIDTH: i32 = 620;
 const SMART_PLAYLIST_EDITOR_HEIGHT: i32 = 360;
