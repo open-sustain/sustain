@@ -210,6 +210,8 @@ impl ApplicationRuntime {
         self.playlists = playlists;
         self.playlist_folders = playlist_folders;
         self.smart_playlists = smart_playlists;
+        // Tracks added to the playlist being played join its queue.
+        self.refresh_playback_queue_track_ids();
         Ok(())
     }
 

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use crate::{PlaylistId, TrackId};
+use crate::{PlaylistId, SmartPlaylistId, TrackId};
 
 use super::{PlaybackOptions, RepeatMode, ShuffleMode, shuffle::shuffled_track_ids};
 
@@ -13,17 +13,25 @@ pub enum PlaybackQueueSource {
     Library,
     Album,
     Playlist(PlaylistId),
-    SearchResults,
-    Selection,
+    SmartPlaylist(SmartPlaylistId),
+    /// The tracks of the list `within` that match the normalized search
+    /// `query`. Each search is its own list: another query, or the same
+    /// query over another list, is another source.
+    SearchResults {
+        within: Box<PlaybackQueueSource>,
+        query: String,
+    },
+    /// The Duplicates view's candidate groups.
+    Duplicates,
 }
 
 impl PlaybackQueueSource {
     /// True for queue sources where Smart Shuffle is meaningful — a
     /// stable library-scale corpus where engagement signals carry across
     /// sessions. Smart is silently downgraded to pure random for ad-hoc
-    /// sources (Album / SearchResults / Selection) where the candidate
-    /// pool is intentionally narrow and the user is signalling an
-    /// explicit listening context, not asking for discovery.
+    /// sources (Album / SmartPlaylist / SearchResults / Duplicates) where
+    /// the candidate pool is intentionally narrow and the user is
+    /// signalling an explicit listening context, not asking for discovery.
     pub fn supports_smart_shuffle(&self) -> bool {
         matches!(self, Self::Library | Self::Playlist(_))
     }
@@ -33,19 +41,16 @@ impl PlaybackQueueSource {
 /// specific track. The activation source (UI view, MPRIS, ...) decides:
 /// the runtime never reaches for "all library tracks" by default; it does
 /// only what the request asks for.
+///
+/// `ordered_track_ids` is the source in the order the user sees it — the
+/// view's current sort — so playback without shuffle continues down the
+/// list as displayed. Track ids that don't resolve to a playable library
+/// track are silently dropped so the queue never tries to play missing
+/// entries.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PlaybackQueueRequest {
-    /// Build the queue from every playable library track. Used by Songs view
-    /// and other surfaces that don't pin the queue to a narrower context.
-    Library,
-    /// Build the queue from this explicit ordered list, labelled with the
-    /// given source for downstream UI / MPRIS reporting. Track ids that
-    /// don't resolve to a playable library track are silently dropped so
-    /// the queue never tries to play missing entries.
-    Explicit {
-        source: PlaybackQueueSource,
-        ordered_track_ids: Vec<TrackId>,
-    },
+pub struct PlaybackQueueRequest {
+    pub source: PlaybackQueueSource,
+    pub ordered_track_ids: Vec<TrackId>,
 }
 
 /// Snapshot of the queue's internal layout — Eager precomputes the
@@ -419,6 +424,95 @@ impl PlaybackQueue {
         self.replace_ordered_track_ids(ordered_track_ids, available_track_ids, shuffle_seed);
     }
 
+    /// Adopt the order the list that defined the queue now shows — the
+    /// user re-sorted it. The tracks the list shows trade places among the
+    /// positions they hold in the source playthrough, taking the list's
+    /// order; source tracks the list no longer shows (a smart playlist's
+    /// membership moved on) keep their positions, and listed tracks the
+    /// source lacks are ignored.
+    ///
+    /// Unshuffled playback continues from the current track in the new
+    /// order, curated Up Next entries first. A shuffled play order stays
+    /// as rolled: the new order is what playback follows once shuffle is
+    /// turned off.
+    pub fn reorder_source(&mut self, listed_track_ids: &[TrackId]) {
+        // The listed tracks the source holds, in the list's order, each
+        // as many times as both hold it.
+        let mut unclaimed = track_counts(&self.ordered_track_ids);
+        let listed: Vec<TrackId> = listed_track_ids
+            .iter()
+            .copied()
+            .filter(|track_id| match unclaimed.get_mut(track_id) {
+                Some(count) if *count > 0 => {
+                    *count -= 1;
+                    true
+                }
+                _ => false,
+            })
+            .collect();
+        // Their positions in the source, filled in the list's order.
+        let mut positions_left = track_counts(&listed);
+        let mut listed = listed.into_iter();
+        for track_id in &mut self.ordered_track_ids {
+            if let Some(count) = positions_left.get_mut(track_id)
+                && *count > 0
+                && let Some(listed_track_id) = listed.next()
+            {
+                *count -= 1;
+                *track_id = listed_track_id;
+            }
+        }
+        if effective_shuffle_mode(self.options.shuffle_mode, &self.source) == ShuffleMode::Off {
+            self.layout = PlaybackQueueLayout::Eager {
+                play_order: eager_play_order(
+                    self.ordered_track_ids.clone(),
+                    self.current_track_id,
+                    &self.upcoming_curated_track_ids(),
+                ),
+            };
+        }
+    }
+
+    /// Add tracks that joined the source — a track imported into the
+    /// library, a playlist entry whose file came back — after the rest
+    /// of the source playthrough, leaving everything already queued in
+    /// place. A shuffled play order reaches them after the tracks it has
+    /// already rolled; a track already queued — curated into Up Next — is
+    /// not queued twice.
+    pub fn append_to_source(&mut self, track_ids: &[TrackId]) {
+        self.ordered_track_ids.extend_from_slice(track_ids);
+        match &mut self.layout {
+            PlaybackQueueLayout::Eager { play_order } => {
+                let queued: HashSet<TrackId> =
+                    play_order.iter().map(|entry| entry.track_id).collect();
+                play_order.extend(
+                    track_ids
+                        .iter()
+                        .copied()
+                        .filter(|track_id| !queued.contains(track_id))
+                        .map(PlaybackQueueEntry::continuation),
+                );
+            }
+            // The picker draws from the source pool, which now holds them.
+            PlaybackQueueLayout::Lazy { .. } => {}
+        }
+    }
+
+    /// Every track the queue refers to: the source pool, the current
+    /// track, and the realised play order with its curated entries.
+    /// Tracks may repeat.
+    pub fn track_ids(&self) -> impl Iterator<Item = TrackId> + '_ {
+        let realised = match &self.layout {
+            PlaybackQueueLayout::Eager { play_order } => play_order,
+            PlaybackQueueLayout::Lazy { played_history, .. } => played_history,
+        };
+        self.ordered_track_ids
+            .iter()
+            .copied()
+            .chain(self.current_track_id)
+            .chain(realised.iter().map(|entry| entry.track_id))
+    }
+
     /// Drop `track_ids` from the queue — tracks that left the library.
     pub fn remove_tracks(&mut self, track_ids: &HashSet<TrackId>) {
         self.ordered_track_ids
@@ -685,19 +779,21 @@ impl PlaybackQueue {
     }
 
     fn rebuild_layout(&mut self, shuffle_seed: u64) {
-        let curated = self
-            .upcoming_entries()
-            .iter()
-            .filter(|entry| entry.is_curated())
-            .map(|entry| entry.track_id)
-            .collect::<Vec<_>>();
         self.layout = build_layout(
             &self.ordered_track_ids,
             self.current_track_id,
-            &curated,
+            &self.upcoming_curated_track_ids(),
             effective_shuffle_mode(self.options.shuffle_mode, &self.source),
             shuffle_seed,
         );
+    }
+
+    fn upcoming_curated_track_ids(&self) -> Vec<TrackId> {
+        self.upcoming_entries()
+            .iter()
+            .filter(|entry| entry.is_curated())
+            .map(|entry| entry.track_id)
+            .collect()
     }
 
     fn contains_realised_track(&self, track_id: TrackId) -> bool {
@@ -748,7 +844,7 @@ enum TrackStep {
 
 /// The actual shuffle mode the layout should honour, which downgrades
 /// Smart to Pure for queue sources that do not support it (Album,
-/// SearchResults, Selection). The user's stored intent — the
+/// SmartPlaylist, SearchResults, Duplicates). The user's stored intent — the
 /// `ShuffleMode` on `PlaybackOptions` — is preserved as-is; this is
 /// only the projection used when laying out the playback sequence.
 fn effective_shuffle_mode(mode: ShuffleMode, source: &PlaybackQueueSource) -> ShuffleMode {
@@ -820,6 +916,15 @@ fn eager_play_order(
         insert_curated(&mut play_order, current + 1, curated_track_ids);
     }
     play_order
+}
+
+/// How many times each track occurs in `track_ids`.
+fn track_counts(track_ids: &[TrackId]) -> HashMap<TrackId, usize> {
+    let mut counts = HashMap::with_capacity(track_ids.len());
+    for track_id in track_ids {
+        *counts.entry(*track_id).or_insert(0) += 1;
+    }
+    counts
 }
 
 fn queue_candidates(track_ids: &[TrackId], current_track_id: TrackId) -> Vec<TrackId> {

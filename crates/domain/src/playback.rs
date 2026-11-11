@@ -25,9 +25,9 @@ pub enum PlaybackCommand {
     /// The queue request is part of the command — not derived inside the
     /// runtime — so the caller (UI / MPRIS / test) decides what context
     /// the activation runs in. Activating a track from the Songs view
-    /// passes [`PlaybackQueueRequest::Library`]; activating from a
-    /// playlist passes [`PlaybackQueueRequest::Explicit`] with the
-    /// playlist's track ids so auto-advance stays within the playlist.
+    /// passes the library as the view lists it; activating from a
+    /// playlist passes the playlist's tracks so auto-advance stays within
+    /// the playlist.
     PlayTrack {
         track_id: TrackId,
         queue: PlaybackQueueRequest,
@@ -78,6 +78,12 @@ pub enum PlaybackCommand {
     /// not contain the playing track (the browsing context changed out
     /// from under it), or when the resolved track pool is unchanged.
     RepopulateQueue(PlaybackQueueRequest),
+    /// The list that defined the queue was re-sorted: adopt `request`'s
+    /// order for the source playthrough (see
+    /// [`PlaybackQueue::reorder_source`]). No-op unless the request names
+    /// the queue's source, so re-sorting any other list — another
+    /// playlist, another search — never touches the queue.
+    ResortQueue(PlaybackQueueRequest),
     /// Advance to the next mode in the shuffle cycle
     /// (`Off → Pure → Smart → Off`). The transport's shuffle button
     /// dispatches this on every click.

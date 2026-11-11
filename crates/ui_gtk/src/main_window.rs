@@ -89,8 +89,8 @@ use super::{
     track_summary::TrackSummary,
     track_table::{
         BeginEditCallback, EditSession, EditableField, RatingChangedCallback, RowDropPosition,
-        RowReorderCallback, RowReorderDrop, RowSetUpdate, TrackActivatedCallback, TrackTable,
-        TrackTableRow, build_track_table,
+        RowReorderCallback, RowReorderDrop, RowSetUpdate, TrackActivatedCallback, TrackActivation,
+        TrackTable, TrackTableRow, build_track_table,
     },
     window_chrome::{install_resize_handles, install_window_state_chrome},
     youtube_audio_replacement::{
@@ -118,9 +118,9 @@ pub(crate) use sidebar_collapse::SidebarCollapseController;
 
 use mpris_bridge::{install_mpris_command_consumer, now_playing_to_mpris_metadata};
 use playback::{
-    install_playback_event_callback, install_playlists_header_playback,
-    library_track_activated_callback, make_toggle_or_start_playback, playback_changed_callback,
-    playlist_track_activated_callback, repopulate_request_for_visible_view,
+    VisibleViewQueues, install_playback_event_callback, install_playlists_header_playback,
+    install_queue_resort, make_toggle_or_start_playback, playback_changed_callback,
+    playlists_queue_source, songs_queue_source, track_activated_callback,
     update_play_pause_sensitivity,
 };
 use playlists::{
@@ -355,12 +355,22 @@ pub(crate) fn build_main_window(
         &missing_track_relocation_completed,
         &artwork_loader,
     );
-    let library_track_activated = library_track_activated_callback(
+    // What the Songs and Playlists tables list, read when a row is
+    // activated or the user re-sorts: the queue those define.
+    let songs_list_source = {
+        let current_search_text = current_search_text.clone();
+        move || Some(songs_queue_source(&current_search_text.borrow()))
+    };
+    let playlists_list_source = {
+        let sidebar = sidebar.clone();
+        let current_search_text = current_search_text.clone();
+        move || playlists_queue_source(sidebar.current_selection(), &current_search_text.borrow())
+    };
+    let library_track_activated = track_activated_callback(
         &command_controller,
-        &runtime,
         playback_changed.clone(),
-        &current_search_text,
         &locate_missing_track,
+        songs_list_source.clone(),
     );
     let show_album_holder: ShowAlbumHolder = Rc::new(RefCell::new(None));
     let track_context_invocation = TrackContextInvocationState::default();
@@ -460,7 +470,12 @@ pub(crate) fn build_main_window(
     let duplicates_view = DuplicatesView::new(
         runtime.clone(),
         context_menu,
-        library_track_activated.clone(),
+        track_activated_callback(
+            &command_controller,
+            playback_changed.clone(),
+            &locate_missing_track,
+            || Some(PlaybackQueueSource::Duplicates),
+        ),
         rating_changed.clone(),
         begin_inline_edit_callback(
             &runtime,
@@ -474,13 +489,11 @@ pub(crate) fn build_main_window(
         &sidebar,
         &playlists_table_holder,
     );
-    let playlist_track_activated = playlist_track_activated_callback(
+    let playlist_track_activated = track_activated_callback(
         &command_controller,
-        &runtime,
-        &sidebar,
         playback_changed.clone(),
-        &current_search_text,
         &locate_missing_track,
+        playlists_list_source.clone(),
     );
     // Inline editing in the Playlists view (regular and smart playlists
     // share this table). A separate hooks instance from the Songs table's
@@ -505,6 +518,8 @@ pub(crate) fn build_main_window(
         Some(playlists_inline_edit),
     );
     playlists_table_holder.replace(Some(playlists_table.clone()));
+    install_queue_resort(&songs_table, &command_controller, songs_list_source);
+    install_queue_resort(&playlists_table, &command_controller, playlists_list_source);
     install_track_column_layout_persistence(&runtime, &songs_table, &playlists_table, &sidebar);
     playback_changed();
     sustain_profiler::profile_mark!(window_profile, "tables/playback wired");
@@ -514,14 +529,6 @@ pub(crate) fn build_main_window(
     playlists_view.set_vexpand(true);
     playlists_view.append(playlists_header.widget());
     playlists_view.append(&playlists_table.widget());
-    install_playlists_header_playback(
-        &playlists_header,
-        &command_controller,
-        &runtime,
-        &sidebar,
-        &current_search_text,
-        &playback_changed,
-    );
     let songs_drop_indicator = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     songs_drop_indicator.add_css_class(LIBRARY_DROP_INDICATOR_CLASS);
     songs_drop_indicator.set_can_target(false);
@@ -576,16 +583,29 @@ pub(crate) fn build_main_window(
     let songs_refresh =
         SongsViewRefresh::install(&content_stack, &songs_table, &runtime, &current_search_text);
     sustain_profiler::profile_mark!(window_profile, "content stack + activators installed");
+    let view_queues = VisibleViewQueues {
+        content_stack: content_stack.clone(),
+        songs_refresh: songs_refresh.clone(),
+        albums_view: albums_view.clone(),
+        playlists_table: playlists_table.clone(),
+        duplicates_view: duplicates_view.clone(),
+        sidebar: sidebar.clone(),
+        current_search_text: current_search_text.clone(),
+    };
+    install_playlists_header_playback(
+        &playlists_header,
+        &command_controller,
+        &runtime,
+        &view_queues,
+        &playback_changed,
+    );
     // The Play button's behaviour depends on the visible view, which now
     // exists. One shared closure drives both the button and the Space
     // shortcut so the two surfaces never diverge.
     let toggle_or_start_playback = make_toggle_or_start_playback(
         &command_controller,
         &runtime,
-        &content_stack,
-        &albums_view,
-        &sidebar,
-        &current_search_text,
+        &view_queues,
         &playback_changed,
     );
     connect_titlebar_play_button(&titlebar, toggle_or_start_playback.clone());
@@ -768,7 +788,7 @@ pub(crate) fn build_main_window(
             albums_view: albums_view.clone(),
             playlists_refresh: playlists_refresh.clone(),
             sidebar: sidebar.clone(),
-            content_stack: content_stack.clone(),
+            view_queues: view_queues.clone(),
             visible_summary_refresh: visible_summary_refresh.clone(),
         },
     );

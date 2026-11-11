@@ -484,6 +484,16 @@ persisted setting, because "what follows this well from the whole
 library" is not a meaningful question inside a closed set the user has
 already chosen.
 
+### Play order follows the list — *iso-iTunes*
+Double-clicking a track plays the list it sits in — Music, a playlist, a
+smart playlist, search results, the Duplicates groups — from that track
+on, in the order the list is sorted; the Play button starts the visible
+list from its first track the same way. Re-sorting the list during
+playback re-sorts what plays next. With shuffle on, the rolled order
+stays put; once shuffle is turned off, playback follows the list's sort
+again. Tracks that join the library or the playing playlist meanwhile
+are queued after the rest.
+
 ### Up Next queue — *iTunes-adjacent*
 A `Play Next` action inserts selected tracks at the head of the curated
 Up Next region (play immediately after the current track). A separate

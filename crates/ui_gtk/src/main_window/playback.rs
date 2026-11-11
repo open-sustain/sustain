@@ -52,197 +52,127 @@ pub(super) fn playback_changed_callback(
     })
 }
 
-/// Activation handler for the Songs view: the queue is the whole library,
-/// so auto-advance and Next/Previous walk all playable tracks in library
-/// order. Matches the iTunes 11 "Music" library default.
-pub(super) fn library_track_activated_callback(
-    command_controller: &SharedCommandController,
-    runtime: &SharedRuntime,
-    playback_changed: PlaybackChangedCallback,
-    current_search_text: &Rc<RefCell<String>>,
-    locate_missing_track: &LocateMissingTrackCallback,
-) -> TrackActivatedCallback {
-    let command_controller = command_controller.clone();
-    let runtime = runtime.clone();
-    let current_search_text = current_search_text.clone();
-    let locate_missing_track = locate_missing_track.clone();
-
-    Rc::new(move |track_id: TrackId| {
-        let queue = {
-            let search_text = current_search_text.borrow().clone();
-            queue_request_for_library(&runtime.borrow(), &search_text)
-        };
-        play_track_or_offer_locate(
-            &command_controller,
-            track_id,
-            queue,
-            &playback_changed,
-            &locate_missing_track,
-        );
-    })
+/// The queue source of the Songs list: the library, or under a search the
+/// results the user sees.
+pub(super) fn songs_queue_source(search_text: &str) -> PlaybackQueueSource {
+    searched_queue_source(PlaybackQueueSource::Library, search_text)
 }
 
-/// Activation handler for the Playlists view: the queue is whatever the
-/// sidebar currently has selected.
-///
-/// - Regular playlist: queue is the playlist's entries in their
-///   authoritative position order, so auto-advance stays inside the
-///   playlist and replays it in the user-defined sequence.
-/// - Smart playlist: queue is the smart playlist's current matching
-///   tracks. The runtime's `PlaybackQueueSource::Selection` is used as
-///   the source label (we don't yet model a smart-playlist source
-///   variant) but the play order is the smart playlist's order.
-/// - Library pseudo-entry: queue is the full (search-filtered)
-///   library, matching the Songs view's behavior.
-///
-/// Any other selection (folders, no selection) falls back to the Library
-/// queue — those targets don't activate tracks in normal use, but a
-/// fallback keeps playback predictable if a future code path ever
-/// double-clicks a row in that state.
-pub(super) fn playlist_track_activated_callback(
-    command_controller: &SharedCommandController,
-    runtime: &SharedRuntime,
-    sidebar: &PlaylistSidebar,
-    playback_changed: PlaybackChangedCallback,
-    current_search_text: &Rc<RefCell<String>>,
-    locate_missing_track: &LocateMissingTrackCallback,
-) -> TrackActivatedCallback {
-    let command_controller = command_controller.clone();
-    let runtime = runtime.clone();
-    let sidebar = sidebar.clone();
-    let current_search_text = current_search_text.clone();
-    let locate_missing_track = locate_missing_track.clone();
-
-    Rc::new(move |track_id: TrackId| {
-        let queue = {
-            let search_text = current_search_text.borrow().clone();
-            let runtime_borrow = runtime.borrow();
-            queue_request_for_playlist_selection(
-                &runtime_borrow,
-                sidebar.current_selection(),
-                &search_text,
-            )
-        };
-        play_track_or_offer_locate(
-            &command_controller,
-            track_id,
-            queue,
-            &playback_changed,
-            &locate_missing_track,
-        );
-    })
-}
-
-fn queue_request_for_playlist_selection(
-    runtime: &ApplicationRuntime,
+/// The queue source of the Playlists table for a sidebar selection: the
+/// selected playlist or smart playlist, or under a search the results the
+/// user sees. `None` for a selection that lists no track set — a folder.
+pub(super) fn playlists_queue_source(
     selection: Option<SidebarSelection>,
     search_text: &str,
-) -> PlaybackQueueRequest {
-    if matches!(selection, Some(SidebarSelection::Music)) {
-        return queue_request_for_library(runtime, search_text);
-    }
-
-    // Queue construction works on track ids only: playlist entries and
-    // smart-playlist matches already carry them, membership/playability
-    // of each id is the runtime's job when it resolves the request, and
-    // the search filter runs against the precomputed search index — no
-    // whole-library map and no `Track` clones on the play path.
-    let (source, candidate_track_ids): (PlaybackQueueSource, Vec<TrackId>) = match selection {
-        Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id))) => {
-            let Some(playlist) = runtime
-                .playlists()
-                .iter()
-                .find(|playlist| playlist.id == playlist_id)
-            else {
-                return PlaybackQueueRequest::Library;
-            };
-            let mut entries: Vec<&PlaylistEntry> = playlist.entries.iter().collect();
-            entries.sort_by_key(|entry| entry.position);
-            (
-                PlaybackQueueSource::Playlist(playlist_id),
-                entries.into_iter().map(|entry| entry.track_id).collect(),
-            )
+) -> Option<PlaybackQueueSource> {
+    let listed = match selection? {
+        SidebarSelection::Item(PlaylistItem::Playlist(playlist_id)) => {
+            PlaybackQueueSource::Playlist(playlist_id)
         }
-        Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(smart_playlist_id))) => (
-            PlaybackQueueSource::Selection,
-            runtime
-                .smart_playlist_matching_tracks(smart_playlist_id)
-                .into_iter()
-                .map(|track| track.id)
-                .collect(),
-        ),
-        _ => return queue_request_for_library(runtime, search_text),
+        SidebarSelection::Item(PlaylistItem::SmartPlaylist(smart_playlist_id)) => {
+            PlaybackQueueSource::SmartPlaylist(smart_playlist_id)
+        }
+        // The table mirrors the Songs rows for the Music entry.
+        SidebarSelection::Music => PlaybackQueueSource::Library,
+        SidebarSelection::Item(PlaylistItem::Folder(_))
+        | SidebarSelection::Albums
+        | SidebarSelection::Statistics => return None,
     };
+    Some(searched_queue_source(listed, search_text))
+}
 
-    if candidate_track_ids.is_empty() {
-        return PlaybackQueueRequest::Library;
-    }
-
-    let normalized = normalize_query(search_text);
-    let ordered_track_ids = if normalized.is_empty() {
-        candidate_track_ids
+/// A search narrows a list to a slice of what it lists: the queue the
+/// slice defines is those search results, not the listed source itself,
+/// so library changes never widen it back (see `RepopulateQueue`).
+fn searched_queue_source(listed: PlaybackQueueSource, search_text: &str) -> PlaybackQueueSource {
+    let query = normalize_query(search_text);
+    if query.is_empty() {
+        listed
     } else {
-        candidate_track_ids
-            .into_iter()
-            .filter(|track_id| runtime.search_matches(*track_id, &normalized))
-            .collect()
-    };
-    PlaybackQueueRequest::Explicit {
-        source,
-        ordered_track_ids,
+        PlaybackQueueSource::SearchResults {
+            within: Box::new(listed),
+            query,
+        }
     }
 }
 
-fn queue_request_for_library(
-    runtime: &ApplicationRuntime,
-    search_text: &str,
-) -> PlaybackQueueRequest {
-    // Normalize the query once and test against the runtime's search
-    // index, exactly like `runtime_library_table_rows` builds the visible
-    // rows — the queue must mirror what the table shows.
-    let normalized = normalize_query(search_text);
-    if normalized.is_empty() {
-        return PlaybackQueueRequest::Library;
-    }
-    let ordered_track_ids = runtime
-        .library_tracks()
-        .iter()
-        .filter(|track| runtime.search_matches(track.id, &normalized))
-        .map(|track| track.id)
-        .collect();
-    PlaybackQueueRequest::Explicit {
-        source: PlaybackQueueSource::SearchResults,
-        ordered_track_ids,
-    }
+/// Activation handler for a track table: playback starts at the activated
+/// row and continues through the table's rows in display order, so
+/// without shuffle the next track is the next row. `queue_source` names
+/// what the table lists at activation time; `None` (a list with no track
+/// set) ignores the activation.
+pub(super) fn track_activated_callback(
+    command_controller: &SharedCommandController,
+    playback_changed: PlaybackChangedCallback,
+    locate_missing_track: &LocateMissingTrackCallback,
+    queue_source: impl Fn() -> Option<PlaybackQueueSource> + 'static,
+) -> TrackActivatedCallback {
+    let command_controller = command_controller.clone();
+    let locate_missing_track = locate_missing_track.clone();
+
+    Rc::new(move |activation: TrackActivation| {
+        let Some(source) = queue_source() else {
+            return;
+        };
+        play_track_or_offer_locate(
+            &command_controller,
+            activation.track_id,
+            PlaybackQueueRequest {
+                source,
+                ordered_track_ids: activation.ordered_track_ids,
+            },
+            &playback_changed,
+            &locate_missing_track,
+        );
+    })
+}
+
+/// Re-sorting a list re-sorts the queue it defines: the runtime adopts
+/// the new order when the queue was started from this list (see
+/// [`PlaybackCommand::ResortQueue`]).
+pub(super) fn install_queue_resort(
+    table: &TrackTable,
+    command_controller: &SharedCommandController,
+    queue_source: impl Fn() -> Option<PlaybackQueueSource> + 'static,
+) {
+    let command_controller = command_controller.clone();
+    table.set_rows_reordered_callback(Rc::new(move |ordered_track_ids| {
+        let Some(source) = queue_source() else {
+            return;
+        };
+        let _ = command_controller.dispatch(ApplicationCommand::Playback(
+            PlaybackCommand::ResortQueue(PlaybackQueueRequest {
+                source,
+                ordered_track_ids,
+            }),
+        ));
+    }));
 }
 
 /// Wires the Playlists header's play and shuffle buttons to start
-/// playback from the sidebar's current selection, matching the album
-/// detail header's play/shuffle behaviour: the first non-missing track
-/// in the queue's display order is the one PlayTrack anchors on; the
-/// shuffle toggle decides what comes after.
+/// playback from the Playlists table, matching the album detail header's
+/// play/shuffle behaviour: the first non-missing track in display order
+/// is the one PlayTrack anchors on; the shuffle toggle decides what comes
+/// after.
 pub(super) fn install_playlists_header_playback(
     playlists_header: &PlaylistsHeader,
     command_controller: &SharedCommandController,
     runtime: &SharedRuntime,
-    sidebar: &PlaylistSidebar,
-    current_search_text: &Rc<RefCell<String>>,
+    view_queues: &VisibleViewQueues,
     playback_changed: &PlaybackChangedCallback,
 ) {
     playlists_header.connect_play(make_playlists_header_play_callback(
         false,
         command_controller,
         runtime,
-        sidebar,
-        current_search_text,
+        view_queues,
         playback_changed,
     ));
     playlists_header.connect_shuffle(make_playlists_header_play_callback(
         true,
         command_controller,
         runtime,
-        sidebar,
-        current_search_text,
+        view_queues,
         playback_changed,
     ));
 }
@@ -251,14 +181,12 @@ fn make_playlists_header_play_callback(
     shuffle: bool,
     command_controller: &SharedCommandController,
     runtime: &SharedRuntime,
-    sidebar: &PlaylistSidebar,
-    current_search_text: &Rc<RefCell<String>>,
+    view_queues: &VisibleViewQueues,
     playback_changed: &PlaybackChangedCallback,
 ) -> Rc<dyn Fn()> {
     let command_controller = command_controller.clone();
     let runtime = runtime.clone();
-    let sidebar = sidebar.clone();
-    let current_search_text = current_search_text.clone();
+    let view_queues = view_queues.clone();
     let playback_changed = playback_changed.clone();
     Rc::new(move || {
         // Set shuffle first so subsequent `PlayTrack` builds its queue
@@ -275,18 +203,10 @@ fn make_playlists_header_play_callback(
         let _ = command_controller.dispatch(ApplicationCommand::Playback(
             PlaybackCommand::SetShuffleMode(shuffle_mode),
         ));
-        let (queue, first_track) = {
-            let runtime_borrow = runtime.borrow();
-            let search_text = current_search_text.borrow().clone();
-            let queue = queue_request_for_playlist_selection(
-                &runtime_borrow,
-                sidebar.current_selection(),
-                &search_text,
-            );
-            let first_track = first_playable_track_for_queue(&runtime_borrow, &queue);
-            (queue, first_track)
+        let Some(queue) = view_queues.playlists_queue_request() else {
+            return;
         };
-        let Some(track_id) = first_track else {
+        let Some(track_id) = first_playable_track(&runtime.borrow(), &queue) else {
             return;
         };
         if command_controller.dispatch_succeeded(ApplicationCommand::Playback(
@@ -297,47 +217,106 @@ fn make_playlists_header_play_callback(
     })
 }
 
-fn first_playable_track_for_queue(
+fn first_playable_track(
     runtime: &ApplicationRuntime,
     queue: &PlaybackQueueRequest,
 ) -> Option<TrackId> {
-    let is_available = |track: &Track| !track.location.is_missing();
-    match queue {
-        PlaybackQueueRequest::Library => runtime
-            .library_tracks()
-            .iter()
-            .find(|track| is_available(track))
-            .map(|track| track.id),
-        PlaybackQueueRequest::Explicit {
-            ordered_track_ids, ..
-        } => ordered_track_ids
-            .iter()
-            .copied()
-            .find(|id| runtime.library_track(*id).is_some_and(is_available)),
+    queue.ordered_track_ids.iter().copied().find(|track_id| {
+        runtime
+            .library_track(*track_id)
+            .is_some_and(|track| !track.location.is_missing())
+    })
+}
+
+/// The track lists the top-bar Play button and a cleared search reach
+/// for: whichever view is visible defines the queue, in the order it
+/// lists its tracks.
+#[derive(Clone)]
+pub(super) struct VisibleViewQueues {
+    pub(super) content_stack: gtk::Stack,
+    pub(super) songs_refresh: SongsViewRefresh,
+    pub(super) albums_view: AlbumsView,
+    pub(super) playlists_table: TrackTable,
+    pub(super) duplicates_view: DuplicatesView,
+    pub(super) sidebar: PlaylistSidebar,
+    pub(super) current_search_text: Rc<RefCell<String>>,
+}
+
+impl VisibleViewQueues {
+    /// "What would Play start right now?", resolved from the view the user
+    /// is looking at when they press it: the first playable track of the
+    /// visible list, or of the first album. `None` when that view has no
+    /// playable track to anchor on. See issue #60.
+    fn play_request(&self, runtime: &SharedRuntime) -> Option<(TrackId, PlaybackQueueRequest)> {
+        if self.visible_view().as_deref() == Some(ALBUMS_VIEW) {
+            return self.albums_view.first_album_play_request();
+        }
+        // Resolved before the runtime is borrowed: bringing a stale Songs
+        // list up to date rebuilds its rows.
+        let queue = self.listed_queue_request()?;
+        let track_id = first_playable_track(&runtime.borrow(), &queue)?;
+        Some((track_id, queue))
+    }
+
+    /// The queue a cleared search widens to: the visible list, now
+    /// unfiltered. `None` for the views a search does not narrow into a
+    /// queue — album playback always queues the whole album and is never
+    /// search-narrowed (#78), the duplicate groups ignore the search, and
+    /// the other views list no tracks. The runtime applies the request only
+    /// while a track is playing and only when it still contains that track,
+    /// so a stale view never clobbers the queue.
+    pub(super) fn widened_queue_request(&self) -> Option<PlaybackQueueRequest> {
+        match self.visible_view().as_deref() {
+            Some(SONGS_VIEW) => Some(self.songs_refresh.queue_request()),
+            Some(PLAYLISTS_VIEW) => self.playlists_queue_request(),
+            _ => None,
+        }
+    }
+
+    fn playlists_queue_request(&self) -> Option<PlaybackQueueRequest> {
+        let source = playlists_queue_source(
+            self.sidebar.current_selection(),
+            &self.current_search_text.borrow(),
+        )?;
+        Some(PlaybackQueueRequest {
+            source,
+            ordered_track_ids: self.playlists_table.ordered_track_ids(),
+        })
+    }
+
+    /// The queue the visible track list defines. Songs, and the views that
+    /// list no tracks of their own (Statistics, devices, CD import), queue
+    /// the library as the Songs view lists it.
+    fn listed_queue_request(&self) -> Option<PlaybackQueueRequest> {
+        match self.visible_view().as_deref() {
+            Some(ALBUMS_VIEW) => None,
+            Some(PLAYLISTS_VIEW) => self.playlists_queue_request(),
+            Some(DUPLICATES_VIEW) => Some(PlaybackQueueRequest {
+                source: PlaybackQueueSource::Duplicates,
+                ordered_track_ids: self.duplicates_view.ordered_track_ids(),
+            }),
+            _ => Some(self.songs_refresh.queue_request()),
+        }
+    }
+
+    fn visible_view(&self) -> Option<glib::GString> {
+        self.content_stack.visible_child_name()
     }
 }
 
 /// Build the closure that backs both the top-bar Play button and the
 /// Space shortcut. When a track is loaded it toggles play/pause; on a
 /// cold start (controller stopped, nothing loaded) it begins playback
-/// from the currently visible view — Songs from the current
-/// sort/filter, Albums from the first album, Playlists from the selected
-/// playlist (falling back to the library). See issue #60.
+/// from the currently visible view (see [`VisibleViewQueues`]).
 pub(super) fn make_toggle_or_start_playback(
     command_controller: &SharedCommandController,
     runtime: &SharedRuntime,
-    content_stack: &gtk::Stack,
-    albums_view: &AlbumsView,
-    sidebar: &PlaylistSidebar,
-    current_search_text: &Rc<RefCell<String>>,
+    view_queues: &VisibleViewQueues,
     playback_changed: &PlaybackChangedCallback,
 ) -> Rc<dyn Fn()> {
     let command_controller = command_controller.clone();
     let runtime = runtime.clone();
-    let content_stack = content_stack.clone();
-    let albums_view = albums_view.clone();
-    let sidebar = sidebar.clone();
-    let current_search_text = current_search_text.clone();
+    let view_queues = view_queues.clone();
     let playback_changed = playback_changed.clone();
 
     Rc::new(move || {
@@ -346,26 +325,9 @@ pub(super) fn make_toggle_or_start_playback(
         // and only a genuine cold start cold-starts the visible view.
         let is_stopped = matches!(runtime.borrow().playback_state(), PlaybackState::Stopped);
         let dispatched = if is_stopped {
-            let request = {
-                let runtime_borrow = runtime.borrow();
-                let search_text = current_search_text.borrow().clone();
-                play_request_for_visible_view(
-                    &runtime_borrow,
-                    &content_stack,
-                    &albums_view,
-                    sidebar.current_selection(),
-                    &search_text,
-                )
-            };
-            match request {
+            match view_queues.play_request(&runtime) {
                 Some((track_id, queue)) => {
-                    if matches!(
-                        &queue,
-                        PlaybackQueueRequest::Explicit {
-                            source: PlaybackQueueSource::Album,
-                            ..
-                        }
-                    ) {
+                    if queue.source == PlaybackQueueSource::Album {
                         crate::albums::ensure_shuffle_disabled(&command_controller);
                     }
                     command_controller.dispatch_succeeded(ApplicationCommand::Playback(
@@ -383,59 +345,6 @@ pub(super) fn make_toggle_or_start_playback(
             playback_changed();
         }
     })
-}
-
-/// Resolve "what would Play start right now?" from the view the user is
-/// currently looking at. Derived at click time — switching modes before
-/// pressing Play changes which track starts. Returns `None` when the
-/// visible view has no playable track to anchor on. See issue #60.
-fn play_request_for_visible_view(
-    runtime: &ApplicationRuntime,
-    content_stack: &gtk::Stack,
-    albums_view: &AlbumsView,
-    sidebar_selection: Option<SidebarSelection>,
-    search_text: &str,
-) -> Option<(TrackId, PlaybackQueueRequest)> {
-    match content_stack.visible_child_name().as_deref() {
-        Some(ALBUMS_VIEW) => albums_view.first_album_play_request(),
-        Some(PLAYLISTS_VIEW) => {
-            let queue =
-                queue_request_for_playlist_selection(runtime, sidebar_selection, search_text);
-            first_playable_track_for_queue(runtime, &queue).map(|track_id| (track_id, queue))
-        }
-        // Songs view (and any unexpected state) plays the full
-        // search-filtered library, matching double-click activation.
-        _ => {
-            let queue = queue_request_for_library(runtime, search_text);
-            first_playable_track_for_queue(runtime, &queue).map(|track_id| (track_id, queue))
-        }
-    }
-}
-
-/// Resolve the queue request that should re-derive the play queue when the
-/// search filter is cleared, based on the view the user is in: Songs widens
-/// to the full library, Playlists widens to the full selected playlist /
-/// smart playlist. Albums return `None` — album playback always queues the
-/// whole album and is never search-narrowed, so there is nothing to widen
-/// (#78). The runtime applies the request only while a track is playing and
-/// only when it still contains that track, so a stale view never clobbers
-/// the queue.
-pub(super) fn repopulate_request_for_visible_view(
-    runtime: &ApplicationRuntime,
-    content_stack: &gtk::Stack,
-    sidebar_selection: Option<SidebarSelection>,
-) -> Option<PlaybackQueueRequest> {
-    match content_stack.visible_child_name().as_deref() {
-        Some(ALBUMS_VIEW) => None,
-        Some(PLAYLISTS_VIEW) => Some(queue_request_for_playlist_selection(
-            runtime,
-            sidebar_selection,
-            "",
-        )),
-        // Songs view (and any unexpected state) widens to the full library,
-        // matching its play/activation behaviour.
-        _ => Some(queue_request_for_library(runtime, "")),
-    }
 }
 
 /// Enable the top-bar Play button when there is something it can act on
@@ -483,4 +392,48 @@ pub(super) fn install_playback_event_callback(
                 playback_changed();
             }
         }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_search_turns_a_listed_source_into_search_results() {
+        let playlist_id = PlaylistId::new(1).expect("valid id");
+        let selection = Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id)));
+
+        assert_eq!(songs_queue_source("  "), PlaybackQueueSource::Library);
+        assert_eq!(
+            songs_queue_source(" ABBA "),
+            PlaybackQueueSource::SearchResults {
+                within: Box::new(PlaybackQueueSource::Library),
+                query: "abba".to_owned(),
+            }
+        );
+        assert_eq!(
+            playlists_queue_source(selection, ""),
+            Some(PlaybackQueueSource::Playlist(playlist_id))
+        );
+        assert_eq!(
+            playlists_queue_source(selection, "abba"),
+            Some(PlaybackQueueSource::SearchResults {
+                within: Box::new(PlaybackQueueSource::Playlist(playlist_id)),
+                query: "abba".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_folder_lists_no_queue() {
+        let folder_id = PlaylistFolderId::new(1).expect("valid id");
+
+        assert_eq!(
+            playlists_queue_source(
+                Some(SidebarSelection::Item(PlaylistItem::Folder(folder_id))),
+                ""
+            ),
+            None
+        );
+    }
 }

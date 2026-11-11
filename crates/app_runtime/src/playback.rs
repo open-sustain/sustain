@@ -82,6 +82,13 @@ impl ApplicationRuntime {
                 self.repopulate_queue(request);
                 Ok(())
             }
+            PlaybackCommand::ResortQueue(request) => {
+                if self.playback_queue.source() == &request.source {
+                    self.playback_queue
+                        .reorder_source(&request.ordered_track_ids);
+                }
+                Ok(())
+            }
             PlaybackCommand::Pause => self.pause_playback(),
             PlaybackCommand::Resume => self.resume_playback(),
             PlaybackCommand::TogglePlayPause => match self.playback_service()?.state() {
@@ -231,27 +238,15 @@ impl ApplicationRuntime {
         &self,
         request: PlaybackQueueRequest,
     ) -> (PlaybackQueueSource, Vec<TrackId>) {
-        let (source, ordered_track_ids) = match request {
-            PlaybackQueueRequest::Library => {
-                (PlaybackQueueSource::Library, self.playable_track_ids())
-            }
-            PlaybackQueueRequest::Explicit {
-                source,
-                ordered_track_ids,
-            } => {
-                // Membership and playability are checked per id against the
-                // id-sorted in-memory library (a binary search each) instead
-                // of materializing a whole-library id set for every queue
-                // build — explicit queues are usually far smaller than the
-                // library.
-                let filtered: Vec<TrackId> = ordered_track_ids
-                    .into_iter()
-                    .filter(|id| self.track_is_playable(*id))
-                    .collect();
-                (source, filtered)
-            }
-        };
-        (source, ordered_track_ids)
+        // Membership and playability are checked per id against the
+        // id-sorted in-memory library (a binary search each) instead of
+        // materializing a whole-library id set for every queue build.
+        let ordered_track_ids = request
+            .ordered_track_ids
+            .into_iter()
+            .filter(|id| self.track_is_playable(*id))
+            .collect();
+        (request.source, ordered_track_ids)
     }
 
     /// Re-derive the play queue from `request`, keeping the currently
@@ -740,54 +735,72 @@ impl ApplicationRuntime {
             .is_some_and(|track| !track.location.is_missing())
     }
 
-    /// Re-derive the queue's ordered track ids from the current library
-    /// state, preserving the queue's source. Called after library-level
-    /// mutations (scan, library move/import, settings update, track
-    /// removal) so a track that just disappeared is dropped from the
-    /// queue without stomping the user's selected queue context.
+    /// Bring the queue up to date with the library after a library-level
+    /// mutation (scan, library move/import, settings update, track
+    /// removal, a file going missing or coming back, a playlist edit)
+    /// without disturbing
+    /// what the user lined up: tracks that are no longer playable leave
+    /// the queue, and tracks that joined the queue's source are appended
+    /// after the rest of its playthrough. Everything else keeps its place
+    /// — the view's sort order, a rolled shuffle, the curated Up Next.
     ///
-    /// When the source is `Library`, the queue is rebuilt from every
-    /// playable track. When it's `Playlist(id)`, the queue is rebuilt
-    /// from that playlist's authoritative entry order, intersected with
-    /// the currently-playable tracks. Other sources (Album,
-    /// SmartPlaylist, SearchResults, Selection) are ad-hoc lists the
-    /// runtime cannot re-derive without UI context; for those we re-run
-    /// the same filter against the queue's existing ids so missing
-    /// tracks fall out, leaving everything else untouched.
+    /// Only the library and a playlist can gain tracks: the runtime knows
+    /// their membership. The other sources (Album, SmartPlaylist,
+    /// SearchResults, Duplicates) are lists the user started from a view;
+    /// the runtime cannot re-derive them without UI context, so they only
+    /// shed tracks.
     pub(super) fn refresh_playback_queue_track_ids(&mut self) {
-        let playable_track_ids = self.playable_track_ids();
-        let playable: HashSet<TrackId> = playable_track_ids.iter().copied().collect();
-        let refreshed: Vec<TrackId> = match self.playback_queue.source().clone() {
-            PlaybackQueueSource::Library => playable_track_ids.clone(),
+        let unplayable: HashSet<TrackId> = self
+            .playback_queue
+            .track_ids()
+            .filter(|id| !self.track_is_playable(*id))
+            .collect();
+        if !unplayable.is_empty() {
+            self.playback_queue.remove_tracks(&unplayable);
+        }
+        let joined = self.tracks_joining_queue_source();
+        if !joined.is_empty() {
+            self.playback_queue.append_to_source(&joined);
+        }
+    }
+
+    /// The playable members of the queue's source that the queue does not
+    /// hold yet, in the source's own order: id order for the library,
+    /// entry order for a playlist.
+    fn tracks_joining_queue_source(&self) -> Vec<TrackId> {
+        let queued: HashSet<TrackId> = self
+            .playback_queue
+            .ordered_track_ids()
+            .iter()
+            .copied()
+            .collect();
+        match self.playback_queue.source() {
+            PlaybackQueueSource::Library => self
+                .playable_track_ids()
+                .into_iter()
+                .filter(|id| !queued.contains(id))
+                .collect(),
             PlaybackQueueSource::Playlist(playlist_id) => {
-                match self.playlists().iter().find(|p| p.id == playlist_id) {
-                    Some(playlist) => {
-                        let mut entries: Vec<_> = playlist.entries.iter().collect();
-                        entries.sort_by_key(|entry| entry.position);
-                        entries
-                            .into_iter()
-                            .map(|entry| entry.track_id)
-                            .filter(|id| playable.contains(id))
-                            .collect()
-                    }
-                    None => Vec::new(),
-                }
+                let Some(playlist) = self
+                    .playlists()
+                    .iter()
+                    .find(|playlist| playlist.id == *playlist_id)
+                else {
+                    return Vec::new();
+                };
+                let mut entries: Vec<_> = playlist.entries.iter().collect();
+                entries.sort_by_key(|entry| entry.position);
+                entries
+                    .into_iter()
+                    .map(|entry| entry.track_id)
+                    .filter(|id| !queued.contains(id) && self.track_is_playable(*id))
+                    .collect()
             }
             PlaybackQueueSource::Album
-            | PlaybackQueueSource::SearchResults
-            | PlaybackQueueSource::Selection => self
-                .playback_queue
-                .ordered_track_ids()
-                .iter()
-                .copied()
-                .filter(|id| playable.contains(id))
-                .collect(),
-        };
-        self.playback_queue.replace_ordered_track_ids(
-            refreshed,
-            &playable_track_ids,
-            playback_shuffle_seed(),
-        );
+            | PlaybackQueueSource::SmartPlaylist(_)
+            | PlaybackQueueSource::SearchResults { .. }
+            | PlaybackQueueSource::Duplicates => Vec::new(),
+        }
     }
 }
 

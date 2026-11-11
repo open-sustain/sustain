@@ -32,7 +32,7 @@ pub(super) struct SearchWiringContext {
     pub(super) albums_view: AlbumsView,
     pub(super) playlists_refresh: PlaylistsViewRefreshContext,
     pub(super) sidebar: PlaylistSidebar,
-    pub(super) content_stack: gtk::Stack,
+    pub(super) view_queues: VisibleViewQueues,
     pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
 }
 
@@ -45,7 +45,7 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
         albums_view,
         playlists_refresh,
         sidebar,
-        content_stack,
+        view_queues,
         visible_summary_refresh,
     } = context;
     connect_titlebar_search(
@@ -56,24 +56,6 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
                 return;
             }
             *current_search_text.borrow_mut() = new_text.clone();
-
-            // Clearing the search widens the play queue back to the current
-            // view, so auto-advance resumes through the full list instead of
-            // stopping at the end of the now-gone filtered set (#78). The
-            // runtime no-ops when nothing is playing or the playing track is
-            // not in the widened view.
-            if new_text.trim().is_empty() {
-                let request = repopulate_request_for_visible_view(
-                    &runtime.borrow(),
-                    &content_stack,
-                    sidebar.current_selection(),
-                );
-                if let Some(request) = request {
-                    let _ = command_controller.dispatch(ApplicationCommand::Playback(
-                        PlaybackCommand::RepopulateQueue(request),
-                    ));
-                }
-            }
 
             sustain_profiler::profile_mark!(change_profile, "search: text changed phase");
 
@@ -104,6 +86,19 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
 
             if !playlists_refreshed {
                 visible_summary_refresh();
+            }
+
+            // Clearing the search widens the play queue back to the visible
+            // list, now unfiltered, so auto-advance resumes through it
+            // instead of stopping at the end of the now-gone filtered set
+            // (#78). The runtime no-ops when nothing is playing or the
+            // playing track is not in the widened list.
+            if normalize_query(&new_text).is_empty()
+                && let Some(request) = view_queues.widened_queue_request()
+            {
+                let _ = command_controller.dispatch(ApplicationCommand::Playback(
+                    PlaybackCommand::RepopulateQueue(request),
+                ));
             }
         }),
     );

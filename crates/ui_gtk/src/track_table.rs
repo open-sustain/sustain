@@ -32,7 +32,18 @@ mod inline_edit;
 mod order;
 mod row;
 
-pub(crate) type TrackActivatedCallback = Rc<dyn Fn(TrackId)>;
+pub(crate) type TrackActivatedCallback = Rc<dyn Fn(TrackActivation)>;
+
+/// Receives the table's track ids in their new display order after the
+/// user re-sorted its rows — a header click, a drag reorder.
+pub(crate) type RowsReorderedCallback = Rc<dyn Fn(Vec<TrackId>)>;
+
+/// A row the user activated, with the list it sits in: the table's track
+/// ids in display order, the list playback continues through.
+pub(crate) struct TrackActivation {
+    pub(crate) track_id: TrackId,
+    pub(crate) ordered_track_ids: Vec<TrackId>,
+}
 
 /// How a table takes a rebuilt row set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +109,7 @@ pub(crate) struct TrackTable {
     managed_columns: Rc<Vec<ManagedColumn>>,
     applying_layout: Rc<Cell<bool>>,
     layout_changed: Rc<RefCell<Option<LayoutChangedCallback>>>,
+    rows_reordered: Rc<RefCell<Option<RowsReorderedCallback>>>,
     pending_save: Rc<RefCell<Option<glib::SourceId>>>,
     row_replacement_generation: Rc<Cell<u64>>,
 }
@@ -866,7 +878,8 @@ impl TrackTable {
     /// Payloads move between the existing row objects, so GTK does no
     /// structural work, and the selection moves with its rows. The view then
     /// follows the first selected row, or returns to the top when nothing is
-    /// selected.
+    /// selected, and — unless a stored layout is being applied — the
+    /// rows-reordered callback learns the new order.
     pub(crate) fn sort_current_rows(&self) {
         let order = self.row_order();
         if order.is_unsorted() {
@@ -934,10 +947,26 @@ impl TrackTable {
                 Some(vertical_scroll_info()),
             );
         }
+        // Restoring a stored layout is not the user re-sorting the list on
+        // screen: on a playlist switch it sorts the rows being left behind,
+        // just before the next playlist's rows replace them.
+        if self.applying_layout.get() {
+            return;
+        }
+        let rows_reordered = self.rows_reordered.borrow().clone();
+        if let Some(rows_reordered) = rows_reordered {
+            rows_reordered(self.ordered_track_ids());
+        }
     }
 
     pub(crate) fn set_layout_changed_callback(&self, callback: LayoutChangedCallback) {
         *self.layout_changed.borrow_mut() = Some(callback);
+    }
+
+    /// Install the callback [`Self::sort_current_rows`] fires once it has
+    /// moved the rows.
+    pub(crate) fn set_rows_reordered_callback(&self, callback: RowsReorderedCallback) {
+        *self.rows_reordered.borrow_mut() = Some(callback);
     }
 
     /// Keep a derived grouped view in its caller-provided order. Duplicates
@@ -1244,7 +1273,10 @@ pub(crate) fn build_track_table(
                 return;
             };
 
-            track_activated(track_id);
+            track_activated(TrackActivation {
+                track_id,
+                ordered_track_ids: ordered_track_ids(&selection_for_activate),
+            });
         });
     }
     table.set_model(Some(&selection));
@@ -1281,6 +1313,7 @@ pub(crate) fn build_track_table(
         managed_columns,
         applying_layout,
         layout_changed,
+        rows_reordered: Rc::new(RefCell::new(None)),
         pending_save,
         row_replacement_generation: Rc::new(Cell::new(0)),
     };
@@ -1854,6 +1887,40 @@ mod tests {
                 reordered_objects, row_objects,
                 "a re-sort moves payloads between the existing row objects"
             );
+        });
+    }
+
+    /// A re-sort the user makes reports the new order; restoring a stored
+    /// layout does not.
+    #[test]
+    fn a_user_re_sort_reports_the_new_order_and_a_restored_layout_does_not() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(
+                vec![named_row(1, "B"), named_row(2, "C"), named_row(3, "A")],
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let reported: Rc<RefCell<Vec<Vec<TrackId>>>> = Rc::default();
+            let reported_for_callback = reported.clone();
+            table.set_rows_reordered_callback(Rc::new(move |ordered_track_ids| {
+                reported_for_callback.borrow_mut().push(ordered_track_ids);
+            }));
+
+            sort_by(&table, "track_name", true);
+            assert!(reported.borrow().is_empty(), "a restored layout");
+
+            let name_column = table
+                .managed_columns
+                .iter()
+                .find(|managed| managed.column_id == "track_name")
+                .map(|managed| managed.column.clone());
+            table
+                .table
+                .sort_by_column(name_column.as_ref(), gtk::SortType::Descending);
+            assert_eq!(*reported.borrow(), vec![track_ids(&[2, 1, 3])]);
         });
     }
 

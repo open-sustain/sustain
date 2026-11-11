@@ -68,6 +68,19 @@ impl SongsViewRefresh {
         }
     }
 
+    /// The play queue the Songs list defines: the library, or the search
+    /// results, in the order the list shows them — brought up to date
+    /// first when it went stale while hidden.
+    pub(super) fn queue_request(&self) -> PlaybackQueueRequest {
+        if self.dirty.get() {
+            self.rebuild();
+        }
+        PlaybackQueueRequest {
+            source: songs_queue_source(&self.current_search_text.borrow()),
+            ordered_track_ids: self.songs_table.ordered_track_ids(),
+        }
+    }
+
     fn rebuild(&self) {
         let profile = sustain_profiler::ProfileScope::start();
         let search_text = self.current_search_text.borrow().clone();
@@ -116,6 +129,36 @@ mod tests {
                 songs_table.summary().track_count,
                 0,
                 "showing the table rebuilds it"
+            );
+        });
+    }
+
+    /// Play pressed over a view without a track list queues the Songs
+    /// list, so a list gone stale while hidden is rebuilt first.
+    #[test]
+    fn a_hidden_songs_table_rebuilds_before_it_defines_a_queue() {
+        crate::test_support::with_gtk(|| {
+            let songs_table = build_track_table(Vec::new(), None, None, None, None, None);
+            let content_stack = gtk::Stack::new();
+            content_stack.add_named(&songs_table.widget(), Some(SONGS_VIEW));
+            content_stack.add_named(&gtk::Box::default(), Some(PLAYLISTS_VIEW));
+            let runtime: SharedRuntime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+            let refresh = SongsViewRefresh::install(
+                &content_stack,
+                &songs_table,
+                &runtime,
+                &Rc::new(RefCell::new(String::new())),
+            );
+            songs_table.replace_rows(vec![TrackTableRow::test_row(1)]);
+            content_stack.set_visible_child_name(PLAYLISTS_VIEW);
+            refresh.refresh();
+
+            assert_eq!(
+                refresh.queue_request(),
+                PlaybackQueueRequest {
+                    source: PlaybackQueueSource::Library,
+                    ordered_track_ids: Vec::new(),
+                }
             );
         });
     }

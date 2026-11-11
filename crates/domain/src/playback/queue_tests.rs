@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use crate::TrackId;
+use crate::{SmartPlaylistId, TrackId};
 
 use super::{
     PlaybackOptions, PlaybackQueue, PlaybackQueueEntryKind, PlaybackQueueSource, RepeatMode,
@@ -85,6 +85,127 @@ fn playback_queue_drops_missing_track_ids_when_order_is_replaced() {
     assert_eq!(queue.current_track_id(), None);
     assert_eq!(queue.next_track_id(), None);
     assert_eq!(queue.ordered_track_ids(), &[track_id(1), track_id(3)]);
+}
+
+#[test]
+fn reordering_the_source_continues_unshuffled_playback_in_the_new_order() {
+    let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+
+    queue.reorder_source(&[track_id(3), track_id(2), track_id(1)]);
+
+    assert_eq!(
+        queue.ordered_track_ids(),
+        &[track_id(3), track_id(2), track_id(1)]
+    );
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[track_id(3), track_id(2), track_id(9), track_id(1)]
+    );
+    assert_eq!(queue.current_track_id(), Some(track_id(2)));
+}
+
+#[test]
+fn reordering_the_source_keeps_a_shuffled_play_order() {
+    let options = PlaybackOptions {
+        shuffle_mode: ShuffleMode::Pure,
+        ..PlaybackOptions::default()
+    };
+    let mut queue = queue_with_options(track_id(2), options);
+    let rolled = queue.play_order_track_ids();
+
+    queue.reorder_source(&[track_id(3), track_id(2), track_id(1)]);
+    assert_eq!(queue.play_order_track_ids(), rolled);
+
+    queue.set_shuffle_mode(ShuffleMode::Off, 10);
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[track_id(3), track_id(2), track_id(1)]
+    );
+}
+
+#[test]
+fn reordering_the_source_keeps_the_place_of_tracks_the_list_no_longer_shows() {
+    let mut queue = PlaybackQueue::new(
+        PlaybackQueueSource::Library,
+        vec![track_id(1), track_id(2), track_id(3), track_id(4)],
+        track_id(1),
+        PlaybackOptions::default(),
+        10,
+    );
+
+    // Track 2 left the list; track 9 was never in the source.
+    queue.reorder_source(&[track_id(9), track_id(4), track_id(3), track_id(1)]);
+
+    assert_eq!(
+        queue.ordered_track_ids(),
+        &[track_id(4), track_id(2), track_id(3), track_id(1)]
+    );
+}
+
+#[test]
+fn reordering_the_source_moves_each_occurrence_of_a_repeated_track() {
+    let mut queue = PlaybackQueue::new(
+        PlaybackQueueSource::Library,
+        vec![track_id(1), track_id(2), track_id(1), track_id(3)],
+        track_id(3),
+        PlaybackOptions::default(),
+        10,
+    );
+
+    queue.reorder_source(&[track_id(1), track_id(1), track_id(3), track_id(2)]);
+
+    assert_eq!(
+        queue.ordered_track_ids(),
+        &[track_id(1), track_id(1), track_id(3), track_id(2)]
+    );
+}
+
+#[test]
+fn appending_to_the_source_keeps_everything_already_queued() {
+    let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+
+    queue.append_to_source(&[track_id(4), track_id(5)]);
+
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[
+            track_id(1),
+            track_id(2),
+            track_id(9),
+            track_id(3),
+            track_id(4),
+            track_id(5)
+        ]
+    );
+    assert_eq!(queue.current_track_id(), Some(track_id(2)));
+}
+
+#[test]
+fn appending_to_the_source_does_not_queue_a_curated_track_twice() {
+    let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+
+    queue.append_to_source(&[track_id(9)]);
+
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[track_id(1), track_id(2), track_id(9), track_id(3)]
+    );
+}
+
+#[test]
+fn track_ids_cover_the_source_and_curated_entries() {
+    let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
+    assert!(queue.enqueue_at_end(&[track_id(9)]));
+
+    let track_ids: HashSet<TrackId> = queue.track_ids().collect();
+
+    assert_eq!(
+        track_ids,
+        HashSet::from([track_id(1), track_id(2), track_id(3), track_id(9)])
+    );
 }
 
 #[test]
@@ -503,15 +624,18 @@ fn lazy_queue_move_to_track_within_history_walks_cursor() {
 
 #[test]
 fn smart_shuffle_downgrades_to_pure_for_ad_hoc_sources() {
-    // Album / SearchResults / Selection are explicit listening
+    // Album / SmartPlaylist / SearchResults are explicit listening
     // contexts; Smart's discovery-oriented signals would be
     // inappropriate there. The user's setting is preserved (the
     // `shuffle_mode` option stays `Smart`), but the layout is
     // built as if Pure was requested.
     for source in [
         PlaybackQueueSource::Album,
-        PlaybackQueueSource::SearchResults,
-        PlaybackQueueSource::Selection,
+        PlaybackQueueSource::SmartPlaylist(SmartPlaylistId::new(1).expect("valid id")),
+        PlaybackQueueSource::SearchResults {
+            within: Box::new(PlaybackQueueSource::Library),
+            query: "abba".to_owned(),
+        },
     ] {
         assert_eq!(
             effective_shuffle_mode(ShuffleMode::Smart, &source),

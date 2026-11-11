@@ -78,7 +78,7 @@ impl AlbumTrackListView {
             play_track_or_offer_locate(
                 &command_controller_for_activate,
                 track_id,
-                PlaybackQueueRequest::Explicit {
+                PlaybackQueueRequest {
                     source: PlaybackQueueSource::Album,
                     ordered_track_ids: album_track_ids.clone(),
                 },

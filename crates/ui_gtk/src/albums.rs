@@ -494,7 +494,7 @@ impl AlbumsView {
         let track_id = *ordered_track_ids.first()?;
         Some((
             track_id,
-            PlaybackQueueRequest::Explicit {
+            PlaybackQueueRequest {
                 source: PlaybackQueueSource::Album,
                 ordered_track_ids,
             },
@@ -1830,7 +1830,7 @@ fn play_album(command_controller: &SharedCommandController, album: &AlbumViewMod
     command_controller.dispatch_succeeded(ApplicationCommand::Playback(
         PlaybackCommand::PlayTrack {
             track_id,
-            queue: PlaybackQueueRequest::Explicit {
+            queue: PlaybackQueueRequest {
                 source: PlaybackQueueSource::Album,
                 ordered_track_ids,
             },
