@@ -12,8 +12,8 @@
 //!
 //! The painter takes the `ScrolledWindow` as its only child (via
 //! `gtk::Widget::set_parent`). It forwards measure/allocate to the child
-//! unchanged and, in `snapshot()`, paints alpha bands matching
-//! `.track-table-row-even` from the bottom of the last real row down to
+//! unchanged and, in `snapshot()`, paints the bands its rows' cells paint
+//! ([`band_color`]) from the bottom of the last real row down to
 //! the viewport bottom. Geometry is driven by two inputs: the y where data
 //! rows begin and a single authoritative pitch constant, [`ROW_HEIGHT_PX`],
 //! pinned by CSS.
@@ -24,10 +24,12 @@
 //! and the CD-import table — shares the same row pitch and the same
 //! theme-derived band colour, so they all stripe identically.
 
+use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use gtk::{gdk, glib};
 use std::cell::Cell;
+
+use crate::table_cell::band_color;
 
 /// Authoritative row pitch for the track table, in pixels.
 ///
@@ -110,7 +112,7 @@ pub(crate) mod imp {
                 return;
             }
 
-            let color = even_band_color(widget.upcast_ref::<gtk::Widget>());
+            let color = band_color(widget.upcast_ref::<gtk::Widget>());
             for band in bands {
                 let rect = gtk::graphene::Rect::new(
                     band.x as f32,
@@ -221,7 +223,7 @@ pub(crate) struct FillerBand {
 ///
 /// The "even" parity is computed from the row index that the first filler
 /// band would occupy if filler rows were real — matching the
-/// `apply_row_tint` rule in `cells.rs` (`row_position % 2 == 0` → tinted).
+/// `apply_row_band` rule in `cells.rs` (`row_position % 2 == 0` → banded).
 pub(crate) fn compute_filler_bands(
     widget_width: i32,
     widget_height: i32,
@@ -255,16 +257,6 @@ pub(crate) fn compute_filler_bands(
         index += 1;
     }
     bands
-}
-
-fn even_band_color(widget: &gtk::Widget) -> gdk::RGBA {
-    // Mirrors `.track-table-row-even { background-color: alpha(@theme_fg_color, 0.025); }`.
-    // `Widget::color()` resolves `@theme_fg_color` against the live style
-    // context, so light/dark mode and the system accent flow through to
-    // the filler bands without any extra wiring — the only three
-    // user-controlled visual inputs Sustain respects.
-    let fg = widget.color();
-    gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), fg.alpha() * 0.025)
 }
 
 #[cfg(test)]

@@ -3,7 +3,6 @@
 
 //! Small leaf helpers shared across the GTK view models.
 
-use gtk::prelude::*;
 use sustain_app_runtime::{Track, TrackMetadata};
 
 /// Returns the trimmed text of an optional string field, or `None` when the
@@ -41,16 +40,4 @@ pub(crate) fn display_title(track: &Track) -> String {
 /// now-playing tile which leaves the line empty.
 pub(crate) fn display_artist(metadata: &TrackMetadata) -> String {
     non_empty_text(&metadata.artist).unwrap_or_else(|| "Unknown Artist".to_owned())
-}
-
-/// Gives `widget` the CSS class `class` and takes away `other`, its
-/// mutually exclusive counterpart. Every class change restyles the widget,
-/// so a widget that already carries `class` is left untouched: refreshing
-/// hundreds of realized cells to the state they already show must not
-/// restyle each of them.
-pub(crate) fn set_exclusive_css_class(widget: &impl IsA<gtk::Widget>, class: &str, other: &str) {
-    if !widget.has_css_class(class) {
-        widget.remove_css_class(other);
-        widget.add_css_class(class);
-    }
 }

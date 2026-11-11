@@ -843,42 +843,16 @@ listview.playlist-sidebar-list > row:focus {
     margin: 1px 6px;
 }
 
-.track-table-row-even {
-    background-color: alpha(@theme_fg_color, 0.025);
-}
-
-.track-table-row-odd {
-    background-color: transparent;
-}
-
+/* An unselected row looks the same hovered, pressed or focused: these
+   outrank the theme's row:hover and row:active rules without naming those
+   states. A selector naming an ancestor's :hover would make every cell
+   restyle whenever the pointer crossing reaches the window — on each
+   wheel step over any list, as recycled rows move under the pointer. */
 columnview.track-table listview row:not(:selected),
-columnview.track-table listview row:not(:selected):hover,
-columnview.track-table listview row:not(:selected):active,
-columnview.track-table listview row:not(:selected):focus {
+columnview.track-table listview row:not(:selected) cell {
     background-color: transparent;
     background-image: none;
     color: @theme_fg_color;
-}
-
-columnview.track-table listview row:not(:selected) cell,
-columnview.track-table listview row:not(:selected):hover cell,
-columnview.track-table listview row:not(:selected):active cell,
-columnview.track-table listview row:not(:selected):focus cell {
-    background-color: transparent;
-    background-image: none;
-    color: @theme_fg_color;
-}
-
-columnview.track-table listview row:not(:selected):hover .track-table-row-even,
-columnview.track-table listview row:not(:selected):active .track-table-row-even,
-columnview.track-table listview row:not(:selected):focus .track-table-row-even {
-    background-color: alpha(@theme_fg_color, 0.025);
-}
-
-columnview.track-table listview row:not(:selected):hover .track-table-row-odd,
-columnview.track-table listview row:not(:selected):active .track-table-row-odd,
-columnview.track-table listview row:not(:selected):focus .track-table-row-odd {
-    background-color: transparent;
 }
 
 /* Secondary text, such as a CD's track numbers and durations. A

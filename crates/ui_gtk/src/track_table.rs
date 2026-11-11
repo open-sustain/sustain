@@ -1583,14 +1583,9 @@ mod tests {
                 let cell =
                     cell_containing_text(&root, text).expect("visible search-result cell exists");
                 assert_eq!(
-                    cell.has_css_class("track-table-row-even"),
+                    cell.is_banded(),
                     position % 2 == 0,
                     "row {text} must be striped from visible position {position}"
-                );
-                assert_eq!(
-                    cell.has_css_class("track-table-row-odd"),
-                    position % 2 != 0,
-                    "row {text} must carry exactly one parity class"
                 );
             }
 
@@ -1632,8 +1627,7 @@ mod tests {
             for text in ["A", "B"] {
                 let cell = cell_containing_text(&root, text).expect("visible cell exists");
                 assert!(
-                    cell.has_css_class("track-table-row-odd")
-                        && !cell.has_css_class("track-table-row-even"),
+                    !cell.is_banded(),
                     "row {text} must carry its new group band"
                 );
             }

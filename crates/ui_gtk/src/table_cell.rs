@@ -18,6 +18,10 @@
 //! - It knows the list item it belongs to, so a table's own pointer
 //!   controllers resolve the row under the pointer from the widget GTK
 //!   picks there, and no cell carries controllers of its own for them.
+//! - It shades its row's band of a striped table itself. A band is no CSS
+//!   class: scrolling rebinds the recycled rows to new positions, and a
+//!   class flipped on every cell of each of them restyles them all, frame
+//!   after frame. A band flipped on a cell only redraws it.
 //!
 //! The text takes the cell's CSS `color` (node name `table-cell`).
 
@@ -25,7 +29,7 @@ use std::cell::{Cell, RefCell};
 
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use gtk::{glib, graphene, pango};
+use gtk::{gdk, glib, graphene, pango};
 
 /// Space between a text and the cell's edges.
 const TEXT_MARGIN: i32 = 8;
@@ -48,6 +52,7 @@ mod imp {
         /// with the cell's font and display, and the layout follows every
         /// change of that context.
         pub(super) layout: RefCell<Option<pango::Layout>>,
+        pub(super) banded: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -97,6 +102,7 @@ mod imp {
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let cell = self.obj();
+            cell.snapshot_band(snapshot);
             if !cell.shows_children() {
                 cell.snapshot_text(snapshot);
             }
@@ -156,6 +162,18 @@ impl TableCell {
             self.update_property(&[gtk::accessible::Property::Label(text)]);
         }
         self.queue_draw();
+    }
+
+    /// Shade the cell as part of a band of its striped table, or not.
+    pub(crate) fn set_banded(&self, banded: bool) {
+        if self.imp().banded.replace(banded) != banded {
+            self.queue_draw();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_banded(&self) -> bool {
+        self.imp().banded.get()
     }
 
     #[cfg(test)]
@@ -250,6 +268,25 @@ impl TableCell {
         (size, size, -1, -1)
     }
 
+    /// The band is the row's: it takes the row's foreground, whatever
+    /// colour the cell gives its own text, and a selected row shows the
+    /// selection colour its stylesheet gives its cells, unbanded.
+    fn snapshot_band(&self, snapshot: &gtk::Snapshot) {
+        if !self.imp().banded.get() {
+            return;
+        }
+        let Some(row) = self.row() else {
+            return;
+        };
+        if row.state_flags().contains(gtk::StateFlags::SELECTED) {
+            return;
+        }
+        snapshot.append_color(
+            &band_color(&row),
+            &graphene::Rect::new(0.0, 0.0, self.width() as f32, self.height() as f32),
+        );
+    }
+
     fn snapshot_text(&self, snapshot: &gtk::Snapshot) {
         let imp = self.imp();
         let Some(xalign) = imp.xalign.get() else {
@@ -286,6 +323,13 @@ impl TableCell {
         snapshot.restore();
         snapshot.pop();
     }
+}
+
+/// The shade of a striped table's bands: `widget`'s foreground at 2.5%,
+/// which follows the theme between light and dark.
+pub(crate) fn band_color(widget: &gtk::Widget) -> gdk::RGBA {
+    let fg = widget.color();
+    gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), fg.alpha() * 0.025)
 }
 
 /// The Pango alignment that places a line at `xalign` between the start

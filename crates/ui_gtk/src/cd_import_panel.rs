@@ -923,7 +923,7 @@ fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFac
         else {
             return;
         };
-        apply_cd_row_tint(&cell, list_item);
+        apply_cd_row_band(&cell, list_item);
         let Some((spinner, icon)) = status_widgets_of(item) else {
             return;
         };
@@ -989,7 +989,7 @@ fn build_cd_check_factory(
         else {
             return;
         };
-        apply_cd_row_tint(&cell, list_item);
+        apply_cd_row_band(&cell, list_item);
         let Some(check) = cell
             .first_child()
             .and_then(|child| child.downcast::<gtk::CheckButton>().ok())
@@ -1025,7 +1025,7 @@ fn build_cd_number_factory() -> gtk::SignalListItemFactory {
         else {
             return;
         };
-        apply_cd_row_tint(&cell, list_item);
+        apply_cd_row_band(&cell, list_item);
         cell.set_text(
             &list_item_cd_row(list_item, |row| format!("{:02}", row.number)).unwrap_or_default(),
         );
@@ -1053,7 +1053,7 @@ fn build_cd_duration_factory() -> gtk::SignalListItemFactory {
         else {
             return;
         };
-        apply_cd_row_tint(&cell, list_item);
+        apply_cd_row_band(&cell, list_item);
         cell.set_text(
             &list_item_cd_row(list_item, |row| format_duration(row.duration)).unwrap_or_default(),
         );
@@ -1112,7 +1112,7 @@ fn build_cd_text_factory(
         else {
             return;
         };
-        apply_cd_row_tint(&cell, list_item);
+        apply_cd_row_band(&cell, list_item);
         let value = list_item_cd_row(list_item, |row| match field {
             EditableField::Artist => row.display_artist(),
             _ => row.display_title(),
@@ -1142,7 +1142,7 @@ fn build_cd_filler_factory() -> gtk::SignalListItemFactory {
         else {
             return;
         };
-        apply_cd_row_tint(&cell, list_item);
+        apply_cd_row_band(&cell, list_item);
     });
     factory
 }
@@ -1179,14 +1179,8 @@ fn render_cd_status(spinner: &gtk::Spinner, icon: &gtk::Image, status: CdRipStat
     }
 }
 
-fn apply_cd_row_tint(cell: &TableCell, list_item: &gtk::ListItem) {
-    cell.remove_css_class("track-table-row-even");
-    cell.remove_css_class("track-table-row-odd");
-    if list_item.position().is_multiple_of(2) {
-        cell.add_css_class("track-table-row-even");
-    } else {
-        cell.add_css_class("track-table-row-odd");
-    }
+fn apply_cd_row_band(cell: &TableCell, list_item: &gtk::ListItem) {
+    cell.set_banded(list_item.position().is_multiple_of(2));
 }
 
 /// Borrow the [`CdRow`] behind a bound model object and run `f` over it.

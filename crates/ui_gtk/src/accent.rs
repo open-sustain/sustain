@@ -138,9 +138,7 @@ fn accent_css(palette: AccentPalette) -> String {
             background-image: none;
         }}
 
-        columnview.track-table listview row:selected .track-table-cell,
-        columnview.track-table listview row:selected .track-table-cell.track-table-row-even,
-        columnview.track-table listview row:selected .track-table-cell.track-table-row-odd {{
+        columnview.track-table listview row:selected .track-table-cell {{
             background-color: {background};
             background-image: none;
             color: {foreground};

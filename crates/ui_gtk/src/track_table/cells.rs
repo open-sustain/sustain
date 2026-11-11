@@ -15,7 +15,6 @@ use crate::cell_registry::{BindingRegistry, CellBinding};
 use crate::rating_stars::RatingStars;
 use crate::table_cell::TableCell;
 use crate::track_context::TrackRowContextMenu;
-use crate::util::set_exclusive_css_class;
 
 const STATUS_COLUMN_WIDTH: i32 = 26;
 const STATUS_ICON_SIZE: i32 = 14;
@@ -118,12 +117,12 @@ impl StatusBindings {
     }
 
     /// Re-derive the status cells in `scope` from their row payload: the
-    /// icon and the row tint.
+    /// icon and the row band.
     pub(super) fn refresh(&self, scope: RefreshScope<'_>, playing_track_id: Option<TrackId>) {
         self.0.for_each_live(|_, (list_item, icon)| {
             if scope.includes(&list_item) {
                 refresh_status_icon(&list_item, &icon, playing_track_id);
-                retint_cell_of(&icon, &list_item);
+                reband_cell_of(&icon, &list_item);
             }
         });
     }
@@ -261,7 +260,7 @@ pub(super) fn build_text_cell_factory(
         let Some(cell) = list_item.child().and_downcast::<TableCell>() else {
             return;
         };
-        apply_bound_row_tint(&cell, list_item);
+        apply_row_band(&cell, list_item);
 
         let Some(row_object) = list_item
             .item()
@@ -327,7 +326,7 @@ pub(super) fn build_rating_cell_factory(
         let Some(cell) = list_item.child().and_downcast::<TableCell>() else {
             return;
         };
-        apply_bound_row_tint(&cell, list_item);
+        apply_row_band(&cell, list_item);
         if let Some(stars) = cell.first_child().and_downcast::<RatingStars>() {
             stars.set_rating(row_rating(list_item.item()));
         }
@@ -382,7 +381,7 @@ fn build_status_cell_factory(
         let Some(cell) = list_item.child().and_downcast::<TableCell>() else {
             return;
         };
-        apply_bound_row_tint(&cell, list_item);
+        apply_row_band(&cell, list_item);
 
         let Some(icon) = cell
             .first_child()
@@ -414,7 +413,7 @@ fn build_filler_factory() -> gtk::SignalListItemFactory {
         let Some(cell) = list_item.child().and_downcast::<TableCell>() else {
             return;
         };
-        apply_bound_row_tint(&cell, list_item);
+        apply_row_band(&cell, list_item);
     });
 
     factory
@@ -431,18 +430,18 @@ fn new_track_text_cell(list_item: &gtk::ListItem, xalign: f32) -> TableCell {
     track_cell(list_item, TableCell::with_text(list_item, xalign))
 }
 
-/// `cell`, kept tinted along with its row. A selected row needs nothing
+/// `cell`, kept banded along with its row. A selected row needs nothing
 /// from its cells: the stylesheet reads the row's own `:selected` state.
 fn track_cell(list_item: &gtk::ListItem, cell: TableCell) -> TableCell {
     cell.add_css_class("track-table-cell");
-    install_cell_row_tint_sync(list_item, &cell);
+    install_cell_row_band_sync(list_item, &cell);
     cell
 }
 
-fn install_cell_row_tint_sync(list_item: &gtk::ListItem, cell: &TableCell) {
+fn install_cell_row_band_sync(list_item: &gtk::ListItem, cell: &TableCell) {
     let cell_for_position = cell.clone();
     list_item.connect_position_notify(move |list_item| {
-        apply_bound_row_tint(&cell_for_position, list_item);
+        apply_row_band(&cell_for_position, list_item);
     });
 }
 
@@ -479,7 +478,7 @@ fn refresh_text_cell(list_item: &gtk::ListItem, cell: &TableCell, column: TrackT
     };
     cell.set_text(&column.text(&row));
     drop(row);
-    apply_bound_row_tint(cell, list_item);
+    apply_row_band(cell, list_item);
 }
 
 fn row_rating(item: Option<glib::Object>) -> Rating {
@@ -493,7 +492,7 @@ fn row_rating(item: Option<glib::Object>) -> Rating {
 
 fn refresh_rating_cell(list_item: &gtk::ListItem, stars: &RatingStars) {
     stars.set_rating(row_rating(list_item.item()));
-    retint_cell_of(stars, list_item);
+    reband_cell_of(stars, list_item);
 }
 
 fn refresh_status_icon(
@@ -559,15 +558,15 @@ fn clear_status_icon(icon: &gtk::Image) {
     icon.set_visible(false);
 }
 
-/// Re-apply the row tint to the track cell holding `content`, whose row
+/// Re-apply the row band to the track cell holding `content`, whose row
 /// payload may have changed in place (a Duplicates group band, say).
-fn retint_cell_of(content: &impl IsA<gtk::Widget>, list_item: &gtk::ListItem) {
+fn reband_cell_of(content: &impl IsA<gtk::Widget>, list_item: &gtk::ListItem) {
     if let Some(cell) = content.parent().and_downcast::<TableCell>() {
-        apply_bound_row_tint(&cell, list_item);
+        apply_row_band(&cell, list_item);
     }
 }
 
-fn apply_bound_row_tint(cell: &TableCell, list_item: &gtk::ListItem) {
+fn apply_row_band(cell: &TableCell, list_item: &gtk::ListItem) {
     let group_band = list_item
         .item()
         .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
@@ -576,11 +575,7 @@ fn apply_bound_row_tint(cell: &TableCell, list_item: &gtk::ListItem) {
                 .ok()
                 .and_then(|row| row.placement.group_band)
         });
-    if group_band.unwrap_or_else(|| list_item.position().is_multiple_of(2)) {
-        set_exclusive_css_class(cell, "track-table-row-even", "track-table-row-odd");
-    } else {
-        set_exclusive_css_class(cell, "track-table-row-odd", "track-table-row-even");
-    }
+    cell.set_banded(group_band.unwrap_or_else(|| list_item.position().is_multiple_of(2)));
 }
 
 #[cfg(test)]
