@@ -167,6 +167,10 @@ pub(crate) struct PlaylistSidebar {
     /// and restored — never the transient view itself, which could fail
     /// or be costly to re-open at launch.
     persistent_selection: Rc<Cell<SidebarSelection>>,
+    /// The selection the previous session ended on, waiting for the library
+    /// load that brings the playlists it may name. Any navigation before
+    /// then supersedes it.
+    launch_selection: Rc<Cell<Option<SidebarSelection>>>,
 }
 
 impl PlaylistSidebar {
@@ -219,6 +223,7 @@ impl PlaylistSidebar {
             Rc::new(RefCell::new(None));
         let active_transient_row: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
         let persistent_selection = Rc::new(Cell::new(SidebarSelection::Music));
+        let launch_selection = Rc::new(Cell::new(None));
 
         let (playlists_header, playlists_caret) = build_disclosure_section_header("Playlists");
         root.append(&playlists_header);
@@ -288,6 +293,7 @@ impl PlaylistSidebar {
             &statistics_row,
             &library_state,
             &selection,
+            &launch_selection,
             on_selection_changed.clone(),
         );
         connect_library_row(
@@ -298,6 +304,7 @@ impl PlaylistSidebar {
             &statistics_row,
             &library_state,
             &selection,
+            &launch_selection,
             on_selection_changed.clone(),
         );
         connect_library_row(
@@ -308,6 +315,7 @@ impl PlaylistSidebar {
             &statistics_row,
             &library_state,
             &selection,
+            &launch_selection,
             on_selection_changed.clone(),
         );
         connect_selection_signal(
@@ -316,6 +324,7 @@ impl PlaylistSidebar {
             &albums_row,
             &statistics_row,
             &library_state,
+            &launch_selection,
             on_selection_changed.clone(),
         );
 
@@ -334,6 +343,7 @@ impl PlaylistSidebar {
         let duplicates_sidebar_row = duplicates_row.clone().upcast::<gtk::Widget>();
         let sidebar_active_transient_row = active_transient_row.clone();
         let persistent_selection_for_duplicates = persistent_selection.clone();
+        let launch_selection_for_duplicates = launch_selection.clone();
         let library_state_for_duplicates = library_state.clone();
         let selection_for_duplicates = selection.clone();
         let music_row_for_duplicates = music_row.clone();
@@ -347,6 +357,7 @@ impl PlaylistSidebar {
                 &duplicates_sidebar_row,
                 &sidebar_active_transient_row,
                 &persistent_selection_for_duplicates,
+                &launch_selection_for_duplicates,
                 &library_state_for_duplicates,
                 &selection_for_duplicates,
                 &on_selection_changed_for_duplicates,
@@ -392,6 +403,7 @@ impl PlaylistSidebar {
             on_duplicates_selected,
             active_transient_row,
             persistent_selection,
+            launch_selection,
         }
     }
 
@@ -487,7 +499,27 @@ impl PlaylistSidebar {
     /// selection-changed path, which switches the content area and clears the
     /// (already-stale) transient highlight.
     pub(crate) fn restore_persistent_selection(&self) {
-        match self.persistent_selection.get() {
+        self.select(self.persistent_selection.get());
+    }
+
+    /// Land on `selection`, the one the previous session ended on, once
+    /// [`Self::apply_launch_selection`] runs at the end of the library
+    /// load — unless the user navigates first. Until then it is what
+    /// [`Self::persisted_selection`] reports, so a session closed during
+    /// the load keeps it.
+    pub(crate) fn defer_launch_selection(&self, selection: SidebarSelection) {
+        self.launch_selection.set(Some(selection));
+    }
+
+    /// Select the deferred launch selection, if no navigation superseded it.
+    pub(crate) fn apply_launch_selection(&self) {
+        if let Some(selection) = self.launch_selection.take() {
+            self.select(selection);
+        }
+    }
+
+    fn select(&self, selection: SidebarSelection) {
+        match selection {
             SidebarSelection::Music => self.select_music(),
             SidebarSelection::Albums => self.select_albums(),
             SidebarSelection::Statistics => self.select_statistics(),
@@ -604,6 +636,7 @@ impl PlaylistSidebar {
             row,
             &self.active_transient_row,
             &self.persistent_selection,
+            &self.launch_selection,
             &self.library_state,
             &self.selection,
             &self.on_selection_changed,
@@ -621,12 +654,14 @@ impl PlaylistSidebar {
         }
     }
 
-    /// The selection to persist and restore on launch. While a transient
-    /// view is active this is the persistent selection that preceded it
-    /// (never the transient view itself); otherwise it is the live
-    /// selection.
+    /// The selection to persist and restore on launch. Before the launch
+    /// selection is applied this is that selection. While a transient view
+    /// is active this is the persistent selection that preceded it (never
+    /// the transient view itself); otherwise it is the live selection.
     pub(crate) fn persisted_selection(&self) -> Option<SidebarSelection> {
-        if self.active_transient_row.borrow().is_some() {
+        if let Some(selection) = self.launch_selection.get() {
+            Some(selection)
+        } else if self.active_transient_row.borrow().is_some() {
             Some(self.persistent_selection.get())
         } else {
             self.current_selection()
@@ -658,6 +693,7 @@ impl PlaylistSidebar {
     }
 
     pub(crate) fn select_item(&self, item: PlaylistItem) {
+        self.launch_selection.set(None);
         self.library_state.set(LibraryRowState::None);
         self.paint_library_rows();
         if !select_item(&self.selection, item) {
@@ -668,6 +704,7 @@ impl PlaylistSidebar {
     }
 
     fn activate_library_row(&self, target: LibraryRowState) {
+        self.launch_selection.set(None);
         self.library_state.set(target);
         self.paint_library_rows();
         self.selection.set_selected(gtk::INVALID_LIST_POSITION);
@@ -1050,6 +1087,7 @@ fn activate_transient_view_state(
     row: &gtk::Widget,
     active_transient_row: &Rc<RefCell<Option<gtk::Widget>>>,
     persistent_selection: &Rc<Cell<SidebarSelection>>,
+    launch_selection: &Rc<Cell<Option<SidebarSelection>>>,
     library_state: &Rc<Cell<LibraryRowState>>,
     selection: &gtk::SingleSelection,
     on_selection_changed: &Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
@@ -1057,6 +1095,7 @@ fn activate_transient_view_state(
     albums_row: &gtk::Box,
     statistics_row: &gtk::Box,
 ) {
+    launch_selection.set(None);
     // Entering the transient state from a persistent one: snapshot the
     // persistent selection. Switching transient-to-transient keeps the
     // original snapshot.
@@ -1089,6 +1128,7 @@ fn connect_library_row(
     statistics_row: &gtk::Box,
     library_state: &Rc<Cell<LibraryRowState>>,
     selection: &gtk::SingleSelection,
+    launch_selection: &Rc<Cell<Option<SidebarSelection>>>,
     on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
 ) {
     let gesture = gtk::GestureClick::new();
@@ -1099,8 +1139,10 @@ fn connect_library_row(
     let statistics_row = statistics_row.clone();
     let library_state = library_state.clone();
     let selection = selection.clone();
+    let launch_selection = launch_selection.clone();
     gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
+        launch_selection.set(None);
         let already_active = library_state.get() == target_state;
         if !already_active {
             library_state.set(target_state);
@@ -1122,6 +1164,7 @@ fn connect_selection_signal(
     albums_row: &gtk::Box,
     statistics_row: &gtk::Box,
     library_state: &Rc<Cell<LibraryRowState>>,
+    launch_selection: &Rc<Cell<Option<SidebarSelection>>>,
     on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
 ) {
     let selection_clone = selection.clone();
@@ -1129,11 +1172,13 @@ fn connect_selection_signal(
     let albums_row = albums_row.clone();
     let statistics_row = statistics_row.clone();
     let library_state = library_state.clone();
+    let launch_selection = launch_selection.clone();
     selection.connect_selected_notify(move |_selection| {
         let item = selected_item(&selection_clone);
         let new_selection = if let Some(item) = item {
             // A playlist row was just picked. Any active Library row
             // loses its highlight.
+            launch_selection.set(None);
             if library_state.get() != LibraryRowState::None {
                 library_state.set(LibraryRowState::None);
                 paint_library_rows(
@@ -1364,12 +1409,14 @@ fn clamp_sidebar_width(content_area: &gtk::Paned) {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use gtk::prelude::*;
     use gtk::{gio, glib};
-    use sustain_app_runtime::{PlaylistId, PlaylistItem};
+    use sustain_app_runtime::{ApplicationRuntime, PlaylistId, PlaylistItem};
 
-    use super::build_row_factory;
     use super::model::SidebarItem;
+    use super::{PlaylistSidebar, SidebarSelection, build_row_factory};
 
     /// A row's widgets must go with the row. The rename entry, the drag
     /// source, the drop target, and the context-menu gesture are wired
@@ -1433,6 +1480,83 @@ mod tests {
         if !ran {
             eprintln!("skipped GTK widget test: no display available");
         }
+    }
+
+    /// The previous session's selection lands once the library has loaded,
+    /// and is what gets persisted until then.
+    #[test]
+    fn launch_selection_lands_when_applied() {
+        let ran = crate::test_support::with_gtk(|| {
+            let sidebar = test_sidebar();
+            let shown = record_selection_changes(&sidebar);
+            sidebar.defer_launch_selection(SidebarSelection::Albums);
+            assert_eq!(sidebar.current_selection(), Some(SidebarSelection::Music));
+            assert_eq!(
+                sidebar.persisted_selection(),
+                Some(SidebarSelection::Albums)
+            );
+
+            sidebar.apply_launch_selection();
+
+            assert_eq!(sidebar.current_selection(), Some(SidebarSelection::Albums));
+            assert_eq!(*shown.borrow(), [Some(SidebarSelection::Albums)]);
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    /// A view the user opens while the library loads is not overridden by
+    /// the previous session's selection when the load ends.
+    #[test]
+    fn navigation_during_the_load_supersedes_the_launch_selection() {
+        let ran = crate::test_support::with_gtk(|| {
+            let library_row = test_sidebar();
+            library_row.defer_launch_selection(SidebarSelection::Albums);
+            library_row.select_statistics();
+            library_row.apply_launch_selection();
+            assert_eq!(
+                library_row.current_selection(),
+                Some(SidebarSelection::Statistics)
+            );
+            assert_eq!(
+                library_row.persisted_selection(),
+                Some(SidebarSelection::Statistics)
+            );
+
+            let transient = test_sidebar();
+            transient.defer_launch_selection(SidebarSelection::Albums);
+            transient
+                .activate_transient_view(gtk::Box::new(gtk::Orientation::Vertical, 0).upcast_ref());
+            let shown = record_selection_changes(&transient);
+            transient.apply_launch_selection();
+            assert!(shown.borrow().is_empty(), "the transient view stays shown");
+            assert_eq!(
+                transient.persisted_selection(),
+                Some(SidebarSelection::Music)
+            );
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    fn test_sidebar() -> PlaylistSidebar {
+        PlaylistSidebar::new(Rc::new(RefCell::new(ApplicationRuntime::new())), false)
+    }
+
+    /// The selections the sidebar shows from here on, past the current one
+    /// the callback is installed with.
+    fn record_selection_changes(
+        sidebar: &PlaylistSidebar,
+    ) -> Rc<RefCell<Vec<Option<SidebarSelection>>>> {
+        let shown = Rc::new(RefCell::new(Vec::new()));
+        sidebar.set_selection_changed(Rc::new({
+            let shown = shown.clone();
+            move |selection| shown.borrow_mut().push(selection)
+        }));
+        shown.borrow_mut().clear();
+        shown
     }
 
     fn drain_main_context() {

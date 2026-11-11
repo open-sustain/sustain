@@ -993,8 +993,8 @@ impl BuiltMainWindow {
 /// content stack by the time `present()` returns. Restoring Albums or a
 /// specific playlist as the persisted selection would otherwise drag
 /// album-grouping or playlist-table population into the startup
-/// critical path — both can run on the first idle instead, after the
-/// window has had a chance to paint.
+/// critical path — both wait for the end of the library load instead,
+/// which also brings the playlists, unless the user navigates first.
 struct DeferredStartup {
     runtime: SharedRuntime,
     first_idle_startup: Box<dyn FnOnce()>,
@@ -1011,18 +1011,20 @@ impl DeferredStartup {
         runtime: SharedRuntime,
         consolidation_requested: crate::library_consolidation::LibraryConsolidationRequestedCallback,
     ) -> Self {
-        let restore_selection: Option<Box<dyn FnOnce()>> = match selection {
+        // Music is already showing.
+        let launch_selection = match selection {
             UiSidebarSelection::Music => None,
-            UiSidebarSelection::Albums => Some(Box::new(move || sidebar.select_albums())),
-            UiSidebarSelection::Statistics => Some(Box::new(move || sidebar.select_statistics())),
-            UiSidebarSelection::Playlist(item) => Some(Box::new(move || sidebar.select_item(item))),
+            UiSidebarSelection::Albums => Some(SidebarSelection::Albums),
+            UiSidebarSelection::Statistics => Some(SidebarSelection::Statistics),
+            UiSidebarSelection::Playlist(item) => Some(SidebarSelection::Item(item)),
         };
+        if let Some(launch_selection) = launch_selection {
+            sidebar.defer_launch_selection(launch_selection);
+        }
         let post_hydration_startup: PostHydrationStartup = Rc::new(RefCell::new(Some(Box::new({
             let runtime = runtime.clone();
             move || {
-                if let Some(restore) = restore_selection {
-                    restore();
-                }
+                sidebar.apply_launch_selection();
                 // Device enumeration probes the filesystem, so it runs
                 // after the first-idle gate and initial hydration.
                 populate_devices();
