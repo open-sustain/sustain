@@ -210,8 +210,13 @@ impl DuplicatesView {
         } else {
             DuplicateMatchMode::Loose
         };
-        let task = match self.runtime.borrow().duplicate_groups_task(mode) {
+        // Release the runtime before the error arm borrows it mutably.
+        let task = self.runtime.borrow().duplicate_groups_task(mode);
+        let task = match task {
             Ok(task) => task,
+            // Opened while the library loads: the views refresh that ends
+            // the load scans again.
+            Err(ApplicationRuntimeError::LibraryHydrationPending) => return,
             Err(error) => {
                 self.status.set_text("Duplicate scan unavailable.");
                 self.runtime.borrow_mut().push_ephemeral_notification(

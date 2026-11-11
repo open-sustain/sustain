@@ -157,6 +157,9 @@ use track_callbacks::{
 /// whichever view is currently visible. Fired after sidebar-driven
 /// view switches, library mutations, and search keystrokes.
 pub(crate) type VisibleSummaryRefreshCallback = Rc<dyn Fn()>;
+/// Bring every library view but Songs up to date with the runtime's
+/// library; see [`library_views_refresh_callback`].
+type LibraryViewsRefreshCallback = Rc<dyn Fn()>;
 type PostHydrationStartup = Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
 
 /// Channel receivers the main window installs as glib consumers on
@@ -599,9 +602,8 @@ pub(crate) fn build_main_window(
     );
     device_panel.set_summary_refresh(visible_summary_refresh.clone());
     duplicates_view.set_summary_refresh(visible_summary_refresh.clone());
-    let library_changed = library_changed_callback(
+    let library_views_refresh = library_views_refresh_callback(
         &runtime,
-        &songs_refresh,
         &albums_view,
         &duplicates_view,
         &statistics_view,
@@ -611,6 +613,7 @@ pub(crate) fn build_main_window(
         &current_search_text,
         visible_summary_refresh.clone(),
     );
+    let library_changed = library_changed_callback(&songs_refresh, &library_views_refresh);
     install_track_availability_observer(&runtime, &songs_table, &playlists_table);
     let track_rows_changed = track_rows_changed_callback(TrackRowChangedContext {
         runtime: &runtime,
@@ -749,11 +752,9 @@ pub(crate) fn build_main_window(
         receiver: library_hydration_result_rx,
         runtime: runtime.clone(),
         songs_table: songs_table.clone(),
-        status_bar: status_bar.clone(),
-        titlebar: titlebar.clone(),
         sidebar: sidebar.clone(),
-        content_stack: content_stack.clone(),
         current_search_text: current_search_text.clone(),
+        library_views_refresh: library_views_refresh.clone(),
         post_hydration_startup: deferred_startup.post_hydration_startup(),
         launch_profile,
     });
@@ -1602,10 +1603,27 @@ fn ui_settings_from_widgets(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Bring Songs and every other library view up to date with the
+/// runtime's library after a scan, an import or a removal.
 fn library_changed_callback(
-    runtime: &SharedRuntime,
     songs_refresh: &SongsViewRefresh,
+    library_views_refresh: &LibraryViewsRefreshCallback,
+) -> LibraryChangedCallback {
+    let songs_refresh = songs_refresh.clone();
+    let library_views_refresh = library_views_refresh.clone();
+    Rc::new(move || {
+        songs_refresh.refresh();
+        library_views_refresh();
+    })
+}
+
+/// Bring every library view but Songs up to date with the runtime's
+/// library. Startup calls this alone once the library has loaded: Songs
+/// has just published its rows by then, while a view opened during the
+/// load still shows the empty library it found.
+#[allow(clippy::too_many_arguments)]
+fn library_views_refresh_callback(
+    runtime: &SharedRuntime,
     albums_view: &AlbumsView,
     duplicates_view: &DuplicatesView,
     statistics_view: &StatisticsView,
@@ -1614,9 +1632,8 @@ fn library_changed_callback(
     titlebar: &Titlebar,
     current_search_text: &Rc<RefCell<String>>,
     visible_summary_refresh: VisibleSummaryRefreshCallback,
-) -> LibraryChangedCallback {
+) -> LibraryViewsRefreshCallback {
     let runtime = runtime.clone();
-    let songs_refresh = songs_refresh.clone();
     let albums_view = albums_view.clone();
     let duplicates_view = duplicates_view.clone();
     let statistics_view = statistics_view.clone();
@@ -1626,7 +1643,6 @@ fn library_changed_callback(
     let current_search_text = current_search_text.clone();
 
     Rc::new(move || {
-        songs_refresh.refresh();
         // AlbumsView re-derives the visible album set from the runtime's
         // current library using the search text it already holds, so we
         // pass no track snapshot and need not call set_search_text here.

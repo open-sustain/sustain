@@ -20,11 +20,9 @@ pub(super) struct LibraryHydrationResultConsumerContext {
     pub(super) receiver: Option<LibraryHydrationResultReceiver>,
     pub(super) runtime: SharedRuntime,
     pub(super) songs_table: TrackTable,
-    pub(super) status_bar: StatusBar,
-    pub(super) titlebar: Titlebar,
     pub(super) sidebar: PlaylistSidebar,
-    pub(super) content_stack: gtk::Stack,
     pub(super) current_search_text: Rc<RefCell<String>>,
+    pub(super) library_views_refresh: LibraryViewsRefreshCallback,
     pub(super) post_hydration_startup: PostHydrationStartup,
     /// The clock of the `activate:` startup landmarks, first idle among
     /// them, when profiling.
@@ -34,11 +32,9 @@ pub(super) struct LibraryHydrationResultConsumerContext {
 struct InitialLibraryRowsPublication {
     runtime: SharedRuntime,
     songs_table: TrackTable,
-    status_bar: StatusBar,
-    titlebar: Titlebar,
     sidebar: PlaylistSidebar,
-    content_stack: gtk::Stack,
     current_search_text: Rc<RefCell<String>>,
+    library_views_refresh: LibraryViewsRefreshCallback,
     post_hydration_startup: PostHydrationStartup,
     launch_profile: Option<sustain_profiler::ProfileScope>,
 }
@@ -53,11 +49,9 @@ pub(super) fn install_library_hydration_result_consumer(
         receiver,
         runtime,
         songs_table,
-        status_bar,
-        titlebar,
         sidebar,
-        content_stack,
         current_search_text,
+        library_views_refresh,
         post_hydration_startup,
         launch_profile,
     } = context;
@@ -87,11 +81,9 @@ pub(super) fn install_library_hydration_result_consumer(
         publish_initial_library_rows(InitialLibraryRowsPublication {
             runtime,
             songs_table,
-            status_bar,
-            titlebar,
             sidebar,
-            content_stack,
             current_search_text,
+            library_views_refresh,
             post_hydration_startup,
             launch_profile,
         });
@@ -102,11 +94,9 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
     let InitialLibraryRowsPublication {
         runtime,
         songs_table,
-        status_bar,
-        titlebar,
         sidebar,
-        content_stack,
         current_search_text,
+        library_views_refresh,
         post_hydration_startup,
         launch_profile,
     } = publication;
@@ -125,7 +115,7 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
             .collect();
         (runtime.library_tracks().len(), rows)
     };
-    let summary = TrackSummary::of_rows(&rows);
+    let visible_tracks = rows.len();
     // Ordered up front, the rows stream in final order: the first batch is
     // already the top of the sorted list, and nothing reshuffles as it fills.
     songs_table.order_rows(&mut rows);
@@ -147,25 +137,21 @@ fn publish_initial_library_rows(publication: InitialLibraryRowsPublication) {
             songs_table.sort_current_rows();
         }
 
-        if still_current && content_stack.visible_child_name().as_deref() == Some(SONGS_VIEW) {
-            status_bar.update_summary(summary);
-        }
         {
             let mut runtime = runtime.borrow_mut();
             runtime.finish_library_hydration_publication();
             crate::start_background_schedulers(&mut runtime);
         }
         sidebar.refresh();
-        update_play_pause_sensitivity(&titlebar, &runtime.borrow());
+        // Songs holds its rows; a view opened while the library loaded
+        // still shows the empty library it found.
+        library_views_refresh();
         run_once(&post_hydration_startup);
         // The library is usable from here on: Songs holds its rows in
         // order, and searching, editing and playing are open.
         if let (Some(launch), Some(publication)) = (launch_profile, hydration_profile) {
             let published = if still_current {
-                format!(
-                    "{} visible / {} total Songs rows published",
-                    summary.track_count, total_tracks
-                )
+                format!("{visible_tracks} visible / {total_tracks} total Songs rows published")
             } else {
                 "Songs rows superseded by a newer view".to_owned()
             };
