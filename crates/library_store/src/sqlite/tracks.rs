@@ -14,10 +14,11 @@ fn execute_full_track(connection: &Connection, sql: &str, track: &Track) -> Stor
     let metadata = &track.metadata;
     let statistics = &track.statistics;
     let relative_path = relative_path_bytes(&track.location.relative_path);
+    // Cached: an import or a rescan runs this once per track.
     connection
-        .execute(
-            sql,
-            params![
+        .prepare_cached(sql)
+        .and_then(|mut statement| {
+            statement.execute(params![
                 track.id.get(),
                 relative_path,
                 metadata_text_param(&metadata.title),
@@ -58,8 +59,8 @@ fn execute_full_track(connection: &Connection, sql: &str, track: &Track) -> Stor
                 track.file_modified_at.and_then(system_time_to_unix),
                 metadata.bit_depth.map(i64::from),
                 metadata.bpm_set_by_user,
-            ],
-        )
+            ])
+        })
         .map(|_| ())
         .map_err(StoreError::from)
 }
@@ -88,15 +89,16 @@ pub(super) fn update_track_location(
     track_id: TrackId,
     location: &TrackLocation,
 ) -> StoreResult<()> {
+    // Cached: a batch relocation runs this once per track.
     connection
-        .execute(
-            "UPDATE tracks SET relative_path = ?1, is_missing = ?2 WHERE id = ?3",
-            params![
+        .prepare_cached("UPDATE tracks SET relative_path = ?1, is_missing = ?2 WHERE id = ?3")
+        .and_then(|mut statement| {
+            statement.execute(params![
                 relative_path_bytes(&location.relative_path),
                 location.is_missing(),
                 track_id.get(),
-            ],
-        )
+            ])
+        })
         .map(|_| ())
         .map_err(StoreError::from)
 }
@@ -360,8 +362,11 @@ fn update_track_metadata(
 }
 
 pub(super) fn delete_track(connection: &Connection, track_id: TrackId) -> StoreResult<()> {
+    // Cached: a removal or a duplicate consolidation runs this once per
+    // track.
     connection
-        .execute("DELETE FROM tracks WHERE id = ?1", params![track_id.get()])
+        .prepare_cached("DELETE FROM tracks WHERE id = ?1")
+        .and_then(|mut statement| statement.execute(params![track_id.get()]))
         .map(|_| ())
         .map_err(StoreError::from)
 }

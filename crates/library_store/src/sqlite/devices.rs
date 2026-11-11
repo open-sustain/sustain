@@ -193,27 +193,31 @@ pub(super) fn save_device_manifest(
             params![id.as_str()],
         )
         .map_err(StoreError::from)?;
-    for entry in entries {
+    {
         // Plain INSERT, not INSERT OR REPLACE: the device's rows were just
         // cleared, so a primary-key conflict here can only mean two entries
         // share one on-device path — a planner bug the sync engine now
         // rejects before it gets here. Failing loudly beats silently
         // collapsing the overwrite evidence (#99).
-        transaction
-            .execute(
+        let mut insert = transaction
+            .prepare_cached(
                 "INSERT INTO sync_manifest \
                  (device_id, track_id, on_device_path, fingerprint, anlz_path, anlz_digest) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
+            )
+            .map_err(StoreError::from)?;
+        for entry in entries {
+            insert
+                .execute(params![
                     id.as_str(),
                     entry.track_id.get(),
                     entry.on_device_path.as_str(),
                     entry.fingerprint,
                     entry.anlz.as_ref().map(|anlz| anlz.dat_path.as_str()),
                     entry.anlz.as_ref().map(|anlz| anlz.digest.as_str()),
-                ],
-            )
-            .map_err(StoreError::from)?;
+                ])
+                .map_err(StoreError::from)?;
+        }
     }
     transaction.commit().map_err(StoreError::from)
 }

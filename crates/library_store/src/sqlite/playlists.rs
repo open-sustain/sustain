@@ -41,19 +41,21 @@ pub(super) fn replace_playlist_entries(
         )
         .map_err(StoreError::from)?;
 
+    let mut insert = connection
+        .prepare_cached(
+            r#"
+                INSERT INTO playlist_entries (playlist_id, track_id, position)
+                VALUES (?1, ?2, ?3)
+                "#,
+        )
+        .map_err(StoreError::from)?;
     for entry in &playlist.entries {
-        connection
-            .execute(
-                r#"
-                    INSERT INTO playlist_entries (playlist_id, track_id, position)
-                    VALUES (?1, ?2, ?3)
-                    "#,
-                params![
-                    entry.playlist_id.get(),
-                    entry.track_id.get(),
-                    i64::from(entry.position),
-                ],
-            )
+        insert
+            .execute(params![
+                entry.playlist_id.get(),
+                entry.track_id.get(),
+                i64::from(entry.position),
+            ])
             .map_err(StoreError::from)?;
     }
     Ok(())
