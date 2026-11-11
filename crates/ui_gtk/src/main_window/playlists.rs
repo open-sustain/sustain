@@ -9,7 +9,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct PlaylistsViewRefreshContext {
-    content_stack: gtk::Stack,
+    content_stack: ContentStack,
     playlists_table: TrackTable,
     playlists_header: PlaylistsHeader,
     status_bar: StatusBar,
@@ -18,7 +18,7 @@ pub(super) struct PlaylistsViewRefreshContext {
 
 impl PlaylistsViewRefreshContext {
     pub(super) fn new(
-        content_stack: &gtk::Stack,
+        content_stack: &ContentStack,
         playlists_table: &TrackTable,
         playlists_header: &PlaylistsHeader,
         status_bar: &StatusBar,

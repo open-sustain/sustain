@@ -233,7 +233,7 @@ fn first_playable_track(
 /// lists its tracks.
 #[derive(Clone)]
 pub(super) struct VisibleViewQueues {
-    pub(super) content_stack: gtk::Stack,
+    pub(super) content_stack: ContentStack,
     pub(super) songs_refresh: SongsViewRefresh,
     pub(super) albums_view: AlbumsView,
     pub(super) playlists_table: TrackTable,

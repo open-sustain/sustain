@@ -37,6 +37,7 @@ mod device_panel;
 mod duplicate_consolidation;
 mod duplicates;
 mod frame_profile;
+mod icon_label;
 mod library_consolidation;
 mod library_import;
 mod library_scan;

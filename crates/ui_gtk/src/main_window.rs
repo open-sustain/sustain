@@ -38,7 +38,7 @@ use super::{
     artwork_loader::ArtworkLoader,
     cd_import_panel::{CdImportPanel, CdImportRequestedCallback},
     command_controller::{SharedCommandController, UiCommandController},
-    content_stack::build_content_stack,
+    content_stack::ContentStack,
     device_panel::DeviceSyncPanel,
     duplicate_consolidation::consolidate_duplicates_callback,
     duplicates::DuplicatesView,
@@ -544,7 +544,7 @@ pub(crate) fn build_main_window(
     let device_panel = DeviceSyncPanel::new(runtime.clone(), command_controller.clone());
     let cd_import_panel = CdImportPanel::new(runtime.clone());
     let statistics_view = StatisticsView::new(runtime.clone());
-    let content_stack = build_content_stack(
+    let content_stack = ContentStack::new(
         &songs_drop_overlay,
         &albums_view.widget(),
         &duplicates_view.widget(),
@@ -884,7 +884,7 @@ pub(crate) fn build_main_window(
         view_settings_changed,
     );
 
-    main_content.append(&content_stack);
+    main_content.append(content_stack.widget());
 
     // gtk::Paned keeps drag-resize between SIDEBAR_MIN_WIDTH and
     // SIDEBAR_MAX_WIDTH, with the user's manually-set width preserved
@@ -1098,7 +1098,7 @@ impl DeferredStartup {
 /// CDs (opening the CD-import page). They share one rendering and one set of
 /// discovery sources, so they are wired together here.
 struct DevicesSectionContext<'a> {
-    content_stack: &'a gtk::Stack,
+    content_stack: &'a ContentStack,
     sidebar: &'a PlaylistSidebar,
     device_panel: &'a DeviceSyncPanel,
     cd_import_panel: &'a CdImportPanel,
@@ -1546,7 +1546,7 @@ fn poll_cd_import(
 }
 
 fn install_duplicates_view(
-    content_stack: &gtk::Stack,
+    content_stack: &ContentStack,
     sidebar: &PlaylistSidebar,
     duplicates_view: &DuplicatesView,
 ) {
@@ -1560,7 +1560,7 @@ fn install_duplicates_view(
     });
 }
 
-fn install_albums_view_activator(content_stack: &gtk::Stack, albums_view: &AlbumsView) {
+fn install_albums_view_activator(content_stack: &ContentStack, albums_view: &AlbumsView) {
     let albums_view = albums_view.clone();
     content_stack.connect_visible_child_name_notify(move |stack| {
         albums_view.set_shown(stack.visible_child_name().as_deref() == Some(ALBUMS_VIEW));
@@ -1572,7 +1572,10 @@ fn install_albums_view_activator(content_stack: &gtk::Stack, albums_view: &Album
 /// while it is hidden. `refresh` is cheap (one O(n) pass plus a few dozen
 /// small widgets), so an unconditional rebuild on every visit is simpler
 /// — and always-fresh — versus dirty-flag bookkeeping.
-fn install_statistics_view_activator(content_stack: &gtk::Stack, statistics_view: &StatisticsView) {
+fn install_statistics_view_activator(
+    content_stack: &ContentStack,
+    statistics_view: &StatisticsView,
+) {
     let statistics_view = statistics_view.clone();
     content_stack.connect_visible_child_name_notify(move |stack| {
         if stack.visible_child_name().as_deref() == Some(STATISTICS_VIEW) {
@@ -1796,7 +1799,7 @@ fn install_track_availability_observer(
 #[allow(clippy::too_many_arguments)]
 fn visible_summary_refresh_callback(
     runtime: &SharedRuntime,
-    content_stack: &gtk::Stack,
+    content_stack: &ContentStack,
     status_bar: &StatusBar,
     songs_table: &TrackTable,
     playlists_table: &TrackTable,

@@ -14,6 +14,8 @@ use std::{cell::RefCell, collections::HashSet, hash::Hash, rc::Rc};
 
 use gtk::prelude::*;
 
+use crate::icon_label::IconLabel;
+
 /// One entry of a check list: what ticking it selects, and how it reads.
 pub(super) struct ChecklistEntry<K> {
     pub(super) key: K,
@@ -103,17 +105,9 @@ pub(super) fn checklist<K: Clone + Eq + Hash + 'static>(
         let Some(check) = list_item.child().and_downcast::<gtk::CheckButton>() else {
             return;
         };
-        let icon = check
-            .child()
-            .and_then(|row| row.first_child())
-            .and_downcast::<gtk::Image>();
-        let label = icon
-            .as_ref()
-            .and_then(|icon| icon.next_sibling())
-            .and_downcast::<gtk::Label>();
-        if let (Some(icon), Some(label)) = (icon, label) {
-            icon.set_icon_name(Some(entry.icon));
-            label.set_label(&entry.name);
+        if let Some(row) = check.child().and_downcast::<IconLabel>() {
+            row.set_icon_name(entry.icon);
+            row.set_text(&entry.name);
         }
         // Read before setting: the check's toggle handler borrows the
         // selection again.
@@ -131,21 +125,14 @@ pub(super) fn checklist<K: Clone + Eq + Hash + 'static>(
     scroller
 }
 
-/// A check button whose child is the entry's icon followed by its name;
+/// A check button showing the entry's icon followed by its name;
 /// toggling it ticks or unticks the entry its row is bound to.
 fn check_row<K: Clone + Eq + Hash + 'static>(
     list_item: &gtk::ListItem,
     checklist: Rc<Checklist<K>>,
 ) -> gtk::CheckButton {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.append(&gtk::Image::new());
-    let label = gtk::Label::new(None);
-    label.set_xalign(0.0);
-    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    row.append(&label);
-
     let check = gtk::CheckButton::new();
-    check.set_child(Some(&row));
+    check.set_child(Some(&IconLabel::new()));
     let list_item = list_item.downgrade();
     check.connect_toggled(move |check| {
         let Some(list_item) = list_item.upgrade() else {
@@ -261,6 +248,15 @@ mod tests {
                 rows.len() < 500,
                 "{} rows built for 5,000 entries",
                 rows.len()
+            );
+            let shown = rows[3]
+                .child()
+                .and_downcast::<IconLabel>()
+                .expect("a row shows its entry in an icon label");
+            assert_eq!(shown.text(), "Artist 3");
+            assert_eq!(
+                shown.icon_name().as_deref(),
+                Some("avatar-default-symbolic")
             );
             assert!(rows[3].is_active(), "a ticked entry shows ticked");
             assert_eq!(changes.get(), 0, "showing the selection changes nothing");

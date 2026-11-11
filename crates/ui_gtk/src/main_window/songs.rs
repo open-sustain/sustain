@@ -22,7 +22,7 @@ use super::*;
 /// clean.
 #[derive(Clone)]
 pub(super) struct SongsViewRefresh {
-    content_stack: gtk::Stack,
+    content_stack: ContentStack,
     songs_table: TrackTable,
     runtime: SharedRuntime,
     current_search_text: Rc<RefCell<String>>,
@@ -33,7 +33,7 @@ impl SongsViewRefresh {
     /// Starts clean: startup hydration fills the Songs table whichever
     /// view is visible.
     pub(super) fn install(
-        content_stack: &gtk::Stack,
+        content_stack: &ContentStack,
         songs_table: &TrackTable,
         runtime: &SharedRuntime,
         current_search_text: &Rc<RefCell<String>>,
@@ -103,9 +103,7 @@ mod tests {
     fn a_hidden_songs_table_rebuilds_once_it_is_shown() {
         crate::test_support::with_gtk(|| {
             let songs_table = build_track_table(Vec::new(), None, None, None, None, None);
-            let content_stack = gtk::Stack::new();
-            content_stack.add_named(&songs_table.widget(), Some(SONGS_VIEW));
-            content_stack.add_named(&gtk::Box::default(), Some(PLAYLISTS_VIEW));
+            let content_stack = ContentStack::with_songs_view(&songs_table.widget());
             let runtime: SharedRuntime = Rc::new(RefCell::new(ApplicationRuntime::new()));
             let refresh = SongsViewRefresh::install(
                 &content_stack,
@@ -139,9 +137,7 @@ mod tests {
     fn a_hidden_songs_table_rebuilds_before_it_defines_a_queue() {
         crate::test_support::with_gtk(|| {
             let songs_table = build_track_table(Vec::new(), None, None, None, None, None);
-            let content_stack = gtk::Stack::new();
-            content_stack.add_named(&songs_table.widget(), Some(SONGS_VIEW));
-            content_stack.add_named(&gtk::Box::default(), Some(PLAYLISTS_VIEW));
+            let content_stack = ContentStack::with_songs_view(&songs_table.widget());
             let runtime: SharedRuntime = Rc::new(RefCell::new(ApplicationRuntime::new()));
             let refresh = SongsViewRefresh::install(
                 &content_stack,

@@ -29,6 +29,7 @@ use super::{
     albums::AlbumsView,
     artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
+    content_stack::ContentStack,
     duplicates::DuplicatesView,
     main_window::SidebarCollapseController,
     sidebar::PlaylistSidebar,
@@ -54,7 +55,7 @@ pub(crate) struct GlobalShortcutContext {
     pub(crate) playlists_table: TrackTable,
     pub(crate) duplicates_view: DuplicatesView,
     pub(crate) albums_view: AlbumsView,
-    pub(crate) content_stack: gtk::Stack,
+    pub(crate) content_stack: ContentStack,
     pub(crate) toggle_or_start_playback: Rc<dyn Fn()>,
     pub(crate) playback_changed: PlaybackChangedCallback,
     pub(crate) library_changed_holder: LibraryChangedHolder,
@@ -554,7 +555,7 @@ fn jump_to_current_track(
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
     albums_view: &AlbumsView,
-    content_stack: &gtk::Stack,
+    content_stack: &ContentStack,
     sidebar: &PlaylistSidebar,
 ) {
     let Some(track_id) = runtime
@@ -583,7 +584,7 @@ fn jump_to_current_track(
 }
 
 fn select_all_in_current_view(
-    content_stack: &gtk::Stack,
+    content_stack: &ContentStack,
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
     duplicates_view: &DuplicatesView,
@@ -602,7 +603,7 @@ fn select_all_in_current_view(
 /// in that mode. Callers must tolerate an empty vector for any non-track
 /// view.
 fn current_view_selection(
-    content_stack: &gtk::Stack,
+    content_stack: &ContentStack,
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
     duplicates_view: &DuplicatesView,
@@ -616,7 +617,7 @@ fn current_view_selection(
 }
 
 fn current_view_order(
-    content_stack: &gtk::Stack,
+    content_stack: &ContentStack,
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
     duplicates_view: &DuplicatesView,

@@ -309,7 +309,7 @@ pub(super) fn sidebar_selection_changed_callback(
     runtime: &SharedRuntime,
     playlists_table: &TrackTable,
     playlists_refresh: &PlaylistsViewRefreshContext,
-    content_stack: &gtk::Stack,
+    content_stack: &ContentStack,
     visible_summary_refresh: VisibleSummaryRefreshCallback,
     current_search_text: &Rc<RefCell<String>>,
 ) -> crate::sidebar::SidebarSelectionChangedCallback {
