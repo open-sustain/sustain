@@ -62,7 +62,7 @@ to Sustain's vendored `crates/dsp` + `crates/analysis`.
 | Temperley 1999 (cited in `templates.rs`) | Alternative key-finding profiles | Mentioned, **not implemented** |
 | Gomtsyan 2019 (`gomtsyan_2019…`) | KK still competitive vs ML; clarity = max/mean | Reference; clarity **not implemented** |
 | Müller & Ewert 2010 (`mueller_2010…`) | STFT chroma, freq→semitone, octave sum, L2 | **Implemented** — `chroma/extractor.rs` (off the key path since v10) |
-| Gómez 2006 (refresh-audit candidate) | HPCP: peak-based, harmonic-weighted pitch-class profile | **Implemented (Sustain-authored, v10–v12)** — peaks + QIFFT + energy + squared-cosine window (v10) + harmonic summation (v11, subharmonic folding, N=8 / decay 0.6) + global tuning estimation (v12, parameter-free circular mean), `chroma/hpcp.rs`; sub-semitone resolution deferred |
+| Gómez 2006 (refresh-audit candidate) | HPCP: peak-based, harmonic-weighted pitch-class profile | **Implemented (Sustain-authored, v10–v12)** — peaks + QIFFT + energy + squared-cosine window (v10) + harmonic summation (v11, subharmonic folding, N=8 / decay 0.6; removed in key v17, when the learned templates made it redundant) + global tuning estimation (v12, parameter-free circular mean; one tuning per track since key v17), `chroma/hpcp.rs`; sub-semitone resolution deferred |
 | Ellis & Poliner 2007 (`ellis_poliner_2007…`) | Temporal chroma smoothing | **Not vendored** (a later front-end layer) |
 | Driedger & Müller 2014 (`driedger_mueller_2014_hpss`) | Median-filter HPSS harmonic/percussive split | **Implemented (Sustain-authored, v9)** — re-derived, `chroma/hpss.rs` |
 | Grosche 2012 (`grosche_2012_tempogram`) | Fourier tempogram over a global novelty curve | **Implemented** — `period/tempogram_fft.rs` |
@@ -151,6 +151,13 @@ spacing needs the resolution), an HPSS-style **harmonic mask**, and
 **HPCP-style** peak+harmonic pitch-class profiles — together its single biggest
 measured jump (45.6% → 63.2%). Gómez/MTG HPCP and Faraldo are the named
 next-level references.
+
+**Since key v17**, harmonic summation is gone (the templates learned since v16
+absorb the overtones, and the folding blurred every peak onto its fifth below),
+the tuning is estimated once over the whole track rather than per 120 s
+segment, and the key frame scales with the sample rate (`key_stft_frame_size`:
+8192 points at 32–48 kHz, 16384 at 88.2–96 kHz). The paragraph below describes
+the v12 state.
 
 **What Sustain has (after v12).** Key runs its own 8192-point STFT
 (`KEY_STFT_FRAME_SIZE`, decoupled from the 2048-point tempogram in v8), then a

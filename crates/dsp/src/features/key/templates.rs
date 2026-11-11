@@ -6,7 +6,7 @@
 //! highest wins. The weights are learned, not taken from listening tests:
 //! they are the multinomial logistic regression that best tells the 24 keys
 //! apart on labelled tracks, as Sustain's own key front end measures them —
-//! the overtones of every note landing on its fifth, the weight of the
+//! the overtones every note adds to its fifth and third, the weight of the
 //! bass, the spread of each spectral peak. One weight vector per mode is
 //! learned, tonic first, and rotated onto each tonic, so every key of a mode
 //! is told apart by the same rule.
@@ -19,10 +19,10 @@
 //!
 //! # Provenance
 //!
-//! Learned by `analysis-bench learn-key-weights` from 3,485 human-labelled
+//! Learned by `analysis-bench learn-key-weights` from 3,486 human-labelled
 //! tracks: GiantSteps Key (604, Beatport dance music), GiantSteps MTG Key
 //! (1,159 confident single-key labels, Beatport dance music) and FMAKv2's
-//! `fma_medium` subset (1,722, seventeen genres). See
+//! `fma_medium` subset (1,723, seventeen genres). See
 //! `docs/analysis-benchmark-corpora.md`. They must be learned again
 //! whenever the key front end (HPSS, HPCP, tuning) changes.
 //!
@@ -34,12 +34,12 @@
 
 /// The major weights, tonic first (C major).
 const MAJOR_WEIGHTS: [f32; 12] = [
-    2.758, -1.247, -0.216, -1.026, 1.264, 0.423, -0.850, 1.254, -0.593, -0.366, -0.836, -0.334,
+    2.134, -1.050, -0.033, -0.731, 0.998, -0.095, -0.638, 1.353, -0.687, -0.229, -0.798, -0.007,
 ];
 
 /// The minor weights, tonic first (C minor).
 const MINOR_WEIGHTS: [f32; 12] = [
-    2.911, -0.952, -0.412, 1.033, -0.314, -0.751, -0.541, 1.214, -0.266, -1.348, -0.135, -0.669,
+    1.902, -0.859, -0.146, 0.645, -0.447, -0.586, -0.484, 1.601, -0.442, -1.014, 0.118, -0.504,
 ];
 
 /// Key templates for all 24 keys

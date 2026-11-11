@@ -1243,3 +1243,57 @@ the same. Not shipped.
 the key's CPU. The extra memory is the decoded track, which a full run
 decodes for tempo anyway; the analysis runs in the background at low
 priority.
+
+## 2026-11-11 — key v17 (one tuning per track, no harmonic summation, rate-scaled frame)
+
+Under #288, after a review of the v16 front end. Three corrections, one
+version, the templates learned again for them (`learn-key-weights`, 3,486
+tracks; one FMAK clip skipped by v16 now yields tonal chroma):
+
+- **One tuning per track.** Reading the track in 120 s segments gave each
+  segment its own tuning estimate. Tuning is a direction on a circle, so a
+  track close to a quarter-tone off can estimate +0.45 in one segment and
+  −0.45 in the next, and bin the same note a semitone apart. The segments'
+  tuning evidence now adds up to the track's, and each segment's frames turn
+  by the whole semitones between its estimate and the track's
+  (`Hpcp::into_frames_tuned_to`; exact, nothing is recomputed).
+- **No harmonic summation.** Every peak credited its eight subharmonics;
+  the 3rd and 6th land on its fifth below, at 0.36 and 0.08 of its own
+  weight. It was a
+  clean win in v11, against fixed profiles; the templates learned since v16
+  weigh the overtones themselves, and without it the scores do not drop
+  anywhere.
+- **The key frame scales with the sample rate** (`key_stft_frame_size`):
+  8192 points from 32 to 48 kHz, 16384 at 88.2 and 96 kHz, 32768 at
+  192 kHz. A fixed 8192 frame read 96 kHz files with bins twice as wide as
+  those the templates are learned on; 2.7 % of the maintainer's library is
+  88.2 kHz or above.
+
+| Set | Tracks | v16 exact / strict / pair F1 | **v17 exact / strict / pair F1** |
+| --- | ---: | --- | --- |
+| GiantSteps Key (held out) | 604 | 61.1 / 79.8 / 60.0 % | **62.3 / 81.0 / 61.1 %** |
+| GiantSteps MTG Key (held out) | 1,159 | 57.9 / 74.7 / 54.4 % | **58.5 / 74.7 / 54.9 %** |
+| FMAK `fma_medium` (held out) | 1,723 | 52.1 / 75.6 / 54.1 % | **53.6 / 76.8 / 54.8 %** |
+| Library tag keys (rekordbox 72.9 / 85.7 / 73.1 %) | 377 | 75.9 / 88.6 / 77.2 % | 74.8 / **89.4** / 77.1 % |
+| — Beatport purchases (rekordbox 71.1 / 84.4 / 70.3 %) | 128 | 73.4 / 85.2 / 73.4 % | 73.4 / **85.9 / 73.8 %** |
+| Library, agreement with rekordbox | 2,500 | 67.8 / 85.7 % | 67.4 / 85.8 % |
+| Private goldish | 18 | 14 / 18 | 14 / 18 |
+| Private silver | 8 | 2 / 5 | 2 / 4 |
+
+Public held-out numbers rise on every set (fitted in Python on the dumped
+log shares; the Rust learner's weights match the Python fit to 0.001). On
+the library the differences are within noise: 4 tag-key tracks become
+strict-compatible and 1 stops. One silver track (a low-confidence
+reference) moves from the relative key to an incompatible one. The
+synthetic A-Dorian vamp now reads D major (v16: D minor); the harmonic-minor
+cadence and the triads still pass. Predicted minor share: 91.0 % on the
+rekordbox set (rekordbox 83.1 %).
+
+**Cost.** The key task alone on the same 300 library tracks: 530 s CPU
+(v16: 665 s) and 281 MB peak RSS, run alongside three other bench
+processes. Most of the saving is the harmonic fan-out.
+
+Pair F1 is the measure the product needs: over every pair of tracks,
+whether the two shown keys are compatible exactly when the two reference
+keys are. A fifth or relative error passes strict but still costs about
+half of a gross error in pair F1.

@@ -25,22 +25,19 @@
 //!    bins within ±[`PITCH_WINDOW_SEMITONES`] of it, weighted by `cos²(·)`, so a
 //!    peak landing between two bins splits smoothly across them and one landing
 //!    on a bin lands fully on it.
-//! 4. **Harmonic summation** — each peak also credits the pitch classes of its
-//!    first [`N_HARMONICS`] *subharmonics* (`freq / h`), decayed by
-//!    [`HARMONIC_DECAY`] per harmonic, folding overtone energy back onto the
-//!    fundamentals it could belong to. This concentrates each played note on
-//!    its true pitch class and counters the systematic leak whereby a tonic's
-//!    5th harmonic (its major third) inflates the major-third bin.
-//! 5. **Global tuning estimation** — before binning, the recording's reference
-//!    pitch is estimated once (the energy-weighted circular mean of every
-//!    peak's deviation from the 440 Hz grid; see [`estimate_tuning`]) and
-//!    subtracted from every pitch class, so audio mastered off 440 is not
-//!    smeared across two bins.
+//! 4. **Tuning estimation** — before binning, the recording's reference pitch
+//!    is estimated over the whole spectrogram (the energy-weighted circular
+//!    mean of every peak's deviation from the 440 Hz grid; see
+//!    [`TuningEvidence`]) and subtracted from every pitch class, so audio
+//!    mastered off 440 is not smeared across two bins. The evidence is
+//!    returned with the frames, so a recording analysed in pieces can bring
+//!    every piece onto the tuning of the whole ([`Hpcp::into_frames_tuned_to`]).
 //!
-//! Sub-semitone resolution and per-frame max-normalization — the remaining
-//! elements of a full HPCP — are intentionally *not* here; each is a separable
-//! change to be measured on its own. The output contract matches the vendored
-//! path exactly: one
+//! Harmonic summation (crediting each peak's subharmonics), sub-semitone
+//! resolution and per-frame max-normalization — the remaining elements of a
+//! full HPCP — are intentionally *not* here. Harmonic summation was, until key
+//! analyzer v17: it blurred every peak onto its fifth below and measured no
+//! better without. The output contract matches the vendored path exactly: one
 //! 12-element, L2-normalized pitch-class vector per frame, on the same
 //! pitch-class grid (shared [`A4_FREQ`]/[`SEMITONE_OFFSET`]) and the same
 //! `[`[CHROMA_FMIN_HZ]`, `[CHROMA_FMAX_HZ]`]` band, so [`detect_key`] consumes
@@ -73,29 +70,96 @@ const EPSILON: f32 = 1e-10;
 /// rather than fitted to any corpus.
 const PITCH_WINDOW_SEMITONES: f32 = 1.0;
 
-/// Number of harmonics folded by the harmonic-summation step. Each spectral
-/// peak credits the pitch classes of its first `N_HARMONICS` *subharmonics*
-/// (`freq / h`, h = 1..=`N_HARMONICS`), attributing the peak's energy back to
-/// the fundamentals it could be an overtone of. Eight is the canonical
-/// HPCP / harmonic-salience depth (Gómez 2006); with [`HARMONIC_DECAY`] the
-/// eighth term carries `0.6^7 ≈ 0.028` of the energy, so deeper folding is
-/// negligible. A fixed literature value, not tuned to any corpus.
-const N_HARMONICS: usize = 8;
+/// How far a recording's peaks sit from the equal-tempered 440 Hz grid: the
+/// resultant of `energy · e^{i·2π·deviation}` over every spectral peak, where
+/// `deviation` is the peak's distance in semitones from its nearest note.
+///
+/// A true vector sum, so it is robust to the ±0.5-semitone wrap (a deviation
+/// of +0.49 and one of −0.49 are nearly the same direction, not opposite),
+/// and evidence from several pieces of a recording adds up to the evidence of
+/// the whole (`+`, [`Iterator::sum`]). It is parameter-free and self-zeroing:
+/// an already-on-grid signal averages to ≈ 0.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TuningEvidence {
+    re: f32,
+    im: f32,
+}
 
-/// Geometric decay of the harmonic-summation weight: the h-th subharmonic
-/// contributes `HARMONIC_DECAY^(h-1)` of the peak's energy, so `h = 1` (the
-/// peak's own pitch class) keeps full weight and reproduces the core term
-/// exactly. `0.6` is the standard harmonic-weighting decay (Gómez 2006); like
-/// [`N_HARMONICS`] it is a fixed literature value, not fitted to any corpus.
-const HARMONIC_DECAY: f32 = 0.6;
+impl TuningEvidence {
+    /// The tuning offset the evidence points to, in semitones ∈ [−0.5, 0.5]:
+    /// the circular mean of the peaks' deviations. `0` when there is no peak
+    /// energy to measure.
+    pub fn semitones(self) -> f32 {
+        if self.re * self.re + self.im * self.im < EPSILON {
+            0.0
+        } else {
+            self.im.atan2(self.re) / std::f32::consts::TAU
+        }
+    }
+}
+
+impl std::ops::Add for TuningEvidence {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            re: self.re + other.re,
+            im: self.im + other.im,
+        }
+    }
+}
+
+impl std::iter::Sum for TuningEvidence {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::default(), std::ops::Add::add)
+    }
+}
+
+/// The HPCP frames of a spectrogram, and the tuning they are binned on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Hpcp {
+    /// One 12-element, L2-normalized pitch-class vector per spectrogram frame.
+    pub frames: Vec<Vec<f32>>,
+    /// The spectrogram's own tuning evidence, whose
+    /// [`semitones`](TuningEvidence::semitones) every frame is binned on.
+    pub tuning: TuningEvidence,
+}
+
+impl Hpcp {
+    /// The frames, on the pitch-class grid of the tuning `reference` points
+    /// to rather than their own.
+    ///
+    /// A tuning is a direction on a circle, so its offset is only defined up
+    /// to a whole semitone: two pieces of one recording a little under a
+    /// quarter-tone sharp can estimate +0.45 and −0.45 (≡ +0.55) and bin the
+    /// same note one pitch class apart. Each piece keeps its own offset, but
+    /// the one congruent to it nearest `reference`'s: the frames turn by the
+    /// whole number of semitones between the two. Binning on an offset a
+    /// whole `k` semitones lower is exactly the same profile turned by `k`
+    /// bins, so nothing is recomputed. `reference` is typically the sum of
+    /// every piece's evidence.
+    pub fn into_frames_tuned_to(self, reference: TuningEvidence) -> Vec<Vec<f32>> {
+        let semitones = (self.tuning.semitones() - reference.semitones()).round();
+        let shift = semitones.rem_euclid(12.0) as usize;
+        let mut frames = self.frames;
+        if shift != 0 {
+            for frame in &mut frames {
+                let bins = frame.len().max(1);
+                frame.rotate_right(shift % bins);
+            }
+        }
+        frames
+    }
+}
 
 /// Compute a Harmonic Pitch Class Profile for each frame of a magnitude
 /// spectrogram.
 ///
 /// Returns one 12-element, L2-normalized pitch-class vector per input frame —
 /// the same shape and normalization as
-/// [`extract_chroma_from_spectrogram_with_options`], so it is a drop-in chroma
-/// source for [`detect_key`]. See the module docs for the algorithm.
+/// [`extract_chroma_from_spectrogram_with_options`], so the frames are a
+/// drop-in chroma source for [`detect_key`] — with the tuning evidence they
+/// are binned on. See the module docs for the algorithm.
 ///
 /// `sample_rate` and `fft_size` are the parameters the spectrogram was computed
 /// with; they set the bin→frequency mapping (`bin · sample_rate / fft_size`).
@@ -112,9 +176,9 @@ pub fn compute_hpcp(
     spectrogram: &[Vec<f32>],
     sample_rate: u32,
     fft_size: usize,
-) -> Result<Vec<Vec<f32>>, AnalysisError> {
+) -> Result<Hpcp, AnalysisError> {
     if spectrogram.is_empty() {
-        return Ok(Vec::new());
+        return Ok(Hpcp::default());
     }
     let n_bins = spectrogram[0].len();
     if n_bins == 0 {
@@ -137,14 +201,14 @@ pub fn compute_hpcp(
     let fmax = CHROMA_FMAX_HZ.min(sample_rate as f32 / 2.0);
 
     // Estimate the recording's tuning once over the whole spectrogram, then
-    // bind every frame's pitch-class grid to it (see `estimate_tuning`).
-    let tuning = estimate_tuning(spectrogram, freq_resolution, fmax);
-
-    let mut out = Vec::with_capacity(spectrogram.len());
-    for frame in spectrogram {
-        out.push(frame_to_hpcp(frame, freq_resolution, fmax, tuning));
-    }
-    Ok(out)
+    // bind every frame's pitch-class grid to it (see `TuningEvidence`).
+    let tuning = tuning_evidence(spectrogram, freq_resolution, fmax);
+    let semitones = tuning.semitones();
+    let frames = spectrogram
+        .iter()
+        .map(|frame| frame_to_hpcp(frame, freq_resolution, fmax, semitones))
+        .collect();
+    Ok(Hpcp { frames, tuning })
 }
 
 /// Invoke `visit(freq, energy)` for every spectral peak of `magnitude_frame`.
@@ -152,7 +216,7 @@ pub fn compute_hpcp(
 /// A peak is an interior local maximum, refined to a sub-bin frequency and
 /// amplitude by quadratic (QIFFT) interpolation and kept only if it falls inside
 /// the `[`[CHROMA_FMIN_HZ]`, `fmax`]` band; `energy` is that amplitude squared.
-/// This is the single source of peak picking shared by [`estimate_tuning`] (the
+/// This is the single source of peak picking shared by [`tuning_evidence`] (the
 /// tuning pass) and [`frame_to_hpcp`] (the binning pass), so the two can never
 /// disagree on what counts as a peak.
 fn for_each_peak(
@@ -195,46 +259,32 @@ fn for_each_peak(
             continue;
         }
 
-        // Interpolated peak amplitude; floored at the sampled magnitude so the
-        // parabolic correction can only refine, never invent a larger peak.
+        // Interpolated peak amplitude, floored at zero against degenerate
+        // inputs.
         let amplitude = (mid - 0.25 * (left - right) * offset).max(0.0);
         visit(freq, amplitude * amplitude);
     }
 }
 
-/// Estimate a global tuning offset, in semitones ∈ [−0.5, 0.5], as the
-/// energy-weighted **circular mean** of every peak's deviation from the
-/// equal-tempered 440 Hz grid. Subtracting it from each pitch class (in
-/// [`frame_to_hpcp`]) re-references the profile to the recording's actual
-/// concert pitch instead of assuming 440 — so audio mastered or recorded off
-/// 440 no longer smears each note across two bins and blunts the template match.
-///
-/// The estimate is the resultant of `energy · e^{i·2π·dev}`: a true vector sum,
-/// so it is robust to the ±0.5-semitone wrap (a deviation of +0.49 and one of
-/// −0.49 are nearly the same direction, not opposite). It is **parameter-free**
-/// and self-zeroing — an already-on-grid signal averages to ≈ 0, leaving such
-/// material untouched — and returns 0 when there is no peak energy to measure.
-fn estimate_tuning(spectrogram: &[Vec<f32>], freq_resolution: f32, fmax: f32) -> f32 {
-    let mut re = 0.0f32;
-    let mut im = 0.0f32;
+/// The [`TuningEvidence`] of every peak of `spectrogram`. Subtracting its
+/// offset from each pitch class (in [`frame_to_hpcp`]) re-references the
+/// profile to the recording's actual concert pitch instead of assuming 440.
+fn tuning_evidence(spectrogram: &[Vec<f32>], freq_resolution: f32, fmax: f32) -> TuningEvidence {
+    let mut evidence = TuningEvidence::default();
     for frame in spectrogram {
         for_each_peak(frame, freq_resolution, fmax, |freq, energy| {
             let position = 12.0 * (freq / A4_FREQ).log2() + SEMITONE_OFFSET;
             let deviation = position - position.round(); // nearest-semitone error
             let phase = std::f32::consts::TAU * deviation;
-            re += energy * phase.cos();
-            im += energy * phase.sin();
+            evidence.re += energy * phase.cos();
+            evidence.im += energy * phase.sin();
         });
     }
-    if re * re + im * im < EPSILON {
-        0.0
-    } else {
-        im.atan2(re) / std::f32::consts::TAU
-    }
+    evidence
 }
 
 /// Map one magnitude frame to a 12-element, L2-normalized HPCP vector, with the
-/// pitch-class grid shifted by `tuning` semitones (see [`estimate_tuning`]).
+/// pitch-class grid shifted by `tuning` semitones (see [`TuningEvidence`]).
 fn frame_to_hpcp(
     magnitude_frame: &[f32],
     freq_resolution: f32,
@@ -244,48 +294,27 @@ fn frame_to_hpcp(
     let mut hpcp = [0.0f32; 12];
 
     for_each_peak(magnitude_frame, freq_resolution, fmax, |freq, energy| {
-        // Harmonic summation. A peak at `freq` is, physically, a candidate h-th
-        // harmonic of a fundamental at `freq / h`, so we credit each
-        // subharmonic's pitch class with the peak's energy scaled by a
-        // geometric decay — folding overtone energy back onto the fundamentals
-        // it could belong to. `h = 1` is the peak's own pitch class at full
-        // weight (the core contribution); the `h ≥ 2` terms pull, e.g., a
-        // tonic's 5th-harmonic (major-third) and 3rd-harmonic (fifth) leakage
-        // back toward the tonic, raising the contrast between played scale
-        // degrees and spurious overtone bins. `freq / h` stays positive and its
-        // pitch class is octave-invariant, so no band re-check is needed: the
-        // band filter above already decided this *peak* is trustworthy.
-        let mut harmonic_weight = 1.0;
-        for h in 1..=N_HARMONICS {
-            // Pitch class of the subharmonic on the shared grid (index 0 = C),
-            // re-referenced by the estimated `tuning`: the `+ SEMITONE_OFFSET`
-            // places A4 at pitch class 9 (matching the key templates) and the
-            // `- tuning` shifts the whole grid onto the recording's concert
-            // pitch. The shift is uniform, so it applies to every subharmonic.
-            let sub_freq = freq / h as f32;
-            let pitch_class =
-                (12.0 * (sub_freq / A4_FREQ).log2() + SEMITONE_OFFSET - tuning).rem_euclid(12.0);
-            let contribution = energy * harmonic_weight;
+        // Pitch class of the peak on the shared grid (index 0 = C),
+        // re-referenced by the estimated `tuning`: the `+ SEMITONE_OFFSET`
+        // places A4 at pitch class 9 (matching the key templates) and the
+        // `- tuning` shifts the whole grid onto the recording's concert pitch.
+        let pitch_class =
+            (12.0 * (freq / A4_FREQ).log2() + SEMITONE_OFFSET - tuning).rem_euclid(12.0);
 
-            // The squared-cosine window spans strictly less than one semitone,
-            // so only the two bins straddling `pitch_class` can receive energy;
-            // every other bin a full 0..12 scan would visit fails the distance
-            // test and adds nothing. Touching just those two — `floor` and its
-            // circular successor — is the identical sum on the identical bins,
-            // and keeps the 8× harmonic fan-out affordable. The two indices are
-            // always distinct (`floor ∈ 0..=11`), so no bin is added twice.
-            let lo = pitch_class.floor() as usize % 12;
-            for bin in [lo, (lo + 1) % 12] {
-                let raw = (pitch_class - bin as f32).abs();
-                let distance = raw.min(12.0 - raw); // circular pitch-class distance
-                if distance < PITCH_WINDOW_SEMITONES {
-                    let phase = std::f32::consts::FRAC_PI_2 * distance / PITCH_WINDOW_SEMITONES;
-                    let weight = phase.cos() * phase.cos();
-                    hpcp[bin] += contribution * weight;
-                }
+        // The squared-cosine window spans strictly less than one semitone, so
+        // only the two bins straddling `pitch_class` can receive energy; every
+        // other bin a full 0..12 scan would visit fails the distance test and
+        // adds nothing. The two indices are always distinct (`floor ∈ 0..=11`),
+        // so no bin is added twice.
+        let lo = pitch_class.floor() as usize % 12;
+        for bin in [lo, (lo + 1) % 12] {
+            let raw = (pitch_class - bin as f32).abs();
+            let distance = raw.min(12.0 - raw); // circular pitch-class distance
+            if distance < PITCH_WINDOW_SEMITONES {
+                let phase = std::f32::consts::FRAC_PI_2 * distance / PITCH_WINDOW_SEMITONES;
+                let weight = phase.cos() * phase.cos();
+                hpcp[bin] += energy * weight;
             }
-
-            harmonic_weight *= HARMONIC_DECAY;
         }
     });
 
@@ -322,7 +351,10 @@ mod tests {
 
     #[test]
     fn empty_spectrogram_is_empty() {
-        assert!(compute_hpcp(&[], SAMPLE_RATE, FFT_SIZE).unwrap().is_empty());
+        assert!(compute_hpcp(&[], SAMPLE_RATE, FFT_SIZE)
+            .unwrap()
+            .frames
+            .is_empty());
     }
 
     #[test]
@@ -339,7 +371,7 @@ mod tests {
     #[test]
     fn output_preserves_shape_and_is_l2_normalized() {
         let spec = vec![frame_with_peak(bin_of(440.0)); 5];
-        let out = compute_hpcp(&spec, SAMPLE_RATE, FFT_SIZE).unwrap();
+        let out = compute_hpcp(&spec, SAMPLE_RATE, FFT_SIZE).unwrap().frames;
         assert_eq!(out.len(), 5);
         for vector in &out {
             assert_eq!(vector.len(), 12);
@@ -352,7 +384,7 @@ mod tests {
     fn pure_tone_resolves_to_its_pitch_class() {
         // A single peak at A4 (440 Hz) must put pitch class 9 (A) on top.
         let spec = vec![frame_with_peak(bin_of(440.0))];
-        let hpcp = &compute_hpcp(&spec, SAMPLE_RATE, FFT_SIZE).unwrap()[0];
+        let hpcp = &compute_hpcp(&spec, SAMPLE_RATE, FFT_SIZE).unwrap().frames[0];
         let top = hpcp
             .iter()
             .enumerate()
@@ -363,7 +395,7 @@ mod tests {
 
         // Middle C (≈261.63 Hz) must put pitch class 0 (C) on top.
         let spec_c = vec![frame_with_peak(bin_of(261.63))];
-        let hpcp_c = &compute_hpcp(&spec_c, SAMPLE_RATE, FFT_SIZE).unwrap()[0];
+        let hpcp_c = &compute_hpcp(&spec_c, SAMPLE_RATE, FFT_SIZE).unwrap().frames[0];
         let top_c = hpcp_c
             .iter()
             .enumerate()
@@ -379,7 +411,9 @@ mod tests {
         // HPCP built only from peaks is all-zero — confirming the noise floor
         // between partials never contributes (the core HPCP distinction).
         let frame: Vec<f32> = (0..FFT_SIZE / 2 + 1).map(|i| i as f32).collect();
-        let hpcp = &compute_hpcp(&[frame], SAMPLE_RATE, FFT_SIZE).unwrap()[0];
+        let hpcp = &compute_hpcp(&[frame], SAMPLE_RATE, FFT_SIZE)
+            .unwrap()
+            .frames[0];
         assert!(
             hpcp.iter().all(|&x| x == 0.0),
             "ramp produced a non-empty profile: {hpcp:?}"
@@ -389,9 +423,7 @@ mod tests {
     #[test]
     fn peak_between_bins_splits_across_neighbors() {
         // A peak whose frequency sits a quarter-tone above A splits across
-        // A (9) and A#/Bb (10): octave-related subharmonics (`freq/2`, `/4`,
-        // `/8`) share that same off-grid pitch class, so the fundamental's two
-        // nearest bins stay the two largest of the profile. Exercised against
+        // A (9) and A#/Bb (10), its two nearest bins. Exercised against
         // `frame_to_hpcp` with `tuning = 0` so the window is isolated from the
         // tuning estimator (which would otherwise re-center a lone off-grid
         // peak — that behavior is covered by `tuning_recenters_off_grid_peaks`).
@@ -410,7 +442,7 @@ mod tests {
                 .copied()
                 .collect::<std::collections::BTreeSet<_>>(),
             [9usize, 10].into_iter().collect(),
-            "fundamental's two nearest bins are not the two largest: {hpcp:?}"
+            "the peak's two nearest bins are not the two largest: {hpcp:?}"
         );
     }
 
@@ -435,12 +467,14 @@ mod tests {
         }
         let freq_resolution = SAMPLE_RATE as f32 / FFT_SIZE as f32;
         let fmax = CHROMA_FMAX_HZ.min(SAMPLE_RATE as f32 / 2.0);
-        let tuning = estimate_tuning(&[frame.clone()], freq_resolution, fmax);
+        let tuning = tuning_evidence(&[frame.clone()], freq_resolution, fmax).semitones();
         assert!(
             (tuning - detune).abs() < 0.05,
             "tuning estimate {tuning} did not recover the +{detune} semitone detune"
         );
-        let hpcp = &compute_hpcp(&[frame], SAMPLE_RATE, FFT_SIZE).unwrap()[0];
+        let hpcp = &compute_hpcp(&[frame], SAMPLE_RATE, FFT_SIZE)
+            .unwrap()
+            .frames[0];
         let top = hpcp
             .iter()
             .enumerate()
@@ -470,37 +504,58 @@ mod tests {
         }
         let freq_resolution = SAMPLE_RATE as f32 / FFT_SIZE as f32;
         let fmax = CHROMA_FMAX_HZ.min(SAMPLE_RATE as f32 / 2.0);
-        let tuning = estimate_tuning(&[frame], freq_resolution, fmax);
+        let tuning = tuning_evidence(&[frame], freq_resolution, fmax).semitones();
         assert!(
             tuning.abs() < 0.05,
             "in-tune signal produced tuning {tuning}"
         );
     }
 
-    #[test]
-    fn harmonic_summation_credits_subharmonics() {
-        // A single A4 peak must, under harmonic summation, energize the pitch
-        // class of its 3rd subharmonic (A4/3 ≈ 146.7 Hz = D) — which is silent
-        // under core-only HPCP. The fundamental A (9) still dominates.
-        let spec = vec![frame_with_peak(bin_of(440.0))];
-        let hpcp = &compute_hpcp(&spec, SAMPLE_RATE, FFT_SIZE).unwrap()[0];
-        assert!(
-            hpcp[2] > 0.0,
-            "3rd subharmonic (D) not credited — harmonic summation inactive: {hpcp:?}"
-        );
-        let top = hpcp
+    /// A frame holding four octaves of C, detuned by `detune` semitones.
+    fn detuned_c_frame(detune: f32) -> Vec<f32> {
+        let note = 261.63 * 2.0f32.powf(detune / 12.0);
+        let mut frame = vec![0.0f32; FFT_SIZE / 2 + 1];
+        for octave in 0..4 {
+            let b = bin_of(note * 2.0f32.powi(octave));
+            frame[b - 1] += 0.5;
+            frame[b] += 1.0;
+            frame[b + 1] += 0.5;
+        }
+        frame
+    }
+
+    fn top_bin(frame: &[f32]) -> usize {
+        frame
             .iter()
             .enumerate()
             .max_by(|a, b| a.1.total_cmp(b.1))
             .unwrap()
-            .0;
-        assert_eq!(
-            top, 9,
-            "fundamental A no longer dominant: pitch class {top}"
-        );
-        assert!(
-            hpcp[9] > hpcp[2],
-            "fundamental A not above its subharmonic D"
-        );
+            .0
+    }
+
+    #[test]
+    fn pieces_tuned_either_side_of_the_wrap_meet_on_one_grid() {
+        // Two pieces of one recording about a quarter-tone sharp of C: one
+        // estimates +0.4 and bins its note on C, the other estimates −0.4
+        // (+0.6) and bins the same note on C#. Tuned to their summed evidence,
+        // which the louder first piece pulls just above +0.4, both land on the
+        // same pitch class.
+        let first = compute_hpcp(&vec![detuned_c_frame(0.4); 2], SAMPLE_RATE, FFT_SIZE).unwrap();
+        let second = compute_hpcp(&[detuned_c_frame(0.6)], SAMPLE_RATE, FFT_SIZE).unwrap();
+        assert_eq!(top_bin(&first.frames[0]), 0);
+        assert_eq!(top_bin(&second.frames[0]), 1);
+
+        let track = first.tuning + second.tuning;
+        let first = first.into_frames_tuned_to(track);
+        let second = second.into_frames_tuned_to(track);
+        assert_eq!(top_bin(&first[0]), 0);
+        assert_eq!(top_bin(&second[0]), 0, "{:?}", second[0]);
+    }
+
+    #[test]
+    fn a_piece_tuned_like_the_whole_is_unchanged() {
+        let hpcp = compute_hpcp(&[detuned_c_frame(0.2)], SAMPLE_RATE, FFT_SIZE).unwrap();
+        let tuning = hpcp.tuning;
+        assert_eq!(hpcp.clone().into_frames_tuned_to(tuning), hpcp.frames);
     }
 }

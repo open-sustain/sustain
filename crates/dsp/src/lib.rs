@@ -29,8 +29,9 @@
 //! * [`emphasize_harmonic`] — *Sustain-authored* median-filter HPSS that
 //!   attenuates percussive energy in a spectrogram before chroma.
 //! * [`compute_hpcp`] — *Sustain-authored* core Harmonic Pitch Class Profile
-//!   (peak-picking + squared-cosine pitch-class weighting); the chroma source
-//!   the key detector uses.
+//!   (peak-picking + squared-cosine pitch-class weighting + tuning); the
+//!   chroma source the key detector uses. Returns an [`Hpcp`] carrying its
+//!   [`TuningEvidence`], so pieces of one recording can share one tuning.
 //! * [`extract_chroma_from_spectrogram_with_options`] + [`detect_key`] +
 //!   [`KeyTemplates`] — chroma → key detection by learned templates weighing
 //!   the [`pitch_class_log_shares`]
@@ -74,7 +75,7 @@ pub use error::AnalysisError;
 pub use features::chroma::extractor::{
     compute_stft, extract_chroma_from_spectrogram_with_options, CHROMA_FMAX_HZ,
 };
-pub use features::chroma::hpcp::compute_hpcp;
+pub use features::chroma::hpcp::{compute_hpcp, Hpcp, TuningEvidence};
 pub use features::chroma::hpss::emphasize_harmonic;
 pub use features::key::detector::{detect_key, pitch_class_log_shares};
 pub use features::key::templates::KeyTemplates;

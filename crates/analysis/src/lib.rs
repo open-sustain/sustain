@@ -101,8 +101,8 @@ use std::time::Duration;
 
 use decode::{DecodedAudio, decode_full, decode_window};
 use sustain_dsp::{
-    CHROMA_FMAX_HZ, KeyTemplates, NormalizationConfig, NormalizationMethod, compute_hpcp,
-    compute_stft, detect_key, detect_spectral_flux_onsets, emphasize_harmonic,
+    CHROMA_FMAX_HZ, Hpcp, KeyTemplates, NormalizationConfig, NormalizationMethod, TuningEvidence,
+    compute_hpcp, compute_stft, detect_key, detect_spectral_flux_onsets, emphasize_harmonic,
     estimate_bpm_tempogram, normalize, pitch_class_log_shares,
 };
 
@@ -172,8 +172,8 @@ pub use waveform::WaveformTiers;
 /// (`KEY_STFT_FRAME_SIZE`, 8192-point) instead of reusing the 2048-point
 /// tempogram STFT. The tempo frame's ~21.5 Hz bins cannot separate
 /// adjacent semitones below ~360 Hz, smearing the low-register harmonic
-/// energy chroma depends on; the 8192-point frame's ~5.4 Hz bins resolve
-/// semitones down to ~90 Hz. Scoring, profiles, and the chroma mapping
+/// energy chroma depends on; the 8192-point frame's ~5.4 Hz bins keep
+/// adjacent semitones' peaks two bins apart down to ~180 Hz. Scoring, profiles, and the chroma mapping
 /// are unchanged — only the spectrogram feeding chroma is finer — but the
 /// chroma, and so the detected key, change for many tracks, which must be
 /// re-attempted under the same `FILL_*_IF_NULL` wipe-and-rescan policy.
@@ -276,6 +276,23 @@ pub use waveform::WaveformTiers;
 /// stored one, a key imported or typed is kept. BPM and audio are
 /// untouched.
 ///
+/// Key version 17: three corrections to the key front end, the templates
+/// learned again for it. The tuning is estimated over the whole track:
+/// read in segments, each segment had its own, and two segments either
+/// side of a quarter-tone could bin the same note a semitone apart; each
+/// segment now joins the grid of the track's tuning
+/// (`Hpcp::into_frames_tuned_to`). Harmonic summation is gone: it blurred
+/// every peak onto its fifth below, and the learned templates already
+/// weigh the overtones. The key frame scales with the sample rate
+/// (`key_stft_frame_size`), so a 96 kHz file is no longer read with bins
+/// twice as wide. Held out, exact / strict agreement rose from 61.1 / 79.8
+/// to 62.3 / 81.0 % on GiantSteps Key, 57.9 / 74.7 to 58.5 / 74.7 % on
+/// GiantSteps MTG Key and 52.1 / 75.6 to 53.6 / 76.8 % on FMAK; on the
+/// 377 library tracks whose files carry another tool's key, strict
+/// agreement with it went from 88.6 to 89.4 % (rekordbox: 85.7 %). The key
+/// takes about a fifth less CPU. Every key Sustain measured is measured
+/// again.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -295,7 +312,7 @@ pub use waveform::WaveformTiers;
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
 pub const ANALYZER_VERSIONS: AnalyzerVersions = AnalyzerVersions {
     bpm: 15,
-    key: 16,
+    key: 17,
     audio: 15,
 };
 
@@ -398,7 +415,7 @@ const MIN_SAMPLES_FOR_ANALYSIS: usize = 44_100;
 /// STFT frame size for the tempogram. Matches stratum-dsp's own
 /// default (`AnalysisConfig::frame_size`); short enough to keep onset
 /// timing sharp for the novelty curve. Key detection no longer shares
-/// this transform — it has its own larger `KEY_STFT_FRAME_SIZE` (below)
+/// this transform — it has its own larger frame (`key_stft_frame_size`, below)
 /// for low-register pitch resolution.
 const STFT_FRAME_SIZE: usize = 2048;
 
@@ -406,23 +423,37 @@ const STFT_FRAME_SIZE: usize = 2048;
 /// the tempogram's novelty curve was tuned against.
 const STFT_HOP_SIZE: usize = 512;
 
-/// STFT frame size for key/chroma detection, decoupled from the tempo
-/// STFT (`STFT_FRAME_SIZE`). The two pull in opposite directions: the
-/// tempogram wants a short frame so onset timing stays sharp, whereas
-/// chroma wants frequency resolution fine enough to separate adjacent
-/// semitones in the low register. At 44.1 kHz an 8192-point transform
-/// yields ~5.4 Hz bins, which resolves semitones down to ~90 Hz; the
-/// 2048-point tempo frame (~21.5 Hz bins) cannot distinguish semitones
-/// below ~360 Hz, smearing the bass/low-mid range — most of the chroma
-/// band, which starts at 100 Hz — where much of a track's harmonic root
-/// energy lives.
-const KEY_STFT_FRAME_SIZE: usize = 8192;
+/// STFT frame size for key/chroma detection at
+/// `KEY_STFT_REFERENCE_SAMPLE_RATE`, decoupled from the tempo STFT
+/// (`STFT_FRAME_SIZE`). The two pull in opposite directions: the tempogram
+/// wants a short frame so onset timing stays sharp, whereas chroma wants
+/// frequency resolution fine enough to separate adjacent semitones in the
+/// low register. At 44.1 kHz an 8192-point transform yields ~5.4 Hz bins:
+/// the peaks of adjacent semitones stay two bins apart down to ~180 Hz and
+/// a whole Hann main lobe (four bins) apart above ~360 Hz. The 2048-point
+/// tempo frame (~21.5 Hz bins) blurs them below ~1.4 kHz.
+const KEY_STFT_REFERENCE_FRAME_SIZE: usize = 8192;
 
-/// STFT hop size for key/chroma detection. Frame/4 = 75% overlap — the
-/// same overlap fraction as the tempo STFT and the standard chroma hop.
-/// Derived from the frame size rather than set independently, so the key
-/// front-end carries no hop tuning of its own.
-const KEY_STFT_HOP_SIZE: usize = KEY_STFT_FRAME_SIZE / 4;
+/// The sample rate `KEY_STFT_REFERENCE_FRAME_SIZE` is meant for: that of
+/// the corpora the key templates are learned from.
+const KEY_STFT_REFERENCE_SAMPLE_RATE: f64 = 44_100.0;
+
+/// The key STFT frame size at `sample_rate`: the power of two nearest to
+/// the reference frame's duration, so the bins stay within a factor √2 of
+/// the ~5.4 Hz the key templates are learned on — 8192 points at 32 to
+/// 48 kHz, 16384 at 88.2 and 96 kHz. A fixed 8192-point frame would give
+/// a 96 kHz file bins twice as wide.
+fn key_stft_frame_size(sample_rate: u32) -> usize {
+    let octaves = (f64::from(sample_rate) / KEY_STFT_REFERENCE_SAMPLE_RATE)
+        .log2()
+        .round()
+        .clamp(-5.0, 5.0) as i32;
+    if octaves >= 0 {
+        KEY_STFT_REFERENCE_FRAME_SIZE << octaves
+    } else {
+        KEY_STFT_REFERENCE_FRAME_SIZE >> -octaves
+    }
+}
 
 /// Longest stretch of audio (seconds) the key chroma is computed over at
 /// once. The key reads the whole of a normal-length track, one segment
@@ -494,9 +525,8 @@ const LOUDNESS_RANGE_GATE_LU: f32 = 20.0;
 /// * [`Self::tempo`] uses the whole track on normal-length tracks for its
 ///   beat tracking, sharing `full_audio` with the waveform.
 /// * [`Self::key`] uses the whole track on normal-length tracks, sharing
-///   `full_audio` with the waveform, and computes its 8192-point
-///   `KEY_STFT_FRAME_SIZE` spectrogram one `KEY_SEGMENT_SECS` segment at
-///   a time.
+///   `full_audio` with the waveform, and computes its spectrogram
+///   (`key_stft_frame_size`) one `KEY_SEGMENT_SECS` segment at a time.
 /// * [`Self::tempo`] estimates its metrical level over a centered
 ///   `BPM_KEY_WINDOW_SECS` window, and on long tracks [`Self::key`]
 ///   reads the same window. When a larger region is already in memory,
@@ -857,11 +887,17 @@ fn octave_normalize(mut bpm: f64, min: f64, max: f64) -> f64 {
 }
 
 /// The key chroma of `samples`, computed one [`key_segments`] segment
-/// at a time and concatenated. `None` if no segment yields a frame.
+/// at a time and concatenated, every segment on the pitch-class grid of
+/// the tuning of the whole (see [`Hpcp::into_frames_tuned_to`]). `None`
+/// if no segment yields a frame.
 fn segmented_key_chroma(samples: &[f32], sample_rate: u32) -> Option<Vec<Vec<f32>>> {
-    let chroma: Vec<Vec<f32>> = key_segments(samples, sample_rate)
-        .filter_map(|segment| segment_key_chroma(segment, sample_rate))
-        .flatten()
+    let segments: Vec<Hpcp> = key_segments(samples, sample_rate)
+        .filter_map(|segment| segment_key_hpcp(segment, sample_rate))
+        .collect();
+    let tuning: TuningEvidence = segments.iter().map(|segment| segment.tuning).sum();
+    let chroma: Vec<Vec<f32>> = segments
+        .into_iter()
+        .flat_map(|segment| segment.into_frames_tuned_to(tuning))
         .collect();
     (!chroma.is_empty()).then_some(chroma)
 }
@@ -875,11 +911,16 @@ fn key_segments(samples: &[f32], sample_rate: u32) -> std::slice::Chunks<'_, f32
     samples.chunks(samples.len().div_ceil(segments).max(1))
 }
 
-/// The key chroma of one segment of audio: its HPCP frames, computed on
-/// the harmonic part of its own key spectrogram. `None` if the segment is
-/// too short for a spectrogram frame or the DSP fails.
-fn segment_key_chroma(samples: &[f32], sample_rate: u32) -> Option<Vec<Vec<f32>>> {
-    let stft = compute_stft(samples, KEY_STFT_FRAME_SIZE, KEY_STFT_HOP_SIZE).ok()?;
+/// The HPCP of one segment of audio, computed on the harmonic part of its
+/// own key spectrogram. `None` if the segment is too short for a
+/// spectrogram frame or the DSP fails.
+fn segment_key_hpcp(samples: &[f32], sample_rate: u32) -> Option<Hpcp> {
+    // Frame/4 = 75% overlap — the same overlap fraction as the tempo STFT
+    // and the standard chroma hop, so the hop is a fixed share of the frame
+    // and carries no tuning of its own.
+    let frame_size = key_stft_frame_size(sample_rate);
+    let hop_size = frame_size / 4;
+    let stft = compute_stft(samples, frame_size, hop_size).ok()?;
     if stft.is_empty() {
         return None;
     }
@@ -889,8 +930,8 @@ fn segment_key_chroma(samples: &[f32], sample_rate: u32) -> Option<Vec<Vec<f32>>
     // track's sample rate and the key STFT's resolution so the span — not a
     // frame/bin count — is what stays fixed across sample rates.
     let rate = sample_rate as f32;
-    let freq_res = rate / KEY_STFT_FRAME_SIZE as f32;
-    let time_kernel = odd_kernel(KEY_HPSS_HARMONIC_SPAN_SECS, KEY_STFT_HOP_SIZE as f32 / rate);
+    let freq_res = rate / frame_size as f32;
+    let time_kernel = odd_kernel(KEY_HPSS_HARMONIC_SPAN_SECS, hop_size as f32 / rate);
     let freq_kernel = odd_kernel(KEY_HPSS_PERCUSSIVE_SPAN_HZ, freq_res);
 
     // Chroma only reads up to `CHROMA_FMAX_HZ`, so HPSS only needs that
@@ -911,7 +952,7 @@ fn segment_key_chroma(samples: &[f32], sample_rate: u32) -> Option<Vec<Vec<f32>>
     // (peak-picking + QIFFT interpolation + squared-cosine weighting)
     // rather than summing every bin, on the same band and pitch-class grid
     // the band-summed path used.
-    compute_hpcp(&harmonic, sample_rate, KEY_STFT_FRAME_SIZE).ok()
+    compute_hpcp(&harmonic, sample_rate, frame_size).ok()
 }
 
 /// Convert a physical span into an **odd** median-filter kernel length (≥ 1) at
@@ -1195,7 +1236,7 @@ fn map_stratum_key(name: &str) -> Option<MusicalKey> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisOptions, Analyzer, BPM_KEY_WINDOW_SECS, KEY_STFT_HOP_SIZE, key_segments,
+        AnalysisOptions, Analyzer, BPM_KEY_WINDOW_SECS, key_segments, key_stft_frame_size,
         map_stratum_key, octave_normalize, segmented_key_chroma, stratum_key_label,
     };
     use std::path::PathBuf;
@@ -1356,8 +1397,20 @@ mod tests {
             |pitch_class: usize| -> f32 { chroma.iter().map(|frame| frame[pitch_class]).sum() };
         let (a, c) = (total(9), total(0));
         assert!(a > 0.0 && c > a, "A {a}, C {c}");
-        let frames_per_second = rate as f32 / KEY_STFT_HOP_SIZE as f32;
+        let frames_per_second = rate as f32 / (key_stft_frame_size(rate) / 4) as f32;
         assert!(chroma.len() as f32 > 240.0 * frames_per_second);
+    }
+
+    #[test]
+    fn the_key_frame_keeps_its_duration_across_sample_rates() {
+        assert_eq!(key_stft_frame_size(44_100), 8_192);
+        assert_eq!(key_stft_frame_size(48_000), 8_192);
+        assert_eq!(key_stft_frame_size(32_000), 8_192);
+        assert_eq!(key_stft_frame_size(88_200), 16_384);
+        assert_eq!(key_stft_frame_size(96_000), 16_384);
+        assert_eq!(key_stft_frame_size(192_000), 32_768);
+        assert_eq!(key_stft_frame_size(22_050), 4_096);
+        assert_eq!(key_stft_frame_size(11_025), 2_048);
     }
 
     #[test]

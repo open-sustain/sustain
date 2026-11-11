@@ -640,15 +640,15 @@ therefore **strict-compatible** key rate: exact key, a fifth away, or the
 relative major/minor. The detector weighs the share each pitch class
 takes of the track's chroma with key templates learned, as a logistic
 regression over the 24 keys, from what Sustain's own front end measures in
-3,485 human-labelled tracks. Scored on each public corpus with weights
-learned from the others, the strict-compatible rate is 79.8% on 604
-GiantSteps Key tracks, 74.8% on 1,159 GiantSteps MTG Key tracks and 75.6%
-on 1,722 FMAK `fma_medium` clips. rekordbox is a reference rather than
+3,486 human-labelled tracks. Scored on each public corpus with weights
+learned from the others, the strict-compatible rate is 81.0% on 604
+GiantSteps Key tracks, 74.7% on 1,159 GiantSteps MTG Key tracks and 76.8%
+on 1,723 FMAK `fma_medium` clips. rekordbox is a reference rather than
 ground truth, and the bar is to be at least as accurate as it is. On the
 377 tracks of the maintainer's library whose files carry a key set by
-another tool, Sustain's key is strict-compatible with the tag on 88.6% of
+another tool, Sustain's key is strict-compatible with the tag on 89.4% of
 them and rekordbox's on 85.7%; Sustain also agrees with rekordbox
-strictly on 85.7% of 2,500 library tracks.
+strictly on 85.8% of 2,500 library tracks.
 
 ### Audio analysis — *Sustain-native*
 A single heavy decode pass produces, as byproducts of the one decode,
