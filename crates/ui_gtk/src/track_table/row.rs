@@ -66,6 +66,8 @@ pub(crate) struct TrackTableRow {
     pub(super) track_name_sort_key: String,
     pub(super) artist_sort_key: String,
     pub(super) album_sort_key: String,
+    /// The genre, pre-collated the same way; genres have no "sort as" tag.
+    pub(super) genre_sort_key: String,
     pub(crate) year: Option<i32>,
     pub(crate) bpm: Option<Bpm>,
     pub(crate) music_key: Option<String>,
@@ -138,16 +140,19 @@ impl TrackTableRow {
             &album,
             honor_sort_tags,
         );
+        let genre = non_empty_text(&track.metadata.genre).unwrap_or_default();
+        let genre_sort_key = normalize_sort_text(&genre);
         Self {
             track_id: Some(track.id),
             track_name,
             artist,
             album,
-            genre: non_empty_text(&track.metadata.genre).unwrap_or_default(),
+            genre,
             has_lyrics: track.has_lyrics(),
             track_name_sort_key,
             artist_sort_key,
             album_sort_key,
+            genre_sort_key,
             year: track.metadata.year,
             bpm: track.metadata.bpm,
             music_key: track.metadata.key.map(|key| key.short_code().to_owned()),
@@ -222,6 +227,7 @@ impl TrackTableRow {
             track_name_sort_key: format!("track {id}"),
             artist_sort_key: String::new(),
             album_sort_key: String::new(),
+            genre_sort_key: String::new(),
             year: None,
             bpm: None,
             music_key: None,
@@ -265,6 +271,7 @@ mod tests {
                 artist_sort: Some("Beatles, The".to_owned()),
                 album: Some("Abbey Road".to_owned()),
                 album_sort: Some("   ".to_owned()),
+                genre: Some("Trip-Hop".to_owned()),
                 ..TrackMetadata::default()
             },
             rating: Rating::default(),
@@ -284,6 +291,10 @@ mod tests {
         assert_eq!(
             honoring.track_name_sort_key, "été",
             "sort keys fold case but keep accents"
+        );
+        assert_eq!(
+            honoring.genre_sort_key, "trip-hop",
+            "a genre has no sort tag but is collated like the others"
         );
 
         let ignoring = TrackTableRow::from_track(&track, false);

@@ -218,14 +218,14 @@ impl TrackTableColumn {
 
     pub(super) fn compare(self, left: &TrackTableRow, right: &TrackTableRow) -> CmpOrdering {
         match self {
-            // Text columns with parallel "sort as" tags order by the
-            // pre-resolved sort keys (issue #13), already collated at
-            // row-build time, so "The Beatles" files under B and a
-            // whole-table sort does no per-comparison normalization.
+            // Text columns order by keys collated at row-build time, so a
+            // whole-table sort does no per-comparison normalization. The
+            // columns with parallel "sort as" tags resolve them into their
+            // keys (issue #13), so "The Beatles" files under B.
             Self::TrackName => left.track_name_sort_key.cmp(&right.track_name_sort_key),
             Self::Artist => left.artist_sort_key.cmp(&right.artist_sort_key),
             Self::Album => left.album_sort_key.cmp(&right.album_sort_key),
-            Self::Genre => compare_optional_text(Some(&left.genre), Some(&right.genre)),
+            Self::Genre => left.genre_sort_key.cmp(&right.genre_sort_key),
             Self::Lyrics => left.has_lyrics.cmp(&right.has_lyrics),
             Self::Year => left.year.cmp(&right.year),
             Self::Bpm => left.bpm.cmp(&right.bpm),
