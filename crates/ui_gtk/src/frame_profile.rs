@@ -3,7 +3,8 @@
 
 //! Frame timing under `--profile`. While the window draws frame after
 //! frame — scrolling, animating — one summary line per second; nothing
-//! while it sits idle.
+//! while it sits idle, but for a lone frame slow enough to be seen, such
+//! as the first frame of a view the user just switched to.
 //!
 //! Each frame clock cycle runs its phases in order: update, layout, paint.
 //! The recorder's handlers run after GTK's own for each phase, so the time
@@ -25,6 +26,10 @@ const RUN_PAUSE: Duration = Duration::from_millis(250);
 
 /// How much of a run one summary line covers.
 const SUMMARY_SPAN: Duration = Duration::from_secs(1);
+
+/// A lone frame whose layout and paint take this long gets a line of its
+/// own: half the frame interval of a 60 Hz display.
+const SLOW_LONE_FRAME: Duration = Duration::from_millis(8);
 
 /// The frames of a run of drawing since its last summary line.
 struct FrameSpan {
@@ -59,6 +64,11 @@ impl FrameSpan {
         self.layout_max = self.layout_max.max(layout);
         self.paint_total += paint;
         self.paint_max = self.paint_max.max(paint);
+    }
+
+    /// A run of frames, or a lone frame that was slow.
+    fn is_worth_reporting(&self) -> bool {
+        self.frames > 1 || self.layout_max + self.paint_max >= SLOW_LONE_FRAME
     }
 
     fn report(&self, ended_at: Instant) {
@@ -97,7 +107,7 @@ impl FrameRecorder {
         if !continues_run {
             // The run before the pause ends with the frame that preceded it.
             if let (Some(span), Some(ended_at)) = (
-                self.span.take().filter(|span| span.frames > 1),
+                self.span.take().filter(FrameSpan::is_worth_reporting),
                 previous_paint_done,
             ) {
                 span.report(ended_at);
