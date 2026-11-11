@@ -790,7 +790,10 @@ pub(crate) fn metadata_mirror(metadata: &TrackMetadata) -> MetadataChange {
         year: mirror_field(&metadata.year),
         compilation: mirror_field(&metadata.compilation),
         bpm: mirror_analysed_field(&metadata.bpm, metadata.bpm_set_by_user),
-        key: mirror_analysed_field(&metadata.key, metadata.key_set_by_user),
+        key: mirror_analysed_field(
+            &metadata.key,
+            metadata.key_origin == sustain_domain::KeyOrigin::Typed,
+        ),
         comments: mirror_field(&metadata.comments),
         lyrics: mirror_field(&metadata.lyrics),
         title_sort: mirror_field(&metadata.title_sort),
@@ -1612,16 +1615,23 @@ mod tests {
             title: Some("Title".to_owned()),
             bpm: sustain_domain::Bpm::from_whole(128),
             key: Some(sustain_domain::MusicalKey::AMinor),
+            key_origin: sustain_domain::KeyOrigin::Measured,
             ..TrackMetadata::default()
         };
         let mirror = metadata_mirror(&measured);
         assert_eq!(mirror.title, FieldChange::Set("Title".to_owned()));
         assert_eq!(mirror.bpm, FieldChange::Unchanged);
         assert_eq!(mirror.key, FieldChange::Unchanged);
+        // A key read from the file stays as the file spells it.
+        let imported = TrackMetadata {
+            key_origin: sustain_domain::KeyOrigin::Imported,
+            ..measured.clone()
+        };
+        assert_eq!(metadata_mirror(&imported).key, FieldChange::Unchanged);
 
         let typed = TrackMetadata {
             bpm_set_by_user: true,
-            key_set_by_user: true,
+            key_origin: sustain_domain::KeyOrigin::Typed,
             ..measured
         };
         let mirror = metadata_mirror(&typed);

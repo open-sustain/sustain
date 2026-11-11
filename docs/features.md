@@ -616,12 +616,14 @@ or a quarter beat away.
 ### Musical key detection — *Sustain-native*
 Estimates the song's tonal centre via chroma analysis over the same
 centered window as BPM, and stores one of the 24 major/minor labels as
-the track's key, replacing one imported from a file tag or measured by
-an older detector. A key the user typed in Get Info or a Key cell is
-theirs: analysis never replaces it, until they clear it. Like the BPM,
-the measured key stays in the library and is not written to the file;
-a key the user typed is mirrored to it. The Music Key column ships hidden by default; surface it through
-the column selector. The same field is exposed to smart-playlist rules
+the track's key when it has none. Sustain remembers where each key came
+from: a key it measured is measured again when the detector improves,
+while a key imported from the file's tags or typed in Get Info or a Key
+cell is kept, until the user clears it. Unlike the BPM, a tagged key is
+not replaced: a person or a dedicated tool set it, and may know better.
+The measured key stays in the library and is not written to the file; a
+key the user typed is mirrored to it. The Music Key column ships hidden
+by default; surface it through the column selector. The same field is exposed to smart-playlist rules
 for harmony-aware sets.
 
 Keys read from file tags or typed into the Get Info dialog or a Key cell

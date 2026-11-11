@@ -61,7 +61,7 @@ pub use managed_library::{
     ManagedTrackPathCandidates, ManagedTrackPathError, ManagedTrackPathInput, ManagedTrackPathPlan,
     ManagedTrackPathPlanner,
 };
-pub use metadata::{FieldChange, MetadataChange, TrackAudioProperties, TrackMetadata};
+pub use metadata::{FieldChange, KeyOrigin, MetadataChange, TrackAudioProperties, TrackMetadata};
 pub use musical_key::MusicalKey;
 pub use playback::{
     LazyPickContext, PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueEntry,

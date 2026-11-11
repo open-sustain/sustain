@@ -59,7 +59,7 @@ fn execute_full_track(connection: &Connection, sql: &str, track: &Track) -> Stor
                 track.file_modified_at.and_then(system_time_to_unix),
                 metadata.bit_depth.map(i64::from),
                 metadata.bpm_set_by_user,
-                metadata.key_set_by_user,
+                key_origin_to_db(metadata.key_origin),
             ])
         })
         .map(|_| ())
@@ -334,7 +334,7 @@ fn update_track_metadata(
                 album_artist_sort = ?22,
                 composer_sort = ?23,
                 bpm_set_by_user = ?24,
-                key_set_by_user = ?25
+                key_origin = ?25
             WHERE id = ?1
             "#,
             params![
@@ -362,7 +362,7 @@ fn update_track_metadata(
                 metadata_text_param(&metadata.album_artist_sort),
                 metadata_text_param(&metadata.composer_sort),
                 metadata.bpm_set_by_user,
-                metadata.key_set_by_user,
+                key_origin_to_db(metadata.key_origin),
             ],
         )
         .map(|_| ())

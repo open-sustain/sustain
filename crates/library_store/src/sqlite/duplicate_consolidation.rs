@@ -63,7 +63,7 @@ fn update_survivor(connection: &Connection, track: &Track) -> StoreResult<()> {
                 has_embedded_artwork = ?25,
                 file_modified_at_unix = NULL,
                 bpm_set_by_user = ?27,
-                key_set_by_user = ?28
+                key_origin = ?28
             WHERE id = ?26
             "#,
             params![
@@ -97,7 +97,7 @@ fn update_survivor(connection: &Connection, track: &Track) -> StoreResult<()> {
                 track.has_embedded_artwork,
                 track.id.get(),
                 metadata.bpm_set_by_user,
-                metadata.key_set_by_user,
+                key_origin_to_db(metadata.key_origin),
             ],
         )
         .map_err(StoreError::from)?;

@@ -560,7 +560,7 @@ fn copy_metadata_field(
         }
         DuplicateMetadataField::Key => {
             target.key = source.key;
-            target.key_set_by_user = source.key_set_by_user;
+            target.key_origin = source.key_origin;
         }
         DuplicateMetadataField::Comments => target.comments.clone_from(&source.comments),
         DuplicateMetadataField::Lyrics => target.lyrics.clone_from(&source.lyrics),

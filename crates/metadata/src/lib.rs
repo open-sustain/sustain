@@ -31,8 +31,8 @@ use sha2::{Digest, Sha256};
 use sustain_artwork::{ArtworkPolicyError, MAX_ENCODED_ARTWORK_BYTES, validate_encoded_artwork};
 
 pub use sustain_domain::{
-    Bpm, FieldChange, MetadataChange, MusicalKey, Rating, TrackContentHash, TrackMetadata,
-    TrackRelativePath,
+    Bpm, FieldChange, KeyOrigin, MetadataChange, MusicalKey, Rating, TrackContentHash,
+    TrackMetadata, TrackRelativePath,
 };
 
 mod atomic_file;

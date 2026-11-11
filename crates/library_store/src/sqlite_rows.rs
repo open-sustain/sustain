@@ -8,8 +8,8 @@ use std::{
 
 use rusqlite::{Connection, Row, params};
 use sustain_domain::{
-    Bpm, MusicalKey, PlayStatistics, PlaylistEntry, SmartPlaylistBoolField, SmartPlaylistBoolRule,
-    SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
+    Bpm, KeyOrigin, MusicalKey, PlayStatistics, PlaylistEntry, SmartPlaylistBoolField,
+    SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
     SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
     SmartPlaylistRule, SmartPlaylistTextField, SmartPlaylistTextOperator, TrackLocation,
     TrackMetadata, TrackRelativePath, WaveformSegment,
@@ -52,9 +52,10 @@ pub(crate) fn track_from_row(row: &Row<'_>) -> StoreResult<Track> {
                 .get(track_column::BPM_SET_BY_USER)
                 .map_err(StoreError::from)?,
             key: optional_musical_key(row, track_column::MUSICAL_KEY)?,
-            key_set_by_user: row
-                .get(track_column::KEY_SET_BY_USER)
-                .map_err(StoreError::from)?,
+            key_origin: key_origin_from_db(
+                row.get(track_column::KEY_ORIGIN)
+                    .map_err(StoreError::from)?,
+            )?,
             comments: row.get(track_column::COMMENTS).map_err(StoreError::from)?,
             duration: duration_seconds.map(seconds_to_duration),
             bitrate_kbps: optional_u32(row, track_column::BITRATE_KBPS)?,
@@ -212,6 +213,26 @@ fn optional_musical_key(row: &Row<'_>, index: usize) -> StoreResult<Option<Music
                 .ok_or_else(|| StoreError::InvalidStoredEnum(format!("musical key: {code}")))
         })
         .transpose()
+}
+
+/// The `tracks.key_origin` code of `origin`.
+pub(crate) fn key_origin_to_db(origin: KeyOrigin) -> i64 {
+    match origin {
+        KeyOrigin::Imported => 0,
+        KeyOrigin::Typed => 1,
+        KeyOrigin::Measured => 2,
+    }
+}
+
+fn key_origin_from_db(code: i64) -> StoreResult<KeyOrigin> {
+    match code {
+        0 => Ok(KeyOrigin::Imported),
+        1 => Ok(KeyOrigin::Typed),
+        2 => Ok(KeyOrigin::Measured),
+        other => Err(StoreError::InvalidStoredEnum(format!(
+            "key origin: {other}"
+        ))),
+    }
 }
 
 pub(crate) fn optional_string(row: &Row<'_>, index: usize) -> StoreResult<Option<String>> {

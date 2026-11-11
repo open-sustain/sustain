@@ -86,8 +86,7 @@ fn initial_tags_from_tagged_file(
         key: tag
             .and_then(|tag| tag.get_string(ItemKey::InitialKey))
             .and_then(MusicalKey::parse),
-        // Like the BPM, a tag key is not the user's own.
-        key_set_by_user: false,
+        key_origin: KeyOrigin::Imported,
         comments: tag.and_then(|tag| tag.comment().map(|value| value.into_owned())),
         lyrics: tag
             .and_then(|tag| tag.get_string(lyrics_item_key(tag.tag_type())))

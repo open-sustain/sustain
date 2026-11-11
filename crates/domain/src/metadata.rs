@@ -5,6 +5,24 @@ use std::{path::Path, time::Duration};
 
 use crate::{Bpm, MusicalKey};
 
+/// Where a track's key came from.
+///
+/// Key analysis fills a track without a key and measures its own keys
+/// again when the detector improves, but keeps a key that came from
+/// anywhere else: a key in a file's tags was set by a person or a tool
+/// that may know better.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum KeyOrigin {
+    /// Read from the file's tags or another library when the track was
+    /// added, or filled in from another source since.
+    #[default]
+    Imported,
+    /// Typed by the user in Sustain; mirrored to the file's tags.
+    Typed,
+    /// Measured by Sustain's key analysis, which may measure it again.
+    Measured,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrackMetadata {
     pub title: Option<String>,
@@ -26,10 +44,9 @@ pub struct TrackMetadata {
     /// own measurement, but never one the user set.
     pub bpm_set_by_user: bool,
     pub key: Option<MusicalKey>,
-    /// Whether the user typed `key` in Sustain. Key analysis replaces any
-    /// other key — read from file tags or measured before — with its own
-    /// measurement, but never one the user set.
-    pub key_set_by_user: bool,
+    /// Where `key` came from, which decides whether key analysis may
+    /// replace it. Consulted only while the track holds a key.
+    pub key_origin: KeyOrigin,
     pub comments: Option<String>,
     pub lyrics: Option<String>,
     /// "Sort as" names — the parallel fields some taggers write next to the
@@ -144,10 +161,10 @@ impl TrackMetadata {
         apply_field_change(&mut self.key, &change.key);
         match change.key {
             FieldChange::Unchanged => {}
-            FieldChange::Set(_) => self.key_set_by_user = true,
+            FieldChange::Set(_) => self.key_origin = KeyOrigin::Typed,
             // A cleared key is no value of the user's: analysis may
             // measure one.
-            FieldChange::Clear => self.key_set_by_user = false,
+            FieldChange::Clear => self.key_origin = KeyOrigin::default(),
         }
         apply_text_field_change(&mut self.comments, &change.comments);
         apply_text_field_change(&mut self.lyrics, &change.lyrics);
@@ -213,6 +230,9 @@ impl TrackMetadata {
         fill_missing_field(&mut self.year, &change.year);
         fill_missing_field(&mut self.compilation, &change.compilation);
         fill_missing_field(&mut self.bpm, &change.bpm);
+        if self.key.is_none() && matches!(change.key, FieldChange::Set(_)) {
+            self.key_origin = KeyOrigin::Imported;
+        }
         fill_missing_field(&mut self.key, &change.key);
         fill_missing_text_field(&mut self.comments, &change.comments);
         fill_missing_text_field(&mut self.lyrics, &change.lyrics);
@@ -466,7 +486,7 @@ fn normalized_text_value(value: String) -> Option<String> {
 mod tests {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::Path};
 
-    use super::{FieldChange, MetadataChange, TrackMetadata};
+    use super::{FieldChange, KeyOrigin, MetadataChange, TrackMetadata};
     use crate::{Bpm, MusicalKey};
 
     #[test]
@@ -570,23 +590,25 @@ mod tests {
     }
 
     #[test]
-    fn a_key_the_user_sets_is_marked_theirs_until_they_clear_it() {
+    fn a_key_records_where_it_came_from() {
         let a_minor = MusicalKey::from_short_code("Am").expect("key");
         let mut metadata = TrackMetadata {
             key: Some(a_minor),
+            key_origin: KeyOrigin::Measured,
             ..TrackMetadata::default()
         };
 
+        // Filling leaves a held key, and its origin, alone.
         let set = MetadataChange {
             key: FieldChange::Set(MusicalKey::from_short_code("C").expect("key")),
             ..MetadataChange::default()
         };
         metadata.fill_missing_from_change(&set);
         assert_eq!(metadata.key, Some(a_minor));
-        assert!(!metadata.key_set_by_user);
+        assert_eq!(metadata.key_origin, KeyOrigin::Measured);
 
         metadata.apply_change(&set);
-        assert!(metadata.key_set_by_user);
+        assert_eq!(metadata.key_origin, KeyOrigin::Typed);
         assert!(!set.releases_key_to_analysis());
 
         let clear = MetadataChange {
@@ -595,8 +617,13 @@ mod tests {
         };
         metadata.apply_change(&clear);
         assert_eq!(metadata.key, None);
-        assert!(!metadata.key_set_by_user);
         assert!(clear.releases_key_to_analysis());
+
+        // A key filled in from elsewhere is imported, not the user's.
+        metadata.key_origin = KeyOrigin::Typed;
+        metadata.fill_missing_from_change(&set);
+        assert_eq!(metadata.key, MusicalKey::from_short_code("C"));
+        assert_eq!(metadata.key_origin, KeyOrigin::Imported);
     }
 
     #[test]

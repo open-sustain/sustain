@@ -70,7 +70,7 @@ pub(super) fn record_analysis(
     {
         transaction
             .execute(
-                REPLACE_TRACK_MUSICAL_KEY_UNLESS_SET_BY_USER_SQL,
+                RECORD_MEASURED_TRACK_KEY_SQL,
                 params![key.short_code(), track_id.get()],
             )
             .map_err(StoreError::from)?;
