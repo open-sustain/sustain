@@ -644,11 +644,11 @@ regression over the 24 keys, from what Sustain's own front end measures in
 learned from the others, the strict-compatible rate is 79.8% on 604
 GiantSteps Key tracks, 74.8% on 1,159 GiantSteps MTG Key tracks and 75.6%
 on 1,722 FMAK `fma_medium` clips. rekordbox is a reference rather than
-ground truth, and the bar is to be at least as accurate as it is: on 2,500
-tracks of the maintainer's library Sustain's key agrees strictly with
-rekordbox's on 85.7%, but on the 115 of them whose files carry a key tag,
-rekordbox still matches the tag more often (87.0% strict against
-Sustain's 84.3%).
+ground truth, and the bar is to be at least as accurate as it is. On the
+377 tracks of the maintainer's library whose files carry a key set by
+another tool, Sustain's key is strict-compatible with the tag on 88.6% of
+them and rekordbox's on 85.7%; Sustain also agrees with rekordbox
+strictly on 85.7% of 2,500 library tracks.
 
 ### Audio analysis — *Sustain-native*
 A single heavy decode pass produces, as byproducts of the one decode,

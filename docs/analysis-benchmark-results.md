@@ -1209,6 +1209,35 @@ unchanged. Against the tag keys rekordbox stays ahead, by 4.3 exact and
 2.7 strict points; on the Beatport keys Sustain now matches it exactly
 and trails by one track strict.
 
+**Every tagged track.** The 115 tag keys above are the part of the 2,500
+rekordbox set whose files carry a key. Scoring every library track that has
+both a file key and a rekordbox key (377; two whose key Sustain itself had
+measured are excluded) with the shipped binary gives a different picture.
+The file keys were set by other tools, Mixed In Key among them, and match
+what Sustain imported, read again from the files. Pair F1 is over every
+pair of tracks: whether the two shown keys are compatible exactly when the
+two tag keys are.
+
+| Subset | Tracks | Sustain exact / strict / pair F1 | rekordbox exact / strict / pair F1 | Only Sustain / only rekordbox compatible |
+| --- | ---: | --- | --- | --- |
+| All | 377 | **75.9 / 88.6 / 77.2 %** | 72.9 / 85.7 / 73.1 % | 21 / 10 |
+| Beatport purchases | 128 | **73.4 / 85.2 / 73.4 %** | 71.1 / 84.4 / 70.3 % | 5 / 4 |
+| In the 2,500 set | 114 | 72.8 / 84.2 / 73.5 % | **77.2 / 86.8 / 75.4 %** | 3 / 6 |
+| Outside it | 263 | **77.2 / 90.5 / 78.8 %** | 71.1 / 85.2 / 71.6 % | 18 / 4 |
+
+The 114 are where rekordbox looked ahead; the 263 never scored before put
+Sustain clearly ahead (sign test p < 0.01), and overall Sustain is at least
+as accurate as rekordbox against these keys. Predicted minor share on the
+2,500 set: 91.2 % against rekordbox's 83.1 %.
+
+**Compatibility-weighted decision, rejected.** Showing the key whose
+compatible group (itself, a fifth either way, its relative) holds the most
+probability raises per-track strict by 1 to 4 points on every set but costs
+10 to 18 exact, and lowers pair F1 by 2 to 7 points on every set: two
+tracks each a step off in opposite directions look compatible while three
+steps apart. Training the weights on the compatible-group likelihood does
+the same. Not shipped.
+
 **Cost.** The key task alone on 300 library tracks: 235 s CPU and
 157 MB peak RSS centered, 665 s CPU and 285 MB whole track, about 2.8×
 the key's CPU. The extra memory is the decoded track, which a full run
