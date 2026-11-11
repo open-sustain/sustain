@@ -1297,3 +1297,48 @@ Pair F1 is the measure the product needs: over every pair of tracks,
 whether the two shown keys are compatible exactly when the two reference
 keys are. A fifth or relative error passes strict but still costs about
 half of a gross error in pair F1.
+
+## 2026-11-11 — bass-register key profile on a resolved transform: not shipped
+
+Under #288. The bass carries the tonic, and v16's bass-band test read it
+from the 8192-point key STFT, whose ~21 Hz Hann main lobe cannot separate
+bass semitones (3 Hz apart at 55 Hz). This prototype (Python, research only)
+decodes at 5,512 Hz and takes a 4096-point STFT (1.35 Hz bins, 0.74 s
+frames, hop 0.19 s), picks QIFFT peaks in a bass band, estimates the band's
+own tuning, bins them with the same squared-cosine window, and adds the
+band's log shares to v17's as 12 more features (48 weights). Held out as
+before; the library sets are scored with weights learned on all three
+public corpora.
+
+Two new library references are used from here on. **Hooktheory**: the
+human-transcribed TheoryTab keys of the Sheet Sage release (CC BY-NC-SA
+3.0, used privately for evaluation only) match 275 library tracks by artist
+and title once remixes, edits and live versions are excluded; 229 are in
+plain major or minor. **Tag keys**: the 377 tracks of the v17 entry.
+
+| Variant | GiantSteps F1 | MTG F1 | FMAK F1 | Hooktheory exact / strict / F1 | Tag keys exact / strict / F1 |
+| --- | ---: | ---: | ---: | --- | --- |
+| v17 (no bass) | 61.1 % | 54.9 % | 54.8 % | 66.4 / 84.3 / 65.3 % | 74.8 / 89.4 / 77.1 % |
+| 27.5–110 Hz | 61.0 % | 55.1 % | 55.3 % | 64.6 / 86.0 / 64.1 % | 75.1 / 88.6 / 76.5 % |
+| 27.5–110 Hz, HPSS | 61.9 % | 55.5 % | 55.2 % | 65.9 / 85.6 / 64.9 % | 74.8 / 88.6 / 76.2 % |
+| 40–160 Hz | 63.0 % | 54.8 % | 55.1 % | 67.2 / 84.7 / 65.5 % | 74.5 / 88.6 / 76.3 % |
+| 27.5–220 Hz, HPSS | 62.5 % | 54.0 % | 55.5 % | 66.8 / 85.2 / 65.4 % | 75.1 / 88.9 / 76.4 % |
+| 55–220 Hz, HPSS | 61.3 % | 54.9 % | 55.0 % | 67.2 / 85.2 / 65.6 % | 74.0 / 88.3 / 76.4 % |
+| rekordbox | | | | 59.8 / 83.8 / 59.7 % | 72.9 / 85.7 / 73.1 % |
+
+Up to +1.9 pair F1 on GiantSteps, under +1 on the others, and nothing on
+either library reference: every variant is within noise of v17 on
+Hooktheory and at or below it on the tag keys. The finely resolved
+transform reproduces v16's coarse result, so the coarse transform was not
+what held the bass back.
+
+**Training data is not the limit either.** Adding the Hooktheory tracks in
+plain major or minor to the 3,486 public ones (five folds by song, weighted
+1×, 3× or 10×) leaves the held-out Hooktheory scores where they are (66.4 to
+66.8 % exact, 84.3 % strict) and the public held-out scores within half a
+point. With 24 weights on the pooled chroma's log shares, neither more
+on-library labels nor a bass profile moves the library.
+
+Both detectors are weakest on major-key songs: on the 66 Hooktheory tracks
+in major, Sustain is 34.8 % exact / 72.7 % strict and rekordbox 39.4 /
+75.8 %.
