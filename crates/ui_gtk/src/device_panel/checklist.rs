@@ -14,7 +14,7 @@ use std::{cell::RefCell, collections::HashSet, hash::Hash, rc::Rc};
 
 use gtk::prelude::*;
 
-use crate::icon_label::IconLabel;
+use crate::leading_icon::LeadingIcon;
 
 /// One entry of a check list: what ticking it selects, and how it reads.
 pub(super) struct ChecklistEntry<K> {
@@ -105,9 +105,11 @@ pub(super) fn checklist<K: Clone + Eq + Hash + 'static>(
         let Some(check) = list_item.child().and_downcast::<gtk::CheckButton>() else {
             return;
         };
-        if let Some(row) = check.child().and_downcast::<IconLabel>() {
+        if let Some(row) = check.child().and_downcast::<LeadingIcon>() {
             row.set_icon_name(entry.icon);
-            row.set_text(&entry.name);
+            if let Some(label) = row.child().and_downcast::<gtk::Label>() {
+                label.set_label(&entry.name);
+            }
         }
         // Read before setting: the check's toggle handler borrows the
         // selection again.
@@ -131,8 +133,12 @@ fn check_row<K: Clone + Eq + Hash + 'static>(
     list_item: &gtk::ListItem,
     checklist: Rc<Checklist<K>>,
 ) -> gtk::CheckButton {
+    let label = gtk::Label::new(None);
+    label.set_xalign(0.0);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+
     let check = gtk::CheckButton::new();
-    check.set_child(Some(&IconLabel::new()));
+    check.set_child(Some(&LeadingIcon::new(&label)));
     let list_item = list_item.downgrade();
     check.connect_toggled(move |check| {
         let Some(list_item) = list_item.upgrade() else {
@@ -251,9 +257,16 @@ mod tests {
             );
             let shown = rows[3]
                 .child()
-                .and_downcast::<IconLabel>()
-                .expect("a row shows its entry in an icon label");
-            assert_eq!(shown.text(), "Artist 3");
+                .and_downcast::<LeadingIcon>()
+                .expect("a row leads its name with an icon");
+            assert_eq!(
+                shown
+                    .child()
+                    .and_downcast::<gtk::Label>()
+                    .map(|label| label.label())
+                    .as_deref(),
+                Some("Artist 3")
+            );
             assert_eq!(
                 shown.icon_name().as_deref(),
                 Some("avatar-default-symbolic")

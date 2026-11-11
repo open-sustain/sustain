@@ -16,7 +16,7 @@ use sustain_app_runtime::{
 
 use super::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SharedRuntime,
-    sidebar_context::SidebarContextMenu,
+    leading_icon::LeadingIcon, sidebar_context::SidebarContextMenu,
 };
 
 mod drag_drop;
@@ -1218,14 +1218,6 @@ fn build_row_factory(
         let Some(list_item) = list_item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        // Inner Box no longer carries the visual frame class; the frame
-        // (padding, border-radius, drop indicators) lives on the TreeExpander
-        // below so it spans the full row width.
-
-        let icon = gtk::Image::new();
-        icon.add_css_class("playlist-sidebar-icon");
-
         let name_stack = gtk::Stack::new();
         name_stack.set_hexpand(true);
         name_stack.set_transition_type(gtk::StackTransitionType::None);
@@ -1249,8 +1241,11 @@ fn build_row_factory(
         name_stack.add_named(&entry, Some("entry"));
         name_stack.set_visible_child_name("label");
 
-        row.append(&icon);
-        row.append(&name_stack);
+        // The icon is drawn by the row itself; see `LeadingIcon`. The frame
+        // (padding, border-radius, drop indicators) lives on the TreeExpander
+        // below so it spans the full row width.
+        let row = LeadingIcon::new(&name_stack);
+        row.add_css_class("playlist-sidebar-icon");
 
         let expander = gtk::TreeExpander::new();
         expander.add_css_class("playlist-sidebar-row");
@@ -1317,19 +1312,10 @@ fn build_row_factory(
         let Some(row_widget) = expander.child() else {
             return;
         };
-        let Ok(row) = row_widget.downcast::<gtk::Box>() else {
+        let Ok(row) = row_widget.downcast::<LeadingIcon>() else {
             return;
         };
-        let Some(icon_widget) = row.first_child() else {
-            return;
-        };
-        let Ok(icon) = icon_widget.downcast::<gtk::Image>() else {
-            return;
-        };
-        let Some(stack_widget) = icon.next_sibling() else {
-            return;
-        };
-        let Ok(name_stack) = stack_widget.downcast::<gtk::Stack>() else {
+        let Some(name_stack) = row.child().and_downcast::<gtk::Stack>() else {
             return;
         };
         let Some(label) = name_stack
@@ -1345,7 +1331,7 @@ fn build_row_factory(
             return;
         };
 
-        icon.set_icon_name(Some(icon_name));
+        row.set_icon_name(icon_name);
         label.set_text(&label_text);
         entry.set_text(&label_text);
         name_stack.set_visible_child_name("label");
