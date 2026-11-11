@@ -36,6 +36,7 @@ mod date_format;
 mod device_panel;
 mod duplicate_consolidation;
 mod duplicates;
+mod frame_profile;
 mod library_consolidation;
 mod library_import;
 mod library_scan;
@@ -468,6 +469,7 @@ pub fn run(
                     profile.elapsed_ms()
                 );
             }
+            frame_profile::install(&main_window.window);
             main_window.window.present();
             if let Some(profile) = activate_profile {
                 sustain_profiler::profile!(
