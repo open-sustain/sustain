@@ -28,20 +28,15 @@ use sustain_app_runtime::{
     PlaybackCommand, ShuffleMode, Track, TrackId,
 };
 
+mod color_fill;
 mod lyrics_overlay;
 mod marquee;
 mod model;
 mod progress_hit_area;
 
+use color_fill::ColorFill;
 use lyrics_overlay::LyricsOverlayFace;
 use marquee::{MarqueeLabel, MarqueeOverflow};
-
-/// CSS class added to the artwork box while a dominant-color background
-/// is active. Defining it as a sibling of `now-playing-artwork` (rather
-/// than overriding that class directly) keeps the default neutral tint
-/// — applied via the static stylesheet — intact for the no-artwork
-/// state without any extra removal step.
-const ARTWORK_DOMINANT_COLOR_CLASS: &str = "now-playing-artwork-dominant";
 
 /// CSS class added to the artwork box while it sits in the missing
 /// state and is therefore clickable. Lets the stylesheet shift the
@@ -96,14 +91,9 @@ pub(crate) struct NowPlayingView {
     /// drop themselves if the track has changed since, so a slow decode
     /// for a previous track never paints over the current one.
     artwork_generation: Rc<Cell<u64>>,
-    /// CSS provider that carries the dominant-color rule for the
-    /// artwork box. Rewritten in place as palettes resolve; installed
-    /// once on the display at construction and stays for the window's
-    /// lifetime.
-    artwork_color_provider: gtk::CssProvider,
-    /// The palette the provider carries, if any. Loading the provider
-    /// restyles the whole window, so only a different palette loads it.
-    applied_palette: Rc<Cell<Option<ArtworkPalette>>>,
+    /// The artwork's dominant color behind a cover that does not fill
+    /// the tile; without one, the tile's own neutral tint shows.
+    artwork_fill: ColorFill,
     /// Track for which a remote artwork fetch is currently in flight.
     /// Used to show the spinner on the right tile (even across track
     /// switches mid-fetch) and to make additional clicks during the
@@ -197,11 +187,12 @@ impl NowPlayingView {
         artwork_inner_stack.add_named(&artwork_missing_icon, Some(ARTWORK_INNER_STACK_MISSING));
         artwork_inner_stack.add_named(&artwork_spinner, Some(ARTWORK_INNER_STACK_FETCHING));
         // The first refresh picks the page, and with it the tile's chrome.
-        artwork_box.set_child(Some(&artwork_inner_stack));
+        let artwork_fill = ColorFill::new();
+        artwork_box.set_child(Some(&artwork_fill));
+        artwork_box.add_overlay(&artwork_inner_stack);
 
         let artwork_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
         let prefetched_artwork_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
-        let artwork_color_provider = install_artwork_color_provider();
         let pending_fetch_track_id: Rc<Cell<Option<TrackId>>> = Rc::new(Cell::new(None));
         let pending_fetch_notification_id: Rc<Cell<Option<NotificationId>>> =
             Rc::new(Cell::new(None));
@@ -307,8 +298,7 @@ impl NowPlayingView {
             artwork_path,
             prefetched_artwork_path,
             artwork_generation: Rc::new(Cell::new(0)),
-            artwork_color_provider,
-            applied_palette: Rc::new(Cell::new(None)),
+            artwork_fill,
             pending_fetch_track_id,
             pending_fetch_notification_id,
             duration,
@@ -653,25 +643,8 @@ impl NowPlayingView {
     }
 
     fn apply_dominant_color(&self, palette: Option<ArtworkPalette>) {
-        if self.applied_palette.replace(palette) == palette {
-            return;
-        }
-        match palette {
-            Some(palette) => {
-                // Rewriting the provider's CSS is preferable to swapping
-                // multiple per-color classes: GTK reapplies styles to
-                // every widget that matches the class, so a single
-                // load_from_string is one re-style pass rather than
-                // several class-list mutations.
-                self.artwork_color_provider
-                    .load_from_string(&artwork_dominant_color_css(palette));
-                self.artwork_box.add_css_class(ARTWORK_DOMINANT_COLOR_CLASS);
-            }
-            None => {
-                self.artwork_box
-                    .remove_css_class(ARTWORK_DOMINANT_COLOR_CLASS);
-            }
-        }
+        self.artwork_fill
+            .set_color(palette.map(ArtworkPalette::background_rgba));
     }
 
     /// Refresh the inline Lyrics chip for the current track. The chip is
@@ -736,29 +709,6 @@ fn synced_lyrics_text(lyrics: &sustain_app_runtime::SyncedLyrics) -> String {
         .map(|line| line.text.as_str())
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn install_artwork_color_provider() -> gtk::CssProvider {
-    let provider = gtk::CssProvider::new();
-    // STYLE_PROVIDER_PRIORITY_APPLICATION + 2 sits one notch above the
-    // accent-color provider (+1) and three notches above the static
-    // app stylesheet, so the dominant background overrides the neutral
-    // tint from app.css. The provider lives for the window's lifetime
-    // — there is no removal step because the widget it styles is
-    // never re-parented or destroyed before app shutdown.
-    if let Some(display) = gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2,
-        );
-    }
-    provider
-}
-
-fn artwork_dominant_color_css(palette: ArtworkPalette) -> String {
-    let background = palette.background_css();
-    format!(".now-playing-artwork-dominant {{ background-color: {background}; }}",)
 }
 
 fn absolute_path_of(source: &ArtworkSource) -> PathBuf {

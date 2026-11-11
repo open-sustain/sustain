@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use gtk::gdk_pixbuf;
+use gtk::{gdk, gdk_pixbuf};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ArtworkPalette {
@@ -60,6 +60,10 @@ impl ArtworkPalette {
 
     pub(crate) fn background_css(self) -> String {
         self.background.css_hex()
+    }
+
+    pub(crate) fn background_rgba(self) -> gdk::RGBA {
+        self.background.rgba()
     }
 
     pub(crate) fn from_components(components: ArtworkPaletteComponents) -> Self {
@@ -337,6 +341,16 @@ impl RgbColor {
 
     fn css_hex(self) -> String {
         format!("#{:02x}{:02x}{:02x}", self.red, self.green, self.blue)
+    }
+
+    fn rgba(self) -> gdk::RGBA {
+        let channel = |value: u8| f32::from(value) / 255.0;
+        gdk::RGBA::new(
+            channel(self.red),
+            channel(self.green),
+            channel(self.blue),
+            1.0,
+        )
     }
 }
 
