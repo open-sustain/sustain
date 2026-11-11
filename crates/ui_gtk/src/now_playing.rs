@@ -101,6 +101,9 @@ pub(crate) struct NowPlayingView {
     /// once on the display at construction and stays for the window's
     /// lifetime.
     artwork_color_provider: gtk::CssProvider,
+    /// The palette the provider carries, if any. Loading the provider
+    /// restyles the whole window, so only a different palette loads it.
+    applied_palette: Rc<Cell<Option<ArtworkPalette>>>,
     /// Track for which a remote artwork fetch is currently in flight.
     /// Used to show the spinner on the right tile (even across track
     /// switches mid-fetch) and to make additional clicks during the
@@ -193,7 +196,7 @@ impl NowPlayingView {
         artwork_inner_stack.add_named(&artwork_image, Some(ARTWORK_INNER_STACK_PRESENT));
         artwork_inner_stack.add_named(&artwork_missing_icon, Some(ARTWORK_INNER_STACK_MISSING));
         artwork_inner_stack.add_named(&artwork_spinner, Some(ARTWORK_INNER_STACK_FETCHING));
-        artwork_inner_stack.set_visible_child_name(ARTWORK_INNER_STACK_MISSING);
+        // The first refresh picks the page, and with it the tile's chrome.
         artwork_box.set_child(Some(&artwork_inner_stack));
 
         let artwork_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
@@ -305,6 +308,7 @@ impl NowPlayingView {
             prefetched_artwork_path,
             artwork_generation: Rc::new(Cell::new(0)),
             artwork_color_provider,
+            applied_palette: Rc::new(Cell::new(None)),
             pending_fetch_track_id,
             pending_fetch_notification_id,
             duration,
@@ -459,6 +463,9 @@ impl NowPlayingView {
     }
 
     fn set_artwork_inner_page(&self, name: &'static str) {
+        if self.artwork_inner_stack.visible_child_name().as_deref() == Some(name) {
+            return;
+        }
         self.artwork_inner_stack.set_visible_child_name(name);
         self.artwork_spinner
             .set_spinning(name == ARTWORK_INNER_STACK_FETCHING);
@@ -627,27 +634,28 @@ impl NowPlayingView {
         }
     }
 
+    /// Show `decoded`, which each refresh hands over again for the same
+    /// track; only what differs from what is shown is applied.
     fn apply_decoded_artwork(&self, decoded: &DecodedArtwork) {
         // Page selection is decided by `apply_artwork_state`; this
         // method only loads the texture (or clears it). Keeping the
         // two concerns separate avoids flicker when a callback lands
         // after a fetch result has primed the cache.
-        let texture = decoded
+        let paintable = decoded
             .tile_texture
             .as_ref()
-            .or(decoded.detail_texture.as_ref());
-        match texture {
-            Some(texture) => {
-                self.artwork_image.set_paintable(Some(texture));
-            }
-            None => {
-                self.artwork_image.set_paintable(None::<&gdk::Paintable>);
-            }
+            .or(decoded.detail_texture.as_ref())
+            .map(|texture| texture.upcast_ref::<gdk::Paintable>());
+        if self.artwork_image.paintable().as_ref() != paintable {
+            self.artwork_image.set_paintable(paintable);
         }
         self.apply_dominant_color(decoded.palette);
     }
 
     fn apply_dominant_color(&self, palette: Option<ArtworkPalette>) {
+        if self.applied_palette.replace(palette) == palette {
+            return;
+        }
         match palette {
             Some(palette) => {
                 // Rewriting the provider's CSS is preferable to swapping
