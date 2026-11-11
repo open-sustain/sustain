@@ -609,6 +609,24 @@ impl LibraryStore for SqliteLibraryStore {
         devices::save_device_manifest(&mut connection, id, entries)
     }
 
+    fn record_device_manifest_entry(
+        &self,
+        id: &SyncDeviceId,
+        entry: &SyncManifestEntry,
+    ) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        devices::record_device_manifest_entry(&connection, id, entry)
+    }
+
+    fn forget_device_manifest_entry(
+        &self,
+        id: &SyncDeviceId,
+        path: &DeviceRelativePath,
+    ) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        devices::forget_device_manifest_entry(&connection, id, path)
+    }
+
     fn device_manifest(&self, id: &SyncDeviceId) -> StoreResult<Vec<SyncManifestEntry>> {
         let connection = self.connection_guard()?;
         devices::device_manifest(&connection, id)

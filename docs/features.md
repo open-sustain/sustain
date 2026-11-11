@@ -1024,7 +1024,7 @@ playlists and artists you ticked for that device pre-filled. The marker is only
 written on first sync — Sustain never touches a device until you ask it to.
 
 Re-syncing is **incremental**. Per device, Sustain keeps a manifest of what it
-last wrote (track → on-device path + content fingerprint), resolves the ticked
+wrote there (track → on-device path + content fingerprint), resolves the ticked
 playlists and artists to a track set (smart playlists and artist selections are
 re-evaluated every sync), diffs it
 against the manifest and what is actually on the drive, and copies only what
@@ -1032,6 +1032,12 @@ changed. The panel shows the plan — to copy / update / unchanged / to remove �
 before you sync; removing tracks no longer selected requires ticking an explicit
 confirmation. Progress and the outcome flow through the status-bar notification
 lane.
+
+A long sync **resumes where it stopped**. Sustain records each file in the
+device's manifest as soon as it is on the drive, so a sync that ends early,
+whether cancelled, cut short by a full or unplugged drive, interrupted by quitting
+Sustain, or killed by a crash, does not copy those files again the next time.
+After a power cut, only the files copied in its last moments may be sent again.
 
 A disk-occupation meter in the panel's footer shows how much of the drive the
 selection will occupy, **stacked by genre**: the largest genres each get a colour

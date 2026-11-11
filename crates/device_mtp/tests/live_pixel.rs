@@ -17,13 +17,27 @@ use std::thread;
 
 use sustain_device_mtp::MtpTransport;
 use sustain_device_sync::{
-    DeviceTransport, MtpTarget, PreparedSyncRequest, SourceSnapshot, SyncInputPlaylist,
-    SyncInputTrack, SyncRequest, engine, resolve_source_fingerprint, source_file_stat,
+    DeviceTransport, JournalError, ManifestJournal, MtpTarget, PreparedSyncRequest, SourceSnapshot,
+    SyncInputPlaylist, SyncInputTrack, SyncRequest, engine, resolve_source_fingerprint,
+    source_file_stat,
 };
 use sustain_domain::{
     DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, SyncDevice, SyncDeviceId,
-    TrackId,
+    SyncManifestEntry, TrackId,
 };
+
+/// The test checks the files on the phone, not the run's journal.
+struct UnrecordedJournal;
+
+impl ManifestJournal for UnrecordedJournal {
+    fn record(&mut self, _entry: &SyncManifestEntry) -> Result<(), JournalError> {
+        Ok(())
+    }
+
+    fn forget(&mut self, _path: &DeviceRelativePath) -> Result<(), JournalError> {
+        Ok(())
+    }
+}
 
 /// Read the phone's volume URI from the environment, skipping (passing)
 /// when it is not set so the suite stays green without hardware.
@@ -188,8 +202,14 @@ fn engine_sync_lays_out_android_paths() {
 
     let handle = thread::spawn(move || {
         let transport = MtpTransport::open(&target);
-        let outcome =
-            engine::sync(&transport, &prepared, &mut |_| {}, &|| false).expect("engine sync");
+        let outcome = engine::sync(
+            &transport,
+            &prepared,
+            &mut UnrecordedJournal,
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("engine sync");
         assert_eq!(outcome.copied, 2, "both tracks copied");
 
         // Audio at the exact Android spec path.

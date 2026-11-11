@@ -18,7 +18,7 @@ pub use sustain_domain::{
     TrackColumnLayoutScope, TrackColumnSort, TrackId, TrackLocation, TrackRelativePath,
     WaveformSegments,
 };
-use sustain_domain::{BeatGrid, SmartPlaylistRuleSet};
+use sustain_domain::{BeatGrid, DeviceRelativePath, SmartPlaylistRuleSet};
 pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 
 mod migrations;
@@ -73,6 +73,35 @@ pub enum StoreError {
     InvalidArtworkPayload,
     StoreUnavailable,
 }
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Database(detail) => write!(f, "database error: {detail}"),
+            Self::DatabaseAhead { current, supported } => write!(
+                f,
+                "the library database is at schema version {current}, newer than this \
+                 build's {supported}"
+            ),
+            Self::UnversionedDatabaseNotEmpty => {
+                f.write_str("the library database holds tables but no schema version")
+            }
+            Self::MigrationFailed {
+                version,
+                description,
+                detail,
+            } => write!(f, "migration {version} ({description}) failed: {detail}"),
+            Self::InvalidStoredId(id) => write!(f, "invalid stored id {id}"),
+            Self::InvalidStoredPath(path) => write!(f, "invalid stored path {path:?}"),
+            Self::InvalidStoredEnum(value) => write!(f, "invalid stored value {value:?}"),
+            Self::InvalidStoredArtwork => f.write_str("invalid stored artwork"),
+            Self::InvalidArtworkPayload => f.write_str("invalid artwork payload"),
+            Self::StoreUnavailable => f.write_str("the library store is unavailable"),
+        }
+    }
+}
+
+impl std::error::Error for StoreError {}
 
 impl From<rusqlite::Error> for StoreError {
     fn from(error: rusqlite::Error) -> Self {
@@ -632,6 +661,21 @@ pub trait LibraryStore: Send + Sync {
         &self,
         id: &SyncDeviceId,
         entries: &[SyncManifestEntry],
+    ) -> StoreResult<()>;
+
+    /// Record that a device holds `entry`'s file, in place of whatever
+    /// its manifest knew at that path.
+    fn record_device_manifest_entry(
+        &self,
+        id: &SyncDeviceId,
+        entry: &SyncManifestEntry,
+    ) -> StoreResult<()>;
+
+    /// Drop what a device's manifest knows at `path`.
+    fn forget_device_manifest_entry(
+        &self,
+        id: &SyncDeviceId,
+        path: &DeviceRelativePath,
     ) -> StoreResult<()>;
 
     /// Load a device's on-device manifest.

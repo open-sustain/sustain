@@ -20,13 +20,13 @@ use super::{
     SmartPlaylistTrackStatus,
 };
 use sustain_domain::{
-    ApplicationCommand, Clock, FieldChange, LibraryManagementMode, MonotonicClock, PlayStatistics,
-    PlaybackCommand, PlaybackOptions, PlaybackState, Playlist, PlaylistFolderId, PlaylistId,
-    PlaylistItem, Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistDateField,
-    SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
-    Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath, UiSettings,
-    UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent,
+    ApplicationCommand, Clock, DeviceRelativePath, FieldChange, LibraryManagementMode,
+    MonotonicClock, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackState, Playlist,
+    PlaylistFolderId, PlaylistId, PlaylistItem, Rating, RepeatMode, ShuffleMode, SmartPlaylist,
+    SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection,
+    SmartPlaylistMatchKind, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
+    SmartPlaylistTextOperator, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
+    UiSettings, UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent,
 };
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan,
@@ -79,110 +79,46 @@ fn runtime_accepts_settings_command() {
 }
 
 #[test]
-fn device_sync_manifest_save_failure_surfaces_error_instead_of_success() {
-    let backing: Arc<dyn LibraryStore> =
-        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
-    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
-    store.set_fail_device_manifest(true);
-    let mut runtime = ApplicationRuntime::new()
-        .with_library_services(store.clone(), Arc::new(TestMetadataService))
-        .expect("library services initialize");
-    let device_id = SyncDeviceId::new("device-id").expect("device id");
+fn a_failed_device_sync_reports_why() {
+    let mut runtime = ApplicationRuntime::new();
     let receiver = runtime.device_sync_event_receiver();
     assert!(matches!(
         runtime
             .device_sync_scheduler
-            .start_test_task(device_id, |_progress, _cancel| Ok(
-                sustain_device_sync::SyncOutcome {
-                    copied: 1,
-                    manifest_is_authoritative: true,
-                    ..Default::default()
-                }
-            ),),
+            .start_test_task(|_progress, _cancel| Err(crate::DeviceSyncFailure::new(
+                "No space left on device".to_owned()
+            ))),
         crate::DeviceSyncStartOutcome::Started(_)
     ));
+    runtime.apply_device_sync_event(receiver.recv_blocking().expect("completion"));
 
-    let event = receiver.recv_blocking().expect("device-sync completion");
-    runtime.apply_device_sync_event(event);
-
-    assert_eq!(store.device_manifest_calls(), 1);
     let notification = runtime
         .notifications()
         .current_ephemeral()
-        .expect("manifest failure notification");
+        .expect("failure notification");
     assert_eq!(notification.category, NotificationCategory::DeviceSync);
     assert_eq!(notification.severity, NotificationSeverity::Error);
-    assert!(notification.body.contains("could not save"));
+    assert_eq!(
+        notification.body,
+        "Device sync failed: No space left on device"
+    );
 }
 
 #[test]
-fn a_failed_device_sync_saves_the_manifest_of_what_it_wrote() {
-    for (failure, saves) in [
-        (
-            crate::DeviceSyncFailure {
-                message: "No space left on device".to_owned(),
-                manifest: Some(Vec::new()),
-            },
-            1,
-        ),
-        (
-            crate::DeviceSyncFailure::before_device("could not open the device".to_owned()),
-            0,
-        ),
-    ] {
-        let backing: Arc<dyn LibraryStore> =
-            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
-        let store = Arc::new(crate::test_store::FaultyStore::new(backing));
-        let mut runtime = ApplicationRuntime::new()
-            .with_library_services(store.clone(), Arc::new(TestMetadataService))
-            .expect("library services initialize");
-        let receiver = runtime.device_sync_event_receiver();
-        let device_id = SyncDeviceId::new("device-id").expect("device id");
-        let message = failure.message.clone();
-        assert!(matches!(
-            runtime
-                .device_sync_scheduler
-                .start_test_task(device_id, move |_progress, _cancel| Err(failure)),
-            crate::DeviceSyncStartOutcome::Started(_)
-        ));
-        runtime.apply_device_sync_event(receiver.recv_blocking().expect("completion"));
-
-        assert_eq!(store.device_manifest_calls(), saves);
-        let notification = runtime
-            .notifications()
-            .current_ephemeral()
-            .expect("failure notification");
-        assert_eq!(notification.severity, NotificationSeverity::Error);
-        assert!(notification.body.contains(&message));
-    }
-}
-
-#[test]
-fn device_sync_preparation_cancellation_preserves_saved_manifest() {
-    let backing: Arc<dyn LibraryStore> =
-        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
-    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
-    let mut runtime = ApplicationRuntime::new()
-        .with_library_services(store.clone(), Arc::new(TestMetadataService))
-        .expect("library services initialize");
-    let device_id = SyncDeviceId::new("device-id").expect("device id");
+fn a_cancelled_device_sync_reports_that_it_stopped() {
+    let mut runtime = ApplicationRuntime::new();
     let receiver = runtime.device_sync_event_receiver();
     assert!(matches!(
         runtime
             .device_sync_scheduler
-            .start_test_task(device_id, |_progress, _cancel| Ok(
-                sustain_device_sync::SyncOutcome {
-                    cancelled: true,
-                    ..Default::default()
-                }
-            ),),
+            .start_test_task(|_progress, _cancel| Ok(sustain_device_sync::SyncOutcome {
+                cancelled: true,
+                ..Default::default()
+            })),
         crate::DeviceSyncStartOutcome::Started(_)
     ));
+    runtime.apply_device_sync_event(receiver.recv_blocking().expect("completion"));
 
-    let event = receiver.recv_blocking().expect("device-sync completion");
-    runtime.apply_device_sync_event(event);
-
-    assert_eq!(store.device_manifest_calls(), 0);
     let notification = runtime
         .notifications()
         .current_ephemeral()
@@ -194,40 +130,25 @@ fn device_sync_preparation_cancellation_preserves_saved_manifest() {
 
 #[test]
 fn stale_device_sync_completion_is_ignored() {
-    let backing: Arc<dyn LibraryStore> =
-        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
-    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
-    let mut runtime = ApplicationRuntime::new()
-        .with_library_services(store.clone(), Arc::new(TestMetadataService))
-        .expect("library services initialize");
-    let device_id = SyncDeviceId::new("device-id").expect("device id");
+    let mut runtime = ApplicationRuntime::new();
     let receiver = runtime.device_sync_event_receiver();
     let started = runtime
         .device_sync_scheduler
-        .start_test_task(device_id, |_progress, _cancel| {
-            Ok(sustain_device_sync::SyncOutcome {
-                manifest_is_authoritative: true,
-                ..Default::default()
-            })
-        });
-    assert!(matches!(started, crate::DeviceSyncStartOutcome::Started(_)));
+        .start_test_task(|_progress, _cancel| Ok(sustain_device_sync::SyncOutcome::default()));
     let crate::DeviceSyncStartOutcome::Started(run_id) = started else {
-        return;
+        panic!("the sync starts: {started:?}");
     };
 
     runtime.apply_device_sync_event(receiver.recv_blocking().expect("completion"));
-    assert_eq!(store.device_manifest_calls(), 1);
+    assert_eq!(runtime.notifications().ephemeral_queue().len(), 1);
     runtime.apply_device_sync_event(crate::DeviceSyncEvent::Finished {
         run_id,
-        completion: crate::DeviceSyncCompletion {
-            device_id: SyncDeviceId::new("device-id").expect("device id"),
-            result: Ok(sustain_device_sync::SyncOutcome::default()),
-        },
+        result: Err(crate::DeviceSyncFailure::new("stale".to_owned())),
     });
     assert_eq!(
-        store.device_manifest_calls(),
+        runtime.notifications().ephemeral_queue().len(),
         1,
-        "a stale completion must not persist state twice"
+        "a stale completion must not be reported"
     );
 }
 
@@ -7813,6 +7734,22 @@ impl LibraryStore for CallCountingLibraryStore {
         entries: &[SyncManifestEntry],
     ) -> StoreResult<()> {
         self.inner.save_device_manifest(id, entries)
+    }
+
+    fn record_device_manifest_entry(
+        &self,
+        id: &SyncDeviceId,
+        entry: &SyncManifestEntry,
+    ) -> StoreResult<()> {
+        self.inner.record_device_manifest_entry(id, entry)
+    }
+
+    fn forget_device_manifest_entry(
+        &self,
+        id: &SyncDeviceId,
+        path: &DeviceRelativePath,
+    ) -> StoreResult<()> {
+        self.inner.forget_device_manifest_entry(id, path)
     }
 
     fn device_manifest(&self, id: &SyncDeviceId) -> StoreResult<Vec<SyncManifestEntry>> {

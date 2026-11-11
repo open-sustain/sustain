@@ -121,7 +121,7 @@ pub use device_plan_scheduler::{
 };
 pub use device_sync::{DeviceAnalysisReadiness, DeviceSyncPlanState, MtpDiscoveryResult};
 pub use device_sync_scheduler::{
-    DeviceSyncCompletion, DeviceSyncEvent, DeviceSyncFailure, DeviceSyncRunId, DeviceSyncScheduler,
+    DeviceSyncEvent, DeviceSyncFailure, DeviceSyncRunId, DeviceSyncScheduler,
     DeviceSyncStartOutcome,
 };
 pub use duplicate_consolidation::{

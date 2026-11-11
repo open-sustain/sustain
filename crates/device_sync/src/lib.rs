@@ -17,6 +17,7 @@
 mod device_root;
 pub mod engine;
 pub mod identity;
+pub mod journal;
 mod layout;
 pub mod model;
 mod sanitize;
@@ -29,6 +30,7 @@ pub use identity::{
     ConnectedDevice, MARKER_FILE, discover, generate_device_id, read_marker,
     read_marker_via_transport, write_marker, write_marker_via_transport,
 };
+pub use journal::{JournalError, ManifestJournal};
 pub use model::{
     DeviceCapacity, GenreBytes, PioneerTrackAnalysis, Placement, PreparedPioneerAssets,
     PreparedSyncRequest, SourceSnapshot, SyncError, SyncFailure, SyncInputPlaylist, SyncInputTrack,
@@ -112,6 +114,83 @@ mod tests {
     /// Open a filesystem transport on a scratch device root.
     fn transport(dest: &Path) -> DeviceRoot {
         DeviceRoot::open(dest).expect("open scratch device root")
+    }
+
+    /// A journal replaying each change over the manifest a run starts
+    /// from.
+    struct ReplayJournal(std::collections::BTreeMap<String, sustain_domain::SyncManifestEntry>);
+
+    impl ReplayJournal {
+        fn over(manifest: &[sustain_domain::SyncManifestEntry]) -> Self {
+            Self(
+                manifest
+                    .iter()
+                    .map(|entry| (entry.on_device_path.as_str().to_owned(), entry.clone()))
+                    .collect(),
+            )
+        }
+
+        fn manifest(&self) -> Vec<sustain_domain::SyncManifestEntry> {
+            self.0.values().cloned().collect()
+        }
+    }
+
+    impl ManifestJournal for ReplayJournal {
+        fn record(
+            &mut self,
+            entry: &sustain_domain::SyncManifestEntry,
+        ) -> Result<(), JournalError> {
+            self.0
+                .insert(entry.on_device_path.as_str().to_owned(), entry.clone());
+            Ok(())
+        }
+
+        fn forget(&mut self, path: &DeviceRelativePath) -> Result<(), JournalError> {
+            self.0.remove(path.as_str());
+            Ok(())
+        }
+    }
+
+    /// The files a manifest tracks, by path, without the analysis pairs
+    /// only a finished Pioneer run records.
+    fn tracked_files(
+        manifest: &[sustain_domain::SyncManifestEntry],
+    ) -> Vec<(String, TrackId, String)> {
+        let mut files: Vec<_> = manifest
+            .iter()
+            .map(|entry| {
+                (
+                    entry.on_device_path.as_str().to_owned(),
+                    entry.track_id,
+                    entry.fingerprint.clone(),
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// Run [`sync`], checking that its journal, replayed over the manifest
+    /// the run starts from, gives the manifest the run reports — however
+    /// the run ends.
+    fn journaled_sync(
+        transport: &dyn DeviceTransport,
+        req: &PreparedSyncRequest,
+        progress: &mut dyn FnMut(SyncProgress),
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<SyncOutcome, SyncFailure> {
+        let mut journal = ReplayJournal::over(&req.previous_manifest);
+        let result = sync(transport, req, &mut journal, progress, cancel);
+        let reported = match &result {
+            Ok(outcome) => &outcome.manifest,
+            Err(failure) => &failure.manifest,
+        };
+        assert_eq!(
+            tracked_files(&journal.manifest()),
+            tracked_files(reported),
+            "the journal replays to the manifest the run reports"
+        );
+        result
     }
 
     /// A device whose copy to `fail_path` fails, either as an error the
@@ -314,7 +393,7 @@ mod tests {
     }
 
     fn run_prepared(dest: &Path, prepared: &PreparedSyncRequest) -> SyncOutcome {
-        sync(&transport(dest), prepared, &mut |_| {}, &|| false).expect("sync ok")
+        journaled_sync(&transport(dest), prepared, &mut |_| {}, &|| false).expect("sync ok")
     }
 
     #[test]
@@ -872,7 +951,7 @@ mod tests {
             assets.push_track(PioneerTrackAnalysis::default(), Some(COVER_PNG));
         }
         assert_eq!(assets.artwork_count(), 1);
-        sync(
+        journaled_sync(
             &transport(fx.dest.path()),
             &PreparedSyncRequest::new(req, Some(assets)).expect("prepared Pioneer request"),
             &mut |_| {},
@@ -903,7 +982,7 @@ mod tests {
         let mut fx = fixture(1);
         fx.tracks[0].artist = "daft punk".into();
         let device = || CaseInsensitiveTransport(transport(fx.dest.path()));
-        let first = sync(
+        let first = journaled_sync(
             &device(),
             &prepared(&request(&fx, DeviceLayout::Pioneer, Vec::new(), true)),
             &mut |_| {},
@@ -913,7 +992,7 @@ mod tests {
 
         // The old spelling is not stale: it is the file the new one names.
         fx.tracks[0].artist = "Daft Punk".into();
-        let corrected = sync(
+        let corrected = journaled_sync(
             &device(),
             &prepared(&request(&fx, DeviceLayout::Pioneer, first.manifest, true)),
             &mut |_| {},
@@ -970,7 +1049,7 @@ mod tests {
             DeviceRelativePath::new("Music/Artist 1/Album 1/02 Title 2.mp3").expect("safe path");
         let transport = CopyFailureTransport::recoverable(transport(fx.dest.path()), fail_path);
 
-        let outcome = sync(&transport, &prepared(&req), &mut |_| {}, &|| false)
+        let outcome = journaled_sync(&transport, &prepared(&req), &mut |_| {}, &|| false)
             .expect("recoverable copy failure does not abort");
 
         assert_eq!(outcome.copied, 2);
@@ -1075,7 +1154,7 @@ mod tests {
         };
 
         // Without confirmation, the third file stays and remains tracked.
-        let kept = sync(
+        let kept = journaled_sync(
             &transport(fx.dest.path()),
             &prepared(&shrink(false)),
             &mut |_| {},
@@ -1086,7 +1165,7 @@ mod tests {
         assert_eq!(kept.manifest.len(), 3);
 
         // With confirmation, the stale file is removed.
-        let removed = sync(
+        let removed = journaled_sync(
             &transport(fx.dest.path()),
             &prepared(&shrink(true)),
             &mut |_| {},
@@ -1116,7 +1195,7 @@ mod tests {
             export_date: "2026-01-01".into(),
         };
 
-        let outcome = sync(
+        let outcome = journaled_sync(
             &transport(fx.dest.path()),
             &prepared(&shrink),
             &mut |_| {},
@@ -1159,7 +1238,7 @@ mod tests {
             export_date: "2026-01-01".into(),
         };
         let copied = std::cell::Cell::new(false);
-        let outcome = sync(
+        let outcome = journaled_sync(
             &transport(fx.dest.path()),
             &prepared(&next),
             &mut |progress| copied.set(progress.stage == SyncStage::Copying),
@@ -1202,7 +1281,7 @@ mod tests {
         let placements = crate::layout::plan_placements(&grown).expect("plan");
         let transport =
             CopyFailureTransport::fatal(transport(fx.dest.path()), placements[2].rel_path.clone());
-        let failure = sync(&transport, &prepared(&grown), &mut |_| {}, &|| false)
+        let failure = journaled_sync(&transport, &prepared(&grown), &mut |_| {}, &|| false)
             .expect_err("a fatal copy error stops the sync");
         assert!(matches!(failure.error, SyncError::Io { .. }));
         let tracked: Vec<TrackId> = failure.manifest.iter().map(|e| e.track_id).collect();
@@ -1216,6 +1295,66 @@ mod tests {
         };
         let outcome = run(fx.dest.path(), &shrunk);
         assert_eq!(outcome.removed, 1);
+        assert_eq!(walk_files(fx.dest.path().join("Music")), 1);
+    }
+
+    #[test]
+    fn an_export_that_never_reports_back_resumes_from_its_journal() {
+        let fx = fixture(3);
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        let placements = crate::layout::plan_placements(&req).expect("plan");
+
+        // The run stops on the third file, and its manifest is lost with
+        // the process: only the journal survives.
+        let transport =
+            CopyFailureTransport::fatal(transport(fx.dest.path()), placements[2].rel_path.clone());
+        let mut journal = ReplayJournal::over(&[]);
+        sync(
+            &transport,
+            &prepared(&req),
+            &mut journal,
+            &mut |_| {},
+            &|| false,
+        )
+        .expect_err("a fatal copy error stops the sync");
+
+        let resumed = run(
+            fx.dest.path(),
+            &request(&fx, DeviceLayout::M3u, journal.manifest(), false),
+        );
+        assert_eq!((resumed.unchanged, resumed.copied), (2, 1));
+    }
+
+    #[test]
+    fn a_change_the_journal_cannot_record_stops_the_sync() {
+        struct FullJournal;
+
+        impl ManifestJournal for FullJournal {
+            fn record(
+                &mut self,
+                _entry: &sustain_domain::SyncManifestEntry,
+            ) -> Result<(), JournalError> {
+                Err("database is full".into())
+            }
+
+            fn forget(&mut self, _path: &DeviceRelativePath) -> Result<(), JournalError> {
+                Ok(())
+            }
+        }
+
+        let fx = fixture(3);
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        let failure = sync(
+            &transport(fx.dest.path()),
+            &prepared(&req),
+            &mut FullJournal,
+            &mut |_| {},
+            &|| false,
+        )
+        .expect_err("an unrecorded change stops the sync");
+        assert!(matches!(failure.error, SyncError::Journal(_)));
+        // The file written before the stop is still reported.
+        assert_eq!(failure.manifest.len(), 1);
         assert_eq!(walk_files(fx.dest.path().join("Music")), 1);
     }
 
@@ -1250,7 +1389,7 @@ mod tests {
             export_date: "2026-01-01".into(),
         };
         assert!(
-            sync(
+            journaled_sync(
                 &transport(fx.dest.path()),
                 &prepared(&shrink),
                 &mut |_| {},
@@ -1306,7 +1445,7 @@ mod tests {
 
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
         assert!(
-            sync(
+            journaled_sync(
                 &transport(fx.dest.path()),
                 &prepared(&req),
                 &mut |_| {},
@@ -1333,7 +1472,7 @@ mod tests {
 
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
         assert!(
-            sync(
+            journaled_sync(
                 &transport(fx.dest.path()),
                 &prepared(&req),
                 &mut |_| {},
@@ -1363,7 +1502,7 @@ mod tests {
 
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
         assert!(
-            sync(
+            journaled_sync(
                 &transport(fx.dest.path()),
                 &prepared(&req),
                 &mut |_| {},
@@ -1431,7 +1570,7 @@ mod tests {
             export_date: "2026-01-01".into(),
         };
         assert!(matches!(
-            sync(
+            journaled_sync(
                 &transport(fx.dest.path()),
                 &prepared(&req),
                 &mut |_| {},

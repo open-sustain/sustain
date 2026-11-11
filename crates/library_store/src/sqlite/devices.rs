@@ -222,6 +222,46 @@ pub(super) fn save_device_manifest(
     transaction.commit().map_err(StoreError::from)
 }
 
+pub(super) fn record_device_manifest_entry(
+    connection: &Connection,
+    id: &SyncDeviceId,
+    entry: &SyncManifestEntry,
+) -> StoreResult<()> {
+    connection
+        .prepare_cached(
+            "INSERT INTO sync_manifest \
+             (device_id, track_id, on_device_path, fingerprint, anlz_path, anlz_digest) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT (device_id, on_device_path) DO UPDATE SET \
+             track_id = excluded.track_id, fingerprint = excluded.fingerprint, \
+             anlz_path = excluded.anlz_path, anlz_digest = excluded.anlz_digest",
+        )
+        .and_then(|mut upsert| {
+            upsert.execute(params![
+                id.as_str(),
+                entry.track_id.get(),
+                entry.on_device_path.as_str(),
+                entry.fingerprint,
+                entry.anlz.as_ref().map(|anlz| anlz.dat_path.as_str()),
+                entry.anlz.as_ref().map(|anlz| anlz.digest.as_str()),
+            ])
+        })
+        .map(|_| ())
+        .map_err(StoreError::from)
+}
+
+pub(super) fn forget_device_manifest_entry(
+    connection: &Connection,
+    id: &SyncDeviceId,
+    path: &DeviceRelativePath,
+) -> StoreResult<()> {
+    connection
+        .prepare_cached("DELETE FROM sync_manifest WHERE device_id = ?1 AND on_device_path = ?2")
+        .and_then(|mut delete| delete.execute(params![id.as_str(), path.as_str()]))
+        .map(|_| ())
+        .map_err(StoreError::from)
+}
+
 pub(super) fn device_manifest(
     connection: &Connection,
     id: &SyncDeviceId,
@@ -436,6 +476,49 @@ mod tests {
             .save_device_manifest(&d.id, &entries)
             .expect("save manifest");
         assert_eq!(store.device_manifest(&d.id).expect("load"), entries);
+    }
+
+    #[test]
+    fn manifest_entries_are_recorded_and_forgotten_one_by_one() {
+        let store = SqliteLibraryStore::open_in_memory().expect("store");
+        let d = device("dev-journal");
+        store.save_sync_device(&d).expect("save");
+        let entry = |track: i64, path: &str, fingerprint: &str| SyncManifestEntry {
+            track_id: TrackId::new(track).expect("id"),
+            on_device_path: device_path(path),
+            fingerprint: fingerprint.into(),
+            anlz: None,
+        };
+        store
+            .save_device_manifest(&d.id, &[entry(1, "a.mp3", "fp1"), entry(2, "b.mp3", "fp2")])
+            .expect("save manifest");
+
+        // A rewritten file replaces what was known at its path, and a new
+        // one joins the rest.
+        let rewritten = SyncManifestEntry {
+            anlz: Some(AnlzRecord {
+                dat_path: device_path("PIONEER/USBANLZ/P051/0001D603/ANLZ0001.DAT"),
+                digest: "ab12".into(),
+            }),
+            ..entry(3, "a.mp3", "fp3")
+        };
+        store
+            .record_device_manifest_entry(&d.id, &rewritten)
+            .expect("record a rewrite");
+        store
+            .record_device_manifest_entry(&d.id, &entry(4, "c.mp3", "fp4"))
+            .expect("record a copy");
+        store
+            .forget_device_manifest_entry(&d.id, &device_path("b.mp3"))
+            .expect("forget a removal");
+        store
+            .forget_device_manifest_entry(&d.id, &device_path("never-there.mp3"))
+            .expect("forgetting an unknown path is no change");
+
+        assert_eq!(
+            store.device_manifest(&d.id).expect("load"),
+            vec![rewritten, entry(4, "c.mp3", "fp4")]
+        );
     }
 
     #[test]

@@ -22,6 +22,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use sustain_domain::DeviceRelativePath;
+
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, DuplicateConsolidationPlan,
     LibraryStore, MetadataChange, OnlineCapabilities, OnlineContext, PendingTagMirror,
@@ -700,6 +702,22 @@ impl LibraryStore for FaultyStore {
             ));
         }
         self.inner.save_device_manifest(id, entries)
+    }
+
+    fn record_device_manifest_entry(
+        &self,
+        id: &SyncDeviceId,
+        entry: &SyncManifestEntry,
+    ) -> StoreResult<()> {
+        self.inner.record_device_manifest_entry(id, entry)
+    }
+
+    fn forget_device_manifest_entry(
+        &self,
+        id: &SyncDeviceId,
+        path: &DeviceRelativePath,
+    ) -> StoreResult<()> {
+        self.inner.forget_device_manifest_entry(id, path)
     }
 
     fn device_manifest(&self, id: &SyncDeviceId) -> StoreResult<Vec<SyncManifestEntry>> {

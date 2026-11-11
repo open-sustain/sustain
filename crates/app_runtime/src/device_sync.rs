@@ -18,10 +18,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sustain_device_mtp::MtpTransport;
 use sustain_device_sync::{
-    ConnectedDevice, DeviceRoot, DeviceTarget, DeviceTransport, PioneerTrackAnalysis,
-    PreparedPioneerAssets, PreparedSyncRequest, SourceSnapshot, SyncInputPlaylist, SyncInputTrack,
-    SyncOutcome, SyncProgress, SyncRequest, SyncStage, engine, resolve_source_fingerprint,
-    source_file_stat,
+    ConnectedDevice, DeviceRoot, DeviceTarget, DeviceTransport, JournalError, ManifestJournal,
+    PioneerTrackAnalysis, PreparedPioneerAssets, PreparedSyncRequest, SourceSnapshot, SyncFailure,
+    SyncInputPlaylist, SyncInputTrack, SyncOutcome, SyncProgress, SyncRequest, SyncStage, engine,
+    resolve_source_fingerprint, source_file_stat,
 };
 use sustain_domain::{
     DeviceLayout, DeviceRelativePath, FilesPerFolderCap, Playlist, PlaylistItem, SmartPlaylist,
@@ -625,9 +625,8 @@ impl ApplicationRuntime {
         };
         match self
             .device_sync_scheduler
-            .start(id, move |progress, cancel| {
-                preparation.run(progress, cancel)
-            }) {
+            .start(move |progress, cancel| preparation.run(progress, cancel))
+        {
             DeviceSyncStartOutcome::Started(_) => {
                 let notification = self.push_persistent_notification(
                     NotificationCategory::DeviceSync,
@@ -656,8 +655,7 @@ impl ApplicationRuntime {
     }
 
     /// Apply a sync event drained from the worker channel: update the
-    /// progress notification, or on completion persist the manifest and
-    /// publish the outcome.
+    /// progress notification, or on completion publish the outcome.
     pub fn apply_device_sync_event(&mut self, event: DeviceSyncEvent) {
         match event {
             DeviceSyncEvent::Progress { run_id, progress } => {
@@ -671,75 +669,37 @@ impl ApplicationRuntime {
                     );
                 }
             }
-            DeviceSyncEvent::Finished { run_id, completion } => {
+            DeviceSyncEvent::Finished { run_id, result } => {
                 if !self.device_sync_scheduler.is_active_run(run_id) {
                     return;
                 }
                 if let Some(id) = self.device_sync_notification_id.take() {
                     self.dismiss_notification(id);
                 }
-                match completion.result {
+                match result {
                     Ok(outcome) => {
-                        let manifest_saved = !outcome.manifest_is_authoritative
-                            || self.save_device_manifest(&completion.device_id, &outcome.manifest);
-                        if !manifest_saved {
-                            self.push_ephemeral_notification(
-                                NotificationCategory::DeviceSync,
-                                NotificationSeverity::Error,
-                                "Device sync failed: could not save the on-device manifest."
-                                    .to_owned(),
-                            );
+                        let severity = if outcome.cancelled || !outcome.copy_failures.is_empty() {
+                            NotificationSeverity::Warning
                         } else {
-                            let severity = if outcome.cancelled || !outcome.copy_failures.is_empty()
-                            {
-                                NotificationSeverity::Warning
-                            } else {
-                                NotificationSeverity::Info
-                            };
-                            self.push_ephemeral_notification(
-                                NotificationCategory::DeviceSync,
-                                severity,
-                                notifications::device_sync_outcome_text(&outcome),
-                            );
-                        }
-                    }
-                    Err(failure) => {
-                        // A run that failed part-way still changed the
-                        // device; its manifest is what the next sync diffs
-                        // against.
-                        let manifest_saved = failure.manifest.as_ref().is_none_or(|manifest| {
-                            self.save_device_manifest(&completion.device_id, manifest)
-                        });
-                        let body = if manifest_saved {
-                            format!("Device sync failed: {}", failure.message)
-                        } else {
-                            format!(
-                                "Device sync failed: {}; could not save the on-device manifest.",
-                                failure.message
-                            )
+                            NotificationSeverity::Info
                         };
                         self.push_ephemeral_notification(
                             NotificationCategory::DeviceSync,
+                            severity,
+                            notifications::device_sync_outcome_text(&outcome),
+                        );
+                    }
+                    Err(failure) => {
+                        self.push_ephemeral_notification(
+                            NotificationCategory::DeviceSync,
                             NotificationSeverity::Error,
-                            body,
+                            format!("Device sync failed: {}", failure.message),
                         );
                     }
                 }
                 self.device_sync_scheduler.acknowledge_completion(run_id);
             }
         }
-    }
-
-    /// Persist `manifest` as what `device_id` holds. Returns whether it
-    /// was saved.
-    fn save_device_manifest(
-        &self,
-        device_id: &SyncDeviceId,
-        manifest: &[SyncManifestEntry],
-    ) -> bool {
-        self.library_store
-            .as_ref()
-            .is_some_and(|store| store.save_device_manifest(device_id, manifest).is_ok())
     }
 
     // --- Resolution helpers ---
@@ -831,10 +791,10 @@ impl DeviceSyncPreparation {
         ) {
             Ok(Some(request)) => request,
             Ok(None) => return Ok(cancelled_outcome()),
-            Err(error) => return Err(DeviceSyncFailure::before_device(error)),
+            Err(error) => return Err(DeviceSyncFailure::new(error)),
         };
         if request.tracks.is_empty() {
-            return Err(DeviceSyncFailure::before_device(
+            return Err(DeviceSyncFailure::new(
                 sustain_device_sync::SyncError::Empty.to_string(),
             ));
         }
@@ -847,17 +807,72 @@ impl DeviceSyncPreparation {
         ) {
             Ok(Some(request)) => request,
             Ok(None) => return Ok(cancelled_outcome()),
-            Err(error) => return Err(DeviceSyncFailure::before_device(error.to_string())),
+            Err(error) => return Err(DeviceSyncFailure::new(error.to_string())),
         };
         let transport = open_transport(&self.mount.target).map_err(|error| {
-            DeviceSyncFailure::before_device(format!("could not open the device: {error}"))
+            DeviceSyncFailure::new(format!("could not open the device: {error}"))
         })?;
-        Ok(engine::sync(
+        let device_id = &self.mount.device_id;
+        let mut journal = StoreManifestJournal {
+            store: self.store.as_ref(),
+            device_id,
+        };
+        let synced = engine::sync(
             transport.as_ref(),
             &prepared,
+            &mut journal,
             progress,
             cancelled,
-        )?)
+        );
+        save_synced_manifest(self.store.as_ref(), device_id, synced)
+    }
+}
+
+/// Records each change a sync makes to the device in the device's saved
+/// manifest as it is made, so that a run the process does not survive
+/// leaves the next one knowing which files are already there.
+struct StoreManifestJournal<'a> {
+    store: &'a dyn LibraryStore,
+    device_id: &'a SyncDeviceId,
+}
+
+impl ManifestJournal for StoreManifestJournal<'_> {
+    fn record(&mut self, entry: &SyncManifestEntry) -> Result<(), JournalError> {
+        self.store
+            .record_device_manifest_entry(self.device_id, entry)
+            .map_err(JournalError::from)
+    }
+
+    fn forget(&mut self, path: &DeviceRelativePath) -> Result<(), JournalError> {
+        self.store
+            .forget_device_manifest_entry(self.device_id, path)
+            .map_err(JournalError::from)
+    }
+}
+
+/// Save the manifest a sync reports — however it ended, it describes what
+/// the device holds — in place of what the journal pieced together.
+fn save_synced_manifest(
+    store: &dyn LibraryStore,
+    device_id: &SyncDeviceId,
+    synced: Result<SyncOutcome, SyncFailure>,
+) -> Result<SyncOutcome, DeviceSyncFailure> {
+    match synced {
+        Ok(outcome) => match store.save_device_manifest(device_id, &outcome.manifest) {
+            Ok(()) => Ok(outcome),
+            Err(error) => Err(DeviceSyncFailure::new(format!(
+                "could not save the on-device manifest: {error}"
+            ))),
+        },
+        Err(failure) => {
+            let message = failure.error.to_string();
+            Err(DeviceSyncFailure::new(
+                match store.save_device_manifest(device_id, &failure.manifest) {
+                    Ok(()) => message,
+                    Err(_) => format!("{message}; could not save the on-device manifest"),
+                },
+            ))
+        }
     }
 }
 
@@ -1294,10 +1309,13 @@ mod tests {
     use sustain_library_store::{LibraryStore, SqliteLibraryStore};
     use sustain_metadata::{InitialTags, MetadataResult, MetadataService};
 
+    use sustain_device_sync::{ManifestJournal, SyncError, SyncFailure, SyncOutcome};
+    use sustain_domain::SyncManifestEntry;
+
     use super::{
         ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
-        DeviceSyncPlanState, build_worker_sync_request, prepare_sync_request, sync_input_track,
-        unix_to_ymd,
+        DeviceSyncPlanState, StoreManifestJournal, build_worker_sync_request, prepare_sync_request,
+        save_synced_manifest, sync_input_track, unix_to_ymd,
     };
     use crate::ApplicationRuntime;
 
@@ -1693,5 +1711,113 @@ mod tests {
         assert!(prepared.is_none());
         assert_eq!(metadata.artwork_reads(), 1);
         assert!(ticks.is_empty());
+    }
+
+    /// A store knowing a USB drive that holds `a.mp3` and `b.mp3`.
+    fn store_with_manifest() -> (SqliteLibraryStore, SyncDeviceId) {
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+        let device = SyncDevice {
+            id: SyncDeviceId::new("usb").expect("device id"),
+            label: "USB".to_owned(),
+            kind: DeviceKind::UsbDrive,
+            layout: DeviceLayout::Pioneer,
+            sub_path: DeviceRelativePath::root(),
+            files_per_folder_cap: FilesPerFolderCap::Unlimited,
+            volume_id: None,
+        };
+        store.save_sync_device(&device).expect("save device");
+        store
+            .save_device_manifest(
+                &device.id,
+                &[manifest_entry(1, "a.mp3"), manifest_entry(2, "b.mp3")],
+            )
+            .expect("save manifest");
+        (store, device.id)
+    }
+
+    fn manifest_entry(track: i64, path: &str) -> SyncManifestEntry {
+        SyncManifestEntry {
+            track_id: TrackId::new(track).expect("track id"),
+            on_device_path: DeviceRelativePath::new(path).expect("device path"),
+            fingerprint: format!("fingerprint-{track}"),
+            anlz: None,
+        }
+    }
+
+    #[test]
+    fn the_journal_keeps_the_saved_manifest_in_step_with_the_device() {
+        let (store, device_id) = store_with_manifest();
+        let mut journal = StoreManifestJournal {
+            store: &store,
+            device_id: &device_id,
+        };
+        journal
+            .record(&manifest_entry(3, "c.mp3"))
+            .expect("record a copy");
+        journal
+            .forget(&DeviceRelativePath::new("a.mp3").expect("device path"))
+            .expect("record a removal");
+
+        assert_eq!(
+            store.device_manifest(&device_id).expect("load manifest"),
+            vec![manifest_entry(2, "b.mp3"), manifest_entry(3, "c.mp3")]
+        );
+    }
+
+    #[test]
+    fn the_manifest_a_sync_reports_is_saved_however_it_ended() {
+        let (store, device_id) = store_with_manifest();
+        let outcome = SyncOutcome {
+            copied: 1,
+            manifest: vec![manifest_entry(3, "c.mp3")],
+            ..SyncOutcome::default()
+        };
+        let saved = save_synced_manifest(&store, &device_id, Ok(outcome.clone()));
+        assert_eq!(saved.expect("the sync succeeded"), outcome);
+        assert_eq!(
+            store.device_manifest(&device_id).expect("load manifest"),
+            vec![manifest_entry(3, "c.mp3")]
+        );
+
+        let failure = SyncFailure {
+            error: SyncError::io("d.mp3", std::io::Error::other("No space left on device")),
+            manifest: vec![manifest_entry(4, "d.mp3")],
+        };
+        let failed =
+            save_synced_manifest(&store, &device_id, Err(failure)).expect_err("the sync failed");
+        assert_eq!(failed.message, "d.mp3: No space left on device");
+        assert_eq!(
+            store.device_manifest(&device_id).expect("load manifest"),
+            vec![manifest_entry(4, "d.mp3")]
+        );
+    }
+
+    #[test]
+    fn a_manifest_that_cannot_be_saved_fails_the_sync() {
+        let (backing, device_id) = store_with_manifest();
+        let store = crate::test_store::FaultyStore::new(std::sync::Arc::new(backing));
+        store.set_fail_device_manifest(true);
+
+        let failed = save_synced_manifest(&store, &device_id, Ok(SyncOutcome::default()))
+            .expect_err("an unsaved manifest fails the sync");
+        assert!(
+            failed
+                .message
+                .starts_with("could not save the on-device manifest"),
+            "{}",
+            failed.message
+        );
+
+        let failure = SyncFailure {
+            error: SyncError::Empty,
+            manifest: Vec::new(),
+        };
+        let failed =
+            save_synced_manifest(&store, &device_id, Err(failure)).expect_err("the sync failed");
+        assert_eq!(
+            failed.message,
+            "the selection contains no tracks; could not save the on-device manifest"
+        );
+        assert_eq!(store.device_manifest_calls(), 2);
     }
 }

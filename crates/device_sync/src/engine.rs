@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use sustain_domain::{AnlzRecord, DeviceLayout, DeviceRelativePath, SyncManifestEntry};
 use sustain_pioneer::path_hash::AnlzSlot;
 
+use crate::journal::ManifestJournal;
 use crate::layout;
 use crate::model::{
     GenreBytes, Placement, PreparedSyncRequest, SyncError, SyncFailure, SyncOutcome, SyncPlan,
@@ -178,9 +179,10 @@ fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreByte
     breakdown
 }
 
-/// Run the sync. `progress` is called as files are processed; `cancel`
-/// is polled cooperatively between files and lets a long copy stop early
-/// without corrupting the device. The returned manifest preserves files
+/// Run the sync. `journal` is told of each change to what the device
+/// holds as it is made; `progress` is called as files are processed;
+/// `cancel` is polled cooperatively between files and lets a long copy
+/// stop early without corrupting the device. The returned manifest preserves files
 /// known to be present: unchanged files, successful writes, and every
 /// previous file the run left alone — stale files kept or not reached, and
 /// files a cancelled run did not get to replace. Recoverable per-track copy
@@ -194,6 +196,7 @@ fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreByte
 pub fn sync(
     transport: &dyn DeviceTransport,
     req: &PreparedSyncRequest,
+    journal: &mut dyn ManifestJournal,
     progress: &mut dyn FnMut(SyncProgress),
     cancel: &dyn Fn() -> bool,
 ) -> Result<SyncOutcome, SyncFailure> {
@@ -208,7 +211,6 @@ pub fn sync(
         return Ok(SyncOutcome {
             cancelled: true,
             manifest: req.previous_manifest.clone(),
-            manifest_is_authoritative: true,
             ..SyncOutcome::default()
         });
     }
@@ -229,7 +231,7 @@ pub fn sync(
     let diff = compute_diff(req, transport, &base, &placements).map_err(untouched)?;
 
     let mut run = Run::new(req, &placements, &diff);
-    match run.execute(transport, &base, progress, cancel) {
+    match run.execute(transport, &base, journal, progress, cancel) {
         Ok(()) => Ok(run.into_outcome()),
         Err(error) => Err(SyncFailure {
             error,
@@ -327,6 +329,7 @@ impl<'a> Run<'a> {
         &mut self,
         transport: &dyn DeviceTransport,
         base: &DeviceRelativePath,
+        journal: &mut dyn ManifestJournal,
         progress: &mut dyn FnMut(SyncProgress),
         cancel: &dyn Fn() -> bool,
     ) -> Result<(), SyncError> {
@@ -345,6 +348,7 @@ impl<'a> Run<'a> {
                 .filter(|anlz| !kept_anlz.contains(&anlz.dat_path));
             remove_placement(transport, base, rel, anlz)?;
             self.removed.insert(rel);
+            journal.forget(rel).map_err(SyncError::Journal)?;
         }
 
         let total = diff.to_write.len();
@@ -356,7 +360,14 @@ impl<'a> Run<'a> {
             let placement = &placements[placement_index];
             let track = &req.tracks[placement.track_index];
             let dest = base.join(&placement.rel_path);
+            // Whatever the write leaves in the slot, the file the manifest
+            // knew there is gone.
             self.claim(placement_index);
+            if diff.updates.contains(&placement_index) {
+                journal
+                    .forget(&placement.rel_path)
+                    .map_err(SyncError::Journal)?;
+            }
             match transport.copy_file(&track.source_path, &dest, &track.source.stat) {
                 Ok(()) => {
                     if diff.updates.contains(&placement_index) {
@@ -366,6 +377,8 @@ impl<'a> Run<'a> {
                     }
                     self.written += 1;
                     self.keep(placement_index);
+                    let entry = self.manifest.last().expect("the write was just kept");
+                    journal.record(entry).map_err(SyncError::Journal)?;
                 }
                 Err(error) if transport.can_continue_after_copy_error(&error) => {
                     self.outcome.copy_failures.push(SyncTrackFailure {
@@ -428,6 +441,7 @@ impl<'a> Run<'a> {
                     .filter(|anlz| !kept_anlz.contains(&anlz.dat_path));
                 remove_placement(transport, base, rel, anlz)?;
                 self.removed.insert(rel);
+                journal.forget(rel).map_err(SyncError::Journal)?;
                 self.outcome.removed += 1;
                 progress(SyncProgress {
                     stage: SyncStage::Removing,
@@ -463,7 +477,6 @@ impl<'a> Run<'a> {
     fn into_outcome(self) -> SyncOutcome {
         SyncOutcome {
             manifest: self.device_manifest(),
-            manifest_is_authoritative: true,
             ..self.outcome
         }
     }

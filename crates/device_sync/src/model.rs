@@ -313,11 +313,6 @@ pub struct SyncOutcome {
     pub unplayable: usize,
     /// The new manifest to persist.
     pub manifest: Vec<SyncManifestEntry>,
-    /// True once the engine has assembled a manifest representing the
-    /// on-device state. Worker-preparation cancellation happens before any
-    /// removable-media mutation and leaves this false, so callers preserve
-    /// the previously stored manifest.
-    pub manifest_is_authoritative: bool,
     /// True if the run stopped early because cancellation was requested.
     pub cancelled: bool,
 }
@@ -341,6 +336,8 @@ pub enum SyncError {
     },
     /// The Pioneer PDB could not be assembled.
     Pdb(sustain_pioneer::PdbError),
+    /// A change to the device could not be recorded in the journal.
+    Journal(crate::journal::JournalError),
     /// Live source preparation failed before removable-media mutation.
     Preparation(String),
     /// The selection resolved to no tracks.
@@ -373,6 +370,7 @@ impl std::fmt::Display for SyncError {
         match self {
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
             Self::Pdb(error) => write!(f, "Pioneer database: {error}"),
+            Self::Journal(error) => write!(f, "could not record the sync's progress: {error}"),
             Self::Preparation(message) => write!(f, "source preparation failed: {message}"),
             Self::Empty => write!(f, "the selection contains no tracks"),
             Self::Planning(message) => write!(f, "device path planning failed: {message}"),
@@ -385,6 +383,7 @@ impl std::error::Error for SyncError {
         match self {
             Self::Io { source, .. } => Some(source),
             Self::Pdb(error) => Some(error),
+            Self::Journal(error) => Some(error.as_ref()),
             Self::Empty | Self::Planning(_) | Self::Preparation(_) => None,
         }
     }

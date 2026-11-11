@@ -8,7 +8,7 @@
 //! loop. The scheduler owns that worker until the runtime applies its
 //! identified completion. Keeping the run active through completion
 //! application prevents a late event from one run mutating the
-//! notification or manifest state of a newer run.
+//! notification state of a newer run.
 
 use std::sync::{
     Arc, Mutex,
@@ -16,8 +16,7 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 
-use sustain_device_sync::{SyncFailure, SyncOutcome, SyncProgress};
-use sustain_domain::{SyncDeviceId, SyncManifestEntry};
+use sustain_device_sync::{SyncOutcome, SyncProgress};
 
 /// Monotonically increasing identity for one accepted device-sync run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,17 +29,11 @@ pub enum DeviceSyncEvent {
         run_id: DeviceSyncRunId,
         progress: SyncProgress,
     },
+    /// The run is over, and what it left on the device is saved.
     Finished {
         run_id: DeviceSyncRunId,
-        completion: DeviceSyncCompletion,
+        result: Result<SyncOutcome, DeviceSyncFailure>,
     },
-}
-
-/// The final result of a sync run.
-#[derive(Debug)]
-pub struct DeviceSyncCompletion {
-    pub device_id: SyncDeviceId,
-    pub result: Result<SyncOutcome, DeviceSyncFailure>,
 }
 
 /// A sync run that ended on an error. The error is stringified because the
@@ -49,28 +42,11 @@ pub struct DeviceSyncCompletion {
 #[derive(Debug)]
 pub struct DeviceSyncFailure {
     pub message: String,
-    /// What the device holds after the run, once the engine got to it:
-    /// files it wrote before the error must stay tracked. `None` when the
-    /// run failed before reaching the device, keeping the saved manifest.
-    pub manifest: Option<Vec<SyncManifestEntry>>,
 }
 
 impl DeviceSyncFailure {
-    /// A failure before the run reached the device.
-    pub fn before_device(message: String) -> Self {
-        Self {
-            message,
-            manifest: None,
-        }
-    }
-}
-
-impl From<SyncFailure> for DeviceSyncFailure {
-    fn from(failure: SyncFailure) -> Self {
-        Self {
-            message: failure.error.to_string(),
-            manifest: Some(failure.manifest),
-        }
+    pub fn new(message: String) -> Self {
+        Self { message }
     }
 }
 
@@ -157,7 +133,6 @@ impl DeviceSyncScheduler {
     /// identified completion after applying it.
     pub fn start(
         &self,
-        device_id: SyncDeviceId,
         task: impl FnOnce(
             &mut dyn FnMut(SyncProgress),
             &dyn Fn() -> bool,
@@ -165,10 +140,10 @@ impl DeviceSyncScheduler {
         + Send
         + 'static,
     ) -> DeviceSyncStartOutcome {
-        self.start_task(device_id, Box::new(task))
+        self.start_task(Box::new(task))
     }
 
-    fn start_task(&self, device_id: SyncDeviceId, task: SyncTask) -> DeviceSyncStartOutcome {
+    fn start_task(&self, task: SyncTask) -> DeviceSyncStartOutcome {
         let mut state = self
             .state
             .lock()
@@ -200,10 +175,7 @@ impl DeviceSyncScheduler {
                 };
                 let cancelled = || cancel.load(Ordering::Acquire);
                 let result = task(&mut on_progress, &cancelled);
-                let _ = sender.send_blocking(DeviceSyncEvent::Finished {
-                    run_id,
-                    completion: DeviceSyncCompletion { device_id, result },
-                });
+                let _ = sender.send_blocking(DeviceSyncEvent::Finished { run_id, result });
             });
 
         match spawn_result {
@@ -265,7 +237,6 @@ impl DeviceSyncScheduler {
     #[cfg(test)]
     pub(crate) fn start_test_task(
         &self,
-        device_id: SyncDeviceId,
         task: impl FnOnce(
             &mut dyn FnMut(SyncProgress),
             &dyn Fn() -> bool,
@@ -273,7 +244,7 @@ impl DeviceSyncScheduler {
         + Send
         + 'static,
     ) -> DeviceSyncStartOutcome {
-        self.start_task(device_id, Box::new(task))
+        self.start_task(Box::new(task))
     }
 }
 
@@ -299,13 +270,8 @@ mod tests {
     use std::time::Duration;
 
     use sustain_device_sync::{SyncOutcome, SyncProgress, SyncStage};
-    use sustain_domain::SyncDeviceId;
 
     use super::{DeviceSyncEvent, DeviceSyncScheduler, DeviceSyncStartOutcome};
-
-    fn device_id() -> SyncDeviceId {
-        SyncDeviceId::new("device-id").expect("device id")
-    }
 
     #[test]
     fn idle_scheduler_never_reports_cancelling() {
@@ -319,8 +285,7 @@ mod tests {
     #[test]
     fn completion_keeps_the_scheduler_busy_until_acknowledged() {
         let scheduler = DeviceSyncScheduler::new();
-        let first =
-            scheduler.start_test_task(device_id(), |_progress, _cancel| Ok(SyncOutcome::default()));
+        let first = scheduler.start_test_task(|_progress, _cancel| Ok(SyncOutcome::default()));
         assert!(matches!(first, DeviceSyncStartOutcome::Started(_)));
         let DeviceSyncStartOutcome::Started(first_id) = first else {
             return;
@@ -333,14 +298,12 @@ mod tests {
             event,
             DeviceSyncEvent::Finished {
                 run_id,
-                completion: _
+                result: _
             } if run_id == first_id
         ));
         assert!(scheduler.is_syncing());
         assert_eq!(
-            scheduler.start_test_task(device_id(), |_progress, _cancel| {
-                Ok(SyncOutcome::default())
-            }),
+            scheduler.start_test_task(|_progress, _cancel| { Ok(SyncOutcome::default()) }),
             DeviceSyncStartOutcome::AlreadyRunning
         );
         assert!(scheduler.acknowledge_completion(first_id));
@@ -350,7 +313,7 @@ mod tests {
     #[test]
     fn progress_and_completion_carry_the_same_run_id() {
         let scheduler = DeviceSyncScheduler::new();
-        let started = scheduler.start_test_task(device_id(), |progress, _cancel| {
+        let started = scheduler.start_test_task(|progress, _cancel| {
             progress(SyncProgress {
                 stage: SyncStage::Copying,
                 completed: 1,
@@ -373,7 +336,7 @@ mod tests {
             scheduler.event_receiver().recv_blocking(),
             Ok(DeviceSyncEvent::Finished {
                 run_id: event_run_id,
-                completion: _
+                result: _
             }) if event_run_id == run_id
         ));
         assert!(scheduler.acknowledge_completion(run_id));
@@ -384,7 +347,7 @@ mod tests {
         let scheduler = DeviceSyncScheduler::new();
         let (worker_started_tx, worker_started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        let started = scheduler.start(device_id(), move |_progress, _cancel| {
+        let started = scheduler.start(move |_progress, _cancel| {
             worker_started_tx.send(()).expect("signal worker start");
             release_rx.recv().expect("release worker");
             Ok(SyncOutcome::default())
@@ -403,7 +366,7 @@ mod tests {
             scheduler.event_receiver().recv_blocking(),
             Ok(DeviceSyncEvent::Finished {
                 run_id: event_run_id,
-                completion: _
+                result: _
             }) if event_run_id == run_id
         ));
         assert!(scheduler.acknowledge_completion(run_id));
@@ -416,7 +379,7 @@ mod tests {
         let observed_for_worker = cancellation_observed.clone();
         let (started_tx, started_rx) = mpsc::channel();
         assert!(matches!(
-            scheduler.start_test_task(device_id(), move |_progress, cancel| {
+            scheduler.start_test_task(move |_progress, cancel| {
                 started_tx.send(()).expect("signal worker start");
                 while !cancel() {
                     std::thread::sleep(Duration::from_millis(1));
