@@ -1514,7 +1514,7 @@ impl ApplicationRuntime {
                 if completed > 0 || failed > 0 {
                     self.push_ephemeral_notification(
                         NotificationCategory::AnalysisBackground,
-                        NotificationSeverity::Info,
+                        notifications::analysis_background_outcome_severity(failed),
                         notifications::analysis_background_outcome_text(completed, failed),
                     );
                 }

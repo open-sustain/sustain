@@ -363,20 +363,28 @@ pub fn analysis_background_running_text(processed: u32, total: u32) -> String {
 }
 
 pub fn analysis_background_outcome_text(completed: u32, failed: u32) -> String {
+    let analyzed = format!(
+        "Analyzed {completed} {}",
+        pluralize(completed as usize, "track", "tracks"),
+    );
+    let not_analyzed = format!(
+        "{failed} {} could not be analyzed",
+        pluralize(failed as usize, "track", "tracks"),
+    );
+    match (completed, failed) {
+        (_, 0) => format!("{analyzed}."),
+        (0, _) => format!("{not_analyzed}."),
+        _ => format!("{analyzed}; {not_analyzed}."),
+    }
+}
+
+/// How serious the end of an analysis batch is: a track that could not be
+/// analyzed has no BPM, key or beat grid to show for it.
+pub fn analysis_background_outcome_severity(failed: u32) -> NotificationSeverity {
     if failed == 0 {
-        format!(
-            "Analyzed {} {}.",
-            completed,
-            pluralize(completed as usize, "track", "tracks"),
-        )
+        NotificationSeverity::Info
     } else {
-        format!(
-            "Analyzed {} {}, {} {} skipped.",
-            completed,
-            pluralize(completed as usize, "track", "tracks"),
-            failed,
-            pluralize(failed as usize, "track", "tracks"),
-        )
+        NotificationSeverity::Warning
     }
 }
 

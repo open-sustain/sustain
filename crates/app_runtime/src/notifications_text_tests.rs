@@ -226,3 +226,32 @@ fn device_sync_outcome_names_tracks_the_device_cannot_play() {
         "Device already up to date; 1 track left off: the device cannot play its format."
     );
 }
+
+#[test]
+fn analysis_outcome_says_which_tracks_could_not_be_analyzed() {
+    assert_eq!(
+        analysis_background_outcome_text(12, 0),
+        "Analyzed 12 tracks."
+    );
+    assert_eq!(
+        analysis_background_outcome_text(12, 1),
+        "Analyzed 12 tracks; 1 track could not be analyzed."
+    );
+    // Nothing was analyzed: the batch must not read as a success.
+    assert_eq!(
+        analysis_background_outcome_text(0, 2),
+        "2 tracks could not be analyzed."
+    );
+}
+
+#[test]
+fn an_analysis_batch_with_a_failure_is_a_warning() {
+    assert_eq!(
+        analysis_background_outcome_severity(0),
+        NotificationSeverity::Info
+    );
+    assert_eq!(
+        analysis_background_outcome_severity(1),
+        NotificationSeverity::Warning
+    );
+}
