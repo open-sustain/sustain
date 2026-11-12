@@ -20,6 +20,9 @@ path = "src/lib.rs"
 # 0.6 brings SIMD-by-default decode, decode-from-non-owning-packets, and
 # the hardened MP4/MKV demuxers.
 symphonia = { version = "0.6", features = [
+    # MPEG audio Layers I and II also travel in `.mp3` files.
+    "mp1",
+    "mp2",
     "mp3",
     "aac",
     "alac",

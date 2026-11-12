@@ -368,6 +368,36 @@ mod tests {
         ((value as f64 + 1.0) / 2.0) * (frames - 1) as f64
     }
 
+    /// Silent MPEG-1 audio at 44.1 kHz: `frame_count` frames that open
+    /// with `header` and carry a zeroed payload, which allocates no bits to
+    /// any subband.
+    fn write_silent_mpeg_audio(
+        path: &std::path::Path,
+        header: [u8; 4],
+        frame_len: usize,
+        frame_count: usize,
+    ) {
+        let mut frame = header.to_vec();
+        frame.resize(frame_len, 0);
+        std::fs::write(path, frame.repeat(frame_count)).expect("write mpeg fixture");
+    }
+
+    #[test]
+    fn decode_full_reads_the_older_mpeg_audio_layers_an_mp3_file_may_hold() {
+        // Layers I and II also travel in `.mp3` files, and play.
+        let layer_one = ([0xFF, 0xFF, 0x90, 0x00], 312, 384); // 288 kbps
+        let layer_two = ([0xFF, 0xFD, 0x90, 0x00], 522, 1152); // 160 kbps
+        for (header, frame_len, samples_per_frame) in [layer_one, layer_two] {
+            let dir = TempDir::new().expect("temp dir");
+            let path = dir.path().join("older-layer.mp3");
+            write_silent_mpeg_audio(&path, header, frame_len, 100);
+
+            let audio = decode_full(&path).expect("decode an older MPEG audio layer");
+            assert_eq!(audio.sample_rate, 44_100);
+            assert_eq!(audio.samples.len(), 100 * samples_per_frame);
+        }
+    }
+
     #[test]
     fn decode_full_reads_the_whole_track() {
         let dir = TempDir::new().expect("temp dir");
