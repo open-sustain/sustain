@@ -52,6 +52,11 @@ fn initial_tags_from_tagged_file(
         .or_else(|| tagged_file.first_tag())
         .filter(|_| read_tags);
     let properties = tagged_file.properties();
+    // lofty guesses the length and bitrate of an MP3 that declares no
+    // frame count from its first frame alone; see `mpeg_frame`.
+    let mpeg_audio_extent = (tagged_file.file_type() == FileType::Mpeg)
+        .then(|| mpeg_frame::audio_extent(path))
+        .flatten();
 
     let mut metadata = TrackMetadata {
         title: tag.and_then(|tag| tag.title().map(|value| value.into_owned())),
@@ -109,8 +114,11 @@ fn initial_tags_from_tagged_file(
         composer_sort: tag
             .and_then(|tag| tag.get_string(ItemKey::ComposerSortOrder))
             .map(ToOwned::to_owned),
-        duration: Some(properties.duration()),
-        bitrate_kbps: properties.audio_bitrate().or(properties.overall_bitrate()),
+        duration: Some(mpeg_audio_extent.map_or(properties.duration(), |extent| extent.duration)),
+        bitrate_kbps: mpeg_audio_extent
+            .and_then(|extent| extent.measured_bitrate_kbps)
+            .or(properties.audio_bitrate())
+            .or(properties.overall_bitrate()),
         sample_rate_hz: properties.sample_rate(),
         bit_depth: properties.bit_depth(),
         channels: properties.channels(),
