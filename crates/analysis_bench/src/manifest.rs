@@ -12,11 +12,13 @@
 //! baseline.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sustain_analysis::AnalysisOptions;
 
 use crate::fixtures::Synthetic;
-use crate::metrics::AnnotatedBeat;
+use crate::metrics::{self, AnnotatedBeat, GridComparison};
 
 /// One analyzer capability. Selecting a subset is the point of the
 /// capability-gated pipeline: a BPM-only run must not pay for key, chroma,
@@ -78,6 +80,18 @@ pub struct Options {
     pub tasks: Option<Vec<Task>>,
 }
 
+impl Options {
+    /// The analyzer options these resolve to, the analyzer's own defaults
+    /// where they are silent.
+    pub fn analysis_options(&self) -> AnalysisOptions {
+        let defaults = AnalysisOptions::default();
+        AnalysisOptions {
+            min_bpm: self.min_bpm.unwrap_or(defaults.min_bpm),
+            max_bpm: self.max_bpm.unwrap_or(defaults.max_bpm),
+        }
+    }
+}
+
 /// One track in a manifest.
 #[derive(Clone, Debug, Deserialize)]
 pub struct TrackEntry {
@@ -126,6 +140,37 @@ pub struct ReferenceGrid {
     pub first_beat_secs: f64,
     /// That beat's position in its bar, 1 (the downbeat) to 4.
     pub first_beat_number: u8,
+}
+
+/// A track's grid ground truth, as a predicted grid is judged against it.
+#[derive(Clone, Copy, Debug)]
+pub enum GridReference<'a> {
+    /// Beats a person marked.
+    Beats(&'a [AnnotatedBeat]),
+    /// A reference grid, probed at 10 %, 50 % and 90 % of the track's
+    /// `duration`.
+    Grid {
+        grid: ReferenceGrid,
+        duration: Duration,
+    },
+}
+
+impl GridReference<'_> {
+    /// How `predicted` relates to the ground truth.
+    pub fn compare(&self, predicted: metrics::Grid) -> GridComparison {
+        match *self {
+            Self::Beats(beats) => metrics::compare_with_beats(predicted, beats),
+            Self::Grid { grid, duration } => {
+                let secs = duration.as_secs_f64();
+                let reference = metrics::Grid {
+                    bpm: grid.bpm,
+                    first_beat_secs: grid.first_beat_secs,
+                    first_beat_number: grid.first_beat_number,
+                };
+                metrics::compare_grids(predicted, reference, &[secs * 0.1, secs * 0.5, secs * 0.9])
+            }
+        }
+    }
 }
 
 /// A malformed manifest.
@@ -233,6 +278,17 @@ pub(crate) fn annotated_beats_problem(
 }
 
 impl TrackEntry {
+    /// The track's grid ground truth: its annotated beats, or its
+    /// reference grid probed across `duration`. `None` without either, or
+    /// with a reference grid but no duration.
+    pub fn grid_reference(&self, duration: Option<Duration>) -> Option<GridReference<'_>> {
+        match (&self.beats, self.beat_grid.zip(duration)) {
+            (Some(beats), _) => Some(GridReference::Beats(beats)),
+            (None, Some((grid, duration))) => Some(GridReference::Grid { grid, duration }),
+            (None, None) => None,
+        }
+    }
+
     /// The capabilities to run for this track: its own override, else the
     /// run default, else every capability.
     pub fn effective_tasks(&self, options: &Options) -> Vec<Task> {

@@ -46,14 +46,16 @@
 //!    snare and voice outvote a kick syncopated onto the off-beats.
 //! 3. **Bar phase.** Music changes at bar lines — chords, bass notes, new
 //!    parts entering. The spectrum of each beat is compared with the
-//!    previous beat's; the beat position, of the four, that carries the
-//!    most change starts the bar.
+//!    beats around it, and a learned model picks the beat position, of
+//!    the four, the changes say starts the bar (`downbeat`).
 
 use std::time::Duration;
 
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex;
 use sustain_domain::{BEATS_PER_BAR, BeatGrid, Bpm};
+
+use crate::downbeat::BarPositionFeatures;
 
 /// Analysis frame at 44.1/48 kHz (~46 ms), doubled per octave of sample
 /// rate above that so the frame spans the same time at any rate.
@@ -62,7 +64,7 @@ const BASE_SAMPLE_RATE: u32 = 44_100;
 /// Frames advance by an eighth of a frame (~5.8 ms at 44.1 kHz).
 const HOP_DIVISOR: usize = 8;
 /// Log-spaced bands the spectrum is summed into.
-const BAND_COUNT: usize = 24;
+pub(crate) const BAND_COUNT: usize = 24;
 const LOWEST_BAND_HZ: f64 = 30.0;
 const HIGHEST_BAND_HZ: f64 = 16_000.0;
 /// The bands centered in this range (Hz) make up the kick band.
@@ -226,6 +228,18 @@ impl Onsets {
     /// The beat grid at `tempo`. `None` when the audio is too short to
     /// hold [`MIN_BEATS`] beats.
     pub(crate) fn beat_grid(&self, tempo: Bpm) -> Option<BeatGrid> {
+        self.beat_grid_and_bars(tempo).map(|(grid, _)| grid)
+    }
+
+    /// The beat grid at `tempo`, and the evidence its downbeat was chosen
+    /// from, position 0 being the grid's first beat. The evidence is
+    /// `None` when there are too few beats to read bars from; the first
+    /// beat then starts a bar. `None` when the audio is too short to hold
+    /// [`MIN_BEATS`] beats.
+    pub(crate) fn beat_grid_and_bars(
+        &self,
+        tempo: Bpm,
+    ) -> Option<(BeatGrid, Option<BarPositionFeatures>)> {
         let period = 60.0 / tempo.as_f64();
         if self.duration_secs / period < MIN_BEATS as f64 {
             return None;
@@ -249,17 +263,24 @@ impl Onsets {
         } else {
             comb_peak
         };
-        let first_beat = (peak + ONSET_LEAD_SECS).rem_euclid(period);
-        let downbeat_index = self.downbeat_index(first_beat, period);
+        let mut first_beat = (peak + ONSET_LEAD_SECS).rem_euclid(period);
+        // Rounding to the grid's precision can carry the phase onto the
+        // interval itself: that beat is the timeline's first, a
+        // microsecond after its start.
+        if BeatGrid::new(tempo, Duration::from_secs_f64(first_beat), 1).is_err() {
+            first_beat = 0.0;
+        }
+        let bars = self.bar_position_features(first_beat, period);
+        let downbeat = bars.as_ref().map_or(0, BarPositionFeatures::downbeat);
         let bar = usize::from(BEATS_PER_BAR);
-        let first_beat_number = ((bar - downbeat_index) % bar) as u8 + 1;
-        let first_beat = Duration::from_secs_f64(first_beat);
-        // Rounding can carry the phase onto the interval itself; that
-        // beat is the next grid's first, which `new` rejects — fall back
-        // to the timeline's start, a microsecond away.
-        BeatGrid::new(tempo, first_beat, first_beat_number)
-            .or_else(|_| BeatGrid::new(tempo, Duration::ZERO, first_beat_number))
-            .ok()
+        let first_beat_number = ((bar - downbeat) % bar) as u8 + 1;
+        let grid = BeatGrid::new(
+            tempo,
+            Duration::from_secs_f64(first_beat),
+            first_beat_number,
+        )
+        .ok()?;
+        Some((grid, bars))
     }
 
     /// The strongest comb over `envelope` at `period` within
@@ -375,55 +396,51 @@ impl Onsets {
         }
     }
 
-    /// Which of the first [`BEATS_PER_BAR`] beats from `first_beat` is a
-    /// downbeat: the bar position where the spectrum changes most from
-    /// one beat to the next.
-    fn downbeat_index(&self, first_beat: f64, period: f64) -> usize {
+    /// The evidence for a bar starting on each of the four beats from
+    /// `first_beat`: the mean band spectrum and the broadband onset of
+    /// every whole beat in the audio, pooled by bar position.
+    fn bar_position_features(&self, first_beat: f64, period: f64) -> Option<BarPositionFeatures> {
         let frame_at = |time: f64| -> usize {
             (((time - self.origin_secs) * self.frame_rate)
                 .round()
                 .max(0.0) as usize)
                 .min(self.bands.len() - 1)
         };
-        let mut beat_spectra: Vec<[f32; BAND_COUNT]> = Vec::new();
-        let beat_starts = (0_u32..)
-            .map(|index| first_beat + f64::from(index) * period)
-            .take_while(|start| start + period <= self.duration_secs);
-        for start in beat_starts {
-            let (from, to) = (frame_at(start), frame_at(start + period));
-            let frames = &self.bands[from..to.max(from + 1)];
-            let mut mean = [0.0_f32; BAND_COUNT];
-            for frame in frames {
-                for (sum, value) in mean.iter_mut().zip(frame) {
-                    *sum += value;
+        let whole_beats = ((self.duration_secs - first_beat) / period)
+            .floor()
+            .max(0.0) as usize;
+        let beat_starts: Vec<f64> = (0..whole_beats)
+            .map(|index| first_beat + index as f64 * period)
+            .collect();
+        let beat_spectra: Vec<[f32; BAND_COUNT]> = beat_starts
+            .iter()
+            .map(|&start| {
+                let (from, to) = (frame_at(start), frame_at(start + period));
+                let frames = &self.bands[from..to.max(from + 1)];
+                let mut mean = [0.0_f32; BAND_COUNT];
+                for frame in frames {
+                    for (sum, value) in mean.iter_mut().zip(frame) {
+                        *sum += value;
+                    }
                 }
-            }
-            for sum in &mut mean {
-                *sum /= frames.len() as f32;
-            }
-            beat_spectra.push(mean);
-        }
-        let bar = usize::from(BEATS_PER_BAR);
-        let mut change = vec![0.0_f64; bar];
-        let mut counts = vec![0_usize; bar];
-        for (index, pair) in beat_spectra.windows(2).enumerate() {
-            let distance: f64 = pair[0]
-                .iter()
-                .zip(&pair[1])
-                .map(|(before, after)| f64::from(after - before).powi(2))
-                .sum();
-            // Squared distance: the large changes at section starts
-            // outweigh the steady beat-to-beat flicker.
-            let position = (index + 1) % bar;
-            change[position] += distance * distance;
-            counts[position] += 1;
-        }
-        (0..bar)
-            .max_by(|&a, &b| {
-                let mean = |position: usize| change[position] / counts[position].max(1) as f64;
-                mean(a).total_cmp(&mean(b))
+                mean.map(|sum| sum / frames.len() as f32)
             })
-            .unwrap_or(0)
+            .collect();
+        // The envelope peaks [`ONSET_LEAD_SECS`] ahead of the beat it
+        // marks; it is read within [`PHASE_VOTE_REACH`] of that peak.
+        let reach = PHASE_VOTE_REACH * period;
+        let beat_onsets: Vec<f32> = beat_starts
+            .iter()
+            .map(|&start| {
+                let peak = start - ONSET_LEAD_SECS;
+                let (from, to) = (frame_at(peak - reach), frame_at(peak + reach));
+                self.broadband[from..=to]
+                    .iter()
+                    .copied()
+                    .fold(0.0, f32::max)
+            })
+            .collect();
+        BarPositionFeatures::of(&beat_spectra, &beat_onsets)
     }
 }
 

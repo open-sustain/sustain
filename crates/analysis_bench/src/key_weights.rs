@@ -10,8 +10,7 @@
 //! the model has 24 weights. They are fitted as a multinomial logistic
 //! regression over the 24 keys: the weights that make the labelled keys
 //! most probable under the softmax of the scores, with a small ridge
-//! penalty. The fit is convex, so Newton's method finds its one optimum
-//! in a few steps, from any start.
+//! penalty ([`crate::softmax_regression`]).
 //!
 //! The ridge also makes the optimum unique. Adding one constant to every
 //! weight adds the same amount to all 24 scores of a track — the sum of
@@ -27,23 +26,16 @@ use sustain_analysis::{AnalysisOptions, Analyzer};
 
 use crate::manifest::Manifest;
 use crate::metrics::{KeyClass, parse_key};
+use crate::softmax_regression::{self, Choice};
 
 /// The ridge penalty on the squared weights, beside the mean negative log
 /// likelihood of the labelled keys. Small enough to change no decision,
 /// large enough to pin the one direction the likelihood cannot see.
 const RIDGE: f64 = 1e-4;
 
-/// The fit stops once a Newton step promises to lower the objective by
-/// less than this (half the Newton decrement): far below any change to a
-/// learned weight's printed digits, yet above the rounding of a sum over
-/// thousands of tracks.
-const DECREASE_TOLERANCE: f64 = 1e-14;
-
-/// More Newton steps than a fit this small ever needs.
-const MAX_NEWTON_STEPS: usize = 100;
-
-/// Both modes' weights, major first: index `12 · mode + interval`.
-type Weights = [f64; 24];
+/// The candidate keys, and the weights: both modes', major first, index
+/// `12 · mode + interval`.
+const KEYS: usize = 24;
 
 /// The labelled tracks to learn from.
 #[derive(Clone, Debug, Default)]
@@ -90,7 +82,8 @@ impl WeightLearner {
         if major_tracks == 0 || minor_tracks == 0 {
             return None;
         }
-        let weights = fit(&self.tracks);
+        let choices: Vec<Choice> = self.tracks.iter().map(LabelledTrack::choice).collect();
+        let weights = softmax_regression::fit(&choices, KEYS, RIDGE);
         Some(KeyWeights {
             major: std::array::from_fn(|interval| weights[interval]),
             minor: std::array::from_fn(|interval| weights[12 + interval]),
@@ -100,153 +93,25 @@ impl WeightLearner {
     }
 }
 
-/// The weights minimizing [`objective`], by Newton's method with a
-/// backtracking line search.
-fn fit(tracks: &[LabelledTrack]) -> Weights {
-    let mut weights = [0.0; 24];
-    for _ in 0..MAX_NEWTON_STEPS {
-        let (value, gradient, hessian) = derivatives(tracks, &weights);
-        let step = solve_positive_definite(&hessian, gradient.map(|g| -g));
-        // The objective's slope along the step: minus the Newton decrement.
-        let slope: f64 = gradient.iter().zip(&step).map(|(g, s)| g * s).sum();
-        if -slope / 2.0 <= DECREASE_TOLERANCE {
-            break;
-        }
-        // Halve the step until it decreases the objective enough (Armijo's
-        // condition); far from the optimum the full step can overshoot.
-        let mut scale = 1.0;
-        loop {
-            let candidate: Weights = std::array::from_fn(|i| weights[i] + scale * step[i]);
-            if objective(tracks, &candidate) <= value + 1e-4 * scale * slope {
-                weights = candidate;
-                break;
-            }
-            scale /= 2.0;
-            if scale < 1e-12 {
-                // No step decreases it: rounding has the last word.
-                return weights;
-            }
-        }
-    }
-    weights
-}
-
-/// The score of each of the 24 keys for `track`: the weights of the key's
-/// mode against the log shares rotated to the key's tonic.
-fn scores(track: &LabelledTrack, weights: &Weights) -> [f64; 24] {
-    std::array::from_fn(|key| {
-        let (mode, tonic) = (key / 12, key % 12);
-        (0..12)
-            .map(|interval| {
-                weights[12 * mode + interval] * track.log_shares[(tonic + interval) % 12]
-            })
-            .sum()
-    })
-}
-
-/// The softmax of `scores`, and the log of its normalizer.
-fn probabilities(scores: &[f64; 24]) -> ([f64; 24], f64) {
-    let highest = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let exponentials = scores.map(|score| (score - highest).exp());
-    let total: f64 = exponentials.iter().sum();
-    (exponentials.map(|e| e / total), highest + total.ln())
-}
-
-/// The mean negative log likelihood of the labelled keys plus the ridge
-/// penalty.
-fn objective(tracks: &[LabelledTrack], weights: &Weights) -> f64 {
-    let likelihood: f64 = tracks
-        .iter()
-        .map(|track| {
-            let scores = scores(track, weights);
-            probabilities(&scores).1 - scores[track.key]
-        })
-        .sum();
-    likelihood / tracks.len() as f64 + ridge_penalty(weights)
-}
-
-fn ridge_penalty(weights: &Weights) -> f64 {
-    RIDGE * weights.iter().map(|w| w * w).sum::<f64>()
-}
-
-/// The [`objective`], its gradient and its Hessian at `weights`.
-fn derivatives(tracks: &[LabelledTrack], weights: &Weights) -> (f64, Weights, [Weights; 24]) {
-    let mut value = 0.0;
-    let mut gradient = [0.0; 24];
-    let mut hessian = [[0.0; 24]; 24];
-    for track in tracks {
-        let scores = scores(track, weights);
-        let (probabilities, log_normalizer) = probabilities(&scores);
-        value += log_normalizer - scores[track.key];
-        // Each key's feature vector: its tonic's rotation of the log
-        // shares, in its mode's half.
-        let features = |key: usize| -> Weights {
-            let (mode, tonic) = (key / 12, key % 12);
-            let mut x = [0.0; 24];
-            for interval in 0..12 {
-                x[12 * mode + interval] = track.log_shares[(tonic + interval) % 12];
-            }
-            x
-        };
-        let mut expected = [0.0; 24];
-        for (key, &p) in probabilities.iter().enumerate() {
-            let x = features(key);
-            for i in 0..24 {
-                expected[i] += p * x[i];
-                for j in 0..24 {
-                    hessian[i][j] += p * x[i] * x[j];
+impl LabelledTrack {
+    /// The track as a choice among the 24 keys, each key's features its
+    /// tonic's rotation of the log shares, in its mode's half.
+    fn choice(&self) -> Choice {
+        let candidates = (0..KEYS)
+            .map(|key| {
+                let (mode, tonic) = (key / 12, key % 12);
+                let mut x = vec![0.0; KEYS];
+                for interval in 0..12 {
+                    x[12 * mode + interval] = self.log_shares[(tonic + interval) % 12];
                 }
-            }
-        }
-        let labelled = features(track.key);
-        for i in 0..24 {
-            gradient[i] += expected[i] - labelled[i];
-            for j in 0..24 {
-                hessian[i][j] -= expected[i] * expected[j];
-            }
+                x
+            })
+            .collect();
+        Choice {
+            candidates,
+            chosen: self.key,
         }
     }
-    let n = tracks.len() as f64;
-    value = value / n + ridge_penalty(weights);
-    for i in 0..24 {
-        gradient[i] = gradient[i] / n + 2.0 * RIDGE * weights[i];
-        for entry in &mut hessian[i] {
-            *entry /= n;
-        }
-        hessian[i][i] += 2.0 * RIDGE;
-    }
-    (value, gradient, hessian)
-}
-
-/// `x` with `matrix · x = rhs`, for a symmetric positive definite
-/// `matrix`, by Cholesky factorization. The objective's Hessian is one:
-/// the likelihood's is positive semidefinite, and the ridge adds a
-/// positive multiple of the identity.
-fn solve_positive_definite(matrix: &[Weights; 24], rhs: Weights) -> Weights {
-    // matrix = L · Lᵀ, L lower triangular.
-    let mut lower = [[0.0; 24]; 24];
-    for i in 0..24 {
-        for j in 0..=i {
-            let dot: f64 = (0..j).map(|k| lower[i][k] * lower[j][k]).sum();
-            lower[i][j] = if i == j {
-                (matrix[i][i] - dot).sqrt()
-            } else {
-                (matrix[i][j] - dot) / lower[j][j]
-            };
-        }
-    }
-    // L · y = rhs, then Lᵀ · x = y.
-    let mut y = [0.0; 24];
-    for i in 0..24 {
-        let dot: f64 = (0..i).map(|k| lower[i][k] * y[k]).sum();
-        y[i] = (rhs[i] - dot) / lower[i][i];
-    }
-    let mut x = [0.0; 24];
-    for i in (0..24).rev() {
-        let dot: f64 = (i + 1..24).map(|k| lower[k][i] * x[k]).sum();
-        x[i] = (y[i] - dot) / lower[i][i];
-    }
-    x
 }
 
 /// What [`learn`] went through, beside the weights.
@@ -348,54 +213,18 @@ mod tests {
         let learner = triad_learner();
         let weights = learner.weights().expect("both modes have tracks");
         assert_eq!((weights.major_tracks, weights.minor_tracks), (12, 12));
-        let all: Weights = std::array::from_fn(|i| {
-            if i < 12 {
-                weights.major[i]
-            } else {
-                weights.minor[i - 12]
-            }
-        });
+        let all: Vec<f64> = weights
+            .major
+            .iter()
+            .chain(&weights.minor)
+            .copied()
+            .collect();
         for track in &learner.tracks {
-            let scores = scores(track, &all);
-            let best = (0..24)
-                .max_by(|&a, &b| scores[a].total_cmp(&scores[b]))
-                .expect("24 keys");
-            assert_eq!(best, track.key);
-        }
-    }
-
-    #[test]
-    fn the_fit_reaches_the_optimum() {
-        let learner = triad_learner();
-        let weights = fit(&learner.tracks);
-        let (value, gradient, _) = derivatives(&learner.tracks, &weights);
-        assert!(gradient.iter().all(|g| g.abs() <= 1e-8), "{gradient:?}");
-        // Any small move away does no better.
-        for i in 0..24 {
-            for delta in [-1e-3, 1e-3] {
-                let mut moved = weights;
-                moved[i] += delta;
-                assert!(objective(&learner.tracks, &moved) >= value);
-            }
-        }
-    }
-
-    #[test]
-    fn the_cholesky_solve_inverts_its_matrix() {
-        let matrix: [Weights; 24] = std::array::from_fn(|i| {
-            std::array::from_fn(|j| {
-                if i == j {
-                    3.0
-                } else {
-                    1.0 / (1 + i + j) as f64
-                }
-            })
-        });
-        let x: Weights = std::array::from_fn(|i| i as f64 - 11.5);
-        let rhs: Weights = std::array::from_fn(|i| (0..24).map(|j| matrix[i][j] * x[j]).sum());
-        let solved = solve_positive_definite(&matrix, rhs);
-        for i in 0..24 {
-            assert!((solved[i] - x[i]).abs() < 1e-9);
+            let choice = track.choice();
+            assert_eq!(
+                softmax_regression::best(&choice.candidates, &all),
+                track.key
+            );
         }
     }
 

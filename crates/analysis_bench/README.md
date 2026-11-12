@@ -142,6 +142,18 @@ cargo run -p sustain-analysis-bench --release -- learn-key-weights \
   validation-data/giantsteps/mtg_key.toml \
   validation-data/fma/corpora/fmak_key_medium.toml
 
+# Learn the downbeat model's weights from manifests with grid ground truth
+# (annotated beats or reference grids) and print them as the array
+# crates/analysis/src/downbeat.rs holds. It also reports each manifest's
+# accuracy under the shipped weights and under weights learned from the
+# others. Run it again whenever the bar features or the beat tracker
+# change. The shipped weights come from the two human beat manifests and
+# the private rekordbox grid manifest:
+cargo run -p sustain-analysis-bench --release -- learn-downbeat-weights \
+  validation-data/beats/gtzan_beats.toml \
+  validation-data/beats/ballroom_beats.toml \
+  <private rekordbox grid manifest>
+
 # Before/after a DSP or decoder change (e.g. #172):
 cargo run -p sustain-analysis-bench --release -- compare \
   --baseline /tmp/before.json --candidate /tmp/after.json

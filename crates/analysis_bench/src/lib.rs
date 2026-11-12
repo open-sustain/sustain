@@ -40,8 +40,13 @@
 //! * [`fmak`] — adapt the FMAK / FMAKv2 key annotations + a Free Music
 //!   Archive audio root into a manifest (a second, independent key corpus;
 //!   audio stays external).
+//! * [`softmax_regression`] — the multinomial logistic regression the
+//!   learned key and downbeat models are fitted with.
 //! * [`key_weights`] — learn the key detector's weights from labelled
 //!   audio, as `analysis-bench learn-key-weights` prints them.
+//! * [`downbeat_weights`] — learn the downbeat model's weights from grids
+//!   with known bars, as `analysis-bench learn-downbeat-weights` prints
+//!   them.
 //! * [`beat_annotations`] — adapt the Ballroom and GTZAN clips + their human
 //!   beat and bar annotations into manifests (the human beat-grid reference;
 //!   audio stays external).
@@ -50,6 +55,7 @@
 //!   source URLs, manifest, and results all stay external).
 
 pub mod beat_annotations;
+pub mod downbeat_weights;
 pub mod fixtures;
 pub mod fmak;
 pub mod giantsteps;
@@ -58,3 +64,4 @@ pub mod manifest;
 pub mod metrics;
 pub mod private;
 pub mod run;
+pub mod softmax_regression;

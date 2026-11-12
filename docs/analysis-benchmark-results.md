@@ -1342,3 +1342,65 @@ on-library labels nor a bass profile moves the library.
 Both detectors are weakest on major-key songs: on the 66 Hooktheory tracks
 in major, Sustain is 34.8 % exact / 72.7 % strict and rekordbox 39.4 /
 75.8 %.
+
+## 2026-11-12 — BPM v16 (learned downbeat model)
+
+Under #282. Until v16 the bar started on the beat position, of the four,
+whose mean spectrum changed most from the beat before it (squared). v16
+scores each position with a linear model over 28 features, and the highest
+score starts the bar (`crates/analysis/src/downbeat.rs`):
+
+- the squared change into the position, per band (24);
+- the broadband onset on the beat;
+- the novelty against two and four beats, how far the mean spectrum of the
+  beats from it differs from that of the beats before it;
+- whether the music starts on it: the first beat whose level is a quarter
+  of the way from the quietest beat's to the median beat's.
+
+Each feature is centered over the four positions and divided by its mean
+absolute deviation there, so only which positions stand out counts. The
+weights are a multinomial logistic regression over the four positions with
+a ridge of 0.5 (`analysis-bench learn-downbeat-weights`, sharing the key
+model's Newton fit, now `softmax_regression`). Tracks count when their grid
+is aligned with the reference and its bars hold on the grid.
+
+The training sets are GTZAN (434 clips) and Ballroom (272 clips) with human
+downbeats, and 659 library tracks scored against rekordbox's grids. The
+library tracks come from the dance development subset and the held-out
+random sample (1,559 tracks). Each set is scored with weights learned from
+the other two:
+
+| Set | Scored | v15 | v16, held out | v16, shipped weights | Fixed / broken |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GTZAN | 434 | 49.3 % | **52.5 %** | 55.5 % | 56 / 29 |
+| Ballroom | 272 | 42.3 % | **54.4 %** | 60.3 % | 58 / 9 |
+| rekordbox | 659 | 75.0 % | **85.1 %** | 85.6 % | 85 / 15 |
+
+The shipped weights are learned from all three sets, so their column is in
+sample; fixed and broken count tracks against v15 under the shipped weights.
+The error distribution under the shipped weights, bar late by 1 / 2 / 3
+beats:
+
+- GTZAN: 68 / 63 / 62, against 60 / 87 / 73 in v15;
+- Ballroom: 32 / 32 / 44, against 45 / 51 / 61;
+- rekordbox: 26 / 29 / 40, against 48 / 44 / 73.
+
+The rekordbox labels carry signal the human sets confirm. Learned from
+GTZAN and Ballroom only, the model reaches the same 85.1 % against
+rekordbox. Held out from each other, though, the human sets get only
+45.6 % (GTZAN) and 47.8 % (Ballroom): each one alone is too narrow, and
+adding the rekordbox tracks raises both by 7 points.
+
+The music-start feature is the largest single gain on whole tracks. Always
+starting the bar on the grid's first beat is already right on 75.9 % of
+the rekordbox tracks and 56.2 % of the Ballroom clips, more than v15
+managed. It is right on 24.0 % of the GTZAN clips, chance, since those are
+excerpts cut from the middle of a song. In a scratch replay of the earlier
+dumps, adding the feature moved held-out accuracy from 78.0 to 81.0 % on
+rekordbox and 48.2 to 51.8 % on Ballroom, and from 56.0 to 54.2 % on GTZAN.
+Sustain always analyzes whole tracks.
+
+Tempo and beat positions are unchanged: the GRID lines of all three runs
+match v15's exactly. The `bars_start_where_the_harmony_changes` fixture
+still passes. The learning pass over the 3,015 tracks took 29 minutes; the
+features reuse the band energies the beat tracker already holds.

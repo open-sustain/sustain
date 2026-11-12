@@ -81,6 +81,7 @@
 mod bands;
 mod beat_tracking;
 mod decode;
+mod downbeat;
 mod mp4_presentation;
 mod waveform;
 
@@ -106,6 +107,7 @@ use sustain_dsp::{
     estimate_bpm_tempogram, normalize, pitch_class_log_shares,
 };
 
+pub use downbeat::{BAR_FEATURE_COUNT, BarPositionFeatures};
 pub use waveform::WaveformTiers;
 
 /// The version of the DSP behind each analysis capability. A
@@ -293,6 +295,19 @@ pub use waveform::WaveformTiers;
 /// takes about a fifth less CPU. Every key Sustain measured is measured
 /// again.
 ///
+/// BPM version 16: the bar's first beat is the one a learned model scores
+/// highest (`downbeat`), not the one the spectrum changes most into. Each
+/// of the four positions is read by the change into it in every band, the
+/// onset on it, its novelty against two and four beats, and whether the
+/// music starts on it — a track's first bar is most often whole. The 28
+/// weights are learned from 434 GTZAN and 272 Ballroom clips with human
+/// downbeats and 659 library tracks against rekordbox's grids
+/// (`analysis-bench learn-downbeat-weights`). Scored on each set with
+/// weights learned from the other two, the downbeat on grids aligned with
+/// the reference went from 49.3 to 52.5 % on GTZAN, 42.3 to 54.4 % on
+/// Ballroom and 75.0 to 85.1 % against rekordbox. Tempo and beats are
+/// untouched; every grid is placed again for its bars.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -311,7 +326,7 @@ pub use waveform::WaveformTiers;
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
 pub const ANALYZER_VERSIONS: AnalyzerVersions = AnalyzerVersions {
-    bpm: 15,
+    bpm: 16,
     key: 17,
     audio: 15,
 };
@@ -635,6 +650,32 @@ impl Analyzer {
     /// centered window. Returns `None` if the file cannot be decoded, is
     /// too short, or has no measurable beat.
     pub fn tempo(&self) -> Option<Tempo> {
+        let (onsets, bpm) = self.tracked_tempo()?;
+        let beat_grid = if self.is_long_track() {
+            None
+        } else {
+            onsets.beat_grid(bpm)
+        };
+        Some(Tempo { bpm, beat_grid })
+    }
+
+    /// The beat grid [`Self::tempo`] places, and the evidence its bars
+    /// were placed by, position 0 being the grid's first beat — what
+    /// `analysis-bench learn-downbeat-weights` learns the downbeat model
+    /// from. `None` where [`Self::tempo`] has no grid, or the grid too
+    /// few beats to read bars from.
+    pub fn bar_positions(&self) -> Option<(BeatGrid, BarPositionFeatures)> {
+        if self.is_long_track() {
+            return None;
+        }
+        let (onsets, bpm) = self.tracked_tempo()?;
+        let (grid, bars) = onsets.beat_grid_and_bars(bpm)?;
+        Some((grid, bars?))
+    }
+
+    /// The onsets of the audio [`Self::tempo`] reads, and the tempo they
+    /// settle on.
+    fn tracked_tempo(&self) -> Option<(beat_tracking::Onsets, Bpm)> {
         let (min_bpm, max_bpm) = (
             f64::from(self.options.min_bpm),
             f64::from(self.options.max_bpm),
@@ -647,12 +688,7 @@ impl Analyzer {
         let onsets = beat_tracking::Onsets::of(&region.samples, region.sample_rate)?;
         let estimate = onsets.beat_level(self.tempogram_bpm()?, min_bpm, max_bpm);
         let bpm = onsets.tempo_near(estimate, min_bpm, max_bpm)?;
-        let beat_grid = if self.is_long_track() {
-            None
-        } else {
-            onsets.beat_grid(bpm)
-        };
-        Some(Tempo { bpm, beat_grid })
+        Some((onsets, bpm))
     }
 
     /// Detected musical key. Returns `None` if the file cannot be

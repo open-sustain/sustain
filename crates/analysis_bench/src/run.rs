@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sustain_analysis::{AcousticFeatures, AnalysisOptions, Analyzer, WaveformSegments};
 
-use crate::manifest::{Manifest, Options, ReferenceGrid, Task, TrackEntry};
-use crate::metrics::{self, AnnotatedBeat, DEFAULT_BPM_TOLERANCE, GridAgreement, KeyCategory};
+use crate::manifest::{Manifest, Options, Task, TrackEntry};
+use crate::metrics::{self, DEFAULT_BPM_TOLERANCE, GridAgreement, KeyCategory};
 
 /// A complete benchmark report.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -393,7 +393,7 @@ pub struct BandStat {
 /// `fixtures_dir`. In `reproducible` mode the env capture and all timings
 /// are dropped from the report.
 pub fn run_manifest(manifest: &Manifest, fixtures_dir: &Path, reproducible: bool) -> Report {
-    let analysis_options = analysis_options(&manifest.options);
+    let analysis_options = manifest.options.analysis_options();
     let tracks: Vec<TrackResult> = manifest
         .tracks
         .iter()
@@ -414,16 +414,6 @@ pub fn run_manifest(manifest: &Manifest, fixtures_dir: &Path, reproducible: bool
         bpm_range: [analysis_options.min_bpm, analysis_options.max_bpm],
         summary,
         tracks,
-    }
-}
-
-/// Resolve manifest options into analyzer options, falling back to the
-/// analyzer's own defaults.
-fn analysis_options(options: &Options) -> AnalysisOptions {
-    let defaults = AnalysisOptions::default();
-    AnalysisOptions {
-        min_bpm: options.min_bpm.unwrap_or(defaults.min_bpm),
-        max_bpm: options.max_bpm.unwrap_or(defaults.max_bpm),
     }
 }
 
@@ -537,11 +527,11 @@ fn run_track(
     }
 
     let bpm_score = entry.bpm.map(|gt| score_bpm(gt, bpm));
-    let grid_score = match (&entry.beats, entry.beat_grid.zip(duration_hint)) {
-        (Some(beats), _) => Some(score_beats(beats, beat_grid)),
-        (None, Some((reference, duration))) => Some(score_grid(reference, beat_grid, duration)),
-        (None, None) => None,
-    };
+    let grid_score = entry.grid_reference(duration_hint).map(|reference| {
+        beat_grid.map_or(MISSING_GRID, |predicted| {
+            reference.compare(predicted.into()).into()
+        })
+    });
     let key_score = entry
         .key
         .as_deref()
@@ -643,37 +633,6 @@ impl From<GridOutput> for metrics::Grid {
             first_beat_number: grid.first_beat_number,
         }
     }
-}
-
-/// Score a detected grid against the reference, probing 10 %, 50 % and
-/// 90 % of the way through the track.
-fn score_grid(
-    reference: ReferenceGrid,
-    predicted: Option<GridOutput>,
-    duration: Duration,
-) -> GridScore {
-    let Some(predicted) = predicted else {
-        return MISSING_GRID;
-    };
-    let secs = duration.as_secs_f64();
-    let reference = metrics::Grid {
-        bpm: reference.bpm,
-        first_beat_secs: reference.first_beat_secs,
-        first_beat_number: reference.first_beat_number,
-    };
-    metrics::compare_grids(
-        predicted.into(),
-        reference,
-        &[secs * 0.1, secs * 0.5, secs * 0.9],
-    )
-    .into()
-}
-
-/// Score a detected grid against beats a person marked.
-fn score_beats(beats: &[AnnotatedBeat], predicted: Option<GridOutput>) -> GridScore {
-    predicted.map_or(MISSING_GRID, |predicted| {
-        metrics::compare_with_beats(predicted.into(), beats).into()
-    })
 }
 
 /// Score key against ground truth. Returns `None` when the ground-truth

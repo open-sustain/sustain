@@ -13,6 +13,7 @@
 //! analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>
 //! analysis-bench adapt-beat-annotations --corpus <ballroom|gtzan> --annotations <dir> --audio <dir> --out <toml>
 //! analysis-bench learn-key-weights <manifest>...
+//! analysis-bench learn-downbeat-weights <manifest>...
 //! ```
 //!
 //! * `run` analyzes every track in a manifest and writes a JSON report
@@ -47,12 +48,19 @@
 //! * `learn-key-weights` learns the key detector's major and minor weights
 //!   from the labelled audio of the given key manifests and prints them as
 //!   the arrays `sustain_dsp`'s key templates hold.
+//! * `learn-downbeat-weights` learns the downbeat model's weights from the
+//!   grid ground truth (annotated beats or reference grids) of the given
+//!   manifests, reports each manifest's accuracy under the shipped weights
+//!   and under weights learned from the other manifests, and prints the
+//!   weights learned from all of them as the array `sustain_analysis`'s
+//!   downbeat model holds.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use sustain_analysis_bench::beat_annotations::{self, BeatCorpus};
+use sustain_analysis_bench::downbeat_weights;
 use sustain_analysis_bench::fmak::{self, AdaptOptions as FmakOptions, AdaptReport as FmakReport};
 use sustain_analysis_bench::giantsteps::{self, AdaptOptions, AdaptReport, Dataset};
 use sustain_analysis_bench::key_weights;
@@ -71,7 +79,8 @@ usage:
   analysis-bench adapt-fmak       --annotations <csv> --audio <dir> --out <toml>
   analysis-bench adapt-private    --reference <toml> --audio <dir> --out <toml>
   analysis-bench adapt-beat-annotations --corpus <ballroom|gtzan> --annotations <dir> --audio <dir> --out <toml>
-  analysis-bench learn-key-weights <manifest>...";
+  analysis-bench learn-key-weights <manifest>...
+  analysis-bench learn-downbeat-weights <manifest>...";
 
 /// A CLI failure: either bad invocation (exit 2) or a runtime error (exit 1).
 enum CliError {
@@ -107,6 +116,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "adapt-private" => cmd_adapt_private(rest),
         "adapt-beat-annotations" => cmd_adapt_beat_annotations(rest),
         "learn-key-weights" => cmd_learn_key_weights(rest),
+        "learn-downbeat-weights" => cmd_learn_downbeat_weights(rest),
         other => Err(CliError::Usage(format!("unknown command {other:?}"))),
     }
 }
@@ -390,16 +400,20 @@ fn cmd_adapt_beat_annotations(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn cmd_learn_key_weights(paths: &[String]) -> Result<(), CliError> {
+fn load_manifests(paths: &[String]) -> Result<Vec<Manifest>, CliError> {
     if paths.is_empty() {
         return Err(CliError::Usage("no manifest given".to_string()));
     }
-    let manifests = paths
+    paths
         .iter()
         .map(|path| {
             Manifest::load(Path::new(path)).map_err(|err| CliError::Failure(format!("{err}")))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect()
+}
+
+fn cmd_learn_key_weights(paths: &[String]) -> Result<(), CliError> {
+    let manifests = load_manifests(paths)?;
     let total: usize = manifests.iter().map(|manifest| manifest.tracks.len()).sum();
     let mut done = 0_usize;
     let (weights, report) = key_weights::learn(&manifests, |_| {
@@ -415,6 +429,42 @@ fn cmd_learn_key_weights(paths: &[String]) -> Result<(), CliError> {
     let weights = weights
         .ok_or_else(|| CliError::Failure("the manifests need tracks in both modes".to_string()))?;
     print!("{}", weights.to_rust());
+    Ok(())
+}
+
+fn cmd_learn_downbeat_weights(paths: &[String]) -> Result<(), CliError> {
+    let manifests = load_manifests(paths)?;
+    let total: usize = manifests.iter().map(|manifest| manifest.tracks.len()).sum();
+    let mut done = 0_usize;
+    let corpora: Vec<_> = manifests
+        .iter()
+        .map(|manifest| {
+            downbeat_weights::collect(manifest, |_| {
+                done += 1;
+                if done.is_multiple_of(100) || done == total {
+                    eprintln!("{done}/{total}");
+                }
+            })
+        })
+        .collect();
+    let learned = downbeat_weights::learn(&corpora)
+        .ok_or_else(|| CliError::Failure("no track has a scored downbeat".to_string()))?;
+    for (index, corpus) in corpora.iter().enumerate() {
+        let held_out = learned
+            .held_out
+            .get(index)
+            .map_or_else(String::new, |(_, accuracy)| {
+                format!(", {:.1} % learned from the others", 100.0 * accuracy)
+            });
+        eprintln!(
+            "{}: {} scored, {} skipped; downbeat right {:.1} % shipped{held_out}",
+            corpus.corpus_id,
+            corpus.choices.len(),
+            corpus.skipped,
+            100.0 * corpus.shipped_accuracy(),
+        );
+    }
+    print!("{}", learned.to_rust());
     Ok(())
 }
 

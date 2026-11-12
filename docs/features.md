@@ -600,8 +600,10 @@ track's onsets — the kick band and the full band — for the tempo and phase
 that fit every beat of the track at once, so the grid does not drift over
 a long track. The kick and the snare-and-voice band then tell the beat
 from the off-beat, so a song whose kick is syncopated onto the off-beats
-still gets its grid on the backbeat. Bars are counted from where the
-timbre changes. Grids are
+still gets its grid on the backbeat. A model learned from human and
+rekordbox downbeats decides which beat starts the bar, from where the
+timbre changes, where the longer view shifts, and where the music starts.
+Grids are
 stored in the library and exported to Pioneer drives. Long tracks (DJ
 mixes, classical movements, podcasts) get no grid, since no single tempo
 fits them. Tempo analysis sets the track's BPM to the grid's tempo
@@ -609,9 +611,11 @@ unless the user typed the BPM. If a typed BPM disagrees with the grid by
 more than half a beat per minute, the grid is not
 exported: an export shows no grid rather than one that contradicts the
 track's tempo. Against Rekordbox on the same 3,902 dance tracks, 67% of
-grids land within 20 ms of Rekordbox's beats across the whole track, and
-the downbeat agrees on 74% of those. The rest mostly lock on the off-beat
-or a quarter beat away.
+grids land within 20 ms of Rekordbox's beats across the whole track. The
+rest mostly lock on the off-beat or a quarter beat away. Where the beats
+agree, the bar starts on the same beat as Rekordbox's on 85% of 659
+library tracks, against 75% before, scored with weights learned without
+them.
 
 ### Musical key detection — *Sustain-native*
 Estimates the song's tonal centre via chroma analysis over the whole
