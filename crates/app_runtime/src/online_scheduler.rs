@@ -16,10 +16,13 @@
 //!
 //! Rate-limit handling: when any per-track attempt comes back with
 //! [`sustain_metadata_remote::RemoteError::RateLimited`], the
-//! capability that hit the limit is left un-stamped (so the next
-//! batch picks it up after the HTTP client's per-host cool-down) and
-//! the worker stops the current batch instead of running the
-//! remaining tracks straight into the same wall.
+//! capability that hit the limit is left un-stamped and the worker
+//! stops the current batch instead of running the remaining tracks
+//! straight into the same wall. It waits the cool-down out on its
+//! command channel — so a shutdown or a settings change is still heard
+//! at once — and then starts the next batch, which picks the track up
+//! again. Explicit items the batch had not finished go back to the
+//! front of their queue.
 //!
 //! Lifecycle, command channel, and shutdown semantics are identical
 //! to the analysis scheduler; see its docs for the longer rationale.
@@ -357,7 +360,9 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
         // once per batch (see `attempt_tags`).
         let mut genre_bias: Option<Vec<String>> = None;
 
-        for item in batch {
+        let mut rate_limited_for = None;
+        let mut batch = batch.into_iter();
+        while let Some(item) = batch.next() {
             // Re-check between tracks so a toggle in Preferences stops
             // the loop within at most one track's worth of work for
             // background items. Explicit items always keep going —
@@ -415,8 +420,8 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
 
             // Only stamp capabilities that actually completed — a
             // rate-limited attempt did not get to talk to the server,
-            // so leaving it un-stamped means the next batch picks it
-            // up again (after the HTTP client's per-host cool-down).
+            // so leaving it un-stamped means a later batch picks it
+            // up again, after the cool-down.
             if !report.attempted.is_empty() {
                 let context = OnlineContext {
                     provider_version,
@@ -456,8 +461,27 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 ProcessOutcome::Succeeded | ProcessOutcome::NoMatch => {
                     state.completed = state.completed.saturating_add(1);
                 }
-                ProcessOutcome::Failed | ProcessOutcome::RateLimited => {
+                ProcessOutcome::Failed => {
                     state.failed = state.failed.saturating_add(1);
+                }
+                ProcessOutcome::RateLimited(cool_down) => {
+                    // Stop the batch entirely on a rate-limit signal:
+                    // the HTTP client refuses every request to the held
+                    // host until the cool-down has passed, so the
+                    // remaining tracks would only be refused too. The
+                    // track is neither done nor failed — it is tried
+                    // again — so it reports no progress. The explicit
+                    // items left, this one first, go back where they
+                    // came from; background items come back with the
+                    // next sweep.
+                    let unfinished = std::iter::once(item)
+                        .chain(batch)
+                        .filter(|item| item.is_explicit);
+                    for item in unfinished.rev() {
+                        state.explicit_queue.push_front(item);
+                    }
+                    rate_limited_for = Some(cool_down);
+                    break;
                 }
             }
 
@@ -468,19 +492,21 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 remaining,
             });
 
-            if matches!(report.outcome, ProcessOutcome::RateLimited) {
-                // Stop the batch entirely on a rate-limit signal. The
-                // HTTP client has already pushed the host's cool-down
-                // forward, so even if we kept iterating we'd just sit
-                // in `respect_rate_limit` for the same duration; this
-                // way the worker drops back to the outer recv() and
-                // resumes on the next nudge (library scan, settings
-                // change, manual wake) without the cool-down also
-                // blocking unrelated work.
-                break;
-            }
-
             thread::sleep(INTER_TRACK_PAUSE);
+        }
+
+        if let Some(cool_down) = rate_limited_for {
+            // Wait the cool-down out where commands are still heard. A
+            // command that arrives first is applied and the loop goes
+            // round: a request to the held host is then refused with
+            // what is left of the cool-down, and the wait resumes.
+            match receiver.recv_timeout(cool_down) {
+                Ok(SchedulerCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return;
+                }
+                Ok(command) => apply_command(command, &mut state),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
         }
     }
 }
@@ -500,12 +526,12 @@ enum ProcessOutcome {
     /// failing ones are stamped as well so we do not hammer a
     /// misbehaving provider every cycle.
     Failed,
-    /// The server explicitly asked us to back off (HTTP 429/503).
-    /// The HTTP client has already pushed the host's cool-down
-    /// forward. The capabilities that hit the rate limit are *not*
-    /// reported as attempted so the track stays eligible on the
-    /// next pass; the worker also stops the current batch.
-    RateLimited,
+    /// The server explicitly asked us to back off (HTTP 429/503) for
+    /// this long, and the HTTP client holds the host until then. The
+    /// capabilities that hit the rate limit are *not* reported as
+    /// attempted so the track stays eligible on the next pass; the
+    /// worker also stops the current batch.
+    RateLimited(Duration),
 }
 
 /// Per-track output of [`process_track`]: the overall outcome (used
@@ -531,7 +557,7 @@ fn process_track(
     let query = query_from_metadata(&track.metadata);
     let mut any_success = false;
     let mut any_failure = false;
-    let mut any_rate_limited = false;
+    let mut rate_limited_for = None;
     let mut attempted = OnlineCapabilities::none();
 
     // Tag enrichment runs first because the matched MusicBrainz
@@ -563,13 +589,13 @@ fn process_track(
                 any_failure = true;
                 attempted.tags = true;
             }
-            AttemptOutcome::RateLimited => {
-                any_rate_limited = true;
+            AttemptOutcome::RateLimited(cool_down) => {
+                rate_limited_for = Some(cool_down);
             }
         }
     }
 
-    if settings.artwork && !any_rate_limited {
+    if settings.artwork && rate_limited_for.is_none() {
         match attempt_artwork(
             track,
             absolute_path,
@@ -589,13 +615,13 @@ fn process_track(
                 any_failure = true;
                 attempted.artwork = true;
             }
-            AttemptOutcome::RateLimited => {
-                any_rate_limited = true;
+            AttemptOutcome::RateLimited(cool_down) => {
+                rate_limited_for = Some(cool_down);
             }
         }
     }
 
-    if settings.lyrics && !any_rate_limited {
+    if settings.lyrics && rate_limited_for.is_none() {
         match attempt_lyrics(
             track,
             absolute_path,
@@ -615,14 +641,14 @@ fn process_track(
                 any_failure = true;
                 attempted.lyrics = true;
             }
-            AttemptOutcome::RateLimited => {
-                any_rate_limited = true;
+            AttemptOutcome::RateLimited(cool_down) => {
+                rate_limited_for = Some(cool_down);
             }
         }
     }
 
-    let outcome = if any_rate_limited {
-        ProcessOutcome::RateLimited
+    let outcome = if let Some(cool_down) = rate_limited_for {
+        ProcessOutcome::RateLimited(cool_down)
     } else if any_success {
         ProcessOutcome::Succeeded
     } else if any_failure {
@@ -638,17 +664,16 @@ enum AttemptOutcome {
     Succeeded,
     NoMatch,
     Failed,
-    RateLimited,
+    RateLimited(Duration),
 }
 
 /// Convert a remote-side error into the right attempt outcome.
 /// `RateLimited` is handled distinctly so the scheduler can stop the
 /// batch; every other error is a generic failure.
 fn attempt_outcome_for_remote_error(error: &RemoteError) -> AttemptOutcome {
-    if matches!(error, RemoteError::RateLimited { .. }) {
-        AttemptOutcome::RateLimited
-    } else {
-        AttemptOutcome::Failed
+    match error {
+        RemoteError::RateLimited { cool_down } => AttemptOutcome::RateLimited(*cool_down),
+        _ => AttemptOutcome::Failed,
     }
 }
 

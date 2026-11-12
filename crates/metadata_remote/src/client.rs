@@ -13,6 +13,14 @@
 //! blocked. The wrapper enforces a minimum gap per host so concurrent
 //! requests across providers cannot collectively violate either policy.
 //!
+//! The two waits are of different kinds. The minimum gap is a second at
+//! most, and a request sleeps through it. A cool-down the server asks for
+//! with a 429/503 runs to minutes: the client never sleeps through one.
+//! While a host is held, requests to it are refused, unsent, with
+//! [`RemoteError::RateLimited`] and the time left, so the caller decides
+//! how to wait — a background worker on its command channel, where it
+//! still hears a shutdown; an interactive fetch not at all.
+//!
 //! Synchronous blocking I/O is intentional. The networked metadata path
 //! is gated behind explicit user actions (a click, a settings tickbox);
 //! its callers always run on a dedicated worker thread that already owns
@@ -52,15 +60,12 @@ pub const LRCLIB_MIN_REQUEST_GAP: Duration = Duration::from_millis(350);
 
 /// Fallback cool-down applied when a server returns 429/503 without
 /// a usable `Retry-After` header. One minute is comfortably more
-/// than any of the providers' published gaps; the caller can fail
-/// fast if a smaller value is appropriate.
+/// than any of the providers' published gaps.
 pub const DEFAULT_RATE_LIMITED_COOL_DOWN: Duration = Duration::from_secs(60);
 
 /// Upper bound applied to whatever the server asked for in
-/// `Retry-After`. A misconfigured or hostile server cannot pin our
-/// worker for an unbounded duration; if a provider really wants us
-/// off for a longer span the user will eventually nudge the
-/// scheduler (library scan, settings toggle, restart).
+/// `Retry-After`. A misconfigured or hostile server cannot hold a
+/// host for an unbounded duration.
 pub const MAX_RATE_LIMITED_COOL_DOWN: Duration = Duration::from_secs(15 * 60);
 
 /// HTTP request timeout. The remote endpoints answer in well under a
@@ -98,12 +103,13 @@ struct RateLimitPolicy {
 #[derive(Default)]
 struct HostState {
     /// "Intent to fire" time for the most recent request to this
-    /// host. New requests wait until this Instant before sending.
-    /// Pushed forward by both the per-host minimum gap *and* any
-    /// 429/503 cool-down observed by [`HttpClient::record_cool_down`],
-    /// so the rate limiter automatically holds the worker back after
-    /// the provider has asked us to stop.
+    /// host. A new request waits until the minimum gap after this
+    /// Instant before sending.
     next_request_at: Option<Instant>,
+    /// Until when the host asked not to be contacted (a 429/503
+    /// cool-down recorded by [`HttpClient::record_cool_down`]). Requests
+    /// are refused, not sent, before this Instant.
+    held_until: Option<Instant>,
 }
 
 pub struct HttpClient {
@@ -166,7 +172,7 @@ impl HttpClient {
     /// responsible for assembling the full URL (including query
     /// parameters) — the rate limiter and User-Agent are applied here.
     pub fn get_json<T: DeserializeOwned>(&self, url: &str) -> RemoteResult<T> {
-        self.respect_rate_limit(url);
+        self.take_turn(url)?;
         let response = self
             .agent
             .get(url)
@@ -205,7 +211,7 @@ impl HttpClient {
     /// which the providers use to indicate "no image present" and is
     /// not an error in our model.
     pub fn get_bytes(&self, url: &str, max_bytes: usize) -> RemoteResult<Option<Vec<u8>>> {
-        self.respect_rate_limit(url);
+        self.take_turn(url)?;
         let response = match self
             .agent
             .get(url)
@@ -247,9 +253,9 @@ impl HttpClient {
     }
 
     /// Recognise 429 (Too Many Requests) and 503 (Service Unavailable).
-    /// On a match, parse `Retry-After`, push the host's cool-down
-    /// forward, and return `Some(cool_down)` so the caller can surface
-    /// a [`RemoteError::RateLimited`]. Returns `None` for any other
+    /// On a match, parse `Retry-After`, hold the host for that long, and
+    /// return `Some(cool_down)` so the caller can surface a
+    /// [`RemoteError::RateLimited`]. Returns `None` for any other
     /// status, leaving normal handling to the caller.
     fn handle_rate_limit_status(
         &self,
@@ -266,17 +272,16 @@ impl HttpClient {
             self.record_cool_down(host, cool_down);
         }
         eprintln!(
-            "Sustain: remote {url} returned HTTP {status}; holding the host for {} s before the next request",
+            "Sustain: remote {url} returned HTTP {status}; holding the host for {} s",
             cool_down.as_secs()
         );
         Some(cool_down)
     }
 
-    /// Push the named host's "next request at" forward by `cool_down`
-    /// from now. Subsequent calls to [`Self::respect_rate_limit`] for
-    /// the same host wait against the new value, so a 429 reply
-    /// automatically translates into a real pause for every other
-    /// scheduled request to that host.
+    /// Hold the named host for `cool_down` from now, or until the end of
+    /// a longer hold already in place. Until then
+    /// [`Self::take_turn`] refuses every request to that host, so a 429
+    /// reply stops the other requests lined up for it too.
     fn record_cool_down(&self, host: &'static str, cool_down: Duration) {
         let mut states = match self.host_states.lock() {
             Ok(guard) => guard,
@@ -284,18 +289,22 @@ impl HttpClient {
         };
         let entry = states.entry(host).or_default();
         let target = Instant::now() + cool_down;
-        entry.next_request_at = Some(match entry.next_request_at {
+        entry.held_until = Some(match entry.held_until {
             Some(existing) => existing.max(target),
             None => target,
         });
     }
 
-    fn respect_rate_limit(&self, url: &str) {
+    /// Take a request's turn on its host: sleep through what is left of
+    /// the minimum gap since the previous request, then let it be sent.
+    /// A host held by a cool-down gives no turn; the request is refused
+    /// with the time the hold has left.
+    fn take_turn(&self, url: &str) -> RemoteResult<()> {
         let Some(host) = host_from_url(url) else {
-            return;
+            return Ok(());
         };
         let Some(policy) = self.rate_limits.get(host) else {
-            return;
+            return Ok(());
         };
 
         // We use a single mutex guarding the whole host-state map. The
@@ -309,6 +318,13 @@ impl HttpClient {
             };
             let entry = states.entry(host).or_default();
             let now = Instant::now();
+            if let Some(held_until) = entry.held_until {
+                let cool_down = held_until.saturating_duration_since(now);
+                if !cool_down.is_zero() {
+                    return Err(RemoteError::RateLimited { cool_down });
+                }
+                entry.held_until = None;
+            }
             let gap_target = entry
                 .next_request_at
                 .map(|previous| previous + policy.minimum_gap)
@@ -325,6 +341,7 @@ impl HttpClient {
         if !sleep_for.is_zero() {
             thread::sleep(sleep_for);
         }
+        Ok(())
     }
 }
 
@@ -545,68 +562,73 @@ mod tests {
         assert_eq!(parse_retry_after(&headers), None);
     }
 
-    #[test]
-    fn record_cool_down_pushes_next_request_at_forward() {
-        let client = HttpClient::new(HttpClientConfig {
-            user_agent: "Sustain-test/0".to_owned(),
-        });
-        // Seed the host with a recent "next request at" so we can
-        // verify the cool-down genuinely moves it forward (not just
-        // sets a non-None value).
-        {
-            let mut states = client.host_states.lock().expect("lock");
-            states.entry("musicbrainz.org").or_default().next_request_at = Some(Instant::now());
-        }
-        let before = client
+    fn held_until(client: &HttpClient, host: &str) -> Option<Instant> {
+        client
             .host_states
             .lock()
             .expect("lock")
-            .get("musicbrainz.org")
-            .and_then(|s| s.next_request_at)
-            .expect("seeded");
-        client.record_cool_down("musicbrainz.org", Duration::from_secs(30));
-        let after = client
-            .host_states
-            .lock()
-            .expect("lock")
-            .get("musicbrainz.org")
-            .and_then(|s| s.next_request_at)
-            .expect("present after cool-down");
-        // The new value should be far in the future relative to
-        // `before` — at least the cool-down minus a little slack for
-        // the function call itself.
-        assert!(
-            after.saturating_duration_since(before) >= Duration::from_secs(29),
-            "cool-down should move next_request_at forward by ~30s, moved {:?}",
-            after.saturating_duration_since(before)
-        );
+            .get(host)
+            .and_then(|state| state.held_until)
     }
 
     #[test]
-    fn record_cool_down_never_pulls_next_request_at_backward() {
-        // If we somehow recorded an earlier cool-down after a longer
-        // one (e.g. a 30s window already in place, a transient 5s
-        // retry-after later), the later call must not shorten the
-        // existing window.
+    fn a_held_host_refuses_requests_without_waiting_the_cool_down_out() {
+        let client = HttpClient::new(HttpClientConfig {
+            user_agent: "Sustain-test/0".to_owned(),
+        });
+        client.record_cool_down("musicbrainz.org", Duration::from_secs(30));
+
+        let asked_at = Instant::now();
+        let cool_down = client
+            .get_json::<TestPayload>("https://musicbrainz.org/ws/2/recording/")
+            .err()
+            .and_then(|error| match error {
+                RemoteError::RateLimited { cool_down } => Some(cool_down),
+                _ => None,
+            })
+            .expect("a held host refuses the request");
+        assert!(
+            asked_at.elapsed() < Duration::from_secs(5),
+            "the refusal must not wait for the cool-down"
+        );
+        assert!(
+            cool_down > Duration::from_secs(25) && cool_down <= Duration::from_secs(30),
+            "the refusal carries what is left of the cool-down, got {cool_down:?}"
+        );
+        // The image endpoint of the same host is refused alike, and
+        // another host is not held.
+        assert!(matches!(
+            client.get_bytes("https://musicbrainz.org/anything", 16),
+            Err(RemoteError::RateLimited { .. })
+        ));
+        assert_eq!(client.take_turn("https://lrclib.net/api/get"), Ok(()));
+    }
+
+    #[test]
+    fn a_host_takes_requests_again_once_its_cool_down_has_passed() {
+        let client = HttpClient::new(HttpClientConfig {
+            user_agent: "Sustain-test/0".to_owned(),
+        });
+        client.record_cool_down("lrclib.net", Duration::from_millis(20));
+        assert!(matches!(
+            client.take_turn("https://lrclib.net/api/get"),
+            Err(RemoteError::RateLimited { .. })
+        ));
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(client.take_turn("https://lrclib.net/api/get"), Ok(()));
+        assert_eq!(held_until(&client, "lrclib.net"), None);
+    }
+
+    #[test]
+    fn record_cool_down_never_shortens_a_longer_hold() {
+        // A 120 s hold already in place, then a transient 1 s
+        // retry-after: the later call must not shorten the hold.
         let client = HttpClient::new(HttpClientConfig {
             user_agent: "Sustain-test/0".to_owned(),
         });
         client.record_cool_down("musicbrainz.org", Duration::from_secs(120));
-        let long_window = client
-            .host_states
-            .lock()
-            .expect("lock")
-            .get("musicbrainz.org")
-            .and_then(|s| s.next_request_at)
-            .expect("present");
+        let long_hold = held_until(&client, "musicbrainz.org").expect("held");
         client.record_cool_down("musicbrainz.org", Duration::from_secs(1));
-        let observed = client
-            .host_states
-            .lock()
-            .expect("lock")
-            .get("musicbrainz.org")
-            .and_then(|s| s.next_request_at)
-            .expect("still present");
-        assert_eq!(observed, long_window);
+        assert_eq!(held_until(&client, "musicbrainz.org"), Some(long_hold));
     }
 }

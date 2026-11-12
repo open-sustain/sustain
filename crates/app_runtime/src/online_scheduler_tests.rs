@@ -117,6 +117,15 @@ fn wait_for(
     }
 }
 
+/// Poll until `condition` holds, failing the test after two seconds.
+fn wait_until(what: &str, condition: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !condition() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn wait_for_artwork_write(metadata: &StubMetadata) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -1453,15 +1462,18 @@ fn rate_limited_lyrics_does_not_stamp_attempt_so_track_stays_eligible() {
         provider_version: 1,
     });
 
-    // The tick reports the failure exactly like any other; the
-    // distinguishing behaviour lives in what didn't get written.
-    let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
-        matches!(progress, SchedulerProgress::Tick { failed: 1, .. })
+    wait_until("the lyrics request", || {
+        remote.lyrics_calls.load(Ordering::SeqCst) > 0
     });
+    // A track the provider would not answer for is neither done nor
+    // failed: nothing is reported for it.
+    assert!(
+        rx.try_recv().is_err(),
+        "a rate-limited track reports no progress"
+    );
 
-    // After the batch, the track must still qualify — a rate-limited
-    // capability is never stamped, so the next pass picks it up
-    // again once the HTTP client's per-host cool-down has elapsed.
+    // The track must still qualify — a rate-limited capability is never
+    // stamped, so it is tried again once the cool-down has passed.
     let still_pending = store
         .tracks_needing_online(
             OnlineCapabilities {
@@ -1521,9 +1533,27 @@ fn rate_limited_in_one_capability_still_stamps_other_completed_capabilities() {
         provider_version: 1,
     });
 
-    let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
-        matches!(progress, SchedulerProgress::Tick { .. })
+    wait_until("the artwork request", || {
+        remote.artwork_calls.load(Ordering::SeqCst) > 0
     });
+    wait_until("the tags stamp", || {
+        store
+            .tracks_needing_online(
+                OnlineCapabilities {
+                    artwork: false,
+                    tags: true,
+                    lyrics: false,
+                },
+                1,
+                10,
+            )
+            .expect("query")
+            .is_empty()
+    });
+    assert!(
+        rx.try_recv().is_err(),
+        "a rate-limited track reports no progress"
+    );
 
     // tags is stamped → no longer a tags candidate.
     assert!(
@@ -1556,6 +1586,179 @@ fn rate_limited_in_one_capability_still_stamps_other_completed_capabilities() {
             .expect("query"),
         vec![track.id],
         "rate-limited artwork capability must remain eligible"
+    );
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn a_rate_limited_track_is_tried_again_once_the_cool_down_has_passed() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    store.save_track(track.clone()).expect("save");
+
+    let remote = Arc::new(
+        StubRemote::default().with_lyrics(Err(RemoteError::RateLimited {
+            cool_down: Duration::from_millis(500),
+        })),
+    );
+    let metadata = Arc::new(StubMetadata::default());
+    let (sink, rx) = capturing_sink();
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
+
+    let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
+        remote_service: remote.clone(),
+        tag_writer,
+        library_store: store.clone(),
+        progress: sink,
+        track_updated: None,
+        clock: fixed_clock(1),
+        initial_settings: OnlineSettings {
+            artwork: false,
+            tags: false,
+            lyrics: true,
+        },
+        library_path: Some(temp.path().to_path_buf()),
+        provider_version: 1,
+    });
+
+    wait_until("the first lyrics request", || {
+        remote.lyrics_calls.load(Ordering::SeqCst) > 0
+    });
+    // The provider answers from now on. The worker is waiting the
+    // cool-down out: it does not ask again before it has passed.
+    *remote.lyrics.lock().expect("lock") = Some(Ok(None));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 1);
+
+    // Then it asks again, by itself, and the track is done.
+    let idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    assert_eq!(
+        idle,
+        SchedulerProgress::Idle {
+            completed: 1,
+            failed: 0
+        }
+    );
+    assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 2);
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn a_worker_waiting_a_cool_down_out_shuts_down_at_once() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    store
+        .save_track(track_with_metadata(temp.path(), "alpha.flac"))
+        .expect("save");
+
+    let remote = Arc::new(
+        StubRemote::default().with_lyrics(Err(RemoteError::RateLimited {
+            cool_down: Duration::from_secs(15 * 60),
+        })),
+    );
+    let metadata = Arc::new(StubMetadata::default());
+    let (sink, _rx) = capturing_sink();
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
+
+    let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
+        remote_service: remote.clone(),
+        tag_writer,
+        library_store: store,
+        progress: sink,
+        track_updated: None,
+        clock: fixed_clock(1),
+        initial_settings: OnlineSettings {
+            artwork: false,
+            tags: false,
+            lyrics: true,
+        },
+        library_path: Some(temp.path().to_path_buf()),
+        provider_version: 1,
+    });
+
+    wait_until("the lyrics request", || {
+        remote.lyrics_calls.load(Ordering::SeqCst) > 0
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        remote.lyrics_calls.load(Ordering::SeqCst),
+        1,
+        "the provider is left alone during the cool-down"
+    );
+    let start = Instant::now();
+    scheduler.shutdown();
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn a_rate_limit_keeps_the_rest_of_an_explicit_run() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut track_ids = Vec::new();
+    for id in 1..=3 {
+        let mut track = track_with_metadata(temp.path(), &format!("explicit-{id}.flac"));
+        track.id = TrackId::new(id).expect("non-zero");
+        track_ids.push(track.id);
+        store.save_track(track).expect("save");
+    }
+
+    let remote = Arc::new(
+        StubRemote::default().with_lyrics(Err(RemoteError::RateLimited {
+            cool_down: Duration::from_millis(50),
+        })),
+    );
+    let metadata = Arc::new(StubMetadata::default());
+    let (sink, rx) = capturing_sink();
+    let (_writer, tag_writer) = spawn_tag_writer(metadata.clone(), store.clone(), temp.path());
+
+    let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
+        remote_service: remote.clone(),
+        tag_writer,
+        library_store: store.clone(),
+        progress: sink,
+        track_updated: None,
+        clock: fixed_clock(1),
+        initial_settings: OnlineSettings::default(),
+        library_path: Some(temp.path().to_path_buf()),
+        provider_version: 1,
+    });
+    // Nothing to do yet: the first Idle is the worker starting up.
+    let _startup = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(
+        track_ids,
+        OnlineCapabilities {
+            artwork: false,
+            tags: false,
+            lyrics: true,
+        },
+    );
+    wait_until("the first lyrics request", || {
+        remote.lyrics_calls.load(Ordering::SeqCst) > 0
+    });
+    *remote.lyrics.lock().expect("lock") = Some(Ok(None));
+
+    // The track that was refused and the two behind it are all asked
+    // for once the cool-down has passed.
+    let idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    assert_eq!(
+        idle,
+        SchedulerProgress::Idle {
+            completed: 3,
+            failed: 0
+        }
     );
 
     scheduler.shutdown();

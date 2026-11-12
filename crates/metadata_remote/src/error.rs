@@ -22,12 +22,12 @@ pub enum RemoteError {
     /// app's job is to back off without spinning on the failure.
     Network,
     /// Server explicitly asked us to stop sending requests for a
-    /// while (HTTP 429 or 503). `cool_down` is the time the HTTP
-    /// client has *already* recorded against the offending host; the
-    /// caller can treat this as a strong signal to stop the current
-    /// batch instead of just the current track. The rate limiter
-    /// holds back the next request to that host automatically — the
-    /// caller does not need to re-implement the wait.
+    /// while (HTTP 429 or 503). `cool_down` is how much longer the HTTP
+    /// client holds the offending host: until it has passed, requests
+    /// to that host are refused with this same error instead of being
+    /// sent. The caller can treat this as a strong signal to stop the
+    /// current batch instead of just the current track, and waits the
+    /// cool-down out itself if it means to try again.
     RateLimited { cool_down: Duration },
     /// Server responded but with a status code we cannot use. Held
     /// for diagnostics; the UI does not branch on the specific code.
