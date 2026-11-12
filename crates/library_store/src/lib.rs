@@ -191,10 +191,11 @@ impl OnlineCapabilities {
     }
 }
 
-/// Per-attempt facts stamped onto `track_online_status`. `provider_version`
-/// is the watermark the scheduler compares against to invalidate stale
-/// rows after a provider switch or significant client change; `now_unix`
-/// is the wall clock at the moment the attempt completed.
+/// Per-attempt facts stamped onto `track_online_status` for each
+/// capability the attempt covered. `provider_version` is the watermark the
+/// scheduler compares a capability's last attempt against to invalidate it
+/// after a provider switch or significant client change; `now_unix` is the
+/// wall clock at the moment the attempt completed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OnlineContext {
     pub provider_version: u32,
@@ -457,10 +458,11 @@ pub trait LibraryStore: Send + Sync {
     ///
     /// Writes the waveform BLOBs only when the waveform capability
     /// was requested and `analysis.waveform_detail` is non-empty.
-    /// Replaces `tracks.bpm_hundredths` and `tracks.musical_key` with the
-    /// measured tempo and key unless the user typed them: a measurement
-    /// supersedes a tag-imported or earlier measured value, never the
-    /// user's own. The beat grid,
+    /// Replaces `tracks.bpm_hundredths` with the measured tempo unless the
+    /// user typed it: a measurement supersedes a tag-imported or earlier
+    /// measured tempo, never the user's own. The measured key fills a
+    /// track without one and replaces an earlier measurement; a key
+    /// imported or typed is kept. The beat grid,
     /// an analysis product rather than a library value, is replaced
     /// whenever the BPM capability ran — removed when the pass found
     /// none. A track that has left the library meanwhile has nothing to

@@ -2332,6 +2332,55 @@ fn online_query_invalidates_stale_provider_version() {
 }
 
 #[test]
+fn an_online_attempt_at_one_capability_leaves_the_others_at_their_version() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let t = track(1, "a.flac");
+    store.save_track(t.clone()).expect("save");
+    let only = |artwork: bool, tags: bool, lyrics: bool| OnlineCapabilities {
+        artwork,
+        tags,
+        lyrics,
+    };
+    // Tags and lyrics were both attempted by provider version 1.
+    store
+        .record_online_attempt(
+            t.id,
+            only(false, true, true),
+            OnlineContext {
+                provider_version: 1,
+                now_unix: 1_000,
+            },
+        )
+        .expect("record");
+    // Version 2 attempts the lyrics alone.
+    store
+        .record_online_attempt(
+            t.id,
+            only(false, false, true),
+            OnlineContext {
+                provider_version: 2,
+                now_unix: 2_000,
+            },
+        )
+        .expect("record");
+
+    let needing = |capabilities| {
+        store
+            .tracks_needing_online(capabilities, 2, 10)
+            .expect("query")
+    };
+    assert!(needing(only(false, false, true)).is_empty());
+    // The tags attempt is still version 1's: version 2 owes one.
+    assert_eq!(needing(only(false, true, false)), vec![t.id]);
+    assert_eq!(
+        store
+            .filter_tracks_needing_online(&[t.id], only(false, true, false), 2)
+            .expect("filter"),
+        vec![t.id]
+    );
+}
+
+#[test]
 fn online_query_excludes_tracks_with_embedded_artwork() {
     let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let mut with_art = track(1, "with_art.flac");

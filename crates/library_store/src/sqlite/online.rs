@@ -14,18 +14,19 @@ pub(super) fn record_online_attempt(
     if capabilities.is_empty() {
         return Ok(());
     }
-    let artwork_at = capabilities.artwork.then_some(context.now_unix);
-    let tags_at = capabilities.tags.then_some(context.now_unix);
-    let lyrics_at = capabilities.lyrics.then_some(context.now_unix);
+    let at = |covered: bool| covered.then_some(context.now_unix);
+    let version = |covered: bool| covered.then_some(i64::from(context.provider_version));
     connection
         .execute(
             UPSERT_TRACK_ONLINE_STATUS_SQL,
             params![
                 track_id.get(),
-                artwork_at,
-                tags_at,
-                lyrics_at,
-                i64::from(context.provider_version),
+                at(capabilities.artwork),
+                at(capabilities.tags),
+                at(capabilities.lyrics),
+                version(capabilities.artwork),
+                version(capabilities.tags),
+                version(capabilities.lyrics),
             ],
         )
         .map(|_| ())
@@ -118,9 +119,9 @@ WHERE t.is_missing = 0
   AND (
         (?{artwork} = 1
             AND COALESCE(t.has_embedded_artwork, 0) = 0
-            AND (s.artwork_attempted_at_unix IS NULL OR s.provider_version < ?{version}))
-     OR (?{tags}    = 1 AND (s.tags_attempted_at_unix   IS NULL OR s.provider_version < ?{version}))
-     OR (?{lyrics}  = 1 AND (s.lyrics_attempted_at_unix IS NULL OR s.provider_version < ?{version}))
+            AND (s.artwork_attempted_at_unix IS NULL OR s.artwork_provider_version < ?{version}))
+     OR (?{tags}    = 1 AND (s.tags_attempted_at_unix   IS NULL OR s.tags_provider_version   < ?{version}))
+     OR (?{lyrics}  = 1 AND (s.lyrics_attempted_at_unix IS NULL OR s.lyrics_provider_version < ?{version}))
       )"
     )
 }

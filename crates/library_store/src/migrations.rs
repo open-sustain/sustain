@@ -18,11 +18,11 @@ use crate::{
         ADD_TRACK_KEY_ORIGIN_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
         INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
         NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
-        VERSION_ANALYSIS_PER_CAPABILITY_SQL,
+        VERSION_ANALYSIS_PER_CAPABILITY_SQL, VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 15;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 16;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -118,6 +118,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 15,
         description: "remember where each key came from",
         step: MigrationStep::Sql(ADD_TRACK_KEY_ORIGIN_SQL),
+    },
+    Migration {
+        version: 16,
+        description: "version online attempts per capability",
+        step: MigrationStep::Sql(VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL),
     },
 ];
 
@@ -1279,6 +1284,71 @@ mod tests {
         assert!(
             connection
                 .execute("UPDATE tracks SET key_origin = 3 WHERE id = 1", [])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn upgrade_from_v15_versions_each_attempted_online_capability() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..15]).expect("schema version 15");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path) VALUES (1, x'61');
+                 INSERT INTO track_online_status \
+                     (track_id, tags_attempted_at_unix, lyrics_attempted_at_unix, \
+                      provider_version) \
+                     VALUES (1, 1700000000, 1700000001, 2);",
+            )
+            .expect("seed an attempted track");
+
+        apply_pending(&connection).expect("upgrade");
+
+        // Artwork attempt, artwork / tags / lyrics versions, tags and
+        // lyrics attempts.
+        type Row = (
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+        );
+        let row: Row = connection
+            .query_row(
+                "SELECT artwork_attempted_at_unix, artwork_provider_version, \
+                     tags_provider_version, lyrics_provider_version, \
+                     tags_attempted_at_unix, lyrics_attempted_at_unix \
+                 FROM track_online_status",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("status");
+        // Artwork was never attempted, so it has no version; the attempts
+        // themselves are kept.
+        assert_eq!(
+            row,
+            (
+                None,
+                None,
+                Some(2),
+                Some(2),
+                Some(1_700_000_000),
+                Some(1_700_000_001)
+            )
+        );
+        assert!(
+            connection
+                .prepare("SELECT provider_version FROM track_online_status")
                 .is_err()
         );
     }

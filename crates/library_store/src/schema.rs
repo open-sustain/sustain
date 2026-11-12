@@ -559,6 +559,25 @@ ALTER TABLE tracks ADD COLUMN key_origin INTEGER NOT NULL DEFAULT 0
     CHECK (key_origin IN (0, 1, 2));
 "#;
 
+// Each online capability keeps the version of the provider pipeline that
+// last attempted it, as each analysis capability does since migration 13:
+// one shared version let an attempt at one capability pass the others off
+// as current. Each starts from the shared version, the best record there
+// is of what last attempted it.
+pub(super) const VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL: &str = r#"
+ALTER TABLE track_online_status ADD COLUMN artwork_provider_version INTEGER;
+ALTER TABLE track_online_status ADD COLUMN tags_provider_version INTEGER;
+ALTER TABLE track_online_status ADD COLUMN lyrics_provider_version INTEGER;
+UPDATE track_online_status SET
+    artwork_provider_version =
+        CASE WHEN artwork_attempted_at_unix IS NOT NULL THEN provider_version END,
+    tags_provider_version =
+        CASE WHEN tags_attempted_at_unix IS NOT NULL THEN provider_version END,
+    lyrics_provider_version =
+        CASE WHEN lyrics_attempted_at_unix IS NOT NULL THEN provider_version END;
+ALTER TABLE track_online_status DROP COLUMN provider_version;
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
@@ -779,11 +798,6 @@ ORDER BY id
     )
 });
 
-/// Upsert into `track_analysis`. Each `*_attempted_at_unix` parameter
-/// is either the analysis timestamp (if the capability ran this pass)
-/// or `NULL` (if it did not) — `COALESCE` preserves whatever value
-/// was already stored in that column, so a BPM-only re-analysis does
-/// not clobber the waveform's "attempted" timestamp.
 /// Stamp an attempt. ?2–?4 are the attempt time for each capability the
 /// attempt covered and NULL for the others, ?6–?8 likewise the analyzer
 /// version; COALESCE keeps an uncovered capability's previous attempt.
@@ -945,31 +959,35 @@ pub(super) const DELETE_TRACK_SYNCED_LYRICS_SQL: &str =
     r#"DELETE FROM track_synced_lyrics WHERE track_id = ?1"#;
 
 /// Upsert into `track_online_status` for a track still in the library.
-/// Each `*_attempted_at_unix` parameter is either the timestamp
-/// (capability ran this pass) or `NULL` (capability not requested this
-/// pass) — `COALESCE` preserves the existing value so a lyrics-only pass
-/// does not clobber the artwork attempt timestamp.
+/// ?2–?4 are the attempt time for each capability the attempt covered
+/// and NULL for the others, ?5–?7 likewise the provider version;
+/// `COALESCE` keeps an uncovered capability's previous attempt, so a
+/// lyrics-only pass does not clobber the artwork attempt.
 pub(super) const UPSERT_TRACK_ONLINE_STATUS_SQL: &str = r#"
 INSERT INTO track_online_status (
     track_id,
     artwork_attempted_at_unix,
     tags_attempted_at_unix,
     lyrics_attempted_at_unix,
-    provider_version
+    artwork_provider_version,
+    tags_provider_version,
+    lyrics_provider_version
 )
-SELECT ?1, ?2, ?3, ?4, ?5
+SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
 WHERE EXISTS (SELECT 1 FROM tracks WHERE id = ?1)
 ON CONFLICT(track_id) DO UPDATE SET
     artwork_attempted_at_unix = COALESCE(excluded.artwork_attempted_at_unix, artwork_attempted_at_unix),
     tags_attempted_at_unix    = COALESCE(excluded.tags_attempted_at_unix,    tags_attempted_at_unix),
     lyrics_attempted_at_unix  = COALESCE(excluded.lyrics_attempted_at_unix,  lyrics_attempted_at_unix),
-    provider_version          = excluded.provider_version
+    artwork_provider_version  = COALESCE(excluded.artwork_provider_version,  artwork_provider_version),
+    tags_provider_version     = COALESCE(excluded.tags_provider_version,     tags_provider_version),
+    lyrics_provider_version   = COALESCE(excluded.lyrics_provider_version,   lyrics_provider_version)
 "#;
 
 /// "Find tracks needing online work." Returns track IDs not marked
 /// missing AND having at least one of the requested capabilities
-/// either un-attempted (NULL timestamp) or stamped by an older
-/// provider_version.
+/// either un-attempted (NULL timestamp) or last attempted by an older
+/// provider version.
 ///
 /// The artwork capability has an extra non-destructive guard: tracks
 /// whose most recent scan observed an embedded picture
@@ -992,9 +1010,9 @@ WHERE t.is_missing = 0
   AND (
         (?1 = 1
             AND COALESCE(t.has_embedded_artwork, 0) = 0
-            AND (s.artwork_attempted_at_unix IS NULL OR s.provider_version < ?4))
-     OR (?2 = 1 AND (s.tags_attempted_at_unix    IS NULL OR s.provider_version < ?4))
-     OR (?3 = 1 AND (s.lyrics_attempted_at_unix  IS NULL OR s.provider_version < ?4))
+            AND (s.artwork_attempted_at_unix IS NULL OR s.artwork_provider_version < ?4))
+     OR (?2 = 1 AND (s.tags_attempted_at_unix    IS NULL OR s.tags_provider_version   < ?4))
+     OR (?3 = 1 AND (s.lyrics_attempted_at_unix  IS NULL OR s.lyrics_provider_version < ?4))
       )
 ORDER BY t.id
 LIMIT ?5
