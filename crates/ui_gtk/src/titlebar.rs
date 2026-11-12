@@ -14,7 +14,8 @@ use super::{
     MEDIA_ICON_SIZE, NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_WIDTH, PlaybackChangedCallback,
     SharedRuntime, TITLEBAR_CONTROL_HEIGHT, TITLEBAR_GAP, TITLEBAR_HEIGHT, TITLEBAR_LEFT_PADDING,
     TITLEBAR_MIN_GAP, TITLEBAR_RIGHT_PADDING, VOLUME_MAGNET_THRESHOLD, VOLUME_MIN_WIDTH,
-    VOLUME_WIDTH, command_controller::SharedCommandController, flexible_width::FlexibleWidth,
+    VOLUME_WIDTH, centered_bar::CenteredBar, command_controller::SharedCommandController,
+    flexible_width::FlexibleWidth,
 };
 
 /// Debounce window for persisting the playback volume to TOML.
@@ -50,15 +51,6 @@ pub(crate) struct Titlebar {
 }
 
 pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercent) -> Titlebar {
-    // In a narrow window the blank spaces, the volume slider and the
-    // search entry give way first, down to their minimums, and the
-    // now-playing area after them: the center box shrinks its center child
-    // last. A wide window shows each at its full width.
-    let topbar = gtk::CenterBox::new();
-    topbar.add_css_class("titlebar");
-    topbar.set_hexpand(true);
-    topbar.set_height_request(TITLEBAR_HEIGHT);
-
     let previous = media_icon_button("media-skip-backward-symbolic", "Previous");
     let play_pause_icon = gtk::Image::from_icon_name("media-playback-start-symbolic");
     play_pause_icon.set_pixel_size(MEDIA_ICON_SIZE);
@@ -131,10 +123,15 @@ pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercen
     end.append(&titlebar_gap());
     end.append(&right_controls);
 
-    topbar.set_start_widget(Some(&start));
+    // In a narrow window the blank spaces, the volume slider and the
+    // search entry give way first, down to their minimums, and the
+    // now-playing area after them: the bar shrinks its center part last.
+    // A wide window shows each at its full width.
     let now_playing = FlexibleWidth::new(&now_playing, NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_WIDTH);
-    topbar.set_center_widget(Some(&now_playing));
-    topbar.set_end_widget(Some(&end));
+    let topbar = CenteredBar::new(&start, &now_playing, &end);
+    topbar.add_css_class("titlebar");
+    topbar.set_hexpand(true);
+    topbar.set_height_request(TITLEBAR_HEIGHT);
 
     let handle = gtk::WindowHandle::new();
     handle.set_child(Some(&topbar));
@@ -428,6 +425,36 @@ mod tests {
                 natural >= NOW_PLAYING_WIDTH + 2 * VOLUME_WIDTH,
                 "natural width {natural}"
             );
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
+    fn the_search_entry_never_covers_the_now_playing_area() {
+        let ran = crate::test_support::with_gtk(|| {
+            let now_playing = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let titlebar = build_titlebar(
+                now_playing.clone(),
+                VolumePercent::from_clamped(VolumePercent::MAX),
+            );
+            let bar = &titlebar.widget;
+            let span = |widget: &gtk::Widget| {
+                let bounds = widget.compute_bounds(bar).expect("laid out in the top bar");
+                (bounds.x(), bounds.x() + bounds.width())
+            };
+            let (minimum, natural, _, _) = bar.measure(gtk::Orientation::Horizontal, -1);
+            for width in minimum..=natural {
+                bar.allocate(width, TITLEBAR_HEIGHT, -1, None);
+                let (_, volume_end) = span(titlebar.volume.upcast_ref());
+                let (now_playing_start, now_playing_end) = span(now_playing.upcast_ref());
+                let (search_start, search_end) = span(titlebar.search.upcast_ref());
+                assert!(volume_end <= now_playing_start, "window width {width}");
+                assert!(now_playing_end <= search_start, "window width {width}");
+                let (_, bar_end) = span(bar.upcast_ref());
+                assert!(search_end <= bar_end, "window width {width}");
+            }
         });
         if !ran {
             eprintln!("skipped GTK widget test: no display available");

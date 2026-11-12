@@ -28,6 +28,7 @@ mod artwork_color;
 mod artwork_loader;
 mod cd_import_panel;
 mod cell_registry;
+mod centered_bar;
 mod chart;
 mod command_controller;
 mod confirmation;
