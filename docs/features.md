@@ -825,9 +825,11 @@ Sustain stores both so smart-playlist rules can use it.
 
 ### Search bar — *iso-iTunes*
 Top-bar search filters the active view in real time across title,
-artist, album, album artist, composer, genre, and file path. Search is
-case- and accent-insensitive and whitespace-normalized. The current search string
-is persisted across restarts.
+artist, album, album artist, composer, genre, and file path. Every word
+typed must be found, each in any of those fields, so `massive mezzanine`
+finds an artist's album. Search is case- and accent-insensitive and
+whitespace-normalized. The current search string is persisted across
+restarts.
 
 ### Column sorting — *iso-iTunes*
 Click a column header in the Music or playlist track table to sort by it;

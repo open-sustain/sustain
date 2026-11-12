@@ -7,19 +7,18 @@ use std::collections::HashMap;
 
 use sustain_domain::{Track, TrackId, normalize_search_text};
 
-/// Joins a track's searchable fields in its precomputed document. Chosen
-/// because a single-line search query never contains it, so
-/// `document.contains(query)` can never span two fields: a track matches
-/// when one of its fields contains the query.
+/// Joins a track's searchable fields in its precomputed document. A
+/// query word holds no whitespace, so no word can match across two
+/// fields: each word is found inside one field or not at all.
 const FIELD_SEPARATOR: char = '\n';
 
 /// A precomputed, normalized search document per track, keyed by id.
 ///
 /// Each track contributes one lowercased string concatenating its
 /// searchable fields, built once on insert/rebuild rather than re-cloned
-/// and re-lowercased on every query. Matching a query is then a single
-/// substring test with no per-track allocation — the index, not the query
-/// path, owns the normalization cost. The owner keeps it in sync with the
+/// and re-lowercased on every query. Matching a query is then one
+/// substring test per query word with no per-track allocation — the
+/// index, not the query path, owns the normalization cost. The owner keeps it in sync with the
 /// library (rebuild on a wholesale change, insert on a per-track update,
 /// remove on deletion).
 #[derive(Debug, Default)]
@@ -60,12 +59,14 @@ impl SearchIndex {
     }
 
     /// Test a track against an ALREADY-normalized query (see
-    /// [`normalize_query`]). A track absent from the index never matches; an
-    /// empty query is the caller's responsibility to short-circuit.
+    /// [`normalize_query`]): the track matches when each of the query's
+    /// words is found in one of its fields, whichever field that is, so
+    /// "massive mezzanine" finds an artist's album. A track absent from
+    /// the index never matches.
     pub fn matches(&self, track_id: TrackId, normalized_query: &str) -> bool {
         self.documents
             .get(&track_id)
-            .is_some_and(|document| document.contains(normalized_query))
+            .is_some_and(|document| every_word_is_found(normalized_query, document))
     }
 }
 
@@ -75,7 +76,16 @@ pub fn normalize_query(query: &str) -> String {
     normalize_search_text(query)
 }
 
-/// Album-level search: matches against the album's title, artist, and year.
+/// Whether `text` contains each whitespace-separated word of
+/// `normalized_query`. A query with no words is found in any text.
+fn every_word_is_found(normalized_query: &str, text: &str) -> bool {
+    normalized_query
+        .split_whitespace()
+        .all(|word| text.contains(word))
+}
+
+/// Album-level search: each word of the search is looked for in the
+/// album's title, artist, and year.
 /// Used by the Albums grid view, which intentionally does NOT search track
 /// titles — typing a track title in Albums view returning no albums is the
 /// agreed behavior (the user can switch to Songs view for that).
@@ -92,10 +102,13 @@ pub fn album_matches_search_text(
     if normalized_search.is_empty() {
         return true;
     }
-    let year_text = album_year.map(|year| year.to_string()).unwrap_or_default();
-    [album_title, album_artist, year_text.as_str()]
-        .iter()
-        .any(|field| normalize_query(field).contains(&normalized_search))
+    let mut document = String::new();
+    push_field(&mut document, album_title);
+    push_field(&mut document, album_artist);
+    if let Some(year) = album_year {
+        push_field(&mut document, &year.to_string());
+    }
+    every_word_is_found(&normalized_search, &document)
 }
 
 /// Build a track's normalized search document: each non-empty searchable
@@ -208,14 +221,47 @@ mod tests {
     }
 
     #[test]
-    fn index_does_not_match_a_query_spanning_two_fields() {
-        // "attack" (artist) and "mezzanine" (album) are distinct fields; a
-        // query straddling them must not match: a track matches when one of
-        // its fields contains the query.
+    fn index_matches_words_found_in_different_fields() {
         let mut track = track(1, "Angel", "Massive Attack");
         track.metadata.album = Some("Mezzanine".to_owned());
         let index = index_of(std::slice::from_ref(&track));
-        assert!(!index.matches(track.id, &normalize_query("attack mezzanine")));
+        for query in ["massive mezzanine", "mezzanine  angel attack", "mass mezz"] {
+            assert!(index.matches(track.id, &normalize_query(query)), "{query}");
+        }
+    }
+
+    #[test]
+    fn index_requires_every_word_of_the_query() {
+        let mut track = track(1, "Angel", "Massive Attack");
+        track.metadata.album = Some("Mezzanine".to_owned());
+        let index = index_of(std::slice::from_ref(&track));
+        assert!(!index.matches(track.id, &normalize_query("massive protection")));
+    }
+
+    #[test]
+    fn index_does_not_match_a_word_spanning_two_fields() {
+        // "attack" ends the artist and "mezzanine" starts the album: no
+        // single word runs from one field into the next.
+        let mut track = track(1, "Angel", "Massive Attack");
+        track.metadata.album = Some("Mezzanine".to_owned());
+        let index = index_of(std::slice::from_ref(&track));
+        assert!(!index.matches(track.id, &normalize_query("attackmezzanine")));
+    }
+
+    #[test]
+    fn album_search_matches_words_found_in_different_fields() {
+        assert!(album_matches_search_text(
+            "Mezzanine",
+            "Massive Attack",
+            Some(1998),
+            "massive mezzanine 1998"
+        ));
+        assert!(!album_matches_search_text(
+            "Mezzanine",
+            "Massive Attack",
+            Some(1998),
+            "massive protection"
+        ));
     }
 
     #[test]
