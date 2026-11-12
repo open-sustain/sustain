@@ -3430,6 +3430,69 @@ fn runtime_play_previous_track_skips_missing_tracks() {
     std::fs::remove_dir_all(root).expect("remove test library");
 }
 
+/// A file deleted behind Sustain's back is still recorded as available:
+/// the track is found missing only when playback reaches it. Moving on
+/// from it, in either direction, is what skipping a missing track means.
+#[test]
+fn runtime_adjacent_playback_moves_past_tracks_found_missing_on_the_way() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    for (id, name) in [(1, "a.flac"), (2, "b.flac"), (3, "c.flac"), (4, "d.flac")] {
+        std::fs::write(root.join(name), b"not real audio").expect("write track");
+        assert_eq!(store.save_track(test_track(track_id(id), name)), Ok(()));
+    }
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize")
+    .with_playback_service(Box::new(NullPlaybackService::new()));
+    let playing = |runtime: &ApplicationRuntime, id: i64| {
+        assert_eq!(
+            runtime.playback_state(),
+            PlaybackState::Playing {
+                track_id: track_id(id),
+                position: std::time::Duration::ZERO,
+            }
+        );
+    };
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: library_queue(&runtime),
+        })),
+        Ok(())
+    );
+    std::fs::remove_file(root.join("b.flac")).expect("delete the second track's file");
+    std::fs::remove_file(root.join("c.flac")).expect("delete the third track's file");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayNextTrack)),
+        Ok(())
+    );
+    playing(&runtime, 4);
+    for id in [2, 3] {
+        let stored = store.track(track_id(id)).expect("reload").expect("row");
+        assert!(stored.location.is_missing(), "track {id} is marked missing");
+    }
+
+    std::fs::remove_file(root.join("a.flac")).expect("delete the first track's file");
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(
+            PlaybackCommand::PlayPreviousTrack
+        )),
+        Ok(())
+    );
+    // Nothing playable lies before the fourth track any more: playback
+    // stops there, as it does at the start of any queue.
+    assert_eq!(runtime.playback_state(), PlaybackState::Stopped);
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
 #[test]
 fn runtime_set_rating_writes_metadata_and_updates_store_cache() {
     let root = unique_test_directory();

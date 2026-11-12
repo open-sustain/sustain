@@ -413,7 +413,7 @@ impl ApplicationRuntime {
     }
 
     fn play_previous_track(&mut self) -> ApplicationRuntimeResult<()> {
-        self.play_adjacent_track(self.playback_queue.previous_track_id())
+        self.play_adjacent_playable_track(|runtime| runtime.playback_queue.previous_track_id())
     }
 
     /// Start an upcoming queue entry while preserving the existing play
@@ -435,18 +435,47 @@ impl ApplicationRuntime {
     }
 
     fn play_next_track(&mut self) -> ApplicationRuntimeResult<()> {
+        self.play_adjacent_playable_track(Self::next_track_candidate)
+    }
+
+    /// The track the queue plays after the current one.
+    fn next_track_candidate(&mut self) -> Option<TrackId> {
         // Smart Shuffle path: the lazy queue hasn't decided a next
         // track yet (the picker is consulted on demand). Resolve a
-        // pick first, append it to the queue's history, and feed it
-        // through the same auto-advance machinery used by Eager
-        // playback. Pure / Off shuffle queues short-circuit here
-        // because `needs_lazy_pick` returns false for them.
+        // pick first and append it to the queue's history, so it goes
+        // through the same auto-advance machinery as Eager playback.
+        // Pure / Off shuffle queues short-circuit here because
+        // `needs_lazy_pick` returns false for them.
         if self.playback_queue.needs_lazy_pick()
             && let Some(picked_track_id) = self.pick_smart_shuffle_next()
         {
-            return self.play_adjacent_track(Some(picked_track_id));
+            return Some(picked_track_id);
         }
-        self.play_adjacent_track(self.playback_queue.next_track_id())
+        self.playback_queue.next_track_id()
+    }
+
+    /// Play the queue's `neighbour` of the current track, moving past
+    /// every neighbour whose file turns out to be gone. A file deleted
+    /// since it was last seen is still recorded as available, so the queue
+    /// still holds its track; the play attempt finds it missing, which
+    /// takes it out of the queue, and the neighbour is asked for again.
+    /// Any other failure, or a missing track the queue keeps offering, is
+    /// reported as it is.
+    fn play_adjacent_playable_track(
+        &mut self,
+        neighbour: impl Fn(&mut Self) -> Option<TrackId>,
+    ) -> ApplicationRuntimeResult<()> {
+        let mut found_missing = None;
+        loop {
+            let candidate = neighbour(self);
+            let result = self.play_adjacent_track(candidate);
+            let is_missing = result == Err(ApplicationRuntimeError::TrackUnavailable)
+                && candidate.is_some_and(|track_id| !self.track_is_playable(track_id));
+            if !is_missing || candidate == found_missing {
+                return result;
+            }
+            found_missing = candidate;
+        }
     }
 
     /// Consult the Smart Shuffle picker for the next track to play,
