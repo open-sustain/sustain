@@ -9,6 +9,8 @@
 //! joined pathname through symlinks into the host filesystem.
 
 use std::{
+    cell::RefCell,
+    collections::HashSet,
     ffi::{CStr, CString},
     fs::File,
     io::{self, Read, Write},
@@ -27,7 +29,11 @@ use rustix::{
 };
 use sustain_domain::{DeviceRelativePath, SourceFileStat};
 
-use crate::{model::DeviceCapacity, source::ensure_source_unchanged, transport::DeviceTransport};
+use crate::{
+    model::DeviceCapacity,
+    source::ensure_source_unchanged,
+    transport::{DeviceTransport, DirectoryWorkBudget},
+};
 
 const DIRECTORY_MODE: Mode = Mode::RUSR
     .union(Mode::WUSR)
@@ -44,16 +50,6 @@ const DIRECTORY_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
     .union(OFlags::NOFOLLOW)
     .union(OFlags::CLOEXEC);
-/// A removable device is untrusted storage. Recursive removal and stale-file
-/// cleanup stop after this much directory work instead of walking an
-/// arbitrarily large crafted tree.
-#[cfg(not(test))]
-const MAX_DIRECTORY_WORK_ENTRIES: usize = 20_000;
-// Keep the adversarial breadth regression quick while exercising the same
-// production branch.
-#[cfg(test)]
-const MAX_DIRECTORY_WORK_ENTRIES: usize = 128;
-const MAX_DIRECTORY_DEPTH: usize = 128;
 
 /// One opened device mount root. All descendant operations are relative to
 /// `fd`; no caller receives an ambient joined path for mutation. The
@@ -61,12 +57,21 @@ const MAX_DIRECTORY_DEPTH: usize = 128;
 /// mounted block filesystem.
 pub struct DeviceRoot {
     fd: OwnedFd,
+    /// The directories already swept of the staging files an interrupted
+    /// earlier run left behind. Each is swept once, before the first write
+    /// into it: a write removes its own staging file whichever way it
+    /// ends, so only another run's can be there, and listing a directory
+    /// before every write would cost a pass over all it holds per file.
+    swept_directories: RefCell<HashSet<DeviceRelativePath>>,
 }
 
 impl DeviceRoot {
     pub fn open(path: &Path) -> io::Result<Self> {
         let fd = open(path, DIRECTORY_FLAGS, Mode::empty()).map_err(io::Error::from)?;
-        Ok(Self { fd })
+        Ok(Self {
+            fd,
+            swept_directories: RefCell::new(HashSet::new()),
+        })
     }
 
     pub(crate) fn ensure_dir_all(&self, path: &DeviceRelativePath) -> io::Result<()> {
@@ -224,14 +229,31 @@ impl DeviceRoot {
         cancel: &dyn Fn() -> bool,
     ) -> io::Result<()> {
         match self.open_dir(path, false) {
-            // Publishing already cleans each target parent before writing.
-            // This startup pass is intentionally scoped to `path` itself:
-            // recursively exploring a Pioneer drive root would hand an
-            // untrusted device control over sync latency.
-            Ok(directory) => cleanup_temporary_files(&directory, cancel),
+            // Publishing sweeps each target parent before first writing
+            // to it. This startup pass is intentionally scoped to `path`
+            // itself: recursively exploring a Pioneer drive root would
+            // hand an untrusted device control over sync latency.
+            Ok(directory) => self.sweep_stale_temporary_files(path, &directory, cancel),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    /// Remove the staging files an interrupted earlier run left in the
+    /// directory at `path`, opened as `directory`, unless this root
+    /// already has.
+    fn sweep_stale_temporary_files(
+        &self,
+        path: &DeviceRelativePath,
+        directory: &OwnedFd,
+        cancel: &dyn Fn() -> bool,
+    ) -> io::Result<()> {
+        if self.swept_directories.borrow().contains(path) {
+            return Ok(());
+        }
+        cleanup_temporary_files(directory, cancel)?;
+        self.swept_directories.borrow_mut().insert(path.clone());
+        Ok(())
     }
 
     fn open_dir(&self, path: &DeviceRelativePath, create: bool) -> io::Result<OwnedFd> {
@@ -273,7 +295,7 @@ impl DeviceRoot {
         let (parent_path, file_name) = split_parent(path)?;
         let parent = self.open_dir(&parent_path, true)?;
         reject_non_regular_destination(&parent, file_name, path)?;
-        cleanup_temporary_files(&parent, &|| false)?;
+        self.sweep_stale_temporary_files(&parent_path, &parent, &|| false)?;
 
         let (temporary_name, mut temporary) = create_temporary_file(&parent)?;
         let write_result = write_body(&mut temporary)
@@ -558,40 +580,6 @@ fn ensure_cleanup_not_cancelled(cancel: &dyn Fn() -> bool) -> io::Result<()> {
     Ok(())
 }
 
-struct DirectoryWorkBudget {
-    remaining_entries: usize,
-}
-
-impl DirectoryWorkBudget {
-    fn new() -> Self {
-        Self {
-            remaining_entries: MAX_DIRECTORY_WORK_ENTRIES,
-        }
-    }
-
-    fn enter_directory(&self, depth: usize) -> io::Result<()> {
-        if depth > MAX_DIRECTORY_DEPTH {
-            return Err(cleanup_budget_exceeded());
-        }
-        Ok(())
-    }
-
-    fn consume_entry(&mut self) -> io::Result<()> {
-        self.remaining_entries = self
-            .remaining_entries
-            .checked_sub(1)
-            .ok_or_else(cleanup_budget_exceeded)?;
-        Ok(())
-    }
-}
-
-fn cleanup_budget_exceeded() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        "device cleanup exceeded its bounded directory-work budget",
-    )
-}
-
 fn cstr_display(name: &CStr) -> String {
     String::from_utf8_lossy(name.to_bytes()).into_owned()
 }
@@ -599,6 +587,7 @@ fn cstr_display(name: &CStr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::{MAX_DIRECTORY_DEPTH, MAX_DIRECTORY_WORK_ENTRIES};
 
     fn staging_files(path: &Path) -> Vec<String> {
         std::fs::read_dir(path)
@@ -751,6 +740,20 @@ mod tests {
             std::fs::read(device.path().join("marker")).expect("read published file"),
             b"published"
         );
+    }
+
+    #[test]
+    fn a_directory_is_swept_once_however_many_files_are_published_into_it() {
+        let device = tempfile::tempdir().expect("device dir");
+        let root = DeviceRoot::open(device.path()).expect("root");
+        // More files than a sweep may list: listing the directory before
+        // every write would cost a pass over everything written so far
+        // and, past the budget, refuse the write.
+        for index in 0..MAX_DIRECTORY_WORK_ENTRIES + 2 {
+            let dest = DeviceRelativePath::new(format!("PIONEER/Artwork/00001/a{index}.jpg"))
+                .expect("safe path");
+            root.write_file(&dest, b"jpeg").expect("publish");
+        }
     }
 
     #[test]

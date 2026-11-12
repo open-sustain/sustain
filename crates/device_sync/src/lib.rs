@@ -37,7 +37,7 @@ pub use model::{
     SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
 };
 pub use source::{ensure_source_unchanged, resolve_source_fingerprint, source_file_stat};
-pub use transport::{DeviceTarget, DeviceTransport, MtpTarget};
+pub use transport::{DeviceTarget, DeviceTransport, DirectoryWorkBudget, MtpTarget};
 
 #[cfg(test)]
 mod tests {

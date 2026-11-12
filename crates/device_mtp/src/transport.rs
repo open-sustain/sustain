@@ -17,13 +17,11 @@ use std::path::Path;
 
 use gio::prelude::*;
 use gio::{Cancellable, File, FileCreateFlags, FileQueryInfoFlags, FileType};
-use sustain_device_sync::{DeviceCapacity, DeviceTransport, MtpTarget, ensure_source_unchanged};
+use sustain_device_sync::{
+    DeviceCapacity, DeviceTransport, DirectoryWorkBudget, MtpTarget, ensure_source_unchanged,
+};
 use sustain_domain::{DeviceRelativePath, SourceFileStat};
 
-/// A removable device is untrusted storage. Recursive removal stops after
-/// this much directory work rather than walking an arbitrarily large tree.
-const MAX_DIRECTORY_WORK_ENTRIES: usize = 20_000;
-const MAX_DIRECTORY_DEPTH: usize = 128;
 /// Streaming copy chunk size.
 const COPY_CHUNK_BYTES: usize = 256 * 1024;
 
@@ -333,40 +331,6 @@ fn parent_of(path: &DeviceRelativePath) -> Option<DeviceRelativePath> {
     }
     components.pop();
     DeviceRelativePath::new(components.join("/"))
-}
-
-struct DirectoryWorkBudget {
-    remaining_entries: usize,
-}
-
-impl DirectoryWorkBudget {
-    fn new() -> Self {
-        Self {
-            remaining_entries: MAX_DIRECTORY_WORK_ENTRIES,
-        }
-    }
-
-    fn enter_directory(&self, depth: usize) -> io::Result<()> {
-        if depth > MAX_DIRECTORY_DEPTH {
-            return Err(budget_exceeded());
-        }
-        Ok(())
-    }
-
-    fn consume_entry(&mut self) -> io::Result<()> {
-        self.remaining_entries = self
-            .remaining_entries
-            .checked_sub(1)
-            .ok_or_else(budget_exceeded)?;
-        Ok(())
-    }
-}
-
-fn budget_exceeded() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        "device cleanup exceeded its bounded directory-work budget",
-    )
 }
 
 fn map_glib_error(error: glib::Error) -> io::Error {

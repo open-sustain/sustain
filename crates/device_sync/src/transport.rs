@@ -126,3 +126,66 @@ pub trait DeviceTransport {
         cancel: &dyn Fn() -> bool,
     ) -> io::Result<()>;
 }
+
+/// The most directory entries one removal or sweep may visit on a device.
+///
+/// A removable device is untrusted storage: recursive removal and
+/// stale-file cleanup stop after this much work instead of walking an
+/// arbitrarily large crafted tree. The bound still has to clear the largest
+/// directory Sustain itself fills and later removes, the Pioneer artwork
+/// bucket, which holds two thumbnails per distinct cover: 200,000 entries
+/// are the covers of 100,000 albums.
+#[cfg(not(test))]
+pub(crate) const MAX_DIRECTORY_WORK_ENTRIES: usize = 200_000;
+// Keep the adversarial breadth regression quick while exercising the same
+// production branch.
+#[cfg(test)]
+pub(crate) const MAX_DIRECTORY_WORK_ENTRIES: usize = 128;
+/// The deepest a removal may descend.
+pub(crate) const MAX_DIRECTORY_DEPTH: usize = 128;
+
+/// The directory work one removal or sweep on a device has left: a
+/// bounded number of entries and a bounded depth, since a removable device
+/// is untrusted storage. Each [`DeviceTransport`] counts its walks against
+/// one.
+pub struct DirectoryWorkBudget {
+    remaining_entries: usize,
+}
+
+impl DirectoryWorkBudget {
+    pub fn new() -> Self {
+        Self {
+            remaining_entries: MAX_DIRECTORY_WORK_ENTRIES,
+        }
+    }
+
+    /// Enter a directory `depth` levels below the walk's start.
+    pub fn enter_directory(&self, depth: usize) -> io::Result<()> {
+        if depth > MAX_DIRECTORY_DEPTH {
+            return Err(budget_exceeded());
+        }
+        Ok(())
+    }
+
+    /// Visit one directory entry.
+    pub fn consume_entry(&mut self) -> io::Result<()> {
+        self.remaining_entries = self
+            .remaining_entries
+            .checked_sub(1)
+            .ok_or_else(budget_exceeded)?;
+        Ok(())
+    }
+}
+
+impl Default for DirectoryWorkBudget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn budget_exceeded() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "device cleanup exceeded its bounded directory-work budget",
+    )
+}
