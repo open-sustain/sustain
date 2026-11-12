@@ -66,7 +66,8 @@ fn skip_leading_id3v2_tags(bytes: &[u8]) -> usize {
 
 /// On-disk length of an ID3v2 tag at the start of `bytes` (10-byte header +
 /// declared size + optional 10-byte footer), or `None` if `bytes` does not
-/// start with a valid-looking ID3v2 header.
+/// start with a valid-looking ID3v2 header or ends before the tag does: a
+/// header claiming more than the data holds has nothing behind it to skip to.
 fn id3v2_tag_len(bytes: &[u8]) -> Option<usize> {
     if bytes.len() < 10 || &bytes[0..3] != b"ID3" {
         return None;
@@ -79,7 +80,8 @@ fn id3v2_tag_len(bytes: &[u8]) -> Option<usize> {
     }
     let size = synchsafe_u32(&bytes[6..10])? as usize;
     let has_footer = bytes[5] & 0x10 != 0;
-    Some(10 + size + if has_footer { 10 } else { 0 })
+    let tag_len = 10 + size + if has_footer { 10 } else { 0 };
+    (tag_len <= bytes.len()).then_some(tag_len)
 }
 
 /// Decodes a 4-byte ID3v2 synchsafe integer (7 bits per byte). Returns `None`

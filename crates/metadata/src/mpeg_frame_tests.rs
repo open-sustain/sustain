@@ -126,3 +126,24 @@ fn returns_none_without_audio() {
     assert_eq!(first_audio_frame_offset(&id3v2_tag(500)), None);
     assert_eq!(first_audio_frame_offset(&[]), None);
 }
+
+#[test]
+fn a_tag_header_claiming_more_than_the_file_holds_is_not_skipped() {
+    // A truncated or corrupt ID3v2 header whose declared size runs past the
+    // end of the data: nothing lies behind it to skip to. The scan starts at
+    // the header instead, and the chained frames inside the claimed region
+    // are still found.
+    let mut bytes = b"ID3".to_vec();
+    bytes.extend_from_slice(&[0x03, 0x00, 0x00]);
+    bytes.extend_from_slice(&synchsafe(1_000_000));
+    let offset = bytes.len();
+    bytes.extend_from_slice(&mpeg_frames(4));
+    assert_eq!(first_audio_frame_offset(&bytes), Some(offset));
+
+    // The same after a tag that does fit.
+    let mut stacked = id3v2_tag(300);
+    stacked.extend_from_slice(b"ID3");
+    stacked.extend_from_slice(&[0x04, 0x00, 0x00]);
+    stacked.extend_from_slice(&synchsafe(1_000_000));
+    assert_eq!(first_audio_frame_offset(&stacked), None);
+}
