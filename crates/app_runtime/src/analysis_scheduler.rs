@@ -454,13 +454,32 @@ fn worker_loop(ctx: WorkerCtx) {
             Err(_) => return,
         };
 
-        let kind = match (ctx.analyzer)(
-            &item.absolute_path,
-            item.capabilities,
-            ctx.analysis_options,
-            item.duration,
-        ) {
-            Ok(analysis) => match ctx.library_store.record_analysis(
+        // The analyzer decodes and measures a file Sustain did not write.
+        // A bug it trips there is that file's failure: unwinding further
+        // would end this worker, leave the track unstamped — to end
+        // another worker every launch — and keep the run from ever
+        // reporting its end. The analyzer holds nothing but its own
+        // per-call state, so nothing is left half-changed behind it.
+        let analysed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (ctx.analyzer)(
+                &item.absolute_path,
+                item.capabilities,
+                ctx.analysis_options,
+                item.duration,
+            )
+        }));
+        let analysed = match analysed {
+            Ok(analysed) => analysed.ok(),
+            Err(_) => {
+                eprintln!(
+                    "Sustain: analysis panicked on {}; the track is recorded as failed",
+                    item.absolute_path.display()
+                );
+                None
+            }
+        };
+        let kind = match analysed {
+            Some(analysis) => match ctx.library_store.record_analysis(
                 item.track_id,
                 &analysis,
                 item.capabilities,
@@ -477,7 +496,7 @@ fn worker_loop(ctx: WorkerCtx) {
                 }
                 Err(error) => OutcomeKind::PersistenceFailed(format!("{error:?}")),
             },
-            Err(_) => match ctx.library_store.record_analysis_attempt_failure(
+            None => match ctx.library_store.record_analysis_attempt_failure(
                 item.track_id,
                 item.capabilities,
                 item.context,

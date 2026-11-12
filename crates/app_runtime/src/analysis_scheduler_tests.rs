@@ -249,6 +249,78 @@ fn scheduler_records_failures_without_clobbering_run() {
     scheduler.shutdown();
 }
 
+/// A decoder or DSP bug that panics on one file must cost that file its
+/// attempt, not the worker its thread: the track is stamped as failed,
+/// the run reaches its end, and the tracks after it are still analysed.
+#[test]
+fn an_analyzer_panic_fails_its_track_and_spares_the_worker() {
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    // More tracks than any preset has workers: every worker meets a
+    // panic, and the healthy track still has one left to run on.
+    let poisoned = 40;
+    for id in 1..=poisoned + 1 {
+        let name = if id <= poisoned {
+            format!("poisoned-{id}.flac")
+        } else {
+            "healthy.flac".to_owned()
+        };
+        let mut track = touch_in(&library_root, &name);
+        track.id = TrackId::new(id).expect("non-zero");
+        store.save_track(track).expect("save");
+    }
+
+    let healthy = ok_analyzer();
+    let analyzer: AnalyzerFn = Arc::new(move |path, capabilities, options, duration| {
+        let poisoned = path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("poisoned"));
+        assert!(!poisoned, "decoder bug on {}", path.display());
+        healthy(path, capabilities, options, duration)
+    });
+    let (sink, rx) = capturing_sink();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        analyzer,
+        sink,
+        fixed_clock(2_000),
+        store.clone(),
+        AnalysisSettings {
+            bpm: true,
+            key: false,
+            audio: false,
+            bpm_range: BpmRange::default(),
+        },
+        Some(library_root),
+    ));
+
+    let idle = wait_for(&rx, Duration::from_secs(10), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    assert_eq!(
+        idle,
+        SchedulerProgress::Idle {
+            completed: 1,
+            failed: poisoned as u32,
+        }
+    );
+    let pending = store
+        .tracks_needing_analysis(
+            AnalysisCapabilities {
+                bpm: true,
+                key: false,
+                audio: false,
+            },
+            VERSIONS,
+            100,
+        )
+        .expect("query");
+    assert!(pending.is_empty(), "every attempt is stamped");
+
+    scheduler.shutdown();
+}
+
 #[test]
 fn scheduler_progress_denominator_does_not_slide_when_pool_grows_mid_run() {
     let temp = TempDir::new().expect("temp dir");

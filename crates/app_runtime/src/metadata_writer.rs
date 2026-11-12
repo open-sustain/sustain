@@ -409,7 +409,19 @@ fn drain_due_batch(
     let mut artwork_completed = false;
     for pending in pending {
         let kind = primary_kind(pending.kinds);
-        let attempt = mirror_one(metadata_service, library_store, library_path, &pending);
+        // Mirroring parses and rewrites a file Sustain did not write. A
+        // bug the tag library trips there is that mirror's failure:
+        // unwinding further would end the one worker every tag write goes
+        // through, and end it again on every launch while the row is
+        // pending. No store call is in flight when the tag library runs,
+        // so the store is left as it was.
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            mirror_one(metadata_service, library_store, library_path, &pending)
+        }))
+        .unwrap_or_else(|_| MirrorAttempt::Failed {
+            error: "the tag write panicked".to_owned(),
+            availability_changed: false,
+        });
         if attempt.availability_changed() {
             emit_event(
                 result_sink,
@@ -1607,6 +1619,88 @@ mod tests {
                 .push(path.to_path_buf());
             Ok(())
         }
+    }
+
+    /// A tag library bug that panics on one file must not end the one
+    /// worker every tag write goes through.
+    #[test]
+    fn a_tag_write_that_panics_fails_its_mirror_and_spares_the_worker() {
+        struct PanicsOnOneFile(RecordingMetadataService);
+
+        impl MetadataService for PanicsOnOneFile {
+            fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
+                self.0.read_initial_tags(path)
+            }
+
+            fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()> {
+                self.0.write_metadata(path, change)
+            }
+
+            fn write_rating(&self, path: &Path, rating: Rating) -> MetadataResult<()> {
+                assert!(!path.ends_with("poisoned.flac"), "tag library bug");
+                self.0.write_rating(path, rating)
+            }
+
+            fn read_artwork(&self, path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+                self.0.read_artwork(path)
+            }
+
+            fn write_artwork(&self, path: &Path, artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+                self.0.write_artwork(path, artwork)
+            }
+        }
+
+        let root = unique_test_directory();
+        std::fs::create_dir_all(&root).expect("create library root");
+        let store: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+        let rating = Rating::new(4).expect("rating");
+        let mut track_ids = Vec::new();
+        for (id, name) in [(1, "poisoned.flac"), (2, "healthy.flac")] {
+            std::fs::write(root.join(name), b"audio").expect("write track");
+            let track_id = TrackId::new(id).expect("track id");
+            store
+                .save_track(Track {
+                    id: track_id,
+                    location: TrackLocation::available(
+                        TrackRelativePath::new(name).expect("relative path"),
+                    ),
+                    metadata: TrackMetadata::default(),
+                    rating: Rating::unrated(),
+                    statistics: Default::default(),
+                    file_size_bytes: None,
+                    has_embedded_artwork: None,
+                    file_modified_at: None,
+                })
+                .expect("save track");
+            store
+                .update_track_rating_and_enqueue_mirror(track_id, rating)
+                .expect("commit rating and outbox row");
+            track_ids.push(track_id);
+        }
+
+        let service = PanicsOnOneFile(RecordingMetadataService::default());
+        let (result_tx, result_rx) = async_channel::unbounded();
+        drain_due_synchronously(&service, store.as_ref(), Some(&root), Some(&result_tx));
+
+        let mut outcomes = Vec::new();
+        while let Ok(MetadataWriterEvent::Mirror(result)) = result_rx.try_recv() {
+            outcomes.push((result.track_id, result.outcome));
+        }
+        assert_eq!(
+            outcomes,
+            [
+                (track_ids[0], MetadataWriteOutcome::Failed),
+                (track_ids[1], MetadataWriteOutcome::Succeeded),
+            ]
+        );
+        // The poisoned file's mirror stays pending, to be tried again.
+        let pending = store.tag_mirrors_due(i64::MAX, 10).expect("pending");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].track_id, track_ids[0]);
+        assert!(pending[0].last_error.is_some());
+
+        std::fs::remove_dir_all(root).expect("remove library root");
     }
 
     #[test]
