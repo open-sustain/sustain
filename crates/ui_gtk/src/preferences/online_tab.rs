@@ -18,8 +18,9 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
 
     let artwork_row = build_switch_row(
         "Fetch missing artwork",
-        "Looks up cover art from MusicBrainz and the Cover Art Archive for tracks \
-         that have none. Never replaces artwork that is already present.",
+        "Looks up cover art from MusicBrainz and the Cover Art Archive, then Deezer \
+         and the iTunes Search API, for tracks that have none. Never replaces \
+         artwork that is already present.",
         initial.artwork,
     );
     wire_online_switch(

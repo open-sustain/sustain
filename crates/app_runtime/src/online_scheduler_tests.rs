@@ -24,8 +24,8 @@ use sustain_domain::{
 use sustain_library_store::{LibraryStore, OnlineCapabilities, SqliteLibraryStore, TrackId};
 use sustain_metadata::{InitialTags, MetadataError, MetadataResult, MetadataService};
 use sustain_metadata_remote::{
-    FetchedArtwork, FetchedLyrics, RemoteError, RemoteMetadataService, RemoteResult, TrackMatch,
-    TrackQuery,
+    ArtworkProvider, FetchedArtwork, FetchedLyrics, RemoteError, RemoteMetadataService,
+    RemoteResult, TrackMatch, TrackQuery,
 };
 use tempfile::TempDir;
 
@@ -211,24 +211,20 @@ impl RemoteMetadataService for StubRemote {
             .clone()
             .unwrap_or_else(|| Ok(track_match.clone()))
     }
-    fn fetch_artwork_for_match(
+    /// Answers from `artwork_for_match` when the caller passes the match
+    /// it already holds, and from `artwork` when it does not.
+    fn fetch_artwork(
         &self,
-        _track_match: &TrackMatch,
+        _query: &TrackQuery,
+        known_match: Option<&TrackMatch>,
     ) -> RemoteResult<Option<FetchedArtwork>> {
-        self.artwork_for_match_calls.fetch_add(1, Ordering::SeqCst);
-        self.artwork_for_match
-            .lock()
-            .expect("lock")
-            .clone()
-            .unwrap_or(Ok(None))
-    }
-    fn fetch_artwork(&self, _query: &TrackQuery) -> RemoteResult<Option<FetchedArtwork>> {
-        self.artwork_calls.fetch_add(1, Ordering::SeqCst);
-        self.artwork
-            .lock()
-            .expect("lock")
-            .clone()
-            .unwrap_or(Ok(None))
+        let (calls, response) = if known_match.is_some() {
+            (&self.artwork_for_match_calls, &self.artwork_for_match)
+        } else {
+            (&self.artwork_calls, &self.artwork)
+        };
+        calls.fetch_add(1, Ordering::SeqCst);
+        response.lock().expect("lock").clone().unwrap_or(Ok(None))
     }
     fn fetch_lyrics(&self, _query: &TrackQuery) -> RemoteResult<Option<FetchedLyrics>> {
         self.lyrics_calls.fetch_add(1, Ordering::SeqCst);
@@ -257,9 +253,10 @@ impl RemoteMetadataService for BlockingIdentifyRemote {
         Ok(Some(self.matched.clone()))
     }
 
-    fn fetch_artwork_for_match(
+    fn fetch_artwork(
         &self,
-        _track_match: &TrackMatch,
+        _query: &TrackQuery,
+        _known_match: Option<&TrackMatch>,
     ) -> RemoteResult<Option<FetchedArtwork>> {
         Ok(None)
     }
@@ -549,7 +546,7 @@ fn explicit_artwork_run_skips_track_with_embedded_artwork() {
 
     let remote = Arc::new(StubRemote::default().with_artwork(Ok(Some(FetchedArtwork {
         bytes: vec![9, 9, 9, 9],
-        release_mbid: "release".to_owned(),
+        provider: ArtworkProvider::CoverArtArchive,
     }))));
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
@@ -606,7 +603,7 @@ fn artwork_capability_fetches_and_writes_when_missing() {
     let expected_artwork = valid_artwork();
     let remote = Arc::new(StubRemote::default().with_artwork(Ok(Some(FetchedArtwork {
         bytes: expected_artwork.clone(),
-        release_mbid: "release".to_owned(),
+        provider: ArtworkProvider::CoverArtArchive,
     }))));
     let metadata = Arc::new(StubMetadata::default());
     // track.has_embedded_artwork left None → tracks_needing_online
@@ -655,7 +652,7 @@ fn artwork_capability_rejects_invalid_remote_bytes_without_writing() {
 
     let remote = Arc::new(StubRemote::default().with_artwork(Ok(Some(FetchedArtwork {
         bytes: b"not an image".to_vec(),
-        release_mbid: "release".to_owned(),
+        provider: ArtworkProvider::CoverArtArchive,
     }))));
     let metadata = Arc::new(StubMetadata::default());
     let (sink, rx) = capturing_sink();
@@ -937,7 +934,7 @@ fn tags_fill_recording_level_fields_when_album_is_missing_but_skip_positional() 
             .with_identify(Ok(Some(track_match)))
             .with_artwork_for_match(Ok(Some(FetchedArtwork {
                 bytes: valid_artwork(),
-                release_mbid: "rel-mbid".to_owned(),
+                provider: ArtworkProvider::CoverArtArchive,
             }))),
     );
     let metadata = Arc::new(StubMetadata::default());
@@ -1890,7 +1887,7 @@ fn explicit_run_arriving_mid_batch_goes_before_the_remaining_background_tracks()
             })))
             .with_artwork(Ok(Some(FetchedArtwork {
                 bytes: valid_artwork(),
-                release_mbid: "release".to_owned(),
+                provider: ArtworkProvider::CoverArtArchive,
             }))),
     );
     let metadata = Arc::new(StubMetadata::default());

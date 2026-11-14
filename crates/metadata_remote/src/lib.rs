@@ -18,13 +18,18 @@
 //!   sparse for MusicBrainz to match by text. The actual Chromaprint
 //!   fingerprint computation lives outside this crate; the client
 //!   here accepts a precomputed [`acoustid::AudioFingerprint`].
+//! * **Deezer** and the **iTunes Search API** — album covers looked
+//!   up by artist and album title when Cover Art Archive has none
+//!   ([`deezer::DeezerClient`], [`itunes::ItunesClient`]). Neither
+//!   needs a key; both are searched by text, so a cover is taken only
+//!   from a result that is the album the tags name.
 //! * **LRClib** — open lyrics database ([`lrclib::LrcLibClient`]).
 //!   Looks up plain and time-coded lyrics by exact artist/title/album
 //!   match; the only provider in this crate that does not depend on
 //!   MusicBrainz at all.
 //!
 //! Direct callers should depend on [`RemoteMetadataService`] — the
-//! single public surface that composes the three clients with the
+//! single public surface that composes the clients with the
 //! selection and fallback rules documented on
 //! [`ComposedRemoteMetadataService`]. The individual modules are
 //! still public so consumers with unusual needs (testing, future
@@ -40,26 +45,32 @@
 #![forbid(unsafe_code)]
 
 pub mod acoustid;
+mod album_cover;
 pub mod client;
 pub mod cover_art_archive;
+pub mod deezer;
 pub mod error;
 mod http;
+pub mod itunes;
 pub mod lrclib;
 mod mbid;
 pub mod musicbrainz;
 pub mod service;
 
 pub use acoustid::{AcoustIdClient, AcoustIdMatch, AudioFingerprint};
+pub use album_cover::AlbumCoverQuery;
 pub use client::{HttpClient, HttpClientConfig};
 pub use cover_art_archive::CoverArtArchiveClient;
+pub use deezer::DeezerClient;
 pub use error::{RemoteError, RemoteResult};
+pub use itunes::ItunesClient;
 pub use lrclib::LrcLibClient;
 pub use musicbrainz::{
     DiscRelease, DiscTrack, GenreVote, MusicBrainzClient, RecordingMatch, RecordingRelease,
     RecordingSearchTerms,
 };
 pub use service::{
-    ComposedRemoteMetadataService, FetchedArtwork, FetchedLyrics, GenreCandidate,
+    ArtworkProvider, ComposedRemoteMetadataService, FetchedArtwork, FetchedLyrics, GenreCandidate,
     RemoteMetadataService, TrackMatch, TrackMatchRelease, TrackMatchSource, TrackQuery,
 };
 

@@ -82,7 +82,7 @@ See [docs/features.md](docs/features.md) for the full reference.
 - Waveform-verified duplicate detection that tells recordings and edits apart, with a previewed batch merge of verified copies (*Sustain-native*)
 - Optional low-bitrate track replacement from a pasted YouTube URL via installed `yt-dlp` and FFmpeg tools in Debian installs (*Sustain-native*)
 - Background BPM, beat-grid, and musical-key detection, with a tempo/harmony-aware smart-playlist rule engine (*Sustain-native*)
-- Background backfill of artwork, ID3 tags, and lyrics via MusicBrainz, Cover Art Archive, AcoustID, and LRClib (*iTunes-adjacent*)
+- Background backfill of artwork, ID3 tags, and lyrics via MusicBrainz, Cover Art Archive, Deezer, the iTunes Search API, AcoustID, and LRClib (*iTunes-adjacent*)
 - Smart Shuffle that picks each next track as a continuation of the one playing: a local, transparent perceptual match, no cloud, no learning (*Sustain-native*)
 - Sync playlists, smart playlists, and artists to USB sticks, SD cards, and Android phones over MTP, incrementally, as a deduplicated `.m3u8` tree or one folder per selected source (*Sustain-native*)
 - **CDJ/XDJ-ready Rekordbox export**: writes the full Pioneer feature set to the drive (BPM, key, beat grids, waveforms and artwork) so the hardware reads it natively; the only Linux music app I know of that does this, not just copies files (*Sustain-native*)

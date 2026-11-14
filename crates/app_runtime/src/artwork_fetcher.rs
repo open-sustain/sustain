@@ -126,7 +126,7 @@ fn worker_loop(
     service: Arc<dyn RemoteMetadataService>,
 ) {
     while let Ok(request) = receiver.recv() {
-        let outcome = match service.fetch_artwork(&request.query) {
+        let outcome = match service.fetch_artwork(&request.query, None) {
             Ok(Some(artwork)) => match normalize_artwork(&artwork.bytes) {
                 Ok(bytes) => ArtworkFetchOutcome::Fetched(bytes),
                 Err(error) => {
@@ -174,6 +174,10 @@ pub(crate) fn query_from_metadata(metadata: &sustain_domain::TrackMetadata) -> T
             .album
             .clone()
             .filter(|value| !value.trim().is_empty()),
+        album_artist: metadata
+            .album_artist
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
         duration_ms: metadata
             .duration
             .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64),
@@ -195,11 +199,13 @@ mod tests {
             artist: Some("  ".to_owned()),
             title: Some("".to_owned()),
             album: Some("Real Album".to_owned()),
+            album_artist: Some(" ".to_owned()),
             duration: Some(Duration::from_secs(200)),
             ..TrackMetadata::default()
         };
         let query = query_from_metadata(&metadata);
         assert_eq!(query.artist, None);
+        assert_eq!(query.album_artist, None);
         assert_eq!(query.title, None);
         assert_eq!(query.album.as_deref(), Some("Real Album"));
         assert_eq!(query.duration_ms, Some(200_000));

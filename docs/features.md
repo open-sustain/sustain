@@ -805,7 +805,11 @@ Providers:
 
 - **Artwork** — MusicBrainz + Cover Art Archive lookup, falling back
   to AcoustID acoustic fingerprinting when the embedded tag set is
-  too sparse for a confident text match.
+  too sparse for a confident text match. When Cover Art Archive has
+  no cover, or no match is found, the album is looked up on Deezer,
+  then on the iTunes Search API, by album artist and album title;
+  a cover is taken only from a result whose artist and title are the
+  album's, so a same-named album by someone else is never embedded.
 - **Tags** — MusicBrainz fills missing fields (title, artist, album,
   album artist, year, track number, genre…) from a matched release.
 - **Lyrics** — LRClib lookup, preferring synced LRC when available

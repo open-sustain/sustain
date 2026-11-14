@@ -58,6 +58,12 @@ pub const ACOUSTID_MIN_REQUEST_GAP: Duration = Duration::from_millis(360);
 /// the user enables background lyrics retrieval.
 pub const LRCLIB_MIN_REQUEST_GAP: Duration = Duration::from_millis(350);
 
+/// Deezer allows 50 requests every five seconds; we stay well under.
+pub const DEEZER_MIN_REQUEST_GAP: Duration = Duration::from_millis(200);
+
+/// The iTunes Search API allows roughly 20 requests a minute.
+pub const ITUNES_MIN_REQUEST_GAP: Duration = Duration::from_millis(3_100);
+
 /// Fallback cool-down applied when a server returns 429/503 without
 /// a usable `Retry-After` header. One minute is comfortably more
 /// than any of the providers' published gaps.
@@ -153,6 +159,18 @@ impl HttpClient {
             "lrclib.net",
             RateLimitPolicy {
                 minimum_gap: LRCLIB_MIN_REQUEST_GAP,
+            },
+        );
+        rate_limits.insert(
+            "api.deezer.com",
+            RateLimitPolicy {
+                minimum_gap: DEEZER_MIN_REQUEST_GAP,
+            },
+        );
+        rate_limits.insert(
+            "itunes.apple.com",
+            RateLimitPolicy {
+                minimum_gap: ITUNES_MIN_REQUEST_GAP,
             },
         );
 
@@ -403,6 +421,8 @@ fn host_from_url(url: &str) -> Option<&'static str> {
         "coverartarchive.org",
         "api.acoustid.org",
         "lrclib.net",
+        "api.deezer.com",
+        "itunes.apple.com",
     ];
     HOSTS
         .iter()

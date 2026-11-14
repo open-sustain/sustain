@@ -2248,6 +2248,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sustain-artwork",
+ "sustain-domain",
  "ureq",
 ]
 

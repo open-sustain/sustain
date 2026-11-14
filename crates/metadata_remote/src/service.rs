@@ -20,8 +20,10 @@
 //! * **Artwork lookup** takes the chosen [`TrackMatch`], walks its
 //!   releases in MusicBrainz-provided order, and queries Cover Art
 //!   Archive for each release MBID until one returns bytes. If every
-//!   release misses, the release-group MBID is tried as a final
-//!   fallback.
+//!   release misses, the release-group MBID is tried. When Cover Art
+//!   Archive has nothing, or no track match was found, the album the
+//!   tags name is looked up by text on Deezer, then on the iTunes Search
+//!   API, which accept only a result that is that album.
 //!
 //! Errors propagate; partial successes (e.g. identification works,
 //! artwork lookup fails) are not silently converted into "no match".
@@ -31,8 +33,11 @@
 use std::sync::Arc;
 
 use crate::acoustid::{AcoustIdClient, AudioFingerprint};
+use crate::album_cover::AlbumCoverQuery;
 use crate::cover_art_archive::CoverArtArchiveClient;
+use crate::deezer::DeezerClient;
 use crate::error::RemoteResult;
+use crate::itunes::ItunesClient;
 use crate::lrclib::LrcLibClient;
 use crate::musicbrainz::{DiscRelease, MusicBrainzClient, RecordingMatch, RecordingSearchTerms};
 
@@ -67,6 +72,9 @@ pub struct TrackQuery {
     pub artist: Option<String>,
     pub title: Option<String>,
     pub album: Option<String>,
+    /// The album's artist, which names the album in the catalogues that
+    /// are searched by album.
+    pub album_artist: Option<String>,
     pub duration_ms: Option<u64>,
     /// Precomputed audio fingerprint, if available. Optional — the
     /// service falls back to text-only identification when absent and
@@ -83,6 +91,23 @@ impl TrackQuery {
         ];
         text.iter()
             .any(|value| value.is_some_and(|inner| !inner.trim().is_empty()))
+    }
+
+    /// The album to look a cover up for: the album artist, or the track
+    /// artist when there is none, and the album title. `None` when the
+    /// tags name no album or no artist.
+    pub fn album_cover_query(&self) -> Option<AlbumCoverQuery> {
+        let filled = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        Some(AlbumCoverQuery {
+            artist: filled(&self.album_artist).or_else(|| filled(&self.artist))?,
+            album: filled(&self.album)?,
+        })
     }
 
     fn to_search_terms(&self) -> RecordingSearchTerms {
@@ -157,13 +182,20 @@ pub enum TrackMatchSource {
     AcoustIdFingerprint,
 }
 
-/// Cover image bytes plus enough provenance to render diagnostics or
-/// a status-bar message. The bytes are exactly what Cover Art Archive
-/// returned — they are not re-encoded, cropped, or normalised here.
+/// Cover image bytes and the provider they came from. The bytes are
+/// exactly what the provider returned — they are not re-encoded,
+/// cropped, or normalised here.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FetchedArtwork {
     pub bytes: Vec<u8>,
-    pub release_mbid: String,
+    pub provider: ArtworkProvider,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArtworkProvider {
+    CoverArtArchive,
+    Deezer,
+    Itunes,
 }
 
 /// Lyrics payload as returned by a remote provider. Both fields are
@@ -212,24 +244,15 @@ pub trait RemoteMetadataService: Send + Sync {
         Ok(track_match.clone())
     }
 
-    /// Fetch artwork for an already-identified match. Returns
-    /// `Ok(None)` if Cover Art Archive has no front cover on file
-    /// for any of the match's releases.
-    fn fetch_artwork_for_match(
+    /// Fetch the front cover for the track `query` describes. A caller
+    /// that already identified the track passes its match, which spares
+    /// identifying it again. Returns `Ok(None)` when no provider has a
+    /// cover for it.
+    fn fetch_artwork(
         &self,
-        track_match: &TrackMatch,
+        query: &TrackQuery,
+        known_match: Option<&TrackMatch>,
     ) -> RemoteResult<Option<FetchedArtwork>>;
-
-    /// Convenience composition: identify, then fetch artwork. The
-    /// individual operations are kept on the trait so callers that
-    /// already hold a [`TrackMatch`] (e.g. after a Get Info dialog)
-    /// can reuse it without re-identifying.
-    fn fetch_artwork(&self, query: &TrackQuery) -> RemoteResult<Option<FetchedArtwork>> {
-        let Some(track_match) = self.identify_track(query)? else {
-            return Ok(None);
-        };
-        self.fetch_artwork_for_match(&track_match)
-    }
 
     /// Fetch lyrics for the track described by `query`. Returns
     /// `Ok(None)` when the provider has no entry for the track —
@@ -271,38 +294,57 @@ pub trait RemoteMetadataService: Send + Sync {
 pub struct ComposedRemoteMetadataService {
     musicbrainz: MusicBrainzClient,
     cover_art_archive: CoverArtArchiveClient,
+    deezer: DeezerClient,
+    itunes: ItunesClient,
     lrclib: LrcLibClient,
     acoustid: Option<AcoustIdClient>,
 }
 
 impl ComposedRemoteMetadataService {
-    pub fn new(
-        musicbrainz: MusicBrainzClient,
-        cover_art_archive: CoverArtArchiveClient,
-        lrclib: LrcLibClient,
-        acoustid: Option<AcoustIdClient>,
-    ) -> Self {
-        Self {
-            musicbrainz,
-            cover_art_archive,
-            lrclib,
-            acoustid,
-        }
-    }
-
-    /// Convenience wrapper: build the whole service stack from a
-    /// shared [`crate::client::HttpClient`] and an optional AcoustID
-    /// key. The HTTP client carries the User-Agent and rate-limit
-    /// state shared across all four providers.
+    /// Build the whole service stack from a shared
+    /// [`crate::client::HttpClient`] and an optional AcoustID key. The
+    /// HTTP client carries the User-Agent and rate-limit state shared
+    /// across every provider.
     pub fn from_http_client(
         http: Arc<crate::client::HttpClient>,
         acoustid_api_key: Option<&str>,
     ) -> Self {
-        let musicbrainz = MusicBrainzClient::new(Arc::clone(&http));
-        let cover_art_archive = CoverArtArchiveClient::new(Arc::clone(&http));
-        let lrclib = LrcLibClient::new(Arc::clone(&http));
-        let acoustid = acoustid_api_key.and_then(|key| AcoustIdClient::new(http, key));
-        Self::new(musicbrainz, cover_art_archive, lrclib, acoustid)
+        Self {
+            musicbrainz: MusicBrainzClient::new(Arc::clone(&http)),
+            cover_art_archive: CoverArtArchiveClient::new(Arc::clone(&http)),
+            deezer: DeezerClient::new(Arc::clone(&http)),
+            itunes: ItunesClient::new(Arc::clone(&http)),
+            lrclib: LrcLibClient::new(Arc::clone(&http)),
+            acoustid: acoustid_api_key.and_then(|key| AcoustIdClient::new(http, key)),
+        }
+    }
+
+    /// The front cover Cover Art Archive holds for one of the match's
+    /// releases, or failing that for one of their release groups.
+    fn cover_art_archive_front(&self, track_match: &TrackMatch) -> RemoteResult<Option<Vec<u8>>> {
+        for release in &track_match.releases {
+            if let Some(bytes) = self
+                .cover_art_archive
+                .fetch_release_front(&release.release_mbid)?
+            {
+                return Ok(Some(bytes));
+            }
+        }
+        // Release-level lookups all missed. Editions and reissues
+        // without their own cover typically still inherit the release
+        // group's front.
+        for release in &track_match.releases {
+            let Some(release_group_mbid) = release.release_group_mbid.as_deref() else {
+                continue;
+            };
+            if let Some(bytes) = self
+                .cover_art_archive
+                .fetch_release_group_front(release_group_mbid)?
+            {
+                return Ok(Some(bytes));
+            }
+        }
+        Ok(None)
     }
 
     fn identify_via_musicbrainz(&self, query: &TrackQuery) -> RemoteResult<Option<TrackMatch>> {
@@ -457,40 +499,43 @@ impl RemoteMetadataService for ComposedRemoteMetadataService {
         Ok(recording_to_match(detailed, track_match.source))
     }
 
-    fn fetch_artwork_for_match(
+    fn fetch_artwork(
         &self,
-        track_match: &TrackMatch,
+        query: &TrackQuery,
+        known_match: Option<&TrackMatch>,
     ) -> RemoteResult<Option<FetchedArtwork>> {
-        for release in &track_match.releases {
-            if let Some(bytes) = self
-                .cover_art_archive
-                .fetch_release_front(&release.release_mbid)?
-            {
-                return Ok(Some(FetchedArtwork {
-                    bytes,
-                    release_mbid: release.release_mbid.clone(),
-                }));
+        let identified;
+        let track_match = match known_match {
+            Some(track_match) => Some(track_match),
+            None => {
+                identified = self.identify_track(query)?;
+                identified.as_ref()
             }
+        };
+        if let Some(track_match) = track_match
+            && let Some(bytes) = self.cover_art_archive_front(track_match)?
+        {
+            return Ok(Some(FetchedArtwork {
+                bytes,
+                provider: ArtworkProvider::CoverArtArchive,
+            }));
         }
-        // Release-level lookups all missed. Try the first
-        // release-group, which is normally the broadest available
-        // bucket: editions/reissues without their own cover art
-        // typically still inherit a group-level front.
-        for release in &track_match.releases {
-            let Some(release_group_mbid) = release.release_group_mbid.as_deref() else {
-                continue;
-            };
-            if let Some(bytes) = self
-                .cover_art_archive
-                .fetch_release_group_front(release_group_mbid)?
-            {
-                return Ok(Some(FetchedArtwork {
-                    bytes,
-                    release_mbid: release.release_mbid.clone(),
-                }));
-            }
+        let Some(album) = query.album_cover_query() else {
+            return Ok(None);
+        };
+        if let Some(bytes) = self.deezer.fetch_album_cover(&album)? {
+            return Ok(Some(FetchedArtwork {
+                bytes,
+                provider: ArtworkProvider::Deezer,
+            }));
         }
-        Ok(None)
+        Ok(self
+            .itunes
+            .fetch_album_cover(&album)?
+            .map(|bytes| FetchedArtwork {
+                bytes,
+                provider: ArtworkProvider::Itunes,
+            }))
     }
 
     fn fetch_lyrics(&self, query: &TrackQuery) -> RemoteResult<Option<FetchedLyrics>> {
@@ -682,6 +727,40 @@ mod tests {
             }
             .has_any_text()
         );
+    }
+
+    #[test]
+    fn an_album_cover_is_looked_up_by_album_artist_then_track_artist() {
+        let query = TrackQuery {
+            artist: Some("Daft Punk feat. Romanthony".to_owned()),
+            album: Some("Discovery".to_owned()),
+            album_artist: Some("Daft Punk".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            query.album_cover_query(),
+            Some(AlbumCoverQuery {
+                artist: "Daft Punk".to_owned(),
+                album: "Discovery".to_owned(),
+            })
+        );
+
+        let without_album_artist = TrackQuery {
+            album_artist: Some("  ".to_owned()),
+            ..query.clone()
+        };
+        assert_eq!(
+            without_album_artist
+                .album_cover_query()
+                .map(|album| album.artist),
+            Some("Daft Punk feat. Romanthony".to_owned())
+        );
+
+        let without_album = TrackQuery {
+            album: None,
+            ..query
+        };
+        assert_eq!(without_album.album_cover_query(), None);
     }
 
     #[test]

@@ -699,21 +699,12 @@ fn attempt_artwork(
         return AttemptOutcome::NoMatch;
     }
 
-    let fetched: Option<FetchedArtwork> = match cached_match {
-        Some(track_match) => match remote_service.fetch_artwork_for_match(track_match) {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("Sustain: artwork fetch failed: {error}");
-                return attempt_outcome_for_remote_error(&error);
-            }
-        },
-        None => match remote_service.fetch_artwork(query) {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!("Sustain: artwork fetch failed: {error}");
-                return attempt_outcome_for_remote_error(&error);
-            }
-        },
+    let fetched: Option<FetchedArtwork> = match remote_service.fetch_artwork(query, cached_match) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("Sustain: artwork fetch failed: {error}");
+            return attempt_outcome_for_remote_error(&error);
+        }
     };
     let Some(artwork) = fetched else {
         return AttemptOutcome::NoMatch;
