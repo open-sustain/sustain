@@ -8,13 +8,18 @@ use std::{
     fs,
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use sustain_domain::{
-    Bpm, DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode, Track, TrackId,
-    TrackRelativePath, duplicate_groups, plan_duplicate_consolidation,
+    Bpm, DuplicateArtworkQuality, DuplicateConsolidationRequest, DuplicateGroup,
+    DuplicateMatchMode, RecordingEvidence, RecordingIdentity, Track, TrackId, TrackRelativePath,
+    VerifiedDuplicateMerge, duplicate_groups, highest_quality_duplicate_artwork,
+    plan_duplicate_consolidation,
 };
 use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, hash_reader_content};
@@ -33,8 +38,8 @@ use crate::{
             remove_regular_file_matching_capability,
         },
     },
-    metadata_writer::metadata_mirror,
-    notifications::runtime_error_text,
+    metadata_writer::{VerifiedDuplicateBatchResult, metadata_mirror},
+    notifications::{runtime_error_text, verified_duplicate_progress_text},
     recording_evidence::{RecordingIdentityCache, WaveformRecordingEvidence},
 };
 
@@ -52,6 +57,42 @@ pub struct DuplicateConsolidationResult {
     pub survivor_id: TrackId,
     pub removed_track_ids: Vec<TrackId>,
     pub summary: DuplicateConsolidationSummary,
+}
+
+/// How a batch of verified merges went, group by group.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct VerifiedDuplicateBatchSummary {
+    /// The merges that committed, in batch order.
+    pub merges: Vec<DuplicateConsolidationResult>,
+    /// Skipped: a track changed or left the library after the preview.
+    pub changed_groups: usize,
+    /// Skipped: the audio no longer establishes one recording.
+    pub unverified_groups: usize,
+    /// Attempted, and the merger refused or rolled back.
+    pub failed_groups: usize,
+    /// Never attempted: the batch was cancelled first.
+    pub cancelled_groups: usize,
+}
+
+impl VerifiedDuplicateBatchSummary {
+    pub fn removed_tracks(&self) -> usize {
+        self.merges
+            .iter()
+            .map(|merge| merge.summary.removed_tracks)
+            .sum()
+    }
+
+    pub fn cleanup_failed(&self) -> bool {
+        self.merges.iter().any(|merge| merge.summary.cleanup_failed)
+    }
+}
+
+/// Why one verified merge did not run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum VerifiedMergeRefusal {
+    Changed,
+    Unverified,
+    Failed,
 }
 
 pub struct DuplicateGroupsTask {
@@ -161,40 +202,188 @@ impl ApplicationRuntime {
         command_outcome
     }
 
+    /// The previewable merges of `groups`: every group the audio verified
+    /// as one recording whose tracks are all in the library and available,
+    /// with the choices a merge makes when nobody picks.
+    pub fn verified_duplicate_merges(
+        &self,
+        groups: &[DuplicateGroup],
+    ) -> Vec<VerifiedDuplicateMerge> {
+        groups
+            .iter()
+            .filter(|group| group.same_recording)
+            .filter_map(|group| {
+                let tracks = group
+                    .track_ids
+                    .iter()
+                    .map(|track_id| {
+                        self.library_track(*track_id)
+                            .filter(|track| {
+                                track.location.availability
+                                    == sustain_domain::TrackAvailability::Available
+                            })
+                            .cloned()
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                VerifiedDuplicateMerge::new(tracks)
+            })
+            .collect()
+    }
+
+    /// Merge each of `merges` in turn on the metadata writer, cancellable
+    /// between merges. Every merge first checks that its tracks still match
+    /// the preview and that the audio still verifies them as one recording.
+    pub fn consolidate_verified_duplicates(
+        &mut self,
+        merges: Vec<VerifiedDuplicateMerge>,
+    ) -> ApplicationRuntimeResult<()> {
+        if merges.is_empty() {
+            return Ok(());
+        }
+        self.ensure_no_conflicting_library_mutation()?;
+        let library_root = self
+            .settings
+            .library_path()
+            .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)?
+            .to_path_buf();
+        let store = self
+            .library_store
+            .clone()
+            .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
+        let metadata_service = self
+            .metadata_service
+            .clone()
+            .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
+
+        for merge in &merges {
+            for track in &merge.tracks {
+                self.stop_playback_if_playing(track.id);
+            }
+        }
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.background_task_status = BackgroundTaskStatus::DuplicateConsolidationRunning;
+        self.duplicate_consolidation_cancellation = Some(cancellation.clone());
+        self.duplicate_consolidation_notification_id = Some(self.push_persistent_notification(
+            NotificationCategory::DuplicateConsolidation,
+            NotificationSeverity::Info,
+            verified_duplicate_progress_text(0, merges.len()),
+            true,
+        ));
+
+        let recording_identities = self.recording_identities.clone();
+        if let Some(writer) = self.metadata_writer() {
+            if writer.consolidate_verified_duplicates(merges, recording_identities, cancellation) {
+                return Ok(());
+            }
+            let error = ApplicationRuntimeError::DuplicateConsolidationFailed;
+            self.apply_verified_duplicate_batch_result(VerifiedDuplicateBatchResult {
+                outcome: Err(error.clone()),
+            });
+            return Err(error);
+        }
+
+        let summary = consolidate_verified_duplicates(
+            &VerifiedDuplicateBatchContext {
+                library_root: &library_root,
+                store: store.as_ref(),
+                metadata_service: metadata_service.as_ref(),
+                filesystem_validator: &self.managed_library_filesystem_validator,
+                recording_identities: &recording_identities,
+                cancellation: &cancellation,
+            },
+            &merges,
+            |_| {},
+        );
+        self.apply_verified_duplicate_batch_result(VerifiedDuplicateBatchResult {
+            outcome: Ok(summary),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn apply_verified_duplicate_progress(&mut self, completed: usize, total: usize) {
+        if let Some(id) = self.duplicate_consolidation_notification_id {
+            self.update_notification_body(id, verified_duplicate_progress_text(completed, total));
+        }
+    }
+
+    pub(crate) fn apply_verified_duplicate_batch_result(
+        &mut self,
+        result: VerifiedDuplicateBatchResult,
+    ) {
+        self.finish_duplicate_consolidation();
+        match result.outcome {
+            Ok(summary) => {
+                if !summary.merges.is_empty() && !self.adopt_consolidated_library() {
+                    return;
+                }
+                let severity = if summary.failed_groups > 0 || summary.cleanup_failed() {
+                    NotificationSeverity::Warning
+                } else {
+                    NotificationSeverity::Info
+                };
+                self.push_ephemeral_notification(
+                    NotificationCategory::DuplicateConsolidation,
+                    severity,
+                    crate::notifications::verified_duplicate_outcome_text(&summary),
+                );
+            }
+            Err(error) => {
+                self.push_ephemeral_notification(
+                    NotificationCategory::DuplicateConsolidation,
+                    NotificationSeverity::Error,
+                    runtime_error_text(&error).to_owned(),
+                );
+            }
+        }
+    }
+
+    fn finish_duplicate_consolidation(&mut self) {
+        if let Some(id) = self.duplicate_consolidation_notification_id.take() {
+            self.dismiss_notification(id);
+        }
+        self.duplicate_consolidation_cancellation = None;
+        self.background_task_status = BackgroundTaskStatus::Idle;
+    }
+
+    /// Reload the tracks and playlists consolidation rewrote. On failure the
+    /// user is told, and `false` returned.
+    fn adopt_consolidated_library(&mut self) -> bool {
+        let refresh = self.library_store.as_ref().map_or(
+            Err(ApplicationRuntimeError::LibraryServicesUnavailable),
+            |store| {
+                let tracks = crate::library_scan::load_library_tracks(store.as_ref())?;
+                let playlists = store
+                    .playlists()
+                    .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+                Ok((tracks, playlists))
+            },
+        );
+        let Ok((tracks, playlists)) = refresh else {
+            self.push_ephemeral_notification(
+                NotificationCategory::DuplicateConsolidation,
+                NotificationSeverity::Error,
+                runtime_error_text(&ApplicationRuntimeError::LibraryStoreFailed).to_owned(),
+            );
+            return false;
+        };
+        self.library_tracks = tracks;
+        self.playlists = playlists;
+        self.rebuild_search_index();
+        self.refresh_playback_queue_track_ids();
+        self.request_smart_shuffle_rebuild();
+        true
+    }
+
     pub(crate) fn apply_duplicate_consolidation_result(
         &mut self,
         result: crate::metadata_writer::DuplicateConsolidationWriterResult,
     ) {
-        if let Some(id) = self.duplicate_consolidation_notification_id.take() {
-            self.dismiss_notification(id);
-        }
-        self.background_task_status = BackgroundTaskStatus::Idle;
-
+        self.finish_duplicate_consolidation();
         match result.outcome {
             Ok(result) => {
-                let refresh = self.library_store.as_ref().map_or(
-                    Err(ApplicationRuntimeError::LibraryServicesUnavailable),
-                    |store| {
-                        let tracks = crate::library_scan::load_library_tracks(store.as_ref())?;
-                        let playlists = store
-                            .playlists()
-                            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-                        Ok((tracks, playlists))
-                    },
-                );
-                let Ok((tracks, playlists)) = refresh else {
-                    self.push_ephemeral_notification(
-                        NotificationCategory::DuplicateConsolidation,
-                        NotificationSeverity::Error,
-                        runtime_error_text(&ApplicationRuntimeError::LibraryStoreFailed).to_owned(),
-                    );
+                if !self.adopt_consolidated_library() {
                     return;
-                };
-                self.library_tracks = tracks;
-                self.playlists = playlists;
-                self.rebuild_search_index();
-                self.refresh_playback_queue_track_ids();
-                self.request_smart_shuffle_rebuild();
+                }
                 let (severity, body) = if result.summary.cleanup_failed {
                     (
                         NotificationSeverity::Warning,
@@ -227,6 +416,107 @@ impl ApplicationRuntime {
             }
         }
     }
+}
+
+/// What a batch of verified merges works against.
+pub(crate) struct VerifiedDuplicateBatchContext<'batch> {
+    pub(crate) library_root: &'batch Path,
+    pub(crate) store: &'batch dyn LibraryStore,
+    pub(crate) metadata_service: &'batch dyn MetadataService,
+    pub(crate) filesystem_validator: &'batch ManagedLibraryFilesystemValidator,
+    pub(crate) recording_identities: &'batch Arc<Mutex<RecordingIdentityCache>>,
+    pub(crate) cancellation: &'batch AtomicBool,
+}
+
+/// Run `merges` one at a time, stopping before the next merge once
+/// cancellation is requested. `progress` hears how many groups are done
+/// after each.
+pub(crate) fn consolidate_verified_duplicates(
+    context: &VerifiedDuplicateBatchContext<'_>,
+    merges: &[VerifiedDuplicateMerge],
+    mut progress: impl FnMut(usize),
+) -> VerifiedDuplicateBatchSummary {
+    let mut summary = VerifiedDuplicateBatchSummary::default();
+    for (done, merge) in merges.iter().enumerate() {
+        if context.cancellation.load(Ordering::SeqCst) {
+            summary.cancelled_groups = merges.len() - done;
+            break;
+        }
+        match consolidate_verified_duplicate(context, merge) {
+            Ok(result) => summary.merges.push(result),
+            Err(VerifiedMergeRefusal::Changed) => summary.changed_groups += 1,
+            Err(VerifiedMergeRefusal::Unverified) => summary.unverified_groups += 1,
+            Err(VerifiedMergeRefusal::Failed) => summary.failed_groups += 1,
+        }
+        progress(done + 1);
+    }
+    summary
+}
+
+fn consolidate_verified_duplicate(
+    context: &VerifiedDuplicateBatchContext<'_>,
+    merge: &VerifiedDuplicateMerge,
+) -> Result<DuplicateConsolidationResult, VerifiedMergeRefusal> {
+    let mut current = Vec::with_capacity(merge.tracks.len());
+    for previewed in &merge.tracks {
+        match context.store.track(previewed.id) {
+            Ok(Some(track)) => current.push(track),
+            Ok(None) => return Err(VerifiedMergeRefusal::Changed),
+            Err(_) => return Err(VerifiedMergeRefusal::Failed),
+        }
+    }
+    if !merge.still_matches(&current) {
+        return Err(VerifiedMergeRefusal::Changed);
+    }
+
+    // Judged against the waveforms stored now: a track analysed again since
+    // the preview is compared afresh.
+    let mut evidence =
+        WaveformRecordingEvidence::new(context.store, context.recording_identities.clone())
+            .map_err(|_| VerifiedMergeRefusal::Failed)?;
+    for (index, left) in current.iter().enumerate() {
+        for right in &current[index + 1..] {
+            if evidence.identity(left.id, right.id) != RecordingIdentity::Same {
+                return Err(VerifiedMergeRefusal::Unverified);
+            }
+        }
+    }
+
+    let artwork_track_id =
+        highest_quality_artwork_track_id(context, &current).unwrap_or(merge.choices.audio_track_id);
+    consolidate_duplicate_tracks(
+        context.library_root,
+        context.store,
+        context.metadata_service,
+        context.filesystem_validator,
+        &merge.request(artwork_track_id),
+    )
+    .map_err(|_| VerifiedMergeRefusal::Failed)
+}
+
+/// The track holding the highest-resolution artwork, as the merge dialog
+/// presets it. Artwork that cannot be read or decoded counts as none, as it
+/// does in the dialog.
+fn highest_quality_artwork_track_id(
+    context: &VerifiedDuplicateBatchContext<'_>,
+    tracks: &[Track],
+) -> Option<TrackId> {
+    let qualities = tracks
+        .iter()
+        .map(|track| {
+            let bytes = context
+                .metadata_service
+                .read_artwork(&track.location.absolute_path(context.library_root))
+                .ok()
+                .flatten()?;
+            let dimensions = sustain_artwork::validate_encoded_artwork(&bytes).ok()?;
+            Some(DuplicateArtworkQuality {
+                pixels: dimensions.pixels,
+                encoded_bytes: bytes.len(),
+            })
+        })
+        .collect::<Vec<_>>();
+    highest_quality_duplicate_artwork(&qualities).map(|index| tracks[index].id)
 }
 
 #[derive(Clone, Debug)]
@@ -1080,6 +1370,7 @@ mod tests {
     use sustain_metadata::{InitialTags, MetadataError, MetadataResult};
 
     use super::*;
+    use crate::test_waveforms::{analyse, music};
 
     #[test]
     fn editable_metadata_matches_compares_bpm_in_whole_beats() {
@@ -1483,6 +1774,188 @@ mod tests {
             validate_journal(&journal),
             Err(ApplicationRuntimeError::DuplicateConsolidationFailed)
         );
+    }
+
+    /// A library of `pairs` duplicate pairs: tracks `2n-1` and `2n` share
+    /// title `n`, a file on disk and an analysed recording.
+    struct VerifiedLibrary {
+        root: PathBuf,
+        store: SqliteLibraryStore,
+        metadata: FixedMetadata,
+        cache: Arc<Mutex<RecordingIdentityCache>>,
+        cancellation: AtomicBool,
+    }
+
+    impl VerifiedLibrary {
+        fn new(label: &str, pairs: i64) -> Self {
+            let root = test_root(label);
+            fs::create_dir_all(&root).expect("create root");
+            let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+            for id in 1..=pairs * 2 {
+                let path = format!("{id}.flac");
+                fs::write(root.join(&path), format!("audio {id}")).expect("write track");
+                store
+                    .save_track(track(id, &path, "Title"))
+                    .expect("save track");
+                let recording = u64::try_from((id + 1) / 2).expect("positive id");
+                analyse(&store, track_id(id), music(recording, 200), 100);
+            }
+            Self {
+                root,
+                store,
+                metadata: FixedMetadata {
+                    persisted: InitialTags {
+                        metadata: track(1, "1.flac", "Title").metadata,
+                        rating: Rating::unrated(),
+                        has_embedded_artwork: false,
+                    },
+                },
+                cache: Arc::default(),
+                cancellation: AtomicBool::new(false),
+            }
+        }
+
+        /// The merges a preview of the library now would offer.
+        fn preview(&self, pairs: i64) -> Vec<VerifiedDuplicateMerge> {
+            (1..=pairs)
+                .map(|pair| {
+                    let tracks = [pair * 2 - 1, pair * 2].map(|id| {
+                        self.store
+                            .track(track_id(id))
+                            .expect("load")
+                            .expect("track")
+                    });
+                    VerifiedDuplicateMerge::new(tracks.to_vec()).expect("merge")
+                })
+                .collect()
+        }
+
+        fn run(
+            &self,
+            merges: &[VerifiedDuplicateMerge],
+            progress: impl FnMut(usize),
+        ) -> VerifiedDuplicateBatchSummary {
+            consolidate_verified_duplicates(
+                &VerifiedDuplicateBatchContext {
+                    library_root: &self.root,
+                    store: &self.store,
+                    metadata_service: &self.metadata,
+                    filesystem_validator: &ManagedLibraryFilesystemValidator::default(),
+                    recording_identities: &self.cache,
+                    cancellation: &self.cancellation,
+                },
+                merges,
+                progress,
+            )
+        }
+
+        fn present(&self, id: i64) -> bool {
+            self.root.join(format!("{id}.flac")).exists()
+        }
+    }
+
+    impl Drop for VerifiedLibrary {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn a_verified_batch_merges_every_group_and_reports_progress() {
+        let library = VerifiedLibrary::new("verified_batch", 2);
+        let merges = library.preview(2);
+        let mut progress = Vec::new();
+
+        let summary = library.run(&merges, |done| progress.push(done));
+
+        assert_eq!(progress, vec![1, 2]);
+        assert_eq!(summary.merges.len(), 2);
+        assert_eq!(summary.removed_tracks(), 2);
+        assert_eq!(
+            summary
+                .merges
+                .iter()
+                .map(|merge| merge.survivor_id)
+                .collect::<Vec<_>>(),
+            vec![track_id(1), track_id(3)]
+        );
+        assert!(library.present(1) && library.present(3));
+        assert!(!library.present(2) && !library.present(4));
+    }
+
+    #[test]
+    fn a_group_changed_since_the_preview_is_left_alone() {
+        let library = VerifiedLibrary::new("verified_changed", 1);
+        let merges = library.preview(1);
+        library
+            .store
+            .update_track_rating(track_id(2), Rating::new(5).expect("rating"))
+            .expect("rate after the preview");
+
+        let summary = library.run(&merges, |_| {});
+
+        assert_eq!(summary.changed_groups, 1);
+        assert!(summary.merges.is_empty());
+        assert!(library.present(1) && library.present(2));
+    }
+
+    #[test]
+    fn a_play_since_the_preview_does_not_hold_a_group_back() {
+        let library = VerifiedLibrary::new("verified_played", 1);
+        let merges = library.preview(1);
+        let statistics = PlayStatistics {
+            play_count: 3,
+            ..PlayStatistics::default()
+        };
+        library
+            .store
+            .update_track_statistics(track_id(2), &statistics)
+            .expect("play after the preview");
+
+        let summary = library.run(&merges, |_| {});
+
+        assert_eq!(summary.merges.len(), 1);
+    }
+
+    #[test]
+    fn a_group_whose_audio_no_longer_verifies_is_left_alone() {
+        let library = VerifiedLibrary::new("verified_reanalysed", 1);
+        let merges = library.preview(1);
+        analyse(&library.store, track_id(2), music(99, 200), 200);
+
+        let summary = library.run(&merges, |_| {});
+
+        assert_eq!(summary.unverified_groups, 1);
+        assert!(summary.merges.is_empty());
+        assert!(library.present(1) && library.present(2));
+    }
+
+    #[test]
+    fn a_group_the_merger_refuses_counts_as_failed_and_the_batch_goes_on() {
+        let library = VerifiedLibrary::new("verified_failed", 2);
+        let merges = library.preview(2);
+        fs::remove_file(library.root.join("2.flac")).expect("remove file");
+
+        let summary = library.run(&merges, |_| {});
+
+        assert_eq!(summary.failed_groups, 1);
+        assert_eq!(summary.merges.len(), 1);
+        assert_eq!(summary.merges[0].survivor_id, track_id(3));
+        assert!(library.present(1));
+    }
+
+    #[test]
+    fn cancelling_stops_before_the_next_merge() {
+        let library = VerifiedLibrary::new("verified_cancelled", 3);
+        let merges = library.preview(3);
+
+        let summary = library.run(&merges, |_| {
+            library.cancellation.store(true, Ordering::SeqCst);
+        });
+
+        assert_eq!(summary.merges.len(), 1);
+        assert_eq!(summary.cancelled_groups, 2);
+        assert!(library.present(3) && library.present(4));
     }
 
     struct FixedMetadata {

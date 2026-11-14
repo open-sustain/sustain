@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::{
     DeviceLayout, DuplicateConsolidationRequest, FilesPerFolderCap, MetadataChange,
     PlaybackCommand, PlaylistFolderId, PlaylistId, PlaylistItem, Rating, SmartPlaylistId,
-    SmartPlaylistRuleSet, SyncDeviceId, TrackId, UserSettings,
+    SmartPlaylistRuleSet, SyncDeviceId, TrackId, UserSettings, VerifiedDuplicateMerge,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -119,6 +119,11 @@ pub enum ApplicationCommand {
         url: String,
     },
     ConsolidateDuplicateTracks(DuplicateConsolidationRequest),
+    /// Merge each previewed group the audio verified as one recording, one
+    /// group at a time, cancellable between merges. A group whose tracks
+    /// changed since the preview, or whose audio no longer verifies, is
+    /// skipped and reported.
+    ConsolidateVerifiedDuplicates(Vec<VerifiedDuplicateMerge>),
     AddExternalLibraryItems {
         paths: Vec<PathBuf>,
     },

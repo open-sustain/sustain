@@ -9,10 +9,10 @@ use std::{
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use sustain_app_runtime::{
-    ApplicationCommand, DuplicateConsolidationRequest, DuplicateMetadataField,
-    DuplicateMetadataFieldSelection, DuplicateMetadataSelection, NotificationCategory,
-    NotificationSeverity, Track, TrackMetadata, default_duplicate_metadata_selection,
-    highest_quality_duplicate_audio_track_ids,
+    ApplicationCommand, DuplicateArtworkQuality, DuplicateConsolidationRequest,
+    DuplicateMetadataField, DuplicateMetadataFieldSelection, DuplicateMetadataSelection,
+    NotificationCategory, NotificationSeverity, Track, TrackId, TrackMetadata,
+    default_duplicate_merge_choices, highest_quality_duplicate_artwork,
 };
 
 use crate::{
@@ -36,12 +36,6 @@ struct MetadataSelector {
     /// `tracks` slice. Exactly one is active, naming the track this field is
     /// taken from.
     buttons: Vec<gtk::CheckButton>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct ArtworkQuality {
-    pixels: u64,
-    encoded_bytes: usize,
 }
 
 pub(crate) fn consolidate_duplicates_callback(
@@ -145,15 +139,15 @@ fn open_dialog(
     intro_detail.add_css_class("dim-label");
     content.append(&intro_detail);
 
-    let metadata = default_duplicate_metadata_selection(&tracks).expect("non-empty tracks");
-    let metadata_selectors = build_metadata_selectors(&tracks, &metadata);
-    let audio_buttons = build_selection_radios(tracks.len(), highest_quality_audio_index(&tracks));
+    let defaults = default_duplicate_merge_choices(&tracks).expect("non-empty tracks");
+    let metadata_selectors = build_metadata_selectors(&tracks, &defaults.metadata);
+    let audio_buttons =
+        build_selection_radios(tracks.len(), track_index(&tracks, defaults.audio_track_id));
     // Artwork starts on the first track and is repointed at the highest-
     // resolution image once the asynchronous previews finish loading.
     let artwork_buttons = build_selection_radios(tracks.len(), 0);
-    // Rating preselects the highest available, matching the prior auto-merge,
-    // but is now a per-track choice like every metadata field.
-    let rating_buttons = build_selection_radios(tracks.len(), highest_rated_index(&tracks));
+    let rating_buttons =
+        build_selection_radios(tracks.len(), track_index(&tracks, defaults.rating_track_id));
 
     let (table, artwork_frames) = build_consolidation_table(
         &tracks,
@@ -442,7 +436,7 @@ fn header_label(text: &str, dim: bool, ellipsize: gtk::pango::EllipsizeMode) -> 
 
 /// Codec, bitrate, duration, and file size on one compact line, e.g.
 /// "FLAC · 1411 kbps · 3:45 · 28.4 MiB".
-fn audio_summary(track: &Track) -> String {
+pub(crate) fn audio_summary(track: &Track) -> String {
     let mut parts = Vec::new();
     let format = file_format(track);
     if !format.is_empty() {
@@ -555,24 +549,11 @@ fn build_selection_radios(count: usize, default_index: usize) -> Vec<gtk::CheckB
     buttons
 }
 
-/// Index of the highest-quality audio track to preselect, falling back to the
-/// first track when bitrates are unknown.
-fn highest_quality_audio_index(tracks: &[Track]) -> usize {
-    highest_quality_duplicate_audio_track_ids(tracks)
-        .first()
-        .and_then(|id| tracks.iter().position(|track| track.id == *id))
-        .unwrap_or(0)
-}
-
-/// Index of the highest-rated track to preselect for the rating, preserving the
-/// previous auto-merge default of keeping the best rating. Ties pick the first.
-fn highest_rated_index(tracks: &[Track]) -> usize {
+/// The column of `track_id` among the dialog's `tracks`.
+fn track_index(tracks: &[Track], track_id: TrackId) -> usize {
     tracks
         .iter()
-        .enumerate()
-        .rev()
-        .max_by_key(|(_, track)| track.rating)
-        .map(|(index, _)| index)
+        .position(|track| track.id == track_id)
         .unwrap_or(0)
 }
 
@@ -651,7 +632,7 @@ fn install_artwork_previews(
                 return;
             }
             if !manually_selected.get()
-                && let Some(best) = highest_quality_artwork_index(&qualities.borrow())
+                && let Some(best) = highest_quality_duplicate_artwork(&qualities.borrow())
                 && let Some(button) = artwork_buttons.get(best)
             {
                 syncing_selection.set(true);
@@ -682,24 +663,11 @@ fn install_artwork_previews(
     }
 }
 
-fn artwork_quality(decoded: &DecodedArtwork) -> Option<ArtworkQuality> {
-    Some(ArtworkQuality {
+fn artwork_quality(decoded: &DecodedArtwork) -> Option<DuplicateArtworkQuality> {
+    Some(DuplicateArtworkQuality {
         pixels: decoded.dimensions?.pixels,
         encoded_bytes: decoded.encoded_bytes_len.unwrap_or_default(),
     })
-}
-
-fn highest_quality_artwork_index(qualities: &[Option<ArtworkQuality>]) -> Option<usize> {
-    let mut best = None;
-    for (index, quality) in qualities.iter().copied().enumerate() {
-        let Some(quality) = quality else {
-            continue;
-        };
-        if best.is_none_or(|(_, best_quality)| quality > best_quality) {
-            best = Some((index, quality));
-        }
-    }
-    best.map(|(index, _)| index)
 }
 
 fn build_metadata_selectors(
@@ -761,7 +729,7 @@ fn selected_metadata(
         .map(|fields| DuplicateMetadataSelection { fields })
 }
 
-fn metadata_field_name(field: DuplicateMetadataField) -> &'static str {
+pub(crate) fn metadata_field_name(field: DuplicateMetadataField) -> &'static str {
     match field {
         DuplicateMetadataField::Title => "Title",
         DuplicateMetadataField::Artist => "Artist",
@@ -786,7 +754,7 @@ fn metadata_field_name(field: DuplicateMetadataField) -> &'static str {
 /// Human-readable value of one metadata field, or `None` when the field is
 /// unpopulated (empty/whitespace text counts as unpopulated, matching the
 /// domain's cherry-pick default).
-fn metadata_field_display(
+pub(crate) fn metadata_field_display(
     metadata: &TrackMetadata,
     field: DuplicateMetadataField,
 ) -> Option<String> {
@@ -847,43 +815,7 @@ fn format_file_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArtworkQuality, highest_quality_artwork_index, rating_stars};
-
-    #[test]
-    fn artwork_preset_prefers_more_pixels_then_more_encoded_bytes() {
-        assert_eq!(
-            highest_quality_artwork_index(&[
-                Some(ArtworkQuality {
-                    pixels: 1_000,
-                    encoded_bytes: 5_000,
-                }),
-                Some(ArtworkQuality {
-                    pixels: 2_000,
-                    encoded_bytes: 1_000,
-                }),
-                Some(ArtworkQuality {
-                    pixels: 2_000,
-                    encoded_bytes: 2_000,
-                }),
-            ]),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn artwork_preset_ignores_tracks_without_artwork() {
-        assert_eq!(
-            highest_quality_artwork_index(&[
-                None,
-                Some(ArtworkQuality {
-                    pixels: 1_000,
-                    encoded_bytes: 5_000,
-                }),
-            ]),
-            Some(1)
-        );
-        assert_eq!(highest_quality_artwork_index(&[None, None]), None);
-    }
+    use super::rating_stars;
 
     #[test]
     fn rating_stars_fills_then_empties_to_five() {

@@ -183,6 +183,128 @@ pub fn highest_quality_duplicate_audio_track_ids(tracks: &[Track]) -> Vec<TrackI
         .collect()
 }
 
+/// The track whose rating a merge keeps when nobody picks: the highest
+/// rating, the earliest of `tracks` on a tie.
+pub fn highest_rated_duplicate_track_id(tracks: &[Track]) -> Option<TrackId> {
+    tracks
+        .iter()
+        .rev()
+        .max_by_key(|track| track.rating)
+        .map(|track| track.id)
+}
+
+/// What a merge keeps when nobody picks, apart from the artwork, which needs
+/// the images themselves: see [`highest_quality_duplicate_artwork`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DuplicateMergeChoices {
+    /// The best supported audio, the earliest of the tracks on a tie.
+    pub audio_track_id: TrackId,
+    /// Per field, as [`default_duplicate_metadata_selection`] picks.
+    pub metadata: DuplicateMetadataSelection,
+    /// As [`highest_rated_duplicate_track_id`] picks.
+    pub rating_track_id: TrackId,
+}
+
+/// The default choices for merging `tracks`; `None` for no tracks.
+pub fn default_duplicate_merge_choices(tracks: &[Track]) -> Option<DuplicateMergeChoices> {
+    Some(DuplicateMergeChoices {
+        audio_track_id: *highest_quality_duplicate_audio_track_ids(tracks).first()?,
+        metadata: default_duplicate_metadata_selection(tracks)?,
+        rating_track_id: highest_rated_duplicate_track_id(tracks)?,
+    })
+}
+
+/// How good one track's embedded artwork is: more pixels, then more encoded
+/// bytes for the same pixels.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct DuplicateArtworkQuality {
+    pub pixels: u64,
+    pub encoded_bytes: usize,
+}
+
+/// The index of the best artwork among `qualities`, one per track with
+/// `None` for a track without artwork; the earliest on a tie, `None` when no
+/// track has artwork.
+pub fn highest_quality_duplicate_artwork(
+    qualities: &[Option<DuplicateArtworkQuality>],
+) -> Option<usize> {
+    let mut best: Option<(usize, DuplicateArtworkQuality)> = None;
+    for (index, quality) in qualities.iter().enumerate() {
+        if let Some(quality) = *quality
+            && best.is_none_or(|(_, best_quality)| quality > best_quality)
+        {
+            best = Some((index, quality));
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
+/// One group the audio verified as copies of a single recording, as the
+/// user previewed it: the tracks as they were then, and the choices the
+/// merge will make. The merge runs only while every track still matches
+/// its snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedDuplicateMerge {
+    pub tracks: Vec<Track>,
+    pub choices: DuplicateMergeChoices,
+}
+
+impl VerifiedDuplicateMerge {
+    /// The merge of `tracks` with the default choices; `None` for fewer than
+    /// two tracks.
+    pub fn new(tracks: Vec<Track>) -> Option<Self> {
+        if tracks.len() < 2 {
+            return None;
+        }
+        let choices = default_duplicate_merge_choices(&tracks)?;
+        Some(Self { tracks, choices })
+    }
+
+    /// Whether `current` still holds everything the preview showed and the
+    /// choices were made from. Listening statistics are summed whatever they
+    /// are, so a play since the preview does not count as a change.
+    pub fn still_matches(&self, current: &[Track]) -> bool {
+        self.tracks.len() == current.len()
+            && self
+                .tracks
+                .iter()
+                .zip(current)
+                .all(|(previewed, current)| same_merge_inputs(previewed, current))
+    }
+
+    /// The full request, keeping the artwork of `artwork_track_id`.
+    pub fn request(&self, artwork_track_id: TrackId) -> DuplicateConsolidationRequest {
+        DuplicateConsolidationRequest {
+            track_ids: self.tracks.iter().map(|track| track.id).collect(),
+            audio_track_id: self.choices.audio_track_id,
+            metadata: self.choices.metadata.clone(),
+            artwork_track_id,
+            rating_track_id: self.choices.rating_track_id,
+        }
+    }
+}
+
+fn same_merge_inputs(previewed: &Track, current: &Track) -> bool {
+    // Destructured so a new track field must be classified here.
+    let Track {
+        id,
+        location,
+        metadata,
+        rating,
+        statistics: _,
+        file_size_bytes,
+        has_embedded_artwork,
+        file_modified_at,
+    } = previewed;
+    *id == current.id
+        && *location == current.location
+        && *metadata == current.metadata
+        && *rating == current.rating
+        && *file_size_bytes == current.file_size_bytes
+        && *has_embedded_artwork == current.has_embedded_artwork
+        && *file_modified_at == current.file_modified_at
+}
+
 /// What the audio says about whether two tracks hold the same recording.
 /// Duplicate grouping asks only about pairs whose tags already match, so
 /// an implementation may do real work per question.
@@ -697,6 +819,110 @@ mod tests {
     use crate::{Bpm, PlayStatistics, PlaylistId, Rating, TrackLocation, TrackRelativePath};
 
     use super::*;
+
+    #[test]
+    fn default_choices_keep_the_best_audio_and_the_highest_rating() {
+        let mut first = track(1, "Artist", "Title", "Album", 200);
+        first.metadata.bitrate_kbps = Some(192);
+        first.rating = Rating::new(3).expect("rating");
+        let mut best_audio = track(2, "Artist", "Title", "Album", 200);
+        best_audio.metadata.bitrate_kbps = Some(320);
+        let mut best_rated = track(3, "Artist", "Title", "Album", 200);
+        best_rated.metadata.bitrate_kbps = Some(320);
+        best_rated.rating = Rating::new(5).expect("rating");
+        let tracks = [first, best_audio, best_rated];
+
+        let choices = default_duplicate_merge_choices(&tracks).expect("choices");
+
+        assert_eq!(choices.audio_track_id, track_id(2));
+        assert_eq!(choices.rating_track_id, track_id(3));
+        assert_eq!(
+            Some(choices.metadata),
+            default_duplicate_metadata_selection(&tracks)
+        );
+        assert_eq!(default_duplicate_merge_choices(&[]), None);
+    }
+
+    #[test]
+    fn a_verified_merge_holds_while_only_listening_statistics_change() {
+        let tracks = vec![
+            track(1, "Artist", "Title", "Album", 200),
+            track(2, "Artist", "Title", "Album", 200),
+        ];
+        let merge = VerifiedDuplicateMerge::new(tracks.clone()).expect("merge");
+
+        let mut played = tracks.clone();
+        played[0].statistics.play_count = 7;
+        assert!(merge.still_matches(&played));
+
+        let mut retagged = tracks.clone();
+        retagged[1].metadata.album = Some("Other".to_owned());
+        assert!(!merge.still_matches(&retagged));
+
+        let mut rerated = tracks.clone();
+        rerated[0].rating = Rating::new(4).expect("rating");
+        assert!(!merge.still_matches(&rerated));
+
+        let mut replaced = tracks.clone();
+        replaced[1].file_size_bytes = Some(1);
+        assert!(!merge.still_matches(&replaced));
+
+        assert!(!merge.still_matches(&tracks[..1]));
+        assert_eq!(VerifiedDuplicateMerge::new(tracks[..1].to_vec()), None);
+    }
+
+    #[test]
+    fn a_verified_merge_requests_its_choices_with_the_given_artwork() {
+        let tracks = vec![
+            track(1, "Artist", "Title", "Album", 200),
+            track(2, "Artist", "Title", "Album", 200),
+        ];
+        let merge = VerifiedDuplicateMerge::new(tracks).expect("merge");
+
+        let request = merge.request(track_id(2));
+
+        assert_eq!(request.track_ids, vec![track_id(1), track_id(2)]);
+        assert_eq!(request.audio_track_id, merge.choices.audio_track_id);
+        assert_eq!(request.metadata, merge.choices.metadata);
+        assert_eq!(request.rating_track_id, merge.choices.rating_track_id);
+        assert_eq!(request.artwork_track_id, track_id(2));
+    }
+
+    #[test]
+    fn artwork_preset_prefers_more_pixels_then_more_encoded_bytes() {
+        assert_eq!(
+            highest_quality_duplicate_artwork(&[
+                Some(DuplicateArtworkQuality {
+                    pixels: 1_000,
+                    encoded_bytes: 5_000,
+                }),
+                Some(DuplicateArtworkQuality {
+                    pixels: 2_000,
+                    encoded_bytes: 1_000,
+                }),
+                Some(DuplicateArtworkQuality {
+                    pixels: 2_000,
+                    encoded_bytes: 2_000,
+                }),
+            ]),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn artwork_preset_ignores_tracks_without_artwork() {
+        assert_eq!(
+            highest_quality_duplicate_artwork(&[
+                None,
+                Some(DuplicateArtworkQuality {
+                    pixels: 1_000,
+                    encoded_bytes: 5_000,
+                }),
+            ]),
+            Some(1)
+        );
+        assert_eq!(highest_quality_duplicate_artwork(&[None, None]), None);
+    }
 
     #[test]
     fn loose_groups_fold_case_diacritics_and_whitespace() {

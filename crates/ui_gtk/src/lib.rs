@@ -70,6 +70,7 @@ mod track_info;
 mod track_summary;
 mod track_table;
 mod util;
+mod verified_duplicates;
 mod window_chrome;
 mod youtube_audio_replacement;
 
@@ -199,9 +200,10 @@ pub(crate) type TrackRowsChangedHolder = Rc<RefCell<Option<TrackRowsChangedCallb
 /// when they left by duplicate consolidation.
 pub(crate) struct TracksRemoved {
     pub(crate) track_ids: std::collections::HashSet<sustain_app_runtime::TrackId>,
-    /// The consolidation survivor: its data changed, and playlist entries
-    /// of the removed tracks now point at it.
-    pub(crate) merged_into: Option<sustain_app_runtime::TrackId>,
+    /// The survivors of the consolidations that removed the tracks: their
+    /// data changed, and the removed tracks' playlist entries now point at
+    /// them. Empty for a plain removal.
+    pub(crate) survivors: Vec<sustain_app_runtime::TrackId>,
 }
 /// Fired after tracks leave the library. Views drop their rows in place
 /// rather than rebuilding, so the user keeps their scroll position and the

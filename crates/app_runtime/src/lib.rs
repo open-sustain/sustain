@@ -19,27 +19,28 @@ pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, BackgroundJobsSettings, BackgroundResourceUsage, Bpm,
     BpmRange, CdEncodingProfile, CdReadMode, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount,
-    DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest, DuplicateGroup,
-    DuplicateMatchMode, DuplicateMetadataField, DuplicateMetadataFieldSelection,
-    DuplicateMetadataSelection, EncodingSettings, FieldChange, FilesPerFolderCap,
-    GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LazyPickContext,
-    LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange, MonotonicClock,
-    MusicalKey, OtherGenres, PlayStatistics, PlaybackCommand, PlaybackOptions, PlaybackQueue,
-    PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
-    PlaybackSession, PlaybackSettings, PlaybackState, Playlist, PlaylistEntry, PlaylistFolder,
-    PlaylistFolderId, PlaylistId, PlaylistItem, PlaylistTree, PlaylistTreeNode, QualityBucket,
-    QualityDistribution, QualityRange, Rating, RepeatMode, ShuffleMode, SmartPlaylist,
-    SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistId,
-    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice,
-    SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock, Track, TrackAvailability,
-    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort, TrackContentHash,
-    TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource, TrackRelativePath, UiSettings,
-    UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent, YearCount,
-    compare_optional_text, compute_library_statistics, default_duplicate_metadata_selection,
-    duplicate_audio_quality, effective_sort_key, highest_quality_duplicate_audio_track_ids,
-    matching_tracks, normalize_sort_text, track_matches_rule_set,
+    DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateArtworkQuality,
+    DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode, DuplicateMergeChoices,
+    DuplicateMetadataField, DuplicateMetadataFieldSelection, DuplicateMetadataSelection,
+    EncodingSettings, FieldChange, FilesPerFolderCap, GenreDistribution, GenrePlayCount,
+    GenreRating, GenreShare, LazyPickContext, LibraryManagementMode, LibrarySettings,
+    LibraryStatistics, MetadataChange, MonotonicClock, MusicalKey, OtherGenres, PlayStatistics,
+    PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueEntry, PlaybackQueueEntryKind,
+    PlaybackQueueRequest, PlaybackQueueSource, PlaybackSession, PlaybackSettings, PlaybackState,
+    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem,
+    PlaylistTree, PlaylistTreeNode, QualityBucket, QualityDistribution, QualityRange, Rating,
+    RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule,
+    SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection,
+    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
+    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
+    SmartShuffleEntropy, SyncDevice, SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock,
+    Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
+    TrackColumnSort, TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
+    TrackRelativePath, UiSettings, UiSidebarSelection, UiWindowSize, UserSettings,
+    VerifiedDuplicateMerge, VolumePercent, YearCount, compare_optional_text,
+    compute_library_statistics, default_duplicate_merge_choices, duplicate_audio_quality,
+    effective_sort_key, highest_quality_duplicate_artwork, matching_tracks, normalize_sort_text,
+    track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities, StoreError};
 pub use sustain_metadata::{
@@ -112,6 +113,8 @@ mod smart_playlists;
 pub mod smart_shuffle_scheduler;
 #[cfg(test)]
 mod test_store;
+#[cfg(test)]
+mod test_waveforms;
 mod track_reconciliation;
 mod youtube_audio_downloader;
 mod youtube_audio_journal;
@@ -127,7 +130,7 @@ pub use device_sync_scheduler::{
 };
 pub use duplicate_consolidation::{
     DuplicateConsolidationResult, DuplicateConsolidationSummary, DuplicateGroupsTask,
-    recover_duplicate_consolidation_journal,
+    VerifiedDuplicateBatchSummary, recover_duplicate_consolidation_journal,
 };
 pub use smart_shuffle_scheduler::{SmartShuffleRebuildResult, SmartShuffleScheduler};
 pub use sustain_device_sync::{
@@ -149,7 +152,7 @@ pub use managed_library::{
 pub use metadata_writer::{
     DuplicateConsolidationWriterResult, ManagedMetadataRetargetResult, MetadataWriteKind,
     MetadataWriteOutcome, MetadataWriteResult, MetadataWriterEvent, MissingTrackRelocationResult,
-    YoutubeAudioReplacementResult,
+    VerifiedDuplicateBatchResult, YoutubeAudioReplacementResult,
 };
 pub use notifications::{
     EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_QUEUE_HARD_CAP, NOTIFICATION_TRANSITION,
@@ -158,7 +161,8 @@ pub use notifications::{
     import_failure_reason_text, library_consolidation_outcome_text,
     library_consolidation_running_text, library_import_outcome_text, library_import_progress_text,
     library_import_running_text, library_path_change_outcome_text, library_scan_outcome_text,
-    library_scan_running_text, runtime_error_text, waveform_cache_unavailable_text,
+    library_scan_running_text, runtime_error_text, verified_duplicate_outcome_text,
+    verified_duplicate_progress_text, waveform_cache_unavailable_text,
 };
 
 pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;
@@ -438,6 +442,9 @@ pub struct ApplicationRuntime {
     library_import_notification_id: Option<NotificationId>,
     library_consolidation_notification_id: Option<NotificationId>,
     duplicate_consolidation_notification_id: Option<NotificationId>,
+    /// Set while a batch of verified merges runs; a single merge cannot be
+    /// cancelled.
+    duplicate_consolidation_cancellation: Option<Arc<AtomicBool>>,
     managed_library_filesystem_notification_id: Option<NotificationId>,
     managed_library_filesystem_validator: managed_library::ManagedLibraryFilesystemValidator,
     /// Recording verdicts the duplicate scans computed, kept across scans.
@@ -748,6 +755,7 @@ impl ApplicationRuntime {
             library_import_notification_id: None,
             library_consolidation_notification_id: None,
             duplicate_consolidation_notification_id: None,
+            duplicate_consolidation_cancellation: None,
             managed_library_filesystem_notification_id: None,
             managed_library_filesystem_validator: Default::default(),
             recording_identities: Default::default(),
@@ -1128,6 +1136,12 @@ impl ApplicationRuntime {
             }
             MetadataWriterEvent::DuplicateConsolidation(result) => {
                 self.apply_duplicate_consolidation_result(result);
+            }
+            MetadataWriterEvent::VerifiedDuplicateProgress { completed, total } => {
+                self.apply_verified_duplicate_progress(completed, total);
+            }
+            MetadataWriterEvent::VerifiedDuplicateConsolidation(result) => {
+                self.apply_verified_duplicate_batch_result(result);
             }
             MetadataWriterEvent::YoutubeAudioReplacement(result) => {
                 self.apply_youtube_audio_replacement_result(result);
@@ -1914,6 +1928,9 @@ impl ApplicationRuntime {
         self.request_library_import_cancellation();
         self.request_library_consolidation_cancellation();
         self.request_cd_import_cancellation();
+        if let Some(cancellation_requested) = &self.duplicate_consolidation_cancellation {
+            cancellation_requested.store(true, Ordering::SeqCst);
+        }
         // A device sync runs on its own worker (not part of the
         // mutually-exclusive library-task set), so cancel it here too:
         // this is the method the status-bar Cancel button invokes, and
@@ -1938,6 +1955,7 @@ impl ApplicationRuntime {
             || flag_set(self.library_import_cancellation.as_ref())
             || flag_set(self.library_consolidation_cancellation.as_ref())
             || flag_set(self.cd_import_cancellation.as_ref())
+            || flag_set(self.duplicate_consolidation_cancellation.as_ref())
             // The device sync worker is not part of the mutually-exclusive
             // library-task set and tracks its own cancel flag, so consult
             // it directly — otherwise the lane never shows "Cancelling..."

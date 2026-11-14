@@ -19,6 +19,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
+        atomic::AtomicBool,
         mpsc::{self, RecvTimeoutError, Sender},
     },
     thread::{self, JoinHandle},
@@ -27,7 +28,7 @@ use std::{
 
 use sustain_domain::{
     DuplicateConsolidationRequest, FieldChange, LibraryManagementMode, MetadataChange,
-    TrackAvailability, TrackMetadata,
+    TrackAvailability, TrackMetadata, VerifiedDuplicateMerge,
 };
 use sustain_library_store::{
     LibraryStore, PendingTagMirror, StoreError, StoredTagMirrorArtwork, TagMirrorArtwork,
@@ -37,10 +38,14 @@ use sustain_metadata::{MetadataError, MetadataService};
 
 use crate::{
     ApplicationRuntimeError,
-    duplicate_consolidation::{DuplicateConsolidationResult, consolidate_duplicate_tracks},
+    duplicate_consolidation::{
+        DuplicateConsolidationResult, VerifiedDuplicateBatchContext, VerifiedDuplicateBatchSummary,
+        consolidate_duplicate_tracks, consolidate_verified_duplicates,
+    },
     file_presence::{FilePresence, probe_file_presence},
     library_mutation::relocate_missing_track_with_store,
     managed_library::{ManagedLibraryFilesystemValidator, retarget_managed_metadata},
+    recording_evidence::RecordingIdentityCache,
     youtube_audio_downloader::StagedYoutubeAudio,
     youtube_audio_replacement::replace_track_audio_from_youtube,
 };
@@ -97,6 +102,13 @@ pub struct DuplicateConsolidationWriterResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedDuplicateBatchResult {
+    /// `Err` when the batch could not start; once it runs, every group's
+    /// fate is in the summary.
+    pub outcome: Result<VerifiedDuplicateBatchSummary, ApplicationRuntimeError>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct YoutubeAudioReplacementResult {
     pub track_id: TrackId,
     pub outcome: Result<(), ApplicationRuntimeError>,
@@ -110,7 +122,36 @@ pub enum MetadataWriterEvent {
     ManagedRetarget(ManagedMetadataRetargetResult),
     MissingTrackRelocation(MissingTrackRelocationResult),
     DuplicateConsolidation(DuplicateConsolidationWriterResult),
+    /// A batch of verified merges finished `completed` of its `total`
+    /// groups. The library itself is reloaded only when the batch ends.
+    VerifiedDuplicateProgress {
+        completed: usize,
+        total: usize,
+    },
+    VerifiedDuplicateConsolidation(VerifiedDuplicateBatchResult),
     YoutubeAudioReplacement(YoutubeAudioReplacementResult),
+}
+
+impl MetadataWriterEvent {
+    /// The duplicate merges this event reports as committed, single or
+    /// batched alike.
+    pub fn committed_duplicate_merges(&self) -> &[DuplicateConsolidationResult] {
+        match self {
+            Self::DuplicateConsolidation(result) => {
+                result.outcome.as_ref().map_or(&[], std::slice::from_ref)
+            }
+            Self::VerifiedDuplicateConsolidation(result) => result
+                .outcome
+                .as_ref()
+                .map_or(&[], |summary| summary.merges.as_slice()),
+            Self::Mirror(_)
+            | Self::TrackAvailabilityChanged(_)
+            | Self::ManagedRetarget(_)
+            | Self::MissingTrackRelocation(_)
+            | Self::VerifiedDuplicateProgress { .. }
+            | Self::YoutubeAudioReplacement(_) => &[],
+        }
+    }
 }
 
 enum MetadataWriterCommand {
@@ -126,6 +167,11 @@ enum MetadataWriterCommand {
     },
     ConsolidateDuplicateTracks {
         request: DuplicateConsolidationRequest,
+    },
+    ConsolidateVerifiedDuplicates {
+        merges: Vec<VerifiedDuplicateMerge>,
+        recording_identities: Arc<Mutex<RecordingIdentityCache>>,
+        cancellation: Arc<AtomicBool>,
     },
     ReplaceTrackAudioFromYoutube {
         track_id: TrackId,
@@ -223,6 +269,21 @@ impl MetadataWriter {
     ) -> bool {
         self.sender
             .send(MetadataWriterCommand::ConsolidateDuplicateTracks { request })
+            .is_ok()
+    }
+
+    pub(crate) fn consolidate_verified_duplicates(
+        &self,
+        merges: Vec<VerifiedDuplicateMerge>,
+        recording_identities: Arc<Mutex<RecordingIdentityCache>>,
+        cancellation: Arc<AtomicBool>,
+    ) -> bool {
+        self.sender
+            .send(MetadataWriterCommand::ConsolidateVerifiedDuplicates {
+                merges,
+                recording_identities,
+                cancellation,
+            })
             .is_ok()
     }
 
@@ -573,6 +634,43 @@ fn apply_command(
             emit_event(
                 result_sink,
                 MetadataWriterEvent::DuplicateConsolidation(DuplicateConsolidationWriterResult {
+                    outcome,
+                }),
+            );
+            *active = true;
+            true
+        }
+        MetadataWriterCommand::ConsolidateVerifiedDuplicates {
+            merges,
+            recording_identities,
+            cancellation,
+        } => {
+            let outcome = library_path
+                .as_deref()
+                .ok_or(ApplicationRuntimeError::LibraryPathUnavailable)
+                .map(|library_root| {
+                    let total = merges.len();
+                    consolidate_verified_duplicates(
+                        &VerifiedDuplicateBatchContext {
+                            library_root,
+                            store: library_store,
+                            metadata_service,
+                            filesystem_validator: managed_library_filesystem_validator,
+                            recording_identities: &recording_identities,
+                            cancellation: &cancellation,
+                        },
+                        &merges,
+                        |completed| {
+                            emit_event(
+                                result_sink,
+                                MetadataWriterEvent::VerifiedDuplicateProgress { completed, total },
+                            );
+                        },
+                    )
+                });
+            emit_event(
+                result_sink,
+                MetadataWriterEvent::VerifiedDuplicateConsolidation(VerifiedDuplicateBatchResult {
                     outcome,
                 }),
             );

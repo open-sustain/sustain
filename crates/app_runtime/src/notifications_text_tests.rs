@@ -2,6 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use super::*;
+use crate::{DuplicateConsolidationResult, DuplicateConsolidationSummary, TrackId};
 
 #[test]
 fn scan_outcome_lists_the_changes_not_the_library_total() {
@@ -253,5 +254,43 @@ fn an_analysis_batch_with_a_failure_is_a_warning() {
     assert_eq!(
         analysis_background_outcome_severity(1),
         NotificationSeverity::Warning
+    );
+}
+
+fn merged(removed_tracks: usize, cleanup_failed: bool) -> DuplicateConsolidationResult {
+    DuplicateConsolidationResult {
+        survivor_id: TrackId::new(1).expect("track id"),
+        removed_track_ids: Vec::new(),
+        summary: DuplicateConsolidationSummary {
+            removed_tracks,
+            cleanup_failed,
+        },
+    }
+}
+
+#[test]
+fn verified_duplicate_outcome_counts_merges_and_removed_tracks() {
+    let summary = VerifiedDuplicateBatchSummary {
+        merges: vec![merged(1, false), merged(2, false)],
+        ..VerifiedDuplicateBatchSummary::default()
+    };
+    assert_eq!(
+        verified_duplicate_outcome_text(&summary),
+        "Merged 2 verified duplicate groups, removing 3 tracks."
+    );
+}
+
+#[test]
+fn verified_duplicate_outcome_names_every_reason_a_group_was_left_alone() {
+    let summary = VerifiedDuplicateBatchSummary {
+        merges: vec![merged(1, true)],
+        changed_groups: 1,
+        unverified_groups: 2,
+        failed_groups: 3,
+        cancelled_groups: 4,
+    };
+    assert_eq!(
+        verified_duplicate_outcome_text(&summary),
+        "Merged 1 verified duplicate group, removing 1 track. Left alone: 1 changed since the preview, 2 no longer verified, 3 failed, 4 cancelled. Sustain retained recovery files because cleanup could not finish safely."
     );
 }

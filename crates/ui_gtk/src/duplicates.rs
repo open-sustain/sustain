@@ -15,6 +15,7 @@ use sustain_app_runtime::{
 
 use crate::{
     SharedRuntime,
+    command_controller::SharedCommandController,
     main_window::VisibleSummaryRefreshCallback,
     track_context::TrackRowContextMenu,
     track_summary::TrackSummary,
@@ -22,6 +23,7 @@ use crate::{
         BeginEditCallback, RatingChangedCallback, RowSetUpdate, TrackActivatedCallback, TrackTable,
         TrackTableRow, build_track_table,
     },
+    verified_duplicates::open_verified_duplicates_preview,
 };
 
 #[derive(Clone)]
@@ -33,8 +35,12 @@ pub(crate) struct DuplicatesView {
     rating_changed: RatingChangedCallback,
     inline_edit: BeginEditCallback,
     runtime: SharedRuntime,
+    command_controller: SharedCommandController,
     strict: gtk::Switch,
     status: gtk::Label,
+    merge_verified: gtk::Button,
+    /// The groups the rows show, for the verified-merge preview.
+    groups: Rc<RefCell<Vec<DuplicateGroup>>>,
     generation: Rc<Cell<u64>>,
     /// Whether the next scan result must replace the rows rather than
     /// reconcile them: a scan that asked for a fresh start was superseded
@@ -47,6 +53,7 @@ pub(crate) struct DuplicatesView {
 impl DuplicatesView {
     pub(crate) fn new(
         runtime: SharedRuntime,
+        command_controller: SharedCommandController,
         context_menu: TrackRowContextMenu,
         track_activated: TrackActivatedCallback,
         rating_changed: RatingChangedCallback,
@@ -64,10 +71,16 @@ impl DuplicatesView {
         let status = gtk::Label::new(Some("Open Duplicates to scan the library."));
         status.set_xalign(0.0);
         status.set_hexpand(true);
+        let merge_verified = gtk::Button::with_label("Merge Verified Duplicates\u{2026}");
+        merge_verified.set_sensitive(false);
+        merge_verified.set_tooltip_text(Some(
+            "Preview and merge the groups whose audio shows them to be copies of one recording",
+        ));
         let strict_label = gtk::Label::new(Some("Strict matching"));
         let strict = gtk::Switch::new();
         strict.set_valign(gtk::Align::Center);
         header.append(&status);
+        header.append(&merge_verified);
         header.append(&strict_label);
         header.append(&strict);
         root.append(&header);
@@ -80,8 +93,11 @@ impl DuplicatesView {
             rating_changed,
             inline_edit,
             runtime,
+            command_controller,
             strict,
             status,
+            merge_verified,
+            groups: Rc::new(RefCell::new(Vec::new())),
             generation: Rc::new(Cell::new(0)),
             replace_pending: Rc::new(Cell::new(false)),
             active: Rc::new(Cell::new(false)),
@@ -93,6 +109,9 @@ impl DuplicatesView {
                 view_for_toggle.scan(RowSetUpdate::Replace);
             }
         });
+        let view_for_merge = view.clone();
+        view.merge_verified
+            .connect_clicked(move |_| view_for_merge.preview_verified_merges());
         view
     }
 
@@ -205,6 +224,7 @@ impl DuplicatesView {
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
         self.status.set_text("Scanning for duplicate tracks...");
+        self.merge_verified.set_sensitive(false);
         let mode = if self.strict.is_active() {
             DuplicateMatchMode::Strict
         } else {
@@ -259,6 +279,21 @@ impl DuplicatesView {
         });
     }
 
+    fn preview_verified_merges(&self) {
+        let merges = self
+            .runtime
+            .borrow()
+            .verified_duplicate_merges(&self.groups.borrow());
+        if merges.is_empty() {
+            return;
+        }
+        let parent = self
+            .root
+            .root()
+            .and_then(|root| root.downcast::<gtk::Window>().ok());
+        open_verified_duplicates_preview(parent.as_ref(), &self.command_controller, merges);
+    }
+
     fn apply_groups(
         &self,
         result: sustain_app_runtime::ApplicationRuntimeResult<Vec<DuplicateGroup>>,
@@ -292,11 +327,14 @@ impl DuplicatesView {
                 if let Some(refresh) = refresh {
                     refresh();
                 }
+                let verified = groups.iter().filter(|group| group.same_recording).count();
                 self.status.set_text(&format!(
-                    "{} duplicate group(s), {} track(s).",
+                    "{} duplicate group(s), {} track(s), {verified} verified by their audio.",
                     groups.len(),
                     row_count
                 ));
+                self.merge_verified.set_sensitive(verified > 0);
+                self.groups.replace(groups);
             }
             Err(error) => {
                 self.status.set_text("Duplicate scan failed.");

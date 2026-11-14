@@ -45,11 +45,13 @@ pub use device_sync::{
     DeviceSelection, FilesPerFolderCap, SyncDevice, SyncDeviceId, SyncManifestEntry,
 };
 pub use duplicate_consolidation::{
-    DuplicateAudioQuality, DuplicateConsolidationError, DuplicateConsolidationPlan,
-    DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode, DuplicateMetadataField,
-    DuplicateMetadataFieldSelection, DuplicateMetadataSelection, NoRecordingEvidence,
-    RecordingEvidence, default_duplicate_metadata_selection, duplicate_audio_quality,
-    duplicate_groups, highest_quality_duplicate_audio_track_ids, plan_duplicate_consolidation,
+    DuplicateArtworkQuality, DuplicateAudioQuality, DuplicateConsolidationError,
+    DuplicateConsolidationPlan, DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode,
+    DuplicateMergeChoices, DuplicateMetadataField, DuplicateMetadataFieldSelection,
+    DuplicateMetadataSelection, NoRecordingEvidence, RecordingEvidence, VerifiedDuplicateMerge,
+    default_duplicate_merge_choices, default_duplicate_metadata_selection, duplicate_audio_quality,
+    duplicate_groups, highest_quality_duplicate_artwork, highest_quality_duplicate_audio_track_ids,
+    highest_rated_duplicate_track_id, plan_duplicate_consolidation,
 };
 pub use id::{PlaylistFolderId, PlaylistId, SmartPlaylistId, TrackId};
 pub use library_statistics::{

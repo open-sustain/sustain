@@ -469,6 +469,7 @@ pub(crate) fn build_main_window(
     albums_view_holder.replace(Some(albums_view.clone()));
     let duplicates_view = DuplicatesView::new(
         runtime.clone(),
+        command_controller.clone(),
         context_menu,
         track_activated_callback(
             &command_controller,

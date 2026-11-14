@@ -199,6 +199,8 @@ pub(super) fn install_metadata_writer_event_consumer(
                 | sustain_app_runtime::MetadataWriterEvent::TrackAvailabilityChanged(_)
                 | sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_)
                 | sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(_)
+                | sustain_app_runtime::MetadataWriterEvent::VerifiedDuplicateProgress { .. }
+                | sustain_app_runtime::MetadataWriterEvent::VerifiedDuplicateConsolidation(_)
                 | sustain_app_runtime::MetadataWriterEvent::YoutubeAudioReplacement(_) => None,
             };
             let mirror_track_id = match &event {
@@ -212,27 +214,21 @@ pub(super) fn install_metadata_writer_event_consumer(
                 | sustain_app_runtime::MetadataWriterEvent::ManagedRetarget(_)
                 | sustain_app_runtime::MetadataWriterEvent::MissingTrackRelocation(_)
                 | sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(_)
+                | sustain_app_runtime::MetadataWriterEvent::VerifiedDuplicateProgress { .. }
+                | sustain_app_runtime::MetadataWriterEvent::VerifiedDuplicateConsolidation(_)
                 | sustain_app_runtime::MetadataWriterEvent::YoutubeAudioReplacement(_) => None,
             };
-            let consolidated = match &event {
-                sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(result) => result
-                    .outcome
-                    .as_ref()
-                    .ok()
-                    .map(|result| (result.survivor_id, result.removed_track_ids.clone())),
-                _ => None,
-            };
-            let duplicate_artwork_sources = match &event {
-                sustain_app_runtime::MetadataWriterEvent::DuplicateConsolidation(result) => {
-                    result.outcome.as_ref().ok().map(|result| {
-                        std::iter::once(result.survivor_id)
-                            .chain(result.removed_track_ids.iter().copied())
-                            .filter_map(|track_id| artwork_source_for_track(&runtime, track_id))
-                            .collect::<Vec<_>>()
-                    })
-                }
-                _ => None,
-            };
+            let merges = event.committed_duplicate_merges().to_vec();
+            // Captured before the runtime reloads the library: the removed
+            // tracks' sources cannot be looked up afterwards.
+            let duplicate_artwork_sources = merges
+                .iter()
+                .flat_map(|merge| {
+                    std::iter::once(merge.survivor_id)
+                        .chain(merge.removed_track_ids.iter().copied())
+                })
+                .filter_map(|track_id| artwork_source_for_track(&runtime, track_id))
+                .collect::<Vec<_>>();
             runtime.borrow_mut().apply_metadata_writer_event(event);
             // Events that change track data reload SQLite through
             // `apply_track_updated`, which fires the standard observer. Plain
@@ -246,25 +242,24 @@ pub(super) fn install_metadata_writer_event_consumer(
             if let Some((track_id, succeeded)) = relocation {
                 relocation_completed(track_id, succeeded);
             }
-            if let Some(sources) = duplicate_artwork_sources {
-                for source in sources {
-                    artwork_loader.invalidate(&source);
-                }
+            for source in duplicate_artwork_sources {
+                artwork_loader.invalidate(&source);
             }
-            if let Some((survivor_id, removed_track_ids)) = consolidated {
+            if !merges.is_empty() {
                 // Report what the runtime's library now lacks: if it could
                 // not reload the consolidated library, nothing left it.
                 let track_ids = {
                     let runtime = runtime.borrow();
-                    removed_track_ids
-                        .into_iter()
+                    merges
+                        .iter()
+                        .flat_map(|merge| merge.removed_track_ids.iter().copied())
                         .filter(|track_id| runtime.library_track(*track_id).is_none())
                         .collect::<HashSet<_>>()
                 };
                 if !track_ids.is_empty() {
                     tracks_removed(&TracksRemoved {
                         track_ids,
-                        merged_into: Some(survivor_id),
+                        survivors: merges.iter().map(|merge| merge.survivor_id).collect(),
                     });
                 }
             }

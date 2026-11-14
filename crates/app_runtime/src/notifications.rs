@@ -304,7 +304,7 @@ impl NotificationCenter {
 
 use crate::{
     ApplicationRuntimeError, ImportFailureReason, LibraryConsolidationSummary,
-    LibraryImportSummary, LibraryScanSummary,
+    LibraryImportSummary, LibraryScanSummary, VerifiedDuplicateBatchSummary,
 };
 
 pub fn library_scan_running_text() -> String {
@@ -551,6 +551,46 @@ pub fn library_consolidation_outcome_text(summary: &LibraryConsolidationSummary)
     };
     if summary.empty_directory_cleanup_failed {
         outcome.push_str(" Some empty folders could not be removed.");
+    }
+    outcome
+}
+
+pub fn verified_duplicate_progress_text(completed: usize, total: usize) -> String {
+    format!("Merging verified duplicates ({completed}/{total})...")
+}
+
+/// One sentence per thing the user should know: what merged, then each
+/// reason a group was left alone.
+pub fn verified_duplicate_outcome_text(summary: &VerifiedDuplicateBatchSummary) -> String {
+    let merged = summary.merges.len();
+    let removed = summary.removed_tracks();
+    let mut outcome = format!(
+        "Merged {merged} verified duplicate {}, removing {removed} {}.",
+        pluralize(merged, "group", "groups"),
+        pluralize(removed, "track", "tracks"),
+    );
+    let mut left_alone = Vec::new();
+    if summary.changed_groups > 0 {
+        left_alone.push(format!(
+            "{} changed since the preview",
+            summary.changed_groups
+        ));
+    }
+    if summary.unverified_groups > 0 {
+        left_alone.push(format!("{} no longer verified", summary.unverified_groups));
+    }
+    if summary.failed_groups > 0 {
+        left_alone.push(format!("{} failed", summary.failed_groups));
+    }
+    if summary.cancelled_groups > 0 {
+        left_alone.push(format!("{} cancelled", summary.cancelled_groups));
+    }
+    if !left_alone.is_empty() {
+        outcome.push_str(&format!(" Left alone: {}.", left_alone.join(", ")));
+    }
+    if summary.cleanup_failed() {
+        outcome
+            .push_str(" Sustain retained recovery files because cleanup could not finish safely.");
     }
     outcome
 }

@@ -271,23 +271,29 @@ pub(super) fn tracks_removed_callback(ctx: TracksRemovedContext<'_>) -> TracksRe
     let current_search_text = ctx.current_search_text.clone();
 
     Rc::new(move |removal: &TracksRemoved| {
-        if let Some(survivor_id) = removal.merged_into {
-            let survivor_row = {
+        if !removal.survivors.is_empty() {
+            let survivor_rows = {
                 let runtime = runtime.borrow();
                 let honor_sort_tags = runtime.settings().library.honor_sort_tags;
-                runtime
-                    .library_track(survivor_id)
-                    .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
+                removal
+                    .survivors
+                    .iter()
+                    .filter_map(|survivor_id| {
+                        runtime.library_track(*survivor_id).map(|track| {
+                            (
+                                *survivor_id,
+                                TrackTableRow::from_track(track, honor_sort_tags),
+                            )
+                        })
+                    })
+                    .collect::<HashMap<_, _>>()
             };
-            if let Some(row) = survivor_row {
-                let rows = HashMap::from([(survivor_id, row)]);
-                songs_table.update_rows(&rows);
-                playlists_table.update_rows(&rows);
-            }
+            songs_table.update_rows(&survivor_rows);
+            playlists_table.update_rows(&survivor_rows);
         }
         songs_table.remove_rows(&removal.track_ids);
         playlists_table.remove_rows(&removal.track_ids);
-        let playlist_membership_may_grow = removal.merged_into.is_some()
+        let playlist_membership_may_grow = !removal.survivors.is_empty()
             || matches!(
                 sidebar.current_selection(),
                 Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(_)))
@@ -760,7 +766,7 @@ fn track_removal_callback(
         if let Some(callback) = tracks_removed_holder.borrow().as_ref() {
             callback(&TracksRemoved {
                 track_ids: removed,
-                merged_into: None,
+                survivors: Vec::new(),
             });
         }
     })

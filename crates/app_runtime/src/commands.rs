@@ -166,6 +166,9 @@ impl ApplicationRuntime {
             ApplicationCommand::ConsolidateDuplicateTracks(request) => {
                 self.consolidate_duplicate_tracks(request)?;
             }
+            ApplicationCommand::ConsolidateVerifiedDuplicates(merges) => {
+                self.consolidate_verified_duplicates(merges)?;
+            }
             ApplicationCommand::SetRating { track_id, rating } => {
                 self.set_rating(track_id, rating)?;
             }

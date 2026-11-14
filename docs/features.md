@@ -233,6 +233,24 @@ merge is recovered before library hydration on the next launch. The view
 is transient: it is never restored or scanned at startup, so it does not
 affect cold-start time.
 
+**Merge Verified Duplicates…** in the Duplicates header — *Sustain-native*
+— offers the groups whose audio shows every pair of copies to be the
+same recording. Groups that only the tags suggest are left for manual
+review. A preview lists each group with the file it keeps (codec,
+bitrate, duration, size and path), how many copies it removes, and the
+value it keeps for every field the copies disagree on. Any group can be
+unchecked, and one confirmation starts the batch. Each group merges
+exactly like **Consolidate to single track** with its preset choices:
+best audio, highest rating, highest-resolution artwork, cherry-picked
+metadata, summed counts. Before each merge Sustain re-reads the tracks
+and compares their current waveforms again. A group whose tracks were
+edited, re-rated or replaced since the preview, or whose audio no longer
+verifies, is left alone; a play in the meantime does not count as a
+change. The batch runs in the background, one journaled merge at a time;
+**Cancel** stops it before the next merge. The final notification
+reports how many groups merged and how many were left alone, with the
+reason for each.
+
 ### Statistics — *Sustain-native*
 The third entry under LIBRARY opens a single scrollable page of
 whole-library diagnostic charts, rendered as aligned proportion bars in
