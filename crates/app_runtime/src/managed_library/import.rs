@@ -26,14 +26,15 @@ use sustain_domain::{
 use sustain_metadata::{InitialTags, audio_format_from_path, hash_file_content};
 
 use crate::{
-    ApplicationRuntimeError, ApplicationRuntimeResult, LibraryImportProgress, LibraryImportResult,
-    LibraryImportSummary, LibraryImportTask, library_scan,
+    ApplicationRuntimeError, ApplicationRuntimeResult, ImportFailure, ImportFailureReason,
+    LibraryImportProgress, LibraryImportResult, LibraryImportSummary, LibraryImportTask,
+    library_scan,
 };
 
 use super::{
     capabilities::ManagedLibraryFilesystemValidator,
     file_ops::{
-        VerifiedFileCopy, copy_file_to_staging_verified,
+        VerifiedFileCopy, VerifiedFileCopyError, copy_file_to_staging_verified,
         prune_empty_ancestor_directories_for_sources, publish_staged_file,
         refresh_verified_staging, remove_copied_files, remove_staged_file,
     },
@@ -47,7 +48,25 @@ struct ManagedImportState {
     pending_tracks: Vec<Track>,
     pending_copied_files: Vec<VerifiedFileCopy>,
     duplicate_files: usize,
-    failed_files: usize,
+    /// Files skipped one by one, the import carrying on past each.
+    failures: Vec<ImportFailure>,
+    /// Copied files whose chunk the library store refused, rolled back
+    /// before the import stopped.
+    rolled_back_files: usize,
+}
+
+impl ManagedImportState {
+    fn failed_files(&self) -> usize {
+        self.failures.len() + self.rolled_back_files
+    }
+}
+
+/// How an import ended, for its summary.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ImportEnd {
+    Completed,
+    Cancelled,
+    StoppedOnError,
 }
 
 pub fn run_library_import_task(
@@ -92,6 +111,7 @@ impl LibraryImportContext<'_> {
             return Ok(LibraryImportResult {
                 tracks: Vec::new(),
                 summary: LibraryImportSummary::default(),
+                failures: Vec::new(),
             });
         }
 
@@ -105,6 +125,10 @@ impl LibraryImportContext<'_> {
         }
     }
 
+    /// Copies each discovered file into the library. A file that cannot be
+    /// brought in is recorded and skipped (#298); only a failure of the
+    /// library itself (its store, its folder, its track ids) stops the
+    /// import.
     fn add_managed_external_library_items(
         &mut self,
         paths: Vec<PathBuf>,
@@ -117,287 +141,92 @@ impl LibraryImportContext<'_> {
         self.managed_library_filesystem_validator
             .validate(&library_path)
             .map_err(ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported)?;
-        let canonical_library_path = fs::canonicalize(&library_path).ok();
 
-        let discovered_files =
-            collect_supported_audio_files(&paths, self.cancellation_requested.as_ref())?;
+        let DiscoveredFiles { files, failures } =
+            collect_supported_audio_files(&paths, self.cancellation_requested.as_ref());
+        let mut state = ManagedImportState {
+            failures,
+            ..ManagedImportState::default()
+        };
+        let total_files = files.len();
         if self.cancellation_requested.load(Ordering::SeqCst) {
-            return Ok(cancelled_import_result(discovered_files.len()));
+            return Ok(managed_import_result(
+                total_files,
+                state,
+                ImportEnd::Cancelled,
+            ));
         }
 
-        let mut occupied_paths = self
-            .existing_tracks
-            .iter()
-            .map(|track| track.location.relative_path.clone())
-            .collect::<BTreeSet<_>>();
-        // Within-batch dedup only: catch two byte-identical source files
-        // dropped in the same import. Cross-existing dedup is decided
-        // against ground truth on disk by `LibraryContentIndex`, never
-        // against the stored content hash, which is import-time only and
-        // may be stale or absent (see #72).
-        let mut seen_hashes: HashSet<String> = HashSet::new();
-
-        // Decide existing-library duplicates against a size-bucketed,
-        // hash-cached index built once from disk. The per-file linear scan
-        // this replaces was O(new × existing) and re-hashed existing files on
-        // every size collision, which dominated import time on a large
-        // library (#146).
-        let mut content_index = LibraryContentIndex::build(&self.existing_tracks, &library_path);
-
-        let planner = ManagedTrackPathPlanner::default();
-        let mut state = ManagedImportState::default();
+        let mut batch = ManagedImportBatch::new(&self.existing_tracks, library_path);
         let mut next_track_id = library_scan::next_track_id(&self.existing_tracks)?;
-        let total_files = discovered_files.len();
 
-        for (index, source_path) in discovered_files.iter().enumerate() {
-            let file_number = index + 1;
+        for (index, source_path) in files.iter().enumerate() {
             if self.cancellation_requested.load(Ordering::SeqCst) {
-                return self.finish_cancelled_managed_import(&library_path, total_files, state);
-            }
-            let source_path = match fs::canonicalize(source_path) {
-                Ok(path) => path,
-                Err(_) => {
-                    state.failed_files += 1;
-                    return self.finish_failed_managed_import(
-                        &library_path,
-                        total_files,
-                        state,
-                        None,
-                        ApplicationRuntimeError::LibraryImportFailed,
-                    );
-                }
-            };
-            if let Some(relative_path) =
-                source_relative_path_inside_library(&source_path, canonical_library_path.as_deref())
-                && occupied_paths.contains(&relative_path)
-            {
-                state.duplicate_files += 1;
-                self.report_progress(file_number, total_files);
-                continue;
-            }
-
-            // Hash the source while copying it once into an unpublished
-            // staging file. The staged descriptor is then rewound and hashed
-            // independently before publication, retaining the read-back
-            // integrity assertion without a second source read (#146).
-            let mut staging = match copy_file_to_staging_verified(&source_path, &library_path) {
-                Ok(staging) => staging,
-                Err(_) => {
-                    state.failed_files += 1;
-                    return self.finish_failed_managed_import(
-                        &library_path,
-                        total_files,
-                        state,
-                        None,
-                        ApplicationRuntimeError::LibraryImportFailed,
-                    );
-                }
-            };
-            let original_content_hash = staging.content_hash.clone();
-            let mut source_size = staging.bytes_copied;
-            let mut content_hash = staging.content_hash.clone();
-            if seen_hashes.contains(content_hash.as_str())
-                || content_index.contains_matching(source_size, &content_hash)
-            {
-                remove_staged_file(staging);
-                state.duplicate_files += 1;
-                self.report_progress(file_number, total_files);
-                continue;
-            }
-
-            let initial_read = match self
-                .metadata_service
-                .read_initial_tags_with_diagnostics(&source_path)
-            {
-                Ok(read) => read,
-                Err(_) => {
-                    remove_staged_file(staging);
-                    state.failed_files += 1;
-                    return self.finish_failed_managed_import(
-                        &library_path,
-                        total_files,
-                        state,
-                        None,
-                        ApplicationRuntimeError::LibraryImportFailed,
-                    );
-                }
-            };
-            let mut initial_tags = initial_read.tags;
-            let repaired_staging = initial_read.repair.is_some_and(|repair| {
-                match self
-                    .metadata_service
-                    .repair_malformed_tags(staging.path(), repair)
-                {
-                    Ok(true) => true,
-                    Ok(false) | Err(_) => false,
-                }
-            });
-            if repaired_staging {
-                if refresh_verified_staging(&mut staging).is_err() {
-                    remove_staged_file(staging);
-                    state.failed_files += 1;
-                    return self.finish_failed_managed_import(
-                        &library_path,
-                        total_files,
-                        state,
-                        None,
-                        ApplicationRuntimeError::LibraryImportFailed,
-                    );
-                }
-                source_size = staging.bytes_copied;
-                content_hash = staging.content_hash.clone();
-                if let Ok(tags) = self.metadata_service.read_initial_tags(staging.path()) {
-                    initial_tags = tags;
-                }
-                if seen_hashes.contains(content_hash.as_str())
-                    || content_index.contains_matching(source_size, &content_hash)
-                {
-                    remove_staged_file(staging);
-                    state.duplicate_files += 1;
-                    self.report_progress(file_number, total_files);
-                    continue;
-                }
-            }
-            let InitialTags {
-                metadata,
-                rating,
-                has_embedded_artwork,
-            } = initial_tags;
-            let planned_destination = plan_destination(
-                &planner,
-                &mut occupied_paths,
-                &library_path,
-                &source_path,
-                &metadata,
-                source_size,
-                &content_hash,
-            );
-            let plan = match planned_destination {
-                Ok(PlannedManagedDestination::Fresh(plan)) => plan,
-                Ok(PlannedManagedDestination::AlreadyPresent) => {
-                    remove_staged_file(staging);
-                    state.duplicate_files += 1;
-                    self.report_progress(file_number, total_files);
-                    continue;
-                }
-                Err(error) => {
-                    remove_staged_file(staging);
-                    state.failed_files += 1;
-                    return self.finish_failed_managed_import(
-                        &library_path,
-                        total_files,
-                        state,
-                        None,
-                        error,
-                    );
-                }
-            };
-            let destination_path = library_path.join(plan.relative_path.as_path());
-            let copy = match publish_staged_file(staging, &destination_path) {
-                Ok(copy) => copy,
-                Err(_) => {
-                    state.failed_files += 1;
-                    return self.finish_failed_managed_import(
-                        &library_path,
-                        total_files,
-                        state,
-                        Some(&destination_path),
-                        ApplicationRuntimeError::LibraryImportFailed,
-                    );
-                }
-            };
-            let Some(track_id) = sustain_domain::TrackId::new(next_track_id) else {
-                let mut cleanup = std::mem::take(&mut state.pending_copied_files);
-                cleanup.push(copy);
-                let _ = rollback_managed_import_files(&library_path, &cleanup, None);
-                let failed_files = state.failed_files + state.pending_tracks.len() + 1;
-                return self.failed_managed_import_result_or_error(
+                return self.finish_cancelled_managed_import(
+                    &batch.library_path,
                     total_files,
-                    state.imported_tracks,
-                    state.duplicate_files,
-                    failed_files,
-                    ApplicationRuntimeError::LibraryStoreFailed,
+                    state,
                 );
-            };
-            next_track_id += 1;
-            state.pending_tracks.push(Track {
-                id: track_id,
-                location: TrackLocation::available(plan.relative_path),
-                metadata,
-                rating,
-                statistics: PlayStatistics::added_at(SystemTime::now()),
-                file_size_bytes: Some(source_size),
-                has_embedded_artwork: Some(has_embedded_artwork),
-                // The first scan after import fingerprints the file and
-                // records its mtime; until then it parses, which is correct
-                // and self-heals (#71).
-                file_modified_at: None,
-            });
-            seen_hashes.insert(original_content_hash.as_str().to_owned());
-            seen_hashes.insert(content_hash.as_str().to_owned());
-            state.pending_copied_files.push(copy);
-            self.report_progress(file_number, total_files);
-            if state.pending_tracks.len() >= MANAGED_IMPORT_COMMIT_CHUNK_SIZE {
-                match self.commit_managed_import_chunk(&library_path, &mut state) {
-                    Ok(()) => {}
-                    Err(ManagedImportCommitError::SaveFailed { failed_tracks }) => {
-                        state.failed_files += failed_tracks;
-                        return self.failed_managed_import_result_or_error(
+            }
+            match batch.import_file(self.metadata_service.as_ref(), source_path) {
+                Err(reason) => state.failures.push(ImportFailure {
+                    path: source_path.clone(),
+                    reason,
+                }),
+                Ok(ManagedFileOutcome::Duplicate) => state.duplicate_files += 1,
+                Ok(ManagedFileOutcome::Copied(copied)) => {
+                    let Some(track_id) = sustain_domain::TrackId::new(next_track_id) else {
+                        state.pending_copied_files.push(copied.copy);
+                        return self.finish_failed_managed_import(
+                            &batch.library_path,
                             total_files,
-                            state.imported_tracks,
-                            state.duplicate_files,
-                            state.failed_files,
+                            state,
                             ApplicationRuntimeError::LibraryStoreFailed,
                         );
-                    }
-                    Err(ManagedImportCommitError::FlushFailed) => {
-                        return Ok(failed_managed_import_result(
-                            total_files,
-                            state.imported_tracks,
-                            state.duplicate_files,
-                            state.failed_files,
-                        ));
+                    };
+                    next_track_id += 1;
+                    let ManagedCopy {
+                        copy,
+                        relative_path,
+                        tags,
+                        size,
+                    } = *copied;
+                    state.pending_tracks.push(Track {
+                        id: track_id,
+                        location: TrackLocation::available(relative_path),
+                        metadata: tags.metadata,
+                        rating: tags.rating,
+                        statistics: PlayStatistics::added_at(SystemTime::now()),
+                        file_size_bytes: Some(size),
+                        has_embedded_artwork: Some(tags.has_embedded_artwork),
+                        // The first scan after import fingerprints the file and
+                        // records its mtime; until then it parses, which is correct
+                        // and self-heals (#71).
+                        file_modified_at: None,
+                    });
+                    state.pending_copied_files.push(copy);
+                    if state.pending_tracks.len() >= MANAGED_IMPORT_COMMIT_CHUNK_SIZE
+                        && let Err(error) =
+                            self.commit_managed_import_chunk(&batch.library_path, &mut state)
+                    {
+                        return stop_after_commit_error(total_files, state, error);
                     }
                 }
             }
+            self.report_progress(index + 1, total_files);
         }
 
         if self.cancellation_requested.load(Ordering::SeqCst) {
-            return self.finish_cancelled_managed_import(&library_path, total_files, state);
+            return self.finish_cancelled_managed_import(&batch.library_path, total_files, state);
         }
-        match self.commit_managed_import_chunk(&library_path, &mut state) {
-            Ok(()) => {}
-            Err(ManagedImportCommitError::SaveFailed { failed_tracks }) => {
-                state.failed_files += failed_tracks;
-                return self.failed_managed_import_result_or_error(
-                    total_files,
-                    state.imported_tracks,
-                    state.duplicate_files,
-                    state.failed_files,
-                    ApplicationRuntimeError::LibraryStoreFailed,
-                );
-            }
-            Err(ManagedImportCommitError::FlushFailed) => {
-                return Ok(failed_managed_import_result(
-                    total_files,
-                    state.imported_tracks,
-                    state.duplicate_files,
-                    state.failed_files,
-                ));
-            }
+        if let Err(error) = self.commit_managed_import_chunk(&batch.library_path, &mut state) {
+            return stop_after_commit_error(total_files, state, error);
         }
-
-        Ok(LibraryImportResult {
-            summary: LibraryImportSummary {
-                discovered_files: total_files,
-                imported_tracks: state.imported_tracks.len(),
-                duplicate_files: state.duplicate_files,
-                failed_files: state.failed_files,
-                cancelled: false,
-                stopped_on_error: false,
-            },
-            tracks: state.imported_tracks,
-        })
+        Ok(managed_import_result(
+            total_files,
+            state,
+            ImportEnd::Completed,
+        ))
     }
 
     fn commit_managed_import_chunk(
@@ -414,11 +243,11 @@ impl LibraryImportContext<'_> {
             .save_tracks(&state.pending_tracks)
             .is_err()
         {
-            let failed_tracks = state.pending_tracks.len();
-            let _ = rollback_managed_import_files(library_path, &state.pending_copied_files, None);
+            state.rolled_back_files += state.pending_tracks.len();
+            let _ = rollback_managed_import_files(library_path, &state.pending_copied_files);
             state.pending_tracks.clear();
             state.pending_copied_files.clear();
-            return Err(ManagedImportCommitError::SaveFailed { failed_tracks });
+            return Err(ManagedImportCommitError::SaveFailed);
         }
 
         let flush_result = self.library_store.flush_durable();
@@ -436,80 +265,30 @@ impl LibraryImportContext<'_> {
         discovered_files: usize,
         mut state: ManagedImportState,
     ) -> ApplicationRuntimeResult<LibraryImportResult> {
-        match self.commit_managed_import_chunk(library_path, &mut state) {
-            Ok(()) => {}
-            Err(ManagedImportCommitError::SaveFailed { failed_tracks }) => {
-                state.failed_files += failed_tracks;
-                return self.failed_managed_import_result_or_error(
-                    discovered_files,
-                    state.imported_tracks,
-                    state.duplicate_files,
-                    state.failed_files,
-                    ApplicationRuntimeError::LibraryStoreFailed,
-                );
-            }
-            Err(ManagedImportCommitError::FlushFailed) => {
-                return Ok(failed_managed_import_result(
-                    discovered_files,
-                    state.imported_tracks,
-                    state.duplicate_files,
-                    state.failed_files,
-                ));
-            }
+        if let Err(error) = self.commit_managed_import_chunk(library_path, &mut state) {
+            return stop_after_commit_error(discovered_files, state, error);
         }
-        Ok(LibraryImportResult {
-            summary: LibraryImportSummary {
-                discovered_files,
-                imported_tracks: state.imported_tracks.len(),
-                duplicate_files: state.duplicate_files,
-                failed_files: state.failed_files,
-                cancelled: true,
-                stopped_on_error: false,
-            },
-            tracks: state.imported_tracks,
-        })
+        Ok(managed_import_result(
+            discovered_files,
+            state,
+            ImportEnd::Cancelled,
+        ))
     }
 
+    /// Stops the import on an error of the library itself, rolling back the
+    /// copies no committed chunk references yet.
     fn finish_failed_managed_import(
         &mut self,
         library_path: &Path,
         discovered_files: usize,
-        state: ManagedImportState,
-        additional_cleanup_path: Option<&Path>,
+        mut state: ManagedImportState,
         error: ApplicationRuntimeError,
     ) -> ApplicationRuntimeResult<LibraryImportResult> {
-        let failed_files = state.failed_files + state.pending_tracks.len();
-        let _ = rollback_managed_import_files(
-            library_path,
-            &state.pending_copied_files,
-            additional_cleanup_path,
-        );
-        self.failed_managed_import_result_or_error(
-            discovered_files,
-            state.imported_tracks,
-            state.duplicate_files,
-            failed_files,
-            error,
-        )
-    }
-
-    fn failed_managed_import_result_or_error(
-        &self,
-        discovered_files: usize,
-        imported_tracks: Vec<Track>,
-        duplicate_files: usize,
-        failed_files: usize,
-        error: ApplicationRuntimeError,
-    ) -> ApplicationRuntimeResult<LibraryImportResult> {
-        if imported_tracks.is_empty() && duplicate_files == 0 {
-            return Err(error);
-        }
-        Ok(failed_managed_import_result(
-            discovered_files,
-            imported_tracks,
-            duplicate_files,
-            failed_files,
-        ))
+        state.rolled_back_files += state.pending_copied_files.len();
+        let _ = rollback_managed_import_files(library_path, &state.pending_copied_files);
+        state.pending_tracks.clear();
+        state.pending_copied_files.clear();
+        stopped_managed_import_or_error(discovered_files, state, error)
     }
 
     fn report_progress(&mut self, processed_files: usize, total_files: usize) {
@@ -519,6 +298,9 @@ impl LibraryImportContext<'_> {
         });
     }
 
+    /// References each discovered file where it lies. A file that cannot be
+    /// referenced is recorded and skipped (#298); the tracks are saved in
+    /// one write at the end, and a refused write fails the whole import.
     fn add_referenced_external_library_items(
         &mut self,
         paths: Vec<PathBuf>,
@@ -531,10 +313,13 @@ impl LibraryImportContext<'_> {
         let canonical_library_path = fs::canonicalize(&library_path)
             .map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
 
-        let discovered_files =
-            collect_supported_audio_files(&paths, self.cancellation_requested.as_ref())?;
+        let DiscoveredFiles {
+            files,
+            mut failures,
+        } = collect_supported_audio_files(&paths, self.cancellation_requested.as_ref());
+        let total_files = files.len();
         if self.cancellation_requested.load(Ordering::SeqCst) {
-            return Ok(cancelled_import_result(discovered_files.len()));
+            return Ok(cancelled_import_result(total_files));
         }
         let mut seen_locations = self
             .existing_tracks
@@ -545,75 +330,306 @@ impl LibraryImportContext<'_> {
         let mut next_track_id = library_scan::next_track_id(&self.existing_tracks)?;
         let mut tracks = Vec::new();
         let mut duplicate_files = 0;
-        let total_files = discovered_files.len();
 
-        for (index, source_path) in discovered_files.iter().enumerate() {
-            let file_number = index + 1;
+        for (index, source_path) in files.iter().enumerate() {
             if self.cancellation_requested.load(Ordering::SeqCst) {
-                return Ok(cancelled_import_result(discovered_files.len()));
+                return Ok(cancelled_import_result(total_files));
             }
-            let source_path = fs::canonicalize(source_path)
-                .map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
-            let relative_path =
-                reference_relative_path_for_source(&source_path, &canonical_library_path)?;
-            if !seen_locations.insert(relative_path.clone()) {
-                duplicate_files += 1;
-                self.report_progress(file_number, total_files);
-                continue;
+            match self.reference_file(source_path, &canonical_library_path, &mut seen_locations) {
+                Err(reason) => failures.push(ImportFailure {
+                    path: source_path.clone(),
+                    reason,
+                }),
+                Ok(None) => duplicate_files += 1,
+                Ok(Some((relative_path, tags, file_size_bytes))) => {
+                    let Some(track_id) = sustain_domain::TrackId::new(next_track_id) else {
+                        return Err(ApplicationRuntimeError::LibraryStoreFailed);
+                    };
+                    next_track_id += 1;
+                    tracks.push(Track {
+                        id: track_id,
+                        location: TrackLocation::available(relative_path),
+                        metadata: tags.metadata,
+                        rating: tags.rating,
+                        statistics: PlayStatistics::added_at(SystemTime::now()),
+                        file_size_bytes,
+                        has_embedded_artwork: Some(tags.has_embedded_artwork),
+                        // Recorded by the first post-import scan; see above (#71).
+                        file_modified_at: None,
+                    });
+                }
             }
-
-            let InitialTags {
-                metadata,
-                rating,
-                has_embedded_artwork,
-            } = self
-                .metadata_service
-                .read_initial_tags(&source_path)
-                .map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
-            let file_size_bytes = fs::metadata(&source_path)
-                .map(|metadata| metadata.len())
-                .ok();
-
-            let Some(track_id) = sustain_domain::TrackId::new(next_track_id) else {
-                return Err(ApplicationRuntimeError::LibraryStoreFailed);
-            };
-            next_track_id += 1;
-            tracks.push(Track {
-                id: track_id,
-                location: TrackLocation::available(relative_path),
-                metadata,
-                rating,
-                statistics: PlayStatistics::added_at(SystemTime::now()),
-                file_size_bytes,
-                has_embedded_artwork: Some(has_embedded_artwork),
-                // Recorded by the first post-import scan; see above (#71).
-                file_modified_at: None,
-            });
-            self.report_progress(file_number, total_files);
+            self.report_progress(index + 1, total_files);
         }
 
         if self.library_store.save_tracks(&tracks).is_err() {
             return Err(ApplicationRuntimeError::LibraryStoreFailed);
         }
 
-        let imported_tracks = tracks.len();
         Ok(LibraryImportResult {
-            tracks,
             summary: LibraryImportSummary {
-                discovered_files: discovered_files.len(),
-                imported_tracks,
+                discovered_files: total_files,
+                imported_tracks: tracks.len(),
                 duplicate_files,
-                failed_files: 0,
+                failed_files: failures.len(),
                 cancelled: false,
                 stopped_on_error: false,
             },
+            tracks,
+            failures,
         })
+    }
+
+    /// The library location, tags and size of one file to reference in
+    /// place, or `None` when the library already references it.
+    fn reference_file(
+        &self,
+        source_path: &Path,
+        canonical_library_path: &Path,
+        seen_locations: &mut BTreeSet<sustain_domain::TrackRelativePath>,
+    ) -> Result<
+        Option<(sustain_domain::TrackRelativePath, InitialTags, Option<u64>)>,
+        ImportFailureReason,
+    > {
+        let source_path =
+            fs::canonicalize(source_path).map_err(|_| ImportFailureReason::Unreadable)?;
+        let relative_path =
+            reference_relative_path_for_source(&source_path, canonical_library_path)
+                .ok_or(ImportFailureReason::OutsideLibraryFolder)?;
+        if !seen_locations.insert(relative_path.clone()) {
+            return Ok(None);
+        }
+        let tags = self
+            .metadata_service
+            .read_initial_tags(&source_path)
+            .map_err(|_| ImportFailureReason::UnreadableTags)?;
+        let file_size_bytes = fs::metadata(&source_path)
+            .map(|metadata| metadata.len())
+            .ok();
+        Ok(Some((relative_path, tags, file_size_bytes)))
     }
 }
 
 enum ManagedImportCommitError {
-    SaveFailed { failed_tracks: usize },
+    SaveFailed,
     FlushFailed,
+}
+
+/// Ends an import whose chunk commit failed. A refused save rolled its
+/// chunk back and stops the import; a failed flush keeps the saved tracks
+/// and reports the import as stopped.
+fn stop_after_commit_error(
+    discovered_files: usize,
+    state: ManagedImportState,
+    error: ManagedImportCommitError,
+) -> ApplicationRuntimeResult<LibraryImportResult> {
+    match error {
+        ManagedImportCommitError::SaveFailed => stopped_managed_import_or_error(
+            discovered_files,
+            state,
+            ApplicationRuntimeError::LibraryStoreFailed,
+        ),
+        ManagedImportCommitError::FlushFailed => Ok(managed_import_result(
+            discovered_files,
+            state,
+            ImportEnd::StoppedOnError,
+        )),
+    }
+}
+
+/// A stopped import that has something to report (committed tracks,
+/// skipped duplicates, files it left out) is reported as stopped; one that
+/// has nothing is the error itself.
+fn stopped_managed_import_or_error(
+    discovered_files: usize,
+    state: ManagedImportState,
+    error: ApplicationRuntimeError,
+) -> ApplicationRuntimeResult<LibraryImportResult> {
+    if state.imported_tracks.is_empty() && state.duplicate_files == 0 && state.failures.is_empty() {
+        return Err(error);
+    }
+    Ok(managed_import_result(
+        discovered_files,
+        state,
+        ImportEnd::StoppedOnError,
+    ))
+}
+
+fn managed_import_result(
+    discovered_files: usize,
+    state: ManagedImportState,
+    end: ImportEnd,
+) -> LibraryImportResult {
+    LibraryImportResult {
+        summary: LibraryImportSummary {
+            discovered_files,
+            imported_tracks: state.imported_tracks.len(),
+            duplicate_files: state.duplicate_files,
+            failed_files: state.failed_files(),
+            cancelled: end == ImportEnd::Cancelled,
+            stopped_on_error: end == ImportEnd::StoppedOnError,
+        },
+        tracks: state.imported_tracks,
+        failures: state.failures,
+    }
+}
+
+/// What became of one file a managed import met.
+enum ManagedFileOutcome {
+    /// The library already holds it.
+    Duplicate,
+    /// It was copied into the library and awaits its track row.
+    Copied(Box<ManagedCopy>),
+}
+
+struct ManagedCopy {
+    copy: VerifiedFileCopy,
+    relative_path: sustain_domain::TrackRelativePath,
+    tags: InitialTags,
+    size: u64,
+}
+
+/// What a managed import knows across its files: where the library is,
+/// which paths and contents it already holds, and those this batch added.
+struct ManagedImportBatch {
+    library_path: PathBuf,
+    canonical_library_path: Option<PathBuf>,
+    planner: ManagedTrackPathPlanner,
+    occupied_paths: BTreeSet<sustain_domain::TrackRelativePath>,
+    // Within-batch dedup only: catch two byte-identical source files
+    // dropped in the same import. Cross-existing dedup is decided
+    // against ground truth on disk by `LibraryContentIndex`, never
+    // against the stored content hash, which is import-time only and
+    // may be stale or absent (see #72).
+    seen_hashes: HashSet<String>,
+    // Decide existing-library duplicates against a size-bucketed,
+    // hash-cached index built once from disk. The per-file linear scan
+    // this replaces was O(new × existing) and re-hashed existing files on
+    // every size collision, which dominated import time on a large
+    // library (#146).
+    content_index: LibraryContentIndex,
+}
+
+impl ManagedImportBatch {
+    fn new(existing_tracks: &[Track], library_path: PathBuf) -> Self {
+        Self {
+            canonical_library_path: fs::canonicalize(&library_path).ok(),
+            planner: ManagedTrackPathPlanner::default(),
+            occupied_paths: existing_tracks
+                .iter()
+                .map(|track| track.location.relative_path.clone())
+                .collect(),
+            seen_hashes: HashSet::new(),
+            content_index: LibraryContentIndex::build(existing_tracks, &library_path),
+            library_path,
+        }
+    }
+
+    fn is_duplicate(&mut self, size: u64, content_hash: &TrackContentHash) -> bool {
+        self.seen_hashes.contains(content_hash.as_str())
+            || self.content_index.contains_matching(size, content_hash)
+    }
+
+    /// Copies one file into the library, or says why it cannot be.
+    fn import_file(
+        &mut self,
+        metadata_service: &dyn sustain_metadata::MetadataService,
+        source_path: &Path,
+    ) -> Result<ManagedFileOutcome, ImportFailureReason> {
+        let source_path =
+            fs::canonicalize(source_path).map_err(|_| ImportFailureReason::Unreadable)?;
+        if let Some(relative_path) = source_relative_path_inside_library(
+            &source_path,
+            self.canonical_library_path.as_deref(),
+        ) && self.occupied_paths.contains(&relative_path)
+        {
+            return Ok(ManagedFileOutcome::Duplicate);
+        }
+
+        // Hash the source while copying it once into an unpublished
+        // staging file. The staged descriptor is then rewound and hashed
+        // independently before publication, retaining the read-back
+        // integrity assertion without a second source read (#146).
+        let mut staging =
+            copy_file_to_staging_verified(&source_path, &self.library_path).map_err(|error| {
+                match error {
+                    VerifiedFileCopyError::SourceUnavailable
+                    | VerifiedFileCopyError::SourceIsNotFile => ImportFailureReason::Unreadable,
+                    _ => ImportFailureReason::CopyFailed,
+                }
+            })?;
+        let original_content_hash = staging.content_hash.clone();
+        if self.is_duplicate(staging.bytes_copied, &original_content_hash) {
+            remove_staged_file(staging);
+            return Ok(ManagedFileOutcome::Duplicate);
+        }
+
+        let initial_read = match metadata_service.read_initial_tags_with_diagnostics(&source_path) {
+            Ok(read) => read,
+            Err(_) => {
+                remove_staged_file(staging);
+                return Err(ImportFailureReason::UnreadableTags);
+            }
+        };
+        let mut tags = initial_read.tags;
+        let repaired_staging = initial_read.repair.is_some_and(|repair| {
+            matches!(
+                metadata_service.repair_malformed_tags(staging.path(), repair),
+                Ok(true)
+            )
+        });
+        if repaired_staging {
+            if refresh_verified_staging(&mut staging).is_err() {
+                remove_staged_file(staging);
+                return Err(ImportFailureReason::CopyFailed);
+            }
+            if let Ok(repaired_tags) = metadata_service.read_initial_tags(staging.path()) {
+                tags = repaired_tags;
+            }
+            if self.is_duplicate(staging.bytes_copied, &staging.content_hash) {
+                remove_staged_file(staging);
+                return Ok(ManagedFileOutcome::Duplicate);
+            }
+        }
+        let size = staging.bytes_copied;
+        let content_hash = staging.content_hash.clone();
+
+        let plan = match plan_destination(
+            &self.planner,
+            &mut self.occupied_paths,
+            &self.library_path,
+            &source_path,
+            &tags.metadata,
+            size,
+            &content_hash,
+        ) {
+            Some(PlannedManagedDestination::Fresh(plan)) => plan,
+            Some(PlannedManagedDestination::AlreadyPresent) => {
+                remove_staged_file(staging);
+                return Ok(ManagedFileOutcome::Duplicate);
+            }
+            None => {
+                remove_staged_file(staging);
+                return Err(ImportFailureReason::NoDestination);
+            }
+        };
+        let destination_path = self.library_path.join(plan.relative_path.as_path());
+        let Ok(copy) = publish_staged_file(staging, &destination_path) else {
+            // Publishing removed its staging and any link it made; only the
+            // folders it created for the destination may be left.
+            prune_empty_ancestor_directories_for_sources(&self.library_path, &[destination_path]);
+            return Err(ImportFailureReason::CopyFailed);
+        };
+        self.seen_hashes
+            .insert(original_content_hash.as_str().to_owned());
+        self.seen_hashes.insert(content_hash.as_str().to_owned());
+        Ok(ManagedFileOutcome::Copied(Box::new(ManagedCopy {
+            copy,
+            relative_path: plan.relative_path,
+            tags,
+            size,
+        })))
+    }
 }
 
 /// Disk-truth duplicate index for one managed-import batch.
@@ -686,60 +702,78 @@ impl LibraryContentIndex {
 fn rollback_managed_import_files(
     library_path: &Path,
     copied_files: &[VerifiedFileCopy],
-    additional_cleanup_path: Option<&Path>,
 ) -> Result<(), ()> {
     let remove_result = remove_copied_files(copied_files);
-    let mut cleanup_paths = copied_files
+    let cleanup_paths = copied_files
         .iter()
         .map(|copy| copy.destination_path.clone())
         .collect::<Vec<_>>();
-    if let Some(path) = additional_cleanup_path {
-        cleanup_paths.push(path.to_path_buf());
-    }
     prune_empty_ancestor_directories_for_sources(library_path, &cleanup_paths);
     remove_result
 }
 
-fn collect_supported_audio_files(
-    paths: &[PathBuf],
-    cancellation: &AtomicBool,
-) -> ApplicationRuntimeResult<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    for path in paths {
-        if cancellation.load(Ordering::SeqCst) {
-            return Ok(files);
-        }
-        collect_supported_audio_path(path, &mut files, cancellation)?;
-    }
-    files.sort();
-    files.dedup();
-    Ok(files)
+/// The supported audio files under the paths an import was given, and the
+/// paths it could not look into.
+struct DiscoveredFiles {
+    files: Vec<PathBuf>,
+    failures: Vec<ImportFailure>,
 }
 
+fn collect_supported_audio_files(paths: &[PathBuf], cancellation: &AtomicBool) -> DiscoveredFiles {
+    let mut discovered = DiscoveredFiles {
+        files: Vec::new(),
+        failures: Vec::new(),
+    };
+    for path in paths {
+        if cancellation.load(Ordering::SeqCst) {
+            break;
+        }
+        collect_supported_audio_path(path, &mut discovered, cancellation);
+    }
+    discovered.files.sort();
+    discovered.files.dedup();
+    discovered
+}
+
+/// Adds the supported audio files at or under `path`. A path that cannot
+/// be read is recorded and the walk carries on with its siblings.
 fn collect_supported_audio_path(
     path: &Path,
-    files: &mut Vec<PathBuf>,
+    discovered: &mut DiscoveredFiles,
     cancellation: &AtomicBool,
-) -> ApplicationRuntimeResult<()> {
+) {
     if cancellation.load(Ordering::SeqCst) {
-        return Ok(());
+        return;
     }
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
+    let unreadable = |discovered: &mut DiscoveredFiles| {
+        discovered.failures.push(ImportFailure {
+            path: path.to_path_buf(),
+            reason: ImportFailureReason::Unreadable,
+        });
+    };
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        unreadable(discovered);
+        return;
+    };
     if metadata.file_type().is_dir() {
-        let entries =
-            fs::read_dir(path).map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
+        let Ok(entries) = fs::read_dir(path) else {
+            unreadable(discovered);
+            return;
+        };
         for entry in entries {
             if cancellation.load(Ordering::SeqCst) {
-                return Ok(());
+                return;
             }
-            let entry = entry.map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
-            collect_supported_audio_path(&entry.path(), files, cancellation)?;
+            match entry {
+                Ok(entry) => collect_supported_audio_path(&entry.path(), discovered, cancellation),
+                // An entry the folder listing itself failed on has no path
+                // of its own: the folder is what could not be read in full.
+                Err(_) => unreadable(discovered),
+            }
         }
     } else if metadata.file_type().is_file() && audio_format_from_path(path).is_ok() {
-        files.push(path.to_path_buf());
+        discovered.files.push(path.to_path_buf());
     }
-    Ok(())
 }
 
 fn cancelled_import_result(discovered_files: usize) -> LibraryImportResult {
@@ -747,31 +781,10 @@ fn cancelled_import_result(discovered_files: usize) -> LibraryImportResult {
         tracks: Vec::new(),
         summary: LibraryImportSummary {
             discovered_files,
-            imported_tracks: 0,
-            duplicate_files: 0,
-            failed_files: 0,
             cancelled: true,
-            stopped_on_error: false,
+            ..LibraryImportSummary::default()
         },
-    }
-}
-
-fn failed_managed_import_result(
-    discovered_files: usize,
-    imported_tracks: Vec<Track>,
-    duplicate_files: usize,
-    failed_files: usize,
-) -> LibraryImportResult {
-    LibraryImportResult {
-        summary: LibraryImportSummary {
-            discovered_files,
-            imported_tracks: imported_tracks.len(),
-            duplicate_files,
-            failed_files,
-            cancelled: false,
-            stopped_on_error: true,
-        },
-        tracks: imported_tracks,
+        failures: Vec::new(),
     }
 }
 
@@ -793,15 +806,15 @@ fn plan_destination(
     metadata: &sustain_domain::TrackMetadata,
     source_size: u64,
     content_hash: &TrackContentHash,
-) -> ApplicationRuntimeResult<PlannedManagedDestination> {
+) -> Option<PlannedManagedDestination> {
     let candidates = planner
         .candidates(ManagedTrackPathInput {
             metadata,
             source_path,
         })
-        .map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
+        .ok()?;
     for candidate in candidates {
-        let plan = candidate.map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
+        let plan = candidate.ok()?;
         if occupied_paths.contains(&plan.relative_path) {
             continue;
         }
@@ -819,15 +832,15 @@ fn plan_destination(
             // truth: if it matches the source byte for byte, the track
             // is already in the library, so skip it.
             if destination_holds_identical_content(&candidate, source_size, content_hash) {
-                return Ok(PlannedManagedDestination::AlreadyPresent);
+                return Some(PlannedManagedDestination::AlreadyPresent);
             }
             continue;
         }
         occupied_paths.insert(plan.relative_path.clone());
-        return Ok(PlannedManagedDestination::Fresh(plan));
+        return Some(PlannedManagedDestination::Fresh(plan));
     }
 
-    Err(ApplicationRuntimeError::LibraryImportFailed)
+    None
 }
 
 fn destination_holds_identical_content(
@@ -847,15 +860,9 @@ fn destination_holds_identical_content(
 fn reference_relative_path_for_source(
     source_path: &Path,
     library_path: &Path,
-) -> ApplicationRuntimeResult<sustain_domain::TrackRelativePath> {
-    if let Ok(relative_path) = source_path.strip_prefix(library_path)
-        && let Some(relative_path) =
-            sustain_domain::TrackRelativePath::new(relative_path.to_path_buf())
-    {
-        return Ok(relative_path);
-    }
-
-    Err(ApplicationRuntimeError::LibraryImportFailed)
+) -> Option<sustain_domain::TrackRelativePath> {
+    let relative_path = source_path.strip_prefix(library_path).ok()?;
+    sustain_domain::TrackRelativePath::new(relative_path.to_path_buf())
 }
 
 fn source_relative_path_inside_library(
@@ -881,30 +888,22 @@ mod tests {
     use crate::managed_library::file_ops::copy_file_verified;
 
     #[test]
-    fn managed_import_rollback_prunes_copied_and_unpublished_destination_folders() {
+    fn managed_import_rollback_removes_copies_and_prunes_their_folders() {
         let root = unique_test_directory();
         let copied = root.join("Artist/Album/song.flac");
-        let unpublished = root.join("Other/Album/song.flac");
         let source = root.join("source.flac");
         fs::create_dir_all(copied.parent().expect("copied parent")).expect("create copied parent");
-        fs::create_dir_all(unpublished.parent().expect("unpublished parent"))
-            .expect("create unpublished parent");
         fs::write(&source, b"audio").expect("write source");
         let hash = hash_file_content(&source).expect("hash source");
         let copied_file = copy_file_verified(&source, &copied, &hash).expect("copy file");
 
         assert_eq!(
-            rollback_managed_import_files(
-                &root,
-                std::slice::from_ref(&copied_file),
-                Some(&unpublished),
-            ),
+            rollback_managed_import_files(&root, std::slice::from_ref(&copied_file)),
             Ok(())
         );
 
         assert!(root.exists());
         assert!(!root.join("Artist").exists());
-        assert!(!root.join("Other").exists());
 
         fs::remove_dir_all(root).expect("remove test root");
     }

@@ -69,14 +69,21 @@ Behavior follows the active library mode:
 - **Keep my library organized** — files are copied into the managed
   `Artist/Album/NN Title.ext` layout, deduplicated by content hash so a
   re-drop of the same audio isn't ingested twice.
-- **Don't touch my files** — files are indexed in place. The drop is
-  refused for files that live outside the configured library folder,
-  since reference mode never moves or copies.
+- **Don't touch my files** — files are indexed in place. A file that
+  lives outside the configured library folder is left out, since
+  reference mode never moves or copies.
 
 Drops while another library task (scan, import, or organize) is running
 are rejected by the runtime rather than racing. Managed copies report
 completed/total progress in the status bar. Cancelling keeps files that have
 already finished copying and records those completed tracks in the library.
+
+An import skips a file it cannot bring in (unreadable, tags it cannot read,
+a copy that fails, outside the library folder in reference mode) and carries
+on with the rest; only a failure of the library itself, such as its database
+refusing a write, stops it. At the end, the status bar counts the files left
+out, and a window lists each one with its folder and the reason, so they can
+be found and fixed. *Sustain-native*
 
 ### Hard-link move primitive — *Sustain-native*
 Managed-mode organization uses a same-filesystem metadata move: retain an

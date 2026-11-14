@@ -154,10 +154,10 @@ pub use notifications::{
     EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_QUEUE_HARD_CAP, NOTIFICATION_TRANSITION,
     Notification, NotificationCategory, NotificationCenter, NotificationId, NotificationKind,
     NotificationSeverity, analysis_background_outcome_text, analysis_background_running_text,
-    library_consolidation_outcome_text, library_consolidation_running_text,
-    library_import_outcome_text, library_import_progress_text, library_import_running_text,
-    library_path_change_outcome_text, library_scan_outcome_text, library_scan_running_text,
-    runtime_error_text, waveform_cache_unavailable_text,
+    import_failure_reason_text, library_consolidation_outcome_text,
+    library_consolidation_running_text, library_import_outcome_text, library_import_progress_text,
+    library_import_running_text, library_path_change_outcome_text, library_scan_outcome_text,
+    library_scan_running_text, runtime_error_text, waveform_cache_unavailable_text,
 };
 
 pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;
@@ -329,6 +329,32 @@ pub struct LibraryScanResult {
 pub struct LibraryImportResult {
     pub tracks: Vec<Track>,
     pub summary: LibraryImportSummary,
+    /// The files the import left out, in the order it met them. Each was
+    /// skipped and the import carried on (#298).
+    pub failures: Vec<ImportFailure>,
+}
+
+/// A file, or a folder, that an import could not bring into the library.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportFailure {
+    pub path: PathBuf,
+    pub reason: ImportFailureReason,
+}
+
+/// Why an import left a file out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImportFailureReason {
+    /// The file, or the folder holding it, could not be read.
+    Unreadable,
+    /// The file's tags could not be read.
+    UnreadableTags,
+    /// The file could not be copied into the library folder.
+    CopyFailed,
+    /// No free file name could be planned for it in the library folder.
+    NoDestination,
+    /// The file lies outside the library folder, which a library that
+    /// references files in place cannot point at.
+    OutsideLibraryFolder,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

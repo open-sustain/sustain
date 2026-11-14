@@ -21,11 +21,16 @@ pub(crate) type LibraryImportRequestedCallback =
     Rc<dyn Fn(Vec<PathBuf>) -> Result<(), ApplicationRuntimeError>>;
 pub(crate) type LibraryImportCompletedCallback = Rc<dyn Fn(&[sustain_app_runtime::Track])>;
 
+/// Starts an import of the dropped paths. When it is done, the views are
+/// told about the new tracks, and a window over `parent` lists any file
+/// the import left out.
 pub(crate) fn library_import_requested_callback(
     runtime: &SharedRuntime,
+    parent: &gtk::Window,
     import_completed: LibraryImportCompletedCallback,
 ) -> LibraryImportRequestedCallback {
     let runtime = runtime.clone();
+    let parent = parent.downgrade();
 
     Rc::new(move |paths| {
         let task = {
@@ -41,7 +46,12 @@ pub(crate) fn library_import_requested_callback(
             let _sent = tx.send(LibraryImportWorkerEvent::Finished(outcome));
         });
 
-        poll_library_import(rx, runtime.clone(), import_completed.clone());
+        poll_library_import(
+            rx,
+            runtime.clone(),
+            parent.clone(),
+            import_completed.clone(),
+        );
         Ok(())
     })
 }
@@ -82,6 +92,7 @@ const LIBRARY_DROP_ACTIVE_CLASS: &str = "library-drop-active";
 fn poll_library_import(
     rx: mpsc::Receiver<LibraryImportWorkerEvent>,
     runtime: SharedRuntime,
+    parent: glib::WeakRef<gtk::Window>,
     import_completed: LibraryImportCompletedCallback,
 ) {
     glib::timeout_add_local(Duration::from_millis(100), move || {
@@ -109,10 +120,16 @@ fn poll_library_import(
                 .update_library_import_progress(progress.processed_files, progress.total_files);
         }
         match finished {
-            Some(Ok(result)) => {
+            Some(Ok(mut result)) => {
+                let failures = std::mem::take(&mut result.failures);
                 let imported_tracks = result.tracks.clone();
                 runtime.borrow_mut().apply_library_import_result(result);
                 import_completed(&imported_tracks);
+                if !failures.is_empty()
+                    && let Some(parent) = parent.upgrade()
+                {
+                    crate::import_failures_dialog::show_import_failures(&parent, failures);
+                }
                 glib::ControlFlow::Break
             }
             Some(Err(error)) => {

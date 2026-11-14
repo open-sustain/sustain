@@ -303,7 +303,8 @@ impl NotificationCenter {
 // case-by-case knowledge of what it means.
 
 use crate::{
-    ApplicationRuntimeError, LibraryConsolidationSummary, LibraryImportSummary, LibraryScanSummary,
+    ApplicationRuntimeError, ImportFailureReason, LibraryConsolidationSummary,
+    LibraryImportSummary, LibraryScanSummary,
 };
 
 pub fn library_scan_running_text() -> String {
@@ -512,12 +513,27 @@ fn library_import_change_clauses(summary: &LibraryImportSummary) -> Option<Strin
     }
     if summary.failed_files > 0 {
         clauses.push(format!(
-            "{} {} failed",
+            "{} {} could not be imported",
             summary.failed_files,
             pluralize(summary.failed_files, "file", "files")
         ));
     }
     (!clauses.is_empty()).then(|| clauses.join(", "))
+}
+
+/// Why an import left a file out, as the end-of-import list shows it.
+pub fn import_failure_reason_text(reason: ImportFailureReason) -> &'static str {
+    match reason {
+        ImportFailureReason::Unreadable => "The file could not be read.",
+        ImportFailureReason::UnreadableTags => "Its tags could not be read.",
+        ImportFailureReason::CopyFailed => "It could not be copied into the library folder.",
+        ImportFailureReason::NoDestination => {
+            "No free file name was left for it in the library folder."
+        }
+        ImportFailureReason::OutsideLibraryFolder => {
+            "It is outside the library folder, and the library keeps files where they are."
+        }
+    }
 }
 
 pub fn library_consolidation_outcome_text(summary: &LibraryConsolidationSummary) -> String {

@@ -1555,13 +1555,15 @@ fn unmanaged_external_import_indexes_library_files_in_place() {
 }
 
 #[test]
-fn unmanaged_external_import_rejects_files_outside_library_path() {
+fn unmanaged_external_import_skips_files_outside_library_path_and_reports_them() {
     let library_root = unique_test_directory();
     let external_root = unique_test_directory();
     std::fs::create_dir_all(&library_root).expect("create library root");
     std::fs::create_dir_all(&external_root).expect("create external root");
-    let source_path = external_root.join("source.flac");
-    std::fs::write(&source_path, b"audio bytes").expect("write source");
+    let outside_path = external_root.join("outside.flac");
+    let inside_path = library_root.join("inside.flac");
+    std::fs::write(&outside_path, b"outside bytes").expect("write outside source");
+    std::fs::write(&inside_path, b"inside bytes").expect("write inside source");
     let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(library_root.clone())),
@@ -1570,17 +1572,113 @@ fn unmanaged_external_import_rejects_files_outside_library_path() {
     .with_library_services(store.clone(), Arc::new(TestMetadataService))
     .expect("library services initialize");
 
+    let task = runtime
+        .prepare_library_import(vec![outside_path.clone(), inside_path])
+        .expect("import starts");
+    let result = super::run_library_import_task(task).expect("the import completes");
+
     assert_eq!(
-        runtime.handle_command(ApplicationCommand::AddExternalLibraryItems {
-            paths: vec![source_path]
-        }),
-        Err(ApplicationRuntimeError::LibraryImportFailed)
+        result.failures,
+        vec![super::ImportFailure {
+            path: outside_path,
+            reason: super::ImportFailureReason::OutsideLibraryFolder,
+        }]
     );
-    assert_eq!(runtime.library_tracks(), &[]);
-    assert_eq!(store.tracks(), Ok(Vec::new()));
+    assert_eq!(result.summary.imported_tracks, 1);
+    assert_eq!(result.summary.failed_files, 1);
+    assert!(!result.summary.stopped_on_error);
+    assert_eq!(
+        result.tracks[0].location.relative_path.as_path(),
+        std::path::Path::new("inside.flac")
+    );
+    assert_eq!(store.tracks().expect("store tracks"), result.tracks);
 
     std::fs::remove_dir_all(library_root).expect("remove library root");
     std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn managed_import_skips_unreadable_files_and_imports_the_rest() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let first = external_root.join("first.flac");
+    let broken = external_root.join("broken.flac");
+    let last = external_root.join("last.flac");
+    let vanished = external_root.join("vanished.flac");
+    std::fs::write(&first, b"first bytes").expect("write first source");
+    std::fs::write(&broken, b"broken bytes").expect("write broken source");
+    std::fs::write(&last, b"last bytes").expect("write last source");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(
+                store.clone(),
+                Arc::new(UnreadableTagsMetadataService {
+                    unreadable_stem: "broken",
+                }),
+            )
+            .expect("library services initialize");
+
+    let task = runtime
+        .prepare_library_import(vec![external_root.clone(), vanished.clone()])
+        .expect("import starts");
+    let result = super::run_library_import_task(task).expect("the import completes");
+
+    assert_eq!(
+        result.failures,
+        vec![
+            super::ImportFailure {
+                path: vanished,
+                reason: super::ImportFailureReason::Unreadable,
+            },
+            super::ImportFailure {
+                path: broken,
+                reason: super::ImportFailureReason::UnreadableTags,
+            },
+        ]
+    );
+    assert_eq!(
+        result.summary,
+        super::LibraryImportSummary {
+            discovered_files: 3,
+            imported_tracks: 2,
+            duplicate_files: 0,
+            failed_files: 2,
+            cancelled: false,
+            stopped_on_error: false,
+        }
+    );
+    let mut titles = result
+        .tracks
+        .iter()
+        .filter_map(|track| track.metadata.title.clone())
+        .collect::<Vec<_>>();
+    titles.sort();
+    assert_eq!(titles, ["first", "last"]);
+    assert_eq!(store.tracks().expect("store tracks"), result.tracks);
+    // The skipped file left nothing behind in the library folder.
+    let mut library_files = Vec::new();
+    collect_files(&library_root, &mut library_files);
+    assert_eq!(library_files.len(), 2, "{library_files:?}");
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+fn collect_files(directory: &Path, files: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(directory).expect("read test directory") {
+        let path = entry.expect("test directory entry").path();
+        if path.is_dir() {
+            collect_files(&path, files);
+        } else {
+            files.push(path);
+        }
+    }
 }
 
 #[test]
@@ -5358,6 +5456,42 @@ impl MetadataService for TestMetadataService {
             rating: Rating::new(3).expect("valid test rating"),
             has_embedded_artwork: false,
         })
+    }
+
+    fn write_metadata(&self, _path: &Path, _change: MetadataChange) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn write_rating(&self, _path: &Path, _rating: Rating) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        Ok(())
+    }
+}
+
+/// Reads every file's tags as titled by its file stem, except the files
+/// named `unreadable_stem`, whose tags cannot be read.
+#[derive(Debug)]
+struct UnreadableTagsMetadataService {
+    unreadable_stem: &'static str,
+}
+
+impl MetadataService for UnreadableTagsMetadataService {
+    fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        if stem == self.unreadable_stem {
+            return Err(MetadataError::ReadFailed);
+        }
+        Ok(initial_tags_with_title(stem))
     }
 
     fn write_metadata(&self, _path: &Path, _change: MetadataChange) -> MetadataResult<()> {

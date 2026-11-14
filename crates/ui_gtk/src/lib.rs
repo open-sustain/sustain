@@ -39,6 +39,7 @@ mod duplicate_consolidation;
 mod duplicates;
 mod flexible_width;
 mod frame_profile;
+mod import_failures_dialog;
 mod leading_icon;
 mod library_consolidation;
 mod library_import;

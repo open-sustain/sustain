@@ -842,7 +842,8 @@ pub(crate) fn build_main_window(
         &current_search_text,
     );
     install_cd_import_requested(&cd_import_panel, &runtime, import_completed.clone());
-    let import_requested = library_import_requested_callback(&runtime, import_completed);
+    let import_requested =
+        library_import_requested_callback(&runtime, window.upcast_ref(), import_completed);
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
     // Re-applies the Views toggles to the live UI the instant they
     // change: the sidebar's Duplicates/Statistics rows.

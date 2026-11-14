@@ -137,7 +137,7 @@ fn library_import_outcome_lists_added_duplicates_and_failures() {
 
     assert_eq!(
         library_import_outcome_text(&summary),
-        "2 tracks added, 1 duplicate file skipped, 3 files failed."
+        "2 tracks added, 1 duplicate file skipped, 3 files could not be imported."
     );
 }
 
@@ -153,7 +153,7 @@ fn library_import_partial_error_reports_stopped_state() {
 
     assert_eq!(
         library_import_outcome_text(&summary),
-        "Import stopped after an error: 32 tracks added, 1 file failed."
+        "Import stopped after an error: 32 tracks added, 1 file could not be imported."
     );
 }
 
