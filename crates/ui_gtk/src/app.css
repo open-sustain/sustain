@@ -1043,7 +1043,9 @@ columnview.track-table listview row:selected .track-table-status-missing {
 
 /* The checklists are list views, so only their visible rows exist. Strip
    Adwaita's list chrome, its view colours included, so they read as plain
-   check rows on the card, 2px apart. */
+   check rows on the card, 2px apart. Geometry is set once, on the plain
+   selectors: the state selectors below outrank them, so padding set
+   there would resize the row under the cursor (#304). */
 listview.device-sync-checklist,
 listview.device-sync-checklist > row,
 listview.device-sync-checklist > row:hover,
@@ -1054,12 +1056,15 @@ listview.device-sync-checklist > row:focus {
     background-image: none;
     border: none;
     color: inherit;
-    min-height: 0;
+}
+
+listview.device-sync-checklist {
     padding: 0;
 }
 
 listview.device-sync-checklist > row {
-    padding-bottom: 2px;
+    min-height: 0;
+    padding: 0 0 2px 0;
 }
 
 /* --- CD import page (#25). All colours are theme-derived so the page
