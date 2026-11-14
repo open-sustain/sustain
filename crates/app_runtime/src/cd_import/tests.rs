@@ -561,7 +561,7 @@ fn running_cd_import_excludes_other_mutations_and_joins_global_cancellation() {
         .prepare_cd_import(request(&disc, vec![1, 2]))
         .expect("prepare claims the slot");
     assert_eq!(
-        *runtime.background_task_status(),
+        runtime.background_task_status(),
         BackgroundTaskStatus::CdImportRunning
     );
     // Another library mutation is refused while the rip owns the slot.
@@ -576,9 +576,48 @@ fn running_cd_import_excludes_other_mutations_and_joins_global_cancellation() {
     // Draining the (now cancelled) task returns the slot to Idle.
     let result = run_cd_import_task(task, |_progress| {}).expect("worker completes");
     runtime.apply_cd_import_result(result);
+    assert_eq!(runtime.background_task_status(), BackgroundTaskStatus::Idle);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_refused_cd_import_leaves_the_running_task_alone() {
+    let root = unique_root();
+    let disc = snapshot("disc-a");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let probe = Arc::new(FakeProbe::holding(disc.clone()));
+    let encoder = Arc::new(FakeEncoder::new(Arc::new(AtomicBool::new(false))));
+    let mut runtime = runtime_with(
+        &root,
+        LibraryManagementMode::ReferenceFilesInPlace,
+        store,
+        probe,
+        encoder,
+    );
+    let _import = runtime
+        .prepare_library_import(Vec::new())
+        .expect("the import claims the slot");
+    let import_notifications = runtime.notifications().persistent_stack().to_vec();
+
+    let refusal = runtime
+        .prepare_cd_import(request(&disc, vec![1]))
+        .err()
+        .expect("the CD import is refused");
+    assert_eq!(refusal, ApplicationRuntimeError::BackgroundTaskRunning);
+    runtime.report_cd_import_start_failure(refusal);
+
     assert_eq!(
-        *runtime.background_task_status(),
-        BackgroundTaskStatus::Idle
+        runtime.background_task_status(),
+        BackgroundTaskStatus::LibraryImportRunning
+    );
+    assert_eq!(
+        runtime.notifications().persistent_stack(),
+        import_notifications.as_slice()
+    );
+    runtime.request_background_task_cancellation();
+    assert!(
+        runtime.background_task_cancellation_requested(),
+        "Cancel still reaches the import"
     );
     let _ = std::fs::remove_dir_all(root);
 }

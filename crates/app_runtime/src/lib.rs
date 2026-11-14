@@ -9,10 +9,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::AtomicBool},
 };
 
 pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
@@ -104,6 +101,7 @@ pub(crate) mod metadata_writer;
 pub mod notifications;
 pub mod online_scheduler;
 pub use online_scheduler::SchedulerProgress as OnlineProgress;
+mod library_task;
 mod playback;
 mod playlist_folders;
 mod playlist_items;
@@ -432,19 +430,9 @@ pub struct ApplicationRuntime {
     last_scan_failures: Vec<ScanFailure>,
     last_library_import_summary: Option<LibraryImportSummary>,
     last_library_consolidation_summary: Option<LibraryConsolidationSummary>,
-    background_task_status: BackgroundTaskStatus,
-    library_scan_cancellation: Option<Arc<AtomicBool>>,
-    library_import_cancellation: Option<Arc<AtomicBool>>,
-    library_consolidation_cancellation: Option<Arc<AtomicBool>>,
-    // Id of the persistent notification published while a given task
-    // is running, so apply/fail can dismiss the exact entry they own.
-    library_scan_notification_id: Option<NotificationId>,
-    library_import_notification_id: Option<NotificationId>,
-    library_consolidation_notification_id: Option<NotificationId>,
-    duplicate_consolidation_notification_id: Option<NotificationId>,
-    /// Set while a batch of verified merges runs; a single merge cannot be
-    /// cancelled.
-    duplicate_consolidation_cancellation: Option<Arc<AtomicBool>>,
+    /// The exclusive library task running now, if any: scan, import,
+    /// organize, duplicate consolidation or CD import.
+    library_task: library_task::LibraryTaskSlot,
     managed_library_filesystem_notification_id: Option<NotificationId>,
     managed_library_filesystem_validator: managed_library::ManagedLibraryFilesystemValidator,
     /// Recording verdicts the duplicate scans computed, kept across scans.
@@ -507,11 +495,9 @@ pub struct ApplicationRuntime {
     // enabled). Disc discovery and MusicBrainz lookup are read-only async
     // work delivered through their own channels; generation counters discard
     // a probe/lookup a later eject or insert has superseded. The rip itself
-    // claims the library-mutation slot via `BackgroundTaskStatus`.
+    // claims the library task slot.
     cd_probe: Option<Arc<dyn sustain_cd_import::OpticalProbe>>,
     cd_encoder: Option<Arc<dyn sustain_cd_import::CdEncoder>>,
-    cd_import_cancellation: Option<Arc<AtomicBool>>,
-    cd_import_notification_id: Option<NotificationId>,
     optical_discs: Vec<sustain_cd_import::TocSnapshot>,
     optical_discovery_generation: u64,
     optical_discovery_sink: async_channel::Sender<cd_import::OpticalDiscoveryResult>,
@@ -747,15 +733,7 @@ impl ApplicationRuntime {
             last_scan_failures: Vec::new(),
             last_library_import_summary: None,
             last_library_consolidation_summary: None,
-            background_task_status: BackgroundTaskStatus::Idle,
-            library_scan_cancellation: None,
-            library_import_cancellation: None,
-            library_consolidation_cancellation: None,
-            library_scan_notification_id: None,
-            library_import_notification_id: None,
-            library_consolidation_notification_id: None,
-            duplicate_consolidation_notification_id: None,
-            duplicate_consolidation_cancellation: None,
+            library_task: Default::default(),
             managed_library_filesystem_notification_id: None,
             managed_library_filesystem_validator: Default::default(),
             recording_identities: Default::default(),
@@ -793,8 +771,6 @@ impl ApplicationRuntime {
             mtp_discovery_source,
             cd_probe: None,
             cd_encoder: None,
-            cd_import_cancellation: None,
-            cd_import_notification_id: None,
             optical_discs: Vec::new(),
             optical_discovery_generation: 0,
             optical_discovery_sink,
@@ -1893,44 +1869,62 @@ impl ApplicationRuntime {
         self.last_library_consolidation_summary.as_ref()
     }
 
-    pub fn background_task_status(&self) -> &BackgroundTaskStatus {
-        &self.background_task_status
+    pub fn background_task_status(&self) -> BackgroundTaskStatus {
+        self.library_task.status()
     }
 
-    pub fn request_library_consolidation_cancellation(&self) {
-        if let Some(cancellation_requested) = &self.library_consolidation_cancellation {
-            cancellation_requested.store(true, Ordering::SeqCst);
+    /// Announce the library task `kind` and hand it the slot. Refused while
+    /// another task runs, before anything is announced, so a refused start
+    /// leaves no notification behind. `cancellation` is the token the
+    /// worker polls, `None` for a task that cannot stop part-way.
+    pub(crate) fn start_library_task(
+        &mut self,
+        kind: library_task::LibraryTaskKind,
+        category: NotificationCategory,
+        body: String,
+        cancellation: Option<Arc<AtomicBool>>,
+    ) -> ApplicationRuntimeResult<()> {
+        if self.library_task.is_occupied() {
+            return Err(ApplicationRuntimeError::BackgroundTaskRunning);
+        }
+        let notification_id = self.push_persistent_notification(
+            category,
+            NotificationSeverity::Info,
+            body,
+            cancellation.is_some(),
+        );
+        self.library_task
+            .occupy(kind, notification_id, cancellation)
+            .inspect_err(|_| self.notifications.dismiss(notification_id))
+    }
+
+    /// Release the slot the task `kind` holds and dismiss its notification.
+    /// Nothing happens when `kind` is not the running task.
+    pub(crate) fn finish_library_task(&mut self, kind: library_task::LibraryTaskKind) {
+        if let Some(id) = self.library_task.finish(kind) {
+            self.dismiss_notification(id);
         }
     }
 
-    pub fn request_library_scan_cancellation(&self) {
-        if let Some(cancellation_requested) = &self.library_scan_cancellation {
-            cancellation_requested.store(true, Ordering::SeqCst);
+    /// Replace the running task's progress text, while `kind` runs.
+    pub(crate) fn update_library_task_progress(
+        &mut self,
+        kind: library_task::LibraryTaskKind,
+        body: String,
+    ) {
+        if let Some(id) = self.library_task.notification(kind) {
+            self.update_notification_body(id, body);
         }
     }
 
-    pub fn request_library_import_cancellation(&self) {
-        if let Some(cancellation_requested) = &self.library_import_cancellation {
-            cancellation_requested.store(true, Ordering::SeqCst);
-        }
-    }
-
-    // Dispatches a cancellation request to whichever background task is
-    // currently running. Background tasks are mutually exclusive (see
-    // `BackgroundTaskStatus::is_running`), so at most one of these
-    // tokens is live at any moment. Idempotent: calling this with no
-    // task running is a no-op, as is calling it twice while one is
-    // winding down. Also pokes the notification observer so the lane
-    // can repaint the running notification's label as "Cancelling..."
-    // without waiting for the next worker poll tick.
+    // Asks whichever library task is running to stop, if it can; the
+    // slot stays occupied until its result arrives. Idempotent: calling
+    // this with no task running is a no-op, as is calling it twice while
+    // one is winding down. Also pokes the notification observer so the
+    // lane can repaint the running notification's label as
+    // "Cancelling..." without waiting for the next worker poll tick.
     pub fn request_background_task_cancellation(&self) {
-        self.request_library_scan_cancellation();
-        self.request_library_import_cancellation();
-        self.request_library_consolidation_cancellation();
-        self.request_cd_import_cancellation();
-        if let Some(cancellation_requested) = &self.duplicate_consolidation_cancellation {
-            cancellation_requested.store(true, Ordering::SeqCst);
-        }
+        self.library_task.request_cancellation();
         // A device sync runs on its own worker (not part of the
         // mutually-exclusive library-task set), so cancel it here too:
         // this is the method the status-bar Cancel button invokes, and
@@ -1946,16 +1940,7 @@ impl ApplicationRuntime {
     // UI surfaces use this to flip the status label to "Cancelling..."
     // so the user sees their click was received.
     pub fn background_task_cancellation_requested(&self) -> bool {
-        fn flag_set(token: Option<&Arc<AtomicBool>>) -> bool {
-            token
-                .map(|token| token.load(Ordering::SeqCst))
-                .unwrap_or(false)
-        }
-        flag_set(self.library_scan_cancellation.as_ref())
-            || flag_set(self.library_import_cancellation.as_ref())
-            || flag_set(self.library_consolidation_cancellation.as_ref())
-            || flag_set(self.cd_import_cancellation.as_ref())
-            || flag_set(self.duplicate_consolidation_cancellation.as_ref())
+        self.library_task.cancellation_requested()
             // The device sync worker is not part of the mutually-exclusive
             // library-task set and tracks its own cancel flag, so consult
             // it directly — otherwise the lane never shows "Cancelling..."

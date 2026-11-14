@@ -545,7 +545,7 @@ fn cancelled_scan_preserves_existing_tracks_without_marking_them_missing() {
     let task = runtime
         .prepare_library_scan(root.clone())
         .expect("prepare scan");
-    runtime.request_library_scan_cancellation();
+    runtime.request_background_task_cancellation();
     let result = run_library_scan_task(task).expect("scan finishes cleanly");
     runtime.apply_library_scan_result(result);
 
@@ -1371,7 +1371,7 @@ fn cancelling_managed_import_keeps_completed_tracks_and_reports_progress() {
     let result = run_library_import_task_with_progress(task, |update| {
         progress.push(update);
         if update.processed_files == 1 {
-            runtime.request_library_import_cancellation();
+            runtime.request_background_task_cancellation();
         }
     })
     .expect("cancelled import completes");

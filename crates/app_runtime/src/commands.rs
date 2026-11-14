@@ -41,7 +41,7 @@ impl ApplicationRuntime {
                 if settings.library != self.settings.library {
                     self.ensure_library_hydrated()?;
                 }
-                if (self.background_task_status.is_running()
+                if (self.library_task.is_occupied()
                     || self.has_pending_managed_metadata_retarget()
                     || self.has_pending_missing_track_relocation())
                     && settings.library != self.settings.library
@@ -55,7 +55,8 @@ impl ApplicationRuntime {
                     // rejected outright while a background task or
                     // serialized retarget is still moving files.
                     let cancellation_allowed = self
-                        .background_task_status
+                        .library_task
+                        .status()
                         .is_library_consolidation_running()
                         && self.settings.library.path == settings.library.path
                         && self.settings.library.management_mode
@@ -64,7 +65,9 @@ impl ApplicationRuntime {
                             == LibraryManagementMode::ReferenceFilesInPlace;
 
                     if cancellation_allowed {
-                        self.request_library_consolidation_cancellation();
+                        self.library_task.request_cancellation_of(
+                            crate::library_task::LibraryTaskKind::Organize,
+                        );
                     } else {
                         return Err(ApplicationRuntimeError::BackgroundTaskRunning);
                     }

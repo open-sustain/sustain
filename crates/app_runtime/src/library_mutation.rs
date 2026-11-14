@@ -432,7 +432,7 @@ impl ApplicationRuntime {
 
     fn ensure_no_background_library_task(&self) -> ApplicationRuntimeResult<()> {
         self.ensure_library_hydrated()?;
-        if self.background_task_status.is_running() {
+        if self.library_task.is_occupied() {
             return Err(ApplicationRuntimeError::BackgroundTaskRunning);
         }
 

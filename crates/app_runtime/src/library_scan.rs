@@ -18,6 +18,7 @@ use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, LibraryScanResult,
     LibraryScanSummary, LibraryScanTask, NotificationCategory, NotificationSeverity,
     file_presence::{FilePresence, probe_file_presence},
+    library_task::LibraryTaskKind,
     notifications,
 };
 
@@ -56,15 +57,12 @@ impl ApplicationRuntime {
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
 
         let cancellation_requested = Arc::new(AtomicBool::new(false));
-        self.library_scan_cancellation = Some(cancellation_requested.clone());
-        self.background_task_status = crate::BackgroundTaskStatus::LibraryScanRunning;
-        let notification_id = self.push_persistent_notification(
+        self.start_library_task(
+            LibraryTaskKind::Scan,
             NotificationCategory::LibraryScan,
-            NotificationSeverity::Info,
             notifications::library_scan_running_text(),
-            true,
-        );
-        self.library_scan_notification_id = Some(notification_id);
+            Some(cancellation_requested.clone()),
+        )?;
 
         Ok(LibraryScanTask {
             library_path,
@@ -86,11 +84,7 @@ impl ApplicationRuntime {
         self.library_tracks = result.tracks;
         self.rebuild_search_index();
         self.refresh_playback_queue_track_ids();
-        self.library_scan_cancellation = None;
-        self.background_task_status = crate::BackgroundTaskStatus::Idle;
-        if let Some(id) = self.library_scan_notification_id.take() {
-            self.dismiss_notification(id);
-        }
+        self.finish_library_task(LibraryTaskKind::Scan);
         let severity = if summary.missing_reconciliation_skipped {
             NotificationSeverity::Warning
         } else {
@@ -119,12 +113,8 @@ impl ApplicationRuntime {
     }
 
     pub fn fail_library_scan(&mut self, error: ApplicationRuntimeError) {
-        self.library_scan_cancellation = None;
         self.last_scan_failures.clear();
-        self.background_task_status = crate::BackgroundTaskStatus::Idle;
-        if let Some(id) = self.library_scan_notification_id.take() {
-            self.dismiss_notification(id);
-        }
+        self.finish_library_task(LibraryTaskKind::Scan);
         self.push_ephemeral_notification(
             NotificationCategory::LibraryScan,
             NotificationSeverity::Error,

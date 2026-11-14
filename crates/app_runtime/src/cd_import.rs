@@ -8,17 +8,14 @@
 //! MusicBrainz disc-id release lookup, and front-cover fetch — and one
 //! mutating task that follows the same prepare / background worker /
 //! apply-or-fail shape as library import. Discovery and lookup never claim
-//! the library-mutation slot; the rip itself does, via
+//! the library task slot; the rip itself does, as
 //! [`crate::BackgroundTaskStatus::CdImportRunning`]. Generation counters let
 //! a stale probe or lookup result be discarded after a disc is ejected or
 //! replaced.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, atomic::AtomicBool};
 use std::thread;
 
 use sustain_cd_import::{CdEncoder, DiscIdentity, OpticalProbe, TocSnapshot};
@@ -27,6 +24,7 @@ use sustain_library_store::LibraryStore;
 use sustain_metadata::MetadataService;
 use sustain_metadata_remote::DiscRelease;
 
+use crate::library_task::LibraryTaskKind;
 use crate::managed_library::ManagedLibraryFilesystemValidator;
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
@@ -176,7 +174,7 @@ impl ApplicationRuntime {
             .map(|error| error.to_string())
     }
 
-    // --- Discovery (read-only, never claims the library-mutation slot) ---
+    // --- Discovery (read-only, never claims the library task slot) ---
 
     /// Kick an off-main-thread probe of every candidate optical drive. The
     /// cheap candidate enumeration runs here; the slow per-disc TOC read is
@@ -383,15 +381,12 @@ impl ApplicationRuntime {
         }
 
         let cancellation_requested = Arc::new(AtomicBool::new(false));
-        self.cd_import_cancellation = Some(cancellation_requested.clone());
-        self.background_task_status = crate::BackgroundTaskStatus::CdImportRunning;
-        let notification_id = self.push_persistent_notification(
+        self.start_library_task(
+            LibraryTaskKind::CdImport,
             NotificationCategory::CdImport,
-            NotificationSeverity::Info,
             notifications::cd_import_running_text(),
-            true,
-        );
-        self.cd_import_notification_id = Some(notification_id);
+            Some(cancellation_requested.clone()),
+        )?;
 
         Ok(CdImportTask {
             library_path,
@@ -412,12 +407,10 @@ impl ApplicationRuntime {
     }
 
     pub fn update_cd_import_progress(&mut self, completed_tracks: usize, total_tracks: usize) {
-        if let Some(id) = self.cd_import_notification_id {
-            self.update_notification_body(
-                id,
-                notifications::cd_import_progress_text(completed_tracks, total_tracks),
-            );
-        }
+        self.update_library_task_progress(
+            LibraryTaskKind::CdImport,
+            notifications::cd_import_progress_text(completed_tracks, total_tracks),
+        );
     }
 
     pub fn apply_cd_import_result(&mut self, result: CdImportResult) {
@@ -426,11 +419,7 @@ impl ApplicationRuntime {
         self.library_tracks.sort_by_key(|track| track.id);
         self.rebuild_search_index();
         self.refresh_playback_queue_track_ids();
-        self.cd_import_cancellation = None;
-        self.background_task_status = crate::BackgroundTaskStatus::Idle;
-        if let Some(id) = self.cd_import_notification_id.take() {
-            self.dismiss_notification(id);
-        }
+        self.finish_library_task(LibraryTaskKind::CdImport);
         let severity = if summary.failure.is_some() {
             NotificationSeverity::Warning
         } else {
@@ -448,24 +437,25 @@ impl ApplicationRuntime {
         );
     }
 
+    /// End the running CD import with `error`.
     pub fn fail_cd_import(&mut self, error: ApplicationRuntimeError) {
-        self.cd_import_cancellation = None;
-        self.background_task_status = crate::BackgroundTaskStatus::Idle;
-        if let Some(id) = self.cd_import_notification_id.take() {
-            self.dismiss_notification(id);
-        }
-        if !self.report_managed_library_filesystem_error(&error) {
+        self.finish_library_task(LibraryTaskKind::CdImport);
+        self.report_cd_import_error(&error);
+    }
+
+    /// Tell the user why [`Self::prepare_cd_import`] refused to start. The
+    /// refusal claimed nothing, so whatever task runs keeps running.
+    pub fn report_cd_import_start_failure(&mut self, error: ApplicationRuntimeError) {
+        self.report_cd_import_error(&error);
+    }
+
+    fn report_cd_import_error(&mut self, error: &ApplicationRuntimeError) {
+        if !self.report_managed_library_filesystem_error(error) {
             self.push_ephemeral_notification(
                 NotificationCategory::CdImport,
                 NotificationSeverity::Error,
-                notifications::runtime_error_text(&error).to_owned(),
+                notifications::runtime_error_text(error).to_owned(),
             );
-        }
-    }
-
-    pub fn request_cd_import_cancellation(&self) {
-        if let Some(cancellation_requested) = &self.cd_import_cancellation {
-            cancellation_requested.store(true, Ordering::SeqCst);
         }
     }
 }

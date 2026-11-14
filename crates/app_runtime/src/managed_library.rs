@@ -22,7 +22,7 @@ use sustain_metadata::hash_file_content;
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult,
     LibraryConsolidationResult, LibraryConsolidationTask, LibraryImportResult, LibraryImportTask,
-    NotificationCategory, NotificationSeverity, notifications,
+    NotificationCategory, NotificationSeverity, library_task::LibraryTaskKind, notifications,
 };
 
 mod capabilities;
@@ -84,15 +84,12 @@ impl ApplicationRuntime {
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
 
         let cancellation_requested = Arc::new(AtomicBool::new(false));
-        self.library_import_cancellation = Some(cancellation_requested.clone());
-        self.background_task_status = crate::BackgroundTaskStatus::LibraryImportRunning;
-        let notification_id = self.push_persistent_notification(
+        self.start_library_task(
+            LibraryTaskKind::Import,
             NotificationCategory::LibraryImport,
-            NotificationSeverity::Info,
             notifications::library_import_running_text(),
-            true,
-        );
-        self.library_import_notification_id = Some(notification_id);
+            Some(cancellation_requested.clone()),
+        )?;
 
         Ok(LibraryImportTask {
             paths,
@@ -112,11 +109,7 @@ impl ApplicationRuntime {
         self.library_tracks.sort_by_key(|track| track.id);
         self.rebuild_search_index();
         self.refresh_playback_queue_track_ids();
-        self.library_import_cancellation = None;
-        self.background_task_status = crate::BackgroundTaskStatus::Idle;
-        if let Some(id) = self.library_import_notification_id.take() {
-            self.dismiss_notification(id);
-        }
+        self.finish_library_task(LibraryTaskKind::Import);
         self.push_ephemeral_notification(
             NotificationCategory::LibraryImport,
             NotificationSeverity::Info,
@@ -125,20 +118,14 @@ impl ApplicationRuntime {
     }
 
     pub fn update_library_import_progress(&mut self, processed_files: usize, total_files: usize) {
-        if let Some(id) = self.library_import_notification_id {
-            self.update_notification_body(
-                id,
-                notifications::library_import_progress_text(processed_files, total_files),
-            );
-        }
+        self.update_library_task_progress(
+            LibraryTaskKind::Import,
+            notifications::library_import_progress_text(processed_files, total_files),
+        );
     }
 
     pub fn fail_library_import(&mut self, error: ApplicationRuntimeError) {
-        self.library_import_cancellation = None;
-        self.background_task_status = crate::BackgroundTaskStatus::Idle;
-        if let Some(id) = self.library_import_notification_id.take() {
-            self.dismiss_notification(id);
-        }
+        self.finish_library_task(LibraryTaskKind::Import);
         if !self.report_managed_library_filesystem_error(&error) {
             self.push_ephemeral_notification(
                 NotificationCategory::LibraryImport,
@@ -163,15 +150,12 @@ impl ApplicationRuntime {
             .clone()
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
         let cancellation_requested = Arc::new(AtomicBool::new(false));
-        self.library_consolidation_cancellation = Some(cancellation_requested.clone());
-        self.background_task_status = crate::BackgroundTaskStatus::LibraryConsolidationRunning;
-        let notification_id = self.push_persistent_notification(
+        self.start_library_task(
+            LibraryTaskKind::Organize,
             NotificationCategory::LibraryConsolidation,
-            NotificationSeverity::Info,
             notifications::library_consolidation_running_text(),
-            true,
-        );
-        self.library_consolidation_notification_id = Some(notification_id);
+            Some(cancellation_requested.clone()),
+        )?;
 
         Ok(LibraryConsolidationTask {
             settings: self.settings.clone(),
@@ -202,11 +186,7 @@ impl ApplicationRuntime {
         if flipped_availability {
             self.notify_track_availability_observer();
         }
-        self.library_consolidation_cancellation = None;
-        self.background_task_status = crate::BackgroundTaskStatus::Idle;
-        if let Some(id) = self.library_consolidation_notification_id.take() {
-            self.dismiss_notification(id);
-        }
+        self.finish_library_task(LibraryTaskKind::Organize);
         // An auto-resume that found nothing to move and nothing
         // missing is silenced by the auto-dismiss timer just like any
         // ephemeral — no special "boring success" branch needed.
@@ -222,11 +202,7 @@ impl ApplicationRuntime {
     }
 
     pub fn fail_library_consolidation(&mut self, error: ApplicationRuntimeError) {
-        self.library_consolidation_cancellation = None;
-        self.background_task_status = crate::BackgroundTaskStatus::Idle;
-        if let Some(id) = self.library_consolidation_notification_id.take() {
-            self.dismiss_notification(id);
-        }
+        self.finish_library_task(LibraryTaskKind::Organize);
         if !self.report_managed_library_filesystem_error(&error) {
             self.push_ephemeral_notification(
                 NotificationCategory::LibraryConsolidation,

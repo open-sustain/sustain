@@ -1456,7 +1456,7 @@ enum CdImportWorkerEvent {
 
 /// Wire the CD page's `Import CD` button to the runtime's prepare /
 /// background-worker / apply path, mirroring library import: prepare claims
-/// the mutation slot on the main thread, the rip runs on a worker, and its
+/// the library task slot on the main thread, the rip runs on a worker, and its
 /// progress/outcome are applied back on the GTK loop.
 fn install_cd_import_requested(
     cd_import_panel: &CdImportPanel,
@@ -1471,7 +1471,7 @@ fn install_cd_import_requested(
             match runtime.prepare_cd_import(request) {
                 Ok(task) => task,
                 Err(error) => {
-                    runtime.fail_cd_import(error);
+                    runtime.report_cd_import_start_failure(error);
                     return;
                 }
             }

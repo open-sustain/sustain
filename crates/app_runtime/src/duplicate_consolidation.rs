@@ -25,8 +25,9 @@ use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, hash_reader_content};
 
 use crate::{
-    ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, BackgroundTaskStatus,
-    NotificationCategory, NotificationSeverity,
+    ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
+    NotificationSeverity,
+    library_task::LibraryTaskKind,
     managed_library::{
         ManagedLibraryFilesystemValidator,
         file_ops::{
@@ -167,13 +168,13 @@ impl ApplicationRuntime {
         for track_id in &request.track_ids {
             self.stop_playback_if_playing(*track_id);
         }
-        self.background_task_status = BackgroundTaskStatus::DuplicateConsolidationRunning;
-        self.duplicate_consolidation_notification_id = Some(self.push_persistent_notification(
+        // A single merge cannot stop part-way.
+        self.start_library_task(
+            LibraryTaskKind::DuplicateConsolidation,
             NotificationCategory::DuplicateConsolidation,
-            NotificationSeverity::Info,
             "Consolidating duplicate tracks...".to_owned(),
-            false,
-        ));
+            None,
+        )?;
 
         if let Some(writer) = self.metadata_writer() {
             if writer.consolidate_duplicate_tracks(request) {
@@ -260,15 +261,14 @@ impl ApplicationRuntime {
                 self.stop_playback_if_playing(track.id);
             }
         }
+        // The batch stops between merges.
         let cancellation = Arc::new(AtomicBool::new(false));
-        self.background_task_status = BackgroundTaskStatus::DuplicateConsolidationRunning;
-        self.duplicate_consolidation_cancellation = Some(cancellation.clone());
-        self.duplicate_consolidation_notification_id = Some(self.push_persistent_notification(
+        self.start_library_task(
+            LibraryTaskKind::DuplicateConsolidation,
             NotificationCategory::DuplicateConsolidation,
-            NotificationSeverity::Info,
             verified_duplicate_progress_text(0, merges.len()),
-            true,
-        ));
+            Some(cancellation.clone()),
+        )?;
 
         let recording_identities = self.recording_identities.clone();
         if let Some(writer) = self.metadata_writer() {
@@ -301,16 +301,17 @@ impl ApplicationRuntime {
     }
 
     pub(crate) fn apply_verified_duplicate_progress(&mut self, completed: usize, total: usize) {
-        if let Some(id) = self.duplicate_consolidation_notification_id {
-            self.update_notification_body(id, verified_duplicate_progress_text(completed, total));
-        }
+        self.update_library_task_progress(
+            LibraryTaskKind::DuplicateConsolidation,
+            verified_duplicate_progress_text(completed, total),
+        );
     }
 
     pub(crate) fn apply_verified_duplicate_batch_result(
         &mut self,
         result: VerifiedDuplicateBatchResult,
     ) {
-        self.finish_duplicate_consolidation();
+        self.finish_library_task(LibraryTaskKind::DuplicateConsolidation);
         match result.outcome {
             Ok(summary) => {
                 if !summary.merges.is_empty() && !self.adopt_consolidated_library() {
@@ -335,14 +336,6 @@ impl ApplicationRuntime {
                 );
             }
         }
-    }
-
-    fn finish_duplicate_consolidation(&mut self) {
-        if let Some(id) = self.duplicate_consolidation_notification_id.take() {
-            self.dismiss_notification(id);
-        }
-        self.duplicate_consolidation_cancellation = None;
-        self.background_task_status = BackgroundTaskStatus::Idle;
     }
 
     /// Reload the tracks and playlists consolidation rewrote. On failure the
@@ -378,7 +371,7 @@ impl ApplicationRuntime {
         &mut self,
         result: crate::metadata_writer::DuplicateConsolidationWriterResult,
     ) {
-        self.finish_duplicate_consolidation();
+        self.finish_library_task(LibraryTaskKind::DuplicateConsolidation);
         match result.outcome {
             Ok(result) => {
                 if !self.adopt_consolidated_library() {
