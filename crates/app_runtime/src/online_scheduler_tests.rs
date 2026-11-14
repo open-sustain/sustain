@@ -1277,7 +1277,10 @@ fn tag_enrichment_snapshot_cannot_clobber_concurrent_rating_edit() {
     store
         .update_track_rating(track.id, Rating::new(5).expect("rating"))
         .expect("commit concurrent rating");
-    runtime.apply_track_updated(track.id);
+    runtime.apply_track_updated(crate::TrackUpdated {
+        track_id: track.id,
+        analysis: false,
+    });
     resume_tx.send(()).expect("resume identify");
     let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
         matches!(progress, SchedulerProgress::Tick { completed: 1, .. })
@@ -1285,7 +1288,10 @@ fn tag_enrichment_snapshot_cannot_clobber_concurrent_rating_edit() {
     let observed = notify_rx
         .recv_timeout(Duration::from_secs(1))
         .expect("track_updated sink fires after persist");
-    runtime.apply_track_updated(observed);
+    runtime.apply_track_updated(crate::TrackUpdated {
+        track_id: observed,
+        analysis: false,
+    });
 
     let stored = store.track(track.id).expect("load").expect("present");
     assert_eq!(stored.rating, Rating::new(5).expect("rating"));

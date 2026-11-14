@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use sustain_app_runtime::{Track, TrackId, TrackMetadata};
@@ -57,12 +57,6 @@ pub(super) struct AlbumTrackViewModel {
     pub(super) track_number: Option<u32>,
     pub(super) duration_seconds: u64,
     pub(super) is_missing: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum AlbumTrackReplacement {
-    Updated(AlbumKey),
-    Unchanged(AlbumKey),
 }
 
 #[derive(Clone, Debug)]
@@ -141,34 +135,39 @@ pub(super) fn group_albums(tracks: &[Track], library_root: Option<&Path>) -> Vec
         .collect()
 }
 
-/// Locate the album holding `track_id` and replace that track's row in
-/// place. Returns the album's key plus whether visible fields actually
-/// changed, so callers can re-render exactly the row that needs it and skip
-/// no-op changes; `None` when no album currently holds the track.
+/// Replace the rows of `new_tracks` inside whichever albums hold them, in
+/// one pass over every album. Returns the indices of the albums whose shown
+/// tracks actually changed, so callers re-render exactly those rows; a
+/// track no album holds, or whose shown fields did not change, is skipped.
 ///
-/// The track list is re-sorted with [`compare_album_tracks`] because a
-/// metadata update can move a track within its album (e.g. a Tags
-/// retrieval populating a missing track number). Callers must use a full
-/// regroup instead when metadata changes can move the track to a different
-/// album bucket.
-pub(super) fn replace_track_in_album(
+/// A changed album's track list is re-sorted with [`compare_album_tracks`]
+/// because a metadata update can move a track within its album (e.g. a
+/// Tags retrieval populating a missing track number). Callers must regroup
+/// instead when metadata changes can move a track to a different album
+/// bucket.
+pub(super) fn replace_tracks_in_albums(
     albums: &mut [AlbumViewModel],
-    track_id: TrackId,
-    new_track: &AlbumTrackViewModel,
+    new_tracks: &HashMap<TrackId, AlbumTrackViewModel>,
     library_root: Option<&Path>,
-) -> Option<AlbumTrackReplacement> {
-    for album in albums.iter_mut() {
-        if let Some(slot) = album.tracks.iter_mut().find(|track| track.id == track_id) {
-            if slot == new_track {
-                return Some(AlbumTrackReplacement::Unchanged(album.key.clone()));
+) -> Vec<usize> {
+    let mut updated = Vec::new();
+    for (album_index, album) in albums.iter_mut().enumerate() {
+        let mut changed = false;
+        for slot in &mut album.tracks {
+            if let Some(new_track) = new_tracks.get(&slot.id)
+                && slot != new_track
+            {
+                slot.clone_from(new_track);
+                changed = true;
             }
-            *slot = new_track.clone();
+        }
+        if changed {
             album.tracks.sort_by(compare_album_tracks);
             refresh_album_artwork_source(album, library_root);
-            return Some(AlbumTrackReplacement::Updated(album.key.clone()));
+            updated.push(album_index);
         }
     }
-    None
+    updated
 }
 
 fn refresh_album_artwork_source(album: &mut AlbumViewModel, library_root: Option<&Path>) {
@@ -354,6 +353,8 @@ fn normalize_album_key(value: &str) -> String {
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
+    use std::collections::HashMap;
+
     use sustain_app_runtime::{
         PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
     };
@@ -361,8 +362,8 @@ mod tests {
     use crate::artwork_loader::ArtworkSource;
 
     use super::{
-        AlbumTrackReplacement, AlbumTrackViewModel, duration_text, group_albums,
-        replace_track_in_album, track_number_text,
+        AlbumTrackViewModel, duration_text, group_albums, replace_tracks_in_albums,
+        track_number_text,
     };
 
     #[test]
@@ -557,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn replace_track_in_album_updates_target_and_re_sorts() {
+    fn replacing_tracks_re_sorts_their_album_and_reports_it() {
         let mut albums = group_albums(
             &[
                 track(1, "b.flac", "Album", "Artist", Some(2), Some(2000)),
@@ -576,21 +577,23 @@ mod tests {
         );
 
         // Promote track 1 from position 2 to position 0; the album's
-        // track vector must re-sort and the function must report the
-        // album whose row needs repainting.
+        // track vector must re-sort and the album whose row needs
+        // repainting must be reported.
         let mut replacement =
             super::album_track(&track(1, "b.flac", "Album", "Artist", Some(1), Some(2000)));
         replacement.track_number = Some(0);
-        let key = replace_track_in_album(&mut albums, track_id(1), &replacement, None);
-
-        let updated_album = albums
-            .iter()
-            .find(|album| album.title == "Album")
-            .expect("Album bucket present");
-        assert_eq!(
-            key.as_ref(),
-            Some(&AlbumTrackReplacement::Updated(updated_album.key.clone()))
+        let updated = replace_tracks_in_albums(
+            &mut albums,
+            &HashMap::from([(track_id(1), replacement)]),
+            None,
         );
+
+        let updated_album_index = albums
+            .iter()
+            .position(|album| album.title == "Album")
+            .expect("Album bucket present");
+        assert_eq!(updated, vec![updated_album_index]);
+        let updated_album = &albums[updated_album_index];
         assert_eq!(
             updated_album
                 .tracks
@@ -602,7 +605,36 @@ mod tests {
     }
 
     #[test]
-    fn replace_track_in_album_returns_none_when_track_absent() {
+    fn replacing_tracks_of_several_albums_reports_each_once() {
+        let mut albums = group_albums(
+            &[
+                track(1, "a.flac", "Album", "Artist", Some(1), None),
+                track(2, "b.flac", "Album", "Artist", Some(2), None),
+                track(3, "c.flac", "Other", "Artist", Some(1), None),
+            ],
+            None,
+        );
+        let renamed = |id, path, album, number| {
+            let mut renamed = super::album_track(&track(id, path, album, "Artist", number, None));
+            renamed.title = format!("Renamed {id}");
+            renamed
+        };
+
+        let updated = replace_tracks_in_albums(
+            &mut albums,
+            &HashMap::from([
+                (track_id(1), renamed(1, "a.flac", "Album", Some(1))),
+                (track_id(2), renamed(2, "b.flac", "Album", Some(2))),
+                (track_id(3), renamed(3, "c.flac", "Other", Some(1))),
+            ]),
+            None,
+        );
+
+        assert_eq!(updated, (0..albums.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn replacing_an_absent_or_unchanged_track_reports_nothing() {
         let mut albums = group_albums(
             &[track(1, "a.flac", "Album", "Artist", Some(1), None)],
             None,
@@ -616,23 +648,15 @@ mod tests {
             duration_seconds: 0,
             is_missing: false,
         };
+        let unchanged = super::album_track(&track(1, "a.flac", "Album", "Artist", Some(1), None));
 
-        assert!(replace_track_in_album(&mut albums, track_id(99), &ghost, None).is_none());
-    }
-
-    #[test]
-    fn replace_track_in_album_reports_unchanged_when_visible_fields_match() {
-        let mut albums = group_albums(
-            &[track(1, "a.flac", "Album", "Artist", Some(1), None)],
-            None,
-        );
-        let replacement = super::album_track(&track(1, "a.flac", "Album", "Artist", Some(1), None));
-
-        let replacement = replace_track_in_album(&mut albums, track_id(1), &replacement, None);
-
-        assert_eq!(
-            replacement,
-            Some(AlbumTrackReplacement::Unchanged(albums[0].key.clone()))
+        assert!(
+            replace_tracks_in_albums(
+                &mut albums,
+                &HashMap::from([(track_id(99), ghost), (track_id(1), unchanged)]),
+                None,
+            )
+            .is_empty()
         );
     }
 

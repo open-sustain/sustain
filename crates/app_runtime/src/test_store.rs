@@ -46,6 +46,7 @@ pub(crate) struct FaultyStore {
     fail_online_attempt: AtomicBool,
     fail_device_manifest: AtomicBool,
     fail_save_tracks: AtomicBool,
+    fail_update_track_locations: AtomicBool,
     fail_save_tracks_on_call: AtomicU32,
     fail_flush_durable: AtomicBool,
     fail_track_read: AtomicBool,
@@ -77,6 +78,7 @@ impl FaultyStore {
             fail_online_attempt: AtomicBool::new(false),
             fail_device_manifest: AtomicBool::new(false),
             fail_save_tracks: AtomicBool::new(false),
+            fail_update_track_locations: AtomicBool::new(false),
             fail_save_tracks_on_call: AtomicU32::new(0),
             fail_flush_durable: AtomicBool::new(false),
             fail_track_read: AtomicBool::new(false),
@@ -132,6 +134,10 @@ impl FaultyStore {
 
     pub(crate) fn set_fail_save_tracks(&self, on: bool) {
         self.fail_save_tracks.store(on, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_fail_update_track_locations(&self, on: bool) {
+        self.fail_update_track_locations.store(on, Ordering::SeqCst);
     }
 
     pub(crate) fn set_fail_save_tracks_on_call(&self, call: u32) {
@@ -273,6 +279,15 @@ impl LibraryStore for FaultyStore {
         location: &TrackLocation,
     ) -> StoreResult<()> {
         self.inner.update_track_location(track_id, location)
+    }
+
+    fn update_track_locations(&self, updates: &[(TrackId, TrackLocation)]) -> StoreResult<()> {
+        if self.fail_update_track_locations.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected update_track_locations failure".to_owned(),
+            ));
+        }
+        self.inner.update_track_locations(updates)
     }
 
     fn update_track_availability_if_path_matches(

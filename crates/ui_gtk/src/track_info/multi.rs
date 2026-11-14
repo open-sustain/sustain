@@ -7,18 +7,13 @@ use sustain_app_runtime::{
     ApplicationCommand, Bpm, FieldChange, MetadataChange, MusicalKey, Track, TrackId,
 };
 
-use crate::{
-    LibraryChangedHolder, TrackRowChangedKind, TrackRowsChangedHolder,
-    command_controller::SharedCommandController,
-};
+use crate::command_controller::SharedCommandController;
 
 use super::{DIALOG_SIDE_MARGIN, DIALOG_WIDTH, NUMBER_ENTRY_WIDTH_CHARS, PAIR_ENTRY_WIDTH_CHARS};
 
 pub(crate) fn open_multi_track_info_dialog(
     parent: &gtk::Window,
     command_controller: &SharedCommandController,
-    library_changed_holder: &LibraryChangedHolder,
-    track_rows_changed_holder: &TrackRowsChangedHolder,
     track_ids: Vec<TrackId>,
 ) {
     if track_ids.len() < 2 {
@@ -92,8 +87,6 @@ pub(crate) fn open_multi_track_info_dialog(
 
     let window_for_ok = window.clone();
     let command_controller = command_controller.clone();
-    let library_changed_holder = library_changed_holder.clone();
-    let track_rows_changed_holder = track_rows_changed_holder.clone();
     ok.connect_clicked(move |_| {
         let change = match details.metadata_change() {
             Ok(change) => change,
@@ -107,16 +100,7 @@ pub(crate) fn open_multi_track_info_dialog(
             return;
         }
 
-        let change_kind = TrackRowChangedKind::for_metadata_change(&change);
-        let result = dispatch_batch_metadata_change(&command_controller, &track_ids, &change);
-        if !result.succeeded_track_ids.is_empty() {
-            if let Some(callback) = track_rows_changed_holder.borrow().as_ref() {
-                callback(&result.succeeded_track_ids, change_kind);
-            } else if let Some(callback) = library_changed_holder.borrow().as_ref() {
-                callback();
-            }
-        }
-        if result.failed == 0 {
+        if dispatch_batch_metadata_change(&command_controller, &track_ids, &change) == 0 {
             window_for_ok.close();
         }
     });
@@ -136,20 +120,15 @@ fn selected_tracks(
         .collect()
 }
 
-struct BatchDispatchResult {
-    succeeded_track_ids: Vec<TrackId>,
-    failed: usize,
-}
-
+/// Dispatch `change` to every track, reporting failures once for the
+/// batch. Returns how many tracks could not be updated.
 fn dispatch_batch_metadata_change(
     command_controller: &SharedCommandController,
     track_ids: &[TrackId],
     change: &MetadataChange,
-) -> BatchDispatchResult {
-    let mut result = BatchDispatchResult {
-        succeeded_track_ids: Vec::new(),
-        failed: 0,
-    };
+) -> usize {
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
     let mut first_error = None;
 
     for track_id in track_ids {
@@ -157,9 +136,9 @@ fn dispatch_batch_metadata_change(
             track_id: *track_id,
             change: Box::new(change.clone()),
         }) {
-            Ok(()) => result.succeeded_track_ids.push(*track_id),
+            Ok(()) => succeeded += 1,
             Err(error) => {
-                result.failed += 1;
+                failed += 1;
                 if first_error.is_none() {
                     first_error = Some(error);
                 }
@@ -167,20 +146,15 @@ fn dispatch_batch_metadata_change(
         }
     }
 
-    match (
-        result.succeeded_track_ids.is_empty(),
-        result.failed,
-        first_error.as_ref(),
-    ) {
-        (_, 0, _) => {}
-        (true, _, Some(error)) => command_controller.report_command_error(error),
-        (false, _, Some(_error)) => {
+    match (succeeded, first_error.as_ref()) {
+        (0, Some(error)) => command_controller.report_command_error(error),
+        (_, Some(_error)) => {
             command_controller.report_command_warning("Some selected tracks could not be updated.");
         }
-        (_, _, None) => {}
+        (_, None) => {}
     }
 
-    result
+    failed
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

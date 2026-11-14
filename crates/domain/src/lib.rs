@@ -32,6 +32,7 @@ mod synced_lyrics;
 mod text;
 mod track;
 mod track_column_layout;
+mod track_fields;
 mod waveform;
 
 pub use acoustic::AcousticFeatures;
@@ -102,6 +103,7 @@ pub use track::{
 pub use track_column_layout::{
     TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
+pub use track_fields::TrackFields;
 pub use waveform::{
     DETAIL_SEGMENTS_PER_SECOND, PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment,
     WaveformSegments,

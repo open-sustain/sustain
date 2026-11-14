@@ -24,8 +24,8 @@ use gtk::prelude::*;
 use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, PlaylistId, PlaylistItem};
 
 use super::{
-    ALBUMS_VIEW, DUPLICATES_VIEW, LibraryChangedHolder, PLAYLISTS_VIEW, PlaybackChangedCallback,
-    SONGS_VIEW, SharedRuntime, TrackRowChangedHolder, TrackRowsChangedHolder,
+    ALBUMS_VIEW, ArtworkChangedHolder, DUPLICATES_VIEW, PLAYLISTS_VIEW, PlaybackChangedCallback,
+    SONGS_VIEW, SharedRuntime,
     albums::AlbumsView,
     artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
@@ -58,9 +58,7 @@ pub(crate) struct GlobalShortcutContext {
     pub(crate) content_stack: ContentStack,
     pub(crate) toggle_or_start_playback: Rc<dyn Fn()>,
     pub(crate) playback_changed: PlaybackChangedCallback,
-    pub(crate) library_changed_holder: LibraryChangedHolder,
-    pub(crate) track_row_changed_holder: TrackRowChangedHolder,
-    pub(crate) track_rows_changed_holder: TrackRowsChangedHolder,
+    pub(crate) artwork_changed_holder: ArtworkChangedHolder,
     pub(crate) artwork_loader: ArtworkLoader,
     pub(crate) track_context_invocation: TrackContextInvocationState,
 }
@@ -213,9 +211,7 @@ fn install_get_info(context: &GlobalShortcutContext) {
         parent_window: &parent_window,
         runtime: &context.runtime,
         command_controller: &context.command_controller,
-        library_changed_holder: &context.library_changed_holder,
-        track_row_changed_holder: &context.track_row_changed_holder,
-        track_rows_changed_holder: &context.track_rows_changed_holder,
+        artwork_changed_holder: &context.artwork_changed_holder,
         playback_changed: context.playback_changed.clone(),
         artwork_loader: &context.artwork_loader,
     });

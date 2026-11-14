@@ -69,6 +69,7 @@ mod track_context_ops;
 mod track_info;
 mod track_summary;
 mod track_table;
+mod track_view_update;
 mod util;
 mod verified_duplicates;
 mod window_chrome;
@@ -126,84 +127,21 @@ const DUPLICATES_VIEW: &str = "duplicates";
 pub(crate) type SharedRuntime = Rc<RefCell<ApplicationRuntime>>;
 pub(crate) type LibraryChangedCallback = Rc<dyn Fn()>;
 pub(crate) type LibraryChangedHolder = Rc<RefCell<Option<LibraryChangedCallback>>>;
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TrackRowChangedKind {
-    /// Track fields changed, but album grouping stayed intact. Tables update
-    /// their row and Albums can patch the affected album in place.
-    Data,
-    /// Track fields that define duplicate candidate identity changed, while
-    /// Albums can still patch the affected album in place.
-    DuplicateGrouping,
-    /// Track fields that define an Albums bucket or its tile subtitle changed.
-    /// Tables update their row, then Albums must regroup.
-    AlbumStructure,
-    /// Track fields changed in a way that affects both Albums grouping and
-    /// duplicate candidate identity.
-    AlbumAndDuplicateGrouping,
-    /// Track fields changed outside the Albums view model, such as rating or
-    /// play count. Tables update their row and Albums stays untouched.
-    TableOnly,
-    /// Embedded artwork changed without a SQLite row change.
-    Artwork,
-}
-
-impl TrackRowChangedKind {
-    pub(crate) fn for_metadata_change(change: &sustain_app_runtime::MetadataChange) -> Self {
-        match (
-            metadata_change_affects_album_structure(change),
-            metadata_change_affects_duplicate_grouping(change),
-        ) {
-            (true, true) => Self::AlbumAndDuplicateGrouping,
-            (true, false) => Self::AlbumStructure,
-            (false, true) => Self::DuplicateGrouping,
-            (false, false) => Self::Data,
-        }
-    }
-
-    pub(crate) fn affects_album_structure(self) -> bool {
-        matches!(self, Self::AlbumStructure | Self::AlbumAndDuplicateGrouping)
-    }
-
-    pub(crate) fn affects_duplicate_grouping(self) -> bool {
-        matches!(
-            self,
-            Self::DuplicateGrouping | Self::AlbumAndDuplicateGrouping
-        )
-    }
-}
-
-fn metadata_change_affects_album_structure(change: &sustain_app_runtime::MetadataChange) -> bool {
-    field_changed(&change.artist)
-        || field_changed(&change.album)
-        || field_changed(&change.album_artist)
-        || field_changed(&change.year)
-        || field_changed(&change.compilation)
-}
-
-fn metadata_change_affects_duplicate_grouping(
-    change: &sustain_app_runtime::MetadataChange,
-) -> bool {
-    field_changed(&change.title) || field_changed(&change.artist) || field_changed(&change.album)
-}
-
-fn field_changed<T>(field: &sustain_app_runtime::FieldChange<T>) -> bool {
-    !matches!(field, sustain_app_runtime::FieldChange::Unchanged)
-}
-
-pub(crate) type TrackRowChangedCallback =
-    Rc<dyn Fn(sustain_app_runtime::TrackId, TrackRowChangedKind)>;
-pub(crate) type TrackRowChangedHolder = Rc<RefCell<Option<TrackRowChangedCallback>>>;
-pub(crate) type TrackRowsChangedCallback =
-    Rc<dyn Fn(&[sustain_app_runtime::TrackId], TrackRowChangedKind)>;
-pub(crate) type TrackRowsChangedHolder = Rc<RefCell<Option<TrackRowsChangedCallback>>>;
-/// Tracks that have left the library, and the track they were merged into
-/// when they left by duplicate consolidation.
+/// Applies the view work a batch of committed track changes calls for.
+pub(crate) type TrackViewUpdateCallback = Rc<dyn Fn(&track_view_update::TrackViewUpdate)>;
+/// Fired when the artwork embedded in tracks' files changed. Embedded
+/// artwork is not a library field, so the runtime's committed track
+/// changes do not report it; whoever changed it reports it here, after
+/// updating the artwork loader's cache.
+pub(crate) type ArtworkChangedCallback = Rc<dyn Fn(&[sustain_app_runtime::TrackId])>;
+pub(crate) type ArtworkChangedHolder = Rc<RefCell<Option<ArtworkChangedCallback>>>;
+/// Tracks that have left the library.
 pub(crate) struct TracksRemoved {
     pub(crate) track_ids: std::collections::HashSet<sustain_app_runtime::TrackId>,
-    /// The survivors of the consolidations that removed the tracks: their
-    /// data changed, and the removed tracks' playlist entries now point at
-    /// them. Empty for a plain removal.
-    pub(crate) survivors: Vec<sustain_app_runtime::TrackId>,
+    /// Whether the tracks left by duplicate consolidation, which points
+    /// their playlist entries at the tracks they were merged into. The
+    /// survivors' own changes arrive as track changes like any other.
+    pub(crate) merged: bool,
 }
 /// Fired after tracks leave the library. Views drop their rows in place
 /// rather than rebuilding, so the user keeps their scroll position and the
@@ -248,7 +186,7 @@ pub(crate) type AnalysisProgressReceiver =
     async_channel::Receiver<sustain_app_runtime::AnalysisProgress>;
 pub(crate) type OnlineProgressReceiver =
     async_channel::Receiver<sustain_app_runtime::OnlineProgress>;
-pub(crate) type TrackUpdatedReceiver = async_channel::Receiver<sustain_app_runtime::TrackId>;
+pub(crate) type TrackUpdatedReceiver = async_channel::Receiver<sustain_app_runtime::TrackUpdated>;
 pub(crate) type SmartShuffleRebuildResultReceiver =
     async_channel::Receiver<sustain_app_runtime::SmartShuffleRebuildResult>;
 pub(crate) type DeviceSyncEventReceiver =
@@ -331,7 +269,7 @@ pub fn run(
     // the library store; without this, scheduler writes (analysis BPM,
     // online lyrics/tags) would not surface until the next launch.
     let (track_updated_tx, track_updated_rx) =
-        async_channel::unbounded::<sustain_app_runtime::TrackId>();
+        async_channel::unbounded::<sustain_app_runtime::TrackUpdated>();
     runtime.set_track_updated_sink(track_updated_tx);
 
     // The Smart Shuffle scheduler owns its result channel internally
@@ -593,64 +531,4 @@ fn start_mpris(
             let _ = command_tx.try_send(command);
         }),
     })
-}
-
-#[cfg(test)]
-mod track_row_changed_kind_tests {
-    use sustain_app_runtime::{FieldChange, MetadataChange};
-
-    use super::TrackRowChangedKind;
-
-    #[test]
-    fn album_grouping_metadata_changes_regroup_albums() {
-        let mut change = MetadataChange {
-            album: FieldChange::Set("New Album".to_owned()),
-            ..MetadataChange::default()
-        };
-        assert_eq!(
-            TrackRowChangedKind::for_metadata_change(&change),
-            TrackRowChangedKind::AlbumAndDuplicateGrouping
-        );
-        assert!(TrackRowChangedKind::for_metadata_change(&change).affects_album_structure());
-        assert!(TrackRowChangedKind::for_metadata_change(&change).affects_duplicate_grouping());
-
-        change = MetadataChange {
-            year: FieldChange::Set(2026),
-            ..MetadataChange::default()
-        };
-        assert_eq!(
-            TrackRowChangedKind::for_metadata_change(&change),
-            TrackRowChangedKind::AlbumStructure
-        );
-        assert!(TrackRowChangedKind::for_metadata_change(&change).affects_album_structure());
-        assert!(!TrackRowChangedKind::for_metadata_change(&change).affects_duplicate_grouping());
-    }
-
-    #[test]
-    fn duplicate_grouping_only_metadata_changes_patch_album_in_place_and_rescan_duplicates() {
-        let change = MetadataChange {
-            title: FieldChange::Set("New Title".to_owned()),
-            ..MetadataChange::default()
-        };
-        assert_eq!(
-            TrackRowChangedKind::for_metadata_change(&change),
-            TrackRowChangedKind::DuplicateGrouping
-        );
-        assert!(!TrackRowChangedKind::for_metadata_change(&change).affects_album_structure());
-        assert!(TrackRowChangedKind::for_metadata_change(&change).affects_duplicate_grouping());
-    }
-
-    #[test]
-    fn non_grouping_metadata_changes_patch_visible_rows_only() {
-        let change = MetadataChange {
-            genre: FieldChange::Set("House".to_owned()),
-            ..MetadataChange::default()
-        };
-        assert_eq!(
-            TrackRowChangedKind::for_metadata_change(&change),
-            TrackRowChangedKind::Data
-        );
-        assert!(!TrackRowChangedKind::for_metadata_change(&change).affects_album_structure());
-        assert!(!TrackRowChangedKind::for_metadata_change(&change).affects_duplicate_grouping());
-    }
 }

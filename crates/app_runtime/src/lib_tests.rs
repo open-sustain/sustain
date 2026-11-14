@@ -51,6 +51,7 @@ use super::{
     run_library_scan_task,
 };
 use crate::{
+    TrackChange, TrackChanges, TrackFields, TrackUpdated,
     file_presence::{FilePresence, probe_file_presence, probe_path_entry_presence},
     managed_library::{
         ManagedLibraryFilesystemError, ManagedLibraryFilesystemValidator, file_ops::FileIdentity,
@@ -824,7 +825,7 @@ fn scan_snapshot_cannot_clobber_newer_statistics_in_store_or_runtime() {
     store
         .update_track_statistics(track_id, &newer_statistics)
         .expect("commit newer statistics");
-    runtime.apply_track_updated(track_id);
+    runtime.apply_track_updated(background_update(track_id));
 
     let result = run_library_scan_task(task).expect("run scan");
     runtime.apply_library_scan_result(result);
@@ -1890,7 +1891,7 @@ fn consolidation_snapshot_cannot_clobber_newer_statistics_in_store_or_runtime() 
     store
         .update_track_statistics(track_id, &newer_statistics)
         .expect("commit newer statistics");
-    runtime.apply_track_updated(track_id);
+    runtime.apply_track_updated(background_update(track_id));
 
     let result = run_library_consolidation_task(task).expect("run consolidation");
     runtime.apply_library_consolidation_result(result);
@@ -2300,6 +2301,45 @@ fn library_path_change_probe_failure_preserves_existing_availability() {
         .expect("path-change warning");
     assert_eq!(notification.severity, NotificationSeverity::Warning);
     assert!(notification.body.contains("1 could not be checked"));
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn library_path_change_adopts_no_availability_the_store_did_not_commit() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    let id = track_id(104);
+    assert_eq!(store.save_track(test_track(id, "track.flac")), Ok(()));
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    store.set_fail_update_track_locations(true);
+
+    let result = runtime
+        .reconcile_track_availability_after_library_path_change_with(root.clone(), |_| {
+            FilePresence::Absent
+        });
+
+    assert_eq!(result, Err(ApplicationRuntimeError::LibraryStoreFailed));
+    assert!(!runtime.library_tracks()[0].location.is_missing());
+    assert!(runtime.take_track_changes().is_empty());
+
+    store.set_fail_update_track_locations(false);
+    runtime
+        .reconcile_track_availability_after_library_path_change_with(root.clone(), |_| {
+            FilePresence::Absent
+        })
+        .expect("mark the track missing");
+
+    assert!(runtime.library_tracks()[0].location.is_missing());
+    assert_eq!(
+        runtime.take_track_changes(),
+        TrackChanges::from([(id, fields_changed(TrackFields::LOCATION))])
+    );
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }
@@ -4436,6 +4476,213 @@ fn managed_metadata_retarget_event_reloads_sqlite_and_surfaces_failure() {
     assert!(runtime.notifications().persistent_stack().is_empty());
 }
 
+/// A runtime over a fresh in-memory store holding `tracks`.
+fn runtime_holding(tracks: Vec<Track>) -> (ApplicationRuntime, Arc<SqliteLibraryStore>) {
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    for track in tracks {
+        assert_eq!(store.save_track(track), Ok(()));
+    }
+    let runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    (runtime, store)
+}
+
+#[test]
+fn track_changes_wake_their_observer_once_per_take() {
+    let (mut runtime, _store) = runtime_holding(vec![
+        test_track(track_id(1), "a.flac"),
+        test_track(track_id(2), "b.flac"),
+    ]);
+    let wakes = count_track_change_wakes(&mut runtime);
+    let rate = |runtime: &mut ApplicationRuntime, id: i64, stars: u8| {
+        runtime
+            .handle_command(ApplicationCommand::SetRating {
+                track_id: track_id(id),
+                rating: Rating::new(stars).expect("rating"),
+            })
+            .expect("rate");
+    };
+
+    rate(&mut runtime, 1, 3);
+    rate(&mut runtime, 2, 4);
+    rate(&mut runtime, 1, 5);
+    assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        runtime.take_track_changes(),
+        TrackChanges::from([
+            (track_id(1), fields_changed(TrackFields::RATING)),
+            (track_id(2), fields_changed(TrackFields::RATING)),
+        ])
+    );
+
+    // A change committed after the take, as while the views apply the
+    // batch, wakes the observer again rather than waiting unseen.
+    rate(&mut runtime, 2, 1);
+    assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[test]
+fn an_observer_installed_after_changes_is_woken_at_once() {
+    let (mut runtime, _store) = runtime_holding(vec![test_track(track_id(1), "a.flac")]);
+    runtime
+        .handle_command(ApplicationCommand::SetRating {
+            track_id: track_id(1),
+            rating: Rating::new(2).expect("rating"),
+        })
+        .expect("rate");
+
+    let wakes = count_track_change_wakes(&mut runtime);
+
+    assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_write_that_changes_nothing_publishes_nothing() {
+    let (mut runtime, _store) = runtime_holding(vec![test_track(track_id(1), "a.flac")]);
+    let wakes = count_track_change_wakes(&mut runtime);
+
+    runtime.apply_track_updated(background_update(track_id(1)));
+
+    assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(runtime.take_track_changes().is_empty());
+}
+
+#[test]
+fn an_analysis_announcement_publishes_an_analysis_change_even_with_an_unchanged_row() {
+    // Analysis can persist a waveform and acoustics while leaving a
+    // user-set BPM and key alone: the row reads back unchanged.
+    let (mut runtime, _store) = runtime_holding(vec![test_track(track_id(1), "a.flac")]);
+
+    runtime.apply_track_updated(TrackUpdated {
+        track_id: track_id(1),
+        analysis: true,
+    });
+
+    assert_eq!(
+        runtime.take_track_changes(),
+        TrackChanges::from([(
+            track_id(1),
+            TrackChange {
+                fields: TrackFields::NONE,
+                analysis: true,
+            }
+        )])
+    );
+}
+
+#[test]
+fn an_adopted_snapshot_publishes_the_changes_nobody_announced() {
+    let (mut runtime, store) = runtime_holding(vec![
+        test_track(track_id(1), "a.flac"),
+        test_track(track_id(2), "b.flac"),
+        test_track(track_id(3), "c.flac"),
+    ]);
+    // A background write lands in SQLite before a wholesale reload reads
+    // the library, and is only announced after it: reading the track back
+    // then finds nothing new.
+    retitle(store.as_ref(), track_id(2), "Enriched");
+    let mut snapshot = store.tracks().expect("snapshot");
+    snapshot.retain(|track| track.id != track_id(3));
+
+    runtime.adopt_library_tracks(snapshot);
+    runtime.apply_track_updated(background_update(track_id(2)));
+
+    assert_eq!(
+        runtime.take_track_changes(),
+        TrackChanges::from([(track_id(2), fields_changed(TrackFields::TITLE))]),
+        "the reload publishes the enrichment; a track leaving is reported elsewhere"
+    );
+}
+
+#[test]
+fn a_managed_edit_publishes_when_its_retarget_commits_not_when_it_is_accepted() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create library root");
+    std::fs::write(root.join("a.flac"), b"audio").expect("write track");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    assert_eq!(store.save_track(test_track(track_id(1), "a.flac")), Ok(()));
+    let mut settings = UserSettings::with_library_path(Some(root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store, Arc::new(TestMetadataService))
+            .expect("library services initialize");
+    let (sink, events) = async_channel::unbounded();
+    runtime.set_metadata_writer_event_sink(sink);
+    runtime.start_metadata_writer().expect("start writer");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateMetadata {
+            track_id: track_id(1),
+            change: Box::new(MetadataChange {
+                title: FieldChange::Set("Renamed".to_owned()),
+                ..MetadataChange::default()
+            }),
+        }),
+        Ok(())
+    );
+    assert!(
+        runtime.take_track_changes().is_empty(),
+        "accepting the edit commits nothing yet"
+    );
+
+    let retarget = loop {
+        let event = events
+            .recv_blocking()
+            .expect("the writer reports the retarget");
+        if matches!(event, crate::MetadataWriterEvent::ManagedRetarget(_)) {
+            break event;
+        }
+        runtime.apply_metadata_writer_event(event);
+    };
+    runtime.apply_metadata_writer_event(retarget);
+    runtime.shutdown_metadata_writer();
+
+    let change = runtime
+        .take_track_changes()
+        .remove(&track_id(1))
+        .expect("the committed retarget is published");
+    assert!(
+        change
+            .fields
+            .contains(TrackFields::TITLE | TrackFields::LOCATION)
+    );
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn a_retarget_that_fails_after_committing_still_publishes_the_committed_row() {
+    let (mut runtime, store) = runtime_holding(vec![test_track(track_id(1), "loose.flac")]);
+    store
+        .apply_track_metadata_change_and_location_and_enqueue_mirror(
+            track_id(1),
+            &MetadataChange {
+                title: FieldChange::Set("New".to_owned()),
+                ..MetadataChange::default()
+            },
+            &track_location("Artist/Album/New.flac"),
+        )
+        .expect("commit retarget");
+
+    runtime.apply_metadata_writer_event(crate::MetadataWriterEvent::ManagedRetarget(
+        crate::ManagedMetadataRetargetResult {
+            track_id: track_id(1),
+            outcome: Err(ApplicationRuntimeError::LibraryConsolidationFailed),
+            empty_directory_cleanup_failed: false,
+        },
+    ));
+
+    assert_eq!(
+        runtime.take_track_changes(),
+        TrackChanges::from([(
+            track_id(1),
+            fields_changed(TrackFields::TITLE | TrackFields::LOCATION)
+        )])
+    );
+}
+
 #[test]
 fn pending_managed_metadata_retarget_blocks_structural_library_operations_only() {
     let root = unique_test_directory();
@@ -6070,9 +6317,9 @@ fn failed_play_registration_retries_after_stop_without_double_incrementing() {
 }
 
 #[test]
-fn registering_a_play_fires_track_data_observer() {
+fn registering_a_play_publishes_the_statistics_change() {
     // Regression for issue #46: committing a play increment must
-    // notify the UI so the table row repaints its play-count and
+    // reach the UI so the table row repaints its play-count and
     // last-played columns live, rather than only after a restart.
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
@@ -6094,12 +6341,6 @@ fn registering_a_play_fires_track_data_observer() {
     .with_monotonic_clock(monotonic_clock.clone())
     .with_playback_service(Box::new(NullPlaybackService::new()));
 
-    let observed: Arc<std::sync::Mutex<Vec<TrackId>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let observed_clone = observed.clone();
-    runtime.set_track_data_observer(Box::new(move |id| {
-        observed_clone.lock().expect("lock").push(id);
-    }));
-
     runtime
         .handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
             track_id: id,
@@ -6118,12 +6359,14 @@ fn registering_a_play_fires_track_data_observer() {
         .expect("tick");
     }
     assert!(
-        observed.lock().expect("lock").is_empty(),
-        "observer must not fire before a play is committed"
+        !runtime
+            .take_track_changes()
+            .values()
+            .any(|change| change.fields.intersects(TrackFields::STATISTICS)),
+        "no statistics change before a play is committed"
     );
 
-    // The tick that crosses the threshold commits the play and must
-    // notify the observer exactly once, for the played track.
+    // The tick that crosses the threshold commits the play.
     advance_playback_tick(
         &mut runtime,
         monotonic_clock.as_ref(),
@@ -6131,9 +6374,9 @@ fn registering_a_play_fires_track_data_observer() {
     )
     .expect("tick that crosses threshold");
     assert_eq!(
-        observed.lock().expect("lock").as_slice(),
-        &[id],
-        "committing a play must fire the data observer for that track"
+        runtime.take_track_changes(),
+        TrackChanges::from([(id, fields_changed(TrackFields::STATISTICS))]),
+        "committing a play publishes the played track's statistics"
     );
 
     std::fs::remove_dir_all(root).expect("remove test library");
@@ -6583,7 +6826,7 @@ fn assert_playlist_track_ids(
 }
 
 #[test]
-fn apply_track_updated_reloads_from_store_and_fires_observer() {
+fn apply_track_updated_reloads_from_store_and_publishes_what_changed() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
     std::fs::write(root.join("a.flac"), b"audio").expect("write a");
@@ -6622,14 +6865,9 @@ fn apply_track_updated_reloads_from_store_and_fires_observer() {
         )
         .expect("mutate");
 
-    // Hook the observer so we can prove it ran with the right id.
-    let observed: Arc<std::sync::Mutex<Vec<TrackId>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let observed_clone = observed.clone();
-    runtime.set_track_data_observer(Box::new(move |id| {
-        observed_clone.lock().expect("lock").push(id);
-    }));
+    let wakes = count_track_change_wakes(&mut runtime);
 
-    runtime.apply_track_updated(track_id(1));
+    runtime.apply_track_updated(background_update(track_id(1)));
 
     assert_eq!(
         runtime
@@ -6640,7 +6878,11 @@ fn apply_track_updated_reloads_from_store_and_fires_observer() {
         Some("After"),
         "in-memory copy must be refreshed from the store"
     );
-    assert_eq!(observed.lock().expect("lock").as_slice(), &[track_id(1)]);
+    assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        runtime.take_track_changes(),
+        TrackChanges::from([(track_id(1), fields_changed(TrackFields::TITLE))])
+    );
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }
@@ -6649,7 +6891,7 @@ fn apply_track_updated_reloads_from_store_and_fires_observer() {
 /// receiver, for the track-reconciliation tests.
 fn reconciling_runtime(
     store: Arc<crate::test_store::FaultyStore>,
-) -> (ApplicationRuntime, async_channel::Receiver<TrackId>) {
+) -> (ApplicationRuntime, async_channel::Receiver<TrackUpdated>) {
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -6685,12 +6927,12 @@ fn reconciliation_notifications(runtime: &ApplicationRuntime) -> usize {
         .count()
 }
 
-/// The next id the runtime announces on its track-updated sink.
-fn next_announced(announced: &async_channel::Receiver<TrackId>) -> TrackId {
+/// The next track the runtime announces on its track-updated sink.
+fn next_announced(announced: &async_channel::Receiver<TrackUpdated>) -> TrackUpdated {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        if let Ok(track_id) = announced.try_recv() {
-            return track_id;
+        if let Ok(update) = announced.try_recv() {
+            return update;
         }
         assert!(
             std::time::Instant::now() < deadline,
@@ -6712,8 +6954,8 @@ fn a_failed_track_read_back_is_retried_and_adopts_the_latest_change() {
 
     retitle(store.as_ref(), track_id(1), "Committed");
     store.set_fail_track_read(true);
-    runtime.apply_track_updated(track_id(1));
-    runtime.apply_track_updated(track_id(1));
+    runtime.apply_track_updated(background_update(track_id(1)));
+    runtime.apply_track_updated(background_update(track_id(1)));
 
     assert_eq!(library_title(&runtime, track_id(1)), None);
     assert_eq!(
@@ -6727,7 +6969,7 @@ fn a_failed_track_read_back_is_retried_and_adopts_the_latest_change() {
     retitle(store.as_ref(), track_id(1), "Newer");
     store.set_fail_track_read(false);
     let retried = next_announced(&announced);
-    assert_eq!(retried, track_id(1));
+    assert_eq!(retried, background_update(track_id(1)));
     runtime.apply_track_updated(retried);
 
     assert_eq!(
@@ -6742,6 +6984,41 @@ fn a_failed_track_read_back_is_retried_and_adopts_the_latest_change() {
 }
 
 #[test]
+fn a_successful_read_publishes_the_analysis_change_of_a_failed_one() {
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store
+        .save_track(test_track(track_id(1), "a.flac"))
+        .expect("seed");
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+
+    store.set_fail_track_read(true);
+    runtime.apply_track_updated(TrackUpdated {
+        track_id: track_id(1),
+        analysis: true,
+    });
+    // An announcement that does not touch the analysis reads the track
+    // back before any retry does.
+    store.set_fail_track_read(false);
+    runtime.apply_track_updated(background_update(track_id(1)));
+
+    assert_eq!(
+        runtime.take_track_changes(),
+        TrackChanges::from([(
+            track_id(1),
+            TrackChange {
+                fields: TrackFields::NONE,
+                analysis: true,
+            }
+        )])
+    );
+    assert_eq!(reconciliation_notifications(&runtime), 0);
+}
+
+#[test]
 fn a_retried_track_deleted_meanwhile_is_resolved_without_coming_back() {
     let backing: Arc<dyn LibraryStore> =
         Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
@@ -6752,7 +7029,7 @@ fn a_retried_track_deleted_meanwhile_is_resolved_without_coming_back() {
     let (mut runtime, announced) = reconciling_runtime(store.clone());
 
     store.set_fail_track_read(true);
-    runtime.apply_track_updated(track_id(1));
+    runtime.apply_track_updated(background_update(track_id(1)));
     store.set_fail_track_read(false);
     runtime
         .handle_command(ApplicationCommand::RemoveTracksFromLibrary {
@@ -6778,14 +7055,14 @@ fn a_track_read_that_keeps_failing_keeps_being_retried() {
     let (mut runtime, announced) = reconciling_runtime(store.clone());
 
     store.set_fail_track_read(true);
-    runtime.apply_track_updated(track_id(1));
+    runtime.apply_track_updated(background_update(track_id(1)));
     let retried = next_announced(&announced);
     runtime.apply_track_updated(retried);
 
     assert_eq!(reconciliation_notifications(&runtime), 1);
     assert_eq!(
         next_announced(&announced),
-        track_id(1),
+        background_update(track_id(1)),
         "a failed retry schedules the next one"
     );
 }
@@ -6816,7 +7093,7 @@ fn apply_track_updated_performs_one_keyed_lookup_and_no_full_scan() {
     counts.track.store(0, Ordering::SeqCst);
     counts.tracks.store(0, Ordering::SeqCst);
 
-    runtime.apply_track_updated(track_id(7));
+    runtime.apply_track_updated(background_update(track_id(7)));
 
     assert_eq!(
         counts.track.load(Ordering::SeqCst),
@@ -7029,6 +7306,32 @@ fn file_presence_probes_distinguish_reachable_files_from_directory_entries() {
     );
 
     std::fs::remove_dir_all(&dir).expect("remove probe directory");
+}
+
+fn background_update(track_id: TrackId) -> TrackUpdated {
+    TrackUpdated {
+        track_id,
+        analysis: false,
+    }
+}
+
+fn fields_changed(fields: TrackFields) -> TrackChange {
+    TrackChange {
+        fields,
+        analysis: false,
+    }
+}
+
+/// Count how often the runtime wakes its track-changes observer.
+fn count_track_change_wakes(
+    runtime: &mut ApplicationRuntime,
+) -> Arc<std::sync::atomic::AtomicUsize> {
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = wakes.clone();
+    runtime.set_track_changes_observer(Box::new(move || {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    wakes
 }
 
 fn test_track(track_id: TrackId, path: &str) -> Track {

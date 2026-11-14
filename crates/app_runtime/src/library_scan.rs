@@ -81,8 +81,7 @@ impl ApplicationRuntime {
         let summary = result.summary;
         self.last_scan_summary = Some(summary.clone());
         self.last_scan_failures = result.failures;
-        self.library_tracks = result.tracks;
-        self.rebuild_search_index();
+        self.adopt_library_tracks(result.tracks);
         self.refresh_playback_queue_track_ids();
         self.finish_library_task(LibraryTaskKind::Scan);
         let severity = if summary.missing_reconciliation_skipped {

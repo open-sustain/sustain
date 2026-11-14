@@ -23,8 +23,7 @@ use super::{
     track_context::TrackRowContextMenu,
 };
 use model::{
-    AlbumKey, AlbumTrackReplacement, AlbumViewModel, album_subtitle, album_track, group_albums,
-    replace_track_in_album,
+    AlbumKey, AlbumViewModel, album_subtitle, album_track, group_albums, replace_tracks_in_albums,
 };
 use track_list::AlbumTrackListView;
 
@@ -325,72 +324,102 @@ impl AlbumsView {
         self.regroup_and_apply_search();
     }
 
-    /// Apply an in-place update for a single track that already lives in
-    /// the same album bucket, mirroring the row-level refresh the Songs and
-    /// Playlists tables run on `track_data_observer`. Album-structure
-    /// metadata edits use `replace_tracks()` instead so regrouping stays
-    /// correct. Only the row holding the affected album repaints; the selected
-    /// album, scroll position, and every untouched row's artwork stay intact.
+    /// Apply in-place updates for tracks that already live in the same
+    /// album buckets, mirroring the row-level refresh the Songs and
+    /// Playlists tables run for committed track changes. Album-structure
+    /// changes use `replace_tracks()` instead so regrouping stays correct.
+    /// Only the rows holding an affected album repaint; the selected album,
+    /// scroll position, and every untouched row's artwork stay intact.
     ///
     /// A full `replace_tracks` here would tear down the entire grid,
     /// drop the user's expanded album, and scroll back to the top every
-    /// time a background lyrics/tags/artwork/BPM/key/waveform job
-    /// finished a single track.
-    pub(crate) fn update_track(&self, track_id: TrackId) {
+    /// time a background lyrics/tags/BPM/key job finished a track. The
+    /// whole batch is patched in one pass over the albums, so a batch of
+    /// thousands (a library organize moving every file) costs no more
+    /// than one regroup.
+    pub(crate) fn update_tracks(&self, track_ids: &[TrackId]) {
         // While dormant, or due a regroup, there is no grouped state worth
-        // patching: the runtime owns the authoritative track and the next
-        // grouping reads it fresh, so a background per-track update costs
-        // nothing here.
+        // patching: the runtime owns the authoritative tracks and the next
+        // grouping reads them fresh, so a background update costs nothing
+        // here.
         if !self.has_current_grouping() {
             return;
         }
 
-        // Keyed O(log n) lookup of the refreshed track, not a linear scan
-        // of the whole library.
-        let new_track_vm = {
+        // Keyed O(log n) lookups of the refreshed tracks, not a linear
+        // scan of the whole library.
+        let (new_tracks, library_root) = {
             let runtime = self.runtime.borrow();
-            let Some(track) = runtime.library_track(track_id) else {
-                return;
-            };
+            let new_tracks = track_ids
+                .iter()
+                .filter_map(|track_id| {
+                    runtime
+                        .library_track(*track_id)
+                        .map(|track| (*track_id, album_track(track)))
+                })
+                .collect::<HashMap<_, _>>();
             (
-                album_track(track),
+                new_tracks,
                 runtime.settings().library_path().map(ToOwned::to_owned),
             )
         };
-
-        let (new_track_vm, library_root) = new_track_vm;
-        let Some(replacement) = replace_track_in_album(
-            &mut self.all_albums.borrow_mut(),
-            track_id,
-            &new_track_vm,
-            library_root.as_deref(),
-        ) else {
-            return;
-        };
-        let affected_album_key = match replacement {
-            AlbumTrackReplacement::Updated(album_key) => album_key,
-            AlbumTrackReplacement::Unchanged(_) => return,
-        };
-
-        // `albums` is a separately-cloned filtered view of
-        // `all_albums`; the on-screen rows read from it, so the same
-        // patch has to land here when the album survived the active
-        // search.
-        let visible_album_present = replace_track_in_album(
-            &mut self.albums.borrow_mut(),
-            track_id,
-            &new_track_vm,
-            library_root.as_deref(),
-        )
-        .is_some();
-        if !visible_album_present {
+        if new_tracks.is_empty() {
             return;
         }
 
-        self.refresh_album_widgets(
-            &affected_album_key,
-            AlbumRowRefresh::Detail(&affected_album_key),
+        let updated = replace_tracks_in_albums(
+            &mut self.all_albums.borrow_mut(),
+            &new_tracks,
+            library_root.as_deref(),
         );
+        if updated.is_empty() {
+            return;
+        }
+
+        // `albums` is a separately-cloned filtered view of
+        // `all_albums`; the on-screen rows read from it, so the same
+        // patch has to land here for the albums that survived the active
+        // search.
+        let visible_updated = replace_tracks_in_albums(
+            &mut self.albums.borrow_mut(),
+            &new_tracks,
+            library_root.as_deref(),
+        );
+        self.refresh_patched_albums(&visible_updated);
+    }
+
+    /// Re-render the realized rows of the albums at these indices of the
+    /// shown albums, which the patch already located: a batch touching
+    /// most of a large library must not search the albums once per album.
+    fn refresh_patched_albums(&self, album_indices: &[usize]) {
+        if album_indices.is_empty() {
+            return;
+        }
+        let columns = self.visible_columns.get().max(1);
+        let detail_tile_row_index = self.selected_detail_tile_row_index();
+        let selected_album = self.selected_album.borrow().clone();
+        let patched_keys = {
+            let albums = self.albums.borrow();
+            album_indices
+                .iter()
+                .map(|album_index| (*album_index, albums[*album_index].key.clone()))
+                .collect::<Vec<_>>()
+        };
+        for (album_index, album_key) in &patched_keys {
+            let refresh = AlbumRowRefresh::Detail(album_key);
+            self.refresh_row_widget(
+                tile_list_position_for_tile_row(album_index / columns, detail_tile_row_index),
+                refresh,
+            );
+            if selected_album.as_ref() == Some(album_key)
+                && let Some(detail_tile_row_index) = detail_tile_row_index
+            {
+                self.refresh_row_widget(
+                    detail_position_for_tile_row(detail_tile_row_index),
+                    refresh,
+                );
+            }
+        }
     }
 
     pub(crate) fn refresh_track_artwork(&self, track_id: TrackId) {

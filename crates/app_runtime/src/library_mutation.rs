@@ -107,7 +107,10 @@ impl ApplicationRuntime {
         // The actor may have run concurrently with optimistic rating or
         // metadata edits. Reload SQLite by id rather than applying the
         // relocation planner's older snapshot over newer authoritative data.
-        self.apply_track_updated(track_id);
+        self.apply_track_updated(crate::TrackUpdated {
+            track_id,
+            analysis: false,
+        });
         self.refresh_playback_queue_track_ids();
         self.notify_track_availability_observer();
         self.nudge_metadata_writer();

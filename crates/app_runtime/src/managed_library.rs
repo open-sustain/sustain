@@ -180,8 +180,7 @@ impl ApplicationRuntime {
                 existing.location.is_missing() != incoming.location.is_missing()
             })
         });
-        replace_library_track_locations_by_id(&mut self.library_tracks, result.tracks);
-        self.rebuild_search_index();
+        self.adopt_library_track_locations(result.tracks);
         self.refresh_playback_queue_track_ids();
         if flipped_availability {
             self.notify_track_availability_observer();
@@ -536,13 +535,16 @@ pub(crate) struct ManagedMissingTrackRelocationOutcome {
     pub(crate) empty_directory_cleanup_failed: bool,
 }
 
-/// Adopt the locations of `updated_tracks` into `library_tracks`, which is
-/// sorted by id.
-fn replace_library_track_locations_by_id(library_tracks: &mut [Track], updated_tracks: Vec<Track>) {
-    for updated_track in updated_tracks {
-        if let Ok(index) = library_tracks.binary_search_by_key(&updated_track.id, |track| track.id)
-        {
-            library_tracks[index].location = updated_track.location;
+impl ApplicationRuntime {
+    /// Adopt the locations of `updated_tracks` into the library, leaving
+    /// every other field as the library holds it.
+    fn adopt_library_track_locations(&mut self, updated_tracks: Vec<Track>) {
+        for updated_track in updated_tracks {
+            if let Some(index) = self.library_track_index(updated_track.id) {
+                let mut track = self.library_tracks[index].clone();
+                track.location = updated_track.location;
+                self.store_library_track(index, track);
+            }
         }
     }
 }

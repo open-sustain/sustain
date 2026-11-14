@@ -32,9 +32,9 @@ pub use sustain_domain::{
     SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
     SmartShuffleEntropy, SyncDevice, SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock,
     Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
-    TrackColumnSort, TrackContentHash, TrackId, TrackLocation, TrackMetadata, TrackPlaybackSource,
-    TrackRelativePath, UiSettings, UiSidebarSelection, UiWindowSize, UserSettings,
-    VerifiedDuplicateMerge, VolumePercent, YearCount, compare_optional_text,
+    TrackColumnSort, TrackContentHash, TrackFields, TrackId, TrackLocation, TrackMetadata,
+    TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection, UiWindowSize,
+    UserSettings, VerifiedDuplicateMerge, VolumePercent, YearCount, compare_optional_text,
     compute_library_statistics, default_duplicate_merge_choices, duplicate_audio_quality,
     effective_sort_key, highest_quality_duplicate_artwork, matching_tracks, normalize_sort_text,
     track_matches_rule_set,
@@ -113,6 +113,7 @@ pub mod smart_shuffle_scheduler;
 mod test_store;
 #[cfg(test)]
 mod test_waveforms;
+mod track_changes;
 mod track_reconciliation;
 mod youtube_audio_downloader;
 mod youtube_audio_journal;
@@ -138,6 +139,7 @@ pub use sustain_smart_shuffle::{
     INDEX_SCHEMA_VERSION as SMART_SHUFFLE_INDEX_SCHEMA_VERSION, PickMode, SmartShuffleError,
     SmartShuffleIndex,
 };
+pub use track_changes::{TrackChange, TrackChanges, TrackChangesObserver, TrackUpdated};
 
 pub use artwork_fetcher::{ArtworkFetchOutcome, ArtworkFetchResult};
 pub use force_backfill::{ForceBackfillOutcome, ForceBackfillProgress, ForceBackfillSummary};
@@ -517,13 +519,12 @@ pub struct ApplicationRuntime {
     // Channel handed to background workers that mutate the persisted
     // copy of a track behind the runtime's back (analysis fills BPM /
     // key, online lyrics/tags writes a row). Workers push the touched
-    // `TrackId`; the UI shell drains the channel on the main loop and
+    // track; the UI shell drains the channel on the main loop and
     // calls [`Self::apply_track_updated`], which reloads the row from
-    // the library store, replaces it in `library_tracks`, and fires
-    // [`Self::track_data_observer`] so visible widgets repaint. A
-    // failed reload is announced on it again, by
-    // `track_reconciliation`.
-    track_updated_sink: Option<async_channel::Sender<TrackId>>,
+    // the library store, replaces it in `library_tracks`, and records
+    // what changed in `track_changes`. A failed reload is announced on
+    // it again, by `track_reconciliation`.
+    track_updated_sink: Option<async_channel::Sender<TrackUpdated>>,
     // The tracks [`Self::apply_track_updated`] could not read back yet,
     // announced again on `track_updated_sink` until it can.
     track_reconciliation: track_reconciliation::TrackReconciliation,
@@ -542,11 +543,12 @@ pub struct ApplicationRuntime {
     // installs this once to drive its narrow per-row icon refresh —
     // see the design note on [`TrackAvailabilityObserver`].
     track_availability_observer: Option<TrackAvailabilityObserver>,
-    // Fires from [`Self::apply_track_updated`] after the in-memory
-    // copy of a single track has been refreshed from the library
-    // store. The UI shell installs this once to drive its targeted
-    // per-row refresh — see [`TrackDataObserver`].
-    track_data_observer: Option<TrackDataObserver>,
+    // What committed writes changed about each track since the views
+    // last took the changes — see [`track_changes`].
+    track_changes: track_changes::TrackChangeOutbox,
+    // Fires when `track_changes` stops being empty. The UI shell
+    // installs this once and takes the changes on the main loop.
+    track_changes_observer: Option<TrackChangesObserver>,
     // Fires whenever Smart Shuffle's user-visible state changes: an
     // index rebuild starts or completes, or a freshly-loaded index is
     // adopted. The Shuffle preferences tab installs this on open and
@@ -570,15 +572,6 @@ pub type NotificationObserver = Box<dyn Fn()>;
 /// when this fires; observers must defer their work onto the main
 /// loop (e.g. `glib::idle_add_local_once`).
 pub type TrackAvailabilityObserver = Box<dyn Fn()>;
-
-/// Callback fired after [`ApplicationRuntime::apply_track_updated`]
-/// has refreshed a single track in `library_tracks` from the library
-/// store. The UI shell uses this to drive its narrow per-row repaint
-/// (analogous to [`TrackAvailabilityObserver`] but scoped to a
-/// specific id). Same re-entrancy contract as the other observers:
-/// the runtime is mid-borrow when this fires, so the closure must
-/// defer back-into-runtime work onto the main loop.
-pub type TrackDataObserver = Box<dyn Fn(TrackId)>;
 
 /// Callback fired whenever Smart Shuffle's user-visible state
 /// changes. Same shape and re-entrancy contract as
@@ -787,7 +780,8 @@ impl ApplicationRuntime {
             notifications: NotificationCenter::new(),
             notification_observer: None,
             track_availability_observer: None,
-            track_data_observer: None,
+            track_changes: track_changes::TrackChangeOutbox::default(),
+            track_changes_observer: None,
             smart_shuffle_state_observer: None,
         }
     }
@@ -1094,7 +1088,10 @@ impl ApplicationRuntime {
         match event {
             MetadataWriterEvent::Mirror(result) => self.apply_metadata_write_result(result),
             MetadataWriterEvent::TrackAvailabilityChanged(track_id) => {
-                self.apply_track_updated(track_id);
+                self.apply_track_updated(TrackUpdated {
+                    track_id,
+                    analysis: false,
+                });
                 if self
                     .library_track(track_id)
                     .is_some_and(|track| track.location.is_missing())
@@ -1127,7 +1124,10 @@ impl ApplicationRuntime {
 
     fn apply_managed_metadata_retarget_result(&mut self, result: ManagedMetadataRetargetResult) {
         self.finish_pending_managed_metadata_retarget(result.track_id);
-        self.apply_track_updated(result.track_id);
+        self.apply_track_updated(TrackUpdated {
+            track_id: result.track_id,
+            analysis: false,
+        });
         match result.outcome {
             // A successful retarget resolves any prior retarget failure. It
             // commits the durable outbox intent but does not prove file tags
@@ -1422,8 +1422,13 @@ impl ApplicationRuntime {
             self.track_updated_sink
                 .clone()
                 .map(|sender| -> analysis_scheduler::TrackUpdatedSink {
+                    // Analysis persists the track's waveform, beat grid
+                    // and acoustics along with any BPM or key it fills.
                     Arc::new(move |track_id| {
-                        let _ = sender.try_send(track_id);
+                        let _ = sender.try_send(TrackUpdated {
+                            track_id,
+                            analysis: true,
+                        });
                     })
                 });
 
@@ -1606,7 +1611,10 @@ impl ApplicationRuntime {
                 .clone()
                 .map(|sender| -> online_scheduler::TrackUpdatedSink {
                     Arc::new(move |track_id| {
-                        let _ = sender.try_send(track_id);
+                        let _ = sender.try_send(TrackUpdated {
+                            track_id,
+                            analysis: false,
+                        });
                     })
                 });
 
@@ -1813,12 +1821,48 @@ impl ApplicationRuntime {
         self.search_index.matches(track_id, normalized_query)
     }
 
-    /// Replace one in-place library track and keep its search document in
-    /// lockstep. The single write path for per-track in-memory updates, so
-    /// the index can never silently drift from `library_tracks`.
+    /// Replace one in-place library track, keep its search document in
+    /// lockstep and record what changed for the views. The single write
+    /// path for per-track in-memory updates, so neither the index nor the
+    /// views can silently drift from `library_tracks`.
     fn store_library_track(&mut self, index: usize, track: Track) {
+        let change = TrackChange {
+            fields: TrackFields::between(&self.library_tracks[index], &track),
+            analysis: false,
+        };
         self.search_index.insert(&track);
+        let track_id = track.id;
         self.library_tracks[index] = track;
+        self.record_track_change(track_id, change);
+    }
+
+    /// Adopt `tracks`, sorted by id, as the whole library: rebuild the
+    /// search index and record every change to a track the library held
+    /// before. A reloaded snapshot can carry writes no one announced to
+    /// the runtime — a background result committed before the snapshot
+    /// was read reads back unchanged afterwards — so only comparing the
+    /// two versions publishes them. Tracks that join or leave the library
+    /// are reported by their own paths.
+    fn adopt_library_tracks(&mut self, tracks: Vec<Track>) {
+        let previous = std::mem::replace(&mut self.library_tracks, tracks);
+        self.rebuild_search_index();
+        let mut previous = previous.iter().peekable();
+        let mut changes = Vec::new();
+        for track in &self.library_tracks {
+            while previous.next_if(|old| old.id < track.id).is_some() {}
+            if let Some(old) = previous.next_if(|old| old.id == track.id) {
+                changes.push((track.id, TrackFields::between(old, track)));
+            }
+        }
+        for (track_id, fields) in changes {
+            self.record_track_change(
+                track_id,
+                TrackChange {
+                    fields,
+                    analysis: false,
+                },
+            );
+        }
     }
 
     /// Rebuild the whole search index after a wholesale `library_tracks`
@@ -2037,15 +2081,37 @@ impl ApplicationRuntime {
     /// (analysis filled BPM, online lyrics/tags wrote a row, etc.).
     /// The UI shell holds the matching receiver and forwards each id
     /// into [`Self::apply_track_updated`] on the main loop.
-    pub fn set_track_updated_sink(&mut self, sink: async_channel::Sender<TrackId>) {
+    pub fn set_track_updated_sink(&mut self, sink: async_channel::Sender<TrackUpdated>) {
         self.track_updated_sink = Some(sink);
     }
 
-    /// Install the observer fired by [`Self::apply_track_updated`].
-    /// The observer must not synchronously re-enter the runtime —
-    /// same contract as [`Self::set_track_availability_observer`].
-    pub fn set_track_data_observer(&mut self, observer: TrackDataObserver) {
-        self.track_data_observer = Some(observer);
+    /// Install the observer fired when committed track changes start
+    /// waiting for [`Self::take_track_changes`]. Fires at once when
+    /// changes already wait, so none recorded before the install is
+    /// stranded. The observer must not synchronously re-enter the
+    /// runtime — same contract as
+    /// [`Self::set_track_availability_observer`].
+    pub fn set_track_changes_observer(&mut self, observer: TrackChangesObserver) {
+        if !self.track_changes.is_empty() {
+            observer();
+        }
+        self.track_changes_observer = Some(observer);
+    }
+
+    /// Every committed track change recorded since the last take, merged
+    /// per track.
+    pub fn take_track_changes(&mut self) -> TrackChanges {
+        self.track_changes.take()
+    }
+
+    /// Record what a committed write changed about `track_id`, waking
+    /// the observer when the change is the first one waiting.
+    fn record_track_change(&mut self, track_id: TrackId, change: TrackChange) {
+        if self.track_changes.record(track_id, change)
+            && let Some(observer) = &self.track_changes_observer
+        {
+            observer();
+        }
     }
 
     /// Install the observer fired whenever Smart Shuffle's state
@@ -2072,29 +2138,17 @@ impl ApplicationRuntime {
         }
     }
 
-    /// Notify the installed [`TrackDataObserver`] that the persisted
-    /// state of a single track changed under it. Callers must have
-    /// already refreshed the matching entry in `library_tracks` so the
-    /// observer reads the new values when it defers back into the
-    /// runtime. Same re-entrancy contract as the other observers: the
-    /// closure must not synchronously re-enter the runtime.
-    pub(crate) fn fire_track_data_observer(&self, track_id: TrackId) {
-        if let Some(observer) = &self.track_data_observer {
-            observer(track_id);
-        }
-    }
-
-    /// Reload the named track from the library store, replace its
+    /// Reload the announced track from the library store, replace its
     /// entry in `library_tracks` (preserving sort order: the vec is
-    /// kept sorted by id and we never reorder), and fire the
-    /// `track_data_observer` so visible widgets can repaint just
-    /// that row. No-op when the track has vanished from the store
+    /// kept sorted by id and we never reorder), and record what changed
+    /// for the views. No-op when the track has vanished from the store
     /// between push and drain — the next library_changed pass will
     /// pick up the deletion. A failed read keeps the track for a
     /// retry, announced again on the track-updated sink after a
     /// backoff, and shows a notification until every such track has
     /// been read back.
-    pub fn apply_track_updated(&mut self, track_id: TrackId) {
+    pub fn apply_track_updated(&mut self, update: TrackUpdated) {
+        let TrackUpdated { track_id, analysis } = update;
         let Some(store) = self.library_store.as_deref() else {
             return;
         };
@@ -2109,30 +2163,48 @@ impl ApplicationRuntime {
                 return;
             }
             Err(error) => {
-                self.track_reconciliation_failed(track_id, &error);
+                self.track_reconciliation_failed(update, &error);
                 return;
             }
         };
-        self.track_reconciled(track_id);
-        // Keep the search document current with the reloaded metadata (an
-        // online enrichment pass can rewrite title/artist/etc).
-        self.search_index.insert(&refreshed);
+        // A failed earlier read of the track may have been announced as an
+        // analysis change this announcement does not repeat.
+        let analysis = self.track_reconciled(track_id) || analysis;
         match self
             .library_tracks
             .binary_search_by_key(&track_id, |track| track.id)
         {
-            Ok(index) => self.library_tracks[index] = refreshed,
+            Ok(index) => self.store_library_track(index, refreshed),
             // Track became visible to the store between the original
             // load and now. Insert in id-sort order so the slice
-            // contract holds.
-            Err(insertion) => self.library_tracks.insert(insertion, refreshed),
+            // contract holds; every field of a track the views never
+            // held is new to them.
+            Err(insertion) => {
+                self.search_index.insert(&refreshed);
+                self.library_tracks.insert(insertion, refreshed);
+                self.record_track_change(
+                    track_id,
+                    TrackChange {
+                        fields: TrackFields::ALL,
+                        analysis: false,
+                    },
+                );
+            }
         }
-        self.fire_track_data_observer(track_id);
+        // Reading the track back cannot reveal its analysis.
+        self.record_track_change(
+            track_id,
+            TrackChange {
+                fields: TrackFields::NONE,
+                analysis,
+            },
+        );
     }
 
-    fn track_reconciliation_failed(&mut self, track_id: TrackId, error: &StoreError) {
+    fn track_reconciliation_failed(&mut self, update: TrackUpdated, error: &StoreError) {
+        let track_id = update.track_id;
         let sink = self.track_updated_sink.as_ref();
-        if self.track_reconciliation.read_failed(track_id, sink) {
+        if self.track_reconciliation.read_failed(update, sink) {
             eprintln!(
                 "Sustain: could not read track {} back from the library database: {error:?}",
                 track_id.get()
@@ -2149,17 +2221,17 @@ impl ApplicationRuntime {
         }
     }
 
-    /// Resolve `track_id` once read back or found gone. Tracks are left
-    /// unresolved only while their notification shows, so without one
-    /// there is nothing to resolve.
-    fn track_reconciled(&mut self, track_id: TrackId) {
-        let Some(id) = self.track_reconciliation.notification() else {
-            return;
-        };
-        if self.track_reconciliation.resolved(track_id) {
+    /// Forget `track_id` as unresolved. Returns whether a failed
+    /// announcement of it said its analysis changed.
+    fn track_reconciled(&mut self, track_id: TrackId) -> bool {
+        let resolved = self.track_reconciliation.resolved(track_id);
+        if resolved.settled
+            && let Some(id) = self.track_reconciliation.notification()
+        {
             self.track_reconciliation.set_notification(None);
             self.dismiss_notification(id);
         }
+        resolved.analysis
     }
 
     pub fn playback_state(&self) -> PlaybackState {

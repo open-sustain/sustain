@@ -3,6 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     rc::Rc,
 };
 
@@ -41,11 +42,19 @@ pub(crate) struct DuplicatesView {
     merge_verified: gtk::Button,
     /// The groups the rows show, for the verified-merge preview.
     groups: Rc<RefCell<Vec<DuplicateGroup>>>,
+    /// Advanced whenever the result of a running scan stops answering
+    /// what the view asks for: the view was left, or the user asked for a
+    /// fresh start (another match mode, the view opened again).
     generation: Rc<Cell<u64>>,
     /// Whether the next scan result must replace the rows rather than
     /// reconcile them: a scan that asked for a fresh start was superseded
     /// before its result arrived.
     replace_pending: Rc<Cell<bool>>,
+    /// At most one scan runs at a time; each reads the whole library.
+    scan_running: Rc<Cell<bool>>,
+    /// Whether the library changed under the running scan, which must
+    /// then be followed by another one.
+    rescan_requested: Rc<Cell<bool>>,
     active: Rc<Cell<bool>>,
     on_summary_refresh: Rc<RefCell<Option<VisibleSummaryRefreshCallback>>>,
 }
@@ -100,6 +109,8 @@ impl DuplicatesView {
             groups: Rc::new(RefCell::new(Vec::new())),
             generation: Rc::new(Cell::new(0)),
             replace_pending: Rc::new(Cell::new(false)),
+            scan_running: Rc::new(Cell::new(false)),
+            rescan_requested: Rc::new(Cell::new(false)),
             active: Rc::new(Cell::new(false)),
             on_summary_refresh: Rc::new(RefCell::new(None)),
         };
@@ -173,19 +184,10 @@ impl DuplicatesView {
         }
     }
 
-    pub(crate) fn update_track_row(&self, track_id: sustain_app_runtime::TrackId) {
-        let row = {
-            let runtime = self.runtime.borrow();
-            let honor_sort_tags = runtime.settings().library.honor_sort_tags;
-            runtime
-                .library_track(track_id)
-                .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
-        };
-        let Some(row) = row else {
-            return;
-        };
+    /// Repaint the rows of these tracks in place, in one table pass.
+    pub(crate) fn update_rows(&self, rows: &HashMap<sustain_app_runtime::TrackId, TrackTableRow>) {
         if let Some(table) = self.table.borrow().as_ref() {
-            table.update_row(track_id, row);
+            table.update_rows(rows);
         }
     }
 
@@ -216,13 +218,22 @@ impl DuplicatesView {
         table
     }
 
+    /// Scan the library for duplicate groups, or, while a scan runs,
+    /// follow it with another. The running scan's result still shows
+    /// unless it no longer answers what the view asks for: it is newer
+    /// than the rows on screen, and a library that keeps changing (an
+    /// analysis sweep) would otherwise keep every result from showing.
     fn scan(&self, update: RowSetUpdate) {
         self.ensure_table();
         if update == RowSetUpdate::Replace {
             self.replace_pending.set(true);
+            self.generation.set(self.generation.get().wrapping_add(1));
         }
-        let generation = self.generation.get().wrapping_add(1);
-        self.generation.set(generation);
+        if self.scan_running.get() {
+            self.rescan_requested.set(true);
+            return;
+        }
+        let generation = self.generation.get();
         self.status.set_text("Scanning for duplicate tracks...");
         self.merge_verified.set_sensitive(false);
         let mode = if self.strict.is_active() {
@@ -264,6 +275,7 @@ impl DuplicatesView {
             );
             return;
         }
+        self.scan_running.set(true);
 
         let view = self.clone();
         glib::MainContext::default().spawn_local(async move {
@@ -273,8 +285,16 @@ impl DuplicatesView {
                 .recv()
                 .await
                 .unwrap_or(Err(ApplicationRuntimeError::LibraryStoreFailed));
-            if view.active.get() && view.generation.get() == generation {
+            view.scan_running.set(false);
+            let rescan = view.rescan_requested.replace(false);
+            if !view.active.get() {
+                return;
+            }
+            if view.generation.get() == generation {
                 view.apply_groups(result);
+            }
+            if rescan {
+                view.scan(RowSetUpdate::Reconcile);
             }
         });
     }

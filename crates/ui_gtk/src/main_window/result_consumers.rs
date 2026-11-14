@@ -7,7 +7,11 @@
 //! `async_channel` receiver (or installs a runtime observer) and applies the
 //! result on the GTK main thread.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use sustain_app_runtime::TrackUpdated;
+
+use crate::track_view_update::TrackViewUpdate;
 
 use super::*;
 
@@ -181,7 +185,7 @@ fn run_once(callback: &PostHydrationStartup) {
 pub(super) fn install_metadata_writer_event_consumer(
     receiver: Option<MetadataWriterEventReceiver>,
     runtime: SharedRuntime,
-    track_row_changed_holder: TrackRowChangedHolder,
+    artwork_changed_holder: ArtworkChangedHolder,
     tracks_removed: TracksRemovedCallback,
     relocation_completed: crate::missing_track::MissingTrackRelocationCompletedCallback,
     artwork_loader: ArtworkLoader,
@@ -231,13 +235,13 @@ pub(super) fn install_metadata_writer_event_consumer(
                 .collect::<Vec<_>>();
             runtime.borrow_mut().apply_metadata_writer_event(event);
             // Events that change track data reload SQLite through
-            // `apply_track_updated`, which fires the standard observer. Plain
-            // mirror completion changes no SQLite row, but artwork consumers
-            // still need a row repaint.
+            // `apply_track_updated`, which records the change for the views.
+            // A completed artwork write changes no SQLite row, but the
+            // artwork the views show comes from the file it rewrote.
             if let Some(track_id) = mirror_track_id
-                && let Some(callback) = track_row_changed_holder.borrow().as_ref()
+                && let Some(callback) = artwork_changed_holder.borrow().as_ref()
             {
-                callback(track_id, TrackRowChangedKind::Artwork);
+                callback(&[track_id]);
             }
             if let Some((track_id, succeeded)) = relocation {
                 relocation_completed(track_id, succeeded);
@@ -259,7 +263,7 @@ pub(super) fn install_metadata_writer_event_consumer(
                 if !track_ids.is_empty() {
                     tracks_removed(&TracksRemoved {
                         track_ids,
-                        survivors: merges.iter().map(|merge| merge.survivor_id).collect(),
+                        merged: true,
                     });
                 }
             }
@@ -322,37 +326,37 @@ pub(super) fn install_online_progress_consumer(
     });
 }
 
-/// Wires the runtime's `track_data_observer` to the shared
-/// per-row refresh callback. The runtime fires this observer after
-/// every `apply_track_updated` — i.e. after a background worker has
-/// mutated a single track in the library store. The deferred
-/// closure invokes the standard row-refresh path so Songs/Albums/
-/// Playlists views all repaint the touched row without rebuilding
-/// the table.
-pub(super) fn install_track_data_observer(
+/// Wires the runtime's committed track changes to the views. The runtime
+/// wakes the observer when changes start waiting; the views take every
+/// waiting change on the next idle, outside the runtime borrow the wake
+/// fires under, and apply them as one batch. A change committed while the
+/// batch applies wakes the observer again for the next one.
+pub(super) fn install_track_changes_observer(
     runtime: &SharedRuntime,
-    track_row_changed_holder: TrackRowChangedHolder,
+    apply: crate::TrackViewUpdateCallback,
 ) {
+    let weak_runtime = Rc::downgrade(runtime);
     runtime
         .borrow_mut()
-        .set_track_data_observer(Box::new(move |track_id| {
-            // The runtime is mid-borrow when this fires — defer the
-            // refresh onto the GLib main loop so the closure can
-            // re-borrow read-only without panicking.
-            let track_row_changed_holder = track_row_changed_holder.clone();
+        .set_track_changes_observer(Box::new(move || {
+            let weak_runtime = weak_runtime.clone();
+            let apply = apply.clone();
             glib::idle_add_local_once(move || {
-                if let Some(callback) = track_row_changed_holder.borrow().clone() {
-                    callback(track_id, TrackRowChangedKind::Data);
+                let Some(runtime) = weak_runtime.upgrade() else {
+                    return;
+                };
+                let changes = runtime.borrow_mut().take_track_changes();
+                if !changes.is_empty() {
+                    apply(&TrackViewUpdate::for_changes(&changes));
                 }
             });
         }));
 }
 
-/// Drains track-id events emitted by the analysis and online
-/// schedulers. Each id is fed into
-/// [`ApplicationRuntime::apply_track_updated`], which reloads the
-/// row from the library store and fires the
-/// `track_data_observer` so the UI repaints.
+/// Drains the tracks the analysis and online schedulers committed changes
+/// to. Each is fed into
+/// [`ApplicationRuntime::apply_track_updated`], which reloads the row
+/// from the library store and records what changed for the views.
 pub(super) fn install_track_updated_consumer(
     receiver: Option<TrackUpdatedReceiver>,
     runtime: SharedRuntime,
@@ -363,18 +367,19 @@ pub(super) fn install_track_updated_consumer(
     glib::MainContext::default().spawn_local(async move {
         while let Ok(first) = receiver.recv().await {
             // Coalesce a burst before touching the store: a full analysis
-            // or online sweep posts ids faster than the main loop drains
-            // them, and one track commonly emits several in quick
-            // succession (bpm, then key, then audio). Refresh each row at
-            // most once per drain so repeated events for the same track do
-            // not each pay for a keyed query and a repaint.
-            let mut pending: HashSet<TrackId> = HashSet::from([first]);
+            // or online sweep posts tracks faster than the main loop drains
+            // them, and one track commonly arrives several times in quick
+            // succession (bpm, then key, then audio). Read each track back
+            // at most once per drain, keeping whether any announcement of
+            // it changed its analysis.
+            let mut pending: HashMap<TrackId, bool> =
+                HashMap::from([(first.track_id, first.analysis)]);
             while let Ok(next) = receiver.try_recv() {
-                pending.insert(next);
+                *pending.entry(next.track_id).or_default() |= next.analysis;
             }
             let mut runtime = runtime.borrow_mut();
-            for track_id in pending {
-                runtime.apply_track_updated(track_id);
+            for (track_id, analysis) in pending {
+                runtime.apply_track_updated(TrackUpdated { track_id, analysis });
             }
         }
     });
@@ -508,7 +513,7 @@ pub(super) struct ArtworkFetchResultConsumerContext {
     pub(super) artwork_loader: ArtworkLoader,
     pub(super) now_playing: crate::now_playing::NowPlayingView,
     pub(super) playback_changed: PlaybackChangedCallback,
-    pub(super) track_row_changed_holder: TrackRowChangedHolder,
+    pub(super) artwork_changed_holder: ArtworkChangedHolder,
 }
 
 pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultConsumerContext) {
@@ -519,7 +524,7 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
         artwork_loader,
         now_playing,
         playback_changed,
-        track_row_changed_holder,
+        artwork_changed_holder,
     } = context;
     let Some(receiver) = receiver else {
         return;
@@ -585,8 +590,8 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
                 body,
             );
             playback_changed();
-            if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-                callback(result.track_id, TrackRowChangedKind::Artwork);
+            if let Some(callback) = artwork_changed_holder.borrow().as_ref() {
+                callback(&[result.track_id]);
             }
         }
     });

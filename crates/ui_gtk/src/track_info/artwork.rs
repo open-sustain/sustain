@@ -14,7 +14,7 @@ use sustain_artwork::{ArtworkReadError, read_artwork_file};
 use super::{ARTWORK_PREVIEW_SIZE, COVER_THUMB_SIZE};
 use crate::artwork_loader::{ArtworkLoader, ArtworkSource};
 use crate::command_controller::SharedCommandController;
-use crate::{PlaybackChangedCallback, TrackRowChangedHolder, TrackRowChangedKind};
+use crate::{ArtworkChangedHolder, PlaybackChangedCallback};
 
 /// Updates the preview frame, the header thumbnail, the explanatory
 /// note, and the Remove button from a (possibly absent) decoded texture
@@ -24,7 +24,7 @@ type ArtworkRefreshCallback = Rc<dyn Fn(Option<gdk::Texture>, bool)>;
 
 #[derive(Clone)]
 struct ArtworkChangePublisher {
-    track_row_changed_holder: TrackRowChangedHolder,
+    artwork_changed_holder: ArtworkChangedHolder,
     playback_changed: PlaybackChangedCallback,
     artwork_loader: ArtworkLoader,
 }
@@ -43,8 +43,8 @@ impl ArtworkChangePublisher {
                 None => self.artwork_loader.prime_missing(source),
             }
         }
-        if let Some(callback) = self.track_row_changed_holder.borrow().as_ref() {
-            callback(track_id, TrackRowChangedKind::Artwork);
+        if let Some(callback) = self.artwork_changed_holder.borrow().as_ref() {
+            callback(&[track_id]);
         }
         (self.playback_changed)();
     }
@@ -64,7 +64,7 @@ impl ArtworkPage {
     pub(super) fn new(
         parent_window: &gtk::Window,
         command_controller: &SharedCommandController,
-        track_row_changed_holder: &TrackRowChangedHolder,
+        artwork_changed_holder: &ArtworkChangedHolder,
         playback_changed: PlaybackChangedCallback,
         track_id: TrackId,
         header_cover: gtk::Frame,
@@ -118,7 +118,7 @@ impl ArtworkPage {
         let current_artwork_source = Rc::new(RefCell::new(None));
         let load_generation = Rc::new(Cell::new(0));
         let artwork_change_publisher = ArtworkChangePublisher {
-            track_row_changed_holder: track_row_changed_holder.clone(),
+            artwork_changed_holder: artwork_changed_holder.clone(),
             playback_changed,
             artwork_loader: artwork_loader.clone(),
         };

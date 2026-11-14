@@ -9,8 +9,7 @@ use gtk::{FileLauncher, gdk, gio};
 use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, TrackId};
 
 use super::{
-    LibraryChangedHolder, PlaybackChangedCallback, SharedRuntime, ShowAlbumHolder,
-    TrackRowChangedHolder, TrackRowsChangedHolder,
+    ArtworkChangedHolder, PlaybackChangedCallback, SharedRuntime, ShowAlbumHolder,
     artwork_loader::ArtworkLoader,
     command_controller::SharedCommandController,
     track_context::{TrackActionCallback, TrackActionInvocation, TrackActionVisibility},
@@ -37,9 +36,7 @@ pub(crate) struct GetInfoCallbackContext<'a> {
     pub(crate) parent_window: &'a gtk::Window,
     pub(crate) runtime: &'a SharedRuntime,
     pub(crate) command_controller: &'a SharedCommandController,
-    pub(crate) library_changed_holder: &'a LibraryChangedHolder,
-    pub(crate) track_row_changed_holder: &'a TrackRowChangedHolder,
-    pub(crate) track_rows_changed_holder: &'a TrackRowsChangedHolder,
+    pub(crate) artwork_changed_holder: &'a ArtworkChangedHolder,
     pub(crate) playback_changed: PlaybackChangedCallback,
     pub(crate) artwork_loader: &'a ArtworkLoader,
 }
@@ -48,21 +45,13 @@ pub(crate) fn get_info_callback(context: GetInfoCallbackContext<'_>) -> TrackAct
     let parent_window = context.parent_window.clone();
     let runtime = context.runtime.clone();
     let command_controller = context.command_controller.clone();
-    let library_changed_holder = context.library_changed_holder.clone();
-    let track_row_changed_holder = context.track_row_changed_holder.clone();
-    let track_rows_changed_holder = context.track_rows_changed_holder.clone();
+    let artwork_changed_holder = context.artwork_changed_holder.clone();
     let playback_changed = context.playback_changed.clone();
     let artwork_loader = context.artwork_loader.clone();
     Rc::new(move |invocation: TrackActionInvocation| {
         let track_ids = invocation.selected_track_ids;
         if track_ids.len() > 1 {
-            open_multi_track_info_dialog(
-                &parent_window,
-                &command_controller,
-                &library_changed_holder,
-                &track_rows_changed_holder,
-                track_ids,
-            );
+            open_multi_track_info_dialog(&parent_window, &command_controller, track_ids);
             return;
         }
         let Some(&track_id) = track_ids.first() else {
@@ -79,8 +68,7 @@ pub(crate) fn get_info_callback(context: GetInfoCallbackContext<'_>) -> TrackAct
             &parent_window,
             &runtime,
             &command_controller,
-            &library_changed_holder,
-            &track_row_changed_holder,
+            &artwork_changed_holder,
             playback_changed.clone(),
             &artwork_loader,
             invocation.displayed_track_ids,

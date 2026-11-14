@@ -359,9 +359,8 @@ impl ApplicationRuntime {
             );
             return false;
         };
-        self.library_tracks = tracks;
+        self.adopt_library_tracks(tracks);
         self.playlists = playlists;
-        self.rebuild_search_index();
         self.refresh_playback_queue_track_ids();
         self.request_smart_shuffle_rebuild();
         true

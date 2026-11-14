@@ -321,44 +321,52 @@ impl ApplicationRuntime {
         probe: impl Fn(&std::path::Path) -> FilePresence,
     ) -> ApplicationRuntimeResult<()> {
         let total = self.library_tracks.len();
-        let mut changed = Vec::new();
+        // The index of each track whose availability flips, beside its new
+        // location.
+        let mut flipped = Vec::new();
         let mut newly_missing = 0usize;
         let mut unresolved = 0usize;
-        let mut reconciled = Vec::with_capacity(total);
-        for mut track in std::mem::take(&mut self.library_tracks) {
-            let was_missing = track.location.is_missing();
+        for (index, track) in self.library_tracks.iter().enumerate() {
             let availability = match probe(&track.location.absolute_path(&new_library_path)) {
-                FilePresence::Present => Some(sustain_domain::TrackAvailability::Available),
-                FilePresence::Absent => Some(sustain_domain::TrackAvailability::Missing),
+                FilePresence::Present => sustain_domain::TrackAvailability::Available,
+                FilePresence::Absent => sustain_domain::TrackAvailability::Missing,
                 FilePresence::ProbeFailed => {
                     unresolved += 1;
-                    None
+                    continue;
                 }
             };
-            if let Some(availability) = availability {
-                track.location = track.location.with_availability(availability);
-            }
-            let now_missing = track.location.is_missing();
-            if was_missing != now_missing {
-                changed.push((track.id, track.location.clone()));
+            let now_missing = availability == sustain_domain::TrackAvailability::Missing;
+            if now_missing != track.location.is_missing() {
                 if now_missing {
                     newly_missing += 1;
                 }
+                flipped.push((
+                    index,
+                    track.location.clone().with_availability(availability),
+                ));
             }
-            reconciled.push(track);
         }
-        self.library_tracks = reconciled;
-        self.rebuild_search_index();
 
-        if !changed.is_empty()
+        if !flipped.is_empty()
             && let Some(store) = self.library_store.as_ref()
         {
+            let changed = flipped
+                .iter()
+                .map(|(index, location)| (self.library_tracks[*index].id, location.clone()))
+                .collect::<Vec<_>>();
             store
                 .update_track_locations(&changed)
                 .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
+        // Adopt only what the store committed.
+        let changed = !flipped.is_empty();
+        for (index, location) in flipped {
+            let mut track = self.library_tracks[index].clone();
+            track.location = location;
+            self.store_library_track(index, track);
+        }
 
-        if !changed.is_empty() {
+        if changed {
             self.refresh_playback_queue_track_ids();
             self.notify_track_availability_observer();
         }

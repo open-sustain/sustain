@@ -146,7 +146,11 @@ impl ApplicationRuntime {
     ) {
         match result.outcome {
             Ok(()) => {
-                self.apply_track_updated(result.track_id);
+                // The new audio discards the old file's analysis.
+                self.apply_track_updated(crate::TrackUpdated {
+                    track_id: result.track_id,
+                    analysis: true,
+                });
                 self.refresh_playback_queue_track_ids();
                 self.smart_shuffle_index = None;
                 self.smart_shuffle_metadata = None;

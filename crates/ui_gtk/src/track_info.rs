@@ -8,8 +8,7 @@ use gtk::{gdk, glib};
 use sustain_app_runtime::{ApplicationCommand, MetadataChange, Track, TrackId};
 
 use super::{
-    LibraryChangedHolder, PlaybackChangedCallback, SharedRuntime, TrackRowChangedHolder,
-    TrackRowChangedKind,
+    ArtworkChangedHolder, PlaybackChangedCallback, SharedRuntime,
     artwork_loader::{ArtworkLoader, ArtworkSource},
     command_controller::SharedCommandController,
 };
@@ -41,8 +40,7 @@ pub(crate) fn open_track_info_dialog(
     parent: &gtk::Window,
     runtime: &SharedRuntime,
     command_controller: &SharedCommandController,
-    library_changed_holder: &LibraryChangedHolder,
-    track_row_changed_holder: &TrackRowChangedHolder,
+    artwork_changed_holder: &ArtworkChangedHolder,
     playback_changed: PlaybackChangedCallback,
     artwork_loader: &ArtworkLoader,
     ordered_track_ids: Vec<TrackId>,
@@ -95,7 +93,7 @@ pub(crate) fn open_track_info_dialog(
     let artwork = ArtworkPage::new(
         parent,
         command_controller,
-        track_row_changed_holder,
+        artwork_changed_holder,
         playback_changed,
         initial.track.id,
         header.cover_frame.clone(),
@@ -166,18 +164,10 @@ pub(crate) fn open_track_info_dialog(
         let cursor = cursor.clone();
         let pages = pages.clone();
         let command_controller = command_controller.clone();
-        let library_changed_holder = library_changed_holder.clone();
-        let track_row_changed_holder = track_row_changed_holder.clone();
         let previous = previous.clone();
         let next = next.clone();
         Rc::new(move |direction| {
-            if !commit_current(
-                &cursor,
-                &pages,
-                &command_controller,
-                &library_changed_holder,
-                &track_row_changed_holder,
-            ) {
+            if !commit_current(&cursor, &pages, &command_controller) {
                 return;
             }
             let Some(index) = find_valid_index(&runtime, &cursor.borrow(), direction) else {
@@ -221,19 +211,11 @@ pub(crate) fn open_track_info_dialog(
     window.add_controller(key_controller);
 
     let command_controller = command_controller.clone();
-    let library_changed_holder = library_changed_holder.clone();
-    let track_row_changed_holder = track_row_changed_holder.clone();
     let window_for_ok = window.clone();
     let cursor_for_ok = cursor.clone();
     let pages_for_ok = pages.clone();
     ok.connect_clicked(move |_| {
-        if commit_current(
-            &cursor_for_ok,
-            &pages_for_ok,
-            &command_controller,
-            &library_changed_holder,
-            &track_row_changed_holder,
-        ) {
+        if commit_current(&cursor_for_ok, &pages_for_ok, &command_controller) {
             window_for_ok.close();
         }
     });
@@ -345,8 +327,6 @@ fn commit_current(
     cursor: &Rc<RefCell<DialogCursor>>,
     pages: &DialogPages,
     command_controller: &SharedCommandController,
-    library_changed_holder: &LibraryChangedHolder,
-    track_row_changed_holder: &TrackRowChangedHolder,
 ) -> bool {
     let cursor = cursor.borrow();
     let track_id = cursor.current_track.id;
@@ -355,53 +335,31 @@ fn commit_current(
     let new_rating = pages.details.current_rating();
     let reset_clicked = pages.details.play_count_reset_requested();
 
-    let mut any_succeeded = false;
-    let mut any_failed = false;
-    let mut callback_kind = None;
+    let mut commands = Vec::new();
     if change != MetadataChange::default() {
-        let change_kind = TrackRowChangedKind::for_metadata_change(&change);
-        match command_controller.dispatch(ApplicationCommand::UpdateMetadata {
+        commands.push(ApplicationCommand::UpdateMetadata {
             track_id,
             change: Box::new(change),
-        }) {
-            Ok(()) => {
-                any_succeeded = true;
-                callback_kind = Some(change_kind);
-            }
-            Err(_) => any_failed = true,
-        }
+        });
     }
     if new_rating != cursor.baseline_rating {
-        match command_controller.dispatch(ApplicationCommand::SetRating {
+        commands.push(ApplicationCommand::SetRating {
             track_id,
             rating: new_rating,
-        }) {
-            Ok(()) => {
-                any_succeeded = true;
-                callback_kind.get_or_insert(TrackRowChangedKind::TableOnly);
-            }
-            Err(_) => any_failed = true,
-        }
+        });
     }
     if reset_clicked && cursor.baseline_play_count > 0 {
-        match command_controller.dispatch(ApplicationCommand::ResetPlayCount { track_id }) {
-            Ok(()) => {
-                any_succeeded = true;
-                callback_kind.get_or_insert(TrackRowChangedKind::TableOnly);
-            }
-            Err(_) => any_failed = true,
-        }
+        commands.push(ApplicationCommand::ResetPlayCount { track_id });
     }
     drop(cursor);
 
-    if any_succeeded {
-        if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-            callback(track_id, callback_kind.unwrap_or(TrackRowChangedKind::Data));
-        } else if let Some(callback) = library_changed_holder.borrow().as_ref() {
-            callback();
-        }
+    // Every command is attempted even after one fails; the views follow
+    // whatever the runtime committed.
+    let mut all_succeeded = true;
+    for command in commands {
+        all_succeeded &= command_controller.dispatch(command).is_ok();
     }
-    !any_failed
+    all_succeeded
 }
 
 fn refresh_navigation_buttons(

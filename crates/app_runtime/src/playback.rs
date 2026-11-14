@@ -720,7 +720,7 @@ impl ApplicationRuntime {
     }
 
     // Applies the given mutation to a track's in-memory statistics,
-    // persists the updated track row, and notifies the UI so the
+    // persists the updated track row, and records the change so the
     // affected table row repaints its play-count / last-played /
     // skip columns live (issue #46). When no library store is
     // installed — for instance in headless tests — only the in-memory
@@ -745,7 +745,6 @@ impl ApplicationRuntime {
                 .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
         self.store_library_track(track_index, updated);
-        self.fire_track_data_observer(track_id);
         Ok(())
     }
 

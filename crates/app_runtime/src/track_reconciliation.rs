@@ -15,16 +15,17 @@
 //! track deleted in the meantime reads back absent, which resolves it
 //! without bringing it back. Ids are kept once each, so the retries never
 //! outgrow the library, and a single timer thread at a time announces
-//! all of them.
+//! all of them. A retry keeps what the failed announcements said about
+//! the track's analysis, which reading the row back cannot tell.
 
 use std::{
-    collections::BTreeSet,
+    collections::BTreeMap,
     sync::{Arc, Mutex, PoisonError},
     thread,
     time::Duration,
 };
 
-use crate::{NotificationId, TrackId};
+use crate::{NotificationId, TrackId, TrackUpdated};
 
 /// The wait before the first retry, doubled after each failed one.
 const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -32,6 +33,16 @@ const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// The longest wait between two retries, so a store that keeps failing is
 /// retried at a slow steady pace rather than not at all.
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
+
+/// What resolving a track settled.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Resolved {
+    /// Whether a failed announcement of the track said its analysis
+    /// changed: the read that resolved it must still publish that.
+    pub(crate) analysis: bool,
+    /// Whether no track is left unresolved.
+    pub(crate) settled: bool,
+}
 
 #[derive(Default)]
 pub(crate) struct TrackReconciliation {
@@ -46,22 +57,29 @@ pub(crate) struct TrackReconciliation {
 /// The state the runtime shares with the retry timer.
 #[derive(Default)]
 struct Pending {
-    unresolved: BTreeSet<TrackId>,
+    /// Each unresolved track, and whether an announcement of it said its
+    /// analysis changed.
+    unresolved: BTreeMap<TrackId, bool>,
     retry_scheduled: bool,
 }
 
 impl TrackReconciliation {
-    /// Keep `track_id`, whose read back failed, and make sure a retry is
-    /// scheduled on `sink`; without a sink, the id waits for its next
-    /// announcement. Returns whether the id was not kept already.
+    /// Keep the track of `update`, whose read back failed, and make sure
+    /// a retry is scheduled on `sink`; without a sink, the track waits for
+    /// its next announcement. Returns whether the track was not kept
+    /// already.
     pub(crate) fn read_failed(
         &mut self,
-        track_id: TrackId,
-        sink: Option<&async_channel::Sender<TrackId>>,
+        update: TrackUpdated,
+        sink: Option<&async_channel::Sender<TrackUpdated>>,
     ) -> bool {
         let (newly_unresolved, schedule) = {
             let mut pending = self.lock();
-            let newly_unresolved = pending.unresolved.insert(track_id);
+            let previous = pending.unresolved.get(&update.track_id).copied();
+            pending
+                .unresolved
+                .insert(update.track_id, previous.unwrap_or(false) | update.analysis);
+            let newly_unresolved = previous.is_none();
             let schedule = sink.is_some() && !pending.retry_scheduled;
             pending.retry_scheduled |= schedule;
             (newly_unresolved, schedule)
@@ -74,18 +92,17 @@ impl TrackReconciliation {
         newly_unresolved
     }
 
-    /// Forget `track_id`, read back or found gone. Returns whether no id
-    /// is left unresolved.
-    pub(crate) fn resolved(&mut self, track_id: TrackId) -> bool {
-        let settled = {
+    /// Forget `track_id`, read back or found gone.
+    pub(crate) fn resolved(&mut self, track_id: TrackId) -> Resolved {
+        let (analysis, settled) = {
             let mut pending = self.lock();
-            pending.unresolved.remove(&track_id);
-            pending.unresolved.is_empty()
+            let analysis = pending.unresolved.remove(&track_id).unwrap_or(false);
+            (analysis, pending.unresolved.is_empty())
         };
         if settled {
             self.retries = 0;
         }
-        settled
+        Resolved { analysis, settled }
     }
 
     #[cfg(test)]
@@ -101,7 +118,7 @@ impl TrackReconciliation {
         self.notification = notification;
     }
 
-    fn schedule_retry(&self, delay: Duration, sink: async_channel::Sender<TrackId>) {
+    fn schedule_retry(&self, delay: Duration, sink: async_channel::Sender<TrackUpdated>) {
         let pending = Arc::clone(&self.pending);
         let spawned = thread::Builder::new()
             .name("sustain-track-reconciliation".to_owned())
@@ -112,10 +129,13 @@ impl TrackReconciliation {
                     pending.retry_scheduled = false;
                     pending.unresolved.clone()
                 };
-                for track_id in unresolved {
+                for (track_id, analysis) in unresolved {
                     // A closed channel means the UI shell is gone and no
                     // one is left to adopt the change.
-                    if sink.send_blocking(track_id).is_err() {
+                    if sink
+                        .send_blocking(TrackUpdated { track_id, analysis })
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -148,6 +168,13 @@ mod tests {
         TrackId::new(id).expect("non-zero track id")
     }
 
+    fn updated(id: i64, analysis: bool) -> TrackUpdated {
+        TrackUpdated {
+            track_id: track_id(id),
+            analysis,
+        }
+    }
+
     #[test]
     fn retries_back_off_up_to_a_steady_pace() {
         assert_eq!(retry_delay(0), Duration::from_secs(1));
@@ -161,13 +188,13 @@ mod tests {
     fn failed_reads_are_kept_once_each_until_resolved() {
         let mut reconciliation = TrackReconciliation::default();
 
-        assert!(reconciliation.read_failed(track_id(1), None));
-        assert!(!reconciliation.read_failed(track_id(1), None));
-        assert!(reconciliation.read_failed(track_id(2), None));
+        assert!(reconciliation.read_failed(updated(1, false), None));
+        assert!(!reconciliation.read_failed(updated(1, false), None));
+        assert!(reconciliation.read_failed(updated(2, false), None));
         assert_eq!(reconciliation.unresolved_count(), 2);
 
-        assert!(!reconciliation.resolved(track_id(1)));
-        assert!(reconciliation.resolved(track_id(2)));
+        assert!(!reconciliation.resolved(track_id(1)).settled);
+        assert!(reconciliation.resolved(track_id(2)).settled);
         assert_eq!(reconciliation.unresolved_count(), 0);
     }
 
@@ -176,19 +203,62 @@ mod tests {
         let (sink, announced) = async_channel::unbounded();
         let mut reconciliation = TrackReconciliation::default();
 
-        reconciliation.read_failed(track_id(1), Some(&sink));
+        reconciliation.read_failed(updated(1, false), Some(&sink));
         // The retry for the first failure is already scheduled: the
         // second failure joins it rather than scheduling its own.
-        reconciliation.read_failed(track_id(2), Some(&sink));
+        reconciliation.read_failed(updated(2, false), Some(&sink));
 
         let first = announced.recv_blocking().expect("first retry");
         let second = announced.recv_blocking().expect("second retry");
-        assert_eq!((first, second), (track_id(1), track_id(2)));
+        assert_eq!((first, second), (updated(1, false), updated(2, false)));
         assert!(announced.is_empty(), "each track is announced once");
         assert_eq!(
             reconciliation.unresolved_count(),
             2,
             "a retry announces tracks; only a successful read resolves them"
+        );
+    }
+
+    #[test]
+    fn a_retry_keeps_an_announced_analysis_change() {
+        let (sink, announced) = async_channel::unbounded();
+        let mut reconciliation = TrackReconciliation::default();
+
+        reconciliation.read_failed(updated(1, true), Some(&sink));
+        // A later announcement without analysis does not erase it.
+        reconciliation.read_failed(updated(1, false), Some(&sink));
+
+        assert_eq!(
+            announced.recv_blocking().expect("retry"),
+            updated(1, true),
+            "reading the row back cannot reveal the analysis change"
+        );
+    }
+
+    #[test]
+    fn resolving_a_track_hands_back_its_announced_analysis_change() {
+        let mut reconciliation = TrackReconciliation::default();
+        reconciliation.read_failed(updated(1, true), None);
+        reconciliation.read_failed(updated(2, false), None);
+
+        assert_eq!(
+            reconciliation.resolved(track_id(1)),
+            Resolved {
+                analysis: true,
+                settled: false,
+            },
+            "the read that resolves the track publishes the analysis change"
+        );
+        assert_eq!(
+            reconciliation.resolved(track_id(2)),
+            Resolved {
+                analysis: false,
+                settled: true,
+            }
+        );
+        assert!(
+            !reconciliation.resolved(track_id(1)).analysis,
+            "resolving forgets the track"
         );
     }
 }

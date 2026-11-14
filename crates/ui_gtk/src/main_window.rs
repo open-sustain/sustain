@@ -20,18 +20,18 @@ use sustain_app_runtime::{
 
 use super::{
     ALBUMS_VIEW, APP_ID, AnalysisProgressReceiver, ApplicationCommand, ApplicationRuntime,
-    ApplicationRuntimeError, ArtworkFetchResultReceiver, AvailabilityChangedCallback,
-    CD_IMPORT_VIEW, CdLookupEventReceiver, ConnectedDevice, DEVICES_VIEW, DUPLICATES_VIEW,
-    DevicePlanResultReceiver, DeviceSyncEventReceiver, LibraryChangedCallback,
-    LibraryChangedHolder, LibraryHydrationResultReceiver, MetadataWriterEventReceiver,
-    MprisCommandReceiver, MtpDiscoveryResultReceiver, OnlineProgressReceiver,
-    OpticalDiscoveryResultReceiver, PLAYLISTS_VIEW, PlaybackChangedCallback, PlaylistEntriesChange,
-    PlaylistEntriesChangedCallback, PlaylistEntriesChangedHolder, SIDEBAR_DEFAULT_WIDTH,
-    SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SONGS_VIEW, STATISTICS_VIEW, SharedMprisService,
-    SharedRuntime, ShowAlbumAction, ShowAlbumHolder, SmartPlaylistTrackStatus,
-    SmartShuffleRebuildResultReceiver, TrackRowChangedCallback, TrackRowChangedHolder,
-    TrackRowChangedKind, TrackRowsChangedHolder, TrackUpdatedReceiver, TracksRemoved,
-    TracksRemovedCallback, TracksRemovedHolder, YoutubeAudioDownloadResultReceiver,
+    ApplicationRuntimeError, ArtworkChangedHolder, ArtworkFetchResultReceiver,
+    AvailabilityChangedCallback, CD_IMPORT_VIEW, CdLookupEventReceiver, ConnectedDevice,
+    DEVICES_VIEW, DUPLICATES_VIEW, DevicePlanResultReceiver, DeviceSyncEventReceiver,
+    LibraryChangedCallback, LibraryChangedHolder, LibraryHydrationResultReceiver,
+    MetadataWriterEventReceiver, MprisCommandReceiver, MtpDiscoveryResultReceiver,
+    OnlineProgressReceiver, OpticalDiscoveryResultReceiver, PLAYLISTS_VIEW,
+    PlaybackChangedCallback, PlaylistEntriesChange, PlaylistEntriesChangedCallback,
+    PlaylistEntriesChangedHolder, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+    SONGS_VIEW, STATISTICS_VIEW, SharedMprisService, SharedRuntime, ShowAlbumAction,
+    ShowAlbumHolder, SmartPlaylistTrackStatus, SmartShuffleRebuildResultReceiver,
+    TrackUpdatedReceiver, TracksRemoved, TracksRemovedCallback, TracksRemovedHolder,
+    YoutubeAudioDownloadResultReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
@@ -134,7 +134,7 @@ use result_consumers::{
     install_library_hydration_result_consumer, install_metadata_writer_event_consumer,
     install_mtp_discovery_consumer, install_online_progress_consumer,
     install_smart_shuffle_launch_rebuild, install_smart_shuffle_rebuild_result_consumer,
-    install_track_data_observer, install_track_updated_consumer,
+    install_track_changes_observer, install_track_updated_consumer,
     install_youtube_audio_download_result_consumer,
 };
 use search::{SearchWiringContext, install_search_wiring};
@@ -146,10 +146,10 @@ use sidebar_callbacks::{
 };
 use songs::SongsViewRefresh;
 use track_callbacks::{
-    PlaylistEntriesChangedContext, TrackRowChangedContext, TracksRemovedContext,
-    begin_inline_edit_callback, playlist_entries_changed_callback, playlist_row_reorder_callback,
-    playlist_track_context_actions, rating_changed_callback, schedule_playlists_structural_refresh,
-    track_context_actions, track_row_changed_callback, track_rows_changed_callback,
+    PlaylistEntriesChangedContext, TrackViewUpdateContext, TracksRemovedContext,
+    artwork_changed_callback, begin_inline_edit_callback, playlist_entries_changed_callback,
+    playlist_row_reorder_callback, playlist_track_context_actions, rating_changed_callback,
+    schedule_playlists_structural_refresh, track_context_actions, track_view_update_callback,
     tracks_removed_callback,
 };
 
@@ -336,8 +336,7 @@ pub(crate) fn build_main_window(
     let sidebar_widget = sidebar.widget();
 
     let library_changed_holder: LibraryChangedHolder = Rc::new(RefCell::new(None));
-    let track_row_changed_holder: TrackRowChangedHolder = Rc::new(RefCell::new(None));
-    let track_rows_changed_holder: TrackRowsChangedHolder = Rc::new(RefCell::new(None));
+    let artwork_changed_holder: ArtworkChangedHolder = Rc::new(RefCell::new(None));
     let tracks_removed_holder: TracksRemovedHolder = Rc::new(RefCell::new(None));
     let playlist_entries_changed_holder: PlaylistEntriesChangedHolder = Rc::new(RefCell::new(None));
     let parent_window = window.clone().upcast::<gtk::Window>();
@@ -380,9 +379,7 @@ pub(crate) fn build_main_window(
         &show_album_holder,
         &command_controller,
         playback_changed.clone(),
-        library_changed_holder.clone(),
-        track_row_changed_holder.clone(),
-        track_rows_changed_holder.clone(),
+        artwork_changed_holder.clone(),
         tracks_removed_holder.clone(),
         &artwork_loader,
     );
@@ -414,9 +411,7 @@ pub(crate) fn build_main_window(
         &show_album_holder,
         &command_controller,
         playback_changed.clone(),
-        library_changed_holder.clone(),
-        track_row_changed_holder.clone(),
-        track_rows_changed_holder.clone(),
+        artwork_changed_holder.clone(),
         tracks_removed_holder.clone(),
         playlist_entries_changed_holder.clone(),
         &artwork_loader,
@@ -438,13 +433,8 @@ pub(crate) fn build_main_window(
         youtube_audio_replacement_callback(&parent_window, &command_controller),
         youtube_audio_replacement_visibility(&runtime),
     );
-    let rating_changed =
-        rating_changed_callback(&command_controller, track_row_changed_holder.clone());
-    let songs_inline_edit = begin_inline_edit_callback(
-        &runtime,
-        &command_controller,
-        track_row_changed_holder.clone(),
-    );
+    let rating_changed = rating_changed_callback(&command_controller);
+    let songs_inline_edit = begin_inline_edit_callback(&runtime, &command_controller);
     let songs_table = build_track_table(
         Vec::new(),
         Some(library_track_activated.clone()),
@@ -478,11 +468,7 @@ pub(crate) fn build_main_window(
             || Some(PlaybackQueueSource::Duplicates),
         ),
         rating_changed.clone(),
-        begin_inline_edit_callback(
-            &runtime,
-            &command_controller,
-            track_row_changed_holder.clone(),
-        ),
+        begin_inline_edit_callback(&runtime, &command_controller),
     );
     let playlist_row_reorder = playlist_row_reorder_callback(
         &command_controller,
@@ -499,17 +485,14 @@ pub(crate) fn build_main_window(
     // Inline editing in the Playlists view (regular and smart playlists
     // share this table). A separate hooks instance from the Songs table's
     // because each `InlineEditController` owns its table's open-edit state.
-    // Edits route through the same `UpdateMetadata` + `track_row_changed`
-    // path: for a smart playlist whose membership the edit changes, the
-    // callback reflows the view; otherwise it refreshes the row in place.
+    // Edits route through the same `UpdateMetadata` path, and reach the
+    // view as a committed track change: for a smart playlist whose
+    // membership the edit changes, the view reflows; otherwise the row
+    // refreshes in place.
     // Dragging rows to reorder them does not contend with the edit click:
     // the click never claims its press, and a drag starts only once the
     // pointer moves past the drag threshold (#158).
-    let playlists_inline_edit = begin_inline_edit_callback(
-        &runtime,
-        &command_controller,
-        track_row_changed_holder.clone(),
-    );
+    let playlists_inline_edit = begin_inline_edit_callback(&runtime, &command_controller);
     let playlists_table = build_track_table(
         Vec::new(),
         Some(playlist_track_activated),
@@ -636,7 +619,7 @@ pub(crate) fn build_main_window(
     );
     let library_changed = library_changed_callback(&songs_refresh, &library_views_refresh);
     install_track_availability_observer(&runtime, &songs_table, &playlists_table);
-    let track_rows_changed = track_rows_changed_callback(TrackRowChangedContext {
+    let track_view_update = track_view_update_callback(TrackViewUpdateContext {
         runtime: &runtime,
         songs_table: &songs_table,
         albums_view: &albums_view,
@@ -648,9 +631,7 @@ pub(crate) fn build_main_window(
         current_search_text: &current_search_text,
         device_panel: &device_panel,
     });
-    let track_row_changed = track_row_changed_callback(track_rows_changed.clone());
-    track_row_changed_holder.replace(Some(track_row_changed));
-    track_rows_changed_holder.replace(Some(track_rows_changed));
+    artwork_changed_holder.replace(Some(artwork_changed_callback(track_view_update.clone())));
     let tracks_removed = tracks_removed_callback(TracksRemovedContext {
         runtime: &runtime,
         songs_table: &songs_table,
@@ -677,7 +658,7 @@ pub(crate) fn build_main_window(
     install_metadata_writer_event_consumer(
         metadata_writer_event_rx,
         runtime.clone(),
-        track_row_changed_holder.clone(),
+        artwork_changed_holder.clone(),
         tracks_removed,
         missing_track_relocation_completed,
         artwork_loader.clone(),
@@ -689,7 +670,7 @@ pub(crate) fn build_main_window(
         artwork_loader: artwork_loader.clone(),
         now_playing: now_playing.clone(),
         playback_changed: playback_changed.clone(),
-        track_row_changed_holder: track_row_changed_holder.clone(),
+        artwork_changed_holder: artwork_changed_holder.clone(),
     });
     install_youtube_audio_download_result_consumer(
         youtube_audio_download_result_rx,
@@ -697,7 +678,7 @@ pub(crate) fn build_main_window(
     );
     install_analysis_progress_consumer(analysis_progress_rx, runtime.clone());
     install_online_progress_consumer(online_progress_rx, runtime.clone());
-    install_track_data_observer(&runtime, track_row_changed_holder.clone());
+    install_track_changes_observer(&runtime, track_view_update);
     install_track_updated_consumer(track_updated_rx, runtime.clone());
     install_smart_shuffle_rebuild_result_consumer(smart_shuffle_rebuild_result_rx, runtime.clone());
     install_device_plan_result_consumer(
@@ -927,9 +908,7 @@ pub(crate) fn build_main_window(
         content_stack: content_stack.clone(),
         toggle_or_start_playback: toggle_or_start_playback.clone(),
         playback_changed: playback_changed.clone(),
-        library_changed_holder: library_changed_holder.clone(),
-        track_row_changed_holder: track_row_changed_holder.clone(),
-        track_rows_changed_holder: track_rows_changed_holder.clone(),
+        artwork_changed_holder: artwork_changed_holder.clone(),
         artwork_loader: artwork_loader.clone(),
         track_context_invocation,
     });

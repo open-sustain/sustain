@@ -8,7 +8,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::TrackRowsChangedCallback;
+use crate::{
+    ArtworkChangedCallback, TrackViewUpdateCallback,
+    track_view_update::{AlbumsUpdate, DuplicatesUpdate, TrackViewUpdate},
+};
 
 use super::*;
 
@@ -18,11 +21,10 @@ use super::*;
 /// the real tag, not the file-stem fallback the row displays). Its commit
 /// funnels through the exact same `UpdateMetadata` write path the File Info
 /// dialog uses — SQLite stays authoritative and the file tags are mirrored —
-/// then refreshes just the affected row, like the rating click does.
+/// and the views follow the change the runtime commits.
 pub(super) fn begin_inline_edit_callback(
     runtime: &SharedRuntime,
     command_controller: &SharedCommandController,
-    track_row_changed_holder: TrackRowChangedHolder,
 ) -> BeginEditCallback {
     let runtime = runtime.clone();
     let command_controller = command_controller.clone();
@@ -36,7 +38,6 @@ pub(super) fn begin_inline_edit_callback(
         };
         let runtime = runtime.clone();
         let command_controller = command_controller.clone();
-        let track_row_changed_holder = track_row_changed_holder.clone();
         let commit = move |new_text: String| {
             // The track may have left the library while the editor was open.
             let Some(initial) = track_metadata(&runtime, track_id) else {
@@ -47,15 +48,12 @@ pub(super) fn begin_inline_edit_callback(
                 // Re-typed the same value, or an unparsable number: no write.
                 return;
             }
-            if !command_controller.dispatch_succeeded(ApplicationCommand::UpdateMetadata {
+            // A refused edit is reported by the dispatch; a committed one
+            // reaches the views as a runtime change.
+            let _result = command_controller.dispatch(ApplicationCommand::UpdateMetadata {
                 track_id,
                 change: Box::new(change),
-            }) {
-                return;
-            }
-            if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-                callback(track_id, inline_edit_changed_kind(field));
-            }
+            });
         };
         Some(EditSession {
             seed,
@@ -74,32 +72,24 @@ fn track_metadata(runtime: &SharedRuntime, track_id: TrackId) -> Option<TrackMet
 
 pub(super) fn rating_changed_callback(
     command_controller: &SharedCommandController,
-    track_row_changed_holder: TrackRowChangedHolder,
 ) -> RatingChangedCallback {
     let command_controller = command_controller.clone();
 
     Rc::new(move |track_id: TrackId, rating: Rating| {
-        if !command_controller
-            .dispatch_succeeded(ApplicationCommand::SetRating { track_id, rating })
-        {
-            return false;
-        }
-        if let Some(callback) = track_row_changed_holder.borrow().as_ref() {
-            callback(track_id, TrackRowChangedKind::TableOnly);
-        }
-        true
+        command_controller.dispatch_succeeded(ApplicationCommand::SetRating { track_id, rating })
     })
 }
 
-/// Targeted refresh path for row-field mutations. Updates only affected rows
-/// in the visible tables, applies the cheapest correct Albums refresh for the
-/// change kind, and refreshes the status-bar summary once. Skips the sidebar
-/// tree because row-field mutations do not alter playlist/folder structure.
+/// Applies the view work for committed track changes. Updates only the
+/// affected rows in the visible tables, applies the cheapest correct Albums
+/// and Duplicates refresh the update calls for, and refreshes the
+/// status-bar summary once. Skips the sidebar tree because row-field
+/// mutations do not alter playlist/folder structure.
 ///
 /// When a smart playlist is selected, the Playlists table falls back to a
-/// full reflow because the mutation may add/remove the track from the
+/// full reflow when the change may add or remove a track from the
 /// playlist's filtered set — an in-place row update would lie.
-pub(super) struct TrackRowChangedContext<'a> {
+pub(super) struct TrackViewUpdateContext<'a> {
     pub(super) runtime: &'a SharedRuntime,
     pub(super) songs_table: &'a TrackTable,
     pub(super) albums_view: &'a AlbumsView,
@@ -112,9 +102,9 @@ pub(super) struct TrackRowChangedContext<'a> {
     pub(super) device_panel: &'a DeviceSyncPanel,
 }
 
-pub(super) fn track_rows_changed_callback(
-    ctx: TrackRowChangedContext<'_>,
-) -> TrackRowsChangedCallback {
+pub(super) fn track_view_update_callback(
+    ctx: TrackViewUpdateContext<'_>,
+) -> TrackViewUpdateCallback {
     let runtime = ctx.runtime.clone();
     let songs_table = ctx.songs_table.clone();
     let albums_view = ctx.albums_view.clone();
@@ -126,15 +116,12 @@ pub(super) fn track_rows_changed_callback(
     let visible_summary_refresh = ctx.visible_summary_refresh;
     let device_panel = ctx.device_panel.clone();
 
-    Rc::new(move |track_ids: &[TrackId], kind: TrackRowChangedKind| {
-        if track_ids.is_empty() {
-            return;
-        }
-
+    Rc::new(move |update: &TrackViewUpdate| {
         let rows = {
             let runtime_borrow = runtime.borrow();
             let honor_sort_tags = runtime_borrow.settings().library.honor_sort_tags;
-            track_ids
+            update
+                .track_ids
                 .iter()
                 .filter_map(|track_id| {
                     runtime_borrow
@@ -143,41 +130,30 @@ pub(super) fn track_rows_changed_callback(
                 })
                 .collect::<HashMap<_, _>>()
         };
+        // Tracks that left the library since the change are dropped from
+        // the views by their removal.
         if rows.is_empty() {
             return;
         }
         let changed_track_ids = rows.keys().copied().collect::<HashSet<_>>();
 
         songs_table.update_rows(&rows);
-        if kind.affects_album_structure() {
-            albums_view.replace_tracks();
-        } else {
-            match kind {
-                TrackRowChangedKind::Data | TrackRowChangedKind::DuplicateGrouping => {
-                    // In-place per-track refresh — never `replace_tracks`. A
-                    // single background completion (Lyrics/Tags/BPM/Key/Waveform,
-                    // metadata write) must not collapse the currently-expanded
-                    // album or scroll the grid back to the top.
-                    for track_id in &changed_track_ids {
-                        albums_view.update_track(*track_id);
-                    }
+        match &update.albums {
+            AlbumsUpdate::Unaffected => {}
+            // In place, never `replace_tracks`: a background completion
+            // (lyrics, tags, BPM, key) must not collapse the expanded
+            // album or scroll the grid back to the top.
+            AlbumsUpdate::Patch(track_ids) => albums_view.update_tracks(track_ids),
+            AlbumsUpdate::Artwork(track_ids) => {
+                for track_id in track_ids {
+                    albums_view.refresh_track_artwork(*track_id);
                 }
-                TrackRowChangedKind::Artwork => {
-                    for track_id in &changed_track_ids {
-                        albums_view.refresh_track_artwork(*track_id);
-                    }
-                }
-                TrackRowChangedKind::AlbumStructure
-                | TrackRowChangedKind::AlbumAndDuplicateGrouping
-                | TrackRowChangedKind::TableOnly => {}
             }
+            AlbumsUpdate::Regroup => albums_view.replace_tracks(),
         }
-        if kind.affects_duplicate_grouping() {
-            duplicates_view.refresh_if_active();
-        } else {
-            for track_id in &changed_track_ids {
-                duplicates_view.update_track_row(*track_id);
-            }
+        match update.duplicates {
+            DuplicatesUpdate::Rows => duplicates_view.update_rows(&rows),
+            DuplicatesUpdate::Regroup => duplicates_view.refresh_if_active(),
         }
 
         match sidebar.current_selection() {
@@ -234,6 +210,16 @@ pub(super) fn track_rows_changed_callback(
     })
 }
 
+/// Reports changed embedded artwork through the same applier as committed
+/// track changes.
+pub(super) fn artwork_changed_callback(
+    track_view_update: TrackViewUpdateCallback,
+) -> ArtworkChangedCallback {
+    Rc::new(move |track_ids: &[TrackId]| {
+        track_view_update(&TrackViewUpdate::for_artwork(track_ids));
+    })
+}
+
 pub(super) struct TracksRemovedContext<'a> {
     pub(super) runtime: &'a SharedRuntime,
     pub(super) songs_table: &'a TrackTable,
@@ -271,29 +257,9 @@ pub(super) fn tracks_removed_callback(ctx: TracksRemovedContext<'_>) -> TracksRe
     let current_search_text = ctx.current_search_text.clone();
 
     Rc::new(move |removal: &TracksRemoved| {
-        if !removal.survivors.is_empty() {
-            let survivor_rows = {
-                let runtime = runtime.borrow();
-                let honor_sort_tags = runtime.settings().library.honor_sort_tags;
-                removal
-                    .survivors
-                    .iter()
-                    .filter_map(|survivor_id| {
-                        runtime.library_track(*survivor_id).map(|track| {
-                            (
-                                *survivor_id,
-                                TrackTableRow::from_track(track, honor_sort_tags),
-                            )
-                        })
-                    })
-                    .collect::<HashMap<_, _>>()
-            };
-            songs_table.update_rows(&survivor_rows);
-            playlists_table.update_rows(&survivor_rows);
-        }
         songs_table.remove_rows(&removal.track_ids);
         playlists_table.remove_rows(&removal.track_ids);
-        let playlist_membership_may_grow = !removal.survivors.is_empty()
+        let playlist_membership_may_grow = removal.merged
             || matches!(
                 sidebar.current_selection(),
                 Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(_)))
@@ -394,28 +360,6 @@ fn playlist_entry_positions(
         .unwrap_or_default()
 }
 
-pub(super) fn track_row_changed_callback(
-    track_rows_changed: TrackRowsChangedCallback,
-) -> TrackRowChangedCallback {
-    Rc::new(move |track_id: TrackId, kind: TrackRowChangedKind| {
-        track_rows_changed(&[track_id], kind);
-    })
-}
-
-fn inline_edit_changed_kind(field: EditableField) -> TrackRowChangedKind {
-    match field {
-        EditableField::Artist | EditableField::Album => {
-            TrackRowChangedKind::AlbumAndDuplicateGrouping
-        }
-        EditableField::Year => TrackRowChangedKind::AlbumStructure,
-        EditableField::Title => TrackRowChangedKind::DuplicateGrouping,
-        EditableField::Genre
-        | EditableField::Bpm
-        | EditableField::Key
-        | EditableField::TrackNumber => TrackRowChangedKind::Data,
-    }
-}
-
 /// Re-derive the shown playlist's rows on the next idle, once for a burst
 /// of track changes, keeping the user's place in the table; a hidden view
 /// is rebuilt on its next visit.
@@ -451,9 +395,7 @@ pub(super) fn track_context_actions(
     show_album_holder: &ShowAlbumHolder,
     command_controller: &SharedCommandController,
     playback_changed: PlaybackChangedCallback,
-    library_changed_holder: LibraryChangedHolder,
-    track_row_changed_holder: TrackRowChangedHolder,
-    track_rows_changed_holder: TrackRowsChangedHolder,
+    artwork_changed_holder: ArtworkChangedHolder,
     tracks_removed_holder: TracksRemovedHolder,
     artwork_loader: &ArtworkLoader,
 ) -> TrackContextActionSet {
@@ -470,9 +412,7 @@ pub(super) fn track_context_actions(
             parent_window: window,
             runtime,
             command_controller,
-            library_changed_holder: &library_changed_holder,
-            track_row_changed_holder: &track_row_changed_holder,
-            track_rows_changed_holder: &track_rows_changed_holder,
+            artwork_changed_holder: &artwork_changed_holder,
             playback_changed: playback_changed.clone(),
             artwork_loader,
         })),
@@ -512,9 +452,7 @@ pub(super) fn playlist_track_context_actions(
     show_album_holder: &ShowAlbumHolder,
     command_controller: &SharedCommandController,
     playback_changed: PlaybackChangedCallback,
-    library_changed_holder: LibraryChangedHolder,
-    track_row_changed_holder: TrackRowChangedHolder,
-    track_rows_changed_holder: TrackRowsChangedHolder,
+    artwork_changed_holder: ArtworkChangedHolder,
     tracks_removed_holder: TracksRemovedHolder,
     playlist_entries_changed_holder: PlaylistEntriesChangedHolder,
     artwork_loader: &ArtworkLoader,
@@ -533,9 +471,7 @@ pub(super) fn playlist_track_context_actions(
             parent_window: window,
             runtime,
             command_controller,
-            library_changed_holder: &library_changed_holder,
-            track_row_changed_holder: &track_row_changed_holder,
-            track_rows_changed_holder: &track_rows_changed_holder,
+            artwork_changed_holder: &artwork_changed_holder,
             playback_changed: playback_changed.clone(),
             artwork_loader,
         })),
@@ -766,7 +702,7 @@ fn track_removal_callback(
         if let Some(callback) = tracks_removed_holder.borrow().as_ref() {
             callback(&TracksRemoved {
                 track_ids: removed,
-                survivors: Vec::new(),
+                merged: false,
             });
         }
     })
