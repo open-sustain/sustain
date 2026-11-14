@@ -169,20 +169,20 @@ type PostHydrationStartup = Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
 /// next background worker is a one-line struct extension instead of
 /// touching every call site.
 pub(crate) struct MainWindowAsyncReceivers {
-    pub mpris_command_rx: Option<MprisCommandReceiver>,
-    pub metadata_writer_event_rx: Option<MetadataWriterEventReceiver>,
-    pub artwork_fetch_result_rx: Option<ArtworkFetchResultReceiver>,
-    pub youtube_audio_download_result_rx: Option<YoutubeAudioDownloadResultReceiver>,
-    pub analysis_progress_rx: Option<AnalysisProgressReceiver>,
-    pub online_progress_rx: Option<OnlineProgressReceiver>,
-    pub track_updated_rx: Option<TrackUpdatedReceiver>,
-    pub smart_shuffle_rebuild_result_rx: Option<SmartShuffleRebuildResultReceiver>,
-    pub device_sync_event_rx: Option<DeviceSyncEventReceiver>,
-    pub device_plan_result_rx: Option<DevicePlanResultReceiver>,
-    pub mtp_discovery_rx: Option<MtpDiscoveryResultReceiver>,
-    pub optical_discovery_rx: Option<OpticalDiscoveryResultReceiver>,
-    pub cd_lookup_rx: Option<CdLookupEventReceiver>,
-    pub library_hydration_result_rx: Option<LibraryHydrationResultReceiver>,
+    pub mpris_command_rx: MprisCommandReceiver,
+    pub metadata_writer_event_rx: MetadataWriterEventReceiver,
+    pub artwork_fetch_result_rx: ArtworkFetchResultReceiver,
+    pub youtube_audio_download_result_rx: YoutubeAudioDownloadResultReceiver,
+    pub analysis_progress_rx: AnalysisProgressReceiver,
+    pub online_progress_rx: OnlineProgressReceiver,
+    pub track_updated_rx: TrackUpdatedReceiver,
+    pub smart_shuffle_rebuild_result_rx: SmartShuffleRebuildResultReceiver,
+    pub device_sync_event_rx: DeviceSyncEventReceiver,
+    pub device_plan_result_rx: DevicePlanResultReceiver,
+    pub mtp_discovery_rx: MtpDiscoveryResultReceiver,
+    pub optical_discovery_rx: OpticalDiscoveryResultReceiver,
+    pub cd_lookup_rx: CdLookupEventReceiver,
+    pub library_hydration_result_rx: LibraryHydrationResultReceiver,
 }
 
 pub(crate) fn build_main_window(
@@ -1084,9 +1084,9 @@ struct DevicesSectionContext<'a> {
     device_panel: &'a DeviceSyncPanel,
     cd_import_panel: &'a CdImportPanel,
     runtime: &'a SharedRuntime,
-    mtp_discovery_rx: Option<MtpDiscoveryResultReceiver>,
-    optical_discovery_rx: Option<OpticalDiscoveryResultReceiver>,
-    cd_lookup_rx: Option<CdLookupEventReceiver>,
+    mtp_discovery_rx: MtpDiscoveryResultReceiver,
+    optical_discovery_rx: OpticalDiscoveryResultReceiver,
+    cd_lookup_rx: CdLookupEventReceiver,
 }
 
 /// The current DEVICES entries: removable sync targets followed by inserted
@@ -1246,7 +1246,8 @@ fn install_devices_section(context: DevicesSectionContext<'_>) {
     install_mtp_discovery_consumer(mtp_discovery_rx, runtime.clone(), render_devices.clone());
 
     // Optical-disc discovery results re-render the section.
-    if let Some(receiver) = optical_discovery_rx {
+    {
+        let receiver = optical_discovery_rx;
         let runtime = runtime.clone();
         let render_devices = render_devices.clone();
         glib::MainContext::default().spawn_local(async move {
@@ -1260,7 +1261,8 @@ fn install_devices_section(context: DevicesSectionContext<'_>) {
 
     // MusicBrainz disc lookup + cover results, dropped when their generation
     // no longer matches the disc currently on the page.
-    if let Some(receiver) = cd_lookup_rx {
+    {
+        let receiver = cd_lookup_rx;
         let runtime = runtime.clone();
         let cd_import_panel = cd_import_panel.clone();
         glib::MainContext::default().spawn_local(async move {

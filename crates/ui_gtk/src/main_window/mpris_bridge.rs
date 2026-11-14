@@ -27,7 +27,7 @@ pub(super) fn now_playing_to_mpris_metadata(
 }
 
 pub(super) fn install_mpris_command_consumer(
-    receiver: Option<MprisCommandReceiver>,
+    receiver: MprisCommandReceiver,
     command_controller: SharedCommandController,
     playback_changed: PlaybackChangedCallback,
     app: gtk::Application,
@@ -36,9 +36,6 @@ pub(super) fn install_mpris_command_consumer(
     // No receiver means MPRIS startup failed; the UI just runs without
     // a media-key bridge, and the dropped sender on the desktop side
     // means future try_send calls would silently no-op anyway.
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(command) = receiver.recv().await {
             handle_mpris_command(

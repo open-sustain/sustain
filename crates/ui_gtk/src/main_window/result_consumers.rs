@@ -21,7 +21,7 @@ use super::*;
 const INITIAL_LIBRARY_ROWS_BATCH_SIZE: usize = 128;
 
 pub(super) struct LibraryHydrationResultConsumerContext {
-    pub(super) receiver: Option<LibraryHydrationResultReceiver>,
+    pub(super) receiver: LibraryHydrationResultReceiver,
     pub(super) runtime: SharedRuntime,
     pub(super) songs_table: TrackTable,
     pub(super) sidebar: PlaylistSidebar,
@@ -59,9 +59,6 @@ pub(super) fn install_library_hydration_result_consumer(
         post_hydration_startup,
         launch_profile,
     } = context;
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         let Ok(result) = receiver.recv().await else {
             return;
@@ -183,16 +180,13 @@ fn run_once(callback: &PostHydrationStartup) {
 /// Managed retarget results reload SQLite because a filesystem or durability
 /// failure may have happened on either side of the atomic row commit.
 pub(super) fn install_metadata_writer_event_consumer(
-    receiver: Option<MetadataWriterEventReceiver>,
+    receiver: MetadataWriterEventReceiver,
     runtime: SharedRuntime,
     artwork_changed_holder: ArtworkChangedHolder,
     tracks_removed: TracksRemovedCallback,
     relocation_completed: crate::missing_track::MissingTrackRelocationCompletedCallback,
     artwork_loader: ArtworkLoader,
 ) {
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(event) = receiver.recv().await {
             let relocation = match &event {
@@ -272,12 +266,9 @@ pub(super) fn install_metadata_writer_event_consumer(
 }
 
 pub(super) fn install_youtube_audio_download_result_consumer(
-    receiver: Option<YoutubeAudioDownloadResultReceiver>,
+    receiver: YoutubeAudioDownloadResultReceiver,
     runtime: SharedRuntime,
 ) {
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(result) = receiver.recv().await {
             runtime
@@ -295,12 +286,9 @@ pub(super) fn install_youtube_audio_download_result_consumer(
 /// updated in place per tick, and dismissed on Idle (with an
 /// ephemeral summary toast when work actually happened).
 pub(super) fn install_analysis_progress_consumer(
-    receiver: Option<AnalysisProgressReceiver>,
+    receiver: AnalysisProgressReceiver,
     runtime: SharedRuntime,
 ) {
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(progress) = receiver.recv().await {
             runtime.borrow_mut().apply_analysis_progress(progress);
@@ -313,12 +301,9 @@ pub(super) fn install_analysis_progress_consumer(
 /// [`ApplicationRuntime::apply_online_progress`] which owns the
 /// matching persistent/ephemeral notification surface.
 pub(super) fn install_online_progress_consumer(
-    receiver: Option<OnlineProgressReceiver>,
+    receiver: OnlineProgressReceiver,
     runtime: SharedRuntime,
 ) {
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(progress) = receiver.recv().await {
             runtime.borrow_mut().apply_online_progress(progress);
@@ -358,12 +343,9 @@ pub(super) fn install_track_changes_observer(
 /// [`ApplicationRuntime::apply_track_updated`], which reloads the row
 /// from the library store and records what changed for the views.
 pub(super) fn install_track_updated_consumer(
-    receiver: Option<TrackUpdatedReceiver>,
+    receiver: TrackUpdatedReceiver,
     runtime: SharedRuntime,
 ) {
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(first) = receiver.recv().await {
             // Coalesce a burst before touching the store: a full analysis
@@ -395,12 +377,9 @@ pub(super) fn install_track_updated_consumer(
 /// forever in the `async_channel` and a freshly-rebuilt index would
 /// never be picked up.
 pub(super) fn install_smart_shuffle_rebuild_result_consumer(
-    receiver: Option<SmartShuffleRebuildResultReceiver>,
+    receiver: SmartShuffleRebuildResultReceiver,
     runtime: SharedRuntime,
 ) {
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(result) = receiver.recv().await {
             runtime
@@ -416,12 +395,9 @@ pub(super) fn install_smart_shuffle_rebuild_result_consumer(
 /// progress notification and, on completion, persists the device
 /// manifest and publishes the outcome.
 pub(super) fn install_device_sync_event_consumer(
-    receiver: Option<DeviceSyncEventReceiver>,
+    receiver: DeviceSyncEventReceiver,
     runtime: SharedRuntime,
 ) {
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(event) = receiver.recv().await {
             runtime.borrow_mut().apply_device_sync_event(event);
@@ -430,13 +406,10 @@ pub(super) fn install_device_sync_event_consumer(
 }
 
 pub(super) fn install_device_plan_result_consumer(
-    receiver: Option<DevicePlanResultReceiver>,
+    receiver: DevicePlanResultReceiver,
     runtime: SharedRuntime,
     device_panel: DeviceSyncPanel,
 ) {
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(result) = receiver.recv().await {
             if runtime.borrow_mut().apply_device_plan_result(result) {
@@ -451,13 +424,10 @@ pub(super) fn install_device_plan_result_consumer(
 /// resolved set lands here. When it actually changes the cached device set,
 /// `render_devices` repaints the sidebar and device panel.
 pub(super) fn install_mtp_discovery_consumer(
-    receiver: Option<MtpDiscoveryResultReceiver>,
+    receiver: MtpDiscoveryResultReceiver,
     runtime: SharedRuntime,
     render_devices: Rc<dyn Fn()>,
 ) {
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(result) = receiver.recv().await {
             if runtime.borrow_mut().apply_mtp_discovery(result) {
@@ -507,7 +477,7 @@ pub(super) fn install_smart_shuffle_launch_rebuild(runtime: &SharedRuntime) {
 /// downstream view (Albums grid, track-table cover columns) settles
 /// on the new visual state.
 pub(super) struct ArtworkFetchResultConsumerContext {
-    pub(super) receiver: Option<ArtworkFetchResultReceiver>,
+    pub(super) receiver: ArtworkFetchResultReceiver,
     pub(super) runtime: SharedRuntime,
     pub(super) command_controller: SharedCommandController,
     pub(super) artwork_loader: ArtworkLoader,
@@ -526,9 +496,6 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
         playback_changed,
         artwork_changed_holder,
     } = context;
-    let Some(receiver) = receiver else {
-        return;
-    };
     glib::MainContext::default().spawn_local(async move {
         while let Ok(result) = receiver.recv().await {
             use sustain_app_runtime::ArtworkFetchOutcome;

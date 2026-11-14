@@ -334,40 +334,28 @@ pub fn run(
             None
         }
     };
-    // `connect_activate` may be invoked more than once over the
-    // application lifetime (e.g. a second `gtk::Application::activate`
-    // call), but the inbound receiver must only be consumed once — a
-    // second consumer would race for the same commands. Take it on the
-    // first activation; later activations skip the setup.
-    let mpris_command_rx_holder: Rc<RefCell<Option<MprisCommandReceiver>>> =
-        Rc::new(RefCell::new(Some(mpris_command_rx)));
-    let writer_event_rx_holder: Rc<RefCell<Option<MetadataWriterEventReceiver>>> =
-        Rc::new(RefCell::new(Some(writer_event_rx)));
-    let fetch_result_rx_holder: Rc<RefCell<Option<ArtworkFetchResultReceiver>>> =
-        Rc::new(RefCell::new(Some(fetch_result_rx)));
-    let youtube_audio_result_rx_holder: Rc<RefCell<Option<YoutubeAudioDownloadResultReceiver>>> =
-        Rc::new(RefCell::new(Some(youtube_audio_result_rx)));
-    let analysis_progress_rx_holder: Rc<RefCell<Option<AnalysisProgressReceiver>>> =
-        Rc::new(RefCell::new(Some(analysis_progress_rx)));
-    let online_progress_rx_holder: Rc<RefCell<Option<OnlineProgressReceiver>>> =
-        Rc::new(RefCell::new(Some(online_progress_rx)));
-    let track_updated_rx_holder: Rc<RefCell<Option<TrackUpdatedReceiver>>> =
-        Rc::new(RefCell::new(Some(track_updated_rx)));
-    let smart_shuffle_rebuild_result_rx_holder: Rc<
-        RefCell<Option<SmartShuffleRebuildResultReceiver>>,
-    > = Rc::new(RefCell::new(Some(smart_shuffle_rebuild_result_rx)));
-    let device_sync_event_rx_holder: Rc<RefCell<Option<DeviceSyncEventReceiver>>> =
-        Rc::new(RefCell::new(Some(device_sync_event_rx)));
-    let device_plan_result_rx_holder: Rc<RefCell<Option<DevicePlanResultReceiver>>> =
-        Rc::new(RefCell::new(Some(device_plan_result_rx)));
-    let mtp_discovery_rx_holder: Rc<RefCell<Option<MtpDiscoveryResultReceiver>>> =
-        Rc::new(RefCell::new(Some(mtp_discovery_rx)));
-    let optical_discovery_rx_holder: Rc<RefCell<Option<OpticalDiscoveryResultReceiver>>> =
-        Rc::new(RefCell::new(Some(optical_discovery_rx)));
-    let cd_lookup_rx_holder: Rc<RefCell<Option<CdLookupEventReceiver>>> =
-        Rc::new(RefCell::new(Some(cd_lookup_rx)));
-    let library_hydration_result_rx_holder: Rc<RefCell<Option<LibraryHydrationResultReceiver>>> =
-        Rc::new(RefCell::new(Some(library_hydration_result_rx)));
+    // The receivers feed the one main window, built by the first
+    // activation. A second `sustain` launch hands its activation to this
+    // instance (`forward_activate`): that, and any later activation,
+    // raises the window instead of building another one.
+    let pending_receivers = Rc::new(RefCell::new(Some(
+        crate::main_window::MainWindowAsyncReceivers {
+            mpris_command_rx,
+            metadata_writer_event_rx: writer_event_rx,
+            artwork_fetch_result_rx: fetch_result_rx,
+            youtube_audio_download_result_rx: youtube_audio_result_rx,
+            analysis_progress_rx,
+            online_progress_rx,
+            track_updated_rx,
+            smart_shuffle_rebuild_result_rx,
+            device_sync_event_rx,
+            device_plan_result_rx,
+            mtp_discovery_rx,
+            optical_discovery_rx,
+            cd_lookup_rx,
+            library_hydration_result_rx,
+        },
+    )));
 
     sustain_profiler::profile_mark!(run_profile, "connect_activate installation starting");
     app.connect_activate({
@@ -375,44 +363,21 @@ pub fn run(
         move |app| {
             let activate_profile = sustain_profiler::ProfileScope::start();
             sustain_profiler::profile_mark!(activate_profile, "activate: entered");
-            let mpris_command_rx = mpris_command_rx_holder.borrow_mut().take();
-            let writer_event_rx = writer_event_rx_holder.borrow_mut().take();
-            let fetch_result_rx = fetch_result_rx_holder.borrow_mut().take();
-            let youtube_audio_result_rx = youtube_audio_result_rx_holder.borrow_mut().take();
-            let analysis_progress_rx = analysis_progress_rx_holder.borrow_mut().take();
-            let online_progress_rx = online_progress_rx_holder.borrow_mut().take();
-            let track_updated_rx = track_updated_rx_holder.borrow_mut().take();
-            let smart_shuffle_rebuild_result_rx =
-                smart_shuffle_rebuild_result_rx_holder.borrow_mut().take();
-            let device_sync_event_rx = device_sync_event_rx_holder.borrow_mut().take();
-            let device_plan_result_rx = device_plan_result_rx_holder.borrow_mut().take();
-            let mtp_discovery_rx = mtp_discovery_rx_holder.borrow_mut().take();
-            let optical_discovery_rx = optical_discovery_rx_holder.borrow_mut().take();
-            let cd_lookup_rx = cd_lookup_rx_holder.borrow_mut().take();
-            let library_hydration_result_rx =
-                library_hydration_result_rx_holder.borrow_mut().take();
+            let Some(receivers) = pending_receivers.borrow_mut().take() else {
+                // The main window exists: raise the application's window
+                // the user focused last.
+                if let Some(window) = app.active_window() {
+                    window.present();
+                }
+                return;
+            };
             let main_window = build_main_window(
                 app,
                 runtime.clone(),
                 mpris_service.clone(),
                 artwork_cache_dir.clone(),
                 database_path.clone(),
-                crate::main_window::MainWindowAsyncReceivers {
-                    mpris_command_rx,
-                    metadata_writer_event_rx: writer_event_rx,
-                    artwork_fetch_result_rx: fetch_result_rx,
-                    youtube_audio_download_result_rx: youtube_audio_result_rx,
-                    analysis_progress_rx,
-                    online_progress_rx,
-                    track_updated_rx,
-                    smart_shuffle_rebuild_result_rx,
-                    device_sync_event_rx,
-                    device_plan_result_rx,
-                    mtp_discovery_rx,
-                    optical_discovery_rx,
-                    cd_lookup_rx,
-                    library_hydration_result_rx,
-                },
+                receivers,
                 activate_profile,
             );
             if let Some(profile) = activate_profile {
