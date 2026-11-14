@@ -55,7 +55,8 @@ pub(crate) fn open_multi_track_info_dialog(
     explanation.add_css_class("dim-label");
     outer.append(&explanation);
 
-    let details = BatchDetailsPage::new(&initial_values);
+    let genre_suggestions = command_controller.runtime().borrow().distinct_genres();
+    let details = BatchDetailsPage::new(&initial_values, genre_suggestions);
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroll.set_propagate_natural_height(true);
@@ -291,7 +292,7 @@ struct BatchDetailsPage {
 }
 
 impl BatchDetailsPage {
-    fn new(initial: &BatchInitialValues) -> Self {
+    fn new(initial: &BatchInitialValues, genre_suggestions: Vec<String>) -> Self {
         let widget = gtk::Grid::new();
         widget.set_row_spacing(6);
         widget.set_column_spacing(10);
@@ -312,6 +313,8 @@ impl BatchDetailsPage {
         let grouping = OptionalEntry::text(&widget, row, "Grouping", initial.grouping.clone());
         row += 1;
         let genre = OptionalEntry::text(&widget, row, "Genre", initial.genre.clone());
+        // The library's genres, as on the single-track page (#301).
+        crate::suggestion_entry::attach_suggestions(&genre.entry, genre_suggestions);
         row += 1;
         let year = OptionalEntry::number(
             &widget,

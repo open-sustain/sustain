@@ -30,6 +30,10 @@ pub(super) fn begin_inline_edit_callback(
         let track_id = crate::track_table::row_track_id(Some(object.clone()))?;
         let seed =
             track_metadata(&runtime, track_id).map(|metadata| field.seed_value(&metadata))?;
+        let suggestions = match field {
+            EditableField::Genre => runtime.borrow().distinct_genres(),
+            _ => Vec::new(),
+        };
         let runtime = runtime.clone();
         let command_controller = command_controller.clone();
         let track_row_changed_holder = track_row_changed_holder.clone();
@@ -55,6 +59,7 @@ pub(super) fn begin_inline_edit_callback(
         };
         Some(EditSession {
             seed,
+            suggestions,
             commit: Box::new(commit),
         })
     })

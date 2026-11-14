@@ -350,6 +350,7 @@ impl CdImportPanel {
                     };
                     Some(EditSession {
                         seed,
+                        suggestions: Vec::new(),
                         commit: Box::new(commit),
                     })
                 }),

@@ -13,8 +13,14 @@
 //! focus-handoff fragility that keeps the inline table editor on a knife's
 //! edge; here the entry stays the sole focus owner throughout.
 //!
-//! Used by the Get Info genre field so the user reuses an existing genre
-//! spelling instead of coining a near-duplicate (#160).
+//! Used by every genre editor (Get Info, the multi-track Get Info and the
+//! inline table editor) so the user reuses an existing genre spelling
+//! instead of coining a near-duplicate (#160, #301).
+//!
+//! The entry owns everything attached here, and nothing attached refers
+//! back up to the entry or the popover strongly. An entry that is simply
+//! removed from its parent, as the inline table editor's is, is therefore
+//! disposed with its popover rather than kept alive by its own handlers.
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -111,7 +117,10 @@ pub(crate) fn attach_suggestions(entry: &gtk::Entry, candidates: Vec<String>) {
 
     // Re-filter and show/hide as the text changes. Gate the *show* on the
     // entry actually having focus so a programmatic `set_text` (navigating
-    // between tracks in Get Info) never pops the list open unbidden.
+    // between tracks in Get Info) never pops the list open unbidden. The
+    // focus sits on the entry's inner text widget, never on the entry
+    // itself, so `has_focus()` would always be false here: ask whether the
+    // focus is within it.
     let popover_for_changed = popover.clone();
     let filter_for_changed = filter.clone();
     let filter_model_for_changed = filter_model.clone();
@@ -119,7 +128,7 @@ pub(crate) fn attach_suggestions(entry: &gtk::Entry, candidates: Vec<String>) {
     entry.connect_changed(move |entry| {
         filter_for_changed.changed(gtk::FilterChange::Different);
         selection_for_changed.set_selected(gtk::INVALID_LIST_POSITION);
-        if filter_model_for_changed.n_items() > 0 && entry.has_focus() {
+        if filter_model_for_changed.n_items() > 0 && has_focus_within(entry) {
             if !popover_for_changed.is_visible() {
                 popover_for_changed.popup();
             }
@@ -129,14 +138,20 @@ pub(crate) fn attach_suggestions(entry: &gtk::Entry, candidates: Vec<String>) {
     });
 
     // Click a row → accept it. Rows are non-focusable, so the click never
-    // pulls focus off the entry.
-    let entry_for_activate = entry.clone();
-    let popover_for_activate = popover.clone();
+    // pulls focus off the entry. The list lives inside the popover, which
+    // lives inside the entry, so both are held weakly here.
+    let entry_for_activate = entry.downgrade();
+    let popover_for_activate = popover.downgrade();
     list.connect_activate(move |list, position| {
-        if let Some(value) = string_at(list.model().as_ref(), position) {
-            apply_suggestion(&entry_for_activate, &value);
+        if let (Some(value), Some(entry)) = (
+            string_at(list.model().as_ref(), position),
+            entry_for_activate.upgrade(),
+        ) {
+            apply_suggestion(&entry, &value);
         }
-        popover_for_activate.popdown();
+        if let Some(popover) = popover_for_activate.upgrade() {
+            popover.popdown();
+        }
     });
 
     // Drive selection and acceptance from the entry's own keys. Capture phase
@@ -147,7 +162,7 @@ pub(crate) fn attach_suggestions(entry: &gtk::Entry, candidates: Vec<String>) {
     let popover_for_key = popover.clone();
     let selection_for_key = selection.clone();
     let filter_model_for_key = filter_model.clone();
-    let entry_for_key = entry.clone();
+    let entry_for_key = entry.downgrade();
     key.connect_key_pressed(move |_, keyval, _, _| {
         let count = filter_model_for_key.n_items();
         match keyval {
@@ -186,13 +201,15 @@ pub(crate) fn attach_suggestions(entry: &gtk::Entry, candidates: Vec<String>) {
                 popover_for_key.popdown();
                 if selected != gtk::INVALID_LIST_POSITION
                     && let Some(value) = string_at(Some(&selection_for_key), selected)
+                    && let Some(entry) = entry_for_key.upgrade()
                 {
-                    apply_suggestion(&entry_for_key, &value);
-                    // Swallow Enter so it doesn't also fire the dialog's OK.
+                    apply_suggestion(&entry, &value);
+                    // Swallow Enter so it doesn't also commit the field (the
+                    // dialog's OK, the inline editor's commit).
                     return glib::Propagation::Stop;
                 }
                 // No highlighted row: closing the list is enough; let Enter
-                // fall through to commit the dialog as usual.
+                // fall through to commit the field as usual.
                 glib::Propagation::Proceed
             }
             gdk::Key::Escape if popover_for_key.is_visible() => {
@@ -214,9 +231,16 @@ pub(crate) fn attach_suggestions(entry: &gtk::Entry, candidates: Vec<String>) {
     entry.add_controller(focus);
 
     // A popover with an explicit parent must be unparented before that parent
-    // is destroyed, or GTK logs a finalize-time warning.
+    // is destroyed, or GTK logs a finalize-time warning. Disposing the entry
+    // emits `destroy`, whether a window tore it down or its last reference
+    // went away.
     let popover_for_destroy = popover.clone();
     entry.connect_destroy(move |_| popover_for_destroy.unparent());
+}
+
+/// Whether keyboard focus is in `entry`, which hands it to its text child.
+fn has_focus_within(entry: &gtk::Entry) -> bool {
+    entry.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN)
 }
 
 /// Read the candidate string at `position` from a list model of
@@ -251,7 +275,78 @@ mod tests {
             let entry = gtk::Entry::new();
             attach_suggestions(&entry, vec!["Rock".to_owned(), "Hip-Hop".to_owned()]);
             entry.set_text("ro");
-            assert!(!entry.has_focus());
+            assert!(!has_focus_within(&entry));
+        }) {
+            eprintln!("SMOKE: no display, skipping");
+        }
+    }
+
+    /// Typing into the focused entry opens the list of matching values;
+    /// filling it programmatically, unfocused, does not (#301).
+    #[test]
+    fn typing_into_the_focused_entry_opens_the_suggestions() {
+        if !crate::test_support::with_gtk(|| {
+            let entry = gtk::Entry::new();
+            attach_suggestions(&entry, vec!["Deep House".to_owned(), "Rock".to_owned()]);
+            let popover = std::iter::successors(entry.first_child(), |child| child.next_sibling())
+                .find_map(|child| child.downcast::<gtk::Popover>().ok())
+                .expect("the suggestion popover is parented to the entry");
+            let elsewhere = gtk::Button::with_label("Elsewhere");
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            content.append(&elsewhere);
+            content.append(&entry);
+            let window = gtk::Window::new();
+            window.set_child(Some(&content));
+            window.present();
+            let context = glib::MainContext::default();
+            let settle = || {
+                for _ in 0..100 {
+                    if !context.iteration(false) {
+                        break;
+                    }
+                }
+            };
+            elsewhere.grab_focus();
+            settle();
+
+            entry.set_text("hou");
+            assert!(!popover.is_visible(), "no list for an unfocused entry");
+
+            entry.set_text("");
+            entry.grab_focus();
+            settle();
+            entry.set_text("hou");
+            assert!(popover.is_visible(), "the focused entry lists what matches");
+            entry.set_text("jazz");
+            assert!(!popover.is_visible(), "nothing matches, so no list");
+            window.destroy();
+        }) {
+            eprintln!("SMOKE: no display, skipping");
+        }
+    }
+
+    /// An entry removed from its parent goes away with its popover: the
+    /// suggestion handlers do not keep it alive (the inline editor's entry
+    /// is only ever removed from its cell).
+    #[test]
+    fn a_removed_entry_is_disposed_with_its_popover() {
+        if !crate::test_support::with_gtk(|| {
+            let parent = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            let entry = gtk::Entry::new();
+            attach_suggestions(&entry, vec!["Rock".to_owned(), "Hip-Hop".to_owned()]);
+            parent.append(&entry);
+            let popover = std::iter::successors(entry.first_child(), |child| child.next_sibling())
+                .find(|child| child.is::<gtk::Popover>())
+                .expect("the suggestion popover is parented to the entry");
+            let entry_weak = entry.downgrade();
+            let popover_weak = popover.downgrade();
+            drop(popover);
+
+            parent.remove(&entry);
+            drop(entry);
+
+            assert!(entry_weak.upgrade().is_none(), "the entry was disposed");
+            assert!(popover_weak.upgrade().is_none(), "its popover went with it");
         }) {
             eprintln!("SMOKE: no display, skipping");
         }

@@ -109,6 +109,9 @@ fn optional_to_string<T: ToString>(value: Option<T>) -> String {
 pub(crate) struct EditSession {
     /// The field's current value, to seed the editor with.
     pub(crate) seed: String,
+    /// Values the editor offers as the user types, so an existing spelling
+    /// is reused (a genre the library already has). Empty for free text.
+    pub(crate) suggestions: Vec<String>,
     /// Writes the typed value to the row the session was opened on.
     pub(crate) commit: Box<dyn FnOnce(String)>,
 }
@@ -275,10 +278,13 @@ impl InlineEditController {
             {
                 return;
             }
-            let Some(cell) = gesture
-                .widget()
-                .and_then(|table| TableCell::at(&table, x, y))
-            else {
+            let Some(table) = gesture.widget() else {
+                return;
+            };
+            if !press_on_table_surface(gesture, &table) {
+                return;
+            }
+            let Some(cell) = TableCell::at(&table, x, y) else {
                 return;
             };
             let Some((list_item, field)) = controller_press.editable_cell(&cell) else {
@@ -408,13 +414,21 @@ impl InlineEditController {
         }
         self.finish_active(FinishMode::Commit);
 
-        let Some(EditSession { seed, commit }) = (self.begin_edit)(&item, field) else {
+        let Some(EditSession {
+            seed,
+            suggestions,
+            commit,
+        }) = (self.begin_edit)(&item, field)
+        else {
             return;
         };
 
         let entry = gtk::Entry::new();
         entry.add_css_class("track-table-inline-edit");
         entry.set_text(&seed);
+        // Its capture-phase keys go first: Enter and Escape act on an open
+        // suggestion list before they commit or cancel the edit.
+        crate::suggestion_entry::attach_suggestions(&entry, suggestions);
         gtk::prelude::EditableExt::set_alignment(&entry, cell.xalign());
         cell.append(&entry);
 
@@ -636,6 +650,18 @@ fn cell_origin_x(cell: &TableCell) -> Option<f32> {
     Some(point.x())
 }
 
+/// Whether the gesture's current press landed on the table's own surface.
+///
+/// A popover parented inside the table, such as an open genre editor's
+/// suggestion list, is its own surface, but its presses still propagate
+/// through the table. Mapped into table coordinates they fall on whatever
+/// rows lie beneath the popover, which are not what the user clicked.
+fn press_on_table_surface(gesture: &gtk::GestureClick, table: &gtk::Widget) -> bool {
+    let event_surface = gesture.current_event().and_then(|event| event.surface());
+    let table_surface = table.native().and_then(|native| native.surface());
+    event_surface.is_some() && event_surface == table_surface
+}
+
 /// Whether keyboard focus is inside the table that holds `cell`.
 fn focus_within_table(cell: &TableCell) -> bool {
     let Some(table) = cell.ancestor(gtk::ColumnView::static_type()) else {
@@ -711,6 +737,7 @@ mod tests {
             let begin_edit: BeginEditCallback = Rc::new(|_, _| {
                 Some(EditSession {
                     seed: String::new(),
+                    suggestions: Vec::new(),
                     commit: Box::new(|_| {}),
                 })
             });
@@ -779,6 +806,7 @@ mod tests {
             let begin_edit: BeginEditCallback = Rc::new(|_, _| {
                 Some(EditSession {
                     seed: String::new(),
+                    suggestions: Vec::new(),
                     commit: Box::new(|_| {}),
                 })
             });
@@ -843,6 +871,74 @@ mod tests {
         }
     }
 
+    /// A session's suggestions are offered by its editor, and the editor goes
+    /// away with them once the edit ends (#301).
+    #[test]
+    fn a_suggesting_editor_is_released_when_the_edit_ends() {
+        let ran = crate::test_support::with_gtk(|| {
+            let begin_edit: BeginEditCallback = Rc::new(|_, _| {
+                Some(EditSession {
+                    seed: String::new(),
+                    suggestions: vec!["Deep House".to_owned(), "House".to_owned()],
+                    commit: Box::new(|_| {}),
+                })
+            });
+            let table = super::super::build_track_table(
+                vec![TrackTableRow::test_row(1)],
+                None,
+                None,
+                None,
+                None,
+                Some(begin_edit),
+            );
+            let window = gtk::Window::new();
+            window.set_default_size(700, 260);
+            window.set_child(Some(&table.widget()));
+            window.present();
+            let context = glib::MainContext::default();
+            let settle = || {
+                for _ in 0..200 {
+                    if !context.iteration(false) {
+                        break;
+                    }
+                }
+            };
+            settle();
+            let controller = table.inline_edit.clone().expect("inline editing table");
+            let (list_item, cell) = controller
+                .cells
+                .find_map_live(|entry, (list_item, cell)| {
+                    (entry.field == EditableField::Genre && list_item.position() == 0)
+                        .then_some((list_item, cell))
+                })
+                .expect("a realized genre cell on the first row");
+            controller.open_edit(EditableField::Genre, &cell, &list_item);
+            settle();
+            let entry = controller
+                .active
+                .borrow()
+                .as_ref()
+                .map(|active| active.entry.downgrade())
+                .expect("an open editor");
+            let has_suggestions = entry.upgrade().is_some_and(|entry| {
+                std::iter::successors(entry.first_child(), |child| child.next_sibling())
+                    .any(|child| child.is::<gtk::Popover>())
+            });
+            assert!(
+                has_suggestions,
+                "the editor offers the session's suggestions"
+            );
+
+            controller.finish_from_keyboard(FinishMode::Commit);
+            settle();
+            assert!(entry.upgrade().is_none(), "the ended editor was released");
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
     /// The track each commit was bound to, and the committed text.
     type Commits = Rc<RefCell<Vec<(Option<TrackId>, String)>>>;
 
@@ -858,6 +954,7 @@ mod tests {
                 let commits = commits_for_hook.clone();
                 Some(EditSession {
                     seed: String::new(),
+                    suggestions: Vec::new(),
                     commit: Box::new(move |text| commits.borrow_mut().push((track_id, text))),
                 })
             });

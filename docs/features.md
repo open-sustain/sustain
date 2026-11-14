@@ -720,7 +720,8 @@ With multiple tracks selected, the same entry points open a conservative
 batch editor. Every editable metadata field is opt-in: unchecked fields
 preserve each track's existing value, while a checked blank deliberately
 clears that field across the selection. Per-track artwork, lyrics, ratings,
-and listening statistics remain outside the batch editor.
+and listening statistics remain outside the batch editor. Its Genre field
+offers the library's genres the same way.
 
 ### Inline rating — *iso-iTunes*
 The Rating column in the table accepts clicks directly: click a star to
@@ -737,7 +738,11 @@ Track Name, Artist, Album, Genre, Year, BPM, Key, and Track #; other
 columns (Bitrate, Type, Duration, Plays, dates, …) ignore the click, and
 Rating keeps its own star widget. **Enter** commits, **Escape** cancels,
 and **Tab** / **Shift+Tab** commit and move to the next / previous
-editable cell in the row; clicking away commits. Edits travel the same
+editable cell in the row; clicking away commits. Committing with Enter
+or cancelling with Escape leaves keyboard focus on the row, so the arrow
+keys carry on through the table. The Genre editor offers the library's
+genres as you type, as in Get Info: Down/Up highlight one, and Enter
+accepts it, then a second Enter commits. Edits travel the same
 `UpdateMetadata` write path as the Get Info dialog, so SQLite stays
 authoritative and the file tag is mirrored. When an edit in a smart
 playlist changes whether the track still matches the playlist's rules,
