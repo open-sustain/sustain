@@ -279,6 +279,24 @@ pub(super) fn load_waveform(
     }))
 }
 
+pub(super) fn waveform_versions(
+    connection: &Connection,
+) -> StoreResult<HashMap<TrackId, WaveformVersion>> {
+    let mut statement = connection
+        .prepare(SELECT_WAVEFORM_VERSIONS_SQL)
+        .map_err(StoreError::from)?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(StoreError::from)?;
+    let mut versions = HashMap::new();
+    for row in rows {
+        let (track_id, token) = row.map_err(StoreError::from)?;
+        let track_id = TrackId::new(track_id).ok_or(StoreError::InvalidStoredId(track_id))?;
+        versions.insert(track_id, WaveformVersion::from_audio_attempt_token(token));
+    }
+    Ok(versions)
+}
+
 pub(super) fn load_beat_grid(
     connection: &Connection,
     track_id: TrackId,

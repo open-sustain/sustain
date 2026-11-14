@@ -569,6 +569,13 @@ impl LibraryStore for FaultyStore {
         self.inner.load_waveform(track_id)
     }
 
+    fn waveform_versions(
+        &self,
+    ) -> StoreResult<std::collections::HashMap<TrackId, sustain_library_store::WaveformVersion>>
+    {
+        self.inner.waveform_versions()
+    }
+
     fn load_beat_grid(&self, track_id: TrackId) -> StoreResult<Option<sustain_domain::BeatGrid>> {
         self.inner.load_beat_grid(track_id)
     }

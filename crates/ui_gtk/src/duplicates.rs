@@ -9,8 +9,8 @@ use std::{
 use gtk::glib;
 use gtk::prelude::*;
 use sustain_app_runtime::{
-    ApplicationRuntimeError, DuplicateMatchMode, NotificationCategory, NotificationSeverity,
-    runtime_error_text,
+    ApplicationRuntimeError, DuplicateGroup, DuplicateMatchMode, NotificationCategory,
+    NotificationSeverity, runtime_error_text,
 };
 
 use crate::{
@@ -261,9 +261,7 @@ impl DuplicatesView {
 
     fn apply_groups(
         &self,
-        result: sustain_app_runtime::ApplicationRuntimeResult<
-            Vec<Vec<sustain_app_runtime::TrackId>>,
-        >,
+        result: sustain_app_runtime::ApplicationRuntimeResult<Vec<DuplicateGroup>>,
     ) {
         match result {
             Ok(groups) => {
@@ -272,7 +270,7 @@ impl DuplicatesView {
                     let honor_sort_tags = runtime.settings().library.honor_sort_tags;
                     let mut rows = Vec::new();
                     for (group_index, group) in groups.iter().enumerate() {
-                        for track_id in group {
+                        for track_id in &group.track_ids {
                             if let Some(track) = runtime.library_track(*track_id) {
                                 rows.push(
                                     TrackTableRow::from_track(track, honor_sort_tags)

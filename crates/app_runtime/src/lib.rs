@@ -19,7 +19,7 @@ pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, BackgroundJobsSettings, BackgroundResourceUsage, Bpm,
     BpmRange, CdEncodingProfile, CdReadMode, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount,
-    DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest,
+    DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateConsolidationRequest, DuplicateGroup,
     DuplicateMatchMode, DuplicateMetadataField, DuplicateMetadataFieldSelection,
     DuplicateMetadataSelection, EncodingSettings, FieldChange, FilesPerFolderCap,
     GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LazyPickContext,
@@ -107,6 +107,7 @@ mod playback;
 mod playlist_folders;
 mod playlist_items;
 mod playlists;
+mod recording_evidence;
 mod smart_playlists;
 pub mod smart_shuffle_scheduler;
 #[cfg(test)]
@@ -439,6 +440,8 @@ pub struct ApplicationRuntime {
     duplicate_consolidation_notification_id: Option<NotificationId>,
     managed_library_filesystem_notification_id: Option<NotificationId>,
     managed_library_filesystem_validator: managed_library::ManagedLibraryFilesystemValidator,
+    /// Recording verdicts the duplicate scans computed, kept across scans.
+    recording_identities: Arc<std::sync::Mutex<recording_evidence::RecordingIdentityCache>>,
     metadata_writer: Option<metadata_writer::MetadataWriter>,
     metadata_writer_event_sink: Option<async_channel::Sender<MetadataWriterEvent>>,
     metadata_write_failed_track_ids: BTreeSet<TrackId>,
@@ -747,6 +750,7 @@ impl ApplicationRuntime {
             duplicate_consolidation_notification_id: None,
             managed_library_filesystem_notification_id: None,
             managed_library_filesystem_validator: Default::default(),
+            recording_identities: Default::default(),
             metadata_writer: None,
             metadata_writer_event_sink: None,
             metadata_write_failed_track_ids: BTreeSet::new(),

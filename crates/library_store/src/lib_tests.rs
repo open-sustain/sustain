@@ -1007,6 +1007,35 @@ fn record_analysis_round_trips_waveform_bytes() {
 }
 
 #[test]
+fn waveform_versions_name_the_stored_waveforms_and_change_on_reanalysis() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let analysed = track(1, "a.flac");
+    let unanalysed = track(2, "b.flac");
+    store.save_track(analysed.clone()).expect("save track");
+    store.save_track(unanalysed.clone()).expect("save track");
+    let analysis = sample_analysis(Some(126.0), Some(MusicalKey::DMinor));
+    let analyse = |now| {
+        store
+            .record_analysis(
+                analysed.id,
+                &analysis,
+                AnalysisCapabilities::all(),
+                ctx(now),
+            )
+            .expect("record analysis");
+    };
+
+    analyse(1_700_000_000);
+    let first = store.waveform_versions().expect("versions");
+    assert_eq!(first.keys().copied().collect::<Vec<_>>(), vec![analysed.id]);
+    assert_eq!(store.waveform_versions().expect("versions"), first);
+
+    analyse(1_700_000_100);
+    let second = store.waveform_versions().expect("versions");
+    assert_ne!(second[&analysed.id], first[&analysed.id]);
+}
+
+#[test]
 fn record_analysis_ignores_non_finite_acoustics() {
     let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let track = track(1, "a.flac");

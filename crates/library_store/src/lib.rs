@@ -38,9 +38,9 @@ use schema::{
     SELECT_ALL_TRACK_ACOUSTICS_SQL, SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL,
     SELECT_TRACK_BEAT_GRID_SQL, SELECT_TRACK_BY_ID_SQL, SELECT_TRACK_SYNCED_LYRICS_SQL,
     SELECT_TRACK_WAVEFORM_SQL, SELECT_TRACKS_NEEDING_ANALYSIS_SQL,
-    SELECT_TRACKS_NEEDING_ONLINE_SQL, UPSERT_SMART_SHUFFLE_INDEX_SQL, UPSERT_TRACK_ACOUSTICS_SQL,
-    UPSERT_TRACK_ANALYSIS_SQL, UPSERT_TRACK_BEAT_GRID_SQL, UPSERT_TRACK_ONLINE_STATUS_SQL,
-    UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
+    SELECT_TRACKS_NEEDING_ONLINE_SQL, SELECT_WAVEFORM_VERSIONS_SQL, UPSERT_SMART_SHUFFLE_INDEX_SQL,
+    UPSERT_TRACK_ACOUSTICS_SQL, UPSERT_TRACK_ANALYSIS_SQL, UPSERT_TRACK_BEAT_GRID_SQL,
+    UPSERT_TRACK_ONLINE_STATUS_SQL, UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
 };
 use sqlite_rows::{
     blob_to_waveform_segments, build_limit, duration_to_seconds, key_origin_to_db,
@@ -200,6 +200,17 @@ impl OnlineCapabilities {
 pub struct OnlineContext {
     pub provider_version: u32,
     pub now_unix: i64,
+}
+
+/// Opaque version of a track's stored waveform: equal versions mean the
+/// same waveform. See [`LibraryStore::waveform_versions`].
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WaveformVersion(i64);
+
+impl WaveformVersion {
+    pub(crate) fn from_audio_attempt_token(token: i64) -> Self {
+        Self(token)
+    }
 }
 
 /// Both waveform tiers as returned by [`LibraryStore::load_waveform`].
@@ -514,6 +525,12 @@ pub trait LibraryStore: Send + Sync {
     /// when the track has not been waveform-analyzed yet (or analysis
     /// failed).
     fn load_waveform(&self, track_id: TrackId) -> StoreResult<Option<StoredWaveform>>;
+
+    /// The version of every stored waveform [`Self::load_waveform`] would
+    /// return, keyed by track, without loading any. A track's version
+    /// changes whenever its audio is analysed again, so anything derived
+    /// from a waveform stays valid exactly while its version does.
+    fn waveform_versions(&self) -> StoreResult<HashMap<TrackId, WaveformVersion>>;
 
     /// Load the beat grid tempo analysis found for a track, if any.
     /// `None` when the track has not been tempo-analyzed yet or has no

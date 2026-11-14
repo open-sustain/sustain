@@ -13,8 +13,8 @@ use std::{
 };
 
 use sustain_domain::{
-    Bpm, DuplicateConsolidationRequest, DuplicateMatchMode, Track, TrackId, TrackRelativePath,
-    duplicate_groups_with_acoustics, plan_duplicate_consolidation,
+    Bpm, DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode, Track, TrackId,
+    TrackRelativePath, duplicate_groups, plan_duplicate_consolidation,
 };
 use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, hash_reader_content};
@@ -35,6 +35,7 @@ use crate::{
     },
     metadata_writer::metadata_mirror,
     notifications::runtime_error_text,
+    recording_evidence::{RecordingIdentityCache, WaveformRecordingEvidence},
 };
 
 const JOURNAL_NAME: &str = ".sustain-duplicate-consolidation-journal";
@@ -56,10 +57,14 @@ pub struct DuplicateConsolidationResult {
 pub struct DuplicateGroupsTask {
     store: std::sync::Arc<dyn LibraryStore>,
     mode: DuplicateMatchMode,
+    recording_identities: Arc<std::sync::Mutex<RecordingIdentityCache>>,
 }
 
 impl DuplicateGroupsTask {
-    pub fn run(self) -> ApplicationRuntimeResult<Vec<Vec<TrackId>>> {
+    /// Group the library into suggested duplicates. Off the main thread:
+    /// comparing waveforms the cache has no verdict for yet takes a few
+    /// milliseconds per pair.
+    pub fn run(self) -> ApplicationRuntimeResult<Vec<DuplicateGroup>> {
         let tracks = self
             .store
             .tracks()
@@ -70,8 +75,14 @@ impl DuplicateGroupsTask {
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
             .into_iter()
             .collect();
-        Ok(duplicate_groups_with_acoustics(
-            &tracks, self.mode, &acoustics,
+        let mut evidence =
+            WaveformRecordingEvidence::new(self.store.as_ref(), self.recording_identities)
+                .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        Ok(duplicate_groups(
+            &tracks,
+            self.mode,
+            &acoustics,
+            &mut evidence,
         ))
     }
 }
@@ -86,7 +97,11 @@ impl ApplicationRuntime {
             .library_store
             .clone()
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
-        Ok(DuplicateGroupsTask { store, mode })
+        Ok(DuplicateGroupsTask {
+            store,
+            mode,
+            recording_identities: self.recording_identities.clone(),
+        })
     }
 
     pub fn consolidate_duplicate_tracks(

@@ -22,6 +22,7 @@ mod playlist;
 mod playlist_folder;
 mod playlist_tree;
 mod rating;
+mod recording_identity;
 mod settings;
 mod smart_playlist;
 mod smart_playlist_defaults;
@@ -45,11 +46,10 @@ pub use device_sync::{
 };
 pub use duplicate_consolidation::{
     DuplicateAudioQuality, DuplicateConsolidationError, DuplicateConsolidationPlan,
-    DuplicateConsolidationRequest, DuplicateMatchMode, DuplicateMetadataField,
-    DuplicateMetadataFieldSelection, DuplicateMetadataSelection,
-    default_duplicate_metadata_selection, duplicate_audio_quality, duplicate_groups,
-    duplicate_groups_with_acoustics, highest_quality_duplicate_audio_track_ids,
-    plan_duplicate_consolidation,
+    DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode, DuplicateMetadataField,
+    DuplicateMetadataFieldSelection, DuplicateMetadataSelection, NoRecordingEvidence,
+    RecordingEvidence, default_duplicate_metadata_selection, duplicate_audio_quality,
+    duplicate_groups, highest_quality_duplicate_audio_track_ids, plan_duplicate_consolidation,
 };
 pub use id::{PlaylistFolderId, PlaylistId, SmartPlaylistId, TrackId};
 pub use library_statistics::{
@@ -73,6 +73,7 @@ pub use playlist::{Playlist, PlaylistEntry};
 pub use playlist_folder::{PlaylistFolder, PlaylistItem};
 pub use playlist_tree::{PlaylistTree, PlaylistTreeNode};
 pub use rating::Rating;
+pub use recording_identity::{RecordingIdentity, RecordingProfile, compare_recordings};
 pub use settings::{
     AnalysisSettings, BackgroundJobsSettings, BackgroundResourceUsage, BpmRange, CdEncodingProfile,
     CdReadMode, DEFAULT_PLAYBACK_VOLUME_PERCENT, EncodingSettings, LibraryManagementMode,

@@ -8,7 +8,9 @@ use std::{
 
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
-use crate::{AcousticFeatures, Playlist, PlaylistEntry, Track, TrackId, TrackMetadata};
+use crate::{
+    AcousticFeatures, Playlist, PlaylistEntry, RecordingIdentity, Track, TrackId, TrackMetadata,
+};
 
 const STRICT_DURATION_TOLERANCE: Duration = Duration::from_secs(2);
 const LOOSE_DURATION_RATIO_LIMIT: f64 = 1.30;
@@ -181,15 +183,43 @@ pub fn highest_quality_duplicate_audio_track_ids(tracks: &[Track]) -> Vec<TrackI
         .collect()
 }
 
-pub fn duplicate_groups(tracks: &[Track], mode: DuplicateMatchMode) -> Vec<Vec<TrackId>> {
-    duplicate_groups_with_acoustics(tracks, mode, &BTreeMap::new())
+/// What the audio says about whether two tracks hold the same recording.
+/// Duplicate grouping asks only about pairs whose tags already match, so
+/// an implementation may do real work per question.
+pub trait RecordingEvidence {
+    fn identity(&mut self, left: TrackId, right: TrackId) -> RecordingIdentity;
 }
 
-pub fn duplicate_groups_with_acoustics(
+/// Evidence for a caller with no audio to compare: nothing is established.
+pub struct NoRecordingEvidence;
+
+impl RecordingEvidence for NoRecordingEvidence {
+    fn identity(&mut self, _left: TrackId, _right: TrackId) -> RecordingIdentity {
+        RecordingIdentity::NotEstablished
+    }
+}
+
+/// One suggested set of duplicate tracks.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DuplicateGroup {
+    /// The members, by ascending id.
+    pub track_ids: Vec<TrackId>,
+    /// Whether the audio established every pair of members as the same
+    /// recording, rather than merely not ruling it out.
+    pub same_recording: bool,
+}
+
+/// Group `tracks` into suggested duplicates: same normalised artist and
+/// title, compatible durations and live markers, no clearly different
+/// acoustics, and no pair the audio shows to be a different recording.
+/// Every pair inside a group satisfies all of that; a match never extends
+/// to a third track by transitivity.
+pub fn duplicate_groups(
     tracks: &[Track],
     mode: DuplicateMatchMode,
     acoustics: &BTreeMap<TrackId, AcousticFeatures>,
-) -> Vec<Vec<TrackId>> {
+    evidence: &mut dyn RecordingEvidence,
+) -> Vec<DuplicateGroup> {
     let mut loose_groups: BTreeMap<(String, String), Vec<&Track>> = BTreeMap::new();
     for track in tracks {
         let title = normalized_duplicate_text(track.metadata.title.as_deref().unwrap_or_default());
@@ -201,11 +231,31 @@ pub fn duplicate_groups_with_acoustics(
         loose_groups.entry((artist, title)).or_default().push(track);
     }
 
+    let mut identities = PairIdentities {
+        evidence,
+        known: BTreeMap::new(),
+    };
     let mut groups = Vec::new();
     for tracks in loose_groups.into_values().filter(|tracks| tracks.len() > 1) {
-        append_candidate_groups(&mut groups, tracks, mode, acoustics);
+        append_candidate_groups(&mut groups, tracks, mode, acoustics, &mut identities);
     }
     groups
+}
+
+/// Recording evidence asked at most once per pair.
+struct PairIdentities<'evidence> {
+    evidence: &'evidence mut dyn RecordingEvidence,
+    known: BTreeMap<(TrackId, TrackId), RecordingIdentity>,
+}
+
+impl PairIdentities<'_> {
+    fn get(&mut self, left: TrackId, right: TrackId) -> RecordingIdentity {
+        let key = (left.min(right), left.max(right));
+        *self
+            .known
+            .entry(key)
+            .or_insert_with(|| self.evidence.identity(key.0, key.1))
+    }
 }
 
 pub fn plan_duplicate_consolidation(
@@ -316,10 +366,11 @@ pub fn plan_duplicate_consolidation(
 }
 
 fn append_candidate_groups(
-    groups: &mut Vec<Vec<TrackId>>,
+    groups: &mut Vec<DuplicateGroup>,
     mut tracks: Vec<&Track>,
     mode: DuplicateMatchMode,
     acoustics: &BTreeMap<TrackId, AcousticFeatures>,
+    identities: &mut PairIdentities<'_>,
 ) {
     tracks.sort_by_key(|track| {
         (
@@ -334,24 +385,43 @@ fn append_candidate_groups(
 
     let mut candidate_groups: Vec<Vec<&Track>> = Vec::new();
     for track in tracks {
-        if let Some(group) = candidate_groups.iter_mut().find(|group| {
-            group
-                .iter()
-                .all(|reference| duplicate_candidates_match(reference, track, mode, acoustics))
-        }) {
-            group.push(track);
-        } else {
+        let mut joined = false;
+        for group in &mut candidate_groups {
+            let mut matches_every_member = true;
+            for reference in group.iter() {
+                if !duplicate_candidates_match(reference, track, mode, acoustics)
+                    || identities.get(reference.id, track.id) == RecordingIdentity::Different
+                {
+                    matches_every_member = false;
+                    break;
+                }
+            }
+            if matches_every_member {
+                group.push(track);
+                joined = true;
+                break;
+            }
+        }
+        if !joined {
             candidate_groups.push(vec![track]);
         }
     }
-    groups.extend(
-        candidate_groups
-            .into_iter()
-            .filter(|group| group.len() > 1)
-            .map(sorted_ids),
-    );
+    for group in candidate_groups.into_iter().filter(|group| group.len() > 1) {
+        let mut same_recording = true;
+        for (index, left) in group.iter().enumerate() {
+            for right in &group[index + 1..] {
+                same_recording &= identities.get(left.id, right.id) == RecordingIdentity::Same;
+            }
+        }
+        groups.push(DuplicateGroup {
+            track_ids: sorted_ids(group),
+            same_recording,
+        });
+    }
 }
 
+/// Whether the tags allow `left` and `right` to be the same track. The
+/// audio is consulted separately, and only when this holds.
 fn duplicate_candidates_match(
     left: &Track,
     right: &Track,
@@ -637,7 +707,7 @@ mod tests {
         ];
 
         assert_eq!(
-            duplicate_groups(&tracks, DuplicateMatchMode::Loose),
+            group_ids(&tracks, DuplicateMatchMode::Loose),
             vec![vec![track_id(1), track_id(2)]]
         );
     }
@@ -652,7 +722,7 @@ mod tests {
         ];
 
         assert_eq!(
-            duplicate_groups(&tracks, DuplicateMatchMode::Strict),
+            group_ids(&tracks, DuplicateMatchMode::Strict),
             vec![vec![track_id(1), track_id(2)]]
         );
     }
@@ -666,7 +736,7 @@ mod tests {
         ];
 
         assert_eq!(
-            duplicate_groups(&tracks, DuplicateMatchMode::Loose),
+            group_ids(&tracks, DuplicateMatchMode::Loose),
             vec![vec![track_id(1), track_id(2)]]
         );
     }
@@ -678,7 +748,7 @@ mod tests {
             track(2, "Artist", "Song (Live)", "Live Album", 202),
         ];
 
-        assert!(duplicate_groups(&tracks, DuplicateMatchMode::Loose).is_empty());
+        assert!(group_ids(&tracks, DuplicateMatchMode::Loose).is_empty());
     }
 
     #[test]
@@ -693,9 +763,156 @@ mod tests {
         ]);
 
         assert!(
-            duplicate_groups_with_acoustics(&tracks, DuplicateMatchMode::Loose, &acoustics)
-                .is_empty()
+            duplicate_groups(
+                &tracks,
+                DuplicateMatchMode::Loose,
+                &acoustics,
+                &mut NoRecordingEvidence
+            )
+            .is_empty()
         );
+    }
+
+    /// Recording evidence from a fixed table of pair verdicts, counting the
+    /// questions it was asked.
+    struct KnownRecordings {
+        verdicts: BTreeMap<(TrackId, TrackId), RecordingIdentity>,
+        questions: Vec<(TrackId, TrackId)>,
+    }
+
+    impl KnownRecordings {
+        fn new(verdicts: &[(i64, i64, RecordingIdentity)]) -> Self {
+            Self {
+                verdicts: verdicts
+                    .iter()
+                    .map(|(left, right, identity)| ((track_id(*left), track_id(*right)), *identity))
+                    .collect(),
+                questions: Vec::new(),
+            }
+        }
+    }
+
+    impl RecordingEvidence for KnownRecordings {
+        fn identity(&mut self, left: TrackId, right: TrackId) -> RecordingIdentity {
+            self.questions.push((left, right));
+            self.verdicts
+                .get(&(left, right))
+                .copied()
+                .unwrap_or(RecordingIdentity::NotEstablished)
+        }
+    }
+
+    fn groups_with(tracks: &[Track], evidence: &mut KnownRecordings) -> Vec<DuplicateGroup> {
+        duplicate_groups(
+            tracks,
+            DuplicateMatchMode::Loose,
+            &BTreeMap::new(),
+            evidence,
+        )
+    }
+
+    #[test]
+    fn a_pair_the_audio_shows_to_differ_is_not_suggested() {
+        // Two live recordings: the tags and live markers agree, the audio
+        // does not (#302).
+        let tracks = vec![
+            track(
+                1,
+                "Adele",
+                "Hometown Glory",
+                "Live at the Royal Albert Hall",
+                257,
+            ),
+            track(2, "Adele", "Hometown Glory", "Live From SoHo", 237),
+        ];
+        let mut evidence = KnownRecordings::new(&[(1, 2, RecordingIdentity::Different)]);
+
+        assert!(groups_with(&tracks, &mut evidence).is_empty());
+    }
+
+    #[test]
+    fn missing_audio_evidence_keeps_the_suggestion_unverified() {
+        let tracks = vec![
+            track(1, "Artist", "Song", "Album", 200),
+            track(2, "Artist", "Song", "Other", 201),
+        ];
+        let mut evidence = KnownRecordings::new(&[]);
+
+        assert_eq!(
+            groups_with(&tracks, &mut evidence),
+            vec![DuplicateGroup {
+                track_ids: vec![track_id(1), track_id(2)],
+                same_recording: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_group_is_the_same_recording_only_when_every_pair_is() {
+        let tracks = vec![
+            track(1, "Artist", "Song", "Album", 200),
+            track(2, "Artist", "Song", "Other", 201),
+            track(3, "Artist", "Song", "Third", 202),
+        ];
+        let mut all_same = KnownRecordings::new(&[
+            (1, 2, RecordingIdentity::Same),
+            (1, 3, RecordingIdentity::Same),
+            (2, 3, RecordingIdentity::Same),
+        ]);
+        let mut one_unknown = KnownRecordings::new(&[
+            (1, 2, RecordingIdentity::Same),
+            (1, 3, RecordingIdentity::Same),
+        ]);
+
+        assert!(groups_with(&tracks, &mut all_same)[0].same_recording);
+        let groups = groups_with(&tracks, &mut one_unknown);
+        assert_eq!(groups[0].track_ids.len(), 3);
+        assert!(!groups[0].same_recording);
+    }
+
+    #[test]
+    fn a_genuine_pair_does_not_pull_in_a_different_version() {
+        // 1 and 2 are one recording; 3 is another version that 2 alone
+        // cannot rule out, but 1 can.
+        let tracks = vec![
+            track(1, "Artist", "Song", "Album", 200),
+            track(2, "Artist", "Song", "Other", 201),
+            track(3, "Artist", "Song", "Remix Album", 210),
+        ];
+        let mut evidence = KnownRecordings::new(&[
+            (1, 2, RecordingIdentity::Same),
+            (1, 3, RecordingIdentity::Different),
+        ]);
+
+        assert_eq!(
+            groups_with(&tracks, &mut evidence),
+            vec![DuplicateGroup {
+                track_ids: vec![track_id(1), track_id(2)],
+                same_recording: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_audio_is_consulted_only_for_pairs_the_tags_allow_and_only_once() {
+        let tracks = vec![
+            track(1, "Artist", "Song", "Album", 200),
+            track(2, "Artist", "Song", "Other", 201),
+            track(3, "Artist", "Song", "Long", 600),
+            track(4, "Artist", "Other Song", "Album", 200),
+        ];
+        let mut evidence = KnownRecordings::new(&[(1, 2, RecordingIdentity::Same)]);
+
+        groups_with(&tracks, &mut evidence);
+
+        assert_eq!(evidence.questions, vec![(track_id(1), track_id(2))]);
+    }
+
+    fn group_ids(tracks: &[Track], mode: DuplicateMatchMode) -> Vec<Vec<TrackId>> {
+        duplicate_groups(tracks, mode, &BTreeMap::new(), &mut NoRecordingEvidence)
+            .into_iter()
+            .map(|group| group.track_ids)
+            .collect()
     }
 
     #[test]

@@ -924,6 +924,16 @@ WHERE track_id = ?1
 "#;
 
 /// The waveform of a track's latest audio attempt, if it produced one.
+/// Version of every waveform [`SELECT_TRACK_WAVEFORM_SQL`] would return:
+/// the same join, without the BLOBs.
+pub(super) const SELECT_WAVEFORM_VERSIONS_SQL: &str = r#"
+SELECT ta.track_id, ta.audio_attempt_token
+FROM track_analysis ta
+JOIN waveform_cache.track_waveform w
+  ON w.track_id = ta.track_id AND w.audio_attempt_token = ta.audio_attempt_token
+WHERE w.detail_segments IS NOT NULL
+"#;
+
 pub(super) const SELECT_TRACK_WAVEFORM_SQL: &str = r#"
 SELECT
     w.preview_segment_duration_ms,

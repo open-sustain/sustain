@@ -453,6 +453,11 @@ impl LibraryStore for SqliteLibraryStore {
         analysis::load_waveform(&connection, track_id)
     }
 
+    fn waveform_versions(&self) -> StoreResult<HashMap<TrackId, WaveformVersion>> {
+        let connection = self.connection_guard()?;
+        analysis::waveform_versions(&connection)
+    }
+
     fn load_beat_grid(&self, track_id: TrackId) -> StoreResult<Option<BeatGrid>> {
         let connection = self.connection_guard()?;
         analysis::load_beat_grid(&connection, track_id)

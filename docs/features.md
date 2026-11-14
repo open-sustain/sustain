@@ -189,6 +189,16 @@ whitespace for artist + title. A **Strict matching** toggle also requires
 the same album and a duration within two seconds. Groups stay adjacent
 and visually banded.
 
+When both tracks of a candidate pair carry an analysed waveform, the scan
+also compares their audio — *Sustain-native*. It aligns the two
+loudness and band envelopes while allowing for encoder padding, trailing
+silence and a slightly different clock. A pair whose audio is clearly
+another performance, or another edit of the same recording (an extended
+mix, a radio edit), is no longer suggested, even though artist and title
+match. Pairs without waveforms (audio analysis off, tracks over fifteen
+minutes) keep their tag-only suggestion. Verdicts are remembered across
+scans until either track is analysed again.
+
 Selecting two or more rows in Songs or Duplicates exposes **Consolidate
 to single track**. Double-clicking a Duplicates row plays it normally,
 so candidate versions can be compared by ear first. The dialog lays the
