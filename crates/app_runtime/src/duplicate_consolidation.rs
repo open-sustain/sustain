@@ -340,15 +340,24 @@ fn run_pre_commit(
         artwork.is_some(),
     )
     .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    let change = metadata_mirror(&preliminary.survivor.metadata);
+    // Mirroring deliberately leaves non-user BPM/key tags unchanged. Verify
+    // the source tags with the actual write applied, while retaining the
+    // separately selected library metadata in SQLite.
+    let mut expected_tags = metadata_service
+        .read_persisted_tags(&stage_path)
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+    expected_tags.metadata.apply_change(&change);
     metadata_service
-        .write_metadata(&stage_path, metadata_mirror(&preliminary.survivor.metadata))
+        .write_metadata(&stage_path, change)
         .and_then(|()| metadata_service.write_rating(&stage_path, preliminary.survivor.rating))
         .and_then(|()| metadata_service.write_artwork(&stage_path, artwork.clone()))
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     verify_staged_tags(
         metadata_service,
         &stage_path,
-        &preliminary.survivor,
+        &expected_tags.metadata,
+        preliminary.survivor.rating,
         artwork,
     )?;
 
@@ -622,7 +631,8 @@ fn replace_original_with_stage(
 fn verify_staged_tags(
     service: &dyn MetadataService,
     stage: &Path,
-    survivor: &Track,
+    expected_metadata: &sustain_domain::TrackMetadata,
+    expected_rating: sustain_domain::Rating,
     artwork: &Option<Vec<u8>>,
 ) -> ApplicationRuntimeResult<()> {
     let written = service
@@ -631,8 +641,8 @@ fn verify_staged_tags(
     let written_artwork = service
         .read_artwork(stage)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    if !editable_metadata_matches(&written.metadata, &survivor.metadata)
-        || written.rating != survivor.rating
+    if !editable_metadata_matches(&written.metadata, expected_metadata)
+        || written.rating != expected_rating
         || &written_artwork != artwork
     {
         return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
@@ -1073,6 +1083,157 @@ mod tests {
             &library
         ));
         assert!(!editable_metadata_matches(&with_bpm(None), &library));
+    }
+
+    #[test]
+    fn consolidation_verifies_preserved_and_mirrored_analysis_tags() {
+        use sustain_domain::{FieldChange, KeyOrigin, MetadataChange, MusicalKey};
+        use sustain_metadata::LoftyMetadataService;
+
+        for (has_file_tags, has_library_values, user_typed) in [
+            (true, true, false),
+            (false, true, false),
+            (true, true, true),
+            (true, false, false),
+        ] {
+            let root = test_root("analysis-tag-policy");
+            fs::create_dir_all(&root).expect("create root");
+            let mut frame = vec![0xFF, 0xFB, 0x90, 0x00];
+            frame.resize(417, 0);
+            fs::write(root.join("keep.mp3"), frame.repeat(4)).expect("write MP3 frames");
+            let source_bpm = has_file_tags.then(|| Bpm::from_whole(88).expect("BPM"));
+            let source_key = has_file_tags.then_some(MusicalKey::CMajor);
+            let service = LoftyMetadataService;
+            service
+                .write_metadata(
+                    &root.join("keep.mp3"),
+                    MetadataChange {
+                        title: FieldChange::Set("Old".to_owned()),
+                        bpm: source_bpm.map_or(FieldChange::Clear, FieldChange::Set),
+                        key: source_key.map_or(FieldChange::Clear, FieldChange::Set),
+                        ..MetadataChange::default()
+                    },
+                )
+                .expect("seed original tags");
+            fs::copy(root.join("keep.mp3"), root.join("remove.mp3")).expect("copy donor");
+            let library_bpm =
+                has_library_values.then(|| Bpm::from_hundredths(13_273).expect("fractional BPM"));
+            let library_key = has_library_values.then_some(MusicalKey::BbMinor);
+            let mut reference = track(2, "remove.mp3", "Chosen");
+            reference.metadata.bpm = library_bpm;
+            reference.metadata.bpm_set_by_user = user_typed;
+            reference.metadata.key = library_key;
+            reference.metadata.key_origin = if user_typed {
+                KeyOrigin::Typed
+            } else {
+                KeyOrigin::Measured
+            };
+            let store = SqliteLibraryStore::open_in_memory().expect("SQLite store");
+            store
+                .save_track(track(1, "keep.mp3", "Old"))
+                .expect("save survivor");
+            store.save_track(reference).expect("save donor");
+
+            consolidate_duplicate_tracks(
+                &root,
+                &store,
+                &service,
+                &ManagedLibraryFilesystemValidator::default(),
+                &DuplicateConsolidationRequest {
+                    track_ids: vec![track_id(1), track_id(2)],
+                    audio_track_id: track_id(1),
+                    metadata: sustain_domain::DuplicateMetadataSelection::from_track(track_id(2)),
+                    artwork_track_id: track_id(1),
+                    rating_track_id: track_id(1),
+                },
+            )
+            .expect("merge must verify the intended tag values");
+
+            let persisted = service
+                .read_persisted_tags(&root.join("keep.mp3"))
+                .expect("read result");
+            let expected_bpm = if has_library_values && !user_typed {
+                source_bpm
+            } else {
+                library_bpm.and_then(|bpm| Bpm::from_whole(bpm.whole()))
+            };
+            let expected_key = if has_library_values && !user_typed {
+                source_key
+            } else {
+                library_key
+            };
+            assert_eq!(persisted.metadata.bpm, expected_bpm);
+            assert_eq!(persisted.metadata.key, expected_key);
+            assert_eq!(persisted.metadata.title.as_deref(), Some("Chosen"));
+            let survivor = store
+                .track(track_id(1))
+                .expect("load survivor")
+                .expect("survivor exists");
+            assert_eq!(survivor.metadata.bpm, library_bpm);
+            assert_eq!(survivor.metadata.key, library_key);
+            assert_eq!(store.track(track_id(2)), Ok(None));
+            fs::remove_dir_all(root).expect("cleanup");
+        }
+    }
+
+    #[test]
+    fn preserved_analysis_tags_do_not_hide_a_failed_metadata_write() {
+        use sustain_domain::{KeyOrigin, MusicalKey};
+
+        let root = test_root("unwritten-metadata");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("keep.flac"), b"audio").expect("survivor");
+        fs::write(root.join("remove.flac"), b"duplicate").expect("donor");
+        let store = SqliteLibraryStore::open_in_memory().expect("SQLite store");
+        store
+            .save_track(track(1, "keep.flac", "Old"))
+            .expect("save survivor");
+        let mut reference = track(2, "remove.flac", "Chosen");
+        reference.metadata.bpm = Bpm::from_hundredths(13_273);
+        reference.metadata.key = Some(MusicalKey::BbMinor);
+        reference.metadata.key_origin = KeyOrigin::Measured;
+        store.save_track(reference).expect("save donor");
+        // This service silently ignores writes. Preserved BPM/key values must
+        // not weaken verification of a title that should have changed.
+        let metadata = FixedMetadata {
+            persisted: InitialTags {
+                metadata: TrackMetadata {
+                    title: Some("Old".to_owned()),
+                    bpm: Bpm::from_whole(88),
+                    key: Some(MusicalKey::CMajor),
+                    ..TrackMetadata::default()
+                },
+                rating: Rating::unrated(),
+                has_embedded_artwork: false,
+            },
+        };
+        assert_eq!(
+            consolidate_duplicate_tracks(
+                &root,
+                &store,
+                &metadata,
+                &ManagedLibraryFilesystemValidator::default(),
+                &DuplicateConsolidationRequest {
+                    track_ids: vec![track_id(1), track_id(2)],
+                    audio_track_id: track_id(1),
+                    metadata: sustain_domain::DuplicateMetadataSelection::from_track(track_id(2)),
+                    artwork_track_id: track_id(1),
+                    rating_track_id: track_id(1),
+                },
+            ),
+            Err(ApplicationRuntimeError::DuplicateConsolidationFailed)
+        );
+        assert_eq!(
+            fs::read(root.join("keep.flac")).expect("survivor"),
+            b"audio"
+        );
+        assert_eq!(
+            fs::read(root.join("remove.flac")).expect("donor"),
+            b"duplicate"
+        );
+        assert!(store.track(track_id(2)).expect("load donor").is_some());
+        assert!(!journal_path(&root).exists());
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
