@@ -447,14 +447,14 @@ impl InlineEditController {
     fn wire_entry(&self, entry: &gtk::Entry) {
         let controller_activate = self.clone();
         entry.connect_activate(move |_| {
-            controller_activate.finish_active(FinishMode::Commit);
+            controller_activate.finish_from_keyboard(FinishMode::Commit);
         });
 
         let key = gtk::EventControllerKey::new();
         let controller_key = self.clone();
         key.connect_key_pressed(move |_controller, keyval, _code, _modifiers| match keyval {
             gdk::Key::Escape => {
-                controller_key.finish_active(FinishMode::Cancel);
+                controller_key.finish_from_keyboard(FinishMode::Cancel);
                 glib::Propagation::Stop
             }
             gdk::Key::Tab | gdk::Key::KP_Tab => {
@@ -508,6 +508,32 @@ impl InlineEditController {
         if is_current {
             self.finish_active(FinishMode::Commit);
         }
+    }
+
+    /// End the active edit from the editor's own keys (Enter, Escape) and
+    /// hand keyboard focus back to the edited row, so the arrow keys move on
+    /// from it (#300). Removing the focused editor would otherwise leave
+    /// focus on no widget at all. Other endings keep focus where it went: a
+    /// click elsewhere moved it already, and Tab opens the next editor.
+    ///
+    /// The row is focused before the editor is removed, while the session
+    /// still sits on the row it was opened on (a re-sort or payload swap
+    /// ends the session first).
+    fn finish_from_keyboard(&self, mode: FinishMode) {
+        let row = self
+            .active
+            .borrow()
+            .as_ref()
+            .map(|active| (active.cell.clone(), active.list_item.position()));
+        if let Some((cell, position)) = row
+            && position != gtk::INVALID_LIST_POSITION
+            && let Some(table) = cell
+                .ancestor(gtk::ColumnView::static_type())
+                .and_downcast::<gtk::ColumnView>()
+        {
+            table.scroll_to(position, None, gtk::ListScrollFlags::FOCUS, None);
+        }
+        self.finish_active(mode);
     }
 
     /// End the active edit (if any), restoring the cell's text and — for
@@ -738,6 +764,78 @@ mod tests {
             assert!(!opens_after_arming(&|| {
                 elsewhere.grab_focus();
             }));
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    /// Enter and Escape hand focus back to the table, so the arrow keys keep
+    /// moving through the rows after an inline edit (#300).
+    #[test]
+    fn ending_an_edit_from_the_keyboard_returns_focus_to_the_table() {
+        let ran = crate::test_support::with_gtk(|| {
+            let begin_edit: BeginEditCallback = Rc::new(|_, _| {
+                Some(EditSession {
+                    seed: String::new(),
+                    commit: Box::new(|_| {}),
+                })
+            });
+            let table = super::super::build_track_table(
+                vec![TrackTableRow::test_row(1), TrackTableRow::test_row(2)],
+                None,
+                None,
+                None,
+                None,
+                Some(begin_edit),
+            );
+            let window = gtk::Window::new();
+            window.set_default_size(700, 260);
+            window.set_child(Some(&table.widget()));
+            window.present();
+            let context = glib::MainContext::default();
+            let settle = || {
+                for _ in 0..200 {
+                    if !context.iteration(false) {
+                        break;
+                    }
+                }
+            };
+            settle();
+            let controller = table.inline_edit.clone().expect("inline editing table");
+            let (list_item, cell) = controller
+                .cells
+                .find_map_live(|entry, (list_item, cell)| {
+                    (entry.field == EditableField::Title && list_item.position() == 0)
+                        .then_some((list_item, cell))
+                })
+                .expect("a realized title cell on the first row");
+            let focus_in_table = || focus_within_table(&cell);
+
+            for end in [
+                &(|entry: &gtk::Entry| entry.emit_activate()) as &dyn Fn(&gtk::Entry),
+                &|_entry: &gtk::Entry| controller.finish_from_keyboard(FinishMode::Cancel),
+            ] {
+                controller.open_edit(EditableField::Title, &cell, &list_item);
+                settle();
+                let entry = controller
+                    .active
+                    .borrow()
+                    .as_ref()
+                    .map(|active| active.entry.clone())
+                    .expect("an open editor");
+                assert!(
+                    entry
+                        .root()
+                        .and_then(|root| root.focus())
+                        .is_some_and(|focus| focus == entry || focus.is_ancestor(&entry))
+                );
+                end(&entry);
+                settle();
+                assert!(controller.active.borrow().is_none(), "the edit ended");
+                assert!(focus_in_table(), "focus is back in the table");
+            }
             window.destroy();
         });
         if !ran {
