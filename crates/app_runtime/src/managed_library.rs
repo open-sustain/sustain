@@ -105,9 +105,7 @@ impl ApplicationRuntime {
     pub fn apply_library_import_result(&mut self, result: LibraryImportResult) {
         let summary = result.summary;
         self.last_library_import_summary = Some(summary.clone());
-        self.library_tracks.extend(result.tracks);
-        self.library_tracks.sort_by_key(|track| track.id);
-        self.rebuild_search_index();
+        self.insert_library_tracks(result.tracks);
         self.refresh_playback_queue_track_ids();
         self.finish_library_task(LibraryTaskKind::Import);
         self.push_ephemeral_notification(
@@ -169,22 +167,11 @@ impl ApplicationRuntime {
     pub fn apply_library_consolidation_result(&mut self, result: LibraryConsolidationResult) {
         let summary = result.summary;
         self.last_library_consolidation_summary = Some(summary.clone());
-        // `result.tracks` now carries both the relocated (still
-        // available) tracks AND any rows whose `is_missing` flag the
-        // planner flipped because the source file had vanished —
-        // fire the availability observer so the UI repaints the
-        // status column on those rows without the cost of a full
-        // table rebuild.
-        let flipped_availability = result.tracks.iter().any(|incoming| {
-            self.library_track(incoming.id).is_some_and(|existing| {
-                existing.location.is_missing() != incoming.location.is_missing()
-            })
-        });
+        // `result.tracks` carries both the relocated (still available)
+        // tracks and the ones the planner flagged missing because their
+        // source file had vanished; adopting them publishes both.
         self.adopt_library_track_locations(result.tracks);
         self.refresh_playback_queue_track_ids();
-        if flipped_availability {
-            self.notify_track_availability_observer();
-        }
         self.finish_library_task(LibraryTaskKind::Organize);
         // An auto-resume that found nothing to move and nothing
         // missing is silenced by the auto-dismiss timer just like any

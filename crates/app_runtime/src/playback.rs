@@ -408,7 +408,6 @@ impl ApplicationRuntime {
         }
         self.store_library_track(index, updated);
         self.refresh_playback_queue_track_ids();
-        self.notify_track_availability_observer();
         Ok(())
     }
 

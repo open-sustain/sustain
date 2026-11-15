@@ -60,7 +60,7 @@ impl PlaylistsViewRefreshContext {
 
 /// Mirror of `install_albums_view_activator` for the Playlists view.
 /// The table is built empty and stays empty while another page is
-/// visible; `library_changed` / selection-changed / search rebuilds
+/// visible; library-change / selection-changed / search rebuilds
 /// flip a `dirty` flag instead of running `replace_rows`. When the
 /// user picks a playlist row in the sidebar, the activator pays the
 /// rebuild cost once with the current state and clears the flag.
@@ -87,7 +87,7 @@ pub(super) fn install_playlists_view_activator(
         }
         let search_text = current_search_text.borrow().clone();
         rebuild_playlists_view(
-            &runtime.borrow(),
+            &runtime,
             &refresh_context.playlists_table,
             &refresh_context.playlists_header,
             &refresh_context.status_bar,
@@ -105,7 +105,7 @@ pub(super) fn install_playlists_view_activator(
 /// flip the dirty flag; `install_playlists_view_activator` runs the
 /// rebuild on the next visit. See its doc-comment for the rationale.
 pub(super) fn refresh_playlists_view_if_visible(
-    runtime: &ApplicationRuntime,
+    runtime: &SharedRuntime,
     refresh_context: &PlaylistsViewRefreshContext,
     sidebar_selection: Option<SidebarSelection>,
     search_text: &str,
@@ -133,8 +133,11 @@ pub(super) fn refresh_playlists_view_if_visible(
 /// from the current selection + search filter. Header summary is derived
 /// from the same row set fed to the table, so the visible "N songs, X
 /// duration" text always matches what's drawn below it.
+///
+/// The runtime is borrowed only to derive the rows: showing them can call
+/// back into it, as a re-sort does to reorder the play queue.
 fn rebuild_playlists_view(
-    runtime: &ApplicationRuntime,
+    runtime: &SharedRuntime,
     playlists_table: &TrackTable,
     playlists_header: &PlaylistsHeader,
     status_bar: &StatusBar,
@@ -143,15 +146,17 @@ fn rebuild_playlists_view(
     update: RowSetUpdate,
 ) {
     let rows_profile = sustain_profiler::ProfileScope::start();
-    let rows = playlist_table_rows_for(runtime, sidebar_selection, search_text);
+    let (rows, header_state) = {
+        let runtime = runtime.borrow();
+        let rows = playlist_table_rows_for(&runtime, sidebar_selection, search_text);
+        let summary = TrackSummary::of_rows(&rows);
+        let header_state = playlists_header_state_for(&runtime, sidebar_selection, summary);
+        (rows, header_state)
+    };
     let row_count = rows.len();
     sustain_profiler::profile_mark!(rows_profile, "playlist rows built ({} rows)", row_count);
     let summary = TrackSummary::of_rows(&rows);
-    playlists_header.set_state(playlists_header_state_for(
-        runtime,
-        sidebar_selection,
-        summary,
-    ));
+    playlists_header.set_state(header_state);
     status_bar.update_summary(summary);
     let show_profile = sustain_profiler::ProfileScope::start();
     playlists_table.show_rows(rows, update);
@@ -281,28 +286,21 @@ pub(super) fn add_to_playlist_provider(runtime: &SharedRuntime) -> AddToPlaylist
     })
 }
 
+/// Adds tracks to a playlist. A refused addition is reported by the
+/// dispatch; a committed one reaches the views as a runtime change.
 pub(super) fn add_to_playlist_callback(
     command_controller: &SharedCommandController,
-    playlist_entries_changed_holder: &PlaylistEntriesChangedHolder,
 ) -> AddToPlaylistCallback {
     let command_controller = command_controller.clone();
-    let playlist_entries_changed_holder = playlist_entries_changed_holder.clone();
 
     Rc::new(move |playlist_id, track_ids| {
         if track_ids.is_empty() {
             return;
         }
-        let dispatched =
-            command_controller.dispatch_succeeded(ApplicationCommand::AddTracksToPlaylist {
-                playlist_id,
-                track_ids,
-            });
-        if !dispatched {
-            return;
-        }
-        if let Some(callback) = playlist_entries_changed_holder.borrow().as_ref() {
-            callback(&PlaylistEntriesChange::Added(playlist_id));
-        }
+        let _result = command_controller.dispatch(ApplicationCommand::AddTracksToPlaylist {
+            playlist_id,
+            track_ids,
+        });
     })
 }
 

@@ -207,7 +207,7 @@ impl ApplicationRuntime {
         let smart_playlists = library_store
             .smart_playlists()
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        self.playlists = playlists;
+        self.adopt_playlists(playlists);
         self.playlist_folders = playlist_folders;
         self.smart_playlists = smart_playlists;
         // Tracks added to the playlist being played join its queue.

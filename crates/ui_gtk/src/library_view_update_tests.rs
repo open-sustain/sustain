@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use sustain_app_runtime::{TrackChange, TrackChanges, TrackFields, TrackId};
+use std::collections::BTreeSet;
 
-use super::{AlbumsUpdate, DuplicatesUpdate, TrackViewUpdate};
+use sustain_app_runtime::{LibraryChanges, PlaylistId, TrackChange, TrackFields, TrackId};
+
+use super::{AlbumsUpdate, DuplicatesUpdate, LibraryViewUpdate};
 
 fn track_id(id: i64) -> TrackId {
     TrackId::new(id).expect("positive track id")
 }
 
 fn changed(fields: TrackFields) -> TrackChange {
-    TrackChange {
-        fields,
-        analysis: false,
-    }
+    TrackChange::fields(fields)
 }
 
-fn update(changes: &[(i64, TrackChange)]) -> TrackViewUpdate {
-    TrackViewUpdate::for_changes(
-        &changes
+fn update(changes: &[(i64, TrackChange)]) -> LibraryViewUpdate {
+    LibraryViewUpdate::for_changes(&LibraryChanges {
+        tracks: changes
             .iter()
             .map(|(id, change)| (track_id(*id), *change))
-            .collect::<TrackChanges>(),
-    )
+            .collect(),
+        playlist_entries: BTreeSet::new(),
+    })
 }
 
 #[test]
@@ -117,10 +117,7 @@ fn a_duplicate_identity_field_regroups_duplicates() {
 
 #[test]
 fn an_analysis_change_regroups_duplicates() {
-    let analysed = TrackChange {
-        fields: TrackFields::NONE,
-        analysis: true,
-    };
+    let analysed = TrackChange::analysis();
 
     assert_eq!(
         update(&[(1, analysed)]).duplicates,
@@ -136,9 +133,49 @@ fn an_analysis_change_regroups_duplicates() {
 
 #[test]
 fn artwork_reloads_album_artwork_and_repaints_rows() {
-    let update = TrackViewUpdate::for_artwork(&[track_id(4)]);
+    let update = LibraryViewUpdate::for_artwork(&[track_id(4)]);
 
     assert_eq!(update.track_ids, vec![track_id(4)]);
     assert_eq!(update.albums, AlbumsUpdate::Artwork(vec![track_id(4)]));
     assert_eq!(update.duplicates, DuplicatesUpdate::Rows);
+    assert!(!update.statistics);
+}
+
+#[test]
+fn a_track_that_joined_or_left_regroups_every_aggregate_view() {
+    let update = update(&[(1, TrackChange::EVERYTHING)]);
+
+    assert_eq!(update.albums, AlbumsUpdate::Regroup);
+    assert_eq!(update.duplicates, DuplicatesUpdate::Regroup);
+    assert!(update.statistics);
+}
+
+#[test]
+fn only_what_the_statistics_page_aggregates_refreshes_it() {
+    for field in [
+        TrackFields::GENRE,
+        TrackFields::AUDIO_FORMAT,
+        TrackFields::YEAR,
+        TrackFields::RATING,
+        TrackFields::STATISTICS,
+    ] {
+        assert!(update(&[(1, changed(field))]).statistics, "{field:?}");
+    }
+    assert!(
+        !update(&[(1, changed(TrackFields::BPM | TrackFields::TITLE))]).statistics,
+        "an analysed BPM or an edited title leaves it alone"
+    );
+}
+
+#[test]
+fn the_playlists_whose_entries_changed_are_passed_on() {
+    let playlist_id = PlaylistId::new(7).expect("positive playlist id");
+    let update = LibraryViewUpdate::for_changes(&LibraryChanges {
+        tracks: Default::default(),
+        playlist_entries: BTreeSet::from([playlist_id]),
+    });
+
+    assert_eq!(update.playlist_entries, BTreeSet::from([playlist_id]));
+    assert!(update.track_ids.is_empty());
+    assert_eq!(update.albums, AlbumsUpdate::Unaffected);
 }

@@ -85,10 +85,11 @@ pub(crate) fn library_consolidation_requested_callback(
 //   - track metadata, rating, statistics, availability flag: unchanged
 //   - playlist membership (linked by TrackId, not path): unchanged
 //   - sidebar entries, now-playing tile, table rows: all unchanged
-// The notification lane is the entire UI contract. Triggering
-// `library_changed()` here would force the songs table, albums view,
-// sidebar tree, and playlists table to rebuild for nothing — measured
-// at multiple seconds of `replace_rows` work on a 10k library.
+// The notification lane is the entire UI contract: the relocated paths
+// reach the views as changes to the tracks' locations, patched in place.
+// Rebuilding the songs table, albums view, sidebar tree and playlists
+// table here would be for nothing — measured at multiple seconds of
+// `replace_rows` work on a 10k library.
 //
 // A worker that ends without delivering an outcome has failed the pass.
 fn apply_library_consolidation_outcome(

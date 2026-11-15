@@ -7,6 +7,7 @@
 )]
 
 use std::{
+    collections::BTreeSet,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{
@@ -2326,7 +2327,7 @@ fn library_path_change_adopts_no_availability_the_store_did_not_commit() {
 
     assert_eq!(result, Err(ApplicationRuntimeError::LibraryStoreFailed));
     assert!(!runtime.library_tracks()[0].location.is_missing());
-    assert!(runtime.take_track_changes().is_empty());
+    assert!(runtime.take_library_changes().tracks.is_empty());
 
     store.set_fail_update_track_locations(false);
     runtime
@@ -2337,7 +2338,7 @@ fn library_path_change_adopts_no_availability_the_store_did_not_commit() {
 
     assert!(runtime.library_tracks()[0].location.is_missing());
     assert_eq!(
-        runtime.take_track_changes(),
+        runtime.take_library_changes().tracks,
         TrackChanges::from([(id, fields_changed(TrackFields::LOCATION))])
     );
 
@@ -4509,7 +4510,7 @@ fn track_changes_wake_their_observer_once_per_take() {
     rate(&mut runtime, 1, 5);
     assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(
-        runtime.take_track_changes(),
+        runtime.take_library_changes().tracks,
         TrackChanges::from([
             (track_id(1), fields_changed(TrackFields::RATING)),
             (track_id(2), fields_changed(TrackFields::RATING)),
@@ -4545,7 +4546,7 @@ fn a_write_that_changes_nothing_publishes_nothing() {
     runtime.apply_track_updated(background_update(track_id(1)));
 
     assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 0);
-    assert!(runtime.take_track_changes().is_empty());
+    assert!(runtime.take_library_changes().tracks.is_empty());
 }
 
 #[test]
@@ -4560,14 +4561,8 @@ fn an_analysis_announcement_publishes_an_analysis_change_even_with_an_unchanged_
     });
 
     assert_eq!(
-        runtime.take_track_changes(),
-        TrackChanges::from([(
-            track_id(1),
-            TrackChange {
-                fields: TrackFields::NONE,
-                analysis: true,
-            }
-        )])
+        runtime.take_library_changes().tracks,
+        TrackChanges::from([(track_id(1), TrackChange::analysis())])
     );
 }
 
@@ -4589,9 +4584,135 @@ fn an_adopted_snapshot_publishes_the_changes_nobody_announced() {
     runtime.apply_track_updated(background_update(track_id(2)));
 
     assert_eq!(
-        runtime.take_track_changes(),
-        TrackChanges::from([(track_id(2), fields_changed(TrackFields::TITLE))]),
-        "the reload publishes the enrichment; a track leaving is reported elsewhere"
+        runtime.take_library_changes().tracks,
+        TrackChanges::from([
+            (track_id(2), fields_changed(TrackFields::TITLE)),
+            (track_id(3), TrackChange::EVERYTHING),
+        ]),
+        "the reload publishes the enrichment and the track that left"
+    );
+}
+
+#[test]
+fn a_track_read_back_before_the_task_that_added_it_reports_keeps_the_newer_version() {
+    let (mut runtime, store) = runtime_holding(vec![test_track(track_id(1), "a.flac")]);
+    // An import commits track 2; a background worker enriches it and
+    // announces it before the import reports.
+    assert_eq!(store.save_track(test_track(track_id(2), "b.flac")), Ok(()));
+    retitle(store.as_ref(), track_id(2), "Enriched");
+    runtime.apply_track_updated(background_update(track_id(2)));
+    runtime.take_library_changes();
+
+    runtime.insert_library_tracks(vec![
+        test_track(track_id(3), "c.flac"),
+        test_track(track_id(2), "b.flac"),
+    ]);
+
+    assert_eq!(
+        runtime
+            .library_tracks()
+            .iter()
+            .map(|track| track.id)
+            .collect::<Vec<_>>(),
+        vec![track_id(1), track_id(2), track_id(3)]
+    );
+    assert_eq!(
+        library_title(&runtime, track_id(2)).as_deref(),
+        Some("Enriched")
+    );
+    assert_eq!(
+        runtime.take_library_changes().tracks,
+        TrackChanges::from([(track_id(3), TrackChange::EVERYTHING)]),
+        "the import's older copy of track 2 is not news"
+    );
+}
+
+#[test]
+fn removed_tracks_leave_the_playlists_that_listed_them_as_in_the_store() {
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    for id in [1, 2, 3] {
+        assert_eq!(
+            store.save_track(test_track(track_id(id), &format!("track-{id}.flac"))),
+            Ok(())
+        );
+    }
+    assert_eq!(
+        store.save_playlist(Playlist {
+            id: playlist_id(1),
+            name: "Favorites".to_owned(),
+            parent_folder_id: None,
+            position: 0,
+            entries: [1, 2, 3]
+                .into_iter()
+                .enumerate()
+                .map(|(position, id)| crate::PlaylistEntry {
+                    playlist_id: playlist_id(1),
+                    track_id: track_id(id),
+                    position: position as u32,
+                })
+                .collect(),
+        }),
+        Ok(())
+    );
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::RemoveTracksFromLibrary {
+            track_ids: vec![track_id(2)],
+        }),
+        Ok(())
+    );
+
+    assert_eq!(
+        runtime.playlists(),
+        store.playlists().expect("stored playlists").as_slice()
+    );
+    assert_eq!(
+        runtime.playlists()[0]
+            .entries
+            .iter()
+            .map(|entry| (entry.track_id, entry.position))
+            .collect::<Vec<_>>(),
+        vec![(track_id(1), 0), (track_id(3), 2)],
+        "the entries that stay keep their positions"
+    );
+    let changes = runtime.take_library_changes();
+    assert_eq!(
+        changes.tracks,
+        TrackChanges::from([(track_id(2), TrackChange::EVERYTHING)])
+    );
+    assert_eq!(changes.playlist_entries, BTreeSet::from([playlist_id(1)]));
+}
+
+#[test]
+fn a_playlist_entry_change_is_published() {
+    let (mut runtime, _store) = runtime_holding(vec![test_track(track_id(1), "a.flac")]);
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::CreatePlaylist {
+            name: "Favorites".to_owned(),
+            parent_folder_id: None,
+        }),
+        Ok(())
+    );
+    let playlist_id = runtime.playlists()[0].id;
+    assert!(
+        runtime.take_library_changes().is_empty(),
+        "a new empty playlist has no entries to show"
+    );
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::AddTracksToPlaylist {
+            playlist_id,
+            track_ids: vec![track_id(1)],
+        }),
+        Ok(())
+    );
+
+    assert_eq!(
+        runtime.take_library_changes().playlist_entries,
+        BTreeSet::from([playlist_id])
     );
 }
 
@@ -4624,7 +4745,7 @@ fn a_managed_edit_publishes_when_its_retarget_commits_not_when_it_is_accepted() 
         Ok(())
     );
     assert!(
-        runtime.take_track_changes().is_empty(),
+        runtime.take_library_changes().tracks.is_empty(),
         "accepting the edit commits nothing yet"
     );
 
@@ -4641,7 +4762,8 @@ fn a_managed_edit_publishes_when_its_retarget_commits_not_when_it_is_accepted() 
     runtime.shutdown_metadata_writer();
 
     let change = runtime
-        .take_track_changes()
+        .take_library_changes()
+        .tracks
         .remove(&track_id(1))
         .expect("the committed retarget is published");
     assert!(
@@ -4675,7 +4797,7 @@ fn a_retarget_that_fails_after_committing_still_publishes_the_committed_row() {
     ));
 
     assert_eq!(
-        runtime.take_track_changes(),
+        runtime.take_library_changes().tracks,
         TrackChanges::from([(
             track_id(1),
             fields_changed(TrackFields::TITLE | TrackFields::LOCATION)
@@ -6360,7 +6482,8 @@ fn registering_a_play_publishes_the_statistics_change() {
     }
     assert!(
         !runtime
-            .take_track_changes()
+            .take_library_changes()
+            .tracks
             .values()
             .any(|change| change.fields.intersects(TrackFields::STATISTICS)),
         "no statistics change before a play is committed"
@@ -6374,7 +6497,7 @@ fn registering_a_play_publishes_the_statistics_change() {
     )
     .expect("tick that crosses threshold");
     assert_eq!(
-        runtime.take_track_changes(),
+        runtime.take_library_changes().tracks,
         TrackChanges::from([(id, fields_changed(TrackFields::STATISTICS))]),
         "committing a play publishes the played track's statistics"
     );
@@ -6880,7 +7003,7 @@ fn apply_track_updated_reloads_from_store_and_publishes_what_changed() {
     );
     assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(
-        runtime.take_track_changes(),
+        runtime.take_library_changes().tracks,
         TrackChanges::from([(track_id(1), fields_changed(TrackFields::TITLE))])
     );
 
@@ -7006,14 +7129,8 @@ fn a_successful_read_publishes_the_analysis_change_of_a_failed_one() {
     runtime.apply_track_updated(background_update(track_id(1)));
 
     assert_eq!(
-        runtime.take_track_changes(),
-        TrackChanges::from([(
-            track_id(1),
-            TrackChange {
-                fields: TrackFields::NONE,
-                analysis: true,
-            }
-        )])
+        runtime.take_library_changes().tracks,
+        TrackChanges::from([(track_id(1), TrackChange::analysis())])
     );
     assert_eq!(reconciliation_notifications(&runtime), 0);
 }
@@ -7316,10 +7433,7 @@ fn background_update(track_id: TrackId) -> TrackUpdated {
 }
 
 fn fields_changed(fields: TrackFields) -> TrackChange {
-    TrackChange {
-        fields,
-        analysis: false,
-    }
+    TrackChange::fields(fields)
 }
 
 /// Count how often the runtime wakes its track-changes observer.
@@ -7328,7 +7442,7 @@ fn count_track_change_wakes(
 ) -> Arc<std::sync::atomic::AtomicUsize> {
     let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = wakes.clone();
-    runtime.set_track_changes_observer(Box::new(move || {
+    runtime.set_library_changes_observer(Box::new(move || {
         counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }));
     wakes

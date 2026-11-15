@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-//! What the views must redo for a batch of committed track changes (#272).
+//! What the views must redo for a batch of committed library changes (#272).
 //!
-//! The runtime reports which fields of which tracks changed; which of
-//! those fields each view depends on is the view's knowledge, kept here
-//! beside the views rather than in the runtime or in whoever made the
-//! change.
+//! The runtime reports which fields of which tracks changed, and which
+//! playlists' entries; which of those each view depends on is the view's
+//! knowledge, kept here beside the views rather than in the runtime or in
+//! whoever made the change. A track that joined or left the library
+//! changed in every field.
 
-use sustain_app_runtime::{TrackChanges, TrackFields, TrackId};
+use std::collections::BTreeSet;
+
+use sustain_app_runtime::{LibraryChanges, PlaylistId, TrackFields, TrackId};
 
 /// The fields that decide which album a track belongs to, or its tile's
 /// subtitle. A change to one regroups the Albums view.
@@ -35,13 +38,28 @@ const DUPLICATE_IDENTITY: TrackFields = TrackFields::TITLE
     .union(TrackFields::ALBUM)
     .union(TrackFields::DURATION);
 
-/// The view work one batch of changes calls for. Rows of every changed
-/// track are always repainted in place in the track tables.
+/// The fields the Statistics page aggregates. Its play and rating
+/// rankings are by genre, and its distributions are of genres, bitrates,
+/// release years and the dates tracks were added.
+const STATISTICS_PAGE: TrackFields = TrackFields::GENRE
+    .union(TrackFields::AUDIO_FORMAT)
+    .union(TrackFields::YEAR)
+    .union(TrackFields::RATING)
+    .union(TrackFields::STATISTICS);
+
+/// The view work one batch of changes calls for. The track tables bring
+/// the rows of every touched track up to date with the runtime: in place
+/// when the track is still in the library, gone when it is not, and in
+/// when it is listed but not shown.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TrackViewUpdate {
+pub(crate) struct LibraryViewUpdate {
     pub(crate) track_ids: Vec<TrackId>,
     pub(crate) albums: AlbumsUpdate,
     pub(crate) duplicates: DuplicatesUpdate,
+    /// Whether the Statistics page aggregates anything that changed.
+    pub(crate) statistics: bool,
+    /// The regular playlists whose entries changed.
+    pub(crate) playlist_entries: BTreeSet<PlaylistId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,12 +83,12 @@ pub(crate) enum DuplicatesUpdate {
     Regroup,
 }
 
-impl TrackViewUpdate {
-    pub(crate) fn for_changes(changes: &TrackChanges) -> Self {
+impl LibraryViewUpdate {
+    pub(crate) fn for_changes(changes: &LibraryChanges) -> Self {
         let mut fields = TrackFields::NONE;
         let mut album_tracks = Vec::new();
         let mut analysis = false;
-        for (track_id, change) in changes {
+        for (track_id, change) in &changes.tracks {
             fields |= change.fields;
             if change.fields.intersects(ALBUM_TRACK) {
                 album_tracks.push(*track_id);
@@ -90,9 +108,11 @@ impl TrackViewUpdate {
             DuplicatesUpdate::Rows
         };
         Self {
-            track_ids: changes.keys().copied().collect(),
+            track_ids: changes.tracks.keys().copied().collect(),
             albums,
             duplicates,
+            statistics: fields.intersects(STATISTICS_PAGE),
+            playlist_entries: changes.playlist_entries.clone(),
         }
     }
 
@@ -103,10 +123,12 @@ impl TrackViewUpdate {
             track_ids: track_ids.to_vec(),
             albums: AlbumsUpdate::Artwork(track_ids.to_vec()),
             duplicates: DuplicatesUpdate::Rows,
+            statistics: false,
+            playlist_entries: BTreeSet::new(),
         }
     }
 }
 
 #[cfg(test)]
-#[path = "track_view_update_tests.rs"]
+#[path = "library_view_update_tests.rs"]
 mod tests;

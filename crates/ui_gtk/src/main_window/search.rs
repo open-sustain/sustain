@@ -71,7 +71,7 @@ pub(super) fn install_search_wiring(titlebar: &Titlebar, context: SearchWiringCo
 
             let playlists_profile = sustain_profiler::ProfileScope::start();
             let playlists_refreshed = refresh_playlists_view_if_visible(
-                &runtime.borrow(),
+                &runtime,
                 &playlists_refresh,
                 sidebar.current_selection(),
                 &new_text,

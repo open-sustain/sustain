@@ -9,8 +9,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    ArtworkChangedCallback, TrackViewUpdateCallback,
-    track_view_update::{AlbumsUpdate, DuplicatesUpdate, TrackViewUpdate},
+    ArtworkChangedCallback, LibraryViewUpdateCallback,
+    library_view_update::{AlbumsUpdate, DuplicatesUpdate, LibraryViewUpdate},
 };
 
 use super::*;
@@ -80,64 +80,81 @@ pub(super) fn rating_changed_callback(
     })
 }
 
-/// Applies the view work for committed track changes. Updates only the
-/// affected rows in the visible tables, applies the cheapest correct Albums
-/// and Duplicates refresh the update calls for, and refreshes the
-/// status-bar summary once. Skips the sidebar tree because row-field
-/// mutations do not alter playlist/folder structure.
+/// Applies the view work for committed library changes.
 ///
-/// When a smart playlist is selected, the Playlists table falls back to a
-/// full reflow when the change may add or remove a track from the
-/// playlist's filtered set — an in-place row update would lie.
-pub(super) struct TrackViewUpdateContext<'a> {
+/// Each touched track's rows are brought up to date with the runtime in
+/// both track tables: in place while the track is in the library, gone
+/// once it is not, and in at their sorted place when Songs lists the track
+/// (it matches the search) but does not show it. A table rebuilt from the
+/// runtime since the change was recorded already shows its outcome, which
+/// is why this compares with what each table shows rather than trusting
+/// what the change was. An edited row stays where it is even when the edit
+/// no longer matches the search, so a row the user just edited does not
+/// vanish under them.
+///
+/// Rows never interleave with Songs' streamed startup publication: the
+/// runtime commits no change before that publication finishes.
+///
+/// Albums and Duplicates take the cheapest correct refresh the update calls
+/// for; Statistics refreshes when it aggregates anything that changed. A
+/// shown regular playlist whose entries changed reconciles with the
+/// runtime, and a shown smart playlist does whenever its membership may
+/// have changed — an in-place row update would lie.
+pub(super) struct LibraryViewUpdateContext<'a> {
     pub(super) runtime: &'a SharedRuntime,
     pub(super) songs_table: &'a TrackTable,
     pub(super) albums_view: &'a AlbumsView,
     pub(super) duplicates_view: &'a DuplicatesView,
+    pub(super) statistics_view: &'a StatisticsView,
     pub(super) playlists_table: &'a TrackTable,
     pub(super) playlists_refresh: &'a PlaylistsViewRefreshContext,
     pub(super) sidebar: &'a PlaylistSidebar,
+    pub(super) titlebar: &'a Titlebar,
     pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
     pub(super) current_search_text: &'a Rc<RefCell<String>>,
     pub(super) device_panel: &'a DeviceSyncPanel,
 }
 
-pub(super) fn track_view_update_callback(
-    ctx: TrackViewUpdateContext<'_>,
-) -> TrackViewUpdateCallback {
+pub(super) fn library_view_update_callback(
+    ctx: LibraryViewUpdateContext<'_>,
+) -> LibraryViewUpdateCallback {
     let runtime = ctx.runtime.clone();
     let songs_table = ctx.songs_table.clone();
     let albums_view = ctx.albums_view.clone();
     let duplicates_view = ctx.duplicates_view.clone();
+    let statistics_view = ctx.statistics_view.clone();
     let playlists_table = ctx.playlists_table.clone();
     let playlists_refresh = ctx.playlists_refresh.clone();
     let sidebar = ctx.sidebar.clone();
+    let titlebar = ctx.titlebar.clone();
     let current_search_text = ctx.current_search_text.clone();
     let visible_summary_refresh = ctx.visible_summary_refresh;
     let device_panel = ctx.device_panel.clone();
 
-    Rc::new(move |update: &TrackViewUpdate| {
-        let rows = {
-            let runtime_borrow = runtime.borrow();
-            let honor_sort_tags = runtime_borrow.settings().library.honor_sort_tags;
+    Rc::new(move |update: &LibraryViewUpdate| {
+        let touched = TouchedTracks::of(&runtime.borrow(), &update.track_ids);
+
+        songs_table.remove_rows(&touched.departed);
+        songs_table.update_rows(&touched.rows);
+        let joined = {
+            let runtime = runtime.borrow();
+            let normalized = normalize_query(&current_search_text.borrow());
+            let shown = songs_table.contained_track_ids(&touched.rows.keys().copied().collect());
+            // In track-id order, the order the library lists them in, which
+            // an unsorted table shows.
             update
                 .track_ids
                 .iter()
-                .filter_map(|track_id| {
-                    runtime_borrow
-                        .library_track(*track_id)
-                        .map(|track| (*track_id, TrackTableRow::from_track(track, honor_sort_tags)))
+                .filter(|track_id| {
+                    !shown.contains(track_id)
+                        && (normalized.is_empty()
+                            || runtime.search_matches(**track_id, &normalized))
                 })
-                .collect::<HashMap<_, _>>()
+                .filter_map(|track_id| touched.rows.get(track_id).cloned())
+                .collect::<Vec<_>>()
         };
-        // Tracks that left the library since the change are dropped from
-        // the views by their removal.
-        if rows.is_empty() {
-            return;
-        }
-        let changed_track_ids = rows.keys().copied().collect::<HashSet<_>>();
+        songs_table.append_rows(joined);
 
-        songs_table.update_rows(&rows);
         match &update.albums {
             AlbumsUpdate::Unaffected => {}
             // In place, never `replace_tracks`: a background completion
@@ -152,57 +169,62 @@ pub(super) fn track_view_update_callback(
             AlbumsUpdate::Regroup => albums_view.replace_tracks(),
         }
         match update.duplicates {
-            DuplicatesUpdate::Rows => duplicates_view.update_rows(&rows),
+            DuplicatesUpdate::Rows => duplicates_view.update_rows(&touched.rows),
             DuplicatesUpdate::Regroup => duplicates_view.refresh_if_active(),
         }
-
-        match sidebar.current_selection() {
-            Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(smart_id))) => {
-                // Smart-playlist *membership* may change with the
-                // edit — but in the overwhelmingly common case
-                // (BPM/key/waveform scan updating a track that
-                // either already matches or already doesn't) the
-                // set is unchanged and only the row's data needs to
-                // repaint. Use the runtime's per-track status check
-                // to tell the two apart, and re-evaluate the whole
-                // smart playlist only when its rows may change.
-                let visible_track_ids = playlists_table.contained_track_ids(&changed_track_ids);
-                let membership_changed = {
-                    let runtime_borrow = runtime.borrow();
-                    changed_track_ids.iter().any(|track_id| {
-                        let status =
-                            runtime_borrow.smart_playlist_track_status(smart_id, *track_id);
-                        let was_in_table = visible_track_ids.contains(track_id);
-                        matches!(
-                            (status, was_in_table),
-                            (SmartPlaylistTrackStatus::Included, false)
-                                | (SmartPlaylistTrackStatus::Excluded, true)
-                                | (SmartPlaylistTrackStatus::RequiresFullRebuild, _)
-                        )
-                    })
-                };
-                if membership_changed {
-                    schedule_playlists_structural_refresh(
-                        runtime.clone(),
-                        playlists_refresh.clone(),
-                        sidebar.clone(),
-                        current_search_text.clone(),
-                    );
-                } else if !visible_track_ids.is_empty() {
-                    // Membership unchanged and at least one changed row is
-                    // visible — refresh visible rows' data in place.
-                    playlists_table.update_rows(&rows);
-                }
-                // else: changed tracks don't match the smart playlist and
-                // aren't on screen anyway; no work needed.
-            }
-            _ => {
-                // In-place row updates are idempotent for a hidden table; no
-                // visibility gating needed.
-                playlists_table.update_rows(&rows);
-            }
+        if update.statistics {
+            statistics_view.refresh_if_visible();
         }
 
+        playlists_table.remove_rows(&touched.departed);
+        let playlist_rows_changed = match sidebar.current_selection() {
+            Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id))) => {
+                update.playlist_entries.contains(&playlist_id)
+            }
+            Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(smart_id))) => {
+                // Smart-playlist *membership* may change with the edit —
+                // but in the overwhelmingly common case (BPM/key/waveform
+                // scan updating a track that either already matches or
+                // already doesn't) the set is unchanged and only the row's
+                // data needs to repaint. The runtime's per-track status
+                // check tells the two apart; a track that left the library
+                // counts too, as it may have held another out of a limited
+                // playlist.
+                let touched_ids = update.track_ids.iter().copied().collect();
+                let visible_track_ids = playlists_table.contained_track_ids(&touched_ids);
+                let runtime = runtime.borrow();
+                touched_ids.iter().any(|track_id| {
+                    let status = runtime.smart_playlist_track_status(smart_id, *track_id);
+                    let was_in_table = visible_track_ids.contains(track_id);
+                    matches!(
+                        (status, was_in_table),
+                        (SmartPlaylistTrackStatus::Included, false)
+                            | (SmartPlaylistTrackStatus::Excluded, true)
+                            | (SmartPlaylistTrackStatus::RequiresFullRebuild, _)
+                    )
+                })
+            }
+            _ => false,
+        };
+        if playlist_rows_changed {
+            schedule_playlists_structural_refresh(
+                runtime.clone(),
+                playlists_refresh.clone(),
+                sidebar.clone(),
+                current_search_text.clone(),
+            );
+        } else {
+            // In-place row updates are idempotent for a hidden table; no
+            // visibility gating needed.
+            playlists_table.update_rows(&touched.rows);
+        }
+
+        // A track joining or leaving can flip the library between empty
+        // and not, which decides whether the Play button can cold-start
+        // anything.
+        update_play_pause_sensitivity(&titlebar, &runtime.borrow());
+        // The summary counts the rows shown, and a device syncing a
+        // playlist selects other tracks once its entries change.
         visible_summary_refresh();
         // A background BPM/key/waveform completion changes the Pioneer
         // export readiness; refresh it when that view is on screen.
@@ -210,154 +232,42 @@ pub(super) fn track_view_update_callback(
     })
 }
 
+/// The touched tracks of one update, split by whether the library still
+/// holds them.
+struct TouchedTracks {
+    /// The row each touched track the library holds shows.
+    rows: HashMap<TrackId, TrackTableRow>,
+    /// The touched tracks the library no longer holds.
+    departed: HashSet<TrackId>,
+}
+
+impl TouchedTracks {
+    fn of(runtime: &ApplicationRuntime, track_ids: &[TrackId]) -> Self {
+        let honor_sort_tags = runtime.settings().library.honor_sort_tags;
+        let mut rows = HashMap::new();
+        let mut departed = HashSet::new();
+        for track_id in track_ids {
+            match runtime.library_track(*track_id) {
+                Some(track) => {
+                    rows.insert(*track_id, TrackTableRow::from_track(track, honor_sort_tags));
+                }
+                None => {
+                    departed.insert(*track_id);
+                }
+            }
+        }
+        Self { rows, departed }
+    }
+}
+
 /// Reports changed embedded artwork through the same applier as committed
-/// track changes.
+/// library changes.
 pub(super) fn artwork_changed_callback(
-    track_view_update: TrackViewUpdateCallback,
+    library_view_update: LibraryViewUpdateCallback,
 ) -> ArtworkChangedCallback {
     Rc::new(move |track_ids: &[TrackId]| {
-        track_view_update(&TrackViewUpdate::for_artwork(track_ids));
+        library_view_update(&LibraryViewUpdate::for_artwork(track_ids));
     })
-}
-
-pub(super) struct TracksRemovedContext<'a> {
-    pub(super) runtime: &'a SharedRuntime,
-    pub(super) songs_table: &'a TrackTable,
-    pub(super) albums_view: &'a AlbumsView,
-    pub(super) duplicates_view: &'a DuplicatesView,
-    pub(super) statistics_view: &'a StatisticsView,
-    pub(super) playlists_table: &'a TrackTable,
-    pub(super) playlists_refresh: &'a PlaylistsViewRefreshContext,
-    pub(super) sidebar: &'a PlaylistSidebar,
-    pub(super) titlebar: &'a Titlebar,
-    pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
-    pub(super) current_search_text: &'a Rc<RefCell<String>>,
-}
-
-/// Contained refresh path for tracks leaving the library (#255). The track
-/// tables drop the removed rows in place, so the user keeps their scroll
-/// position and the rest of their selection; a library rebuild would send
-/// them back to the top.
-///
-/// The playlist table reflows only where membership can grow: a smart
-/// playlist may admit tracks the removed ones held out (a limit), and a
-/// consolidation points the removed tracks' playlist entries at the
-/// survivor.
-pub(super) fn tracks_removed_callback(ctx: TracksRemovedContext<'_>) -> TracksRemovedCallback {
-    let runtime = ctx.runtime.clone();
-    let songs_table = ctx.songs_table.clone();
-    let albums_view = ctx.albums_view.clone();
-    let duplicates_view = ctx.duplicates_view.clone();
-    let statistics_view = ctx.statistics_view.clone();
-    let playlists_table = ctx.playlists_table.clone();
-    let playlists_refresh = ctx.playlists_refresh.clone();
-    let sidebar = ctx.sidebar.clone();
-    let titlebar = ctx.titlebar.clone();
-    let visible_summary_refresh = ctx.visible_summary_refresh;
-    let current_search_text = ctx.current_search_text.clone();
-
-    Rc::new(move |removal: &TracksRemoved| {
-        songs_table.remove_rows(&removal.track_ids);
-        playlists_table.remove_rows(&removal.track_ids);
-        let playlist_membership_may_grow = removal.merged
-            || matches!(
-                sidebar.current_selection(),
-                Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(_)))
-            );
-        if playlist_membership_may_grow {
-            schedule_playlists_structural_refresh(
-                runtime.clone(),
-                playlists_refresh.clone(),
-                sidebar.clone(),
-                current_search_text.clone(),
-            );
-        }
-        // Album buckets, duplicate groups and statistics all aggregate over
-        // the library; each rebuilds only while on screen.
-        albums_view.replace_tracks();
-        duplicates_view.refresh_if_active();
-        statistics_view.refresh_if_visible();
-        // Removing the last tracks leaves the Play button nothing to start.
-        update_play_pause_sensitivity(&titlebar, &runtime.borrow());
-        visible_summary_refresh();
-    })
-}
-
-pub(super) struct PlaylistEntriesChangedContext<'a> {
-    pub(super) runtime: &'a SharedRuntime,
-    pub(super) playlists_table: &'a TrackTable,
-    pub(super) sidebar: &'a PlaylistSidebar,
-    pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
-    pub(super) current_search_text: &'a Rc<RefCell<String>>,
-}
-
-/// Contained refresh path for a playlist's track list changing. The
-/// library is untouched, so the Songs, Albums and Duplicates views and the
-/// sidebar keep their state; only a table showing that playlist changes,
-/// and in place: its rows come and go while the user keeps their scroll
-/// position and selection.
-pub(super) fn playlist_entries_changed_callback(
-    ctx: PlaylistEntriesChangedContext<'_>,
-) -> PlaylistEntriesChangedCallback {
-    let runtime = ctx.runtime.clone();
-    let playlists_table = ctx.playlists_table.clone();
-    let sidebar = ctx.sidebar.clone();
-    let visible_summary_refresh = ctx.visible_summary_refresh;
-    let current_search_text = ctx.current_search_text.clone();
-
-    Rc::new(move |change: &PlaylistEntriesChange| {
-        let shown = sidebar.current_selection();
-        let shows = |playlist_id: PlaylistId| {
-            shown == Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id)))
-        };
-        match change {
-            PlaylistEntriesChange::Removed {
-                playlist_id,
-                track_ids,
-            } if shows(*playlist_id) => {
-                playlists_table.remove_rows(track_ids);
-                playlists_table
-                    .set_playlist_positions(&playlist_entry_positions(&runtime, *playlist_id));
-            }
-            PlaylistEntriesChange::Added(playlist_id) if shows(*playlist_id) => {
-                // Insert just the entries the table lacks; tracks the
-                // playlist already held were not added again.
-                let mut rows = playlist_table_rows_for(
-                    &runtime.borrow(),
-                    shown,
-                    &current_search_text.borrow(),
-                );
-                let candidates = rows.iter().filter_map(|row| row.track_id).collect();
-                let present = playlists_table.contained_track_ids(&candidates);
-                rows.retain(|row| row.track_id.is_some_and(|id| !present.contains(&id)));
-                playlists_table.append_rows(rows);
-            }
-            PlaylistEntriesChange::Removed { .. } | PlaylistEntriesChange::Added(_) => {}
-        }
-        // A device syncing the playlist now selects other tracks.
-        visible_summary_refresh();
-    })
-}
-
-/// Each track's position in a regular playlist, as the runtime numbers
-/// its entries.
-fn playlist_entry_positions(
-    runtime: &SharedRuntime,
-    playlist_id: PlaylistId,
-) -> HashMap<TrackId, u32> {
-    runtime
-        .borrow()
-        .playlists()
-        .iter()
-        .find(|playlist| playlist.id == playlist_id)
-        .map(|playlist| {
-            playlist
-                .entries
-                .iter()
-                .map(|entry| (entry.track_id, entry.position))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Re-derive the shown playlist's rows on the next idle, once for a burst
@@ -379,7 +289,7 @@ pub(super) fn schedule_playlists_structural_refresh(
     glib::idle_add_local_once(move || {
         let search_text = current_search_text.borrow().clone();
         refresh_playlists_view_if_visible(
-            &runtime.borrow(),
+            &runtime,
             &playlists_refresh,
             sidebar.current_selection(),
             &search_text,
@@ -396,7 +306,6 @@ pub(super) fn track_context_actions(
     command_controller: &SharedCommandController,
     playback_changed: PlaybackChangedCallback,
     artwork_changed_holder: ArtworkChangedHolder,
-    tracks_removed_holder: TracksRemovedHolder,
     artwork_loader: &ArtworkLoader,
 ) -> TrackContextActionSet {
     TrackContextActionSet::new(vec![
@@ -429,17 +338,13 @@ pub(super) fn track_context_actions(
             artwork_loader,
         )),
         TrackContextAction::remove_from_library(track_removal_callback(
-            runtime,
             command_controller,
             playback_changed.clone(),
-            tracks_removed_holder.clone(),
             remove_from_library_commands,
         )),
         TrackContextAction::move_to_trash(track_removal_callback(
-            runtime,
             command_controller,
             playback_changed,
-            tracks_removed_holder.clone(),
             move_to_trash_commands,
         )),
     ])
@@ -453,8 +358,6 @@ pub(super) fn playlist_track_context_actions(
     command_controller: &SharedCommandController,
     playback_changed: PlaybackChangedCallback,
     artwork_changed_holder: ArtworkChangedHolder,
-    tracks_removed_holder: TracksRemovedHolder,
-    playlist_entries_changed_holder: PlaylistEntriesChangedHolder,
     artwork_loader: &ArtworkLoader,
     sidebar: &PlaylistSidebar,
 ) -> TrackContextActionSet {
@@ -482,25 +385,17 @@ pub(super) fn playlist_track_context_actions(
         TrackContextAction::copy_files(copy_files_callback(runtime, window)),
         TrackContextAction::show_in_folder(show_in_folder_callback(runtime, window)),
         TrackContextAction::remove_from_playlist(
-            remove_from_playlist_callback(
-                command_controller,
-                sidebar,
-                playlist_entries_changed_holder,
-            ),
+            remove_from_playlist_callback(command_controller, sidebar),
             current_selection_is_regular_playlist(sidebar),
         ),
         TrackContextAction::remove_from_library(track_removal_callback(
-            runtime,
             command_controller,
             playback_changed.clone(),
-            tracks_removed_holder.clone(),
             remove_from_library_commands,
         )),
         TrackContextAction::move_to_trash(track_removal_callback(
-            runtime,
             command_controller,
             playback_changed,
-            tracks_removed_holder.clone(),
             move_to_trash_commands,
         )),
     ])
@@ -513,12 +408,10 @@ pub(super) fn playlist_track_context_actions(
 /// this dispatches `MovePlaylistEntries` so the runtime/SQLite are the
 /// source of truth.
 ///
-/// Post-dispatch the callback touches **only** the playlists table —
-/// nothing in the library, the album set, or the sidebar tree changes
-/// when a playlist's internal order is shuffled. Its rows take the
-/// playlist's new numbering and move in place, carrying the selection
-/// with them, so the dropped rows stay selected where the user put them
-/// and the view does not jump.
+/// The committed reorder reaches the table as a change to the playlist's
+/// entries: its rows take the playlist's new numbering and move in place,
+/// carrying the selection with them, so the dropped rows stay selected
+/// where the user put them and the view does not jump.
 ///
 /// `new_position` is the insertion index in the playlist's *post-removal*
 /// entries list (see `ApplicationCommand::MovePlaylistEntries`), so the
@@ -528,12 +421,10 @@ pub(super) fn playlist_row_reorder_callback(
     command_controller: &SharedCommandController,
     runtime: &SharedRuntime,
     sidebar: &PlaylistSidebar,
-    playlists_table_holder: &Rc<RefCell<Option<TrackTable>>>,
 ) -> RowReorderCallback {
     let command_controller = command_controller.clone();
     let runtime = runtime.clone();
     let sidebar = sidebar.clone();
-    let playlists_table_holder = playlists_table_holder.clone();
 
     Rc::new(move |drop: RowReorderDrop| -> bool {
         let Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id))) =
@@ -561,22 +452,11 @@ pub(super) fn playlist_row_reorder_callback(
             new_position
         };
 
-        let dispatched =
-            command_controller.dispatch_succeeded(ApplicationCommand::MovePlaylistEntries {
-                playlist_id,
-                track_ids: drop.dragged_track_ids,
-                new_position,
-            });
-        if !dispatched {
-            return false;
-        }
-
-        if let Some(playlists_table) = playlists_table_holder.borrow().as_ref() {
-            playlists_table
-                .set_playlist_positions(&playlist_entry_positions(&runtime, playlist_id));
-            playlists_table.sort_current_rows();
-        }
-        true
+        command_controller.dispatch_succeeded(ApplicationCommand::MovePlaylistEntries {
+            playlist_id,
+            track_ids: drop.dragged_track_ids,
+            new_position,
+        })
     })
 }
 
@@ -615,31 +495,26 @@ fn compute_playlist_reorder_position(
     u32::try_from(new_position).ok()
 }
 
+/// Removes the selected tracks from the shown regular playlist. A refused
+/// removal is reported by the dispatch; a committed one reaches the views
+/// as a runtime change.
 fn remove_from_playlist_callback(
     command_controller: &SharedCommandController,
     sidebar: &PlaylistSidebar,
-    playlist_entries_changed_holder: PlaylistEntriesChangedHolder,
 ) -> TrackActionCallback {
     let command_controller = command_controller.clone();
     let sidebar = sidebar.clone();
 
     Rc::new(move |invocation: TrackActionInvocation| {
-        let track_ids = invocation.selected_track_ids;
         let Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id))) =
             sidebar.current_selection()
         else {
             return;
         };
-        if command_controller.dispatch_succeeded(ApplicationCommand::RemoveTracksFromPlaylist {
+        let _result = command_controller.dispatch(ApplicationCommand::RemoveTracksFromPlaylist {
             playlist_id,
-            track_ids: track_ids.clone(),
-        }) && let Some(callback) = playlist_entries_changed_holder.borrow().as_ref()
-        {
-            callback(&PlaylistEntriesChange::Removed {
-                playlist_id,
-                track_ids: track_ids.into_iter().collect(),
-            });
-        }
+            track_ids: invocation.selected_track_ids,
+        });
     })
 }
 
@@ -653,9 +528,6 @@ fn current_selection_is_regular_playlist(sidebar: &PlaylistSidebar) -> TrackActi
     })
 }
 
-/// Runs a library-removing command (Remove from Library, Move to Trash) on
-/// each selected track, then reports the tracks that actually left: a
-/// command can fail for some tracks of the selection and not others.
 /// One command for the whole selection: the library drops it in a single
 /// transaction.
 fn remove_from_library_commands(track_ids: &[TrackId]) -> Vec<ApplicationCommand> {
@@ -672,38 +544,21 @@ fn move_to_trash_commands(track_ids: &[TrackId]) -> Vec<ApplicationCommand> {
         .collect()
 }
 
+/// Runs a library-removing command (Remove from Library, Move to Trash) on
+/// the selected tracks. A command can fail for some tracks of the selection
+/// and not others; the runtime publishes the tracks that left.
 fn track_removal_callback(
-    runtime: &SharedRuntime,
     command_controller: &SharedCommandController,
     playback_changed: PlaybackChangedCallback,
-    tracks_removed_holder: TracksRemovedHolder,
     commands: fn(&[TrackId]) -> Vec<ApplicationCommand>,
 ) -> TrackActionCallback {
-    let runtime = runtime.clone();
     let command_controller = command_controller.clone();
 
     Rc::new(move |invocation: TrackActionInvocation| {
-        let track_ids = invocation.selected_track_ids;
-        let result = command_controller.dispatch_batch(commands(&track_ids));
-        if result.succeeded == 0 {
-            return;
-        }
-        playback_changed();
-        let removed = {
-            let runtime = runtime.borrow();
-            track_ids
-                .into_iter()
-                .filter(|track_id| runtime.library_track(*track_id).is_none())
-                .collect::<HashSet<_>>()
-        };
-        if removed.is_empty() {
-            return;
-        }
-        if let Some(callback) = tracks_removed_holder.borrow().as_ref() {
-            callback(&TracksRemoved {
-                track_ids: removed,
-                merged: false,
-            });
+        let result = command_controller.dispatch_batch(commands(&invocation.selected_track_ids));
+        // Removing the playing track stops playback.
+        if result.succeeded > 0 {
+            playback_changed();
         }
     })
 }

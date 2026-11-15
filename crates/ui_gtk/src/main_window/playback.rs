@@ -397,6 +397,7 @@ pub(super) fn install_playback_event_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sustain_app_runtime::PlaylistId;
 
     #[test]
     fn a_search_turns_a_listed_source_into_search_results() {

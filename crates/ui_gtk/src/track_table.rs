@@ -405,7 +405,11 @@ impl TrackTable {
     /// A row stays when its track is still listed, and takes the listed
     /// row whole, play-order position and group band included. As under
     /// [`Self::update_rows`], it does not move when its new data would sort
-    /// it elsewhere.
+    /// it elsewhere. A new play order is another matter: when the playlist
+    /// shown reordered its entries and the table shows play order, the rows
+    /// move to it as under [`Self::sort_current_rows`], carrying the
+    /// selection with them. Renumbering alone, as after entries leave,
+    /// keeps the rows' order and moves nothing.
     pub(crate) fn reconcile_rows(&self, rows: Vec<TrackTableRow>) {
         // A progressive rebuild still streaming would add its remaining rows
         // a second time; they go in below with the other new rows instead.
@@ -419,6 +423,7 @@ impl TrackTable {
         let mut incoming: Vec<Option<TrackTableRow>> = rows.into_iter().map(Some).collect();
 
         let mut leaving = HashSet::new();
+        let mut play_positions = Vec::new();
         for position in 0..self.store.n_items() {
             let Some(row_object) = self
                 .store
@@ -437,7 +442,14 @@ impl TrackTable {
                 .get(&track_id)
                 .and_then(|&index| incoming[index].take())
             {
-                Some(row) => *row_object.borrow_mut::<TrackTableRow>() = row,
+                Some(row) => {
+                    let mut shown = row_object.borrow_mut::<TrackTableRow>();
+                    play_positions.push((
+                        shown.placement.playlist_position,
+                        row.placement.playlist_position,
+                    ));
+                    *shown = row;
+                }
                 None => {
                     leaving.insert(position);
                 }
@@ -453,6 +465,11 @@ impl TrackTable {
             self.append_rows(incoming.into_iter().flatten().collect());
         }
         self.refresh_bound_cells();
+        if play_order_changed(play_positions)
+            && status_sort_is_active(&self.table, &self.status_column)
+        {
+            self.sort_current_rows();
+        }
     }
 
     /// Insert the rows of `listed` that are present — the ones the table
@@ -522,24 +539,6 @@ impl TrackTable {
         removed
     }
 
-    /// Mirror each row's play-order position from `positions` after the
-    /// displayed playlist renumbered its entries. Renumbering keeps the
-    /// entries' relative order, so no row moves and none is redrawn.
-    pub(crate) fn set_playlist_positions(&self, positions: &HashMap<TrackId, u32>) {
-        for position in 0..self.store.n_items() {
-            let Some(row_object) = self
-                .store
-                .item(position)
-                .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
-            else {
-                continue;
-            };
-            let mut row = row_object.borrow_mut::<TrackTableRow>();
-            row.placement.playlist_position =
-                row.track_id.and_then(|id| positions.get(&id).copied());
-        }
-    }
-
     /// Hand keyboard focus to the nearest row `removes` spares — the next
     /// one, else the previous one — when the focused row is about to go.
     ///
@@ -597,46 +596,6 @@ impl TrackTable {
             }
         }
         present
-    }
-
-    /// Walk the underlying store once, refreshing each row's
-    /// `is_missing` flag from `lookup`, then repaint the status icon
-    /// on whichever rows are currently bound to a visible cell. Never
-    /// emits `gio::ListModel::items-changed`: scroll position, focus,
-    /// and selection survive a missing-flag flip — the table did not
-    /// restructure, only the per-row status-column rendering needs to
-    /// change. The same pattern the rating cell uses for its own
-    /// click-driven updates (see `update_row`).
-    ///
-    /// Cost is bounded by `store.n_items()` for the data sync plus
-    /// the visible-row count for the icon repaint, never library-wide
-    /// re-bind cost. Callers pass `lookup` returning `None` for ids
-    /// they don't know about; those rows are left untouched.
-    pub(crate) fn refresh_missing_flags(&self, lookup: &dyn Fn(TrackId) -> Option<bool>) {
-        let n_items = self.store.n_items();
-        for position in 0..n_items {
-            let Some(row_object) = self
-                .store
-                .item(position)
-                .and_then(|item| item.downcast::<glib::BoxedAnyObject>().ok())
-            else {
-                continue;
-            };
-            let track_id = match row_object.try_borrow::<TrackTableRow>() {
-                Ok(row) => row.track_id,
-                Err(_) => continue,
-            };
-            let Some(track_id) = track_id else { continue };
-            let Some(now_missing) = lookup(track_id) else {
-                continue;
-            };
-            let mut row = row_object.borrow_mut::<TrackTableRow>();
-            if row.is_missing != now_missing {
-                row.is_missing = now_missing;
-            }
-        }
-        self.status_bindings
-            .refresh_icons(self.playing_track_id.get());
     }
 
     /// Returns the [`TrackId`]s of the currently selected rows, in the
@@ -1088,6 +1047,13 @@ fn read_current_sort(
         column_id: column_id.to_owned(),
         ascending: matches!(column_sorter.primary_sort_order(), gtk::SortType::Ascending),
     })
+}
+
+/// Whether rows that went from the first to the second play position of
+/// each pair now play in another order than before.
+fn play_order_changed(mut positions: Vec<(Option<u32>, Option<u32>)>) -> bool {
+    positions.sort_by_key(|(before, _)| *before);
+    positions.windows(2).any(|pair| pair[0].1 > pair[1].1)
 }
 
 /// Whether `table` shows play order, first track first: its primary sort is
@@ -2016,12 +1982,49 @@ mod tests {
                     .collect(),
             );
 
-            table.remove_rows(&track_ids(&[1, 2]).into_iter().collect());
-            table.set_playlist_positions(&track_ids(&[3, 4]).into_iter().zip(0..).collect());
-            table.append_rows(vec![row(5).with_playlist_position(Some(2))]);
+            table.reconcile_rows(
+                [3, 4, 5]
+                    .into_iter()
+                    .zip(0..)
+                    .map(|(id, position)| row(id).with_playlist_position(Some(position)))
+                    .collect(),
+            );
 
             assert_eq!(table.ordered_track_ids(), track_ids(&[3, 4, 5]));
         });
+    }
+
+    /// Renumbering after an entry leaves is no reorder: a row an edit left
+    /// out of the shown sort stays where it is.
+    #[test]
+    fn a_renumbering_moves_no_row() {
+        crate::test_support::with_gtk(|| {
+            let reorder: RowReorderCallback = Rc::new(|_| false);
+            let table = build_track_table(Vec::new(), None, None, None, Some(reorder), None);
+            sort_by(&table, "track_name", true);
+            let entry =
+                |id, name, position| named_row(id, name).with_playlist_position(Some(position));
+            table.replace_rows(vec![entry(1, "A", 0), entry(2, "C", 1), entry(3, "E", 2)]);
+            table.update_rows(&HashMap::from([(track_ids(&[1])[0], entry(1, "Z", 0))]));
+
+            table.reconcile_rows(vec![entry(1, "Z", 0), entry(2, "C", 1)]);
+
+            assert_eq!(table.ordered_track_ids(), track_ids(&[1, 2]));
+        });
+    }
+
+    #[test]
+    fn only_rows_that_change_places_change_the_play_order() {
+        assert!(!super::play_order_changed(vec![
+            (Some(0), Some(0)),
+            (Some(2), Some(1)),
+            (Some(5), Some(2)),
+        ]));
+        assert!(super::play_order_changed(vec![
+            (Some(0), Some(2)),
+            (Some(1), Some(0)),
+            (Some(2), Some(1)),
+        ]));
     }
 
     /// A drag reorder renumbers the playlist; the rows follow in place and
@@ -2040,8 +2043,13 @@ mod tests {
             table.selection.select_item(0, true);
 
             // Track 1 dropped after track 3.
-            table.set_playlist_positions(&track_ids(&[2, 3, 1, 4]).into_iter().zip(0..).collect());
-            table.sort_current_rows();
+            table.reconcile_rows(
+                [2, 3, 1, 4]
+                    .into_iter()
+                    .zip(0..)
+                    .map(|(id, position)| row(id).with_playlist_position(Some(position)))
+                    .collect(),
+            );
 
             assert_eq!(table.ordered_track_ids(), track_ids(&[2, 3, 1, 4]));
             assert_eq!(table.selected_track_ids(), track_ids(&[1]));

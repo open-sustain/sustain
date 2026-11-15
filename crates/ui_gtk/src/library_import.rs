@@ -19,15 +19,13 @@ enum LibraryImportWorkerEvent {
 
 pub(crate) type LibraryImportRequestedCallback =
     Rc<dyn Fn(Vec<PathBuf>) -> Result<(), ApplicationRuntimeError>>;
-pub(crate) type LibraryImportCompletedCallback = Rc<dyn Fn(&[sustain_app_runtime::Track])>;
 
-/// Starts an import of the dropped paths. When it is done, the views are
-/// told about the new tracks, and a window over `parent` lists any file
-/// the import left out.
+/// Starts an import of the dropped paths. When it is done, the runtime
+/// publishes the new tracks to the views, and a window over `parent`
+/// lists any file the import left out.
 pub(crate) fn library_import_requested_callback(
     runtime: &SharedRuntime,
     parent: &gtk::Window,
-    import_completed: LibraryImportCompletedCallback,
 ) -> LibraryImportRequestedCallback {
     let runtime = runtime.clone();
     let parent = parent.downgrade();
@@ -46,12 +44,7 @@ pub(crate) fn library_import_requested_callback(
             let _sent = tx.send(LibraryImportWorkerEvent::Finished(outcome));
         });
 
-        poll_library_import(
-            rx,
-            runtime.clone(),
-            parent.clone(),
-            import_completed.clone(),
-        );
+        poll_library_import(rx, runtime.clone(), parent.clone());
         Ok(())
     })
 }
@@ -93,7 +86,6 @@ fn poll_library_import(
     rx: mpsc::Receiver<LibraryImportWorkerEvent>,
     runtime: SharedRuntime,
     parent: glib::WeakRef<gtk::Window>,
-    import_completed: LibraryImportCompletedCallback,
 ) {
     glib::timeout_add_local(Duration::from_millis(100), move || {
         let mut latest_progress = None;
@@ -122,9 +114,7 @@ fn poll_library_import(
         match finished {
             Some(Ok(mut result)) => {
                 let failures = std::mem::take(&mut result.failures);
-                let imported_tracks = result.tracks.clone();
                 runtime.borrow_mut().apply_library_import_result(result);
-                import_completed(&imported_tracks);
                 if !failures.is_empty()
                     && let Some(parent) = parent.upgrade()
                 {

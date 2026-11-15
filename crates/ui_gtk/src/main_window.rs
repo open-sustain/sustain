@@ -13,25 +13,22 @@ use gtk::{gio, glib};
 use sustain_app_runtime::{
     CdImportProgress, CdImportRequest, CdImportResult, DeviceTarget, MetadataChange,
     PlaybackCommand, PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState,
-    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, Rating,
-    ShuffleMode, TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
-    TrackMetadata, UiSettings, UiSidebarSelection, UiWindowSize, normalize_query,
+    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
+    TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackMetadata,
+    UiSettings, UiSidebarSelection, UiWindowSize, normalize_query,
 };
 
 use super::{
     ALBUMS_VIEW, APP_ID, AnalysisProgressReceiver, ApplicationCommand, ApplicationRuntime,
-    ApplicationRuntimeError, ArtworkChangedHolder, ArtworkFetchResultReceiver,
-    AvailabilityChangedCallback, CD_IMPORT_VIEW, CdLookupEventReceiver, ConnectedDevice,
-    DEVICES_VIEW, DUPLICATES_VIEW, DevicePlanResultReceiver, DeviceSyncEventReceiver,
-    LibraryChangedCallback, LibraryChangedHolder, LibraryHydrationResultReceiver,
+    ApplicationRuntimeError, ArtworkChangedHolder, ArtworkFetchResultReceiver, CD_IMPORT_VIEW,
+    CdLookupEventReceiver, ConnectedDevice, DEVICES_VIEW, DUPLICATES_VIEW,
+    DevicePlanResultReceiver, DeviceSyncEventReceiver, LibraryHydrationResultReceiver,
     MetadataWriterEventReceiver, MprisCommandReceiver, MtpDiscoveryResultReceiver,
     OnlineProgressReceiver, OpticalDiscoveryResultReceiver, PLAYLISTS_VIEW,
-    PlaybackChangedCallback, PlaylistEntriesChange, PlaylistEntriesChangedCallback,
-    PlaylistEntriesChangedHolder, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+    PlaybackChangedCallback, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
     SONGS_VIEW, STATISTICS_VIEW, SharedMprisService, SharedRuntime, ShowAlbumAction,
     ShowAlbumHolder, SmartPlaylistTrackStatus, SmartShuffleRebuildResultReceiver,
-    TrackUpdatedReceiver, TracksRemoved, TracksRemovedCallback, TracksRemovedHolder,
-    YoutubeAudioDownloadResultReceiver,
+    TrackUpdatedReceiver, YoutubeAudioDownloadResultReceiver,
     accent::install_accent_css,
     albums::AlbumsView,
     app_css::install_app_css,
@@ -46,8 +43,7 @@ use super::{
         library_consolidation_requested_callback, maybe_auto_resume_library_consolidation,
     },
     library_import::{
-        LIBRARY_DROP_INDICATOR_CLASS, LibraryImportCompletedCallback, install_file_drop_target,
-        library_import_requested_callback,
+        LIBRARY_DROP_INDICATOR_CLASS, install_file_drop_target, library_import_requested_callback,
     },
     library_scan::library_scan_requested_callback,
     missing_track::{
@@ -125,16 +121,16 @@ use playback::{
 };
 use playlists::{
     PlaylistsViewRefreshContext, add_to_playlist_callback, add_to_playlist_provider,
-    install_playlists_view_activator, playlist_table_rows_for, refresh_playlists_view_if_visible,
+    install_playlists_view_activator, refresh_playlists_view_if_visible,
 };
 use result_consumers::{
     ArtworkFetchResultConsumerContext, LibraryHydrationResultConsumerContext,
     install_analysis_progress_consumer, install_artwork_fetch_result_consumer,
     install_device_plan_result_consumer, install_device_sync_event_consumer,
-    install_library_hydration_result_consumer, install_metadata_writer_event_consumer,
-    install_mtp_discovery_consumer, install_online_progress_consumer,
-    install_smart_shuffle_launch_rebuild, install_smart_shuffle_rebuild_result_consumer,
-    install_track_changes_observer, install_track_updated_consumer,
+    install_library_changes_observer, install_library_hydration_result_consumer,
+    install_metadata_writer_event_consumer, install_mtp_discovery_consumer,
+    install_online_progress_consumer, install_smart_shuffle_launch_rebuild,
+    install_smart_shuffle_rebuild_result_consumer, install_track_updated_consumer,
     install_youtube_audio_download_result_consumer,
 };
 use search::{SearchWiringContext, install_search_wiring};
@@ -146,11 +142,9 @@ use sidebar_callbacks::{
 };
 use songs::SongsViewRefresh;
 use track_callbacks::{
-    PlaylistEntriesChangedContext, TrackViewUpdateContext, TracksRemovedContext,
-    artwork_changed_callback, begin_inline_edit_callback, playlist_entries_changed_callback,
-    playlist_row_reorder_callback, playlist_track_context_actions, rating_changed_callback,
-    schedule_playlists_structural_refresh, track_context_actions, track_view_update_callback,
-    tracks_removed_callback,
+    LibraryViewUpdateContext, artwork_changed_callback, begin_inline_edit_callback,
+    library_view_update_callback, playlist_row_reorder_callback, playlist_track_context_actions,
+    rating_changed_callback, track_context_actions,
 };
 
 /// Recompute the status-bar summary (track count, total duration) for
@@ -335,10 +329,7 @@ pub(crate) fn build_main_window(
     );
     let sidebar_widget = sidebar.widget();
 
-    let library_changed_holder: LibraryChangedHolder = Rc::new(RefCell::new(None));
     let artwork_changed_holder: ArtworkChangedHolder = Rc::new(RefCell::new(None));
-    let tracks_removed_holder: TracksRemovedHolder = Rc::new(RefCell::new(None));
-    let playlist_entries_changed_holder: PlaylistEntriesChangedHolder = Rc::new(RefCell::new(None));
     let parent_window = window.clone().upcast::<gtk::Window>();
     let pending_located_playbacks: PendingLocatedPlaybacks = Rc::new(RefCell::new(HashMap::new()));
     let missing_track_relocation_completed = missing_track_relocation_completed_callback(
@@ -380,12 +371,10 @@ pub(crate) fn build_main_window(
         &command_controller,
         playback_changed.clone(),
         artwork_changed_holder.clone(),
-        tracks_removed_holder.clone(),
         &artwork_loader,
     );
     let add_to_playlist_provider = add_to_playlist_provider(&runtime);
-    let add_to_playlist_callback =
-        add_to_playlist_callback(&command_controller, &playlist_entries_changed_holder);
+    let add_to_playlist_callback = add_to_playlist_callback(&command_controller);
     let context_menu = TrackRowContextMenu::new(
         context_actions,
         parent_window.clone(),
@@ -412,8 +401,6 @@ pub(crate) fn build_main_window(
         &command_controller,
         playback_changed.clone(),
         artwork_changed_holder.clone(),
-        tracks_removed_holder.clone(),
-        playlist_entries_changed_holder.clone(),
         &artwork_loader,
         &sidebar,
     );
@@ -470,12 +457,8 @@ pub(crate) fn build_main_window(
         rating_changed.clone(),
         begin_inline_edit_callback(&runtime, &command_controller),
     );
-    let playlist_row_reorder = playlist_row_reorder_callback(
-        &command_controller,
-        &runtime,
-        &sidebar,
-        &playlists_table_holder,
-    );
+    let playlist_row_reorder =
+        playlist_row_reorder_callback(&command_controller, &runtime, &sidebar);
     let playlist_track_activated = track_activated_callback(
         &command_controller,
         playback_changed.clone(),
@@ -552,7 +535,7 @@ pub(crate) fn build_main_window(
     });
     // The playlists table is built empty. It only needs to be populated
     // when the user actually opens the Playlists view; rebuilding it on
-    // every library_changed / selection change while Songs is visible
+    // every library change / selection change while Songs is visible
     // is wasted work and dominates startup time on large libraries
     // (measured: ~672ms for 8890 rows in `replace_rows`).
     let playlists_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(true));
@@ -617,22 +600,7 @@ pub(crate) fn build_main_window(
         &current_search_text,
         visible_summary_refresh.clone(),
     );
-    let library_changed = library_changed_callback(&songs_refresh, &library_views_refresh);
-    install_track_availability_observer(&runtime, &songs_table, &playlists_table);
-    let track_view_update = track_view_update_callback(TrackViewUpdateContext {
-        runtime: &runtime,
-        songs_table: &songs_table,
-        albums_view: &albums_view,
-        duplicates_view: &duplicates_view,
-        playlists_table: &playlists_table,
-        playlists_refresh: &playlists_refresh,
-        sidebar: &sidebar,
-        visible_summary_refresh: visible_summary_refresh.clone(),
-        current_search_text: &current_search_text,
-        device_panel: &device_panel,
-    });
-    artwork_changed_holder.replace(Some(artwork_changed_callback(track_view_update.clone())));
-    let tracks_removed = tracks_removed_callback(TracksRemovedContext {
+    let library_view_update = library_view_update_callback(LibraryViewUpdateContext {
         runtime: &runtime,
         songs_table: &songs_table,
         albums_view: &albums_view,
@@ -644,22 +612,13 @@ pub(crate) fn build_main_window(
         titlebar: &titlebar,
         visible_summary_refresh: visible_summary_refresh.clone(),
         current_search_text: &current_search_text,
+        device_panel: &device_panel,
     });
-    tracks_removed_holder.replace(Some(tracks_removed.clone()));
-    playlist_entries_changed_holder.replace(Some(playlist_entries_changed_callback(
-        PlaylistEntriesChangedContext {
-            runtime: &runtime,
-            playlists_table: &playlists_table,
-            sidebar: &sidebar,
-            visible_summary_refresh: visible_summary_refresh.clone(),
-            current_search_text: &current_search_text,
-        },
-    )));
+    artwork_changed_holder.replace(Some(artwork_changed_callback(library_view_update.clone())));
     install_metadata_writer_event_consumer(
         metadata_writer_event_rx,
         runtime.clone(),
         artwork_changed_holder.clone(),
-        tracks_removed,
         missing_track_relocation_completed,
         artwork_loader.clone(),
     );
@@ -678,7 +637,7 @@ pub(crate) fn build_main_window(
     );
     install_analysis_progress_consumer(analysis_progress_rx, runtime.clone());
     install_online_progress_consumer(online_progress_rx, runtime.clone());
-    install_track_changes_observer(&runtime, track_view_update);
+    install_library_changes_observer(&runtime, library_view_update);
     install_track_updated_consumer(track_updated_rx, runtime.clone());
     install_smart_shuffle_rebuild_result_consumer(smart_shuffle_rebuild_result_rx, runtime.clone());
     install_device_plan_result_consumer(
@@ -792,10 +751,7 @@ pub(crate) fn build_main_window(
         &playlists_refresh,
     ));
     sidebar.set_delete_callback(sidebar_delete_callback(&command_controller, &sidebar));
-    sidebar.set_tracks_drop_callback(sidebar_tracks_drop_callback(
-        &command_controller,
-        &playlist_entries_changed_holder,
-    ));
+    sidebar.set_tracks_drop_callback(sidebar_tracks_drop_callback(&command_controller));
     sidebar.set_edit_smart_playlist_callback(sidebar_edit_smart_playlist_callback(
         &window,
         &command_controller,
@@ -808,24 +764,9 @@ pub(crate) fn build_main_window(
     sidebar.set_online_run_callback(sidebar_online_run_callback(&runtime));
     sidebar.set_analysis_enabled_query(sidebar_analysis_enabled_query(&runtime));
     sidebar.set_online_busy_query(sidebar_online_busy_query(&runtime));
-    library_changed_holder.replace(Some(library_changed.clone()));
-    let scan_requested = library_scan_requested_callback(&runtime, library_changed.clone());
-    let import_completed = library_import_completed_callback(
-        &runtime,
-        &songs_table,
-        &songs_refresh,
-        &albums_view,
-        &duplicates_view,
-        &statistics_view,
-        &playlists_refresh,
-        &sidebar,
-        &titlebar,
-        visible_summary_refresh.clone(),
-        &current_search_text,
-    );
-    install_cd_import_requested(&cd_import_panel, &runtime, import_completed.clone());
-    let import_requested =
-        library_import_requested_callback(&runtime, window.upcast_ref(), import_completed);
+    let scan_requested = library_scan_requested_callback(&runtime);
+    install_cd_import_requested(&cd_import_panel, &runtime);
+    let import_requested = library_import_requested_callback(&runtime, window.upcast_ref());
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
     // Re-applies the Views toggles to the live UI the instant they
     // change: the sidebar's Duplicates/Statistics rows.
@@ -1439,11 +1380,7 @@ enum CdImportWorkerEvent {
 /// background-worker / apply path, mirroring library import: prepare claims
 /// the library task slot on the main thread, the rip runs on a worker, and its
 /// progress/outcome are applied back on the GTK loop.
-fn install_cd_import_requested(
-    cd_import_panel: &CdImportPanel,
-    runtime: &SharedRuntime,
-    import_completed: LibraryImportCompletedCallback,
-) {
+fn install_cd_import_requested(cd_import_panel: &CdImportPanel, runtime: &SharedRuntime) {
     let runtime = runtime.clone();
     let panel = cd_import_panel.clone();
     let callback: CdImportRequestedCallback = Rc::new(move |request: CdImportRequest| {
@@ -1467,7 +1404,7 @@ fn install_cd_import_requested(
             });
             let _sent = tx.send(CdImportWorkerEvent::Finished(outcome));
         });
-        poll_cd_import(rx, runtime.clone(), panel.clone(), import_completed.clone());
+        poll_cd_import(rx, runtime.clone(), panel.clone());
     });
     cd_import_panel.set_import_requested_callback(callback);
 }
@@ -1476,7 +1413,6 @@ fn poll_cd_import(
     rx: std::sync::mpsc::Receiver<CdImportWorkerEvent>,
     runtime: SharedRuntime,
     cd_import_panel: CdImportPanel,
-    import_completed: LibraryImportCompletedCallback,
 ) {
     glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
         let mut latest_progress = None;
@@ -1508,9 +1444,7 @@ fn poll_cd_import(
         match finished {
             Some(Ok(result)) => {
                 let imported = result.summary.imported_tracks;
-                let imported_tracks = result.tracks.clone();
                 runtime.borrow_mut().apply_cd_import_result(result);
-                import_completed(&imported_tracks);
                 cd_import_panel.finish_import_display(imported);
                 cd_import_panel.refresh_import_sensitivity();
                 glib::ControlFlow::Break
@@ -1611,20 +1545,6 @@ fn ui_settings_from_widgets(
     }
 }
 
-/// Bring Songs and every other library view up to date with the
-/// runtime's library after a scan, an import or a removal.
-fn library_changed_callback(
-    songs_refresh: &SongsViewRefresh,
-    library_views_refresh: &LibraryViewsRefreshCallback,
-) -> LibraryChangedCallback {
-    let songs_refresh = songs_refresh.clone();
-    let library_views_refresh = library_views_refresh.clone();
-    Rc::new(move || {
-        songs_refresh.refresh();
-        library_views_refresh();
-    })
-}
-
 /// Bring every library view but Songs up to date with the runtime's
 /// library. Startup calls this alone once the library has loaded: Songs
 /// has just published its rows by then, while a view opened during the
@@ -1665,7 +1585,7 @@ fn library_views_refresh_callback(
         // playlist's rows (tracks gone, smart rules newly matching).
         let search_text = current_search_text.borrow().clone();
         refresh_playlists_view_if_visible(
-            &runtime.borrow(),
+            &runtime,
             &playlists_refresh,
             sidebar.current_selection(),
             &search_text,
@@ -1677,106 +1597,6 @@ fn library_views_refresh_callback(
         update_play_pause_sensitivity(&titlebar, &runtime.borrow());
         visible_summary_refresh();
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn library_import_completed_callback(
-    runtime: &SharedRuntime,
-    songs_table: &TrackTable,
-    songs_refresh: &SongsViewRefresh,
-    albums_view: &AlbumsView,
-    duplicates_view: &DuplicatesView,
-    statistics_view: &StatisticsView,
-    playlists_refresh: &PlaylistsViewRefreshContext,
-    sidebar: &PlaylistSidebar,
-    titlebar: &Titlebar,
-    visible_summary_refresh: VisibleSummaryRefreshCallback,
-    current_search_text: &Rc<RefCell<String>>,
-) -> LibraryImportCompletedCallback {
-    let runtime = runtime.clone();
-    let songs_table = songs_table.clone();
-    let songs_refresh = songs_refresh.clone();
-    let albums_view = albums_view.clone();
-    let duplicates_view = duplicates_view.clone();
-    let statistics_view = statistics_view.clone();
-    let playlists_refresh = playlists_refresh.clone();
-    let sidebar = sidebar.clone();
-    let titlebar = titlebar.clone();
-    let current_search_text = current_search_text.clone();
-
-    Rc::new(move |imported_tracks| {
-        if imported_tracks.is_empty() {
-            return;
-        }
-        // Inserting keeps a visible table's scroll and selection; a hidden
-        // one rebuilds when next shown anyway.
-        if songs_refresh.is_visible() {
-            let search_text = current_search_text.borrow().clone();
-            let rows = {
-                let runtime = runtime.borrow();
-                imported_library_table_rows(&runtime, imported_tracks, &search_text)
-            };
-            songs_table.append_rows(rows);
-        } else {
-            songs_refresh.refresh();
-        }
-        albums_view.replace_tracks();
-        duplicates_view.refresh_if_active();
-        statistics_view.refresh_if_visible();
-        // New tracks join no regular playlist, but a smart one may admit
-        // them.
-        if matches!(
-            sidebar.current_selection(),
-            Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(_)))
-        ) {
-            schedule_playlists_structural_refresh(
-                runtime.clone(),
-                playlists_refresh.clone(),
-                sidebar.clone(),
-                current_search_text.clone(),
-            );
-        }
-        update_play_pause_sensitivity(&titlebar, &runtime.borrow());
-        visible_summary_refresh();
-    })
-}
-
-/// Wires the runtime's `track_availability_observer` to a narrow
-/// per-row refresh on both track tables. The runtime fires this
-/// observer after every lazy `is_missing` flip (failed-play
-/// detection, library-path re-stat, consolidation source miss).
-/// The deferred closure snapshots `(track_id, is_missing)` from the
-/// runtime and asks each loaded table to patch matching rows in
-/// place; never a `replace_rows`, so scroll/focus/selection survive
-/// — see the design note on [`AvailabilityChangedCallback`].
-fn install_track_availability_observer(
-    runtime: &SharedRuntime,
-    songs_table: &TrackTable,
-    playlists_table: &TrackTable,
-) {
-    let runtime_for_observer = runtime.clone();
-    let songs_table = songs_table.clone();
-    let playlists_table = playlists_table.clone();
-    let refresh: AvailabilityChangedCallback = Rc::new(move || {
-        let availability: HashMap<TrackId, bool> = runtime_for_observer
-            .borrow()
-            .library_tracks()
-            .iter()
-            .map(|track| (track.id, track.location.is_missing()))
-            .collect();
-        let lookup = |id: TrackId| availability.get(&id).copied();
-        songs_table.refresh_missing_flags(&lookup);
-        playlists_table.refresh_missing_flags(&lookup);
-    });
-    runtime
-        .borrow_mut()
-        .set_track_availability_observer(Box::new(move || {
-            // The runtime is mid-borrow when this fires — defer
-            // the refresh onto the GLib main loop so the closure
-            // can re-borrow the runtime read-only without panicking.
-            let refresh = refresh.clone();
-            glib::idle_add_local_once(move || refresh());
-        }));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1972,20 +1792,6 @@ fn runtime_library_table_rows(
     let normalized = normalize_query(search_text);
     runtime
         .library_tracks()
-        .iter()
-        .filter(|track| normalized.is_empty() || runtime.search_matches(track.id, &normalized))
-        .map(|track| TrackTableRow::from_track(track, honor_sort_tags))
-        .collect()
-}
-
-fn imported_library_table_rows(
-    runtime: &ApplicationRuntime,
-    imported_tracks: &[Track],
-    search_text: &str,
-) -> Vec<TrackTableRow> {
-    let honor_sort_tags = runtime.settings().library.honor_sort_tags;
-    let normalized = normalize_query(search_text);
-    imported_tracks
         .iter()
         .filter(|track| normalized.is_empty() || runtime.search_matches(track.id, &normalized))
         .map(|track| TrackTableRow::from_track(track, honor_sort_tags))

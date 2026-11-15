@@ -6,16 +6,13 @@ use std::{path::PathBuf, rc::Rc};
 use gtk::glib;
 use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
 
-use super::{
-    ApplicationRuntimeError, LibraryChangedCallback, SharedRuntime, run_library_scan_task,
-};
+use super::{ApplicationRuntimeError, SharedRuntime, run_library_scan_task};
 
 pub(crate) type LibraryScanRequestedCallback =
     Rc<dyn Fn(PathBuf) -> Result<(), ApplicationRuntimeError>>;
 
 pub(crate) fn library_scan_requested_callback(
     runtime: &SharedRuntime,
-    library_changed: LibraryChangedCallback,
 ) -> LibraryScanRequestedCallback {
     let runtime = runtime.clone();
 
@@ -45,23 +42,22 @@ pub(crate) fn library_scan_requested_callback(
             let _sent = tx.send_blocking(run_library_scan_task(task));
         });
 
-        apply_library_scan_outcome(rx, runtime.clone(), library_changed.clone());
+        apply_library_scan_outcome(rx, runtime.clone());
         Ok(())
     })
 }
 
-/// Apply the scan's outcome once its worker delivers it. A worker that
-/// ends without delivering one has failed the scan.
+/// Apply the scan's outcome once its worker delivers it; the runtime
+/// publishes what it changed to the views. A worker that ends without
+/// delivering one has failed the scan.
 fn apply_library_scan_outcome(
     rx: async_channel::Receiver<Result<super::LibraryScanResult, ApplicationRuntimeError>>,
     runtime: SharedRuntime,
-    library_changed: LibraryChangedCallback,
 ) {
     glib::MainContext::default().spawn_local(async move {
         match rx.recv().await {
             Ok(Ok(result)) => {
                 runtime.borrow_mut().apply_library_scan_result(result);
-                library_changed();
             }
             Ok(Err(error)) => {
                 runtime.borrow_mut().fail_library_scan(error);
@@ -90,7 +86,7 @@ mod tests {
         // main-loop work, so the start-failure path is exercised here
         // without a display.
         let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
-        let callback = library_scan_requested_callback(&runtime, Rc::new(|| {}));
+        let callback = library_scan_requested_callback(&runtime);
 
         assert!(callback(PathBuf::from("/music")).is_err());
 

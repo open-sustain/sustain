@@ -44,6 +44,7 @@ mod leading_icon;
 mod library_consolidation;
 mod library_import;
 mod library_scan;
+mod library_view_update;
 mod main_window;
 mod metadata_diff;
 mod missing_track;
@@ -69,7 +70,6 @@ mod track_context_ops;
 mod track_info;
 mod track_summary;
 mod track_table;
-mod track_view_update;
 mod util;
 mod verified_duplicates;
 mod window_chrome;
@@ -125,52 +125,14 @@ const CD_IMPORT_VIEW: &str = "cd-import";
 const DUPLICATES_VIEW: &str = "duplicates";
 
 pub(crate) type SharedRuntime = Rc<RefCell<ApplicationRuntime>>;
-pub(crate) type LibraryChangedCallback = Rc<dyn Fn()>;
-pub(crate) type LibraryChangedHolder = Rc<RefCell<Option<LibraryChangedCallback>>>;
-/// Applies the view work a batch of committed track changes calls for.
-pub(crate) type TrackViewUpdateCallback = Rc<dyn Fn(&track_view_update::TrackViewUpdate)>;
+/// Applies the view work a batch of committed library changes calls for.
+pub(crate) type LibraryViewUpdateCallback = Rc<dyn Fn(&library_view_update::LibraryViewUpdate)>;
 /// Fired when the artwork embedded in tracks' files changed. Embedded
-/// artwork is not a library field, so the runtime's committed track
+/// artwork is not a library field, so the runtime's committed library
 /// changes do not report it; whoever changed it reports it here, after
 /// updating the artwork loader's cache.
 pub(crate) type ArtworkChangedCallback = Rc<dyn Fn(&[sustain_app_runtime::TrackId])>;
 pub(crate) type ArtworkChangedHolder = Rc<RefCell<Option<ArtworkChangedCallback>>>;
-/// Tracks that have left the library.
-pub(crate) struct TracksRemoved {
-    pub(crate) track_ids: std::collections::HashSet<sustain_app_runtime::TrackId>,
-    /// Whether the tracks left by duplicate consolidation, which points
-    /// their playlist entries at the tracks they were merged into. The
-    /// survivors' own changes arrive as track changes like any other.
-    pub(crate) merged: bool,
-}
-/// Fired after tracks leave the library. Views drop their rows in place
-/// rather than rebuilding, so the user keeps their scroll position and the
-/// rest of their selection.
-pub(crate) type TracksRemovedCallback = Rc<dyn Fn(&TracksRemoved)>;
-pub(crate) type TracksRemovedHolder = Rc<RefCell<Option<TracksRemovedCallback>>>;
-/// A change to the track list of one regular playlist. The library itself
-/// is untouched, so only a view of that playlist has anything to redraw.
-pub(crate) enum PlaylistEntriesChange {
-    /// Tracks were appended to the playlist.
-    Added(sustain_app_runtime::PlaylistId),
-    /// Every entry of these tracks left the playlist.
-    Removed {
-        playlist_id: sustain_app_runtime::PlaylistId,
-        track_ids: std::collections::HashSet<sustain_app_runtime::TrackId>,
-    },
-}
-pub(crate) type PlaylistEntriesChangedCallback = Rc<dyn Fn(&PlaylistEntriesChange)>;
-pub(crate) type PlaylistEntriesChangedHolder = Rc<RefCell<Option<PlaylistEntriesChangedCallback>>>;
-/// Re-sync the `is_missing` flag on every loaded row from the
-/// runtime's view of the library, repaint visible status icons, and
-/// leave scroll/focus/selection untouched. Fired after operations
-/// the runtime can use to flip availability without rebuilding the
-/// table (a lazy-detection failed play, a library-path change that
-/// re-stats existing tracks). The bulk-rebuild
-/// [`LibraryChangedCallback`] would also work, but it splices the
-/// store and thus blows scroll position — unacceptable when the
-/// table content itself has not structurally changed.
-pub(crate) type AvailabilityChangedCallback = Rc<dyn Fn()>;
 pub(crate) type PlaybackChangedCallback = Rc<dyn Fn()>;
 pub(crate) type ShowAlbumAction = Rc<dyn Fn(sustain_app_runtime::TrackId)>;
 pub(crate) type ShowAlbumHolder = Rc<RefCell<Option<ShowAlbumAction>>>;

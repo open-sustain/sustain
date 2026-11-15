@@ -112,7 +112,6 @@ impl ApplicationRuntime {
             analysis: false,
         });
         self.refresh_playback_queue_track_ids();
-        self.notify_track_availability_observer();
         self.nudge_metadata_writer();
         if empty_directory_cleanup_failed {
             self.push_ephemeral_notification(
@@ -329,11 +328,9 @@ impl ApplicationRuntime {
         library_store
             .delete_tracks(track_ids)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        self.library_tracks
-            .retain(|track| !removed.contains(&track.id));
+        self.remove_library_tracks(&removed);
         self.playback_queue.remove_tracks(&removed);
         for track_id in removed {
-            self.search_index.remove(track_id);
             self.dismiss_all_metadata_write_warnings(track_id);
         }
         Ok(())

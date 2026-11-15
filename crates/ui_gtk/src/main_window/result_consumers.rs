@@ -7,11 +7,11 @@
 //! `async_channel` receiver (or installs a runtime observer) and applies the
 //! result on the GTK main thread.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use sustain_app_runtime::TrackUpdated;
 
-use crate::track_view_update::TrackViewUpdate;
+use crate::library_view_update::LibraryViewUpdate;
 
 use super::*;
 
@@ -183,7 +183,6 @@ pub(super) fn install_metadata_writer_event_consumer(
     receiver: MetadataWriterEventReceiver,
     runtime: SharedRuntime,
     artwork_changed_holder: ArtworkChangedHolder,
-    tracks_removed: TracksRemovedCallback,
     relocation_completed: crate::missing_track::MissingTrackRelocationCompletedCallback,
     artwork_loader: ArtworkLoader,
 ) {
@@ -228,8 +227,8 @@ pub(super) fn install_metadata_writer_event_consumer(
                 .filter_map(|track_id| artwork_source_for_track(&runtime, track_id))
                 .collect::<Vec<_>>();
             runtime.borrow_mut().apply_metadata_writer_event(event);
-            // Events that change track data reload SQLite through
-            // `apply_track_updated`, which records the change for the views.
+            // Events that change the library reload it from SQLite, which
+            // records the change for the views.
             // A completed artwork write changes no SQLite row, but the
             // artwork the views show comes from the file it rewrote.
             if let Some(track_id) = mirror_track_id
@@ -242,24 +241,6 @@ pub(super) fn install_metadata_writer_event_consumer(
             }
             for source in duplicate_artwork_sources {
                 artwork_loader.invalidate(&source);
-            }
-            if !merges.is_empty() {
-                // Report what the runtime's library now lacks: if it could
-                // not reload the consolidated library, nothing left it.
-                let track_ids = {
-                    let runtime = runtime.borrow();
-                    merges
-                        .iter()
-                        .flat_map(|merge| merge.removed_track_ids.iter().copied())
-                        .filter(|track_id| runtime.library_track(*track_id).is_none())
-                        .collect::<HashSet<_>>()
-                };
-                if !track_ids.is_empty() {
-                    tracks_removed(&TracksRemoved {
-                        track_ids,
-                        merged: true,
-                    });
-                }
             }
         }
     });
@@ -311,28 +292,28 @@ pub(super) fn install_online_progress_consumer(
     });
 }
 
-/// Wires the runtime's committed track changes to the views. The runtime
-/// wakes the observer when changes start waiting; the views take every
-/// waiting change on the next idle, outside the runtime borrow the wake
-/// fires under, and apply them as one batch. A change committed while the
-/// batch applies wakes the observer again for the next one.
-pub(super) fn install_track_changes_observer(
+/// Wires the runtime's committed library changes to the views. The
+/// runtime wakes the observer when changes start waiting; the views take
+/// every waiting change on the next idle, outside the runtime borrow the
+/// wake fires under, and apply them as one batch. A change committed while
+/// the batch applies wakes the observer again for the next one.
+pub(super) fn install_library_changes_observer(
     runtime: &SharedRuntime,
-    apply: crate::TrackViewUpdateCallback,
+    apply: crate::LibraryViewUpdateCallback,
 ) {
     let weak_runtime = Rc::downgrade(runtime);
     runtime
         .borrow_mut()
-        .set_track_changes_observer(Box::new(move || {
+        .set_library_changes_observer(Box::new(move || {
             let weak_runtime = weak_runtime.clone();
             let apply = apply.clone();
             glib::idle_add_local_once(move || {
                 let Some(runtime) = weak_runtime.upgrade() else {
                     return;
                 };
-                let changes = runtime.borrow_mut().take_track_changes();
+                let changes = runtime.borrow_mut().take_library_changes();
                 if !changes.is_empty() {
-                    apply(&TrackViewUpdate::for_changes(&changes));
+                    apply(&LibraryViewUpdate::for_changes(&changes));
                 }
             });
         }));

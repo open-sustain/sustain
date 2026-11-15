@@ -415,9 +415,7 @@ impl ApplicationRuntime {
 
     pub fn apply_cd_import_result(&mut self, result: CdImportResult) {
         let summary = result.summary;
-        self.library_tracks.extend(result.tracks);
-        self.library_tracks.sort_by_key(|track| track.id);
-        self.rebuild_search_index();
+        self.insert_library_tracks(result.tracks);
         self.refresh_playback_queue_track_ids();
         self.finish_library_task(LibraryTaskKind::CdImport);
         let severity = if summary.failure.is_some() {

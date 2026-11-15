@@ -360,7 +360,7 @@ impl ApplicationRuntime {
             return false;
         };
         self.adopt_library_tracks(tracks);
-        self.playlists = playlists;
+        self.adopt_playlists(playlists);
         self.refresh_playback_queue_track_ids();
         self.request_smart_shuffle_rebuild();
         true

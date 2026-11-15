@@ -368,7 +368,6 @@ impl ApplicationRuntime {
 
         if changed {
             self.refresh_playback_queue_track_ids();
-            self.notify_track_availability_observer();
         }
 
         let severity = if newly_missing > 0 || unresolved > 0 {

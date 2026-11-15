@@ -137,7 +137,7 @@ pub(super) fn sidebar_edit_smart_playlist_callback(
                 {
                     let search_text = current_search_text.borrow().clone();
                     refresh_playlists_view_if_visible(
-                        &runtime.borrow(),
+                        &runtime,
                         &playlists_refresh,
                         selection,
                         &search_text,
@@ -381,7 +381,7 @@ pub(super) fn sidebar_selection_changed_callback(
             true
         } else {
             refresh_playlists_view_if_visible(
-                &runtime.borrow(),
+                &runtime,
                 &playlists_refresh,
                 selection,
                 &search_text,
@@ -406,12 +406,13 @@ fn selection_profile_kind(selection: Option<SidebarSelection>) -> &'static str {
     }
 }
 
+/// Adds tracks dropped on a sidebar playlist to it. A refused addition is
+/// reported by the dispatch; a committed one reaches the views as a
+/// runtime change.
 pub(super) fn sidebar_tracks_drop_callback(
     command_controller: &SharedCommandController,
-    playlist_entries_changed_holder: &PlaylistEntriesChangedHolder,
 ) -> crate::sidebar::SidebarTracksDropCallback {
     let command_controller = command_controller.clone();
-    let playlist_entries_changed_holder = playlist_entries_changed_holder.clone();
 
     Rc::new(move |target, track_ids| {
         let PlaylistItem::Playlist(playlist_id) = target else {
@@ -420,16 +421,9 @@ pub(super) fn sidebar_tracks_drop_callback(
         if track_ids.is_empty() {
             return;
         }
-        let dispatched =
-            command_controller.dispatch_succeeded(ApplicationCommand::AddTracksToPlaylist {
-                playlist_id,
-                track_ids,
-            });
-        if !dispatched {
-            return;
-        }
-        if let Some(callback) = playlist_entries_changed_holder.borrow().as_ref() {
-            callback(&PlaylistEntriesChange::Added(playlist_id));
-        }
+        let _result = command_controller.dispatch(ApplicationCommand::AddTracksToPlaylist {
+            playlist_id,
+            track_ids,
+        });
     })
 }
