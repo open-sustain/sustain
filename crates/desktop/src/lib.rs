@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-pub use sustain_app_runtime::{PlaybackState, TrackId};
+pub use sustain_app_runtime::{PlayableId, PlaybackState, TrackId};
 
 mod metadata;
 mod mpris;

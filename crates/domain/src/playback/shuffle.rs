@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use crate::TrackId;
+use super::PlayableId;
 
-pub(super) fn shuffled_track_ids(track_ids: &[TrackId], shuffle_seed: u64) -> Vec<TrackId> {
+pub(super) fn shuffled_track_ids(track_ids: &[PlayableId], shuffle_seed: u64) -> Vec<PlayableId> {
     let mut shuffled = track_ids.to_vec();
     let mut random = SplitMix64::new(shuffle_seed);
 

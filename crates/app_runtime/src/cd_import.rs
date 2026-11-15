@@ -192,6 +192,7 @@ impl ApplicationRuntime {
             // No drives: clear synchronously so an ejected/removed drive
             // disappears without waiting on a worker.
             self.optical_discs.clear();
+            self.release_ejected_disc();
             return;
         }
         let sink = self.optical_discovery_sink.clone();
@@ -215,6 +216,7 @@ impl ApplicationRuntime {
             return false;
         }
         self.optical_discs = result.discs;
+        self.release_ejected_disc();
         true
     }
 
@@ -357,7 +359,7 @@ impl ApplicationRuntime {
             .probe(&snapshot.device_path)
             .is_some_and(|current| current.is_same_disc(&expected_identity));
         if !still_present {
-            return Err(ApplicationRuntimeError::CdImportDiscChanged);
+            return Err(ApplicationRuntimeError::CdDiscChanged);
         }
 
         let mut selected = request.selected_tracks;
@@ -366,14 +368,14 @@ impl ApplicationRuntime {
         let plans: Vec<CdTrackPlan> = selected
             .into_iter()
             .filter(|number| snapshot.track(*number).is_some())
-            .map(|number| {
-                let mut metadata =
-                    plan::build_track_metadata(&snapshot, request.release.as_ref(), number);
-                apply_track_override(&mut metadata, request.overrides.get(&number));
-                CdTrackPlan {
-                    track_number: number,
-                    metadata,
-                }
+            .map(|number| CdTrackPlan {
+                track_number: number,
+                metadata: disc_track_metadata(
+                    &snapshot,
+                    request.release.as_ref(),
+                    request.overrides.get(&number),
+                    number,
+                ),
             })
             .collect();
         if plans.is_empty() {
@@ -387,6 +389,8 @@ impl ApplicationRuntime {
             notifications::cd_import_running_text(),
             Some(cancellation_requested.clone()),
         )?;
+        // The drive serves one reader: the rip takes it from playback.
+        self.release_disc_drive(expected_identity.device_path());
         self.ripping_disc = Some(expected_identity.clone());
 
         Ok(CdImportTask {
@@ -469,6 +473,19 @@ impl ApplicationRuntime {
 /// Overlay a track's user-typed title/artist onto its looked-up metadata.
 /// A blank (or whitespace-only) override field is ignored, leaving the
 /// looked-up / generated value in place.
+/// The metadata of physical track `number`, as a rip tags it: the chosen
+/// release's (or the fallback identity's), under the user's overrides.
+pub(crate) fn disc_track_metadata(
+    snapshot: &TocSnapshot,
+    release: Option<&DiscRelease>,
+    track_override: Option<&CdTrackOverride>,
+    number: u32,
+) -> TrackMetadata {
+    let mut metadata = plan::build_track_metadata(snapshot, release, number);
+    apply_track_override(&mut metadata, track_override);
+    metadata
+}
+
 fn apply_track_override(metadata: &mut TrackMetadata, track_override: Option<&CdTrackOverride>) {
     let Some(track_override) = track_override else {
         return;

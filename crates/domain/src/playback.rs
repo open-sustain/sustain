@@ -6,17 +6,19 @@ use std::time::Duration;
 use crate::TrackId;
 
 mod options;
+mod playable;
 mod queue;
 mod shuffle;
 mod source;
 mod volume;
 
 pub use options::{PlaybackOptions, RepeatMode, ShuffleMode};
+pub use playable::PlayableId;
 pub use queue::{
     LazyPickContext, PlaybackQueue, PlaybackQueueEntry, PlaybackQueueEntryKind,
     PlaybackQueueRequest, PlaybackQueueSource,
 };
-pub use source::TrackPlaybackSource;
+pub use source::{PlaybackLocation, PlaybackSource};
 pub use volume::VolumePercent;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,7 +39,7 @@ pub enum PlaybackCommand {
     /// the existing curated region and source continuation remain intact.
     /// No-op when `track_id` is no longer upcoming by the time the command is
     /// handled.
-    PlayQueueTrack(TrackId),
+    PlayQueueTrack(PlayableId),
     PlayPreviousTrack,
     /// Auto-advance to the next track. Used by the GStreamer EOS callback
     /// when the current track ends naturally. NOT a user-initiated skip;
@@ -59,13 +61,13 @@ pub enum PlaybackCommand {
     /// Remove a single curated Up Next track without disturbing source
     /// continuation or the shuffle seed. Dispatched by the queue popover's
     /// per-track evict control. No-op for read-only continuation rows.
-    RemoveFromQueue(TrackId),
+    RemoveFromQueue(PlayableId),
     /// Reorder one curated Up Next track immediately before or after
     /// another. Dispatched by the queue popover's drag-to-reorder. No-op
     /// for read-only continuation rows.
     ReorderQueue {
-        track_id: TrackId,
-        target_track_id: TrackId,
+        track_id: PlayableId,
+        target_track_id: PlayableId,
         place_after: bool,
     },
     /// Re-derive the play queue from `request` while keeping the currently
@@ -107,14 +109,26 @@ pub enum PlaybackState {
     #[default]
     Stopped,
     Loading {
-        track_id: TrackId,
+        track_id: PlayableId,
     },
     Playing {
-        track_id: TrackId,
+        track_id: PlayableId,
         position: Duration,
     },
     Paused {
-        track_id: TrackId,
+        track_id: PlayableId,
         position: Duration,
     },
+}
+
+impl PlaybackState {
+    /// What is loading, playing or paused, if anything.
+    pub fn playable(&self) -> Option<PlayableId> {
+        match self {
+            Self::Loading { track_id }
+            | Self::Playing { track_id, .. }
+            | Self::Paused { track_id, .. } => Some(*track_id),
+            Self::Stopped => None,
+        }
+    }
 }

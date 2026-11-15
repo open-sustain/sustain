@@ -292,12 +292,14 @@ pub(crate) fn build_main_window(
     let initial_volume = runtime.borrow().settings().playback.volume;
     let titlebar = build_titlebar(now_playing.widget(), initial_volume);
     titlebar.set_search_text(&initial_search_text);
+    let cd_import_panel_holder: Rc<RefCell<Option<CdImportPanel>>> = Rc::new(RefCell::new(None));
     let playback_changed = playback_changed_callback(
         &runtime,
         &now_playing,
         &titlebar,
         songs_table_holder.clone(),
         albums_view_holder.clone(),
+        cd_import_panel_holder.clone(),
         playlists_table_holder.clone(),
         queue_view_holder.clone(),
         mpris_service.clone(),
@@ -510,6 +512,13 @@ pub(crate) fn build_main_window(
 
     let device_panel = DeviceSyncPanel::new(runtime.clone(), command_controller.clone());
     let cd_import_panel = CdImportPanel::new(runtime.clone());
+    cd_import_panel_holder.replace(Some(cd_import_panel.clone()));
+    install_audio_cd_playback(
+        &cd_import_panel,
+        &runtime,
+        &command_controller,
+        &playback_changed,
+    );
     let statistics_view = StatisticsView::new(runtime.clone());
     let content_stack = ContentStack::new(
         &songs_drop_overlay,
@@ -532,6 +541,7 @@ pub(crate) fn build_main_window(
         mtp_discovery_rx,
         optical_discovery_rx,
         cd_lookup_rx,
+        playback_changed: playback_changed.clone(),
     });
     // The playlists table is built empty. It only needs to be populated
     // when the user actually opens the Playlists view; rebuilding it on
@@ -558,6 +568,7 @@ pub(crate) fn build_main_window(
         duplicates_view: duplicates_view.clone(),
         sidebar: sidebar.clone(),
         current_search_text: current_search_text.clone(),
+        cd_import_panel: cd_import_panel.clone(),
     };
     install_playlists_header_playback(
         &playlists_header,
@@ -766,7 +777,7 @@ pub(crate) fn build_main_window(
     sidebar.set_analysis_enabled_query(sidebar_analysis_enabled_query(&runtime));
     sidebar.set_online_busy_query(sidebar_online_busy_query(&runtime));
     let scan_requested = library_scan_requested_callback(&runtime);
-    install_cd_import_requested(&cd_import_panel, &sidebar, &runtime);
+    install_cd_import_requested(&cd_import_panel, &sidebar, &runtime, &playback_changed);
     let import_requested = library_import_requested_callback(&runtime, window.upcast_ref());
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
     // Re-applies the Views toggles to the live UI the instant they
@@ -1038,6 +1049,8 @@ struct DevicesSectionContext<'a> {
     mtp_discovery_rx: MtpDiscoveryResultReceiver,
     optical_discovery_rx: OpticalDiscoveryResultReceiver,
     cd_lookup_rx: CdLookupEventReceiver,
+    /// Losing a disc ends its playback.
+    playback_changed: PlaybackChangedCallback,
 }
 
 /// The current DEVICES entries: removable sync targets followed by inserted
@@ -1081,6 +1094,7 @@ fn install_devices_section(context: DevicesSectionContext<'_>) {
         mtp_discovery_rx,
         optical_discovery_rx,
         cd_lookup_rx,
+        playback_changed,
     } = context;
 
     {
@@ -1117,14 +1131,16 @@ fn install_devices_section(context: DevicesSectionContext<'_>) {
     }
     {
         let runtime = runtime.clone();
+        let playback_changed = playback_changed.clone();
         sidebar.set_cd_eject_callback(Rc::new(move |snapshot: TocSnapshot| {
-            eject_optical_disc(&snapshot.device_path, &runtime);
+            eject_optical_disc(&snapshot.device_path, &runtime, &playback_changed);
         }));
     }
     {
         let runtime = runtime.clone();
+        let playback_changed = playback_changed.clone();
         cd_import_panel.set_eject_requested_callback(Rc::new(move |snapshot: TocSnapshot| {
-            eject_optical_disc(&snapshot.device_path, &runtime);
+            eject_optical_disc(&snapshot.device_path, &runtime, &playback_changed);
         }));
     }
 
@@ -1171,6 +1187,8 @@ fn install_devices_section(context: DevicesSectionContext<'_>) {
             if shown_device_gone && on_device_page {
                 sidebar.restore_persistent_selection();
             }
+            // A disc that left its drive took its playback with it.
+            playback_changed();
         })
     };
     // A full refresh kicks the asynchronous Android/MTP and optical-disc
@@ -1286,7 +1304,15 @@ fn install_devices_section(context: DevicesSectionContext<'_>) {
 /// The removal propagates back through the volume monitor, which refreshes
 /// the DEVICES section and — if the CD page is showing this disc — leaves it.
 /// A failed eject is reported through the notification lane.
-fn eject_optical_disc(device_path: &std::path::Path, runtime: &SharedRuntime) {
+fn eject_optical_disc(
+    device_path: &std::path::Path,
+    runtime: &SharedRuntime,
+    playback_changed: &PlaybackChangedCallback,
+) {
+    // Free the drive before asking it to eject: a disc being played keeps
+    // it open.
+    runtime.borrow_mut().release_disc_drive(device_path);
+    playback_changed();
     let Some(device) = device_path.to_str() else {
         return;
     };
@@ -1389,15 +1415,51 @@ enum CdImportWorkerEvent {
 /// Wire the CD page's `Import CD` button to the runtime's prepare /
 /// background-worker / apply path, mirroring library import: prepare claims
 /// the library task slot on the main thread, the rip runs on a worker, and its
+/// Wire the CD page's playback: a double-clicked track plays the disc from
+/// it, and a renamed disc renames the disc being played.
+fn install_audio_cd_playback(
+    cd_import_panel: &CdImportPanel,
+    runtime: &SharedRuntime,
+    command_controller: &SharedCommandController,
+    playback_changed: &PlaybackChangedCallback,
+) {
+    {
+        let runtime = runtime.clone();
+        let command_controller = command_controller.clone();
+        let playback_changed = playback_changed.clone();
+        cd_import_panel.set_play_requested_callback(Rc::new(
+            move |disc: sustain_app_runtime::AudioCdDescription, track_number: u32| {
+                let played = runtime.borrow_mut().play_audio_cd(disc, track_number);
+                if let Err(error) = played {
+                    command_controller.report_command_error(&error);
+                }
+                playback_changed();
+            },
+        ));
+    }
+    let runtime = runtime.clone();
+    let playback_changed = playback_changed.clone();
+    cd_import_panel.set_described_callback(Rc::new(
+        move |disc: sustain_app_runtime::AudioCdDescription| {
+            let renamed = runtime.borrow_mut().redescribe_playing_disc(&disc);
+            if renamed {
+                playback_changed();
+            }
+        },
+    ));
+}
+
 /// progress/outcome are applied back on the GTK loop.
 fn install_cd_import_requested(
     cd_import_panel: &CdImportPanel,
     sidebar: &PlaylistSidebar,
     runtime: &SharedRuntime,
+    playback_changed: &PlaybackChangedCallback,
 ) {
     let runtime = runtime.clone();
     let panel = cd_import_panel.clone();
     let sidebar = sidebar.clone();
+    let playback_changed = playback_changed.clone();
     let callback: CdImportRequestedCallback = Rc::new(move |request: CdImportRequest| {
         let task = {
             let mut runtime = runtime.borrow_mut();
@@ -1410,9 +1472,11 @@ fn install_cd_import_requested(
             }
         };
         // The slot is claimed; reflect it on the button and the sidebar's
-        // disc row immediately.
+        // disc row immediately. The rip took the drive from a disc being
+        // played.
         panel.refresh_import_sensitivity();
         sidebar.refresh_transfer_badges();
+        playback_changed();
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {

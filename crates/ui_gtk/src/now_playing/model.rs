@@ -3,12 +3,17 @@
 
 use std::time::Duration;
 
-use sustain_app_runtime::{PlaybackState, Track, TrackMetadata};
+use sustain_app_runtime::{NowPlayingItem, PlaybackState, TrackMetadata};
 
 use crate::util::non_empty_text;
 
-pub(super) fn track_title(track: &Track) -> String {
-    crate::util::display_title(track)
+/// The title Now Playing shows: a library track's display title, or a
+/// disc track's title as a rip would tag it.
+pub(super) fn item_title(item: &NowPlayingItem) -> String {
+    match item {
+        NowPlayingItem::Library(track) => crate::util::display_title(track),
+        NowPlayingItem::AudioCd(track) => track.metadata.title.clone().unwrap_or_default(),
+    }
 }
 
 pub(super) fn artist_album_text(metadata: &TrackMetadata) -> String {

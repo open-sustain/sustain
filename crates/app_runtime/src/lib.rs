@@ -22,22 +22,23 @@ pub use sustain_domain::{
     EncodingSettings, FieldChange, FilesPerFolderCap, GenreDistribution, GenrePlayCount,
     GenreRating, GenreShare, LazyPickContext, LibraryManagementMode, LibrarySettings,
     LibraryStatistics, MetadataChange, MonotonicClock, MusicalKey, OtherGenres, PlayStatistics,
-    PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueEntry, PlaybackQueueEntryKind,
-    PlaybackQueueRequest, PlaybackQueueSource, PlaybackSession, PlaybackSettings, PlaybackState,
-    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem,
-    PlaylistTree, PlaylistTreeNode, QualityBucket, QualityDistribution, QualityRange, Rating,
-    RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule,
-    SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection,
-    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
-    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
-    SmartShuffleEntropy, SyncDevice, SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock,
-    Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
-    TrackColumnSort, TrackContentHash, TrackFields, TrackId, TrackLocation, TrackMetadata,
-    TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection, UiWindowSize,
-    UserSettings, VerifiedDuplicateMerge, VolumePercent, WaveformSegment, WaveformSegments,
-    YearCount, compare_optional_text, compute_library_statistics, default_duplicate_merge_choices,
-    duplicate_audio_quality, effective_sort_key, highest_quality_duplicate_artwork,
-    matching_tracks, normalize_sort_text, track_matches_rule_set,
+    PlayableId, PlaybackCommand, PlaybackLocation, PlaybackOptions, PlaybackQueue,
+    PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
+    PlaybackSession, PlaybackSettings, PlaybackSource, PlaybackState, Playlist, PlaylistEntry,
+    PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, PlaylistTree, PlaylistTreeNode,
+    QualityBucket, QualityDistribution, QualityRange, Rating, RepeatMode, ShuffleMode,
+    SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
+    SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
+    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice,
+    SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock, Track, TrackAvailability,
+    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort, TrackContentHash,
+    TrackFields, TrackId, TrackLocation, TrackMetadata, TrackRelativePath, UiSettings,
+    UiSidebarSelection, UiWindowSize, UserSettings, VerifiedDuplicateMerge, VolumePercent,
+    WaveformSegment, WaveformSegments, YearCount, compare_optional_text,
+    compute_library_statistics, default_duplicate_merge_choices, duplicate_audio_quality,
+    effective_sort_key, highest_quality_duplicate_artwork, matching_tracks, normalize_sort_text,
+    track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities, StoreError};
 pub use sustain_metadata::{
@@ -84,6 +85,7 @@ pub(crate) fn track_artist_name(track: &Track) -> Option<&str> {
 }
 
 pub(crate) mod artwork_fetcher;
+mod audio_cd_playback;
 mod cd_import;
 mod commands;
 mod device_plan_scheduler;
@@ -176,13 +178,15 @@ pub enum ApplicationRuntimeError {
     /// CD ripping was requested but no optical probe / encoder backend is
     /// installed (e.g. a build without the `optical` feature).
     CdBackendUnavailable,
-    /// The disc in the drive no longer matches the one the import was
-    /// prepared against — the user swapped or ejected it.
-    CdImportDiscChanged,
+    /// The disc in the drive no longer matches the one the CD page shows —
+    /// the user swapped or ejected it.
+    CdDiscChanged,
     /// A CD import could not start or could not complete a track.
     CdImportFailed,
     /// A CD import was requested with an empty track selection.
     CdImportNoTracksSelected,
+    /// The disc cannot be played: its drive is ripping it.
+    AudioCdDriveBusy,
     DuplicateConsolidationFailed,
     DuplicateConsolidationSourceMissing,
     LibraryPathUnavailable,
@@ -221,6 +225,7 @@ pub enum ApplicationRuntimeError {
 
 pub use youtube_audio_downloader::YoutubeAudioDownloadResult;
 
+pub use audio_cd_playback::{AudioCdDescription, AudioCdTrack};
 pub use cd_import::{
     CdImportProgress, CdImportRequest, CdImportResult, CdImportSummary, CdImportTask,
     CdLookupEvent, CdTrackOverride, OpticalDiscoveryResult, run_cd_import_task,
@@ -293,9 +298,44 @@ impl BackgroundTaskStatus {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct NowPlaying {
-    pub track: Option<Track>,
+    /// What is loading, playing or paused, if anything.
+    pub item: Option<NowPlayingItem>,
     pub state: PlaybackState,
     pub options: PlaybackOptions,
+}
+
+/// The item Now Playing shows: a library track, or a track of the disc
+/// being played.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NowPlayingItem {
+    Library(Track),
+    AudioCd(AudioCdTrack),
+}
+
+impl NowPlayingItem {
+    pub fn playable(&self) -> PlayableId {
+        match self {
+            Self::Library(track) => PlayableId::Library(track.id),
+            Self::AudioCd(track) => PlayableId::AudioCdTrack {
+                number: track.number,
+            },
+        }
+    }
+
+    pub fn metadata(&self) -> &TrackMetadata {
+        match self {
+            Self::Library(track) => &track.metadata,
+            Self::AudioCd(track) => &track.metadata,
+        }
+    }
+
+    /// The library track, when the item is one.
+    pub fn library_track(&self) -> Option<&Track> {
+        match self {
+            Self::Library(track) => Some(track),
+            Self::AudioCd(_) => None,
+        }
+    }
 }
 
 pub struct LibraryScanTask {
@@ -513,6 +553,7 @@ pub struct ApplicationRuntime {
     /// The disc being ripped, from the moment the rip claims the library
     /// task slot until its outcome is applied.
     ripping_disc: Option<DiscIdentity>,
+    playing_disc: Option<audio_cd_playback::PlayingDisc>,
     cd_lookup_sink: async_channel::Sender<cd_import::CdLookupEvent>,
     cd_lookup_source: async_channel::Receiver<cd_import::CdLookupEvent>,
     /// In-memory copy of the prepared Smart Shuffle index (genre IDF
@@ -763,6 +804,7 @@ impl ApplicationRuntime {
             optical_discovery_source,
             cd_metadata_generation: 0,
             ripping_disc: None,
+            playing_disc: None,
             cd_lookup_sink,
             cd_lookup_source,
             smart_shuffle_index: None,
@@ -2261,11 +2303,11 @@ impl ApplicationRuntime {
         self.playback_queue.options()
     }
 
-    pub fn playback_queue_current_track_id(&self) -> Option<TrackId> {
+    pub fn playback_queue_current_track_id(&self) -> Option<PlayableId> {
         self.playback_queue.current_track_id()
     }
 
-    pub fn playback_queue_next_track_id(&self) -> Option<TrackId> {
+    pub fn playback_queue_next_track_id(&self) -> Option<PlayableId> {
         self.playback_queue.next_track_id()
     }
 
@@ -2286,12 +2328,19 @@ impl ApplicationRuntime {
 
     pub fn now_playing(&self) -> NowPlaying {
         let state = self.playback_state();
-        let track = playback::playback_track_id(&state)
-            .and_then(|track_id| self.library_track(track_id))
-            .cloned();
+        let item = state.playable().and_then(|playable| match playable {
+            PlayableId::Library(track_id) => self
+                .library_track(track_id)
+                .cloned()
+                .map(NowPlayingItem::Library),
+            PlayableId::AudioCdTrack { number } => self
+                .audio_cd_track(number)
+                .cloned()
+                .map(NowPlayingItem::AudioCd),
+        });
 
         NowPlaying {
-            track,
+            item,
             state,
             options: self.playback_queue.options(),
         }

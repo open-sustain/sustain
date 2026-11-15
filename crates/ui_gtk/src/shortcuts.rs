@@ -557,8 +557,9 @@ fn jump_to_current_track(
     let Some(track_id) = runtime
         .borrow()
         .now_playing()
-        .track
+        .item
         .as_ref()
+        .and_then(sustain_app_runtime::NowPlayingItem::library_track)
         .map(|track| track.id)
     else {
         return;

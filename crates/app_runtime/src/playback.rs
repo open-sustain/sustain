@@ -2,12 +2,12 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use sustain_domain::{
-    PlaybackCommand, PlaybackQueue, PlaybackQueueRequest, PlaybackQueueSource, PlaybackSession,
-    PlaybackState, Track, TrackAvailability, TrackId, TrackPlaybackSource,
+    PlayableId, PlaybackCommand, PlaybackQueue, PlaybackQueueRequest, PlaybackQueueSource,
+    PlaybackSession, PlaybackSource, PlaybackState, Track, TrackAvailability, TrackId,
 };
 use sustain_playback::{PlaybackBackendError, PlaybackService};
 use sustain_smart_shuffle::{PickContext, format_debug, pick_next_track};
@@ -51,6 +51,7 @@ impl ApplicationRuntime {
                 let new_queue = self.build_playback_queue(track_id, queue)?;
                 self.play_track(track_id)?;
                 self.playback_queue = new_queue;
+                self.playing_disc = None;
                 Ok(())
             }
             PlaybackCommand::PlayQueueTrack(track_id) => self.play_queue_track(track_id),
@@ -58,11 +59,12 @@ impl ApplicationRuntime {
             PlaybackCommand::PlayNextTrack => self.play_next_track(),
             PlaybackCommand::SkipCurrentTrack => self.skip_current_track(),
             PlaybackCommand::EnqueueNext(track_ids) => {
-                self.playback_queue.enqueue_after_current(&track_ids);
+                self.playback_queue
+                    .enqueue_after_current(&playables(&track_ids));
                 Ok(())
             }
             PlaybackCommand::EnqueueLast(track_ids) => {
-                self.playback_queue.enqueue_at_end(&track_ids);
+                self.playback_queue.enqueue_at_end(&playables(&track_ids));
                 Ok(())
             }
             PlaybackCommand::RemoveFromQueue(track_id) => {
@@ -85,7 +87,7 @@ impl ApplicationRuntime {
             PlaybackCommand::ResortQueue(request) => {
                 if self.playback_queue.source() == &request.source {
                     self.playback_queue
-                        .reorder_source(&request.ordered_track_ids);
+                        .reorder_source(&playables(&request.ordered_track_ids));
                 }
                 Ok(())
             }
@@ -105,7 +107,7 @@ impl ApplicationRuntime {
         }
     }
 
-    fn playback_service(&self) -> ApplicationRuntimeResult<&dyn PlaybackService> {
+    pub(crate) fn playback_service(&self) -> ApplicationRuntimeResult<&dyn PlaybackService> {
         self.playback_service
             .as_deref()
             .ok_or(ApplicationRuntimeError::PlaybackServiceUnavailable)
@@ -146,13 +148,19 @@ impl ApplicationRuntime {
     }
 
     fn playback_backend_error_text(&self, error: &PlaybackBackendError) -> String {
-        let Some(track_id) = error.track_id else {
+        let Some(playable) = error.track_id else {
             return "Playback failed. Skipping to the next track.".to_owned();
         };
-        let track_name = self
-            .library_track(track_id)
-            .and_then(track_display_name)
-            .unwrap_or_else(|| format!("#{}", track_id.get()));
+        let track_name = match playable {
+            PlayableId::Library(track_id) => self
+                .library_track(track_id)
+                .and_then(track_display_name)
+                .unwrap_or_else(|| format!("#{}", track_id.get())),
+            PlayableId::AudioCdTrack { number } => self
+                .audio_cd_track(number)
+                .and_then(|track| track.metadata.title.clone())
+                .unwrap_or_else(|| format!("CD track {number}")),
+        };
 
         format!("Playback failed for {track_name}. Skipping to the next track.")
     }
@@ -163,13 +171,15 @@ impl ApplicationRuntime {
             return;
         }
 
-        if let Some(track_id) = error.track_id {
-            eprintln!(
+        match error.track_id {
+            Some(PlayableId::Library(track_id)) => eprintln!(
                 "Sustain: playback backend error for track {}: {detail}",
                 track_id.get()
-            );
-        } else {
-            eprintln!("Sustain: playback backend error: {detail}");
+            ),
+            Some(PlayableId::AudioCdTrack { number }) => {
+                eprintln!("Sustain: playback backend error for CD track {number}: {detail}");
+            }
+            None => eprintln!("Sustain: playback backend error: {detail}"),
         }
     }
 
@@ -223,12 +233,12 @@ impl ApplicationRuntime {
         // playable" precondition for the whole command — same role
         // `library_playback_queue` played before. If it fails we never get
         // to play_track.
-        let _source = self.track_playback_source(track_id)?;
+        let _path = self.library_track_path(track_id)?;
         let (source, ordered_track_ids) = self.resolve_playback_queue_request(request);
         Ok(PlaybackQueue::new(
             source,
             ordered_track_ids,
-            track_id,
+            track_id.into(),
             self.playback_queue.options(),
             playback_shuffle_seed(),
         ))
@@ -237,7 +247,7 @@ impl ApplicationRuntime {
     fn resolve_playback_queue_request(
         &self,
         request: PlaybackQueueRequest,
-    ) -> (PlaybackQueueSource, Vec<TrackId>) {
+    ) -> (PlaybackQueueSource, Vec<PlayableId>) {
         // Membership and playability are checked per id against the
         // id-sorted in-memory library (a binary search each) instead of
         // materializing a whole-library id set for every queue build.
@@ -245,6 +255,7 @@ impl ApplicationRuntime {
             .ordered_track_ids
             .into_iter()
             .filter(|id| self.track_is_playable(*id))
+            .map(PlayableId::Library)
             .collect();
         (request.source, ordered_track_ids)
     }
@@ -283,13 +294,22 @@ impl ApplicationRuntime {
         {
             return;
         }
-        let available_track_ids = self.playable_track_ids();
+        let available_track_ids = playables(&self.playable_track_ids());
         self.playback_queue.replace_source(
             source,
             ordered_track_ids,
             &available_track_ids,
             playback_shuffle_seed(),
         );
+    }
+
+    /// Play `playable`: a library track, or a track of the disc being
+    /// played.
+    pub(super) fn play_playable(&mut self, playable: PlayableId) -> ApplicationRuntimeResult<()> {
+        match playable {
+            PlayableId::Library(track_id) => self.play_track(track_id),
+            PlayableId::AudioCdTrack { number } => self.play_audio_cd_track(number),
+        }
     }
 
     fn play_track(&mut self, track_id: TrackId) -> ApplicationRuntimeResult<()> {
@@ -301,7 +321,7 @@ impl ApplicationRuntime {
         track_id: TrackId,
         probe: impl Fn(&Path) -> FilePresence,
     ) -> ApplicationRuntimeResult<()> {
-        let source = self.track_playback_source(track_id)?;
+        let path = self.library_track_path(track_id)?;
         // Lazy availability reconciliation: every play attempt
         // re-stats the resolved path and brings the persisted
         // `is_missing` flag into agreement with what is actually on
@@ -315,7 +335,7 @@ impl ApplicationRuntime {
             .library_track(track_id)
             .map(|track| track.location.is_missing())
             .unwrap_or(false);
-        match (probe(&source.path), recorded_missing) {
+        match (probe(&path), recorded_missing) {
             (FilePresence::Absent, true) => {
                 return Err(ApplicationRuntimeError::TrackUnavailable);
             }
@@ -331,7 +351,7 @@ impl ApplicationRuntime {
         }
         self.settle_current_playing_session();
         self.playback_service()?
-            .play_track(source)
+            .play_track(PlaybackSource::file(track_id.into(), path))
             .map_err(|_| ApplicationRuntimeError::PlaybackFailed)?;
         // Every new playback starts a fresh session: any unfinished
         // listening on the previous track ends here without registering
@@ -356,17 +376,12 @@ impl ApplicationRuntime {
     /// the runtime cannot even form a candidate path (track id not
     /// in the library, or no library root configured), not that the
     /// file is necessarily gone.
-    fn track_playback_source(
-        &self,
-        track_id: TrackId,
-    ) -> ApplicationRuntimeResult<TrackPlaybackSource> {
+    fn library_track_path(&self, track_id: TrackId) -> ApplicationRuntimeResult<PathBuf> {
         let track = self
             .library_track(track_id)
             .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
-        let path = self
-            .absolute_track_path(track)
-            .ok_or(ApplicationRuntimeError::TrackUnavailable)?;
-        Ok(TrackPlaybackSource::new(track_id, path))
+        self.absolute_track_path(track)
+            .ok_or(ApplicationRuntimeError::TrackUnavailable)
     }
 
     /// Flip a track's persisted availability to `Missing` after a live
@@ -420,11 +435,11 @@ impl ApplicationRuntime {
     /// and activation; treating that case as a no-op keeps the UI command
     /// race-free without letting this path become an arbitrary track
     /// activation surface.
-    fn play_queue_track(&mut self, track_id: TrackId) -> ApplicationRuntimeResult<()> {
+    fn play_queue_track(&mut self, track_id: PlayableId) -> ApplicationRuntimeResult<()> {
         if !self.playback_queue.contains_upcoming_track(track_id) {
             return Ok(());
         }
-        self.play_track(track_id)?;
+        self.play_playable(track_id)?;
         let moved = self.playback_queue.move_to_track(track_id);
         debug_assert!(
             moved,
@@ -438,7 +453,7 @@ impl ApplicationRuntime {
     }
 
     /// The track the queue plays after the current one.
-    fn next_track_candidate(&mut self) -> Option<TrackId> {
+    fn next_track_candidate(&mut self) -> Option<PlayableId> {
         // Smart Shuffle path: the lazy queue hasn't decided a next
         // track yet (the picker is consulted on demand). Resolve a
         // pick first and append it to the queue's history, so it goes
@@ -462,14 +477,14 @@ impl ApplicationRuntime {
     /// reported as it is.
     fn play_adjacent_playable_track(
         &mut self,
-        neighbour: impl Fn(&mut Self) -> Option<TrackId>,
+        neighbour: impl Fn(&mut Self) -> Option<PlayableId>,
     ) -> ApplicationRuntimeResult<()> {
         let mut found_missing = None;
         loop {
             let candidate = neighbour(self);
             let result = self.play_adjacent_track(candidate);
             let is_missing = result == Err(ApplicationRuntimeError::TrackUnavailable)
-                && candidate.is_some_and(|track_id| !self.track_is_playable(track_id));
+                && candidate.is_some_and(|track_id| !self.playable_is_available(track_id));
             if !is_missing || candidate == found_missing {
                 return result;
             }
@@ -482,19 +497,22 @@ impl ApplicationRuntime {
     /// no candidates remain or the queue is not in lazy layout.
     /// Emits the `SUSTAIN_LOG_SMART_SHUFFLE=1` trace line on stderr
     /// when the env var is set.
-    fn pick_smart_shuffle_next(&mut self) -> Option<TrackId> {
+    fn pick_smart_shuffle_next(&mut self) -> Option<PlayableId> {
         let context = self.playback_queue.lazy_pick_context()?;
 
         // The candidate pool is the whole library, so each id resolves to
         // its live `&Track` by the keyed lookup rather than a linear scan.
-        let seed = self.library_track(context.seed_track_id)?;
+        // Smart Shuffle only runs over library sources, so every playable
+        // here is a library track.
+        let seed = self.library_track(context.seed_track_id.library_track_id()?)?;
         // Candidate pool: every library track, minus missing files so
         // the picker never proposes something we cannot play. The
         // picker itself drops the seed and applies the guards.
         let candidate_refs: Vec<&Track> = context
             .candidate_pool
             .iter()
-            .filter_map(|track_id| self.library_track(*track_id))
+            .filter_map(|playable| playable.library_track_id())
+            .filter_map(|track_id| self.library_track(track_id))
             .filter(|track| !track.location.is_missing())
             .collect();
         // Played history, most-recent-last, resolved to tracks for the
@@ -502,7 +520,8 @@ impl ApplicationRuntime {
         let history_refs: Vec<&Track> = context
             .played_history
             .iter()
-            .filter_map(|track_id| self.library_track(*track_id))
+            .filter_map(|playable| playable.library_track_id())
+            .filter_map(|track_id| self.library_track(track_id))
             .collect();
 
         let pick_context = PickContext {
@@ -523,11 +542,15 @@ impl ApplicationRuntime {
             eprintln!("{}", format_debug(&debug, label));
         }
 
-        self.playback_queue.lazy_append_pick(picked.track_id);
-        Some(picked.track_id)
+        let picked = PlayableId::Library(picked.track_id);
+        self.playback_queue.lazy_append_pick(picked);
+        Some(picked)
     }
 
-    fn play_adjacent_track(&mut self, track_id: Option<TrackId>) -> ApplicationRuntimeResult<()> {
+    fn play_adjacent_track(
+        &mut self,
+        track_id: Option<PlayableId>,
+    ) -> ApplicationRuntimeResult<()> {
         let Some(track_id) = track_id else {
             // End of queue (or no neighbour in the current direction). Stop
             // the backend so its state stops reporting the previous track as
@@ -541,7 +564,7 @@ impl ApplicationRuntime {
             return Ok(());
         };
 
-        self.play_track(track_id)?;
+        self.play_playable(track_id)?;
         let _moved = self.playback_queue.move_to_track(track_id);
         Ok(())
     }
@@ -582,11 +605,15 @@ impl ApplicationRuntime {
         let state = self.playback_state();
         match state {
             PlaybackState::Playing { track_id, .. } => {
-                self.ensure_session_for_track(track_id, now);
-                if let Some(session) = self.playback_session.as_mut() {
-                    session.account_playing_until(now);
+                // Listening statistics belong to library tracks: a disc
+                // track plays without a session.
+                if let Some(track_id) = track_id.library_track_id() {
+                    self.ensure_session_for_track(track_id, now);
+                    if let Some(session) = self.playback_session.as_mut() {
+                        session.account_playing_until(now);
+                    }
+                    self.enqueue_play_registration_if_needed();
                 }
-                self.enqueue_play_registration_if_needed();
             }
             PlaybackState::Paused { .. }
             | PlaybackState::Stopped
@@ -624,7 +651,7 @@ impl ApplicationRuntime {
         self.playback_session = Some(session);
     }
 
-    fn settle_current_playing_session(&mut self) {
+    pub(crate) fn settle_current_playing_session(&mut self) {
         if matches!(self.playback_state(), PlaybackState::Playing { .. }) {
             let now = self.monotonic_clock.now();
             if let Some(session) = self.playback_session.as_mut() {
@@ -762,6 +789,15 @@ impl ApplicationRuntime {
             .is_some_and(|track| !track.location.is_missing())
     }
 
+    /// Whether `playable` can be played: a library track that is not
+    /// missing, or a track of the disc being played.
+    fn playable_is_available(&self, playable: PlayableId) -> bool {
+        match playable {
+            PlayableId::Library(track_id) => self.track_is_playable(track_id),
+            PlayableId::AudioCdTrack { number } => self.audio_cd_track(number).is_some(),
+        }
+    }
+
     /// Bring the queue up to date with the library after a library-level
     /// mutation (scan, library move/import, settings update, track
     /// removal, a file going missing or coming back, a playlist edit)
@@ -777,10 +813,10 @@ impl ApplicationRuntime {
     /// the runtime cannot re-derive them without UI context, so they only
     /// shed tracks.
     pub(super) fn refresh_playback_queue_track_ids(&mut self) {
-        let unplayable: HashSet<TrackId> = self
+        let unplayable: HashSet<PlayableId> = self
             .playback_queue
             .track_ids()
-            .filter(|id| !self.track_is_playable(*id))
+            .filter(|id| !self.playable_is_available(*id))
             .collect();
         if !unplayable.is_empty() {
             self.playback_queue.remove_tracks(&unplayable);
@@ -794,8 +830,8 @@ impl ApplicationRuntime {
     /// The playable members of the queue's source that the queue does not
     /// hold yet, in the source's own order: id order for the library,
     /// entry order for a playlist.
-    fn tracks_joining_queue_source(&self) -> Vec<TrackId> {
-        let queued: HashSet<TrackId> = self
+    fn tracks_joining_queue_source(&self) -> Vec<PlayableId> {
+        let queued: HashSet<PlayableId> = self
             .playback_queue
             .ordered_track_ids()
             .iter()
@@ -805,6 +841,7 @@ impl ApplicationRuntime {
             PlaybackQueueSource::Library => self
                 .playable_track_ids()
                 .into_iter()
+                .map(PlayableId::Library)
                 .filter(|id| !queued.contains(id))
                 .collect(),
             PlaybackQueueSource::Playlist(playlist_id) => {
@@ -820,24 +857,23 @@ impl ApplicationRuntime {
                 entries
                     .into_iter()
                     .map(|entry| entry.track_id)
-                    .filter(|id| !queued.contains(id) && self.track_is_playable(*id))
+                    .filter(|id| self.track_is_playable(*id))
+                    .map(PlayableId::Library)
+                    .filter(|id| !queued.contains(id))
                     .collect()
             }
             PlaybackQueueSource::Album
             | PlaybackQueueSource::SmartPlaylist(_)
             | PlaybackQueueSource::SearchResults { .. }
-            | PlaybackQueueSource::Duplicates => Vec::new(),
+            | PlaybackQueueSource::Duplicates
+            | PlaybackQueueSource::AudioCd => Vec::new(),
         }
     }
 }
 
-pub(super) fn playback_track_id(state: &PlaybackState) -> Option<TrackId> {
-    match state {
-        PlaybackState::Loading { track_id }
-        | PlaybackState::Playing { track_id, .. }
-        | PlaybackState::Paused { track_id, .. } => Some(*track_id),
-        PlaybackState::Stopped => None,
-    }
+/// Library track ids as playables.
+fn playables(track_ids: &[TrackId]) -> Vec<PlayableId> {
+    track_ids.iter().copied().map(PlayableId::Library).collect()
 }
 
 pub(super) fn playback_shuffle_seed() -> u64 {

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use sustain_app_runtime::TrackId;
+use sustain_app_runtime::PlayableId;
 
 /// Trimmed snapshot of the track currently being played, used to derive
 /// the MPRIS `Metadata` dictionary. Keeping a dedicated type — rather than
@@ -13,7 +13,7 @@ use sustain_app_runtime::TrackId;
 /// a library store.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct NowPlayingMetadata {
-    pub track_id: Option<TrackId>,
+    pub track_id: Option<PlayableId>,
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,

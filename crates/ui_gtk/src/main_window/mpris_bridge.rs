@@ -10,19 +10,20 @@ use super::*;
 pub(super) fn now_playing_to_mpris_metadata(
     now_playing: &sustain_app_runtime::NowPlaying,
 ) -> sustain_desktop::NowPlayingMetadata {
-    let Some(track) = now_playing.track.as_ref() else {
+    let Some(item) = now_playing.item.as_ref() else {
         return sustain_desktop::NowPlayingMetadata::default();
     };
+    let metadata = item.metadata();
     sustain_desktop::NowPlayingMetadata {
-        track_id: Some(track.id),
-        title: track.metadata.title.clone(),
-        artist: track.metadata.artist.clone(),
-        album: track.metadata.album.clone(),
-        album_artist: track.metadata.album_artist.clone(),
-        genre: track.metadata.genre.clone(),
-        track_number: track.metadata.track_number,
-        disc_number: track.metadata.disc_number,
-        duration: track.metadata.duration,
+        track_id: Some(item.playable()),
+        title: metadata.title.clone(),
+        artist: metadata.artist.clone(),
+        album: metadata.album.clone(),
+        album_artist: metadata.album_artist.clone(),
+        genre: metadata.genre.clone(),
+        track_number: metadata.track_number,
+        disc_number: metadata.disc_number,
+        duration: metadata.duration,
     }
 }
 

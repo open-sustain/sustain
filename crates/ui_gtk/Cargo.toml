@@ -20,5 +20,8 @@ sustain-artwork = { path = "../artwork" }
 sustain-desktop = { path = "../desktop" }
 sustain-profiler = { path = "../profiler" }
 
+[dev-dependencies]
+sustain-playback = { path = "../playback" }
+
 [lints]
 workspace = true

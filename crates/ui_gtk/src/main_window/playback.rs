@@ -15,6 +15,7 @@ pub(super) fn playback_changed_callback(
     titlebar: &Titlebar,
     songs_table_holder: Rc<RefCell<Option<TrackTable>>>,
     albums_view_holder: Rc<RefCell<Option<AlbumsView>>>,
+    cd_import_panel_holder: Rc<RefCell<Option<CdImportPanel>>>,
     playlists_table_holder: Rc<RefCell<Option<TrackTable>>>,
     queue_view_holder: Rc<RefCell<Option<QueueView>>>,
     mpris_service: Option<SharedMprisService>,
@@ -29,7 +30,11 @@ pub(super) fn playback_changed_callback(
         // A track loading/clearing changes whether Play resumes a current
         // track or must cold-start the visible view.
         update_play_pause_sensitivity(&titlebar, &runtime.borrow());
-        let playing_track_id = now_playing_state.track.as_ref().map(|track| track.id);
+        let playing_track_id = now_playing_state
+            .item
+            .as_ref()
+            .and_then(sustain_app_runtime::NowPlayingItem::library_track)
+            .map(|track| track.id);
         if let Some(songs_table) = songs_table_holder.borrow().as_ref() {
             songs_table.set_playing_track_id(playing_track_id);
         }
@@ -38,6 +43,9 @@ pub(super) fn playback_changed_callback(
         }
         if let Some(playlists_table) = playlists_table_holder.borrow().as_ref() {
             playlists_table.set_playing_track_id(playing_track_id);
+        }
+        if let Some(cd_import_panel) = cd_import_panel_holder.borrow().as_ref() {
+            cd_import_panel.refresh_playing_track();
         }
         now_playing.refresh(&now_playing_state);
         // Advancing the current track shifts the queue tail; keep an open
@@ -240,6 +248,7 @@ pub(super) struct VisibleViewQueues {
     pub(super) duplicates_view: DuplicatesView,
     pub(super) sidebar: PlaylistSidebar,
     pub(super) current_search_text: Rc<RefCell<String>>,
+    pub(super) cd_import_panel: CdImportPanel,
 }
 
 impl VisibleViewQueues {
@@ -324,6 +333,12 @@ pub(super) fn make_toggle_or_start_playback(
         // controller" signal: a paused/playing track resumes as usual,
         // and only a genuine cold start cold-starts the visible view.
         let is_stopped = matches!(runtime.borrow().playback_state(), PlaybackState::Stopped);
+        if is_stopped && view_queues.visible_view().as_deref() == Some(CD_IMPORT_VIEW) {
+            // The CD page plays its disc from the first track, through the
+            // same path as a double-click.
+            view_queues.cd_import_panel.play_from_first_track();
+            return;
+        }
         let dispatched = if is_stopped {
             match view_queues.play_request(&runtime) {
                 Some((track_id, queue)) => {

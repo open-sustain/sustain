@@ -57,7 +57,7 @@ use std::{
 use async_channel::Sender;
 use async_io::Timer;
 use futures_lite::FutureExt;
-use sustain_app_runtime::{PlaybackState, TrackId};
+use sustain_app_runtime::{PlayableId, PlaybackState};
 use zbus::{
     OwnedObjectPath, OwnedVariant, Variant, connection, interface, object_server::InterfaceRef,
 };
@@ -290,7 +290,7 @@ async fn apply_update(
     match update {
         MprisUpdate::PlaybackState(state) => {
             let new_status = playback_status_text(&state).to_owned();
-            let new_has_track = playback_track_id(&state).is_some();
+            let new_has_track = state.playable().is_some();
             let (status_changed, capabilities_changed) = {
                 let mut iface = player_ref.get_mut().await;
                 let status_changed = iface.playback_status != new_status;
@@ -411,15 +411,6 @@ impl PositionTracker {
     }
 }
 
-fn playback_track_id(state: &PlaybackState) -> Option<TrackId> {
-    match state {
-        PlaybackState::Loading { track_id }
-        | PlaybackState::Playing { track_id, .. }
-        | PlaybackState::Paused { track_id, .. } => Some(*track_id),
-        PlaybackState::Stopped => None,
-    }
-}
-
 fn build_mpris_metadata(metadata: &NowPlayingMetadata) -> HashMap<String, OwnedVariant> {
     let mut map: HashMap<String, OwnedVariant> = HashMap::new();
 
@@ -492,12 +483,20 @@ fn build_mpris_metadata(metadata: &NowPlayingMetadata) -> HashMap<String, OwnedV
     map
 }
 
-fn track_object_path(track_id: TrackId) -> OwnedObjectPath {
+fn track_object_path(playable: PlayableId) -> OwnedObjectPath {
     // Wrap the integer track id in a path under our app's reverse-DNS
     // root so clients can disambiguate Sustain's track ids from other
     // players'. Underscores in path segments are valid per the D-Bus
-    // spec, so the `open_sustain` segment is fine as-is.
-    let path = format!("/io/github/open_sustain/sustain/track/{}", track_id.get());
+    // spec, so the `open_sustain` segment is fine as-is. A disc track
+    // has a path of its own, so it never aliases a library track.
+    let path = match playable {
+        PlayableId::Library(track_id) => {
+            format!("/io/github/open_sustain/sustain/track/{}", track_id.get())
+        }
+        PlayableId::AudioCdTrack { number } => {
+            format!("/io/github/open_sustain/sustain/audio_cd_track/{number}")
+        }
+    };
     OwnedObjectPath::try_from(path)
         .unwrap_or_else(|_| OwnedObjectPath::try_from(TRACK_ID_NONE).unwrap_or_default())
 }
@@ -718,15 +717,15 @@ impl PlayerInterface {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use sustain_app_runtime::{PlaybackState, TrackId};
+    use sustain_app_runtime::{PlayableId, PlaybackState, TrackId};
 
     use super::{
         MprisPlaybackSink, MprisService, MprisStartConfig, NowPlayingMetadata, PositionTracker,
         build_mpris_metadata, playback_position_micros, playback_status_text,
     };
 
-    fn track_id(value: i64) -> TrackId {
-        TrackId::new(value).expect("positive test track id")
+    fn track_id(value: i64) -> PlayableId {
+        PlayableId::Library(TrackId::new(value).expect("positive test track id"))
     }
 
     fn silent_config() -> MprisStartConfig {

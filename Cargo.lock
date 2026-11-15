@@ -2311,6 +2311,7 @@ dependencies = [
  "sustain-app-runtime",
  "sustain-artwork",
  "sustain-desktop",
+ "sustain-playback",
  "sustain-profiler",
 ]
 

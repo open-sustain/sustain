@@ -726,11 +726,14 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> &'static str {
         ApplicationRuntimeError::CdBackendUnavailable => {
             "CD ripping is not available in this build."
         }
-        ApplicationRuntimeError::CdImportDiscChanged => {
+        ApplicationRuntimeError::CdDiscChanged => {
             "The disc changed. Re-insert the original disc and try again."
         }
         ApplicationRuntimeError::CdImportFailed => "The CD could not be imported.",
         ApplicationRuntimeError::CdImportNoTracksSelected => "Select at least one track to import.",
+        ApplicationRuntimeError::AudioCdDriveBusy => {
+            "The disc is being imported. Play it once the import is done."
+        }
     }
 }
 

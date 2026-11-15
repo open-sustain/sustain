@@ -1244,8 +1244,24 @@ deterministically finishes or rolls back an interrupted one, and an existing
 library file is never overwritten. Per-track progress is shown inline in the
 track table's status column as the rip advances; the overall progress,
 cancellation, and the success / partial / failure outcome all additionally flow
-through the status-bar notification lane; playback continues uninterrupted
-during a rip.
+through the status-bar notification lane; library playback continues
+uninterrupted during a rip.
+
+### Audio CD playback — *iso-iTunes*
+
+Double-click a track on the CD-import page to play the disc from it, straight
+from the drive, without importing it. The whole disc is queued in track order,
+so it plays on through the transport, Now Playing, the queue, MPRIS and the
+media keys exactly like a library list; shuffle and repeat apply as usual, with
+Smart Shuffle playing a disc as pure shuffle. The playing track shows the
+speaker in the page's status column. Disc tracks carry the names the page
+shows — the chosen MusicBrainz release, the fallback `Track NN`, or the user's
+inline renames, updated live while the disc plays — and the duration read from
+the disc. A disc track is not a library track: it keeps no play count, skip
+count or rating, and Now Playing shows no artwork for it. The drive serves one
+reader at a time: importing the disc stops its playback, a disc being imported
+cannot be played, and ejecting the disc (or the disc leaving the drive) stops
+it and takes its tracks out of the queue.
 
 ---
 

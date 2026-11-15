@@ -20,13 +20,13 @@ use super::{
     shuffle_icon::ShuffleShineIcon,
 };
 use model::{
-    artist_album_text, playback_position, progress_fraction, remaining_time_text, time_text,
-    track_title,
+    artist_album_text, item_title, playback_position, progress_fraction, remaining_time_text,
+    time_text,
 };
 use progress_hit_area::ProgressHitArea;
 use sustain_app_runtime::{
     ApplicationCommand, NotificationCategory, NotificationId, NotificationSeverity, NowPlaying,
-    PlaybackCommand, ShuffleMode, Track, TrackId,
+    NowPlayingItem, PlayableId, PlaybackCommand, ShuffleMode, Track, TrackId,
 };
 
 mod color_fill;
@@ -333,7 +333,9 @@ impl NowPlayingView {
         if let Some(id) = self.pending_fetch_notification_id.take() {
             self.runtime.borrow_mut().dismiss_notification(id);
         }
-        if self.runtime.borrow().playback_queue_current_track_id() == Some(track_id) {
+        if self.runtime.borrow().playback_queue_current_track_id()
+            == Some(PlayableId::Library(track_id))
+        {
             *self.artwork_path.borrow_mut() = None;
         }
     }
@@ -439,7 +441,7 @@ impl NowPlayingView {
             _ => false,
         };
         if is_fetching {
-            self.set_artwork_inner_page(ARTWORK_INNER_STACK_FETCHING);
+            self.set_artwork_inner_page(ARTWORK_INNER_STACK_FETCHING, false);
             return;
         }
         let has_artwork = source
@@ -453,20 +455,22 @@ impl NowPlayingView {
             })
             .is_some();
         if has_artwork {
-            self.set_artwork_inner_page(ARTWORK_INNER_STACK_PRESENT);
+            self.set_artwork_inner_page(ARTWORK_INNER_STACK_PRESENT, true);
         } else {
-            self.set_artwork_inner_page(ARTWORK_INNER_STACK_MISSING);
+            // Only a library track has artwork to fetch: a disc track's
+            // missing cover is not clickable.
+            self.set_artwork_inner_page(ARTWORK_INNER_STACK_MISSING, track_id.is_some());
         }
     }
 
-    fn set_artwork_inner_page(&self, name: &'static str) {
-        if self.artwork_inner_stack.visible_child_name().as_deref() == Some(name) {
-            return;
-        }
+    /// Show the inner artwork page `name`; the present and missing pages
+    /// take clicks when `clickable`.
+    fn set_artwork_inner_page(&self, name: &'static str, clickable: bool) {
         self.artwork_inner_stack.set_visible_child_name(name);
         self.artwork_spinner
             .set_spinning(name == ARTWORK_INNER_STACK_FETCHING);
-        if name == ARTWORK_INNER_STACK_MISSING || name == ARTWORK_INNER_STACK_PRESENT {
+        if clickable && (name == ARTWORK_INNER_STACK_MISSING || name == ARTWORK_INNER_STACK_PRESENT)
+        {
             self.artwork_box.add_css_class(ARTWORK_CLICKABLE_CLASS);
             let tooltip = if name == ARTWORK_INNER_STACK_MISSING {
                 ARTWORK_MISSING_TOOLTIP
@@ -500,7 +504,14 @@ impl NowPlayingView {
             Some(ARTWORK_INNER_STACK_MISSING) => {}
             _ => return false,
         }
-        let Some(track_id) = self.runtime.borrow().playback_queue_current_track_id() else {
+        // Artwork is fetched for library tracks; a disc track has none
+        // to fetch.
+        let Some(track_id) = self
+            .runtime
+            .borrow()
+            .playback_queue_current_track_id()
+            .and_then(PlayableId::library_track_id)
+        else {
             return false;
         };
         // PLAN: "The click is idempotent: further clicks while a fetch
@@ -519,7 +530,7 @@ impl NowPlayingView {
             return false;
         }
         self.pending_fetch_track_id.set(Some(track_id));
-        self.set_artwork_inner_page(ARTWORK_INNER_STACK_FETCHING);
+        self.set_artwork_inner_page(ARTWORK_INNER_STACK_FETCHING, false);
         // Mirror the tile-local spinner with a persistent notification
         // so an in-flight fetch is noticeable even when the user
         // isn't looking at the artwork tile. The fetch worker is
@@ -539,7 +550,7 @@ impl NowPlayingView {
         let Some(parent) = self.parent_window.upgrade() else {
             return false;
         };
-        let Some(track) = self.runtime.borrow().now_playing().track else {
+        let Some(NowPlayingItem::Library(track)) = self.runtime.borrow().now_playing().item else {
             return false;
         };
         if initial_face == LyricsOverlayFace::Lyrics && !track.has_lyrics() {
@@ -610,7 +621,10 @@ impl NowPlayingView {
     fn prefetch_next_artwork(&self) {
         let next_track = {
             let runtime = self.runtime.borrow();
-            let Some(next_track_id) = runtime.playback_queue_next_track_id() else {
+            let Some(next_track_id) = runtime
+                .playback_queue_next_track_id()
+                .and_then(PlayableId::library_track_id)
+            else {
                 return;
             };
             runtime.library_track(next_track_id).cloned()
@@ -707,8 +721,7 @@ impl NowPlayingView {
     /// edge) instead of scrolling, so the chip stays pinned to the title's
     /// trailing edge; without lyrics the title reclaims the full viewport
     /// and scrolls as usual.
-    fn update_lyrics_chip(&self, track: &Track) {
-        let has_lyrics = track.has_lyrics();
+    fn update_lyrics_chip(&self, has_lyrics: bool) {
         self.lyrics_chip.set_visible(has_lyrics);
         if has_lyrics {
             self.title.set_max_width(MARQUEE_TITLE_CHIP_WIDTH);
@@ -720,10 +733,14 @@ impl NowPlayingView {
     }
 
     pub(crate) fn refresh(&self, now_playing: &NowPlaying) {
-        self.sync_artwork(now_playing.track.as_ref());
-        self.sync_waveform(now_playing.track.as_ref().map(|track| track.id));
+        let library_track = now_playing
+            .item
+            .as_ref()
+            .and_then(NowPlayingItem::library_track);
+        self.sync_artwork(library_track);
+        self.sync_waveform(library_track.map(|track| track.id));
 
-        let Some(track) = &now_playing.track else {
+        let Some(item) = &now_playing.item else {
             self.stack.set_visible_child_name(EMPTY_STACK_NAME);
             self.title.set_text("");
             self.artist_album.set_text("");
@@ -738,14 +755,14 @@ impl NowPlayingView {
         };
 
         self.stack.set_visible_child_name(LOADED_STACK_NAME);
-        self.update_lyrics_chip(track);
+        self.update_lyrics_chip(library_track.is_some_and(Track::has_lyrics));
 
-        let duration = track.metadata.duration.unwrap_or_default();
+        let metadata = item.metadata();
+        let duration = metadata.duration.unwrap_or_default();
         self.duration.set(duration);
         let position = playback_position(&now_playing.state).unwrap_or_default();
-        self.title.set_text(&track_title(track));
-        self.artist_album
-            .set_text(&artist_album_text(&track.metadata));
+        self.title.set_text(&item_title(item));
+        self.artist_album.set_text(&artist_album_text(metadata));
         self.elapsed.set_text(&time_text(position));
         self.remaining
             .set_text(&remaining_time_text(position, duration));

@@ -24,7 +24,9 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
-use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, PlaybackQueueEntry, TrackId};
+use sustain_app_runtime::{
+    ApplicationCommand, PlayableId, PlaybackCommand, PlaybackQueueEntry, TrackId,
+};
 
 use crate::{
     PlaybackChangedCallback, SharedRuntime,
@@ -598,16 +600,25 @@ fn bind_queue_row(item: &glib::Object, runtime: &SharedRuntime, artwork_loader: 
     // could re-enter the runtime.
     let resolved = {
         let runtime = runtime.borrow();
-        runtime.library_track(track_id).map(|track| {
-            let source = runtime.absolute_track_path(track).map(|absolute| {
-                ArtworkSource::embedded_track(track.location.path().to_path_buf(), absolute)
-            });
-            (
-                display_title(track),
-                display_artist(&track.metadata),
-                source,
-            )
-        })
+        match track_id {
+            PlayableId::Library(track_id) => runtime.library_track(track_id).map(|track| {
+                let source = runtime.absolute_track_path(track).map(|absolute| {
+                    ArtworkSource::embedded_track(track.location.path().to_path_buf(), absolute)
+                });
+                (
+                    display_title(track),
+                    display_artist(&track.metadata),
+                    source,
+                )
+            }),
+            PlayableId::AudioCdTrack { number } => runtime.audio_cd_track(number).map(|track| {
+                (
+                    track.metadata.title.clone().unwrap_or_default(),
+                    display_artist(&track.metadata),
+                    None,
+                )
+            }),
+        }
     };
 
     let Some((title_text, artist_text, source)) = resolved else {
@@ -703,7 +714,7 @@ fn queue_row_widgets(row: &gtk::Box) -> Option<(gtk::Image, gtk::Label, gtk::Lab
     Some((image, title, artist, evict))
 }
 
-fn queue_row_track_id(item: Option<glib::Object>) -> Option<TrackId> {
+fn queue_row_track_id(item: Option<glib::Object>) -> Option<PlayableId> {
     queue_row_entry(item).map(PlaybackQueueEntry::track_id)
 }
 
@@ -735,19 +746,31 @@ fn clear_queue_drop_indicator(row: &gtk::Widget) {
 /// Reorder payload prefix, deliberately distinct from the `tracks:`
 /// payload the library tables emit so a queue-row drag only ever reorders
 /// within the queue and is rejected by playlist/sidebar drop targets.
-fn queue_drag_payload(track_id: TrackId) -> String {
-    format!("queue-track:{}", track_id.get())
-}
-
-fn parse_queue_payload(text: &str) -> Option<TrackId> {
-    let (kind, id) = text.split_once(':')?;
-    if kind != "queue-track" {
-        return None;
+fn queue_drag_payload(track_id: PlayableId) -> String {
+    match track_id {
+        PlayableId::Library(track_id) => format!("queue-track:{}", track_id.get()),
+        PlayableId::AudioCdTrack { number } => format!("queue-cd-track:{number}"),
     }
-    id.trim().parse::<i64>().ok().and_then(TrackId::new)
 }
 
-fn peek_queue_payload(target: &gtk::DropTarget) -> Option<TrackId> {
+fn parse_queue_payload(text: &str) -> Option<PlayableId> {
+    let (kind, id) = text.split_once(':')?;
+    let id = id.trim();
+    match kind {
+        "queue-track" => id
+            .parse::<i64>()
+            .ok()
+            .and_then(TrackId::new)
+            .map(PlayableId::Library),
+        "queue-cd-track" => id
+            .parse::<u32>()
+            .ok()
+            .map(|number| PlayableId::AudioCdTrack { number }),
+        _ => None,
+    }
+}
+
+fn peek_queue_payload(target: &gtk::DropTarget) -> Option<PlayableId> {
     let value = target.value()?;
     let text = value.get::<String>().ok()?;
     parse_queue_payload(&text)
@@ -759,10 +782,10 @@ mod tests {
         QUEUE_EMPTY_TEXT, QUEUE_SMART_SHUFFLE_EMPTY_HELPER, QUEUE_SMART_SHUFFLE_EMPTY_TITLE,
         empty_queue_text, parse_queue_payload, queue_drag_payload,
     };
-    use sustain_app_runtime::TrackId;
+    use sustain_app_runtime::{PlayableId, TrackId};
 
-    fn track_id(value: i64) -> TrackId {
-        TrackId::new(value).expect("valid test track id")
+    fn track_id(value: i64) -> PlayableId {
+        PlayableId::Library(TrackId::new(value).expect("valid test track id"))
     }
 
     #[test]
@@ -770,6 +793,11 @@ mod tests {
         assert_eq!(
             parse_queue_payload(&queue_drag_payload(track_id(42))),
             Some(track_id(42))
+        );
+        let disc_track = PlayableId::AudioCdTrack { number: 7 };
+        assert_eq!(
+            parse_queue_payload(&queue_drag_payload(disc_track)),
+            Some(disc_track)
         );
     }
 

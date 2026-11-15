@@ -9,8 +9,8 @@ use std::{
 
 use sustain_artwork::validate_encoded_artwork;
 use sustain_domain::{
-    LibraryManagementMode, MetadataChange, PlaybackCommand, Rating, TrackId, TrackLocation,
-    TrackRelativePath,
+    LibraryManagementMode, MetadataChange, PlayableId, PlaybackCommand, Rating, TrackId,
+    TrackLocation, TrackRelativePath,
 };
 use sustain_library_store::TagMirrorArtwork;
 use sustain_metadata::audio_format_from_path;
@@ -25,7 +25,6 @@ use crate::{
         metadata_change_affects_managed_path, prune_empty_ancestor_directories_for_sources,
         relocate_managed_missing_track, retarget_managed_metadata,
     },
-    playback::playback_track_id,
 };
 
 impl ApplicationRuntime {
@@ -329,7 +328,8 @@ impl ApplicationRuntime {
             .delete_tracks(track_ids)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.remove_library_tracks(&removed);
-        self.playback_queue.remove_tracks(&removed);
+        self.playback_queue
+            .remove_tracks(&removed.iter().copied().map(PlayableId::Library).collect());
         for track_id in removed {
             self.dismiss_all_metadata_write_warnings(track_id);
         }
@@ -425,7 +425,11 @@ impl ApplicationRuntime {
         let Some(service) = self.playback_service.as_deref() else {
             return;
         };
-        if playback_track_id(&service.state()).is_some_and(|playing| track_ids.contains(&playing)) {
+        let playing = service.state().playable();
+        if playing
+            .and_then(PlayableId::library_track_id)
+            .is_some_and(|playing| track_ids.contains(&playing))
+        {
             let _ = self.handle_playback_command(PlaybackCommand::Stop);
         }
     }

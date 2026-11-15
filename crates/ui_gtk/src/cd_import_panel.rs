@@ -15,6 +15,9 @@
 //! click-an-already-selected-cell inline editing through the shared
 //! [`InlineEditController`].
 //!
+//! Double-clicking a track plays the disc from it, straight from the drive
+//! (#197); the playing track shows the speaker in the status column.
+//!
 //! The columns are: a leading rip-status column (empty / spinner while a
 //! track is being ripped / green tick once done — issue #195), an import
 //! tick, the track number, the editable title and artist, and the duration.
@@ -38,7 +41,9 @@ use std::time::Duration;
 use gtk::prelude::*;
 use gtk::{gdk, gdk_pixbuf, gio, glib};
 
-use sustain_app_runtime::{CdImportRequest, CdTrackOverride, DiscRelease, TocSnapshot};
+use sustain_app_runtime::{
+    AudioCdDescription, CdImportRequest, CdTrackOverride, DiscRelease, TocSnapshot,
+};
 
 use crate::cell_registry::{BindingRegistry, CellBinding};
 use crate::table_cell::TableCell;
@@ -66,10 +71,23 @@ const STATUS_ICON_SIZE: i32 = 14;
 /// Smart Shuffle preferences tab uses for its "ready" state, so it reads
 /// green in both light and dark themes and against the system accent.
 const DONE_ICON: &str = "object-select-symbolic";
+const DONE_ICON_CLASSES: [&str; 2] = ["device-analysis-badge", "ok"];
+/// The speaker on the playing track, as in the Songs table.
+const PLAYING_ICON: &str = "audio-volume-high-symbolic";
+const PLAYING_ICON_CLASS: &str = "track-table-status-playing";
 
 /// Fired when the user clicks `Import CD`. The main window wires this to
 /// the runtime's prepare / background-worker / apply path.
 pub(crate) type CdImportRequestedCallback = Rc<dyn Fn(CdImportRequest)>;
+
+/// Fired when the user double-clicks a track: play the described disc from
+/// that track.
+pub(crate) type CdPlayRequestedCallback = Rc<dyn Fn(AudioCdDescription, u32)>;
+
+/// Fired when what the page calls the disc's tracks changes — a release
+/// arrived or was chosen, or the user renamed a track — so a disc being
+/// played is renamed alike.
+pub(crate) type CdDescribedCallback = Rc<dyn Fn(AudioCdDescription)>;
 
 /// Fired when the user clicks the header `Eject` button. Carries the shown
 /// disc so the main window can resolve and eject the drive.
@@ -104,6 +122,8 @@ struct CdRow {
     /// Whether this track is ticked for import.
     selected: Cell<bool>,
     status: Cell<CdRipStatus>,
+    /// Whether the player is on this track of the disc.
+    playing: Cell<bool>,
 }
 
 impl CdRow {
@@ -180,9 +200,9 @@ struct CdStatusBindings(BindingRegistry<CdStatusBinding>);
 impl CdStatusBindings {
     fn refresh(&self) {
         self.0.for_each_live(|_, (list_item, spinner, icon)| {
-            let status = list_item_cd_row(&list_item, |row| row.status.get())
-                .unwrap_or(CdRipStatus::Pending);
-            render_cd_status(&spinner, &icon, status);
+            let mark = list_item_cd_row(&list_item, |row| (row.status.get(), row.playing.get()))
+                .unwrap_or((CdRipStatus::Pending, false));
+            render_cd_status(&spinner, &icon, mark);
         });
     }
 }
@@ -228,6 +248,8 @@ pub(crate) struct CdImportPanel {
     suppress_toggles: Rc<Cell<bool>>,
     runtime: SharedRuntime,
     on_import_requested: Rc<RefCell<Option<CdImportRequestedCallback>>>,
+    on_play_requested: Rc<RefCell<Option<CdPlayRequestedCallback>>>,
+    on_described: Rc<RefCell<Option<CdDescribedCallback>>>,
     on_eject_requested: Rc<RefCell<Option<CdEjectRequestedCallback>>>,
 }
 
@@ -322,9 +344,20 @@ impl CdImportPanel {
         let text_bindings = CdTextBindings::default();
         let status_bindings = CdStatusBindings::default();
         let suppress_check_toggle = Rc::new(Cell::new(false));
+        let state = Rc::new(RefCell::new(PanelState {
+            snapshot: None,
+            releases: Vec::new(),
+            selected_release: None,
+            cover: None,
+            importing: Vec::new(),
+        }));
+        let on_described: Rc<RefCell<Option<CdDescribedCallback>>> = Rc::new(RefCell::new(None));
 
         let inline_edit = {
             let commit_bindings = text_bindings.clone();
+            let commit_state = state.clone();
+            let commit_store = store.clone();
+            let commit_described = on_described.clone();
             InlineEditController::new(
                 &table,
                 Rc::new(move |object: &glib::Object, field: EditableField| {
@@ -336,6 +369,9 @@ impl CdImportPanel {
                     })?;
                     let object = object.clone();
                     let commit_bindings = commit_bindings.clone();
+                    let commit_state = commit_state.clone();
+                    let commit_store = commit_store.clone();
+                    let commit_described = commit_described.clone();
                     let commit = move |new_text: String| {
                         with_cd_row(&object, |row| match field {
                             EditableField::Artist => {
@@ -347,6 +383,7 @@ impl CdImportPanel {
                             _ => {}
                         });
                         commit_bindings.refresh();
+                        announce_description(&commit_state, &commit_store, &commit_described);
                     };
                     Some(EditSession {
                         seed,
@@ -438,19 +475,28 @@ impl CdImportPanel {
             text_bindings,
             status_bindings,
             import_button,
-            state: Rc::new(RefCell::new(PanelState {
-                snapshot: None,
-                releases: Vec::new(),
-                selected_release: None,
-                cover: None,
-                importing: Vec::new(),
-            })),
+            state,
             suppress_toggles: Rc::new(Cell::new(false)),
             runtime,
             on_import_requested: Rc::new(RefCell::new(None)),
+            on_play_requested: Rc::new(RefCell::new(None)),
+            on_described,
             on_eject_requested: Rc::new(RefCell::new(None)),
         };
         panel.wire_signals();
+        {
+            let panel = panel.clone();
+            table.connect_activate(move |_table, position| {
+                let Some(number) = panel
+                    .store
+                    .item(position)
+                    .and_then(|object| with_cd_row(&object, |row| row.number))
+                else {
+                    return;
+                };
+                panel.request_play(number);
+            });
+        }
         {
             let panel = panel.clone();
             eject_button.connect_clicked(move |_| {
@@ -471,6 +517,64 @@ impl CdImportPanel {
 
     pub(crate) fn set_import_requested_callback(&self, callback: CdImportRequestedCallback) {
         self.on_import_requested.replace(Some(callback));
+    }
+
+    pub(crate) fn set_play_requested_callback(&self, callback: CdPlayRequestedCallback) {
+        self.on_play_requested.replace(Some(callback));
+    }
+
+    pub(crate) fn set_described_callback(&self, callback: CdDescribedCallback) {
+        self.on_described.replace(Some(callback));
+    }
+
+    /// Play the disc from its first track, as double-clicking it would.
+    pub(crate) fn play_from_first_track(&self) {
+        let Some(number) = self
+            .store
+            .item(0)
+            .and_then(|object| with_cd_row(&object, |row| row.number))
+        else {
+            return;
+        };
+        self.request_play(number);
+    }
+
+    fn request_play(&self, number: u32) {
+        let Some(description) = disc_description(&self.state.borrow(), &self.store) else {
+            return;
+        };
+        if let Some(callback) = self.on_play_requested.borrow().as_ref() {
+            callback(description, number);
+        }
+    }
+
+    /// Show the speaker on the track the player is on, when it plays this
+    /// page's disc.
+    pub(crate) fn refresh_playing_track(&self) {
+        let playing = {
+            let runtime = self.runtime.borrow();
+            let state = self.state.borrow();
+            runtime
+                .playing_audio_cd_track()
+                .filter(|(disc, _)| {
+                    state
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.is_same_disc(disc))
+                })
+                .map(|(_, number)| number)
+        };
+        for index in 0..self.store.n_items() {
+            let Some(object) = self.store.item(index) else {
+                continue;
+            };
+            let _ = with_cd_row(&object, |row| row.playing.set(Some(row.number) == playing));
+        }
+        self.status_bindings.refresh();
+    }
+
+    fn announce_description(&self) {
+        announce_description(&self.state, &self.store, &self.on_described);
     }
 
     pub(crate) fn set_eject_requested_callback(&self, callback: CdEjectRequestedCallback) {
@@ -494,6 +598,7 @@ impl CdImportPanel {
                 };
                 panel.refresh_header();
                 panel.recompute_row_base();
+                panel.announce_description();
                 if let Some(release) = selected {
                     // Re-fetch the cover for the newly chosen release; show
                     // the spinner until that Cover event resolves it.
@@ -567,6 +672,7 @@ impl CdImportPanel {
         self.populate_release_selector();
         self.refresh_header();
         self.recompute_row_base();
+        self.announce_description();
         match chosen {
             Some(release) => {
                 // A match was found; keep the spinner up while its cover is
@@ -736,31 +842,28 @@ impl CdImportPanel {
                 override_artist: RefCell::new(None),
                 selected: Cell::new(true),
                 status: Cell::new(CdRipStatus::Pending),
+                playing: Cell::new(false),
             };
             self.store.append(&glib::BoxedAnyObject::new(row));
         }
+        self.refresh_playing_track();
     }
 
     fn current_request(&self) -> Option<CdImportRequest> {
         let state = self.state.borrow();
-        let snapshot = state.snapshot.clone()?;
+        let AudioCdDescription {
+            snapshot,
+            release,
+            overrides,
+        } = disc_description(&state, &self.store)?;
         let mut selected_tracks = Vec::new();
-        let mut overrides = BTreeMap::new();
         for index in 0..self.store.n_items() {
             let Some(object) = self.store.item(index) else {
                 continue;
             };
             let _ = with_cd_row(&object, |row| {
-                if !row.selected.get() {
-                    return;
-                }
-                selected_tracks.push(row.number);
-                let track_override = CdTrackOverride {
-                    title: row.override_title.borrow().clone(),
-                    artist: row.override_artist.borrow().clone(),
-                };
-                if track_override.title.is_some() || track_override.artist.is_some() {
-                    overrides.insert(row.number, track_override);
+                if row.selected.get() {
+                    selected_tracks.push(row.number);
                 }
             });
         }
@@ -770,7 +873,7 @@ impl CdImportPanel {
         Some(CdImportRequest {
             snapshot,
             selected_tracks,
-            release: state.selected_release().cloned(),
+            release,
             cover: state.cover.clone(),
             overrides,
         })
@@ -882,11 +985,6 @@ fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFac
         spinner.set_visible(false);
 
         let icon = gtk::Image::from_icon_name(DONE_ICON);
-        // Filled green check disc, identical to the Smart Shuffle "ready"
-        // badge: the round fill comes from `device-analysis-badge`, the
-        // success colour from `ok`, and the glyph is recoloured to the base.
-        icon.add_css_class("device-analysis-badge");
-        icon.add_css_class("ok");
         icon.set_pixel_size(STATUS_ICON_SIZE);
         icon.set_halign(gtk::Align::Center);
         icon.set_valign(gtk::Align::Center);
@@ -928,9 +1026,9 @@ fn build_cd_status_factory(bindings: CdStatusBindings) -> gtk::SignalListItemFac
         let Some((spinner, icon)) = status_widgets_of(item) else {
             return;
         };
-        let status =
-            list_item_cd_row(list_item, |row| row.status.get()).unwrap_or(CdRipStatus::Pending);
-        render_cd_status(&spinner, &icon, status);
+        let mark = list_item_cd_row(list_item, |row| (row.status.get(), row.playing.get()))
+            .unwrap_or((CdRipStatus::Pending, false));
+        render_cd_status(&spinner, &icon, mark);
     });
 
     factory
@@ -1160,7 +1258,19 @@ fn status_widgets_of(item: &glib::Object) -> Option<(gtk::Spinner, gtk::Image)> 
     Some((spinner, icon))
 }
 
-fn render_cd_status(spinner: &gtk::Spinner, icon: &gtk::Image, status: CdRipStatus) {
+/// Render a status cell: the speaker on the playing track, otherwise the
+/// track's rip status.
+fn render_cd_status(
+    spinner: &gtk::Spinner,
+    icon: &gtk::Image,
+    (status, playing): (CdRipStatus, bool),
+) {
+    if playing {
+        spinner.stop();
+        spinner.set_visible(false);
+        show_cd_status_icon(icon, PLAYING_ICON, &[PLAYING_ICON_CLASS]);
+        return;
+    }
     match status {
         CdRipStatus::Pending => {
             spinner.stop();
@@ -1175,8 +1285,66 @@ fn render_cd_status(spinner: &gtk::Spinner, icon: &gtk::Image, status: CdRipStat
         CdRipStatus::Done => {
             spinner.stop();
             spinner.set_visible(false);
-            icon.set_visible(true);
+            // Filled green check disc, identical to the Smart Shuffle
+            // "ready" badge: the round fill comes from
+            // `device-analysis-badge`, the success colour from `ok`, and the
+            // glyph is recoloured to the base.
+            show_cd_status_icon(icon, DONE_ICON, &DONE_ICON_CLASSES);
         }
+    }
+}
+
+fn show_cd_status_icon(icon: &gtk::Image, icon_name: &str, classes: &[&str]) {
+    for class in DONE_ICON_CLASSES
+        .into_iter()
+        .chain([PLAYING_ICON_CLASS])
+        .filter(|class| !classes.contains(class))
+    {
+        icon.remove_css_class(class);
+    }
+    for class in classes {
+        icon.add_css_class(class);
+    }
+    icon.set_icon_name(Some(icon_name));
+    icon.set_visible(true);
+}
+
+/// The disc as the page describes it: its snapshot, the chosen release, and
+/// the user's renames of every track.
+fn disc_description(state: &PanelState, store: &gio::ListStore) -> Option<AudioCdDescription> {
+    let snapshot = state.snapshot.clone()?;
+    let mut overrides = BTreeMap::new();
+    for index in 0..store.n_items() {
+        let Some(object) = store.item(index) else {
+            continue;
+        };
+        let _ = with_cd_row(&object, |row| {
+            let track_override = CdTrackOverride {
+                title: row.override_title.borrow().clone(),
+                artist: row.override_artist.borrow().clone(),
+            };
+            if track_override.title.is_some() || track_override.artist.is_some() {
+                overrides.insert(row.number, track_override);
+            }
+        });
+    }
+    Some(AudioCdDescription {
+        snapshot,
+        release: state.selected_release().cloned(),
+        overrides,
+    })
+}
+
+fn announce_description(
+    state: &RefCell<PanelState>,
+    store: &gio::ListStore,
+    on_described: &RefCell<Option<CdDescribedCallback>>,
+) {
+    let Some(description) = disc_description(&state.borrow(), store) else {
+        return;
+    };
+    if let Some(callback) = on_described.borrow().as_ref() {
+        callback(description);
     }
 }
 
@@ -1431,6 +1599,15 @@ mod tests {
         with_cd_row(&object, |row| row.selected.set(value)).expect("CdRow");
     }
 
+    fn playing_rows(panel: &CdImportPanel) -> Vec<u32> {
+        (0..panel.store.n_items())
+            .filter_map(|index| {
+                let object = panel.store.item(index)?;
+                with_cd_row(&object, |row| row.playing.get().then_some(row.number)).flatten()
+            })
+            .collect()
+    }
+
     fn row_status(panel: &CdImportPanel, number: u32) -> CdRipStatus {
         (0..panel.store.n_items())
             .find_map(|index| {
@@ -1576,6 +1753,73 @@ mod tests {
             assert!(panel.current_snapshot().is_none());
             assert!(!panel.panel_ready_for_import());
             assert!(!panel.import_button.is_sensitive());
+        });
+        if !ran {
+            eprintln!("SMOKE: no display, skipping");
+        }
+    }
+
+    #[test]
+    fn the_track_being_played_shows_the_speaker() {
+        let ran = crate::test_support::with_gtk(|| {
+            let runtime = Rc::new(RefCell::new(
+                ApplicationRuntime::new()
+                    .with_playback_service(Box::new(sustain_playback::NullPlaybackService::new())),
+            ));
+            let panel = CdImportPanel::new(runtime.clone());
+            let disc = snapshot("disc-a", 3);
+            // Discovery sees the disc in its drive (no probe ran: the first
+            // generation is current).
+            assert!(runtime.borrow_mut().apply_optical_discovery(
+                sustain_app_runtime::OpticalDiscoveryResult {
+                    generation: 0,
+                    discs: vec![disc.clone()],
+                }
+            ));
+            panel.show_disc(disc.clone());
+            assert!(playing_rows(&panel).is_empty());
+
+            let description = disc_description(&panel.state.borrow(), &panel.store)
+                .expect("the page describes its disc");
+            runtime
+                .borrow_mut()
+                .play_audio_cd(description, 2)
+                .expect("play the disc");
+            panel.refresh_playing_track();
+            assert_eq!(playing_rows(&panel), vec![2]);
+
+            // Another disc on the page shows no speaker.
+            panel.show_disc(snapshot("disc-b", 3));
+            assert!(playing_rows(&panel).is_empty());
+        });
+        if !ran {
+            eprintln!("SMOKE: no display, skipping");
+        }
+    }
+
+    #[test]
+    fn renaming_a_track_describes_the_disc_anew() {
+        let ran = crate::test_support::with_gtk(|| {
+            let panel = panel();
+            panel.show_disc(snapshot("disc-a", 2));
+            let described = Rc::new(RefCell::new(Vec::new()));
+            let sink = described.clone();
+            panel.set_described_callback(Rc::new(move |disc: AudioCdDescription| {
+                sink.borrow_mut().push(disc.overrides);
+            }));
+
+            let object = panel.store.item(1).expect("row exists");
+            let _ = with_cd_row(&object, |row| {
+                *row.override_title.borrow_mut() = Some("Renamed".to_owned());
+            });
+            panel.announce_description();
+
+            let described = described.borrow();
+            let overrides = described.last().expect("the disc was described");
+            assert_eq!(
+                overrides.get(&2).and_then(|track| track.title.as_deref()),
+                Some("Renamed")
+            );
         });
         if !ran {
             eprintln!("SMOKE: no display, skipping");

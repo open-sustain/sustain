@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use crate::{SmartPlaylistId, TrackId};
 
 use super::{
-    PlaybackOptions, PlaybackQueue, PlaybackQueueEntryKind, PlaybackQueueSource, RepeatMode,
-    ShuffleMode, effective_shuffle_mode,
+    PlayableId, PlaybackOptions, PlaybackQueue, PlaybackQueueEntryKind, PlaybackQueueSource,
+    RepeatMode, ShuffleMode, effective_shuffle_mode,
 };
 
 #[test]
@@ -200,7 +200,7 @@ fn track_ids_cover_the_source_and_curated_entries() {
     let mut queue = queue_with_options(track_id(2), PlaybackOptions::default());
     assert!(queue.enqueue_at_end(&[track_id(9)]));
 
-    let track_ids: HashSet<TrackId> = queue.track_ids().collect();
+    let track_ids: HashSet<PlayableId> = queue.track_ids().collect();
 
     assert_eq!(
         track_ids,
@@ -894,7 +894,7 @@ fn remove_from_queue_keeps_pure_shuffle_order_intact() {
     );
     let evicted = queue.upcoming_track_ids()[0];
     assert!(queue.enqueue_after_current(&[evicted]));
-    let expected: Vec<TrackId> = queue
+    let expected: Vec<PlayableId> = queue
         .play_order_track_ids()
         .iter()
         .copied()
@@ -984,7 +984,7 @@ fn move_within_queue_refuses_current_or_non_upcoming_tracks() {
     );
 }
 
-fn queue_with_options(current_track_id: TrackId, options: PlaybackOptions) -> PlaybackQueue {
+fn queue_with_options(current_track_id: PlayableId, options: PlaybackOptions) -> PlaybackQueue {
     PlaybackQueue::new(
         PlaybackQueueSource::Library,
         vec![track_id(1), track_id(2), track_id(3)],
@@ -994,6 +994,6 @@ fn queue_with_options(current_track_id: TrackId, options: PlaybackOptions) -> Pl
     )
 }
 
-fn track_id(value: i64) -> TrackId {
-    TrackId::new(value).expect("valid test track id")
+fn track_id(value: i64) -> PlayableId {
+    PlayableId::Library(TrackId::new(value).expect("valid test track id"))
 }

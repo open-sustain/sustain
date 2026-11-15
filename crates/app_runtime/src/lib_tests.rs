@@ -211,7 +211,7 @@ fn runtime_handles_every_application_command_intentionally() {
             Ok(()),
         ),
         (
-            ApplicationCommand::Playback(PlaybackCommand::PlayQueueTrack(track_id)),
+            ApplicationCommand::Playback(PlaybackCommand::PlayQueueTrack(track_id.into())),
             Ok(()),
         ),
         (
@@ -2877,13 +2877,13 @@ fn runtime_plays_tracks_through_playback_service() {
     assert_eq!(
         runtime.playback_state(),
         PlaybackState::Playing {
-            track_id,
+            track_id: track_id.into(),
             position: std::time::Duration::ZERO,
         }
     );
     assert_eq!(
-        runtime.now_playing().track.map(|track| track.id),
-        Some(track_id)
+        runtime.now_playing().item.map(|item| item.playable()),
+        Some(track_id.into())
     );
 
     std::fs::remove_dir_all(root).expect("remove test library");
@@ -2896,7 +2896,7 @@ fn playback_backend_errors_keep_status_text_concise() {
 
     runtime
         .handle_playback_backend_error(PlaybackBackendError {
-            track_id: Some(track_id(1)),
+            track_id: Some(playable(1)),
             message: format!(
                 "No decoder available. {}",
                 "debug/plugin-search-detail ".repeat(64)
@@ -2935,7 +2935,7 @@ fn a_pause_request_from_the_sound_server_pauses_playing_audio_and_says_why() {
 
     assert!(matches!(
         runtime.playback_state(),
-        PlaybackState::Paused { track_id: paused, .. } if paused == track_id(1)
+        PlaybackState::Paused { track_id: paused, .. } if paused == playable(1)
     ));
     let notification = runtime
         .notifications()
@@ -3137,7 +3137,7 @@ fn runtime_play_next_track_skips_missing_tracks() {
     assert_eq!(
         runtime.playback_state(),
         PlaybackState::Playing {
-            track_id: track_id(3),
+            track_id: playable(3),
             position: std::time::Duration::ZERO,
         }
     );
@@ -3194,7 +3194,7 @@ fn repopulate_queue_widens_searched_results_so_auto_advance_continues() {
     assert_eq!(
         runtime.playback_state(),
         PlaybackState::Playing {
-            track_id: track_id(1),
+            track_id: playable(1),
             position: std::time::Duration::ZERO,
         }
     );
@@ -3208,7 +3208,7 @@ fn repopulate_queue_widens_searched_results_so_auto_advance_continues() {
     assert_eq!(
         runtime.playback_state(),
         PlaybackState::Playing {
-            track_id: track_id(2),
+            track_id: playable(2),
             position: std::time::Duration::ZERO,
         }
     );
@@ -3230,14 +3230,14 @@ fn play_queue_track_starts_upcoming_entry_without_rebuilding_the_queue() {
     );
     assert_eq!(
         runtime.handle_command(ApplicationCommand::Playback(
-            PlaybackCommand::PlayQueueTrack(track_id(2))
+            PlaybackCommand::PlayQueueTrack(playable(2))
         )),
         Ok(())
     );
     assert_eq!(
         runtime.playback_state(),
         PlaybackState::Playing {
-            track_id: track_id(2),
+            track_id: playable(2),
             position: std::time::Duration::ZERO,
         }
     );
@@ -3247,7 +3247,7 @@ fn play_queue_track_starts_upcoming_entry_without_rebuilding_the_queue() {
             .iter()
             .map(|entry| entry.track_id())
             .collect::<Vec<_>>(),
-        &[track_id(3)]
+        &[playable(3)]
     );
 
     assert_eq!(
@@ -3257,7 +3257,7 @@ fn play_queue_track_starts_upcoming_entry_without_rebuilding_the_queue() {
     assert_eq!(
         runtime.playback_state(),
         PlaybackState::Playing {
-            track_id: track_id(3),
+            track_id: playable(3),
             position: std::time::Duration::ZERO,
         }
     );
@@ -3300,8 +3300,8 @@ fn repopulate_queue_preserves_curated_up_next_before_widened_continuation() {
             .map(|entry| (entry.track_id(), entry.kind()))
             .collect::<Vec<_>>(),
         &[
-            (track_id(3), PlaybackQueueEntryKind::Curated),
-            (track_id(2), PlaybackQueueEntryKind::Continuation),
+            (playable(3), PlaybackQueueEntryKind::Curated),
+            (playable(2), PlaybackQueueEntryKind::Continuation),
         ]
     );
 
@@ -3346,7 +3346,7 @@ fn repopulate_queue_is_left_alone_when_playing_track_absent_from_request() {
     assert_eq!(
         runtime.playback_state(),
         PlaybackState::Playing {
-            track_id: track_id(2),
+            track_id: playable(2),
             position: std::time::Duration::ZERO,
         }
     );
@@ -3391,7 +3391,7 @@ fn repopulate_queue_never_widens_an_album_queue() {
     assert_eq!(
         runtime.playback_state(),
         PlaybackState::Playing {
-            track_id: track_id(2),
+            track_id: playable(2),
             position: std::time::Duration::ZERO,
         }
     );
@@ -3426,7 +3426,12 @@ fn upcoming_track_ids(runtime: &ApplicationRuntime) -> Vec<TrackId> {
     runtime
         .playback_queue_upcoming_preview(usize::MAX)
         .into_iter()
-        .map(sustain_domain::PlaybackQueueEntry::track_id)
+        .map(|entry| {
+            entry
+                .track_id()
+                .library_track_id()
+                .expect("a library queue holds library tracks")
+        })
         .collect()
 }
 
@@ -3549,7 +3554,7 @@ fn a_track_going_missing_leaves_the_queue_order_alone() {
         Err(ApplicationRuntimeError::TrackUnavailable)
     );
     assert_eq!(upcoming_track_ids(&runtime), vec![track_id(1)]);
-    assert_eq!(runtime.playback_queue_current_track_id(), Some(track_id(3)));
+    assert_eq!(runtime.playback_queue_current_track_id(), Some(playable(3)));
 
     std::fs::remove_dir_all(root).expect("remove test library");
 }
@@ -3595,7 +3600,7 @@ fn runtime_play_previous_track_skips_missing_tracks() {
     assert_eq!(
         runtime.playback_state(),
         PlaybackState::Playing {
-            track_id: track_id(1),
+            track_id: playable(1),
             position: std::time::Duration::ZERO,
         }
     );
@@ -3626,7 +3631,7 @@ fn runtime_adjacent_playback_moves_past_tracks_found_missing_on_the_way() {
         assert_eq!(
             runtime.playback_state(),
             PlaybackState::Playing {
-                track_id: track_id(id),
+                track_id: playable(id),
                 position: std::time::Duration::ZERO,
             }
         );
@@ -4365,7 +4370,7 @@ fn runtime_removes_a_batch_of_tracks_from_library_and_queue() {
         })),
         Ok(())
     );
-    assert_eq!(runtime.playback_queue_next_track_id(), Some(track_id(2)));
+    assert_eq!(runtime.playback_queue_next_track_id(), Some(playable(2)));
 
     assert_eq!(
         runtime.handle_command(ApplicationCommand::RemoveTracksFromLibrary {
@@ -4376,7 +4381,7 @@ fn runtime_removes_a_batch_of_tracks_from_library_and_queue() {
 
     assert_eq!(runtime.library_tracks(), std::slice::from_ref(&kept));
     assert_eq!(store.tracks(), Ok(vec![kept]));
-    assert_eq!(runtime.playback_queue_current_track_id(), Some(track_id(1)));
+    assert_eq!(runtime.playback_queue_current_track_id(), Some(playable(1)));
     assert_eq!(runtime.playback_queue_next_track_id(), None);
 
     std::fs::remove_dir_all(root).expect("remove test library");
@@ -6609,7 +6614,7 @@ fn skip_current_track_registers_skip_before_play_threshold() {
     match runtime.playback_state() {
         PlaybackState::Playing {
             track_id: playing, ..
-        } => assert_eq!(playing, track_id(2)),
+        } => assert_eq!(playing, playable(2)),
         other => panic!("expected B to be playing, got {other:?}"),
     }
 
@@ -6918,6 +6923,10 @@ fn library_queue(runtime: &ApplicationRuntime) -> PlaybackQueueRequest {
             .map(|track| track.id)
             .collect(),
     }
+}
+
+fn playable(value: i64) -> sustain_domain::PlayableId {
+    sustain_domain::PlayableId::Library(track_id(value))
 }
 
 fn track_id(value: i64) -> TrackId {

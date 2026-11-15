@@ -8,7 +8,9 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 use gst::glib;
 use gst::prelude::*;
 use gstreamer as gst;
-pub use sustain_domain::{PlaybackCommand, PlaybackState, TrackPlaybackSource, VolumePercent};
+pub use sustain_domain::{
+    PlaybackCommand, PlaybackLocation, PlaybackSource, PlaybackState, VolumePercent,
+};
 
 pub type PlaybackResult<T> = Result<T, PlaybackError>;
 
@@ -21,7 +23,7 @@ const PULSE_STREAM_PROPERTIES_NAME: &str = "props";
 /// accepted, such as a decoder error discovered during preroll.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlaybackBackendError {
-    pub track_id: Option<sustain_domain::TrackId>,
+    pub track_id: Option<sustain_domain::PlayableId>,
     pub message: String,
 }
 
@@ -56,7 +58,7 @@ pub enum PlaybackError {
 }
 
 pub trait PlaybackService {
-    fn play_track(&self, source: TrackPlaybackSource) -> PlaybackResult<()>;
+    fn play_track(&self, source: PlaybackSource) -> PlaybackResult<()>;
     fn pause(&self) -> PlaybackResult<()>;
     fn resume(&self) -> PlaybackResult<()>;
     fn stop(&self) -> PlaybackResult<()>;
@@ -81,10 +83,8 @@ impl NullPlaybackService {
 }
 
 impl PlaybackService for NullPlaybackService {
-    fn play_track(&self, source: TrackPlaybackSource) -> PlaybackResult<()> {
-        if source.path.as_os_str().is_empty() {
-            return Err(PlaybackError::MissingSourcePath);
-        }
+    fn play_track(&self, source: PlaybackSource) -> PlaybackResult<()> {
+        source_uri(&source.location)?;
 
         self.state.replace(PlaybackState::Playing {
             track_id: source.track_id,
@@ -181,7 +181,7 @@ impl GStreamerPlaybackService {
                         }
                     }
                     gst::MessageView::Error(error) => {
-                        let track_id = playback_track_id(&bus_state.borrow());
+                        let track_id = bus_state.borrow().playable();
                         let backend_error = PlaybackBackendError {
                             track_id,
                             message: gst_error_message(error),
@@ -238,13 +238,8 @@ impl GStreamerPlaybackService {
 }
 
 impl PlaybackService for GStreamerPlaybackService {
-    fn play_track(&self, source: TrackPlaybackSource) -> PlaybackResult<()> {
-        if source.path.as_os_str().is_empty() {
-            return Err(PlaybackError::MissingSourcePath);
-        }
-
-        let uri = gst::glib::filename_to_uri(&source.path, None)
-            .map_err(|_| PlaybackError::SourceUriFailed)?;
+    fn play_track(&self, source: PlaybackSource) -> PlaybackResult<()> {
+        let uri = source_uri(&source.location)?;
 
         self.playbin
             .set_state(gst::State::Null)
@@ -379,12 +374,27 @@ fn duration_from_clock_time(clock_time: gst::ClockTime) -> Duration {
     Duration::from_nanos(clock_time.nseconds())
 }
 
-fn playback_track_id(state: &PlaybackState) -> Option<sustain_domain::TrackId> {
-    match state {
-        PlaybackState::Loading { track_id }
-        | PlaybackState::Playing { track_id, .. }
-        | PlaybackState::Paused { track_id, .. } => Some(*track_id),
-        PlaybackState::Stopped => None,
+/// The URI `playbin` opens for `location`: a `file://` URI for a library
+/// file, a `cdda://` URI naming the drive and the track for a disc track.
+fn source_uri(location: &PlaybackLocation) -> PlaybackResult<String> {
+    match location {
+        PlaybackLocation::File(path) => {
+            if path.as_os_str().is_empty() {
+                return Err(PlaybackError::MissingSourcePath);
+            }
+            gst::glib::filename_to_uri(path, None)
+                .map(String::from)
+                .map_err(|_| PlaybackError::SourceUriFailed)
+        }
+        PlaybackLocation::AudioCd {
+            device,
+            track_number,
+        } => {
+            let device = device.to_str().filter(|device| !device.is_empty());
+            let device = device.ok_or(PlaybackError::MissingSourcePath)?;
+            let device = gst::glib::uri_escape_string(device, Some("/"), false);
+            Ok(format!("cdda://{device}#{track_number}"))
+        }
     }
 }
 
@@ -452,15 +462,16 @@ fn pulse_stream_properties() -> gst::Structure {
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
+    use gst::prelude::*;
     use gstreamer as gst;
-    use sustain_domain::TrackId;
+    use sustain_domain::{PlayableId, TrackId};
 
     use super::{
         APPLICATION_ID, APPLICATION_NAME, NullPlaybackService, PULSE_STREAM_PROPERTIES_NAME,
         PlaybackError, PlaybackService, PlaybackState, VolumePercent, is_pause_request,
         pulse_stream_properties,
     };
-    use crate::TrackPlaybackSource;
+    use crate::{PlaybackLocation, PlaybackSource, source_uri};
 
     #[test]
     fn null_service_starts_stopped() {
@@ -475,7 +486,7 @@ mod tests {
         let track_id = positive_track_id();
 
         assert_eq!(
-            playback.play_track(TrackPlaybackSource::new(
+            playback.play_track(PlaybackSource::file(
                 track_id,
                 PathBuf::from("/music/track.flac")
             )),
@@ -525,10 +536,7 @@ mod tests {
         let playback = NullPlaybackService::new();
 
         assert_eq!(
-            playback.play_track(TrackPlaybackSource::new(
-                positive_track_id(),
-                PathBuf::new()
-            )),
+            playback.play_track(PlaybackSource::file(positive_track_id(), PathBuf::new())),
             Err(PlaybackError::MissingSourcePath)
         );
     }
@@ -579,9 +587,42 @@ mod tests {
         assert!(!is_pause_request(&gst::message::Eos::new()));
     }
 
-    fn positive_track_id() -> TrackId {
+    #[test]
+    fn a_disc_track_opens_the_named_track_of_the_named_drive() {
+        gst::init().expect("GStreamer init");
+        let uri = source_uri(&PlaybackLocation::AudioCd {
+            device: PathBuf::from("/dev/sr1"),
+            track_number: 4,
+        })
+        .expect("disc track uri");
+
+        assert_eq!(uri, "cdda:///dev/sr1#4");
+        let Ok(source) = gst::ElementFactory::make_with_name("cdparanoiasrc", None) else {
+            return;
+        };
+        source
+            .dynamic_cast_ref::<gst::URIHandler>()
+            .expect("cdda source handles URIs")
+            .set_uri(&uri)
+            .expect("cdda source accepts the uri");
+        assert_eq!(source.property::<String>("device"), "/dev/sr1");
+        assert_eq!(source.property::<u32>("track"), 4);
+    }
+
+    #[test]
+    fn a_disc_track_without_a_drive_is_refused() {
+        assert_eq!(
+            source_uri(&PlaybackLocation::AudioCd {
+                device: PathBuf::new(),
+                track_number: 1,
+            }),
+            Err(PlaybackError::MissingSourcePath)
+        );
+    }
+
+    fn positive_track_id() -> PlayableId {
         match TrackId::new(1) {
-            Some(track_id) => track_id,
+            Some(track_id) => PlayableId::Library(track_id),
             None => unreachable!("hard-coded positive track id should be valid"),
         }
     }

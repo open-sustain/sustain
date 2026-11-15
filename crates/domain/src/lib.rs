@@ -67,9 +67,9 @@ pub use managed_library::{
 pub use metadata::{FieldChange, KeyOrigin, MetadataChange, TrackAudioProperties, TrackMetadata};
 pub use musical_key::MusicalKey;
 pub use playback::{
-    LazyPickContext, PlaybackCommand, PlaybackOptions, PlaybackQueue, PlaybackQueueEntry,
-    PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState, RepeatMode,
-    ShuffleMode, TrackPlaybackSource, VolumePercent,
+    LazyPickContext, PlayableId, PlaybackCommand, PlaybackLocation, PlaybackOptions, PlaybackQueue,
+    PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
+    PlaybackSource, PlaybackState, RepeatMode, ShuffleMode, VolumePercent,
 };
 pub use playback_session::PlaybackSession;
 pub use playlist::{Playlist, PlaylistEntry};
