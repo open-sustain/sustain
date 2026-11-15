@@ -1530,7 +1530,7 @@ Findings:
 
 - **The bass register adds nothing** over the register split, on any set.
   Bass-only additions to the shipped 12 numbers (40–80, 80–160, 40–160 Hz)
-  moved strict by −1.8 to +0.5 points.
+  moved strict by −1.8 to +0.9 points.
 - **The register split moves a tenth of the tracks and nets about zero** on
   the product metric: on four of five sets as many tracks leave the
   compatible group as enter it. Exact agreement rises 1 to 5 points on four
