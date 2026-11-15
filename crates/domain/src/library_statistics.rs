@@ -38,6 +38,8 @@ pub struct LibraryStatistics {
     /// Total number of tracks in the library (the denominator for the
     /// genre-distribution shares).
     pub total_tracks: usize,
+    /// Plays recorded across the whole library.
+    pub total_plays: u64,
     /// Share of tracks per genre, largest first, with the long tail
     /// folded into a single "Other" bucket.
     pub genre_distribution: GenreDistribution,
@@ -184,6 +186,7 @@ pub fn compute_library_statistics(
 ) -> LibraryStatistics {
     LibraryStatistics {
         total_tracks: tracks.len(),
+        total_plays: tracks.iter().map(|track| track.statistics.play_count).sum(),
         genre_distribution: genre_distribution(tracks),
         quality_distribution: quality_distribution(tracks),
         most_played_genres: most_played_genres(tracks),
@@ -374,10 +377,18 @@ fn decade_of(year: i32) -> i32 {
     year - year.rem_euclid(10)
 }
 
+/// The first year sound was recorded (Scott's phonautograph, 1860): a
+/// release year before it is a mistyped tag, not a release.
+const FIRST_RECORDING_YEAR: i32 = 1860;
+
 fn release_decades(tracks: &[Track]) -> Vec<DecadeCount> {
     let mut counts: HashMap<Option<i32>, usize> = HashMap::new();
     for track in tracks {
-        let decade = track.metadata.year.map(decade_of);
+        let decade = track
+            .metadata
+            .year
+            .filter(|year| *year >= FIRST_RECORDING_YEAR)
+            .map(decade_of);
         *counts.entry(decade).or_insert(0) += 1;
     }
     sorted_year_buckets(counts)
@@ -497,6 +508,7 @@ mod tests {
     fn empty_library_yields_zeroed_statistics() {
         let stats = compute(&[]);
         assert_eq!(stats.total_tracks, 0);
+        assert_eq!(stats.total_plays, 0);
         assert!(stats.genre_distribution.entries.is_empty());
         assert_eq!(stats.genre_distribution.other, None);
         assert_eq!(stats.quality_distribution.total_with_bitrate, 0);
@@ -731,6 +743,36 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn release_years_before_recorded_sound_are_unknown() {
+        let tracks = [
+            with_year(track(1, None), 203),
+            with_year(track(2, None), 1859),
+            with_year(track(3, None), 1860),
+        ];
+        let decades = compute(&tracks).release_decades;
+
+        assert_eq!(
+            decades,
+            vec![
+                DecadeCount {
+                    decade: Some(1860),
+                    track_count: 1,
+                },
+                DecadeCount {
+                    decade: None,
+                    track_count: 2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn total_plays_sum_every_track() {
+        let tracks = [played(track(1, None), 3), played(track(2, None), 4)];
+        assert_eq!(compute(&tracks).total_plays, 7);
     }
 
     #[test]

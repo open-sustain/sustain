@@ -1252,14 +1252,22 @@ listview.device-sync-checklist > row {
     font-size: 0.85em;
 }
 
-/* Each chart sits in a card: a faintly contrasting surface matching the
-   sync view's playlist container (a fold of the foreground over the
-   window), so it reads as raised in light themes and recessed in dark
-   ones without a hard-coded colour. */
-.statistics-card {
-    background-color: alpha(@theme_fg_color, 0.05);
-    border-radius: 6px;
-    padding: 14px;
+/* Each chart sits in a card: a barely raised surface (a fold of the
+   foreground over the page) with a hairline edge, so cards read as
+   separate without a heavy grey slab. Theme-aware in light and dark. */
+.statistics-card,
+.statistics-figure {
+    background-color: alpha(@theme_fg_color, 0.025);
+    border: 1px solid alpha(@theme_fg_color, 0.08);
+    border-radius: 10px;
+    padding: 16px;
+}
+
+/* The big number of a headline figure. */
+.statistics-figure-value {
+    font-size: 1.8em;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
 }
 
 /* Duplicate consolidation dialog: every survivor decision is a self-labelling

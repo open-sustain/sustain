@@ -13,13 +13,15 @@
 //! rules are unit-tested without a UI; this module only turns the result
 //! into widgets.
 //!
-//! Layout: each chart sits in its own card (a contrasting surface). The
-//! the three part-of-a-whole charts use donuts drawn by [`crate::chart`] with
-//! an accent-derived palette and a legend; the weighted most-liked ranking is
-//! a bar chart. These four cards flow into a responsive
-//! two-up grid that reflows to one column when the window is narrow; the
-//! two distributions over time (release decade, year added) run full
-//! width below as vertical-bar histograms. Every chart is drawn with
+//! Layout: a row of headline figures (tracks, listening time, size,
+//! plays) opens the page. Each chart then sits in its own card. The two
+//! part-of-a-whole charts (genre, bitrate) are donuts drawn by
+//! [`crate::chart`] in shades of the accent with a legend; the two top-5
+//! genre rankings (most played, most liked) are ranked horizontal bars.
+//! These four cards flow into a responsive two-up grid that reflows to
+//! one column when the window is narrow; the two distributions over time
+//! (release decade, year added) run full width below as vertical-bar
+//! histograms. Every chart is drawn with
 //! Cairo against the live theme accent, so the page tracks the system
 //! accent in both light and dark themes.
 //!
@@ -38,7 +40,9 @@ use sustain_app_runtime::{
 };
 
 use crate::SharedRuntime;
-use crate::chart::{self, DonutSlice, VerticalBar};
+use crate::chart::{self, ChartBar, DonutSlice, SliceTone};
+use crate::status_bar::{duration_text, file_size_text, grouped, pluralize};
+use crate::track_summary::TrackSummary;
 
 /// Gap between cards, in pixels, both within the donut grid and above the
 /// full-width histograms.
@@ -85,7 +89,14 @@ impl StatisticsView {
             self.content.remove(&child);
         }
 
-        let stats = compute_library_statistics(self.runtime.borrow().library_tracks(), local_year);
+        let (stats, summary) = {
+            let runtime = self.runtime.borrow();
+            let tracks = runtime.library_tracks();
+            (
+                compute_library_statistics(tracks, local_year),
+                TrackSummary::of_tracks(tracks),
+            )
+        };
 
         if stats.total_tracks == 0 {
             let empty = gtk::Label::new(Some(
@@ -97,6 +108,9 @@ impl StatisticsView {
             self.content.append(&empty);
             return;
         }
+
+        self.content
+            .append(&headline_figures(&summary, stats.total_plays));
 
         // The four compact cards reflow into a two-up grid (one column when
         // narrow); the homogeneous sizing keeps the tiles aligned.
@@ -188,7 +202,7 @@ fn count_share_text(count: usize, total: usize) -> String {
     quantity_share_text(count as f64, total as f64)
 }
 
-/// `"<quantity> (<pct>%)"` for fractional weighted quantities.
+/// `"<quantity> (<pct>%)"` for weighted quantities, the quantity rounded.
 fn quantity_share_text(quantity: f64, total: f64) -> String {
     let percent = if total == 0.0 {
         0.0
@@ -198,20 +212,21 @@ fn quantity_share_text(quantity: f64, total: f64) -> String {
     format!("{} ({percent:.0}%)", quantity_text(quantity))
 }
 
+/// A weighted quantity for display. A track tagged with several genres
+/// counts a share toward each, so the sums are fractional. Large sums
+/// show whole with their thousands grouped (`2274.25` → `"2,274"`), where
+/// the fraction is noise; small ones keep a tenth (`0.33` → `"0.3"`), so
+/// a real contribution never reads as zero.
 fn quantity_text(quantity: f64) -> String {
-    let rounded = quantity.round();
-    if (quantity - rounded).abs() < 0.005 {
-        return format!("{rounded:.0}");
+    let quantity = quantity.max(0.0);
+    let tenths = (quantity * 10.0).round() as u64;
+    if tenths == 0 && quantity > 0.0 {
+        "< 0.1".to_owned()
+    } else if quantity >= 10.0 || tenths.is_multiple_of(10) {
+        grouped(quantity.round() as u64)
+    } else {
+        format!("{}.{}", tenths / 10, tenths % 10)
     }
-
-    let mut text = format!("{quantity:.2}");
-    while text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    text
 }
 
 /// A genre name for display, mapping the "no genre tag" case to a
@@ -222,20 +237,22 @@ fn genre_label(genre: &Option<String>) -> String {
 
 /// The centred readout shown inside a donut's hole: the denominator the
 /// slices are shares of, over a unit word.
-fn donut_center(total: impl std::fmt::Display, unit: &str) -> String {
+fn donut_center(total: &str, unit: &str) -> String {
     format!("{total}\n{unit}")
 }
 
 fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
     let total = distribution.total_tracks;
+    let ranked = distribution.entries.len();
     let mut slices: Vec<DonutSlice> = distribution
         .entries
         .iter()
-        .map(|entry| DonutSlice {
+        .enumerate()
+        .map(|(rank, entry)| DonutSlice {
             label: genre_label(&entry.genre),
             fraction: fraction_f64(entry.track_weight, total as f64),
             value: quantity_share_text(entry.track_weight, total as f64),
-            muted: false,
+            tone: SliceTone::ranked(rank, ranked),
         })
         .collect();
     if let Some(other) = distribution.other {
@@ -251,11 +268,11 @@ fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
             ),
             fraction: fraction_f64(other.track_weight, total as f64),
             value: quantity_share_text(other.track_weight, total as f64),
-            muted: true,
+            tone: SliceTone::Muted,
         });
     }
-    let content =
-        (!slices.is_empty()).then(|| chart::donut(slices, Some(donut_center(total, "tracks"))));
+    let content = (!slices.is_empty())
+        .then(|| chart::donut(slices, Some(donut_center(&grouped(total as u64), "tracks"))));
     section(
         "Genre",
         Some("Share of tracks per genre across the whole library."),
@@ -269,19 +286,23 @@ fn quality_distribution_section(distribution: &QualityDistribution) -> gtk::Widg
     let slices: Vec<DonutSlice> = if total == 0 {
         Vec::new()
     } else {
+        // Bitrate is ordered: the best range takes the accent itself, the
+        // poorer ones fade from it.
+        let buckets = distribution.buckets.len();
         distribution
             .buckets
             .iter()
-            .map(|bucket| DonutSlice {
+            .enumerate()
+            .map(|(index, bucket)| DonutSlice {
                 label: quality_label(bucket.range).to_owned(),
                 fraction: fraction(bucket.track_count, total),
                 value: count_share_text(bucket.track_count, total),
-                muted: false,
+                tone: SliceTone::ranked(buckets - 1 - index, buckets),
             })
             .collect()
     };
-    let content =
-        (!slices.is_empty()).then(|| chart::donut(slices, Some(donut_center(total, "tracks"))));
+    let content = (!slices.is_empty())
+        .then(|| chart::donut(slices, Some(donut_center(&grouped(total as u64), "tracks"))));
     section(
         "Quality",
         Some("Share of tracks per bitrate range."),
@@ -300,20 +321,19 @@ fn quality_label(range: QualityRange) -> &'static str {
 }
 
 fn most_played_section(genres: &[GenrePlayCount]) -> gtk::Widget {
-    // A play count is a real quantity, so the donut shows each genre's
-    // share of the plays among the most-played five.
-    let total: f64 = genres.iter().map(|genre| genre.total_play_count).sum();
-    let slices: Vec<DonutSlice> = genres
+    let most = genres
         .iter()
-        .map(|genre| DonutSlice {
+        .map(|genre| genre.total_play_count)
+        .fold(0.0, f64::max);
+    let bars: Vec<ChartBar> = genres
+        .iter()
+        .map(|genre| ChartBar {
             label: genre_label(&genre.genre),
-            fraction: fraction_f64(genre.total_play_count, total),
-            value: quantity_share_text(genre.total_play_count, total),
-            muted: false,
+            fraction: fraction_f64(genre.total_play_count, most),
+            value: quantity_text(genre.total_play_count),
         })
         .collect();
-    let content = (total > 0.0)
-        .then(|| chart::donut(slices, Some(donut_center(quantity_text(total), "plays"))));
+    let content = (most > 0.0).then(|| chart::ranked_bars(bars));
     section(
         "Most played genres",
         Some("Top 5 by total play count."),
@@ -323,20 +343,19 @@ fn most_played_section(genres: &[GenrePlayCount]) -> gtk::Widget {
 }
 
 fn most_liked_section(genres: &[GenreRating]) -> gtk::Widget {
-    let max = genres
+    let most = genres
         .iter()
         .map(|genre| genre.total_stars)
-        .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(0.0);
-    let bars: Vec<VerticalBar> = genres
+        .fold(0.0, f64::max);
+    let bars: Vec<ChartBar> = genres
         .iter()
-        .map(|genre| VerticalBar {
+        .map(|genre| ChartBar {
             label: genre_label(&genre.genre),
-            fraction: fraction_f64(genre.total_stars, max),
+            fraction: fraction_f64(genre.total_stars, most),
             value: format!("{}★", quantity_text(genre.total_stars)),
         })
         .collect();
-    let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
+    let content = (!bars.is_empty()).then(|| chart::ranked_bars(bars));
     section(
         "Most liked genres",
         Some("Top 5 by total rating points across rated tracks."),
@@ -351,15 +370,15 @@ fn release_years_section(decades: &[DecadeCount]) -> gtk::Widget {
         .map(|decade| decade.track_count)
         .max()
         .unwrap_or(0);
-    let bars: Vec<VerticalBar> = decades
+    let bars: Vec<ChartBar> = decades
         .iter()
-        .map(|decade| VerticalBar {
+        .map(|decade| ChartBar {
             label: decade
                 .decade
                 .map(|year| format!("{year}s"))
                 .unwrap_or_else(|| "Unknown".to_owned()),
             fraction: fraction(decade.track_count, max),
-            value: decade.track_count.to_string(),
+            value: grouped(decade.track_count as u64),
         })
         .collect();
     let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
@@ -373,15 +392,15 @@ fn release_years_section(decades: &[DecadeCount]) -> gtk::Widget {
 
 fn added_years_section(years: &[YearCount]) -> gtk::Widget {
     let max = years.iter().map(|year| year.track_count).max().unwrap_or(0);
-    let bars: Vec<VerticalBar> = years
+    let bars: Vec<ChartBar> = years
         .iter()
-        .map(|year| VerticalBar {
+        .map(|year| ChartBar {
             label: year
                 .year
                 .map(|year| year.to_string())
                 .unwrap_or_else(|| "Unknown".to_owned()),
             fraction: fraction(year.track_count, max),
-            value: year.track_count.to_string(),
+            value: grouped(year.track_count as u64),
         })
         .collect();
     let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
@@ -409,6 +428,52 @@ fn fraction_f64(numerator: f64, denominator: f64) -> f64 {
     } else {
         numerator / denominator
     }
+}
+
+/// The row of big figures opening the page: how many tracks, how long
+/// they play, how much room they take, how often they were played. The
+/// tiles flow onto fewer per line as the window narrows.
+fn headline_figures(summary: &TrackSummary, total_plays: u64) -> gtk::Widget {
+    const FIGURES: u32 = 4;
+    let row = gtk::FlowBox::new();
+    row.set_homogeneous(true);
+    row.set_hexpand(true);
+    row.set_max_children_per_line(FIGURES);
+    row.set_column_spacing(CARD_SPACING as u32);
+    row.set_row_spacing(CARD_SPACING as u32);
+    row.set_selection_mode(gtk::SelectionMode::None);
+    // Display only: no tile takes focus or reacts to clicks.
+    row.set_can_focus(false);
+    let tracks = summary.track_count;
+    let plays = usize::try_from(total_plays).unwrap_or(usize::MAX);
+    for (figure, caption) in [
+        (
+            grouped(tracks as u64),
+            pluralize(tracks, "track", "tracks").to_owned(),
+        ),
+        (
+            duration_text(summary.duration_seconds),
+            "of music".to_owned(),
+        ),
+        (file_size_text(summary.size_bytes), "on disk".to_owned()),
+        (
+            grouped(total_plays),
+            pluralize(plays, "play", "plays").to_owned(),
+        ),
+    ] {
+        let tile = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        tile.add_css_class("statistics-figure");
+        let figure_label = gtk::Label::new(Some(&figure));
+        figure_label.add_css_class("statistics-figure-value");
+        figure_label.set_xalign(0.0);
+        let caption_label = gtk::Label::new(Some(&caption));
+        caption_label.add_css_class("statistics-section-caption");
+        caption_label.set_xalign(0.0);
+        tile.append(&figure_label);
+        tile.append(&caption_label);
+        row.append(&tile);
+    }
+    row.upcast()
 }
 
 /// Assemble one chart card: a contrasting surface holding a title, an
@@ -516,10 +581,21 @@ mod tests {
     }
 
     #[test]
-    fn quantity_share_text_trims_fractional_weights() {
-        assert_eq!(quantity_share_text(0.5, 10.0), "0.5 (5%)");
-        assert_eq!(quantity_share_text(1.0 / 3.0, 1.0), "0.33 (33%)");
+    fn quantity_share_text_keeps_small_weights_visible() {
+        assert_eq!(quantity_share_text(0.4, 10.0), "0.4 (4%)");
+        assert_eq!(quantity_share_text(2274.25, 10265.0), "2,274 (22%)");
         assert_eq!(quantity_share_text(10.0, 10.0), "10 (100%)");
+    }
+
+    #[test]
+    fn quantities_keep_a_tenth_only_while_small() {
+        assert_eq!(quantity_text(7296.08), "7,296");
+        assert_eq!(quantity_text(12.4), "12");
+        assert_eq!(quantity_text(9.96), "10");
+        assert_eq!(quantity_text(3.0), "3");
+        assert_eq!(quantity_text(1.0 / 3.0), "0.3");
+        assert_eq!(quantity_text(0.02), "< 0.1");
+        assert_eq!(quantity_text(0.0), "0");
     }
 
     #[test]

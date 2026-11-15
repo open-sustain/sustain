@@ -378,7 +378,7 @@ pub(crate) fn library_status_text(
 ) -> String {
     format!(
         "{} {}, {}, {}",
-        track_count,
+        grouped(track_count as u64),
         pluralize(track_count, "song", "songs"),
         duration_text(duration_seconds),
         file_size_text(size_bytes),
@@ -389,7 +389,11 @@ pub(crate) fn duration_text(duration_seconds: u64) -> String {
     let hours = duration_seconds / 3_600;
     if hours >= 24 {
         let days = hours / 24;
-        format!("{} {}", days, pluralize(days as usize, "day", "days"))
+        format!(
+            "{} {}",
+            grouped(days),
+            pluralize(days as usize, "day", "days")
+        )
     } else if hours >= 1 {
         format!("{} {}", hours, pluralize(hours as usize, "hour", "hours"))
     } else {
@@ -402,15 +406,28 @@ pub(crate) fn duration_text(duration_seconds: u64) -> String {
     }
 }
 
-fn file_size_text(size_bytes: u64) -> String {
+pub(crate) fn file_size_text(size_bytes: u64) -> String {
     const MB: u64 = 1_000_000;
     const GB: u64 = 1_000_000_000;
 
     if size_bytes >= GB {
-        format!("{} GB", size_bytes / GB)
+        format!("{} GB", grouped(size_bytes / GB))
     } else {
-        format!("{} MB", size_bytes / MB)
+        format!("{} MB", grouped(size_bytes / MB))
     }
+}
+
+/// `value` with its thousands separated by commas (`49295` → `"49,295"`).
+pub(crate) fn grouped(value: u64) -> String {
+    let digits = value.to_string();
+    let mut text = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    text
 }
 
 pub(crate) fn pluralize(
@@ -424,6 +441,19 @@ pub(crate) fn pluralize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_figures_group_their_thousands() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1_000), "1,000");
+        assert_eq!(grouped(49_295), "49,295");
+        assert_eq!(grouped(1_234_567), "1,234,567");
+        assert_eq!(
+            library_status_text(10_265, 2_592_000_000, 1_234_000_000_000),
+            "10,265 songs, 30,000 days, 1,234 GB"
+        );
+    }
 
     #[test]
     fn library_status_uses_hours_and_megabytes_for_small_libraries() {

@@ -6,16 +6,16 @@
 //! colours. GTK ships no chart widget; like GNOME's own apps, Sustain
 //! draws its own.
 //!
-//! Two primitives cover the Statistics page:
-//! - [`donut`] for part-of-a-whole and comparison breakdowns (genre,
-//!   bitrate, most-played, most-liked), with an accent-derived
-//!   categorical palette and a legend;
+//! Three primitives cover the Statistics page:
+//! - [`donut`] for part-of-a-whole breakdowns (genre, bitrate), each
+//!   slice a shade of the accent and a legend beside the ring;
+//! - [`ranked_bars`] for top-N rankings (most played, most liked): one
+//!   horizontal bar per entry, label left, value right;
 //! - [`vertical_bars`] for histograms over an ordered axis (release
 //!   decade, year added).
 //!
-//! The categorical palette ([`categorical_color`]) is shared with the
-//! device-sync occupation meter, so both speak the same accent-hue
-//! language.
+//! The device-sync occupation meter tells media kinds apart with
+//! [`categorical_color`], the accent rotated around the hue wheel.
 //!
 //! Every canvas reads its accent from `area.color()`, which the CSS
 //! `color` property sets to `@theme_selected_bg_color`; nothing here
@@ -35,12 +35,13 @@ const CHART_ACCENT_CLASS: &str = "statistics-chart";
 /// read crisply while staying a touch soft against the card behind it.
 const BAR_FILL_ALPHA: f64 = 0.85;
 
-/// Corner radius of a histogram bar's fill, in pixels, applied to all
-/// four corners so each bar reads as a rounded capsule rather than a
-/// flat-edged block. Clamped per-bar to half the bar width and half the
-/// bar height, so narrow columns and stub bars round into a stadium
-/// shape instead of over-rounding.
-const BAR_FILL_RADIUS: f64 = 10.0;
+/// Corner radius of a bar's free end, in pixels: the top of a histogram
+/// bar, the right end of a ranked bar. The end standing on the axis stays
+/// square, so the bars read as grown from a common baseline.
+const BAR_FILL_RADIUS: f64 = 5.0;
+
+/// Height of a ranked bar, in pixels.
+const RANKED_BAR_HEIGHT: i32 = 14;
 
 /// Diameter of a donut ring, in pixels.
 const DONUT_DIAMETER: i32 = 260;
@@ -75,6 +76,19 @@ pub(crate) fn categorical_color(accent: gdk::RGBA, hue_offset: f64) -> (f64, f64
         l.clamp(0.45, 0.62),
     )
 }
+
+/// The opacity of a donut slice painted at `shade`: the accent itself at
+/// 0, fading toward the card surface as `shade` reaches 1. Fading over
+/// the surface keeps the accent's hue untouched (a grey accent stays
+/// grey) and lets the live light or dark card set the palest tone, so
+/// the ramp follows the theme instead of guessing it.
+pub(crate) fn shade_opacity(shade: f64) -> f64 {
+    1.0 - (1.0 - PALEST_SHADE_OPACITY) * shade.clamp(0.0, 1.0)
+}
+
+/// The opacity of the palest slice: faint enough to step apart from its
+/// neighbours, opaque enough to stay visible on either card surface.
+const PALEST_SHADE_OPACITY: f64 = 0.55;
 
 /// A theme-neutral grey for the aggregated "other" / untagged tail of a
 /// categorical palette.
@@ -118,41 +132,58 @@ pub(crate) fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
 }
 
 /// One slice of a [`donut`]: a category label, its fraction of the whole,
-/// a value string shown in the legend, and whether it is the muted
-/// neutral tail (the folded "other" remainder) rather than a coloured
-/// category.
+/// a value string shown in the legend, and its tone.
 pub(crate) struct DonutSlice {
     pub label: String,
     pub fraction: f64,
     pub value: String,
-    pub muted: bool,
+    pub tone: SliceTone,
 }
 
-/// A donut chart: a ring of accent-hued wedges with an optional centred
+/// How a [`DonutSlice`] is coloured.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum SliceTone {
+    /// A shade of the accent, from 0 (the accent itself) to 1 (the
+    /// faintest); see [`shade_opacity`].
+    Shade(f64),
+    /// The neutral grey of a folded "other" remainder.
+    Muted,
+}
+
+impl SliceTone {
+    /// The tone of the slice at `rank` among `count` ranked slices: the
+    /// first the accent itself, the last the faintest shade.
+    pub(crate) fn ranked(rank: usize, count: usize) -> Self {
+        if count <= 1 {
+            Self::Shade(0.0)
+        } else {
+            Self::Shade(rank as f64 / (count - 1) as f64)
+        }
+    }
+
+    /// Set `cr`'s source to this tone, resolved from the live `accent`.
+    fn set_source(self, cr: &gtk::cairo::Context, accent: gdk::RGBA) {
+        match self {
+            Self::Shade(shade) => cr.set_source_rgba(
+                accent.red() as f64,
+                accent.green() as f64,
+                accent.blue() as f64,
+                shade_opacity(shade),
+            ),
+            Self::Muted => {
+                let (r, g, b) = MUTED_GREY;
+                cr.set_source_rgb(r, g, b);
+            }
+        }
+    }
+}
+
+/// A donut chart: a ring of accent-shaded wedges with an optional centred
 /// total, paired with a legend listing each slice's swatch, label, and
 /// value. The ring and the matching swatch resolve the same colour from
 /// the live accent at draw time, so the legend always agrees with the
 /// ring across theme and accent changes.
 pub(crate) fn donut(slices: Vec<DonutSlice>, center: Option<String>) -> gtk::Widget {
-    // Spread the coloured slices evenly around the wheel; the muted tail
-    // (if any) takes the neutral grey instead of a hue. Each slice's role
-    // is computed once and shared by its wedge and its legend swatch.
-    let coloured = slices.iter().filter(|slice| !slice.muted).count().max(1);
-    let hue_step = 360.0 / coloured as f64;
-    let mut next_hue = 0usize;
-    let roles: Vec<Option<f64>> = slices
-        .iter()
-        .map(|slice| {
-            if slice.muted {
-                None
-            } else {
-                let hue = next_hue as f64 * hue_step;
-                next_hue += 1;
-                Some(hue)
-            }
-        })
-        .collect();
-
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 18);
     row.set_halign(gtk::Align::Center);
     row.set_valign(gtk::Align::Center);
@@ -167,10 +198,9 @@ pub(crate) fn donut(slices: Vec<DonutSlice>, center: Option<String>) -> gtk::Wid
     // top of the row instead of vertically centring it like the other,
     // shorter-legend donuts.
     ring.set_valign(gtk::Align::Center);
-    let wedges: Vec<(f64, Option<f64>)> = slices
+    let wedges: Vec<(f64, SliceTone)> = slices
         .iter()
-        .zip(&roles)
-        .map(|(slice, role)| (slice.fraction, *role))
+        .map(|slice| (slice.fraction, slice.tone))
         .collect();
     ring.set_draw_func(move |area, cr, width, height| {
         let w = width as f64;
@@ -187,7 +217,7 @@ pub(crate) fn donut(slices: Vec<DonutSlice>, center: Option<String>) -> gtk::Wid
             return;
         }
         let mut start = -PI / 2.0;
-        for (fraction, role) in &wedges {
+        for (fraction, tone) in &wedges {
             let sweep = fraction.clamp(0.0, 1.0) * 2.0 * PI;
             if sweep <= 0.0 {
                 continue;
@@ -204,11 +234,7 @@ pub(crate) fn donut(slices: Vec<DonutSlice>, center: Option<String>) -> gtk::Wid
             cr.arc(cx, cy, outer, a0, a1);
             cr.arc_negative(cx, cy, inner, a1, a0);
             cr.close_path();
-            let (r, g, b) = match role {
-                Some(hue) => categorical_color(accent, *hue),
-                None => MUTED_GREY,
-            };
-            cr.set_source_rgb(r, g, b);
+            tone.set_source(cr, accent);
             let _ = cr.fill();
             start = end;
         }
@@ -234,10 +260,10 @@ pub(crate) fn donut(slices: Vec<DonutSlice>, center: Option<String>) -> gtk::Wid
     legend.set_column_spacing(8);
     legend.set_row_spacing(4);
     legend.set_valign(gtk::Align::Center);
-    for (index, (slice, role)) in slices.iter().zip(&roles).enumerate() {
+    for (index, slice) in slices.iter().enumerate() {
         let line = index as i32;
 
-        legend.attach(&swatch(*role), 0, line, 1, 1);
+        legend.attach(&swatch(slice.tone), 0, line, 1, 1);
 
         let label = gtk::Label::new(Some(&slice.label));
         label.add_css_class("statistics-legend-label");
@@ -259,8 +285,8 @@ pub(crate) fn donut(slices: Vec<DonutSlice>, center: Option<String>) -> gtk::Wid
 }
 
 /// A small legend swatch: a filled disc in the same colour its donut
-/// wedge resolves to (a hue, or the muted grey for the tail).
-fn swatch(role: Option<f64>) -> gtk::DrawingArea {
+/// wedge resolves to.
+fn swatch(tone: SliceTone) -> gtk::DrawingArea {
     let area = gtk::DrawingArea::new();
     area.add_css_class(CHART_ACCENT_CLASS);
     area.set_content_width(SWATCH_SIZE);
@@ -272,31 +298,26 @@ fn swatch(role: Option<f64>) -> gtk::DrawingArea {
         if w <= 0.0 || h <= 0.0 {
             return;
         }
-        let accent = area.color();
-        let (r, g, b) = match role {
-            Some(hue) => categorical_color(accent, hue),
-            None => MUTED_GREY,
-        };
-        cr.set_source_rgb(r, g, b);
+        tone.set_source(cr, area.color());
         cr.arc(w / 2.0, h / 2.0, (w.min(h) / 2.0) - 1.0, 0.0, 2.0 * PI);
         let _ = cr.fill();
     });
     area
 }
 
-/// One bar of a [`vertical_bars`] histogram: its x-axis label, its height
-/// as a fraction of the tallest bar, and the value shown inside it.
-pub(crate) struct VerticalBar {
+/// One bar of a [`vertical_bars`] histogram or of [`ranked_bars`]: its
+/// label, its length as a fraction of the longest bar, and the value
+/// printed beside it.
+pub(crate) struct ChartBar {
     pub label: String,
     pub fraction: f64,
     pub value: String,
 }
 
 /// A vertical-bar histogram over an ordered axis. Each bar is one column
-/// of a homogeneous grid — the bar with its value laid over the foot of
-/// the fill, the axis label below — so the columns line up exactly
-/// without any per-pixel alignment.
-pub(crate) fn vertical_bars(bars: Vec<VerticalBar>) -> gtk::Widget {
+/// of a homogeneous grid — its value over the bar, the axis label below —
+/// so the columns line up exactly without any per-pixel alignment.
+pub(crate) fn vertical_bars(bars: Vec<ChartBar>) -> gtk::Widget {
     let grid = gtk::Grid::new();
     grid.set_column_homogeneous(true);
     grid.set_column_spacing(6);
@@ -306,20 +327,16 @@ pub(crate) fn vertical_bars(bars: Vec<VerticalBar>) -> gtk::Widget {
     for (index, bar) in bars.iter().enumerate() {
         let col = index as i32;
 
-        // The overlay wraps the bar (which is sized to its own height), so
-        // sitting it at the foot of the row keeps the bars on a common
-        // baseline while the value, centred in the overlay, lands on the
-        // vertical centre of the coloured bar.
-        let overlay = gtk::Overlay::new();
-        overlay.set_valign(gtk::Align::End);
-        overlay.set_child(Some(&vertical_bar(bar.fraction)));
-
+        // The value rides just above its bar, both at the foot of the
+        // row, so the bars share a baseline whatever their height.
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        column.set_valign(gtk::Align::End);
         let value = gtk::Label::new(Some(&bar.value));
         value.add_css_class("statistics-bar-value");
         value.set_halign(gtk::Align::Center);
-        value.set_valign(gtk::Align::Center);
-        overlay.add_overlay(&value);
-        grid.attach(&overlay, col, 0, 1, 1);
+        column.append(&value);
+        column.append(&bar_canvas(bar.fraction, BarDirection::Up));
+        grid.attach(&column, col, 0, 1, 1);
 
         let label = gtk::Label::new(Some(&bar.label));
         label.add_css_class("statistics-axis-label");
@@ -332,24 +349,67 @@ pub(crate) fn vertical_bars(bars: Vec<VerticalBar>) -> gtk::Widget {
     grid.upcast()
 }
 
-/// A single histogram bar: the widget is sized to the bar's own height —
-/// `fraction` of [`VBAR_HEIGHT`] — and sat at the foot of the column, so
-/// the tallest bar defines the row height and the rest share a baseline.
-/// The draw-func fills the whole allocation with the live theme accent as
-/// a rounded capsule, all four corners swept; sizing the widget to the
-/// bar (rather than the full column) lets an overlaid value centre on the
-/// bar instead of on the empty space above it. The bar floats directly on
-/// the card — there is no trough background.
-fn vertical_bar(fraction: f64) -> gtk::DrawingArea {
+/// A ranking: one row per entry, its label, a horizontal bar as long as
+/// its share of the longest, and its value right-aligned.
+pub(crate) fn ranked_bars(bars: Vec<ChartBar>) -> gtk::Widget {
+    let grid = gtk::Grid::new();
+    grid.set_column_spacing(12);
+    grid.set_row_spacing(10);
+    grid.set_hexpand(true);
+    grid.set_valign(gtk::Align::Center);
+
+    for (index, bar) in bars.iter().enumerate() {
+        let row = index as i32;
+
+        let label = gtk::Label::new(Some(&bar.label));
+        label.add_css_class("statistics-legend-label");
+        label.set_xalign(0.0);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_max_width_chars(16);
+        grid.attach(&label, 0, row, 1, 1);
+
+        let canvas = bar_canvas(bar.fraction, BarDirection::Right);
+        canvas.set_hexpand(true);
+        canvas.set_valign(gtk::Align::Center);
+        grid.attach(&canvas, 1, row, 1, 1);
+
+        let value = gtk::Label::new(Some(&bar.value));
+        value.add_css_class("statistics-legend-value");
+        value.set_xalign(1.0);
+        grid.attach(&value, 2, row, 1, 1);
+    }
+
+    grid.upcast()
+}
+
+/// Which way a bar grows from its axis.
+#[derive(Clone, Copy)]
+enum BarDirection {
+    /// A histogram column, standing on the baseline.
+    Up,
+    /// A ranking row, starting at the left edge.
+    Right,
+}
+
+/// One bar in the live accent: a histogram column sized to `fraction` of
+/// [`VBAR_HEIGHT`], or a ranking row filling `fraction` of its width. Its
+/// free end is rounded, the end on the axis square.
+fn bar_canvas(fraction: f64, direction: BarDirection) -> gtk::DrawingArea {
     let fraction = fraction.clamp(0.0, 1.0);
     let area = gtk::DrawingArea::new();
     area.add_css_class("statistics-vbar");
-    area.set_content_height((fraction * f64::from(VBAR_HEIGHT)).round() as i32);
-    area.set_hexpand(true);
-    area.set_valign(gtk::Align::End);
+    match direction {
+        BarDirection::Up => {
+            area.set_content_height((fraction * f64::from(VBAR_HEIGHT)).round() as i32);
+            area.set_hexpand(true);
+        }
+        BarDirection::Right => area.set_content_height(RANKED_BAR_HEIGHT),
+    }
     area.set_draw_func(move |area, cr, width, height| {
-        let w = width as f64;
-        let h = height as f64;
+        let (w, h) = match direction {
+            BarDirection::Up => (width as f64, height as f64),
+            BarDirection::Right => (width as f64 * fraction, height as f64),
+        };
         if w <= 0.0 || h <= 0.0 {
             return;
         }
@@ -361,15 +421,21 @@ fn vertical_bar(fraction: f64) -> gtk::DrawingArea {
             BAR_FILL_ALPHA,
         );
         let radius = BAR_FILL_RADIUS.min(w / 2.0).min(h / 2.0);
-        // Trace the allocation clockwise as a rounded rectangle, every
-        // corner swept by a quarter arc: top-left (PI..1.5PI), top-right
-        // (1.5PI..2PI), bottom-right (0..0.5PI), bottom-left (0.5PI..PI).
-        // Cairo links consecutive arcs with the straight edges between them.
         cr.new_sub_path();
-        cr.arc(radius, radius, radius, PI, 1.5 * PI);
-        cr.arc(w - radius, radius, radius, 1.5 * PI, 2.0 * PI);
-        cr.arc(w - radius, h - radius, radius, 0.0, 0.5 * PI);
-        cr.arc(radius, h - radius, radius, 0.5 * PI, PI);
+        match direction {
+            BarDirection::Up => {
+                cr.move_to(0.0, h);
+                cr.arc(radius, radius, radius, PI, 1.5 * PI);
+                cr.arc(w - radius, radius, radius, 1.5 * PI, 2.0 * PI);
+                cr.line_to(w, h);
+            }
+            BarDirection::Right => {
+                cr.move_to(0.0, 0.0);
+                cr.arc(w - radius, radius, radius, 1.5 * PI, 2.0 * PI);
+                cr.arc(w - radius, h - radius, radius, 0.0, 0.5 * PI);
+                cr.line_to(0.0, h);
+            }
+        }
         cr.close_path();
         let _ = cr.fill();
     });
@@ -395,6 +461,23 @@ mod tests {
             assert!((g - g2).abs() < 1e-9, "g: {g} != {g2}");
             assert!((b - b2).abs() < 1e-9, "b: {b} != {b2}");
         }
+    }
+
+    #[test]
+    fn shades_fade_from_the_opaque_accent() {
+        assert_eq!(shade_opacity(0.0), 1.0);
+        assert_eq!(shade_opacity(1.0), PALEST_SHADE_OPACITY);
+        for step in 0..10 {
+            let shade = f64::from(step) / 10.0;
+            assert!(shade_opacity(shade) > shade_opacity(shade + 0.1));
+        }
+    }
+
+    #[test]
+    fn ranked_tones_spread_over_the_whole_ramp() {
+        assert_eq!(SliceTone::ranked(0, 1), SliceTone::Shade(0.0));
+        assert_eq!(SliceTone::ranked(0, 5), SliceTone::Shade(0.0));
+        assert_eq!(SliceTone::ranked(4, 5), SliceTone::Shade(1.0));
     }
 
     #[test]
@@ -428,38 +511,41 @@ mod widget_smoke {
                         label: "House".to_owned(),
                         fraction: 0.5,
                         value: "50 (50%)".to_owned(),
-                        muted: false,
+                        tone: SliceTone::ranked(0, 2),
                     },
                     DonutSlice {
                         label: "Techno".to_owned(),
                         fraction: 0.3,
                         value: "30 (30%)".to_owned(),
-                        muted: false,
+                        tone: SliceTone::ranked(1, 2),
                     },
                     DonutSlice {
                         label: "Other (3 genres)".to_owned(),
                         fraction: 0.2,
                         value: "20 (20%)".to_owned(),
-                        muted: true,
+                        tone: SliceTone::Muted,
                     },
                 ],
                 Some("100\ntracks".to_owned()),
             );
-            let bars = vertical_bars(vec![
-                VerticalBar {
-                    label: "1990s".to_owned(),
-                    fraction: 1.0,
-                    value: "40".to_owned(),
-                },
-                VerticalBar {
-                    label: "2000s".to_owned(),
-                    fraction: 0.5,
-                    value: "20".to_owned(),
-                },
-            ]);
+            let sample_bars = || {
+                vec![
+                    ChartBar {
+                        label: "1990s".to_owned(),
+                        fraction: 1.0,
+                        value: "40".to_owned(),
+                    },
+                    ChartBar {
+                        label: "2000s".to_owned(),
+                        fraction: 0.5,
+                        value: "20".to_owned(),
+                    },
+                ]
+            };
             let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
             column.append(&donut);
-            column.append(&bars);
+            column.append(&vertical_bars(sample_bars()));
+            column.append(&ranked_bars(sample_bars()));
 
             let window = gtk::Window::new();
             window.set_default_size(420, 480);
