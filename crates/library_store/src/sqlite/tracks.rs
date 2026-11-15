@@ -439,6 +439,10 @@ pub(super) fn tracks(connection: &Connection) -> StoreResult<Vec<Track>> {
     while let Some(row) = rows.next().map_err(StoreError::from)? {
         tracks.push(track_from_row(row)?);
     }
+    // The row count is unknown up front, so the vector grew by doubling;
+    // callers keep the whole library for the session, which would hold
+    // up to twice the tracks' size (#306).
+    tracks.shrink_to_fit();
 
     Ok(tracks)
 }
