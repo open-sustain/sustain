@@ -246,10 +246,14 @@ pub(super) fn palette_components_from_cache_row(
     let Some(secondary) = rgb_from_cache_columns(row, 11)? else {
         return Ok(None);
     };
+    let Some(accent) = rgb_from_cache_columns(row, 14)? else {
+        return Ok(None);
+    };
     Ok(Some(ArtworkPaletteComponents {
         background,
         foreground,
         secondary,
+        accent,
     }))
 }
 

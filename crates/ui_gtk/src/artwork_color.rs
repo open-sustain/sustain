@@ -10,6 +10,7 @@ pub(crate) struct ArtworkPalette {
     background: RgbColor,
     foreground: RgbColor,
     secondary: RgbColor,
+    accent: RgbColor,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,6 +18,7 @@ pub(crate) struct ArtworkPaletteComponents {
     pub(crate) background: RgbColorComponents,
     pub(crate) foreground: RgbColorComponents,
     pub(crate) secondary: RgbColorComponents,
+    pub(crate) accent: RgbColorComponents,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,10 +53,12 @@ impl ArtworkPalette {
         let background = buckets.first()?.average()?;
         let foreground = readable_foreground(background);
         let secondary = pick_secondary(&buckets, background, foreground);
+        let accent = pick_accent(&buckets, background);
         Some(Self {
             background,
             foreground,
             secondary,
+            accent,
         })
     }
 
@@ -66,14 +70,15 @@ impl ArtworkPalette {
         self.background.rgba()
     }
 
-    /// The cover's dominant colour, lightened or darkened just enough to
-    /// show on the window's chrome whatever the theme: the top bar is
+    /// The cover's most colourful colour (see [`pick_accent`]), lightened
+    /// or darkened just enough to show on the window's chrome whatever the
+    /// theme: the top bar is
     /// near-white in a light theme and near-black in a dark one, and a
     /// colour whose luminance sits between [`CHROME_MIN_LUMINANCE`] and
     /// [`CHROME_MAX_LUMINANCE`] keeps at least 2:1 against both. The hue
     /// is kept.
     pub(crate) fn chrome_rgba(self) -> gdk::RGBA {
-        within_luminance(self.background, CHROME_MIN_LUMINANCE, CHROME_MAX_LUMINANCE).rgba()
+        within_luminance(self.accent, CHROME_MIN_LUMINANCE, CHROME_MAX_LUMINANCE).rgba()
     }
 
     pub(crate) fn from_components(components: ArtworkPaletteComponents) -> Self {
@@ -81,6 +86,7 @@ impl ArtworkPalette {
             background: RgbColor::from_components(components.background),
             foreground: RgbColor::from_components(components.foreground),
             secondary: RgbColor::from_components(components.secondary),
+            accent: RgbColor::from_components(components.accent),
         }
     }
 
@@ -89,6 +95,7 @@ impl ArtworkPalette {
             background: self.background.components(),
             foreground: self.foreground.components(),
             secondary: self.secondary.components(),
+            accent: self.accent.components(),
         }
     }
 
@@ -115,6 +122,7 @@ impl ArtworkPalette {
             background,
             foreground,
             secondary,
+            accent: background,
         }
     }
 }
@@ -132,6 +140,13 @@ const SECONDARY_MIN_CONTRAST: f64 = 2.2;
 /// background to soften it. Keeps the muted text on-palette without
 /// pretending the artwork had a chromatic accent it didn't have.
 const SECONDARY_FALLBACK_BLEND: f64 = 0.35;
+
+/// Smallest share of the cover's sampled pixels a colour must cover to
+/// be its accent: a few stray pixels do not colour the chrome.
+const ACCENT_MIN_SHARE: f64 = 0.01;
+/// Chroma (max minus min RGB channel) under which a colour reads as grey:
+/// a cover with nothing more colourful keeps its dominant colour.
+const ACCENT_MIN_CHROMA: u8 = 48;
 
 fn scored_buckets_from_pixbuf(pixbuf: &gdk_pixbuf::Pixbuf) -> Option<Vec<ColorBucket>> {
     let width = usize::try_from(pixbuf.width()).ok()?;
@@ -239,6 +254,24 @@ fn pick_secondary(buckets: &[ColorBucket], background: RgbColor, foreground: Rgb
     }
 
     blend_toward(foreground, background, SECONDARY_FALLBACK_BLEND)
+}
+
+/// The most colourful colour covering at least [`ACCENT_MIN_SHARE`] of
+/// the cover, so a grey or near-black cover with a coloured motif shows
+/// that motif's colour rather than its grey. A cover with no colour of at
+/// least [`ACCENT_MIN_CHROMA`] keeps `dominant`.
+fn pick_accent(buckets: &[ColorBucket], dominant: RgbColor) -> RgbColor {
+    let sampled: u64 = buckets.iter().map(|bucket| bucket.pixels).sum();
+    buckets
+        .iter()
+        .filter(|bucket| bucket.pixels as f64 >= sampled as f64 * ACCENT_MIN_SHARE)
+        .filter_map(|bucket| bucket.average())
+        .filter(|color| color.chroma() >= ACCENT_MIN_CHROMA)
+        // Buckets come by descending score: on equal chroma the first,
+        // larger one wins.
+        .rev()
+        .max_by_key(|color| color.chroma())
+        .unwrap_or(dominant)
 }
 
 fn rgb_distance(a: RgbColor, b: RgbColor) -> f64 {
@@ -389,6 +422,12 @@ impl RgbColor {
         }
     }
 
+    /// How far the colour is from grey: its largest channel minus its
+    /// smallest.
+    fn chroma(self) -> u8 {
+        self.red.max(self.green).max(self.blue) - self.red.min(self.green).min(self.blue)
+    }
+
     /// `self` moved `amount` (0 to 1) of the way to `other`.
     fn mix(self, other: Self, amount: f64) -> Self {
         let channel = |from: u8, to: u8| {
@@ -420,8 +459,8 @@ impl RgbColor {
 mod tests {
     use super::{
         ArtworkPalette, CHROME_MAX_LUMINANCE, CHROME_MIN_LUMINANCE, ColorBucket, RgbColor,
-        contrast_ratio, dominant_color, pick_secondary, readable_foreground, relative_luminance,
-        sample_step, within_luminance,
+        contrast_ratio, dominant_color, pick_accent, pick_secondary, readable_foreground,
+        relative_luminance, sample_step, within_luminance,
     };
 
     #[test]
@@ -512,6 +551,28 @@ mod tests {
 
         // White (foreground) blended 35% toward the dark blue background.
         assert_eq!(secondary, RgbColor::new(173, 180, 236));
+    }
+
+    #[test]
+    fn the_accent_is_the_most_colourful_noticeable_colour() {
+        let grey = RgbColor::new(90, 90, 92);
+        let buckets = vec![
+            bucket(90, 90, 92, 800),
+            bucket(150, 120, 110, 100),
+            bucket(200, 40, 40, 60),
+            // Too few pixels to count, however vivid.
+            bucket(0, 255, 0, 5),
+        ];
+
+        assert_eq!(pick_accent(&buckets, grey), RgbColor::new(200, 40, 40));
+    }
+
+    #[test]
+    fn a_grey_cover_keeps_its_dominant_colour_as_accent() {
+        let grey = RgbColor::new(90, 90, 92);
+        let buckets = vec![bucket(90, 90, 92, 800), bucket(140, 130, 120, 200)];
+
+        assert_eq!(pick_accent(&buckets, grey), grey);
     }
 
     #[test]

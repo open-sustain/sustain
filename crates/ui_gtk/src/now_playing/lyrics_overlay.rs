@@ -263,6 +263,11 @@ mod tests {
                     green: 120,
                     blue: 60,
                 },
+                accent: RgbColorComponents {
+                    red: 200,
+                    green: 120,
+                    blue: 60,
+                },
             });
 
             let view = gtk::TextView::new();

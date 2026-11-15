@@ -20,7 +20,7 @@ use super::decode::{
     texture_from_png,
 };
 
-const CACHE_SCHEMA_VERSION: i64 = 2;
+const CACHE_SCHEMA_VERSION: i64 = 3;
 const CACHE_SOURCE_KIND_EMBEDDED_TRACK: &str = "embedded-track";
 const CACHE_MAX_BYTES: i64 = 5_i64 * 1024 * 1024 * 1024;
 
@@ -267,6 +267,9 @@ impl ArtworkDiskCache {
                     secondary_red    INTEGER,
                     secondary_green  INTEGER,
                     secondary_blue   INTEGER,
+                    accent_red       INTEGER,
+                    accent_green     INTEGER,
+                    accent_blue      INTEGER,
                     updated_at_unix  INTEGER NOT NULL,
                     PRIMARY KEY (source_kind, source_key)
                 ) WITHOUT ROWID;
@@ -301,7 +304,10 @@ impl ArtworkDiskCache {
                            foreground_blue,
                            secondary_red,
                            secondary_green,
-                           secondary_blue
+                           secondary_blue,
+                           accent_red,
+                           accent_green,
+                           accent_blue
                       FROM artwork_cache
                      WHERE source_kind = ?1
                        AND source_key = ?2
@@ -326,7 +332,10 @@ impl ArtworkDiskCache {
                            foreground_blue,
                            secondary_red,
                            secondary_green,
-                           secondary_blue
+                           secondary_blue,
+                           accent_red,
+                           accent_green,
+                           accent_blue
                       FROM artwork_cache
                      WHERE source_kind = ?1
                        AND source_key = ?2
@@ -424,6 +433,7 @@ impl ArtworkDiskCache {
         let background = palette.map(|palette| palette.background);
         let foreground = palette.map(|palette| palette.foreground);
         let secondary = palette.map(|palette| palette.secondary);
+        let accent = palette.map(|palette| palette.accent);
         if connection
             .execute(
                 r#"
@@ -447,11 +457,14 @@ impl ArtworkDiskCache {
                 secondary_red,
                 secondary_green,
                 secondary_blue,
+                accent_red,
+                accent_green,
+                accent_blue,
                 updated_at_unix
             )
             VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                ?17, ?18, ?19,
+                ?17, ?18, ?19, ?20, ?21, ?22,
                 unixepoch()
             )
             ON CONFLICT(source_kind, source_key) DO UPDATE SET
@@ -570,6 +583,30 @@ impl ArtworkDiskCache {
                         THEN COALESCE(excluded.secondary_blue, artwork_cache.secondary_blue)
                         ELSE excluded.secondary_blue
                     END,
+                accent_red =
+                    CASE
+                        WHEN artwork_cache.file_size = excluded.file_size
+                         AND artwork_cache.mtime_ns = excluded.mtime_ns
+                         AND artwork_cache.format_version = excluded.format_version
+                        THEN COALESCE(excluded.accent_red, artwork_cache.accent_red)
+                        ELSE excluded.accent_red
+                    END,
+                accent_green =
+                    CASE
+                        WHEN artwork_cache.file_size = excluded.file_size
+                         AND artwork_cache.mtime_ns = excluded.mtime_ns
+                         AND artwork_cache.format_version = excluded.format_version
+                        THEN COALESCE(excluded.accent_green, artwork_cache.accent_green)
+                        ELSE excluded.accent_green
+                    END,
+                accent_blue =
+                    CASE
+                        WHEN artwork_cache.file_size = excluded.file_size
+                         AND artwork_cache.mtime_ns = excluded.mtime_ns
+                         AND artwork_cache.format_version = excluded.format_version
+                        THEN COALESCE(excluded.accent_blue, artwork_cache.accent_blue)
+                        ELSE excluded.accent_blue
+                    END,
                 updated_at_unix = excluded.updated_at_unix
             "#,
                 params![
@@ -598,6 +635,9 @@ impl ArtworkDiskCache {
                     secondary.map(|color| i64::from(color.red)),
                     secondary.map(|color| i64::from(color.green)),
                     secondary.map(|color| i64::from(color.blue)),
+                    accent.map(|color| i64::from(color.red)),
+                    accent.map(|color| i64::from(color.green)),
+                    accent.map(|color| i64::from(color.blue)),
                 ],
             )
             .is_ok()
@@ -957,6 +997,7 @@ mod tests {
                 background: rgb(1, 2, 3),
                 foreground: rgb(250, 251, 252),
                 secondary: rgb(80, 90, 100),
+                accent: rgb(200, 40, 40),
             }),
             ..CachedArtwork::default()
         }
