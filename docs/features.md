@@ -1104,7 +1104,8 @@ against the manifest and what is actually on the drive, and copies only what
 changed. The panel shows the plan — to copy / update / unchanged / to remove —
 before you sync; removing tracks no longer selected requires ticking an explicit
 confirmation. Progress and the outcome flow through the status-bar notification
-lane.
+lane, and while the sync runs the device's sidebar row carries the same turning
+sync badge as an Audio CD being ripped.
 
 A long sync **resumes where it stopped**. Sustain records each file in the
 device's manifest as soon as it is on the drive, so a sync that ends early,

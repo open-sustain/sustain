@@ -236,6 +236,11 @@ impl ApplicationRuntime {
         self.device_sync_scheduler.is_syncing()
     }
 
+    /// The device a running sync is writing to, if one runs.
+    pub fn syncing_device(&self) -> Option<&SyncDeviceId> {
+        self.syncing_device.as_ref()
+    }
+
     /// Ask the in-flight device sync to stop at the next file boundary.
     pub fn request_device_sync_cancellation(&self) {
         self.device_sync_scheduler.request_cancellation();
@@ -247,6 +252,7 @@ impl ApplicationRuntime {
         if let Some(id) = self.device_sync_notification_id.take() {
             self.dismiss_notification(id);
         }
+        self.syncing_device = None;
         self.device_sync_scheduler.shutdown();
     }
 
@@ -628,6 +634,7 @@ impl ApplicationRuntime {
             .start(move |progress, cancel| preparation.run(progress, cancel))
         {
             DeviceSyncStartOutcome::Started(_) => {
+                self.syncing_device = Some(id);
                 let notification = self.push_persistent_notification(
                     NotificationCategory::DeviceSync,
                     NotificationSeverity::Info,
@@ -658,6 +665,9 @@ impl ApplicationRuntime {
     /// progress notification, or on completion publish the outcome.
     pub fn apply_device_sync_event(&mut self, event: DeviceSyncEvent) {
         match event {
+            // The runtime marked the device when the run was accepted;
+            // the event only tells the shell to show it.
+            DeviceSyncEvent::Started { .. } => {}
             DeviceSyncEvent::Progress { run_id, progress } => {
                 if !self.device_sync_scheduler.is_active_run(run_id) {
                     return;
@@ -676,6 +686,7 @@ impl ApplicationRuntime {
                 if let Some(id) = self.device_sync_notification_id.take() {
                     self.dismiss_notification(id);
                 }
+                self.syncing_device = None;
                 match result {
                     Ok(outcome) => {
                         let severity = if outcome.cancelled || !outcome.copy_failures.is_empty() {

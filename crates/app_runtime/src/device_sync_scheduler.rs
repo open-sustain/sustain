@@ -25,6 +25,8 @@ pub struct DeviceSyncRunId(u64);
 /// An event published by the sync worker.
 #[derive(Debug)]
 pub enum DeviceSyncEvent {
+    /// The run's worker is under way; always the run's first event.
+    Started { run_id: DeviceSyncRunId },
     Progress {
         run_id: DeviceSyncRunId,
         progress: SyncProgress,
@@ -168,6 +170,7 @@ impl DeviceSyncScheduler {
         let spawn_result = thread::Builder::new()
             .name("sustain-device-sync".to_owned())
             .spawn(move || {
+                let _ = sender.send_blocking(DeviceSyncEvent::Started { run_id });
                 let progress_sender = sender.clone();
                 let mut on_progress = |progress: SyncProgress| {
                     let _ = progress_sender
@@ -290,6 +293,10 @@ mod tests {
         let DeviceSyncStartOutcome::Started(first_id) = first else {
             return;
         };
+        assert!(matches!(
+            scheduler.event_receiver().recv_blocking(),
+            Ok(DeviceSyncEvent::Started { run_id }) if run_id == first_id
+        ));
         let event = scheduler
             .event_receiver()
             .recv_blocking()
@@ -327,6 +334,10 @@ mod tests {
         };
         assert!(matches!(
             scheduler.event_receiver().recv_blocking(),
+            Ok(DeviceSyncEvent::Started { run_id: event_run_id }) if event_run_id == run_id
+        ));
+        assert!(matches!(
+            scheduler.event_receiver().recv_blocking(),
             Ok(DeviceSyncEvent::Progress {
                 run_id: event_run_id,
                 progress: _
@@ -362,6 +373,10 @@ mod tests {
         assert!(scheduler.is_syncing());
 
         release_tx.send(()).expect("release worker");
+        assert!(matches!(
+            scheduler.event_receiver().recv_blocking(),
+            Ok(DeviceSyncEvent::Started { run_id: event_run_id }) if event_run_id == run_id
+        ));
         assert!(matches!(
             scheduler.event_receiver().recv_blocking(),
             Ok(DeviceSyncEvent::Finished {

@@ -31,10 +31,6 @@ use gtk::prelude::*;
 /// `area.color()`. Carried by the donut ring and its legend swatches.
 const CHART_ACCENT_CLASS: &str = "statistics-chart";
 
-/// Opacity of the single-accent fill on the bar charts — solid enough to
-/// read crisply while staying a touch soft against the card behind it.
-const BAR_FILL_ALPHA: f64 = 0.85;
-
 /// Corner radius of a bar's free end, in pixels: the top of a histogram
 /// bar, the right end of a ranked bar. The end standing on the axis stays
 /// square, so the bars read as grown from a common baseline.
@@ -87,8 +83,9 @@ pub(crate) fn shade_opacity(shade: f64) -> f64 {
 }
 
 /// The opacity of the palest slice: faint enough to step apart from its
-/// neighbours, opaque enough to stay visible on either card surface.
-const PALEST_SHADE_OPACITY: f64 = 0.55;
+/// neighbours, opaque enough to keep about 3:1 against either card
+/// surface with the default accents.
+const PALEST_SHADE_OPACITY: f64 = 0.75;
 
 /// A theme-neutral grey for the aggregated "other" / untagged tail of a
 /// categorical palette.
@@ -414,11 +411,10 @@ fn bar_canvas(fraction: f64, direction: BarDirection) -> gtk::DrawingArea {
             return;
         }
         let accent = area.color();
-        cr.set_source_rgba(
+        cr.set_source_rgb(
             accent.red() as f64,
             accent.green() as f64,
             accent.blue() as f64,
-            BAR_FILL_ALPHA,
         );
         let radius = BAR_FILL_RADIUS.min(w / 2.0).min(h / 2.0);
         cr.new_sub_path();

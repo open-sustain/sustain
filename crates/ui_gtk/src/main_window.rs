@@ -646,7 +646,7 @@ pub(crate) fn build_main_window(
         runtime.clone(),
         device_panel.clone(),
     );
-    install_device_sync_event_consumer(device_sync_event_rx, runtime.clone());
+    install_device_sync_event_consumer(device_sync_event_rx, runtime.clone(), sidebar.clone());
     // The sidebar is now the sole navigation surface: its selection
     // chooses which content-stack page is visible (Music → SONGS_VIEW,
     // Albums → ALBUMS_VIEW, an Item → PLAYLISTS_VIEW). The non-default
@@ -1412,7 +1412,7 @@ fn install_cd_import_requested(
         // The slot is claimed; reflect it on the button and the sidebar's
         // disc row immediately.
         panel.refresh_import_sensitivity();
-        sidebar.refresh_rip_badges();
+        sidebar.refresh_transfer_badges();
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -1463,14 +1463,14 @@ fn poll_cd_import(
             Some(Ok(result)) => {
                 let imported = result.summary.imported_tracks;
                 runtime.borrow_mut().apply_cd_import_result(result);
-                sidebar.refresh_rip_badges();
+                sidebar.refresh_transfer_badges();
                 cd_import_panel.finish_import_display(imported);
                 cd_import_panel.refresh_import_sensitivity();
                 glib::ControlFlow::Break
             }
             Some(Err(error)) => {
                 runtime.borrow_mut().fail_cd_import(error);
-                sidebar.refresh_rip_badges();
+                sidebar.refresh_transfer_badges();
                 // The prepare/dispatch failed before any track was imported;
                 // clear every spinner.
                 cd_import_panel.finish_import_display(0);

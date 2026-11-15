@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use sustain_app_runtime::TrackUpdated;
+use sustain_app_runtime::{DeviceSyncEvent, TrackUpdated};
 
 use crate::library_view_update::LibraryViewUpdate;
 
@@ -370,18 +370,24 @@ pub(super) fn install_smart_shuffle_rebuild_result_consumer(
     });
 }
 
-/// Drains [`DeviceSyncEvent`](sustain_app_runtime::DeviceSyncEvent)s
+/// Drains [`DeviceSyncEvent`]s
 /// posted by the background device-sync worker and feeds them into
 /// [`ApplicationRuntime::apply_device_sync_event`], which updates the
 /// progress notification and, on completion, persists the device
-/// manifest and publishes the outcome.
+/// manifest and publishes the outcome. A run starting or ending turns the
+/// synced device's sidebar badge on or off.
 pub(super) fn install_device_sync_event_consumer(
     receiver: DeviceSyncEventReceiver,
     runtime: SharedRuntime,
+    sidebar: PlaylistSidebar,
 ) {
     glib::MainContext::default().spawn_local(async move {
         while let Ok(event) = receiver.recv().await {
+            let starts_or_ends = !matches!(event, DeviceSyncEvent::Progress { .. });
             runtime.borrow_mut().apply_device_sync_event(event);
+            if starts_or_ends {
+                sidebar.refresh_transfer_badges();
+            }
         }
     });
 }

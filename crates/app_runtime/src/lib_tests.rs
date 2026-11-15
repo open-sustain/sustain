@@ -92,7 +92,7 @@ fn a_failed_device_sync_reports_why() {
             ))),
         crate::DeviceSyncStartOutcome::Started(_)
     ));
-    runtime.apply_device_sync_event(receiver.recv_blocking().expect("completion"));
+    apply_device_sync_run(&mut runtime, &receiver);
 
     let notification = runtime
         .notifications()
@@ -119,7 +119,7 @@ fn a_cancelled_device_sync_reports_that_it_stopped() {
             })),
         crate::DeviceSyncStartOutcome::Started(_)
     ));
-    runtime.apply_device_sync_event(receiver.recv_blocking().expect("completion"));
+    apply_device_sync_run(&mut runtime, &receiver);
 
     let notification = runtime
         .notifications()
@@ -128,6 +128,39 @@ fn a_cancelled_device_sync_reports_that_it_stopped() {
     assert_eq!(notification.category, NotificationCategory::DeviceSync);
     assert_eq!(notification.severity, NotificationSeverity::Warning);
     assert!(notification.body.contains("Sync stopped"));
+}
+
+/// Apply a sync run's events through its completion.
+fn apply_device_sync_run(
+    runtime: &mut ApplicationRuntime,
+    receiver: &async_channel::Receiver<crate::DeviceSyncEvent>,
+) {
+    loop {
+        let event = receiver.recv_blocking().expect("sync event");
+        let finished = matches!(event, crate::DeviceSyncEvent::Finished { .. });
+        runtime.apply_device_sync_event(event);
+        if finished {
+            return;
+        }
+    }
+}
+
+#[test]
+fn completing_a_sync_clears_the_syncing_device() {
+    let mut runtime = ApplicationRuntime::new();
+    let receiver = runtime.device_sync_event_receiver();
+    assert!(matches!(
+        runtime
+            .device_sync_scheduler
+            .start_test_task(|_progress, _cancel| Ok(sustain_device_sync::SyncOutcome::default())),
+        crate::DeviceSyncStartOutcome::Started(_)
+    ));
+    let device = SyncDeviceId::new("usb-stick").expect("valid device id");
+    runtime.syncing_device = Some(device.clone());
+    assert_eq!(runtime.syncing_device(), Some(&device));
+
+    apply_device_sync_run(&mut runtime, &receiver);
+    assert_eq!(runtime.syncing_device(), None);
 }
 
 #[test]
@@ -141,7 +174,7 @@ fn stale_device_sync_completion_is_ignored() {
         panic!("the sync starts: {started:?}");
     };
 
-    runtime.apply_device_sync_event(receiver.recv_blocking().expect("completion"));
+    apply_device_sync_run(&mut runtime, &receiver);
     assert_eq!(runtime.notifications().ephemeral_queue().len(), 1);
     runtime.apply_device_sync_event(crate::DeviceSyncEvent::Finished {
         run_id,

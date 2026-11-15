@@ -11,8 +11,8 @@ use gtk::{gdk, glib};
 
 use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, ConnectedDevice, DeviceKind, DeviceTarget,
-    DiscIdentity, OnlineRunRequest, PlaylistItem, PlaylistTreeNode, SmartPlaylistId, TocSnapshot,
-    TrackId,
+    DiscIdentity, OnlineRunRequest, PlaylistItem, PlaylistTreeNode, SmartPlaylistId, SyncDeviceId,
+    TocSnapshot, TrackId,
 };
 
 use super::{
@@ -159,9 +159,9 @@ pub(crate) struct PlaylistSidebar {
     on_device_eject: Rc<RefCell<Option<SidebarDeviceEjectCallback>>>,
     on_cd_selected: Rc<RefCell<Option<SidebarCdSelectedCallback>>>,
     on_cd_eject: Rc<RefCell<Option<SidebarCdEjectCallback>>>,
-    /// The rip badge of each Audio CD row on screen, by the disc it
+    /// The transfer badge of each Devices row on screen, by what the row
     /// stands for.
-    cd_rip_badges: Rc<RefCell<Vec<(DiscIdentity, gtk::Image)>>>,
+    transfer_badges: Rc<RefCell<Vec<(DeviceRowSubject, gtk::Image)>>>,
     on_duplicates_selected: Rc<RefCell<Option<SidebarDuplicatesSelectedCallback>>>,
     /// The currently highlighted *transient* row (a device today, the
     /// future Duplicates scan), for single-selection CSS. Mutually
@@ -405,7 +405,7 @@ impl PlaylistSidebar {
             on_device_eject,
             on_cd_selected,
             on_cd_eject,
-            cd_rip_badges: Rc::new(RefCell::new(Vec::new())),
+            transfer_badges: Rc::new(RefCell::new(Vec::new())),
             on_duplicates_selected,
             active_transient_row,
             persistent_selection,
@@ -549,7 +549,7 @@ impl PlaylistSidebar {
             self.devices_body.remove(&child);
         }
         self.active_transient_row.replace(None);
-        self.cd_rip_badges.borrow_mut().clear();
+        self.transfer_badges.borrow_mut().clear();
         let has_devices = !entries.is_empty();
         self.devices_header.set_visible(has_devices);
         self.devices_body.set_visible(has_devices);
@@ -567,6 +567,11 @@ impl PlaylistSidebar {
                     };
                     let row_parts = build_standalone_sidebar_row_parts(&device.label, icon);
                     let row = row_parts.row;
+                    let sync_badge = sidebar_transfer_badge("Syncing");
+                    row_parts.content.append(&sync_badge);
+                    self.transfer_badges
+                        .borrow_mut()
+                        .push((DeviceRowSubject::SyncTarget(device.id.clone()), sync_badge));
                     if device.kind == DeviceKind::UsbDrive
                         && matches!(&device.target, DeviceTarget::Filesystem { .. })
                     {
@@ -600,11 +605,11 @@ impl PlaylistSidebar {
                     let row_parts =
                         build_standalone_sidebar_row_parts("Audio CD", "media-optical-symbolic");
                     let row = row_parts.row;
-                    let rip_badge = sidebar_rip_badge();
+                    let rip_badge = sidebar_transfer_badge("Importing");
                     row_parts.content.append(&rip_badge);
-                    self.cd_rip_badges
+                    self.transfer_badges
                         .borrow_mut()
-                        .push((snapshot.identity(), rip_badge));
+                        .push((DeviceRowSubject::Disc(snapshot.identity()), rip_badge));
                     let eject = sidebar_eject_button({
                         let sidebar = self.clone();
                         let snapshot = snapshot.clone();
@@ -633,21 +638,31 @@ impl PlaylistSidebar {
             };
             self.devices_body.append(&row);
         }
-        self.refresh_rip_badges();
+        self.refresh_transfer_badges();
     }
 
-    /// Show the rip badge on the Audio CD row of the disc the runtime is
-    /// ripping, and on no other: a sync icon turning on green, as iTunes
-    /// marks a disc it imports (#197). Called when a rip starts or ends;
-    /// rebuilt rows take it up themselves.
-    pub(crate) fn refresh_rip_badges(&self) {
-        let ripping = self.runtime.borrow().ripping_disc().cloned();
-        self.show_rip_badge_on(ripping.as_ref());
+    /// Show the transfer badge on the Devices rows the runtime is moving
+    /// music through — the Audio CD being ripped (#197), the device being
+    /// synced — and on no other: a sync icon turning on green, as iTunes
+    /// marks a disc it imports or a device it syncs. Called when a rip or
+    /// a sync starts or ends; rebuilt rows take it up themselves.
+    pub(crate) fn refresh_transfer_badges(&self) {
+        let (ripping, syncing) = {
+            let runtime = self.runtime.borrow();
+            (
+                runtime.ripping_disc().cloned(),
+                runtime.syncing_device().cloned(),
+            )
+        };
+        self.show_transfer_badges(ripping.as_ref(), syncing.as_ref());
     }
 
-    fn show_rip_badge_on(&self, ripping: Option<&DiscIdentity>) {
-        for (disc, badge) in self.cd_rip_badges.borrow().iter() {
-            badge.set_visible(ripping == Some(disc));
+    fn show_transfer_badges(&self, ripping: Option<&DiscIdentity>, syncing: Option<&SyncDeviceId>) {
+        for (subject, badge) in self.transfer_badges.borrow().iter() {
+            badge.set_visible(match subject {
+                DeviceRowSubject::Disc(disc) => ripping == Some(disc),
+                DeviceRowSubject::SyncTarget(device) => syncing == Some(device),
+            });
         }
     }
 
@@ -935,15 +950,23 @@ fn sidebar_eject_button(on_pressed: impl Fn() + 'static) -> gtk::Button {
     eject
 }
 
-/// The badge an Audio CD row shows while the disc is ripped; it turns by
-/// a CSS animation.
-fn sidebar_rip_badge() -> gtk::Image {
+/// What a Devices row stands for, so a transfer badge lands on its row.
+#[derive(Clone, Debug, PartialEq)]
+enum DeviceRowSubject {
+    Disc(DiscIdentity),
+    SyncTarget(SyncDeviceId),
+}
+
+/// The badge a Devices row shows while music moves through it — a disc
+/// ripped, a device synced; it turns by a CSS animation. `tooltip` names
+/// the transfer.
+fn sidebar_transfer_badge(tooltip: &str) -> gtk::Image {
     let badge = gtk::Image::from_icon_name("view-refresh-symbolic");
     badge.set_pixel_size(12);
     badge.add_css_class("device-analysis-badge");
     badge.add_css_class("ok");
-    badge.add_css_class("playlist-sidebar-rip-badge");
-    badge.set_tooltip_text(Some("Importing"));
+    badge.add_css_class("playlist-sidebar-transfer-badge");
+    badge.set_tooltip_text(Some(tooltip));
     badge.set_valign(gtk::Align::Center);
     badge
 }
@@ -1443,7 +1466,10 @@ mod tests {
     use sustain_app_runtime::{ApplicationRuntime, PlaylistId, PlaylistItem};
 
     use super::{PlaylistSidebar, SidebarDeviceEntry, SidebarSelection, build_row_factory};
-    use sustain_app_runtime::{PlaylistTreeNode, RawTocTrack, TocSnapshot};
+    use sustain_app_runtime::{
+        ConnectedDevice, DeviceKind, DeviceTarget, PlaylistTreeNode, RawTocTrack, SyncDeviceId,
+        TocSnapshot,
+    };
 
     /// A row's widgets must go with the row. The rename entry, the drag
     /// source, the drop target, and the context-menu gesture are wired
@@ -1582,24 +1608,59 @@ mod tests {
                 SidebarDeviceEntry::AudioCd(second.clone()),
             ];
             sidebar.set_devices(&discs);
-            assert_eq!(rip_badges_shown(&sidebar), [false, false]);
+            assert_eq!(transfer_badges_shown(&sidebar), [false, false]);
 
-            sidebar.show_rip_badge_on(Some(&second.identity()));
-            assert_eq!(rip_badges_shown(&sidebar), [false, true]);
+            sidebar.show_transfer_badges(Some(&second.identity()), None);
+            assert_eq!(transfer_badges_shown(&sidebar), [false, true]);
 
-            sidebar.show_rip_badge_on(None);
-            assert_eq!(rip_badges_shown(&sidebar), [false, false]);
+            sidebar.show_transfer_badges(None, None);
+            assert_eq!(transfer_badges_shown(&sidebar), [false, false]);
 
-            sidebar.show_rip_badge_on(Some(&first.identity()));
+            sidebar.show_transfer_badges(Some(&first.identity()), None);
             sidebar.set_devices(&discs);
             assert_eq!(
-                rip_badges_shown(&sidebar),
+                transfer_badges_shown(&sidebar),
                 [false, false],
                 "a rebuild reads the runtime, which rips no disc"
             );
 
             sidebar.set_devices(&[]);
-            assert!(rip_badges_shown(&sidebar).is_empty());
+            assert!(transfer_badges_shown(&sidebar).is_empty());
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    /// The sync badge marks the device being synced, not the disc beside
+    /// it, and a rip marks the disc, not the device.
+    #[test]
+    fn the_device_being_synced_shows_the_transfer_badge() {
+        let ran = crate::test_support::with_gtk(|| {
+            let sidebar = test_sidebar();
+            let stick = ConnectedDevice {
+                id: SyncDeviceId::new("usb-stick").expect("valid device id"),
+                kind: DeviceKind::UsbDrive,
+                target: DeviceTarget::Filesystem {
+                    mount_path: std::path::PathBuf::from("/media/stick"),
+                },
+                volume_id: None,
+                label: "Stick".to_owned(),
+                is_known: true,
+                has_marker: true,
+            };
+            let cd = disc("/dev/sr0", "only");
+            sidebar.set_devices(&[
+                SidebarDeviceEntry::SyncTarget(stick.clone()),
+                SidebarDeviceEntry::AudioCd(cd.clone()),
+            ]);
+            assert_eq!(transfer_badges_shown(&sidebar), [false, false]);
+
+            sidebar.show_transfer_badges(None, Some(&stick.id));
+            assert_eq!(transfer_badges_shown(&sidebar), [true, false]);
+
+            sidebar.show_transfer_badges(Some(&cd.identity()), None);
+            assert_eq!(transfer_badges_shown(&sidebar), [false, true]);
         });
         if !ran {
             eprintln!("skipped GTK widget test: no display available");
@@ -1619,12 +1680,12 @@ mod tests {
         )
     }
 
-    fn rip_badges_shown(sidebar: &PlaylistSidebar) -> Vec<bool> {
+    fn transfer_badges_shown(sidebar: &PlaylistSidebar) -> Vec<bool> {
         sidebar
-            .cd_rip_badges
+            .transfer_badges
             .borrow()
             .iter()
-            .map(|(_disc, badge)| badge.is_visible())
+            .map(|(_subject, badge)| badge.is_visible())
             .collect()
     }
 

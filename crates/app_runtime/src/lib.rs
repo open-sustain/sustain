@@ -484,6 +484,9 @@ pub struct ApplicationRuntime {
     // Id of the persistent notification shown while a device sync runs,
     // so progress can update it in place and completion can dismiss it.
     device_sync_notification_id: Option<NotificationId>,
+    /// The device being synced, from the moment its run starts until its
+    /// outcome is applied.
+    syncing_device: Option<SyncDeviceId>,
     // Async MTP (Android) discovery. The cheap volume-monitor scan runs on
     // the main thread; the slow per-phone storage + identity-marker probe
     // is handed to a one-shot worker thread, whose resolved devices land in
@@ -747,6 +750,7 @@ impl ApplicationRuntime {
             device_plan_cache: None,
             device_sync_scheduler: DeviceSyncScheduler::new(),
             device_sync_notification_id: None,
+            syncing_device: None,
             mtp_devices: Vec::new(),
             mtp_discovery_generation: 0,
             mtp_discovery_sink,

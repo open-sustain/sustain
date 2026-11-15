@@ -1109,14 +1109,14 @@ listview.device-sync-checklist > row {
     padding: 2px 4px;
 }
 
-/* The Audio CD row's rip badge (#197): the round success badge the CD
-   page ticks imported tracks with, its sync icon turning while the disc
-   is ripped, as iTunes marks a disc it imports. */
-.playlist-sidebar-rip-badge {
-    animation: playlist-sidebar-rip-turn 1.2s linear infinite;
+/* A Devices row's transfer badge: the round success badge the CD page
+   ticks imported tracks with, its sync icon turning while a disc is
+   ripped (#197) or a device synced, as iTunes marks them. */
+.playlist-sidebar-transfer-badge {
+    animation: playlist-sidebar-transfer-turn 1.2s linear infinite;
 }
 
-@keyframes playlist-sidebar-rip-turn {
+@keyframes playlist-sidebar-transfer-turn {
     to { -gtk-icon-transform: rotate(1turn); }
 }
 
@@ -1209,10 +1209,16 @@ listview.device-sync-checklist > row {
     font-style: italic;
 }
 
-/* Accent source for the donut ring and its legend swatches: no trough,
-   just the live accent for the Cairo draw funcs to read. */
-.statistics-chart {
-    color: @theme_selected_bg_color;
+/* Accent source for the charts — the donut ring, its legend swatches,
+   and the bars, which carry no trough and float on the card: the live
+   accent for the Cairo draw funcs to read, drawn two fifths of the way
+   toward the text colour. The selection accent is tuned to sit behind
+   white text, which leaves it too dark to read as a mark on a dark card;
+   moving it toward the foreground lifts it there and deepens it on a
+   light card, so a chart keeps its contrast in both themes. */
+.statistics-chart,
+.statistics-vbar {
+    color: mix(@theme_selected_bg_color, @theme_fg_color, 0.4);
 }
 
 /* The centred total inside a donut's hole. */
@@ -1230,14 +1236,6 @@ listview.device-sync-checklist > row {
 .statistics-legend-value {
     color: alpha(@theme_fg_color, 0.6);
     font-variant-numeric: tabular-nums;
-}
-
-/* A histogram bar: the accent fill is painted entirely in Cairo (see
-   chart.rs's vertical_bar). The widget carries no trough background — the
-   rounded bar floats directly on the card — and exposes only the accent
-   color the draw-func reads. */
-.statistics-vbar {
-    color: @theme_selected_bg_color;
 }
 
 /* The value above each histogram bar and the axis label below it. */
