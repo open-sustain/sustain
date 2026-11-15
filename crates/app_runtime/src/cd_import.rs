@@ -387,6 +387,7 @@ impl ApplicationRuntime {
             notifications::cd_import_running_text(),
             Some(cancellation_requested.clone()),
         )?;
+        self.ripping_disc = Some(expected_identity.clone());
 
         Ok(CdImportTask {
             library_path,
@@ -406,6 +407,11 @@ impl ApplicationRuntime {
         })
     }
 
+    /// The disc a running CD import is reading, if one runs.
+    pub fn ripping_disc(&self) -> Option<&DiscIdentity> {
+        self.ripping_disc.as_ref()
+    }
+
     pub fn update_cd_import_progress(&mut self, completed_tracks: usize, total_tracks: usize) {
         self.update_library_task_progress(
             LibraryTaskKind::CdImport,
@@ -418,6 +424,7 @@ impl ApplicationRuntime {
         self.insert_library_tracks(result.tracks);
         self.refresh_playback_queue_track_ids();
         self.finish_library_task(LibraryTaskKind::CdImport);
+        self.ripping_disc = None;
         let severity = if summary.failure.is_some() {
             NotificationSeverity::Warning
         } else {
@@ -438,6 +445,7 @@ impl ApplicationRuntime {
     /// End the running CD import with `error`.
     pub fn fail_cd_import(&mut self, error: ApplicationRuntimeError) {
         self.finish_library_task(LibraryTaskKind::CdImport);
+        self.ripping_disc = None;
         self.report_cd_import_error(&error);
     }
 

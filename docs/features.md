@@ -1193,8 +1193,10 @@ interaction as the library table — click a cell of the already-selected row to
 rename it inline — so a disc MusicBrainz could not identify can be named by hand,
 and the typed value wins over the looked-up one. A leading status column shows
 each track's rip progress: empty while pending, an animated spinner on the track
-currently being ripped, and a green tick once it is imported. The same "Import CD"
-workflow iTunes used, driven from Sustain's own library model.
+currently being ripped, and a green tick once it is imported. While the rip runs,
+the sidebar's Audio CD row carries a turning sync badge on green, so the import
+stays visible from any view. The same "Import CD" workflow iTunes used, driven
+from Sustain's own library model.
 
 The disc is identified by a **MusicBrainz Disc ID** computed from its table of
 contents (via libdiscid) — a single disc-id lookup, not per-track title guessing.

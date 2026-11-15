@@ -11,7 +11,8 @@ use gtk::{gdk, glib};
 
 use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, ConnectedDevice, DeviceKind, DeviceTarget,
-    OnlineRunRequest, PlaylistItem, PlaylistTreeNode, SmartPlaylistId, TocSnapshot, TrackId,
+    DiscIdentity, OnlineRunRequest, PlaylistItem, PlaylistTreeNode, SmartPlaylistId, TocSnapshot,
+    TrackId,
 };
 
 use super::{
@@ -158,6 +159,9 @@ pub(crate) struct PlaylistSidebar {
     on_device_eject: Rc<RefCell<Option<SidebarDeviceEjectCallback>>>,
     on_cd_selected: Rc<RefCell<Option<SidebarCdSelectedCallback>>>,
     on_cd_eject: Rc<RefCell<Option<SidebarCdEjectCallback>>>,
+    /// The rip badge of each Audio CD row on screen, by the disc it
+    /// stands for.
+    cd_rip_badges: Rc<RefCell<Vec<(DiscIdentity, gtk::Image)>>>,
     on_duplicates_selected: Rc<RefCell<Option<SidebarDuplicatesSelectedCallback>>>,
     /// The currently highlighted *transient* row (a device today, the
     /// future Duplicates scan), for single-selection CSS. Mutually
@@ -401,6 +405,7 @@ impl PlaylistSidebar {
             on_device_eject,
             on_cd_selected,
             on_cd_eject,
+            cd_rip_badges: Rc::new(RefCell::new(Vec::new())),
             on_duplicates_selected,
             active_transient_row,
             persistent_selection,
@@ -544,6 +549,7 @@ impl PlaylistSidebar {
             self.devices_body.remove(&child);
         }
         self.active_transient_row.replace(None);
+        self.cd_rip_badges.borrow_mut().clear();
         let has_devices = !entries.is_empty();
         self.devices_header.set_visible(has_devices);
         self.devices_body.set_visible(has_devices);
@@ -594,6 +600,11 @@ impl PlaylistSidebar {
                     let row_parts =
                         build_standalone_sidebar_row_parts("Audio CD", "media-optical-symbolic");
                     let row = row_parts.row;
+                    let rip_badge = sidebar_rip_badge();
+                    row_parts.content.append(&rip_badge);
+                    self.cd_rip_badges
+                        .borrow_mut()
+                        .push((snapshot.identity(), rip_badge));
                     let eject = sidebar_eject_button({
                         let sidebar = self.clone();
                         let snapshot = snapshot.clone();
@@ -621,6 +632,22 @@ impl PlaylistSidebar {
                 }
             };
             self.devices_body.append(&row);
+        }
+        self.refresh_rip_badges();
+    }
+
+    /// Show the rip badge on the Audio CD row of the disc the runtime is
+    /// ripping, and on no other: a sync icon turning on green, as iTunes
+    /// marks a disc it imports (#197). Called when a rip starts or ends;
+    /// rebuilt rows take it up themselves.
+    pub(crate) fn refresh_rip_badges(&self) {
+        let ripping = self.runtime.borrow().ripping_disc().cloned();
+        self.show_rip_badge_on(ripping.as_ref());
+    }
+
+    fn show_rip_badge_on(&self, ripping: Option<&DiscIdentity>) {
+        for (disc, badge) in self.cd_rip_badges.borrow().iter() {
+            badge.set_visible(ripping == Some(disc));
         }
     }
 
@@ -906,6 +933,19 @@ fn sidebar_eject_button(on_pressed: impl Fn() + 'static) -> gtk::Button {
     });
     eject.add_controller(gesture);
     eject
+}
+
+/// The badge an Audio CD row shows while the disc is ripped; it turns by
+/// a CSS animation.
+fn sidebar_rip_badge() -> gtk::Image {
+    let badge = gtk::Image::from_icon_name("view-refresh-symbolic");
+    badge.set_pixel_size(12);
+    badge.add_css_class("device-analysis-badge");
+    badge.add_css_class("ok");
+    badge.add_css_class("playlist-sidebar-rip-badge");
+    badge.set_tooltip_text(Some("Importing"));
+    badge.set_valign(gtk::Align::Center);
+    badge
 }
 
 /// Builds a non-interactive sidebar section header, used for sections that
@@ -1402,8 +1442,8 @@ mod tests {
     use gtk::{gio, glib};
     use sustain_app_runtime::{ApplicationRuntime, PlaylistId, PlaylistItem};
 
-    use super::{PlaylistSidebar, SidebarSelection, build_row_factory};
-    use sustain_app_runtime::PlaylistTreeNode;
+    use super::{PlaylistSidebar, SidebarDeviceEntry, SidebarSelection, build_row_factory};
+    use sustain_app_runtime::{PlaylistTreeNode, RawTocTrack, TocSnapshot};
 
     /// A row's widgets must go with the row. The rename entry, the drag
     /// source, the drop target, and the context-menu gesture are wired
@@ -1526,6 +1566,66 @@ mod tests {
         if !ran {
             eprintln!("skipped GTK widget test: no display available");
         }
+    }
+
+    /// Only the row of the disc being ripped shows the rip badge, with
+    /// two drives too, and a rebuild of the Devices rows mid-rip keeps it
+    /// on that disc.
+    #[test]
+    fn only_the_disc_being_ripped_shows_the_rip_badge() {
+        let ran = crate::test_support::with_gtk(|| {
+            let sidebar = test_sidebar();
+            let first = disc("/dev/sr0", "first");
+            let second = disc("/dev/sr1", "second");
+            let discs = [
+                SidebarDeviceEntry::AudioCd(first.clone()),
+                SidebarDeviceEntry::AudioCd(second.clone()),
+            ];
+            sidebar.set_devices(&discs);
+            assert_eq!(rip_badges_shown(&sidebar), [false, false]);
+
+            sidebar.show_rip_badge_on(Some(&second.identity()));
+            assert_eq!(rip_badges_shown(&sidebar), [false, true]);
+
+            sidebar.show_rip_badge_on(None);
+            assert_eq!(rip_badges_shown(&sidebar), [false, false]);
+
+            sidebar.show_rip_badge_on(Some(&first.identity()));
+            sidebar.set_devices(&discs);
+            assert_eq!(
+                rip_badges_shown(&sidebar),
+                [false, false],
+                "a rebuild reads the runtime, which rips no disc"
+            );
+
+            sidebar.set_devices(&[]);
+            assert!(rip_badges_shown(&sidebar).is_empty());
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    fn disc(device: &str, disc_id: &str) -> TocSnapshot {
+        TocSnapshot::from_raw(
+            std::path::PathBuf::from(device),
+            disc_id.to_owned(),
+            String::new(),
+            &[RawTocTrack {
+                number: 1,
+                offset: 150,
+                sectors: 13_350,
+            }],
+        )
+    }
+
+    fn rip_badges_shown(sidebar: &PlaylistSidebar) -> Vec<bool> {
+        sidebar
+            .cd_rip_badges
+            .borrow()
+            .iter()
+            .map(|(_disc, badge)| badge.is_visible())
+            .collect()
     }
 
     fn test_sidebar() -> PlaylistSidebar {

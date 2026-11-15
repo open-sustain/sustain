@@ -507,6 +507,9 @@ pub struct ApplicationRuntime {
     optical_discovery_sink: async_channel::Sender<cd_import::OpticalDiscoveryResult>,
     optical_discovery_source: async_channel::Receiver<cd_import::OpticalDiscoveryResult>,
     cd_metadata_generation: u64,
+    /// The disc being ripped, from the moment the rip claims the library
+    /// task slot until its outcome is applied.
+    ripping_disc: Option<DiscIdentity>,
     cd_lookup_sink: async_channel::Sender<cd_import::CdLookupEvent>,
     cd_lookup_source: async_channel::Receiver<cd_import::CdLookupEvent>,
     /// In-memory copy of the prepared Smart Shuffle index (genre IDF
@@ -755,6 +758,7 @@ impl ApplicationRuntime {
             optical_discovery_sink,
             optical_discovery_source,
             cd_metadata_generation: 0,
+            ripping_disc: None,
             cd_lookup_sink,
             cd_lookup_source,
             smart_shuffle_index: None,

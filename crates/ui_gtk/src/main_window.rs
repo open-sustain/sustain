@@ -766,7 +766,7 @@ pub(crate) fn build_main_window(
     sidebar.set_analysis_enabled_query(sidebar_analysis_enabled_query(&runtime));
     sidebar.set_online_busy_query(sidebar_online_busy_query(&runtime));
     let scan_requested = library_scan_requested_callback(&runtime);
-    install_cd_import_requested(&cd_import_panel, &runtime);
+    install_cd_import_requested(&cd_import_panel, &sidebar, &runtime);
     let import_requested = library_import_requested_callback(&runtime, window.upcast_ref());
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
     // Re-applies the Views toggles to the live UI the instant they
@@ -1390,9 +1390,14 @@ enum CdImportWorkerEvent {
 /// background-worker / apply path, mirroring library import: prepare claims
 /// the library task slot on the main thread, the rip runs on a worker, and its
 /// progress/outcome are applied back on the GTK loop.
-fn install_cd_import_requested(cd_import_panel: &CdImportPanel, runtime: &SharedRuntime) {
+fn install_cd_import_requested(
+    cd_import_panel: &CdImportPanel,
+    sidebar: &PlaylistSidebar,
+    runtime: &SharedRuntime,
+) {
     let runtime = runtime.clone();
     let panel = cd_import_panel.clone();
+    let sidebar = sidebar.clone();
     let callback: CdImportRequestedCallback = Rc::new(move |request: CdImportRequest| {
         let task = {
             let mut runtime = runtime.borrow_mut();
@@ -1404,8 +1409,10 @@ fn install_cd_import_requested(cd_import_panel: &CdImportPanel, runtime: &Shared
                 }
             }
         };
-        // The slot is claimed; reflect it on the button immediately.
+        // The slot is claimed; reflect it on the button and the sidebar's
+        // disc row immediately.
         panel.refresh_import_sensitivity();
+        sidebar.refresh_rip_badges();
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -1414,7 +1421,7 @@ fn install_cd_import_requested(cd_import_panel: &CdImportPanel, runtime: &Shared
             });
             let _sent = tx.send(CdImportWorkerEvent::Finished(outcome));
         });
-        poll_cd_import(rx, runtime.clone(), panel.clone());
+        poll_cd_import(rx, runtime.clone(), panel.clone(), sidebar.clone());
     });
     cd_import_panel.set_import_requested_callback(callback);
 }
@@ -1423,6 +1430,7 @@ fn poll_cd_import(
     rx: std::sync::mpsc::Receiver<CdImportWorkerEvent>,
     runtime: SharedRuntime,
     cd_import_panel: CdImportPanel,
+    sidebar: PlaylistSidebar,
 ) {
     glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
         let mut latest_progress = None;
@@ -1455,12 +1463,14 @@ fn poll_cd_import(
             Some(Ok(result)) => {
                 let imported = result.summary.imported_tracks;
                 runtime.borrow_mut().apply_cd_import_result(result);
+                sidebar.refresh_rip_badges();
                 cd_import_panel.finish_import_display(imported);
                 cd_import_panel.refresh_import_sensitivity();
                 glib::ControlFlow::Break
             }
             Some(Err(error)) => {
                 runtime.borrow_mut().fail_cd_import(error);
+                sidebar.refresh_rip_badges();
                 // The prepare/dispatch failed before any track was imported;
                 // clear every spinner.
                 cd_import_panel.finish_import_display(0);

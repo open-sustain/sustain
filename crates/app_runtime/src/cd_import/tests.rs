@@ -564,6 +564,7 @@ fn running_cd_import_excludes_other_mutations_and_joins_global_cancellation() {
         runtime.background_task_status(),
         BackgroundTaskStatus::CdImportRunning
     );
+    assert_eq!(runtime.ripping_disc(), Some(&disc.identity()));
     // Another library mutation is refused while the rip owns the slot.
     assert!(matches!(
         runtime.prepare_library_import(Vec::new()),
@@ -577,6 +578,7 @@ fn running_cd_import_excludes_other_mutations_and_joins_global_cancellation() {
     let result = run_cd_import_task(task, |_progress| {}).expect("worker completes");
     runtime.apply_cd_import_result(result);
     assert_eq!(runtime.background_task_status(), BackgroundTaskStatus::Idle);
+    assert_eq!(runtime.ripping_disc(), None);
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -605,6 +607,7 @@ fn a_refused_cd_import_leaves_the_running_task_alone() {
         .expect("the CD import is refused");
     assert_eq!(refusal, ApplicationRuntimeError::BackgroundTaskRunning);
     runtime.report_cd_import_start_failure(refusal);
+    assert_eq!(runtime.ripping_disc(), None, "a refused rip reads no disc");
 
     assert_eq!(
         runtime.background_task_status(),

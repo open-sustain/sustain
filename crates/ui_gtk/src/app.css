@@ -1109,6 +1109,17 @@ listview.device-sync-checklist > row {
     padding: 2px 4px;
 }
 
+/* The Audio CD row's rip badge (#197): the round success badge the CD
+   page ticks imported tracks with, its sync icon turning while the disc
+   is ripped, as iTunes marks a disc it imports. */
+.playlist-sidebar-rip-badge {
+    animation: playlist-sidebar-rip-turn 1.2s linear infinite;
+}
+
+@keyframes playlist-sidebar-rip-turn {
+    to { -gtk-icon-transform: rotate(1turn); }
+}
+
 /* Per-metric analysis readiness in the Pioneer export panel. Theme-aware
    semantic colours from the same Adwaita palette as @error_color above,
    so they read correctly in both light and dark. */
