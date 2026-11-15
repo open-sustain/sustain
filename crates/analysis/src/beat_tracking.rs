@@ -232,6 +232,10 @@ impl Onsets {
     /// against its own alternatives in turn, until none replaces it:
     /// each replacement is stronger on the kick by [`METRICAL_MARGIN`],
     /// so the walk ends.
+    ///
+    /// A level is measured near its ratio's tempo, so it can settle just
+    /// outside the range. The walk goes on from it — the beat may be one
+    /// more step away — but the beat is the last level the range holds.
     pub(crate) fn beat_level(&self, estimate: f64, min_bpm: f64, max_bpm: f64) -> f64 {
         let Some(mut level) = self.metrical_level_near(estimate) else {
             return estimate;
@@ -245,7 +249,9 @@ impl Onsets {
             .filter(|alternative| alternative.replaces(&level))
             .max_by(|a, b| a.kick_per_beat.total_cmp(&b.kick_per_beat))
         {
-            beat = alternative.tempo;
+            if (min_bpm..=max_bpm).contains(&alternative.tempo) {
+                beat = alternative.tempo;
+            }
             level = alternative;
         }
         beat
@@ -825,6 +831,24 @@ mod tests {
         let onsets = Onsets::of(&samples, SAMPLE_RATE).expect("onsets");
         let level = onsets.beat_level(154.9 / 1.5 * 0.985, 76.0, 155.0);
         assert!((level - 154.9).abs() < 1.0, "{level}");
+    }
+
+    #[test]
+    fn a_level_measured_outside_the_range_is_not_the_beat() {
+        // Kicks at 157 BPM, outside the range, under a louder low figure
+        // at 103. Three halves of the figure's tempo is in range, and the
+        // kicks are within reach of it.
+        let kicks = render(157.0, 0.2, 90.0, &kick(), None);
+        let burst = tone(80.0, 0.9, 0.002, 0.1, 0.2);
+        let figure = render(103.0, 0.2, 90.0, &burst, None);
+        let samples: Vec<f32> = kicks
+            .iter()
+            .zip(&figure)
+            .map(|(k, f)| 0.5 * k + f)
+            .collect();
+        let onsets = Onsets::of(&samples, SAMPLE_RATE).expect("onsets");
+        let level = onsets.beat_level(103.0, 76.0, 155.0);
+        assert!((76.0..=155.0).contains(&level), "{level}");
     }
 
     #[test]
