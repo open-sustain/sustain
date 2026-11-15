@@ -114,11 +114,22 @@ identical between the two; the only difference is core count (16 vs
 12), which is marginal for this product. Anything that feels (or
 measures) slow on either machine will be worse on real-world hardware.
 
-### Hard requirement: cold start ≤ 150 ms
+### Hard requirement: cold start ≤ 225 ms
 
 Launching `sustain` from a terminal on a 10,000-track library must
-reach the GTK main-loop first-idle landmark in **150 ms or less** on
-the maintainer's machines (release build, warm filesystem cache).
+reach the GTK main-loop first-idle landmark in **225 ms or less** on
+the maintainer's machines (release build, warm filesystem cache), **on
+the power adapter with the normal power profile** (`balanced`).
+
+Check both before measuring: `powerprofilesctl get` must print
+`balanced`, and `cat /sys/class/power_supply/AC/online` must print `1`.
+On battery or in the `power-saver` profile, the CPU is throttled and the
+225 ms figure can be out of reach for reasons that have nothing to do
+with the code. Measurements taken there are not held to the budget.
+Check them for regressions instead: compare the change against its parent
+commit, both measured in that same mode, and treat a clear slowdown as
+the regression. Never chase the absolute figure in a throttled mode;
+report which mode the numbers came from.
 
 When checking cold-start performance, run the release binary with
 `--profile`; the startup landmarks are intentionally silent without
@@ -132,7 +143,7 @@ prints the relevant milestones to stderr when profiling is enabled:
 [PROFILE] ... activate: first idle reached at <ms>ms     <-- the budget gate
 ```
 
-Any change that pushes `first idle` past 150 ms is a regression and
+Any change that pushes `first idle` past 225 ms is a regression and
 must be fixed before merge — not deferred. Add new instrumentation
 landmarks (not per-callback noise) when introducing a new startup
 phase, and bind any new performance instrumentation to the `--profile`

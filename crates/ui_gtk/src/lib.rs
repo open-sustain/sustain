@@ -281,7 +281,7 @@ pub fn run(
     // Spawn the MPRIS worker. `start` returns immediately: the session-bus
     // connection and name acquisition run on the worker thread, off the
     // cold-start critical path, so this never delays window presentation or
-    // the 150 ms first-idle budget (#98). State published before the bus is
+    // the 225 ms first-idle budget (#98). State published before the bus is
     // ready queues and is applied once it connects; a hung or unavailable
     // bus is bounded and surfaces as a logged "disabled". The inbound
     // channel carries method calls from the MPRIS worker thread to the GTK

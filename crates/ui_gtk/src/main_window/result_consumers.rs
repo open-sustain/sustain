@@ -419,7 +419,7 @@ pub(super) fn install_mtp_discovery_consumer(
 }
 
 /// Delay before the one-shot launch rebuild fires. A second is plenty
-/// to clear the cold-start window (the 150 ms first-idle budget plus
+/// to clear the cold-start window (the 225 ms first-idle budget plus
 /// margin) so the rebuild's main-thread prep — cloning the track list
 /// and loading cached acoustics before the build hands off to a
 /// background worker — never counts against startup. The user never
