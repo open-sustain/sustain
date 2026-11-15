@@ -1404,3 +1404,88 @@ Tempo and beat positions are unchanged: the GRID lines of all three runs
 match v15's exactly. The `bars_start_where_the_harmony_changes` fixture
 still passes. The learning pass over the 3,015 tracks took 29 minutes; the
 features reuse the band energies the beat tracker already holds.
+
+## 2026-11-15 — tempo v17 (metrical level checked both ways), private and public corpora
+
+Under #283. v15 checked the tempogram's estimate against two faster levels
+(×3/2, ×4/3) on the kick's mean energy per beat. v17 checks it against six
+(×3/2, ×4/3, ×5/4 and their inverses, when the BPM range holds them), and a
+level that wins is checked against its own alternatives in turn. **One
+variable changed:** the tempogram, the tempo and phase search at the level
+settled on, the grid, the bars and the key are untouched (BPM analyzer
+version 16 → 17). A track whose estimate is not replaced keeps its v16
+tempo exactly.
+
+Three things had to change for that to work:
+
+- **Slower levels need another test.** A sparse or syncopated kick lands on
+  a slower grid's few beats more squarely than on the beat's own, so per-beat
+  strength alone moves correct tempos down (v15's finding). A slower level
+  must now also catch no less of the kick and of the mid band (400–1,500 Hz)
+  *in total* — per beat times beats — than the level it replaces. When the
+  slower level is the beat, the onsets live on its grid. When it is not, it
+  skips beats the snare and the voice play on.
+- **Each level is measured at its own tempo.** An alternative sits at a ratio
+  of an estimate that is itself up to 2 % off, so its tempo is searched within
+  3 % of that ratio, and the search ignores the BPM range (the range only
+  decides which levels are tried). Clamped to the range, a level at 155 BPM
+  was measured off its tempo and lost.
+- **The figure of five.** Most of the remaining errors were 5/4× the tempo.
+
+| Set | Reference | Tracks | Within 2 % before | **after** | Fixed | Broken | Wrong → other wrong |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Dance development subset | rekordbox | 959 | 924 | **930** | **6** | **0** | 2 |
+| Held-out random sample, all genres | rekordbox | 600 | 460 | **467** | **7** | **0** | 0 |
+| GiantSteps Tempo | human | 661 | 429 | **456** | **27** | **0** | 16 |
+| GTZAN | human beats | 933 | 562 | **603** | **41** | **0** | 30 |
+| Ballroom | human beats | 523 | 349 | **366** | **17** | **0** | 16 |
+
+The rule and its constants were chosen on the two rekordbox sets and
+GiantSteps Tempo together, with GTZAN and Ballroom watched, so none of the
+five is strictly unseen; "held out" here means the 600 tracks v15 never
+used. GiantSteps Tempo (dance music, human-annotated, downloaded and
+md5-verified for this round) is the reference that does not depend on
+rekordbox. Of the 13 fixes against rekordbox, 8 were at 5/4× the tempo and
+5 below it (4/5×, 3/4×, 5/8× and the like, some reached in two steps).
+
+How firm the numbers are:
+
+- **The span.** Fixed / broken over dev, held out, GiantSteps, GTZAN,
+  Ballroom: 2 % gives 4/0, 6/0, 25/0, 34/1, 15/1; 2.5 % gives 6/0, 5/0,
+  26/1, 38/0, 16/0; **3 % gives 6/0, 7/0, 27/0, 41/0, 17/0**; 3.5 % gives
+  6/1, 7/0, 23/0, 37/1, 14/0; 4 % gives 5/0, 4/0, 24/1, 43/1, 15/0; 5 %
+  gives 5/0, 6/0, 26/0, 40/0, 16/0. Every span gains far more than it
+  breaks, but 3 % is the only one with no break anywhere, and the breaks
+  either side of it are single tracks. Zero is a property of this choice, not
+  of the method.
+- **The mid-band test** matters: without it one held-out track, three
+  GiantSteps and five GTZAN tracks break. It never refused a faster level on
+  any of the 3,676 tracks, so it is asked of slower levels only.
+- **The walk** (checking the winner's own alternatives) is worth two fixes on
+  the development set and six on GTZAN. Without ×5/4 and ×4/5 the
+  development set gains one track instead of six.
+
+Not shipped:
+
+- **Whether the beats hold across the track.** #283 asked for a level check
+  on the hold: the share of 8-second windows whose local phase agrees with
+  the whole track's. Tried as the criterion and as a per-window vote, it did
+  not separate right moves from wrong ones — a wrong slower level often
+  holds as well as the right one (one wrong move saw its hold rise from
+  0.26 to 0.80). The independent hold measure of #280 was kept as a check
+  instead: of the 15 rekordbox tracks that changed, the hold rose on 12 and
+  fell on 3, and those 3 now match rekordbox's tempo.
+- **Kick × mid product for faster levels.** Fixed one more development track
+  (2/3×, kick only 1.03 times stronger at the right level) and broke
+  GiantSteps and Ballroom tracks.
+- **Octave partners** (×8/5, ×5/8): no gain.
+
+Analysis time: the BPM pass takes 13 % longer per whole track (669 → 757 ms
+on 156 library tracks, decode included): the kick is measured at up to six
+more levels, each over a wider span.
+
+#283 stays open. On the development set 18 in-range errors remain: 1 at
+2/3×, 1 at 3/4×, 2 at 4/3×, 2 at 3/2×, 2 at 4/5×, 10 elsewhere. By the hold
+measure two of them are Sustain's (the 2/3× and one 4/3×), two are
+rekordbox's (one 4/5×, one 3/2×), and the rest are undecided. Ten tracks
+above 155 BPM still fold to half tempo by design.

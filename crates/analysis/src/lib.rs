@@ -308,6 +308,21 @@ pub use waveform::WaveformTiers;
 /// Ballroom and 75.0 to 85.1 % against rekordbox. Tempo and beats are
 /// untouched; every grid is placed again for its bars.
 ///
+/// BPM version 17: the metrical level check works both ways and reaches a
+/// figure of five beats. v15 only tried the faster levels ×3/2 and ×4/3,
+/// on how squarely the kick lands on a beat. The check now tries ×3/2,
+/// ×4/3, ×5/4 and their inverses, each measured within 3 % of its tempo
+/// rather than at the range's edge, and a level that wins is checked
+/// against its own alternatives in turn. Per-beat kick strength still
+/// decides for a faster level; it cannot for a slower one — a sparse kick
+/// lands on fewer beats more squarely — so a slower level also has to
+/// catch no less of the kick and of the mid band in total than the one it
+/// replaces (`MetricalLevel::replaces`). Against rekordbox, 6 of the 959
+/// development tracks and 7 of the 600 held out come right and none goes
+/// wrong; against human annotations, 27 of GiantSteps Tempo's 661 tracks,
+/// 41 of GTZAN's 933 and 17 of Ballroom's 523 come right and none goes
+/// wrong. Every tempo and grid is measured again.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -326,7 +341,7 @@ pub use waveform::WaveformTiers;
 /// unchanged — key merely becomes deterministic on ambiguous ties (which the
 /// storage layer's `FILL_*_IF_NULL` policy never re-clobbers anyway).
 pub const ANALYZER_VERSIONS: AnalyzerVersions = AnalyzerVersions {
-    bpm: 16,
+    bpm: 17,
     key: 17,
     audio: 15,
 };

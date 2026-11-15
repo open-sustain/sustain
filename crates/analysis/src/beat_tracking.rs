@@ -20,13 +20,14 @@
 //!
 //! 1. **Tempo.** The caller's estimate (the tempogram's) settles which
 //!    octave is the beat — a comb is easily drawn to two or four beats.
-//!    It can also lock onto a figure longer than the beat: three beats
-//!    heard as two (a dotted, 3-3-2 bass line), or four as three. The
-//!    faster levels that would undo such a lock are checked on the kick
-//!    envelope, which plays the beat, and one replaces the estimate only
-//!    if the kick is clearly stronger on its beats (`METRICAL_MARGIN`).
-//!    Near the level settled on, a
-//!    comb over the kick envelope takes over: for
+//!    It can also lock onto a figure that is not the beat: three, four
+//!    or five beats heard as two, three or four (a dotted, 3-3-2 bass
+//!    line), or the other way round. The levels that would undo such a
+//!    lock are measured on the kick and mid envelopes, and one replaces
+//!    the estimate only if the kick is clearly stronger on its beats
+//!    and, for a slower level, neither band carries less on them in
+//!    total (`MetricalLevel::replaces`). Near the level settled on, a comb
+//!    over the kick envelope takes over: for
 //!    each candidate tempo the envelope is folded onto one beat period,
 //!    and the tempo whose fold piles the most onset energy onto one phase
 //!    wins. The winner is then refined by summing the envelope at every
@@ -83,19 +84,32 @@ const DETREND_SECS: f64 = 0.5;
 /// within ±2 BPM of the true tempo on nearly every track, and 2 % of a
 /// dance tempo is more than that.
 const ESTIMATE_SPAN: f64 = 0.02;
-/// Faster metrical levels the estimate is checked against, as ratios to
-/// it: the beat when the estimate locked onto three of them, or four.
-/// Only faster levels: a kick that skips beats (syncopated, as in
-/// breakbeat, tek or dembow) can make a slower grid land on it more
-/// squarely than the beat's does, but it cannot fill every pulse of a
-/// faster one. Octaves are the estimate's and the range's to settle.
-const METRICAL_ALTERNATIVES: [f64; 2] = [3.0 / 2.0, 4.0 / 3.0];
+/// Metrical levels a level is checked against, as ratios to it: the beat
+/// when the tempogram locked onto three of them heard as two, four as
+/// three or five as four, or onto two, three or four heard as three,
+/// four or five. Octaves are the estimate's and the range's to settle.
+const METRICAL_ALTERNATIVES: [f64; 6] = [
+    3.0 / 2.0,
+    4.0 / 3.0,
+    5.0 / 4.0,
+    2.0 / 3.0,
+    3.0 / 4.0,
+    4.0 / 5.0,
+];
+/// How far around a metrical level its tempo is searched when levels
+/// are compared. Wider than [`ESTIMATE_SPAN`]: an alternative sits at a
+/// ratio of an estimate that is itself off by up to that span, and a
+/// level measured off its tempo loses to any other. On 3,676 tracks
+/// with a reference tempo, every span from 2 to 5 % fixed far more
+/// tempos than it broke, and this one broke none
+/// (`docs/analysis-benchmark-results.md`, tempo v17).
+const LEVEL_SPAN: f64 = 0.03;
 /// How much stronger, per beat, the kick must be at an alternative level
-/// than at the estimate's for the alternative to replace it. The
+/// than at the current one for the alternative to replace it. The
 /// estimate has heard the whole spectrum; the kick only overrides it
-/// where it clearly disagrees. On 1,559 development tracks the levels
-/// that won were at least 1.24 times stronger and every other at most
-/// 1.03 times; this margin sits between the two.
+/// where it clearly disagrees. On 1,559 development tracks the faster
+/// levels that won were at least 1.24 times stronger and every other at
+/// most 1.03 times; this margin sits between the two.
 const METRICAL_MARGIN: f64 = 1.12;
 /// Coarse tempo candidates are spaced by this ratio (0.05 %, about
 /// 0.06 BPM at 128 BPM).
@@ -128,6 +142,48 @@ const ONSET_LEAD_SECS: f64 = 0.016;
 const PHASE_VOTE_REACH: f64 = 0.125;
 /// A grid needs at least this many beats to measure anything.
 const MIN_BEATS: usize = 16;
+
+/// A candidate for the beat's metrical level, measured on the onset
+/// envelopes over the whole track.
+struct MetricalLevel {
+    /// Beats per minute.
+    tempo: f64,
+    /// Mean kick-envelope energy on a beat, at the kick's best phase. A
+    /// mean over the beats weighs every level alike, where the coarse
+    /// fold's peak, read from bins a fixed fraction of the period wide,
+    /// favours slower levels.
+    kick_per_beat: f64,
+    /// Mean mid-envelope energy on a beat, at the mid band's best phase.
+    mid_per_beat: f64,
+}
+
+impl MetricalLevel {
+    /// Whether this level is the beat rather than `current`.
+    ///
+    /// Its beats must land on the kick clearly more squarely
+    /// ([`METRICAL_MARGIN`]). That settles a faster level: a kick cannot
+    /// fill every pulse of a faster grid unless it plays there.
+    ///
+    /// It cannot settle a slower one. A sparse or syncopated kick
+    /// (breakbeat, tek, dembow, a rock kick on 1 and 3) lands on a slower
+    /// grid's few beats more squarely than on the beat's own, which is
+    /// why per-beat strength alone moved correct tempos down. A slower
+    /// level's grid must also catch no less of the kick and of the mid
+    /// band in total — per beat times beats — than `current`'s: when it
+    /// is the beat, the onsets live on its grid and it catches more of
+    /// them with fewer beats; when `current` is, the slower grid skips
+    /// beats the snare and the voice play on, and the mid band loses
+    /// even where a sparse kick does not.
+    fn replaces(&self, current: &Self) -> bool {
+        if self.kick_per_beat <= current.kick_per_beat * METRICAL_MARGIN {
+            return false;
+        }
+        let beats = self.tempo / current.tempo;
+        beats > 1.0
+            || (self.kick_per_beat * beats >= current.kick_per_beat
+                && self.mid_per_beat * beats >= current.mid_per_beat)
+    }
+}
 
 /// Onset envelopes and band energies of one stretch of audio.
 pub(crate) struct Onsets {
@@ -170,34 +226,53 @@ impl Onsets {
     }
 
     /// The metrical level of the beat, as a tempo estimate within
-    /// `[min_bpm, max_bpm]`: `estimate`, unless the kick is
-    /// [`METRICAL_MARGIN`] times stronger per beat at one of the
-    /// [`METRICAL_ALTERNATIVES`] that the range holds.
+    /// `[min_bpm, max_bpm]`: `estimate`, unless one of its
+    /// [`METRICAL_ALTERNATIVES`] that the range holds replaces it (see
+    /// [`MetricalLevel::replaces`]). A level that replaced it is checked
+    /// against its own alternatives in turn, until none replaces it:
+    /// each replacement is stronger on the kick by [`METRICAL_MARGIN`],
+    /// so the walk ends.
     pub(crate) fn beat_level(&self, estimate: f64, min_bpm: f64, max_bpm: f64) -> f64 {
-        let Some(estimate_strength) = self.kick_per_beat(estimate, min_bpm, max_bpm) else {
+        let Some(mut level) = self.metrical_level_near(estimate) else {
             return estimate;
         };
-        METRICAL_ALTERNATIVES
+        let mut beat = estimate;
+        while let Some(alternative) = METRICAL_ALTERNATIVES
             .iter()
-            .map(|ratio| estimate * ratio)
-            .filter(|&level| level <= max_bpm)
-            .filter_map(|level| {
-                let strength = self.kick_per_beat(level, min_bpm, max_bpm)?;
-                (strength > estimate_strength * METRICAL_MARGIN).then_some((strength, level))
-            })
-            .max_by(|a, b| a.0.total_cmp(&b.0))
-            .map_or(estimate, |(_, level)| level)
+            .map(|ratio| level.tempo * ratio)
+            .filter(|tempo| (min_bpm..=max_bpm).contains(tempo))
+            .filter_map(|tempo| self.metrical_level_near(tempo))
+            .filter(|alternative| alternative.replaces(&level))
+            .max_by(|a, b| a.kick_per_beat.total_cmp(&b.kick_per_beat))
+        {
+            beat = alternative.tempo;
+            level = alternative;
+        }
+        beat
     }
 
-    /// The mean kick-envelope energy per beat at the tempo near `estimate`
-    /// and its best phase: how squarely that level's beats land on kicks.
-    /// A mean over the beats weighs every level alike, where the coarse
-    /// fold's peak, read from bins a fixed fraction of the period wide,
-    /// favours slower levels.
-    fn kick_per_beat(&self, estimate: f64, min_bpm: f64, max_bpm: f64) -> Option<f64> {
-        let coarse = self.coarse_tempo_near(estimate, min_bpm, max_bpm)?;
-        let (sum, tempo) = self.refined_tempo(coarse);
-        Some(sum / (self.duration_secs * tempo / 60.0))
+    /// The metrical level within [`LEVEL_SPAN`] of `tempo`: the tempo
+    /// there whose beats sum the most kick energy, and how strongly the
+    /// kick and the mid band land on its beats, each at its own best
+    /// phase. The search ignores the BPM range: a level at the edge of
+    /// the range is still measured at its own tempo, not at the edge.
+    /// `None` when there is too little audio to hold [`MIN_BEATS`] beats
+    /// there, or no onsets at all.
+    fn metrical_level_near(&self, tempo: f64) -> Option<MetricalLevel> {
+        let low = tempo * (1.0 - LEVEL_SPAN);
+        if self.duration_secs * low / 60.0 < MIN_BEATS as f64 {
+            return None;
+        }
+        let coarse = self.coarse_tempo(low, tempo * (1.0 + LEVEL_SPAN))?;
+        let (kick_sum, tempo) = self.refined_tempo(coarse);
+        let period = 60.0 / tempo;
+        let beats = self.duration_secs / period;
+        let mid_phase = self.best_phase(&self.mid, period, REFINE_PHASE_STEPS);
+        Some(MetricalLevel {
+            tempo,
+            kick_per_beat: kick_sum / beats,
+            mid_per_beat: self.comb(&self.mid, period, mid_phase) / beats,
+        })
     }
 
     /// The precise tempo near `estimate` (beats per minute), kept within
@@ -668,9 +743,10 @@ mod tests {
     #[test]
     fn a_figure_longer_than_the_beat_gives_way_to_the_kick() {
         // A kick on every beat under a loud stab every one and a half
-        // beats (a dotted figure) or every four thirds; the estimate
-        // locked onto the stabs, the kick band hears the beat.
-        for (bpm, figure_beats) in [(125.0, 1.5), (128.0, 4.0 / 3.0)] {
+        // beats (a dotted figure), every four thirds or every five
+        // quarters; the estimate locked onto the stabs, the kick band
+        // hears the beat.
+        for (bpm, figure_beats) in [(125.0, 1.5), (128.0, 4.0 / 3.0), (124.0, 1.25)] {
             let kicks = render(bpm, 0.2, 90.0, &kick(), None);
             let figure_bpm = bpm / figure_beats;
             let stab = tone(330.0, 0.9, 0.002, 0.2, 0.3);
@@ -692,6 +768,56 @@ mod tests {
         let samples: Vec<f32> = kicks.iter().zip(&hats).map(|(k, h)| k + h).collect();
         let onsets = Onsets::of(&samples, SAMPLE_RATE).expect("onsets");
         assert_eq!(onsets.beat_level(100.0, 76.0, 155.0), 100.0);
+    }
+
+    #[test]
+    fn a_figure_shorter_than_the_beat_gives_way_to_the_kick() {
+        // A kick on every beat and a snare on every other, under a loud
+        // tick, above the mid band, every two thirds, three quarters or
+        // four fifths of a beat; the estimate locked onto the ticks.
+        for (bpm, figure_beats) in [(100.0, 2.0 / 3.0), (102.0, 0.75), (104.0, 0.8)] {
+            let period = 60.0 / bpm;
+            let kicks = render(bpm, 0.2, 90.0, &kick(), None);
+            let snares = render(bpm / 2.0, 0.2 + period, 90.0, &snare(), None);
+            let figure_bpm = bpm / figure_beats;
+            let tick = tone(6_000.0, 0.9, 0.002, 0.03, 0.1);
+            let ticks = render(figure_bpm, 0.2, 90.0, &tick, None);
+            let samples: Vec<f32> = kicks
+                .iter()
+                .zip(&snares)
+                .zip(&ticks)
+                .map(|((k, s), t)| k + s + t)
+                .collect();
+            let onsets = Onsets::of(&samples, SAMPLE_RATE).expect("onsets");
+            let level = onsets.beat_level(figure_bpm, 76.0, 155.0);
+            assert!((level - bpm).abs() < 1.0, "{bpm}: {level}");
+        }
+    }
+
+    #[test]
+    fn a_sparse_kick_does_not_slow_the_beat() {
+        // 120 BPM carried by a snare on every beat, the kick on every
+        // third only. Per beat the kick lands more squarely on 80 BPM —
+        // every other pulse, against every third — but that grid skips
+        // snares the beat does not.
+        let kicks = render(40.0, 0.25, 90.0, &kick(), None);
+        let snares = render(120.0, 0.25, 90.0, &snare(), None);
+        let samples: Vec<f32> = kicks.iter().zip(&snares).map(|(k, s)| k + s).collect();
+        let onsets = Onsets::of(&samples, SAMPLE_RATE).expect("onsets");
+        assert_eq!(onsets.beat_level(120.0, 76.0, 155.0), 120.0);
+    }
+
+    #[test]
+    fn a_level_at_the_edge_of_the_range_is_measured_at_its_own_tempo() {
+        // 154 BPM heard as two thirds of it: the level's own tempo is
+        // within a hundredth of the range's edge, and still found.
+        let kicks = render(154.9, 0.2, 90.0, &kick(), None);
+        let stab = tone(330.0, 0.9, 0.002, 0.2, 0.3);
+        let stabs = render(154.9 / 1.5, 0.2, 90.0, &stab, None);
+        let samples: Vec<f32> = kicks.iter().zip(&stabs).map(|(k, s)| k + s).collect();
+        let onsets = Onsets::of(&samples, SAMPLE_RATE).expect("onsets");
+        let level = onsets.beat_level(154.9 / 1.5 * 0.985, 76.0, 155.0);
+        assert!((level - 154.9).abs() < 1.0, "{level}");
     }
 
     #[test]
