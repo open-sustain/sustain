@@ -795,14 +795,21 @@ mod tests {
     }
 
     #[test]
-    fn a_sparse_kick_does_not_slow_the_beat() {
-        // 120 BPM carried by a snare on every beat, the kick on every
-        // third only. Per beat the kick lands more squarely on 80 BPM —
-        // every other pulse, against every third — but that grid skips
-        // snares the beat does not.
-        let kicks = render(40.0, 0.25, 90.0, &kick(), None);
+    fn a_syncopated_kick_does_not_slow_the_beat() {
+        // 120 BPM carried by a snare on every beat, under a dotted kick:
+        // on the first of every three beats and a beat and a half later.
+        // An 80 BPM grid lands on every kick, the beat's own on half of
+        // them — but it skips two snares in three.
+        let period = 60.0 / 120.0;
+        let on_beat = render(40.0, 0.25, 90.0, &kick(), None);
+        let dotted = render(40.0, 0.25 + 1.5 * period, 90.0, &kick(), None);
         let snares = render(120.0, 0.25, 90.0, &snare(), None);
-        let samples: Vec<f32> = kicks.iter().zip(&snares).map(|(k, s)| k + s).collect();
+        let samples: Vec<f32> = on_beat
+            .iter()
+            .zip(&dotted)
+            .zip(&snares)
+            .map(|((k, d), s)| k + d + s)
+            .collect();
         let onsets = Onsets::of(&samples, SAMPLE_RATE).expect("onsets");
         assert_eq!(onsets.beat_level(120.0, 76.0, 155.0), 120.0);
     }
