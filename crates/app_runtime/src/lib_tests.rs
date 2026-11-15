@@ -2690,6 +2690,7 @@ fn runtime_saves_ui_settings_with_settings_store() {
         playlists_section_collapsed: false,
         sidebar_show_duplicates: false,
         sidebar_show_statistics: true,
+        now_playing_waveform: true,
         window_size: Some(UiWindowSize {
             width: 1280,
             height: 800,
@@ -8210,6 +8211,13 @@ impl LibraryStore for CallCountingLibraryStore {
 
     fn load_waveform(&self, track_id: TrackId) -> StoreResult<Option<StoredWaveform>> {
         self.inner.load_waveform(track_id)
+    }
+
+    fn load_waveform_preview(
+        &self,
+        track_id: TrackId,
+    ) -> StoreResult<Option<sustain_library_store::WaveformSegments>> {
+        self.inner.load_waveform_preview(track_id)
     }
 
     fn waveform_versions(

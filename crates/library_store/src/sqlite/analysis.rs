@@ -279,6 +279,27 @@ pub(super) fn load_waveform(
     }))
 }
 
+pub(super) fn load_waveform_preview(
+    connection: &Connection,
+    track_id: TrackId,
+) -> StoreResult<Option<WaveformSegments>> {
+    connection
+        .query_row(
+            SELECT_TRACK_WAVEFORM_PREVIEW_SQL,
+            params![track_id.get()],
+            |row| {
+                let duration: f64 = row.get(0)?;
+                let bytes: Vec<u8> = row.get(1)?;
+                Ok(WaveformSegments {
+                    segment_duration_ms: duration as f32,
+                    segments: blob_to_waveform_segments(&bytes),
+                })
+            },
+        )
+        .optional()
+        .map_err(StoreError::from)
+}
+
 pub(super) fn waveform_versions(
     connection: &Connection,
 ) -> StoreResult<HashMap<TrackId, WaveformVersion>> {

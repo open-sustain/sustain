@@ -179,3 +179,14 @@ fn the_playlists_whose_entries_changed_are_passed_on() {
     assert!(update.track_ids.is_empty());
     assert_eq!(update.albums, AlbumsUpdate::Unaffected);
 }
+
+#[test]
+fn the_tracks_whose_analysis_changed_are_named() {
+    let update = update(&[
+        (1, TrackChange::analysis()),
+        (2, changed(TrackFields::TITLE)),
+        (3, TrackChange::EVERYTHING),
+    ]);
+
+    assert_eq!(update.analysed, BTreeSet::from([track_id(1), track_id(3)]));
+}

@@ -66,6 +66,16 @@ impl ArtworkPalette {
         self.background.rgba()
     }
 
+    /// The cover's dominant colour, lightened or darkened just enough to
+    /// show on the window's chrome whatever the theme: the top bar is
+    /// near-white in a light theme and near-black in a dark one, and a
+    /// colour whose luminance sits between [`CHROME_MIN_LUMINANCE`] and
+    /// [`CHROME_MAX_LUMINANCE`] keeps at least 2:1 against both. The hue
+    /// is kept.
+    pub(crate) fn chrome_rgba(self) -> gdk::RGBA {
+        within_luminance(self.background, CHROME_MIN_LUMINANCE, CHROME_MAX_LUMINANCE).rgba()
+    }
+
     pub(crate) fn from_components(components: ArtworkPaletteComponents) -> Self {
         Self {
             background: RgbColor::from_components(components.background),
@@ -270,6 +280,46 @@ fn color_weight(red: u8, green: u8, blue: u8, alpha: u8) -> u16 {
     (16 + chroma).saturating_mul(opacity) / 255
 }
 
+/// The darkest a cover colour drawn on the chrome may be: 2:1 against a
+/// dark top bar (`#242424`).
+const CHROME_MIN_LUMINANCE: f64 = 0.12;
+/// The lightest a cover colour drawn on the chrome may be: 2:1 against a
+/// light top bar (`#ebebeb`).
+const CHROME_MAX_LUMINANCE: f64 = 0.38;
+
+/// `color` mixed with white when its luminance is under `min`, or with
+/// black when it is over `max`, by the least amount reaching the bound.
+fn within_luminance(color: RgbColor, min: f64, max: f64) -> RgbColor {
+    let luminance = relative_luminance(color);
+    let too_dark = luminance < min;
+    if !too_dark && luminance <= max {
+        return color;
+    }
+    let toward = if too_dark {
+        RgbColor::new(255, 255, 255)
+    } else {
+        RgbColor::new(0, 0, 0)
+    };
+    let short_of_bound = |mixed: RgbColor| {
+        let mixed_luminance = relative_luminance(mixed);
+        if too_dark {
+            mixed_luminance < min
+        } else {
+            mixed_luminance > max
+        }
+    };
+    let (mut short, mut enough) = (0.0, 1.0);
+    for _ in 0..16 {
+        let amount = (short + enough) / 2.0;
+        if short_of_bound(color.mix(toward, amount)) {
+            short = amount;
+        } else {
+            enough = amount;
+        }
+    }
+    color.mix(toward, enough)
+}
+
 fn readable_foreground(background: RgbColor) -> RgbColor {
     let white = RgbColor::new(255, 255, 255);
     let black = RgbColor::new(0, 0, 0);
@@ -339,6 +389,18 @@ impl RgbColor {
         }
     }
 
+    /// `self` moved `amount` (0 to 1) of the way to `other`.
+    fn mix(self, other: Self, amount: f64) -> Self {
+        let channel = |from: u8, to: u8| {
+            (f64::from(from) + (f64::from(to) - f64::from(from)) * amount).round() as u8
+        };
+        Self::new(
+            channel(self.red, other.red),
+            channel(self.green, other.green),
+            channel(self.blue, other.blue),
+        )
+    }
+
     fn css_hex(self) -> String {
         format!("#{:02x}{:02x}{:02x}", self.red, self.green, self.blue)
     }
@@ -357,8 +419,9 @@ impl RgbColor {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtworkPalette, ColorBucket, RgbColor, dominant_color, pick_secondary, readable_foreground,
-        sample_step,
+        ArtworkPalette, CHROME_MAX_LUMINANCE, CHROME_MIN_LUMINANCE, ColorBucket, RgbColor,
+        contrast_ratio, dominant_color, pick_secondary, readable_foreground, relative_luminance,
+        sample_step, within_luminance,
     };
 
     #[test]
@@ -449,6 +512,44 @@ mod tests {
 
         // White (foreground) blended 35% toward the dark blue background.
         assert_eq!(secondary, RgbColor::new(173, 180, 236));
+    }
+
+    #[test]
+    fn a_cover_colour_already_visible_on_the_chrome_is_kept() {
+        let red = RgbColor::new(200, 40, 40);
+        assert_eq!(chrome(red), red);
+    }
+
+    #[test]
+    fn chrome_colours_show_on_light_and_dark_top_bars() {
+        let dark_bar = RgbColor::new(0x24, 0x24, 0x24);
+        let light_bar = RgbColor::new(0xeb, 0xeb, 0xeb);
+        for cover in [
+            RgbColor::new(0, 0, 0),
+            RgbColor::new(0x30, 0x30, 0x30),
+            RgbColor::new(10, 10, 120),
+            RgbColor::new(255, 255, 255),
+            RgbColor::new(250, 240, 120),
+            RgbColor::new(120, 230, 230),
+        ] {
+            let shown = chrome(cover);
+            assert!(
+                contrast_ratio(shown, dark_bar) >= 2.0 && contrast_ratio(shown, light_bar) >= 2.0,
+                "{cover:?} became {shown:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dark_cover_colour_is_lightened_only_to_the_bound() {
+        let shown = chrome(RgbColor::new(10, 10, 120));
+        let luminance = relative_luminance(shown);
+        assert!((CHROME_MIN_LUMINANCE..CHROME_MIN_LUMINANCE + 0.01).contains(&luminance));
+        assert!(shown.blue > shown.red, "the hue is kept: {shown:?}");
+    }
+
+    fn chrome(color: RgbColor) -> RgbColor {
+        within_luminance(color, CHROME_MIN_LUMINANCE, CHROME_MAX_LUMINANCE)
     }
 
     fn bucket(red: u8, green: u8, blue: u8, pixels: u64) -> ColorBucket {

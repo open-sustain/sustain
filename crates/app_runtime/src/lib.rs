@@ -34,10 +34,10 @@ pub use sustain_domain::{
     Track, TrackAvailability, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope,
     TrackColumnSort, TrackContentHash, TrackFields, TrackId, TrackLocation, TrackMetadata,
     TrackPlaybackSource, TrackRelativePath, UiSettings, UiSidebarSelection, UiWindowSize,
-    UserSettings, VerifiedDuplicateMerge, VolumePercent, YearCount, compare_optional_text,
-    compute_library_statistics, default_duplicate_merge_choices, duplicate_audio_quality,
-    effective_sort_key, highest_quality_duplicate_artwork, matching_tracks, normalize_sort_text,
-    track_matches_rule_set,
+    UserSettings, VerifiedDuplicateMerge, VolumePercent, WaveformSegment, WaveformSegments,
+    YearCount, compare_optional_text, compute_library_statistics, default_duplicate_merge_choices,
+    duplicate_audio_quality, effective_sort_key, highest_quality_duplicate_artwork,
+    matching_tracks, normalize_sort_text, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities, StoreError};
 pub use sustain_metadata::{
@@ -1407,7 +1407,8 @@ impl ApplicationRuntime {
                 .clone()
                 .map(|sender| -> analysis_scheduler::TrackUpdatedSink {
                     // Analysis persists the track's waveform, beat grid
-                    // and acoustics along with any BPM or key it fills.
+                    // and acoustics along with any BPM or key it fills,
+                    // and a failed attempt voids the earlier ones.
                     Arc::new(move |track_id| {
                         let _ = sender.try_send(TrackUpdated {
                             track_id,
@@ -2301,6 +2302,21 @@ impl ApplicationRuntime {
         store
             .load_synced_lyrics(track_id)
             .map(|stored| stored.map(|stored| stored.lyrics))
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
+    }
+
+    /// Load the preview waveform of a track's latest audio analysis, for
+    /// a display surface. `None` when the track has none: it was never
+    /// analysed, or its analysis produced no waveform.
+    pub fn load_waveform_preview(
+        &self,
+        track_id: TrackId,
+    ) -> ApplicationRuntimeResult<Option<WaveformSegments>> {
+        let Some(store) = self.library_store.as_deref() else {
+            return Err(ApplicationRuntimeError::LibraryServicesUnavailable);
+        };
+        store
+            .load_waveform_preview(track_id)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)
     }
 

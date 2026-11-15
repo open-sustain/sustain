@@ -450,6 +450,16 @@ source of truth for whether the lyrics surface appears.
 Click or drag on the progress bar to seek. The clickable hit area
 extends above the visual bar so the target isn't a one-pixel hairline.
 
+### Now Playing waveform — *Sustain-native*
+An opt-in View preference ("Show the waveform in Now Playing") replaces
+the progress bar with the playing track's waveform once audio analysis
+has measured it: small vertical bars, rounded on top, the played ones
+in the cover's dominant colour (lightened or darkened just enough to show
+on the top bar in light and dark themes; the theme's foreground for a
+track without artwork) and the rest a neutral gray. It
+seeks exactly like the progress bar, appears as soon as the track's
+analysis lands, and falls back to the plain bar for tracks without one.
+
 ### Shuffle and repeat — *iso-iTunes*
 Shuffle and repeat toggle buttons sit in the now-playing tile.
 Shuffle cycles through Off → Pure → Smart (see *Smart Shuffle*

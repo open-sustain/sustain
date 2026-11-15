@@ -40,11 +40,25 @@ pub(super) fn build(
     );
     wire_view_switch(
         &statistics_row.switch,
-        command_controller,
-        view_settings_changed,
+        command_controller.clone(),
+        view_settings_changed.clone(),
         ViewFlag::SidebarStatistics,
     );
     content.append(&statistics_row.container);
+
+    let waveform_row = build_switch_row(
+        "Show the waveform in Now Playing",
+        "Draws the playing track's waveform in place of the progress bar, \
+         once audio analysis has measured it.",
+        initial.now_playing_waveform,
+    );
+    wire_view_switch(
+        &waveform_row.switch,
+        command_controller,
+        view_settings_changed,
+        ViewFlag::NowPlayingWaveform,
+    );
+    content.append(&waveform_row.container);
 
     content.upcast()
 }
@@ -53,6 +67,7 @@ pub(super) fn build(
 enum ViewFlag {
     SidebarDuplicates,
     SidebarStatistics,
+    NowPlayingWaveform,
 }
 
 fn wire_view_switch(
@@ -66,13 +81,14 @@ fn wire_view_switch(
         match flag {
             ViewFlag::SidebarDuplicates => settings.ui.sidebar_show_duplicates = requested_state,
             ViewFlag::SidebarStatistics => settings.ui.sidebar_show_statistics = requested_state,
+            ViewFlag::NowPlayingWaveform => settings.ui.now_playing_waveform = requested_state,
         }
         if command_controller
             .dispatch(ApplicationCommand::UpdateSettings(settings))
             .is_ok()
         {
             // Apply the change to the live UI (sidebar rows now, the
-            // Now Playing chips on its next refresh) without a relaunch.
+            // Now Playing waveform) without a relaunch.
             view_settings_changed();
             Propagation::Proceed
         } else {

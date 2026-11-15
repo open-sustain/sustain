@@ -453,6 +453,11 @@ impl LibraryStore for SqliteLibraryStore {
         analysis::load_waveform(&connection, track_id)
     }
 
+    fn load_waveform_preview(&self, track_id: TrackId) -> StoreResult<Option<WaveformSegments>> {
+        let connection = self.connection_guard()?;
+        analysis::load_waveform_preview(&connection, track_id)
+    }
+
     fn waveform_versions(&self) -> StoreResult<HashMap<TrackId, WaveformVersion>> {
         let connection = self.connection_guard()?;
         analysis::waveform_versions(&connection)

@@ -3,6 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::BTreeSet,
     path::PathBuf,
     rc::Rc,
     time::Duration,
@@ -33,6 +34,7 @@ mod lyrics_overlay;
 mod marquee;
 mod model;
 mod progress_hit_area;
+mod waveform_bars;
 
 use color_fill::ColorFill;
 use lyrics_overlay::LyricsOverlayFace;
@@ -105,6 +107,10 @@ pub(crate) struct NowPlayingView {
     /// owns once the result arrives.
     pending_fetch_notification_id: Rc<Cell<Option<NotificationId>>>,
     duration: Rc<Cell<Duration>>,
+    /// The track whose waveform the progress shows, or `None` when it
+    /// shows the progress bar for want of a waveform to load: no track,
+    /// or the waveform turned off in the Views settings.
+    waveform_track: Rc<Cell<Option<TrackId>>>,
 }
 
 const EMPTY_STACK_NAME: &str = "no-track";
@@ -302,6 +308,7 @@ impl NowPlayingView {
             pending_fetch_track_id,
             pending_fetch_notification_id,
             duration,
+            waveform_track: Rc::new(Cell::new(None)),
         };
         install_playback_option_controls(&view, command_controller.clone());
         install_artwork_click_handler(&view, command_controller);
@@ -645,6 +652,53 @@ impl NowPlayingView {
     fn apply_dominant_color(&self, palette: Option<ArtworkPalette>) {
         self.artwork_fill
             .set_color(palette.map(ArtworkPalette::background_rgba));
+        self.hit_area
+            .set_cover_color(palette.map(ArtworkPalette::chrome_rgba));
+    }
+
+    /// Show the waveform of `track_id` as the progress when the Views
+    /// settings ask for it and the track has one; the progress bar
+    /// otherwise. Reads the waveform only when the track changes.
+    fn sync_waveform(&self, track_id: Option<TrackId>) {
+        let wanted = {
+            let runtime = self.runtime.borrow();
+            track_id.filter(|_| runtime.settings().ui.now_playing_waveform)
+        };
+        if wanted == self.waveform_track.get() {
+            return;
+        }
+        self.waveform_track.set(wanted);
+        let amplitudes = wanted.and_then(|track_id| {
+            // A waveform that cannot be read is shown as none, as the
+            // synced lyrics are: the progress bar does the same job.
+            let preview = match self.runtime.borrow().load_waveform_preview(track_id) {
+                Ok(preview) => preview,
+                Err(error) => {
+                    eprintln!("sustain: could not load the Now Playing waveform: {error:?}");
+                    None
+                }
+            }?;
+            Some(
+                preview
+                    .segments
+                    .iter()
+                    .map(|segment| segment.amplitude)
+                    .collect(),
+            )
+        });
+        self.hit_area.set_waveform(amplitudes);
+    }
+
+    /// The persisted audio analysis of these tracks changed: read the
+    /// playing track's waveform again if it is one of them.
+    pub(crate) fn analysis_changed(&self, track_ids: &BTreeSet<TrackId>) {
+        let Some(track_id) = self.waveform_track.get() else {
+            return;
+        };
+        if track_ids.contains(&track_id) {
+            self.waveform_track.set(None);
+            self.sync_waveform(Some(track_id));
+        }
     }
 
     /// Refresh the inline Lyrics chip for the current track. The chip is
@@ -667,6 +721,7 @@ impl NowPlayingView {
 
     pub(crate) fn refresh(&self, now_playing: &NowPlaying) {
         self.sync_artwork(now_playing.track.as_ref());
+        self.sync_waveform(now_playing.track.as_ref().map(|track| track.id));
 
         let Some(track) = &now_playing.track else {
             self.stack.set_visible_child_name(EMPTY_STACK_NAME);

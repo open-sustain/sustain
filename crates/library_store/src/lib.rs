@@ -37,10 +37,11 @@ use schema::{
     RECORD_MEASURED_TRACK_KEY_SQL, REPLACE_TRACK_BPM_UNLESS_SET_BY_USER_SQL, SAVE_TRACK_SQL,
     SELECT_ALL_TRACK_ACOUSTICS_SQL, SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL,
     SELECT_TRACK_BEAT_GRID_SQL, SELECT_TRACK_BY_ID_SQL, SELECT_TRACK_SYNCED_LYRICS_SQL,
-    SELECT_TRACK_WAVEFORM_SQL, SELECT_TRACKS_NEEDING_ANALYSIS_SQL,
-    SELECT_TRACKS_NEEDING_ONLINE_SQL, SELECT_WAVEFORM_VERSIONS_SQL, UPSERT_SMART_SHUFFLE_INDEX_SQL,
-    UPSERT_TRACK_ACOUSTICS_SQL, UPSERT_TRACK_ANALYSIS_SQL, UPSERT_TRACK_BEAT_GRID_SQL,
-    UPSERT_TRACK_ONLINE_STATUS_SQL, UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
+    SELECT_TRACK_WAVEFORM_PREVIEW_SQL, SELECT_TRACK_WAVEFORM_SQL,
+    SELECT_TRACKS_NEEDING_ANALYSIS_SQL, SELECT_TRACKS_NEEDING_ONLINE_SQL,
+    SELECT_WAVEFORM_VERSIONS_SQL, UPSERT_SMART_SHUFFLE_INDEX_SQL, UPSERT_TRACK_ACOUSTICS_SQL,
+    UPSERT_TRACK_ANALYSIS_SQL, UPSERT_TRACK_BEAT_GRID_SQL, UPSERT_TRACK_ONLINE_STATUS_SQL,
+    UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
 };
 use sqlite_rows::{
     blob_to_waveform_segments, build_limit, duration_to_seconds, key_origin_to_db,
@@ -525,6 +526,11 @@ pub trait LibraryStore: Send + Sync {
     /// when the track has not been waveform-analyzed yet (or analysis
     /// failed).
     fn load_waveform(&self, track_id: TrackId) -> StoreResult<Option<StoredWaveform>>;
+
+    /// Load only the preview tier of the track's stored waveform: the
+    /// same waveform [`Self::load_waveform`] returns, without reading the
+    /// much larger detail tier.
+    fn load_waveform_preview(&self, track_id: TrackId) -> StoreResult<Option<WaveformSegments>>;
 
     /// The version of every stored waveform [`Self::load_waveform`] would
     /// return, keyed by track, without loading any. A track's version

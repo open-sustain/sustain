@@ -946,6 +946,18 @@ JOIN waveform_cache.track_waveform w
 WHERE ta.track_id = ?1 AND w.detail_segments IS NOT NULL
 "#;
 
+/// The preview tier alone of the waveform [`SELECT_TRACK_WAVEFORM_SQL`]
+/// would return, for a display that has no use for the detail tier.
+pub(super) const SELECT_TRACK_WAVEFORM_PREVIEW_SQL: &str = r#"
+SELECT
+    w.preview_segment_duration_ms,
+    w.preview_segments
+FROM track_analysis ta
+JOIN waveform_cache.track_waveform w
+  ON w.track_id = ta.track_id AND w.audio_attempt_token = ta.audio_attempt_token
+WHERE ta.track_id = ?1 AND w.detail_segments IS NOT NULL
+"#;
+
 /// Upsert the synced-lyrics JSON for a track still in the library.
 /// Source is a short provider tag (e.g. `"lrclib"`) kept so a later
 /// diagnostic can answer "where did this come from?" without consulting

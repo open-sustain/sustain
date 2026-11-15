@@ -113,6 +113,7 @@ pub(super) struct LibraryViewUpdateContext<'a> {
     pub(super) visible_summary_refresh: VisibleSummaryRefreshCallback,
     pub(super) current_search_text: &'a Rc<RefCell<String>>,
     pub(super) device_panel: &'a DeviceSyncPanel,
+    pub(super) now_playing: &'a NowPlayingView,
 }
 
 pub(super) fn library_view_update_callback(
@@ -130,6 +131,7 @@ pub(super) fn library_view_update_callback(
     let current_search_text = ctx.current_search_text.clone();
     let visible_summary_refresh = ctx.visible_summary_refresh;
     let device_panel = ctx.device_panel.clone();
+    let now_playing = ctx.now_playing.clone();
 
     Rc::new(move |update: &LibraryViewUpdate| {
         let touched = TouchedTracks::of(&runtime.borrow(), &update.track_ids);
@@ -229,6 +231,7 @@ pub(super) fn library_view_update_callback(
         // A background BPM/key/waveform completion changes the Pioneer
         // export readiness; refresh it when that view is on screen.
         device_panel.refresh_readiness();
+        now_playing.analysis_changed(&update.analysed);
     })
 }
 

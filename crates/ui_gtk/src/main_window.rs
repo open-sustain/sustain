@@ -613,6 +613,7 @@ pub(crate) fn build_main_window(
         visible_summary_refresh: visible_summary_refresh.clone(),
         current_search_text: &current_search_text,
         device_panel: &device_panel,
+        now_playing: &now_playing,
     });
     artwork_changed_holder.replace(Some(artwork_changed_callback(library_view_update.clone())));
     install_metadata_writer_event_consumer(
@@ -769,14 +770,23 @@ pub(crate) fn build_main_window(
     let import_requested = library_import_requested_callback(&runtime, window.upcast_ref());
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
     // Re-applies the Views toggles to the live UI the instant they
-    // change: the sidebar's Duplicates/Statistics rows.
+    // change: the sidebar's Duplicates/Statistics rows and the Now
+    // Playing waveform.
     let view_settings_changed: ViewSettingsChangedCallback = {
         let sidebar = sidebar.clone();
+        let now_playing = now_playing.clone();
         let runtime = runtime.clone();
         std::rc::Rc::new(move || {
-            let runtime = runtime.borrow();
-            let ui = &runtime.settings().ui;
-            sidebar.set_view_row_visibility(ui.sidebar_show_duplicates, ui.sidebar_show_statistics);
+            let now_playing_state = {
+                let runtime = runtime.borrow();
+                let ui = &runtime.settings().ui;
+                sidebar.set_view_row_visibility(
+                    ui.sidebar_show_duplicates,
+                    ui.sidebar_show_statistics,
+                );
+                runtime.now_playing()
+            };
+            now_playing.refresh(&now_playing_state);
         })
     };
 
@@ -1531,6 +1541,7 @@ fn ui_settings_from_widgets(
         // unchanged — otherwise this close-time save would reset them.
         sidebar_show_duplicates: current.sidebar_show_duplicates,
         sidebar_show_statistics: current.sidebar_show_statistics,
+        now_playing_waveform: current.now_playing_waveform,
         // GTK keeps the default size at the size the window has when it
         // is neither maximized nor full screen, so a maximized window
         // still records the size it restores to.

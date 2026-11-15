@@ -1007,6 +1007,33 @@ fn record_analysis_round_trips_waveform_bytes() {
 }
 
 #[test]
+fn the_preview_of_a_stored_waveform_loads_alone() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+    assert_eq!(store.load_waveform_preview(track.id), Ok(None));
+
+    let analysis = sample_analysis(Some(126.0), Some(MusicalKey::DMinor));
+    store
+        .record_analysis(
+            track.id,
+            &analysis,
+            AnalysisCapabilities::all(),
+            ctx(1_700_000_000),
+        )
+        .expect("record analysis");
+
+    let stored = store
+        .load_waveform(track.id)
+        .expect("load")
+        .expect("waveform");
+    assert_eq!(
+        store.load_waveform_preview(track.id),
+        Ok(Some(stored.preview))
+    );
+}
+
+#[test]
 fn waveform_versions_name_the_stored_waveforms_and_change_on_reanalysis() {
     let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
     let analysed = track(1, "a.flac");

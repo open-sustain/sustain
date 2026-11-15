@@ -701,6 +701,17 @@ fn shutdown_returns_after_join() {
 
 #[test]
 fn track_updated_sink_fires_after_successful_analysis() {
+    assert_track_updated_after(ok_analyzer());
+}
+
+/// A failed attempt replaces the track's earlier outcome, so its row is
+/// reloaded too: a waveform it no longer has must stop showing.
+#[test]
+fn track_updated_sink_fires_after_failed_analysis() {
+    assert_track_updated_after(err_analyzer());
+}
+
+fn assert_track_updated_after(analyzer: AnalyzerFn) {
     use std::sync::mpsc as std_mpsc;
 
     let temp = TempDir::new().expect("temp dir");
@@ -718,7 +729,7 @@ fn track_updated_sink_fires_after_successful_analysis() {
 
     let (sink, _rx) = capturing_sink();
     let scheduler = AnalysisScheduler::start(AnalysisSchedulerConfig {
-        analyzer: ok_analyzer(),
+        analyzer,
         progress: sink,
         track_updated: Some(track_updated),
         clock: fixed_clock(1),

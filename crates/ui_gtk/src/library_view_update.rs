@@ -60,6 +60,9 @@ pub(crate) struct LibraryViewUpdate {
     pub(crate) statistics: bool,
     /// The regular playlists whose entries changed.
     pub(crate) playlist_entries: BTreeSet<PlaylistId>,
+    /// The tracks whose persisted audio analysis changed: their
+    /// waveform, beat grid or acoustic features.
+    pub(crate) analysed: BTreeSet<TrackId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,13 +90,15 @@ impl LibraryViewUpdate {
     pub(crate) fn for_changes(changes: &LibraryChanges) -> Self {
         let mut fields = TrackFields::NONE;
         let mut album_tracks = Vec::new();
-        let mut analysis = false;
+        let mut analysed = BTreeSet::new();
         for (track_id, change) in &changes.tracks {
             fields |= change.fields;
             if change.fields.intersects(ALBUM_TRACK) {
                 album_tracks.push(*track_id);
             }
-            analysis |= change.analysis;
+            if change.analysis {
+                analysed.insert(*track_id);
+            }
         }
         let albums = if fields.intersects(ALBUM_GROUPING) {
             AlbumsUpdate::Regroup
@@ -102,7 +107,7 @@ impl LibraryViewUpdate {
         } else {
             AlbumsUpdate::Patch(album_tracks)
         };
-        let duplicates = if analysis || fields.intersects(DUPLICATE_IDENTITY) {
+        let duplicates = if !analysed.is_empty() || fields.intersects(DUPLICATE_IDENTITY) {
             DuplicatesUpdate::Regroup
         } else {
             DuplicatesUpdate::Rows
@@ -113,6 +118,7 @@ impl LibraryViewUpdate {
             duplicates,
             statistics: fields.intersects(STATISTICS_PAGE),
             playlist_entries: changes.playlist_entries.clone(),
+            analysed,
         }
     }
 
@@ -125,6 +131,7 @@ impl LibraryViewUpdate {
             duplicates: DuplicatesUpdate::Rows,
             statistics: false,
             playlist_entries: BTreeSet::new(),
+            analysed: BTreeSet::new(),
         }
     }
 }

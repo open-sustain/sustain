@@ -169,8 +169,9 @@ pub enum SchedulerProgress {
 pub struct AnalysisSchedulerConfig {
     pub analyzer: AnalyzerFn,
     pub progress: ProgressSink,
-    /// Optional refresh signal: after every successful analysis pass
-    /// the worker pushes the touched `TrackId` so the runtime can
+    /// Optional refresh signal: after every analysis outcome the store
+    /// recorded, success or failure, the worker pushes the touched
+    /// `TrackId` so the runtime can
     /// reload that row from the store into its in-memory copy. `None`
     /// when the embedder does not care about live UI refreshes.
     pub track_updated: Option<TrackUpdatedSink>,
@@ -501,7 +502,15 @@ fn worker_loop(ctx: WorkerCtx) {
                 item.capabilities,
                 item.context,
             ) {
-                Ok(()) => OutcomeKind::AnalysisFailed,
+                // A recorded failure replaces the track's earlier outcome
+                // (its stored waveform stops counting), so the row is
+                // reloaded as after a success.
+                Ok(()) => {
+                    if let Some(notify) = ctx.track_updated.as_deref() {
+                        notify(item.track_id);
+                    }
+                    OutcomeKind::AnalysisFailed
+                }
                 Err(error) => OutcomeKind::PersistenceFailed(format!("{error:?}")),
             },
         };

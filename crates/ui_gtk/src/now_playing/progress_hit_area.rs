@@ -2,7 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -12,18 +12,26 @@ use gtk::{cairo, gdk};
 
 use super::super::command_controller::SharedCommandController;
 use super::model::progress_fraction_from_x;
+use super::waveform_bars;
 use sustain_app_runtime::{ApplicationCommand, PlaybackCommand};
 
 const INDICATOR_TICK_WIDTH: f64 = 6.0;
 const INDICATOR_TICK_RADIUS: f64 = 2.0;
 const SCRUB_SEEK_THROTTLE: Duration = Duration::from_millis(125);
 const SCRUB_SEEK_MIN_STEP: Duration = Duration::from_millis(250);
+/// Height of the waveform that stands in for the progress bar.
+const WAVEFORM_HEIGHT: i32 = 14;
 
 #[derive(Clone)]
 pub(super) struct ProgressHitArea {
     overlay: gtk::Overlay,
     progress: gtk::ProgressBar,
     indicator: gtk::DrawingArea,
+    /// The track's waveform, shown instead of the progress bar and its
+    /// tick when the track has one to show.
+    waveform: gtk::DrawingArea,
+    waveform_amplitudes: Rc<RefCell<Option<Vec<u8>>>>,
+    cover_color: Rc<Cell<Option<gdk::RGBA>>>,
     position_fraction: Rc<Cell<f64>>,
     has_track: Rc<Cell<bool>>,
     dragging: Rc<Cell<bool>>,
@@ -57,6 +65,21 @@ impl ProgressHitArea {
         indicator.set_vexpand(true);
         overlay.add_overlay(&indicator);
 
+        // In the progress bar's place, the waveform tells assistive
+        // technologies what the bar did: a progress from 0 to 1.
+        let waveform = gtk::DrawingArea::builder()
+            .accessible_role(gtk::AccessibleRole::ProgressBar)
+            .build();
+        waveform.update_property(&[
+            gtk::accessible::Property::ValueMin(0.0),
+            gtk::accessible::Property::ValueMax(1.0),
+        ]);
+        waveform.add_css_class("song-progress-waveform");
+        waveform.set_hexpand(true);
+        waveform.set_content_height(WAVEFORM_HEIGHT);
+        let waveform_amplitudes: Rc<RefCell<Option<Vec<u8>>>> = Rc::new(RefCell::new(None));
+        let cover_color: Rc<Cell<Option<gdk::RGBA>>> = Rc::new(Cell::new(None));
+
         let position_fraction: Rc<Cell<f64>> = Rc::new(Cell::new(0.0));
         let has_track: Rc<Cell<bool>> = Rc::new(Cell::new(false));
         let dragging: Rc<Cell<bool>> = Rc::new(Cell::new(false));
@@ -69,10 +92,17 @@ impl ProgressHitArea {
             dragging: dragging.clone(),
             hovered: hovered.clone(),
         });
+        install_waveform_draw(
+            &waveform,
+            waveform_amplitudes.clone(),
+            cover_color.clone(),
+            position_fraction.clone(),
+        );
         install_drag_seek(SeekContext {
             overlay: overlay.clone(),
             progress: progress.clone(),
             indicator: indicator.clone(),
+            waveform: waveform.clone(),
             position_fraction: position_fraction.clone(),
             has_track: has_track.clone(),
             dragging: dragging.clone(),
@@ -86,6 +116,9 @@ impl ProgressHitArea {
             overlay,
             progress,
             indicator,
+            waveform,
+            waveform_amplitudes,
+            cover_color,
             position_fraction,
             has_track,
             dragging,
@@ -111,7 +144,32 @@ impl ProgressHitArea {
         self.has_track.set(has_track);
         self.position_fraction.set(clamped);
         self.progress.set_fraction(clamped);
+        self.waveform
+            .update_property(&[gtk::accessible::Property::ValueNow(clamped)]);
         self.indicator.queue_draw();
+        self.waveform.queue_draw();
+    }
+
+    /// Show the amplitudes of the track's preview waveform as its
+    /// progress, or the progress bar when there are none.
+    pub(super) fn set_waveform(&self, amplitudes: Option<Vec<u8>>) {
+        let shows_waveform = amplitudes.is_some();
+        self.waveform_amplitudes.replace(amplitudes);
+        if shows_waveform {
+            self.overlay.set_child(Some(&self.waveform));
+        } else {
+            self.overlay.set_child(Some(&self.progress));
+        }
+        // The waveform replaces the seek tick, not just the bar.
+        self.indicator.set_visible(!shows_waveform);
+        self.waveform.queue_draw();
+    }
+
+    /// The cover's color, which the played part of the waveform takes.
+    pub(super) fn set_cover_color(&self, color: Option<gdk::RGBA>) {
+        if self.cover_color.replace(color) != color {
+            self.waveform.queue_draw();
+        }
     }
 
     pub(super) fn install_hover_visibility_on(&self, container: &impl IsA<gtk::Widget>) {
@@ -136,6 +194,35 @@ impl ProgressHitArea {
 
         container.add_controller(motion);
     }
+}
+
+fn install_waveform_draw(
+    waveform: &gtk::DrawingArea,
+    amplitudes: Rc<RefCell<Option<Vec<u8>>>>,
+    cover_color: Rc<Cell<Option<gdk::RGBA>>>,
+    position_fraction: Rc<Cell<f64>>,
+) {
+    waveform.set_draw_func(move |area, context, width, height| {
+        let amplitudes = amplitudes.borrow();
+        let Some(amplitudes) = amplitudes.as_deref() else {
+            return;
+        };
+        let width = f64::from(width);
+        let height = f64::from(height);
+        if width <= 0.0 || height <= 0.0 {
+            return;
+        }
+        let foreground = area.color();
+        waveform_bars::draw(
+            context,
+            &waveform_bars::bar_levels(amplitudes, waveform_bars::bar_count(width)),
+            position_fraction.get(),
+            width,
+            height,
+            waveform_bars::played_color(cover_color.get(), foreground),
+            waveform_bars::unplayed_color(foreground),
+        );
+    });
 }
 
 struct IndicatorDrawState {
@@ -177,7 +264,7 @@ fn install_indicator_draw(state: IndicatorDrawState) {
 }
 
 fn draw_indicator_tick(context: &cairo::Context, body: &gdk::RGBA, x_left: f64, height: f64) {
-    build_rounded_top_rect(
+    waveform_bars::rounded_top_rect(
         context,
         x_left,
         0.0,
@@ -194,42 +281,12 @@ fn draw_indicator_tick(context: &cairo::Context, body: &gdk::RGBA, x_left: f64, 
     let _result = context.fill();
 }
 
-fn build_rounded_top_rect(
-    context: &cairo::Context,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    radius: f64,
-) {
-    let radius = radius.max(0.0).min(width / 2.0).min(height);
-    context.new_path();
-    context.move_to(x, y + height);
-    context.line_to(x, y + radius);
-    context.arc(
-        x + radius,
-        y + radius,
-        radius,
-        std::f64::consts::PI,
-        1.5 * std::f64::consts::PI,
-    );
-    context.line_to(x + width - radius, y);
-    context.arc(
-        x + width - radius,
-        y + radius,
-        radius,
-        1.5 * std::f64::consts::PI,
-        2.0 * std::f64::consts::PI,
-    );
-    context.line_to(x + width, y + height);
-    context.close_path();
-}
-
 #[derive(Clone)]
 struct SeekContext {
     overlay: gtk::Overlay,
     progress: gtk::ProgressBar,
     indicator: gtk::DrawingArea,
+    waveform: gtk::DrawingArea,
     position_fraction: Rc<Cell<f64>>,
     has_track: Rc<Cell<bool>>,
     dragging: Rc<Cell<bool>>,
@@ -245,6 +302,7 @@ impl SeekContext {
             &self.overlay,
             &self.progress,
             &self.indicator,
+            &self.waveform,
             &self.position_fraction,
             &self.duration,
             x,
@@ -346,6 +404,7 @@ fn preview_at_x(
     overlay: &gtk::Overlay,
     progress: &gtk::ProgressBar,
     indicator: &gtk::DrawingArea,
+    waveform: &gtk::DrawingArea,
     position_fraction: &Cell<f64>,
     duration: &Cell<Duration>,
     x: f64,
@@ -358,6 +417,7 @@ fn preview_at_x(
     progress.set_fraction(fraction);
     position_fraction.set(fraction);
     indicator.queue_draw();
+    waveform.queue_draw();
     Some(fraction)
 }
 

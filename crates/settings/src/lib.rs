@@ -394,6 +394,8 @@ struct UiSettingsDocument {
     #[serde(default = "default_view_visible")]
     sidebar_show_statistics: bool,
     #[serde(default)]
+    now_playing_waveform: bool,
+    #[serde(default)]
     window_width: Option<u32>,
     #[serde(default)]
     window_height: Option<u32>,
@@ -412,6 +414,7 @@ impl Default for UiSettingsDocument {
             playlists_section_collapsed: false,
             sidebar_show_duplicates: default_view_visible(),
             sidebar_show_statistics: default_view_visible(),
+            now_playing_waveform: false,
             window_width: None,
             window_height: None,
             window_maximized: false,
@@ -610,6 +613,7 @@ impl SettingsDocument {
                 playlists_section_collapsed: settings.ui.playlists_section_collapsed,
                 sidebar_show_duplicates: settings.ui.sidebar_show_duplicates,
                 sidebar_show_statistics: settings.ui.sidebar_show_statistics,
+                now_playing_waveform: settings.ui.now_playing_waveform,
                 window_width: settings.ui.window_size.map(|size| size.width),
                 window_height: settings.ui.window_size.map(|size| size.height),
                 window_maximized: settings.ui.window_maximized,
@@ -659,6 +663,7 @@ impl SettingsDocument {
                 playlists_section_collapsed: self.ui.playlists_section_collapsed,
                 sidebar_show_duplicates: self.ui.sidebar_show_duplicates,
                 sidebar_show_statistics: self.ui.sidebar_show_statistics,
+                now_playing_waveform: self.ui.now_playing_waveform,
                 // A size is restored only whole and positive; anything
                 // else falls back to the default size.
                 window_size: match (self.ui.window_width, self.ui.window_height) {
@@ -910,6 +915,7 @@ mod tests {
                 // persist rather than silently falling back to defaults.
                 sidebar_show_duplicates: false,
                 sidebar_show_statistics: false,
+                now_playing_waveform: true,
                 window_size: Some(UiWindowSize {
                     width: 1440,
                     height: 900,

@@ -125,6 +125,9 @@ pub struct UiSettings {
     /// Whether the sidebar's Library → Statistics row is shown. On by
     /// default.
     pub sidebar_show_statistics: bool,
+    /// Whether Now Playing shows the playing track's waveform in place
+    /// of its progress bar, when the track has one. Off by default.
+    pub now_playing_waveform: bool,
     /// The main window's size when it is neither maximized nor full
     /// screen. `None` until a session has ended: the window opens at its
     /// default size.
@@ -151,6 +154,7 @@ impl Default for UiSettings {
             playlists_section_collapsed: false,
             sidebar_show_duplicates: true,
             sidebar_show_statistics: true,
+            now_playing_waveform: false,
             window_size: None,
             window_maximized: false,
         }
