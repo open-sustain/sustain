@@ -1489,3 +1489,65 @@ more levels, each over a wider span.
 measure two of them are Sustain's (the 2/3× and one 4/3×), two are
 rekordbox's (one 4/5×, one 3/2×), and the rest are undecided. Ten tracks
 above 155 BPM still fold to half tempo by design.
+
+## 2026-11-15 — key: register-split and bass-register chroma, measured and not shipped
+
+Under #288. The key is read from 12 numbers, the log share each pitch class
+takes of the whole track's chroma between 100 and 5,000 Hz. Two richer
+readings were dumped for every labelled track and learned with the same
+softmax regression. Nothing changed in the detector (key analyzer version
+17 stands).
+
+- **Register split.** The same peaks on the same transform, kept apart in six
+  bands (100–200, 200–400, 400–800, 800–1,600, 1,600–3,200, 3,200–5,000 Hz):
+  72 weights instead of 24.
+- **Bass register.** A transform four times longer (32,768 points at
+  44.1 kHz, 1.3 Hz bins, same harmonic separation), read in 40–80, 80–160
+  and 160–320 Hz, added to the six bands.
+
+Exact / strict / pair F1. Public sets are held out (learned on the other
+two). The library sets use weights learned on all three public sets.
+
+| Set | n | v17 | six registers | six registers + bass |
+| --- | ---: | --- | --- | --- |
+| GiantSteps Key | 604 | 62.3 / 81.1 / 61.2 | 65.7 / 81.5 / 64.0 | 67.2 / 81.0 / 64.6 |
+| GiantSteps MTG Key | 1,159 | 58.5 / 74.7 / 54.9 | 58.4 / 75.9 / 56.9 | 57.3 / 75.1 / 55.9 |
+| FMAK `fma_medium` | 1,722 | 53.6 / 76.8 / 54.8 | 54.8 / 76.2 / 55.4 | 55.6 / 77.0 / 56.0 |
+| Library, other tools' tag keys | 374 | 75.1 / 89.6 / 77.1 | 77.0 / 89.8 / 78.2 | 76.7 / 89.0 / 78.0 |
+| Library, Hooktheory keys | 212 | 65.1 / 83.5 / 63.4 | 69.8 / 87.7 / 67.6 | 71.7 / 87.3 / 68.1 |
+
+Per track, strict-compatible fixed / broken against v17:
+
+| Set | six registers | six registers + bass |
+| --- | --- | --- |
+| GiantSteps Key | 26 / 24 | 28 / 29 |
+| GiantSteps MTG Key | 84 / 70 | 87 / 83 |
+| FMAK | 72 / 83 | 96 / 93 |
+| Tag keys | 7 / 6 | 6 / 8 |
+| Hooktheory | 10 / 1 | 9 / 1 |
+
+Findings:
+
+- **The bass register adds nothing** over the register split, on any set.
+  Bass-only additions to the shipped 12 numbers (40–80, 80–160, 40–160 Hz)
+  moved strict by −1.8 to +0.5 points.
+- **The register split moves a tenth of the tracks and nets about zero** on
+  the product metric: on four of five sets as many tracks leave the
+  compatible group as enter it. Exact agreement rises 1 to 5 points on four
+  sets. Only the Hooktheory songs gain clearly (10 / 1 on 212).
+- Fifteen other layouts (two or three bands, per-band or raw-energy
+  normalisation, stronger regularisation) gave the same picture: exact up a
+  little, strict within a point either way.
+
+Under the rule that a change ships only if it fixes without breaking, neither
+ships. The churn says the pooled pitch-class share is at its ceiling, however
+it is cut by register.
+
+Major-key songs stay weak, and the reason is visible on the Hooktheory songs:
+of 63 in major, v17 names 37 % exactly and calls 32 % the relative minor
+(compatible), 11 % the parallel minor and 16 % something unrelated; of 149 in
+minor it names 77 % exactly. The register split changes the unrelated share
+(16 → 6 %), not the relative-minor one. A major key and its relative minor
+hold the same notes, so the share of each note cannot tell them apart. What
+can is where the music rests: the chord a phrase ends on, the bass note under
+it. That needs the chroma in time order, which the track-wide sum discards.
