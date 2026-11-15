@@ -24,13 +24,28 @@ const MIN_BAR_HEIGHT: f64 = 1.0;
 const PLAYED_ALPHA: f32 = 0.48;
 const UNPLAYED_ALPHA: f32 = 0.18;
 
+/// The loudness span, in decibels below the track's peak, the bars
+/// spread over. A track's span is measured from its peak down to its
+/// [`SPAN_PERCENTILE`] amplitude, then held within these bounds: a
+/// brickwalled master, all of it within a decibel or two of its peak,
+/// still spreads over [`MIN_SPAN_DB`] instead of drawing a flat line, and
+/// a very dynamic one keeps its quiet passages visible down to
+/// [`MAX_SPAN_DB`].
+const MIN_SPAN_DB: f64 = 6.0;
+const MAX_SPAN_DB: f64 = 30.0;
+/// The share of the track's sounding amplitudes left below its span.
+const SPAN_PERCENTILE: f64 = 0.05;
+
 /// The level, from 0 to 1, of each of `bar_count` bars spread over
 /// `amplitudes`: the loudest amplitude under each bar, so a short peak
-/// never disappears between two bars.
+/// never disappears between two bars, placed on the track's loudness
+/// span (see [`MIN_SPAN_DB`]). The peak reaches full height on every
+/// track, so tracks compare at a glance, and the bars follow loudness in
+/// decibels, which is how differences are heard.
 pub(super) fn bar_levels(amplitudes: &[u8], bar_count: usize) -> Vec<f64> {
-    if amplitudes.is_empty() {
-        return Vec::new();
-    }
+    let Some(span) = LoudnessSpan::of(amplitudes) else {
+        return vec![0.0; if amplitudes.is_empty() { 0 } else { bar_count }];
+    };
     (0..bar_count)
         .map(|bar| {
             let start = bar * amplitudes.len() / bar_count;
@@ -40,9 +55,52 @@ pub(super) fn bar_levels(amplitudes: &[u8], bar_count: usize) -> Vec<f64> {
                 .copied()
                 .max()
                 .unwrap_or(0);
-            f64::from(loudest) / f64::from(u8::MAX)
+            span.level(loudest)
         })
         .collect()
+}
+
+/// The decibel range of a track the bars spread over, ending at its peak.
+struct LoudnessSpan {
+    peak_db: f64,
+    span_db: f64,
+}
+
+impl LoudnessSpan {
+    /// The span of `amplitudes`, or `None` for a silent track.
+    fn of(amplitudes: &[u8]) -> Option<Self> {
+        let mut counts = [0_usize; 256];
+        for &amplitude in amplitudes {
+            counts[usize::from(amplitude)] += 1;
+        }
+        let peak = (1..=255).rev().find(|&amplitude| counts[amplitude] > 0)?;
+        // Silence says nothing about how loud the music is mastered.
+        let sounding: usize = counts[1..].iter().sum();
+        let below = (sounding as f64 * SPAN_PERCENTILE) as usize;
+        let mut seen = 0;
+        let quiet = (1..=255)
+            .find(|&amplitude| {
+                seen += counts[amplitude];
+                seen > below
+            })
+            .unwrap_or(peak);
+        let peak_db = decibels(peak as u8);
+        Some(Self {
+            peak_db,
+            span_db: (peak_db - decibels(quiet as u8)).clamp(MIN_SPAN_DB, MAX_SPAN_DB),
+        })
+    }
+
+    fn level(&self, amplitude: u8) -> f64 {
+        if amplitude == 0 {
+            return 0.0;
+        }
+        ((decibels(amplitude) - (self.peak_db - self.span_db)) / self.span_db).clamp(0.0, 1.0)
+    }
+}
+
+fn decibels(amplitude: u8) -> f64 {
+    20.0 * (f64::from(amplitude) / f64::from(u8::MAX)).log10()
 }
 
 /// How many bars fit in `width` pixels.

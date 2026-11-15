@@ -466,6 +466,11 @@ on the top bar in light and dark themes; the theme's foreground for a
 track without artwork) and the rest a neutral gray. It
 seeks exactly like the progress bar, appears as soon as the track's
 analysis lands, and falls back to the plain bar for tracks without one.
+The bars follow loudness in decibels, every track's peak at full height,
+spread over the track's own dynamic range: on a brickwalled master the
+few decibels it still varies by fill the bar height, so its contour shows
+instead of a near-flat line, and a dynamic one keeps its quiet passages
+visible.
 
 ### Shuffle and repeat — *iso-iTunes*
 Shuffle and repeat toggle buttons sit in the now-playing tile.
