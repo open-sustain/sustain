@@ -16,8 +16,9 @@
 //! Layout: a row of headline figures (tracks, listening time, size,
 //! plays) opens the page. Each chart then sits in its own card. The two
 //! part-of-a-whole charts (genre, bitrate) are donuts drawn by
-//! [`crate::chart`] in shades of the accent with a legend; the two top-5
-//! genre rankings (most played, most liked) are ranked horizontal bars.
+//! [`crate::chart`] with a hue per slice and a legend; the two top-5
+//! genre rankings (most played, most liked) are ranked horizontal bars,
+//! a hue per genre.
 //! These four cards flow into a responsive two-up grid that reflows to
 //! one column when the window is narrow; the two distributions over time
 //! (release decade, year added) run full width below as vertical-bar
@@ -40,7 +41,7 @@ use sustain_app_runtime::{
 };
 
 use crate::SharedRuntime;
-use crate::chart::{self, ChartBar, DonutSlice, SliceTone};
+use crate::chart::{self, ChartBar, ChartTone, DonutSlice};
 use crate::status_bar::{duration_text, file_size_text, grouped, pluralize};
 use crate::track_summary::TrackSummary;
 
@@ -252,7 +253,7 @@ fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
             label: genre_label(&entry.genre),
             fraction: fraction_f64(entry.track_weight, total as f64),
             value: quantity_share_text(entry.track_weight, total as f64),
-            tone: SliceTone::ranked(rank, ranked),
+            tone: ChartTone::category(rank, ranked),
         })
         .collect();
     if let Some(other) = distribution.other {
@@ -268,7 +269,7 @@ fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
             ),
             fraction: fraction_f64(other.track_weight, total as f64),
             value: quantity_share_text(other.track_weight, total as f64),
-            tone: SliceTone::Muted,
+            tone: ChartTone::Muted,
         });
     }
     let content = (!slices.is_empty())
@@ -286,8 +287,7 @@ fn quality_distribution_section(distribution: &QualityDistribution) -> gtk::Widg
     let slices: Vec<DonutSlice> = if total == 0 {
         Vec::new()
     } else {
-        // Bitrate is ordered: the best range takes the accent itself, the
-        // poorer ones fade from it.
+        // The best range takes the accent's own hue.
         let buckets = distribution.buckets.len();
         distribution
             .buckets
@@ -297,7 +297,7 @@ fn quality_distribution_section(distribution: &QualityDistribution) -> gtk::Widg
                 label: quality_label(bucket.range).to_owned(),
                 fraction: fraction(bucket.track_count, total),
                 value: count_share_text(bucket.track_count, total),
-                tone: SliceTone::ranked(buckets - 1 - index, buckets),
+                tone: ChartTone::category(buckets - 1 - index, buckets),
             })
             .collect()
     };

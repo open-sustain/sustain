@@ -8,14 +8,15 @@
 //!
 //! Three primitives cover the Statistics page:
 //! - [`donut`] for part-of-a-whole breakdowns (genre, bitrate), each
-//!   slice a shade of the accent and a legend beside the ring;
+//!   slice its own hue and a legend beside the ring;
 //! - [`ranked_bars`] for top-N rankings (most played, most liked): one
-//!   horizontal bar per entry, label left, value right;
+//!   horizontal bar per entry, each its own hue, label left, value right;
 //! - [`vertical_bars`] for histograms over an ordered axis (release
-//!   decade, year added).
+//!   decade, year added), every bar the accent itself.
 //!
-//! The device-sync occupation meter tells media kinds apart with
-//! [`categorical_color`], the accent rotated around the hue wheel.
+//! Categories are told apart with [`categorical_color`], the accent
+//! rotated around the hue wheel — the palette the device-sync occupation
+//! meter shares.
 //!
 //! Every canvas reads its accent from `area.color()`, which the CSS
 //! `color` property sets to `@theme_selected_bg_color`; nothing here
@@ -73,20 +74,6 @@ pub(crate) fn categorical_color(accent: gdk::RGBA, hue_offset: f64) -> (f64, f64
     )
 }
 
-/// The opacity of a donut slice painted at `shade`: the accent itself at
-/// 0, fading toward the card surface as `shade` reaches 1. Fading over
-/// the surface keeps the accent's hue untouched (a grey accent stays
-/// grey) and lets the live light or dark card set the palest tone, so
-/// the ramp follows the theme instead of guessing it.
-pub(crate) fn shade_opacity(shade: f64) -> f64 {
-    1.0 - (1.0 - PALEST_SHADE_OPACITY) * shade.clamp(0.0, 1.0)
-}
-
-/// The opacity of the palest slice: faint enough to step apart from its
-/// neighbours, opaque enough to keep about 3:1 against either card
-/// surface with the default accents.
-const PALEST_SHADE_OPACITY: f64 = 0.75;
-
 /// A theme-neutral grey for the aggregated "other" / untagged tail of a
 /// categorical palette.
 pub(crate) const MUTED_GREY: (f64, f64, f64) = (0.6, 0.6, 0.6);
@@ -134,39 +121,40 @@ pub(crate) struct DonutSlice {
     pub label: String,
     pub fraction: f64,
     pub value: String,
-    pub tone: SliceTone,
+    pub tone: ChartTone,
 }
 
-/// How a [`DonutSlice`] is coloured.
+/// How a chart mark — a donut slice, a bar — is coloured.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum SliceTone {
-    /// A shade of the accent, from 0 (the accent itself) to 1 (the
-    /// faintest); see [`shade_opacity`].
-    Shade(f64),
+pub(crate) enum ChartTone {
+    /// The accent itself.
+    Accent,
+    /// A category: the accent rotated this many degrees around the hue
+    /// wheel; see [`categorical_color`].
+    Category(f64),
     /// The neutral grey of a folded "other" remainder.
     Muted,
 }
 
-impl SliceTone {
-    /// The tone of the slice at `rank` among `count` ranked slices: the
-    /// first the accent itself, the last the faintest shade.
-    pub(crate) fn ranked(rank: usize, count: usize) -> Self {
-        if count <= 1 {
-            Self::Shade(0.0)
-        } else {
-            Self::Shade(rank as f64 / (count - 1) as f64)
-        }
+impl ChartTone {
+    /// The tone of the category at `rank` among `count`: hues spread
+    /// evenly around the wheel, the first one the accent's own.
+    pub(crate) fn category(rank: usize, count: usize) -> Self {
+        Self::Category(360.0 * rank as f64 / count.max(1) as f64)
     }
 
     /// Set `cr`'s source to this tone, resolved from the live `accent`.
     fn set_source(self, cr: &gtk::cairo::Context, accent: gdk::RGBA) {
         match self {
-            Self::Shade(shade) => cr.set_source_rgba(
+            Self::Accent => cr.set_source_rgb(
                 accent.red() as f64,
                 accent.green() as f64,
                 accent.blue() as f64,
-                shade_opacity(shade),
             ),
+            Self::Category(hue_offset) => {
+                let (r, g, b) = categorical_color(accent, hue_offset);
+                cr.set_source_rgb(r, g, b);
+            }
             Self::Muted => {
                 let (r, g, b) = MUTED_GREY;
                 cr.set_source_rgb(r, g, b);
@@ -175,7 +163,7 @@ impl SliceTone {
     }
 }
 
-/// A donut chart: a ring of accent-shaded wedges with an optional centred
+/// A donut chart: a ring of wedges with an optional centred
 /// total, paired with a legend listing each slice's swatch, label, and
 /// value. The ring and the matching swatch resolve the same colour from
 /// the live accent at draw time, so the legend always agrees with the
@@ -195,7 +183,7 @@ pub(crate) fn donut(slices: Vec<DonutSlice>, center: Option<String>) -> gtk::Wid
     // top of the row instead of vertically centring it like the other,
     // shorter-legend donuts.
     ring.set_valign(gtk::Align::Center);
-    let wedges: Vec<(f64, SliceTone)> = slices
+    let wedges: Vec<(f64, ChartTone)> = slices
         .iter()
         .map(|slice| (slice.fraction, slice.tone))
         .collect();
@@ -283,7 +271,7 @@ pub(crate) fn donut(slices: Vec<DonutSlice>, center: Option<String>) -> gtk::Wid
 
 /// A small legend swatch: a filled disc in the same colour its donut
 /// wedge resolves to.
-fn swatch(tone: SliceTone) -> gtk::DrawingArea {
+fn swatch(tone: ChartTone) -> gtk::DrawingArea {
     let area = gtk::DrawingArea::new();
     area.add_css_class(CHART_ACCENT_CLASS);
     area.set_content_width(SWATCH_SIZE);
@@ -332,7 +320,11 @@ pub(crate) fn vertical_bars(bars: Vec<ChartBar>) -> gtk::Widget {
         value.add_css_class("statistics-bar-value");
         value.set_halign(gtk::Align::Center);
         column.append(&value);
-        column.append(&bar_canvas(bar.fraction, BarDirection::Up));
+        column.append(&bar_canvas(
+            bar.fraction,
+            BarDirection::Up,
+            ChartTone::Accent,
+        ));
         grid.attach(&column, col, 0, 1, 1);
 
         let label = gtk::Label::new(Some(&bar.label));
@@ -347,7 +339,8 @@ pub(crate) fn vertical_bars(bars: Vec<ChartBar>) -> gtk::Widget {
 }
 
 /// A ranking: one row per entry, its label, a horizontal bar as long as
-/// its share of the longest, and its value right-aligned.
+/// its share of the longest, and its value right-aligned. Each entry is
+/// a category and takes its own hue.
 pub(crate) fn ranked_bars(bars: Vec<ChartBar>) -> gtk::Widget {
     let grid = gtk::Grid::new();
     grid.set_column_spacing(12);
@@ -355,6 +348,7 @@ pub(crate) fn ranked_bars(bars: Vec<ChartBar>) -> gtk::Widget {
     grid.set_hexpand(true);
     grid.set_valign(gtk::Align::Center);
 
+    let count = bars.len();
     for (index, bar) in bars.iter().enumerate() {
         let row = index as i32;
 
@@ -365,7 +359,11 @@ pub(crate) fn ranked_bars(bars: Vec<ChartBar>) -> gtk::Widget {
         label.set_max_width_chars(16);
         grid.attach(&label, 0, row, 1, 1);
 
-        let canvas = bar_canvas(bar.fraction, BarDirection::Right);
+        let canvas = bar_canvas(
+            bar.fraction,
+            BarDirection::Right,
+            ChartTone::category(index, count),
+        );
         canvas.set_hexpand(true);
         canvas.set_valign(gtk::Align::Center);
         grid.attach(&canvas, 1, row, 1, 1);
@@ -388,10 +386,10 @@ enum BarDirection {
     Right,
 }
 
-/// One bar in the live accent: a histogram column sized to `fraction` of
+/// One bar in `tone`: a histogram column sized to `fraction` of
 /// [`VBAR_HEIGHT`], or a ranking row filling `fraction` of its width. Its
 /// free end is rounded, the end on the axis square.
-fn bar_canvas(fraction: f64, direction: BarDirection) -> gtk::DrawingArea {
+fn bar_canvas(fraction: f64, direction: BarDirection, tone: ChartTone) -> gtk::DrawingArea {
     let fraction = fraction.clamp(0.0, 1.0);
     let area = gtk::DrawingArea::new();
     area.add_css_class("statistics-vbar");
@@ -410,12 +408,7 @@ fn bar_canvas(fraction: f64, direction: BarDirection) -> gtk::DrawingArea {
         if w <= 0.0 || h <= 0.0 {
             return;
         }
-        let accent = area.color();
-        cr.set_source_rgb(
-            accent.red() as f64,
-            accent.green() as f64,
-            accent.blue() as f64,
-        );
+        tone.set_source(cr, area.color());
         let radius = BAR_FILL_RADIUS.min(w / 2.0).min(h / 2.0);
         cr.new_sub_path();
         match direction {
@@ -460,20 +453,11 @@ mod tests {
     }
 
     #[test]
-    fn shades_fade_from_the_opaque_accent() {
-        assert_eq!(shade_opacity(0.0), 1.0);
-        assert_eq!(shade_opacity(1.0), PALEST_SHADE_OPACITY);
-        for step in 0..10 {
-            let shade = f64::from(step) / 10.0;
-            assert!(shade_opacity(shade) > shade_opacity(shade + 0.1));
-        }
-    }
-
-    #[test]
-    fn ranked_tones_spread_over_the_whole_ramp() {
-        assert_eq!(SliceTone::ranked(0, 1), SliceTone::Shade(0.0));
-        assert_eq!(SliceTone::ranked(0, 5), SliceTone::Shade(0.0));
-        assert_eq!(SliceTone::ranked(4, 5), SliceTone::Shade(1.0));
+    fn categories_spread_evenly_around_the_wheel() {
+        assert_eq!(ChartTone::category(0, 1), ChartTone::Category(0.0));
+        assert_eq!(ChartTone::category(0, 4), ChartTone::Category(0.0));
+        assert_eq!(ChartTone::category(1, 4), ChartTone::Category(90.0));
+        assert_eq!(ChartTone::category(3, 4), ChartTone::Category(270.0));
     }
 
     #[test]
@@ -507,19 +491,19 @@ mod widget_smoke {
                         label: "House".to_owned(),
                         fraction: 0.5,
                         value: "50 (50%)".to_owned(),
-                        tone: SliceTone::ranked(0, 2),
+                        tone: ChartTone::category(0, 2),
                     },
                     DonutSlice {
                         label: "Techno".to_owned(),
                         fraction: 0.3,
                         value: "30 (30%)".to_owned(),
-                        tone: SliceTone::ranked(1, 2),
+                        tone: ChartTone::category(1, 2),
                     },
                     DonutSlice {
                         label: "Other (3 genres)".to_owned(),
                         fraction: 0.2,
                         value: "20 (20%)".to_owned(),
-                        tone: SliceTone::Muted,
+                        tone: ChartTone::Muted,
                     },
                 ],
                 Some("100\ntracks".to_owned()),

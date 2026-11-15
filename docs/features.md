@@ -253,7 +253,7 @@ reason for each.
 
 ### Statistics — *Sustain-native*
 The third entry under LIBRARY opens a single scrollable page of
-whole-library diagnostic charts in shades of the system accent colour.
+whole-library diagnostic charts coloured from the system accent colour.
 A row of headline figures opens it — tracks, listening time, size on
 disk, and total plays — its tiles reflowing onto fewer per line in a
 narrow window. Large figures are shown whole with their thousands
@@ -261,18 +261,19 @@ grouped; the small fractional weights of multi-genre tracks keep a
 tenth, so a real contribution never reads as zero:
 
 - **Genre distribution** — a donut of the share of tracks per genre, each
-  slice a fainter shade of the accent than the one before (the largest dozen
+  slice its own hue, rotated from the accent around the colour wheel (the largest dozen
   genres individually, the long tail folded into one *Other* bar;
   untagged tracks counted as *Unknown*). Slash-delimited tags such as
   `House/Deep` are split into equal fractional contributions so each
   component genre is represented without double-counting the track.
 - **Quality distribution** — a donut of the share of tracks per bitrate
-  range (≤ 128, 129–255, 256–320, > 320 kbps), the best range in the
-  accent itself.
+  range (≤ 128, 129–255, 256–320, > 320 kbps), a hue per range, the best
+  range in the accent's own hue.
 - **Most played genres** — ranked bars of the top five by total play
-  count, using the same fractional genre split as the distribution chart.
+  count, a hue per genre, using the same fractional genre split as the
+  distribution chart.
 - **Most liked genres** — ranked bars of the top five by total rating
-  points across rated tracks, so broad library support carries weight instead
+  points across rated tracks, a hue per genre, so broad library support carries weight instead
   of letting marginal genres dominate; slash-delimited genres split rating
   points without lowering the per-genre average, and zero-star tracks are
   excluded per the rating-as-exclusion convention.
