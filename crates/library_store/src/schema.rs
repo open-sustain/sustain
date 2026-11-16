@@ -559,6 +559,39 @@ ALTER TABLE tracks ADD COLUMN key_origin INTEGER NOT NULL DEFAULT 0
     CHECK (key_origin IN (0, 1, 2));
 "#;
 
+// A FLAC track's analysis that left nothing behind is attempted again. A
+// decode that failed is recorded as an attempt, so the track is not read
+// again until its analyzer version advances; FLAC files followed by an
+// ID3v1 tag failed every decode until the decoder learned to leave the
+// tag out, and would have stayed without a waveform, tempo and key.
+// Nothing records why an attempt came back empty, so every empty one on a
+// FLAC file is made again: no tempo, no key, or no acoustics after the
+// attempt that measures it. What still cannot be read fails once more and
+// is recorded as before.
+pub(super) const RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL: &str = r#"
+UPDATE track_analysis
+SET bpm_attempted_at_unix = NULL, bpm_analyzer_version = NULL
+WHERE bpm_attempted_at_unix IS NOT NULL
+  AND track_id IN (
+    SELECT id FROM tracks
+    WHERE bpm_hundredths IS NULL
+      AND lower(CAST(substr(relative_path, -5) AS TEXT)) = '.flac');
+UPDATE track_analysis
+SET key_attempted_at_unix = NULL, key_analyzer_version = NULL
+WHERE key_attempted_at_unix IS NOT NULL
+  AND track_id IN (
+    SELECT id FROM tracks
+    WHERE musical_key IS NULL
+      AND lower(CAST(substr(relative_path, -5) AS TEXT)) = '.flac');
+UPDATE track_analysis
+SET audio_attempted_at_unix = NULL, audio_analyzer_version = NULL
+WHERE audio_attempted_at_unix IS NOT NULL
+  AND track_id NOT IN (SELECT track_id FROM track_acoustics)
+  AND track_id IN (
+    SELECT id FROM tracks
+    WHERE lower(CAST(substr(relative_path, -5) AS TEXT)) = '.flac');
+"#;
+
 // Each online capability keeps the version of the provider pipeline that
 // last attempted it, as each analysis capability does since migration 13:
 // one shared version let an attempt at one capability pass the others off

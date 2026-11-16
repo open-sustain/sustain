@@ -17,12 +17,13 @@ use crate::{
         ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL,
         ADD_TRACK_KEY_ORIGIN_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
         INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
-        NORMALIZE_EMPTY_TRACK_METADATA_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
-        VERSION_ANALYSIS_PER_CAPABILITY_SQL, VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
+        NORMALIZE_EMPTY_TRACK_METADATA_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL,
+        STORE_BPM_IN_HUNDREDTHS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
+        VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 16;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 17;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -123,6 +124,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 16,
         description: "version online attempts per capability",
         step: MigrationStep::Sql(VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL),
+    },
+    Migration {
+        version: 17,
+        description: "attempt again every FLAC analysis that left nothing behind",
+        step: MigrationStep::Sql(RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL),
     },
 ];
 
@@ -1350,6 +1356,83 @@ mod tests {
             connection
                 .prepare("SELECT provider_version FROM track_online_status")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn upgrade_from_v16_attempts_again_every_flac_analysis_that_left_nothing_behind() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..16]).expect("schema version 16");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path, bpm_hundredths, musical_key) VALUES
+                     (1, CAST('a.flac' AS BLOB), NULL, NULL),
+                     (2, CAST('b.flac' AS BLOB), 12800, 'Am'),
+                     (3, CAST('c.FLAC' AS BLOB), NULL, 'Am'),
+                     (4, CAST('d.flac' AS BLOB), NULL, NULL),
+                     (5, CAST('e.mp3' AS BLOB), NULL, NULL);
+                 INSERT INTO track_analysis
+                     (track_id, bpm_attempted_at_unix, bpm_analyzer_version,
+                      key_attempted_at_unix, key_analyzer_version,
+                      audio_attempted_at_unix, audio_analyzer_version) VALUES
+                     (1, 1700000000, 16, 1700000000, 17, 1700000000, 15),
+                     (2, 1700000000, 16, 1700000000, 17, 1700000000, 15),
+                     (3, 1700000000, 16, 1700000000, 17, NULL, NULL),
+                     (4, NULL, NULL, NULL, NULL, NULL, NULL),
+                     (5, 1700000000, 16, 1700000000, 17, 1700000000, 15);
+                 INSERT INTO track_acoustics VALUES (2, -9.0, -7.0, 5.0, 3.0, 0.3, 0.4, 0.3, 0.2, 0.5);",
+            )
+            .expect("seed analysed tracks");
+
+        apply_pending(&connection).expect("upgrade");
+
+        type Attempt = (Option<i64>, Option<i64>);
+        let attempts = |track: i64| -> [Attempt; 3] {
+            connection
+                .query_row(
+                    "SELECT bpm_attempted_at_unix, bpm_analyzer_version,                          key_attempted_at_unix, key_analyzer_version,                          audio_attempted_at_unix, audio_analyzer_version                      FROM track_analysis WHERE track_id = ?1",
+                    [track],
+                    |row| {
+                        Ok([
+                            (row.get(0)?, row.get(1)?),
+                            (row.get(2)?, row.get(3)?),
+                            (row.get(4)?, row.get(5)?),
+                        ])
+                    },
+                )
+                .expect("attempts")
+        };
+        let (bpm, key, audio) = (
+            (Some(1_700_000_000), Some(16)),
+            (Some(1_700_000_000), Some(17)),
+            (Some(1_700_000_000), Some(15)),
+        );
+        let none = (None, None);
+        // Every attempt came back empty: all three are made again.
+        assert_eq!(attempts(1), [none, none, none]);
+        // Every attempt measured something: all three stand.
+        assert_eq!(attempts(2), [bpm, key, audio]);
+        // Only the tempo came back empty; the audio pass was never made.
+        assert_eq!(attempts(3), [none, key, none]);
+        assert_eq!(attempts(4), [none, none, none]);
+        // Not a FLAC file: its empty attempts stand.
+        assert_eq!(attempts(5), [bpm, key, audio]);
+        let kept: Vec<(i64, Option<i64>, Option<String>)> = connection
+            .prepare("SELECT id, bpm_hundredths, musical_key FROM tracks ORDER BY id")
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("tracks");
+        assert_eq!(
+            kept,
+            [
+                (1, None, None),
+                (2, Some(12_800), Some("Am".to_string())),
+                (3, None, Some("Am".to_string())),
+                (4, None, None),
+                (5, None, None),
+            ]
         );
     }
 
