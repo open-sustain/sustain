@@ -1560,3 +1560,78 @@ minor it names 77 % exactly. The register split changes the unrelated share
 hold the same notes, so the share of each note cannot tell them apart. What
 can is where the music rests: the chord a phrase ends on, the bass note under
 it. That needs the chroma in time order, which the track-wide sum discards.
+
+## 2026-11-16 — key: time-ordered evidence, measured and not shipped
+
+Under #308. The previous entry ended on the next lever: evidence in time
+order rather than a track-wide share. The chroma of every labelled track
+was dumped in half-second windows (the same peaks and tuning as the
+detector between 100 and 5,000 Hz, plus a bass register on a transform four
+times longer, 40–260 Hz), and each candidate signal was added to the 12 log
+shares the detector reads, learned with the same softmax regression.
+Nothing changed in the detector (key analyzer version 17 stands).
+
+Signals, each read for every candidate tonic:
+
+- **Bass over time**: the share of windows whose strongest bass pitch class
+  is each note, and the pooled bass share.
+- **Chords**: the share of windows nearest each of the 24 triads.
+- **Where the track starts and ends**: the pooled share of the first and of
+  the last ten seconds, and the bass of the last ten.
+- **Notes that sound together**: the 12 × 12 co-occurrence of pitch classes
+  within one- and two-second windows. This is what a pooled share loses: an
+  Am / D vamp and a D ninth chord pool alike, but in the vamp C and F♯
+  never sound together.
+- **Order**: the antisymmetric part of the co-occurrence between a window
+  and the one two seconds later (which chord follows which).
+
+Strict-compatible tracks fixed / broken against v17. Public sets are held
+out (learned on the other two); the library sets use weights learned on all
+three.
+
+| Set | n | bass over time | triads | ending | co-occurrence (1 s) | + order |
+| --- | ---: | --- | --- | --- | --- | --- |
+| GiantSteps Key | 604 | 8 / 18 | 8 / 23 | 2 / 8 | 7 / 11 | 7 / 11 |
+| GiantSteps MTG Key | 1,159 | 40 / 64 | 34 / 33 | 22 / 16 | 47 / 33 | 44 / 41 |
+| FMAK `fma_medium` | 1,723 | 35 / 44 | 62 / 44 | 17 / 14 | 47 / 48 | 64 / 76 |
+| Library, other tools' tag keys | 374 | 1 / 6 | 4 / 4 | 4 / 2 | 3 / 4 | 3 / 6 |
+| Library, Hooktheory keys | 212 | 3 / 0 | 4 / 1 | 2 / 0 | 6 / 0 | 4 / 2 |
+
+Findings:
+
+- **No signal fixes without breaking.** Each one moves 2 to 10 % of the
+  tracks and breaks tracks on at least two sets. The best, co-occurrence,
+  gains 1.2 strict points on GiantSteps MTG and 2.8 on the Hooktheory songs,
+  is level on FMAK, and loses 0.7 on GiantSteps Key and 0.3 on the tag keys.
+- **Order adds nothing to co-occurrence**, and costs FMAK.
+- **Major keys do not move.** On the 63 major Hooktheory songs the exact
+  share goes from 37 to 40–41 % with co-occurrence, and the relative-minor
+  share stays at 32–35 %.
+- **Weighting major tracks in the fit only trades one mode for the other.**
+  At twice the weight the major Hooktheory songs reach 51 % exact and the
+  minor ones fall from 77 to 67 %; strict falls 4.5 points on both
+  GiantSteps sets.
+
+Where v17 stands by mode (exact / strict):
+
+| Set | major share of the reference | major tracks | minor tracks |
+| --- | ---: | --- | --- |
+| GiantSteps Key | 15 % | 45 / 55 | 65 / 86 |
+| GiantSteps MTG Key | 33 % | 35 / 55 | 70 / 84 |
+| FMAK | 43 % | 41 / 66 | 63 / 85 |
+| Tag keys | 11 % | 20 / 51 | 82 / 94 |
+| Hooktheory | 30 % | 37 / 73 | 77 / 88 |
+
+On the electronic sets a fifth to a quarter of the major tracks are read as
+the parallel minor (19 % GiantSteps, 27 % MTG and tag keys), which the note
+shares should separate by the third; on the songs it is the relative minor
+(32 %).
+
+Reading: a linear decision over hand-made statistics of the chroma has been
+tried in three families now (registers, bass, time order), and each churns
+without a net gain. The references themselves bound what is measurable:
+the two commercial tools compared in #288 agree with each other on 86 to
+89 % of the library tracks, where v17 sits. The remaining errors are major
+tracks, and no statistic tried here separates them. A further attempt needs
+a different kind of model, or references that mark the major tracks more
+reliably, not another feature of this kind.
