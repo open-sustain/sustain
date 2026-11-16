@@ -1482,7 +1482,10 @@ Not shipped:
 
 Analysis time: the BPM pass takes 13 % longer per whole track (669 → 757 ms
 on 156 library tracks, decode included): the kick is measured at up to six
-more levels, each over a wider span.
+more levels, each over a wider span. A later change folds only the envelope's
+non-zero frames in the coarse tempo search, with identical tempos and grids,
+which brings the BPM pass to 7 % over v16 (measured side by side on the same
+156 tracks).
 
 #283 stays open. On the development set 18 in-range errors remain: 1 at
 2/3×, 1 at 3/4×, 2 at 4/3×, 2 at 3/2×, 2 at 4/5×, 10 elsewhere. By the hold

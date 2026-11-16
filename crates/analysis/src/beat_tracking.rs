@@ -399,6 +399,15 @@ impl Onsets {
         if total <= 0.0 {
             return None;
         }
+        // The envelope is zero wherever the flux is under its local mean,
+        // most of the time; only its onsets add to a fold.
+        let onsets: Vec<(f64, f64)> = self
+            .kick
+            .iter()
+            .enumerate()
+            .filter(|&(_, &value)| value != 0.0)
+            .map(|(frame, &value)| (frame as f64, f64::from(value)))
+            .collect();
         let steps = ((max_bpm / min_bpm).ln() / COARSE_TEMPO_STEP.ln()).ceil() as usize + 1;
         let mut best = (f64::NEG_INFINITY, min_bpm);
         let mut histogram = [0.0_f64; COARSE_PHASE_BINS];
@@ -406,10 +415,10 @@ impl Onsets {
             let tempo = (min_bpm * COARSE_TEMPO_STEP.powi(step as i32)).min(max_bpm);
             histogram.fill(0.0);
             let beats_per_frame = tempo / 60.0 / self.frame_rate;
-            for (frame, &value) in self.kick.iter().enumerate() {
-                let phase = (frame as f64 * beats_per_frame).fract();
+            for &(frame, value) in &onsets {
+                let phase = (frame * beats_per_frame).fract();
                 let bin = ((phase * COARSE_PHASE_BINS as f64) as usize).min(COARSE_PHASE_BINS - 1);
-                histogram[bin] += f64::from(value);
+                histogram[bin] += value;
             }
             let peak = (0..COARSE_PHASE_BINS)
                 .map(|bin| {
