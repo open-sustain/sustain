@@ -19,57 +19,96 @@ pub fn normalize_search_text(text: &str) -> String {
 }
 
 fn fold_search_text(text: &str) -> String {
+    base_letters(text).collect()
+}
+
+fn base_letters(text: &str) -> impl Iterator<Item = char> + '_ {
     text.nfkd()
         .filter(|character| !is_combining_mark(*character))
         .flat_map(char::to_lowercase)
-        .collect()
 }
 
-/// Normalize user-facing text into the collation key library sorting
-/// compares by: trim outer whitespace and lowercase per character with
-/// Unicode case mapping. Unlike [`normalize_search_text`], accents are
-/// kept — sorting distinguishes "déjà" from "deja".
+/// Where a library text value files in sort order.
 ///
-/// [`compare_optional_text`] applies exactly this collation
-/// lazily, without allocating; code that compares the same strings many
-/// times (a whole-table sort) can build these keys once and compare them
-/// with `str::cmp`, which orders identically.
-pub fn normalize_sort_text(text: &str) -> String {
-    let text = text.trim();
-    // An ASCII character lowercases to one ASCII character: the same key,
-    // built bytewise. Most tags are ASCII, and a table builds three keys
-    // per row.
-    if text.is_ascii() {
-        return text.to_ascii_lowercase();
-    }
-    fold_sort_text(text)
+/// Text sorts by its base letters first: trimmed, accents dropped and case
+/// folded, the fold [`normalize_search_text`] applies. "Édith" files under
+/// E, next to "Edith", rather than after every unaccented name. Two values
+/// with the same base letters then order by their case-folded text with the
+/// accents kept, so "deja" and "déjà" stay distinct and in a fixed order.
+/// Values that differ only in case or outer whitespace are equal.
+///
+/// [`compare_optional_text`] applies exactly this order lazily, without
+/// allocating; code that compares the same strings many times (a
+/// whole-table sort) builds these keys once and compares them instead.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct CollationKey {
+    base: String,
+    /// The case-folded text with its accents kept, when that differs from
+    /// `base`. Empty otherwise, so an unaccented value holds one string.
+    accented: String,
 }
 
-fn fold_sort_text(text: &str) -> String {
-    let mut key = String::with_capacity(text.len());
-    key.extend(text.chars().flat_map(char::to_lowercase));
-    key
+impl CollationKey {
+    pub fn new(text: &str) -> Self {
+        let text = text.trim();
+        // ASCII holds no accent and lowercases bytewise. Most tags are
+        // ASCII, and a table builds four keys per row.
+        if text.is_ascii() {
+            return Self {
+                base: text.to_ascii_lowercase(),
+                accented: String::new(),
+            };
+        }
+        let base = fold_search_text(text);
+        let accented: String = case_folded(text).collect();
+        Self {
+            accented: if accented == base {
+                String::new()
+            } else {
+                accented
+            },
+            base,
+        }
+    }
+
+    fn accented(&self) -> &str {
+        if self.accented.is_empty() {
+            &self.base
+        } else {
+            &self.accented
+        }
+    }
+}
+
+impl Ord for CollationKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.base
+            .cmp(&other.base)
+            .then_with(|| self.accented().cmp(other.accented()))
+    }
+}
+
+impl PartialOrd for CollationKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn case_folded(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.chars().flat_map(char::to_lowercase)
 }
 
 /// Compares two optional text fields for library sort order.
 ///
-/// Each side collates as its trimmed, Unicode-lowercased form — exactly
-/// the key [`normalize_sort_text`] builds, applied lazily here so
-/// a comparison allocates nothing and stops at the first differing
-/// character. A missing value (`None`) collates as the empty string.
-/// Code that compares the same strings many times (a whole-table sort)
-/// can instead build [`normalize_sort_text`] keys once and compare them
-/// with `str::cmp`, which orders identically.
+/// The order is the one [`CollationKey`] defines, applied lazily here so a
+/// comparison allocates nothing and stops at the first differing
+/// character. A missing value (`None`) sorts as the empty string.
 pub fn compare_optional_text(left: Option<&str>, right: Option<&str>) -> Ordering {
-    fn collation_chars(value: Option<&str>) -> impl Iterator<Item = char> + '_ {
-        value
-            .unwrap_or_default()
-            .trim()
-            .chars()
-            .flat_map(char::to_lowercase)
-    }
-
-    collation_chars(left).cmp(collation_chars(right))
+    let left = left.unwrap_or_default().trim();
+    let right = right.unwrap_or_default().trim();
+    base_letters(left)
+        .cmp(base_letters(right))
+        .then_with(|| case_folded(left).cmp(case_folded(right)))
 }
 
 /// The text a column actually sorts by, honoring the "sort as" tag
@@ -97,8 +136,8 @@ mod tests {
     use std::cmp::Ordering;
 
     use super::{
-        compare_optional_text, effective_sort_key, fold_search_text, fold_sort_text,
-        normalize_search_text, normalize_sort_text,
+        CollationKey, compare_optional_text, effective_sort_key, fold_search_text,
+        normalize_search_text,
     };
 
     #[test]
@@ -107,8 +146,24 @@ mod tests {
     }
 
     #[test]
-    fn sort_text_normalization_folds_case_but_keeps_accents() {
-        assert_eq!(normalize_sort_text(" Déjà BjÖrk "), "déjà björk");
+    fn an_accented_letter_sorts_with_its_base_letter() {
+        let mut names = ["Zoé", "Étienne", "Eric", "edith", "Édith", "Björk", "Bjork"];
+        names.sort_by_key(|name| CollationKey::new(name));
+        assert_eq!(
+            names,
+            ["Bjork", "Björk", "edith", "Édith", "Eric", "Étienne", "Zoé"]
+        );
+    }
+
+    #[test]
+    fn sort_keys_ignore_case_and_outer_whitespace_but_not_accents() {
+        assert_eq!(
+            CollationKey::new(" Déjà BjÖrk "),
+            CollationKey::new("déjà björk")
+        );
+        assert_ne!(CollationKey::new("déjà"), CollationKey::new("deja"));
+        // The Kelvin sign lowercases to an ASCII "k".
+        assert_eq!(CollationKey::new("\u{212A}"), CollationKey::new("k"));
     }
 
     #[test]
@@ -126,7 +181,14 @@ mod tests {
                 fold_search_text(text),
                 "{text:?}"
             );
-            assert_eq!(normalize_sort_text(text), fold_sort_text(text), "{text:?}");
+            assert_eq!(
+                CollationKey::new(text),
+                CollationKey {
+                    base: fold_search_text(text),
+                    accented: String::new(),
+                },
+                "{text:?}"
+            );
         }
     }
 
@@ -151,10 +213,10 @@ mod tests {
 
     #[test]
     fn optional_text_collation_orders_exactly_like_sort_key_comparison() {
-        // The lazy comparison and a `str::cmp` over pre-built
-        // `normalize_sort_text` keys must stay interchangeable: the track
-        // table sorts most text columns by stored keys and compares the
-        // others directly, and the two orders may never diverge.
+        // The lazy comparison and a comparison of pre-built keys must stay
+        // interchangeable: the track table sorts most text columns by
+        // stored keys and compares the others directly, and the two orders
+        // may never diverge.
         let samples = [
             None,
             Some(""),
@@ -168,13 +230,20 @@ mod tests {
             Some("weiß"),
             Some("İstanbul"),
             Some("ΟΔΥΣΣΕΥΣ"),
+            Some("µ"),
+            Some("μ"),
+            Some("\u{212A}"),
+            Some("k"),
+            Some("ka"),
+            Some("é"),
+            Some("ez"),
         ];
         for left in samples {
             for right in samples {
                 assert_eq!(
                     compare_optional_text(left, right),
-                    normalize_sort_text(left.unwrap_or_default())
-                        .cmp(&normalize_sort_text(right.unwrap_or_default())),
+                    CollationKey::new(left.unwrap_or_default())
+                        .cmp(&CollationKey::new(right.unwrap_or_default())),
                     "collation diverged for {left:?} vs {right:?}"
                 );
             }

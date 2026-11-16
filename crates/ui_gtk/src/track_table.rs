@@ -1439,7 +1439,7 @@ fn playlist_position_from_object(object: &glib::Object) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use sustain_app_runtime::TrackId;
+    use sustain_app_runtime::{CollationKey, TrackId};
 
     use super::*;
     use crate::table_cell::TableCell;
@@ -2164,7 +2164,7 @@ mod tests {
     fn named_row(id: i64, track_name: &str) -> TrackTableRow {
         let mut row = row(id);
         row.track_name = track_name.to_owned();
-        row.track_name_sort_key = track_name.to_lowercase();
+        row.track_name_sort_key = CollationKey::new(track_name);
         row
     }
 

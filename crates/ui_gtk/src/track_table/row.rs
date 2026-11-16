@@ -3,7 +3,7 @@
 
 use std::{path::Path, time::SystemTime};
 
-use sustain_app_runtime::{Bpm, Track, TrackId, effective_sort_key, normalize_sort_text};
+use sustain_app_runtime::{Bpm, CollationKey, Track, TrackId, effective_sort_key};
 
 use crate::util::non_empty_text;
 
@@ -59,15 +59,15 @@ pub(crate) struct TrackTableRow {
     pub(crate) has_lyrics: bool,
     /// Effective sort keys for the text columns, resolved at row-build
     /// time from the track's "sort as" tags and the live
-    /// honor-sort-tags preference (issue #13), then pre-collated with
-    /// [`normalize_sort_text`] so the column comparators are plain
-    /// `str::cmp`. The keys order "The Beatles" under B while the row
-    /// still displays as written.
-    pub(super) track_name_sort_key: String,
-    pub(super) artist_sort_key: String,
-    pub(super) album_sort_key: String,
-    /// The genre, pre-collated the same way; genres have no "sort as" tag.
-    pub(super) genre_sort_key: String,
+    /// honor-sort-tags preference (issue #13), then built into a
+    /// [`CollationKey`] once so the column comparators only compare. The keys
+    /// order "The Beatles" under B while the row still displays as
+    /// written.
+    pub(super) track_name_sort_key: CollationKey,
+    pub(super) artist_sort_key: CollationKey,
+    pub(super) album_sort_key: CollationKey,
+    /// The genre, keyed the same way; genres have no "sort as" tag.
+    pub(super) genre_sort_key: CollationKey,
     pub(crate) year: Option<i32>,
     pub(crate) bpm: Option<Bpm>,
     pub(crate) music_key: Option<String>,
@@ -141,7 +141,7 @@ impl TrackTableRow {
             honor_sort_tags,
         );
         let genre = non_empty_text(&track.metadata.genre).unwrap_or_default();
-        let genre_sort_key = normalize_sort_text(&genre);
+        let genre_sort_key = CollationKey::new(&genre);
         Self {
             track_id: Some(track.id),
             track_name,
@@ -193,13 +193,11 @@ impl TrackTableRow {
 
 /// The effective sort key for a text column: the tag-derived "sort as"
 /// value when the preference is on and one is present, otherwise the
-/// already-resolved display string — pre-collated so sorting compares
-/// stored keys with `str::cmp` instead of re-normalizing per comparison.
-/// Shares [`sustain_app_runtime::effective_sort_key`] and
-/// [`normalize_sort_text`] with the library store so the table headers
-/// and the store sort agree (issue #13).
-fn sort_key(sort_field: Option<&str>, display: &str, honor_sort_tags: bool) -> String {
-    normalize_sort_text(
+/// already-resolved display string — keyed once so sorting compares
+/// stored keys instead of folding the text again per comparison
+/// (issue #13).
+fn sort_key(sort_field: Option<&str>, display: &str, honor_sort_tags: bool) -> CollationKey {
+    CollationKey::new(
         effective_sort_key(sort_field, Some(display), honor_sort_tags).unwrap_or(display),
     )
 }
@@ -223,11 +221,10 @@ impl TrackTableRow {
             album: String::new(),
             genre: String::new(),
             has_lyrics: false,
-            // Sort keys are stored pre-collated (`normalize_sort_text`).
-            track_name_sort_key: format!("track {id}"),
-            artist_sort_key: String::new(),
-            album_sort_key: String::new(),
-            genre_sort_key: String::new(),
+            track_name_sort_key: CollationKey::new(&format!("Track {id}")),
+            artist_sort_key: CollationKey::default(),
+            album_sort_key: CollationKey::default(),
+            genre_sort_key: CollationKey::default(),
             year: None,
             bpm: None,
             music_key: None,
@@ -253,7 +250,8 @@ mod tests {
     use std::path::PathBuf;
 
     use sustain_app_runtime::{
-        PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
+        CollationKey, PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata,
+        TrackRelativePath,
     };
 
     use super::TrackTableRow;
@@ -283,21 +281,24 @@ mod tests {
 
         let honoring = TrackTableRow::from_track(&track, true);
         assert_eq!(honoring.artist, "The Beatles", "the display name stays");
-        assert_eq!(honoring.artist_sort_key, "beatles, the");
+        assert_eq!(honoring.artist_sort_key, CollationKey::new("beatles, the"));
         assert_eq!(
-            honoring.album_sort_key, "abbey road",
+            honoring.album_sort_key,
+            CollationKey::new("abbey road"),
             "a blank sort tag falls back to the display name"
         );
         assert_eq!(
-            honoring.track_name_sort_key, "été",
+            honoring.track_name_sort_key,
+            CollationKey::new("été"),
             "sort keys fold case but keep accents"
         );
         assert_eq!(
-            honoring.genre_sort_key, "trip-hop",
-            "a genre has no sort tag but is collated like the others"
+            honoring.genre_sort_key,
+            CollationKey::new("trip-hop"),
+            "a genre has no sort tag but is keyed like the others"
         );
 
         let ignoring = TrackTableRow::from_track(&track, false);
-        assert_eq!(ignoring.artist_sort_key, "the beatles");
+        assert_eq!(ignoring.artist_sort_key, CollationKey::new("the beatles"));
     }
 }

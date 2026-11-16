@@ -676,7 +676,7 @@ fn focus_within_table(cell: &TableCell) -> bool {
 mod tests {
     use super::super::TrackTableRow;
     use super::*;
-    use sustain_app_runtime::{Bpm, TrackId};
+    use sustain_app_runtime::{Bpm, CollationKey, TrackId};
 
     fn metadata() -> TrackMetadata {
         TrackMetadata {
@@ -959,9 +959,9 @@ mod tests {
                 })
             });
             let mut first = TrackTableRow::test_row(1);
-            first.track_name_sort_key = "b".to_owned();
+            first.track_name_sort_key = CollationKey::new("b");
             let mut second = TrackTableRow::test_row(2);
-            second.track_name_sort_key = "a".to_owned();
+            second.track_name_sort_key = CollationKey::new("a");
             let table = super::super::build_track_table(
                 vec![first, second],
                 None,

@@ -905,6 +905,9 @@ click again to reverse direction. The chosen sort column and direction are
 remembered across restarts, per view: the Music library and each smart
 playlist keep their own, while regular playlists default to their manual
 play order. Albums view is grid-based and does not sort by columns.
+Text sorts without regard to case, and an accented letter files with its
+base letter: `Édith Piaf` sits under E, beside `Edith`, in the track
+table and in the Albums grid alike.
 
 ### Sort-order metadata — *iso-iTunes*
 Sustain reads title, artist, album, album artist, and composer sort-order

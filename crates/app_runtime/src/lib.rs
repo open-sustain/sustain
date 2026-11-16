@@ -15,8 +15,8 @@ use std::{
 pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, BackgroundJobsSettings, BackgroundResourceUsage, Bpm,
-    BpmRange, CdEncodingProfile, CdReadMode, Clock, DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount,
-    DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateArtworkQuality,
+    BpmRange, CdEncodingProfile, CdReadMode, Clock, CollationKey, DEFAULT_PLAYBACK_VOLUME_PERCENT,
+    DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateArtworkQuality,
     DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode, DuplicateMergeChoices,
     DuplicateMetadataField, DuplicateMetadataFieldSelection, DuplicateMetadataSelection,
     EncodingSettings, FieldChange, FilesPerFolderCap, GenreDistribution, GenrePlayCount,
@@ -37,8 +37,7 @@ pub use sustain_domain::{
     UiSidebarSelection, UiWindowSize, UserSettings, VerifiedDuplicateMerge, VolumePercent,
     WaveformSegment, WaveformSegments, YearCount, compare_optional_text,
     compute_library_statistics, default_duplicate_merge_choices, duplicate_audio_quality,
-    effective_sort_key, highest_quality_duplicate_artwork, matching_tracks, normalize_sort_text,
-    track_matches_rule_set,
+    effective_sort_key, highest_quality_duplicate_artwork, matching_tracks, track_matches_rule_set,
 };
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities, StoreError};
 pub use sustain_metadata::{
@@ -1812,7 +1811,7 @@ impl ApplicationRuntime {
             }
         }
         let mut genres: Vec<String> = unique.into_iter().collect();
-        genres.sort_by_cached_key(|genre| genre.to_lowercase());
+        genres.sort_by_cached_key(|genre| CollationKey::new(genre));
         genres
     }
 
@@ -1827,7 +1826,7 @@ impl ApplicationRuntime {
             }
         }
         let mut artists: Vec<String> = unique.into_iter().collect();
-        artists.sort_by_cached_key(|artist| artist.to_lowercase());
+        artists.sort_by_cached_key(|artist| CollationKey::new(artist));
         artists
     }
 

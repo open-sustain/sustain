@@ -2416,7 +2416,7 @@ mod tests {
     }
 
     fn album_key_for_test(index: usize) -> AlbumKey {
-        AlbumKey::for_test(format!("Artist {index}"), format!("Album {index}"))
+        AlbumKey::for_test(&format!("Artist {index}"), &format!("Album {index}"))
     }
 
     fn cover_requisition(cover: &gtk::Overlay) -> ((i32, i32), (i32, i32)) {

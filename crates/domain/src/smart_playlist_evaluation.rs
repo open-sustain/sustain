@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    MusicalKey, SmartPlaylistBoolField, SmartPlaylistDateField, SmartPlaylistLimit,
+    CollationKey, MusicalKey, SmartPlaylistBoolField, SmartPlaylistDateField, SmartPlaylistLimit,
     SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
     SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
     SmartPlaylistTextOperator, Track, normalize_search_text,
@@ -291,16 +291,16 @@ fn sort_for_selection(
             tracks.sort_by_key(|track| pseudo_random_key(track.id.get(), seed));
         }
         SmartPlaylistLimitSelection::TitleAscending => {
-            tracks.sort_by_cached_key(|track| ci_string(track.metadata.title.as_deref()));
+            tracks.sort_by_cached_key(|track| sort_key(track.metadata.title.as_deref()));
         }
         SmartPlaylistLimitSelection::ArtistAscending => {
-            tracks.sort_by_cached_key(|track| ci_string(track.metadata.artist.as_deref()));
+            tracks.sort_by_cached_key(|track| sort_key(track.metadata.artist.as_deref()));
         }
         SmartPlaylistLimitSelection::AlbumAscending => {
-            tracks.sort_by_cached_key(|track| ci_string(track.metadata.album.as_deref()));
+            tracks.sort_by_cached_key(|track| sort_key(track.metadata.album.as_deref()));
         }
         SmartPlaylistLimitSelection::GenreAscending => {
-            tracks.sort_by_cached_key(|track| ci_string(track.metadata.genre.as_deref()));
+            tracks.sort_by_cached_key(|track| sort_key(track.metadata.genre.as_deref()));
         }
         SmartPlaylistLimitSelection::HighestRating => {
             tracks.sort_by_key(|track| Reverse(track.rating.stars()));
@@ -331,8 +331,8 @@ fn sort_for_selection(
 
 /// The case-insensitive key the limit sorts order by. Allocated once per
 /// track via `sort_by_cached_key`, not once per comparison.
-fn ci_string(value: Option<&str>) -> String {
-    value.map(normalize_search_text).unwrap_or_default()
+fn sort_key(value: Option<&str>) -> CollationKey {
+    CollationKey::new(value.unwrap_or_default())
 }
 
 fn random_seed(now: SystemTime) -> u64 {

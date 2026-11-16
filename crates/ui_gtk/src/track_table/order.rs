@@ -132,6 +132,8 @@ pub(super) fn apply_permutation(permutation: &[usize], mut swap: impl FnMut(usiz
 
 #[cfg(test)]
 mod tests {
+    use sustain_app_runtime::CollationKey;
+
     use super::*;
 
     #[test]
@@ -197,7 +199,7 @@ mod tests {
     fn row(id: i64, year: Option<i32>, track_name: &str) -> TrackTableRow {
         let mut row = TrackTableRow::test_row(id);
         row.year = year;
-        row.track_name_sort_key = track_name.to_owned();
+        row.track_name_sort_key = CollationKey::new(track_name);
         row
     }
 }

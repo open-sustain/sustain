@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use sustain_app_runtime::{Track, TrackId, TrackMetadata};
+use sustain_app_runtime::{CollationKey, Track, TrackId, TrackMetadata, compare_optional_text};
 
 use crate::artwork_loader::ArtworkSource;
 use crate::util::non_empty_text;
@@ -17,16 +17,16 @@ use crate::util::non_empty_text;
 /// different `group_albums` calls share a key iff they cover the same tracks.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub(super) struct AlbumKey {
-    artist: String,
-    title: String,
+    artist: CollationKey,
+    title: CollationKey,
 }
 
 #[cfg(test)]
 impl AlbumKey {
-    pub(super) fn for_test(artist: impl Into<String>, title: impl Into<String>) -> Self {
+    pub(super) fn for_test(artist: &str, title: &str) -> Self {
         Self {
-            artist: artist.into(),
-            title: title.into(),
+            artist: CollationKey::new(artist),
+            title: CollationKey::new(title),
         }
     }
 }
@@ -82,8 +82,8 @@ pub(super) fn group_albums(tracks: &[Track], library_root: Option<&Path>) -> Vec
         let title = album_title(&track.metadata);
         let grouping = album_grouping(&track.metadata);
         let key = AlbumKey {
-            artist: normalize_album_key(&grouping.key_artist),
-            title: normalize_album_key(&title),
+            artist: CollationKey::new(&grouping.key_artist),
+            title: CollationKey::new(&title),
         };
         let bucket = albums.entry(key.clone()).or_insert_with(|| AlbumBucket {
             key,
@@ -253,7 +253,7 @@ pub(super) fn compare_album_tracks(
                 .unwrap_or(u32::MAX)
                 .cmp(&right.track_number.unwrap_or(u32::MAX))
         })
-        .then_with(|| normalize_album_key(&left.title).cmp(&normalize_album_key(&right.title)))
+        .then_with(|| compare_optional_text(Some(&left.title), Some(&right.title)))
         .then_with(|| left.id.cmp(&right.id))
 }
 
@@ -316,10 +316,10 @@ fn artist_summary(artists: &[String]) -> String {
 }
 
 fn push_unique_artist(artists: &mut Vec<String>, artist: String) {
-    let normalized = normalize_album_key(&artist);
+    let key = CollationKey::new(&artist);
     if artists
         .iter()
-        .any(|existing| normalize_album_key(existing) == normalized)
+        .any(|existing| CollationKey::new(existing) == key)
     {
         return;
     }
@@ -343,10 +343,6 @@ fn track_title(track: &Track) -> String {
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_default()
-}
-
-fn normalize_album_key(value: &str) -> String {
-    value.trim().to_lowercase()
 }
 
 #[cfg(test)]
@@ -389,6 +385,26 @@ mod tests {
             vec![2, 1]
         );
         assert_eq!(albums[1].title, "Other");
+    }
+
+    #[test]
+    fn an_album_by_an_accented_artist_files_under_the_base_letter() {
+        let tracks = vec![
+            track(1, "a.flac", "Zoo", "Zebra", Some(1), None),
+            track(2, "b.flac", "Olympia", "Édith Piaf", Some(1), None),
+            track(3, "c.flac", "Eden", "Eurythmics", Some(1), None),
+            track(4, "d.flac", "Debut", "Björk", Some(1), None),
+        ];
+
+        let albums = group_albums(&tracks, None);
+
+        assert_eq!(
+            albums
+                .iter()
+                .map(|album| album.artist.as_str())
+                .collect::<Vec<_>>(),
+            ["Björk", "Édith Piaf", "Eurythmics", "Zebra"]
+        );
     }
 
     #[test]

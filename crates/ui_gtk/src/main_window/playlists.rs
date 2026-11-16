@@ -5,6 +5,8 @@
 //! playlists-header state projection, the per-playlist/smart-playlist row
 //! construction, and the add-to-playlist menu provider and callback.
 
+use sustain_app_runtime::CollationKey;
+
 use super::*;
 
 #[derive(Clone)]
@@ -277,11 +279,7 @@ pub(super) fn add_to_playlist_provider(runtime: &SharedRuntime) -> AddToPlaylist
                 display_path: playlist_display_path(playlist, &folders),
             })
             .collect();
-        entries.sort_by(|left, right| {
-            left.display_path
-                .to_lowercase()
-                .cmp(&right.display_path.to_lowercase())
-        });
+        entries.sort_by_cached_key(|entry| CollationKey::new(&entry.display_path));
         entries
     })
 }
