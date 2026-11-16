@@ -11,7 +11,13 @@
 //! authoritative.
 
 use super::*;
-use lofty::{config::ParseOptions, error::LoftyError, file::FileType, probe::Probe};
+use lofty::{
+    config::ParseOptions,
+    error::{FileParseError, TextDecodingError},
+    file::FileType,
+    probe::Probe,
+    tag::items::timestamp::TimestampParseError,
+};
 
 pub(crate) fn read_tags(
     path: &Path,
@@ -163,12 +169,14 @@ fn read_tagged_file_without_tags(path: &Path) -> MetadataResult<TaggedFile> {
 fn metadata_error_from_lofty(
     path: &Path,
     expected_format: Option<AudioFormat>,
-    error: LoftyError,
+    error: FileParseError,
 ) -> MetadataError {
-    match error.kind() {
-        ErrorKind::BadTimestamp(_) => MetadataError::MalformedTag(MalformedTagError::BadTimestamp),
-        ErrorKind::TextDecode(_) => MetadataError::MalformedTag(MalformedTagError::TextDecode),
-        _ => container_format_mismatch(path, expected_format).unwrap_or(MetadataError::ReadFailed),
+    if caused_by::<TimestampParseError>(&error) {
+        MetadataError::MalformedTag(MalformedTagError::BadTimestamp)
+    } else if caused_by::<TextDecodingError>(&error) {
+        MetadataError::MalformedTag(MalformedTagError::TextDecode)
+    } else {
+        container_format_mismatch(path, expected_format).unwrap_or(MetadataError::ReadFailed)
     }
 }
 

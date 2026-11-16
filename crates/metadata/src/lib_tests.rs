@@ -11,7 +11,7 @@ use lofty::{
     config::WriteOptions,
     id3::v2::Id3v2Tag,
     mp4::Ilst,
-    ogg::VorbisComments,
+    ogg::tag::VorbisComments,
     picture::{Picture, PictureType},
     prelude::{Accessor, AudioFile, TaggedFileExt},
     tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType},

@@ -14,7 +14,6 @@ use std::{
 
 use lofty::{
     config::{GlobalOptions, WriteOptions, apply_global_options},
-    error::ErrorKind,
     file::TaggedFile,
     id3::v2::{Frame, Id3v2Tag, PopularimeterFrame},
     picture::{Picture, PictureType},
@@ -347,7 +346,7 @@ impl MetadataService for LoftyMetadataService {
         // edit would clobber data that doesn't belong to us.
         let preserved_popularimeter = tag.ratings().next().map(|popularimeter| {
             PreservedPopularimeter::from_parts(
-                popularimeter.email().unwrap_or("").to_owned(),
+                popularimeter.email().to_owned(),
                 popularimeter.play_counter,
             )
         });
@@ -460,6 +459,13 @@ pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {
 /// the integer key wherever the format maps it and fall back to the
 /// decimal key otherwise. Used for both reading and writing so the value
 /// round-trips on every format.
+/// Whether `error`, or an error it reports as its cause, is an `E`. lofty
+/// reports a failure as the operation that failed (parsing or encoding a
+/// file) and carries why in the error's source chain.
+fn caused_by<E: std::error::Error + 'static>(error: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(error), |error| error.source()).any(|error| error.is::<E>())
+}
+
 fn bpm_item_key(tag_type: TagType) -> ItemKey {
     if ItemKey::IntegerBpm.map_key(tag_type).is_some() {
         ItemKey::IntegerBpm

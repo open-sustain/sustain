@@ -10,6 +10,7 @@
 //! compaction here is the write-side counterpart to [`crate::mpeg_frame`].
 
 use super::*;
+use lofty::error::{FileEncodingError, UnknownFormatError};
 
 pub(crate) fn ensure_primary_tag(tagged_file: &mut TaggedFile) {
     if tagged_file.primary_tag().is_some() {
@@ -333,7 +334,7 @@ pub(crate) fn atomic_save_id3v2_to_path(
 
 fn atomic_save_lofty(
     path: &Path,
-    mut save: impl FnMut(&Path) -> lofty::error::Result<()>,
+    mut save: impl FnMut(&Path) -> Result<(), FileEncodingError>,
 ) -> MetadataResult<()> {
     let is_mp3 = audio_format_from_path(path) == Ok(AudioFormat::Mp3);
     atomic_write_via_rename(path, |temp_path| {
@@ -344,7 +345,7 @@ fn atomic_save_lofty(
             // of tolerated leading junk. That — and only that — is the defect
             // healed below; every other save failure is surfaced verbatim so
             // an unrelated error never triggers a leading-region rewrite.
-            Err(error) if matches!(error.kind(), ErrorKind::UnknownFormat) => {}
+            Err(error) if caused_by::<UnknownFormatError>(&error) => {}
             Err(_) => return Err(MetadataError::WriteFailed),
         }
 

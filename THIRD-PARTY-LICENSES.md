@@ -31,7 +31,7 @@ in the Flatpak.
 
 ## Summary
 
-- **Apache License 2.0** (`Apache-2.0`) — 155 crate(s)
+- **Apache License 2.0** (`Apache-2.0`) — 156 crate(s)
 - **MIT License** (`MIT`) — 54 crate(s)
 - **Unicode License v3** (`Unicode-3.0`) — 20 crate(s)
 - **Mozilla Public License 2.0** (`MPL-2.0`) — 16 crate(s)
@@ -3547,7 +3547,7 @@ Applies to:
 - [event-listener 5.4.1](https://github.com/smol-rs/event-listener)
 - [fastrand 2.4.1](https://github.com/smol-rs/fastrand)
 - [find-msvc-tools 0.1.9](https://github.com/rust-lang/cc-rs)
-- [flate2 1.1.9](https://github.com/rust-lang/flate2-rs)
+- [flate2 1.1.11](https://github.com/rust-lang/flate2-rs)
 - [form_urlencoded 1.2.2](https://github.com/servo/rust-url)
 - [futures-lite 2.6.1](https://github.com/smol-rs/futures-lite)
 - [glob 0.3.3](https://github.com/rust-lang/glob)
@@ -5385,10 +5385,11 @@ Applies to:
 - [image 0.25.10](https://github.com/image-rs/image)
 - [itoa 1.0.18](https://github.com/dtolnay/itoa)
 - [libc 0.2.191](https://github.com/rust-lang/libc)
-- [lofty 0.24.0](https://github.com/Serial-ATA/lofty-rs)
-- [lofty_attr 0.12.0](https://github.com/Serial-ATA/lofty-rs)
+- [lofty 0.25.5](https://github.com/Serial-ATA/lofty-rs)
+- [lofty_attr 0.13.0](https://github.com/Serial-ATA/lofty-rs)
 - [miniz_oxide 0.8.9](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
-- [ogg_pager 0.7.1](https://github.com/Serial-ATA/lofty-rs)
+- [miniz_oxide 0.9.1](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide)
+- [ogg_pager 0.8.0](https://github.com/Serial-ATA/lofty-rs)
 - [paste 1.0.15](https://github.com/dtolnay/paste)
 - [pastey 0.2.3](https://github.com/as1100k/pastey)
 - [pin-project-lite 0.2.17](https://github.com/taiki-e/pin-project-lite)
@@ -6897,7 +6898,7 @@ THE SOFTWARE.
 
 Applies to:
 
-- [data-encoding 2.11.0](https://github.com/ia0/data-encoding)
+- [data-encoding 2.11.1](https://github.com/ia0/data-encoding)
 
 ```text
 The MIT License (MIT)
