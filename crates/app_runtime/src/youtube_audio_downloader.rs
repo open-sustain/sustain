@@ -268,8 +268,11 @@ fn staged_directory_size(
     let mut entry_count = 0usize;
     let mut pending = vec![directory.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        let entries =
-            fs::read_dir(directory).map_err(|_| YoutubeAudioDownloadError::OutputRejected)?;
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(YoutubeAudioDownloadError::OutputRejected),
+        };
         for entry in entries {
             let entry = entry.map_err(|_| YoutubeAudioDownloadError::OutputRejected)?;
             entry_count = entry_count.saturating_add(1);
@@ -282,9 +285,14 @@ fn staged_directory_size(
             if file_type.is_dir() {
                 pending.push(entry.path());
             } else if file_type.is_file() {
-                let metadata = entry
-                    .metadata()
-                    .map_err(|_| YoutubeAudioDownloadError::OutputRejected)?;
+                // yt-dlp renames and deletes its partial files while it
+                // works. One that went away between being listed and being
+                // measured occupies nothing.
+                let metadata = match entry.metadata() {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(_) => return Err(YoutubeAudioDownloadError::OutputRejected),
+                };
                 total = total.saturating_add(metadata.len());
                 if total > stop_after_bytes {
                     return Ok(total);
@@ -346,6 +354,32 @@ mod tests {
                 Err(YoutubeAudioDownloadError::InvalidUrl)
             );
         }
+    }
+
+    #[test]
+    fn a_partial_file_that_goes_away_while_being_measured_occupies_nothing() {
+        let directory = tempfile::tempdir().expect("staging directory");
+        let stop = AtomicBool::new(false);
+        thread::scope(|scope| {
+            // What yt-dlp does to its fragments: write one, then delete it.
+            scope.spawn(|| {
+                let fragment = directory.path().join("audio.part-Frag.part");
+                while !stop.load(Ordering::Relaxed) {
+                    fs::write(&fragment, b"fragment").expect("write fragment");
+                    fs::remove_file(&fragment).expect("remove fragment");
+                }
+            });
+            let deadline = Instant::now() + Duration::from_millis(300);
+            let mut outcome = Ok(0);
+            while outcome.is_ok() && Instant::now() < deadline {
+                outcome = staged_directory_size(directory.path(), u64::MAX);
+            }
+            stop.store(true, Ordering::Relaxed);
+            assert!(
+                matches!(outcome, Ok(size) if size <= 8),
+                "measuring a directory in flux gave {outcome:?}"
+            );
+        });
     }
 
     #[test]
