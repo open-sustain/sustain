@@ -26,6 +26,27 @@ fn base_letters(text: &str) -> impl Iterator<Item = char> + '_ {
     text.nfkd()
         .filter(|character| !is_combining_mark(*character))
         .flat_map(char::to_lowercase)
+        .flat_map(undecomposed_base_letters)
+}
+
+/// The base letters of a lowercase Latin letter that Unicode gives no
+/// decomposition: a stroke or a ligature is part of the letter itself, not
+/// a combining mark. They fold the way the Unicode collation algorithm
+/// files them, so "royksopp" finds "Røyksopp" and "coeur" finds "Cœur".
+fn undecomposed_base_letters(letter: char) -> impl Iterator<Item = char> {
+    let (first, second) = match letter {
+        'ø' => ('o', None),
+        'œ' => ('o', Some('e')),
+        'æ' => ('a', Some('e')),
+        'ß' => ('s', Some('s')),
+        'ł' => ('l', None),
+        'đ' | 'ð' => ('d', None),
+        'ħ' => ('h', None),
+        'ŧ' => ('t', None),
+        'ı' => ('i', None),
+        other => (other, None),
+    };
+    std::iter::once(first).chain(second)
 }
 
 /// Where a library text value files in sort order.
@@ -146,12 +167,49 @@ mod tests {
     }
 
     #[test]
+    fn search_text_normalization_folds_strokes_and_ligatures() {
+        for (text, folded) in [
+            ("Røyksopp", "royksopp"),
+            ("Cœur de pirate", "coeur de pirate"),
+            ("ÆON", "aeon"),
+            ("Straße", "strasse"),
+            ("STRAẞE", "strasse"),
+            ("Łódź", "lodz"),
+            ("Đorđe", "dorde"),
+            ("Sigur Rós – Með", "sigur ros – med"),
+            ("Kadıköy", "kadikoy"),
+        ] {
+            assert_eq!(normalize_search_text(text), folded, "{text:?}");
+        }
+    }
+
+    #[test]
     fn an_accented_letter_sorts_with_its_base_letter() {
-        let mut names = ["Zoé", "Étienne", "Eric", "edith", "Édith", "Björk", "Bjork"];
+        let mut names = [
+            "Zoé",
+            "Rush",
+            "Røyksopp",
+            "Étienne",
+            "Eric",
+            "edith",
+            "Édith",
+            "Björk",
+            "Bjork",
+        ];
         names.sort_by_key(|name| CollationKey::new(name));
         assert_eq!(
             names,
-            ["Bjork", "Björk", "edith", "Édith", "Eric", "Étienne", "Zoé"]
+            [
+                "Bjork",
+                "Björk",
+                "edith",
+                "Édith",
+                "Eric",
+                "Étienne",
+                "Røyksopp",
+                "Rush",
+                "Zoé"
+            ]
         );
     }
 

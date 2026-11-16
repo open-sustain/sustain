@@ -896,7 +896,8 @@ Top-bar search filters the active view in real time across title,
 artist, album, album artist, composer, genre, and file path. Every word
 typed must be found, each in any of those fields, so `massive mezzanine`
 finds an artist's album. Search is case- and accent-insensitive and
-whitespace-normalized. The current search string is persisted across
+whitespace-normalized; a stroked letter or a ligature matches its plain
+spelling too, so `royksopp` finds `Røyksopp` and `coeur` finds `Cœur`. The current search string is persisted across
 restarts.
 
 ### Column sorting — *iso-iTunes*
@@ -906,8 +907,8 @@ remembered across restarts, per view: the Music library and each smart
 playlist keep their own, while regular playlists default to their manual
 play order. Albums view is grid-based and does not sort by columns.
 Text sorts without regard to case, and an accented letter files with its
-base letter: `Édith Piaf` sits under E, beside `Edith`, in the track
-table and in the Albums grid alike.
+base letter: `Édith Piaf` sits under E, beside `Edith`, and `Røyksopp`
+under Ro, in the track table and in the Albums grid alike.
 
 ### Sort-order metadata — *iso-iTunes*
 Sustain reads title, artist, album, album artist, and composer sort-order
