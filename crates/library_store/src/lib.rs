@@ -704,6 +704,18 @@ pub trait LibraryStore: Send + Sync {
 
     /// Load a device's on-device manifest.
     fn device_manifest(&self, id: &SyncDeviceId) -> StoreResult<Vec<SyncManifestEntry>>;
+
+    /// Replace the record of the playlist files the last sync left on a
+    /// device (the M3U layout's `.m3u8` files), paths relative to the
+    /// device's sync base like the manifest's.
+    fn save_device_playlist_files(
+        &self,
+        id: &SyncDeviceId,
+        paths: &[DeviceRelativePath],
+    ) -> StoreResult<()>;
+
+    /// Load the record of the playlist files Sustain wrote to a device.
+    fn device_playlist_files(&self, id: &SyncDeviceId) -> StoreResult<Vec<DeviceRelativePath>>;
 }
 
 #[derive(Debug)]

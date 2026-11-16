@@ -367,6 +367,7 @@ mod tests {
                 track_indices: (0..fx.tracks.len()).collect(),
             }],
             previous_manifest: prev,
+            previous_playlist_files: Vec::new(),
             remove_stale: remove,
             export_date: "2026-01-01".into(),
         }
@@ -402,6 +403,142 @@ mod tests {
 
     fn run_prepared(dest: &Path, prepared: &PreparedSyncRequest) -> SyncOutcome {
         journaled_sync(&transport(dest), prepared, &mut |_| {}, &|| false).expect("sync ok")
+    }
+
+    fn device_path(path: &str) -> DeviceRelativePath {
+        DeviceRelativePath::new(path).expect("safe path")
+    }
+
+    /// A request for the same tracks with one playlist per name, carrying
+    /// what `previous` left on the device.
+    fn playlists_request(
+        fx: &Fixture,
+        layout: DeviceLayout,
+        names: &[&str],
+        previous: &SyncOutcome,
+        remove: bool,
+    ) -> SyncRequest {
+        SyncRequest {
+            playlists: names
+                .iter()
+                .map(|name| SyncInputPlaylist {
+                    name: (*name).into(),
+                    track_indices: (0..fx.tracks.len()).collect(),
+                })
+                .collect(),
+            previous_manifest: previous.manifest.clone(),
+            previous_playlist_files: previous.playlist_files.clone(),
+            ..request(fx, layout, Vec::new(), remove)
+        }
+    }
+
+    #[test]
+    fn the_file_of_a_playlist_left_out_goes_only_with_confirmation() {
+        let fx = fixture(2);
+        let first = run(
+            fx.dest.path(),
+            &playlists_request(
+                &fx,
+                DeviceLayout::M3u,
+                &["Mix", "Chill"],
+                &SyncOutcome::default(),
+                false,
+            ),
+        );
+        assert_eq!(
+            first.playlist_files,
+            [device_path("Mix.m3u8"), device_path("Chill.m3u8")]
+        );
+        // A playlist file Sustain did not write is never its to remove.
+        std::fs::write(fx.dest.path().join("Mine.m3u8"), "#EXTM3U\n").expect("user playlist");
+
+        // "Mix" renamed, "Chill" unticked.
+        let renamed =
+            |remove| playlists_request(&fx, DeviceLayout::M3u, &["Mix 2026"], &first, remove);
+        let planned = plan(&transport(fx.dest.path()), &renamed(true)).expect("plan");
+        assert_eq!(
+            planned.to_remove,
+            [device_path("Mix.m3u8"), device_path("Chill.m3u8")]
+        );
+
+        let kept = run(fx.dest.path(), &renamed(false));
+        assert_eq!(kept.removed, 0);
+        assert!(fx.dest.path().join("Mix.m3u8").is_file());
+        assert_eq!(
+            kept.playlist_files,
+            [
+                device_path("Mix 2026.m3u8"),
+                device_path("Mix.m3u8"),
+                device_path("Chill.m3u8")
+            ]
+        );
+
+        let removed = run(
+            fx.dest.path(),
+            &playlists_request(&fx, DeviceLayout::M3u, &["Mix 2026"], &kept, true),
+        );
+        assert_eq!(removed.removed, 2);
+        assert_eq!(removed.playlist_files, [device_path("Mix 2026.m3u8")]);
+        assert!(!fx.dest.path().join("Mix.m3u8").exists());
+        assert!(!fx.dest.path().join("Chill.m3u8").exists());
+        assert!(fx.dest.path().join("Mix 2026.m3u8").is_file());
+        assert!(fx.dest.path().join("Mine.m3u8").is_file());
+        // The tracks stay: the remaining playlist holds them all.
+        assert_eq!(removed.manifest.len(), 2);
+    }
+
+    #[test]
+    fn a_playlist_renamed_in_case_keeps_its_file_on_a_device_that_ignores_case() {
+        let fx = fixture(1);
+        let device = || CaseInsensitiveTransport(transport(fx.dest.path()));
+        let first = journaled_sync(
+            &device(),
+            &prepared(&playlists_request(
+                &fx,
+                DeviceLayout::M3u,
+                &["mix"],
+                &SyncOutcome::default(),
+                false,
+            )),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("sync");
+
+        let req = playlists_request(&fx, DeviceLayout::M3u, &["Mix"], &first, true);
+        assert!(plan(&device(), &req).expect("plan").to_remove.is_empty());
+        let second =
+            journaled_sync(&device(), &prepared(&req), &mut |_| {}, &|| false).expect("sync");
+
+        assert_eq!(second.removed, 0);
+        assert_eq!(second.playlist_files, [device_path("Mix.m3u8")]);
+        assert!(fx.dest.path().join("mix.m3u8").is_file());
+    }
+
+    #[test]
+    fn leaving_the_m3u_layout_makes_every_playlist_file_stale() {
+        let fx = fixture(1);
+        let first = run(
+            fx.dest.path(),
+            &playlists_request(
+                &fx,
+                DeviceLayout::M3u,
+                &["Mix"],
+                &SyncOutcome::default(),
+                false,
+            ),
+        );
+
+        let outcome = run(
+            fx.dest.path(),
+            &SyncRequest {
+                previous_manifest: Vec::new(),
+                ..playlists_request(&fx, DeviceLayout::FolderPerPlaylist, &["Mix"], &first, true)
+            },
+        );
+
+        assert!(outcome.playlist_files.is_empty());
+        assert!(!fx.dest.path().join("Mix.m3u8").exists());
     }
 
     #[test]
@@ -543,6 +680,7 @@ mod tests {
             tracks,
             playlists,
             previous_manifest: prev,
+            previous_playlist_files: Vec::new(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         }
@@ -1002,6 +1140,7 @@ mod tests {
                 track_indices: vec![0, 1],
             }],
             previous_manifest: Vec::new(),
+            previous_playlist_files: Vec::new(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };
@@ -1179,6 +1318,7 @@ mod tests {
                 track_indices: vec![0, 1],
             }],
             previous_manifest: first.manifest.clone(),
+            previous_playlist_files: Vec::new(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };
@@ -1208,6 +1348,7 @@ mod tests {
                 track_indices: vec![0, 1],
             }],
             previous_manifest: first.manifest.clone(),
+            previous_playlist_files: Vec::new(),
             remove_stale: remove,
             export_date: "2026-01-01".into(),
         };
@@ -1250,6 +1391,7 @@ mod tests {
                 track_indices: vec![0, 1],
             }],
             previous_manifest: first.manifest.clone(),
+            previous_playlist_files: Vec::new(),
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
@@ -1335,6 +1477,7 @@ mod tests {
                 track_indices: vec![0, 1, 2],
             }],
             previous_manifest: first.manifest.clone(),
+            previous_playlist_files: Vec::new(),
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
@@ -1486,6 +1629,7 @@ mod tests {
                 track_indices: vec![0],
             }],
             previous_manifest: first.manifest,
+            previous_playlist_files: Vec::new(),
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
@@ -1700,6 +1844,7 @@ mod tests {
             tracks: Vec::new(),
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
+            previous_playlist_files: Vec::new(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };

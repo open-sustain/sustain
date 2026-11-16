@@ -312,6 +312,57 @@ pub(super) fn device_manifest(
     Ok(entries)
 }
 
+pub(super) fn save_device_playlist_files(
+    connection: &mut Connection,
+    id: &SyncDeviceId,
+    paths: &[DeviceRelativePath],
+) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    transaction
+        .execute(
+            "DELETE FROM sync_playlist_files WHERE device_id = ?1",
+            params![id.as_str()],
+        )
+        .map_err(StoreError::from)?;
+    {
+        let mut insert = transaction
+            .prepare_cached(
+                "INSERT INTO sync_playlist_files (device_id, on_device_path) VALUES (?1, ?2)",
+            )
+            .map_err(StoreError::from)?;
+        for path in paths {
+            insert
+                .execute(params![id.as_str(), path.as_str()])
+                .map_err(StoreError::from)?;
+        }
+    }
+    transaction.commit().map_err(StoreError::from)
+}
+
+pub(super) fn device_playlist_files(
+    connection: &Connection,
+    id: &SyncDeviceId,
+) -> StoreResult<Vec<DeviceRelativePath>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT on_device_path FROM sync_playlist_files \
+             WHERE device_id = ?1 ORDER BY on_device_path",
+        )
+        .map_err(StoreError::from)?;
+    let mut rows = statement
+        .query(params![id.as_str()])
+        .map_err(StoreError::from)?;
+    let mut paths = Vec::new();
+    while let Some(row) = rows.next().map_err(StoreError::from)? {
+        let raw: String = row.get(0).map_err(StoreError::from)?;
+        let path = DeviceRelativePath::new(raw.clone()).ok_or_else(|| {
+            StoreError::InvalidStoredEnum(format!("device playlist file path: {raw}"))
+        })?;
+        paths.push(path);
+    }
+    Ok(paths)
+}
+
 fn device_from_row(row: &rusqlite::Row<'_>) -> StoreResult<SyncDevice> {
     let id_text: String = row.get(0).map_err(StoreError::from)?;
     let id = SyncDeviceId::new(id_text.clone()).ok_or(StoreError::InvalidStoredEnum(format!(
@@ -519,6 +570,40 @@ mod tests {
             store.device_manifest(&d.id).expect("load"),
             vec![rewritten, entry(4, "c.mp3", "fp4")]
         );
+    }
+
+    #[test]
+    fn playlist_files_are_saved_in_place_of_the_last_record() {
+        let store = SqliteLibraryStore::open_in_memory().expect("store");
+        let d = device("dev-playlists");
+        store.save_sync_device(&d).expect("save");
+        let other = device("dev-other");
+        store.save_sync_device(&other).expect("save other");
+        store
+            .save_device_playlist_files(&other.id, &[device_path("Other.m3u8")])
+            .expect("save other record");
+        assert!(store.device_playlist_files(&d.id).expect("load").is_empty());
+
+        store
+            .save_device_playlist_files(
+                &d.id,
+                &[device_path("Mix.m3u8"), device_path("Chill.m3u8")],
+            )
+            .expect("save");
+        store
+            .save_device_playlist_files(&d.id, &[device_path("Music/Mix.m3u8")])
+            .expect("replace");
+
+        assert_eq!(
+            store.device_playlist_files(&d.id).expect("load"),
+            vec![device_path("Music/Mix.m3u8")]
+        );
+        assert_eq!(
+            store.device_playlist_files(&other.id).expect("load other"),
+            vec![device_path("Other.m3u8")]
+        );
+        store.delete_sync_device(&d.id).expect("delete");
+        assert!(store.device_playlist_files(&d.id).expect("load").is_empty());
     }
 
     #[test]

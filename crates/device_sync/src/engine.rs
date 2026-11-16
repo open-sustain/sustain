@@ -43,6 +43,9 @@ struct Diff {
     /// these go before the copies.
     respelled: Vec<DeviceRelativePath>,
     removals: Vec<DeviceRelativePath>,
+    /// Recorded playlist files no playlist of this sync writes: the file
+    /// of a playlist that left the selection or was renamed.
+    stale_playlist_files: Vec<DeviceRelativePath>,
 }
 
 impl Diff {
@@ -117,12 +120,26 @@ fn compute_diff(
         .map(|e| e.on_device_path.clone())
         .collect();
 
+    // Compared as the device compares names: a playlist renamed only in
+    // case writes the very file its old name recorded, which must stay.
+    let written_playlists: HashSet<String> = layout::playlist_files(req)?
+        .iter()
+        .map(|(path, _playlist)| layout::device_path_key(path.as_str()))
+        .collect();
+    let stale_playlist_files = req
+        .previous_playlist_files
+        .iter()
+        .filter(|path| !written_playlists.contains(&layout::device_path_key(path.as_str())))
+        .cloned()
+        .collect();
+
     Ok(Diff {
         to_write,
         updates,
         unchanged,
         respelled,
         removals,
+        stale_playlist_files,
     })
 }
 
@@ -148,7 +165,11 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
     Ok(SyncPlan {
         to_copy: diff.copy_count(),
         to_update: diff.updates.len(),
-        to_remove: diff.removals,
+        to_remove: diff
+            .removals
+            .into_iter()
+            .chain(diff.stale_playlist_files)
+            .collect(),
         unchanged: diff.unchanged.len(),
         bytes_to_copy,
         bytes_total,
@@ -224,6 +245,7 @@ pub fn sync(
     let untouched = |error: SyncError| SyncFailure {
         error,
         manifest: req.previous_manifest.clone(),
+        playlist_files: req.previous_playlist_files.clone(),
     };
     if req.tracks.is_empty() {
         return Err(untouched(SyncError::Empty));
@@ -232,6 +254,7 @@ pub fn sync(
         return Ok(SyncOutcome {
             cancelled: true,
             manifest: req.previous_manifest.clone(),
+            playlist_files: req.previous_playlist_files.clone(),
             ..SyncOutcome::default()
         });
     }
@@ -257,6 +280,7 @@ pub fn sync(
         Err(error) => Err(SyncFailure {
             error,
             manifest: run.device_manifest(),
+            playlist_files: run.device_playlist_files(),
         }),
     }
 }
@@ -283,6 +307,9 @@ struct Run<'a> {
     /// write, and the files it deleted.
     claimed: HashSet<String>,
     removed: HashSet<&'a DeviceRelativePath>,
+    /// The playlist files the run wrote, and the stale ones it removed.
+    playlists_written: Vec<DeviceRelativePath>,
+    playlists_removed: HashSet<&'a DeviceRelativePath>,
 }
 
 impl<'a> Run<'a> {
@@ -317,6 +344,8 @@ impl<'a> Run<'a> {
             written: 0,
             claimed: HashSet::new(),
             removed: HashSet::new(),
+            playlists_written: Vec::new(),
+            playlists_removed: HashSet::new(),
         };
         // Unchanged files stay in the manifest as-is.
         for &index in &diff.unchanged {
@@ -430,8 +459,15 @@ impl<'a> Run<'a> {
                 completed: 0,
                 total: 1,
             });
-            let mut finalized =
-                layout::finalize(req, transport, base, placements, &self.present, cancel)?;
+            let mut finalized = layout::finalize(
+                req,
+                transport,
+                base,
+                placements,
+                &self.present,
+                &mut self.playlists_written,
+                cancel,
+            )?;
             for (entry, index) in self.manifest.iter_mut().zip(&self.entry_placements) {
                 if let Some(anlz) = finalized.anlz.remove(index) {
                     entry.anlz = Some(anlz);
@@ -445,31 +481,64 @@ impl<'a> Run<'a> {
         }
 
         // Removals, only behind the caller's confirmation.
-        if req.remove_stale && !diff.removals.is_empty() {
-            // Analysis pairs the new manifest records are never deleted, even
-            // if a (corrupt) stale entry names the same slot.
-            let kept_anlz = recorded_anlz(&self.manifest);
-            let remove_total = diff.removals.len();
-            for (done, rel) in diff.removals.iter().enumerate() {
-                if cancel() {
-                    self.outcome.cancelled = true;
-                    return Ok(());
-                }
-                let anlz = self
-                    .previous_anlz
-                    .get(rel)
-                    .copied()
-                    .filter(|anlz| !kept_anlz.contains(&anlz.dat_path));
-                remove_placement(transport, base, rel, anlz)?;
-                self.removed.insert(rel);
-                journal.forget(rel).map_err(SyncError::Journal)?;
-                self.outcome.removed += 1;
-                progress(SyncProgress {
-                    stage: SyncStage::Removing,
-                    completed: done + 1,
-                    total: remove_total,
-                });
+        if req.remove_stale {
+            self.remove_stale(transport, base, journal, progress, cancel)?;
+        }
+        Ok(())
+    }
+
+    /// Delete the files the selection no longer holds: stale audio, with
+    /// the analysis pairs only it recorded, then the playlist files no
+    /// playlist writes any more.
+    fn remove_stale(
+        &mut self,
+        transport: &dyn DeviceTransport,
+        base: &DeviceRelativePath,
+        journal: &mut dyn ManifestJournal,
+        progress: &mut dyn FnMut(SyncProgress),
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<(), SyncError> {
+        let diff = self.diff;
+        let remove_total = diff.removals.len() + diff.stale_playlist_files.len();
+        let mut done = 0;
+        // Analysis pairs the new manifest records are never deleted, even
+        // if a (corrupt) stale entry names the same slot.
+        let kept_anlz = recorded_anlz(&self.manifest);
+        for rel in &diff.removals {
+            if cancel() {
+                self.outcome.cancelled = true;
+                return Ok(());
             }
+            let anlz = self
+                .previous_anlz
+                .get(rel)
+                .copied()
+                .filter(|anlz| !kept_anlz.contains(&anlz.dat_path));
+            remove_placement(transport, base, rel, anlz)?;
+            self.removed.insert(rel);
+            journal.forget(rel).map_err(SyncError::Journal)?;
+            self.outcome.removed += 1;
+            done += 1;
+            progress(SyncProgress {
+                stage: SyncStage::Removing,
+                completed: done,
+                total: remove_total,
+            });
+        }
+        for rel in &diff.stale_playlist_files {
+            if cancel() {
+                self.outcome.cancelled = true;
+                return Ok(());
+            }
+            remove_file_and_emptied_folders(transport, base, rel)?;
+            self.playlists_removed.insert(rel);
+            self.outcome.removed += 1;
+            done += 1;
+            progress(SyncProgress {
+                stage: SyncStage::Removing,
+                completed: done,
+                total: remove_total,
+            });
         }
         Ok(())
     }
@@ -495,9 +564,33 @@ impl<'a> Run<'a> {
         manifest
     }
 
+    /// The playlist files the device holds from Sustain as far as the run
+    /// knows: those it wrote, and every previously recorded one it neither
+    /// removed nor wrote again (under any spelling).
+    fn device_playlist_files(&self) -> Vec<DeviceRelativePath> {
+        let rewritten: HashSet<String> = self
+            .playlists_written
+            .iter()
+            .map(|path| layout::device_path_key(path.as_str()))
+            .collect();
+        let mut files = self.playlists_written.clone();
+        files.extend(
+            self.req
+                .previous_playlist_files
+                .iter()
+                .filter(|path| {
+                    !self.playlists_removed.contains(path)
+                        && !rewritten.contains(&layout::device_path_key(path.as_str()))
+                })
+                .cloned(),
+        );
+        files
+    }
+
     fn into_outcome(self) -> SyncOutcome {
         SyncOutcome {
             manifest: self.device_manifest(),
+            playlist_files: self.device_playlist_files(),
             ..self.outcome
         }
     }

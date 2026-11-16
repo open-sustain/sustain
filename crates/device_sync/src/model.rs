@@ -117,6 +117,10 @@ pub struct SyncRequest {
     pub playlists: Vec<SyncInputPlaylist>,
     /// What Sustain last wrote to this device.
     pub previous_manifest: Vec<SyncManifestEntry>,
+    /// The playlist files the previous syncs wrote and left on the device,
+    /// relative to the sync base like the manifest's paths. A recorded
+    /// file no playlist of this sync writes is stale; no other file is.
+    pub previous_playlist_files: Vec<DeviceRelativePath>,
     /// Delete on-device files no longer in the selection.
     pub remove_stale: bool,
     /// `YYYY-MM-DD` stamped into the Pioneer analyze-date field.
@@ -265,7 +269,8 @@ pub struct SyncPlan {
     /// Existing files whose source changed and will be overwritten.
     pub to_update: usize,
     /// On-device files no longer in the selection (candidates for
-    /// removal). Paths are relative to the device root.
+    /// removal): audio files, then playlist files no playlist of the
+    /// selection writes any more. Paths are relative to the sync base.
     pub to_remove: Vec<DeviceRelativePath>,
     /// Files already present and current.
     pub unchanged: usize,
@@ -313,6 +318,8 @@ pub struct SyncOutcome {
     pub unplayable: usize,
     /// The new manifest to persist.
     pub manifest: Vec<SyncManifestEntry>,
+    /// The playlist files the device holds from Sustain, to persist.
+    pub playlist_files: Vec<DeviceRelativePath>,
     /// True if the run stopped early because cancellation was requested.
     pub cancelled: bool,
 }
@@ -397,6 +404,9 @@ pub struct SyncFailure {
     /// before touching the device, otherwise the files it kept or wrote
     /// plus every previous file it left alone.
     pub manifest: Vec<SyncManifestEntry>,
+    /// The playlist files the device holds from Sustain, to persist: the
+    /// previous record, less those the run removed, plus those it wrote.
+    pub playlist_files: Vec<DeviceRelativePath>,
 }
 
 impl std::fmt::Display for SyncFailure {

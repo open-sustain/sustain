@@ -641,4 +641,18 @@ impl LibraryStore for SqliteLibraryStore {
         let connection = self.connection_guard()?;
         devices::device_manifest(&connection, id)
     }
+
+    fn save_device_playlist_files(
+        &self,
+        id: &SyncDeviceId,
+        paths: &[DeviceRelativePath],
+    ) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        devices::save_device_playlist_files(&mut connection, id, paths)
+    }
+
+    fn device_playlist_files(&self, id: &SyncDeviceId) -> StoreResult<Vec<DeviceRelativePath>> {
+        let connection = self.connection_guard()?;
+        devices::device_playlist_files(&connection, id)
+    }
 }

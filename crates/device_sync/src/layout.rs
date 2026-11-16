@@ -24,7 +24,9 @@ use sustain_pioneer::{
     device_setting, path_hash, pdb,
 };
 
-use crate::model::{Placement, PreparedSyncRequest, SyncError, SyncInputTrack, SyncRequest};
+use crate::model::{
+    Placement, PreparedSyncRequest, SyncError, SyncInputPlaylist, SyncInputTrack, SyncRequest,
+};
 use crate::transport::DeviceTransport;
 
 const MUSIC_DIR: &str = "Music";
@@ -157,17 +159,20 @@ pub(crate) struct Finalized {
 /// `present` holds the indices (into `placements`) that are known to exist
 /// on the device after the copy phase: unchanged files plus successful
 /// writes from this run. Recoverable copy failures are intentionally absent.
+/// Each playlist file is pushed onto `playlist_files` as it lands, so a
+/// run that stops part-way still knows which it wrote.
 pub(crate) fn finalize(
     req: &PreparedSyncRequest,
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
     present: &HashSet<usize>,
+    playlist_files: &mut Vec<DeviceRelativePath>,
     cancel: &dyn Fn() -> bool,
 ) -> Result<Finalized, SyncError> {
     match req.device.layout {
         DeviceLayout::M3u => {
-            write_m3u_playlists(req, transport, base, placements, present)?;
+            write_m3u_playlists(req, transport, base, placements, present, playlist_files)?;
             Ok(Finalized::default())
         }
         DeviceLayout::FolderPerPlaylist => Ok(Finalized::default()),
@@ -334,25 +339,55 @@ fn unique_name(used: &mut HashSet<String>, base: String) -> String {
 // m3u index files
 // ---------------------------------------------------------------------
 
+/// The playlist files the layout writes for `req`, beside the playlist
+/// each holds, relative to the sync base. Only the M3U layout writes any.
+pub(crate) fn playlist_files(
+    req: &SyncRequest,
+) -> Result<Vec<(DeviceRelativePath, &SyncInputPlaylist)>, SyncError> {
+    if req.device.layout != DeviceLayout::M3u {
+        return Ok(Vec::new());
+    }
+    // Android players auto-discover playlists where their relative entries
+    // resolve, so the `.m3u8` is dropped inside the `Music/` tree with
+    // entries relative to it (`Artist/Album/Track`). Every other target
+    // keeps the playlist at the device root with `Music/`-prefixed entries
+    // (the player reads them from the drive root).
+    let playlist_dir = if req.device.kind == DeviceKind::Android {
+        DeviceRelativePath::new(MUSIC_DIR).expect("static Music dir is safe")
+    } else {
+        DeviceRelativePath::root()
+    };
+    let mut used: HashSet<String> = HashSet::new();
+    req.playlists
+        .iter()
+        .map(|playlist| {
+            // The number that tells two playlists of one name apart goes
+            // before the extension: a device reads "Mix (2).m3u8" as a
+            // playlist and "Mix.m3u8 (2)" as nothing.
+            let stem = unique_name(
+                &mut used,
+                crate::sanitize::component(&playlist.name, TREE_COMPONENT_CAP, "Playlist"),
+            );
+            let path = playlist_dir
+                .join_component(&format!("{stem}.m3u8"))
+                .ok_or_else(|| SyncError::planning("generated an unsafe playlist path"))?;
+            Ok((path, playlist))
+        })
+        .collect()
+}
+
 fn write_m3u_playlists(
     req: &SyncRequest,
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
     present: &HashSet<usize>,
+    written: &mut Vec<DeviceRelativePath>,
 ) -> Result<(), SyncError> {
-    // Android players auto-discover playlists where their relative entries
-    // resolve, so the `.m3u8` is dropped inside the `Music/` tree with
-    // entries relative to it (`Artist/Album/Track`). Every other target
-    // keeps the playlist at the device root with `Music/`-prefixed entries
-    // (the player reads them from the drive root).
-    let android = req.device.kind == DeviceKind::Android;
-    let playlist_dir = if android {
-        DeviceRelativePath::new(MUSIC_DIR).expect("static Music dir is safe")
-    } else {
-        DeviceRelativePath::root()
-    };
-    let entry_prefix = if android {
+    // Entries are relative to the playlist's own folder (see
+    // `playlist_files`): `Music/`-less on Android, whose playlists sit in
+    // `Music/`.
+    let entry_prefix = if req.device.kind == DeviceKind::Android {
         format!("{MUSIC_DIR}/")
     } else {
         String::new()
@@ -373,16 +408,7 @@ fn write_m3u_playlists(
         })
         .collect();
 
-    let mut used: HashSet<String> = HashSet::new();
-    for playlist in &req.playlists {
-        // The number that tells two playlists of one name apart goes
-        // before the extension: a device reads "Mix (2).m3u8" as a
-        // playlist and "Mix.m3u8 (2)" as nothing.
-        let stem = unique_name(
-            &mut used,
-            crate::sanitize::component(&playlist.name, TREE_COMPONENT_CAP, "Playlist"),
-        );
-        let name = format!("{stem}.m3u8");
+    for (relative, playlist) in playlist_files(req)? {
         let mut body = String::from("#EXTM3U\n");
         for &track_index in &playlist.track_indices {
             let Some(rel) = path_for.get(&track_index) else {
@@ -397,13 +423,11 @@ fn write_m3u_playlists(
                 rel,
             ));
         }
-        let relative = playlist_dir
-            .join_component(&name)
-            .ok_or_else(|| SyncError::planning("generated an unsafe playlist path"))?;
         let dest = base.join(&relative);
         transport
             .write_file(&dest, body.as_bytes())
             .map_err(|error| SyncError::io(dest.as_str(), error))?;
+        written.push(relative);
     }
     Ok(())
 }

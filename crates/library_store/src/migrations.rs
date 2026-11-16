@@ -13,9 +13,9 @@ use sustain_domain::MusicalKey;
 use crate::{
     StoreError, StoreResult,
     schema::{
-        ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_TRACK_BEAT_GRID_SQL,
-        ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL,
-        ADD_TRACK_KEY_ORIGIN_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
+        ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_SYNC_PLAYLIST_FILES_SQL,
+        ADD_TRACK_BEAT_GRID_SQL, ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL,
+        ADD_TRACK_COLUMN_SORT_SQL, ADD_TRACK_KEY_ORIGIN_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
         INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
         NORMALIZE_EMPTY_TRACK_METADATA_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL,
         RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 18;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 19;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -134,6 +134,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 18,
         description: "attempt again every analysis of an MP4 file above 65,535 Hz",
         step: MigrationStep::Sql(RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL),
+    },
+    Migration {
+        version: 19,
+        description: "record the playlist files a sync wrote to a device",
+        step: MigrationStep::Sql(ADD_SYNC_PLAYLIST_FILES_SQL),
     },
 ];
 
@@ -261,6 +266,7 @@ mod tests {
         "sync_device_playlists",
         "sync_devices",
         "sync_manifest",
+        "sync_playlist_files",
         "tag_mirror_outbox",
         "track_acoustics",
         "track_analysis",
@@ -1501,6 +1507,48 @@ mod tests {
             )
             .expect("track");
         assert_eq!(kept, (Some(6_400), Some("Am".to_string())));
+    }
+
+    #[test]
+    fn upgrade_from_v18_adds_an_empty_playlist_file_record_and_preserves_the_manifest() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..18]).expect("schema version 18");
+        connection
+            .execute_batch(
+                "INSERT INTO sync_devices \
+                 (id, label, kind, layout, sub_path, files_per_folder_cap, volume_id) \
+                 VALUES ('dev', 'USB', 0, 0, '', 0, NULL); \
+                 INSERT INTO sync_manifest (device_id, track_id, on_device_path, fingerprint) \
+                 VALUES ('dev', 7, 'Music/A/B/1.mp3', 'fp');",
+            )
+            .expect("seed version 18 device");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(tables(&connection), EXPECTED_TABLES);
+        let count = |table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count")
+        };
+        assert_eq!(count("sync_manifest"), 1);
+        assert_eq!(count("sync_playlist_files"), 0);
+        // A device's record goes with the device.
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON; \
+                 INSERT INTO sync_playlist_files (device_id, on_device_path) \
+                 VALUES ('dev', 'Mix.m3u8'); \
+                 DELETE FROM sync_devices WHERE id = 'dev';",
+            )
+            .expect("record, then forget the device");
+        assert_eq!(count("sync_playlist_files"), 0);
     }
 
     #[test]

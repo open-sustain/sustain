@@ -610,6 +610,22 @@ WHERE track_id IN (
       AND lower(CAST(substr(relative_path, -4) AS TEXT)) IN ('.m4a', '.m4b', '.mp4'));
 "#;
 
+// Migration 19 records the playlist files a sync wrote to a device (the
+// M3U layout's `.m3u8` index files), apart from the audio manifest: they
+// belong to no track and are rewritten whole on every run. With the
+// record, a later sync can remove the file of a playlist that left the
+// selection or was renamed, and only a file Sustain wrote there. Files
+// written before this migration were never recorded, so they stay on the
+// device; every device starts with an empty record.
+pub(super) const ADD_SYNC_PLAYLIST_FILES_SQL: &str = r#"
+CREATE TABLE sync_playlist_files (
+    device_id      TEXT NOT NULL,
+    on_device_path TEXT NOT NULL,
+    PRIMARY KEY (device_id, on_device_path),
+    FOREIGN KEY (device_id) REFERENCES sync_devices(id) ON DELETE CASCADE
+);
+"#;
+
 // Each online capability keeps the version of the provider pipeline that
 // last attempted it, as each analysis capability does since migration 13:
 // one shared version let an attempt at one capability pass the others off

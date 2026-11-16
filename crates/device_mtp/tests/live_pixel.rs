@@ -195,6 +195,7 @@ fn engine_sync_lays_out_android_paths() {
             track_indices: vec![0, 1],
         }],
         previous_manifest: Vec::new(),
+        previous_playlist_files: Vec::new(),
         remove_stale: false,
         export_date: "2026-06-07".to_owned(),
     };

@@ -863,15 +863,21 @@ impl ManifestJournal for StoreManifestJournal<'_> {
     }
 }
 
-/// Save the manifest a sync reports — however it ended, it describes what
-/// the device holds — in place of what the journal pieced together.
+/// Save the manifest and playlist files a sync reports — however it
+/// ended, they describe what the device holds — in place of what the
+/// journal pieced together.
 fn save_synced_manifest(
     store: &dyn LibraryStore,
     device_id: &SyncDeviceId,
     synced: Result<SyncOutcome, SyncFailure>,
 ) -> Result<SyncOutcome, DeviceSyncFailure> {
+    let save = |manifest: &[SyncManifestEntry], playlist_files: &[DeviceRelativePath]| {
+        store
+            .save_device_manifest(device_id, manifest)
+            .and_then(|()| store.save_device_playlist_files(device_id, playlist_files))
+    };
     match synced {
-        Ok(outcome) => match store.save_device_manifest(device_id, &outcome.manifest) {
+        Ok(outcome) => match save(&outcome.manifest, &outcome.playlist_files) {
             Ok(()) => Ok(outcome),
             Err(error) => Err(DeviceSyncFailure::new(format!(
                 "could not save the on-device manifest: {error}"
@@ -880,7 +886,7 @@ fn save_synced_manifest(
         Err(failure) => {
             let message = failure.error.to_string();
             Err(DeviceSyncFailure::new(
-                match store.save_device_manifest(device_id, &failure.manifest) {
+                match save(&failure.manifest, &failure.playlist_files) {
                     Ok(()) => message,
                     Err(_) => format!("{message}; could not save the on-device manifest"),
                 },
@@ -965,6 +971,7 @@ fn build_worker_sync_request(
             tracks: Vec::new(),
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
+            previous_playlist_files: Vec::new(),
             remove_stale,
             export_date,
         }));
@@ -981,6 +988,9 @@ fn build_worker_sync_request(
     let previous_manifest = store
         .device_manifest(&mount.device_id)
         .map_err(|error| format!("could not load device manifest: {error:?}"))?;
+    let previous_playlist_files = store
+        .device_playlist_files(&mount.device_id)
+        .map_err(|error| format!("could not load device playlist files: {error:?}"))?;
     if cancelled() {
         return Ok(None);
     }
@@ -1051,6 +1061,7 @@ fn build_worker_sync_request(
         tracks,
         playlists: resolved_playlists,
         previous_manifest,
+        previous_playlist_files,
         remove_stale,
         export_date,
     }))
@@ -1475,6 +1486,7 @@ mod tests {
                 .collect(),
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
+            previous_playlist_files: Vec::new(),
             remove_stale: false,
             export_date: "2026-06-01".to_owned(),
         }
@@ -1823,9 +1835,11 @@ mod tests {
     #[test]
     fn the_manifest_a_sync_reports_is_saved_however_it_ended() {
         let (store, device_id) = store_with_manifest();
+        let playlist = |path: &str| DeviceRelativePath::new(path).expect("device path");
         let outcome = SyncOutcome {
             copied: 1,
             manifest: vec![manifest_entry(3, "c.mp3")],
+            playlist_files: vec![playlist("Mix.m3u8")],
             ..SyncOutcome::default()
         };
         let saved = save_synced_manifest(&store, &device_id, Ok(outcome.clone()));
@@ -1834,10 +1848,17 @@ mod tests {
             store.device_manifest(&device_id).expect("load manifest"),
             vec![manifest_entry(3, "c.mp3")]
         );
+        assert_eq!(
+            store
+                .device_playlist_files(&device_id)
+                .expect("load playlist files"),
+            vec![playlist("Mix.m3u8")]
+        );
 
         let failure = SyncFailure {
             error: SyncError::io("d.mp3", std::io::Error::other("No space left on device")),
             manifest: vec![manifest_entry(4, "d.mp3")],
+            playlist_files: vec![playlist("Chill.m3u8")],
         };
         let failed =
             save_synced_manifest(&store, &device_id, Err(failure)).expect_err("the sync failed");
@@ -1845,6 +1866,12 @@ mod tests {
         assert_eq!(
             store.device_manifest(&device_id).expect("load manifest"),
             vec![manifest_entry(4, "d.mp3")]
+        );
+        assert_eq!(
+            store
+                .device_playlist_files(&device_id)
+                .expect("load playlist files"),
+            vec![playlist("Chill.m3u8")]
         );
     }
 
@@ -1867,6 +1894,7 @@ mod tests {
         let failure = SyncFailure {
             error: SyncError::Empty,
             manifest: Vec::new(),
+            playlist_files: Vec::new(),
         };
         let failed =
             save_synced_manifest(&store, &device_id, Err(failure)).expect_err("the sync failed");

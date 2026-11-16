@@ -752,4 +752,16 @@ impl LibraryStore for FaultyStore {
     fn device_manifest(&self, id: &SyncDeviceId) -> StoreResult<Vec<SyncManifestEntry>> {
         self.inner.device_manifest(id)
     }
+
+    fn save_device_playlist_files(
+        &self,
+        id: &SyncDeviceId,
+        paths: &[DeviceRelativePath],
+    ) -> StoreResult<()> {
+        self.inner.save_device_playlist_files(id, paths)
+    }
+
+    fn device_playlist_files(&self, id: &SyncDeviceId) -> StoreResult<Vec<DeviceRelativePath>> {
+        self.inner.device_playlist_files(id)
+    }
 }

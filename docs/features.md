@@ -1122,7 +1122,10 @@ against the manifest and what is actually on the drive, and copies only what
 changed. The panel shows the plan — to copy / update / unchanged / to remove —
 before you sync; removing tracks no longer selected requires ticking an explicit
 confirmation, and a folder that removal leaves empty goes with its last file,
-so the device stops listing an artist or a playlist with nothing in it.
+so the device stops listing an artist or a playlist with nothing in it. The same
+confirmation removes the `.m3u8` of a playlist that was unticked or renamed:
+Sustain records each playlist file it writes and only ever removes one it
+recorded, never a playlist file it did not write.
 Progress and the outcome flow through the status-bar notification
 lane, and while the sync runs the device's sidebar row carries the same turning
 sync badge as an Audio CD being ripped.
