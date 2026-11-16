@@ -768,6 +768,8 @@ The Genre field autocompletes against the genres already in the library
 (type to filter, Down/Up to highlight, Enter or click to accept) so a
 track is tagged with an existing spelling rather than a near-duplicate
 that would splinter listening stats and smart-playlist membership.
+A genre the library already spells several ways is offered once, under
+the spelling most tracks use.
 The File tab shows path, duration, bitrate, sample rate, and channels.
 The Artwork tab shows the embedded cover (or a missing-art placeholder)
 with add and remove actions. The Lyrics tab shows the raw lyrics text.
@@ -1099,7 +1101,9 @@ MPRIS and work globally without focus.
 A **DEVICES** section in the sidebar lists connected USB sticks, SD cards, and
 Android phones (over MTP). Selecting one opens its sync panel in the main content
 column: tick-lists of playlists, smart playlists, and artists to send to the
-device, the on-drive format, and a Sync button. Mounted USB devices also get a
+device, the on-drive format, and a Sync button. An artist the library spells
+several ways (`Daft Punk`, `DAFT PUNK`) is listed once and sends the tracks of
+every spelling. Mounted USB devices also get a
 sidebar eject control that delegates to the desktop's normal eject/unmount
 machinery. The same GUI-driven workflow iTunes used for iPod sync, generalised
 to any removable drive or phone.

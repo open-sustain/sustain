@@ -2,6 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
@@ -123,6 +124,70 @@ fn case_folded(text: &str) -> impl Iterator<Item = char> + '_ {
     text.nfd().flat_map(char::to_lowercase)
 }
 
+/// The one spelling each value of a library text field goes by.
+///
+/// Tags written by different tools spell one artist "Daft Punk" here and
+/// "DAFT PUNK" there. Search, sorting and smart-playlist rules already
+/// treat those as one value; a list that names each value once does too.
+/// Spellings that are equal as [`CollationKey`]s share the spelling most
+/// occurrences use, and the first in byte order when several are used
+/// equally.
+pub struct Spellings<'a> {
+    shown: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> Spellings<'a> {
+    /// `values` holds one item per occurrence: a value tagged on forty
+    /// tracks comes forty times.
+    pub fn of(values: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut uses: HashMap<&str, usize> = HashMap::new();
+        for value in values {
+            *uses.entry(value).or_insert(0) += 1;
+        }
+
+        let keyed: Vec<(CollationKey, &str, usize)> = uses
+            .into_iter()
+            .map(|(spelling, count)| (CollationKey::new(spelling), spelling, count))
+            .collect();
+        let mut preferred: HashMap<&CollationKey, (&str, usize)> = HashMap::new();
+        for (key, spelling, count) in &keyed {
+            let candidate = (*spelling, *count);
+            preferred
+                .entry(key)
+                .and_modify(|best| {
+                    let more_used = candidate.1 > best.1;
+                    let as_used_and_first = candidate.1 == best.1 && candidate.0 < best.0;
+                    if more_used || as_used_and_first {
+                        *best = candidate;
+                    }
+                })
+                .or_insert(candidate);
+        }
+
+        Self {
+            shown: keyed
+                .iter()
+                .map(|(key, spelling, _)| (*spelling, preferred[key].0))
+                .collect(),
+        }
+    }
+
+    /// The spelling `value` goes by, or `None` for a value that was not
+    /// among the occurrences.
+    pub fn shown(&self, value: &str) -> Option<&'a str> {
+        self.shown.get(value).copied()
+    }
+
+    /// Every value once, under the spelling it goes by, in sort order.
+    pub fn distinct(&self) -> Vec<&'a str> {
+        let mut distinct: Vec<&str> = self.shown.values().copied().collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        distinct.sort_by_cached_key(|value| CollationKey::new(value));
+        distinct
+    }
+}
+
 /// Compares two optional text fields for library sort order.
 ///
 /// The order is the one [`CollationKey`] defines, applied lazily here so a
@@ -161,7 +226,7 @@ mod tests {
     use std::cmp::Ordering;
 
     use super::{
-        CollationKey, compare_optional_text, effective_sort_key, fold_search_text,
+        CollationKey, Spellings, compare_optional_text, effective_sort_key, fold_search_text,
         normalize_search_text,
     };
 
@@ -240,6 +305,32 @@ mod tests {
         assert_ne!(
             CollationKey::new(decomposed),
             CollationKey::new("bjork – deja")
+        );
+    }
+
+    #[test]
+    fn a_value_goes_by_its_most_used_spelling() {
+        let spellings = Spellings::of([
+            "daft punk",
+            "Daft Punk",
+            "Daft Punk",
+            "DAFT PUNK",
+            // Equally used: the first in byte order.
+            "air",
+            "Air",
+            // An accent makes another value, not another spelling.
+            "A\u{ef}r",
+            "Zero 7",
+        ]);
+
+        assert_eq!(spellings.shown("daft punk"), Some("Daft Punk"));
+        assert_eq!(spellings.shown("DAFT PUNK"), Some("Daft Punk"));
+        assert_eq!(spellings.shown("air"), Some("Air"));
+        assert_eq!(spellings.shown("A\u{ef}r"), Some("A\u{ef}r"));
+        assert_eq!(spellings.shown("Moby"), None);
+        assert_eq!(
+            spellings.distinct(),
+            ["Air", "A\u{ef}r", "Daft Punk", "Zero 7"]
         );
     }
 

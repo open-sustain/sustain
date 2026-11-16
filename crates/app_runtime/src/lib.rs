@@ -30,7 +30,7 @@ pub use sustain_domain::{
     SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
     SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
     SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, SyncDevice,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, Spellings, SyncDevice,
     SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock, Track, TrackAvailability,
     TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort, TrackContentHash,
     TrackFields, TrackId, TrackLocation, TrackMetadata, TrackRelativePath, UiSettings,
@@ -73,6 +73,10 @@ pub use priority::{IoPriorityClass, NiceLevel, resolve_worker_count};
 /// produce genres at all; the bump re-opens every previously-
 /// stamped track for the corrected pipeline.
 pub const ONLINE_PROVIDER_VERSION: u32 = 2;
+
+fn owned(values: Vec<&str>) -> Vec<String> {
+    values.into_iter().map(str::to_owned).collect()
+}
 
 pub(crate) fn track_artist_name(track: &Track) -> Option<&str> {
     track
@@ -1794,40 +1798,33 @@ impl ApplicationRuntime {
         &self.library_tracks
     }
 
-    /// Every distinct, non-empty genre currently in the library, sorted
-    /// case-insensitively. Feeds the Get Info genre field's autocomplete so
-    /// the user reuses an existing spelling instead of coining a near-
-    /// duplicate ("Hip-Hop" vs "Hip Hop") that would split listening stats
-    /// and smart-playlist membership (#160). Derived from the in-memory
-    /// library so it reflects edits made this session without a DB round-trip.
+    /// Every distinct, non-empty genre currently in the library, in sort
+    /// order. Feeds the Get Info genre field's autocomplete so the user
+    /// reuses an existing spelling instead of coining a near-duplicate
+    /// ("Hip-Hop" vs "Hip Hop") that would split listening stats and
+    /// smart-playlist membership (#160). A genre the library spells
+    /// several ways ("Deep House", "Deep house") is offered once, under
+    /// the spelling most tracks use. Derived from the in-memory library
+    /// so it reflects edits made this session without a DB round-trip.
     pub fn distinct_genres(&self) -> Vec<String> {
-        let mut unique = std::collections::BTreeSet::<String>::new();
-        for track in &self.library_tracks {
-            if let Some(genre) = track.metadata.genre.as_deref() {
-                let genre = genre.trim();
-                if !genre.is_empty() {
-                    unique.insert(genre.to_owned());
-                }
-            }
-        }
-        let mut genres: Vec<String> = unique.into_iter().collect();
-        genres.sort_by_cached_key(|genre| CollationKey::new(genre));
-        genres
+        let genres = self
+            .library_tracks
+            .iter()
+            .filter_map(|track| track.metadata.genre.as_deref())
+            .map(str::trim)
+            .filter(|genre| !genre.is_empty());
+        owned(Spellings::of(genres).distinct())
     }
 
     /// Every distinct, non-empty track artist currently in the library,
-    /// sorted case-insensitively. Feeds the device-sync artist checklist so
-    /// the selection reflects the authoritative SQLite library state.
+    /// in sort order. Feeds the device-sync artist checklist so the
+    /// selection reflects the authoritative SQLite library state. An
+    /// artist the library spells several ways ("Daft Punk", "DAFT PUNK")
+    /// is listed once, under the spelling most tracks use; ticking it
+    /// selects the tracks of every spelling.
     pub fn distinct_artists(&self) -> Vec<String> {
-        let mut unique = std::collections::BTreeSet::<String>::new();
-        for track in &self.library_tracks {
-            if let Some(artist) = track_artist_name(track) {
-                unique.insert(artist.to_owned());
-            }
-        }
-        let mut artists: Vec<String> = unique.into_iter().collect();
-        artists.sort_by_cached_key(|artist| CollationKey::new(artist));
-        artists
+        let artists = self.library_tracks.iter().filter_map(track_artist_name);
+        owned(Spellings::of(artists).distinct())
     }
 
     /// Look up a single in-memory library track by id. `library_tracks` is

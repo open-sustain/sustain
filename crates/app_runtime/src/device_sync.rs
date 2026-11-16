@@ -36,7 +36,8 @@ use crate::device_plan_scheduler::{
 use crate::device_sync_scheduler::{DeviceSyncEvent, DeviceSyncFailure, DeviceSyncStartOutcome};
 use crate::{
     AnalysisRunRequest, ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult,
-    NotificationCategory, NotificationSeverity, notifications, track_artist_name,
+    NotificationCategory, NotificationSeverity, compare_optional_text, notifications,
+    track_artist_name,
 };
 
 /// Per-device analysis coverage for the ticked playlists/artists, shown in
@@ -1164,14 +1165,18 @@ fn prepare_sync_request(
     PreparedSyncRequest::new(request, pioneer_assets).map(Some)
 }
 
+/// The tracks by `artist`, however their tags spell the name: the artist
+/// checklist lists "Daft Punk" and "DAFT PUNK" as one artist.
 fn artist_track_ids(artist: &str, tracks: &[Track]) -> Vec<TrackId> {
-    let artist = artist.trim();
-    if artist.is_empty() {
+    if artist.trim().is_empty() {
         return Vec::new();
     }
     tracks
         .iter()
-        .filter(|track| track_artist_name(track) == Some(artist))
+        .filter(|track| {
+            track_artist_name(track)
+                .is_some_and(|name| compare_optional_text(Some(name), Some(artist)).is_eq())
+        })
         .map(|track| track.id)
         .collect()
 }
@@ -1325,8 +1330,8 @@ mod tests {
 
     use super::{
         ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
-        DeviceSyncPlanState, StoreManifestJournal, build_worker_sync_request, prepare_sync_request,
-        save_synced_manifest, sync_input_track, unix_to_ymd,
+        DeviceSyncPlanState, StoreManifestJournal, artist_track_ids, build_worker_sync_request,
+        prepare_sync_request, save_synced_manifest, sync_input_track, unix_to_ymd,
     };
     use crate::ApplicationRuntime;
 
@@ -1563,6 +1568,30 @@ mod tests {
         assert_eq!(readiness.total, 3);
         assert_eq!(readiness.missing_bpm, 1);
         assert_eq!(readiness.missing_beat_grid, 2);
+    }
+
+    #[test]
+    fn a_ticked_artist_selects_the_tracks_of_every_spelling_of_the_name() {
+        let tracks = [
+            library_track(1, "a.mp3", "Daft Punk"),
+            library_track(2, "b.mp3", " DAFT PUNK "),
+            library_track(3, "c.mp3", "Daft Punk feat. Pharrell"),
+            library_track(4, "d.mp3", "Bjo\u{308}rk"),
+            library_track(5, "e.mp3", "Bjork"),
+            library_track(6, "f.mp3", " "),
+        ];
+        let ids = |artist: &str| -> Vec<i64> {
+            artist_track_ids(artist, &tracks)
+                .into_iter()
+                .map(TrackId::get)
+                .collect()
+        };
+
+        assert_eq!(ids("daft punk"), [1, 2]);
+        // A composed and a decomposed accent spell one name; a missing
+        // accent spells another.
+        assert_eq!(ids("Bj\u{f6}rk"), [4]);
+        assert_eq!(ids(" "), Vec::<i64>::new());
     }
 
     #[test]

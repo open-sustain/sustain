@@ -93,7 +93,9 @@ pub use smart_playlist_defaults::default_smart_playlists;
 pub use smart_playlist_evaluation::{matching_tracks, track_matches_rule, track_matches_rule_set};
 pub use statistics::PlayStatistics;
 pub use synced_lyrics::{SyncedLyrics, SyncedLyricsLine};
-pub use text::{CollationKey, compare_optional_text, effective_sort_key, normalize_search_text};
+pub use text::{
+    CollationKey, Spellings, compare_optional_text, effective_sort_key, normalize_search_text,
+};
 pub use track::{
     SourceFileStat, SourceFingerprint, Track, TrackAvailability, TrackContentHash, TrackLocation,
     TrackRelativePath,

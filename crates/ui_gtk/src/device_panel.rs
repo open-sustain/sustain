@@ -24,7 +24,7 @@ use gtk::prelude::*;
 use gtk::{gdk, glib};
 
 use sustain_app_runtime::{
-    ApplicationCommand, ConnectedDevice, DeviceAnalysisReadiness, DeviceLayout,
+    ApplicationCommand, CollationKey, ConnectedDevice, DeviceAnalysisReadiness, DeviceLayout,
     DeviceSyncPlanState, FilesPerFolderCap, PlaylistItem, SyncPlan,
 };
 
@@ -468,12 +468,11 @@ impl DeviceSyncPanel {
         container.set_vexpand(true);
 
         let runtime = self.runtime.borrow();
-        let selected: std::collections::HashSet<String> = runtime
-            .device_artist_selection(&device.id)
-            .into_iter()
-            .collect();
-        let entries: Vec<ChecklistEntry<String>> = runtime
-            .distinct_artists()
+        let saved = runtime.device_artist_selection(&device.id);
+        let artists = runtime.distinct_artists();
+        drop(runtime);
+        let selected = ticked_artists(&artists, &saved);
+        let entries: Vec<ChecklistEntry<String>> = artists
             .into_iter()
             .map(|artist| ChecklistEntry {
                 name: artist.clone(),
@@ -481,7 +480,6 @@ impl DeviceSyncPanel {
                 icon: ARTIST_ICON,
             })
             .collect();
-        drop(runtime);
 
         if entries.is_empty() {
             let empty = gtk::Label::new(Some(
@@ -1115,5 +1113,38 @@ fn human_bytes(bytes: u64) -> String {
         format!("{bytes} B")
     } else {
         format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// The listed artists a saved selection ticks. The list shows each artist
+/// under one spelling; a selection saved under another spelling of the
+/// name ("DAFT PUNK" for "Daft Punk") ticks that entry.
+fn ticked_artists(listed: &[String], saved: &[String]) -> std::collections::HashSet<String> {
+    let saved: std::collections::HashSet<CollationKey> = saved
+        .iter()
+        .map(|artist| CollationKey::new(artist))
+        .collect();
+    listed
+        .iter()
+        .filter(|artist| saved.contains(&CollationKey::new(artist)))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::ticked_artists;
+
+    #[test]
+    fn a_saved_artist_ticks_its_entry_whatever_spelling_it_was_saved_with() {
+        let listed = ["Air", "Daft Punk", "Zero 7"].map(str::to_owned);
+        let saved = ["DAFT PUNK", "air", "Gone From The Library"].map(str::to_owned);
+
+        assert_eq!(
+            ticked_artists(&listed, &saved),
+            HashSet::from(["Air".to_owned(), "Daft Punk".to_owned()])
+        );
     }
 }

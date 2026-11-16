@@ -23,7 +23,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use crate::{CollationKey, Track};
+use crate::{Spellings, Track};
 
 /// Genres shown individually in the genre-distribution chart before the
 /// long tail collapses into a single "Other" entry.
@@ -210,49 +210,14 @@ fn tagged_genres(track: &Track) -> impl Iterator<Item = &str> {
         .filter(|genre| !genre.is_empty())
 }
 
-/// The one spelling each genre is counted and shown under.
-///
-/// Tags written by different tools spell a genre "Deep House" here and
-/// "Deep house" there. Those are one genre everywhere else in the library
-/// (search, smart-playlist rules, sorting), so they are one here: spellings
-/// that are equal as [`CollationKey`]s share the spelling most tracks use,
-/// and the first in byte order when several are used equally.
-struct GenreSpellings<'a> {
-    shown: HashMap<&'a str, &'a str>,
-}
+/// The spelling each genre is counted and shown under: "Deep House" and
+/// "Deep house" are one genre here, as they are everywhere else in the
+/// library.
+struct GenreSpellings<'a>(Spellings<'a>);
 
 impl<'a> GenreSpellings<'a> {
     fn of(tracks: &'a [Track]) -> Self {
-        let mut uses: HashMap<&str, usize> = HashMap::new();
-        for genre in tracks.iter().flat_map(tagged_genres) {
-            *uses.entry(genre).or_insert(0) += 1;
-        }
-
-        let keyed: Vec<(CollationKey, &str, usize)> = uses
-            .into_iter()
-            .map(|(spelling, count)| (CollationKey::new(spelling), spelling, count))
-            .collect();
-        let mut preferred: HashMap<&CollationKey, (&str, usize)> = HashMap::new();
-        for (key, spelling, count) in &keyed {
-            let candidate = (*spelling, *count);
-            preferred
-                .entry(key)
-                .and_modify(|best| {
-                    let more_used = candidate.1 > best.1;
-                    let as_used_and_first = candidate.1 == best.1 && candidate.0 < best.0;
-                    if more_used || as_used_and_first {
-                        *best = candidate;
-                    }
-                })
-                .or_insert(candidate);
-        }
-
-        Self {
-            shown: keyed
-                .iter()
-                .map(|(key, spelling, _)| (*spelling, preferred[key].0))
-                .collect(),
-        }
+        Self(Spellings::of(tracks.iter().flat_map(tagged_genres)))
     }
 
     /// The grouping keys of a track: its genres under their shown
@@ -262,7 +227,7 @@ impl<'a> GenreSpellings<'a> {
     fn keys(&self, track: &'a Track) -> Vec<Option<&'a str>> {
         let mut genres = Vec::new();
         for genre in tagged_genres(track) {
-            let genre = Some(self.shown[genre]);
+            let genre = Some(self.0.shown(genre).unwrap_or(genre));
             if !genres.contains(&genre) {
                 genres.push(genre);
             }
