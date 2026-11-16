@@ -1039,6 +1039,10 @@ pool and respawns it under the new preset; in-flight tracks finish
 naturally before the swap. Settings live in the
 `[background_jobs]` section of `settings.toml`.
 
+On the maintainer's Ryzen AI Max+ 395 (16 cores), Aggressive analyses
+about **4 tracks per second** (300 tracks in 75 s), so a 10,000-track
+library is analysed in roughly 42 minutes.
+
 ### Library-backup guidance — *Sustain-native*
 
 The About tab names the folder that holds Sustain's SQLite library
