@@ -31,7 +31,7 @@
 use std::collections::HashSet;
 use std::time::SystemTime;
 
-use sustain_domain::{SmartShuffleEntropy, Track, TrackId};
+use sustain_domain::{SmartShuffleEntropy, Track, TrackId, compare_optional_text};
 
 use crate::affinity::{self, AffinityBreakdown, AffinityFeature, NEUTRAL_PRIOR};
 use crate::index::{INDEX_SCHEMA_VERSION, SmartShuffleIndex};
@@ -424,7 +424,7 @@ fn same_album_penalty(seed: &Track, cand: &Track) -> f32 {
     ) {
         (Some(seed_album), Some(cand_album))
             if !seed_album.trim().is_empty()
-                && seed_album.trim().eq_ignore_ascii_case(cand_album.trim()) =>
+                && compare_optional_text(Some(seed_album), Some(cand_album)).is_eq() =>
         {
             SAME_ALBUM_PENALTY
         }
@@ -665,7 +665,7 @@ mod tests {
         TrackMetadata, TrackRelativePath,
     };
 
-    use super::{PickContext, PickMode, pick_next_track};
+    use super::{PickContext, PickMode, SAME_ALBUM_PENALTY, pick_next_track, same_album_penalty};
 
     fn track(id: i64, metadata: TrackMetadata) -> Track {
         Track {
@@ -694,6 +694,30 @@ mod tests {
             entropy: SmartShuffleEntropy::Balanced,
             now: SystemTime::UNIX_EPOCH,
         }
+    }
+
+    fn on_album(id: i64, album: &str) -> Track {
+        track(
+            id,
+            TrackMetadata {
+                album: Some(album.to_owned()),
+                ..TrackMetadata::default()
+            },
+        )
+    }
+
+    #[test]
+    fn the_same_album_is_recognised_whatever_its_case_or_accent_spelling() {
+        let seed = on_album(1, "L'\u{c9}t\u{e9} indien");
+        for same in ["L'\u{c9}T\u{c9} INDIEN ", "L'E\u{301}te\u{301} indien"] {
+            assert_eq!(
+                same_album_penalty(&seed, &on_album(2, same)),
+                SAME_ALBUM_PENALTY,
+                "{same:?}"
+            );
+        }
+        assert_eq!(same_album_penalty(&seed, &on_album(2, "L'Ete indien")), 0.0);
+        assert_eq!(same_album_penalty(&on_album(1, " "), &on_album(2, "")), 0.0);
     }
 
     #[test]
