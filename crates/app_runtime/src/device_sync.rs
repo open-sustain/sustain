@@ -36,8 +36,7 @@ use crate::device_plan_scheduler::{
 use crate::device_sync_scheduler::{DeviceSyncEvent, DeviceSyncFailure, DeviceSyncStartOutcome};
 use crate::{
     AnalysisRunRequest, ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult,
-    NotificationCategory, NotificationSeverity, compare_optional_text, notifications,
-    track_artist_name,
+    CollationKey, NotificationCategory, NotificationSeverity, notifications, track_artist_name,
 };
 
 /// Per-device analysis coverage for the ticked playlists/artists, shown in
@@ -220,8 +219,9 @@ impl ApplicationRuntime {
                 }
             }
         }
+        let by_artist = ArtistTracks::of(&self.library_tracks);
         for artist in self.device_artist_selection(id) {
-            for tid in artist_track_ids(&artist, &self.library_tracks) {
+            for &tid in by_artist.by(&artist) {
                 if seen.insert(tid)
                     && let Some(track) = self.library_track(tid)
                 {
@@ -731,8 +731,9 @@ impl ApplicationRuntime {
                 }
             }
         }
+        let by_artist = ArtistTracks::of(&self.library_tracks);
         for artist in self.device_artist_selection(id) {
-            for tid in artist_track_ids(&artist, &self.library_tracks) {
+            for &tid in by_artist.by(&artist) {
                 if seen.insert(tid) {
                     ids.push(tid);
                 }
@@ -1019,11 +1020,12 @@ fn build_worker_sync_request(
             track_indices: indices,
         });
     }
+    let by_artist = ArtistTracks::of(&library_tracks);
     for artist in artist_selection {
         if cancelled() {
             return Ok(None);
         }
-        let track_ids = artist_track_ids(&artist, &library_tracks);
+        let track_ids = by_artist.by(&artist).to_vec();
         if track_ids.is_empty() {
             continue;
         }
@@ -1165,20 +1167,32 @@ fn prepare_sync_request(
     PreparedSyncRequest::new(request, pioneer_assets).map(Some)
 }
 
-/// The tracks by `artist`, however their tags spell the name: the artist
-/// checklist lists "Daft Punk" and "DAFT PUNK" as one artist.
-fn artist_track_ids(artist: &str, tracks: &[Track]) -> Vec<TrackId> {
-    if artist.trim().is_empty() {
-        return Vec::new();
+/// The library's tracks under each artist, however their tags spell the
+/// name: the artist checklist lists "Daft Punk" and "DAFT PUNK" as one
+/// artist. Built in one pass over the library, so resolving a selection
+/// costs the same whether one artist is ticked or all of them.
+struct ArtistTracks(HashMap<CollationKey, Vec<TrackId>>);
+
+impl ArtistTracks {
+    fn of(tracks: &[Track]) -> Self {
+        let mut by_artist = HashMap::<CollationKey, Vec<TrackId>>::new();
+        for track in tracks {
+            if let Some(artist) = track_artist_name(track) {
+                by_artist
+                    .entry(CollationKey::new(artist))
+                    .or_default()
+                    .push(track.id);
+            }
+        }
+        Self(by_artist)
     }
-    tracks
-        .iter()
-        .filter(|track| {
-            track_artist_name(track)
-                .is_some_and(|name| compare_optional_text(Some(name), Some(artist)).is_eq())
-        })
-        .map(|track| track.id)
-        .collect()
+
+    /// The tracks by `artist`, in library order; none for a blank name.
+    fn by(&self, artist: &str) -> &[TrackId] {
+        self.0
+            .get(&CollationKey::new(artist))
+            .map_or(&[], Vec::as_slice)
+    }
 }
 
 fn snapshot_playlist_track_ids(
@@ -1329,9 +1343,9 @@ mod tests {
     use sustain_domain::SyncManifestEntry;
 
     use super::{
-        ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
-        DeviceSyncPlanState, StoreManifestJournal, artist_track_ids, build_worker_sync_request,
-        prepare_sync_request, save_synced_manifest, sync_input_track, unix_to_ymd,
+        ArtistTracks, ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
+        DeviceSyncPlanState, StoreManifestJournal, build_worker_sync_request, prepare_sync_request,
+        save_synced_manifest, sync_input_track, unix_to_ymd,
     };
     use crate::ApplicationRuntime;
 
@@ -1580,10 +1594,12 @@ mod tests {
             library_track(5, "e.mp3", "Bjork"),
             library_track(6, "f.mp3", " "),
         ];
+        let by_artist = ArtistTracks::of(&tracks);
         let ids = |artist: &str| -> Vec<i64> {
-            artist_track_ids(artist, &tracks)
-                .into_iter()
-                .map(TrackId::get)
+            by_artist
+                .by(artist)
+                .iter()
+                .map(|track_id| track_id.get())
                 .collect()
         };
 
