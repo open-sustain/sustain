@@ -24,6 +24,7 @@
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
+use sustain_app_runtime::normalize_query;
 
 /// Tallest the suggestion list grows before it scrolls, in rows.
 const MAX_VISIBLE_ROWS: u32 = 8;
@@ -39,24 +40,15 @@ pub(crate) fn attach_suggestions(entry: &gtk::Entry, candidates: Vec<String>) {
 
     let model = gtk::StringList::new(&candidates.iter().map(String::as_str).collect::<Vec<_>>());
 
-    // Match every candidate that *contains* the typed text (case-insensitive),
-    // excluding the verbatim value the user already has so a complete entry
-    // doesn't suggest itself.
     let entry_for_filter = entry.downgrade();
     let filter = gtk::CustomFilter::new(move |object| {
         let Some(entry) = entry_for_filter.upgrade() else {
             return false;
         };
-        let needle = entry.text().to_lowercase();
-        let needle = needle.trim();
-        if needle.is_empty() {
-            return false;
-        }
         let Some(candidate) = object.downcast_ref::<gtk::StringObject>() else {
             return false;
         };
-        let haystack = candidate.string().to_lowercase();
-        haystack.contains(needle) && haystack != needle
+        is_suggested_for(&candidate.string(), &entry.text())
     });
     let filter_model = gtk::FilterListModel::new(Some(model), Some(filter.clone()));
     let selection = gtk::SingleSelection::new(Some(filter_model.clone()));
@@ -259,9 +251,34 @@ fn apply_suggestion(entry: &gtk::Entry, value: &str) {
     entry.set_position(-1);
 }
 
+/// Whether `candidate` is offered for what the user `typed`: it contains
+/// the typed text the way search matches it, without regard to case or
+/// accents, so "bjork" offers "Björk". The value the entry already holds
+/// verbatim is left out, so a complete entry doesn't suggest itself.
+fn is_suggested_for(candidate: &str, typed: &str) -> bool {
+    let typed = typed.trim();
+    let needle = normalize_query(typed);
+    !needle.is_empty() && candidate != typed && normalize_query(candidate).contains(&needle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_value_is_suggested_without_regard_to_case_or_accents() {
+        assert!(is_suggested_for("Björk", "bjo"));
+        assert!(is_suggested_for("Björk", "Bjork"));
+        assert!(is_suggested_for("Trip-Hop", " HOP "));
+        assert!(!is_suggested_for("Rock", "pop"));
+    }
+
+    #[test]
+    fn the_value_already_typed_is_not_suggested_nor_is_anything_for_a_blank() {
+        assert!(!is_suggested_for("Björk", "Björk"));
+        assert!(!is_suggested_for("Björk", " Björk "));
+        assert!(!is_suggested_for("Björk", "   "));
+    }
 
     #[test]
     fn attach_suggestions_constructs_without_panicking() {
