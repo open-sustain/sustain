@@ -59,7 +59,8 @@ use async_io::Timer;
 use futures_lite::FutureExt;
 use sustain_app_runtime::{PlayableId, PlaybackState};
 use zbus::{
-    OwnedObjectPath, OwnedVariant, Variant, connection, interface, object_server::InterfaceRef,
+    OwnedObjectPath, OwnedVariant, Variant, connection, interface,
+    object_server::{InterfaceRef, SignalEmitter},
 };
 
 use crate::{DesktopError, DesktopResult, NowPlayingMetadata};
@@ -291,7 +292,7 @@ async fn apply_update(
         MprisUpdate::PlaybackState(state) => {
             let new_status = playback_status_text(&state).to_owned();
             let new_has_track = state.playable().is_some();
-            let (status_changed, capabilities_changed) = {
+            let (status_changed, capabilities_changed, seeked_to) = {
                 let mut iface = player_ref.get_mut().await;
                 let status_changed = iface.playback_status != new_status;
                 let capabilities_changed = iface.has_active_track != new_has_track;
@@ -300,9 +301,9 @@ async fn apply_update(
                 // playing it advances from here without further updates;
                 // pause/seek/track-change/stop re-anchor or freeze it.
                 let now = iface.origin.elapsed();
-                iface.position.apply_state(&state, now);
+                let seeked_to = iface.position.apply_state(&state, now);
                 iface.has_active_track = new_has_track;
-                (status_changed, capabilities_changed)
+                (status_changed, capabilities_changed, seeked_to)
             };
             let iface = player_ref.get().await;
             let emitter = player_ref.signal_emitter();
@@ -314,6 +315,9 @@ async fn apply_update(
                 iface.can_pause_changed(emitter).await?;
                 iface.can_go_next_changed(emitter).await?;
                 iface.can_go_previous_changed(emitter).await?;
+            }
+            if let Some(position) = seeked_to {
+                PlayerInterface::seeked(emitter, position).await?;
             }
         }
         MprisUpdate::NowPlaying(metadata) => {
@@ -370,8 +374,16 @@ fn duration_to_micros(duration: Duration) -> i64 {
 /// means the property advances for polling clients (`playerctl`, GNOME)
 /// without any periodic GTK publication, and a wall-clock change cannot
 /// perturb it because the baseline is taken from a monotonic source.
+/// How far a published position may sit from the one the tracker had
+/// reached before it counts as a jump. A position is sampled, then crosses
+/// a thread to get here, so two readings of one uninterrupted playback
+/// never agree to the microsecond.
+const SEEK_TOLERANCE_MICROS: u64 = 250_000;
+
 #[derive(Debug, Default)]
 struct PositionTracker {
+    /// What the position belongs to; a jump is only one within it.
+    playable: Option<PlayableId>,
     /// Position sampled the last time [`Self::apply_state`] ran.
     base_micros: i64,
     /// Monotonic clock reading when `base_micros` was sampled, set only
@@ -387,9 +399,19 @@ impl PositionTracker {
     /// starts the position advancing from its reported offset; pause and
     /// seek re-anchor to the new offset and freeze/continue accordingly;
     /// loading and stop reset to zero.
-    fn apply_state(&mut self, state: &PlaybackState, now: Duration) {
+    ///
+    /// Returns the new position when it is a jump within the same track:
+    /// one that clients following the position on their own clock could
+    /// not have predicted, and must be told of with `Seeked`.
+    fn apply_state(&mut self, state: &PlaybackState, now: Duration) -> Option<i64> {
+        let predicted = self.position_micros(now);
+        let playable = state.playable();
+        let same_track = playable.is_some() && playable == self.playable;
+        self.playable = playable;
         self.base_micros = playback_position_micros(state);
         self.advancing_since = matches!(state, PlaybackState::Playing { .. }).then_some(now);
+        let position = self.position_micros(now);
+        (same_track && position.abs_diff(predicted) > SEEK_TOLERANCE_MICROS).then_some(position)
     }
 
     /// Update the clamp bound when now-playing metadata changes.
@@ -711,6 +733,11 @@ impl PlayerInterface {
     fn can_control(&self) -> bool {
         true
     }
+
+    /// The position moved in a way the playback status does not explain;
+    /// `position` is the new one, in microseconds.
+    #[zbus(signal)]
+    async fn seeked(emitter: &SignalEmitter<'_>, position: i64) -> zbus::Result<()>;
 }
 
 #[cfg(test)]
@@ -875,14 +902,55 @@ mod tests {
             at(10_000_000),
         );
         // A seek republishes Playing at the new offset (e.g. 30s).
-        tracker.apply_state(
+        let seeked_to = tracker.apply_state(
             &PlaybackState::Playing {
                 track_id: track_id(1),
                 position: Duration::from_secs(30),
             },
             at(11_000_000),
         );
+        assert_eq!(seeked_to, Some(30_000_000));
         assert_eq!(tracker.position_micros(at(11_500_000)), 30_500_000);
+    }
+
+    #[test]
+    fn a_position_the_clock_predicted_is_not_a_seek() {
+        let mut tracker = PositionTracker::default();
+        let playing = |seconds: u64| PlaybackState::Playing {
+            track_id: track_id(1),
+            position: Duration::from_secs(seconds),
+        };
+        assert_eq!(tracker.apply_state(&playing(1), at(10_000_000)), None);
+        // One second later the same playback is published a second in.
+        assert_eq!(tracker.apply_state(&playing(2), at(11_000_000)), None);
+        // Pausing and resuming where it stood moves nothing.
+        let paused = PlaybackState::Paused {
+            track_id: track_id(1),
+            position: Duration::from_secs(3),
+        };
+        assert_eq!(tracker.apply_state(&paused, at(12_000_000)), None);
+        assert_eq!(tracker.apply_state(&playing(3), at(60_000_000)), None);
+    }
+
+    #[test]
+    fn another_track_starting_is_not_a_seek() {
+        let mut tracker = PositionTracker::default();
+        tracker.apply_state(
+            &PlaybackState::Playing {
+                track_id: track_id(1),
+                position: Duration::from_secs(90),
+            },
+            at(10_000_000),
+        );
+        let next = PlaybackState::Playing {
+            track_id: track_id(2),
+            position: Duration::ZERO,
+        };
+        assert_eq!(tracker.apply_state(&next, at(11_000_000)), None);
+        assert_eq!(
+            tracker.apply_state(&PlaybackState::Stopped, at(12_000_000)),
+            None
+        );
     }
 
     #[test]
