@@ -1627,11 +1627,27 @@ the parallel minor (19 % GiantSteps, 27 % MTG and tag keys), which the note
 shares should separate by the third; on the songs it is the relative minor
 (32 %).
 
+The two errors have different causes, visible in the note shares of the
+major tracks (share of the track's chroma, relative to the reference tonic):
+
+| Major tracks read as | minor third | major third | tonic |
+| --- | ---: | ---: | ---: |
+| the right key | 2.5–3.5 % | 10–13 % | 19–23 % |
+| the parallel minor | 5–7 % | 5–7 % | 18–24 % |
+| the relative minor | 3–5 % | 11–14 % | 13–16 % |
+
+The tracks read as the parallel minor carry the two thirds about equally
+(the minor one is the stronger on 72 % of them on GiantSteps Key, 25–57 %
+elsewhere), with a stronger flat seventh: the audio does not say major, and
+the reference may be the one to doubt. The tracks read as the relative
+minor have a clear major third and a weak tonic: the music does not dwell
+on its tonic, which is the case time order was meant to settle and did not.
+
 Reading: a linear decision over hand-made statistics of the chroma has been
 tried in three families now (registers, bass, time order), and each churns
 without a net gain. The references themselves bound what is measurable:
-the two commercial tools compared in #288 agree with each other on 86 to
-89 % of the library tracks, where v17 sits. The remaining errors are major
+on the library tracks rekordbox is strict-compatible with the other
+tools' tag keys 85.7 % of the time, and v17 88.6 % (#288). The remaining errors are major
 tracks, and no statistic tried here separates them. A further attempt needs
 a different kind of model, or references that mark the major tracks more
 reliably, not another feature of this kind.
