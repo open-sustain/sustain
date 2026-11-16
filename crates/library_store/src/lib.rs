@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::Path,
     sync::{Mutex, MutexGuard},
 };
@@ -416,25 +416,26 @@ pub trait LibraryStore: Send + Sync {
     /// Best-effort cleanup of payloads no longer referenced by an outbox row.
     fn garbage_collect_tag_mirror_artwork(&self) -> StoreResult<()>;
 
-    /// Return the set of distinct, non-empty genre values currently
-    /// stored on tracks in the library. Order is not specified; the
-    /// caller normalizes for whatever comparison it needs. Used by
-    /// the online tag-enrichment path to bias its genre choice
-    /// toward genres the user already curates, avoiding genre
-    /// sprawl (e.g. picking "House" over "Electronica" when the
-    /// library already has House tracks). Default implementation
-    /// scans `tracks()` for crates that don't have a cheaper
-    /// projection.
-    fn distinct_genres(&self) -> StoreResult<Vec<String>> {
-        let mut seen: BTreeSet<String> = BTreeSet::new();
+    /// Every distinct, non-blank genre tag currently stored on tracks in
+    /// the library, with the number of tracks that carry it. Order is
+    /// not specified, and tags that differ in case or outer whitespace
+    /// are separate entries: the caller folds them for whatever
+    /// comparison it needs. Used by the online tag-enrichment path to
+    /// bias its genre choice toward genres the user already curates,
+    /// under the spelling the library uses most, avoiding genre sprawl
+    /// (e.g. picking "House" over "Electronica" when the library already
+    /// has House tracks). Default implementation scans `tracks()` for
+    /// crates that don't have a cheaper projection.
+    fn genre_track_counts(&self) -> StoreResult<Vec<(String, u64)>> {
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
         for track in self.tracks()? {
             if let Some(genre) = track.metadata.genre
                 && !genre.trim().is_empty()
             {
-                seen.insert(genre);
+                *counts.entry(genre).or_insert(0) += 1;
             }
         }
-        Ok(seen.into_iter().collect())
+        Ok(counts.into_iter().collect())
     }
     fn save_playlist(&self, playlist: Playlist) -> StoreResult<()>;
     fn playlist(&self, playlist_id: PlaylistId) -> StoreResult<Option<Playlist>>;

@@ -361,7 +361,7 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
 
         // Library-genre bias list for tag enrichment, resolved at most
         // once per batch (see `attempt_tags`).
-        let mut genre_bias: Option<Vec<String>> = None;
+        let mut genre_bias: Option<LibraryGenres> = None;
 
         let mut rate_limited_for = None;
         let mut batch = batch.into_iter();
@@ -555,7 +555,7 @@ fn process_track(
     remote_service: &dyn RemoteMetadataService,
     tag_writer: &MetadataWriteHandle,
     library_store: &dyn LibraryStore,
-    genre_bias: &mut Option<Vec<String>>,
+    genre_bias: &mut Option<LibraryGenres>,
 ) -> ProcessReport {
     let query = query_from_metadata(&track.metadata);
     let mut any_success = false;
@@ -929,7 +929,7 @@ fn attempt_tags(
     tag_writer: &MetadataWriteHandle,
     library_store: &dyn LibraryStore,
     cached_match: &mut Option<TrackMatch>,
-    genre_bias: &mut Option<Vec<String>>,
+    genre_bias: &mut Option<LibraryGenres>,
 ) -> AttemptOutcome {
     // Gate-shaped check: don't talk to the network if there is
     // nothing we are allowed to fill. The positional fields require
@@ -998,13 +998,14 @@ fn attempt_tags(
     if need_genre {
         // Library-aware genre selection. The bias list is resolved at
         // most once per worker batch through the `genre_bias` memo —
-        // dozens of genre-needing tracks share one distinct_genres()
+        // dozens of genre-needing tracks share one genre_track_counts()
         // query, and a list one batch stale is harmless. A failed query
         // degrades gracefully to "no library bias" for the rest of the
         // batch: the worker still gets to pick a genre based on votes
         // alone, rather than silently skipping the whole track.
-        let library_genres =
-            genre_bias.get_or_insert_with(|| library_store.distinct_genres().unwrap_or_default());
+        let library_genres = genre_bias.get_or_insert_with(|| {
+            LibraryGenres::of(library_store.genre_track_counts().unwrap_or_default())
+        });
         if let Some(name) = select_genre(&matched.genres, library_genres) {
             change.genre = FieldChange::Set(name);
         }
@@ -1090,21 +1091,73 @@ fn attempt_tags(
 /// Falls back to the top-voted candidate if none of them are in the
 /// library yet — better to seed the library with a community-curated
 /// genre than to leave the field blank forever.
-fn select_genre(matched_genres: &[GenreCandidate], library_genres: &[String]) -> Option<String> {
-    let library_by_normalized: std::collections::HashMap<String, &String> = library_genres
+fn select_genre(
+    matched_genres: &[GenreCandidate],
+    library_genres: &LibraryGenres,
+) -> Option<String> {
+    matched_genres
         .iter()
-        .map(|name| (normalize_search_text(name), name))
-        .collect();
-    for candidate in matched_genres {
-        if let Some(library_spelling) =
-            library_by_normalized.get(&normalize_search_text(&candidate.name))
-        {
-            return Some((*library_spelling).clone());
+        .find_map(|candidate| library_genres.spelling_of(&candidate.name))
+        .map(str::to_owned)
+        .or_else(|| {
+            matched_genres
+                .first()
+                .map(|candidate| candidate.name.clone())
+        })
+}
+
+/// The genres the library already holds, each under the spelling an
+/// online candidate adopts.
+///
+/// A candidate matches a library genre without regard to case, accents
+/// or outer whitespace. Where the library itself spells such a genre
+/// several ways ("House", "house"), the candidate adopts the spelling
+/// most tracks carry, the first in byte order when several are carried
+/// equally, so enrichment converges on one spelling instead of feeding
+/// a minority one.
+#[derive(Debug, Default)]
+struct LibraryGenres {
+    spelling_by_normalized: std::collections::HashMap<String, String>,
+}
+
+impl LibraryGenres {
+    /// `track_counts` pairs each genre tag with the number of tracks
+    /// that carry it, as `LibraryStore::genre_track_counts` reports them.
+    fn of(track_counts: Vec<(String, u64)>) -> Self {
+        // One spelling under different outer whitespace is one spelling,
+        // its tracks counted together.
+        let mut count_by_spelling = std::collections::HashMap::<&str, u64>::new();
+        for (genre, count) in &track_counts {
+            *count_by_spelling.entry(genre.trim()).or_insert(0) += count;
+        }
+
+        let mut spelling_by_normalized = std::collections::HashMap::<String, (&str, u64)>::new();
+        for candidate in count_by_spelling {
+            spelling_by_normalized
+                .entry(normalize_search_text(candidate.0))
+                .and_modify(|best| {
+                    let more_used = candidate.1 > best.1;
+                    let as_used_and_first = candidate.1 == best.1 && candidate.0 < best.0;
+                    if more_used || as_used_and_first {
+                        *best = candidate;
+                    }
+                })
+                .or_insert(candidate);
+        }
+
+        Self {
+            spelling_by_normalized: spelling_by_normalized
+                .into_iter()
+                .map(|(normalized, (spelling, _))| (normalized, spelling.to_owned()))
+                .collect(),
         }
     }
-    matched_genres
-        .first()
-        .map(|candidate| candidate.name.clone())
+
+    fn spelling_of(&self, genre: &str) -> Option<&str> {
+        self.spelling_by_normalized
+            .get(&normalize_search_text(genre))
+            .map(String::as_str)
+    }
 }
 
 /// Find the release in `releases` whose title matches `album`

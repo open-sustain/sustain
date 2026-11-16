@@ -1318,7 +1318,7 @@ fn genre_prefers_a_candidate_already_present_in_the_library() {
     let store: Arc<dyn LibraryStore> =
         Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     // Seed an unrelated track carrying "House" so the library
-    // exposes it through distinct_genres().
+    // exposes it through genre_track_counts().
     let mut seed = track_with_metadata(temp.path(), "seed.flac");
     seed.id = TrackId::new(99).expect("non-zero");
     seed.metadata.genre = Some("House".to_owned());
@@ -1958,7 +1958,7 @@ fn explicit_run_arriving_mid_batch_goes_before_the_remaining_background_tracks()
 fn a_candidate_genre_adopts_the_library_spelling_whatever_its_accents() {
     use sustain_metadata_remote::GenreCandidate;
 
-    use super::select_genre;
+    use super::{LibraryGenres, select_genre};
 
     let candidates = [
         GenreCandidate {
@@ -1970,10 +1970,55 @@ fn a_candidate_genre_adopts_the_library_spelling_whatever_its_accents() {
             vote_count: 4,
         },
     ];
-    let library = ["Chanson Française".to_owned(), "Rock".to_owned()];
+    let library = LibraryGenres::of(vec![
+        ("Chanson Française".to_owned(), 3),
+        ("Rock".to_owned(), 1),
+    ]);
 
     assert_eq!(
         select_genre(&candidates, &library).as_deref(),
         Some("Chanson Française")
     );
+}
+
+#[test]
+fn a_candidate_genre_adopts_the_spelling_most_of_the_library_uses() {
+    use sustain_metadata_remote::GenreCandidate;
+
+    use super::{LibraryGenres, select_genre};
+
+    let candidates = [GenreCandidate {
+        name: "DEEP HOUSE".to_owned(),
+        vote_count: 2,
+    }];
+    let adopted = |track_counts: &[(&str, u64)]| {
+        let library = LibraryGenres::of(
+            track_counts
+                .iter()
+                .map(|(genre, count)| ((*genre).to_owned(), *count))
+                .collect(),
+        );
+        select_genre(&candidates, &library)
+    };
+
+    assert_eq!(
+        adopted(&[("deep house", 2), ("Deep House", 40), ("Deep house", 5)]).as_deref(),
+        Some("Deep House")
+    );
+    // Carried equally: the first in byte order, whatever order they come in.
+    assert_eq!(
+        adopted(&[("deep house", 2), ("Deep House", 2)]).as_deref(),
+        Some("Deep House")
+    );
+    assert_eq!(
+        adopted(&[("Deep House", 2), ("deep house", 2)]).as_deref(),
+        Some("Deep House")
+    );
+    // One spelling under different outer whitespace counts together.
+    assert_eq!(
+        adopted(&[("deep house", 3), ("Deep House", 2), ("Deep House ", 2)]).as_deref(),
+        Some("Deep House")
+    );
+    // Nothing in the library: the top-voted candidate as it comes.
+    assert_eq!(adopted(&[("Rock", 9)]).as_deref(), Some("DEEP HOUSE"));
 }

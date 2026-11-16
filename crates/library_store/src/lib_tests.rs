@@ -71,6 +71,35 @@ fn sqlite_save_track_normalizes_empty_text_metadata() {
 }
 
 #[test]
+fn genre_track_counts_report_each_stored_spelling_with_its_tracks() {
+    let store = SqliteLibraryStore::open_in_memory().expect("store");
+    for (id, genre) in [
+        (1, Some("House")),
+        (2, Some("House")),
+        (3, Some("house")),
+        (4, Some("Techno")),
+        (5, Some("  ")),
+        (6, None),
+    ] {
+        let mut track = track(id, &format!("{id}.flac"));
+        track.metadata.genre = genre.map(str::to_owned);
+        store.save_track(track).expect("save track");
+    }
+
+    let mut counts = store.genre_track_counts().expect("genre track counts");
+    counts.sort();
+
+    assert_eq!(
+        counts,
+        [
+            ("House".to_owned(), 2),
+            ("Techno".to_owned(), 1),
+            ("house".to_owned(), 1),
+        ]
+    );
+}
+
+#[test]
 fn sqlite_track_key_round_trips_as_its_short_code() {
     let store = SqliteLibraryStore::open_in_memory().expect("store");
     let mut track = track(1, "keyed.flac");

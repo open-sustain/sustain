@@ -292,9 +292,9 @@ impl LibraryStore for SqliteLibraryStore {
         self.tag_mirror_blobs.garbage_collect(&referenced, snapshot)
     }
 
-    fn distinct_genres(&self) -> StoreResult<Vec<String>> {
+    fn genre_track_counts(&self) -> StoreResult<Vec<(String, u64)>> {
         let connection = self.connection_guard()?;
-        tracks::distinct_genres(&connection)
+        tracks::genre_track_counts(&connection)
     }
 
     fn save_playlist(&self, playlist: Playlist) -> StoreResult<()> {

@@ -447,21 +447,25 @@ pub(super) fn tracks(connection: &Connection) -> StoreResult<Vec<Track>> {
     Ok(tracks)
 }
 
-pub(super) fn distinct_genres(connection: &Connection) -> StoreResult<Vec<String>> {
+pub(super) fn genre_track_counts(connection: &Connection) -> StoreResult<Vec<(String, u64)>> {
     let mut statement = connection
         .prepare(
-            "SELECT DISTINCT genre FROM tracks \
+            "SELECT genre, COUNT(*) FROM tracks \
                  WHERE genre IS NOT NULL AND TRIM(genre) <> '' \
-                 ORDER BY genre",
+                 GROUP BY genre",
         )
         .map_err(StoreError::from)?;
     let mut rows = statement.query([]).map_err(StoreError::from)?;
-    let mut genres = Vec::new();
+    let mut counts = Vec::new();
     while let Some(row) = rows.next().map_err(StoreError::from)? {
-        let value: String = row.get(0).map_err(StoreError::from)?;
-        if !value.trim().is_empty() {
-            genres.push(value);
+        let genre: String = row.get(0).map_err(StoreError::from)?;
+        // SQL TRIM strips spaces only; the contract is non-blank.
+        if !genre.trim().is_empty() {
+            let count: i64 = row.get(1).map_err(StoreError::from)?;
+            let count = u64::try_from(count)
+                .map_err(|_| StoreError::Database("genre track count is negative".to_owned()))?;
+            counts.push((genre, count));
         }
     }
-    Ok(genres)
+    Ok(counts)
 }
