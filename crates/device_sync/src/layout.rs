@@ -375,8 +375,14 @@ fn write_m3u_playlists(
 
     let mut used: HashSet<String> = HashSet::new();
     for playlist in &req.playlists {
-        let stem = crate::sanitize::component(&playlist.name, TREE_COMPONENT_CAP, "Playlist");
-        let name = unique_name(&mut used, format!("{stem}.m3u8"));
+        // The number that tells two playlists of one name apart goes
+        // before the extension: a device reads "Mix (2).m3u8" as a
+        // playlist and "Mix.m3u8 (2)" as nothing.
+        let stem = unique_name(
+            &mut used,
+            crate::sanitize::component(&playlist.name, TREE_COMPONENT_CAP, "Playlist"),
+        );
+        let name = format!("{stem}.m3u8");
         let mut body = String::from("#EXTM3U\n");
         for &track_index in &playlist.track_indices {
             let Some(rel) = path_for.get(&track_index) else {

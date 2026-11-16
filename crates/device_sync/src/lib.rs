@@ -397,6 +397,35 @@ mod tests {
     }
 
     #[test]
+    fn playlists_of_one_name_each_get_a_playlist_file() {
+        let fx = fixture(2);
+        let mut req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        req.playlists = ["Mix", "mix", "Mix"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| SyncInputPlaylist {
+                name: name.into(),
+                track_indices: vec![index % 2],
+            })
+            .collect();
+        run(fx.dest.path(), &req);
+
+        let mut playlists: Vec<String> = std::fs::read_dir(fx.dest.path())
+            .expect("read device")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .into_string()
+                    .expect("name")
+            })
+            .filter(|name| name.to_lowercase().starts_with("mix"))
+            .collect();
+        playlists.sort();
+        assert_eq!(playlists, ["Mix (3).m3u8", "Mix.m3u8", "mix (2).m3u8"]);
+    }
+
+    #[test]
     fn a_tag_holding_a_line_break_stays_on_its_playlist_line() {
         let mut fx = fixture(2);
         fx.tracks[0].title = "First line\r\nMusic/not-a-track.mp3".to_owned();
