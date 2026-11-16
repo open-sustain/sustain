@@ -139,7 +139,10 @@ fn parse_timestamp(raw: &str) -> Option<u32> {
         }
     };
 
-    Some(minutes.checked_mul(60_000)?.checked_add(seconds * 1_000)? + fraction_ms)
+    minutes
+        .checked_mul(60_000)?
+        .checked_add(seconds * 1_000)?
+        .checked_add(fraction_ms)
 }
 
 #[cfg(test)]
@@ -226,6 +229,23 @@ mod tests {
         let source = "[01:30]Foo";
         let parsed = SyncedLyrics::parse_lrc(source).expect("parse");
         assert_eq!(parsed.lines[0].at_ms, 90_000);
+    }
+
+    #[test]
+    fn a_timestamp_past_what_milliseconds_can_hold_is_skipped() {
+        // 71582:47.000 is the last whole second a `u32` of milliseconds
+        // holds; the fraction is what carries it past the end.
+        let source = "[71582:47.999]Too far\n[71582:47.295]Last\n[00:01.00]Real";
+        let parsed = SyncedLyrics::parse_lrc(source).expect("parse");
+        assert_eq!(
+            parsed
+                .lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Real", "Last"]
+        );
+        assert_eq!(parsed.lines[1].at_ms, u32::MAX);
     }
 
     #[test]
