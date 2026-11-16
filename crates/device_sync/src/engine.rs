@@ -8,7 +8,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use sustain_domain::{AnlzRecord, DeviceLayout, DeviceRelativePath, SyncManifestEntry};
+use sustain_domain::{
+    AnlzRecord, CollationKey, DeviceLayout, DeviceRelativePath, SyncManifestEntry,
+};
 use sustain_pioneer::path_hash::AnlzSlot;
 
 use crate::journal::ManifestJournal;
@@ -157,23 +159,42 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
 /// Aggregate the placement footprint per genre, mirroring how
 /// `bytes_total` is summed so the breakdown adds up to it exactly. A
 /// blank or whitespace-only genre tag collapses to `None` ("Unknown").
-/// Ordered largest first, ties broken by genre name for a deterministic
-/// (test-stable) result.
+/// Tags that spell one genre differently ("Deep House", "Deep house":
+/// equal as [`CollationKey`]s) are one genre, named by the spelling that
+/// carries the most bytes. Ordered largest first, ties broken by genre
+/// name for a deterministic (test-stable) result.
 fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreBytes> {
-    let mut by_genre: HashMap<Option<String>, u64> = HashMap::new();
+    let mut by_spelling: HashMap<Option<&str>, u64> = HashMap::new();
     for placement in placements {
         let track = &req.tracks[placement.track_index];
         let genre = track
             .genre
             .as_deref()
             .map(str::trim)
-            .filter(|g| !g.is_empty())
-            .map(str::to_owned);
-        *by_genre.entry(genre).or_default() += track.source.stat.size_bytes;
+            .filter(|g| !g.is_empty());
+        *by_spelling.entry(genre).or_default() += track.source.stat.size_bytes;
     }
+
+    // Each genre: its total, and the spelling to name it by with the bytes
+    // that spelling carries.
+    let mut by_genre: HashMap<Option<CollationKey>, (u64, Option<&str>, u64)> = HashMap::new();
+    for (spelling, bytes) in by_spelling {
+        let (total, named, named_bytes) = by_genre
+            .entry(spelling.map(CollationKey::new))
+            .or_insert((0, spelling, 0));
+        *total += bytes;
+        if bytes > *named_bytes || (bytes == *named_bytes && spelling < *named) {
+            *named = spelling;
+            *named_bytes = bytes;
+        }
+    }
+
     let mut breakdown: Vec<GenreBytes> = by_genre
-        .into_iter()
-        .map(|(genre, bytes)| GenreBytes { genre, bytes })
+        .into_values()
+        .map(|(bytes, named, _)| GenreBytes {
+            genre: named.map(str::to_owned),
+            bytes,
+        })
         .collect();
     breakdown.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.genre.cmp(&b.genre)));
     breakdown

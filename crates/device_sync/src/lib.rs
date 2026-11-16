@@ -1559,6 +1559,39 @@ mod tests {
     }
 
     #[test]
+    fn spellings_of_one_genre_share_a_footprint_segment() {
+        let mut fx = fixture(4);
+        let specs = [
+            ("deep house", 100u64),
+            ("Deep House", 300),
+            ("DEEP HOUSE ", 50),
+            ("Deep Hous\u{e9}", 20),
+        ];
+        for (track, (genre, size)) in fx.tracks.iter_mut().zip(specs) {
+            track.genre = Some(genre.to_owned());
+            track.source.stat.size_bytes = size;
+        }
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        let plan = plan(&transport(fx.dest.path()), &req).expect("plan");
+
+        // Named by the spelling carrying the most bytes; an accent makes a
+        // different genre, not a different spelling.
+        assert_eq!(
+            plan.genre_bytes,
+            vec![
+                GenreBytes {
+                    genre: Some("Deep House".into()),
+                    bytes: 450,
+                },
+                GenreBytes {
+                    genre: Some("Deep Hous\u{e9}".into()),
+                    bytes: 20,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn empty_selection_is_rejected() {
         let fx = fixture(0);
         let req = SyncRequest {

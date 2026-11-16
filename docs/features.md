@@ -266,6 +266,8 @@ tenth, so a real contribution never reads as zero:
   untagged tracks counted as *Unknown*). Slash-delimited tags such as
   `House/Deep` are split into equal fractional contributions so each
   component genre is represented without double-counting the track.
+  Spellings that differ only in case (`Deep House`, `Deep house`) are one
+  genre, shown under the spelling most tracks use.
 - **Quality distribution** — a donut of the share of tracks per bitrate
   range (≤ 128, 129–255, 256–320, > 320 kbps), a hue per range, the best
   range in the accent's own hue.

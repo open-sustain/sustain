@@ -23,7 +23,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::SystemTime;
 
-use crate::Track;
+use crate::{CollationKey, Track};
 
 /// Genres shown individually in the genre-distribution chart before the
 /// long tail collapses into a single "Other" entry.
@@ -184,48 +184,104 @@ pub fn compute_library_statistics(
     tracks: &[Track],
     year_of_added: impl Fn(SystemTime) -> Option<i32>,
 ) -> LibraryStatistics {
+    let spellings = GenreSpellings::of(tracks);
     LibraryStatistics {
         total_tracks: tracks.len(),
         total_plays: tracks.iter().map(|track| track.statistics.play_count).sum(),
-        genre_distribution: genre_distribution(tracks),
+        genre_distribution: genre_distribution(tracks, &spellings),
         quality_distribution: quality_distribution(tracks),
-        most_played_genres: most_played_genres(tracks),
-        most_liked_genres: most_liked_genres(tracks),
+        most_played_genres: most_played_genres(tracks, &spellings),
+        most_liked_genres: most_liked_genres(tracks, &spellings),
         release_decades: release_decades(tracks),
         added_years: added_years(tracks, year_of_added),
     }
 }
 
-/// Normalise a track's genre tag into grouping keys. Slash-delimited tags
-/// split into equal-weighted genre components; empty components are ignored.
-/// A tag with no usable component still contributes to the untagged bucket.
-/// The keys borrow from the track: the aggregations count every track of
-/// the library, and own a genre name only once it is ranked.
-fn genre_keys(track: &Track) -> Vec<Option<&str>> {
-    let Some(raw) = track.metadata.genre.as_deref() else {
-        return vec![None];
-    };
-
-    let mut genres = Vec::new();
-    for genre in raw.split('/') {
-        let genre = genre.trim();
-        if genre.is_empty() || genres.contains(&Some(genre)) {
-            continue;
-        }
-        genres.push(Some(genre));
-    }
-
-    if genres.is_empty() {
-        vec![None]
-    } else {
-        genres
-    }
+/// The genre names a track's tag holds: a slash-delimited tag names
+/// several, and blank components name none.
+fn tagged_genres(track: &Track) -> impl Iterator<Item = &str> {
+    track
+        .metadata
+        .genre
+        .as_deref()
+        .into_iter()
+        .flat_map(|tag| tag.split('/'))
+        .map(str::trim)
+        .filter(|genre| !genre.is_empty())
 }
 
-fn weighted_genres(track: &Track) -> Vec<(Option<&str>, f64)> {
-    let keys = genre_keys(track);
-    let weight = 1.0 / keys.len() as f64;
-    keys.into_iter().map(|genre| (genre, weight)).collect()
+/// The one spelling each genre is counted and shown under.
+///
+/// Tags written by different tools spell a genre "Deep House" here and
+/// "Deep house" there. Those are one genre everywhere else in the library
+/// (search, smart-playlist rules, sorting), so they are one here: spellings
+/// that are equal as [`CollationKey`]s share the spelling most tracks use,
+/// and the first in byte order when several are used equally.
+struct GenreSpellings<'a> {
+    shown: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> GenreSpellings<'a> {
+    fn of(tracks: &'a [Track]) -> Self {
+        let mut uses: HashMap<&str, usize> = HashMap::new();
+        for genre in tracks.iter().flat_map(tagged_genres) {
+            *uses.entry(genre).or_insert(0) += 1;
+        }
+
+        let keyed: Vec<(CollationKey, &str, usize)> = uses
+            .into_iter()
+            .map(|(spelling, count)| (CollationKey::new(spelling), spelling, count))
+            .collect();
+        let mut preferred: HashMap<&CollationKey, (&str, usize)> = HashMap::new();
+        for (key, spelling, count) in &keyed {
+            let candidate = (*spelling, *count);
+            preferred
+                .entry(key)
+                .and_modify(|best| {
+                    let more_used = candidate.1 > best.1;
+                    let as_used_and_first = candidate.1 == best.1 && candidate.0 < best.0;
+                    if more_used || as_used_and_first {
+                        *best = candidate;
+                    }
+                })
+                .or_insert(candidate);
+        }
+
+        Self {
+            shown: keyed
+                .iter()
+                .map(|(key, spelling, _)| (*spelling, preferred[key].0))
+                .collect(),
+        }
+    }
+
+    /// The grouping keys of a track: its genres under their shown
+    /// spelling, each once, or the untagged bucket (`None`) when its tag
+    /// names no genre. The keys borrow from the library: the aggregations
+    /// count every track, and own a genre name only once it is ranked.
+    fn keys(&self, track: &'a Track) -> Vec<Option<&'a str>> {
+        let mut genres = Vec::new();
+        for genre in tagged_genres(track) {
+            let genre = Some(self.shown[genre]);
+            if !genres.contains(&genre) {
+                genres.push(genre);
+            }
+        }
+
+        if genres.is_empty() {
+            vec![None]
+        } else {
+            genres
+        }
+    }
+
+    /// A track's genres with the share of the track each one carries: a
+    /// track tagged with several genres counts equally toward each.
+    fn weighted(&self, track: &'a Track) -> Vec<(Option<&'a str>, f64)> {
+        let keys = self.keys(track);
+        let weight = 1.0 / keys.len() as f64;
+        keys.into_iter().map(|genre| (genre, weight)).collect()
+    }
 }
 
 fn compare_weight_desc(left: f64, right: f64) -> Ordering {
@@ -244,10 +300,13 @@ fn genre_tiebreak(left: &Option<String>, right: &Option<String>) -> std::cmp::Or
     }
 }
 
-fn genre_distribution(tracks: &[Track]) -> GenreDistribution {
+fn genre_distribution<'a>(
+    tracks: &'a [Track],
+    spellings: &GenreSpellings<'a>,
+) -> GenreDistribution {
     let mut counts: HashMap<Option<&str>, f64> = HashMap::new();
     for track in tracks {
-        for (genre, weight) in weighted_genres(track) {
+        for (genre, weight) in spellings.weighted(track) {
             *counts.entry(genre).or_insert(0.0) += weight;
         }
     }
@@ -306,10 +365,13 @@ fn quality_distribution(tracks: &[Track]) -> QualityDistribution {
     }
 }
 
-fn most_played_genres(tracks: &[Track]) -> Vec<GenrePlayCount> {
+fn most_played_genres<'a>(
+    tracks: &'a [Track],
+    spellings: &GenreSpellings<'a>,
+) -> Vec<GenrePlayCount> {
     let mut totals: HashMap<Option<&str>, f64> = HashMap::new();
     for track in tracks {
-        for (genre, weight) in weighted_genres(track) {
+        for (genre, weight) in spellings.weighted(track) {
             *totals.entry(genre).or_insert(0.0) += track.statistics.play_count as f64 * weight;
         }
     }
@@ -330,7 +392,7 @@ fn most_played_genres(tracks: &[Track]) -> Vec<GenrePlayCount> {
     ranked
 }
 
-fn most_liked_genres(tracks: &[Track]) -> Vec<GenreRating> {
+fn most_liked_genres<'a>(tracks: &'a [Track], spellings: &GenreSpellings<'a>) -> Vec<GenreRating> {
     // (sum of stars, rated-track weight) per genre, over rated
     // tracks only — zero-star tracks are excluded per the project's
     // rating-as-exclusion convention.
@@ -340,7 +402,7 @@ fn most_liked_genres(tracks: &[Track]) -> Vec<GenreRating> {
         if stars == 0 {
             continue;
         }
-        for (genre, weight) in weighted_genres(track) {
+        for (genre, weight) in spellings.weighted(track) {
             let entry = sums.entry(genre).or_insert((0.0, 0.0));
             entry.0 += f64::from(stars) * weight;
             entry.1 += weight;
@@ -585,6 +647,47 @@ mod tests {
         assert_near(weight("Deep"), 0.5);
         assert_near(weight("Techno"), 0.5);
         assert_near(weight("Ambient"), 0.5);
+    }
+
+    #[test]
+    fn spellings_of_one_genre_count_together_under_the_most_used_one() {
+        let tracks = [
+            played(track(1, Some("Deep House")), 3),
+            played(track(2, Some("Deep House")), 1),
+            rated(played(track(3, Some("deep house")), 4), 5),
+            track(4, Some("DEEP HOUSE / Deep House")),
+            // Equally used spellings: the first in byte order is shown.
+            track(5, Some("trip hop")),
+            track(6, Some("Trip Hop")),
+            // An accent makes a different word, not a different spelling.
+            track(7, Some("Deep Hous\u{e9}")),
+        ];
+        let stats = compute(&tracks);
+        let shares: Vec<(Option<&str>, f64)> = stats
+            .genre_distribution
+            .entries
+            .iter()
+            .map(|share| (share.genre.as_deref(), share.track_weight))
+            .collect();
+
+        assert_eq!(
+            shares,
+            [
+                (Some("Deep House"), 4.0),
+                (Some("Trip Hop"), 2.0),
+                (Some("Deep Hous\u{e9}"), 1.0),
+            ]
+        );
+        assert_eq!(stats.most_played_genres.len(), 1);
+        assert_eq!(
+            stats.most_played_genres[0].genre.as_deref(),
+            Some("Deep House")
+        );
+        assert_near(stats.most_played_genres[0].total_play_count, 8.0);
+        assert_eq!(
+            stats.most_liked_genres[0].genre.as_deref(),
+            Some("Deep House")
+        );
     }
 
     #[test]
