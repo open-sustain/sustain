@@ -140,18 +140,24 @@ fn decode_region(path: &Path, region: Region) -> Result<DecodedAudio, AnalysisEr
             .ok_or_else(|| AnalysisError::NoAudioTrack {
                 path: path_label.clone(),
             })?;
-        let sample_rate = codec_params
-            .sample_rate
-            .ok_or_else(|| AnalysisError::DecoderError {
-                path: path_label.clone(),
-                message: "no sample rate reported by decoder".to_string(),
-            })?;
         let decoder = symphonia::default::get_codecs()
             .make_audio_decoder(codec_params, &AudioDecoderOptions::default())
             .map_err(|err| AnalysisError::DecoderError {
                 path: path_label.clone(),
                 message: format!("decoder factory failed: {err}"),
             })?;
+        // The rate is the decoder's, not the container's: an MP4 sample
+        // entry holds its rate in sixteen bits, so an 88.2 or 96 kHz
+        // stream is declared at another rate there, and only the codec's
+        // own configuration, which the decoder reads, has the real one.
+        let sample_rate =
+            decoder
+                .codec_params()
+                .sample_rate
+                .ok_or_else(|| AnalysisError::DecoderError {
+                    path: path_label.clone(),
+                    message: "no sample rate reported by decoder".to_string(),
+                })?;
         (track_id, sample_rate, decoder)
     };
 
@@ -450,12 +456,16 @@ mod tests {
     /// One second of a 440 Hz sine — one fixture per container and codec
     /// (generated with ffmpeg; see `testdata/`).
     fn assert_sine_decodes(name: &str) -> super::DecodedAudio {
+        assert_sine_decodes_at(name, 44_100)
+    }
+
+    fn assert_sine_decodes_at(name: &str, sample_rate: u32) -> super::DecodedAudio {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
             .join(name);
         let audio = decode_full(&path).expect("decode the fixture");
-        assert_eq!(audio.sample_rate, 44_100);
-        let seconds = audio.samples.len() as f64 / 44_100.0;
+        assert_eq!(audio.sample_rate, sample_rate);
+        let seconds = audio.samples.len() as f64 / f64::from(sample_rate);
         assert!((seconds - 1.0).abs() < 0.05, "{name}: decoded {seconds} s");
         let peak = audio
             .samples
@@ -469,6 +479,11 @@ mod tests {
     fn decode_full_reads_aac_and_apple_lossless_m4a() {
         let _ = assert_sine_decodes("sine-aac.m4a");
         let _ = assert_sine_decodes("sine-alac.m4a");
+    }
+
+    #[test]
+    fn decode_full_reads_aac_above_the_rate_an_mp4_sample_entry_can_hold() {
+        let _ = assert_sine_decodes_at("sine-aac-96k.m4a", 96_000);
     }
 
     #[test]

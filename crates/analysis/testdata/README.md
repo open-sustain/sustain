@@ -8,6 +8,15 @@ ffmpeg -f lavfi -i "sine=frequency=440:duration=1:sample_rate=44100" -ac 1 \
   -c:a alac -map_metadata -1 -fflags +bitexact -flags:a +bitexact sine-alac.m4a
 ```
 
+The same sine at 96 kHz in AAC, a rate the sixteen-bit field of an MP4
+sample entry cannot hold (FFmpeg writes 48,000 there; the real rate is in
+the codec configuration):
+
+```
+ffmpeg -f lavfi -i "sine=frequency=440:duration=1:sample_rate=96000" -ac 1 \
+  -c:a aac -b:a 32k -map_metadata -1 -fflags +bitexact -flags:a +bitexact sine-aac-96k.m4a
+```
+
 Presentation fixtures: a 2 ms 1 kHz burst half a second into one second of
 silence, mono 44.1 kHz AAC. FFmpeg records the encoder's 1,024 priming
 frames in an edit list; the second file carries no edit list, and the
