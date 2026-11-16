@@ -6,7 +6,9 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{FileLauncher, gdk, gio};
-use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, TrackId};
+use sustain_app_runtime::{
+    ApplicationCommand, NotificationCategory, NotificationSeverity, PlaybackCommand, TrackId,
+};
 
 use super::{
     ArtworkChangedHolder, PlaybackChangedCallback, SharedRuntime, ShowAlbumHolder,
@@ -28,7 +30,7 @@ pub(crate) fn copy_files_callback(
         if paths.is_empty() {
             return;
         }
-        copy_paths_to_clipboard(&window, &paths);
+        copy_paths_to_clipboard(&runtime, &window, &paths);
     })
 }
 
@@ -159,7 +161,7 @@ pub(crate) fn show_in_folder_callback(
         else {
             return;
         };
-        show_path_in_folder(&window, &path);
+        show_path_in_folder(&runtime, &window, &path);
     })
 }
 
@@ -175,16 +177,25 @@ fn absolute_paths_for_tracks(runtime: &SharedRuntime, track_ids: &[TrackId]) -> 
         .collect()
 }
 
-fn copy_paths_to_clipboard(window: &gtk::Window, paths: &[PathBuf]) {
+/// Tell the user a track action did not happen.
+fn report_action_failure(runtime: &SharedRuntime, body: String) {
+    runtime.borrow_mut().push_ephemeral_notification(
+        NotificationCategory::Command,
+        NotificationSeverity::Warning,
+        body,
+    );
+}
+
+fn copy_paths_to_clipboard(runtime: &SharedRuntime, window: &gtk::Window, paths: &[PathBuf]) {
     let files: Vec<gio::File> = paths.iter().map(gio::File::for_path).collect();
     let file_list = gdk::FileList::from_array(&files);
     let provider = gdk::ContentProvider::for_value(&file_list.to_value());
     if let Err(error) = window.clipboard().set_content(Some(&provider)) {
-        eprintln!("sustain: clipboard set failed: {error}");
+        report_action_failure(runtime, format!("Could not copy the files: {error}."));
     }
 }
 
-fn show_path_in_folder(window: &gtk::Window, path: &Path) {
+fn show_path_in_folder(runtime: &SharedRuntime, window: &gtk::Window, path: &Path) {
     // @TODO codex: confirm gtk::FileLauncher::open_containing_folder is the
     // right primitive here. Internally it calls org.freedesktop.FileManager1
     // ShowItems over D-Bus and falls back to opening the parent directory if
@@ -192,9 +203,17 @@ fn show_path_in_folder(window: &gtk::Window, path: &Path) {
     // of eyes on the choice vs. calling D-Bus directly.
     let file = gio::File::for_path(path);
     let launcher = FileLauncher::new(Some(&file));
-    launcher.open_containing_folder(Some(window), None::<&gio::Cancellable>, |result| {
-        if let Err(error) = result {
-            eprintln!("sustain: open containing folder failed: {error}");
+    let runtime = runtime.clone();
+    launcher.open_containing_folder(Some(window), None::<&gio::Cancellable>, move |result| {
+        // Dismissing a chooser the desktop put up is the user's answer,
+        // not a failure.
+        if let Err(error) = result
+            && !error.matches(gtk::DialogError::Dismissed)
+        {
+            report_action_failure(
+                &runtime,
+                format!("Could not show the file's folder: {error}."),
+            );
         }
     });
 }
