@@ -386,8 +386,8 @@ fn write_m3u_playlists(
             body.push_str(&format!(
                 "#EXTINF:{},{} - {}\n{}\n",
                 track.duration_ms / 1000,
-                track.artist,
-                track.title,
+                extinf_text(&track.artist),
+                extinf_text(&track.title),
                 rel,
             ));
         }
@@ -618,4 +618,23 @@ fn is_file(transport: &dyn DeviceTransport, path: &DeviceRelativePath) -> Result
     transport
         .is_regular_file(path)
         .map_err(|error| SyncError::io(path.as_str(), error))
+}
+
+/// A track's artist or title as `#EXTINF` display text.
+///
+/// A playlist is read line by line, and the line after `#EXTINF` is the
+/// entry's path. A tag may hold a line break (a pasted title, a field a
+/// tagger wrapped); written as it is, the rest of the tag would read as a
+/// path. Every control character, the line breaks among them, is written
+/// as a space.
+fn extinf_text(tag: &str) -> String {
+    tag.chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }

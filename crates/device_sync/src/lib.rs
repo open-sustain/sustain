@@ -397,6 +397,28 @@ mod tests {
     }
 
     #[test]
+    fn a_tag_holding_a_line_break_stays_on_its_playlist_line() {
+        let mut fx = fixture(2);
+        fx.tracks[0].title = "First line\r\nMusic/not-a-track.mp3".to_owned();
+        fx.tracks[0].artist = "Tab\there\u{85}and there".to_owned();
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        run(fx.dest.path(), &req);
+
+        let m3u = std::fs::read_to_string(fx.dest.path().join("My Set.m3u8")).expect("read m3u");
+        let lines: Vec<&str> = m3u.split(['\n', '\r', '\u{85}']).collect();
+        // The header, then a description and a path per track, then the
+        // empty piece after the last line.
+        assert_eq!(lines.len(), 6, "{m3u:?}");
+        assert_eq!(
+            lines[1].split_once(',').map(|(_, text)| text),
+            Some("Tab here and there - First line  Music/not-a-track.mp3")
+        );
+        for path in [lines[2], lines[4]] {
+            assert!(fx.dest.path().join(path).is_file(), "{path:?}");
+        }
+    }
+
+    #[test]
     fn m3u_layout_writes_tree_and_playlist() {
         let fx = fixture(3);
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
