@@ -196,11 +196,12 @@ fn copy_paths_to_clipboard(runtime: &SharedRuntime, window: &gtk::Window, paths:
 }
 
 fn show_path_in_folder(runtime: &SharedRuntime, window: &gtk::Window, path: &Path) {
-    // @TODO codex: confirm gtk::FileLauncher::open_containing_folder is the
-    // right primitive here. Internally it calls org.freedesktop.FileManager1
-    // ShowItems over D-Bus and falls back to opening the parent directory if
-    // that fails — which is the behaviour we want — but worth a second pair
-    // of eyes on the choice vs. calling D-Bus directly.
+    // `FileLauncher` asks the OpenURI portal for the directory when the
+    // portal is there, and `org.freedesktop.FileManager1.ShowItems`
+    // otherwise (GTK 4.18, `gtkfilelauncher.c`), which is what a direct
+    // D-Bus call would have to do again. Neither path falls back to
+    // opening the parent directory: a desktop without a file manager
+    // answering either one is reported as a failure.
     let file = gio::File::for_path(path);
     let launcher = FileLauncher::new(Some(&file));
     let runtime = runtime.clone();
