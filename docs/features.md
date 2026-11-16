@@ -1121,7 +1121,9 @@ re-evaluated every sync), diffs it
 against the manifest and what is actually on the drive, and copies only what
 changed. The panel shows the plan — to copy / update / unchanged / to remove —
 before you sync; removing tracks no longer selected requires ticking an explicit
-confirmation. Progress and the outcome flow through the status-bar notification
+confirmation, and a folder that removal leaves empty goes with its last file,
+so the device stops listing an artist or a playlist with nothing in it.
+Progress and the outcome flow through the status-bar notification
 lane, and while the sync runs the device's sidebar row carries the same turning
 sync badge as an Audio CD being ripped.
 

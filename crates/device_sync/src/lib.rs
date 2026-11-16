@@ -265,6 +265,10 @@ mod tests {
             self.root.remove_file_if_exists(path)
         }
 
+        fn remove_dir_if_empty(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+            self.root.remove_dir_if_empty(path)
+        }
+
         fn remove_tree_if_exists(
             &self,
             path: &DeviceRelativePath,
@@ -326,6 +330,10 @@ mod tests {
 
         fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
             self.0.remove_file_if_exists(&folded(path))
+        }
+
+        fn remove_dir_if_empty(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+            self.0.remove_dir_if_empty(&folded(path))
         }
 
         fn remove_tree_if_exists(
@@ -1256,6 +1264,48 @@ mod tests {
         assert!(outcome.cancelled);
         assert_eq!(outcome.removed, 0);
         assert_eq!(outcome.manifest, first.manifest);
+    }
+
+    #[test]
+    fn a_folder_emptied_by_stale_removal_goes_with_its_last_file() {
+        let mut fx = fixture(4);
+        let folders = [
+            ("A", "First"),
+            ("A", "Second"),
+            ("B", "Third"),
+            ("C", "Fourth"),
+        ];
+        for (track, (artist, album)) in fx.tracks.iter_mut().zip(folders) {
+            track.artist = artist.into();
+            track.album = album.into();
+        }
+        let first_request = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        let first = run(fx.dest.path(), &first_request);
+        let music = fx.dest.path().join("Music");
+        // Something of the listener's own in one of the folders.
+        std::fs::write(music.join("C/Fourth/cover.jpg"), b"art").expect("own file");
+
+        // Only the first track stays ticked.
+        let mut next = request(&fx, DeviceLayout::M3u, first.manifest.clone(), true);
+        next.tracks.truncate(1);
+        next.playlists[0].track_indices = vec![0];
+        let outcome = run(fx.dest.path(), &next);
+        assert_eq!(outcome.removed, 3);
+
+        // The artist keeps the album that still holds a track; the artist
+        // whose only album emptied goes; a folder holding anything else stays.
+        assert!(music.join("A/First").is_dir());
+        assert!(!music.join("A/Second").exists());
+        assert!(!music.join("B").exists());
+        assert!(music.join("C/Fourth/cover.jpg").is_file());
+
+        // Nothing left to sync: the folders go, the device root stays.
+        let mut last = request(&fx, DeviceLayout::M3u, outcome.manifest.clone(), true);
+        last.tracks = vec![fx.tracks[3].clone()];
+        last.playlists[0].track_indices = vec![0];
+        run(fx.dest.path(), &last);
+        assert!(!music.join("A").exists());
+        assert!(fx.dest.path().is_dir());
     }
 
     #[test]

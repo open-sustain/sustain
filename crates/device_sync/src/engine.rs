@@ -528,25 +528,54 @@ fn manifest_entry(
 /// its entry recorded. Only recorded files are touched: an analysis
 /// directory can hold other tracks' pairs, so it is never removed whole,
 /// and an entry without a record — or with one that does not name a slot
-/// inside the analysis tree — leaves the analysis tree alone.
+/// inside the analysis tree — leaves the analysis tree alone. A folder
+/// the removal leaves empty goes with its last file.
 fn remove_placement(
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     rel: &DeviceRelativePath,
     anlz: Option<&AnlzRecord>,
 ) -> Result<(), SyncError> {
-    let audio_path = base.join(rel);
-    transport
-        .remove_file_if_exists(&audio_path)
-        .map_err(|error| SyncError::io(audio_path.as_str(), error))?;
+    remove_file_and_emptied_folders(transport, base, rel)?;
     let slot = anlz.and_then(|anlz| AnlzSlot::from_dat_path(&format!("/{}", anlz.dat_path)));
     if let Some(slot) = slot {
         for path in [slot.dat_path(), slot.ext_path()] {
-            let path = base.join(&layout::drive_relative(&path)?);
-            transport
-                .remove_file_if_exists(&path)
-                .map_err(|error| SyncError::io(path.as_str(), error))?;
+            remove_file_and_emptied_folders(transport, base, &layout::drive_relative(&path)?)?;
         }
+    }
+    Ok(())
+}
+
+/// Delete the file at `rel` beneath `base`, then each folder on the way
+/// up from it that now holds nothing: the album folder of the last track
+/// of an album, then the artist folder if that was the artist's last
+/// album. A device that lists folders (a car stereo, a deck) would
+/// otherwise keep showing a playlist or an artist with nothing in it.
+/// Stops at the first folder that still holds anything, and never
+/// removes `base` itself.
+fn remove_file_and_emptied_folders(
+    transport: &dyn DeviceTransport,
+    base: &DeviceRelativePath,
+    rel: &DeviceRelativePath,
+) -> Result<(), SyncError> {
+    let file = base.join(rel);
+    transport
+        .remove_file_if_exists(&file)
+        .map_err(|error| SyncError::io(file.as_str(), error))?;
+
+    let mut folders: Vec<&str> = rel.components().collect();
+    folders.pop();
+    while !folders.is_empty() {
+        let folder = DeviceRelativePath::new(folders.join("/"))
+            .ok_or_else(|| SyncError::planning("a stale file sits under an unsafe folder"))?;
+        let folder = base.join(&folder);
+        let removed = transport
+            .remove_dir_if_empty(&folder)
+            .map_err(|error| SyncError::io(folder.as_str(), error))?;
+        if !removed {
+            break;
+        }
+        folders.pop();
     }
     Ok(())
 }

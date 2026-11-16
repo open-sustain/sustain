@@ -242,6 +242,50 @@ impl DeviceTransport for MtpTransport {
         }
     }
 
+    fn remove_dir_if_empty(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+        if path.is_root() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "refusing to remove the device storage root",
+            ));
+        }
+        let dir = self.resolve(path);
+        match dir.query_info(
+            "standard::type",
+            FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            Cancellable::NONE,
+        ) {
+            Ok(info) if info.file_type() == FileType::Directory => {}
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("refusing to remove non-directory device path: {path}"),
+                ));
+            }
+            Err(error) if is_not_found(&error) => return Ok(false),
+            Err(error) => return Err(map_glib_error(error)),
+        }
+        // Emptiness is checked here, not left to the delete: what an MTP
+        // device does when asked to delete a folder that holds something
+        // is the device's own business, and some delete everything in it.
+        let mut children = dir
+            .enumerate_children(
+                "standard::name",
+                FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+                Cancellable::NONE,
+            )
+            .map_err(map_glib_error)?;
+        if let Some(child) = children.next() {
+            child.map_err(map_glib_error)?;
+            return Ok(false);
+        }
+        match dir.delete(Cancellable::NONE) {
+            Ok(()) => Ok(true),
+            Err(error) if is_not_found(&error) => Ok(false),
+            Err(error) => Err(map_glib_error(error)),
+        }
+    }
+
     fn remove_tree_if_exists(
         &self,
         path: &DeviceRelativePath,

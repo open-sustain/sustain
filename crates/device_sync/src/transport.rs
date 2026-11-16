@@ -110,6 +110,11 @@ pub trait DeviceTransport {
     /// file was removed.
     fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool>;
 
+    /// Remove the directory at `path` if it is there and holds nothing.
+    /// Returns whether a directory was removed: one that holds anything,
+    /// a file or a folder, is left as it is, and so is a missing one.
+    fn remove_dir_if_empty(&self, path: &DeviceRelativePath) -> io::Result<bool>;
+
     /// Recursively remove the directory tree at `path` if present. Returns
     /// whether a tree was removed.
     fn remove_tree_if_exists(

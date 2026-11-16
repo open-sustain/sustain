@@ -195,6 +195,37 @@ impl DeviceRoot {
         Ok(true)
     }
 
+    pub(crate) fn remove_dir_if_empty(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+        if path.is_root() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "refusing to remove the device mount root",
+            ));
+        }
+        let (parent, directory_name) = split_parent(path)?;
+        let parent = match self.open_dir(&parent, false) {
+            Ok(parent) => parent,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        // The kernel removes a directory only when it is empty, in one
+        // step: nothing written to it in between can be lost. It reports
+        // a directory that holds something as NOTEMPTY or EXIST.
+        match unlinkat(&parent, directory_name, AtFlags::REMOVEDIR) {
+            Ok(()) => {}
+            Err(Errno::NOENT | Errno::NOTEMPTY | Errno::EXIST) => return Ok(false),
+            Err(Errno::NOTDIR) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("refusing to remove non-directory device path: {path}"),
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+        sync_directory(&parent)?;
+        Ok(true)
+    }
+
     pub(crate) fn remove_tree_if_exists(
         &self,
         path: &DeviceRelativePath,
@@ -357,6 +388,10 @@ impl DeviceTransport for DeviceRoot {
 
     fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
         self.remove_file_if_exists(path)
+    }
+
+    fn remove_dir_if_empty(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+        self.remove_dir_if_empty(path)
     }
 
     fn remove_tree_if_exists(
@@ -647,6 +682,47 @@ mod tests {
         let root = DeviceRoot::open(device.path()).expect("root");
         let marker = DeviceRelativePath::new("marker").expect("safe path");
         assert!(root.read_to_string(&marker, 4096).is_err());
+    }
+
+    #[test]
+    fn only_a_directory_that_holds_nothing_is_removed_as_empty() {
+        let device = tempfile::tempdir().expect("device dir");
+        std::fs::create_dir_all(device.path().join("kept/inner")).expect("nested");
+        std::fs::create_dir_all(device.path().join("with-file")).expect("dir");
+        std::fs::write(device.path().join("with-file/a"), b"x").expect("file");
+        std::fs::write(device.path().join("a-file"), b"x").expect("file");
+        std::fs::create_dir(device.path().join("empty")).expect("empty");
+        std::os::unix::fs::symlink(device.path().join("empty"), device.path().join("link"))
+            .expect("symlink");
+
+        let root = DeviceRoot::open(device.path()).expect("root");
+        let path = |text: &str| DeviceRelativePath::new(text).expect("safe path");
+
+        assert_eq!(root.remove_dir_if_empty(&path("kept")).ok(), Some(false));
+        assert_eq!(
+            root.remove_dir_if_empty(&path("with-file")).ok(),
+            Some(false)
+        );
+        assert_eq!(root.remove_dir_if_empty(&path("missing")).ok(), Some(false));
+        assert_eq!(
+            root.remove_dir_if_empty(&path("gone/missing")).ok(),
+            Some(false)
+        );
+        assert!(root.remove_dir_if_empty(&path("a-file")).is_err());
+        assert!(root.remove_dir_if_empty(&path("link")).is_err());
+        assert!(
+            root.remove_dir_if_empty(&DeviceRelativePath::root())
+                .is_err()
+        );
+        for kept in ["kept/inner", "with-file/a", "a-file", "empty", "link"] {
+            assert!(
+                device.path().join(kept).symlink_metadata().is_ok(),
+                "{kept}"
+            );
+        }
+
+        assert_eq!(root.remove_dir_if_empty(&path("empty")).ok(), Some(true));
+        assert!(!device.path().join("empty").exists());
     }
 
     #[test]
