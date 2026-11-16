@@ -14,13 +14,17 @@ use super::super::{
     library_scan::LibraryScanRequestedCallback,
 };
 use super::switch_row::build_switch_row;
-use super::{HELPER_MAX_WIDTH_CHARS, HELPER_MIN_WIDTH_CHARS, PATH_ENTRY_VISIBLE_CHARS};
+use super::{
+    HELPER_MAX_WIDTH_CHARS, HELPER_MIN_WIDTH_CHARS, PATH_ENTRY_VISIBLE_CHARS,
+    SortTagsChangedCallback,
+};
 
 pub(super) fn build(
     parent_window: &gtk::Window,
     command_controller: SharedCommandController,
     scan_requested: LibraryScanRequestedCallback,
     consolidation_requested: LibraryConsolidationRequestedCallback,
+    sort_tags_changed: SortTagsChangedCallback,
 ) -> gtk::Widget {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 14);
     content.set_margin_top(24);
@@ -264,8 +268,7 @@ pub(super) fn build(
         "Order the library by the \u{201C}sort as\u{201D} tags some files carry \
          (ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT, and friends) plus \
          Sustain's generated leading-article sort values, so \u{201C}The Beatles\u{201D} \
-         files under B and \u{201C}Björk\u{201D} sorts as \u{201C}Bjork\u{201D}. Turn off for \
-         strict alphabetic-as-shown ordering.",
+         files under B. Turn off to order every name as it is shown.",
         sort_tags_enabled,
     );
     let command_controller_for_sort_tags = command_controller.clone();
@@ -278,8 +281,11 @@ pub(super) fn build(
                 .settings()
                 .clone();
             settings.library.honor_sort_tags = requested_state;
-            let _result = command_controller_for_sort_tags
-                .dispatch(ApplicationCommand::UpdateSettings(settings));
+            if command_controller_for_sort_tags
+                .dispatch_succeeded(ApplicationCommand::UpdateSettings(settings))
+            {
+                sort_tags_changed();
+            }
             Propagation::Proceed
         });
 
@@ -377,4 +383,62 @@ fn request_library_scan_from_entry(
     }
 
     scan_requested(PathBuf::from(path_text))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use sustain_app_runtime::ApplicationRuntime;
+
+    use super::*;
+    use crate::command_controller::UiCommandController;
+
+    fn switch_labelled(root: &gtk::Widget, label_text: &str) -> Option<gtk::Switch> {
+        let mut child = root.first_child();
+        let mut labelled = false;
+        while let Some(widget) = child {
+            if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+                labelled = label.text() == label_text;
+            } else if let Some(switch) = widget.downcast_ref::<gtk::Switch>() {
+                if labelled {
+                    return Some(switch.clone());
+                }
+            } else if let Some(found) = switch_labelled(&widget, label_text) {
+                return Some(found);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+
+    #[test]
+    fn flipping_the_sort_tag_switch_saves_it_and_re_files_the_lists() {
+        if !crate::test_support::with_gtk(|| {
+            let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+            let command_controller: SharedCommandController =
+                Rc::new(UiCommandController::new(runtime.clone()));
+            let re_filed = Rc::new(Cell::new(0));
+            let re_filed_by_tab = re_filed.clone();
+            let window = gtk::Window::new();
+            let page = build(
+                &window,
+                command_controller,
+                Rc::new(|_| Ok(())),
+                Rc::new(|| Ok(())),
+                Rc::new(move || re_filed_by_tab.set(re_filed_by_tab.get() + 1)),
+            );
+            let switch =
+                switch_labelled(&page, "Sort using sort-order tags").expect("the sort-tag switch");
+            assert!(switch.is_active(), "sort tags are honored by default");
+
+            switch.set_active(false);
+
+            assert!(!runtime.borrow().settings().library.honor_sort_tags);
+            assert_eq!(re_filed.get(), 1);
+        }) {
+            eprintln!("SMOKE: no display, skipping");
+        }
+    }
 }

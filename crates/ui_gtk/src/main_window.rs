@@ -52,7 +52,10 @@ use super::{
     },
     now_playing::NowPlayingView,
     playlists_header::{PlaylistsHeader, PlaylistsHeaderState},
-    preferences::{ViewSettingsChangedCallback, install_preferences_action, settings_button},
+    preferences::{
+        PreferencesHooks, SortTagsChangedCallback, ViewSettingsChangedCallback,
+        install_preferences_action, settings_button,
+    },
     queue_view::QueueView,
     shortcuts::{
         GlobalShortcutContext, create_new_playlist, install_global_shortcuts,
@@ -801,14 +804,29 @@ pub(crate) fn build_main_window(
         })
     };
 
+    // Re-files the Songs table and every other library list under the
+    // sort-tag preference the instant it changes.
+    let sort_tags_changed: SortTagsChangedCallback = {
+        let songs_refresh = songs_refresh.clone();
+        let library_views_refresh = library_views_refresh.clone();
+        std::rc::Rc::new(move || {
+            songs_refresh.refresh();
+            library_views_refresh();
+        })
+    };
+    let preferences_hooks = PreferencesHooks {
+        scan_requested: scan_requested.clone(),
+        consolidation_requested: consolidation_requested.clone(),
+        view_settings_changed,
+        sort_tags_changed,
+    };
+
     install_preferences_action(
         app,
         &window,
         command_controller.clone(),
         database_path.clone(),
-        scan_requested.clone(),
-        consolidation_requested.clone(),
-        view_settings_changed.clone(),
+        preferences_hooks.clone(),
     );
 
     let main_content = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -824,9 +842,7 @@ pub(crate) fn build_main_window(
         &window,
         command_controller,
         database_path,
-        scan_requested,
-        consolidation_requested.clone(),
-        view_settings_changed,
+        preferences_hooks,
     );
 
     main_content.append(content_stack.widget());

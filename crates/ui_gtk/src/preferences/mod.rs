@@ -27,6 +27,20 @@ mod views_tab;
 /// threaded down to the Views tab.
 pub(crate) type ViewSettingsChangedCallback = std::rc::Rc<dyn Fn()>;
 
+/// Re-files the library lists the moment the sort-tag preference
+/// changes, so the switch shows its effect while Preferences is open.
+pub(crate) type SortTagsChangedCallback = std::rc::Rc<dyn Fn()>;
+
+/// What Preferences asks of the main window, where the widgets a
+/// preference acts on live.
+#[derive(Clone)]
+pub(crate) struct PreferencesHooks {
+    pub(crate) scan_requested: LibraryScanRequestedCallback,
+    pub(crate) consolidation_requested: LibraryConsolidationRequestedCallback,
+    pub(crate) view_settings_changed: ViewSettingsChangedCallback,
+    pub(crate) sort_tags_changed: SortTagsChangedCallback,
+}
+
 /// Pixel size of the icon stacked above each tab label. The strip is
 /// intentionally taller than the GTK default chrome — matching the
 /// integrated top bar convention noted in CLAUDE.md and giving the
@@ -71,9 +85,7 @@ pub(crate) fn install_preferences_action(
     window: &gtk::ApplicationWindow,
     command_controller: SharedCommandController,
     database_path: PathBuf,
-    scan_requested: LibraryScanRequestedCallback,
-    consolidation_requested: LibraryConsolidationRequestedCallback,
-    view_settings_changed: ViewSettingsChangedCallback,
+    hooks: PreferencesHooks,
 ) {
     if app.lookup_action("preferences").is_some() {
         return;
@@ -86,8 +98,6 @@ pub(crate) fn install_preferences_action(
     let preferences = gio::SimpleAction::new("preferences", Some(glib::VariantTy::STRING));
     let window = window.clone();
     let command_controller = command_controller.clone();
-    let scan_requested = scan_requested.clone();
-    let consolidation_requested = consolidation_requested.clone();
     preferences.connect_activate(move |_action, parameter| {
         let initial_tab = parameter
             .and_then(glib::Variant::str)
@@ -97,9 +107,7 @@ pub(crate) fn install_preferences_action(
             &window,
             command_controller.clone(),
             database_path.clone(),
-            scan_requested.clone(),
-            consolidation_requested.clone(),
-            view_settings_changed.clone(),
+            hooks.clone(),
             initial_tab,
         );
     });
@@ -135,9 +143,7 @@ pub(crate) fn settings_button(
     window: &gtk::ApplicationWindow,
     command_controller: SharedCommandController,
     database_path: PathBuf,
-    scan_requested: LibraryScanRequestedCallback,
-    consolidation_requested: LibraryConsolidationRequestedCallback,
-    view_settings_changed: ViewSettingsChangedCallback,
+    hooks: PreferencesHooks,
 ) -> gtk::Button {
     let icon = gtk::Image::from_icon_name("preferences-system-symbolic");
     icon.set_pixel_size(14);
@@ -158,16 +164,12 @@ pub(crate) fn settings_button(
 
     let window = window.clone();
     let command_controller = command_controller.clone();
-    let scan_requested = scan_requested.clone();
-    let consolidation_requested = consolidation_requested.clone();
     button.connect_clicked(move |_| {
         open_preferences_window(
             &window,
             command_controller.clone(),
             database_path.clone(),
-            scan_requested.clone(),
-            consolidation_requested.clone(),
-            view_settings_changed.clone(),
+            hooks.clone(),
             TAB_LIBRARY,
         );
     });
@@ -179,9 +181,7 @@ fn open_preferences_window(
     parent: &gtk::ApplicationWindow,
     command_controller: SharedCommandController,
     database_path: PathBuf,
-    scan_requested: LibraryScanRequestedCallback,
-    consolidation_requested: LibraryConsolidationRequestedCallback,
-    view_settings_changed: ViewSettingsChangedCallback,
+    hooks: PreferencesHooks,
     initial_tab: &str,
 ) {
     let window = gtk::Window::builder()
@@ -239,8 +239,9 @@ fn open_preferences_window(
     let library_page = library_tab::build(
         window.upcast_ref(),
         command_controller.clone(),
-        scan_requested,
-        consolidation_requested,
+        hooks.scan_requested,
+        hooks.consolidation_requested,
+        hooks.sort_tags_changed,
     );
     stack.add_named(&library_page, Some(TAB_LIBRARY));
 
@@ -256,7 +257,7 @@ fn open_preferences_window(
     let shuffle_page = shuffle_tab::build(window.upcast_ref(), command_controller.clone());
     stack.add_named(&shuffle_page, Some(TAB_SHUFFLE));
 
-    let views_page = views_tab::build(command_controller, view_settings_changed);
+    let views_page = views_tab::build(command_controller, hooks.view_settings_changed);
     stack.add_named(&views_page, Some(TAB_VIEWS));
 
     let about_page = about_tab::build(&window, &database_path);
