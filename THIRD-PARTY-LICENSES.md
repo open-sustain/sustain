@@ -33,7 +33,7 @@ in the Flatpak.
 
 - **Apache License 2.0** (`Apache-2.0`) — 155 crate(s)
 - **MIT License** (`MIT`) — 54 crate(s)
-- **Unicode License v3** (`Unicode-3.0`) — 19 crate(s)
+- **Unicode License v3** (`Unicode-3.0`) — 20 crate(s)
 - **Mozilla Public License 2.0** (`MPL-2.0`) — 16 crate(s)
 - **ISC License** (`ISC`) — 4 crate(s)
 - **BSD 3-Clause "New" or "Revised" License** (`BSD-3-Clause`) — 2 crate(s)
@@ -74,6 +74,7 @@ Applies to:
 
 - [static_assertions 1.1.0](https://github.com/nvzqz/static-assertions-rs)
 - [tinyvec 1.11.0](https://github.com/Lokathor/tinyvec)
+- [ureq-proto 0.7.1](https://github.com/algesten/ureq-proto)
 - [utf8_iter 1.0.4](https://github.com/hsivonen/utf8_iter)
 - [zeroize 1.8.2](https://github.com/RustCrypto/utils)
 
@@ -949,7 +950,7 @@ Applies to:
 
 Applies to:
 
-- [moxcms 0.7.11](https://github.com/awxkee/moxcms.git)
+- [moxcms 0.8.1](https://github.com/awxkee/moxcms.git)
 - [pxfm 0.1.29](https://github.com/awxkee/pxfm)
 
 ```text
@@ -1163,7 +1164,7 @@ Applies to:
 
 Applies to:
 
-- [ureq 3.3.0](https://github.com/algesten/ureq)
+- [ureq 3.5.2](https://github.com/algesten/ureq)
 - [zune-core 0.5.1](https://github.com/etemesi254/zune-image)
 - [zune-jpeg 0.5.15](https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg)
 
@@ -1816,7 +1817,7 @@ Applies to:
 
 Applies to:
 
-- [formatx 0.3.0](https://github.com/clitic/formatx)
+- [formatx 0.4.2](https://github.com/clitic/formatx)
 
 ```text
                                  Apache License
@@ -3531,7 +3532,7 @@ Applies to:
 - [async-channel 2.5.0](https://github.com/smol-rs/async-channel)
 - [async-io 2.6.0](https://github.com/smol-rs/async-io)
 - [autocfg 1.5.1](https://github.com/cuviper/autocfg)
-- [base64 0.22.1](https://github.com/marshallpierce/rust-base64)
+- [base64 0.23.1](https://github.com/marshallpierce/rust-base64)
 - [biquad 0.6.0](https://github.com/korken89/biquad-rs)
 - [bitflags 2.13.2](https://github.com/bitflags/bitflags)
 - [cc 1.2.62](https://github.com/rust-lang/cc-rs)
@@ -3588,7 +3589,7 @@ Applies to:
 - [stable_deref_trait 1.2.1](https://github.com/storyyeller/stable_deref_trait)
 - [system-deps 7.0.8](https://github.com/gdesmott/system-deps)
 - [tempfile 3.27.0](https://github.com/Stebalien/tempfile)
-- [unicode-normalization 0.1.25](https://github.com/unicode-rs/unicode-normalization)
+- [unicode-normalization 0.1.26](https://github.com/unicode-rs/unicode-normalization)
 - [url 2.5.8](https://github.com/servo/rust-url)
 - [uuid 1.23.1](https://github.com/uuid-rs/uuid)
 
@@ -4235,7 +4236,7 @@ Applies to:
 - [crypto-common 0.2.2](https://github.com/RustCrypto/traits)
 - [digest 0.11.3](https://github.com/RustCrypto/traits)
 - [hybrid-array 0.4.12](https://github.com/RustCrypto/hybrid-array)
-- [sha2 0.11.0](https://github.com/RustCrypto/hashes)
+- [sha2 0.11.1](https://github.com/RustCrypto/hashes)
 
 ```text
                               Apache License
@@ -5381,7 +5382,7 @@ Applies to:
 - [fdeflate 0.3.7](https://github.com/image-rs/fdeflate)
 - [field-offset 0.3.6](https://github.com/Diggsey/rust-field-offset)
 - [image-webp 0.2.4](https://github.com/image-rs/image-webp)
-- [image 0.25.9](https://github.com/image-rs/image)
+- [image 0.25.10](https://github.com/image-rs/image)
 - [itoa 1.0.18](https://github.com/dtolnay/itoa)
 - [libc 0.2.191](https://github.com/rust-lang/libc)
 - [lofty 0.24.0](https://github.com/Serial-ATA/lofty-rs)
@@ -5408,7 +5409,6 @@ Applies to:
 - [thiserror-impl 2.0.21](https://github.com/dtolnay/thiserror)
 - [thiserror 2.0.21](https://github.com/dtolnay/thiserror)
 - [unicode-ident 1.0.24](https://github.com/dtolnay/unicode-ident)
-- [ureq-proto 0.6.0](https://github.com/algesten/ureq-proto)
 - [utf8-zero 0.8.1](https://github.com/algesten/utf8-zero)
 
 ```text
@@ -6273,8 +6273,8 @@ The GNU General Public License does not permit incorporating your program into p
 
 Applies to:
 
-- [libsqlite3-sys 0.39.1](https://github.com/rusqlite/rusqlite)
-- [rusqlite 0.41.1](https://github.com/rusqlite/rusqlite)
+- [libsqlite3-sys 0.40.0](https://github.com/rusqlite/rusqlite)
+- [rusqlite 0.42.0](https://github.com/rusqlite/rusqlite)
 
 ```text
 Copyright (c) 2014 The rusqlite developers
@@ -6512,8 +6512,8 @@ DEALINGS IN THE SOFTWARE.
 
 Applies to:
 
-- [zbus 6.2.1](https://github.com/z-galaxy/zbus/)
-- [zbus_macros 6.2.1](https://github.com/z-galaxy/zbus/)
+- [zbus 6.3.0](https://github.com/z-galaxy/zbus/)
+- [zbus_macros 6.3.0](https://github.com/z-galaxy/zbus/)
 - [zbus_utils 6.1.0](https://github.com/z-galaxy/zbus/)
 
 ```text
@@ -7854,6 +7854,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 Applies to:
 
 - [unicode-ident 1.0.24](https://github.com/dtolnay/unicode-ident)
+- [unicode-normalization 0.1.26](https://github.com/unicode-rs/unicode-normalization)
 
 ```text
 UNICODE LICENSE V3
