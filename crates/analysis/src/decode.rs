@@ -30,6 +30,8 @@
 
 use std::path::Path;
 
+use crate::audio_bytes::AudioBytes;
+
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::probe::Hint;
@@ -92,7 +94,11 @@ fn decode_region(path: &Path, region: Region) -> Result<DecodedAudio, AnalysisEr
         path: path_label.clone(),
         source,
     })?;
-    let media_source = MediaSourceStream::new(Box::new(file), Default::default());
+    let audio_bytes = AudioBytes::new(file).map_err(|source| AnalysisError::OpenFailed {
+        path: path_label.clone(),
+        source,
+    })?;
+    let media_source = MediaSourceStream::new(Box::new(audio_bytes), Default::default());
 
     let mut hint = Hint::new();
     if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
@@ -441,13 +447,13 @@ mod tests {
         );
     }
 
-    /// One second of a 440 Hz sine in an M4A container — one fixture per
-    /// codec an M4A file carries (generated with ffmpeg; see `testdata/`).
-    fn assert_m4a_decodes(name: &str) {
+    /// One second of a 440 Hz sine — one fixture per container and codec
+    /// (generated with ffmpeg; see `testdata/`).
+    fn assert_sine_decodes(name: &str) -> super::DecodedAudio {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
             .join(name);
-        let audio = decode_full(&path).expect("decode m4a");
+        let audio = decode_full(&path).expect("decode the fixture");
         assert_eq!(audio.sample_rate, 44_100);
         let seconds = audio.samples.len() as f64 / 44_100.0;
         assert!((seconds - 1.0).abs() < 0.05, "{name}: decoded {seconds} s");
@@ -456,12 +462,21 @@ mod tests {
             .iter()
             .fold(0.0_f32, |peak, s| peak.max(s.abs()));
         assert!(peak > 0.1, "{name}: decoded silence");
+        audio
     }
 
     #[test]
     fn decode_full_reads_aac_and_apple_lossless_m4a() {
-        assert_m4a_decodes("sine-aac.m4a");
-        assert_m4a_decodes("sine-alac.m4a");
+        let _ = assert_sine_decodes("sine-aac.m4a");
+        let _ = assert_sine_decodes("sine-alac.m4a");
+    }
+
+    #[test]
+    fn decode_full_reads_a_flac_followed_by_an_id3v1_tag_to_its_last_sample() {
+        let plain = assert_sine_decodes("sine.flac");
+        let tagged = assert_sine_decodes("sine-id3v1.flac");
+        assert_eq!(plain.samples.len(), 44_100);
+        assert_eq!(tagged.samples, plain.samples);
     }
 
     /// A 2 ms burst half a second into one second of silence, in AAC,

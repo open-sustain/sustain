@@ -78,6 +78,7 @@
 //! respectively. This crate touches the filesystem only to read the
 //! audio file.
 
+mod audio_bytes;
 mod bands;
 mod beat_tracking;
 mod decode;

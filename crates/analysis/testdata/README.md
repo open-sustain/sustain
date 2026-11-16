@@ -28,3 +28,14 @@ m['----:com.apple.iTunes:iTunSMPB'] = [MP4FreeForm(
     b' 00000000 00000000 00000000 00000000 00000000 00000000')]
 m.save()"
 ```
+
+FLAC fixtures: the same sine, and the same file followed by the 128-byte
+ID3v1 tag older taggers appended to FLAC files too:
+
+```
+ffmpeg -f lavfi -i "sine=frequency=440:duration=1:sample_rate=44100" -ac 1 \
+  -c:a flac -map_metadata -1 -fflags +bitexact -flags:a +bitexact sine.flac
+python3 -c "
+tag = b'TAG' + b'Title'.ljust(30, b'\0') + b'Artist'.ljust(30, b'\0') + b'\0' * 64 + b'\xff'
+open('sine-id3v1.flac', 'wb').write(open('sine.flac', 'rb').read() + tag)"
+```
