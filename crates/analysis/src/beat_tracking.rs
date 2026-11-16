@@ -99,7 +99,7 @@ const METRICAL_ALTERNATIVES: [f64; 6] = [
 /// How far around a metrical level its tempo is searched when levels
 /// are compared. Wider than [`ESTIMATE_SPAN`]: an alternative sits at a
 /// ratio of an estimate that is itself off by up to that span, and a
-/// level measured off its tempo loses to any other. On 3,676 tracks
+/// level measured off its tempo loses to any other. On 3,660 tracks
 /// with a reference tempo, every span from 2 to 5 % fixed far more
 /// tempos than it broke, and this one broke none
 /// (`docs/analysis-benchmark-results.md`, tempo v17).

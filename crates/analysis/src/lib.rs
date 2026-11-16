@@ -317,8 +317,8 @@ pub use waveform::WaveformTiers;
 /// decides for a faster level; it cannot for a slower one — a sparse kick
 /// lands on fewer beats more squarely — so a slower level also has to
 /// catch no less of the kick and of the mid band in total than the one it
-/// replaces (`MetricalLevel::replaces`). Against rekordbox, 6 of the 959
-/// development tracks and 7 of the 600 held out come right and none goes
+/// replaces (`MetricalLevel::replaces`). Against rekordbox, 6 of the 953
+/// development tracks and 7 of the 590 held out come right and none goes
 /// wrong; against human annotations, 27 of GiantSteps Tempo's 661 tracks,
 /// 41 of GTZAN's 933 and 17 of Ballroom's 523 come right and none goes
 /// wrong. Every tempo and grid is measured again.

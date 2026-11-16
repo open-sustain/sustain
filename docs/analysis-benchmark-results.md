@@ -1434,11 +1434,14 @@ Three things had to change for that to work:
 
 | Set | Reference | Tracks | Within 2 % before | **after** | Fixed | Broken | Wrong → other wrong |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Dance development subset | rekordbox | 959 | 924 | **930** | **6** | **0** | 2 |
-| Held-out random sample, all genres | rekordbox | 600 | 460 | **467** | **7** | **0** | 0 |
+| Dance development subset | rekordbox | 953 | 924 | **930** | **6** | **0** | 2 |
+| Held-out random sample, all genres | rekordbox | 590 | 460 | **467** | **7** | **0** | 0 |
 | GiantSteps Tempo | human | 661 | 429 | **456** | **27** | **0** | 16 |
 | GTZAN | human beats | 933 | 562 | **603** | **41** | **0** | 30 |
 | Ballroom | human beats | 523 | 349 | **366** | **17** | **0** | 16 |
+
+Tracks are those whose file could be read: 6 of the 959 development files
+and 10 of the 600 held out have moved since the lists were drawn.
 
 The rule and its constants were chosen on the two rekordbox sets and
 GiantSteps Tempo together, with GTZAN and Ballroom watched, so none of the
@@ -1460,7 +1463,7 @@ How firm the numbers are:
   of the method.
 - **The mid-band test** matters: without it one held-out track, three
   GiantSteps and five GTZAN tracks break. It never refused a faster level on
-  any of the 3,676 tracks, so it is asked of slower levels only.
+  any of the 3,660 tracks, so it is asked of slower levels only.
 - **The walk** (checking the winner's own alternatives) is worth two fixes on
   the development set and six on GTZAN. Without ×5/4 and ×4/5 the
   development set gains one track instead of six.
@@ -1487,10 +1490,13 @@ non-zero frames in the coarse tempo search, with identical tempos and grids,
 which brings the BPM pass to 7 % over v16 (measured side by side on the same
 156 tracks).
 
-#283 stays open. On the development set 18 in-range errors remain: 1 at
-2/3×, 1 at 3/4×, 2 at 4/3×, 2 at 3/2×, 2 at 4/5×, 10 elsewhere. By the hold
-measure two of them are Sustain's (the 2/3× and one 4/3×), two are
-rekordbox's (one 4/5×, one 3/2×), and the rest are undecided. Ten tracks
+#283 stays open. On the development set 12 in-range errors remain: 1 at
+2/3×, 1 at 3/4×, 2 at 4/3×, 2 at 3/2×, 2 at 4/5×, 1 at 9/8× and 3 that are
+3 to 8 % slow. By the hold measure two of them are Sustain's (the 2/3× and
+one 4/3×), two are rekordbox's (one 4/5×, one 3/2×), and the rest are
+undecided. The 88 in-range errors held out are another kind of problem: 47
+sit at no small ratio, 34 of those within 10 % of the tempo (music that
+drifts or was never played to a click). Ten tracks
 above 155 BPM still fold to half tempo by design.
 
 ## 2026-11-15 — key: register-split and bass-register chroma, measured and not shipped
