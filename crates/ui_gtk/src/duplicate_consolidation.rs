@@ -14,7 +14,7 @@ use sustain_app_runtime::{
     NotificationCategory, NotificationSeverity, Track, TrackId, TrackMetadata,
     default_duplicate_merge_choices, highest_quality_duplicate_artwork,
 };
-use sustain_i18n::{gettext, pgettext, tr_format};
+use sustain_i18n::{gettext, ngettext, pgettext, plural_count, tr_format};
 
 use crate::{
     SharedRuntime,
@@ -793,7 +793,18 @@ pub(crate) fn metadata_field_display(
             .lyrics
             .as_ref()
             .filter(|lyrics| !lyrics.trim().is_empty())
-            .map(|lyrics| format!("{} characters", lyrics.chars().count())),
+            .map(|lyrics| {
+                let count = lyrics.chars().count();
+                tr_format!(
+                    // Translators: the length of a track's lyrics.
+                    ngettext(
+                        "{count} character",
+                        "{count} characters",
+                        plural_count(count)
+                    ),
+                    count = count
+                )
+            }),
     };
     value.filter(|value| !value.trim().is_empty())
 }

@@ -43,4 +43,9 @@ trak = "trak"
 # and any dependency bump can introduce more. The file's only hand-written
 # prose lives in `about.hbs`, which typos still scans, so excluding the
 # generated output costs no real spell-check coverage.
-extend-exclude = ["THIRD-PARTY-LICENSES.md"]
+#
+# The `po/*.po` translation catalogs are French, German, Spanish, ... prose
+# that an English spell checker can only misread (`Titel`, `curso`). Their
+# English source strings live in `po/sustain.pot`, which typos still scans,
+# so every msgid stays checked.
+extend-exclude = ["THIRD-PARTY-LICENSES.md", "po/*.po"]

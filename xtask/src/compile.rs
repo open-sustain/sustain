@@ -22,7 +22,7 @@ pub fn run() -> Result<(), String> {
 /// Compile against an explicit workspace root (the real one, or a fixture in
 /// tests).
 pub fn run_in(root: &Path) -> Result<(), String> {
-    tools::preflight()?;
+    tools::preflight_compile()?;
 
     let po_dir = workspace::po_dir(root);
     let langs = workspace::linguas(root)?;

@@ -88,6 +88,7 @@ See [docs/features.md](docs/features.md) for the full reference.
 - **CDJ/XDJ-ready Rekordbox export**: writes the full Pioneer feature set to the drive (BPM, key, beat grids, waveforms and artwork) so the hardware reads it natively; the only Linux music app I know of that does this, not just copies files (*Sustain-native*)
 - Play and rip audio CDs: play a disc straight from the drive, or rip it into the library with MusicBrainz Disc ID lookup, embedded cover art, and FLAC / MP3 256 / MP3 320 encoding (*iso-iTunes*)
 - Native light / dark theme and system accent color (*Sustain-native*)
+- Localized in French, German, Spanish, Portuguese, Italian, Dutch, and Korean, following the desktop's language (*iso-iTunes*)
 
 ## Install
 

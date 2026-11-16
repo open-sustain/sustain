@@ -975,6 +975,16 @@ quality.
 GNOME's accent color is honored for selection highlights, buttons, and
 focus rings. Changing the system accent updates Sustain immediately.
 
+### Interface language — *iso-iTunes*
+Sustain speaks the desktop's language. The interface, notifications,
+dialogs, the desktop entry, and the AppStream description are translated
+into French, German, Spanish, European Portuguese, Italian, Dutch, and
+Korean, and fall back to English for any other locale. As with the
+theme, there is no in-app language picker: the standard locale
+environment (`LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`) decides.
+Counts follow each language's plural rules, and large numbers use its
+thousands separator.
+
 ---
 
 ## Track context menu — *iso-iTunes*

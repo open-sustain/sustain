@@ -100,11 +100,11 @@ fn build_backup_section(database_path: &Path) -> gtk::Widget {
     section.set_halign(gtk::Align::Center);
     section.set_margin_top(20);
 
-    section.append(&centered_helper_label(
+    section.append(&centered_helper_label(&gettext(
         "Playlists and listening stats live only in Sustain's database — your \
          ratings, tags, and artwork are also written to your music files. Back \
          up this folder alongside your music:",
-    ));
+    )));
 
     let folder = backup_folder(database_path);
     // Default foreground (not the muted helper class) so the path stands

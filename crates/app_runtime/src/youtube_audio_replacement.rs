@@ -221,25 +221,27 @@ impl ApplicationRuntime {
 }
 
 fn youtube_audio_download_error_text(error: YoutubeAudioDownloadError) -> String {
-    gettext(match error {
-        YoutubeAudioDownloadError::InvalidUrl => "Paste a valid YouTube URL.",
+    match error {
+        YoutubeAudioDownloadError::InvalidUrl => gettext("Paste a valid YouTube URL."),
         YoutubeAudioDownloadError::YtDlpUnavailable => {
-            "Install yt-dlp and FFmpeg before replacing audio from YouTube."
+            gettext("Install yt-dlp and FFmpeg before replacing audio from YouTube.")
         }
         YoutubeAudioDownloadError::DownloadFailed => {
-            "yt-dlp could not download usable audio from that YouTube URL."
+            gettext("yt-dlp could not download usable audio from that YouTube URL.")
         }
         YoutubeAudioDownloadError::OutputRejected => {
-            "yt-dlp returned an unsupported or unsafe audio file."
+            gettext("yt-dlp returned an unsupported or unsafe audio file.")
         }
         YoutubeAudioDownloadError::PayloadTooLarge => {
-            "The downloaded YouTube replacement exceeded Sustain's size limit."
+            gettext("The downloaded YouTube replacement exceeded Sustain's size limit.")
         }
         YoutubeAudioDownloadError::TimedOut => {
-            "The YouTube audio download exceeded Sustain's time limit."
+            gettext("The YouTube audio download exceeded Sustain's time limit.")
         }
-        YoutubeAudioDownloadError::Cancelled => "The YouTube audio download was cancelled.",
-    })
+        YoutubeAudioDownloadError::Cancelled => {
+            gettext("The YouTube audio download was cancelled.")
+        }
+    }
 }
 
 pub(crate) fn replace_track_audio_from_youtube(

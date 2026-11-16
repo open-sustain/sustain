@@ -60,7 +60,8 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             libdiscid-dev \
-            libclang-dev
+            libclang-dev \
+            gettext
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -74,6 +75,13 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: cargo-deb
+
+      # The .deb's assets include the compiled catalogs and the localized
+      # desktop/AppStream files from target/i18n/dist; cargo-deb fails on a
+      # missing asset, so a skipped compile cannot ship an English-only package.
+      # Compiling needs only msgfmt, which trixie's gettext provides.
+      - name: Compile translations
+        run: cargo run --locked -p xtask -- i18n-compile
 
       - name: Build release .deb
         run: cargo deb -p sustain-app --locked
@@ -107,7 +115,8 @@ jobs:
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             libdiscid-dev \
-            libclang-dev
+            libclang-dev \
+            gettext
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -121,6 +130,13 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: cargo-deb
+
+      # The .deb's assets include the compiled catalogs and the localized
+      # desktop/AppStream files from target/i18n/dist; cargo-deb fails on a
+      # missing asset, so a skipped compile cannot ship an English-only package.
+      # Compiling needs only msgfmt, which trixie's gettext provides.
+      - name: Compile translations
+        run: cargo run --locked -p xtask -- i18n-compile
 
       - name: Build release .deb
         run: cargo deb -p sustain-app --locked
@@ -168,6 +184,13 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates
+
+      # The checkout provides po/LINGUAS, the list of locales the package must
+      # carry a catalog for.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: source
 
       - name: Download .deb artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -218,6 +241,13 @@ jobs:
           # (cargo-about excludes private workspace crates from the inventory).
           grep -qE '/usr/share/doc/sustain/sustain-dsp/LICENSE-MIT$' /tmp/deb-contents.txt
           grep -qE '/usr/share/doc/sustain/sustain-dsp/LICENSE-APACHE$' /tmp/deb-contents.txt
+          # One compiled catalog per locale in po/LINGUAS. Checked against the
+          # package contents for the same reason as the notices above: minimal
+          # Ubuntu images also strip /usr/share/locale at unpack time.
+          for lang in $(grep -v '^#' source/po/LINGUAS); do
+            grep -qE "/usr/share/locale/${lang}/LC_MESSAGES/sustain\.mo$" /tmp/deb-contents.txt \
+              || { echo "The .deb carries no catalog for ${lang}"; exit 1; }
+          done
 
   # Distro-agnostic build for users on Elementary / Zorin / Mint /
   # Fedora / openSUSE / etc. Targets the org.gnome.Platform//48

@@ -24,7 +24,7 @@ pub fn run() -> Result<(), String> {
 /// Check against an explicit workspace root (the real one, or a fixture in
 /// tests).
 pub fn run_in(root: &Path) -> Result<(), String> {
-    tools::preflight()?;
+    tools::preflight_maintenance()?;
     let mut problems = Vec::new();
 
     check_pot_current(root, &mut problems)?;

@@ -55,11 +55,11 @@ pub(super) fn build(
 /// match — there is no learning), and the *where* (everything runs on
 /// your own machine).
 fn build_intro_paragraph() -> gtk::Widget {
-    let label = gtk::Label::new(Some(
+    let label = gtk::Label::new(Some(&gettext(
         "Smart Shuffle tries to follow your mood by using the current track's \
          genre, tempo, key, era and discovery period to choose the next track. \
          Turning on audio analysis allows for even better picks.",
-    ));
+    )));
     label.add_css_class("preference-helper");
     label.set_xalign(0.0);
     label.set_wrap(true);
@@ -195,7 +195,7 @@ fn build_entropy_section(
     mark_label_row.append(&mark_label(&gettext("Adventurous"), gtk::Align::End));
     container.append(&mark_label_row);
 
-    let caption = gtk::Label::new(Some(entropy_caption(initial_entropy)));
+    let caption = gtk::Label::new(Some(&entropy_caption(initial_entropy)));
     caption.add_css_class("preference-helper");
     caption.set_xalign(0.0);
     caption.set_wrap(true);
@@ -208,7 +208,7 @@ fn build_entropy_section(
     let caption_for_callback = caption.clone();
     scale.connect_value_changed(move |s| {
         let entropy = value_to_entropy(s.value());
-        caption_for_callback.set_text(entropy_caption(entropy));
+        caption_for_callback.set_text(&entropy_caption(entropy));
         let mut settings = controller.runtime().borrow().settings().clone();
         if settings.playback.smart_shuffle_entropy == entropy {
             return;
@@ -244,20 +244,20 @@ fn value_to_entropy(value: f64) -> SmartShuffleEntropy {
     }
 }
 
-fn entropy_caption(entropy: SmartShuffleEntropy) -> &'static str {
+fn entropy_caption(entropy: SmartShuffleEntropy) -> String {
     match entropy {
-        SmartShuffleEntropy::Focused => {
+        SmartShuffleEntropy::Focused => gettext(
             "Almost always plays the highest-scoring continuation. \
-             Predictable picks, less surprise."
-        }
-        SmartShuffleEntropy::Balanced => {
+             Predictable picks, less surprise.",
+        ),
+        SmartShuffleEntropy::Balanced => gettext(
             "Favours strong continuations but mixes in the occasional \
-             looser match. The default."
-        }
-        SmartShuffleEntropy::Adventurous => {
+             looser match. The default.",
+        ),
+        SmartShuffleEntropy::Adventurous => gettext(
             "Casts a wider net and spreads picks more evenly across it. \
-             More variety, more deep cuts."
-        }
+             More variety, more deep cuts.",
+        ),
     }
 }
 

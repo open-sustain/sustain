@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-16 20:16+0100\n"
+"POT-Creation-Date: 2026-11-16 20:37+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -206,6 +206,13 @@ msgstr ""
 #: crates/ui_gtk/src/track_context.rs:811
 #, rust-format
 msgid "All"
+msgstr ""
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:250
+#, rust-format
+msgid ""
+"Almost always plays the highest-scoring continuation. Predictable picks, "
+"less surprise."
 msgstr ""
 
 #: crates/ui_gtk/src/device_panel.rs:641
@@ -469,6 +476,13 @@ msgstr ""
 #: crates/ui_gtk/src/status_bar.rs:201
 #, rust-format
 msgid "Cancelling..."
+msgstr ""
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:258
+#, rust-format
+msgid ""
+"Casts a wider net and spreads picks more evenly across it. More variety, "
+"more deep cuts."
 msgstr ""
 
 #: crates/ui_gtk/src/track_info/file_page.rs:82
@@ -884,6 +898,13 @@ msgstr ""
 msgid "Fast"
 msgstr ""
 
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:254
+#, rust-format
+msgid ""
+"Favours strong continuations but mixes in the occasional looser match. The "
+"default."
+msgstr ""
+
 #: data/io.github.open_sustain.sustain.metainfo.xml:25
 msgid "Features:"
 msgstr ""
@@ -939,6 +960,11 @@ msgstr ""
 #: crates/ui_gtk/src/import_failures_dialog.rs:22
 #, rust-format
 msgid "Files Not Imported"
+msgstr ""
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:42
+#, rust-format
+msgid "Files in this folder are scanned into your Sustain library."
 msgstr ""
 
 #: crates/ui_gtk/src/device_panel.rs:302
@@ -1085,6 +1111,11 @@ msgstr ""
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:403
 #, rust-format
 msgid "Innocuous"
+msgstr ""
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:227
+#, rust-format
+msgid "Install yt-dlp and FFmpeg before replacing audio from YouTube."
 msgstr ""
 
 #: crates/ui_gtk/src/preferences/shuffle_tab.rs:329
@@ -1709,6 +1740,11 @@ msgstr[1] ""
 msgid "Paranoid"
 msgstr ""
 
+#: crates/app_runtime/src/youtube_audio_replacement.rs:225
+#, rust-format
+msgid "Paste a valid YouTube URL."
+msgstr ""
+
 #: crates/ui_gtk/src/youtube_audio_replacement.rs:61
 #, rust-format
 msgid ""
@@ -1803,6 +1839,14 @@ msgstr ""
 #: crates/ui_gtk/src/sidebar.rs:236
 #, rust-format
 msgid "Playlists"
+msgstr ""
+
+#: crates/ui_gtk/src/preferences/about_tab.rs:104
+#, rust-format
+msgid ""
+"Playlists and listening stats live only in Sustain's database — your "
+"ratings, tags, and artwork are also written to your music files. Back up "
+"this folder alongside your music:"
 msgstr ""
 
 #: crates/ui_gtk/src/device_panel.rs:234
@@ -2154,6 +2198,14 @@ msgid ""
 "are summed, oldest date added is preserved."
 msgstr ""
 
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:273
+#, rust-format
+msgid ""
+"Sets the tempo window Sustain uses when folding half-time and double-time "
+"detections. Widen it for very slow or fast music; narrow it if results tend "
+"to land at half or double the expected tempo."
+msgstr ""
+
 #: crates/ui_gtk/src/preferences/mod.rs:153
 #, rust-format
 msgid "Settings"
@@ -2259,6 +2311,14 @@ msgstr ""
 msgid "Smart Shuffle ready."
 msgstr ""
 
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:59
+#, rust-format
+msgid ""
+"Smart Shuffle tries to follow your mood by using the current track's genre, "
+"tempo, key, era and discovery period to choose the next track. Turning on "
+"audio analysis allows for even better picks."
+msgstr ""
+
 #: crates/ui_gtk/src/queue_view.rs:337
 #, rust-format
 msgid "Smart Shuffle will choose the next track."
@@ -2289,7 +2349,7 @@ msgstr ""
 msgid "Some empty managed-library folders could not be removed."
 msgstr ""
 
-#: crates/ui_gtk/src/device_panel.rs:1079
+#: crates/ui_gtk/src/device_panel.rs:1083
 #, rust-format
 msgid ""
 "Some selected tracks are not fully analysed ({gaps}). They will still sync, "
@@ -2372,12 +2432,12 @@ msgstr ""
 msgid "Sync"
 msgstr ""
 
-#: crates/ui_gtk/src/device_panel.rs:1117
+#: crates/ui_gtk/src/device_panel.rs:1121
 #, rust-format
 msgid "Sync and remove"
 msgstr ""
 
-#: crates/ui_gtk/src/device_panel.rs:1119
+#: crates/ui_gtk/src/device_panel.rs:1123
 #, rust-format
 msgid "Sync anyway"
 msgstr ""
@@ -2392,7 +2452,7 @@ msgstr ""
 msgid "Sync complete: {changes}; {unplayable}."
 msgstr ""
 
-#: crates/ui_gtk/src/device_panel.rs:1124
+#: crates/ui_gtk/src/device_panel.rs:1128
 #, rust-format
 msgid "Sync device"
 msgstr ""
@@ -2417,7 +2477,7 @@ msgstr ""
 msgid "Syncing"
 msgstr ""
 
-#: crates/ui_gtk/src/device_panel.rs:1094
+#: crates/ui_gtk/src/device_panel.rs:1098
 #, rust-format
 msgid ""
 "Syncing will remove {count} track from this device that is no longer in your "
@@ -2489,6 +2549,16 @@ msgstr[1] ""
 msgid "The CD could not be imported."
 msgstr ""
 
+#: crates/app_runtime/src/youtube_audio_replacement.rs:239
+#, rust-format
+msgid "The YouTube audio download exceeded Sustain's time limit."
+msgstr ""
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:242
+#, rust-format
+msgid "The YouTube audio download was cancelled."
+msgstr ""
+
 #: crates/app_runtime/src/notifications.rs:977
 #, rust-format
 msgid "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
@@ -2534,6 +2604,11 @@ msgstr ""
 #: crates/app_runtime/src/notifications.rs:990
 #, rust-format
 msgid "The disc is being imported. Play it once the import is done."
+msgstr ""
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:236
+#, rust-format
+msgid "The downloaded YouTube replacement exceeded Sustain's size limit."
 msgstr ""
 
 #: crates/app_runtime/src/youtube_audio_replacement.rs:131
@@ -3268,6 +3343,16 @@ msgstr ""
 msgid "value"
 msgstr ""
 
+#: crates/app_runtime/src/youtube_audio_replacement.rs:230
+#, rust-format
+msgid "yt-dlp could not download usable audio from that YouTube URL."
+msgstr ""
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:233
+#, rust-format
+msgid "yt-dlp returned an unsupported or unsafe audio file."
+msgstr ""
+
 #. Translators: both halves are the two phrases below, as in
 #. "Analyzed 12 tracks; 2 tracks could not be analyzed."
 #: crates/app_runtime/src/notifications.rs:473
@@ -3320,6 +3405,13 @@ msgstr[1] ""
 #, rust-format
 msgid "{count} channel"
 msgid_plural "{count} channels"
+msgstr[0] ""
+msgstr[1] ""
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:801
+#, rust-format
+msgid "{count} character"
+msgid_plural "{count} characters"
 msgstr[0] ""
 msgstr[1] ""
 
@@ -3425,22 +3517,22 @@ msgid_plural "{count} missing"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/ui_gtk/src/device_panel.rs:1055
+#: crates/ui_gtk/src/device_panel.rs:1059
 #, rust-format
 msgid "{count} missing BPM"
 msgstr ""
 
-#: crates/ui_gtk/src/device_panel.rs:1073
+#: crates/ui_gtk/src/device_panel.rs:1077
 #, rust-format
 msgid "{count} missing beat grid"
 msgstr ""
 
-#: crates/ui_gtk/src/device_panel.rs:1061
+#: crates/ui_gtk/src/device_panel.rs:1065
 #, rust-format
 msgid "{count} missing key"
 msgstr ""
 
-#: crates/ui_gtk/src/device_panel.rs:1067
+#: crates/ui_gtk/src/device_panel.rs:1071
 #, rust-format
 msgid "{count} missing waveform"
 msgstr ""
@@ -3467,6 +3559,13 @@ msgid ""
 "{count} of the selected files are missing from disk, so these duplicates "
 "can't be consolidated. Restore or remove them, then try again."
 msgstr ""
+
+#: crates/ui_gtk/src/device_panel.rs:859
+#, rust-format
+msgid "{count} other genre — {size}"
+msgid_plural "{count} other genres — {size}"
+msgstr[0] ""
+msgstr[1] ""
 
 #: crates/app_runtime/src/notifications.rs:329
 #, rust-format

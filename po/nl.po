@@ -1,0 +1,3734 @@
+# Dutch translation of Sustain.
+# Copyright (C) 2026 AnnoyingTechnology
+# This file is distributed under the same license as the Sustain package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Sustain\n"
+"Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
+"POT-Creation-Date: 2026-11-16 20:37+0100\n"
+"PO-Revision-Date: 2026-11-16 20:38+0100\n"
+"Last-Translator: Sustain maintainers\n"
+"Language-Team: Dutch\n"
+"Language: nl\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:499
+#, rust-format
+msgid ""
+"\"{current_name}\" will be deleted along with every playlist, smart "
+"playlist, and folder inside it. This cannot be undone."
+msgstr "‘{current_name}’ wordt verwijderd, samen met alle afspeellijsten, slimme afspeellijsten en mappen erin. Dit kan niet ongedaan worden gemaakt."
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:511
+#, rust-format
+msgid ""
+"\"{current_name}\" will be removed from the sidebar. The tracks it currently "
+"matches stay in your library."
+msgstr "‘{current_name}’ wordt uit de zijbalk verwijderd. De nummers die er nu aan voldoen blijven in je bibliotheek."
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:505
+#, rust-format
+msgid ""
+"\"{current_name}\" will be removed from the sidebar. The tracks themselves "
+"stay in your library."
+msgstr "‘{current_name}’ wordt uit de zijbalk verwijderd. De nummers zelf blijven in je bibliotheek."
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:390
+#, rust-format
+msgid "\"{offending}\" is not a valid date (use YYYY-MM-DD)."
+msgstr "‘{offending}’ is geen geldige datum (gebruik JJJJ-MM-DD)."
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:384
+#, rust-format
+msgid "\"{offending}\" is not a valid rating (0 to 5)."
+msgstr "‘{offending}’ is geen geldige waardering (0 tot 5)."
+
+#: crates/ui_gtk/src/verified_duplicates.rs:211
+#, rust-format
+msgid "(empty)"
+msgstr "(leeg)"
+
+#. Translators: groups the thousands of a large number, as in "49,295".
+#. Use your language's separator, such as "." or a narrow no-break space.
+#: crates/ui_gtk/src/status_bar.rs:444
+#, rust-format
+msgctxt "thousands separator"
+msgid ","
+msgstr "."
+
+#. Translators: separates the items of a short list, as in
+#. "3 added, 1 updated". Keep any space the language puts after it.
+#: crates/i18n/src/lib.rs:97
+#, rust-format
+msgctxt "list separator"
+msgid ", "
+msgstr ", "
+
+#: crates/ui_gtk/src/track_info/details.rs:153
+#, rust-format
+msgid "0 (will reset on OK)"
+msgstr "0 (wordt bij OK op nul gezet)"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:30
+msgid "5-star ratings, play count, skip count, last played, last skipped"
+msgstr "waarderingen met 5 sterren, aantal keer afgespeeld, aantal keer overgeslagen, laatst afgespeeld, laatst overgeslagen"
+
+#: crates/app_runtime/src/device_sync.rs:599
+#: crates/app_runtime/src/device_sync.rs:655
+#, rust-format
+msgid "A device sync is already running."
+msgstr "Er loopt al een apparaatsynchronisatie."
+
+#: crates/app_runtime/src/notifications.rs:935
+#, rust-format
+msgid "A folder cannot be moved inside itself."
+msgstr "Een map kan niet in zichzelf worden verplaatst."
+
+#: crates/app_runtime/src/lib.rs:1186
+#, rust-format
+msgid ""
+"A managed-library metadata edit could not finish safely. Sustain retained "
+"its recovery state where needed. Resolve filesystem access and retry the "
+"edit."
+msgstr "Een metadatabewerking in de beheerde bibliotheek kon niet veilig worden afgerond. Sustain heeft waar nodig zijn herstelstatus bewaard. Los de toegang tot het bestandssysteem op en probeer de bewerking opnieuw."
+
+#: crates/ui_gtk/src/preferences/about_tab.rs:45
+#, rust-format
+msgid "A music library manager and player for the Linux desktop."
+msgstr "Een muziekbibliotheek en speler voor de Linux-desktop."
+
+#: crates/app_runtime/src/notifications.rs:925
+#, rust-format
+msgid "A smart playlist needs at least one rule."
+msgstr "Een slimme afspeellijst heeft minstens één regel nodig."
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:381
+#, rust-format
+msgid "A text rule needs a value."
+msgstr "Een tekstregel heeft een waarde nodig."
+
+#: crates/ui_gtk/src/preferences/mod.rs:302
+#, rust-format
+msgid "About"
+msgstr "Over"
+
+#: crates/ui_gtk/src/track_info/artwork.rs:94
+#, rust-format
+msgid "Add Artwork…"
+msgstr "Albumhoes toevoegen…"
+
+#: crates/ui_gtk/src/smart_playlist_editor.rs:600
+#, rust-format
+msgid "Add rule"
+msgstr "Regel toevoegen"
+
+#: crates/ui_gtk/src/track_context.rs:585
+#, rust-format
+msgid "Add to Playlist…"
+msgstr "Aan afspeellijst toevoegen…"
+
+#: crates/ui_gtk/src/track_context.rs:248
+#, rust-format
+msgid "Add to Queue"
+msgstr "Aan wachtrij toevoegen"
+
+#: crates/app_runtime/src/notifications.rs:380
+#, rust-format
+msgid "Adding tracks ({processed}/{total})..."
+msgstr "Nummers toevoegen ({processed}/{total})…"
+
+#: crates/app_runtime/src/notifications.rs:375
+#, rust-format
+msgid "Adding tracks..."
+msgstr "Nummers toevoegen…"
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:195
+#, rust-format
+msgid "Adventurous"
+msgstr "Avontuurlijk"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:405
+#, rust-format
+msgid "Aggressive"
+msgstr "Agressief"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:748
+#: crates/ui_gtk/src/track_info/details.rs:77
+#: crates/ui_gtk/src/track_info/multi.rs:289
+#: crates/ui_gtk/src/track_table/columns.rs:62
+#, rust-format
+msgid "Album"
+msgstr "Album"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:65
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Album"
+msgstr "Album"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:749
+#, rust-format
+msgid "Album Artist"
+msgstr "Albumartiest"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:62
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Album Artist"
+msgstr "Albumartiest"
+
+#: crates/ui_gtk/src/track_info/details.rs:80
+#: crates/ui_gtk/src/track_info/multi.rs:294
+#, rust-format
+msgid "Album artist"
+msgstr "Albumartiest"
+
+#: crates/ui_gtk/src/track_info/details.rs:111
+#: crates/ui_gtk/src/track_info/multi.rs:352
+#, rust-format
+msgid "Album is a compilation of songs by various artists"
+msgstr "Album is een compilatie van nummers van verschillende artiesten"
+
+#: crates/ui_gtk/src/sidebar.rs:193
+#, rust-format
+msgid "Albums"
+msgstr "Albums"
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:251
+#: crates/ui_gtk/src/sidebar/row_context.rs:316
+#: crates/ui_gtk/src/track_context.rs:769
+#: crates/ui_gtk/src/track_context.rs:811
+#, rust-format
+msgid "All"
+msgstr "Alle"
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:250
+#, rust-format
+msgid ""
+"Almost always plays the highest-scoring continuation. Predictable picks, "
+"less surprise."
+msgstr "Speelt bijna altijd het best scorende vervolg. Voorspelbare keuzes, weinig verrassingen."
+
+#: crates/ui_gtk/src/device_panel.rs:641
+#, rust-format
+msgid "Analyse {count} missing track"
+msgid_plural "Analyse {count} missing tracks"
+msgstr[0] "{count} ontbrekend nummer analyseren"
+msgstr[1] "{count} ontbrekende nummers analyseren"
+
+#: crates/ui_gtk/src/device_panel.rs:360
+#: crates/ui_gtk/src/preferences/mod.rs:295
+#, rust-format
+msgid "Analysis"
+msgstr "Analyse"
+
+#: crates/app_runtime/src/notifications.rs:544
+#, rust-format
+msgid "Analysis paused: the library database rejected a write ({detail})."
+msgstr "Analyse gepauzeerd: de bibliotheekdatabase weigerde een schrijfactie ({detail})."
+
+#: crates/app_runtime/src/notifications.rs:476
+#, rust-format
+msgid "Analyzed {completed} track"
+msgid_plural "Analyzed {completed} tracks"
+msgstr[0] "{completed} nummer geanalyseerd"
+msgstr[1] "{completed} nummers geanalyseerd"
+
+#: crates/app_runtime/src/notifications.rs:456
+#, rust-format
+msgid "Analyzed {completed} track."
+msgid_plural "Analyzed {completed} tracks."
+msgstr[0] "{completed} nummer geanalyseerd."
+msgstr[1] "{completed} nummers geanalyseerd."
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:180
+#: crates/ui_gtk/src/track_context.rs:664
+#, rust-format
+msgid "Analyze…"
+msgstr "Analyseren…"
+
+#: crates/app_runtime/src/notifications.rs:446
+#, rust-format
+msgid "Analyzing tracks ({processed}/{total})..."
+msgstr "Nummers analyseren ({processed}/{total})…"
+
+#: crates/app_runtime/src/notifications.rs:884
+#, rust-format
+msgid "Another background task is already running."
+msgstr "Er loopt al een andere achtergrondtaak."
+
+#: crates/ui_gtk/src/shortcuts.rs:458
+#, rust-format
+msgctxt "shortcuts group"
+msgid "Application"
+msgstr "Toepassing"
+
+#: crates/ui_gtk/src/cd_import_panel.rs:435
+#: crates/ui_gtk/src/duplicate_consolidation.rs:747
+#: crates/ui_gtk/src/track_info/details.rs:74
+#: crates/ui_gtk/src/track_info/multi.rs:287
+#: crates/ui_gtk/src/track_table/columns.rs:61
+#, rust-format
+msgid "Artist"
+msgstr "Artiest"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:59
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Artist"
+msgstr "Artiest"
+
+#: crates/ui_gtk/src/device_panel.rs:241
+#, rust-format
+msgid "Artists to sync"
+msgstr "Te synchroniseren artiesten"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:501
+#: crates/ui_gtk/src/sidebar/row_context.rs:292
+#: crates/ui_gtk/src/track_context.rs:793 crates/ui_gtk/src/track_info.rs:106
+#, rust-format
+msgid "Artwork"
+msgstr "Albumhoes"
+
+#: crates/ui_gtk/src/main_window/result_consumers.rs:514
+#, rust-format
+msgid "Artwork fetched. Saving it to the audio file."
+msgstr "Albumhoes opgehaald. Wordt opgeslagen in het audiobestand."
+
+#: crates/ui_gtk/src/track_info/artwork.rs:110
+#, rust-format
+msgid "Artwork is embedded in the audio file."
+msgstr "De albumhoes is ingesloten in het audiobestand."
+
+#: crates/app_runtime/src/lib.rs:1113
+#, rust-format
+msgid "Artwork updated."
+msgstr "Albumhoes bijgewerkt."
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:222
+#: crates/ui_gtk/src/track_context.rs:753
+#, rust-format
+msgid "Audio"
+msgstr "Audio"
+
+#: crates/app_runtime/src/cd_import/plan.rs:57
+#: crates/ui_gtk/src/cd_import_panel.rs:56 crates/ui_gtk/src/sidebar.rs:609
+#, rust-format
+msgid "Audio CD"
+msgstr "Audio-cd"
+
+#: crates/ui_gtk/src/missing_track.rs:170
+#, rust-format
+msgid "Audio Files"
+msgstr "Audiobestanden"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:46
+#, rust-format
+msgid "Audio analysis"
+msgstr "Audioanalyse"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:293
+#: crates/ui_gtk/src/track_info/format.rs:31
+#, rust-format
+msgid "Audio file"
+msgstr "Audiobestand"
+
+#: crates/ui_gtk/src/track_context.rs:823
+#, rust-format
+msgid "Audio from YouTube"
+msgstr "Audio van YouTube"
+
+#: crates/ui_gtk/src/device_panel.rs:361
+#: crates/ui_gtk/src/duplicate_consolidation.rs:759
+#: crates/ui_gtk/src/sidebar/row_context.rs:214
+#: crates/ui_gtk/src/track_context.rs:747
+#: crates/ui_gtk/src/track_info/details.rs:118
+#: crates/ui_gtk/src/track_info/multi.rs:359
+#: crates/ui_gtk/src/track_table/columns.rs:66
+#, rust-format
+msgid "BPM"
+msgstr "BPM"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:105
+#, rust-format
+msgctxt "smart playlist field"
+msgid "BPM"
+msgstr "BPM"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:29
+#, rust-format
+msgid "BPM detection"
+msgstr "BPM-detectie"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:243
+#, rust-format
+msgid "BPM range"
+msgstr "BPM-bereik"
+
+#: crates/app_runtime/src/lib.rs:2951
+#, rust-format
+msgid ""
+"Background BPM analysis is enabled. These tracks are already queued by the "
+"global sweep."
+msgstr "BPM-analyse op de achtergrond staat aan. Deze nummers staan al in de wachtrij van de algemene ronde."
+
+#: crates/app_runtime/src/lib.rs:2957
+#, rust-format
+msgid ""
+"Background audio analysis is enabled. These tracks are already queued by the "
+"global sweep."
+msgstr "Audioanalyse op de achtergrond staat aan. Deze nummers staan al in de wachtrij van de algemene ronde."
+
+#: crates/app_runtime/src/lib.rs:2954
+#, rust-format
+msgid ""
+"Background key detection is enabled. These tracks are already queued by the "
+"global sweep."
+msgstr "Toonsoortdetectie op de achtergrond staat aan. Deze nummers staan al in de wachtrij van de algemene ronde."
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:364
+#, rust-format
+msgid "Background resource usage"
+msgstr "Gebruik van systeembronnen op de achtergrond"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:404
+#: crates/ui_gtk/src/preferences/encoding_tab.rs:61
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:194
+#, rust-format
+msgid "Balanced"
+msgstr "Gebalanceerd"
+
+#: crates/ui_gtk/src/device_panel.rs:371
+#, rust-format
+msgid "Beat grid"
+msgstr "Beatgrid"
+
+#: crates/ui_gtk/src/device_panel.rs:303
+#, rust-format
+msgid "Before chunking into numbered subfolders."
+msgstr "Voordat ze over genummerde submappen worden verdeeld."
+
+#: crates/ui_gtk/src/track_info/file_page.rs:68
+#, rust-format
+msgid "Bit rate"
+msgstr "Bitsnelheid"
+
+#: crates/ui_gtk/src/track_table/columns.rs:68
+#, rust-format
+msgid "Bitrate"
+msgstr "Bitsnelheid"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:102
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Bitrate (kbps)"
+msgstr "Bitsnelheid (kbps)"
+
+#: crates/ui_gtk/src/preferences/encoding_tab.rs:37
+#, rust-format
+msgid "CD import format"
+msgstr "Importformaat voor cd's"
+
+#: crates/app_runtime/src/notifications.rs:423
+#, rust-format
+msgid "CD import stopped: {imported} track imported."
+msgid_plural "CD import stopped: {imported} tracks imported."
+msgstr[0] "Cd-import gestopt: {imported} nummer geïmporteerd."
+msgstr[1] "Cd-import gestopt: {imported} nummers geïmporteerd."
+
+#: crates/ui_gtk/src/preferences/encoding_tab.rs:60
+#, rust-format
+msgid "CD read accuracy"
+msgstr "Leesnauwkeurigheid van cd's"
+
+#: crates/app_runtime/src/notifications.rs:980
+#, rust-format
+msgid "CD ripping is not available in this build."
+msgstr "Cd's rippen is niet beschikbaar in deze versie."
+
+#: crates/app_runtime/src/playback.rs:163
+#, rust-format
+msgid "CD track {number}"
+msgstr "Cd-nummer {number}"
+
+#: crates/ui_gtk/src/device_panel.rs:563
+#, rust-format
+msgid "Calculating device sync plan..."
+msgstr "Synchronisatieplan voor het apparaat berekenen…"
+
+#: crates/ui_gtk/src/confirmation.rs:25
+#: crates/ui_gtk/src/duplicate_consolidation.rs:169
+#: crates/ui_gtk/src/smart_playlist_editor.rs:427
+#: crates/ui_gtk/src/status_bar.rs:168 crates/ui_gtk/src/status_bar.rs:172
+#: crates/ui_gtk/src/track_info/multi.rs:72 crates/ui_gtk/src/track_info.rs:139
+#: crates/ui_gtk/src/verified_duplicates.rs:76
+#: crates/ui_gtk/src/youtube_audio_replacement.rs:75
+#, rust-format
+msgid "Cancel"
+msgstr "Annuleren"
+
+#: crates/ui_gtk/src/status_bar.rs:201
+#, rust-format
+msgid "Cancelling..."
+msgstr "Annuleren…"
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:258
+#, rust-format
+msgid ""
+"Casts a wider net and spreads picks more evenly across it. More variety, "
+"more deep cuts."
+msgstr "Werpt een breder net uit en spreidt de keuzes gelijkmatiger. Meer variatie, meer verborgen parels."
+
+#: crates/ui_gtk/src/track_info/file_page.rs:82
+#, rust-format
+msgid "Channels"
+msgstr "Kanalen"
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:331
+#, rust-format
+msgid "Choose"
+msgstr "Kiezen"
+
+#: crates/ui_gtk/src/track_info/artwork.rs:266
+#, rust-format
+msgid "Choose Artwork"
+msgstr "Albumhoes kiezen"
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:330
+#, rust-format
+msgid "Choose Library Folder"
+msgstr "Bibliotheekmap kiezen"
+
+#: crates/app_runtime/src/notifications.rs:905
+#, rust-format
+msgid "Choose a library folder first."
+msgstr "Kies eerst een bibliotheekmap."
+
+#: crates/app_runtime/src/notifications.rs:960
+#, rust-format
+msgid "Choose a replacement inside the configured library folder."
+msgstr "Kies een vervanging binnen de ingestelde bibliotheekmap."
+
+#: crates/app_runtime/src/notifications.rs:963
+#, rust-format
+msgid "Choose a supported audio file."
+msgstr "Kies een ondersteund audiobestand."
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:88
+#, rust-format
+msgid "Choose folder"
+msgstr "Map kiezen"
+
+#: crates/ui_gtk/src/cd_import_panel.rs:310
+#, rust-format
+msgid "Choose the CD import format"
+msgstr "Kies het importformaat voor cd's"
+
+#: crates/ui_gtk/src/preferences/mod.rs:351
+#: crates/ui_gtk/src/smart_playlist_editor.rs:571
+#, rust-format
+msgid "Close"
+msgstr "Sluiten"
+
+#: crates/ui_gtk/src/shortcuts.rs:132
+#, rust-format
+msgid "Close window"
+msgstr "Venster sluiten"
+
+#: crates/ui_gtk/src/main_window/sidebar_collapse.rs:158
+#, rust-format
+msgid "Collapse sidebar"
+msgstr "Zijbalk inklappen"
+
+#: crates/ui_gtk/src/track_table.rs:1388
+#, rust-format
+msgid "Columns"
+msgstr "Kolommen"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:761
+#: crates/ui_gtk/src/track_info/details.rs:197
+#: crates/ui_gtk/src/track_info/multi.rs:375
+#, rust-format
+msgid "Comments"
+msgstr "Opmerkingen"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:758
+#: crates/ui_gtk/src/track_info/multi.rs:351
+#, rust-format
+msgid "Compilation"
+msgstr "Compilatie"
+
+#: crates/ui_gtk/src/device_panel.rs:735
+#, rust-format
+msgid "Complete"
+msgstr "Volledig"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:750
+#: crates/ui_gtk/src/track_info/details.rs:83
+#: crates/ui_gtk/src/track_info/multi.rs:299
+#, rust-format
+msgid "Composer"
+msgstr "Componist"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:71
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Composer"
+msgstr "Componist"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:170
+#, rust-format
+msgid "Consolidate"
+msgstr "Samenvoegen"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:119
+#, rust-format
+msgid "Consolidate Duplicate Tracks"
+msgstr "Dubbele nummers samenvoegen"
+
+#: crates/ui_gtk/src/track_context.rs:323
+#, rust-format
+msgid "Consolidate to single track"
+msgstr "Samenvoegen tot één nummer"
+
+#: crates/app_runtime/src/duplicate_consolidation.rs:176
+#, rust-format
+msgid "Consolidating duplicate tracks..."
+msgstr "Dubbele nummers samenvoegen…"
+
+#: crates/ui_gtk/src/track_context.rs:272
+#, rust-format
+msgid "Copy"
+msgstr "Kopiëren"
+
+#: crates/app_runtime/src/notifications.rs:1009
+#, rust-format
+msgid "Copying tracks ({completed}/{total})…"
+msgstr "Nummers kopiëren ({completed}/{total})…"
+
+#: crates/ui_gtk/src/track_context_ops.rs:197
+#, rust-format
+msgid "Could not copy the files: {error}."
+msgstr "Kan de bestanden niet kopiëren: {error}."
+
+#: crates/ui_gtk/src/main_window.rs:1396
+#, rust-format
+msgid "Could not eject the device."
+msgstr "Kan het apparaat niet uitwerpen."
+
+#: crates/ui_gtk/src/main_window.rs:1356
+#, rust-format
+msgid "Could not eject the disc."
+msgstr "Kan de schijf niet uitwerpen."
+
+#: crates/ui_gtk/src/main_window/result_consumers.rs:533
+#, rust-format
+msgid "Could not fetch cover art."
+msgstr "Kan de albumhoes niet ophalen."
+
+#: crates/ui_gtk/src/main_window.rs:1380
+#, rust-format
+msgid "Could not find the mounted device to eject."
+msgstr "Kan het aangekoppelde apparaat om uit te werpen niet vinden."
+
+#: crates/ui_gtk/src/main_window.rs:1273
+#, rust-format
+msgid "Could not reach MusicBrainz; using fallback CD metadata."
+msgstr "MusicBrainz is niet bereikbaar; er worden vervangende cd-metadata gebruikt."
+
+#: crates/app_runtime/src/device_sync.rs:156
+#, rust-format
+msgid "Could not scan for Android devices: {error}"
+msgstr "Kan niet zoeken naar Android-apparaten: {error}"
+
+#: crates/ui_gtk/src/track_context_ops.rs:221
+#, rust-format
+msgid "Could not show the file's folder: {error}."
+msgstr "Kan de map van het bestand niet tonen: {error}."
+
+#: crates/ui_gtk/src/main_window.rs:1411
+#, rust-format
+msgid "Could not unmount the device."
+msgstr "Kan het apparaat niet ontkoppelen."
+
+#: crates/ui_gtk/src/command_controller.rs:59
+#, rust-format
+msgid "Could not use the selected artwork: {error}."
+msgstr "Kan de gekozen albumhoes niet gebruiken: {error}."
+
+#: crates/ui_gtk/src/track_table/columns.rs:76
+#, rust-format
+msgid "Date Added"
+msgstr "Datum toegevoegd"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:108
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Date Added"
+msgstr "Datum toegevoegd"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:357
+#, rust-format
+msgid "Date added"
+msgstr "Datum toegevoegd"
+
+#: crates/ui_gtk/src/track_info/file_page.rs:91
+#, rust-format
+msgid "Date modified"
+msgstr "Datum gewijzigd"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:48
+#, rust-format
+msgid ""
+"Decodes each track once to produce the color waveforms and the perceptual "
+"features Smart Shuffle uses to match transitions, and reads BPM and key off "
+"the same decode — so turning this on enables and locks both. The heaviest "
+"pass; runs in the background on tracks that are missing it."
+msgstr "Decodeert elk nummer één keer om de gekleurde golfvormen en de perceptuele kenmerken te maken die Smart Shuffle gebruikt om overgangen af te stemmen, en leest BPM en toonsoort uit dezelfde decodering — daarom worden beide hiermee ingeschakeld en vergrendeld. De zwaarste ronde; draait op de achtergrond voor nummers waarbij die nog ontbreekt."
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:497
+#, rust-format
+msgid "Delete Folder"
+msgstr "Map verwijderen"
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:351
+#, rust-format
+msgid "Delete Folder…"
+msgstr "Map verwijderen…"
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:352
+#: crates/ui_gtk/src/sidebar/row_context.rs:503
+#, rust-format
+msgid "Delete Playlist"
+msgstr "Afspeellijst verwijderen"
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:353
+#: crates/ui_gtk/src/sidebar/row_context.rs:509
+#, rust-format
+msgid "Delete Smart Playlist"
+msgstr "Slimme afspeellijst verwijderen"
+
+#: crates/ui_gtk/src/track_info.rs:93
+#, rust-format
+msgid "Details"
+msgstr "Details"
+
+#: crates/app_runtime/src/device_sync.rs:417
+#, rust-format
+msgid "Device"
+msgstr "Apparaat"
+
+#: crates/app_runtime/src/notifications.rs:1055
+#, rust-format
+msgid "Device already up to date."
+msgstr "Het apparaat is al bijgewerkt."
+
+#: crates/app_runtime/src/notifications.rs:1052
+#, rust-format
+msgid "Device already up to date; {unplayable}."
+msgstr "Het apparaat is al bijgewerkt; {unplayable}."
+
+#: crates/ui_gtk/src/device_panel.rs:565
+#, rust-format
+msgid "Device capacity unavailable"
+msgstr "Apparaatcapaciteit niet beschikbaar"
+
+#: crates/ui_gtk/src/device_panel.rs:561
+#, rust-format
+msgid "Device disconnected"
+msgstr "Apparaat losgekoppeld"
+
+#: crates/ui_gtk/src/device_panel.rs:620
+#, rust-format
+msgid ""
+"Device forgotten. Its saved playlists, artists, and sync history were "
+"cleared."
+msgstr "Apparaat vergeten. De opgeslagen afspeellijsten, artiesten en synchronisatiegeschiedenis zijn gewist."
+
+#: crates/app_runtime/src/device_sync.rs:663
+#, rust-format
+msgid "Device sync failed to start: {detail}"
+msgstr "Apparaatsynchronisatie kon niet starten: {detail}"
+
+#: crates/app_runtime/src/device_sync.rs:716
+#, rust-format
+msgid "Device sync failed: {detail}"
+msgstr "Apparaatsynchronisatie mislukt: {detail}"
+
+#: crates/ui_gtk/src/sidebar.rs:215
+#, rust-format
+msgid "Devices"
+msgstr "Apparaten"
+
+#: crates/ui_gtk/src/track_info/details.rs:107
+#, rust-format
+msgid "Disc"
+msgstr "Schijf"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:755
+#, rust-format
+msgid "Disc Number"
+msgstr "Schijfnummer"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:96
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Disc Number"
+msgstr "Schijfnummer"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:756
+#, rust-format
+msgid "Disc Total"
+msgstr "Aantal schijven"
+
+#: crates/ui_gtk/src/track_info/multi.rs:335
+#: crates/ui_gtk/src/track_info/multi.rs:426
+#, rust-format
+msgid "Disc number"
+msgstr "Schijfnummer"
+
+#: crates/ui_gtk/src/track_info/multi.rs:343
+#: crates/ui_gtk/src/track_info/multi.rs:431
+#, rust-format
+msgid "Disc total"
+msgstr "Aantal schijven"
+
+#: crates/ui_gtk/src/preferences/about_tab.rs:68
+#, rust-format
+msgid "Documentation"
+msgstr "Documentatie"
+
+#: crates/ui_gtk/src/youtube_audio_replacement.rs:76
+#, rust-format
+msgid "Download and Replace"
+msgstr "Downloaden en vervangen"
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:81
+#, rust-format
+msgid "Downloading replacement audio from YouTube..."
+msgstr "Vervangende audio van YouTube downloaden…"
+
+#: crates/ui_gtk/src/preferences/views_tab.rs:53
+#, rust-format
+msgid ""
+"Draws the playing track's waveform in place of the progress bar, once audio "
+"analysis has measured it."
+msgstr "Tekent de golfvorm van het spelende nummer in plaats van de voortgangsbalk, zodra de audioanalyse die heeft gemeten."
+
+#: crates/ui_gtk/src/duplicates.rs:274 crates/ui_gtk/src/duplicates.rs:278
+#, rust-format
+msgid "Duplicate scan could not be started."
+msgstr "Kan het zoeken naar duplicaten niet starten."
+
+#: crates/ui_gtk/src/duplicates.rs:361
+#, rust-format
+msgid "Duplicate scan failed."
+msgstr "Zoeken naar duplicaten mislukt."
+
+#: crates/ui_gtk/src/duplicates.rs:255
+#, rust-format
+msgid "Duplicate scan unavailable."
+msgstr "Zoeken naar duplicaten niet beschikbaar."
+
+#: crates/ui_gtk/src/sidebar.rs:195
+#, rust-format
+msgid "Duplicates"
+msgstr "Duplicaten"
+
+#: crates/ui_gtk/src/track_info/file_page.rs:54
+#: crates/ui_gtk/src/track_table/columns.rs:70
+#, rust-format
+msgid "Duration"
+msgstr "Duur"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:99
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Duration (seconds)"
+msgstr "Duur (seconden)"
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:141
+#, rust-format
+msgid "Edit…"
+msgstr "Bewerken…"
+
+#: crates/ui_gtk/src/cd_import_panel.rs:319 crates/ui_gtk/src/sidebar.rs:944
+#, rust-format
+msgid "Eject"
+msgstr "Uitwerpen"
+
+#: crates/ui_gtk/src/preferences/mod.rs:294
+#, rust-format
+msgid "Encoding"
+msgstr "Codering"
+
+#: crates/ui_gtk/src/cd_import_panel.rs:308
+#, rust-format
+msgid "Encoding Settings"
+msgstr "Coderingsinstellingen"
+
+#: crates/ui_gtk/src/preferences/encoding_tab.rs:62
+#, rust-format
+msgid "Error correction used when ripping audio CDs."
+msgstr "Foutcorrectie bij het rippen van audio-cd's."
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:171
+#, rust-format
+msgid "Exploration"
+msgstr "Verkenning"
+
+#: crates/ui_gtk/src/preferences/encoding_tab.rs:38
+#, rust-format
+msgid "FLAC (Lossless)"
+msgstr "FLAC (verliesvrij)"
+
+#: crates/ui_gtk/src/track_info/format.rs:22
+#, rust-format
+msgid "FLAC audio file"
+msgstr "FLAC-audiobestand"
+
+#: crates/ui_gtk/src/preferences/encoding_tab.rs:61
+#, rust-format
+msgid "Fast"
+msgstr "Snel"
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:254
+#, rust-format
+msgid ""
+"Favours strong continuations but mixes in the occasional looser match. The "
+"default."
+msgstr "Geeft de voorkeur aan sterke vervolgen, maar mengt af en toe een lossere keuze erdoor. De standaard."
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:25
+msgid "Features:"
+msgstr "Functies:"
+
+#: crates/ui_gtk/src/now_playing.rs:481
+#, rust-format
+msgid "Fetch artwork"
+msgstr "Albumhoes ophalen"
+
+#: crates/ui_gtk/src/preferences/online_tab.rs:21
+#, rust-format
+msgid "Fetch missing artwork"
+msgstr "Ontbrekende albumhoezen ophalen"
+
+#: crates/ui_gtk/src/preferences/online_tab.rs:52
+#, rust-format
+msgid "Fetch missing lyrics"
+msgstr "Ontbrekende songteksten ophalen"
+
+#: crates/ui_gtk/src/preferences/online_tab.rs:37
+#, rust-format
+msgid "Fetch missing tags"
+msgstr "Ontbrekende tags ophalen"
+
+#: crates/ui_gtk/src/now_playing.rs:546
+#, rust-format
+msgid "Fetching artwork…"
+msgstr "Albumhoes ophalen…"
+
+#: crates/ui_gtk/src/track_context.rs:675
+#, rust-format
+msgid "Fetch…"
+msgstr "Ophalen…"
+
+#: crates/ui_gtk/src/track_info.rs:115
+#, rust-format
+msgctxt "Get Info page"
+msgid "File"
+msgstr "Bestand"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:119
+#, rust-format
+msgctxt "smart playlist field"
+msgid "File"
+msgstr "Bestand"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:77
+#, rust-format
+msgctxt "smart playlist field"
+msgid "File Name"
+msgstr "Bestandsnaam"
+
+#: crates/ui_gtk/src/import_failures_dialog.rs:22
+#, rust-format
+msgid "Files Not Imported"
+msgstr "Niet geïmporteerde bestanden"
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:42
+#, rust-format
+msgid "Files in this folder are scanned into your Sustain library."
+msgstr "Bestanden in deze map worden gescand en aan je Sustain-bibliotheek toegevoegd."
+
+#: crates/ui_gtk/src/device_panel.rs:302
+#, rust-format
+msgid "Files per folder"
+msgstr "Bestanden per map"
+
+#: crates/ui_gtk/src/shortcuts.rs:114
+#, rust-format
+msgid "Focus search bar"
+msgstr "Zoekbalk focussen"
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:193
+#, rust-format
+msgid "Focused"
+msgstr "Gericht"
+
+#: crates/ui_gtk/src/device_panel.rs:607
+#, rust-format
+msgid "Forget device"
+msgstr "Apparaat vergeten"
+
+#: crates/ui_gtk/src/track_info/file_page.rs:86
+#, rust-format
+msgid "Format"
+msgstr "Formaat"
+
+#: crates/ui_gtk/src/preferences/encoding_tab.rs:39
+#, rust-format
+msgid "Format used when ripping audio CDs into your library."
+msgstr "Formaat bij het rippen van audio-cd's naar je bibliotheek."
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:752
+#: crates/ui_gtk/src/track_info/details.rs:93
+#: crates/ui_gtk/src/track_info/multi.rs:304
+#: crates/ui_gtk/src/track_table/columns.rs:63
+#, rust-format
+msgid "Genre"
+msgstr "Genre"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:74
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Genre"
+msgstr "Genre"
+
+#: crates/ui_gtk/src/statistics.rs:285
+#, rust-format
+msgctxt "statistics section"
+msgid "Genre"
+msgstr "Genre"
+
+#: crates/ui_gtk/src/shortcuts.rs:115 crates/ui_gtk/src/track_context.rs:260
+#, rust-format
+msgid "Get Info"
+msgstr "Info"
+
+#: crates/ui_gtk/src/track_info/multi.rs:34
+#, rust-format
+msgid "Get Info - {count} Track"
+msgid_plural "Get Info - {count} Tracks"
+msgstr[0] "Info - {count} nummer"
+msgstr[1] "Info - {count} nummers"
+
+#: crates/ui_gtk/src/track_info.rs:436
+#, rust-format
+msgid "Get Info - {track}"
+msgstr "Info - {track}"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:29
+msgid "Get Info metadata editor with tag mirroring to ID3, Vorbis, and MP4"
+msgstr "Metadata-editor met overname van tags naar ID3, Vorbis en MP4"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:751
+#: crates/ui_gtk/src/track_info/details.rs:86
+#: crates/ui_gtk/src/track_info/multi.rs:302
+#, rust-format
+msgid "Grouping"
+msgstr "Groepering"
+
+#: crates/ui_gtk/src/titlebar.rs:75
+#, rust-format
+msgid "High volume"
+msgstr "Hoog volume"
+
+#: crates/ui_gtk/src/preferences/online_tab.rs:39
+#, rust-format
+msgid ""
+"Identifies tracks via AcoustID fingerprinting and fills missing fields from "
+"MusicBrainz. Never overwrites a tag that is already set."
+msgstr "Herkent nummers via AcoustID-vingerafdrukken en vult ontbrekende velden aan uit MusicBrainz. Overschrijft nooit een tag die al is ingevuld."
+
+#: crates/ui_gtk/src/track_info/artwork.rs:271
+#, rust-format
+msgid "Images"
+msgstr "Afbeeldingen"
+
+#: crates/ui_gtk/src/cd_import_panel.rs:321
+#, rust-format
+msgid "Import CD"
+msgstr "Cd importeren"
+
+#: crates/app_runtime/src/notifications.rs:607
+#, rust-format
+msgid "Import stopped after an error: {changes}."
+msgstr "Import gestopt na een fout: {changes}."
+
+#: crates/app_runtime/src/notifications.rs:614
+#, rust-format
+msgid "Import stopped: {count} added before cancel."
+msgid_plural "Import stopped: {count} added before cancel."
+msgstr[0] "Import gestopt: {count} toegevoegd vóór het annuleren."
+msgstr[1] "Import gestopt: {count} toegevoegd vóór het annuleren."
+
+#: crates/app_runtime/src/notifications.rs:411
+#, rust-format
+msgid "Imported {imported} of {requested} track: {failure}"
+msgid_plural "Imported {imported} of {requested} tracks: {failure}"
+msgstr[0] "{imported} van {requested} nummer geïmporteerd: {failure}"
+msgstr[1] "{imported} van {requested} nummers geïmporteerd: {failure}"
+
+#: crates/app_runtime/src/notifications.rs:432
+#, rust-format
+msgid "Imported {imported} track from CD."
+msgid_plural "Imported {imported} tracks from CD."
+msgstr[0] "{imported} nummer van cd geïmporteerd."
+msgstr[1] "{imported} nummers van cd geïmporteerd."
+
+#: crates/ui_gtk/src/sidebar.rs:613
+#, rust-format
+msgid "Importing"
+msgstr "Importeren"
+
+#: crates/app_runtime/src/notifications.rs:396
+#, rust-format
+msgid "Importing CD ({completed}/{total})..."
+msgstr "Cd importeren ({completed}/{total})…"
+
+#: crates/app_runtime/src/notifications.rs:391
+#, rust-format
+msgid "Importing CD..."
+msgstr "Cd importeren…"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:403
+#, rust-format
+msgid "Innocuous"
+msgstr "Onschuldig"
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:227
+#, rust-format
+msgid "Install yt-dlp and FFmpeg before replacing audio from YouTube."
+msgstr "Installeer yt-dlp en FFmpeg voordat je audio via YouTube vervangt."
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:329
+#, rust-format
+msgid ""
+"It builds the first time you turn Smart Shuffle on, then refreshes whenever "
+"your library or its analysis changes."
+msgstr "De index wordt opgebouwd wanneer je Smart Shuffle voor het eerst aanzet, en daarna bijgewerkt telkens als je bibliotheek of de analyse ervan verandert."
+
+#: crates/app_runtime/src/notifications.rs:680
+#, rust-format
+msgid "It could not be copied into the library folder."
+msgstr "Het kon niet naar de bibliotheekmap worden gekopieerd."
+
+#: crates/app_runtime/src/notifications.rs:686
+#, rust-format
+msgid ""
+"It is outside the library folder, and the library keeps files where they are."
+msgstr "Het staat buiten de bibliotheekmap, en de bibliotheek laat bestanden staan waar ze staan."
+
+#: crates/app_runtime/src/notifications.rs:678
+#, rust-format
+msgid "Its tags could not be read."
+msgstr "De tags konden niet worden gelezen."
+
+#: crates/ui_gtk/src/shortcuts.rs:127
+#, rust-format
+msgid "Jump to currently playing track"
+msgstr "Naar het spelende nummer springen"
+
+#: crates/ui_gtk/src/verified_duplicates.rs:163
+#, rust-format
+msgid "Keeps {audio} · {path} · removes {removed} copy"
+msgid_plural "Keeps {audio} · {path} · removes {removed} copies"
+msgstr[0] "Behoudt {audio} · {path} · verwijdert {removed} kopie"
+msgstr[1] "Behoudt {audio} · {path} · verwijdert {removed} kopieën"
+
+#: crates/ui_gtk/src/device_panel.rs:363
+#: crates/ui_gtk/src/duplicate_consolidation.rs:760
+#: crates/ui_gtk/src/sidebar/row_context.rs:217
+#: crates/ui_gtk/src/track_context.rs:750
+#: crates/ui_gtk/src/track_info/details.rs:124
+#: crates/ui_gtk/src/track_info/multi.rs:367
+#: crates/ui_gtk/src/track_table/columns.rs:67
+#, rust-format
+msgctxt "musical key"
+msgid "Key"
+msgstr "Toonsoort"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:37
+#, rust-format
+msgid "Key detection"
+msgstr "Toonsoortdetectie"
+
+#: crates/ui_gtk/src/track_info/multi.rs:614
+#, rust-format
+msgid "Key must be a musical key, such as Am, F#, or 8A."
+msgstr "De toonsoort moet een muzikale toonsoort zijn, zoals Am, F# of 8A."
+
+#: crates/ui_gtk/src/shortcuts.rs:135
+#, rust-format
+msgid "Keyboard shortcuts"
+msgstr "Sneltoetsen"
+
+#: crates/ui_gtk/src/track_info/file_page.rs:49
+#, rust-format
+msgid "Kind"
+msgstr "Soort"
+
+#: crates/ui_gtk/src/track_table/columns.rs:74
+#, rust-format
+msgid "Last Played"
+msgstr "Laatst afgespeeld"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:111
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Last Played"
+msgstr "Laatst afgespeeld"
+
+#: crates/ui_gtk/src/track_table/columns.rs:75
+#, rust-format
+msgid "Last Skipped"
+msgstr "Laatst overgeslagen"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:114
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Last Skipped"
+msgstr "Laatst overgeslagen"
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:322
+#, rust-format
+msgid "Last index rebuild: {when}"
+msgstr "Laatste herbouw van de index: {when}"
+
+#: crates/ui_gtk/src/track_info/details.rs:171
+#, rust-format
+msgid "Last played"
+msgstr "Laatst afgespeeld"
+
+#: crates/ui_gtk/src/track_info/details.rs:178
+#, rust-format
+msgid "Last skipped"
+msgstr "Laatst overgeslagen"
+
+#: crates/app_runtime/src/notifications.rs:766
+#, rust-format
+msgid "Left alone: {groups}."
+msgstr "Ongemoeid gelaten: {groups}."
+
+#: crates/ui_gtk/src/preferences/mod.rs:293 crates/ui_gtk/src/sidebar.rs:189
+#, rust-format
+msgid "Library"
+msgstr "Bibliotheek"
+
+#: crates/ui_gtk/src/shortcuts.rs:456
+#, rust-format
+msgctxt "shortcuts group"
+msgid "Library"
+msgstr "Bibliotheek"
+
+#: crates/app_runtime/src/notifications.rs:846
+#, rust-format
+msgid "Library folder updated."
+msgstr "Bibliotheekmap bijgewerkt."
+
+#: crates/app_runtime/src/notifications.rs:863
+#, rust-format
+msgid "Library folder updated: all {total} track found."
+msgid_plural "Library folder updated: all {total} tracks found."
+msgstr[0] "Bibliotheekmap bijgewerkt: {total} nummer gevonden."
+msgstr[1] "Bibliotheekmap bijgewerkt: alle {total} nummers gevonden."
+
+#: crates/app_runtime/src/notifications.rs:872
+#, rust-format
+msgid ""
+"Library folder updated: {missing} of {total} track not found at the new "
+"location."
+msgid_plural ""
+"Library folder updated: {missing} of {total} tracks not found at the new "
+"location."
+msgstr[0] "Bibliotheekmap bijgewerkt: {missing} van {total} nummer niet gevonden op de nieuwe locatie."
+msgstr[1] "Bibliotheekmap bijgewerkt: {missing} van {total} nummers niet gevonden op de nieuwe locatie."
+
+#: crates/app_runtime/src/notifications.rs:851
+#, rust-format
+msgid ""
+"Library folder updated: {missing} of {total} track not found; {unresolved} "
+"could not be checked."
+msgid_plural ""
+"Library folder updated: {missing} of {total} tracks not found; {unresolved} "
+"could not be checked."
+msgstr[0] "Bibliotheekmap bijgewerkt: {missing} van {total} nummer niet gevonden; {unresolved} konden niet worden gecontroleerd."
+msgstr[1] "Bibliotheekmap bijgewerkt: {missing} van {total} nummers niet gevonden; {unresolved} konden niet worden gecontroleerd."
+
+#: crates/app_runtime/src/notifications.rs:694
+#, rust-format
+msgid "Library organization stopped: {moved}, {pending}."
+msgstr "Ordenen van de bibliotheek gestopt: {moved}, {pending}."
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:198
+#, rust-format
+msgid "Library organization will stop after the current file."
+msgstr "Het ordenen van de bibliotheek stopt na het huidige bestand."
+
+#: crates/app_runtime/src/notifications.rs:703
+#, rust-format
+msgid "Library organized: {moved}, {organized}, {missing}."
+msgstr "Bibliotheek geordend: {moved}, {organized}, {missing}."
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:38
+#, rust-format
+msgid "Library path"
+msgstr "Bibliotheekpad"
+
+#: crates/app_runtime/src/notifications.rs:899
+#, rust-format
+msgid "Library scanning is not available in this build."
+msgstr "Het scannen van de bibliotheek is niet beschikbaar in deze versie."
+
+#: crates/ui_gtk/src/preferences/about_tab.rs:56
+#, rust-format
+msgid "Licensed under GPL-3.0-or-later"
+msgstr "Uitgegeven onder GPL-3.0-or-later"
+
+#: crates/ui_gtk/src/smart_playlist_editor.rs:371
+#, rust-format
+msgid "Limit to"
+msgstr "Beperken tot"
+
+#: crates/ui_gtk/src/preferences/views_tab.rs:26
+#, rust-format
+msgid "Lists the Duplicates view in the left column's Library section."
+msgstr "Toont de weergave Duplicaten in de sectie Bibliotheek van de linkerkolom."
+
+#: crates/ui_gtk/src/preferences/views_tab.rs:39
+#, rust-format
+msgid "Lists the Statistics view in the left column's Library section."
+msgstr "Toont de weergave Statistieken in de sectie Bibliotheek van de linkerkolom."
+
+#: crates/app_runtime/src/lib.rs:968
+#, rust-format
+msgid "Loading library…"
+msgstr "Bibliotheek laden…"
+
+#: crates/ui_gtk/src/missing_track.rs:96
+#, rust-format
+msgid "Locate"
+msgstr "Zoeken"
+
+#: crates/ui_gtk/src/missing_track.rs:95
+#, rust-format
+msgid "Locate Missing Track"
+msgstr "Ontbrekend nummer zoeken"
+
+#: crates/ui_gtk/src/track_info/file_page.rs:102
+#, rust-format
+msgid "Location"
+msgstr "Locatie"
+
+#: crates/ui_gtk/src/preferences/online_tab.rs:23
+#, rust-format
+msgid ""
+"Looks up cover art from MusicBrainz and the Cover Art Archive, then Deezer "
+"and the iTunes Search API, for tracks that have none. Never replaces artwork "
+"that is already present."
+msgstr "Zoekt albumhoezen bij MusicBrainz en het Cover Art Archive, daarna bij Deezer en via de iTunes Search API, voor nummers die er geen hebben. Vervangt nooit een bestaande albumhoes."
+
+#: crates/ui_gtk/src/preferences/online_tab.rs:54
+#, rust-format
+msgid ""
+"Looks up synchronised and plain lyrics from LRClib for tracks that have "
+"none. Never replaces lyrics that are already present."
+msgstr "Zoekt gesynchroniseerde en gewone songteksten bij LRClib voor nummers die er geen hebben. Vervangt nooit een bestaande songtekst."
+
+#: crates/ui_gtk/src/titlebar.rs:74
+#, rust-format
+msgid "Low volume"
+msgstr "Laag volume"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:762
+#: crates/ui_gtk/src/now_playing.rs:224
+#: crates/ui_gtk/src/sidebar/row_context.rs:282
+#: crates/ui_gtk/src/track_context.rs:787 crates/ui_gtk/src/track_info.rs:109
+#: crates/ui_gtk/src/track_table/columns.rs:64
+#, rust-format
+msgid "Lyrics"
+msgstr "Songtekst"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:117
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Lyrics"
+msgstr "Songtekst"
+
+#: crates/ui_gtk/src/track_info/format.rs:21
+#, rust-format
+msgid "MPEG audio file"
+msgstr "MPEG-audiobestand"
+
+#: crates/ui_gtk/src/track_info/format.rs:25
+#, rust-format
+msgid "MPEG-4 audio file"
+msgstr "MPEG-4-audiobestand"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:34
+msgid "MPRIS, D-Bus, and media-key integration"
+msgstr "Integratie met MPRIS, D-Bus en mediatoetsen"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:63
+msgid "Main library view in the system dark theme"
+msgstr "Hoofdweergave van de bibliotheek in het donkere systeemthema"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:67
+msgid "Main library view in the system light theme"
+msgstr "Hoofdweergave van de bibliotheek in het lichte systeemthema"
+
+#: crates/ui_gtk/src/smart_playlist_editor.rs:334
+#, rust-format
+msgid "Match"
+msgstr "Voldoet aan"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:265
+#, rust-format
+msgid "Maximum"
+msgstr "Maximum"
+
+#: crates/ui_gtk/src/verified_duplicates.rs:27
+#, rust-format
+msgid "Merge Verified Duplicates"
+msgstr "Geverifieerde duplicaten samenvoegen"
+
+#: crates/ui_gtk/src/duplicates.rs:84
+#, rust-format
+msgid "Merge Verified Duplicates…"
+msgstr "Geverifieerde duplicaten samenvoegen…"
+
+#: crates/ui_gtk/src/verified_duplicates.rs:92
+#, rust-format
+msgid "Merge {included} Group"
+msgid_plural "Merge {included} Groups"
+msgstr[0] "{included} groep samenvoegen"
+msgstr[1] "{included} groepen samenvoegen"
+
+#. Translators: {groups} is "{count} verified duplicate group(s)" and
+#. {tracks} is "{count} track(s)".
+#: crates/app_runtime/src/notifications.rs:740
+#, rust-format
+msgid "Merged {groups}, removing {tracks}."
+msgstr "{groups} samengevoegd, {tracks} verwijderd."
+
+#: crates/app_runtime/src/notifications.rs:726
+#, rust-format
+msgid "Merging verified duplicates ({completed}/{total})..."
+msgstr "Geverifieerde duplicaten samenvoegen ({completed}/{total})…"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:258
+#, rust-format
+msgid "Minimum"
+msgstr "Minimum"
+
+#: crates/ui_gtk/src/track_info/format.rs:92
+#, rust-format
+msgid "Mono"
+msgstr "Mono"
+
+#: crates/ui_gtk/src/statistics.rs:376
+#, rust-format
+msgid "Most liked genres"
+msgstr "Favoriete genres"
+
+#: crates/ui_gtk/src/statistics.rs:354
+#, rust-format
+msgid "Most played genres"
+msgstr "Meest afgespeelde genres"
+
+#: crates/ui_gtk/src/track_context.rs:335
+#: crates/ui_gtk/src/track_context.rs:906
+#: crates/ui_gtk/src/track_context.rs:908
+#, rust-format
+msgid "Move to Trash"
+msgstr "Naar prullenbak verplaatsen"
+
+#: crates/ui_gtk/src/sidebar.rs:192
+#, rust-format
+msgid "Music"
+msgstr "Muziek"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:80
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Music Key"
+msgstr "Toonsoort"
+
+#: data/io.github.open_sustain.sustain.desktop:4
+#: data/io.github.open_sustain.sustain.metainfo.xml:9
+msgid "Music library and player"
+msgstr "Muziekbibliotheek en speler"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:35
+msgid "Native light and dark themes that follow the system accent color"
+msgstr "Eigen lichte en donkere thema's die de accentkleur van het systeem volgen"
+
+#: crates/ui_gtk/src/track_info/details.rs:324
+#, rust-format
+msgid "Never"
+msgstr "Nooit"
+
+#: crates/ui_gtk/src/sidebar_context.rs:38
+#, rust-format
+msgid "New Playlist"
+msgstr "Nieuwe afspeellijst"
+
+#: crates/ui_gtk/src/sidebar_context.rs:40
+#, rust-format
+msgid "New Playlist Folder"
+msgstr "Nieuwe afspeellijstmap"
+
+#: crates/ui_gtk/src/sidebar_context.rs:39
+#, rust-format
+msgid "New Smart Playlist…"
+msgstr "Nieuwe slimme afspeellijst…"
+
+#: crates/ui_gtk/src/shortcuts.rs:108
+#, rust-format
+msgid "New playlist"
+msgstr "Nieuwe afspeellijst"
+
+#: crates/ui_gtk/src/shortcuts.rs:111
+#, rust-format
+msgid "New smart playlist"
+msgstr "Nieuwe slimme afspeellijst"
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:106
+#, rust-format
+msgid ""
+"New tracks are copied into clean artist, album, and track folders. Existing "
+"tracks are organized in the background when this is turned on."
+msgstr "Nieuwe nummers worden gekopieerd naar nette mappen per artiest, album en nummer. Bestaande nummers worden op de achtergrond geordend zodra dit wordt ingeschakeld."
+
+#: crates/ui_gtk/src/shortcuts.rs:124
+#, rust-format
+msgid "Next track"
+msgstr "Volgend nummer"
+
+#: crates/ui_gtk/src/track_info.rs:133
+#, rust-format
+msgid "Next track (Ctrl+])"
+msgstr "Volgend nummer (Ctrl+])"
+
+#: crates/ui_gtk/src/titlebar.rs:61
+#, rust-format
+msgid "Next, right-click to display the queue"
+msgstr "Volgende; rechtsklik om de wachtrij te tonen"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:788
+#: crates/ui_gtk/src/smart_playlist_editor.rs:93
+#: crates/ui_gtk/src/track_table/columns.rs:255
+#, rust-format
+msgid "No"
+msgstr "Nee"
+
+#: crates/ui_gtk/src/albums.rs:1897
+#, rust-format
+msgid "No albums"
+msgstr "Geen albums"
+
+#: crates/ui_gtk/src/device_panel.rs:495
+#, rust-format
+msgid "No artists yet. Add music with artist tags to sync by artist."
+msgstr "Nog geen artiesten. Voeg muziek met artiesttags toe om per artiest te synchroniseren."
+
+#: crates/app_runtime/src/notifications.rs:626
+#, rust-format
+msgid "No audio files were found."
+msgstr "Er zijn geen audiobestanden gevonden."
+
+#: crates/app_runtime/src/notifications.rs:634
+#, rust-format
+msgid "No changes."
+msgstr "Geen wijzigingen."
+
+#: crates/ui_gtk/src/main_window/result_consumers.rs:525
+#, rust-format
+msgid "No cover art found for this track."
+msgstr "Geen albumhoes gevonden voor dit nummer."
+
+#: crates/app_runtime/src/notifications.rs:683
+#, rust-format
+msgid "No free file name was left for it in the library folder."
+msgstr "Er was geen vrije bestandsnaam meer over in de bibliotheekmap."
+
+#: crates/ui_gtk/src/statistics.rs:290
+#, rust-format
+msgid "No genres tagged yet."
+msgstr "Nog geen genres getagd."
+
+#: crates/ui_gtk/src/queue_view.rs:336
+#, rust-format
+msgid "No manually queued track"
+msgstr "Geen handmatig toegevoegd nummer in de wachtrij"
+
+#: crates/ui_gtk/src/device_panel.rs:443
+#, rust-format
+msgid "No playlists yet. Create a playlist to sync it."
+msgstr "Nog geen afspeellijsten. Maak een afspeellijst om die te synchroniseren."
+
+#: crates/ui_gtk/src/track_context.rs:708
+#, rust-format
+msgid "No playlists."
+msgstr "Geen afspeellijsten."
+
+#: crates/ui_gtk/src/statistics.rs:357
+#, rust-format
+msgid "No plays recorded yet."
+msgstr "Nog niets afgespeeld."
+
+#: crates/ui_gtk/src/statistics.rs:381
+#, rust-format
+msgid "No ratings recorded yet."
+msgstr "Nog geen waarderingen."
+
+#: crates/ui_gtk/src/statistics.rs:410
+#, rust-format
+msgid "No release years tagged yet."
+msgstr "Nog geen verschijningsjaren getagd."
+
+#: crates/ui_gtk/src/statistics.rs:105
+#, rust-format
+msgid ""
+"No statistics yet — add music to your library to see its breakdown here."
+msgstr "Nog geen statistieken — voeg muziek toe aan je bibliotheek om hier de verdeling te zien."
+
+#: crates/ui_gtk/src/statistics.rs:326
+#, rust-format
+msgid "No tracks carry a bitrate yet."
+msgstr "Nog geen nummers met een bitsnelheid."
+
+#: crates/ui_gtk/src/device_panel.rs:570
+#, rust-format
+msgid "Not enough space — {needed} needed, {free} free"
+msgstr "Niet genoeg ruimte — {needed} nodig, {free} vrij"
+
+#: crates/ui_gtk/src/statistics.rs:432
+#, rust-format
+msgid "Nothing added yet."
+msgstr "Nog niets toegevoegd."
+
+#: crates/ui_gtk/src/queue_view.rs:95 crates/ui_gtk/src/queue_view.rs:340
+#, rust-format
+msgid "Nothing up next"
+msgstr "Niets hierna"
+
+#: crates/ui_gtk/src/now_playing/lyrics_overlay.rs:43
+#, rust-format
+msgid "Now Playing"
+msgstr "Speelt nu"
+
+#: crates/ui_gtk/src/statistics.rs:430
+#, rust-format
+msgid "Number of tracks added to the library each year."
+msgstr "Aantal nummers dat elk jaar aan de bibliotheek is toegevoegd."
+
+#: crates/ui_gtk/src/statistics.rs:408
+#, rust-format
+msgid "Number of tracks per release decade."
+msgstr "Aantal nummers per decennium van verschijnen."
+
+#: crates/ui_gtk/src/import_failures_dialog.rs:64
+#: crates/ui_gtk/src/smart_playlist_editor.rs:428
+#: crates/ui_gtk/src/track_info/multi.rs:73 crates/ui_gtk/src/track_info.rs:140
+#, rust-format
+msgid "OK"
+msgstr "OK"
+
+#: crates/ui_gtk/src/track_info/format.rs:23
+#, rust-format
+msgid "Ogg Vorbis audio file"
+msgstr "Ogg Vorbis-audiobestand"
+
+#: crates/ui_gtk/src/device_panel.rs:248
+#, rust-format
+msgid "On-drive format"
+msgstr "Formaat op het apparaat"
+
+#: crates/app_runtime/src/notifications.rs:896
+#, rust-format
+msgid ""
+"One or more of the selected files is missing from disk. Restore or remove "
+"it, then consolidate again."
+msgstr "Een of meer van de gekozen bestanden ontbreken op de schijf. Herstel of verwijder ze en voeg daarna opnieuw samen."
+
+#: crates/ui_gtk/src/preferences/mod.rs:296
+#, rust-format
+msgid "Online"
+msgstr "Online"
+
+#: crates/app_runtime/src/notifications.rs:551
+#, rust-format
+msgid ""
+"Online retrieval paused: the library database rejected a write ({detail})."
+msgstr "Online ophalen gepauzeerd: de bibliotheekdatabase weigerde een schrijfactie ({detail})."
+
+#: crates/ui_gtk/src/track_info/multi.rs:54
+#, rust-format
+msgid ""
+"Only checked fields are applied to the selected tracks. Unchecked fields "
+"keep each track's existing value."
+msgstr "Alleen aangevinkte velden worden op de gekozen nummers toegepast. Niet-aangevinkte velden behouden de huidige waarde van elk nummer."
+
+#: crates/ui_gtk/src/duplicates.rs:81
+#, rust-format
+msgid "Open Duplicates to scan the library."
+msgstr "Open Duplicaten om de bibliotheek te scannen."
+
+#: crates/ui_gtk/src/track_info/format.rs:24
+#, rust-format
+msgid "Opus audio file"
+msgstr "Opus-audiobestand"
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:275
+#, rust-format
+msgid ""
+"Order the library by the “sort as” tags some files carry (ID3 TSOP/TSOT, "
+"Vorbis ARTISTSORT/TITLESORT, and friends) plus Sustain's generated leading-"
+"article sort values, so “The Beatles” files under B. Turn off to order every "
+"name as it is shown."
+msgstr "Sorteert de bibliotheek op de sorteertags die sommige bestanden hebben (ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT en dergelijke) plus de sorteerwaarden zonder lidwoord vooraan die Sustain genereert, zodat ‘The Beatles’ onder de B staat. Zet dit uit om elke naam te sorteren zoals die wordt getoond."
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:104
+#, rust-format
+msgid "Organize my library"
+msgstr "Mijn bibliotheek ordenen"
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:58
+#, rust-format
+msgid "Organized library mode needs an accessible, writable library folder."
+msgstr "De modus voor een geordende bibliotheek heeft een toegankelijke, beschrijfbare bibliotheekmap nodig."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:62
+#, rust-format
+msgid ""
+"Organized library mode needs permission to create files and folders in the "
+"selected library folder."
+msgstr "De modus voor een geordende bibliotheek heeft toestemming nodig om bestanden en mappen te maken in de gekozen bibliotheekmap."
+
+#: crates/app_runtime/src/notifications.rs:387
+#, rust-format
+msgid "Organizing library..."
+msgstr "Bibliotheek ordenen…"
+
+#: crates/ui_gtk/src/statistics.rs:264
+#, rust-format
+msgid "Other ({count} genre)"
+msgid_plural "Other ({count} genres)"
+msgstr[0] "Overig ({count} genre)"
+msgstr[1] "Overig ({count} genres)"
+
+#: crates/ui_gtk/src/preferences/encoding_tab.rs:61
+#, rust-format
+msgid "Paranoid"
+msgstr "Paranoïde"
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:225
+#, rust-format
+msgid "Paste a valid YouTube URL."
+msgstr "Plak een geldige YouTube-URL."
+
+#: crates/ui_gtk/src/youtube_audio_replacement.rs:61
+#, rust-format
+msgid ""
+"Paste one YouTube video URL. Sustain uses your installed yt-dlp and FFmpeg "
+"to download the best available audio. The replacement is accepted only when "
+"its duration matches and its bitrate is not junk or worse than the current "
+"file."
+msgstr "Plak de URL van één YouTube-video. Sustain gebruikt je geïnstalleerde yt-dlp en FFmpeg om de best beschikbare audio te downloaden. De vervanging wordt alleen geaccepteerd als de duur overeenkomt en de bitsnelheid niet waardeloos of slechter is dan die van het huidige bestand."
+
+#: crates/app_runtime/src/playback.rs:146
+#, rust-format
+msgid ""
+"Paused: the audio output was disconnected or taken by another application."
+msgstr "Gepauzeerd: de audio-uitvoer is losgekoppeld of door een andere toepassing overgenomen."
+
+#: crates/app_runtime/src/device_sync.rs:616
+#, rust-format
+msgid "Pick at least one playlist or artist to sync to this device."
+msgstr "Kies minstens één afspeellijst of artiest om met dit apparaat te synchroniseren."
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:133
+#, rust-format
+msgid ""
+"Pick the surviving attributes, a single consolidated file will be preserved "
+"in your library upon confirmation."
+msgstr "Kies de te behouden eigenschappen; na bevestiging blijft één samengevoegd bestand in je bibliotheek bewaard."
+
+#: crates/ui_gtk/src/playlists_header.rs:59
+#, rust-format
+msgctxt "playback control"
+msgid "Play"
+msgstr "Afspelen"
+
+#: crates/ui_gtk/src/shortcuts.rs:119
+#, rust-format
+msgid "Play / pause"
+msgstr "Afspelen / pauzeren"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:87
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Play Count"
+msgstr "Aantal keer afgespeeld"
+
+#: crates/ui_gtk/src/track_context.rs:233
+#, rust-format
+msgid "Play Next"
+msgstr "Hierna afspelen"
+
+#: crates/ui_gtk/src/albums.rs:1265
+#, rust-format
+msgid "Play album"
+msgstr "Album afspelen"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:330
+#: crates/ui_gtk/src/track_info/details.rs:157
+#, rust-format
+msgid "Play count"
+msgstr "Aantal keer afgespeeld"
+
+#: crates/ui_gtk/src/titlebar.rs:58
+#, rust-format
+msgid "Play/Pause"
+msgstr "Afspelen/Pauzeren"
+
+#: crates/ui_gtk/src/shortcuts.rs:455
+#, rust-format
+msgctxt "shortcuts group"
+msgid "Playback"
+msgstr "Afspelen"
+
+#: crates/app_runtime/src/playback.rs:167
+#, rust-format
+msgid "Playback failed for {track_name}. Skipping to the next track."
+msgstr "Afspelen van {track_name} mislukt. Er wordt naar het volgende nummer gesprongen."
+
+#: crates/app_runtime/src/playback.rs:153
+#, rust-format
+msgid "Playback failed. Skipping to the next track."
+msgstr "Afspelen mislukt. Er wordt naar het volgende nummer gesprongen."
+
+#: crates/app_runtime/src/notifications.rs:967
+#, rust-format
+msgid "Playback is not available."
+msgstr "Afspelen is niet beschikbaar."
+
+#: crates/app_runtime/src/device_sync.rs:1025
+#, rust-format
+msgid "Playlist"
+msgstr "Afspeellijst"
+
+#: crates/ui_gtk/src/sidebar.rs:236
+#, rust-format
+msgid "Playlists"
+msgstr "Afspeellijsten"
+
+#: crates/ui_gtk/src/preferences/about_tab.rs:104
+#, rust-format
+msgid ""
+"Playlists and listening stats live only in Sustain's database — your "
+"ratings, tags, and artwork are also written to your music files. Back up "
+"this folder alongside your music:"
+msgstr "Afspeellijsten en luisterstatistieken bestaan alleen in de database van Sustain — je beoordelingen, tags en illustraties worden ook in je muziekbestanden geschreven. Maak een back-up van deze map samen met je muziek:"
+
+#: crates/ui_gtk/src/device_panel.rs:234
+#, rust-format
+msgid "Playlists to sync"
+msgstr "Te synchroniseren afspeellijsten"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:28
+msgid "Playlists, smart playlists, and playlist folders"
+msgstr "Afspeellijsten, slimme afspeellijsten en afspeellijstmappen"
+
+#: crates/ui_gtk/src/track_table/columns.rs:72
+#, rust-format
+msgid "Plays"
+msgstr "Afgespeeld"
+
+#: crates/ui_gtk/src/preferences/mod.rs:189 crates/ui_gtk/src/shortcuts.rs:139
+#, rust-format
+msgid "Preferences"
+msgstr "Voorkeuren"
+
+#: crates/ui_gtk/src/preferences/mod.rs:164
+#, rust-format
+msgid "Preferences (Ctrl+,)"
+msgstr "Voorkeuren (Ctrl+,)"
+
+#: crates/app_runtime/src/notifications.rs:1004
+#, rust-format
+msgid "Preparing tracks ({completed}/{total})…"
+msgstr "Nummers voorbereiden ({completed}/{total})…"
+
+#: crates/ui_gtk/src/duplicates.rs:87
+#, rust-format
+msgid ""
+"Preview and merge the groups whose audio shows them to be copies of one "
+"recording"
+msgstr "Bekijk en voeg de groepen samen waarvan de audio laat zien dat het kopieën van één opname zijn"
+
+#: crates/ui_gtk/src/titlebar.rs:55
+#, rust-format
+msgid "Previous"
+msgstr "Vorige"
+
+#: crates/ui_gtk/src/shortcuts.rs:121
+#, rust-format
+msgid "Previous track"
+msgstr "Vorig nummer"
+
+#: crates/ui_gtk/src/track_info.rs:132
+#, rust-format
+msgid "Previous track (Ctrl+[)"
+msgstr "Vorig nummer (Ctrl+[)"
+
+#: crates/ui_gtk/src/statistics.rs:323
+#, rust-format
+msgid "Quality"
+msgstr "Kwaliteit"
+
+#: crates/app_runtime/src/lib.rs:3014
+#, rust-format
+msgid "Queued {count} track for BPM analysis."
+msgid_plural "Queued {count} tracks for BPM analysis."
+msgstr[0] "{count} nummer in de wachtrij voor BPM-analyse."
+msgstr[1] "{count} nummers in de wachtrij voor BPM-analyse."
+
+#: crates/app_runtime/src/lib.rs:3029
+#, rust-format
+msgid "Queued {count} track for analysis."
+msgid_plural "Queued {count} tracks for analysis."
+msgstr[0] "{count} nummer in de wachtrij voor analyse."
+msgstr[1] "{count} nummers in de wachtrij voor analyse."
+
+#: crates/app_runtime/src/lib.rs:3111
+#, rust-format
+msgid "Queued {count} track for artwork retrieval."
+msgid_plural "Queued {count} tracks for artwork retrieval."
+msgstr[0] "{count} nummer in de wachtrij voor het ophalen van albumhoezen."
+msgstr[1] "{count} nummers in de wachtrij voor het ophalen van albumhoezen."
+
+#: crates/app_runtime/src/lib.rs:3024
+#, rust-format
+msgid "Queued {count} track for audio analysis."
+msgid_plural "Queued {count} tracks for audio analysis."
+msgstr[0] "{count} nummer in de wachtrij voor audioanalyse."
+msgstr[1] "{count} nummers in de wachtrij voor audioanalyse."
+
+#: crates/app_runtime/src/lib.rs:3019
+#, rust-format
+msgid "Queued {count} track for key detection."
+msgid_plural "Queued {count} tracks for key detection."
+msgstr[0] "{count} nummer in de wachtrij voor toonsoortdetectie."
+msgstr[1] "{count} nummers in de wachtrij voor toonsoortdetectie."
+
+#: crates/app_runtime/src/lib.rs:3106
+#, rust-format
+msgid "Queued {count} track for lyrics retrieval."
+msgid_plural "Queued {count} tracks for lyrics retrieval."
+msgstr[0] "{count} nummer in de wachtrij voor het ophalen van songteksten."
+msgstr[1] "{count} nummers in de wachtrij voor het ophalen van songteksten."
+
+#: crates/app_runtime/src/lib.rs:3121
+#, rust-format
+msgid "Queued {count} track for online retrieval."
+msgid_plural "Queued {count} tracks for online retrieval."
+msgstr[0] "{count} nummer in de wachtrij voor online ophalen."
+msgstr[1] "{count} nummers in de wachtrij voor online ophalen."
+
+#: crates/app_runtime/src/lib.rs:3116
+#, rust-format
+msgid "Queued {count} track for tag enrichment."
+msgid_plural "Queued {count} tracks for tag enrichment."
+msgstr[0] "{count} nummer in de wachtrij voor het aanvullen van tags."
+msgstr[1] "{count} nummers in de wachtrij voor het aanvullen van tags."
+
+#: crates/ui_gtk/src/shortcuts.rs:133
+#, rust-format
+msgid "Quit Sustain"
+msgstr "Sustain afsluiten"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:305
+#: crates/ui_gtk/src/track_info/details.rs:131
+#: crates/ui_gtk/src/track_table/columns.rs:71
+#, rust-format
+msgid "Rating"
+msgstr "Waardering"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:82
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Rating"
+msgstr "Waardering"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:32
+msgid "Real-time search with sortable and customizable columns"
+msgstr "Direct zoeken met sorteerbare en aanpasbare kolommen"
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:296
+#, rust-format
+msgid "Rebuilding the Smart Shuffle index…"
+msgstr "Index van Smart Shuffle herbouwen…"
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:49
+#, rust-format
+msgid ""
+"Recovered an interrupted YouTube audio replacement, but retained the "
+"previous pathname because its identity could not be proven."
+msgstr "Een onderbroken vervanging van YouTube-audio is hersteld, maar het vorige pad is behouden omdat de identiteit ervan niet kon worden aangetoond."
+
+#: crates/ui_gtk/src/statistics.rs:407
+#, rust-format
+msgid "Release years"
+msgstr "Verschijningsjaren"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:33
+msgid ""
+"Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, and "
+"AcoustID"
+msgstr "Albumhoezen en metadata op afstand ophalen via MusicBrainz, Cover Art Archive en AcoustID"
+
+#: crates/app_runtime/src/notifications.rs:974
+#, rust-format
+msgid "Remote artwork retrieval is not available in this build."
+msgstr "Albumhoezen op afstand ophalen is niet beschikbaar in deze versie."
+
+#: crates/ui_gtk/src/track_info/artwork.rs:95
+#, rust-format
+msgid "Remove Artwork"
+msgstr "Albumhoes verwijderen"
+
+#: crates/ui_gtk/src/track_context.rs:311
+#: crates/ui_gtk/src/track_context.rs:891
+#: crates/ui_gtk/src/track_context.rs:893
+#, rust-format
+msgid "Remove from Library"
+msgstr "Uit bibliotheek verwijderen"
+
+#: crates/ui_gtk/src/track_context.rs:350
+#, rust-format
+msgid "Remove from Playlist"
+msgstr "Uit afspeellijst verwijderen"
+
+#: crates/ui_gtk/src/queue_view.rs:417
+#, rust-format
+msgid "Remove from queue"
+msgstr "Uit wachtrij verwijderen"
+
+#: crates/ui_gtk/src/smart_playlist_editor.rs:596
+#, rust-format
+msgid "Remove rule"
+msgstr "Regel verwijderen"
+
+#: crates/app_runtime/src/notifications.rs:1016
+#, rust-format
+msgid "Removing tracks ({completed}/{total})…"
+msgstr "Nummers verwijderen ({completed}/{total})…"
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:153
+#, rust-format
+msgid "Rename"
+msgstr "Hernoemen"
+
+#: crates/ui_gtk/src/now_playing.rs:250
+#, rust-format
+msgctxt "playback control"
+msgid "Repeat"
+msgstr "Herhalen"
+
+#: crates/ui_gtk/src/youtube_audio_replacement.rs:48
+#, rust-format
+msgid "Replace Audio from YouTube"
+msgstr "Audio vervangen via YouTube"
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:164
+#, rust-format
+msgid ""
+"Replacement installed, but the previous audio file could not be moved to "
+"trash."
+msgstr "Vervanging geïnstalleerd, maar het vorige audiobestand kon niet naar de prullenbak worden verplaatst."
+
+#: crates/ui_gtk/src/preferences/about_tab.rs:76
+#, rust-format
+msgid "Report a problem"
+msgstr "Een probleem melden"
+
+#: crates/ui_gtk/src/track_info/details.rs:147
+#, rust-format
+msgid "Reset"
+msgstr "Herstellen"
+
+#: crates/app_runtime/src/notifications.rs:519
+#, rust-format
+msgid "Retrieved online data for {completed} track."
+msgid_plural "Retrieved online data for {completed} tracks."
+msgstr[0] "Onlinegegevens opgehaald voor {completed} nummer."
+msgstr[1] "Onlinegegevens opgehaald voor {completed} nummers."
+
+#. Translators: {tracks} is "{count} track(s)" and {skipped} is
+#. "{count} track(s) skipped", as in "Retrieved online data for
+#. 40 tracks, 2 tracks skipped."
+#: crates/app_runtime/src/notifications.rs:530
+#, rust-format
+msgid "Retrieved online data for {tracks}, {skipped}."
+msgstr "Onlinegegevens opgehaald voor {tracks}, {skipped}."
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:184
+#, rust-format
+msgid "Retrieve…"
+msgstr "Ophalen…"
+
+#: crates/app_runtime/src/notifications.rs:509
+#, rust-format
+msgid "Retrieving online data ({completed}/{total})..."
+msgstr "Onlinegegevens ophalen ({completed}/{total})…"
+
+#: crates/ui_gtk/src/shortcuts.rs:117
+#, rust-format
+msgid "Reveal selected track in Files"
+msgstr "Gekozen nummer tonen in Bestanden"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:31
+#, rust-format
+msgid ""
+"Runs in the background and sets each track's BPM to the measured tempo. "
+"Never replaces a BPM you typed yourself."
+msgstr "Draait op de achtergrond en stelt de BPM van elk nummer in op het gemeten tempo. Vervangt nooit een BPM die je zelf hebt ingevoerd."
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:39
+#, rust-format
+msgid ""
+"Runs in the background on tracks missing a musical key, and measures its own "
+"keys again when detection improves. Never replaces a key from the file's "
+"tags or one you typed."
+msgstr "Draait op de achtergrond voor nummers zonder toonsoort, en meet de eigen toonsoorten opnieuw wanneer de detectie verbetert. Vervangt nooit een toonsoort uit de tags van het bestand of een die je zelf hebt ingevoerd."
+
+#: crates/ui_gtk/src/track_info/file_page.rs:75
+#, rust-format
+msgid "Sample rate"
+msgstr "Samplefrequentie"
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:91
+#, rust-format
+msgid "Save library path and scan now"
+msgstr "Bibliotheekpad opslaan en nu scannen"
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:90
+#, rust-format
+msgid "Scan"
+msgstr "Scannen"
+
+#: crates/app_runtime/src/notifications.rs:581
+#, rust-format
+msgid "Scan complete: no changes."
+msgstr "Scan voltooid: geen wijzigingen."
+
+#: crates/app_runtime/src/notifications.rs:580
+#, rust-format
+msgid "Scan complete: {changes}."
+msgstr "Scan voltooid: {changes}."
+
+#: crates/app_runtime/src/notifications.rs:576
+#, rust-format
+msgid "Scan partial: missing-file reconciliation skipped."
+msgstr "Scan gedeeltelijk: afstemming van ontbrekende bestanden overgeslagen."
+
+#: crates/app_runtime/src/notifications.rs:573
+#, rust-format
+msgid "Scan partial: {changes}; missing-file reconciliation skipped."
+msgstr "Scan gedeeltelijk: {changes}; afstemming van ontbrekende bestanden overgeslagen."
+
+#: crates/app_runtime/src/notifications.rs:567
+#, rust-format
+msgid "Scan stopped."
+msgstr "Scan gestopt."
+
+#: crates/app_runtime/src/notifications.rs:566
+#, rust-format
+msgid "Scan stopped: {changes}."
+msgstr "Scan gestopt: {changes}."
+
+#: crates/ui_gtk/src/duplicates.rs:239
+#, rust-format
+msgid "Scanning for duplicate tracks..."
+msgstr "Zoeken naar dubbele nummers…"
+
+#: crates/app_runtime/src/notifications.rs:371
+#, rust-format
+msgid "Scanning library..."
+msgstr "Bibliotheek scannen…"
+
+#: crates/ui_gtk/src/titlebar.rs:85
+#, rust-format
+msgid "Search"
+msgstr "Zoeken"
+
+#: crates/ui_gtk/src/shortcuts.rs:130
+#, rust-format
+msgid "Select all tracks"
+msgstr "Alle nummers selecteren"
+
+#: crates/app_runtime/src/notifications.rs:987
+#, rust-format
+msgid "Select at least one track to import."
+msgstr "Kies minstens één nummer om te importeren."
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:141
+#, rust-format
+msgid ""
+"Sensible choices are pre-selected. Implicit choices: play counts and skips "
+"are summed, oldest date added is preserved."
+msgstr "Verstandige keuzes zijn al geselecteerd. Impliciete keuzes: het aantal keer afgespeeld en overgeslagen wordt opgeteld, de oudste datum van toevoegen blijft behouden."
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:273
+#, rust-format
+msgid ""
+"Sets the tempo window Sustain uses when folding half-time and double-time "
+"detections. Widen it for very slow or fast music; narrow it if results tend "
+"to land at half or double the expected tempo."
+msgstr "Bepaalt het tempobereik dat Sustain gebruikt om detecties op half en dubbel tempo te corrigeren. Verbreed het voor zeer trage of snelle muziek; versmal het als resultaten vaak op de helft of het dubbele van het verwachte tempo uitkomen."
+
+#: crates/ui_gtk/src/preferences/mod.rs:153
+#, rust-format
+msgid "Settings"
+msgstr "Instellingen"
+
+#: crates/ui_gtk/src/statistics.rs:324
+#, rust-format
+msgid "Share of tracks per bitrate range."
+msgstr "Aandeel nummers per bitsnelheidsbereik."
+
+#: crates/ui_gtk/src/statistics.rs:287
+#, rust-format
+msgid "Share of tracks per genre across the whole library."
+msgstr "Aandeel nummers per genre in de hele bibliotheek."
+
+#: crates/ui_gtk/src/track_context.rs:299
+#, rust-format
+msgid "Show Album"
+msgstr "Album tonen"
+
+#: crates/ui_gtk/src/preferences/views_tab.rs:25
+#, rust-format
+msgid "Show Duplicates in the sidebar"
+msgstr "Duplicaten tonen in de zijbalk"
+
+#: crates/ui_gtk/src/preferences/views_tab.rs:38
+#, rust-format
+msgid "Show Statistics in the sidebar"
+msgstr "Statistieken tonen in de zijbalk"
+
+#: crates/ui_gtk/src/track_context.rs:284
+#, rust-format
+msgid "Show in Folder"
+msgstr "Tonen in map"
+
+#: crates/ui_gtk/src/now_playing.rs:226
+#, rust-format
+msgid "Show lyrics"
+msgstr "Songtekst tonen"
+
+#: crates/ui_gtk/src/main_window/sidebar_collapse.rs:156
+#, rust-format
+msgid "Show sidebar"
+msgstr "Zijbalk tonen"
+
+#: crates/ui_gtk/src/preferences/views_tab.rs:51
+#, rust-format
+msgid "Show the waveform in Now Playing"
+msgstr "Golfvorm tonen bij Speelt nu"
+
+#: crates/ui_gtk/src/now_playing.rs:240
+#: crates/ui_gtk/src/playlists_header.rs:65
+#, rust-format
+msgctxt "playback control"
+msgid "Shuffle"
+msgstr "Willekeurig"
+
+#: crates/ui_gtk/src/preferences/mod.rs:299
+#, rust-format
+msgctxt "preferences tab"
+msgid "Shuffle"
+msgstr "Willekeurig"
+
+#: crates/ui_gtk/src/albums.rs:1278
+#, rust-format
+msgid "Shuffle album"
+msgstr "Album willekeurig afspelen"
+
+#: crates/ui_gtk/src/track_info/file_page.rs:61
+#, rust-format
+msgid "Size"
+msgstr "Grootte"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:90
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Skip Count"
+msgstr "Overgeslagen"
+
+#: crates/ui_gtk/src/track_info/details.rs:164
+#, rust-format
+msgid "Skip count"
+msgstr "Overgeslagen"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:342
+#: crates/ui_gtk/src/track_table/columns.rs:73
+#, rust-format
+msgid "Skips"
+msgstr "Overgeslagen"
+
+#: crates/ui_gtk/src/smart_playlist_editor.rs:294
+#, rust-format
+msgid "Smart Playlist"
+msgstr "Slimme afspeellijst"
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:326
+#, rust-format
+msgid "Smart Shuffle index not built yet."
+msgstr "De index van Smart Shuffle is nog niet opgebouwd."
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:304
+#, rust-format
+msgid "Smart Shuffle ready."
+msgstr "Smart Shuffle is klaar."
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:59
+#, rust-format
+msgid ""
+"Smart Shuffle tries to follow your mood by using the current track's genre, "
+"tempo, key, era and discovery period to choose the next track. Turning on "
+"audio analysis allows for even better picks."
+msgstr "Slim willekeurig afspelen probeert je stemming te volgen door het genre, tempo, de toonsoort, het tijdperk en de ontdekkingsperiode van het huidige nummer te gebruiken om het volgende te kiezen. Met audioanalyse ingeschakeld worden de keuzes nog beter."
+
+#: crates/ui_gtk/src/queue_view.rs:337
+#, rust-format
+msgid "Smart Shuffle will choose the next track."
+msgstr "Smart Shuffle kiest het volgende nummer."
+
+#: crates/app_runtime/src/lib.rs:2568
+#, rust-format
+msgid "Smart Shuffle: failed to persist the rebuilt index."
+msgstr "Smart Shuffle: kan de herbouwde index niet opslaan."
+
+#: crates/app_runtime/src/lib.rs:2554
+#, rust-format
+msgid "Smart Shuffle: failed to serialise the rebuilt index."
+msgstr "Smart Shuffle: kan de herbouwde index niet serialiseren."
+
+#: crates/app_runtime/src/notifications.rs:829
+#, rust-format
+msgid "Some changes could not be mirrored to audio files. Sustain will retry."
+msgstr "Sommige wijzigingen konden niet naar de audiobestanden worden overgenomen. Sustain probeert het opnieuw."
+
+#: crates/app_runtime/src/notifications.rs:713
+#, rust-format
+msgid "Some empty folders could not be removed."
+msgstr "Sommige lege mappen konden niet worden verwijderd."
+
+#: crates/app_runtime/src/notifications.rs:821
+#, rust-format
+msgid "Some empty managed-library folders could not be removed."
+msgstr "Sommige lege mappen van de beheerde bibliotheek konden niet worden verwijderd."
+
+#: crates/ui_gtk/src/device_panel.rs:1083
+#, rust-format
+msgid ""
+"Some selected tracks are not fully analysed ({gaps}). They will still sync, "
+"but that information will be missing on Pioneer players. Run Analyse first "
+"to fill the gaps."
+msgstr "Sommige gekozen nummers zijn niet volledig geanalyseerd ({gaps}). Ze worden toch gesynchroniseerd, maar die informatie ontbreekt op Pioneer-spelers. Voer eerst Analyseren uit om de gaten te vullen."
+
+#: crates/ui_gtk/src/command_controller.rs:98
+#: crates/ui_gtk/src/track_info/multi.rs:161
+#, rust-format
+msgid "Some selected tracks could not be updated."
+msgstr "Sommige gekozen nummers konden niet worden bijgewerkt."
+
+#: crates/app_runtime/src/notifications.rs:833
+#, rust-format
+msgid ""
+"Some track changes could not be read from the library database. Sustain will "
+"retry."
+msgstr "Sommige wijzigingen aan nummers konden niet uit de bibliotheekdatabase worden gelezen. Sustain probeert het opnieuw."
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:27
+msgid "Songs, Albums, and Playlists views with a keyboard-friendly table"
+msgstr "Weergaven Nummers, Albums en Afspeellijsten met een toetsenbordvriendelijke tabel"
+
+#: crates/ui_gtk/src/preferences/library_tab.rs:273
+#, rust-format
+msgid "Sort using sort-order tags"
+msgstr "Sorteren met sorteertags"
+
+#: crates/ui_gtk/src/sidebar.rs:197
+#, rust-format
+msgid "Statistics"
+msgstr "Statistieken"
+
+#: crates/ui_gtk/src/track_info/format.rs:93
+#, rust-format
+msgid "Stereo"
+msgstr "Stereo"
+
+#: crates/ui_gtk/src/duplicates.rs:89
+#, rust-format
+msgid "Strict matching"
+msgstr "Strikte vergelijking"
+
+#: crates/ui_gtk/src/main_window.rs:225
+#: data/io.github.open_sustain.sustain.desktop:3
+#: data/io.github.open_sustain.sustain.metainfo.xml:8
+#, rust-format
+msgid "Sustain"
+msgstr "Sustain"
+
+#: crates/app_runtime/src/playback.rs:716
+#, rust-format
+msgid ""
+"Sustain could not save listening statistics. The pending play count is "
+"retained in memory and will retry automatically."
+msgstr "Sustain kon de luisterstatistieken niet opslaan. Het nog te verwerken afspeelaantal blijft in het geheugen en wordt automatisch opnieuw geprobeerd."
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:19
+msgid ""
+"Sustain is a Linux-native music library and player heavily inspired by the "
+"dense, predictable workflow of iTunes circa 2012. It is built around a fast "
+"main table view, with first-class playlists, smart playlists, ratings, "
+"listening statistics, and search."
+msgstr "Sustain is een Linux-eigen muziekbibliotheek en speler, sterk geïnspireerd door de compacte, voorspelbare werkwijze van iTunes rond 2012. Het draait om een snelle hoofdtabel, met volwaardige afspeellijsten, slimme afspeellijsten, waarderingen, luisterstatistieken en zoeken."
+
+#: crates/app_runtime/src/notifications.rs:772
+#, rust-format
+msgid ""
+"Sustain retained recovery files because cleanup could not finish safely."
+msgstr "Sustain heeft herstelbestanden bewaard omdat het opruimen niet veilig kon worden afgerond."
+
+#: crates/ui_gtk/src/shortcuts.rs:452
+#, rust-format
+msgid "Sustain shortcuts"
+msgstr "Sneltoetsen van Sustain"
+
+#: crates/ui_gtk/src/device_panel.rs:661
+#, rust-format
+msgid "Sync"
+msgstr "Synchroniseren"
+
+#: crates/ui_gtk/src/device_panel.rs:1121
+#, rust-format
+msgid "Sync and remove"
+msgstr "Synchroniseren en verwijderen"
+
+#: crates/ui_gtk/src/device_panel.rs:1123
+#, rust-format
+msgid "Sync anyway"
+msgstr "Toch synchroniseren"
+
+#: crates/app_runtime/src/notifications.rs:1080
+#, rust-format
+msgid "Sync complete: {changes}."
+msgstr "Synchronisatie voltooid: {changes}."
+
+#: crates/app_runtime/src/notifications.rs:1082
+#, rust-format
+msgid "Sync complete: {changes}; {unplayable}."
+msgstr "Synchronisatie voltooid: {changes}; {unplayable}."
+
+#: crates/ui_gtk/src/device_panel.rs:1128
+#, rust-format
+msgid "Sync device"
+msgstr "Apparaat synchroniseren"
+
+#: crates/app_runtime/src/notifications.rs:1086
+#, rust-format
+msgid "Sync partial: {changes}."
+msgstr "Synchronisatie gedeeltelijk: {changes}."
+
+#: crates/app_runtime/src/notifications.rs:1088
+#, rust-format
+msgid "Sync partial: {changes}; {unplayable}."
+msgstr "Synchronisatie gedeeltelijk: {changes}; {unplayable}."
+
+#: crates/app_runtime/src/notifications.rs:1034
+#, rust-format
+msgid "Sync stopped: {changes}."
+msgstr "Synchronisatie gestopt: {changes}."
+
+#: crates/ui_gtk/src/sidebar.rs:573
+#, rust-format
+msgid "Syncing"
+msgstr "Synchroniseren"
+
+#: crates/ui_gtk/src/device_panel.rs:1098
+#, rust-format
+msgid ""
+"Syncing will remove {count} track from this device that is no longer in your "
+"selected playlists."
+msgid_plural ""
+"Syncing will remove {count} tracks from this device that are no longer in "
+"your selected playlists."
+msgstr[0] "Bij het synchroniseren wordt {count} nummer van dit apparaat verwijderd dat niet meer in je gekozen afspeellijsten staat."
+msgstr[1] "Bij het synchroniseren worden {count} nummers van dit apparaat verwijderd die niet meer in je gekozen afspeellijsten staan."
+
+#: crates/app_runtime/src/notifications.rs:996
+#, rust-format
+msgid "Syncing {label}…"
+msgstr "{label} synchroniseren…"
+
+#: crates/ui_gtk/src/sidebar/row_context.rs:287
+#: crates/ui_gtk/src/track_context.rs:790
+#, rust-format
+msgid "Tags"
+msgstr "Tags"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:397
+#, rust-format
+msgid "Take every tag and the rating from this track"
+msgstr "Alle tags en de waardering van dit nummer overnemen"
+
+#: crates/app_runtime/src/device_sync.rs:607
+#, rust-format
+msgid "That device is no longer connected."
+msgstr "Dat apparaat is niet meer verbonden."
+
+#: crates/app_runtime/src/notifications.rs:957
+#, rust-format
+msgid "That file is already attached to another library track."
+msgstr "Dat bestand is al gekoppeld aan een ander nummer in de bibliotheek."
+
+#: crates/app_runtime/src/lib.rs:3043
+#, rust-format
+msgid "That track already has BPM analysis — nothing to queue."
+msgid_plural "All {count} tracks already have BPM analysis — nothing to queue."
+msgstr[0] "Dat nummer heeft al een BPM-analyse — niets om in de wachtrij te zetten."
+msgstr[1] "Alle {count} nummers hebben al een BPM-analyse — niets om in de wachtrij te zetten."
+
+#: crates/app_runtime/src/lib.rs:3058
+#, rust-format
+msgid "That track already has analysis — nothing to queue."
+msgid_plural "All {count} tracks already have analysis — nothing to queue."
+msgstr[0] "Dat nummer is al geanalyseerd — niets om in de wachtrij te zetten."
+msgstr[1] "Alle {count} nummers zijn al geanalyseerd — niets om in de wachtrij te zetten."
+
+#: crates/app_runtime/src/lib.rs:3053
+#, rust-format
+msgid "That track already has audio analysis — nothing to queue."
+msgid_plural ""
+"All {count} tracks already have audio analysis — nothing to queue."
+msgstr[0] "Dat nummer heeft al een audioanalyse — niets om in de wachtrij te zetten."
+msgstr[1] "Alle {count} nummers hebben al een audioanalyse — niets om in de wachtrij te zetten."
+
+#: crates/app_runtime/src/lib.rs:3048
+#, rust-format
+msgid "That track already has key detection — nothing to queue."
+msgid_plural ""
+"All {count} tracks already have key detection — nothing to queue."
+msgstr[0] "Dat nummer heeft al een toonsoortdetectie — niets om in de wachtrij te zetten."
+msgstr[1] "Alle {count} nummers hebben al een toonsoortdetectie — niets om in de wachtrij te zetten."
+
+#: crates/app_runtime/src/notifications.rs:985
+#, rust-format
+msgid "The CD could not be imported."
+msgstr "De cd kon niet worden geïmporteerd."
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:239
+#, rust-format
+msgid "The YouTube audio download exceeded Sustain's time limit."
+msgstr "Het downloaden van de YouTube-audio overschreed de tijdslimiet van Sustain."
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:242
+#, rust-format
+msgid "The YouTube audio download was cancelled."
+msgstr "Het downloaden van de YouTube-audio is geannuleerd."
+
+#: crates/app_runtime/src/notifications.rs:977
+#, rust-format
+msgid "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
+msgstr "De albumhoes wordt niet ondersteund, is beschadigd of overschrijdt de groottegrenzen van Sustain."
+
+#: crates/ui_gtk/src/track_context.rs:916
+#, rust-format
+msgid ""
+"The audio file will be moved to the system trash and the track will be "
+"removed from the library."
+msgid_plural ""
+"The {count} audio files will be moved to the system trash and the tracks "
+"will be removed from the library."
+msgstr[0] "Het audiobestand wordt naar de prullenbak van het systeem verplaatst en het nummer wordt uit de bibliotheek verwijderd."
+msgstr[1] "De {count} audiobestanden worden naar de prullenbak van het systeem verplaatst en de nummers worden uit de bibliotheek verwijderd."
+
+#: crates/ui_gtk/src/track_context.rs:927
+#, rust-format
+msgid ""
+"The audio file will stay on disk, but the track will be removed from "
+"Sustain. Library data for this track, including play count and date added, "
+"will be removed."
+msgid_plural ""
+"The audio files will stay on disk, but the {count} tracks will be removed "
+"from Sustain. Library data for these tracks, including play counts and dates "
+"added, will be removed."
+msgstr[0] "Het audiobestand blijft op de schijf, maar het nummer wordt uit Sustain verwijderd. De bibliotheekgegevens van dit nummer, waaronder het aantal keer afgespeeld en de datum van toevoegen, worden verwijderd."
+msgstr[1] "De audiobestanden blijven op de schijf, maar de {count} nummers worden uit Sustain verwijderd. De bibliotheekgegevens van deze nummers, waaronder het aantal keer afgespeeld en de datums van toevoegen, worden verwijderd."
+
+#: crates/ui_gtk/src/verified_duplicates.rs:49
+#, rust-format
+msgid ""
+"The best audio file and the highest rating are kept, along with the highest-"
+"resolution artwork. Play counts and skips are summed, and the oldest date "
+"added is kept. Uncheck a group to review it yourself."
+msgstr "Het beste audiobestand en de hoogste waardering blijven behouden, samen met de albumhoes met de hoogste resolutie. Het aantal keer afgespeeld en overgeslagen wordt opgeteld, en de oudste datum van toevoegen blijft behouden. Vink een groep uit om die zelf te beoordelen."
+
+#: crates/app_runtime/src/notifications.rs:983
+#, rust-format
+msgid "The disc changed. Re-insert the original disc and try again."
+msgstr "De schijf is gewisseld. Plaats de oorspronkelijke schijf terug en probeer het opnieuw."
+
+#: crates/app_runtime/src/notifications.rs:990
+#, rust-format
+msgid "The disc is being imported. Play it once the import is done."
+msgstr "De schijf wordt geïmporteerd. Speel hem af zodra de import klaar is."
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:236
+#, rust-format
+msgid "The downloaded YouTube replacement exceeded Sustain's size limit."
+msgstr "De van YouTube gedownloade vervanging overschrijdt de groottelimiet van Sustain."
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:131
+#, rust-format
+msgid "The downloaded audio could not be published safely."
+msgstr "De gedownloade audio kon niet veilig worden gepubliceerd."
+
+#: crates/app_runtime/src/notifications.rs:948
+#, rust-format
+msgid "The downloaded audio could not safely replace this track."
+msgstr "De gedownloade audio kon dit nummer niet veilig vervangen."
+
+#: crates/app_runtime/src/notifications.rs:893
+#, rust-format
+msgid "The duplicate tracks could not be consolidated safely."
+msgstr "De dubbele nummers konden niet veilig worden samengevoegd."
+
+#: crates/ui_gtk/src/main_window/result_consumers.rs:519
+#, rust-format
+msgid "The fetched artwork could not be queued for saving."
+msgstr "De opgehaalde albumhoes kon niet in de wachtrij worden gezet om op te slaan."
+
+#: crates/ui_gtk/src/main_window/result_consumers.rs:529
+#, rust-format
+msgid ""
+"The fetched cover art was rejected because it is unsupported, corrupt, or "
+"too large."
+msgstr "De opgehaalde albumhoes is geweigerd omdat die niet wordt ondersteund, beschadigd of te groot is."
+
+#: crates/app_runtime/src/notifications.rs:677
+#, rust-format
+msgid "The file could not be read."
+msgstr "Het bestand kon niet worden gelezen."
+
+#: crates/app_runtime/src/notifications.rs:909
+#, rust-format
+msgid "The files could not be added to the library."
+msgstr "De bestanden konden niet aan de bibliotheek worden toegevoegd."
+
+#: crates/app_runtime/src/notifications.rs:919
+#, rust-format
+msgid "The folder name is not valid."
+msgstr "De mapnaam is ongeldig."
+
+#: crates/app_runtime/src/notifications.rs:890
+#, rust-format
+msgid "The library could not be organized."
+msgstr "De bibliotheek kon niet worden geordend."
+
+#: crates/app_runtime/src/notifications.rs:902
+#, rust-format
+msgid "The library database could not be updated."
+msgstr "De bibliotheekdatabase kon niet worden bijgewerkt."
+
+#: crates/app_runtime/src/lib.rs:1004
+#, rust-format
+msgid "The music library could not be loaded."
+msgstr "De muziekbibliotheek kon niet worden geladen."
+
+#: crates/app_runtime/src/notifications.rs:912
+#, rust-format
+msgid "The music library is still loading."
+msgstr "De muziekbibliotheek wordt nog geladen."
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:394
+#, rust-format
+msgid "The number of days must be at least 1."
+msgstr "Het aantal dagen moet minstens 1 zijn."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:60
+#, rust-format
+msgid "The organized library path must be a folder."
+msgstr "Het pad van de geordende bibliotheek moet een map zijn."
+
+#: crates/app_runtime/src/notifications.rs:929
+#, rust-format
+msgid "The playlist could not be updated."
+msgstr "De afspeellijst kon niet worden bijgewerkt."
+
+#: crates/app_runtime/src/notifications.rs:932
+#, rust-format
+msgid "The playlist folder could not be updated."
+msgstr "De afspeellijstmap kon niet worden bijgewerkt."
+
+#: crates/app_runtime/src/notifications.rs:917
+#, rust-format
+msgid "The playlist name is not valid."
+msgstr "De naam van de afspeellijst is ongeldig."
+
+#: crates/app_runtime/src/notifications.rs:954
+#, rust-format
+msgid "The replacement track file could not be used."
+msgstr "Het vervangende bestand voor het nummer kon niet worden gebruikt."
+
+#: crates/app_runtime/src/notifications.rs:887
+#, rust-format
+msgid "The selected folder could not be scanned."
+msgstr "De gekozen map kon niet worden gescand."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:86
+#, rust-format
+msgid ""
+"The selected library folder cannot durably save managed directory changes."
+msgstr "De gekozen bibliotheekmap kan wijzigingen aan beheerde mappen niet duurzaam opslaan."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:65
+#, rust-format
+msgid "The selected library folder cannot durably save managed files."
+msgstr "De gekozen bibliotheekmap kan beheerde bestanden niet duurzaam opslaan."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:80
+#, rust-format
+msgid ""
+"The selected library folder cannot publish Sustain's recovery journal "
+"atomically."
+msgstr "De gekozen bibliotheekmap kan het herstellogboek van Sustain niet atomair publiceren."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:83
+#, rust-format
+msgid ""
+"The selected library folder cannot safely protect Sustain's recovery journal "
+"from overwrite."
+msgstr "De gekozen bibliotheekmap kan het herstellogboek van Sustain niet veilig tegen overschrijven beschermen."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:71
+#, rust-format
+msgid ""
+"The selected library folder cannot safely refuse overwriting an existing "
+"managed file."
+msgstr "De gekozen bibliotheekmap kan het overschrijven van een bestaand beheerd bestand niet veilig weigeren."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:74
+#, rust-format
+msgid "The selected library folder cannot safely remove managed pathnames."
+msgstr "De gekozen bibliotheekmap kan beheerde paden niet veilig verwijderen."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:89
+#, rust-format
+msgid ""
+"The selected library folder could not remove Sustain's filesystem probe "
+"files."
+msgstr "De gekozen bibliotheekmap kon de testbestanden van Sustain niet verwijderen."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:77
+#, rust-format
+msgid ""
+"The selected library folder did not preserve a managed file after a hard-"
+"link move."
+msgstr "De gekozen bibliotheekmap heeft een beheerd bestand na een verplaatsing via een harde koppeling niet behouden."
+
+#: crates/app_runtime/src/managed_library/capabilities.rs:68
+#, rust-format
+msgid ""
+"The selected library folder does not support the hard-link moves required by "
+"organized library mode."
+msgstr "De gekozen bibliotheekmap ondersteunt de verplaatsingen via harde koppelingen niet die de modus voor een geordende bibliotheek vereist."
+
+#: crates/app_runtime/src/notifications.rs:938
+#, rust-format
+msgid "The smart playlist could not be updated."
+msgstr "De slimme afspeellijst kon niet worden bijgewerkt."
+
+#: crates/app_runtime/src/notifications.rs:922
+#, rust-format
+msgid "The smart playlist name is not valid."
+msgstr "De naam van de slimme afspeellijst is ongeldig."
+
+#: crates/app_runtime/src/notifications.rs:971
+#, rust-format
+msgid "The track could not be moved to trash."
+msgstr "Het nummer kon niet naar de prullenbak worden verplaatst."
+
+#: crates/app_runtime/src/notifications.rs:915
+#, rust-format
+msgid "The track metadata could not be updated."
+msgstr "De metadata van het nummer konden niet worden bijgewerkt."
+
+#: crates/app_runtime/src/library_mutation.rs:120
+#, rust-format
+msgid "The track was located, but empty library folders could not be removed."
+msgstr "Het nummer is gevonden, maar lege bibliotheekmappen konden niet worden verwijderd."
+
+#: crates/app_runtime/src/notifications.rs:825
+#, rust-format
+msgid ""
+"The waveform cache could not be opened. Waveforms will not be kept this "
+"session."
+msgstr "De golfvormcache kon niet worden geopend. Golfvormen worden deze sessie niet bewaard."
+
+#: crates/ui_gtk/src/verified_duplicates.rs:41
+#, rust-format
+msgid ""
+"Their audio shows each of these groups to be copies of one recording. Each "
+"group merges into a single track, keeping the choices shown."
+msgstr "Hun audio laat zien dat elk van deze groepen kopieën van één opname zijn. Elke groep wordt samengevoegd tot één nummer, met behoud van de getoonde keuzes."
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:379
+#, rust-format
+msgid "This combination of field and operator is not supported."
+msgstr "Deze combinatie van veld en operator wordt niet ondersteund."
+
+#: crates/ui_gtk/src/main_window.rs:1420
+#, rust-format
+msgid "This device cannot be ejected by the desktop."
+msgstr "Dit apparaat kan niet door de desktop worden uitgeworpen."
+
+#: crates/app_runtime/src/device_sync.rs:494
+#, rust-format
+msgid "This device's selection is empty."
+msgstr "De selectie van dit apparaat is leeg."
+
+#: crates/ui_gtk/src/track_info/artwork.rs:112
+#, rust-format
+msgid "This track has no embedded artwork."
+msgstr "Dit nummer heeft geen ingesloten albumhoes."
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:298
+#, rust-format
+msgid "This usually takes a moment."
+msgstr "Dit duurt meestal even."
+
+#: crates/ui_gtk/src/cd_import_panel.rs:444
+#, rust-format
+msgid "Time"
+msgstr "Tijd"
+
+#: crates/ui_gtk/src/cd_import_panel.rs:426
+#: crates/ui_gtk/src/duplicate_consolidation.rs:746
+#: crates/ui_gtk/src/track_info/details.rs:71
+#: crates/ui_gtk/src/track_info/multi.rs:285
+#, rust-format
+msgid "Title"
+msgstr "Titel"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:68
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Title"
+msgstr "Titel"
+
+#: crates/ui_gtk/src/statistics.rs:355
+#, rust-format
+msgid "Top 5 by total play count."
+msgstr "Top 5 op totaal aantal keer afgespeeld."
+
+#: crates/ui_gtk/src/statistics.rs:378
+#, rust-format
+msgid "Top 5 by total rating points across rated tracks."
+msgstr "Top 5 op totaal aantal waarderingspunten van gewaardeerde nummers."
+
+#: crates/ui_gtk/src/track_info/details.rs:102
+#, rust-format
+msgid "Track"
+msgstr "Nummer"
+
+#: crates/ui_gtk/src/track_table/columns.rs:77
+#, rust-format
+msgid "Track #"
+msgstr "Nr."
+
+#: crates/ui_gtk/src/track_table/columns.rs:60
+#, rust-format
+msgid "Track Name"
+msgstr "Naam van nummer"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:753
+#, rust-format
+msgid "Track Number"
+msgstr "Tracknummer"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:93
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Track Number"
+msgstr "Tracknummer"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:754
+#, rust-format
+msgid "Track Total"
+msgstr "Aantal tracks"
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:170
+#, rust-format
+msgid "Track audio replaced from YouTube."
+msgstr "Audio van nummer vervangen via YouTube."
+
+#: crates/app_runtime/src/notifications.rs:969
+#, rust-format
+msgid "Track file is missing."
+msgstr "Het bestand van het nummer ontbreekt."
+
+#: crates/ui_gtk/src/track_info/multi.rs:319
+#: crates/ui_gtk/src/track_info/multi.rs:416
+#, rust-format
+msgid "Track number"
+msgstr "Tracknummer"
+
+#: crates/ui_gtk/src/track_info/multi.rs:327
+#: crates/ui_gtk/src/track_info/multi.rs:421
+#, rust-format
+msgid "Track total"
+msgstr "Aantal tracks"
+
+#: crates/app_runtime/src/cd_import/plan.rs:44
+#: crates/ui_gtk/src/cd_import_panel.rs:1521
+#: crates/ui_gtk/src/duplicate_consolidation.rs:395
+#, rust-format
+msgid "Track {number}"
+msgstr "Track {number}"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:36
+msgid ""
+"Two library modes: leave files in place, or keep the library organized on "
+"disk"
+msgstr "Twee bibliotheekmodi: bestanden laten staan waar ze staan, of de bibliotheek geordend op schijf houden"
+
+#: crates/ui_gtk/src/track_table/columns.rs:69
+#, rust-format
+msgctxt "file type column"
+msgid "Type"
+msgstr "Type"
+
+#: crates/ui_gtk/src/device_panel.rs:841 crates/ui_gtk/src/statistics.rs:237
+#: crates/ui_gtk/src/statistics.rs:400 crates/ui_gtk/src/statistics.rs:422
+#, rust-format
+msgid "Unknown"
+msgstr "Onbekend"
+
+#: crates/ui_gtk/src/albums/model.rs:300
+#, rust-format
+msgid "Unknown Album"
+msgstr "Onbekend album"
+
+#: crates/app_runtime/src/cd_import/plan.rs:53
+#: crates/ui_gtk/src/albums/model.rs:374
+#: crates/ui_gtk/src/cd_import_panel.rs:61 crates/ui_gtk/src/util.rs:43
+#, rust-format
+msgid "Unknown Artist"
+msgstr "Onbekende artiest"
+
+#: crates/ui_gtk/src/track_info.rs:430 crates/ui_gtk/src/track_info.rs:447
+#, rust-format
+msgid "Untitled"
+msgstr "Naamloos"
+
+#: data/io.github.open_sustain.sustain.metainfo.xml:31
+msgid "Up Next queue with Play Next and Add to Queue"
+msgstr "Wachtrij ‘Hierna’ met ‘Hierna afspelen’ en ‘Aan wachtrij toevoegen’"
+
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:485
+#, rust-format
+msgid "Uses {workers} of {total} core on this machine."
+msgid_plural "Uses {workers} of {total} cores on this machine."
+msgstr[0] "Gebruikt {workers} van {total} kern op deze computer."
+msgstr[1] "Gebruikt {workers} van {total} kernen op deze computer."
+
+#: crates/ui_gtk/src/albums/model.rs:330 crates/ui_gtk/src/albums/model.rs:331
+#, rust-format
+msgid "Various Artists"
+msgstr "Verschillende artiesten"
+
+#: crates/ui_gtk/src/preferences/about_tab.rs:52
+#, rust-format
+msgid "Version {version}"
+msgstr "Versie {version}"
+
+#: crates/ui_gtk/src/preferences/mod.rs:301
+#, rust-format
+msgid "Views"
+msgstr "Weergaven"
+
+#: crates/ui_gtk/src/titlebar.rs:72
+#, rust-format
+msgid "Volume"
+msgstr "Volume"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:173
+#, rust-format
+msgid "Waiting for artwork previews"
+msgstr "Wachten op voorbeelden van albumhoezen"
+
+#: crates/ui_gtk/src/device_panel.rs:367
+#, rust-format
+msgid "Waveform"
+msgstr "Golfvorm"
+
+#: crates/app_runtime/src/notifications.rs:1014
+#, rust-format
+msgid "Writing device database…"
+msgstr "Apparaatdatabase schrijven…"
+
+#: crates/app_runtime/src/notifications.rs:1013
+#, rust-format
+msgid "Writing playlists…"
+msgstr "Afspeellijsten schrijven…"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:757
+#: crates/ui_gtk/src/track_info/details.rs:97
+#: crates/ui_gtk/src/track_info/multi.rs:311
+#: crates/ui_gtk/src/track_info/multi.rs:411
+#: crates/ui_gtk/src/track_table/columns.rs:65
+#, rust-format
+msgid "Year"
+msgstr "Jaar"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:84
+#, rust-format
+msgctxt "smart playlist field"
+msgid "Year"
+msgstr "Jaar"
+
+#: crates/ui_gtk/src/statistics.rs:429
+#, rust-format
+msgid "Year added"
+msgstr "Jaar toegevoegd"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:788
+#: crates/ui_gtk/src/smart_playlist_editor.rs:92
+#: crates/ui_gtk/src/track_table/columns.rs:255
+#, rust-format
+msgid "Yes"
+msgstr "Ja"
+
+#: crates/app_runtime/src/notifications.rs:945
+#, rust-format
+msgid "YouTube audio replacement is not available."
+msgstr "Audio vervangen via YouTube is niet beschikbaar."
+
+#: crates/app_runtime/src/notifications.rs:951
+#, rust-format
+msgid ""
+"YouTube replacement is available only for present tracks at or below 192 "
+"kbps."
+msgstr "Vervangen via YouTube is alleen beschikbaar voor aanwezige nummers van 192 kbps of minder."
+
+#: crates/app_runtime/src/notifications.rs:941
+#, rust-format
+msgid "Your settings could not be loaded."
+msgstr "Je instellingen konden niet worden geladen."
+
+#: crates/app_runtime/src/notifications.rs:943
+#, rust-format
+msgid "Your settings could not be saved."
+msgstr "Je instellingen konden niet worden opgeslagen."
+
+#: crates/ui_gtk/src/now_playing.rs:483
+#, rust-format
+msgid "Zoom artwork"
+msgstr "Albumhoes vergroten"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:343
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "album"
+msgstr "album"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:292
+#, rust-format
+msgctxt "smart playlist match"
+msgid "all"
+msgstr "alle"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:293
+#, rust-format
+msgctxt "smart playlist match"
+msgid "any"
+msgstr "een van de"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:342
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "artist"
+msgstr "artiest"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:158
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "contains"
+msgstr "bevat"
+
+#. Translators: follows the day count of "is in the last [7] days".
+#: crates/ui_gtk/src/smart_playlist_editor.rs:137
+#, rust-format
+msgid "days"
+msgstr "dagen"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:159
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "does not contain"
+msgstr "bevat niet"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:163
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "ends with"
+msgstr "eindigt op"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:344
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "genre"
+msgstr "genre"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:336
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "highest rating"
+msgstr "hoogste waardering"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:160
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:166
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:184
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is"
+msgstr "is"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:179
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is after"
+msgstr "is na"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:178
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is before"
+msgstr "is voor"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:164
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:176
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:182
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is empty"
+msgstr "is leeg"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:168
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is greater than"
+msgstr "is groter dan"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:170
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is greater than or equal to"
+msgstr "is groter dan of gelijk aan"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:180
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is in the last"
+msgstr "valt in de afgelopen"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:172
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is less than"
+msgstr "is kleiner dan"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:174
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is less than or equal to"
+msgstr "is kleiner dan of gelijk aan"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:185
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is missing"
+msgstr "ontbreekt"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:161
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:167
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is not"
+msgstr "is niet"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:181
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is not in the last"
+msgstr "valt niet in de afgelopen"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:165
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:177
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:183
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:186
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "is present"
+msgstr "is aanwezig"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:333
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "least often played"
+msgstr "minst vaak afgespeeld"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:321
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "least recently added"
+msgstr "langst geleden toegevoegd"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:327
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "least recently played"
+msgstr "langst geleden afgespeeld"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:339
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "lowest rating"
+msgstr "laagste waardering"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:330
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "most often played"
+msgstr "meest afgespeeld"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:318
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "most recently added"
+msgstr "meest recent toegevoegd"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:324
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "most recently played"
+msgstr "meest recent afgespeeld"
+
+#: data/io.github.open_sustain.sustain.desktop:9
+msgid "music;player;library;audio;"
+msgstr "muziek;speler;bibliotheek;audio;"
+
+#: crates/app_runtime/src/notifications.rs:605
+#, rust-format
+msgid "no tracks added"
+msgstr "geen nummers toegevoegd"
+
+#. Translators: between a number and its total, as in "Track [3] of [12]".
+#: crates/ui_gtk/src/track_info/form.rs:36
+#, rust-format
+msgctxt "number of total"
+msgid "of"
+msgstr "van"
+
+#: crates/ui_gtk/src/statistics.rs:475
+#, rust-format
+msgid "of music"
+msgstr "muziek"
+
+#: crates/ui_gtk/src/smart_playlist_editor.rs:349
+#, rust-format
+msgid "of the following rules:"
+msgstr "volgende regels:"
+
+#: crates/ui_gtk/src/statistics.rs:476
+#, rust-format
+msgid "on disk"
+msgstr "op schijf"
+
+#: crates/ui_gtk/src/statistics.rs:479
+#, rust-format
+msgid "play"
+msgid_plural "plays"
+msgstr[0] "keer afgespeeld"
+msgstr[1] "keer afgespeeld"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:316
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "random"
+msgstr "willekeurig"
+
+#: crates/ui_gtk/src/smart_playlist_editor.rs:376
+#, rust-format
+msgid "songs, selected by"
+msgstr "nummers, selectie:"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:162
+#, rust-format
+msgctxt "smart playlist operator"
+msgid "starts with"
+msgstr "begint met"
+
+#. Translators: completes "Imported 3 of 10 tracks: ..." when the user
+#. swapped discs mid-import.
+#: crates/app_runtime/src/cd_import/task.rs:365
+#, rust-format
+msgid "the disc in the drive changed during import"
+msgstr "de schijf in het station is tijdens het importeren gewisseld"
+
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:341
+#, rust-format
+msgctxt "smart playlist limit"
+msgid "title"
+msgstr "titel"
+
+#: crates/ui_gtk/src/statistics.rs:280 crates/ui_gtk/src/statistics.rs:318
+#: crates/ui_gtk/src/statistics.rs:473
+#, rust-format
+msgid "track"
+msgid_plural "tracks"
+msgstr[0] "nummer"
+msgstr[1] "nummers"
+
+#: crates/ui_gtk/src/sidebar_context.rs:20
+#, rust-format
+msgid "untitled folder"
+msgstr "naamloze map"
+
+#: crates/ui_gtk/src/sidebar_context.rs:15
+#, rust-format
+msgid "untitled playlist"
+msgstr "naamloze afspeellijst"
+
+#: crates/ui_gtk/src/sidebar_context.rs:25
+#, rust-format
+msgid "untitled smart playlist"
+msgstr "naamloze slimme afspeellijst"
+
+#: crates/ui_gtk/src/smart_playlist_editor.rs:63
+#, rust-format
+msgid "value"
+msgstr "waarde"
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:230
+#, rust-format
+msgid "yt-dlp could not download usable audio from that YouTube URL."
+msgstr "yt-dlp kon geen bruikbare audio downloaden van die YouTube-URL."
+
+#: crates/app_runtime/src/youtube_audio_replacement.rs:233
+#, rust-format
+msgid "yt-dlp returned an unsupported or unsafe audio file."
+msgstr "yt-dlp leverde een niet-ondersteund of onveilig audiobestand op."
+
+#. Translators: both halves are the two phrases below, as in
+#. "Analyzed 12 tracks; 2 tracks could not be analyzed."
+#: crates/app_runtime/src/notifications.rs:473
+#, rust-format
+msgid "{analyzed}; {not_analyzed}."
+msgstr "{analyzed}; {not_analyzed}."
+
+#. Translators: {changes} is a list such as "3 tracks added,
+#. 1 duplicate file skipped", made a sentence of its own.
+#: crates/app_runtime/src/notifications.rs:631
+#, rust-format
+msgid "{changes}."
+msgstr "{changes}."
+
+#. Translators: an item of a list of what happened to the library's
+#. tracks, as in "Scan complete: 3 added, 1 updated."
+#: crates/app_runtime/src/notifications.rs:319
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} added"
+msgid_plural "{count} added"
+msgstr[0] "{count} toegevoegd"
+msgstr[1] "{count} toegevoegd"
+
+#: crates/app_runtime/src/notifications.rs:333
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} already organized"
+msgid_plural "{count} already organized"
+msgstr[0] "{count} al geordend"
+msgstr[1] "{count} al geordend"
+
+#: crates/app_runtime/src/notifications.rs:812
+#, rust-format
+msgctxt "count of duplicate groups"
+msgid "{count} cancelled"
+msgid_plural "{count} cancelled"
+msgstr[0] "{count} geannuleerd"
+msgstr[1] "{count} geannuleerd"
+
+#: crates/app_runtime/src/notifications.rs:794
+#, rust-format
+msgctxt "count of duplicate groups"
+msgid "{count} changed since the preview"
+msgid_plural "{count} changed since the preview"
+msgstr[0] "{count} gewijzigd sinds het voorbeeld"
+msgstr[1] "{count} gewijzigd sinds het voorbeeld"
+
+#: crates/ui_gtk/src/track_info/format.rs:95
+#, rust-format
+msgid "{count} channel"
+msgid_plural "{count} channels"
+msgstr[0] "{count} kanaal"
+msgstr[1] "{count} kanalen"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:801
+#, rust-format
+msgid "{count} character"
+msgid_plural "{count} characters"
+msgstr[0] "{count} teken"
+msgstr[1] "{count} tekens"
+
+#: crates/app_runtime/src/notifications.rs:337
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} copied"
+msgid_plural "{count} copied"
+msgstr[0] "{count} gekopieerd"
+msgstr[1] "{count} gekopieerd"
+
+#: crates/ui_gtk/src/status_bar.rs:405
+#, rust-format
+msgid "{count} day"
+msgid_plural "{count} days"
+msgstr[0] "{count} dag"
+msgstr[1] "{count} dagen"
+
+#: crates/app_runtime/src/notifications.rs:654
+#, rust-format
+msgid "{count} duplicate file skipped"
+msgid_plural "{count} duplicate files skipped"
+msgstr[0] "{count} dubbel bestand overgeslagen"
+msgstr[1] "{count} dubbele bestanden overgeslagen"
+
+#: crates/ui_gtk/src/duplicates.rs:378
+#, rust-format
+msgctxt "count of duplicate groups"
+msgid "{count} duplicate group"
+msgid_plural "{count} duplicate groups"
+msgstr[0] "{count} groep duplicaten"
+msgstr[1] "{count} groepen duplicaten"
+
+#: crates/app_runtime/src/duplicate_consolidation.rs:397
+#, rust-format
+msgid "{count} duplicate track consolidated."
+msgid_plural "{count} duplicate tracks consolidated."
+msgstr[0] "{count} dubbel nummer samengevoegd."
+msgstr[1] "{count} dubbele nummers samengevoegd."
+
+#: crates/app_runtime/src/duplicate_consolidation.rs:385
+#, rust-format
+msgid ""
+"{count} duplicate track consolidated. Sustain retained recovery files "
+"because cleanup could not finish safely."
+msgid_plural ""
+"{count} duplicate tracks consolidated. Sustain retained recovery files "
+"because cleanup could not finish safely."
+msgstr[0] "{count} dubbel nummer samengevoegd. Sustain heeft herstelbestanden bewaard omdat het opruimen niet veilig kon worden afgerond."
+msgstr[1] "{count} dubbele nummers samengevoegd. Sustain heeft herstelbestanden bewaard omdat het opruimen niet veilig kon worden afgerond."
+
+#: crates/app_runtime/src/notifications.rs:806
+#, rust-format
+msgctxt "count of duplicate groups"
+msgid "{count} failed"
+msgid_plural "{count} failed"
+msgstr[0] "{count} mislukt"
+msgstr[1] "{count} mislukt"
+
+#: crates/app_runtime/src/notifications.rs:326
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} failed"
+msgid_plural "{count} failed"
+msgstr[0] "{count} mislukt"
+msgstr[1] "{count} mislukt"
+
+#: crates/app_runtime/src/notifications.rs:664
+#, rust-format
+msgid "{count} file could not be imported"
+msgid_plural "{count} files could not be imported"
+msgstr[0] "{count} bestand kon niet worden geïmporteerd"
+msgstr[1] "{count} bestanden konden niet worden geïmporteerd"
+
+#: crates/ui_gtk/src/import_failures_dialog.rs:38
+#, rust-format
+msgid "{count} file could not be imported. The rest of the import went ahead."
+msgid_plural ""
+"{count} files could not be imported. The rest of the import went ahead."
+msgstr[0] "{count} bestand kon niet worden geïmporteerd. De rest van de import is doorgegaan."
+msgstr[1] "{count} bestanden konden niet worden geïmporteerd. De rest van de import is doorgegaan."
+
+#: crates/ui_gtk/src/status_bar.rs:410
+#, rust-format
+msgid "{count} hour"
+msgid_plural "{count} hours"
+msgstr[0] "{count} uur"
+msgstr[1] "{count} uur"
+
+#: crates/ui_gtk/src/status_bar.rs:417
+#, rust-format
+msgid "{count} minute"
+msgid_plural "{count} minutes"
+msgstr[0] "{count} minuut"
+msgstr[1] "{count} minuten"
+
+#: crates/app_runtime/src/notifications.rs:324
+#: crates/ui_gtk/src/device_panel.rs:745
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} missing"
+msgid_plural "{count} missing"
+msgstr[0] "{count} ontbreekt"
+msgstr[1] "{count} ontbreken"
+
+#: crates/ui_gtk/src/device_panel.rs:1059
+#, rust-format
+msgid "{count} missing BPM"
+msgstr "{count} zonder BPM"
+
+#: crates/ui_gtk/src/device_panel.rs:1077
+#, rust-format
+msgid "{count} missing beat grid"
+msgstr "{count} zonder beatgrid"
+
+#: crates/ui_gtk/src/device_panel.rs:1065
+#, rust-format
+msgid "{count} missing key"
+msgstr "{count} zonder toonsoort"
+
+#: crates/ui_gtk/src/device_panel.rs:1071
+#, rust-format
+msgid "{count} missing waveform"
+msgstr "{count} zonder golfvorm"
+
+#: crates/app_runtime/src/notifications.rs:327
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} moved"
+msgid_plural "{count} moved"
+msgstr[0] "{count} verplaatst"
+msgstr[1] "{count} verplaatst"
+
+#: crates/app_runtime/src/notifications.rs:800
+#, rust-format
+msgctxt "count of duplicate groups"
+msgid "{count} no longer verified"
+msgid_plural "{count} no longer verified"
+msgstr[0] "{count} niet meer geverifieerd"
+msgstr[1] "{count} niet meer geverifieerd"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:97
+#, rust-format
+msgid ""
+"{count} of the selected files are missing from disk, so these duplicates "
+"can't be consolidated. Restore or remove them, then try again."
+msgstr "{count} van de gekozen bestanden ontbreken op de schijf, dus deze duplicaten kunnen niet worden samengevoegd. Herstel of verwijder ze en probeer het opnieuw."
+
+#: crates/ui_gtk/src/device_panel.rs:859
+#, rust-format
+msgid "{count} other genre — {size}"
+msgid_plural "{count} other genres — {size}"
+msgstr[0] "{count} ander genre — {size}"
+msgstr[1] "{count} andere genres — {size}"
+
+#: crates/app_runtime/src/notifications.rs:329
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} pending"
+msgid_plural "{count} pending"
+msgstr[0] "{count} in afwachting"
+msgstr[1] "{count} in afwachting"
+
+#: crates/app_runtime/src/notifications.rs:339
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} removed"
+msgid_plural "{count} removed"
+msgstr[0] "{count} verwijderd"
+msgstr[1] "{count} verwijderd"
+
+#: crates/ui_gtk/src/status_bar.rs:392
+#, rust-format
+msgctxt "count of songs"
+msgid "{count} song"
+msgid_plural "{count} songs"
+msgstr[0] "{count} nummer"
+msgstr[1] "{count} nummers"
+
+#: crates/app_runtime/src/notifications.rs:532
+#: crates/app_runtime/src/notifications.rs:750
+#, rust-format
+msgid "{count} track"
+msgid_plural "{count} tracks"
+msgstr[0] "{count} nummer"
+msgstr[1] "{count} nummers"
+
+#: crates/ui_gtk/src/duplicates.rs:387
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} track"
+msgid_plural "{count} tracks"
+msgstr[0] "{count} nummer"
+msgstr[1] "{count} nummers"
+
+#: crates/app_runtime/src/notifications.rs:644
+#: crates/app_runtime/src/notifications.rs:1062
+#, rust-format
+msgid "{count} track added"
+msgid_plural "{count} tracks added"
+msgstr[0] "{count} nummer toegevoegd"
+msgstr[1] "{count} nummers toegevoegd"
+
+#: crates/app_runtime/src/notifications.rs:362
+#, rust-format
+msgid "{count} track failed"
+msgid_plural "{count} tracks failed"
+msgstr[0] "{count} nummer mislukt"
+msgstr[1] "{count} nummers mislukt"
+
+#: crates/ui_gtk/src/preferences/shuffle_tab.rs:314
+#, rust-format
+msgid "{count} track indexed ({percent}% audio profiled)"
+msgid_plural "{count} tracks indexed ({percent}% audio profiled)"
+msgstr[0] "{count} nummer geïndexeerd ({percent}% met audioprofiel)"
+msgstr[1] "{count} nummers geïndexeerd ({percent}% met audioprofiel)"
+
+#: crates/app_runtime/src/notifications.rs:1042
+#, rust-format
+msgid "{count} track left off: the device cannot play its format"
+msgid_plural "{count} tracks left off: the device cannot play their format"
+msgstr[0] "{count} nummer weggelaten: het apparaat kan het formaat niet afspelen"
+msgstr[1] "{count} nummers weggelaten: het apparaat kan het formaat niet afspelen"
+
+#: crates/app_runtime/src/notifications.rs:536
+#, rust-format
+msgid "{count} track skipped"
+msgid_plural "{count} tracks skipped"
+msgstr[0] "{count} nummer overgeslagen"
+msgstr[1] "{count} nummers overgeslagen"
+
+#: crates/app_runtime/src/notifications.rs:321
+#, rust-format
+msgctxt "count of tracks"
+msgid "{count} updated"
+msgid_plural "{count} updated"
+msgstr[0] "{count} bijgewerkt"
+msgstr[1] "{count} bijgewerkt"
+
+#: crates/ui_gtk/src/duplicates.rs:396
+#, rust-format
+msgctxt "count of duplicate groups"
+msgid "{count} verified by their audio"
+msgid_plural "{count} verified by their audio"
+msgstr[0] "{count} geverifieerd door de audio"
+msgstr[1] "{count} geverifieerd door de audio"
+
+#: crates/app_runtime/src/notifications.rs:743
+#, rust-format
+msgid "{count} verified duplicate group"
+msgid_plural "{count} verified duplicate groups"
+msgstr[0] "{count} geverifieerde groep duplicaten"
+msgstr[1] "{count} geverifieerde groepen duplicaten"
+
+#: crates/app_runtime/src/notifications.rs:484
+#, rust-format
+msgid "{failed} track could not be analyzed"
+msgid_plural "{failed} tracks could not be analyzed"
+msgstr[0] "{failed} nummer kon niet worden geanalyseerd"
+msgstr[1] "{failed} nummers konden niet worden geanalyseerd"
+
+#: crates/app_runtime/src/notifications.rs:464
+#, rust-format
+msgid "{failed} track could not be analyzed."
+msgid_plural "{failed} tracks could not be analyzed."
+msgstr[0] "{failed} nummer kon niet worden geanalyseerd."
+msgstr[1] "{failed} nummers konden niet worden geanalyseerd."
+
+#. Translators: a field a merge keeps, as in "Year: 1999".
+#: crates/ui_gtk/src/verified_duplicates.rs:209
+#, rust-format
+msgid "{field}: {value}"
+msgstr "{field}: {value}"
+
+#. Translators: a skipped file's folder, then why it was skipped.
+#: crates/ui_gtk/src/import_failures_dialog.rs:162
+#, rust-format
+msgid "{folder} — {reason}"
+msgstr "{folder} — {reason}"
+
+#. Translators: {format} is a file extension in capitals, such as "WAV".
+#: crates/ui_gtk/src/track_info/format.rs:28
+#, rust-format
+msgid "{format} audio file"
+msgstr "{format}-audiobestand"
+
+#. Translators: {label} is a Get Info field, such as "Year".
+#: crates/ui_gtk/src/track_info/multi.rs:654
+#, rust-format
+msgid "{label} must be a whole number."
+msgstr "{label} moet een geheel getal zijn."
+
+#. Translators: a size in gigabytes; use your language's unit symbol.
+#: crates/ui_gtk/src/status_bar.rs:432
+#, rust-format
+msgid "{size} GB"
+msgstr "{size} GB"
+
+#. Translators: a size in megabytes; use your language's unit symbol.
+#: crates/ui_gtk/src/status_bar.rs:435
+#, rust-format
+msgid "{size} MB"
+msgstr "{size} MB"
+
+#. Translators: the device meter, as in "3.2 GB of 64 GB".
+#: crates/ui_gtk/src/device_panel.rs:580
+#, rust-format
+msgid "{used} of {total}"
+msgstr "{used} van {total}"
+
+#. Translators: a decade, as in "1990s".
+#: crates/ui_gtk/src/statistics.rs:398
+#, rust-format
+msgid "{year}s"
+msgstr "Jaren {year}"
+
+#: crates/ui_gtk/src/duplicate_consolidation.rs:105
+#, rust-format
+msgid ""
+"“{name}” is missing from disk, so these duplicates can't be consolidated. "
+"Restore or remove it, then try again."
+msgstr "‘{name}’ ontbreekt op de schijf, dus deze duplicaten kunnen niet worden samengevoegd. Herstel of verwijder het en probeer het opnieuw."

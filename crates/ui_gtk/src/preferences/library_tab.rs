@@ -38,9 +38,9 @@ pub(super) fn build(
     let library_path_label = gtk::Label::new(Some(&gettext("Library path")));
     library_path_label.set_xalign(0.0);
 
-    let library_path_help = gtk::Label::new(Some(
+    let library_path_help = gtk::Label::new(Some(&gettext(
         "Files in this folder are scanned into your Sustain library.",
-    ));
+    )));
     library_path_help.add_css_class("preference-helper");
     library_path_help.set_xalign(0.0);
     library_path_help.set_wrap(true);

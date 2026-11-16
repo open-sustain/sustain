@@ -31,7 +31,7 @@ pub fn run() -> Result<(), String> {
 /// Extract against an explicit workspace root (the real one, or a fixture in
 /// tests).
 pub fn run_in(root: &Path) -> Result<(), String> {
-    tools::preflight()?;
+    tools::preflight_maintenance()?;
     let pot = workspace::pot_path(root);
 
     // Generate into scratch first, then replace the committed template only if

@@ -269,11 +269,11 @@ fn build_bpm_range_section(command_controller: SharedCommandController) -> gtk::
     );
     container.append(&row);
 
-    let caption = gtk::Label::new(Some(
+    let caption = gtk::Label::new(Some(&gettext(
         "Sets the tempo window Sustain uses when folding half-time and double-time detections. \
          Widen it for very slow or fast music; narrow it if results tend to land at half or \
          double the expected tempo.",
-    ));
+    )));
     caption.add_css_class("preference-helper");
     caption.set_xalign(0.0);
     caption.set_wrap(true);

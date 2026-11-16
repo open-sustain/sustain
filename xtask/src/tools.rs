@@ -8,9 +8,10 @@
 
 use std::process::{Command, Output};
 
-/// The gettext tools every i18n command relies on. Their absence is a setup
-/// error, not a runtime condition, so the preflight checks them up front.
-const REQUIRED_TOOLS: &[&str] = &[
+/// The gettext tools the catalog-maintenance commands (`i18n-extract`,
+/// `i18n-check`) rely on. Their absence is a setup error, not a runtime
+/// condition, so the preflight checks them up front.
+const MAINTENANCE_TOOLS: &[&str] = &[
     "xgettext",
     "msgcat",
     "msgmerge",
@@ -21,15 +22,25 @@ const REQUIRED_TOOLS: &[&str] = &[
 
 /// Minimum `xgettext` version. 0.24 is the first release with the `rust-format`
 /// flag the extraction contract relies on; Debian trixie ships 0.23.1, which
-/// rejects it, so the localization commands require a newer gettext.
+/// rejects it, so the catalog-maintenance commands require a newer gettext.
 const MIN_XGETTEXT: (u32, u32) = (0, 24);
 
-/// Verify the gettext toolchain is present and new enough.
-pub fn preflight() -> Result<(), String> {
-    for tool in REQUIRED_TOOLS {
-        ensure_present(tool)?;
+/// Verify the gettext toolchain can maintain the catalogs: every tool present,
+/// and `xgettext` new enough to extract Rust sources.
+pub fn preflight_maintenance() -> Result<(), String> {
+    for tool in MAINTENANCE_TOOLS {
+        ensure_present(tool, "GNU gettext >= 0.24")?;
     }
     ensure_xgettext_version()
+}
+
+/// Verify the toolchain can compile the committed catalogs into installable
+/// artifacts. That needs `msgfmt` alone, and no particular release of it:
+/// compiling reads `.po` files, so it does not depend on the Rust support
+/// extraction needs. Packaging builds therefore run on the distribution's own
+/// gettext (Debian trixie, the GNOME SDK) without a newer toolchain.
+pub fn preflight_compile() -> Result<(), String> {
+    ensure_present("msgfmt", "GNU gettext")
 }
 
 /// A `Command` for `program` with a forced `C` locale so its diagnostics and
@@ -62,8 +73,8 @@ pub fn capture(command: &mut Command) -> Result<Output, String> {
         .map_err(|err| format!("cannot run {name}: {err}"))
 }
 
-/// Confirm `tool` can be spawned at all.
-fn ensure_present(tool: &str) -> Result<(), String> {
+/// Confirm `tool` can be spawned at all; `package` names what provides it.
+fn ensure_present(tool: &str, package: &str) -> Result<(), String> {
     cmd(tool)
         .arg("--version")
         .output()
@@ -71,7 +82,7 @@ fn ensure_present(tool: &str) -> Result<(), String> {
         .map_err(|err| {
             format!(
                 "required tool `{tool}` is unavailable ({err}); \
-                 install GNU gettext >= 0.24 (Debian: `apt-get install gettext`)"
+                 install {package} (Debian: `apt-get install gettext`)"
             )
         })
 }

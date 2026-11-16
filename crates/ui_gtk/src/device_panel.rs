@@ -854,10 +854,14 @@ fn genre_segments(plan: &SyncPlan, total_bytes: u64) -> Vec<BarSegment> {
         segments.push(BarSegment {
             fraction: other_bytes as f64 / total_bytes as f64,
             tint: SegmentTint::Muted,
-            label: Some(format!(
-                "{other_count} other {} — {}",
-                if other_count == 1 { "genre" } else { "genres" },
-                human_bytes(other_bytes)
+            label: Some(tr_format!(
+                ngettext(
+                    "{count} other genre — {size}",
+                    "{count} other genres — {size}",
+                    plural_count(other_count)
+                ),
+                count = other_count,
+                size = human_bytes(other_bytes)
             )),
         });
     }
