@@ -223,6 +223,7 @@ work do not belong in either file.
 
 Before committing, run the same gate CI runs: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --no-deps --document-private-items`.
 Push only on green — shipping a regression a local run would have caught is a process failure, not a CI quirk.
+CI also runs `typos` (configured in `.typos.toml`), which that gate does not cover: run `typos` as well before pushing. A test string in another language is enough to trip it.
 
 Never create branches. Commit and push directly to `main`.
 When a commit fixes a tracked GitHub issue, use a GitHub closing keyword in the
