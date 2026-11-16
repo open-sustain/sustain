@@ -17,13 +17,13 @@ use crate::{
         ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL,
         ADD_TRACK_KEY_ORIGIN_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
         INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
-        NORMALIZE_EMPTY_TRACK_METADATA_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL,
-        STORE_BPM_IN_HUNDREDTHS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
-        VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
+        NORMALIZE_EMPTY_TRACK_METADATA_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL,
+        RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
+        VERSION_ANALYSIS_PER_CAPABILITY_SQL, VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 17;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 18;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -129,6 +129,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 17,
         description: "attempt again every FLAC analysis that left nothing behind",
         step: MigrationStep::Sql(RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL),
+    },
+    Migration {
+        version: 18,
+        description: "attempt again every analysis of an MP4 file above 65,535 Hz",
+        step: MigrationStep::Sql(RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL),
     },
 ];
 
@@ -1357,6 +1362,68 @@ mod tests {
                 .prepare("SELECT provider_version FROM track_online_status")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn upgrade_from_v17_attempts_again_every_analysis_of_a_high_rate_mp4_file() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..17]).expect("schema version 17");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks
+                     (id, relative_path, sample_rate_hz, bpm_hundredths, musical_key) VALUES
+                     (1, CAST('a.m4a' AS BLOB), 96000, 6400, 'Am'),
+                     (2, CAST('b.M4A' AS BLOB), 88200, NULL, NULL),
+                     (3, CAST('c.m4a' AS BLOB), 48000, 12800, 'Am'),
+                     (4, CAST('d.flac' AS BLOB), 96000, 12800, 'Am'),
+                     (5, CAST('e.m4a' AS BLOB), NULL, 12800, 'Am');
+                 INSERT INTO track_analysis
+                     (track_id, bpm_attempted_at_unix, bpm_analyzer_version,
+                      key_attempted_at_unix, key_analyzer_version,
+                      audio_attempted_at_unix, audio_analyzer_version)
+                 SELECT id, 1700000000, 17, 1700000000, 17, 1700000000, 15 FROM tracks;",
+            )
+            .expect("seed analysed tracks");
+
+        apply_pending(&connection).expect("upgrade");
+
+        let attempted: Vec<(i64, bool, bool, bool)> = connection
+            .prepare(
+                "SELECT track_id,
+                        bpm_attempted_at_unix IS NOT NULL AND bpm_analyzer_version IS NOT NULL,
+                        key_attempted_at_unix IS NOT NULL AND key_analyzer_version IS NOT NULL,
+                        audio_attempted_at_unix IS NOT NULL AND audio_analyzer_version IS NOT NULL
+                 FROM track_analysis ORDER BY track_id",
+            )
+            .expect("prepare")
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("attempts");
+        assert_eq!(
+            attempted,
+            [
+                // Above what a sample entry holds: every attempt is made again.
+                (1, false, false, false),
+                (2, false, false, false),
+                // A rate the sample entry holds, another container, and a
+                // file whose rate was never read: their attempts stand.
+                (3, true, true, true),
+                (4, true, true, true),
+                (5, true, true, true),
+            ]
+        );
+        // What was measured stays until the new attempt replaces it.
+        let kept: (Option<i64>, Option<String>) = connection
+            .query_row(
+                "SELECT bpm_hundredths, musical_key FROM tracks WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("track");
+        assert_eq!(kept, (Some(6_400), Some("Am".to_string())));
     }
 
     #[test]

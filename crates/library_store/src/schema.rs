@@ -592,6 +592,24 @@ WHERE audio_attempted_at_unix IS NOT NULL
     WHERE lower(CAST(substr(relative_path, -5) AS TEXT)) = '.flac');
 "#;
 
+// An MP4 file above 65,535 Hz was analysed at the rate its sample entry
+// declares, which sixteen bits cannot make the real one: a 96 kHz AAC
+// track was read at half speed and cut to its first half, and what was
+// measured from it is wrong. Every attempt on such a file is made again,
+// as an analyzer version advance would have every track's. Apple Lossless
+// in the same container was read at its real rate; its tracks cannot be
+// told apart here and are measured again to the same result.
+pub(super) const RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL: &str = r#"
+UPDATE track_analysis
+SET bpm_attempted_at_unix = NULL, bpm_analyzer_version = NULL,
+    key_attempted_at_unix = NULL, key_analyzer_version = NULL,
+    audio_attempted_at_unix = NULL, audio_analyzer_version = NULL
+WHERE track_id IN (
+    SELECT id FROM tracks
+    WHERE sample_rate_hz > 65535
+      AND lower(CAST(substr(relative_path, -4) AS TEXT)) IN ('.m4a', '.m4b', '.mp4'));
+"#;
+
 // Each online capability keeps the version of the provider pipeline that
 // last attempted it, as each analysis capability does since migration 13:
 // one shared version let an attempt at one capability pass the others off
