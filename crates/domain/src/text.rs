@@ -56,7 +56,8 @@ fn undecomposed_base_letters(letter: char) -> impl Iterator<Item = char> {
 /// E, next to "Edith", rather than after every unaccented name. Two values
 /// with the same base letters then order by their case-folded text with the
 /// accents kept, so "deja" and "déjà" stay distinct and in a fixed order.
-/// Values that differ only in case or outer whitespace are equal.
+/// Values that differ only in case, in outer whitespace, or in how Unicode
+/// spells an accented letter (composed or decomposed) are equal.
 ///
 /// [`compare_optional_text`] applies exactly this order lazily, without
 /// allocating; code that compares the same strings many times (a
@@ -115,8 +116,11 @@ impl PartialOrd for CollationKey {
     }
 }
 
+/// The text lowercased with its accents kept, in one canonical form: a
+/// tag writes "é" either as one character or as "e" and a combining
+/// accent, and both spellings are the same text.
 fn case_folded(text: &str) -> impl Iterator<Item = char> + '_ {
-    text.chars().flat_map(char::to_lowercase)
+    text.nfd().flat_map(char::to_lowercase)
 }
 
 /// Compares two optional text fields for library sort order.
@@ -222,6 +226,21 @@ mod tests {
         assert_ne!(CollationKey::new("déjà"), CollationKey::new("deja"));
         // The Kelvin sign lowercases to an ASCII "k".
         assert_eq!(CollationKey::new("\u{212A}"), CollationKey::new("k"));
+    }
+
+    #[test]
+    fn a_composed_and_a_decomposed_accent_are_the_same_text() {
+        let composed = "Bj\u{f6}rk \u{2013} D\u{c9}J\u{c0}";
+        let decomposed = "Bjo\u{308}rk \u{2013} DE\u{301}JA\u{300}";
+        assert_eq!(CollationKey::new(composed), CollationKey::new(decomposed));
+        assert_eq!(
+            compare_optional_text(Some(composed), Some(decomposed)),
+            Ordering::Equal
+        );
+        assert_ne!(
+            CollationKey::new(decomposed),
+            CollationKey::new("bjork – deja")
+        );
     }
 
     #[test]
