@@ -917,7 +917,8 @@ unchanged while sorting by their intended keys. When a file lacks a sort
 field, Sustain generates leading-English-article values such as
 `The Beatles` -> `Beatles (The)`. The Library preference for honoring sort
 tags is enabled by default; disabling it makes text columns sort by the
-display fields only. Full metadata mirrors preserve stored sort fields where
+display fields only. The Albums grid files each album the same way, by
+artist and then title, so `The Beatles` sits under B there too. Full metadata mirrors preserve stored sort fields where
 the active metadata backend can round-trip the standard file tag.
 
 ### Column customization — *iso-iTunes*

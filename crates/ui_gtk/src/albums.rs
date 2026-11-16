@@ -497,8 +497,12 @@ impl AlbumsView {
     fn regroup_and_apply_search(&self) {
         {
             let runtime = self.runtime.borrow();
-            *self.all_albums.borrow_mut() =
-                group_albums(runtime.library_tracks(), runtime.settings().library_path());
+            let settings = runtime.settings();
+            *self.all_albums.borrow_mut() = group_albums(
+                runtime.library_tracks(),
+                settings.library_path(),
+                settings.library.honor_sort_tags,
+            );
         }
         self.visible_columns
             .set(columns_for_width(self.scroller.width()));

@@ -4,7 +4,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use sustain_app_runtime::{CollationKey, Track, TrackId, TrackMetadata, compare_optional_text};
+use sustain_app_runtime::{
+    CollationKey, Track, TrackId, TrackMetadata, compare_optional_text, effective_sort_key,
+};
 
 use crate::artwork_loader::ArtworkSource;
 use crate::util::non_empty_text;
@@ -69,13 +71,39 @@ struct AlbumBucket {
     track_artists: Vec<String>,
     year: Option<i32>,
     tracks: Vec<AlbumTrackViewModel>,
+    /// The "sort as" tags the album files under, from the first of its
+    /// tracks to carry each; `None` files it under the name it shows.
+    sort_artist: Option<String>,
+    sort_title: Option<String>,
+}
+
+impl AlbumBucket {
+    /// Where the album files in the grid: by artist, then by title, each
+    /// under its "sort as" tag when it has one, so "The Beatles" sits
+    /// under B here as it does in the track table.
+    fn filing_order(&self) -> (CollationKey, CollationKey, AlbumKey) {
+        let filed_under = |sort_tag: &Option<String>, shown: &CollationKey| {
+            sort_tag
+                .as_deref()
+                .map_or_else(|| shown.clone(), CollationKey::new)
+        };
+        (
+            filed_under(&self.sort_artist, &self.key.artist),
+            filed_under(&self.sort_title, &self.key.title),
+            self.key.clone(),
+        )
+    }
 }
 
 const UNKNOWN_ALBUM: &str = "Unknown Album";
 const UNKNOWN_ARTIST: &str = "Unknown Artist";
 const COMPILATION_ALBUM_ARTIST: &str = "Various Artists";
 
-pub(super) fn group_albums(tracks: &[Track], library_root: Option<&Path>) -> Vec<AlbumViewModel> {
+pub(super) fn group_albums(
+    tracks: &[Track],
+    library_root: Option<&Path>,
+    honor_sort_tags: bool,
+) -> Vec<AlbumViewModel> {
     let mut albums = BTreeMap::<AlbumKey, AlbumBucket>::new();
 
     for track in tracks {
@@ -94,6 +122,8 @@ pub(super) fn group_albums(tracks: &[Track], library_root: Option<&Path>) -> Vec
             track_artists: Vec::new(),
             year: track.metadata.year,
             tracks: Vec::new(),
+            sort_artist: None,
+            sort_title: None,
         });
         if grouping.has_explicit_album_artist && !bucket.has_explicit_album_artist {
             bucket.artist = grouping.display_artist.clone();
@@ -104,11 +134,23 @@ pub(super) fn group_albums(tracks: &[Track], library_root: Option<&Path>) -> Vec
         if bucket.year.is_none() {
             bucket.year = track.metadata.year;
         }
+        if bucket.sort_artist.is_none() {
+            bucket.sort_artist =
+                effective_sort_key(grouping.artist_sort_tag, None, honor_sort_tags)
+                    .map(ToOwned::to_owned);
+        }
+        if bucket.sort_title.is_none() {
+            bucket.sort_title =
+                effective_sort_key(track.metadata.album_sort.as_deref(), None, honor_sort_tags)
+                    .map(ToOwned::to_owned);
+        }
         bucket.tracks.push(album_track(track));
     }
 
+    let mut albums: Vec<AlbumBucket> = albums.into_values().collect();
+    albums.sort_by_cached_key(AlbumBucket::filing_order);
     albums
-        .into_values()
+        .into_iter()
         .map(|mut bucket| {
             bucket.tracks.sort_by(compare_album_tracks);
             let representative_track_path = bucket
@@ -262,7 +304,9 @@ fn album_title(metadata: &TrackMetadata) -> String {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct AlbumGrouping {
+struct AlbumGrouping<'a> {
+    /// The "sort as" tag of the artist the album is keyed by, if any.
+    artist_sort_tag: Option<&'a str>,
     key_artist: String,
     display_artist: String,
     track_artist: String,
@@ -270,10 +314,11 @@ struct AlbumGrouping {
     is_compilation: bool,
 }
 
-fn album_grouping(metadata: &TrackMetadata) -> AlbumGrouping {
+fn album_grouping(metadata: &TrackMetadata) -> AlbumGrouping<'_> {
     let track_artist = track_artist(metadata);
     if let Some(album_artist) = non_empty_text(&metadata.album_artist) {
         return AlbumGrouping {
+            artist_sort_tag: metadata.album_artist_sort.as_deref(),
             key_artist: album_artist.clone(),
             display_artist: album_artist,
             track_artist,
@@ -284,6 +329,7 @@ fn album_grouping(metadata: &TrackMetadata) -> AlbumGrouping {
 
     if metadata.compilation.unwrap_or(false) {
         return AlbumGrouping {
+            artist_sort_tag: None,
             key_artist: COMPILATION_ALBUM_ARTIST.to_owned(),
             display_artist: COMPILATION_ALBUM_ARTIST.to_owned(),
             track_artist,
@@ -293,6 +339,7 @@ fn album_grouping(metadata: &TrackMetadata) -> AlbumGrouping {
     }
 
     AlbumGrouping {
+        artist_sort_tag: metadata.artist_sort.as_deref(),
         key_artist: track_artist.clone(),
         display_artist: track_artist.clone(),
         track_artist,
@@ -370,7 +417,7 @@ mod tests {
             track(3, "other.flac", "Other", "Artist", Some(1), None),
         ];
 
-        let albums = group_albums(&tracks, None);
+        let albums = group_albums(&tracks, None, true);
 
         assert_eq!(albums.len(), 2);
         assert_eq!(albums[0].title, "Album");
@@ -396,7 +443,7 @@ mod tests {
             track(4, "d.flac", "Debut", "Björk", Some(1), None),
         ];
 
-        let albums = group_albums(&tracks, None);
+        let albums = group_albums(&tracks, None, true);
 
         assert_eq!(
             albums
@@ -408,13 +455,41 @@ mod tests {
     }
 
     #[test]
+    fn an_album_files_under_its_sort_tags_while_they_are_honored() {
+        let mut beatles = track(1, "a.flac", "The White Album", "The Beatles", Some(1), None);
+        beatles.metadata.artist_sort = Some("Beatles (The)".to_owned());
+        beatles.metadata.album_sort = Some("White Album (The)".to_owned());
+        let tracks = vec![
+            beatles,
+            track(2, "b.flac", "Mezzanine", "Massive Attack", Some(1), None),
+            track(3, "c.flac", "Blue Lines", "Massive Attack", Some(1), None),
+        ];
+        let titles = |honor_sort_tags| {
+            group_albums(&tracks, None, honor_sort_tags)
+                .into_iter()
+                .map(|album| album.title)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            titles(true),
+            ["The White Album", "Blue Lines", "Mezzanine"],
+            "filed under B, and still shown as written"
+        );
+        assert_eq!(
+            titles(false),
+            ["Blue Lines", "Mezzanine", "The White Album"]
+        );
+    }
+
+    #[test]
     fn non_compilation_tracks_with_same_album_and_different_artists_stay_separate() {
         let tracks = vec![
             track(1, "a.flac", "Shared", "Artist A", Some(1), None),
             track(2, "b.flac", "Shared", "Artist B", Some(2), None),
         ];
 
-        let albums = group_albums(&tracks, None);
+        let albums = group_albums(&tracks, None, true);
 
         assert_eq!(albums.len(), 2);
         assert_eq!(
@@ -433,7 +508,7 @@ mod tests {
             compilation_track(2, "b.flac", "Compilation", "Artist B", Some(2)),
         ];
 
-        let albums = group_albums(&tracks, None);
+        let albums = group_albums(&tracks, None, true);
 
         assert_eq!(albums.len(), 1);
         assert_eq!(albums[0].title, "Compilation");
@@ -469,7 +544,7 @@ mod tests {
             ),
         ];
 
-        let albums = group_albums(&tracks, None);
+        let albums = group_albums(&tracks, None, true);
 
         assert_eq!(albums.len(), 1);
         assert_eq!(albums[0].artist, "Album Artist");
@@ -486,7 +561,7 @@ mod tests {
             compilation_track(6, "f.flac", "Compilation", "artist a", Some(6)),
         ];
 
-        let albums = group_albums(&tracks, None);
+        let albums = group_albums(&tracks, None, true);
 
         assert_eq!(
             albums[0].artist,
@@ -502,7 +577,7 @@ mod tests {
         ];
         let library_root = PathBuf::from("/music");
 
-        let albums = group_albums(&tracks, Some(&library_root));
+        let albums = group_albums(&tracks, Some(&library_root), true);
 
         assert_eq!(albums.len(), 1);
         assert_eq!(
@@ -525,7 +600,7 @@ mod tests {
             missing_track(2, "b.flac", "Album", "Artist"),
         ];
 
-        let albums = group_albums(&tracks, None);
+        let albums = group_albums(&tracks, None, true);
 
         assert_eq!(albums.len(), 1);
         // Track ordering inside the bucket runs through `compare_album_tracks`,
@@ -552,6 +627,7 @@ mod tests {
                 file_modified_at: None,
             }],
             None,
+            true,
         );
 
         assert_eq!(albums[0].title, "Unknown Album");
@@ -582,6 +658,7 @@ mod tests {
                 track(3, "other.flac", "Other", "Artist", Some(1), None),
             ],
             None,
+            true,
         );
         assert_eq!(
             albums[0]
@@ -629,6 +706,7 @@ mod tests {
                 track(3, "c.flac", "Other", "Artist", Some(1), None),
             ],
             None,
+            true,
         );
         let renamed = |id, path, album, number| {
             let mut renamed = super::album_track(&track(id, path, album, "Artist", number, None));
@@ -654,6 +732,7 @@ mod tests {
         let mut albums = group_albums(
             &[track(1, "a.flac", "Album", "Artist", Some(1), None)],
             None,
+            true,
         );
         let ghost = AlbumTrackViewModel {
             id: track_id(99),
