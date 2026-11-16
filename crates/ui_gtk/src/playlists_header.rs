@@ -10,8 +10,9 @@
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use sustain_i18n::{pgettext, phrase_list};
 
-use crate::status_bar::{duration_text, pluralize};
+use crate::status_bar::{duration_text, songs_text};
 use crate::{TITLEBAR_HEIGHT, track_summary::TrackSummary};
 
 /// Snapshot of what the header should display. Computed once per refresh
@@ -53,10 +54,16 @@ impl PlaylistsHeader {
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         title_row.append(&title);
 
-        let play_button = header_icon_button("media-playback-start-symbolic", "Play");
+        let play_button = header_icon_button(
+            "media-playback-start-symbolic",
+            &pgettext("playback control", "Play"),
+        );
         title_row.append(&play_button);
 
-        let shuffle_button = header_icon_button("media-playlist-shuffle-symbolic", "Shuffle");
+        let shuffle_button = header_icon_button(
+            "media-playlist-shuffle-symbolic",
+            &pgettext("playback control", "Shuffle"),
+        );
         title_row.append(&shuffle_button);
 
         title_block.append(&title_row);
@@ -126,12 +133,7 @@ impl PlaylistsHeader {
 }
 
 fn summary_text(track_count: usize, duration_seconds: u64) -> String {
-    format!(
-        "{} {}, {}",
-        track_count,
-        pluralize(track_count, "song", "songs"),
-        duration_text(duration_seconds),
-    )
+    phrase_list(&[songs_text(track_count), duration_text(duration_seconds)])
 }
 
 fn header_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button {

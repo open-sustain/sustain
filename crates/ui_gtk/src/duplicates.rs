@@ -13,6 +13,7 @@ use sustain_app_runtime::{
     ApplicationRuntimeError, DuplicateGroup, DuplicateMatchMode, NotificationCategory,
     NotificationSeverity, runtime_error_text,
 };
+use sustain_i18n::{gettext, npgettext, phrase_list, plural_count, tr_format};
 
 use crate::{
     SharedRuntime,
@@ -77,15 +78,15 @@ impl DuplicatesView {
         header.set_margin_end(10);
         header.set_margin_bottom(8);
         header.set_margin_start(10);
-        let status = gtk::Label::new(Some("Open Duplicates to scan the library."));
+        let status = gtk::Label::new(Some(&gettext("Open Duplicates to scan the library.")));
         status.set_xalign(0.0);
         status.set_hexpand(true);
-        let merge_verified = gtk::Button::with_label("Merge Verified Duplicates\u{2026}");
+        let merge_verified = gtk::Button::with_label(&gettext("Merge Verified Duplicates\u{2026}"));
         merge_verified.set_sensitive(false);
-        merge_verified.set_tooltip_text(Some(
+        merge_verified.set_tooltip_text(Some(&gettext(
             "Preview and merge the groups whose audio shows them to be copies of one recording",
-        ));
-        let strict_label = gtk::Label::new(Some("Strict matching"));
+        )));
+        let strict_label = gtk::Label::new(Some(&gettext("Strict matching")));
         let strict = gtk::Switch::new();
         strict.set_valign(gtk::Align::Center);
         header.append(&status);
@@ -234,7 +235,8 @@ impl DuplicatesView {
             return;
         }
         let generation = self.generation.get();
-        self.status.set_text("Scanning for duplicate tracks...");
+        self.status
+            .set_text(&gettext("Scanning for duplicate tracks..."));
         self.merge_verified.set_sensitive(false);
         let mode = if self.strict.is_active() {
             DuplicateMatchMode::Strict
@@ -249,11 +251,12 @@ impl DuplicatesView {
             // the load scans again.
             Err(ApplicationRuntimeError::LibraryHydrationPending) => return,
             Err(error) => {
-                self.status.set_text("Duplicate scan unavailable.");
+                self.status
+                    .set_text(&gettext("Duplicate scan unavailable."));
                 self.runtime.borrow_mut().push_ephemeral_notification(
                     NotificationCategory::DuplicateConsolidation,
                     NotificationSeverity::Error,
-                    runtime_error_text(&error).to_owned(),
+                    runtime_error_text(&error),
                 );
                 return;
             }
@@ -267,11 +270,12 @@ impl DuplicatesView {
             })
             .is_err()
         {
-            self.status.set_text("Duplicate scan could not be started.");
+            self.status
+                .set_text(&gettext("Duplicate scan could not be started."));
             self.runtime.borrow_mut().push_ephemeral_notification(
                 NotificationCategory::DuplicateConsolidation,
                 NotificationSeverity::Error,
-                "Duplicate scan could not be started.".to_owned(),
+                gettext("Duplicate scan could not be started."),
             );
             return;
         }
@@ -348,22 +352,52 @@ impl DuplicatesView {
                     refresh();
                 }
                 let verified = groups.iter().filter(|group| group.same_recording).count();
-                self.status.set_text(&format!(
-                    "{} duplicate group(s), {} track(s), {verified} verified by their audio.",
-                    groups.len(),
-                    row_count
-                ));
+                self.status
+                    .set_text(&duplicate_scan_summary(groups.len(), row_count, verified));
                 self.merge_verified.set_sensitive(verified > 0);
                 self.groups.replace(groups);
             }
             Err(error) => {
-                self.status.set_text("Duplicate scan failed.");
+                self.status.set_text(&gettext("Duplicate scan failed."));
                 self.runtime.borrow_mut().push_ephemeral_notification(
                     NotificationCategory::DuplicateConsolidation,
                     NotificationSeverity::Error,
-                    runtime_error_text(&error).to_owned(),
+                    runtime_error_text(&error),
                 );
             }
         }
     }
+}
+/// The status line after a scan: how many groups and tracks it found, and
+/// how many of the groups their audio verified.
+fn duplicate_scan_summary(groups: usize, tracks: usize, verified: usize) -> String {
+    phrase_list(&[
+        tr_format!(
+            npgettext(
+                "count of duplicate groups",
+                "{count} duplicate group",
+                "{count} duplicate groups",
+                plural_count(groups)
+            ),
+            count = groups
+        ),
+        tr_format!(
+            npgettext(
+                "count of tracks",
+                "{count} track",
+                "{count} tracks",
+                plural_count(tracks)
+            ),
+            count = tracks
+        ),
+        tr_format!(
+            npgettext(
+                "count of duplicate groups",
+                "{count} verified by their audio",
+                "{count} verified by their audio",
+                plural_count(verified)
+            ),
+            count = verified
+        ),
+    ])
 }

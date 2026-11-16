@@ -63,6 +63,40 @@ use gettextrs::LocaleCategory;
 pub use formatx::formatx;
 pub use gettextrs::{gettext, ngettext, npgettext, pgettext};
 
+/// Fill the `{name}` placeholders of a looked-up message:
+/// `tr_format!(gettext("Syncing {label}…"), label = label)`.
+///
+/// Write the `gettext`-family call inside the invocation, unqualified, so
+/// `xgettext` extracts its message. Substitution cannot fail on a valid
+/// message: the English template names exactly the arguments its call site
+/// passes, and `cargo xtask i18n-check` (`msgfmt --check-format`) rejects a
+/// translation that uses a placeholder its English does not. A failure is
+/// therefore a broken catalog or call site, a bug, and panics as one.
+#[macro_export]
+macro_rules! tr_format {
+    ($message:expr, $($name:ident = $value:expr),+ $(,)?) => {
+        $crate::formatx!($message, $($name = $value),+).expect(
+            "a message's placeholders are those of its English template, \
+             which its call site fills (checked by `cargo xtask i18n-check`)",
+        )
+    };
+}
+
+/// The `n` that `ngettext` chooses a plural form by, for a count held as
+/// `usize`. Counts past `u32::MAX` saturate, which picks the same form a
+/// huge number would.
+pub fn plural_count(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// Join phrases that are each translated whole ("3 added", "1 updated")
+/// into one list, with the separator the language writes between them.
+pub fn phrase_list(phrases: &[String]) -> String {
+    // Translators: separates the items of a short list, as in
+    // "3 added, 1 updated". Keep any space the language puts after it.
+    phrases.join(&pgettext("list separator", ", "))
+}
+
 /// The gettext text domain. Matches the basename of the installed catalogs at
 /// `<locale dir>/<lang>/LC_MESSAGES/sustain.mo`.
 const TEXT_DOMAIN: &str = "sustain";

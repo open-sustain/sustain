@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
 use sustain_artwork::ArtworkReadError;
+use sustain_i18n::{gettext, tr_format};
 
 use super::{ApplicationCommand, ApplicationRuntimeError, SharedRuntime};
 
@@ -54,7 +55,10 @@ impl UiCommandController {
     pub(crate) fn report_artwork_selection_error(&self, error: &ArtworkReadError) {
         self.report_command_message(
             NotificationSeverity::Warning,
-            format!("Could not use the selected artwork: {error}."),
+            tr_format!(
+                gettext("Could not use the selected artwork: {error}."),
+                error = error
+            ),
         );
     }
 
@@ -91,7 +95,7 @@ impl UiCommandController {
             (0, _, Some(error)) => self.report_command_error(error),
             (_, _, Some(_error)) => self.report_command_message(
                 NotificationSeverity::Warning,
-                "Some selected tracks could not be updated.".to_owned(),
+                gettext("Some selected tracks could not be updated."),
             ),
             (_, _, None) => {}
         }
@@ -109,10 +113,7 @@ impl UiCommandController {
             // succeeds. Do not stack a transient command error above it.
             return;
         }
-        self.report_command_message(
-            NotificationSeverity::Error,
-            runtime_error_text(error).to_owned(),
-        );
+        self.report_command_message(NotificationSeverity::Error, runtime_error_text(error));
     }
 
     fn report_command_message(&self, severity: NotificationSeverity, body: String) {

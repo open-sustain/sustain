@@ -2,6 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use gtk::prelude::*;
+use sustain_i18n::pgettext;
 
 pub(super) fn attach_field(
     grid: &gtk::Grid,
@@ -31,7 +32,8 @@ pub(super) fn attach_paired_field(
     grid.attach(&label, 0, row, 1, 1);
     grid.attach(first, 1, row, 1, 1);
 
-    let separator = gtk::Label::new(Some("of"));
+    // Translators: between a number and its total, as in "Track [3] of [12]".
+    let separator = gtk::Label::new(Some(&pgettext("number of total", "of")));
     separator.add_css_class("dim-label");
     grid.attach(&separator, 2, row, 1, 1);
     grid.attach(second, 3, row, 1, 1);

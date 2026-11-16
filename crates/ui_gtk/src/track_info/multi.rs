@@ -6,6 +6,7 @@ use gtk::{gdk, glib};
 use sustain_app_runtime::{
     ApplicationCommand, Bpm, FieldChange, MetadataChange, MusicalKey, Track, TrackId,
 };
+use sustain_i18n::{gettext, ngettext, pgettext, plural_count, tr_format};
 
 use crate::command_controller::SharedCommandController;
 
@@ -28,7 +29,14 @@ pub(crate) fn open_multi_track_info_dialog(
     let initial_values = BatchInitialValues::from_tracks(&tracks);
 
     let window = gtk::Window::builder()
-        .title(format!("Get Info - {} Tracks", track_ids.len()))
+        .title(tr_format!(
+            ngettext(
+                "Get Info - {count} Track",
+                "Get Info - {count} Tracks",
+                plural_count(track_ids.len())
+            ),
+            count = track_ids.len()
+        ))
         .transient_for(parent)
         .modal(true)
         .resizable(false)
@@ -42,9 +50,9 @@ pub(crate) fn open_multi_track_info_dialog(
     outer.set_margin_bottom(16);
     outer.set_margin_start(DIALOG_SIDE_MARGIN);
 
-    let explanation = gtk::Label::new(Some(
+    let explanation = gtk::Label::new(Some(&gettext(
         "Only checked fields are applied to the selected tracks. Unchecked fields keep each track's existing value.",
-    ));
+    )));
     explanation.set_wrap(true);
     explanation.set_xalign(0.0);
     explanation.add_css_class("dim-label");
@@ -61,8 +69,8 @@ pub(crate) fn open_multi_track_info_dialog(
 
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     buttons.set_halign(gtk::Align::End);
-    let cancel = gtk::Button::with_label("Cancel");
-    let ok = gtk::Button::with_label("OK");
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
+    let ok = gtk::Button::with_label(&gettext("OK"));
     ok.add_css_class("suggested-action");
     buttons.append(&cancel);
     buttons.append(&ok);
@@ -149,7 +157,8 @@ fn dispatch_batch_metadata_change(
     match (succeeded, first_error.as_ref()) {
         (0, Some(error)) => command_controller.report_command_error(error),
         (_, Some(_error)) => {
-            command_controller.report_command_warning("Some selected tracks could not be updated.");
+            command_controller
+                .report_command_warning(gettext("Some selected tracks could not be updated."));
         }
         (_, None) => {}
     }
@@ -273,27 +282,33 @@ impl BatchDetailsPage {
         widget.set_hexpand(true);
 
         let mut row = 0;
-        let title = OptionalEntry::text(&widget, row, "Title", initial.title.clone());
+        let title = OptionalEntry::text(&widget, row, &gettext("Title"), initial.title.clone());
         row += 1;
-        let artist = OptionalEntry::text(&widget, row, "Artist", initial.artist.clone());
+        let artist = OptionalEntry::text(&widget, row, &gettext("Artist"), initial.artist.clone());
         row += 1;
-        let album = OptionalEntry::text(&widget, row, "Album", initial.album.clone());
+        let album = OptionalEntry::text(&widget, row, &gettext("Album"), initial.album.clone());
         row += 1;
-        let album_artist =
-            OptionalEntry::text(&widget, row, "Album artist", initial.album_artist.clone());
+        let album_artist = OptionalEntry::text(
+            &widget,
+            row,
+            &gettext("Album artist"),
+            initial.album_artist.clone(),
+        );
         row += 1;
-        let composer = OptionalEntry::text(&widget, row, "Composer", initial.composer.clone());
+        let composer =
+            OptionalEntry::text(&widget, row, &gettext("Composer"), initial.composer.clone());
         row += 1;
-        let grouping = OptionalEntry::text(&widget, row, "Grouping", initial.grouping.clone());
+        let grouping =
+            OptionalEntry::text(&widget, row, &gettext("Grouping"), initial.grouping.clone());
         row += 1;
-        let genre = OptionalEntry::text(&widget, row, "Genre", initial.genre.clone());
+        let genre = OptionalEntry::text(&widget, row, &gettext("Genre"), initial.genre.clone());
         // The library's genres, as on the single-track page (#301).
         crate::suggestion_entry::attach_suggestions(&genre.entry, genre_suggestions);
         row += 1;
         let year = OptionalEntry::number(
             &widget,
             row,
-            "Year",
+            &gettext("Year"),
             NUMBER_ENTRY_WIDTH_CHARS,
             initial.year.clone(),
         );
@@ -301,7 +316,7 @@ impl BatchDetailsPage {
         let track_number = OptionalEntry::number(
             &widget,
             row,
-            "Track number",
+            &gettext("Track number"),
             PAIR_ENTRY_WIDTH_CHARS,
             initial.track_number.clone(),
         );
@@ -309,7 +324,7 @@ impl BatchDetailsPage {
         let track_total = OptionalEntry::number(
             &widget,
             row,
-            "Track total",
+            &gettext("Track total"),
             PAIR_ENTRY_WIDTH_CHARS,
             initial.track_total.clone(),
         );
@@ -317,7 +332,7 @@ impl BatchDetailsPage {
         let disc_number = OptionalEntry::number(
             &widget,
             row,
-            "Disc number",
+            &gettext("Disc number"),
             PAIR_ENTRY_WIDTH_CHARS,
             initial.disc_number.clone(),
         );
@@ -325,7 +340,7 @@ impl BatchDetailsPage {
         let disc_total = OptionalEntry::number(
             &widget,
             row,
-            "Disc total",
+            &gettext("Disc total"),
             PAIR_ENTRY_WIDTH_CHARS,
             initial.disc_total.clone(),
         );
@@ -333,24 +348,31 @@ impl BatchDetailsPage {
         let compilation = OptionalBool::new(
             &widget,
             row,
-            "Compilation",
-            "Album is a compilation of songs by various artists",
+            &gettext("Compilation"),
+            &gettext("Album is a compilation of songs by various artists"),
             initial.compilation.clone(),
         );
         row += 1;
         let bpm = OptionalEntry::number(
             &widget,
             row,
-            "BPM",
+            &gettext("BPM"),
             NUMBER_ENTRY_WIDTH_CHARS,
             initial.bpm.clone(),
         );
         row += 1;
-        let key = OptionalEntry::new(&widget, row, "Key", gtk::Entry::new(), initial.key.clone());
+        let key = OptionalEntry::new(
+            &widget,
+            row,
+            &pgettext("musical key", "Key"),
+            gtk::Entry::new(),
+            initial.key.clone(),
+        );
         row += 1;
         key.entry.set_width_chars(8);
         key.entry.set_hexpand(false);
-        let comments = OptionalTextView::new(&widget, row, "Comments", initial.comments.clone());
+        let comments =
+            OptionalTextView::new(&widget, row, &gettext("Comments"), initial.comments.clone());
 
         Self {
             widget,
@@ -385,24 +407,28 @@ impl BatchDetailsPage {
             composer: text_change(&self.composer.initial, self.composer.selected_text()),
             grouping: text_change(&self.grouping.initial, self.grouping.selected_text()),
             genre: text_change(&self.genre.initial, self.genre.selected_text()),
-            year: number_change("Year", &self.year.initial, self.year.selected_text())?,
+            year: number_change(
+                &gettext("Year"),
+                &self.year.initial,
+                self.year.selected_text(),
+            )?,
             track_number: number_change(
-                "Track number",
+                &gettext("Track number"),
                 &self.track_number.initial,
                 self.track_number.selected_text(),
             )?,
             track_total: number_change(
-                "Track total",
+                &gettext("Track total"),
                 &self.track_total.initial,
                 self.track_total.selected_text(),
             )?,
             disc_number: number_change(
-                "Disc number",
+                &gettext("Disc number"),
                 &self.disc_number.initial,
                 self.disc_number.selected_text(),
             )?,
             disc_total: number_change(
-                "Disc total",
+                &gettext("Disc total"),
                 &self.disc_total.initial,
                 self.disc_total.selected_text(),
             )?,
@@ -585,7 +611,7 @@ fn key_change(
 ) -> Result<FieldChange<MusicalKey>, String> {
     parsed_change(initial, value, |text| {
         MusicalKey::parse(text)
-            .ok_or_else(|| "Key must be a musical key, such as Am, F#, or 8A.".to_owned())
+            .ok_or_else(|| gettext("Key must be a musical key, such as Am, F#, or 8A."))
     })
 }
 
@@ -623,8 +649,10 @@ where
     T: Clone + Eq + std::str::FromStr,
 {
     parsed_change(initial, value, |text| {
-        text.parse()
-            .map_err(|_| format!("{label} must be a whole number."))
+        text.parse().map_err(|_| {
+            // Translators: {label} is a Get Info field, such as "Year".
+            tr_format!(gettext("{label} must be a whole number."), label = label)
+        })
     })
 }
 

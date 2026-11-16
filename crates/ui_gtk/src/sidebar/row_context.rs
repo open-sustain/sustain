@@ -10,6 +10,7 @@ use gtk::{gdk, gio, glib};
 use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, OnlineCapability, OnlineRunRequest, PlaylistItem,
 };
+use sustain_i18n::{gettext, pgettext, tr_format};
 
 use super::model::{bound_playlist_item, bound_tree_node};
 use super::{
@@ -135,7 +136,12 @@ fn row_context_menu_model(
                 callback(smart_playlist_id);
             }
         });
-        append_local_action_item(&menu, "Edit\u{2026}", local_action_group, EDIT_ACTION);
+        append_local_action_item(
+            &menu,
+            &gettext("Edit\u{2026}"),
+            local_action_group,
+            EDIT_ACTION,
+        );
     }
 
     let name_stack_for_rename = context.actions.name_stack.clone();
@@ -144,7 +150,7 @@ fn row_context_menu_model(
     add_local_action(action_group, RENAME_ACTION, true, move || {
         begin_rename(&name_stack_for_rename, &label_for_rename, &entry_for_rename);
     });
-    append_local_action_item(&menu, "Rename", local_action_group, RENAME_ACTION);
+    append_local_action_item(&menu, &gettext("Rename"), local_action_group, RENAME_ACTION);
 
     let anchor_for_delete = anchor.clone();
     let item_for_delete = context.item;
@@ -160,7 +166,7 @@ fn row_context_menu_model(
     });
     append_local_action_item(
         &menu,
-        delete_label_for(context.item),
+        &delete_label_for(context.item),
         local_action_group,
         DELETE_ACTION,
     );
@@ -171,11 +177,11 @@ fn row_context_menu_model(
     ) {
         let run_section = gio::Menu::new();
         run_section.append_submenu(
-            Some("Analyze\u{2026}"),
+            Some(&gettext("Analyze\u{2026}")),
             &analyze_submenu_model(context, action_group, local_action_group),
         );
         run_section.append_submenu(
-            Some("Retrieve\u{2026}"),
+            Some(&gettext("Retrieve\u{2026}")),
             &retrieve_submenu_model(context, action_group, local_action_group),
         );
         menu.append_section(None, &run_section);
@@ -205,9 +211,17 @@ fn analyze_submenu_model(
     };
 
     for (action_name, label, capability) in [
-        (ANALYZE_BPM_ACTION, "BPM", AnalysisCapability::Bpm),
-        (ANALYZE_KEY_ACTION, "Key", AnalysisCapability::Key),
-        (ANALYZE_AUDIO_ACTION, "Audio", AnalysisCapability::Audio),
+        (ANALYZE_BPM_ACTION, gettext("BPM"), AnalysisCapability::Bpm),
+        (
+            ANALYZE_KEY_ACTION,
+            pgettext("musical key", "Key"),
+            AnalysisCapability::Key,
+        ),
+        (
+            ANALYZE_AUDIO_ACTION,
+            gettext("Audio"),
+            AnalysisCapability::Audio,
+        ),
     ] {
         let item = context.item;
         let on_analysis_run = context.actions.on_analysis_run.clone();
@@ -221,7 +235,7 @@ fn analyze_submenu_model(
                 }
             },
         );
-        append_local_action_item(&model, label, local_action_group, action_name);
+        append_local_action_item(&model, &label, local_action_group, action_name);
     }
 
     let all = gio::Menu::new();
@@ -232,7 +246,12 @@ fn analyze_submenu_model(
             callback(item, AnalysisRunRequest::All);
         }
     });
-    append_local_action_item(&all, "All", local_action_group, ANALYZE_ALL_ACTION);
+    append_local_action_item(
+        &all,
+        &gettext("All"),
+        local_action_group,
+        ANALYZE_ALL_ACTION,
+    );
     model.append_section(None, &all);
 
     model
@@ -258,11 +277,19 @@ fn retrieve_submenu_model(
         .unwrap_or(false);
 
     for (action_name, label, capability) in [
-        (RETRIEVE_LYRICS_ACTION, "Lyrics", OnlineCapability::Lyrics),
-        (RETRIEVE_TAGS_ACTION, "Tags", OnlineCapability::Tags),
+        (
+            RETRIEVE_LYRICS_ACTION,
+            gettext("Lyrics"),
+            OnlineCapability::Lyrics,
+        ),
+        (
+            RETRIEVE_TAGS_ACTION,
+            gettext("Tags"),
+            OnlineCapability::Tags,
+        ),
         (
             RETRIEVE_ARTWORK_ACTION,
-            "Artwork",
+            gettext("Artwork"),
             OnlineCapability::Artwork,
         ),
     ] {
@@ -273,7 +300,7 @@ fn retrieve_submenu_model(
                 callback(item, OnlineRunRequest::Single(capability));
             }
         });
-        append_local_action_item(&model, label, local_action_group, action_name);
+        append_local_action_item(&model, &label, local_action_group, action_name);
     }
 
     let all = gio::Menu::new();
@@ -284,7 +311,12 @@ fn retrieve_submenu_model(
             callback(item, OnlineRunRequest::All);
         }
     });
-    append_local_action_item(&all, "All", local_action_group, RETRIEVE_ALL_ACTION);
+    append_local_action_item(
+        &all,
+        &gettext("All"),
+        local_action_group,
+        RETRIEVE_ALL_ACTION,
+    );
     model.append_section(None, &all);
 
     model
@@ -314,11 +346,11 @@ fn add_local_action(
     action_group.add_action(&action);
 }
 
-fn delete_label_for(item: PlaylistItem) -> &'static str {
+fn delete_label_for(item: PlaylistItem) -> String {
     match item {
-        PlaylistItem::Folder(_) => "Delete Folder…",
-        PlaylistItem::Playlist(_) => "Delete Playlist",
-        PlaylistItem::SmartPlaylist(_) => "Delete Smart Playlist",
+        PlaylistItem::Folder(_) => gettext("Delete Folder…"),
+        PlaylistItem::Playlist(_) => gettext("Delete Playlist"),
+        PlaylistItem::SmartPlaylist(_) => gettext("Delete Smart Playlist"),
     }
 }
 
@@ -460,35 +492,33 @@ fn confirm_and_delete(
         return;
     };
 
-    let (title, detail, button_label) = match item {
+    let (title, detail) = match item {
         PlaylistItem::Folder(_) => (
-            "Delete Folder",
-            format!(
-                "\"{current_name}\" will be deleted along with every playlist, smart playlist, and folder inside it. This cannot be undone."
+            gettext("Delete Folder"),
+            gettext(
+                "\"{current_name}\" will be deleted along with every playlist, smart playlist, and folder inside it. This cannot be undone.",
             ),
-            "Delete Folder",
         ),
         PlaylistItem::Playlist(_) => (
-            "Delete Playlist",
-            format!(
-                "\"{current_name}\" will be removed from the sidebar. The tracks themselves stay in your library."
+            gettext("Delete Playlist"),
+            gettext(
+                "\"{current_name}\" will be removed from the sidebar. The tracks themselves stay in your library.",
             ),
-            "Delete Playlist",
         ),
         PlaylistItem::SmartPlaylist(_) => (
-            "Delete Smart Playlist",
-            format!(
-                "\"{current_name}\" will be removed from the sidebar. The tracks it currently matches stay in your library."
+            gettext("Delete Smart Playlist"),
+            gettext(
+                "\"{current_name}\" will be removed from the sidebar. The tracks it currently matches stay in your library.",
             ),
-            "Delete Smart Playlist",
         ),
     };
+    let detail = tr_format!(detail, current_name = current_name);
 
     crate::confirmation::show_confirmation_alert(
         &parent_window,
-        title,
+        &title,
         &detail,
-        button_label,
+        &title,
         move || {
             if let Some(callback) = on_delete.borrow().as_ref() {
                 callback(item);

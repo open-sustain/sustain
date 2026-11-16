@@ -7,6 +7,7 @@
 //! drag-to-close gestures.
 
 use super::*;
+use sustain_i18n::gettext;
 
 /// Owns the sidebar collapse / expand state, the toggle button that
 /// drives it, and the last manually-set expanded width so a user who
@@ -152,10 +153,10 @@ impl SidebarCollapseController {
 ///   right-pointing arrow ("Show sidebar").
 fn sync_collapse_toggle_icon(button: &gtk::Button, collapsed: bool) {
     let (icon_name, tooltip) = if collapsed {
-        ("go-next-symbolic", "Show sidebar")
+        ("go-next-symbolic", gettext("Show sidebar"))
     } else {
-        ("go-previous-symbolic", "Collapse sidebar")
+        ("go-previous-symbolic", gettext("Collapse sidebar"))
     };
     button.set_icon_name(icon_name);
-    button.set_tooltip_text(Some(tooltip));
+    button.set_tooltip_text(Some(&tooltip));
 }

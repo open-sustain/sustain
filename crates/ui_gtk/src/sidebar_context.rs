@@ -5,11 +5,25 @@ use std::{collections::HashSet, rc::Rc};
 
 use gtk::prelude::*;
 use gtk::{gdk, gio};
+use sustain_i18n::gettext;
 
-pub(crate) const NEW_PLAYLIST_DEFAULT_NAME: &str = "untitled playlist";
-pub(crate) const NEW_PLAYLIST_FOLDER_DEFAULT_NAME: &str = "untitled folder";
-pub(crate) const NEW_SMART_PLAYLIST_DEFAULT_NAME: &str = "untitled smart playlist";
 const SIDEBAR_CONTEXT_ACTION_GROUP: &str = "sidebar-context";
+
+/// The name a new playlist starts with, before [`unique_default_name`]
+/// numbers it apart from existing ones.
+pub(crate) fn new_playlist_default_name() -> String {
+    gettext("untitled playlist")
+}
+
+/// The name a new playlist folder starts with.
+pub(crate) fn new_playlist_folder_default_name() -> String {
+    gettext("untitled folder")
+}
+
+/// The name a new smart playlist starts with.
+pub(crate) fn new_smart_playlist_default_name() -> String {
+    gettext("untitled smart playlist")
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SidebarContextAction {
@@ -19,11 +33,11 @@ pub(crate) enum SidebarContextAction {
 }
 
 impl SidebarContextAction {
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::Playlist => "New Playlist",
-            Self::SmartPlaylist => "New Smart Playlist\u{2026}",
-            Self::PlaylistFolder => "New Playlist Folder",
+            Self::Playlist => gettext("New Playlist"),
+            Self::SmartPlaylist => gettext("New Smart Playlist\u{2026}"),
+            Self::PlaylistFolder => gettext("New Playlist Folder"),
         }
     }
 
@@ -87,7 +101,7 @@ fn sidebar_context_action_group(on_action: SidebarActionCallback) -> gio::Simple
 fn popup_menu(anchor: &gtk::Widget, x: f64, y: f64) {
     let menu = gio::Menu::new();
     for action in SIDEBAR_CONTEXT_ACTIONS.iter().copied() {
-        menu.append(Some(action.label()), Some(action.detailed_action()));
+        menu.append(Some(&action.label()), Some(action.detailed_action()));
     }
 
     let popover = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
@@ -138,7 +152,7 @@ mod tests {
     fn unique_default_name_returns_base_when_unused() {
         let existing: [&str; 0] = [];
         assert_eq!(
-            unique_default_name(existing, NEW_PLAYLIST_DEFAULT_NAME),
+            unique_default_name(existing, &new_playlist_default_name()),
             "untitled playlist"
         );
     }
@@ -147,7 +161,7 @@ mod tests {
     fn unique_default_name_appends_smallest_free_suffix() {
         let existing = ["untitled playlist", "untitled playlist 2"];
         assert_eq!(
-            unique_default_name(existing, NEW_PLAYLIST_DEFAULT_NAME),
+            unique_default_name(existing, &new_playlist_default_name()),
             "untitled playlist 3"
         );
     }
@@ -156,7 +170,7 @@ mod tests {
     fn unique_default_name_skips_already_taken_higher_suffixes() {
         let existing = ["untitled folder 2", "untitled folder 3"];
         assert_eq!(
-            unique_default_name(existing, NEW_PLAYLIST_FOLDER_DEFAULT_NAME),
+            unique_default_name(existing, &new_playlist_folder_default_name()),
             "untitled folder"
         );
     }

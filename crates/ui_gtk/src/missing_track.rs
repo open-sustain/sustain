@@ -8,6 +8,7 @@ use gtk::{FileDialog, FileFilter, gio};
 use sustain_app_runtime::{
     ApplicationCommand, ApplicationRuntimeError, PlaybackCommand, PlaybackQueueRequest, TrackId,
 };
+use sustain_i18n::gettext;
 
 use crate::{
     PlaybackChangedCallback, SharedRuntime,
@@ -91,8 +92,8 @@ pub(crate) fn locate_missing_track_callback(
         pending_playbacks.borrow_mut().insert(track_id, queue);
 
         let dialog = FileDialog::builder()
-            .title("Locate Missing Track")
-            .accept_label("Locate")
+            .title(gettext("Locate Missing Track"))
+            .accept_label(gettext("Locate"))
             .modal(true)
             .build();
         install_audio_filters(&dialog);
@@ -166,7 +167,7 @@ fn artwork_source_for_track(runtime: &SharedRuntime, track_id: TrackId) -> Optio
 
 fn install_audio_filters(dialog: &FileDialog) {
     let filter = FileFilter::new();
-    filter.set_name(Some("Audio Files"));
+    filter.set_name(Some(&gettext("Audio Files")));
     for pattern in [
         "*.mp3", "*.MP3", "*.ogg", "*.OGG", "*.opus", "*.OPUS", "*.flac", "*.FLAC", "*.m4a",
         "*.M4A", "*.mp4", "*.MP4", "*.wav", "*.WAV", "*.aiff", "*.AIFF",

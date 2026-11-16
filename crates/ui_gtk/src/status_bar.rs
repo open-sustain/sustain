@@ -12,6 +12,7 @@ use sustain_app_runtime::{
     ApplicationRuntime, EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_TRANSITION, Notification,
     NotificationId, NotificationKind,
 };
+use sustain_i18n::{gettext, ngettext, npgettext, pgettext, phrase_list, plural_count, tr_format};
 
 use super::{STATUS_BAR_HEIGHT, SharedRuntime};
 use crate::track_summary::TrackSummary;
@@ -164,11 +165,11 @@ impl NotificationSlot {
         label.add_css_class("task-status-label");
         label.set_xalign(1.0);
 
-        let cancel = gtk::Button::with_label("Cancel");
+        let cancel = gtk::Button::with_label(&gettext("Cancel"));
         cancel.add_css_class("task-status-cancel");
         cancel.set_valign(gtk::Align::Center);
         cancel.set_visible(false);
-        cancel.set_tooltip_text(Some("Cancel"));
+        cancel.set_tooltip_text(Some(&gettext("Cancel")));
         let cancel_for_click = cancel.clone();
         cancel.connect_clicked(move |_| {
             // Cooperative cancellation: disable the button while the
@@ -197,11 +198,11 @@ impl NotificationSlot {
         );
 
         let label_text = if is_persistent && cancelling {
-            "Cancelling..."
+            gettext("Cancelling...")
         } else {
-            notification.body.as_str()
+            notification.body.clone()
         };
-        self.label.set_text(label_text);
+        self.label.set_text(&label_text);
 
         self.spinner.set_visible(is_persistent);
         self.spinner.set_spinning(is_persistent);
@@ -376,12 +377,23 @@ pub(crate) fn library_status_text(
     duration_seconds: u64,
     size_bytes: u64,
 ) -> String {
-    format!(
-        "{} {}, {}, {}",
-        grouped(track_count as u64),
-        pluralize(track_count, "song", "songs"),
+    phrase_list(&[
+        songs_text(track_count),
         duration_text(duration_seconds),
         file_size_text(size_bytes),
+    ])
+}
+
+/// "{count} songs", the library's track count in its grouped form.
+pub(crate) fn songs_text(track_count: usize) -> String {
+    tr_format!(
+        npgettext(
+            "count of songs",
+            "{count} song",
+            "{count} songs",
+            plural_count(track_count)
+        ),
+        count = grouped(track_count as u64)
     )
 }
 
@@ -389,19 +401,24 @@ pub(crate) fn duration_text(duration_seconds: u64) -> String {
     let hours = duration_seconds / 3_600;
     if hours >= 24 {
         let days = hours / 24;
-        format!(
-            "{} {}",
-            grouped(days),
-            pluralize(days as usize, "day", "days")
+        tr_format!(
+            ngettext("{count} day", "{count} days", plural_count_u64(days)),
+            count = grouped(days)
         )
     } else if hours >= 1 {
-        format!("{} {}", hours, pluralize(hours as usize, "hour", "hours"))
+        tr_format!(
+            ngettext("{count} hour", "{count} hours", plural_count_u64(hours)),
+            count = hours
+        )
     } else {
         let minutes = duration_seconds / 60;
-        format!(
-            "{} {}",
-            minutes,
-            pluralize(minutes as usize, "minute", "minutes")
+        tr_format!(
+            ngettext(
+                "{count} minute",
+                "{count} minutes",
+                plural_count_u64(minutes)
+            ),
+            count = minutes
         )
     }
 }
@@ -411,31 +428,34 @@ pub(crate) fn file_size_text(size_bytes: u64) -> String {
     const GB: u64 = 1_000_000_000;
 
     if size_bytes >= GB {
-        format!("{} GB", grouped(size_bytes / GB))
+        // Translators: a size in gigabytes; use your language's unit symbol.
+        tr_format!(gettext("{size} GB"), size = grouped(size_bytes / GB))
     } else {
-        format!("{} MB", grouped(size_bytes / MB))
+        // Translators: a size in megabytes; use your language's unit symbol.
+        tr_format!(gettext("{size} MB"), size = grouped(size_bytes / MB))
     }
 }
 
-/// `value` with its thousands separated by commas (`49295` → `"49,295"`).
+/// `value` with its thousands grouped by the language's separator
+/// (`49295` → `"49,295"` in English).
 pub(crate) fn grouped(value: u64) -> String {
+    // Translators: groups the thousands of a large number, as in "49,295".
+    // Use your language's separator, such as "." or a narrow no-break space.
+    let separator = pgettext("thousands separator", ",");
     let digits = value.to_string();
-    let mut text = String::with_capacity(digits.len() + digits.len() / 3);
+    let mut text = String::with_capacity(digits.len() + digits.len() / 3 * separator.len());
     for (index, digit) in digits.chars().enumerate() {
         if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            text.push(',');
+            text.push_str(&separator);
         }
         text.push(digit);
     }
     text
 }
 
-pub(crate) fn pluralize(
-    count: usize,
-    singular: &'static str,
-    plural: &'static str,
-) -> &'static str {
-    if count == 1 { singular } else { plural }
+/// [`plural_count`] for a `u64` count.
+pub(crate) fn plural_count_u64(count: u64) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]

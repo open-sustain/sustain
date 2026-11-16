@@ -9,6 +9,7 @@ use std::cmp::Ordering as CmpOrdering;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackColumnSort, TrackId};
+use sustain_i18n::gettext;
 
 use super::track_context::TrackRowContextMenu;
 use crate::track_summary::TrackSummary;
@@ -1358,7 +1359,7 @@ fn build_table_column(
     } else {
         build_text_cell_factory(column, text_bindings, inline_edit)
     };
-    let table_column = gtk::ColumnViewColumn::new(Some(column.title()), Some(factory));
+    let table_column = gtk::ColumnViewColumn::new(Some(&column.title()), Some(factory));
     table_column.set_resizable(true);
     table_column.set_expand(column.expands());
     table_column.set_fixed_width(column.default_width());
@@ -1380,11 +1381,11 @@ fn build_column_visibility_menu() -> gio::Menu {
     let columns = gio::Menu::new();
     for column in TRACK_TABLE_COLUMNS {
         columns.append(
-            Some(column.title()),
+            Some(&column.title()),
             Some(&format!("columns.{}", column.action_name())),
         );
     }
-    menu.append_section(Some("Columns"), &columns);
+    menu.append_section(Some(&gettext("Columns")), &columns);
     menu
 }
 

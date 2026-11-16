@@ -9,6 +9,7 @@ use gtk::{FileLauncher, gdk, gio};
 use sustain_app_runtime::{
     ApplicationCommand, NotificationCategory, NotificationSeverity, PlaybackCommand, TrackId,
 };
+use sustain_i18n::{gettext, tr_format};
 
 use super::{
     ArtworkChangedHolder, PlaybackChangedCallback, SharedRuntime, ShowAlbumHolder,
@@ -191,7 +192,10 @@ fn copy_paths_to_clipboard(runtime: &SharedRuntime, window: &gtk::Window, paths:
     let file_list = gdk::FileList::from_array(&files);
     let provider = gdk::ContentProvider::for_value(&file_list.to_value());
     if let Err(error) = window.clipboard().set_content(Some(&provider)) {
-        report_action_failure(runtime, format!("Could not copy the files: {error}."));
+        report_action_failure(
+            runtime,
+            tr_format!(gettext("Could not copy the files: {error}."), error = error),
+        );
     }
 }
 
@@ -213,7 +217,10 @@ fn show_path_in_folder(runtime: &SharedRuntime, window: &gtk::Window, path: &Pat
         {
             report_action_failure(
                 &runtime,
-                format!("Could not show the file's folder: {error}."),
+                tr_format!(
+                    gettext("Could not show the file's folder: {error}."),
+                    error = error
+                ),
             );
         }
     });

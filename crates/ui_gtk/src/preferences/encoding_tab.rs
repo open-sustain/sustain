@@ -12,6 +12,7 @@
 //! thorough (Fast, Balanced, Paranoid).
 
 use gtk::prelude::*;
+use sustain_i18n::gettext;
 
 use super::super::{
     ApplicationCommand, CdEncodingProfile, CdReadMode, command_controller::SharedCommandController,
@@ -33,9 +34,9 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
         let controller = command_controller.clone();
         append_three_stop_slider(
             &content,
-            "CD import format",
-            ["MP3 (256)", "MP3 (320)", "FLAC (Lossless)"],
-            "Format used when ripping audio CDs into your library.",
+            &gettext("CD import format"),
+            ["MP3 (256)", "MP3 (320)", &gettext("FLAC (Lossless)")],
+            &gettext("Format used when ripping audio CDs into your library."),
             profile_to_value(encoding.cd_profile),
             0,
             move |value| {
@@ -56,9 +57,9 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
         let controller = command_controller;
         append_three_stop_slider(
             &content,
-            "CD read accuracy",
-            ["Fast", "Balanced", "Paranoid"],
-            "Error correction used when ripping audio CDs.",
+            &gettext("CD read accuracy"),
+            [&gettext("Fast"), &gettext("Balanced"), &gettext("Paranoid")],
+            &gettext("Error correction used when ripping audio CDs."),
             read_mode_to_value(encoding.cd_read_mode),
             20,
             move |value| {

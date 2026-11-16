@@ -39,10 +39,11 @@ use sustain_app_runtime::{
     DecadeCount, GenreDistribution, GenrePlayCount, GenreRating, QualityDistribution, QualityRange,
     YearCount, compute_library_statistics,
 };
+use sustain_i18n::{gettext, ngettext, pgettext, plural_count, tr_format};
 
 use crate::SharedRuntime;
 use crate::chart::{self, ChartBar, ChartTone, DonutSlice};
-use crate::status_bar::{duration_text, file_size_text, grouped, pluralize};
+use crate::status_bar::{duration_text, file_size_text, grouped};
 use crate::track_summary::TrackSummary;
 
 /// Gap between cards, in pixels, both within the donut grid and above the
@@ -100,9 +101,9 @@ impl StatisticsView {
         };
 
         if stats.total_tracks == 0 {
-            let empty = gtk::Label::new(Some(
+            let empty = gtk::Label::new(Some(&gettext(
                 "No statistics yet — add music to your library to see its breakdown here.",
-            ));
+            )));
             empty.add_css_class("statistics-empty-page");
             empty.set_xalign(0.0);
             empty.set_wrap(true);
@@ -233,7 +234,7 @@ fn quantity_text(quantity: f64) -> String {
 /// A genre name for display, mapping the "no genre tag" case to a
 /// readable label.
 fn genre_label(genre: &Option<String>) -> String {
-    genre.clone().unwrap_or_else(|| "Unknown".to_owned())
+    genre.clone().unwrap_or_else(|| gettext("Unknown"))
 }
 
 /// The centred readout shown inside a donut's hole: the denominator the
@@ -258,27 +259,35 @@ fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
         .collect();
     if let Some(other) = distribution.other {
         slices.push(DonutSlice {
-            label: format!(
-                "Other ({} {})",
-                other.genre_count,
-                if other.genre_count == 1 {
-                    "genre"
-                } else {
-                    "genres"
-                }
+            label: tr_format!(
+                ngettext(
+                    "Other ({count} genre)",
+                    "Other ({count} genres)",
+                    plural_count(other.genre_count)
+                ),
+                count = other.genre_count
             ),
             fraction: fraction_f64(other.track_weight, total as f64),
             value: quantity_share_text(other.track_weight, total as f64),
             tone: ChartTone::Muted,
         });
     }
-    let content = (!slices.is_empty())
-        .then(|| chart::donut(slices, Some(donut_center(&grouped(total as u64), "tracks"))));
+    let content = (!slices.is_empty()).then(|| {
+        chart::donut(
+            slices,
+            Some(donut_center(
+                &grouped(total as u64),
+                &ngettext("track", "tracks", plural_count(total)),
+            )),
+        )
+    });
     section(
-        "Genre",
-        Some("Share of tracks per genre across the whole library."),
+        &pgettext("statistics section", "Genre"),
+        Some(&gettext(
+            "Share of tracks per genre across the whole library.",
+        )),
         content,
-        "No genres tagged yet.",
+        &gettext("No genres tagged yet."),
     )
 }
 
@@ -301,13 +310,20 @@ fn quality_distribution_section(distribution: &QualityDistribution) -> gtk::Widg
             })
             .collect()
     };
-    let content = (!slices.is_empty())
-        .then(|| chart::donut(slices, Some(donut_center(&grouped(total as u64), "tracks"))));
+    let content = (!slices.is_empty()).then(|| {
+        chart::donut(
+            slices,
+            Some(donut_center(
+                &grouped(total as u64),
+                &ngettext("track", "tracks", plural_count(total)),
+            )),
+        )
+    });
     section(
-        "Quality",
-        Some("Share of tracks per bitrate range."),
+        &gettext("Quality"),
+        Some(&gettext("Share of tracks per bitrate range.")),
         content,
-        "No tracks carry a bitrate yet.",
+        &gettext("No tracks carry a bitrate yet."),
     )
 }
 
@@ -335,10 +351,10 @@ fn most_played_section(genres: &[GenrePlayCount]) -> gtk::Widget {
         .collect();
     let content = (most > 0.0).then(|| chart::ranked_bars(bars));
     section(
-        "Most played genres",
-        Some("Top 5 by total play count."),
+        &gettext("Most played genres"),
+        Some(&gettext("Top 5 by total play count.")),
         content,
-        "No plays recorded yet.",
+        &gettext("No plays recorded yet."),
     )
 }
 
@@ -357,10 +373,12 @@ fn most_liked_section(genres: &[GenreRating]) -> gtk::Widget {
         .collect();
     let content = (!bars.is_empty()).then(|| chart::ranked_bars(bars));
     section(
-        "Most liked genres",
-        Some("Top 5 by total rating points across rated tracks."),
+        &gettext("Most liked genres"),
+        Some(&gettext(
+            "Top 5 by total rating points across rated tracks.",
+        )),
         content,
-        "No ratings recorded yet.",
+        &gettext("No ratings recorded yet."),
     )
 }
 
@@ -375,18 +393,21 @@ fn release_years_section(decades: &[DecadeCount]) -> gtk::Widget {
         .map(|decade| ChartBar {
             label: decade
                 .decade
-                .map(|year| format!("{year}s"))
-                .unwrap_or_else(|| "Unknown".to_owned()),
+                .map(|year| {
+                    // Translators: a decade, as in "1990s".
+                    tr_format!(gettext("{year}s"), year = year)
+                })
+                .unwrap_or_else(|| gettext("Unknown")),
             fraction: fraction(decade.track_count, max),
             value: grouped(decade.track_count as u64),
         })
         .collect();
     let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
     section(
-        "Release years",
-        Some("Number of tracks per release decade."),
+        &gettext("Release years"),
+        Some(&gettext("Number of tracks per release decade.")),
         content,
-        "No release years tagged yet.",
+        &gettext("No release years tagged yet."),
     )
 }
 
@@ -398,17 +419,17 @@ fn added_years_section(years: &[YearCount]) -> gtk::Widget {
             label: year
                 .year
                 .map(|year| year.to_string())
-                .unwrap_or_else(|| "Unknown".to_owned()),
+                .unwrap_or_else(|| gettext("Unknown")),
             fraction: fraction(year.track_count, max),
             value: grouped(year.track_count as u64),
         })
         .collect();
     let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
     section(
-        "Year added",
-        Some("Number of tracks added to the library each year."),
+        &gettext("Year added"),
+        Some(&gettext("Number of tracks added to the library each year.")),
         content,
-        "Nothing added yet.",
+        &gettext("Nothing added yet."),
     )
 }
 
@@ -449,16 +470,13 @@ fn headline_figures(summary: &TrackSummary, total_plays: u64) -> gtk::Widget {
     for (figure, caption) in [
         (
             grouped(tracks as u64),
-            pluralize(tracks, "track", "tracks").to_owned(),
+            ngettext("track", "tracks", plural_count(tracks)),
         ),
-        (
-            duration_text(summary.duration_seconds),
-            "of music".to_owned(),
-        ),
-        (file_size_text(summary.size_bytes), "on disk".to_owned()),
+        (duration_text(summary.duration_seconds), gettext("of music")),
+        (file_size_text(summary.size_bytes), gettext("on disk")),
         (
             grouped(total_plays),
-            pluralize(plays, "play", "plays").to_owned(),
+            ngettext("play", "plays", plural_count(plays)),
         ),
     ] {
         let tile = gtk::Box::new(gtk::Orientation::Vertical, 2);

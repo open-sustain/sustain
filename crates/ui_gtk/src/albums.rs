@@ -14,6 +14,7 @@ use sustain_app_runtime::{
     ApplicationCommand, PlaybackCommand, PlaybackQueueRequest, PlaybackQueueSource, ShuffleMode,
     TrackId, album_matches_search_text,
 };
+use sustain_i18n::gettext;
 
 use super::{
     PlaybackChangedCallback, SharedRuntime,
@@ -1260,7 +1261,8 @@ impl AlbumsView {
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         header.append(&title);
 
-        let play_button = detail_icon_button("media-playback-start-symbolic", "Play album");
+        let play_button =
+            detail_icon_button("media-playback-start-symbolic", &gettext("Play album"));
         let album_for_play = album.clone();
         let command_controller_for_play = self.command_controller.clone();
         let playback_changed_for_play = self.playback_changed.clone();
@@ -1272,7 +1274,8 @@ impl AlbumsView {
         });
         header.append(&play_button);
 
-        let shuffle_button = detail_icon_button("media-playlist-shuffle-symbolic", "Shuffle album");
+        let shuffle_button =
+            detail_icon_button("media-playlist-shuffle-symbolic", &gettext("Shuffle album"));
         let album_for_shuffle = album.clone();
         let command_controller_for_shuffle = self.command_controller.clone();
         let playback_changed_for_shuffle = self.playback_changed.clone();
@@ -1891,7 +1894,7 @@ fn album_list_row_at(store: &gio::ListStore, position: usize) -> Option<AlbumLis
 }
 
 fn empty_albums_label() -> gtk::Label {
-    let label = gtk::Label::new(Some("No albums"));
+    let label = gtk::Label::new(Some(&gettext("No albums")));
     label.add_css_class("album-empty-state");
     label.set_margin_top(24);
     label.set_margin_end(24);

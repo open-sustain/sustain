@@ -8,6 +8,7 @@ use gtk::glib::Propagation;
 use gtk::prelude::*;
 use sustain_app_runtime::priority::resolve_worker_count;
 use sustain_app_runtime::{AnalysisSettings, BpmRange};
+use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 
 use super::super::{
     ApplicationCommand, BackgroundResourceUsage, command_controller::SharedCommandController,
@@ -25,24 +26,30 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
     let initial = command_controller.runtime().borrow().settings().analysis;
 
     let bpm_row = build_switch_row(
-        "BPM detection",
-        "Runs in the background and sets each track's BPM to the measured \
+        &gettext("BPM detection"),
+        &gettext(
+            "Runs in the background and sets each track's BPM to the measured \
          tempo. Never replaces a BPM you typed yourself.",
+        ),
         initial.bpm,
     );
     let key_row = build_switch_row(
-        "Key detection",
-        "Runs in the background on tracks missing a musical key, and measures \
+        &gettext("Key detection"),
+        &gettext(
+            "Runs in the background on tracks missing a musical key, and measures \
          its own keys again when detection improves. Never replaces a key \
          from the file's tags or one you typed.",
+        ),
         initial.key,
     );
     let audio_row = build_switch_row(
-        "Audio analysis",
-        "Decodes each track once to produce the color waveforms and the perceptual \
+        &gettext("Audio analysis"),
+        &gettext(
+            "Decodes each track once to produce the color waveforms and the perceptual \
          features Smart Shuffle uses to match transitions, and reads BPM and key off \
          the same decode — so turning this on enables and locks both. The heaviest \
          pass; runs in the background on tracks that are missing it.",
+        ),
         initial.audio,
     );
 
@@ -233,7 +240,7 @@ fn build_bpm_range_section(command_controller: SharedCommandController) -> gtk::
     let container = gtk::Box::new(gtk::Orientation::Vertical, 4);
     container.add_css_class("preference-slider-row");
 
-    let header = gtk::Label::new(Some("BPM range"));
+    let header = gtk::Label::new(Some(&gettext("BPM range")));
     header.set_xalign(0.0);
     container.append(&header);
 
@@ -248,14 +255,14 @@ fn build_bpm_range_section(command_controller: SharedCommandController) -> gtk::
     row.set_halign(gtk::Align::Center);
     let min_spin = labelled_bpm_spin(
         &row,
-        "Minimum",
+        &gettext("Minimum"),
         f64::from(BpmRange::ABSOLUTE_MIN),
         f64::from(BpmRange::ABSOLUTE_MAX - 1),
         f64::from(initial.min()),
     );
     let max_spin = labelled_bpm_spin(
         &row,
-        "Maximum",
+        &gettext("Maximum"),
         f64::from(BpmRange::ABSOLUTE_MIN + 1),
         f64::from(BpmRange::ABSOLUTE_MAX),
         f64::from(initial.max()),
@@ -354,7 +361,7 @@ fn build_resource_usage_slider(command_controller: SharedCommandController) -> g
     let container = gtk::Box::new(gtk::Orientation::Vertical, 4);
     container.add_css_class("preference-slider-row");
 
-    let header = gtk::Label::new(Some("Background resource usage"));
+    let header = gtk::Label::new(Some(&gettext("Background resource usage")));
     header.set_xalign(0.0);
     container.append(&header);
 
@@ -393,9 +400,9 @@ fn build_resource_usage_slider(command_controller: SharedCommandController) -> g
     // on its tick, and the labels at the 0 and 2 endpoints would
     // overflow the scale's bounds.
     let mark_label_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    let innocuous_label = mark_label("Innocuous", gtk::Align::Start);
-    let balanced_label = mark_label("Balanced", gtk::Align::Center);
-    let aggressive_label = mark_label("Aggressive", gtk::Align::End);
+    let innocuous_label = mark_label(&gettext("Innocuous"), gtk::Align::Start);
+    let balanced_label = mark_label(&gettext("Balanced"), gtk::Align::Center);
+    let aggressive_label = mark_label(&gettext("Aggressive"), gtk::Align::End);
     mark_label_row.append(&innocuous_label);
     mark_label_row.append(&balanced_label);
     mark_label_row.append(&aggressive_label);
@@ -473,8 +480,15 @@ fn caption_text(usage: BackgroundResourceUsage) -> String {
     let total = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
-    let plural = if workers == 1 { "core" } else { "cores" };
-    format!("Uses {workers} of {total} {plural} on this machine.")
+    tr_format!(
+        ngettext(
+            "Uses {workers} of {total} core on this machine.",
+            "Uses {workers} of {total} cores on this machine.",
+            plural_count(total)
+        ),
+        workers = workers,
+        total = total
+    )
 }
 
 #[cfg(test)]

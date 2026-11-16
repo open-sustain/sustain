@@ -3,6 +3,7 @@
 
 use gtk::gio;
 use gtk::prelude::*;
+use sustain_i18n::gettext;
 
 const CANCEL_BUTTON: i32 = 0;
 const CONFIRM_BUTTON: i32 = 1;
@@ -21,7 +22,7 @@ pub(crate) fn show_confirmation_alert(
         .modal(true)
         .message(message)
         .detail(detail)
-        .buttons(["Cancel", confirm_label])
+        .buttons([gettext("Cancel").as_str(), confirm_label])
         .cancel_button(CANCEL_BUTTON)
         .default_button(CANCEL_BUTTON)
         .build();

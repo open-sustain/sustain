@@ -14,6 +14,7 @@ use sustain_app_runtime::{
     DiscIdentity, OnlineRunRequest, PlaylistItem, PlaylistTreeNode, SmartPlaylistId, SyncDeviceId,
     TocSnapshot, TrackId,
 };
+use sustain_i18n::gettext;
 
 use super::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SharedRuntime,
@@ -185,14 +186,15 @@ impl PlaylistSidebar {
         root.set_vexpand(true);
         root.set_size_request(SIDEBAR_MIN_WIDTH, -1);
 
-        let library_header = build_static_section_header("Library");
+        let library_header = build_static_section_header(&gettext("Library"));
         root.append(&library_header);
 
-        let music_row = build_standalone_sidebar_row("Music", "audio-x-generic-symbolic");
-        let albums_row = build_standalone_sidebar_row("Albums", "media-optical-symbolic");
-        let duplicates_row = build_standalone_sidebar_row("Duplicates", "edit-copy-symbolic");
+        let music_row = build_standalone_sidebar_row(&gettext("Music"), "audio-x-generic-symbolic");
+        let albums_row = build_standalone_sidebar_row(&gettext("Albums"), "media-optical-symbolic");
+        let duplicates_row =
+            build_standalone_sidebar_row(&gettext("Duplicates"), "edit-copy-symbolic");
         let statistics_row =
-            build_standalone_sidebar_row("Statistics", "sustain-statistics-symbolic");
+            build_standalone_sidebar_row(&gettext("Statistics"), "sustain-statistics-symbolic");
         // Duplicates and Statistics are optional library rows, toggled in
         // the Views preferences (both shown by default).
         {
@@ -210,7 +212,7 @@ impl PlaylistSidebar {
         // Library and Playlists only when relevant hardware is present.
         // Rows are rebuilt dynamically from device discovery, which runs
         // after first-frame to keep startup cheap.
-        let devices_header = build_static_section_header("Devices");
+        let devices_header = build_static_section_header(&gettext("Devices"));
         devices_header.set_visible(false);
         root.append(&devices_header);
         let devices_body = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -230,7 +232,8 @@ impl PlaylistSidebar {
         let persistent_selection = Rc::new(Cell::new(SidebarSelection::Music));
         let launch_selection = Rc::new(Cell::new(None));
 
-        let (playlists_header, playlists_caret) = build_disclosure_section_header("Playlists");
+        let (playlists_header, playlists_caret) =
+            build_disclosure_section_header(&gettext("Playlists"));
         root.append(&playlists_header);
 
         let tree = Rc::new(SidebarTree::new(&runtime.borrow()));
@@ -567,7 +570,7 @@ impl PlaylistSidebar {
                     };
                     let row_parts = build_standalone_sidebar_row_parts(&device.label, icon);
                     let row = row_parts.row;
-                    let sync_badge = sidebar_transfer_badge("Syncing");
+                    let sync_badge = sidebar_transfer_badge(&gettext("Syncing"));
                     row_parts.content.append(&sync_badge);
                     self.transfer_badges
                         .borrow_mut()
@@ -602,10 +605,12 @@ impl PlaylistSidebar {
                     row
                 }
                 SidebarDeviceEntry::AudioCd(snapshot) => {
-                    let row_parts =
-                        build_standalone_sidebar_row_parts("Audio CD", "media-optical-symbolic");
+                    let row_parts = build_standalone_sidebar_row_parts(
+                        &gettext("Audio CD"),
+                        "media-optical-symbolic",
+                    );
                     let row = row_parts.row;
-                    let rip_badge = sidebar_transfer_badge("Importing");
+                    let rip_badge = sidebar_transfer_badge(&gettext("Importing"));
                     row_parts.content.append(&rip_badge);
                     self.transfer_badges
                         .borrow_mut()
@@ -936,7 +941,7 @@ fn sidebar_eject_button(on_pressed: impl Fn() + 'static) -> gtk::Button {
     let eject = gtk::Button::from_icon_name("media-eject-symbolic");
     eject.add_css_class("flat");
     eject.add_css_class("playlist-sidebar-eject");
-    eject.set_tooltip_text(Some("Eject"));
+    eject.set_tooltip_text(Some(&gettext("Eject")));
     eject.set_valign(gtk::Align::Center);
 
     let gesture = gtk::GestureClick::new();

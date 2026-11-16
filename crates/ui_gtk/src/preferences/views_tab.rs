@@ -3,6 +3,7 @@
 
 use gtk::glib::Propagation;
 use gtk::prelude::*;
+use sustain_i18n::gettext;
 
 use super::super::{ApplicationCommand, command_controller::SharedCommandController};
 use super::ViewSettingsChangedCallback;
@@ -21,8 +22,8 @@ pub(super) fn build(
     let initial = command_controller.runtime().borrow().settings().ui.clone();
 
     let duplicates_row = build_switch_row(
-        "Show Duplicates in the sidebar",
-        "Lists the Duplicates view in the left column's Library section.",
+        &gettext("Show Duplicates in the sidebar"),
+        &gettext("Lists the Duplicates view in the left column's Library section."),
         initial.sidebar_show_duplicates,
     );
     wire_view_switch(
@@ -34,8 +35,8 @@ pub(super) fn build(
     content.append(&duplicates_row.container);
 
     let statistics_row = build_switch_row(
-        "Show Statistics in the sidebar",
-        "Lists the Statistics view in the left column's Library section.",
+        &gettext("Show Statistics in the sidebar"),
+        &gettext("Lists the Statistics view in the left column's Library section."),
         initial.sidebar_show_statistics,
     );
     wire_view_switch(
@@ -47,9 +48,11 @@ pub(super) fn build(
     content.append(&statistics_row.container);
 
     let waveform_row = build_switch_row(
-        "Show the waveform in Now Playing",
-        "Draws the playing track's waveform in place of the progress bar, \
+        &gettext("Show the waveform in Now Playing"),
+        &gettext(
+            "Draws the playing track's waveform in place of the progress bar, \
          once audio analysis has measured it.",
+        ),
         initial.now_playing_waveform,
     );
     wire_view_switch(

@@ -10,6 +10,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use sustain_app_runtime::{ApplicationCommand, Track, TrackId, VerifiedDuplicateMerge};
+use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 
 use crate::{
     command_controller::SharedCommandController,
@@ -23,7 +24,7 @@ pub(crate) fn open_verified_duplicates_preview(
     merges: Vec<VerifiedDuplicateMerge>,
 ) {
     let window = gtk::Window::builder()
-        .title("Merge Verified Duplicates")
+        .title(gettext("Merge Verified Duplicates"))
         .modal(true)
         .default_width(820)
         .default_height(640)
@@ -36,17 +37,17 @@ pub(crate) fn open_verified_duplicates_preview(
     content.set_margin_bottom(18);
     content.set_margin_start(18);
 
-    let intro = gtk::Label::new(Some(
+    let intro = gtk::Label::new(Some(&gettext(
         "Their audio shows each of these groups to be copies of one recording. Each group merges into a single track, keeping the choices shown.",
-    ));
+    )));
     intro.set_xalign(0.0);
     intro.set_wrap(true);
     intro.add_css_class("consolidation-intro");
     content.append(&intro);
 
-    let intro_detail = gtk::Label::new(Some(
+    let intro_detail = gtk::Label::new(Some(&gettext(
         "The best audio file and the highest rating are kept, along with the highest-resolution artwork. Play counts and skips are summed, and the oldest date added is kept. Uncheck a group to review it yourself.",
-    ));
+    )));
     intro_detail.set_xalign(0.0);
     intro_detail.set_wrap(true);
     intro_detail.add_css_class("dim-label");
@@ -72,7 +73,7 @@ pub(crate) fn open_verified_duplicates_preview(
 
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     buttons.set_halign(gtk::Align::End);
-    let cancel = gtk::Button::with_label("Cancel");
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
     let merge_button = gtk::Button::new();
     merge_button.add_css_class("destructive-action");
     buttons.append(&cancel);
@@ -86,9 +87,13 @@ pub(crate) fn open_verified_duplicates_preview(
         let merge_button = merge_button.clone();
         move || {
             let included = checks.iter().filter(|check| check.is_active()).count();
-            merge_button.set_label(&format!(
-                "Merge {included} {}",
-                if included == 1 { "Group" } else { "Groups" }
+            merge_button.set_label(&tr_format!(
+                ngettext(
+                    "Merge {included} Group",
+                    "Merge {included} Groups",
+                    plural_count(included)
+                ),
+                included = included
             ));
             merge_button.set_sensitive(included > 0);
         }
@@ -153,11 +158,15 @@ fn merge_row(merge: &VerifiedDuplicateMerge) -> (gtk::ListBoxRow, gtk::CheckButt
     ));
     let removed = merge.tracks.len() - 1;
     details.append(&row_label(
-        &format!(
-            "Keeps {} \u{00b7} {} \u{00b7} removes {removed} {}",
-            audio_summary(kept_audio),
-            kept_audio.location.path().display(),
-            if removed == 1 { "copy" } else { "copies" }
+        &tr_format!(
+            ngettext(
+                "Keeps {audio} \u{00b7} {path} \u{00b7} removes {removed} copy",
+                "Keeps {audio} \u{00b7} {path} \u{00b7} removes {removed} copies",
+                plural_count(removed)
+            ),
+            audio = audio_summary(kept_audio),
+            path = kept_audio.location.path().display(),
+            removed = removed
         ),
         &["dim-label"],
     ));
@@ -195,10 +204,11 @@ fn kept_differences(merge: &VerifiedDuplicateMerge) -> Vec<String> {
                 .iter()
                 .any(|track| metadata_field_display(&track.metadata, selection.field) != kept);
             disagree.then(|| {
-                format!(
-                    "{}: {}",
-                    metadata_field_name(selection.field),
-                    kept.as_deref().unwrap_or("(empty)")
+                tr_format!(
+                    // Translators: a field a merge keeps, as in "Year: 1999".
+                    gettext("{field}: {value}"),
+                    field = metadata_field_name(selection.field),
+                    value = kept.unwrap_or_else(|| gettext("(empty)"))
                 )
             })
         })

@@ -9,6 +9,7 @@ use std::{
 use gtk::glib;
 use gtk::prelude::*;
 use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, PlaybackState, VolumePercent};
+use sustain_i18n::gettext;
 
 use super::{
     MEDIA_ICON_SIZE, NOW_PLAYING_MIN_WIDTH, NOW_PLAYING_WIDTH, PlaybackChangedCallback,
@@ -51,13 +52,13 @@ pub(crate) struct Titlebar {
 }
 
 pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercent) -> Titlebar {
-    let previous = media_icon_button("media-skip-backward-symbolic", "Previous");
+    let previous = media_icon_button("media-skip-backward-symbolic", &gettext("Previous"));
     let play_pause_icon = gtk::Image::from_icon_name("media-playback-start-symbolic");
     play_pause_icon.set_pixel_size(MEDIA_ICON_SIZE);
-    let play_pause = media_icon_button_from_image(&play_pause_icon, "Play/Pause");
+    let play_pause = media_icon_button_from_image(&play_pause_icon, &gettext("Play/Pause"));
     let next = media_icon_button(
         "media-skip-forward-symbolic",
-        "Next, right-click to display the queue",
+        &gettext("Next, right-click to display the queue"),
     );
     set_titlebar_control_height(&previous);
     set_titlebar_control_height(&play_pause);
@@ -68,10 +69,10 @@ pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercen
     volume.set_value(initial_volume.as_scalar());
     volume.set_height_request(TITLEBAR_CONTROL_HEIGHT);
     volume.set_draw_value(false);
-    volume.set_tooltip_text(Some("Volume"));
+    volume.set_tooltip_text(Some(&gettext("Volume")));
 
-    let low_volume_icon = volume_icon("audio-volume-low-symbolic", "Low volume");
-    let high_volume_icon = volume_icon("audio-volume-high-symbolic", "High volume");
+    let low_volume_icon = volume_icon("audio-volume-low-symbolic", &gettext("Low volume"));
+    let high_volume_icon = volume_icon("audio-volume-high-symbolic", &gettext("High volume"));
 
     let volume_controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     volume_controls.set_valign(gtk::Align::Center);
@@ -81,7 +82,7 @@ pub(crate) fn build_titlebar(now_playing: gtk::Box, initial_volume: VolumePercen
 
     let search = gtk::SearchEntry::new();
     search.add_css_class("topbar-search");
-    search.set_placeholder_text(Some("Search"));
+    search.set_placeholder_text(Some(&gettext("Search")));
     search.set_width_chars(SEARCH_MIN_WIDTH_CHARS);
     search.set_max_width_chars(SEARCH_WIDTH_CHARS);
     search.set_valign(gtk::Align::Center);

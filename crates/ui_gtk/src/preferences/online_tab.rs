@@ -3,6 +3,7 @@
 
 use gtk::glib::Propagation;
 use gtk::prelude::*;
+use sustain_i18n::gettext;
 
 use super::super::{ApplicationCommand, command_controller::SharedCommandController};
 use super::switch_row::build_switch_row;
@@ -17,10 +18,12 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
     let initial = command_controller.runtime().borrow().settings().online;
 
     let artwork_row = build_switch_row(
-        "Fetch missing artwork",
-        "Looks up cover art from MusicBrainz and the Cover Art Archive, then Deezer \
+        &gettext("Fetch missing artwork"),
+        &gettext(
+            "Looks up cover art from MusicBrainz and the Cover Art Archive, then Deezer \
          and the iTunes Search API, for tracks that have none. Never replaces \
          artwork that is already present.",
+        ),
         initial.artwork,
     );
     wire_online_switch(
@@ -31,9 +34,11 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
     content.append(&artwork_row.container);
 
     let tags_row = build_switch_row(
-        "Fetch missing tags",
-        "Identifies tracks via AcoustID fingerprinting and fills missing fields \
+        &gettext("Fetch missing tags"),
+        &gettext(
+            "Identifies tracks via AcoustID fingerprinting and fills missing fields \
          from MusicBrainz. Never overwrites a tag that is already set.",
+        ),
         initial.tags,
     );
     wire_online_switch(
@@ -44,9 +49,11 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
     content.append(&tags_row.container);
 
     let lyrics_row = build_switch_row(
-        "Fetch missing lyrics",
-        "Looks up synchronised and plain lyrics from LRClib for tracks that have none. \
+        &gettext("Fetch missing lyrics"),
+        &gettext(
+            "Looks up synchronised and plain lyrics from LRClib for tracks that have none. \
          Never replaces lyrics that are already present.",
+        ),
         initial.lyrics,
     );
     wire_online_switch(&lyrics_row.switch, command_controller, OnlineFlag::Lyrics);

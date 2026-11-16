@@ -10,6 +10,7 @@ use gtk::prelude::*;
 use gtk::{FileDialog, FileFilter, gdk, gio, glib};
 use sustain_app_runtime::{ApplicationCommand, TrackId};
 use sustain_artwork::{ArtworkReadError, read_artwork_file};
+use sustain_i18n::gettext;
 
 use super::{ARTWORK_PREVIEW_SIZE, COVER_THUMB_SIZE};
 use crate::artwork_loader::{ArtworkLoader, ArtworkSource};
@@ -90,8 +91,8 @@ impl ArtworkPage {
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         buttons.set_halign(gtk::Align::Center);
         buttons.set_margin_top(12);
-        let add_button = gtk::Button::with_label("Add Artwork\u{2026}");
-        let remove_button = gtk::Button::with_label("Remove Artwork");
+        let add_button = gtk::Button::with_label(&gettext("Add Artwork\u{2026}"));
+        let remove_button = gtk::Button::with_label(&gettext("Remove Artwork"));
         remove_button.add_css_class("destructive-action");
         buttons.append(&add_button);
         buttons.append(&remove_button);
@@ -105,10 +106,10 @@ impl ArtworkPage {
             Rc::new(move |texture: Option<gdk::Texture>, has_artwork: bool| {
                 set_frame_texture(&frame, texture.as_ref(), ARTWORK_PREVIEW_SIZE);
                 set_frame_texture(&header_cover, texture.as_ref(), COVER_THUMB_SIZE);
-                note.set_text(if has_artwork {
-                    "Artwork is embedded in the audio file."
+                note.set_text(&if has_artwork {
+                    gettext("Artwork is embedded in the audio file.")
                 } else {
-                    "This track has no embedded artwork."
+                    gettext("This track has no embedded artwork.")
                 });
                 remove_button.set_sensitive(has_artwork);
             })
@@ -262,12 +263,12 @@ fn open_artwork_picker(
     refresh: ArtworkRefreshCallback,
 ) {
     let dialog = FileDialog::builder()
-        .title("Choose Artwork")
+        .title(gettext("Choose Artwork"))
         .modal(true)
         .build();
 
     let filter = FileFilter::new();
-    filter.set_name(Some("Images"));
+    filter.set_name(Some(&gettext("Images")));
     filter.add_mime_type("image/png");
     filter.add_mime_type("image/jpeg");
     filter.add_mime_type("image/webp");

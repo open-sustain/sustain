@@ -5,6 +5,7 @@ use std::path::Path;
 
 use gtk::gio;
 use gtk::prelude::*;
+use sustain_i18n::{gettext, tr_format};
 
 use super::{HELPER_MAX_WIDTH_CHARS, HELPER_MIN_WIDTH_CHARS};
 
@@ -40,18 +41,20 @@ pub(super) fn build(parent_window: &gtk::Window, database_path: &Path) -> gtk::W
     name.add_css_class("about-app-name");
     content.append(&name);
 
-    content.append(&centered_helper_label(
+    content.append(&centered_helper_label(&gettext(
         "A music library manager and player for the Linux desktop.",
-    ));
+    )));
 
     let details = gtk::Box::new(gtk::Orientation::Vertical, 2);
     details.set_halign(gtk::Align::Center);
     details.set_margin_top(8);
-    details.append(&centered_helper_label(&format!(
-        "Version {}",
-        env!("CARGO_PKG_VERSION")
+    details.append(&centered_helper_label(&tr_format!(
+        gettext("Version {version}"),
+        version = env!("CARGO_PKG_VERSION")
     )));
-    details.append(&centered_helper_label("Licensed under GPL-3.0-or-later"));
+    details.append(&centered_helper_label(&gettext(
+        "Licensed under GPL-3.0-or-later",
+    )));
     details.append(&centered_helper_label("© 2026 AnnoyingTechnology"));
     content.append(&details);
 
@@ -62,7 +65,7 @@ pub(super) fn build(parent_window: &gtk::Window, database_path: &Path) -> gtk::W
     actions.set_margin_top(16);
     actions.set_homogeneous(true);
 
-    let docs_button = gtk::Button::with_label("Documentation");
+    let docs_button = gtk::Button::with_label(&gettext("Documentation"));
     docs_button.set_tooltip_text(Some(DOCUMENTATION_URL));
     let docs_parent = parent_window.clone();
     docs_button.connect_clicked(move |_| {
@@ -70,7 +73,7 @@ pub(super) fn build(parent_window: &gtk::Window, database_path: &Path) -> gtk::W
     });
     actions.append(&docs_button);
 
-    let issues_button = gtk::Button::with_label("Report a problem");
+    let issues_button = gtk::Button::with_label(&gettext("Report a problem"));
     issues_button.set_tooltip_text(Some(ISSUES_URL));
     let issues_parent = parent_window.clone();
     issues_button.connect_clicked(move |_| {

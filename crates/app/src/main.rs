@@ -150,7 +150,7 @@ fn main() {
                 runtime.push_ephemeral_notification(
                     sustain_app_runtime::NotificationCategory::WaveformCache,
                     sustain_app_runtime::NotificationSeverity::Warning,
-                    sustain_app_runtime::waveform_cache_unavailable_text().to_owned(),
+                    sustain_app_runtime::waveform_cache_unavailable_text(),
                 );
             }
             // The force-backfill command iterates every track immediately, so

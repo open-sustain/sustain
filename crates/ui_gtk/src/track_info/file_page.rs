@@ -5,6 +5,7 @@ use std::{fs, path::Path};
 
 use gtk::prelude::*;
 use sustain_app_runtime::Track;
+use sustain_i18n::gettext;
 
 use super::{
     form::attach_readonly_field,
@@ -45,49 +46,49 @@ fn build_grid(track: &Track, absolute_path: Option<&Path>) -> gtk::Grid {
     let file_metadata = absolute_path.and_then(|path| fs::metadata(path).ok());
 
     let mut row: i32 = 0;
-    attach_readonly_field(&grid, row, "Kind", &format_kind(absolute_path));
+    attach_readonly_field(&grid, row, &gettext("Kind"), &format_kind(absolute_path));
     row += 1;
     attach_readonly_field(
         &grid,
         row,
-        "Duration",
+        &gettext("Duration"),
         &format_duration_label(track.metadata.duration),
     );
     row += 1;
     attach_readonly_field(
         &grid,
         row,
-        "Size",
+        &gettext("Size"),
         &format_size_label(file_metadata.as_ref().map(|metadata| metadata.len())),
     );
     row += 1;
     attach_readonly_field(
         &grid,
         row,
-        "Bit rate",
+        &gettext("Bit rate"),
         &format_optional_unit(track.metadata.bitrate_kbps, "kbps"),
     );
     row += 1;
     attach_readonly_field(
         &grid,
         row,
-        "Sample rate",
+        &gettext("Sample rate"),
         &format_sample_rate(track.metadata.sample_rate_hz),
     );
     row += 1;
     attach_readonly_field(
         &grid,
         row,
-        "Channels",
+        &gettext("Channels"),
         &format_channels(track.metadata.channels),
     );
     row += 1;
-    attach_readonly_field(&grid, row, "Format", &format_kind(absolute_path));
+    attach_readonly_field(&grid, row, &gettext("Format"), &format_kind(absolute_path));
     row += 1;
     attach_readonly_field(
         &grid,
         row,
-        "Date modified",
+        &gettext("Date modified"),
         &format_modified(
             file_metadata
                 .as_ref()
@@ -98,7 +99,7 @@ fn build_grid(track: &Track, absolute_path: Option<&Path>) -> gtk::Grid {
     let location_text = absolute_path
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| String::from("\u{2014}"));
-    attach_readonly_field(&grid, row, "Location", &location_text);
+    attach_readonly_field(&grid, row, &gettext("Location"), &location_text);
 
     grid
 }

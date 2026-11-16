@@ -6,11 +6,13 @@ use std::{cell::RefCell, path::PathBuf, rc::Rc};
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use sustain_app_runtime::{ApplicationCommand, MetadataChange, Track, TrackId};
+use sustain_i18n::{gettext, pgettext, tr_format};
 
 use super::{
     ArtworkChangedHolder, PlaybackChangedCallback, SharedRuntime,
     artwork_loader::{ArtworkLoader, ArtworkSource},
     command_controller::SharedCommandController,
+    util::display_artist,
 };
 
 mod artwork;
@@ -59,7 +61,7 @@ pub(crate) fn open_track_info_dialog(
     )));
 
     let window = gtk::Window::builder()
-        .title(format!("Get Info - {}", track_display_name(&initial.track)))
+        .title(get_info_title(&initial.track))
         .transient_for(parent)
         .modal(true)
         .resizable(false)
@@ -88,7 +90,7 @@ pub(crate) fn open_track_info_dialog(
         &initial.track.statistics,
         runtime.borrow().distinct_genres(),
     );
-    stack.add_titled(&details.widget, Some("details"), "Details");
+    stack.add_titled(&details.widget, Some("details"), &gettext("Details"));
 
     let artwork = ArtworkPage::new(
         parent,
@@ -101,13 +103,17 @@ pub(crate) fn open_track_info_dialog(
         initial.artwork_source.clone(),
         initial.has_embedded_artwork,
     );
-    stack.add_titled(&artwork.widget, Some("artwork"), "Artwork");
+    stack.add_titled(&artwork.widget, Some("artwork"), &gettext("Artwork"));
 
     let lyrics = LyricsPage::new(&initial.track.metadata);
-    stack.add_titled(&lyrics.widget, Some("lyrics"), "Lyrics");
+    stack.add_titled(&lyrics.widget, Some("lyrics"), &gettext("Lyrics"));
 
     let file_page = FilePage::new(&initial.track, initial.absolute_path.as_deref());
-    stack.add_titled(&file_page.widget, Some("file"), "File");
+    stack.add_titled(
+        &file_page.widget,
+        Some("file"),
+        &pgettext("Get Info page", "File"),
+    );
 
     let switcher = gtk::StackSwitcher::new();
     switcher.set_stack(Some(&stack));
@@ -123,15 +129,15 @@ pub(crate) fn open_track_info_dialog(
     buttons.set_margin_top(14);
     buttons.set_margin_start(DIALOG_SIDE_MARGIN);
     buttons.set_margin_end(DIALOG_SIDE_MARGIN);
-    let previous = navigation_button("go-previous-symbolic", "Previous track (Ctrl+[)");
-    let next = navigation_button("go-next-symbolic", "Next track (Ctrl+])");
+    let previous = navigation_button("go-previous-symbolic", &gettext("Previous track (Ctrl+[)"));
+    let next = navigation_button("go-next-symbolic", &gettext("Next track (Ctrl+])"));
     buttons.append(&previous);
     buttons.append(&next);
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     buttons.append(&spacer);
-    let cancel = gtk::Button::with_label("Cancel");
-    let ok = gtk::Button::with_label("OK");
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
+    let ok = gtk::Button::with_label(&gettext("OK"));
     ok.add_css_class("suggested-action");
     buttons.append(&cancel);
     buttons.append(&ok);
@@ -302,10 +308,7 @@ fn reload_dialog(
     cursor
         .borrow_mut()
         .replace_current(index, loaded.track.clone());
-    window.set_title(Some(&format!(
-        "Get Info - {}",
-        track_display_name(&loaded.track)
-    )));
+    window.set_title(Some(&get_info_title(&loaded.track)));
     pages.header.reload(&loaded.track);
     pages.details.reload(
         &loaded.track.metadata,
@@ -424,7 +427,24 @@ fn track_display_name(track: &Track) -> String {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
         })
-        .unwrap_or_else(|| "Untitled".to_owned())
+        .unwrap_or_else(|| gettext("Untitled"))
+}
+
+/// The dialog's title for one track: "Get Info - <track name>".
+fn get_info_title(track: &Track) -> String {
+    tr_format!(
+        gettext("Get Info - {track}"),
+        track = track_display_name(track)
+    )
+}
+
+/// The header's title line: the title tag, or "Untitled" without one.
+fn header_title(track: &Track) -> String {
+    track
+        .metadata
+        .title
+        .clone()
+        .unwrap_or_else(|| gettext("Untitled"))
 }
 
 struct Header {
@@ -437,10 +457,8 @@ struct Header {
 
 impl Header {
     fn reload(&self, track: &Track) {
-        self.title
-            .set_text(track.metadata.title.as_deref().unwrap_or("Untitled"));
-        self.artist
-            .set_text(track.metadata.artist.as_deref().unwrap_or("Unknown Artist"));
+        self.title.set_text(&header_title(track));
+        self.artist.set_text(&display_artist(&track.metadata));
         self.album
             .set_text(track.metadata.album.as_deref().unwrap_or_default());
         self.album.set_visible(track.metadata.album.is_some());
@@ -465,15 +483,13 @@ fn build_header(track: &Track) -> Header {
     info.set_valign(gtk::Align::Center);
     info.set_hexpand(true);
 
-    let title = gtk::Label::new(Some(track.metadata.title.as_deref().unwrap_or("Untitled")));
+    let title = gtk::Label::new(Some(&header_title(track)));
     title.add_css_class("track-info-title");
     title.set_xalign(0.0);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     info.append(&title);
 
-    let artist = gtk::Label::new(Some(
-        track.metadata.artist.as_deref().unwrap_or("Unknown Artist"),
-    ));
+    let artist = gtk::Label::new(Some(&display_artist(&track.metadata)));
     artist.add_css_class("track-info-subtitle");
     artist.set_xalign(0.0);
     artist.set_ellipsize(gtk::pango::EllipsizeMode::End);

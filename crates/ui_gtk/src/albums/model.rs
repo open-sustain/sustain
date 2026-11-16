@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use sustain_app_runtime::{
     CollationKey, Track, TrackId, TrackMetadata, compare_optional_text, effective_sort_key,
 };
+use sustain_i18n::gettext;
 
 use crate::artwork_loader::ArtworkSource;
 use crate::util::non_empty_text;
@@ -94,10 +95,6 @@ impl AlbumBucket {
         )
     }
 }
-
-const UNKNOWN_ALBUM: &str = "Unknown Album";
-const UNKNOWN_ARTIST: &str = "Unknown Artist";
-const COMPILATION_ALBUM_ARTIST: &str = "Various Artists";
 
 pub(super) fn group_albums(
     tracks: &[Track],
@@ -300,7 +297,7 @@ pub(super) fn compare_album_tracks(
 }
 
 fn album_title(metadata: &TrackMetadata) -> String {
-    non_empty_text(&metadata.album).unwrap_or_else(|| UNKNOWN_ALBUM.to_owned())
+    non_empty_text(&metadata.album).unwrap_or_else(|| gettext("Unknown Album"))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -330,8 +327,8 @@ fn album_grouping(metadata: &TrackMetadata) -> AlbumGrouping<'_> {
     if metadata.compilation.unwrap_or(false) {
         return AlbumGrouping {
             artist_sort_tag: None,
-            key_artist: COMPILATION_ALBUM_ARTIST.to_owned(),
-            display_artist: COMPILATION_ALBUM_ARTIST.to_owned(),
+            key_artist: gettext("Various Artists"),
+            display_artist: gettext("Various Artists"),
             track_artist,
             has_explicit_album_artist: false,
             is_compilation: true,
@@ -374,7 +371,7 @@ fn push_unique_artist(artists: &mut Vec<String>, artist: String) {
 }
 
 fn track_artist(metadata: &TrackMetadata) -> String {
-    non_empty_text(&metadata.artist).unwrap_or_else(|| UNKNOWN_ARTIST.to_owned())
+    non_empty_text(&metadata.artist).unwrap_or_else(|| gettext("Unknown Artist"))
 }
 
 fn track_title(track: &Track) -> String {

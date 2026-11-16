@@ -9,6 +9,7 @@ use sustain_domain::{
     PlayableId, PlaybackCommand, PlaybackQueue, PlaybackQueueRequest, PlaybackQueueSource,
     PlaybackSession, PlaybackSource, PlaybackState, Track, TrackAvailability, TrackId,
 };
+use sustain_i18n::{gettext, tr_format};
 use sustain_playback::{PlaybackBackendError, PlaybackService};
 use sustain_smart_shuffle::{PickContext, format_debug, pick_next_track};
 
@@ -142,14 +143,14 @@ impl ApplicationRuntime {
         self.push_ephemeral_notification(
             NotificationCategory::Playback,
             NotificationSeverity::Info,
-            "Paused: the audio output was disconnected or taken by another application.".to_owned(),
+            gettext("Paused: the audio output was disconnected or taken by another application."),
         );
         Ok(())
     }
 
     fn playback_backend_error_text(&self, error: &PlaybackBackendError) -> String {
         let Some(playable) = error.track_id else {
-            return "Playback failed. Skipping to the next track.".to_owned();
+            return gettext("Playback failed. Skipping to the next track.");
         };
         let track_name = match playable {
             PlayableId::Library(track_id) => self
@@ -159,10 +160,13 @@ impl ApplicationRuntime {
             PlayableId::AudioCdTrack { number } => self
                 .audio_cd_track(number)
                 .and_then(|track| track.metadata.title.clone())
-                .unwrap_or_else(|| format!("CD track {number}")),
+                .unwrap_or_else(|| tr_format!(gettext("CD track {number}"), number = number)),
         };
 
-        format!("Playback failed for {track_name}. Skipping to the next track.")
+        tr_format!(
+            gettext("Playback failed for {track_name}. Skipping to the next track."),
+            track_name = track_name
+        )
     }
 
     fn log_playback_backend_error(&self, error: &PlaybackBackendError) {
@@ -708,8 +712,9 @@ impl ApplicationRuntime {
     }
 
     fn push_or_update_playback_statistics_warning(&mut self) {
-        let body = "Sustain could not save listening statistics. The pending play count is retained in memory and will retry automatically."
-            .to_owned();
+        let body = gettext(
+            "Sustain could not save listening statistics. The pending play count is retained in memory and will retry automatically.",
+        );
         if let Some(id) = self.playback_statistics_notification_id {
             self.update_notification_body(id, body);
         } else {

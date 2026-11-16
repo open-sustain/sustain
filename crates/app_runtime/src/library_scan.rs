@@ -117,7 +117,7 @@ impl ApplicationRuntime {
         self.push_ephemeral_notification(
             NotificationCategory::LibraryScan,
             NotificationSeverity::Error,
-            notifications::runtime_error_text(&error).to_owned(),
+            notifications::runtime_error_text(&error),
         );
     }
 }

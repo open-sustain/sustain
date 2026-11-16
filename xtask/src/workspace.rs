@@ -16,10 +16,15 @@ pub const TEXT_DOMAIN: &str = "sustain";
 pub const APP_ID: &str = "io.github.open_sustain.sustain";
 
 /// Workspace-relative roots scanned for translatable Rust strings. Only the
-/// presentation-boundary crates own user-visible text; the durable domain,
-/// store, playback, and desktop-protocol crates stay string-free, so they are
-/// deliberately excluded from extraction.
-pub const RUST_SOURCE_ROOTS: &[&str] = &["crates/ui_gtk/src", "crates/app_runtime/src"];
+/// presentation-boundary crates own user-visible text, plus the shared
+/// wording `sustain_i18n` itself provides (the list separator); the durable
+/// domain, store, playback, and desktop-protocol crates stay string-free, so
+/// they are deliberately excluded from extraction.
+pub const RUST_SOURCE_ROOTS: &[&str] = &[
+    "crates/ui_gtk/src",
+    "crates/app_runtime/src",
+    "crates/i18n/src",
+];
 
 /// The workspace root, derived from this crate's compile-time manifest path.
 /// `xtask` lives directly under the workspace root, so the manifest directory's

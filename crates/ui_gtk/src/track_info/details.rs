@@ -8,6 +8,7 @@ use gtk::prelude::*;
 use sustain_app_runtime::{
     FieldChange, MetadataChange, MusicalKey, PlayStatistics, Rating, TrackMetadata,
 };
+use sustain_i18n::{gettext, pgettext};
 
 use crate::date_format::format_system_time_short;
 
@@ -67,66 +68,67 @@ impl DetailsPage {
 
         let mut row: i32 = 0;
         let title = text_entry(initial.title.as_deref());
-        attach_field(&grid, row, "Title", &title);
+        attach_field(&grid, row, &gettext("Title"), &title);
         row += 1;
         let artist = text_entry(initial.artist.as_deref());
-        attach_field(&grid, row, "Artist", &artist);
+        attach_field(&grid, row, &gettext("Artist"), &artist);
         row += 1;
         let album = text_entry(initial.album.as_deref());
-        attach_field(&grid, row, "Album", &album);
+        attach_field(&grid, row, &gettext("Album"), &album);
         row += 1;
         let album_artist = text_entry(initial.album_artist.as_deref());
-        attach_field(&grid, row, "Album artist", &album_artist);
+        attach_field(&grid, row, &gettext("Album artist"), &album_artist);
         row += 1;
         let composer = text_entry(initial.composer.as_deref());
-        attach_field(&grid, row, "Composer", &composer);
+        attach_field(&grid, row, &gettext("Composer"), &composer);
         row += 1;
         let grouping = text_entry(initial.grouping.as_deref());
-        attach_field(&grid, row, "Grouping", &grouping);
+        attach_field(&grid, row, &gettext("Grouping"), &grouping);
         row += 1;
         let genre = text_entry(initial.genre.as_deref());
         // Offer the library's existing genres as autocomplete so the user
         // reuses a spelling instead of splintering one ("Hip-Hop" vs "Hip
         // Hop") across stats and smart playlists (#160).
         crate::suggestion_entry::attach_suggestions(&genre, genre_suggestions);
-        attach_field(&grid, row, "Genre", &genre);
+        attach_field(&grid, row, &gettext("Genre"), &genre);
         row += 1;
 
         let year = number_entry(initial.year, NUMBER_ENTRY_WIDTH_CHARS);
-        attach_field(&grid, row, "Year", &year);
+        attach_field(&grid, row, &gettext("Year"), &year);
         row += 1;
 
         let track_number = number_entry(initial.track_number, PAIR_ENTRY_WIDTH_CHARS);
         let track_total = number_entry(initial.track_total, PAIR_ENTRY_WIDTH_CHARS);
-        attach_paired_field(&grid, row, "Track", &track_number, &track_total);
+        attach_paired_field(&grid, row, &gettext("Track"), &track_number, &track_total);
         row += 1;
 
         let disc_number = number_entry(initial.disc_number, PAIR_ENTRY_WIDTH_CHARS);
         let disc_total = number_entry(initial.disc_total, PAIR_ENTRY_WIDTH_CHARS);
-        attach_paired_field(&grid, row, "Disc", &disc_number, &disc_total);
+        attach_paired_field(&grid, row, &gettext("Disc"), &disc_number, &disc_total);
         row += 1;
 
-        let compilation =
-            gtk::CheckButton::with_label("Album is a compilation of songs by various artists");
+        let compilation = gtk::CheckButton::with_label(&gettext(
+            "Album is a compilation of songs by various artists",
+        ));
         compilation.set_active(initial.compilation.unwrap_or(false));
         grid.attach(&compilation, 1, row, 3, 1);
         row += 1;
 
         let bpm = number_entry(initial.bpm, NUMBER_ENTRY_WIDTH_CHARS);
-        attach_field(&grid, row, "BPM", &bpm);
+        attach_field(&grid, row, &gettext("BPM"), &bpm);
         row += 1;
 
         let key = text_entry(initial.key.map(MusicalKey::short_code));
         key.set_width_chars(8);
         key.set_hexpand(false);
-        attach_field(&grid, row, "Key", &key);
+        attach_field(&grid, row, &pgettext("musical key", "Key"), &key);
         row += 1;
 
         let rating = RatingStars::new();
         rating.set_halign(gtk::Align::Start);
         rating.set_rating(initial_rating);
         rating.connect_rating_chosen(RatingStars::set_rating);
-        attach_field(&grid, row, "Rating", &rating);
+        attach_field(&grid, row, &gettext("Rating"), &rating);
         row += 1;
 
         // Statistics block: counts on the left, dates underneath.
@@ -142,38 +144,38 @@ impl DetailsPage {
         play_count_label.set_xalign(0.0);
         play_count_label.set_hexpand(true);
         play_count_label.set_text(&initial_statistics.play_count.to_string());
-        let reset_button = gtk::Button::with_label("Reset");
+        let reset_button = gtk::Button::with_label(&gettext("Reset"));
         let reset_state = stats_reset.clone();
         let play_label_for_reset = play_count_label.clone();
         reset_button.connect_clicked(move |button| {
             reset_state.set(true);
             button.set_sensitive(false);
-            play_label_for_reset.set_text("0 (will reset on OK)");
+            play_label_for_reset.set_text(&gettext("0 (will reset on OK)"));
         });
         play_count_row.append(&play_count_label);
         play_count_row.append(&reset_button);
-        attach_field(&grid, row, "Play count", &play_count_row);
+        attach_field(&grid, row, &gettext("Play count"), &play_count_row);
         row += 1;
 
         let skip_count_label = gtk::Label::new(None);
         skip_count_label.set_xalign(0.0);
         skip_count_label.set_hexpand(true);
         skip_count_label.set_text(&initial_statistics.skip_count.to_string());
-        attach_field(&grid, row, "Skip count", &skip_count_label);
+        attach_field(&grid, row, &gettext("Skip count"), &skip_count_label);
         row += 1;
 
         let last_played_label = gtk::Label::new(None);
         last_played_label.set_xalign(0.0);
         last_played_label.set_hexpand(true);
         last_played_label.set_text(&format_stat_date(initial_statistics.last_played_at));
-        attach_field(&grid, row, "Last played", &last_played_label);
+        attach_field(&grid, row, &gettext("Last played"), &last_played_label);
         row += 1;
 
         let last_skipped_label = gtk::Label::new(None);
         last_skipped_label.set_xalign(0.0);
         last_skipped_label.set_hexpand(true);
         last_skipped_label.set_text(&format_stat_date(initial_statistics.last_skipped_at));
-        attach_field(&grid, row, "Last skipped", &last_skipped_label);
+        attach_field(&grid, row, &gettext("Last skipped"), &last_skipped_label);
         row += 1;
 
         let play_count_reset = stats_reset;
@@ -192,7 +194,7 @@ impl DetailsPage {
         comments_scroll.set_min_content_height(70);
         comments_scroll.set_hexpand(true);
         comments_scroll.set_child(Some(&comments));
-        let comments_label = gtk::Label::new(Some("Comments"));
+        let comments_label = gtk::Label::new(Some(&gettext("Comments")));
         comments_label.set_xalign(0.0);
         comments_label.set_valign(gtk::Align::Start);
         comments_label.add_css_class("track-info-field-label");
@@ -319,5 +321,5 @@ fn set_optional_number<T: ToString>(entry: &gtk::Entry, value: Option<T>) {
 fn format_stat_date(value: Option<std::time::SystemTime>) -> String {
     value
         .and_then(format_system_time_short)
-        .unwrap_or_else(|| "Never".to_owned())
+        .unwrap_or_else(|| gettext("Never"))
 }

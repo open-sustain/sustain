@@ -6,6 +6,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 use sustain_app_runtime::{ApplicationCommand, TrackId};
+use sustain_i18n::gettext;
 
 use crate::{
     SharedRuntime,
@@ -44,7 +45,7 @@ fn open_dialog(
     track_id: TrackId,
 ) {
     let window = gtk::Window::builder()
-        .title("Replace Audio from YouTube")
+        .title(gettext("Replace Audio from YouTube"))
         .transient_for(parent)
         .modal(true)
         .default_width(520)
@@ -56,9 +57,9 @@ fn open_dialog(
     content.set_margin_start(18);
     content.set_margin_end(18);
 
-    let explanation = gtk::Label::new(Some(
+    let explanation = gtk::Label::new(Some(&gettext(
         "Paste one YouTube video URL. Sustain uses your installed yt-dlp and FFmpeg to download the best available audio. The replacement is accepted only when its duration matches and its bitrate is not junk or worse than the current file.",
-    ));
+    )));
     explanation.set_wrap(true);
     explanation.set_xalign(0.0);
     content.append(&explanation);
@@ -71,8 +72,8 @@ fn open_dialog(
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.set_halign(gtk::Align::End);
-    let cancel = gtk::Button::with_label("Cancel");
-    let download = gtk::Button::with_label("Download and Replace");
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
+    let download = gtk::Button::with_label(&gettext("Download and Replace"));
     download.add_css_class("suggested-action");
     actions.append(&cancel);
     actions.append(&download);

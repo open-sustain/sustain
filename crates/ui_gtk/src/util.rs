@@ -4,6 +4,7 @@
 //! Small leaf helpers shared across the GTK view models.
 
 use sustain_app_runtime::{Track, TrackMetadata};
+use sustain_i18n::gettext;
 
 /// Returns the trimmed text of an optional string field, or `None` when the
 /// value is absent or blank once trimmed. Used by the view models to fall back
@@ -39,5 +40,5 @@ pub(crate) fn display_title(track: &Track) -> String {
 /// needs a populated second line (the play-queue popover), unlike the
 /// now-playing tile which leaves the line empty.
 pub(crate) fn display_artist(metadata: &TrackMetadata) -> String {
-    non_empty_text(&metadata.artist).unwrap_or_else(|| "Unknown Artist".to_owned())
+    non_empty_text(&metadata.artist).unwrap_or_else(|| gettext("Unknown Artist"))
 }

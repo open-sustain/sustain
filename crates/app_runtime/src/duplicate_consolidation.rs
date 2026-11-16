@@ -21,6 +21,7 @@ use sustain_domain::{
     VerifiedDuplicateMerge, duplicate_groups, highest_quality_duplicate_artwork,
     plan_duplicate_consolidation,
 };
+use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, hash_reader_content};
 
@@ -172,7 +173,7 @@ impl ApplicationRuntime {
         self.start_library_task(
             LibraryTaskKind::DuplicateConsolidation,
             NotificationCategory::DuplicateConsolidation,
-            "Consolidating duplicate tracks...".to_owned(),
+            gettext("Consolidating duplicate tracks..."),
             None,
         )?;
 
@@ -332,7 +333,7 @@ impl ApplicationRuntime {
                 self.push_ephemeral_notification(
                     NotificationCategory::DuplicateConsolidation,
                     NotificationSeverity::Error,
-                    runtime_error_text(&error).to_owned(),
+                    runtime_error_text(&error),
                 );
             }
         }
@@ -355,7 +356,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DuplicateConsolidation,
                 NotificationSeverity::Error,
-                runtime_error_text(&ApplicationRuntimeError::LibraryStoreFailed).to_owned(),
+                runtime_error_text(&ApplicationRuntimeError::LibraryStoreFailed),
             );
             return false;
         };
@@ -379,17 +380,25 @@ impl ApplicationRuntime {
                 let (severity, body) = if result.summary.cleanup_failed {
                     (
                         NotificationSeverity::Warning,
-                        format!(
-                            "{} duplicate track(s) consolidated. Sustain retained recovery files because cleanup could not finish safely.",
-                            result.summary.removed_tracks
+                        tr_format!(
+                            ngettext(
+                                "{count} duplicate track consolidated. Sustain retained recovery files because cleanup could not finish safely.",
+                                "{count} duplicate tracks consolidated. Sustain retained recovery files because cleanup could not finish safely.",
+                                plural_count(result.summary.removed_tracks)
+                            ),
+                            count = result.summary.removed_tracks
                         ),
                     )
                 } else {
                     (
                         NotificationSeverity::Info,
-                        format!(
-                            "{} duplicate track(s) consolidated.",
-                            result.summary.removed_tracks
+                        tr_format!(
+                            ngettext(
+                                "{count} duplicate track consolidated.",
+                                "{count} duplicate tracks consolidated.",
+                                plural_count(result.summary.removed_tracks)
+                            ),
+                            count = result.summary.removed_tracks
                         ),
                     )
                 };
@@ -403,7 +412,7 @@ impl ApplicationRuntime {
                 self.push_ephemeral_notification(
                     NotificationCategory::DuplicateConsolidation,
                     NotificationSeverity::Error,
-                    runtime_error_text(&error).to_owned(),
+                    runtime_error_text(&error),
                 );
             }
         }

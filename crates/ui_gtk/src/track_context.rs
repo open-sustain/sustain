@@ -9,6 +9,7 @@ use gtk::{gdk, gio, glib};
 use sustain_app_runtime::{
     AnalysisCapability, AnalysisRunRequest, OnlineCapability, OnlineRunRequest, PlaylistId, TrackId,
 };
+use sustain_i18n::{gettext, ngettext, pgettext, plural_count, tr_format};
 
 pub(crate) type TrackActionCallback = Rc<dyn Fn(TrackActionInvocation)>;
 pub(crate) type TrackActionVisibility = Rc<dyn Fn(&[TrackId]) -> bool>;
@@ -210,7 +211,7 @@ enum TrackActionConfirmation {
 #[derive(Clone)]
 pub(crate) struct TrackContextAction {
     id: TrackContextActionId,
-    label: &'static str,
+    label: String,
     section: TrackContextActionSection,
     selection: TrackSelectionRequirement,
     confirmation: TrackActionConfirmation,
@@ -229,7 +230,7 @@ impl TrackContextAction {
     ) -> Self {
         Self {
             id: TrackContextActionId::PlayNext,
-            label: "Play Next",
+            label: gettext("Play Next"),
             section: TrackContextActionSection::Queue,
             selection: TrackSelectionRequirement::AtLeastOne,
             confirmation: TrackActionConfirmation::None,
@@ -244,7 +245,7 @@ impl TrackContextAction {
     ) -> Self {
         Self {
             id: TrackContextActionId::AddToQueue,
-            label: "Add to Queue",
+            label: gettext("Add to Queue"),
             section: TrackContextActionSection::Queue,
             selection: TrackSelectionRequirement::AtLeastOne,
             confirmation: TrackActionConfirmation::None,
@@ -256,7 +257,7 @@ impl TrackContextAction {
     pub(crate) fn get_info(callback: TrackActionCallback) -> Self {
         Self {
             id: TrackContextActionId::GetInfo,
-            label: "Get Info",
+            label: gettext("Get Info"),
             section: TrackContextActionSection::Info,
             selection: TrackSelectionRequirement::AtLeastOne,
             confirmation: TrackActionConfirmation::None,
@@ -268,7 +269,7 @@ impl TrackContextAction {
     pub(crate) fn copy_files(callback: TrackActionCallback) -> Self {
         Self {
             id: TrackContextActionId::CopyFiles,
-            label: "Copy",
+            label: gettext("Copy"),
             section: TrackContextActionSection::Files,
             selection: TrackSelectionRequirement::AtLeastOne,
             confirmation: TrackActionConfirmation::None,
@@ -280,7 +281,7 @@ impl TrackContextAction {
     pub(crate) fn show_in_folder(callback: TrackActionCallback) -> Self {
         Self {
             id: TrackContextActionId::ShowInFolder,
-            label: "Show in Folder",
+            label: gettext("Show in Folder"),
             section: TrackContextActionSection::Files,
             selection: TrackSelectionRequirement::AtLeastOne,
             confirmation: TrackActionConfirmation::None,
@@ -295,7 +296,7 @@ impl TrackContextAction {
     ) -> Self {
         Self {
             id: TrackContextActionId::ShowAlbum,
-            label: "Show Album",
+            label: gettext("Show Album"),
             section: TrackContextActionSection::Navigate,
             selection: TrackSelectionRequirement::Single,
             confirmation: TrackActionConfirmation::None,
@@ -307,7 +308,7 @@ impl TrackContextAction {
     pub(crate) fn remove_from_library(callback: TrackActionCallback) -> Self {
         Self {
             id: TrackContextActionId::RemoveFromLibrary,
-            label: "Remove from Library",
+            label: gettext("Remove from Library"),
             section: TrackContextActionSection::Destructive,
             selection: TrackSelectionRequirement::AtLeastOne,
             confirmation: TrackActionConfirmation::RemoveFromLibrary,
@@ -319,7 +320,7 @@ impl TrackContextAction {
     pub(crate) fn consolidate_duplicates(callback: TrackActionCallback) -> Self {
         Self {
             id: TrackContextActionId::ConsolidateDuplicates,
-            label: "Consolidate to single track",
+            label: gettext("Consolidate to single track"),
             section: TrackContextActionSection::Destructive,
             selection: TrackSelectionRequirement::AtLeastTwo,
             confirmation: TrackActionConfirmation::None,
@@ -331,7 +332,7 @@ impl TrackContextAction {
     pub(crate) fn move_to_trash(callback: TrackActionCallback) -> Self {
         Self {
             id: TrackContextActionId::MoveToTrash,
-            label: "Move to Trash",
+            label: gettext("Move to Trash"),
             section: TrackContextActionSection::Destructive,
             selection: TrackSelectionRequirement::AtLeastOne,
             confirmation: TrackActionConfirmation::MoveToTrash,
@@ -346,7 +347,7 @@ impl TrackContextAction {
     ) -> Self {
         Self {
             id: TrackContextActionId::RemoveFromPlaylist,
-            label: "Remove from Playlist",
+            label: gettext("Remove from Playlist"),
             section: TrackContextActionSection::Destructive,
             selection: TrackSelectionRequirement::AtLeastOne,
             confirmation: TrackActionConfirmation::None,
@@ -581,7 +582,7 @@ impl TrackRowContextMenu {
         let root = gio::Menu::new();
         if let Some(add) = &self.add_to_playlist {
             root.append_submenu(
-                Some("Add to Playlist\u{2026}"),
+                Some(&gettext("Add to Playlist\u{2026}")),
                 &add_to_playlist_submenu_model(
                     add,
                     action_group,
@@ -646,7 +647,7 @@ impl TrackRowContextMenu {
             });
         }
         menu.append(
-            Some(action.label),
+            Some(&action.label),
             Some(&action.id.detailed_action(local_action_group)),
         );
     }
@@ -660,7 +661,7 @@ impl TrackRowContextMenu {
         let section = gio::Menu::new();
         if let Some(analyze) = &self.analyze {
             section.append_submenu(
-                Some("Analyze\u{2026}"),
+                Some(&gettext("Analyze\u{2026}")),
                 &analyze_submenu_model(
                     analyze,
                     action_group,
@@ -671,7 +672,7 @@ impl TrackRowContextMenu {
         }
         if let Some(retrieve) = &self.retrieve {
             section.append_submenu(
-                Some("Fetch\u{2026}"),
+                Some(&gettext("Fetch\u{2026}")),
                 &retrieve_submenu_model(
                     retrieve,
                     action_group,
@@ -704,7 +705,7 @@ fn add_to_playlist_submenu_model(
 
     let entries = (action.provider)();
     if entries.is_empty() {
-        menu.append(Some("No playlists."), None::<&str>);
+        menu.append(Some(&gettext("No playlists.")), None::<&str>);
         return menu;
     }
 
@@ -743,16 +744,20 @@ fn analyze_submenu_model(
 ) -> gio::Menu {
     let model = gio::Menu::new();
     for (name, label, capability) in [
-        ("analyze-bpm", "BPM", AnalysisCapability::Bpm),
-        ("analyze-key", "Key", AnalysisCapability::Key),
-        ("analyze-audio", "Audio", AnalysisCapability::Audio),
+        ("analyze-bpm", gettext("BPM"), AnalysisCapability::Bpm),
+        (
+            "analyze-key",
+            pgettext("musical key", "Key"),
+            AnalysisCapability::Key,
+        ),
+        ("analyze-audio", gettext("Audio"), AnalysisCapability::Audio),
     ] {
         let run = menu.run.clone();
         let track_ids = track_ids.to_vec();
         add_local_action(action_group, name, !(menu.enabled)(capability), move || {
             run(track_ids.clone(), AnalysisRunRequest::Single(capability));
         });
-        model.append(Some(label), Some(&format!("{local_action_group}.{name}")));
+        model.append(Some(&label), Some(&format!("{local_action_group}.{name}")));
     }
     let all = gio::Menu::new();
     let run = menu.run.clone();
@@ -761,7 +766,7 @@ fn analyze_submenu_model(
         run(track_ids.clone(), AnalysisRunRequest::All);
     });
     all.append(
-        Some("All"),
+        Some(&gettext("All")),
         Some(&format!("{local_action_group}.analyze-all")),
     );
     model.append_section(None, &all);
@@ -777,16 +782,24 @@ fn retrieve_submenu_model(
     let model = gio::Menu::new();
     let busy = (menu.busy)();
     for (name, label, capability) in [
-        ("retrieve-lyrics", "Lyrics", OnlineCapability::Lyrics),
-        ("retrieve-tags", "Tags", OnlineCapability::Tags),
-        ("retrieve-artwork", "Artwork", OnlineCapability::Artwork),
+        (
+            "retrieve-lyrics",
+            gettext("Lyrics"),
+            OnlineCapability::Lyrics,
+        ),
+        ("retrieve-tags", gettext("Tags"), OnlineCapability::Tags),
+        (
+            "retrieve-artwork",
+            gettext("Artwork"),
+            OnlineCapability::Artwork,
+        ),
     ] {
         let run = menu.run.clone();
         let track_ids = track_ids.to_vec();
         add_local_action(action_group, name, !busy, move || {
             run(track_ids.clone(), OnlineRunRequest::Single(capability));
         });
-        model.append(Some(label), Some(&format!("{local_action_group}.{name}")));
+        model.append(Some(&label), Some(&format!("{local_action_group}.{name}")));
     }
     let all = gio::Menu::new();
     let run = menu.run.clone();
@@ -795,7 +808,7 @@ fn retrieve_submenu_model(
         run(all_track_ids.clone(), OnlineRunRequest::All);
     });
     all.append(
-        Some("All"),
+        Some(&gettext("All")),
         Some(&format!("{local_action_group}.retrieve-all")),
     );
     model.append_section(None, &all);
@@ -807,7 +820,7 @@ fn retrieve_submenu_model(
             replace_audio_from_youtube(track_id)
         });
         youtube.append(
-            Some("Audio from YouTube"),
+            Some(&gettext("Audio from YouTube")),
             Some(&format!("{local_action_group}.fetch-youtube-audio")),
         );
         model.append_section(None, &youtube);
@@ -875,9 +888,9 @@ fn confirm_remove_from_library(
     let detail = remove_from_library_confirmation_detail(track_ids.len());
     crate::confirmation::show_confirmation_alert(
         parent,
-        "Remove from Library",
+        &gettext("Remove from Library"),
         &detail,
-        "Remove from Library",
+        &gettext("Remove from Library"),
         move || on_confirm(track_ids),
     );
 }
@@ -890,31 +903,33 @@ fn confirm_move_to_trash(
     let detail = trash_confirmation_detail(track_ids.len());
     crate::confirmation::show_confirmation_alert(
         parent,
-        "Move to Trash",
+        &gettext("Move to Trash"),
         &detail,
-        "Move to Trash",
+        &gettext("Move to Trash"),
         move || on_confirm(track_ids),
     );
 }
 
 fn trash_confirmation_detail(count: usize) -> String {
-    if count == 1 {
-        "The audio file will be moved to the system trash and the track will be removed from the library.".to_owned()
-    } else {
-        format!(
-            "The {count} audio files will be moved to the system trash and the tracks will be removed from the library."
-        )
-    }
+    tr_format!(
+        ngettext(
+            "The audio file will be moved to the system trash and the track will be removed from the library.",
+            "The {count} audio files will be moved to the system trash and the tracks will be removed from the library.",
+            plural_count(count)
+        ),
+        count = count
+    )
 }
 
 fn remove_from_library_confirmation_detail(count: usize) -> String {
-    if count == 1 {
-        "The audio file will stay on disk, but the track will be removed from Sustain. Library data for this track, including play count and date added, will be removed.".to_owned()
-    } else {
-        format!(
-            "The audio files will stay on disk, but the {count} tracks will be removed from Sustain. Library data for these tracks, including play counts and dates added, will be removed."
-        )
-    }
+    tr_format!(
+        ngettext(
+            "The audio file will stay on disk, but the track will be removed from Sustain. Library data for this track, including play count and date added, will be removed.",
+            "The audio files will stay on disk, but the {count} tracks will be removed from Sustain. Library data for these tracks, including play counts and dates added, will be removed.",
+            plural_count(count)
+        ),
+        count = count
+    )
 }
 
 #[cfg(test)]

@@ -163,10 +163,9 @@ impl ApplicationRuntime {
     /// the currently configured profile.
     pub fn cd_import_unavailable_reason(&self) -> Option<String> {
         let Some(encoder) = self.cd_encoder.as_ref() else {
-            return Some(
-                notifications::runtime_error_text(&ApplicationRuntimeError::CdBackendUnavailable)
-                    .to_owned(),
-            );
+            return Some(notifications::runtime_error_text(
+                &ApplicationRuntimeError::CdBackendUnavailable,
+            ));
         };
         encoder
             .ensure_available(self.settings.encoding.cd_profile)
@@ -464,7 +463,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::CdImport,
                 NotificationSeverity::Error,
-                notifications::runtime_error_text(error).to_owned(),
+                notifications::runtime_error_text(error),
             );
         }
     }

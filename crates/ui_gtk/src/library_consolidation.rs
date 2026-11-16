@@ -61,7 +61,7 @@ pub(crate) fn library_consolidation_requested_callback(
                         runtime.push_ephemeral_notification(
                             NotificationCategory::LibraryConsolidation,
                             NotificationSeverity::Error,
-                            runtime_error_text(&error).to_owned(),
+                            runtime_error_text(&error),
                         );
                     }
                     return Err(error);

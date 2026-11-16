@@ -27,6 +27,7 @@ use gtk::{gdk, gio, glib};
 use sustain_app_runtime::{
     ApplicationCommand, PlayableId, PlaybackCommand, PlaybackQueueEntry, TrackId,
 };
+use sustain_i18n::gettext;
 
 use crate::{
     PlaybackChangedCallback, SharedRuntime,
@@ -59,9 +60,6 @@ const QUEUE_CONTENT_WIDTH: i32 = 304;
 
 const QUEUE_PAGE_LIST: &str = "list";
 const QUEUE_PAGE_EMPTY: &str = "empty";
-const QUEUE_EMPTY_TEXT: &str = "Nothing up next";
-const QUEUE_SMART_SHUFFLE_EMPTY_TITLE: &str = "No manually queued track";
-const QUEUE_SMART_SHUFFLE_EMPTY_HELPER: &str = "Smart Shuffle will choose the next track.";
 const QUEUE_EVICT_ICON: &str = "window-close-symbolic";
 const QUEUE_ARTWORK_MISSING_ICON: &str = "image-missing-symbolic";
 const QUEUE_ARTWORK_MISSING_ICON_SIZE: i32 = QUEUE_ROW_ARTWORK_SIZE / 2;
@@ -94,7 +92,7 @@ impl QueueEmptyState {
         widget.set_valign(gtk::Align::Center);
         widget.set_width_request(QUEUE_CONTENT_WIDTH);
 
-        let title = gtk::Label::new(Some(QUEUE_EMPTY_TEXT));
+        let title = gtk::Label::new(Some(&gettext("Nothing up next")));
         title.add_css_class("queue-empty-title");
         title.set_halign(gtk::Align::Center);
         title.set_justify(gtk::Justification::Center);
@@ -118,8 +116,8 @@ impl QueueEmptyState {
 
     fn sync(&self, uses_lazy_continuation: bool) {
         let (title, helper) = empty_queue_text(uses_lazy_continuation);
-        self.title.set_text(title);
-        self.helper.set_text(helper.unwrap_or_default());
+        self.title.set_text(&title);
+        self.helper.set_text(helper.as_deref().unwrap_or_default());
         self.helper.set_visible(helper.is_some());
     }
 }
@@ -332,14 +330,14 @@ fn install_right_click_open(
     next_button.add_controller(gesture);
 }
 
-fn empty_queue_text(uses_lazy_continuation: bool) -> (&'static str, Option<&'static str>) {
+fn empty_queue_text(uses_lazy_continuation: bool) -> (String, Option<String>) {
     if uses_lazy_continuation {
         (
-            QUEUE_SMART_SHUFFLE_EMPTY_TITLE,
-            Some(QUEUE_SMART_SHUFFLE_EMPTY_HELPER),
+            gettext("No manually queued track"),
+            Some(gettext("Smart Shuffle will choose the next track.")),
         )
     } else {
-        (QUEUE_EMPTY_TEXT, None)
+        (gettext("Nothing up next"), None)
     }
 }
 
@@ -416,7 +414,7 @@ fn build_queue_row() -> gtk::Box {
     evict.add_css_class("queue-row-evict");
     evict.add_css_class("flat");
     evict.set_valign(gtk::Align::Center);
-    evict.set_tooltip_text(Some("Remove from queue"));
+    evict.set_tooltip_text(Some(&gettext("Remove from queue")));
     // Hidden until the row is hovered; kept allocated (opacity, not
     // visibility) so revealing it never shifts the title's width, and
     // untargetable while invisible so it is never an unseen click target.
@@ -778,10 +776,7 @@ fn peek_queue_payload(target: &gtk::DropTarget) -> Option<PlayableId> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        QUEUE_EMPTY_TEXT, QUEUE_SMART_SHUFFLE_EMPTY_HELPER, QUEUE_SMART_SHUFFLE_EMPTY_TITLE,
-        empty_queue_text, parse_queue_payload, queue_drag_payload,
-    };
+    use super::{empty_queue_text, parse_queue_payload, queue_drag_payload};
     use sustain_app_runtime::{PlayableId, TrackId};
 
     fn track_id(value: i64) -> PlayableId {
@@ -810,12 +805,15 @@ mod tests {
 
     #[test]
     fn smart_shuffle_empty_text_explains_on_demand_continuation() {
-        assert_eq!(empty_queue_text(false), (QUEUE_EMPTY_TEXT, None));
+        assert_eq!(
+            empty_queue_text(false),
+            ("Nothing up next".to_owned(), None)
+        );
         assert_eq!(
             empty_queue_text(true),
             (
-                QUEUE_SMART_SHUFFLE_EMPTY_TITLE,
-                Some(QUEUE_SMART_SHUFFLE_EMPTY_HELPER)
+                "No manually queued track".to_owned(),
+                Some("Smart Shuffle will choose the next track.".to_owned())
             )
         );
     }

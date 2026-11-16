@@ -12,6 +12,7 @@ use sustain_app_runtime::{
     SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
     SmartPlaylistTextOperator,
 };
+use sustain_i18n::{gettext, pgettext, tr_format};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum EditorField {
@@ -25,72 +26,100 @@ pub(super) enum EditorField {
     FileStatus,
 }
 
-pub(super) const EDITOR_FIELDS: &[(EditorField, &str)] = &[
-    (EditorField::Text(SmartPlaylistTextField::Artist), "Artist"),
-    (
-        EditorField::Text(SmartPlaylistTextField::AlbumArtist),
-        "Album Artist",
-    ),
-    (EditorField::Text(SmartPlaylistTextField::Album), "Album"),
-    (EditorField::Text(SmartPlaylistTextField::Title), "Title"),
-    (
-        EditorField::Text(SmartPlaylistTextField::Composer),
-        "Composer",
-    ),
-    (EditorField::Text(SmartPlaylistTextField::Genre), "Genre"),
-    (
-        EditorField::Text(SmartPlaylistTextField::FileName),
-        "File Name",
-    ),
-    (
-        EditorField::Text(SmartPlaylistTextField::MusicalKey),
-        "Music Key",
-    ),
-    (EditorField::Rating, "Rating"),
-    (EditorField::Number(SmartPlaylistNumberField::Year), "Year"),
-    (
-        EditorField::Number(SmartPlaylistNumberField::PlayCount),
-        "Play Count",
-    ),
-    (
-        EditorField::Number(SmartPlaylistNumberField::SkipCount),
-        "Skip Count",
-    ),
-    (
-        EditorField::Number(SmartPlaylistNumberField::TrackNumber),
-        "Track Number",
-    ),
-    (
-        EditorField::Number(SmartPlaylistNumberField::DiscNumber),
-        "Disc Number",
-    ),
-    (
-        EditorField::Number(SmartPlaylistNumberField::DurationSeconds),
-        "Duration (seconds)",
-    ),
-    (
-        EditorField::Number(SmartPlaylistNumberField::BitrateKbps),
-        "Bitrate (kbps)",
-    ),
-    (EditorField::Number(SmartPlaylistNumberField::Bpm), "BPM"),
-    (
-        EditorField::Date(SmartPlaylistDateField::DateAdded),
-        "Date Added",
-    ),
-    (
-        EditorField::Date(SmartPlaylistDateField::LastPlayed),
-        "Last Played",
-    ),
-    (
-        EditorField::Date(SmartPlaylistDateField::LastSkipped),
-        "Last Skipped",
-    ),
-    (
-        EditorField::Bool(SmartPlaylistBoolField::HasLyrics),
-        "Lyrics",
-    ),
-    (EditorField::FileStatus, "File"),
+pub(super) const EDITOR_FIELDS: &[EditorField] = &[
+    EditorField::Text(SmartPlaylistTextField::Artist),
+    EditorField::Text(SmartPlaylistTextField::AlbumArtist),
+    EditorField::Text(SmartPlaylistTextField::Album),
+    EditorField::Text(SmartPlaylistTextField::Title),
+    EditorField::Text(SmartPlaylistTextField::Composer),
+    EditorField::Text(SmartPlaylistTextField::Genre),
+    EditorField::Text(SmartPlaylistTextField::FileName),
+    EditorField::Text(SmartPlaylistTextField::MusicalKey),
+    EditorField::Rating,
+    EditorField::Number(SmartPlaylistNumberField::Year),
+    EditorField::Number(SmartPlaylistNumberField::PlayCount),
+    EditorField::Number(SmartPlaylistNumberField::SkipCount),
+    EditorField::Number(SmartPlaylistNumberField::TrackNumber),
+    EditorField::Number(SmartPlaylistNumberField::DiscNumber),
+    EditorField::Number(SmartPlaylistNumberField::DurationSeconds),
+    EditorField::Number(SmartPlaylistNumberField::BitrateKbps),
+    EditorField::Number(SmartPlaylistNumberField::Bpm),
+    EditorField::Date(SmartPlaylistDateField::DateAdded),
+    EditorField::Date(SmartPlaylistDateField::LastPlayed),
+    EditorField::Date(SmartPlaylistDateField::LastSkipped),
+    EditorField::Bool(SmartPlaylistBoolField::HasLyrics),
+    EditorField::FileStatus,
 ];
+
+impl EditorField {
+    /// The field's name in a rule row's first drop-down.
+    pub(super) fn label(self) -> String {
+        match self {
+            EditorField::Text(SmartPlaylistTextField::Artist) => {
+                pgettext("smart playlist field", "Artist")
+            }
+            EditorField::Text(SmartPlaylistTextField::AlbumArtist) => {
+                pgettext("smart playlist field", "Album Artist")
+            }
+            EditorField::Text(SmartPlaylistTextField::Album) => {
+                pgettext("smart playlist field", "Album")
+            }
+            EditorField::Text(SmartPlaylistTextField::Title) => {
+                pgettext("smart playlist field", "Title")
+            }
+            EditorField::Text(SmartPlaylistTextField::Composer) => {
+                pgettext("smart playlist field", "Composer")
+            }
+            EditorField::Text(SmartPlaylistTextField::Genre) => {
+                pgettext("smart playlist field", "Genre")
+            }
+            EditorField::Text(SmartPlaylistTextField::FileName) => {
+                pgettext("smart playlist field", "File Name")
+            }
+            EditorField::Text(SmartPlaylistTextField::MusicalKey) => {
+                pgettext("smart playlist field", "Music Key")
+            }
+            EditorField::Rating => pgettext("smart playlist field", "Rating"),
+            EditorField::Number(SmartPlaylistNumberField::Year) => {
+                pgettext("smart playlist field", "Year")
+            }
+            EditorField::Number(SmartPlaylistNumberField::PlayCount) => {
+                pgettext("smart playlist field", "Play Count")
+            }
+            EditorField::Number(SmartPlaylistNumberField::SkipCount) => {
+                pgettext("smart playlist field", "Skip Count")
+            }
+            EditorField::Number(SmartPlaylistNumberField::TrackNumber) => {
+                pgettext("smart playlist field", "Track Number")
+            }
+            EditorField::Number(SmartPlaylistNumberField::DiscNumber) => {
+                pgettext("smart playlist field", "Disc Number")
+            }
+            EditorField::Number(SmartPlaylistNumberField::DurationSeconds) => {
+                pgettext("smart playlist field", "Duration (seconds)")
+            }
+            EditorField::Number(SmartPlaylistNumberField::BitrateKbps) => {
+                pgettext("smart playlist field", "Bitrate (kbps)")
+            }
+            EditorField::Number(SmartPlaylistNumberField::Bpm) => {
+                pgettext("smart playlist field", "BPM")
+            }
+            EditorField::Date(SmartPlaylistDateField::DateAdded) => {
+                pgettext("smart playlist field", "Date Added")
+            }
+            EditorField::Date(SmartPlaylistDateField::LastPlayed) => {
+                pgettext("smart playlist field", "Last Played")
+            }
+            EditorField::Date(SmartPlaylistDateField::LastSkipped) => {
+                pgettext("smart playlist field", "Last Skipped")
+            }
+            EditorField::Bool(SmartPlaylistBoolField::HasLyrics) => {
+                pgettext("smart playlist field", "Lyrics")
+            }
+            EditorField::FileStatus => pgettext("smart playlist field", "File"),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum EditorOperator {
@@ -122,33 +151,39 @@ pub(super) enum EditorOperator {
 }
 
 impl EditorOperator {
-    pub(super) fn label(self) -> &'static str {
+    /// The operator's wording in a rule row's second drop-down, read as
+    /// `<field> <operator> <value>`.
+    pub(super) fn label(self) -> String {
         match self {
-            Self::TextContains => "contains",
-            Self::TextDoesNotContain => "does not contain",
-            Self::TextIs => "is",
-            Self::TextIsNot => "is not",
-            Self::TextStartsWith => "starts with",
-            Self::TextEndsWith => "ends with",
-            Self::TextIsEmpty => "is empty",
-            Self::TextIsPresent => "is present",
-            Self::NumberEqual => "is",
-            Self::NumberNotEqual => "is not",
-            Self::NumberGreaterThan => "is greater than",
-            Self::NumberGreaterThanOrEqual => "is greater than or equal to",
-            Self::NumberLessThan => "is less than",
-            Self::NumberLessThanOrEqual => "is less than or equal to",
-            Self::NumberIsEmpty => "is empty",
-            Self::NumberIsPresent => "is present",
-            Self::DateBefore => "is before",
-            Self::DateAfter => "is after",
-            Self::DateInLast => "is in the last",
-            Self::DateNotInLast => "is not in the last",
-            Self::DateIsEmpty => "is empty",
-            Self::DateIsPresent => "is present",
-            Self::BoolEqual => "is",
-            Self::FileMissing => "is missing",
-            Self::FilePresent => "is present",
+            Self::TextContains => pgettext("smart playlist operator", "contains"),
+            Self::TextDoesNotContain => pgettext("smart playlist operator", "does not contain"),
+            Self::TextIs => pgettext("smart playlist operator", "is"),
+            Self::TextIsNot => pgettext("smart playlist operator", "is not"),
+            Self::TextStartsWith => pgettext("smart playlist operator", "starts with"),
+            Self::TextEndsWith => pgettext("smart playlist operator", "ends with"),
+            Self::TextIsEmpty => pgettext("smart playlist operator", "is empty"),
+            Self::TextIsPresent => pgettext("smart playlist operator", "is present"),
+            Self::NumberEqual => pgettext("smart playlist operator", "is"),
+            Self::NumberNotEqual => pgettext("smart playlist operator", "is not"),
+            Self::NumberGreaterThan => pgettext("smart playlist operator", "is greater than"),
+            Self::NumberGreaterThanOrEqual => {
+                pgettext("smart playlist operator", "is greater than or equal to")
+            }
+            Self::NumberLessThan => pgettext("smart playlist operator", "is less than"),
+            Self::NumberLessThanOrEqual => {
+                pgettext("smart playlist operator", "is less than or equal to")
+            }
+            Self::NumberIsEmpty => pgettext("smart playlist operator", "is empty"),
+            Self::NumberIsPresent => pgettext("smart playlist operator", "is present"),
+            Self::DateBefore => pgettext("smart playlist operator", "is before"),
+            Self::DateAfter => pgettext("smart playlist operator", "is after"),
+            Self::DateInLast => pgettext("smart playlist operator", "is in the last"),
+            Self::DateNotInLast => pgettext("smart playlist operator", "is not in the last"),
+            Self::DateIsEmpty => pgettext("smart playlist operator", "is empty"),
+            Self::DateIsPresent => pgettext("smart playlist operator", "is present"),
+            Self::BoolEqual => pgettext("smart playlist operator", "is"),
+            Self::FileMissing => pgettext("smart playlist operator", "is missing"),
+            Self::FilePresent => pgettext("smart playlist operator", "is present"),
         }
     }
 
@@ -248,44 +283,67 @@ pub(super) fn operators_for_field(field: EditorField) -> &'static [EditorOperato
     }
 }
 
-pub(super) const MATCH_KINDS: &[(SmartPlaylistMatchKind, &str)] = &[
-    (SmartPlaylistMatchKind::All, "all"),
-    (SmartPlaylistMatchKind::Any, "any"),
+pub(super) const MATCH_KINDS: &[SmartPlaylistMatchKind] =
+    &[SmartPlaylistMatchKind::All, SmartPlaylistMatchKind::Any];
+
+/// The match kind's word in `Match [all] of the following rules:`.
+pub(super) fn match_kind_label(kind: SmartPlaylistMatchKind) -> String {
+    match kind {
+        SmartPlaylistMatchKind::All => pgettext("smart playlist match", "all"),
+        SmartPlaylistMatchKind::Any => pgettext("smart playlist match", "any"),
+    }
+}
+
+pub(super) const LIMIT_SELECTIONS: &[SmartPlaylistLimitSelection] = &[
+    SmartPlaylistLimitSelection::Random,
+    SmartPlaylistLimitSelection::MostRecentlyAdded,
+    SmartPlaylistLimitSelection::LeastRecentlyAdded,
+    SmartPlaylistLimitSelection::MostRecentlyPlayed,
+    SmartPlaylistLimitSelection::LeastRecentlyPlayed,
+    SmartPlaylistLimitSelection::MostOftenPlayed,
+    SmartPlaylistLimitSelection::LeastOftenPlayed,
+    SmartPlaylistLimitSelection::HighestRating,
+    SmartPlaylistLimitSelection::LowestRating,
+    SmartPlaylistLimitSelection::TitleAscending,
+    SmartPlaylistLimitSelection::ArtistAscending,
+    SmartPlaylistLimitSelection::AlbumAscending,
+    SmartPlaylistLimitSelection::GenreAscending,
 ];
 
-pub(super) const LIMIT_SELECTIONS: &[(SmartPlaylistLimitSelection, &str)] = &[
-    (SmartPlaylistLimitSelection::Random, "random"),
-    (
-        SmartPlaylistLimitSelection::MostRecentlyAdded,
-        "most recently added",
-    ),
-    (
-        SmartPlaylistLimitSelection::LeastRecentlyAdded,
-        "least recently added",
-    ),
-    (
-        SmartPlaylistLimitSelection::MostRecentlyPlayed,
-        "most recently played",
-    ),
-    (
-        SmartPlaylistLimitSelection::LeastRecentlyPlayed,
-        "least recently played",
-    ),
-    (
-        SmartPlaylistLimitSelection::MostOftenPlayed,
-        "most often played",
-    ),
-    (
-        SmartPlaylistLimitSelection::LeastOftenPlayed,
-        "least often played",
-    ),
-    (SmartPlaylistLimitSelection::HighestRating, "highest rating"),
-    (SmartPlaylistLimitSelection::LowestRating, "lowest rating"),
-    (SmartPlaylistLimitSelection::TitleAscending, "title"),
-    (SmartPlaylistLimitSelection::ArtistAscending, "artist"),
-    (SmartPlaylistLimitSelection::AlbumAscending, "album"),
-    (SmartPlaylistLimitSelection::GenreAscending, "genre"),
-];
+/// The selection's wording in `Limit to [25] songs, selected by [random]`.
+pub(super) fn limit_selection_label(selection: SmartPlaylistLimitSelection) -> String {
+    match selection {
+        SmartPlaylistLimitSelection::Random => pgettext("smart playlist limit", "random"),
+        SmartPlaylistLimitSelection::MostRecentlyAdded => {
+            pgettext("smart playlist limit", "most recently added")
+        }
+        SmartPlaylistLimitSelection::LeastRecentlyAdded => {
+            pgettext("smart playlist limit", "least recently added")
+        }
+        SmartPlaylistLimitSelection::MostRecentlyPlayed => {
+            pgettext("smart playlist limit", "most recently played")
+        }
+        SmartPlaylistLimitSelection::LeastRecentlyPlayed => {
+            pgettext("smart playlist limit", "least recently played")
+        }
+        SmartPlaylistLimitSelection::MostOftenPlayed => {
+            pgettext("smart playlist limit", "most often played")
+        }
+        SmartPlaylistLimitSelection::LeastOftenPlayed => {
+            pgettext("smart playlist limit", "least often played")
+        }
+        SmartPlaylistLimitSelection::HighestRating => {
+            pgettext("smart playlist limit", "highest rating")
+        }
+        SmartPlaylistLimitSelection::LowestRating => {
+            pgettext("smart playlist limit", "lowest rating")
+        }
+        SmartPlaylistLimitSelection::TitleAscending => pgettext("smart playlist limit", "title"),
+        SmartPlaylistLimitSelection::ArtistAscending => pgettext("smart playlist limit", "artist"),
+        SmartPlaylistLimitSelection::AlbumAscending => pgettext("smart playlist limit", "album"),
+        SmartPlaylistLimitSelection::GenreAscending => pgettext("smart playlist limit", "genre"),
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum ValueInput {
@@ -318,16 +376,22 @@ impl RuleError {
     pub(super) fn message(&self) -> String {
         match self {
             Self::FieldOperatorMismatch => {
-                "This combination of field and operator is not supported.".to_owned()
+                gettext("This combination of field and operator is not supported.")
             }
-            Self::EmptyTextValue => "A text rule needs a value.".to_owned(),
+            Self::EmptyTextValue => gettext("A text rule needs a value."),
             Self::OutOfRangeRating { offending } => {
-                format!("\"{offending}\" is not a valid rating (0 to 5).")
+                tr_format!(
+                    gettext("\"{offending}\" is not a valid rating (0 to 5)."),
+                    offending = offending
+                )
             }
             Self::InvalidDate { offending } => {
-                format!("\"{offending}\" is not a valid date (use YYYY-MM-DD).")
+                tr_format!(
+                    gettext("\"{offending}\" is not a valid date (use YYYY-MM-DD)."),
+                    offending = offending
+                )
             }
-            Self::InvalidDays => "The number of days must be at least 1.".to_owned(),
+            Self::InvalidDays => gettext("The number of days must be at least 1."),
         }
     }
 }
@@ -622,7 +686,7 @@ pub(super) fn decompose_rule(
 pub(super) fn index_of_field(field: EditorField) -> u32 {
     EDITOR_FIELDS
         .iter()
-        .position(|(f, _)| *f == field)
+        .position(|f| *f == field)
         .map(|i| i as u32)
         .unwrap_or(0)
 }
@@ -638,7 +702,7 @@ pub(super) fn index_of_operator(field: EditorField, op: EditorOperator) -> u32 {
 pub(super) fn index_of_match_kind(kind: SmartPlaylistMatchKind) -> u32 {
     MATCH_KINDS
         .iter()
-        .position(|(k, _)| *k == kind)
+        .position(|k| *k == kind)
         .map(|i| i as u32)
         .unwrap_or(0)
 }
@@ -646,7 +710,7 @@ pub(super) fn index_of_match_kind(kind: SmartPlaylistMatchKind) -> u32 {
 pub(super) fn index_of_limit_selection(selection: SmartPlaylistLimitSelection) -> u32 {
     LIMIT_SELECTIONS
         .iter()
-        .position(|(s, _)| *s == selection)
+        .position(|s| *s == selection)
         .map(|i| i as u32)
         .unwrap_or(0)
 }

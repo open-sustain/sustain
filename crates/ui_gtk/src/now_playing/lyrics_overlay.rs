@@ -3,6 +3,7 @@
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
+use sustain_i18n::gettext;
 
 use crate::artwork_color::ArtworkPalette;
 
@@ -39,7 +40,7 @@ fn build(
     // parent on Wayland — focus-out is the Wayland-safe "click elsewhere
     // closes" (#163).
     let window = gtk::Window::builder()
-        .title("Now Playing")
+        .title(gettext("Now Playing"))
         .decorated(false)
         .transient_for(parent)
         .modal(false)

@@ -5,6 +5,7 @@ use std::cmp::Ordering as CmpOrdering;
 use std::time::SystemTime;
 
 use sustain_app_runtime::compare_optional_text;
+use sustain_i18n::{gettext, pgettext};
 
 use super::inline_edit::EditableField;
 use super::row::TrackTableRow;
@@ -54,26 +55,26 @@ pub(super) const TRACK_TABLE_COLUMNS: &[TrackTableColumn] = &[
 ];
 
 impl TrackTableColumn {
-    pub(super) fn title(self) -> &'static str {
+    pub(super) fn title(self) -> String {
         match self {
-            Self::TrackName => "Track Name",
-            Self::Artist => "Artist",
-            Self::Album => "Album",
-            Self::Genre => "Genre",
-            Self::Lyrics => "Lyrics",
-            Self::Year => "Year",
-            Self::Bpm => "BPM",
-            Self::MusicKey => "Key",
-            Self::Bitrate => "Bitrate",
-            Self::FileType => "Type",
-            Self::Duration => "Duration",
-            Self::Rating => "Rating",
-            Self::Plays => "Plays",
-            Self::Skips => "Skips",
-            Self::LastPlayed => "Last Played",
-            Self::LastSkipped => "Last Skipped",
-            Self::DateAdded => "Date Added",
-            Self::TrackNumber => "Track #",
+            Self::TrackName => gettext("Track Name"),
+            Self::Artist => gettext("Artist"),
+            Self::Album => gettext("Album"),
+            Self::Genre => gettext("Genre"),
+            Self::Lyrics => gettext("Lyrics"),
+            Self::Year => gettext("Year"),
+            Self::Bpm => gettext("BPM"),
+            Self::MusicKey => pgettext("musical key", "Key"),
+            Self::Bitrate => gettext("Bitrate"),
+            Self::FileType => pgettext("file type column", "Type"),
+            Self::Duration => gettext("Duration"),
+            Self::Rating => gettext("Rating"),
+            Self::Plays => gettext("Plays"),
+            Self::Skips => gettext("Skips"),
+            Self::LastPlayed => gettext("Last Played"),
+            Self::LastSkipped => gettext("Last Skipped"),
+            Self::DateAdded => gettext("Date Added"),
+            Self::TrackNumber => gettext("Track #"),
         }
     }
 
@@ -196,7 +197,7 @@ impl TrackTableColumn {
             Self::Artist => row.artist.clone(),
             Self::Album => row.album.clone(),
             Self::Genre => row.genre.clone(),
-            Self::Lyrics => yes_no_text(row.has_lyrics).to_owned(),
+            Self::Lyrics => yes_no_text(row.has_lyrics),
             Self::Year => optional_number_text(row.year),
             Self::Bpm => optional_number_text(row.bpm),
             Self::MusicKey => row.music_key.clone().unwrap_or_default(),
@@ -250,8 +251,8 @@ fn optional_number_text<T: std::fmt::Display>(value: Option<T>) -> String {
     value.map(|value| value.to_string()).unwrap_or_default()
 }
 
-fn yes_no_text(value: bool) -> &'static str {
-    if value { "Yes" } else { "No" }
+fn yes_no_text(value: bool) -> String {
+    if value { gettext("Yes") } else { gettext("No") }
 }
 
 fn optional_date_text(value: Option<SystemTime>) -> String {
@@ -276,7 +277,7 @@ mod tests {
 
     #[test]
     fn table_columns_match_the_product_contract() {
-        let titles: Vec<&str> = TRACK_TABLE_COLUMNS
+        let titles: Vec<String> = TRACK_TABLE_COLUMNS
             .iter()
             .map(|column| column.title())
             .collect();

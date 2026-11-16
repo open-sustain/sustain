@@ -12,10 +12,8 @@
 
 use sustain_cd_import::TocSnapshot;
 use sustain_domain::TrackMetadata;
+use sustain_i18n::{gettext, tr_format};
 use sustain_metadata_remote::DiscRelease;
-
-const FALLBACK_ALBUM: &str = "Audio CD";
-const FALLBACK_ARTIST: &str = "Unknown Artist";
 
 /// Build the editable metadata for one physical track.
 ///
@@ -41,19 +39,22 @@ pub(crate) fn build_track_metadata(
     let title = disc_track
         .and_then(|track| non_blank(track.title.as_deref()))
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("Track {physical_number:02}"));
+        .unwrap_or_else(|| {
+            tr_format!(
+                gettext("Track {number}"),
+                number = format!("{physical_number:02}")
+            )
+        });
 
     let release_artist = release.and_then(|release| non_blank(release.artist_credit.as_deref()));
     let artist = disc_track
         .and_then(|track| non_blank(track.artist_credit.as_deref()))
         .or(release_artist)
-        .unwrap_or(FALLBACK_ARTIST)
-        .to_owned();
+        .map_or_else(|| gettext("Unknown Artist"), ToOwned::to_owned);
 
     let album = release
         .and_then(|release| non_blank(release.title.as_deref()))
-        .unwrap_or(FALLBACK_ALBUM)
-        .to_owned();
+        .map_or_else(|| gettext("Audio CD"), ToOwned::to_owned);
 
     let track_total = release
         .map(|release| release.track_total)

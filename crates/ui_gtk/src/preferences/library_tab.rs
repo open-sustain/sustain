@@ -4,8 +4,9 @@
 use std::path::PathBuf;
 
 use gtk::prelude::*;
-use gtk::{gio, glib::Propagation};
+use gtk::{gio, glib, glib::Propagation};
 use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
+use sustain_i18n::gettext;
 
 use super::super::{
     ApplicationCommand, ApplicationRuntimeError, LibraryManagementMode,
@@ -34,7 +35,7 @@ pub(super) fn build(
 
     let label_group = gtk::Box::new(gtk::Orientation::Vertical, 3);
 
-    let library_path_label = gtk::Label::new(Some("Library path"));
+    let library_path_label = gtk::Label::new(Some(&gettext("Library path")));
     library_path_label.set_xalign(0.0);
 
     let library_path_help = gtk::Label::new(Some(
@@ -61,7 +62,10 @@ pub(super) fn build(
     // wider than the panel via `path_row`'s horizontal sum.
     path_entry.set_width_chars(PATH_ENTRY_VISIBLE_CHARS);
     path_entry.set_max_width_chars(PATH_ENTRY_VISIBLE_CHARS);
-    path_entry.set_placeholder_text(Some("/home/julien/Music"));
+    // Suggest the user's own XDG music folder, the usual library root.
+    if let Some(music_dir) = glib::user_special_dir(glib::UserDirectory::Music) {
+        path_entry.set_placeholder_text(Some(&music_dir.to_string_lossy()));
+    }
     let library_task_is_running = command_controller
         .runtime()
         .borrow()
@@ -81,10 +85,10 @@ pub(super) fn build(
     folder_button.add_css_class("flat");
     folder_button.add_css_class("settings-button");
     folder_button.set_child(Some(&folder_icon));
-    folder_button.set_tooltip_text(Some("Choose folder"));
+    folder_button.set_tooltip_text(Some(&gettext("Choose folder")));
 
-    let scan_button = gtk::Button::with_label("Scan");
-    scan_button.set_tooltip_text(Some("Save library path and scan now"));
+    let scan_button = gtk::Button::with_label(&gettext("Scan"));
+    scan_button.set_tooltip_text(Some(&gettext("Save library path and scan now")));
     path_entry.set_sensitive(!library_task_is_running);
     folder_button.set_sensitive(!library_task_is_running);
     scan_button.set_sensitive(!library_task_is_running);
@@ -97,9 +101,11 @@ pub(super) fn build(
         .library
         .management_mode;
     let keep_organized_row = build_switch_row(
-        "Organize my library",
-        "New tracks are copied into clean artist, album, and track folders. \
+        &gettext("Organize my library"),
+        &gettext(
+            "New tracks are copied into clean artist, album, and track folders. \
          Existing tracks are organized in the background when this is turned on.",
+        ),
         library_path_is_valid
             && management_mode == LibraryManagementMode::CopyAddedFilesIntoLibrary,
     );
@@ -131,7 +137,7 @@ pub(super) fn build(
                 &command_controller_for_organization,
                 NotificationCategory::LibraryConsolidation,
                 NotificationSeverity::Warning,
-                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable).to_owned(),
+                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable),
             );
             return Propagation::Stop;
         }
@@ -189,7 +195,7 @@ pub(super) fn build(
                         &command_controller_for_organization,
                         NotificationCategory::LibraryConsolidation,
                         NotificationSeverity::Info,
-                        "Library organization will stop after the current file.".to_owned(),
+                        gettext("Library organization will stop after the current file."),
                     );
                 }
                 Propagation::Proceed
@@ -239,7 +245,7 @@ pub(super) fn build(
                 &command_controller_for_scan,
                 NotificationCategory::LibraryScan,
                 NotificationSeverity::Warning,
-                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable).to_owned(),
+                runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable),
             );
             return;
         }
@@ -264,11 +270,13 @@ pub(super) fn build(
         .library
         .honor_sort_tags;
     let sort_tags_row = build_switch_row(
-        "Sort using sort-order tags",
-        "Order the library by the \u{201C}sort as\u{201D} tags some files carry \
+        &gettext("Sort using sort-order tags"),
+        &gettext(
+            "Order the library by the \u{201C}sort as\u{201D} tags some files carry \
          (ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT, and friends) plus \
          Sustain's generated leading-article sort values, so \u{201C}The Beatles\u{201D} \
          files under B. Turn off to order every name as it is shown.",
+        ),
         sort_tags_enabled,
     );
     let command_controller_for_sort_tags = command_controller.clone();
@@ -319,8 +327,8 @@ fn open_library_folder_chooser(
     path_entry: &gtk::Entry,
 ) {
     let dialog = gtk::FileDialog::builder()
-        .title("Choose Library Folder")
-        .accept_label("Choose")
+        .title(gettext("Choose Library Folder"))
+        .accept_label(gettext("Choose"))
         .modal(true)
         .build();
 

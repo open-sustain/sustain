@@ -27,6 +27,7 @@ use sustain_domain::{
     DeviceLayout, DeviceRelativePath, FilesPerFolderCap, Playlist, PlaylistItem, SmartPlaylist,
     SyncDevice, SyncDeviceId, SyncManifestEntry, Track, TrackId, matching_tracks,
 };
+use sustain_i18n::{gettext, tr_format};
 use sustain_library_store::{AnalysisCapabilities, LibraryStore};
 use sustain_metadata::MetadataService;
 
@@ -151,7 +152,10 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Error,
-                format!("Could not scan for Android devices: {error}"),
+                tr_format!(
+                    gettext("Could not scan for Android devices: {error}"),
+                    error = error
+                ),
             );
         }
     }
@@ -410,7 +414,7 @@ impl ApplicationRuntime {
     fn device_config_or_default(&self, id: &SyncDeviceId) -> SyncDevice {
         self.device_config(id).unwrap_or_else(|| SyncDevice {
             id: id.clone(),
-            label: "Device".to_owned(),
+            label: gettext("Device"),
             kind: sustain_domain::DeviceKind::UsbDrive,
             layout: DeviceLayout::M3u,
             sub_path: DeviceRelativePath::root(),
@@ -487,7 +491,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Info,
-                "This device's selection is empty.".to_owned(),
+                gettext("This device's selection is empty."),
             );
             return Ok(());
         }
@@ -592,7 +596,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Info,
-                "A device sync is already running.".to_owned(),
+                gettext("A device sync is already running."),
             );
             return Ok(());
         }
@@ -600,7 +604,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Warning,
-                "That device is no longer connected.".to_owned(),
+                gettext("That device is no longer connected."),
             );
             return Ok(());
         };
@@ -609,7 +613,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::DeviceSync,
                 NotificationSeverity::Info,
-                "Pick at least one playlist or artist to sync to this device.".to_owned(),
+                gettext("Pick at least one playlist or artist to sync to this device."),
             );
             return Ok(());
         }
@@ -648,14 +652,17 @@ impl ApplicationRuntime {
                 self.push_ephemeral_notification(
                     NotificationCategory::DeviceSync,
                     NotificationSeverity::Info,
-                    "A device sync is already running.".to_owned(),
+                    gettext("A device sync is already running."),
                 );
             }
             DeviceSyncStartOutcome::SpawnFailed(detail) => {
                 self.push_ephemeral_notification(
                     NotificationCategory::DeviceSync,
                     NotificationSeverity::Error,
-                    format!("Device sync failed to start: {detail}"),
+                    tr_format!(
+                        gettext("Device sync failed to start: {detail}"),
+                        detail = detail
+                    ),
                 );
             }
         }
@@ -705,7 +712,10 @@ impl ApplicationRuntime {
                         self.push_ephemeral_notification(
                             NotificationCategory::DeviceSync,
                             NotificationSeverity::Error,
-                            format!("Device sync failed: {}", failure.message),
+                            tr_format!(
+                                gettext("Device sync failed: {detail}"),
+                                detail = failure.message
+                            ),
                         );
                     }
                 }
@@ -1012,7 +1022,7 @@ fn build_worker_sync_request(
             continue;
         };
         let name = snapshot_playlist_name(item, &playlists, &smart_playlists)
-            .unwrap_or_else(|| "Playlist".to_owned());
+            .unwrap_or_else(|| gettext("Playlist"));
         let Some(indices) = resolve_sync_track_indices(
             store,
             &by_id,

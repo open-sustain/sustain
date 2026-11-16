@@ -17,6 +17,7 @@ use sustain_app_runtime::{
     TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackMetadata,
     UiSettings, UiSidebarSelection, UiWindowSize, normalize_query,
 };
+use sustain_i18n::gettext;
 
 use super::{
     ALBUMS_VIEW, APP_ID, AnalysisProgressReceiver, ApplicationCommand, ApplicationRuntime,
@@ -63,8 +64,8 @@ use super::{
     },
     sidebar::{PlaylistSidebar, SidebarDeviceEntry, SidebarSelection, build_content_area},
     sidebar_context::{
-        NEW_PLAYLIST_FOLDER_DEFAULT_NAME, SidebarActionCallback, SidebarContextAction,
-        SidebarContextMenu, unique_default_name,
+        SidebarActionCallback, SidebarContextAction, SidebarContextMenu,
+        new_playlist_folder_default_name, unique_default_name,
     },
     smart_playlist_editor::{SmartPlaylistEditorMode, open_smart_playlist_editor},
     statistics::StatisticsView,
@@ -221,7 +222,7 @@ pub(crate) fn build_main_window(
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .decorated(false)
-        .title("Sustain")
+        .title(gettext("Sustain"))
         .default_width(i32::try_from(window_size.width).unwrap_or(i32::MAX))
         .default_height(i32::try_from(window_size.height).unwrap_or(i32::MAX))
         .maximized(initial_ui_settings.window_maximized)
@@ -1269,8 +1270,7 @@ fn install_devices_section(context: DevicesSectionContext<'_>) {
                             runtime.borrow_mut().push_ephemeral_notification(
                                 sustain_app_runtime::NotificationCategory::CdImport,
                                 sustain_app_runtime::NotificationSeverity::Warning,
-                                "Could not reach MusicBrainz; using fallback CD metadata."
-                                    .to_owned(),
+                                gettext("Could not reach MusicBrainz; using fallback CD metadata."),
                             );
                         }
                         cd_import_panel.apply_releases(releases, failed);
@@ -1353,7 +1353,7 @@ fn eject_optical_disc(
                 runtime.borrow_mut().push_ephemeral_notification(
                     sustain_app_runtime::NotificationCategory::CdImport,
                     sustain_app_runtime::NotificationSeverity::Warning,
-                    "Could not eject the disc.".to_owned(),
+                    gettext("Could not eject the disc."),
                 );
             }
         },
@@ -1377,7 +1377,7 @@ fn eject_usb_device(device: &ConnectedDevice, runtime: &SharedRuntime) {
         runtime.borrow_mut().push_ephemeral_notification(
             sustain_app_runtime::NotificationCategory::DeviceSync,
             sustain_app_runtime::NotificationSeverity::Warning,
-            "Could not find the mounted device to eject.".to_owned(),
+            gettext("Could not find the mounted device to eject."),
         );
         return;
     };
@@ -1393,7 +1393,7 @@ fn eject_usb_device(device: &ConnectedDevice, runtime: &SharedRuntime) {
                     runtime.borrow_mut().push_ephemeral_notification(
                         sustain_app_runtime::NotificationCategory::DeviceSync,
                         sustain_app_runtime::NotificationSeverity::Warning,
-                        "Could not eject the device.".to_owned(),
+                        gettext("Could not eject the device."),
                     );
                 }
             },
@@ -1408,7 +1408,7 @@ fn eject_usb_device(device: &ConnectedDevice, runtime: &SharedRuntime) {
                     runtime.borrow_mut().push_ephemeral_notification(
                         sustain_app_runtime::NotificationCategory::DeviceSync,
                         sustain_app_runtime::NotificationSeverity::Warning,
-                        "Could not unmount the device.".to_owned(),
+                        gettext("Could not unmount the device."),
                     );
                 }
             },
@@ -1417,7 +1417,7 @@ fn eject_usb_device(device: &ConnectedDevice, runtime: &SharedRuntime) {
         runtime.borrow_mut().push_ephemeral_notification(
             sustain_app_runtime::NotificationCategory::DeviceSync,
             sustain_app_runtime::NotificationSeverity::Warning,
-            "This device cannot be ejected by the desktop.".to_owned(),
+            gettext("This device cannot be ejected by the desktop."),
         );
     }
 }

@@ -2131,6 +2131,7 @@ dependencies = [
  "sustain-device-mtp",
  "sustain-device-sync",
  "sustain-domain",
+ "sustain-i18n",
  "sustain-library-store",
  "sustain-metadata",
  "sustain-metadata-remote",
@@ -2310,6 +2311,7 @@ dependencies = [
  "sustain-app-runtime",
  "sustain-artwork",
  "sustain-desktop",
+ "sustain-i18n",
  "sustain-playback",
  "sustain-profiler",
 ]

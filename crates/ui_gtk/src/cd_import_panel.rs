@@ -44,14 +44,22 @@ use gtk::{gdk, gdk_pixbuf, gio, glib};
 use sustain_app_runtime::{
     AudioCdDescription, CdImportRequest, CdTrackOverride, DiscRelease, TocSnapshot,
 };
+use sustain_i18n::{gettext, tr_format};
 
 use crate::cell_registry::{BindingRegistry, CellBinding};
 use crate::table_cell::TableCell;
 use crate::track_table::{EditSession, EditableField, EmptyRowPainter, InlineEditController};
 use crate::{SharedRuntime, TITLEBAR_HEIGHT};
 
-const FALLBACK_ALBUM: &str = "Audio CD";
-const FALLBACK_ARTIST: &str = "Unknown Artist";
+/// The album title shown for a disc no release names.
+fn fallback_album() -> String {
+    gettext("Audio CD")
+}
+
+/// The artist shown for a disc no release credits.
+fn fallback_artist() -> String {
+    gettext("Unknown Artist")
+}
 /// Edge length of the header artwork thumbnail. Sized to sit comfortably
 /// inside the fixed [`TITLEBAR_HEIGHT`] top bar with a little vertical
 /// breathing room.
@@ -273,12 +281,12 @@ impl CdImportPanel {
         identity.set_hexpand(true);
         identity.set_valign(gtk::Align::Center);
 
-        let title_label = gtk::Label::new(Some(FALLBACK_ALBUM));
+        let title_label = gtk::Label::new(Some(&fallback_album()));
         title_label.add_css_class("cd-import-title");
         title_label.set_xalign(0.0);
         title_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
-        let subtitle_label = gtk::Label::new(Some(FALLBACK_ARTIST));
+        let subtitle_label = gtk::Label::new(Some(&fallback_artist()));
         subtitle_label.add_css_class("cd-import-subtitle");
         subtitle_label.add_css_class("dim-label");
         subtitle_label.set_xalign(0.0);
@@ -297,9 +305,9 @@ impl CdImportPanel {
         actions.add_css_class("cd-import-actions");
         actions.set_valign(gtk::Align::Center);
 
-        let encoding_button = gtk::Button::with_label("Encoding Settings");
+        let encoding_button = gtk::Button::with_label(&gettext("Encoding Settings"));
         encoding_button.add_css_class("cd-import-secondary-button");
-        encoding_button.set_tooltip_text(Some("Choose the CD import format"));
+        encoding_button.set_tooltip_text(Some(&gettext("Choose the CD import format")));
         encoding_button.connect_clicked(|button| {
             // Open Preferences at the Encoding tab via the app action; any
             // widget in the window can reach the "app." action group.
@@ -308,9 +316,9 @@ impl CdImportPanel {
 
         let eject_button = gtk::Button::from_icon_name("media-eject-symbolic");
         eject_button.add_css_class("cd-import-secondary-button");
-        eject_button.set_tooltip_text(Some("Eject"));
+        eject_button.set_tooltip_text(Some(&gettext("Eject")));
 
-        let import_button = gtk::Button::with_label("Import CD");
+        let import_button = gtk::Button::with_label(&gettext("Import CD"));
         import_button.add_css_class("suggested-action");
         import_button.add_css_class("cd-import-button");
 
@@ -415,7 +423,7 @@ impl CdImportPanel {
             &build_cd_number_factory(),
         ));
         table.append_column(&fixed_column(
-            Some("Title"),
+            Some(&gettext("Title")),
             TITLE_COLUMN_WIDTH,
             &build_cd_text_factory(
                 EditableField::Title,
@@ -424,7 +432,7 @@ impl CdImportPanel {
             ),
         ));
         table.append_column(&fixed_column(
-            Some("Artist"),
+            Some(&gettext("Artist")),
             ARTIST_COLUMN_WIDTH,
             &build_cd_text_factory(
                 EditableField::Artist,
@@ -433,7 +441,7 @@ impl CdImportPanel {
             ),
         ));
         table.append_column(&fixed_column(
-            Some("Time"),
+            Some(&gettext("Time")),
             TIME_COLUMN_WIDTH,
             &build_cd_duration_factory(),
         ));
@@ -714,8 +722,8 @@ impl CdImportPanel {
         self.suppress_toggles.set(true);
         self.release_selector.set_visible(false);
         self.suppress_toggles.set(false);
-        self.title_label.set_text(FALLBACK_ALBUM);
-        self.subtitle_label.set_text(FALLBACK_ARTIST);
+        self.title_label.set_text(&fallback_album());
+        self.subtitle_label.set_text(&fallback_artist());
         self.set_artwork_placeholder();
         self.update_import_sensitivity();
     }
@@ -800,8 +808,8 @@ impl CdImportPanel {
         let release = state.selected_release();
         let title = release
             .and_then(|release| non_blank(release.title.as_deref()))
-            .unwrap_or(FALLBACK_ALBUM);
-        self.title_label.set_text(title);
+            .map_or_else(fallback_album, ToOwned::to_owned);
+        self.title_label.set_text(&title);
         self.subtitle_label.set_text(&subtitle_text(release));
     }
 
@@ -1459,10 +1467,10 @@ fn release_rank(release: &DiscRelease) -> (u8, u8, u32) {
 }
 
 fn release_selector_label(release: &DiscRelease) -> String {
-    let title = non_blank(release.title.as_deref()).unwrap_or(FALLBACK_ALBUM);
+    let title = non_blank(release.title.as_deref()).map_or_else(fallback_album, ToOwned::to_owned);
     match release.year {
         Some(year) => format!("{title} ({year})"),
-        None => title.to_owned(),
+        None => title,
     }
 }
 
@@ -1471,10 +1479,10 @@ fn release_selector_label(release: &DiscRelease) -> String {
 fn subtitle_text(release: Option<&DiscRelease>) -> String {
     let artist = release
         .and_then(|release| non_blank(release.artist_credit.as_deref()))
-        .unwrap_or(FALLBACK_ARTIST);
+        .map_or_else(fallback_artist, ToOwned::to_owned);
     let details = release.map(release_details).unwrap_or_default();
     if details.is_empty() {
-        artist.to_owned()
+        artist
     } else {
         format!("{artist} · {details}")
     }
@@ -1510,7 +1518,7 @@ fn track_display(
     let title = disc_track
         .and_then(|track| non_blank(track.title.as_deref()))
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("Track {number:02}"));
+        .unwrap_or_else(|| tr_format!(gettext("Track {number}"), number = format!("{number:02}")));
     let artist = disc_track
         .and_then(|track| non_blank(track.artist_credit.as_deref()))
         .or_else(|| release.and_then(|release| non_blank(release.artist_credit.as_deref())))

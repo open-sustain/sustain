@@ -8,10 +8,11 @@ use gtk::prelude::*;
 
 use super::super::{
     ApplicationCommand, command_controller::SharedCommandController,
-    date_format::format_system_time_short,
+    date_format::format_system_time_short, status_bar::grouped,
 };
 use super::{HELPER_MAX_WIDTH_CHARS, HELPER_MIN_WIDTH_CHARS};
 use sustain_app_runtime::{SmartShuffleEntropy, SmartShuffleIndexMetadata};
+use sustain_i18n::{gettext, ngettext, tr_format};
 
 pub(super) fn build(
     window: &gtk::Window,
@@ -167,7 +168,7 @@ fn build_entropy_section(
     let container = gtk::Box::new(gtk::Orientation::Vertical, 4);
     container.add_css_class("preference-slider-row");
 
-    let header = gtk::Label::new(Some("Exploration"));
+    let header = gtk::Label::new(Some(&gettext("Exploration")));
     header.set_xalign(0.0);
     container.append(&header);
 
@@ -189,9 +190,9 @@ fn build_entropy_section(
     container.append(&scale);
 
     let mark_label_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    mark_label_row.append(&mark_label("Focused", gtk::Align::Start));
-    mark_label_row.append(&mark_label("Balanced", gtk::Align::Center));
-    mark_label_row.append(&mark_label("Adventurous", gtk::Align::End));
+    mark_label_row.append(&mark_label(&gettext("Focused"), gtk::Align::Start));
+    mark_label_row.append(&mark_label(&gettext("Balanced"), gtk::Align::Center));
+    mark_label_row.append(&mark_label(&gettext("Adventurous"), gtk::Align::End));
     container.append(&mark_label_row);
 
     let caption = gtk::Label::new(Some(entropy_caption(initial_entropy)));
@@ -292,15 +293,15 @@ fn index_status(
     if is_rebuilding {
         return IndexStatus {
             badge: IndexBadge::Rebuilding,
-            headline: "Rebuilding the Smart Shuffle index…".to_owned(),
+            headline: gettext("Rebuilding the Smart Shuffle index…"),
             stats: None,
-            muted: Some("This usually takes a moment.".to_owned()),
+            muted: Some(gettext("This usually takes a moment.")),
         };
     }
     match (index_loaded, metadata) {
         (true, Some(meta)) => IndexStatus {
             badge: IndexBadge::Ready,
-            headline: "Smart Shuffle ready.".to_owned(),
+            headline: gettext("Smart Shuffle ready."),
             // One emphasised line: track count plus the audio-enhanced
             // coverage in parentheses. Coverage is an *optional
             // enhancement*, not a measure of whether Smart Shuffle works —
@@ -308,23 +309,26 @@ fn index_status(
             // year, …) at 0% coverage; this percentage is how much of the
             // library also has the heavier audio analysis (loudness,
             // timbre) that sharpens continuity.
-            stats: Some(format!(
-                "{} tracks indexed ({}% audio profiled)",
-                group_thousands(meta.indexed_track_count),
-                (meta.analysis_coverage * 100.0).round() as i64
+            stats: Some(tr_format!(
+                ngettext(
+                    "{count} track indexed ({percent}% audio profiled)",
+                    "{count} tracks indexed ({percent}% audio profiled)",
+                    meta.indexed_track_count
+                ),
+                count = grouped(u64::from(meta.indexed_track_count)),
+                percent = (meta.analysis_coverage * 100.0).round() as i64
             )),
             muted: format_system_time_short(meta.built_at)
-                .map(|when| format!("Last index rebuild: {when}")),
+                .map(|when| tr_format!(gettext("Last index rebuild: {when}"), when = when)),
         },
         _ => IndexStatus {
             badge: IndexBadge::Unbuilt,
-            headline: "Smart Shuffle index not built yet.".to_owned(),
+            headline: gettext("Smart Shuffle index not built yet."),
             stats: None,
-            muted: Some(
+            muted: Some(gettext(
                 "It builds the first time you turn Smart Shuffle on, then refreshes \
-                 whenever your library or its analysis changes."
-                    .to_owned(),
-            ),
+                 whenever your library or its analysis changes.",
+            )),
         },
     }
 }
@@ -387,24 +391,9 @@ fn set_optional_label(label: &gtk::Label, text: Option<&str>) {
     }
 }
 
-/// Format an integer with thousands separators (e.g. `10243` →
-/// `10,243`) for the indexed-track-count line.
-fn group_thousands(value: u32) -> String {
-    let digits = value.to_string();
-    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
-    let len = digits.len();
-    for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (len - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(ch);
-    }
-    grouped
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{SmartShuffleEntropy, entropy_to_value, group_thousands, value_to_entropy};
+    use super::{SmartShuffleEntropy, entropy_to_value, value_to_entropy};
 
     #[test]
     fn entropy_round_trips_through_slider_value() {
@@ -425,14 +414,5 @@ mod tests {
         assert_eq!(value_to_entropy(1.6), SmartShuffleEntropy::Adventurous);
         assert_eq!(value_to_entropy(-1.0), SmartShuffleEntropy::Focused);
         assert_eq!(value_to_entropy(99.0), SmartShuffleEntropy::Adventurous);
-    }
-
-    #[test]
-    fn thousands_grouping_matches_expectations() {
-        assert_eq!(group_thousands(0), "0");
-        assert_eq!(group_thousands(42), "42");
-        assert_eq!(group_thousands(1_000), "1,000");
-        assert_eq!(group_thousands(10_243), "10,243");
-        assert_eq!(group_thousands(1_234_567), "1,234,567");
     }
 }

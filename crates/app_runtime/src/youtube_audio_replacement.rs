@@ -9,6 +9,7 @@ use sustain_domain::{
     LibraryManagementMode, ManagedTrackPathInput, ManagedTrackPathPlanner, Track, TrackLocation,
     TrackRelativePath,
 };
+use sustain_i18n::gettext;
 use sustain_library_store::LibraryStore;
 use sustain_metadata::{MetadataService, audio_format_from_path, hash_file_content};
 
@@ -44,8 +45,9 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::YoutubeAudioReplacement,
                 NotificationSeverity::Warning,
-                "Recovered an interrupted YouTube audio replacement, but retained the previous pathname because its identity could not be proven."
-                    .to_owned(),
+                gettext(
+                    "Recovered an interrupted YouTube audio replacement, but retained the previous pathname because its identity could not be proven.",
+                ),
             );
         }
     }
@@ -76,7 +78,7 @@ impl ApplicationRuntime {
         let notification_id = self.push_persistent_notification(
             NotificationCategory::YoutubeAudioReplacement,
             NotificationSeverity::Info,
-            "Downloading replacement audio from YouTube...".to_owned(),
+            gettext("Downloading replacement audio from YouTube..."),
             false,
         );
         self.youtube_audio_replacement_notification_ids
@@ -126,7 +128,7 @@ impl ApplicationRuntime {
                     self.finish_youtube_audio_replacement(
                         result.track_id,
                         NotificationSeverity::Error,
-                        "The downloaded audio could not be published safely.".to_owned(),
+                        gettext("The downloaded audio could not be published safely."),
                     );
                 }
             }
@@ -134,7 +136,7 @@ impl ApplicationRuntime {
                 self.finish_youtube_audio_replacement(
                     result.track_id,
                     NotificationSeverity::Error,
-                    youtube_audio_download_error_text(error).to_owned(),
+                    youtube_audio_download_error_text(error),
                 );
             }
         }
@@ -158,13 +160,14 @@ impl ApplicationRuntime {
                 let (severity, body) = if result.original_retained {
                     (
                         NotificationSeverity::Warning,
-                        "Replacement installed, but the previous audio file could not be moved to trash."
-                            .to_owned(),
+                        gettext(
+                            "Replacement installed, but the previous audio file could not be moved to trash.",
+                        ),
                     )
                 } else {
                     (
                         NotificationSeverity::Info,
-                        "Track audio replaced from YouTube.".to_owned(),
+                        gettext("Track audio replaced from YouTube."),
                     )
                 };
                 self.finish_youtube_audio_replacement(result.track_id, severity, body);
@@ -173,7 +176,7 @@ impl ApplicationRuntime {
                 self.finish_youtube_audio_replacement(
                     result.track_id,
                     NotificationSeverity::Error,
-                    crate::runtime_error_text(&error).to_owned(),
+                    crate::runtime_error_text(&error),
                 );
             }
         }
@@ -217,8 +220,8 @@ impl ApplicationRuntime {
     }
 }
 
-fn youtube_audio_download_error_text(error: YoutubeAudioDownloadError) -> &'static str {
-    match error {
+fn youtube_audio_download_error_text(error: YoutubeAudioDownloadError) -> String {
+    gettext(match error {
         YoutubeAudioDownloadError::InvalidUrl => "Paste a valid YouTube URL.",
         YoutubeAudioDownloadError::YtDlpUnavailable => {
             "Install yt-dlp and FFmpeg before replacing audio from YouTube."
@@ -236,7 +239,7 @@ fn youtube_audio_download_error_text(error: YoutubeAudioDownloadError) -> &'stat
             "The YouTube audio download exceeded Sustain's time limit."
         }
         YoutubeAudioDownloadError::Cancelled => "The YouTube audio download was cancelled.",
-    }
+    })
 }
 
 pub(crate) fn replace_track_audio_from_youtube(

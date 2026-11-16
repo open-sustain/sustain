@@ -27,6 +27,7 @@ use sustain_app_runtime::{
     ApplicationCommand, CollationKey, ConnectedDevice, DeviceAnalysisReadiness, DeviceLayout,
     DeviceSyncPlanState, FilesPerFolderCap, PlaylistItem, SyncPlan,
 };
+use sustain_i18n::{gettext, ngettext, npgettext, pgettext, phrase_list, plural_count, tr_format};
 
 use crate::SharedRuntime;
 use crate::command_controller::SharedCommandController;
@@ -230,21 +231,21 @@ impl DeviceSyncPanel {
         let playlists_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
         playlists_column.set_hexpand(true);
         playlists_column.set_vexpand(true);
-        playlists_column.append(&section_label("Playlists to sync"));
+        playlists_column.append(&section_label(&gettext("Playlists to sync")));
         playlists_column.append(&self.build_playlist_container(device));
         columns.append(&playlists_column);
 
         let artists_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
         artists_column.set_hexpand(true);
         artists_column.set_vexpand(true);
-        artists_column.append(&section_label("Artists to sync"));
+        artists_column.append(&section_label(&gettext("Artists to sync")));
         artists_column.append(&self.build_artist_container(device));
         columns.append(&artists_column);
 
         let settings_column = gtk::Box::new(gtk::Orientation::Vertical, 6);
         settings_column.set_valign(gtk::Align::Start);
         settings_column.set_size_request(SETTINGS_COLUMN_WIDTH, -1);
-        settings_column.append(&section_label("On-drive format"));
+        settings_column.append(&section_label(&gettext("On-drive format")));
         let format_group = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let mut anchor: Option<gtk::CheckButton> = None;
         for layout in DeviceLayout::ALL {
@@ -298,8 +299,8 @@ impl DeviceSyncPanel {
         device: &ConnectedDevice,
         current: FilesPerFolderCap,
     ) {
-        container.append(&section_label("Files per folder"));
-        let caption = gtk::Label::new(Some("Before chunking into numbered subfolders."));
+        container.append(&section_label(&gettext("Files per folder")));
+        let caption = gtk::Label::new(Some(&gettext("Before chunking into numbered subfolders.")));
         caption.set_xalign(0.0);
         caption.set_wrap(true);
         caption.add_css_class("dim-label");
@@ -356,12 +357,18 @@ impl DeviceSyncPanel {
     fn populate_pioneer_readiness(&self, section: &gtk::Box, device: &ConnectedDevice) {
         Self::clear(section);
         let readiness = self.runtime.borrow().device_analysis_readiness(&device.id);
-        section.append(&section_label("Analysis"));
-        section.append(&analysis_status_row("BPM", readiness.missing_bpm));
-        section.append(&analysis_status_row("Key", readiness.missing_key));
-        section.append(&analysis_status_row("Waveform", readiness.missing_waveform));
+        section.append(&section_label(&gettext("Analysis")));
+        section.append(&analysis_status_row(&gettext("BPM"), readiness.missing_bpm));
         section.append(&analysis_status_row(
-            "Beat grid",
+            &pgettext("musical key", "Key"),
+            readiness.missing_key,
+        ));
+        section.append(&analysis_status_row(
+            &gettext("Waveform"),
+            readiness.missing_waveform,
+        ));
+        section.append(&analysis_status_row(
+            &gettext("Beat grid"),
             readiness.missing_beat_grid,
         ));
     }
@@ -432,7 +439,9 @@ impl DeviceSyncPanel {
         drop(runtime);
 
         if entries.is_empty() {
-            let empty = gtk::Label::new(Some("No playlists yet. Create a playlist to sync it."));
+            let empty = gtk::Label::new(Some(&gettext(
+                "No playlists yet. Create a playlist to sync it.",
+            )));
             empty.set_xalign(0.0);
             empty.set_valign(gtk::Align::Start);
             empty.add_css_class("dim-label");
@@ -482,9 +491,9 @@ impl DeviceSyncPanel {
             .collect();
 
         if entries.is_empty() {
-            let empty = gtk::Label::new(Some(
+            let empty = gtk::Label::new(Some(&gettext(
                 "No artists yet. Add music with artist tags to sync by artist.",
-            ));
+            )));
             empty.set_xalign(0.0);
             empty.set_valign(gtk::Align::Start);
             empty.add_css_class("dim-label");
@@ -549,27 +558,28 @@ impl DeviceSyncPanel {
         let over_capacity = total_bytes > 0 && needed_bytes > available_bytes;
 
         let (fraction, text) = if !connected {
-            (0.0, "Device disconnected".to_owned())
+            (0.0, gettext("Device disconnected"))
         } else if pending {
-            (0.0, "Calculating device sync plan...".to_owned())
+            (0.0, gettext("Calculating device sync plan..."))
         } else if total_bytes == 0 {
-            (0.0, "Device capacity unavailable".to_owned())
+            (0.0, gettext("Device capacity unavailable"))
         } else if over_capacity {
             (
                 1.0,
-                format!(
-                    "Not enough space — {} needed, {} free",
-                    human_bytes(needed_bytes),
-                    human_bytes(available_bytes)
+                tr_format!(
+                    gettext("Not enough space — {needed} needed, {free} free"),
+                    needed = human_bytes(needed_bytes),
+                    free = human_bytes(available_bytes)
                 ),
             )
         } else {
             (
                 selected_bytes as f64 / total_bytes as f64,
-                format!(
-                    "{} of {}",
-                    human_bytes(selected_bytes),
-                    human_bytes(total_bytes)
+                tr_format!(
+                    // Translators: the device meter, as in "3.2 GB of 64 GB".
+                    gettext("{used} of {total}"),
+                    used = human_bytes(selected_bytes),
+                    total = human_bytes(total_bytes)
                 ),
             )
         };
@@ -594,7 +604,7 @@ impl DeviceSyncPanel {
         // --- Actions (extreme right) ---
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
 
-        let forget = gtk::Button::with_label("Forget device");
+        let forget = gtk::Button::with_label(&gettext("Forget device"));
         {
             let panel = self.clone();
             let device_id = device.id.clone();
@@ -606,9 +616,9 @@ impl DeviceSyncPanel {
                     });
                 Self::clear(&panel.body);
                 Self::clear(&panel.bottom_bar);
-                let note = gtk::Label::new(Some(
+                let note = gtk::Label::new(Some(&gettext(
                     "Device forgotten. Its saved playlists, artists, and sync history were cleared.",
-                ));
+                )));
                 note.set_xalign(0.0);
                 note.set_valign(gtk::Align::Start);
                 note.set_margin_top(18);
@@ -626,14 +636,13 @@ impl DeviceSyncPanel {
         // Analyse the selection's missing BPM/key/waveforms. Only shown
         // when there is something analysable (always zero off Pioneer).
         if readiness.analyzable > 0 {
-            let analyse = gtk::Button::with_label(&format!(
-                "Analyse {} missing {}",
-                readiness.analyzable,
-                if readiness.analyzable == 1 {
-                    "track"
-                } else {
-                    "tracks"
-                },
+            let analyse = gtk::Button::with_label(&tr_format!(
+                ngettext(
+                    "Analyse {count} missing track",
+                    "Analyse {count} missing tracks",
+                    plural_count(readiness.analyzable)
+                ),
+                count = readiness.analyzable
             ));
             {
                 let panel = self.clone();
@@ -649,7 +658,7 @@ impl DeviceSyncPanel {
             actions.append(&analyse);
         }
 
-        let sync = gtk::Button::with_label("Sync");
+        let sync = gtk::Button::with_label(&gettext("Sync"));
         sync.add_css_class("suggested-action");
         sync.set_sensitive(connected && !pending && plan.is_some() && !over_capacity);
         {
@@ -723,14 +732,22 @@ fn analysis_status_row(name: &str, missing: usize) -> gtk::Box {
         (
             "object-select-symbolic",
             "ok",
-            "Complete".to_owned(),
+            gettext("Complete"),
             "device-analysis-ok",
         )
     } else {
         (
             "emblem-important-symbolic",
             "warn",
-            format!("{missing} missing"),
+            tr_format!(
+                npgettext(
+                    "count of tracks",
+                    "{count} missing",
+                    "{count} missing",
+                    plural_count(missing)
+                ),
+                count = missing
+            ),
             "device-analysis-warn",
         )
     };
@@ -821,7 +838,8 @@ fn genre_segments(plan: &SyncPlan, total_bytes: u64) -> Vec<BarSegment> {
     let mut other_count = 0usize;
     for (rank, genre) in plan.genre_bytes.iter().enumerate() {
         if rank < GENRE_PALETTE_CAP {
-            let name = genre.genre.as_deref().unwrap_or("Unknown");
+            let unknown = gettext("Unknown");
+            let name = genre.genre.as_deref().unwrap_or(&unknown);
             segments.push(BarSegment {
                 fraction: genre.bytes as f64 / total_bytes as f64,
                 tint: SegmentTint::AccentHue(rank as f64 * hue_step),
@@ -1033,22 +1051,36 @@ impl PreSyncWarnings {
         }
         let mut parts = Vec::new();
         if self.missing_bpm > 0 {
-            parts.push(format!("{} missing BPM", self.missing_bpm));
+            parts.push(tr_format!(
+                gettext("{count} missing BPM"),
+                count = self.missing_bpm
+            ));
         }
         if self.missing_key > 0 {
-            parts.push(format!("{} missing key", self.missing_key));
+            parts.push(tr_format!(
+                gettext("{count} missing key"),
+                count = self.missing_key
+            ));
         }
         if self.missing_waveform > 0 {
-            parts.push(format!("{} missing waveform", self.missing_waveform));
+            parts.push(tr_format!(
+                gettext("{count} missing waveform"),
+                count = self.missing_waveform
+            ));
         }
         if self.missing_beat_grid > 0 {
-            parts.push(format!("{} missing beat grid", self.missing_beat_grid));
+            parts.push(tr_format!(
+                gettext("{count} missing beat grid"),
+                count = self.missing_beat_grid
+            ));
         }
-        Some(format!(
-            "Some selected tracks are not fully analysed ({}). They will still sync, \
-             but that information will be missing on Pioneer players. Run Analyse first \
-             to fill the gaps.",
-            parts.join(", "),
+        Some(tr_format!(
+            gettext(
+                "Some selected tracks are not fully analysed ({gaps}). They will still sync, \
+                 but that information will be missing on Pioneer players. Run Analyse first \
+                 to fill the gaps."
+            ),
+            gaps = phrase_list(&parts)
         ))
     }
 
@@ -1057,15 +1089,13 @@ impl PreSyncWarnings {
         if self.remove_count == 0 {
             return None;
         }
-        Some(format!(
-            "Syncing will remove {} {} from this device that {} no longer in your selected playlists.",
-            self.remove_count,
-            if self.remove_count == 1 {
-                "track"
-            } else {
-                "tracks"
-            },
-            if self.remove_count == 1 { "is" } else { "are" },
+        Some(tr_format!(
+            ngettext(
+                "Syncing will remove {count} track from this device that is no longer in your selected playlists.",
+                "Syncing will remove {count} tracks from this device that are no longer in your selected playlists.",
+                plural_count(self.remove_count)
+            ),
+            count = self.remove_count
         ))
     }
 }
@@ -1084,16 +1114,16 @@ fn confirm_sync(parent: &gtk::Window, warnings: PreSyncWarnings, on_confirm: imp
     // Removals delete files, so keep the stronger wording; an analysis-only
     // caution is a plain "proceed anyway".
     let confirm_label = if warnings.remove_count > 0 {
-        "Sync and remove"
+        gettext("Sync and remove")
     } else {
-        "Sync anyway"
+        gettext("Sync anyway")
     };
 
     crate::confirmation::show_confirmation_alert(
         parent,
-        "Sync device",
+        &gettext("Sync device"),
         &detail,
-        confirm_label,
+        &confirm_label,
         on_confirm,
     );
 }

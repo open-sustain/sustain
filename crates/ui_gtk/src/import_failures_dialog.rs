@@ -13,12 +13,13 @@ use std::path::Path;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 use sustain_app_runtime::{ImportFailure, import_failure_reason_text};
+use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 
 /// Lists `failures` in a window over `parent`. The list is virtualized, so
 /// an import that left out thousands of files opens it as quickly.
 pub(crate) fn show_import_failures(parent: &gtk::Window, failures: Vec<ImportFailure>) {
     let window = gtk::Window::builder()
-        .title("Files Not Imported")
+        .title(gettext("Files Not Imported"))
         .transient_for(parent)
         .modal(true)
         .default_width(640)
@@ -32,11 +33,14 @@ pub(crate) fn show_import_failures(parent: &gtk::Window, failures: Vec<ImportFai
     content.set_margin_start(18);
 
     let count = failures.len();
-    let heading = gtk::Label::new(Some(&if count == 1 {
-        "1 file could not be imported. The rest of the import went ahead.".to_owned()
-    } else {
-        format!("{count} files could not be imported. The rest of the import went ahead.")
-    }));
+    let heading = gtk::Label::new(Some(&tr_format!(
+        ngettext(
+            "{count} file could not be imported. The rest of the import went ahead.",
+            "{count} files could not be imported. The rest of the import went ahead.",
+            plural_count(count)
+        ),
+        count = count
+    )));
     heading.set_xalign(0.0);
     heading.set_wrap(true);
     content.append(&heading);
@@ -57,7 +61,7 @@ pub(crate) fn show_import_failures(parent: &gtk::Window, failures: Vec<ImportFai
     scroller.set_child(Some(&list));
     content.append(&scroller);
 
-    let close = gtk::Button::with_label("OK");
+    let close = gtk::Button::with_label(&gettext("OK"));
     close.add_css_class("suggested-action");
     close.set_halign(gtk::Align::End);
     let window_for_close = window.downgrade();
@@ -153,8 +157,13 @@ fn failure_row_text(failure: &ImportFailure) -> (String, String) {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        Some(folder) => format!("{} — {reason}", folder.display()),
-        None => reason.to_owned(),
+        Some(folder) => tr_format!(
+            // Translators: a skipped file's folder, then why it was skipped.
+            gettext("{folder} — {reason}"),
+            folder = folder.display(),
+            reason = reason
+        ),
+        None => reason,
     };
     (name, detail)
 }

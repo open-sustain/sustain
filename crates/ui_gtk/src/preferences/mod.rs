@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
+use sustain_i18n::{gettext, pgettext};
 
 use super::{
     PREFERENCES_WIDTH, WINDOW_SHADOW_MARGIN, command_controller::SharedCommandController,
@@ -149,7 +150,7 @@ pub(crate) fn settings_button(
     icon.set_pixel_size(14);
     icon.add_css_class("status-bar-settings-icon");
 
-    let label = gtk::Label::new(Some("Settings"));
+    let label = gtk::Label::new(Some(&gettext("Settings")));
     label.set_xalign(0.0);
 
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -160,7 +161,7 @@ pub(crate) fn settings_button(
     button.add_css_class("flat");
     button.add_css_class("status-bar-settings-button");
     button.set_child(Some(&content));
-    button.set_tooltip_text(Some("Preferences (Ctrl+,)"));
+    button.set_tooltip_text(Some(&gettext("Preferences (Ctrl+,)")));
 
     let window = window.clone();
     let command_controller = command_controller.clone();
@@ -185,7 +186,7 @@ fn open_preferences_window(
     initial_tab: &str,
 ) {
     let window = gtk::Window::builder()
-        .title("Preferences")
+        .title(gettext("Preferences"))
         .decorated(false)
         .transient_for(parent)
         .modal(true)
@@ -289,13 +290,16 @@ fn open_preferences_window(
 /// Builds the headerless drag surface that combines the three icon-above-label
 /// tab buttons and the close button on the trailing end.
 fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window, initial_tab: &str) -> gtk::Widget {
-    let library_button = build_tab_button("folder-music-symbolic", "Library");
-    let encoding_button = build_tab_button("media-optical-symbolic", "Encoding");
-    let analysis_button = build_tab_button("applications-science-symbolic", "Analysis");
-    let online_button = build_tab_button("network-transmit-receive-symbolic", "Online");
-    let shuffle_button = build_tab_button("media-playlist-shuffle-symbolic", "Shuffle");
-    let views_button = build_tab_button("view-list-symbolic", "Views");
-    let about_button = build_tab_button("help-about-symbolic", "About");
+    let library_button = build_tab_button("folder-music-symbolic", &gettext("Library"));
+    let encoding_button = build_tab_button("media-optical-symbolic", &gettext("Encoding"));
+    let analysis_button = build_tab_button("applications-science-symbolic", &gettext("Analysis"));
+    let online_button = build_tab_button("network-transmit-receive-symbolic", &gettext("Online"));
+    let shuffle_button = build_tab_button(
+        "media-playlist-shuffle-symbolic",
+        &pgettext("preferences tab", "Shuffle"),
+    );
+    let views_button = build_tab_button("view-list-symbolic", &gettext("Views"));
+    let about_button = build_tab_button("help-about-symbolic", &gettext("About"));
 
     // Group them all so exactly one is active at a time.
     encoding_button.set_group(Some(&library_button));
@@ -344,7 +348,7 @@ fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window, initial_tab: &str) 
     close_button.add_css_class("flat");
     close_button.add_css_class("preference-close-button");
     close_button.set_child(Some(&close_icon));
-    close_button.set_tooltip_text(Some("Close"));
+    close_button.set_tooltip_text(Some(&gettext("Close")));
     close_button.set_valign(gtk::Align::Center);
     close_button.set_margin_end(8);
 

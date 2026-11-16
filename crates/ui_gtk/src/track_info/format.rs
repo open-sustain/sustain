@@ -5,6 +5,7 @@ use std::{
     path::Path,
     time::{Duration, SystemTime},
 };
+use sustain_i18n::{gettext, ngettext, tr_format};
 
 use crate::date_format::format_system_time_short;
 
@@ -17,13 +18,17 @@ pub(super) fn format_kind(path: Option<&Path>) -> String {
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase);
     match extension.as_deref() {
-        Some("mp3") => "MPEG audio file".to_owned(),
-        Some("flac") => "FLAC audio file".to_owned(),
-        Some("ogg" | "oga") => "Ogg Vorbis audio file".to_owned(),
-        Some("opus") => "Opus audio file".to_owned(),
-        Some("m4a" | "m4b" | "mp4") => "MPEG-4 audio file".to_owned(),
-        Some(other) => format!("{} audio file", other.to_ascii_uppercase()),
-        None => "Audio file".to_owned(),
+        Some("mp3") => gettext("MPEG audio file"),
+        Some("flac") => gettext("FLAC audio file"),
+        Some("ogg" | "oga") => gettext("Ogg Vorbis audio file"),
+        Some("opus") => gettext("Opus audio file"),
+        Some("m4a" | "m4b" | "mp4") => gettext("MPEG-4 audio file"),
+        Some(other) => tr_format!(
+            // Translators: {format} is a file extension in capitals, such as "WAV".
+            gettext("{format} audio file"),
+            format = other.to_ascii_uppercase()
+        ),
+        None => gettext("Audio file"),
     }
 }
 
@@ -84,9 +89,12 @@ pub(super) fn format_sample_rate(sample_rate_hz: Option<u32>) -> String {
 
 pub(super) fn format_channels(channels: Option<u8>) -> String {
     match channels {
-        Some(1) => "Mono".to_owned(),
-        Some(2) => "Stereo".to_owned(),
-        Some(count) => format!("{count} channels"),
+        Some(1) => gettext("Mono"),
+        Some(2) => gettext("Stereo"),
+        Some(count) => tr_format!(
+            ngettext("{count} channel", "{count} channels", u32::from(count)),
+            count = count
+        ),
         None => String::from("\u{2014}"),
     }
 }

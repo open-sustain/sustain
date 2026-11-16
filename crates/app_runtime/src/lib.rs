@@ -39,6 +39,7 @@ pub use sustain_domain::{
     compute_library_statistics, default_duplicate_merge_choices, duplicate_audio_quality,
     effective_sort_key, highest_quality_duplicate_artwork, matching_tracks, track_matches_rule_set,
 };
+use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities, StoreError};
 pub use sustain_metadata::{
     AudioFormat, MalformedTagError, MetadataError, MetadataService, ScanFailure,
@@ -964,7 +965,7 @@ impl ApplicationRuntime {
         let notification_id = self.push_persistent_notification(
             NotificationCategory::LibraryHydration,
             NotificationSeverity::Info,
-            "Loading library…".to_owned(),
+            gettext("Loading library…"),
             false,
         );
         self.library_hydration_notification_id = Some(notification_id);
@@ -1000,7 +1001,7 @@ impl ApplicationRuntime {
                 self.push_persistent_notification(
                     NotificationCategory::LibraryHydration,
                     NotificationSeverity::Error,
-                    "The music library could not be loaded.".to_owned(),
+                    gettext("The music library could not be loaded."),
                     false,
                 );
                 false
@@ -1109,7 +1110,7 @@ impl ApplicationRuntime {
                     self.push_ephemeral_notification(
                         NotificationCategory::MetadataWrite,
                         NotificationSeverity::Info,
-                        "Artwork updated.".to_owned(),
+                        gettext("Artwork updated."),
                     );
                 }
             }
@@ -1181,8 +1182,9 @@ impl ApplicationRuntime {
                 self.report_managed_library_filesystem_error(&error);
                 self.push_or_update_managed_metadata_retarget_warning(
                     result.track_id,
-                    "A managed-library metadata edit could not finish safely. Sustain retained its recovery state where needed. Resolve filesystem access and retry the edit."
-                        .to_owned(),
+                    gettext(
+                        "A managed-library metadata edit could not finish safely. Sustain retained its recovery state where needed. Resolve filesystem access and retry the edit.",
+                    ),
                 );
             }
         }
@@ -1261,7 +1263,7 @@ impl ApplicationRuntime {
         let id = self.push_persistent_notification(
             NotificationCategory::MetadataWrite,
             NotificationSeverity::Error,
-            notifications::metadata_write_retry_text().to_owned(),
+            notifications::metadata_write_retry_text(),
             false,
         );
         self.metadata_write_notification_id = Some(id);
@@ -2262,7 +2264,7 @@ impl ApplicationRuntime {
             let id = self.push_persistent_notification(
                 NotificationCategory::TrackReconciliation,
                 NotificationSeverity::Warning,
-                notifications::track_reconciliation_retry_text().to_owned(),
+                notifications::track_reconciliation_retry_text(),
                 false,
             );
             self.track_reconciliation.set_notification(Some(id));
@@ -2439,7 +2441,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::Settings,
                 NotificationSeverity::Warning,
-                runtime_error_text(&ApplicationRuntimeError::SettingsSaveFailed).to_owned(),
+                runtime_error_text(&ApplicationRuntimeError::SettingsSaveFailed),
             );
             return Err(ApplicationRuntimeError::SettingsSaveFailed);
         }
@@ -2549,7 +2551,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::SmartShuffle,
                 NotificationSeverity::Warning,
-                "Smart Shuffle: failed to serialise the rebuilt index.".to_owned(),
+                gettext("Smart Shuffle: failed to serialise the rebuilt index."),
             );
             return;
         };
@@ -2563,7 +2565,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::SmartShuffle,
                 NotificationSeverity::Warning,
-                "Smart Shuffle: failed to persist the rebuilt index.".to_owned(),
+                gettext("Smart Shuffle: failed to persist the rebuilt index."),
             );
             return;
         }
@@ -2826,10 +2828,7 @@ impl ApplicationRuntime {
                 self.push_ephemeral_notification(
                     NotificationCategory::AnalysisBackground,
                     NotificationSeverity::Info,
-                    format!(
-                        "Background {} is enabled. These tracks are already queued by the global sweep.",
-                        capability.label()
-                    ),
+                    capability.background_enabled_text(),
                 );
                 return RunDecision::DeniedBackgroundEnabled;
             }
@@ -2854,7 +2853,7 @@ impl ApplicationRuntime {
             self.push_ephemeral_notification(
                 NotificationCategory::AnalysisBackground,
                 NotificationSeverity::Info,
-                already_complete_text(original_count, request.label()),
+                request.already_complete_text(original_count),
             );
             return RunDecision::AlreadyComplete;
         }
@@ -2866,7 +2865,7 @@ impl ApplicationRuntime {
         self.push_ephemeral_notification(
             NotificationCategory::AnalysisBackground,
             NotificationSeverity::Info,
-            queued_text(count, request.label()),
+            request.queued_text(count),
         );
         RunDecision::Accepted
     }
@@ -2899,24 +2898,9 @@ impl ApplicationRuntime {
         self.push_ephemeral_notification(
             NotificationCategory::OnlineBackground,
             NotificationSeverity::Info,
-            queued_text(count, request.label()),
+            request.queued_text(count),
         );
         RunDecision::Accepted
-    }
-}
-
-fn queued_text(count: usize, label: &str) -> String {
-    format!(
-        "Queued {count} {noun} for {label}.",
-        noun = if count == 1 { "track" } else { "tracks" },
-    )
-}
-
-fn already_complete_text(count: usize, label: &str) -> String {
-    if count == 1 {
-        format!("That track already has {label} — nothing to queue.")
-    } else {
-        format!("All {count} tracks already have {label} — nothing to queue.")
     }
 }
 
@@ -2959,13 +2943,19 @@ pub enum AnalysisCapability {
 }
 
 impl AnalysisCapability {
-    /// Human-readable label for the notification text the runtime
-    /// emits when a per-set run is accepted or denied.
-    pub fn label(self) -> &'static str {
+    /// Why a per-set run is refused while the background sweep for this
+    /// capability is on.
+    fn background_enabled_text(self) -> String {
         match self {
-            Self::Bpm => "BPM analysis",
-            Self::Key => "key detection",
-            Self::Audio => "audio analysis",
+            Self::Bpm => gettext(
+                "Background BPM analysis is enabled. These tracks are already queued by the global sweep.",
+            ),
+            Self::Key => gettext(
+                "Background key detection is enabled. These tracks are already queued by the global sweep.",
+            ),
+            Self::Audio => gettext(
+                "Background audio analysis is enabled. These tracks are already queued by the global sweep.",
+            ),
         }
     }
 }
@@ -2977,16 +2967,6 @@ pub enum OnlineCapability {
     Lyrics,
     Artwork,
     Tags,
-}
-
-impl OnlineCapability {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Lyrics => "lyrics retrieval",
-            Self::Artwork => "artwork retrieval",
-            Self::Tags => "tag enrichment",
-        }
-    }
 }
 
 /// Shape of an analysis-run request submitted by the right-click
@@ -3026,12 +3006,61 @@ impl AnalysisRunRequest {
         }
     }
 
-    /// Notification label for the accepted case.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Single(capability) => capability.label(),
-            Self::All => "analysis",
-        }
+    /// The notification for an accepted run of `count` tracks.
+    fn queued_text(self, count: usize) -> String {
+        let n = plural_count(count);
+        let message = match self {
+            Self::Single(AnalysisCapability::Bpm) => ngettext(
+                "Queued {count} track for BPM analysis.",
+                "Queued {count} tracks for BPM analysis.",
+                n,
+            ),
+            Self::Single(AnalysisCapability::Key) => ngettext(
+                "Queued {count} track for key detection.",
+                "Queued {count} tracks for key detection.",
+                n,
+            ),
+            Self::Single(AnalysisCapability::Audio) => ngettext(
+                "Queued {count} track for audio analysis.",
+                "Queued {count} tracks for audio analysis.",
+                n,
+            ),
+            Self::All => ngettext(
+                "Queued {count} track for analysis.",
+                "Queued {count} tracks for analysis.",
+                n,
+            ),
+        };
+        tr_format!(message, count = count)
+    }
+
+    /// The notification for a request whose `count` tracks all have what
+    /// it would measure.
+    fn already_complete_text(self, count: usize) -> String {
+        let n = plural_count(count);
+        let message = match self {
+            Self::Single(AnalysisCapability::Bpm) => ngettext(
+                "That track already has BPM analysis — nothing to queue.",
+                "All {count} tracks already have BPM analysis — nothing to queue.",
+                n,
+            ),
+            Self::Single(AnalysisCapability::Key) => ngettext(
+                "That track already has key detection — nothing to queue.",
+                "All {count} tracks already have key detection — nothing to queue.",
+                n,
+            ),
+            Self::Single(AnalysisCapability::Audio) => ngettext(
+                "That track already has audio analysis — nothing to queue.",
+                "All {count} tracks already have audio analysis — nothing to queue.",
+                n,
+            ),
+            Self::All => ngettext(
+                "That track already has analysis — nothing to queue.",
+                "All {count} tracks already have analysis — nothing to queue.",
+                n,
+            ),
+        };
+        tr_format!(message, count = count)
     }
 }
 
@@ -3069,11 +3098,32 @@ impl OnlineRunRequest {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Single(capability) => capability.label(),
-            Self::All => "online retrieval",
-        }
+    /// The notification for an accepted run of `count` tracks.
+    fn queued_text(self, count: usize) -> String {
+        let n = plural_count(count);
+        let message = match self {
+            Self::Single(OnlineCapability::Lyrics) => ngettext(
+                "Queued {count} track for lyrics retrieval.",
+                "Queued {count} tracks for lyrics retrieval.",
+                n,
+            ),
+            Self::Single(OnlineCapability::Artwork) => ngettext(
+                "Queued {count} track for artwork retrieval.",
+                "Queued {count} tracks for artwork retrieval.",
+                n,
+            ),
+            Self::Single(OnlineCapability::Tags) => ngettext(
+                "Queued {count} track for tag enrichment.",
+                "Queued {count} tracks for tag enrichment.",
+                n,
+            ),
+            Self::All => ngettext(
+                "Queued {count} track for online retrieval.",
+                "Queued {count} tracks for online retrieval.",
+                n,
+            ),
+        };
+        tr_format!(message, count = count)
     }
 }
 

@@ -14,6 +14,7 @@ use sustain_app_runtime::{
     ApplicationCommand, SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection,
     SmartPlaylistMatchKind, SmartPlaylistRule, SmartPlaylistRuleSet,
 };
+use sustain_i18n::gettext;
 
 use super::{
     SMART_PLAYLIST_EDITOR_HEIGHT, SMART_PLAYLIST_EDITOR_WIDTH, WINDOW_SHADOW_MARGIN,
@@ -26,7 +27,8 @@ use model::{
     EDITOR_FIELDS, EditorField, EditorOperator, LIMIT_SELECTIONS, MATCH_KINDS, RuleError,
     ValueInput, ValueKind, automatic_name_for_single_text_rule, decompose_rule,
     effective_value_kind, extract_rule, index_of_field, index_of_limit_selection,
-    index_of_match_kind, index_of_operator, operators_for_field,
+    index_of_match_kind, index_of_operator, limit_selection_label, match_kind_label,
+    operators_for_field,
 };
 
 #[derive(Clone)]
@@ -58,7 +60,7 @@ impl ValueWidget {
             ValueKind::Text => {
                 let entry = gtk::Entry::new();
                 entry.set_hexpand(true);
-                entry.set_placeholder_text(Some("value"));
+                entry.set_placeholder_text(Some(&gettext("value")));
                 Self::Text(entry)
             }
             ValueKind::Number => {
@@ -86,7 +88,10 @@ impl ValueWidget {
                 spin.set_digits(0);
                 Self::Days(spin)
             }
-            ValueKind::Bool => Self::Bool(gtk::DropDown::from_strings(&["Yes", "No"])),
+            ValueKind::Bool => Self::Bool(gtk::DropDown::from_strings(&[
+                &gettext("Yes"),
+                &gettext("No"),
+            ])),
             ValueKind::None => Self::None,
         }
     }
@@ -105,8 +110,8 @@ impl RuleRow {
         let (initial_field, initial_operator, initial_value) = match initial {
             Some(rule) => decompose_rule(rule),
             None => (
-                EDITOR_FIELDS[0].0,
-                operators_for_field(EDITOR_FIELDS[0].0)[0],
+                EDITOR_FIELDS[0],
+                operators_for_field(EDITOR_FIELDS[0])[0],
                 ValueInput::None,
             ),
         };
@@ -114,12 +119,8 @@ impl RuleRow {
         let container = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         container.add_css_class("smart-playlist-rule-row");
 
-        let field_model = gtk::StringList::new(
-            &EDITOR_FIELDS
-                .iter()
-                .map(|(_, label)| *label)
-                .collect::<Vec<_>>(),
-        );
+        let field_model: gtk::StringList =
+            EDITOR_FIELDS.iter().map(|field| field.label()).collect();
         let field_combo = gtk::DropDown::new(Some(field_model), gtk::Expression::NONE);
         field_combo.set_selected(index_of_field(initial_field));
 
@@ -132,7 +133,8 @@ impl RuleRow {
         let value_container = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         value_container.set_hexpand(true);
 
-        let days_suffix = gtk::Label::new(Some("days"));
+        // Translators: follows the day count of "is in the last [7] days".
+        let days_suffix = gtk::Label::new(Some(&gettext("days")));
         days_suffix.set_visible(false);
 
         let current_field = Rc::new(Cell::new(initial_field));
@@ -161,7 +163,7 @@ impl RuleRow {
         let days_suffix_for_field = days_suffix.clone();
         field_combo.connect_selected_notify(move |dropdown| {
             let index = dropdown.selected() as usize;
-            let Some((field, _)) = EDITOR_FIELDS.get(index).copied() else {
+            let Some(field) = EDITOR_FIELDS.get(index).copied() else {
                 return;
             };
             current_field_for_field.set(field);
@@ -251,11 +253,10 @@ fn install_value_widget(
 }
 
 fn operator_model_for_field(field: EditorField) -> gtk::StringList {
-    let labels: Vec<&str> = operators_for_field(field)
+    operators_for_field(field)
         .iter()
         .map(|op| op.label())
-        .collect();
-    gtk::StringList::new(&labels)
+        .collect()
 }
 
 fn apply_initial_value(widget: &ValueWidget, input: &ValueInput) {
@@ -290,7 +291,7 @@ pub(crate) fn open_smart_playlist_editor(
     mode: SmartPlaylistEditorMode,
 ) {
     let window = gtk::Window::builder()
-        .title("Smart Playlist")
+        .title(gettext("Smart Playlist"))
         .decorated(false)
         .transient_for(parent)
         .modal(true)
@@ -330,14 +331,14 @@ pub(crate) fn open_smart_playlist_editor(
     };
 
     let match_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let match_prefix = gtk::Label::new(Some("Match"));
+    let match_prefix = gtk::Label::new(Some(&gettext("Match")));
     let match_combo = gtk::DropDown::new(
-        Some(gtk::StringList::new(
-            &MATCH_KINDS
+        Some(
+            MATCH_KINDS
                 .iter()
-                .map(|(_, label)| *label)
-                .collect::<Vec<_>>(),
-        )),
+                .map(|kind| match_kind_label(*kind))
+                .collect::<gtk::StringList>(),
+        ),
         gtk::Expression::NONE,
     );
     match_combo.set_selected(
@@ -345,7 +346,7 @@ pub(crate) fn open_smart_playlist_editor(
             .map(|rules| index_of_match_kind(rules.match_kind))
             .unwrap_or(0),
     );
-    let match_suffix = gtk::Label::new(Some("of the following rules:"));
+    let match_suffix = gtk::Label::new(Some(&gettext("of the following rules:")));
     match_row.append(&match_prefix);
     match_row.append(&match_combo);
     match_row.append(&match_suffix);
@@ -367,19 +368,19 @@ pub(crate) fn open_smart_playlist_editor(
 
     let limit_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     limit_row.add_css_class("smart-playlist-limit-row");
-    let limit_check = gtk::CheckButton::with_label("Limit to");
+    let limit_check = gtk::CheckButton::with_label(&gettext("Limit to"));
     let limit_count = gtk::SpinButton::with_range(1.0, 10_000.0, 1.0);
     limit_count.set_value(25.0);
     limit_count.set_digits(0);
     limit_count.set_sensitive(false);
-    let limit_unit = gtk::Label::new(Some("songs, selected by"));
+    let limit_unit = gtk::Label::new(Some(&gettext("songs, selected by")));
     let limit_selection_combo = gtk::DropDown::new(
-        Some(gtk::StringList::new(
-            &LIMIT_SELECTIONS
+        Some(
+            LIMIT_SELECTIONS
                 .iter()
-                .map(|(_, label)| *label)
-                .collect::<Vec<_>>(),
-        )),
+                .map(|selection| limit_selection_label(*selection))
+                .collect::<gtk::StringList>(),
+        ),
         gtk::Expression::NONE,
     );
     limit_selection_combo.set_selected(0);
@@ -423,8 +424,8 @@ pub(crate) fn open_smart_playlist_editor(
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     buttons.set_halign(gtk::Align::End);
 
-    let cancel_button = gtk::Button::with_label("Cancel");
-    let ok_button = gtk::Button::with_label("OK");
+    let cancel_button = gtk::Button::with_label(&gettext("Cancel"));
+    let ok_button = gtk::Button::with_label(&gettext("OK"));
     ok_button.add_css_class("suggested-action");
 
     let window_for_cancel = window.clone();
@@ -567,7 +568,7 @@ fn close_row_for(window: &gtk::Window) -> gtk::Box {
     close_button.add_css_class("flat");
     close_button.add_css_class("preference-close-button");
     close_button.set_child(Some(&close_icon));
-    close_button.set_tooltip_text(Some("Close"));
+    close_button.set_tooltip_text(Some(&gettext("Close")));
     close_button.set_halign(gtk::Align::End);
     close_button.set_valign(gtk::Align::Center);
     close_button.set_hexpand(true);
@@ -592,11 +593,11 @@ fn rule_row_buttons() -> RuleRowButtons {
 
     let remove_button = gtk::Button::from_icon_name("list-remove-symbolic");
     remove_button.add_css_class("flat");
-    remove_button.set_tooltip_text(Some("Remove rule"));
+    remove_button.set_tooltip_text(Some(&gettext("Remove rule")));
 
     let add_button = gtk::Button::from_icon_name("list-add-symbolic");
     add_button.add_css_class("flat");
-    add_button.set_tooltip_text(Some("Add rule"));
+    add_button.set_tooltip_text(Some(&gettext("Add rule")));
 
     container.append(&remove_button);
     container.append(&add_button);
@@ -672,7 +673,7 @@ fn match_kind_from_combo(combo: &gtk::DropDown) -> SmartPlaylistMatchKind {
     let index = combo.selected() as usize;
     MATCH_KINDS
         .get(index)
-        .map(|(kind, _)| *kind)
+        .copied()
         .unwrap_or(SmartPlaylistMatchKind::All)
 }
 
@@ -680,6 +681,6 @@ fn limit_selection_from_combo(combo: &gtk::DropDown) -> SmartPlaylistLimitSelect
     let index = combo.selected() as usize;
     LIMIT_SELECTIONS
         .get(index)
-        .map(|(selection, _)| *selection)
+        .copied()
         .unwrap_or(SmartPlaylistLimitSelection::Random)
 }

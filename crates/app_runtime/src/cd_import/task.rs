@@ -360,9 +360,11 @@ fn full_set_change(metadata: &TrackMetadata) -> MetadataChange {
 }
 
 fn disc_changed_message() -> String {
-    sustain_cd_import::CdImportError::DiscChanged.to_string()
+    // Translators: completes "Imported 3 of 10 tracks: ..." when the user
+    // swapped discs mid-import.
+    sustain_i18n::gettext("the disc in the drive changed during import")
 }
 
 fn error_text(error: &ApplicationRuntimeError) -> String {
-    crate::runtime_error_text(error).to_owned()
+    crate::runtime_error_text(error)
 }

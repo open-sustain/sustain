@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use sustain_app_runtime::{DeviceSyncEvent, TrackUpdated};
+use sustain_i18n::gettext;
 
 use crate::library_view_update::LibraryViewUpdate;
 
@@ -510,27 +511,26 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
                     if queued {
                         (
                             sustain_app_runtime::NotificationSeverity::Info,
-                            "Artwork fetched. Saving it to the audio file.".to_owned(),
+                            gettext("Artwork fetched. Saving it to the audio file."),
                         )
                     } else {
                         (
                             sustain_app_runtime::NotificationSeverity::Error,
-                            "The fetched artwork could not be queued for saving.".to_owned(),
+                            gettext("The fetched artwork could not be queued for saving."),
                         )
                     }
                 }
                 ArtworkFetchOutcome::NoMatch => (
                     sustain_app_runtime::NotificationSeverity::Info,
-                    "No cover art found for this track.".to_owned(),
+                    gettext("No cover art found for this track."),
                 ),
                 ArtworkFetchOutcome::Rejected => (
                     sustain_app_runtime::NotificationSeverity::Warning,
-                    "The fetched cover art was rejected because it is unsupported, corrupt, or too large."
-                        .to_owned(),
+                    gettext("The fetched cover art was rejected because it is unsupported, corrupt, or too large."),
                 ),
                 ArtworkFetchOutcome::Failed => (
                     sustain_app_runtime::NotificationSeverity::Error,
-                    "Could not fetch cover art.".to_owned(),
+                    gettext("Could not fetch cover art."),
                 ),
             };
             // The corresponding "Fetching artwork…" persistent is

@@ -22,6 +22,7 @@ use std::{collections::HashSet, rc::Rc};
 use gtk::gio;
 use gtk::prelude::*;
 use sustain_app_runtime::{ApplicationCommand, PlaybackCommand, PlaylistId, PlaylistItem};
+use sustain_i18n::{gettext, pgettext};
 
 use super::{
     ALBUMS_VIEW, ArtworkChangedHolder, DUPLICATES_VIEW, PLAYLISTS_VIEW, PlaybackChangedCallback,
@@ -34,7 +35,7 @@ use super::{
     main_window::SidebarCollapseController,
     sidebar::PlaylistSidebar,
     sidebar_context::{
-        NEW_PLAYLIST_DEFAULT_NAME, NEW_SMART_PLAYLIST_DEFAULT_NAME, unique_default_name,
+        new_playlist_default_name, new_smart_playlist_default_name, unique_default_name,
     },
     smart_playlist_editor::{SmartPlaylistEditorMode, open_smart_playlist_editor},
     titlebar::Titlebar,
@@ -86,13 +87,15 @@ pub(crate) fn install_global_shortcuts(context: GlobalShortcutContext) {
 struct ShortcutDescription {
     action: &'static str,
     accelerator: &'static str,
-    title: &'static str,
+    /// The localized title the shortcuts overlay lists it under, looked up
+    /// when the overlay is built.
+    title: fn() -> String,
 }
 
 const fn shortcut(
     action: &'static str,
     accelerator: &'static str,
-    title: &'static str,
+    title: fn() -> String,
 ) -> ShortcutDescription {
     ShortcutDescription {
         action,
@@ -101,37 +104,40 @@ const fn shortcut(
     }
 }
 
-const NEW_PLAYLIST: ShortcutDescription = shortcut("new-playlist", "<Primary>n", "New playlist");
-const NEW_SMART_PLAYLIST: ShortcutDescription = shortcut(
-    "new-smart-playlist",
-    "<Primary><Alt>n",
-    "New smart playlist",
-);
+const NEW_PLAYLIST: ShortcutDescription =
+    shortcut("new-playlist", "<Primary>n", || gettext("New playlist"));
+const NEW_SMART_PLAYLIST: ShortcutDescription =
+    shortcut("new-smart-playlist", "<Primary><Alt>n", || {
+        gettext("New smart playlist")
+    });
 const FOCUS_SEARCH: ShortcutDescription =
-    shortcut("focus-search", "<Primary>f", "Focus search bar");
-const GET_INFO: ShortcutDescription = shortcut("get-info", "<Primary>i", "Get Info");
-const SHOW_IN_FOLDER: ShortcutDescription = shortcut(
-    "show-in-folder",
-    "<Primary>r",
-    "Reveal selected track in Files",
-);
-const PLAY_PAUSE: ShortcutDescription = shortcut("play-pause", "space", "Play / pause");
-const PREVIOUS_TRACK: ShortcutDescription =
-    shortcut("previous-track", "<Primary>Left", "Previous track");
-const NEXT_TRACK: ShortcutDescription = shortcut("next-track", "<Primary>Right", "Next track");
-const JUMP_TO_CURRENT_TRACK: ShortcutDescription = shortcut(
-    "jump-to-current-track",
-    "<Primary>l",
-    "Jump to currently playing track",
-);
-const SELECT_ALL: ShortcutDescription = shortcut("select-all", "<Primary>a", "Select all tracks");
-const CLOSE_WINDOW: ShortcutDescription = shortcut("close-window", "<Primary>w", "Close window");
-const QUIT: ShortcutDescription = shortcut("quit", "<Primary>q", "Quit Sustain");
-const SHOW_SHORTCUTS: ShortcutDescription =
-    shortcut("show-shortcuts", "<Primary>question", "Keyboard shortcuts");
+    shortcut("focus-search", "<Primary>f", || gettext("Focus search bar"));
+const GET_INFO: ShortcutDescription = shortcut("get-info", "<Primary>i", || gettext("Get Info"));
+const SHOW_IN_FOLDER: ShortcutDescription = shortcut("show-in-folder", "<Primary>r", || {
+    gettext("Reveal selected track in Files")
+});
+const PLAY_PAUSE: ShortcutDescription = shortcut("play-pause", "space", || gettext("Play / pause"));
+const PREVIOUS_TRACK: ShortcutDescription = shortcut("previous-track", "<Primary>Left", || {
+    gettext("Previous track")
+});
+const NEXT_TRACK: ShortcutDescription =
+    shortcut("next-track", "<Primary>Right", || gettext("Next track"));
+const JUMP_TO_CURRENT_TRACK: ShortcutDescription =
+    shortcut("jump-to-current-track", "<Primary>l", || {
+        gettext("Jump to currently playing track")
+    });
+const SELECT_ALL: ShortcutDescription =
+    shortcut("select-all", "<Primary>a", || gettext("Select all tracks"));
+const CLOSE_WINDOW: ShortcutDescription =
+    shortcut("close-window", "<Primary>w", || gettext("Close window"));
+const QUIT: ShortcutDescription = shortcut("quit", "<Primary>q", || gettext("Quit Sustain"));
+const SHOW_SHORTCUTS: ShortcutDescription = shortcut("show-shortcuts", "<Primary>question", || {
+    gettext("Keyboard shortcuts")
+});
 pub(crate) const PREFERENCES_ACCELERATOR: &str = "<Primary>comma";
-const PREFERENCES: ShortcutDescription =
-    shortcut("preferences", PREFERENCES_ACCELERATOR, "Preferences");
+const PREFERENCES: ShortcutDescription = shortcut("preferences", PREFERENCES_ACCELERATOR, || {
+    gettext("Preferences")
+});
 
 const PLAYBACK_SHORTCUTS: &[ShortcutDescription] = &[
     PLAY_PAUSE,
@@ -443,18 +449,21 @@ fn build_shortcuts_overlay(window: &gtk::ApplicationWindow) -> gtk::ShortcutsWin
         .build();
     let section = gtk::ShortcutsSection::builder()
         .section_name("general")
-        .title("Sustain shortcuts")
+        .title(gettext("Sustain shortcuts"))
         .build();
     for (title, shortcuts) in [
-        ("Playback", PLAYBACK_SHORTCUTS),
-        ("Library", LIBRARY_SHORTCUTS),
-        ("Application", APPLICATION_SHORTCUTS),
+        (pgettext("shortcuts group", "Playback"), PLAYBACK_SHORTCUTS),
+        (pgettext("shortcuts group", "Library"), LIBRARY_SHORTCUTS),
+        (
+            pgettext("shortcuts group", "Application"),
+            APPLICATION_SHORTCUTS,
+        ),
     ] {
         let group = gtk::ShortcutsGroup::builder().title(title).build();
         for shortcut in shortcuts {
             group.add_shortcut(
                 &gtk::ShortcutsShortcut::builder()
-                    .title(shortcut.title)
+                    .title((shortcut.title)())
                     .accelerator(shortcut.accelerator)
                     .action_name(detailed_action_name(*shortcut))
                     .build(),
@@ -647,7 +656,7 @@ pub(crate) fn create_new_playlist(
             .collect();
         (ids, names)
     };
-    let name = unique_default_name(existing_names, NEW_PLAYLIST_DEFAULT_NAME);
+    let name = unique_default_name(existing_names, &new_playlist_default_name());
     if command_controller.dispatch_succeeded(ApplicationCommand::CreatePlaylist {
         name,
         parent_folder_id: None,
@@ -681,7 +690,7 @@ pub(crate) fn open_new_smart_playlist_editor(
         .iter()
         .map(|smart| smart.name.clone())
         .collect();
-    let name = unique_default_name(existing_names, NEW_SMART_PLAYLIST_DEFAULT_NAME);
+    let name = unique_default_name(existing_names, &new_smart_playlist_default_name());
     let sidebar_for_saved = sidebar.clone();
     open_smart_playlist_editor(
         parent,

@@ -14,6 +14,7 @@ use sustain_app_runtime::{
     NotificationCategory, NotificationSeverity, Track, TrackId, TrackMetadata,
     default_duplicate_merge_choices, highest_quality_duplicate_artwork,
 };
+use sustain_i18n::{gettext, pgettext, tr_format};
 
 use crate::{
     SharedRuntime,
@@ -91,14 +92,19 @@ fn missing_files_message(tracks: &[Track], missing: &[sustain_app_runtime::Track
         .map(display_title)
         .collect::<Vec<_>>();
     if names.len() > 1 {
-        return format!(
-            "{} of the selected files are missing from disk, so these duplicates can't be consolidated. Restore or remove them, then try again.",
-            names.len()
+        return tr_format!(
+            gettext(
+                "{count} of the selected files are missing from disk, so these duplicates can't be consolidated. Restore or remove them, then try again.",
+            ),
+            count = names.len()
         );
     }
     let name = names.pop().unwrap_or_default();
-    format!(
-        "\u{201c}{name}\u{201d} is missing from disk, so these duplicates can't be consolidated. Restore or remove it, then try again."
+    tr_format!(
+        gettext(
+            "\u{201c}{name}\u{201d} is missing from disk, so these duplicates can't be consolidated. Restore or remove it, then try again.",
+        ),
+        name = name
     )
 }
 
@@ -110,7 +116,7 @@ fn open_dialog(
     tracks: Vec<Track>,
 ) {
     let window = gtk::Window::builder()
-        .title("Consolidate Duplicate Tracks")
+        .title(gettext("Consolidate Duplicate Tracks"))
         .transient_for(parent)
         .modal(true)
         .default_width(900)
@@ -123,17 +129,17 @@ fn open_dialog(
     content.set_margin_bottom(18);
     content.set_margin_start(18);
 
-    let intro = gtk::Label::new(Some(
+    let intro = gtk::Label::new(Some(&gettext(
         "Pick the surviving attributes, a single consolidated file will be preserved in your library upon confirmation.",
-    ));
+    )));
     intro.set_xalign(0.0);
     intro.set_wrap(true);
     intro.add_css_class("consolidation-intro");
     content.append(&intro);
 
-    let intro_detail = gtk::Label::new(Some(
+    let intro_detail = gtk::Label::new(Some(&gettext(
         "Sensible choices are pre-selected. Implicit choices: play counts and skips are summed, oldest date added is preserved.",
-    ));
+    )));
     intro_detail.set_xalign(0.0);
     intro_detail.set_wrap(true);
     intro_detail.add_css_class("dim-label");
@@ -160,11 +166,11 @@ fn open_dialog(
 
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     buttons.set_halign(gtk::Align::End);
-    let cancel = gtk::Button::with_label("Cancel");
-    let consolidate = gtk::Button::with_label("Consolidate");
+    let cancel = gtk::Button::with_label(&gettext("Cancel"));
+    let consolidate = gtk::Button::with_label(&gettext("Consolidate"));
     consolidate.add_css_class("destructive-action");
     consolidate.set_sensitive(false);
-    consolidate.set_tooltip_text(Some("Waiting for artwork previews"));
+    consolidate.set_tooltip_text(Some(&gettext("Waiting for artwork previews")));
     let window_for_cancel = window.clone();
     cancel.connect_clicked(move |_| window_for_cancel.close());
     let window_for_confirm = window.clone();
@@ -284,7 +290,7 @@ fn build_consolidation_table(
             column_index(index),
             row,
             button,
-            "Audio file",
+            &gettext("Audio file"),
             &cell_value_label(&audio_summary(track), false),
         );
     }
@@ -296,7 +302,7 @@ fn build_consolidation_table(
             column_index(index),
             row,
             button,
-            "Rating",
+            &gettext("Rating"),
             &cell_value_label(&rating_stars(track.rating.stars()), false),
         );
     }
@@ -309,7 +315,7 @@ fn build_consolidation_table(
                 column_index(index),
                 row,
                 button,
-                metadata_field_name(selector.field),
+                &metadata_field_name(selector.field),
                 &metadata_cell_value(&track.metadata, selector.field),
             );
         }
@@ -320,7 +326,10 @@ fn build_consolidation_table(
     // contributing values stay visible even though the merge is not a choice.
     for (index, track) in tracks.iter().enumerate() {
         grid.attach(
-            &info_cell("Play count", &track.statistics.play_count.to_string()),
+            &info_cell(
+                &gettext("Play count"),
+                &track.statistics.play_count.to_string(),
+            ),
             column_index(index),
             row,
             1,
@@ -330,7 +339,7 @@ fn build_consolidation_table(
     row += 1;
     for (index, track) in tracks.iter().enumerate() {
         grid.attach(
-            &info_cell("Skips", &track.statistics.skip_count.to_string()),
+            &info_cell(&gettext("Skips"), &track.statistics.skip_count.to_string()),
             column_index(index),
             row,
             1,
@@ -345,7 +354,7 @@ fn build_consolidation_table(
             .and_then(format_system_time_short)
             .unwrap_or_else(|| "—".to_owned());
         grid.attach(
-            &info_cell("Date added", &added),
+            &info_cell(&gettext("Date added"), &added),
             column_index(index),
             row,
             1,
@@ -382,8 +391,11 @@ fn build_track_header(
     column.set_margin_end(4);
     column.set_margin_bottom(2);
 
-    let select_all = gtk::Button::with_label(&format!("Track {}", index + 1));
-    select_all.set_tooltip_text(Some("Take every tag and the rating from this track"));
+    let select_all =
+        gtk::Button::with_label(&tr_format!(gettext("Track {number}"), number = index + 1));
+    select_all.set_tooltip_text(Some(&gettext(
+        "Take every tag and the rating from this track",
+    )));
     {
         let selectors = metadata_selectors.to_vec();
         let rating_buttons = rating_buttons.to_vec();
@@ -486,7 +498,7 @@ fn attach_artwork_cell(
     frame: &gtk::Frame,
 ) {
     frame.set_halign(gtk::Align::Start);
-    attach_selectable_cell(grid, column, row, button, "Artwork", frame);
+    attach_selectable_cell(grid, column, row, button, &gettext("Artwork"), frame);
 }
 
 /// A non-selectable info cell: field name (bold) over an automatically-merged
@@ -729,25 +741,25 @@ fn selected_metadata(
         .map(|fields| DuplicateMetadataSelection { fields })
 }
 
-pub(crate) fn metadata_field_name(field: DuplicateMetadataField) -> &'static str {
+pub(crate) fn metadata_field_name(field: DuplicateMetadataField) -> String {
     match field {
-        DuplicateMetadataField::Title => "Title",
-        DuplicateMetadataField::Artist => "Artist",
-        DuplicateMetadataField::Album => "Album",
-        DuplicateMetadataField::AlbumArtist => "Album Artist",
-        DuplicateMetadataField::Composer => "Composer",
-        DuplicateMetadataField::Grouping => "Grouping",
-        DuplicateMetadataField::Genre => "Genre",
-        DuplicateMetadataField::TrackNumber => "Track Number",
-        DuplicateMetadataField::TrackTotal => "Track Total",
-        DuplicateMetadataField::DiscNumber => "Disc Number",
-        DuplicateMetadataField::DiscTotal => "Disc Total",
-        DuplicateMetadataField::Year => "Year",
-        DuplicateMetadataField::Compilation => "Compilation",
-        DuplicateMetadataField::Bpm => "BPM",
-        DuplicateMetadataField::Key => "Key",
-        DuplicateMetadataField::Comments => "Comments",
-        DuplicateMetadataField::Lyrics => "Lyrics",
+        DuplicateMetadataField::Title => gettext("Title"),
+        DuplicateMetadataField::Artist => gettext("Artist"),
+        DuplicateMetadataField::Album => gettext("Album"),
+        DuplicateMetadataField::AlbumArtist => gettext("Album Artist"),
+        DuplicateMetadataField::Composer => gettext("Composer"),
+        DuplicateMetadataField::Grouping => gettext("Grouping"),
+        DuplicateMetadataField::Genre => gettext("Genre"),
+        DuplicateMetadataField::TrackNumber => gettext("Track Number"),
+        DuplicateMetadataField::TrackTotal => gettext("Track Total"),
+        DuplicateMetadataField::DiscNumber => gettext("Disc Number"),
+        DuplicateMetadataField::DiscTotal => gettext("Disc Total"),
+        DuplicateMetadataField::Year => gettext("Year"),
+        DuplicateMetadataField::Compilation => gettext("Compilation"),
+        DuplicateMetadataField::Bpm => gettext("BPM"),
+        DuplicateMetadataField::Key => pgettext("musical key", "Key"),
+        DuplicateMetadataField::Comments => gettext("Comments"),
+        DuplicateMetadataField::Lyrics => gettext("Lyrics"),
     }
 }
 
@@ -771,13 +783,9 @@ pub(crate) fn metadata_field_display(
         DuplicateMetadataField::DiscNumber => metadata.disc_number.map(|value| value.to_string()),
         DuplicateMetadataField::DiscTotal => metadata.disc_total.map(|value| value.to_string()),
         DuplicateMetadataField::Year => metadata.year.map(|value| value.to_string()),
-        DuplicateMetadataField::Compilation => metadata.compilation.map(|value| {
-            if value {
-                "Yes".to_owned()
-            } else {
-                "No".to_owned()
-            }
-        }),
+        DuplicateMetadataField::Compilation => metadata
+            .compilation
+            .map(|value| if value { gettext("Yes") } else { gettext("No") }),
         DuplicateMetadataField::Bpm => metadata.bpm.map(|value| value.to_string()),
         DuplicateMetadataField::Key => metadata.key.map(|key| key.short_code().to_owned()),
         DuplicateMetadataField::Comments => metadata.comments.clone(),

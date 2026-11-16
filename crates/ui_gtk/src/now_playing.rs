@@ -28,6 +28,7 @@ use sustain_app_runtime::{
     ApplicationCommand, NotificationCategory, NotificationId, NotificationSeverity, NowPlaying,
     NowPlayingItem, PlayableId, PlaybackCommand, ShuffleMode, Track, TrackId,
 };
+use sustain_i18n::{gettext, pgettext};
 
 mod color_fill;
 mod lyrics_overlay;
@@ -54,9 +55,6 @@ const ARTWORK_INNER_STACK_FETCHING: &str = "fetching";
 /// symbolic icon name; falls back gracefully on systems with a
 /// different theme.
 const ARTWORK_MISSING_ICON_NAME: &str = "image-missing-symbolic";
-
-const ARTWORK_MISSING_TOOLTIP: &str = "Fetch artwork";
-const ARTWORK_PRESENT_TOOLTIP: &str = "Zoom artwork";
 
 #[derive(Clone)]
 pub(crate) struct NowPlayingView {
@@ -223,9 +221,9 @@ impl NowPlayingView {
         // cover, which was cramped and visually noisy. Shown only when the
         // track has lyrics; while shown, the title truncates instead of
         // scrolling so the chip stays pinned to its trailing edge.
-        let lyrics_chip = gtk::Button::with_label("Lyrics");
+        let lyrics_chip = gtk::Button::with_label(&gettext("Lyrics"));
         lyrics_chip.add_css_class("now-playing-lcd-chip");
-        lyrics_chip.set_tooltip_text(Some("Show lyrics"));
+        lyrics_chip.set_tooltip_text(Some(&gettext("Show lyrics")));
         lyrics_chip.set_cursor_from_name(Some("pointer"));
         lyrics_chip.set_valign(gtk::Align::Center);
         lyrics_chip.set_visible(false);
@@ -237,14 +235,21 @@ impl NowPlayingView {
 
         let shuffle_icon =
             ShuffleShineIcon::new("media-playlist-shuffle-symbolic", NOW_PLAYING_ICON_SIZE);
-        let (shuffle_widget, shuffle_button) =
-            side_status_chrome(&shuffle_icon, "Shuffle", &elapsed);
+        let (shuffle_widget, shuffle_button) = side_status_chrome(
+            &shuffle_icon,
+            &pgettext("playback control", "Shuffle"),
+            &elapsed,
+        );
 
         let repeat_icon = gtk::Image::from_icon_name("media-playlist-repeat-symbolic");
         repeat_icon.add_css_class("now-playing-side-icon");
         repeat_icon.set_pixel_size(NOW_PLAYING_ICON_SIZE);
         repeat_icon.set_halign(gtk::Align::Center);
-        let (repeat_widget, repeat_button) = side_status_chrome(&repeat_icon, "Repeat", &remaining);
+        let (repeat_widget, repeat_button) = side_status_chrome(
+            &repeat_icon,
+            &pgettext("playback control", "Repeat"),
+            &remaining,
+        );
 
         let detail_content = gtk::CenterBox::new();
         detail_content.set_hexpand(true);
@@ -473,11 +478,11 @@ impl NowPlayingView {
         {
             self.artwork_box.add_css_class(ARTWORK_CLICKABLE_CLASS);
             let tooltip = if name == ARTWORK_INNER_STACK_MISSING {
-                ARTWORK_MISSING_TOOLTIP
+                gettext("Fetch artwork")
             } else {
-                ARTWORK_PRESENT_TOOLTIP
+                gettext("Zoom artwork")
             };
-            self.artwork_box.set_tooltip_text(Some(tooltip));
+            self.artwork_box.set_tooltip_text(Some(&tooltip));
             // GTK4's CSS `cursor` property is honoured inconsistently
             // across distributions, so set the cursor on the widget
             // directly. Falls back to the parent's cursor when the
@@ -538,7 +543,7 @@ impl NowPlayingView {
         let notification_id = self.runtime.borrow_mut().push_persistent_notification(
             NotificationCategory::ArtworkFetch,
             NotificationSeverity::Info,
-            "Fetching artwork…".to_owned(),
+            gettext("Fetching artwork…"),
             false,
         );
         self.pending_fetch_notification_id
