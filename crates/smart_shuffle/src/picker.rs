@@ -708,15 +708,15 @@ mod tests {
 
     #[test]
     fn the_same_album_is_recognised_whatever_its_case_or_accent_spelling() {
-        let seed = on_album(1, "L'\u{c9}t\u{e9} indien");
-        for same in ["L'\u{c9}T\u{c9} INDIEN ", "L'E\u{301}te\u{301} indien"] {
+        let seed = on_album(1, "D\u{e9}j\u{e0} Vu");
+        for same in ["D\u{c9}J\u{c0} VU ", "De\u{301}ja\u{300} Vu"] {
             assert_eq!(
                 same_album_penalty(&seed, &on_album(2, same)),
                 SAME_ALBUM_PENALTY,
                 "{same:?}"
             );
         }
-        assert_eq!(same_album_penalty(&seed, &on_album(2, "L'Ete indien")), 0.0);
+        assert_eq!(same_album_penalty(&seed, &on_album(2, "Deja Vu")), 0.0);
         assert_eq!(same_album_penalty(&on_album(1, " "), &on_album(2, "")), 0.0);
     }
 
