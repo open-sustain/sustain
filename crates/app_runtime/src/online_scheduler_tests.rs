@@ -1953,3 +1953,27 @@ fn explicit_run_arriving_mid_batch_goes_before_the_remaining_background_tracks()
 
     scheduler.shutdown();
 }
+
+#[test]
+fn a_candidate_genre_adopts_the_library_spelling_whatever_its_accents() {
+    use sustain_metadata_remote::GenreCandidate;
+
+    use super::select_genre;
+
+    let candidates = [
+        GenreCandidate {
+            name: "electronic".to_owned(),
+            vote_count: 9,
+        },
+        GenreCandidate {
+            name: "chanson francaise".to_owned(),
+            vote_count: 4,
+        },
+    ];
+    let library = ["Chanson Française".to_owned(), "Rock".to_owned()];
+
+    assert_eq!(
+        select_genre(&candidates, &library).as_deref(),
+        Some("Chanson Française")
+    );
+}

@@ -58,7 +58,10 @@ use std::{
 };
 
 use sustain_artwork::validate_encoded_artwork;
-use sustain_domain::{FieldChange, MetadataChange, OnlineSettings, SyncedLyrics, Track, TrackId};
+use sustain_domain::{
+    FieldChange, MetadataChange, OnlineSettings, SyncedLyrics, Track, TrackId,
+    normalize_search_text,
+};
 use sustain_library_store::{LibraryStore, OnlineCapabilities, OnlineContext};
 use sustain_metadata_remote::{
     FetchedArtwork, FetchedLyrics, GenreCandidate, RemoteError, RemoteMetadataService, TrackMatch,
@@ -1081,8 +1084,8 @@ fn attempt_tags(
 /// When multiple candidates are in the library, the one with the
 /// highest vote count among them wins (the `matched_genres` list is
 /// sorted descending, so the first hit wins by iteration order). The
-/// library's existing spelling is preserved so casing stays
-/// consistent across the library.
+/// library's existing spelling is preserved, whatever the case and
+/// accents of the candidate, so one genre keeps one spelling.
 ///
 /// Falls back to the top-voted candidate if none of them are in the
 /// library yet — better to seed the library with a community-curated
@@ -1090,10 +1093,11 @@ fn attempt_tags(
 fn select_genre(matched_genres: &[GenreCandidate], library_genres: &[String]) -> Option<String> {
     let library_by_normalized: std::collections::HashMap<String, &String> = library_genres
         .iter()
-        .map(|name| (normalize_genre(name), name))
+        .map(|name| (normalize_search_text(name), name))
         .collect();
     for candidate in matched_genres {
-        if let Some(library_spelling) = library_by_normalized.get(&normalize_genre(&candidate.name))
+        if let Some(library_spelling) =
+            library_by_normalized.get(&normalize_search_text(&candidate.name))
         {
             return Some((*library_spelling).clone());
         }
@@ -1103,19 +1107,15 @@ fn select_genre(matched_genres: &[GenreCandidate], library_genres: &[String]) ->
         .map(|candidate| candidate.name.clone())
 }
 
-fn normalize_genre(value: &str) -> String {
-    value.trim().to_lowercase()
-}
-
 /// Find the release in `releases` whose title matches `album`
-/// (case- and whitespace-normalized). Returns `None` when no match
+/// (without regard to case, accents or outer whitespace). Returns `None` when no match
 /// exists; callers treat that as "we can't trust the positional
 /// fields on any of these releases".
 fn find_release_matching_album<'a>(
     releases: &'a [TrackMatchRelease],
     album: &str,
 ) -> Option<&'a TrackMatchRelease> {
-    let needle = normalize_album(album);
+    let needle = normalize_search_text(album);
     if needle.is_empty() {
         return None;
     }
@@ -1123,13 +1123,9 @@ fn find_release_matching_album<'a>(
         release
             .title
             .as_deref()
-            .map(|title| normalize_album(title) == needle)
+            .map(|title| normalize_search_text(title) == needle)
             .unwrap_or(false)
     })
-}
-
-fn normalize_album(value: &str) -> String {
-    value.trim().to_lowercase()
 }
 
 #[cfg(test)]
