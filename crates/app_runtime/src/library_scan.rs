@@ -94,15 +94,8 @@ impl ApplicationRuntime {
             severity,
             notifications::library_scan_outcome_text(&summary),
         );
-        // New tracks may have landed; nudge the analysis scheduler so
-        // it polls for fresh work without waiting for the next idle
-        // cycle. No-op when no scheduler has been started.
-        if let Some(scheduler) = self.analysis_scheduler() {
-            scheduler.wake();
-        }
-        if let Some(scheduler) = self.online_scheduler() {
-            scheduler.wake();
-        }
+        // New tracks may have landed, and missing ones may be back.
+        self.wake_background_sweeps();
         // A scan is one of the events that genuinely changes the Smart
         // Shuffle index (new tracks, new genres). Rebuild on the
         // background worker — it is milliseconds of work and the

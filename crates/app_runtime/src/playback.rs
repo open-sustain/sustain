@@ -427,6 +427,9 @@ impl ApplicationRuntime {
         }
         self.store_library_track(index, updated);
         self.refresh_playback_queue_track_ids();
+        if availability == TrackAvailability::Available {
+            self.wake_background_sweeps();
+        }
         Ok(())
     }
 

@@ -361,6 +361,11 @@ impl MetadataChange {
     pub fn releases_key_to_analysis(&self) -> bool {
         matches!(self.key, FieldChange::Clear)
     }
+
+    /// Whether this change hands any analysed field back to analysis.
+    pub fn releases_to_analysis(&self) -> bool {
+        self.releases_bpm_to_analysis() || self.releases_key_to_analysis()
+    }
 }
 
 const GENERATED_SORT_ARTICLES: &[&str] = &["The", "A", "An"];
@@ -610,6 +615,7 @@ mod tests {
         metadata.apply_change(&set);
         assert_eq!(metadata.key_origin, KeyOrigin::Typed);
         assert!(!set.releases_key_to_analysis());
+        assert!(!set.releases_to_analysis());
 
         let clear = MetadataChange {
             key: FieldChange::Clear,
@@ -618,6 +624,7 @@ mod tests {
         metadata.apply_change(&clear);
         assert_eq!(metadata.key, None);
         assert!(clear.releases_key_to_analysis());
+        assert!(clear.releases_to_analysis());
 
         // A key filled in from elsewhere is imported, not the user's.
         metadata.key_origin = KeyOrigin::Typed;

@@ -426,6 +426,7 @@ impl ApplicationRuntime {
         let summary = result.summary;
         self.insert_library_tracks(result.tracks);
         self.refresh_playback_queue_track_ids();
+        self.wake_background_sweeps();
         self.finish_library_task(LibraryTaskKind::CdImport);
         self.ripping_disc = None;
         let severity = if summary.failure.is_some() {

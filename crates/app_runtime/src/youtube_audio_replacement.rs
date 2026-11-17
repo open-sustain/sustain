@@ -154,6 +154,7 @@ impl ApplicationRuntime {
                     analysis: true,
                 });
                 self.refresh_playback_queue_track_ids();
+                self.wake_background_sweeps();
                 self.smart_shuffle_index = None;
                 self.smart_shuffle_metadata = None;
                 self.request_smart_shuffle_rebuild();

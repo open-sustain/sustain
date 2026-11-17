@@ -1131,11 +1131,12 @@ impl ApplicationRuntime {
                     track_id,
                     analysis: false,
                 });
-                if self
-                    .library_track(track_id)
-                    .is_some_and(|track| track.location.is_missing())
-                {
-                    self.dismiss_ordinary_metadata_write_warning(track_id);
+                match self.library_track(track_id) {
+                    Some(track) if track.location.is_missing() => {
+                        self.dismiss_ordinary_metadata_write_warning(track_id);
+                    }
+                    Some(_) => self.wake_background_sweeps(),
+                    None => {}
                 }
                 self.refresh_playback_queue_track_ids();
             }
@@ -1172,6 +1173,9 @@ impl ApplicationRuntime {
             // have converged yet: only the later mirror-success event may
             // dismiss an ordinary tag-write retry warning.
             Ok(()) => {
+                if result.releases_to_analysis {
+                    self.wake_background_sweeps();
+                }
                 self.dismiss_managed_metadata_retarget_warning(result.track_id);
                 self.dismiss_managed_library_filesystem_warning();
                 if result.empty_directory_cleanup_failed {
@@ -1598,6 +1602,23 @@ impl ApplicationRuntime {
 
     pub(crate) fn analysis_scheduler(&self) -> Option<&analysis_scheduler::AnalysisScheduler> {
         self.analysis_scheduler.as_ref()
+    }
+
+    /// Tell the background sweeps that the set of tracks they owe work
+    /// may have grown: tracks joined the library, a missing track became
+    /// available again, or a track's analysis was discarded or handed
+    /// back to it. An idle sweep re-polls the store only when a command
+    /// reaches it; events that send none of their own (a settings or
+    /// library-path change does) must come through here, or their tracks
+    /// wait for the next launch. No-op for a scheduler that has not been
+    /// started.
+    pub(crate) fn wake_background_sweeps(&self) {
+        if let Some(scheduler) = self.analysis_scheduler() {
+            scheduler.wake();
+        }
+        if let Some(scheduler) = self.online_scheduler() {
+            scheduler.wake();
+        }
     }
 
     /// Spin up the background online scheduler against the previously

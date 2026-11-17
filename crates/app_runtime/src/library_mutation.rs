@@ -113,6 +113,8 @@ impl ApplicationRuntime {
         });
         self.refresh_playback_queue_track_ids();
         self.nudge_metadata_writer();
+        // A missing track is skipped by the sweeps; located, it is due.
+        self.wake_background_sweeps();
         if empty_directory_cleanup_failed {
             self.push_ephemeral_notification(
                 crate::NotificationCategory::LibraryImport,
@@ -203,6 +205,7 @@ impl ApplicationRuntime {
                 track_id,
                 outcome: outcome.clone(),
                 empty_directory_cleanup_failed,
+                releases_to_analysis: change.releases_to_analysis(),
             });
             outcome?;
             self.nudge_metadata_writer();
@@ -219,6 +222,9 @@ impl ApplicationRuntime {
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.store_library_track(track_index, track);
         self.nudge_metadata_writer();
+        if change.releases_to_analysis() {
+            self.wake_background_sweeps();
+        }
 
         Ok(())
     }

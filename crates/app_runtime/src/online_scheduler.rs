@@ -151,8 +151,8 @@ pub(crate) struct OnlineSchedulerConfig {
 enum SchedulerCommand {
     SettingsChanged(OnlineSettings),
     LibraryPathChanged(Option<PathBuf>),
-    /// "Look for new work" — the library has grown or the user
-    /// manually requested a re-run.
+    /// "Look for new work" — the set of tracks needing online work
+    /// may have grown (see `ApplicationRuntime::wake_background_sweeps`).
     Wake,
     /// User-initiated batch: process every track in `track_ids`
     /// with the given `capabilities`, independent of the global

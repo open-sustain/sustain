@@ -1237,6 +1237,78 @@ fn managed_import_commits_large_batches_in_bounded_chunks_with_stable_progress()
 }
 
 #[test]
+fn imported_tracks_and_a_cleared_bpm_wake_an_idle_analysis_sweep() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_paths = write_numbered_flac_sources(&external_root, 2);
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    settings.analysis.bpm = true;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store, Arc::new(TestMetadataService))
+            .expect("library services initialize");
+    let (sink, progress) = async_channel::unbounded();
+    runtime.set_analysis_progress_sink(sink);
+    runtime
+        .start_analysis_scheduler()
+        .expect("start analysis scheduler");
+    // The empty library leaves the sweep idle. From here on nothing but
+    // a wake can make it poll the store again.
+    assert_eq!(next_analysis_sweep_idle(&progress), 0);
+
+    let task = runtime
+        .prepare_library_import(source_paths)
+        .expect("prepare import");
+    let result = run_library_import_task(task).expect("import completes");
+    runtime.apply_library_import_result(result);
+    assert_eq!(next_analysis_sweep_idle(&progress), 2);
+
+    // Clearing the BPM hands it back to analysis.
+    let track_id = runtime.library_tracks()[0].id;
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateMetadata {
+            track_id,
+            change: Box::new(MetadataChange {
+                bpm: FieldChange::Clear,
+                ..MetadataChange::default()
+            }),
+        }),
+        Ok(())
+    );
+    assert_eq!(next_analysis_sweep_idle(&progress), 1);
+
+    runtime.shutdown_analysis_scheduler();
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+/// Wait for the analysis sweep to go idle and return how many tracks
+/// its run attempted. The fixture files hold no decodable audio, so an
+/// attempt may land as completed or failed; both count.
+fn next_analysis_sweep_idle(progress: &async_channel::Receiver<crate::AnalysisProgress>) -> u32 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match progress.try_recv() {
+            Ok(crate::AnalysisProgress::Idle { completed, failed }) => return completed + failed,
+            Ok(crate::AnalysisProgress::Tick { .. }) => {}
+            Ok(crate::AnalysisProgress::PersistenceError { detail }) => {
+                panic!("analysis sweep failed to persist: {detail}")
+            }
+            Err(async_channel::TryRecvError::Empty) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => panic!("analysis sweep did not go idle in time: {error:?}"),
+        }
+    }
+}
+
+#[test]
 fn managed_import_save_failure_after_committed_chunk_keeps_committed_tracks() {
     let library_root = unique_test_directory();
     let external_root = unique_test_directory();
@@ -4456,6 +4528,7 @@ fn managed_metadata_retarget_event_reloads_sqlite_and_surfaces_failure() {
             track_id,
             outcome: Ok(()),
             empty_directory_cleanup_failed: false,
+            releases_to_analysis: false,
         },
     ));
 
@@ -4486,6 +4559,7 @@ fn managed_metadata_retarget_event_reloads_sqlite_and_surfaces_failure() {
             track_id,
             outcome: Err(ApplicationRuntimeError::LibraryConsolidationFailed),
             empty_directory_cleanup_failed: false,
+            releases_to_analysis: false,
         },
     ));
     assert_eq!(runtime.notifications().persistent_stack().len(), 1);
@@ -4511,6 +4585,7 @@ fn managed_metadata_retarget_event_reloads_sqlite_and_surfaces_failure() {
             track_id,
             outcome: Ok(()),
             empty_directory_cleanup_failed: false,
+            releases_to_analysis: false,
         },
     ));
     assert!(runtime.notifications().persistent_stack().is_empty());
@@ -4832,6 +4907,7 @@ fn a_retarget_that_fails_after_committing_still_publishes_the_committed_row() {
             track_id: track_id(1),
             outcome: Err(ApplicationRuntimeError::LibraryConsolidationFailed),
             empty_directory_cleanup_failed: false,
+            releases_to_analysis: false,
         },
     ));
 

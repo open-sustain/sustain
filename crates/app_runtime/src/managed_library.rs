@@ -107,6 +107,7 @@ impl ApplicationRuntime {
         self.last_library_import_summary = Some(summary.clone());
         self.insert_library_tracks(result.tracks);
         self.refresh_playback_queue_track_ids();
+        self.wake_background_sweeps();
         self.finish_library_task(LibraryTaskKind::Import);
         self.push_ephemeral_notification(
             NotificationCategory::LibraryImport,

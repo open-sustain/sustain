@@ -87,6 +87,9 @@ pub struct ManagedMetadataRetargetResult {
     pub track_id: TrackId,
     pub outcome: Result<(), ApplicationRuntimeError>,
     pub empty_directory_cleanup_failed: bool,
+    /// Whether the change handed the track's BPM or key back to
+    /// analysis ([`MetadataChange::releases_to_analysis`]).
+    pub releases_to_analysis: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -581,6 +584,7 @@ fn apply_command(
                     track_id,
                     outcome: outcome.map(|_| ()),
                     empty_directory_cleanup_failed,
+                    releases_to_analysis: change.releases_to_analysis(),
                 }),
             );
             *active = true;
@@ -1404,6 +1408,7 @@ mod tests {
                 track_id,
                 outcome: Ok(()),
                 empty_directory_cleanup_failed: false,
+                releases_to_analysis: false,
             })
         );
         assert_eq!(
@@ -1595,6 +1600,7 @@ mod tests {
                 track_id,
                 outcome: Err(ApplicationRuntimeError::LibraryConsolidationFailed),
                 empty_directory_cleanup_failed: false,
+                releases_to_analysis: false,
             })
         );
         let stored = store.track(track_id).expect("load track").expect("track");

@@ -188,8 +188,8 @@ enum SchedulerCommand {
     SettingsChanged(AnalysisSettings),
     ResourceUsageChanged(BackgroundResourceUsage),
     LibraryPathChanged(Option<PathBuf>),
-    /// "Look for new work" — the store may have grown (library scan
-    /// added tracks, or the user manually requested re-analysis).
+    /// "Look for new work" — the set of tracks needing analysis may
+    /// have grown (see `ApplicationRuntime::wake_background_sweeps`).
     Wake,
     /// User-initiated batch: process every track in `track_ids` with
     /// the given `capabilities`, independent of the global
