@@ -284,6 +284,12 @@ tenth, so a real contribution never reads as zero:
 - **Year added** — track counts per calendar year a track entered the
   library.
 
+Both histograms stack each column by genre in the genre donut's own
+colours — largest genre at the foot, the folded *Other* tail on top — so
+how the library's genres shift across decades and years reads straight
+off the chart; hovering a column lists its genres with their counts and
+shares.
+
 Every figure comes from SQLite (the authoritative library copy); no file
 tags are re-read at view time. The page is computed lazily — only when it
 is shown, and refreshed when it is on screen and the library changes — so
@@ -772,7 +778,9 @@ A genre the library already spells several ways is offered once, under
 the spelling most tracks use.
 The File tab shows path, duration, bitrate, sample rate, and channels.
 The Artwork tab shows the embedded cover (or a missing-art placeholder)
-with add and remove actions. The Lyrics tab shows the raw lyrics text.
+with add, paste, and remove actions. Paste (also `Ctrl+V` on that tab)
+takes an image copied from another application, or an image file copied
+in a file manager. The Lyrics tab shows the raw lyrics text.
 
 Opening Get Info on a track is `Ctrl+I` or the row context menu.
 Previous/Next buttons walk the displayed track order without closing the

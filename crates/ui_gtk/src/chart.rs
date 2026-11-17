@@ -11,8 +11,9 @@
 //!   slice its own hue and a legend beside the ring;
 //! - [`ranked_bars`] for top-N rankings (most played, most liked): one
 //!   horizontal bar per entry, each its own hue, label left, value right;
-//! - [`vertical_bars`] for histograms over an ordered axis (release
-//!   decade, year added), every bar the accent itself.
+//! - [`stacked_columns`] for histograms over an ordered axis (release
+//!   decade, year added), each column stacked from per-category
+//!   segments in the same tones as a matching donut.
 //!
 //! Categories are told apart with [`categorical_color`], the accent
 //! rotated around the hue wheel — the palette the device-sync occupation
@@ -33,7 +34,7 @@ use gtk::prelude::*;
 const CHART_ACCENT_CLASS: &str = "statistics-chart";
 
 /// Corner radius of a bar's free end, in pixels: the top of a histogram
-/// bar, the right end of a ranked bar. The end standing on the axis stays
+/// column, the right end of a ranked bar. The end standing on the axis stays
 /// square, so the bars read as grown from a common baseline.
 const BAR_FILL_RADIUS: f64 = 5.0;
 
@@ -53,8 +54,8 @@ const DONUT_SLICE_GAP: f64 = 0.018;
 /// Edge of a legend swatch, in pixels.
 const SWATCH_SIZE: i32 = 12;
 
-/// Total drawn height of a histogram bar's column (trough), in pixels.
-const VBAR_HEIGHT: i32 = 120;
+/// Drawn height of the tallest histogram column, in pixels.
+const COLUMN_HEIGHT: i32 = 120;
 
 /// A category colour: the live `accent` rotated `hue_offset` degrees
 /// around the wheel, with saturation and lightness clamped to a vivid,
@@ -127,8 +128,6 @@ pub(crate) struct DonutSlice {
 /// How a chart mark — a donut slice, a bar — is coloured.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum ChartTone {
-    /// The accent itself.
-    Accent,
     /// A category: the accent rotated this many degrees around the hue
     /// wheel; see [`categorical_color`].
     Category(f64),
@@ -146,11 +145,6 @@ impl ChartTone {
     /// Set `cr`'s source to this tone, resolved from the live `accent`.
     fn set_source(self, cr: &gtk::cairo::Context, accent: gdk::RGBA) {
         match self {
-            Self::Accent => cr.set_source_rgb(
-                accent.red() as f64,
-                accent.green() as f64,
-                accent.blue() as f64,
-            ),
             Self::Category(hue_offset) => {
                 let (r, g, b) = categorical_color(accent, hue_offset);
                 cr.set_source_rgb(r, g, b);
@@ -290,44 +284,59 @@ fn swatch(tone: ChartTone) -> gtk::DrawingArea {
     area
 }
 
-/// One bar of a [`vertical_bars`] histogram or of [`ranked_bars`]: its
-/// label, its length as a fraction of the longest bar, and the value
-/// printed beside it.
+/// One bar of [`ranked_bars`]: its label, its length as a fraction of the
+/// longest bar, and the value printed beside it.
 pub(crate) struct ChartBar {
     pub label: String,
     pub fraction: f64,
     pub value: String,
 }
 
-/// A vertical-bar histogram over an ordered axis. Each bar is one column
-/// of a homogeneous grid — its value over the bar, the axis label below —
-/// so the columns line up exactly without any per-pixel alignment.
-pub(crate) fn vertical_bars(bars: Vec<ChartBar>) -> gtk::Widget {
+/// One column of a [`stacked_columns`] histogram: its axis label, the
+/// value printed over it, a tooltip detailing it, and its segments from
+/// the baseline up.
+pub(crate) struct ChartColumn {
+    pub label: String,
+    pub value: String,
+    pub tooltip: String,
+    pub segments: Vec<ColumnSegment>,
+}
+
+/// One segment of a [`ChartColumn`]: its height as a fraction of the
+/// tallest column, and its tone. A column is as tall as its segments
+/// together.
+pub(crate) struct ColumnSegment {
+    pub fraction: f64,
+    pub tone: ChartTone,
+}
+
+/// A histogram over an ordered axis, each column stacked from its
+/// segments. Each column is one cell of a homogeneous grid — its value
+/// over the column, the axis label below — so the columns line up exactly
+/// without any per-pixel alignment.
+pub(crate) fn stacked_columns(columns: Vec<ChartColumn>) -> gtk::Widget {
     let grid = gtk::Grid::new();
     grid.set_column_homogeneous(true);
     grid.set_column_spacing(6);
     grid.set_row_spacing(4);
     grid.set_hexpand(true);
 
-    for (index, bar) in bars.iter().enumerate() {
+    for (index, column) in columns.into_iter().enumerate() {
         let col = index as i32;
 
-        // The value rides just above its bar, both at the foot of the
-        // row, so the bars share a baseline whatever their height.
-        let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        column.set_valign(gtk::Align::End);
-        let value = gtk::Label::new(Some(&bar.value));
+        // The value rides just above its column, both at the foot of the
+        // row, so the columns share a baseline whatever their height.
+        let stack = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        stack.set_valign(gtk::Align::End);
+        stack.set_tooltip_text(Some(&column.tooltip));
+        let value = gtk::Label::new(Some(&column.value));
         value.add_css_class("statistics-bar-value");
         value.set_halign(gtk::Align::Center);
-        column.append(&value);
-        column.append(&bar_canvas(
-            bar.fraction,
-            BarDirection::Up,
-            ChartTone::Accent,
-        ));
-        grid.attach(&column, col, 0, 1, 1);
+        stack.append(&value);
+        stack.append(&column_canvas(column.segments));
+        grid.attach(&stack, col, 0, 1, 1);
 
-        let label = gtk::Label::new(Some(&bar.label));
+        let label = gtk::Label::new(Some(&column.label));
         label.add_css_class("statistics-axis-label");
         label.set_halign(gtk::Align::Center);
         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -359,11 +368,7 @@ pub(crate) fn ranked_bars(bars: Vec<ChartBar>) -> gtk::Widget {
         label.set_max_width_chars(16);
         grid.attach(&label, 0, row, 1, 1);
 
-        let canvas = bar_canvas(
-            bar.fraction,
-            BarDirection::Right,
-            ChartTone::category(index, count),
-        );
+        let canvas = ranked_bar_canvas(bar.fraction, ChartTone::category(index, count));
         canvas.set_hexpand(true);
         canvas.set_valign(gtk::Align::Center);
         grid.attach(&canvas, 1, row, 1, 1);
@@ -377,54 +382,71 @@ pub(crate) fn ranked_bars(bars: Vec<ChartBar>) -> gtk::Widget {
     grid.upcast()
 }
 
-/// Which way a bar grows from its axis.
-#[derive(Clone, Copy)]
-enum BarDirection {
-    /// A histogram column, standing on the baseline.
-    Up,
-    /// A ranking row, starting at the left edge.
-    Right,
+/// A histogram column [`COLUMN_HEIGHT`] tall at full scale, its segments
+/// stacked from the baseline up. The top is rounded, the foot square, so
+/// the columns read as grown from a common baseline.
+fn column_canvas(segments: Vec<ColumnSegment>) -> gtk::DrawingArea {
+    let total: f64 = segments
+        .iter()
+        .map(|segment| segment.fraction.max(0.0))
+        .sum();
+    let area = gtk::DrawingArea::new();
+    area.add_css_class("statistics-vbar");
+    area.set_content_height((total.min(1.0) * f64::from(COLUMN_HEIGHT)).round() as i32);
+    area.set_hexpand(true);
+    area.set_draw_func(move |area, cr, width, height| {
+        let w = width as f64;
+        let h = height as f64;
+        if w <= 0.0 || h <= 0.0 || total <= 0.0 {
+            return;
+        }
+        let accent = area.color();
+        let radius = BAR_FILL_RADIUS.min(w / 2.0).min(h / 2.0);
+        cr.new_sub_path();
+        cr.move_to(0.0, h);
+        cr.arc(radius, radius, radius, PI, 1.5 * PI);
+        cr.arc(w - radius, radius, radius, 1.5 * PI, 2.0 * PI);
+        cr.line_to(w, h);
+        cr.close_path();
+        cr.clip();
+        // Segment edges snap to whole pixels so adjacent segments meet
+        // without an antialiased seam between them.
+        let mut stacked = 0.0;
+        let mut bottom = h;
+        for segment in &segments {
+            stacked += segment.fraction.max(0.0);
+            let top = h - (h * stacked / total).round();
+            if top < bottom {
+                cr.rectangle(0.0, top, w, bottom - top);
+                segment.tone.set_source(cr, accent);
+                let _ = cr.fill();
+                bottom = top;
+            }
+        }
+    });
+    area
 }
 
-/// One bar in `tone`: a histogram column sized to `fraction` of
-/// [`VBAR_HEIGHT`], or a ranking row filling `fraction` of its width. Its
-/// free end is rounded, the end on the axis square.
-fn bar_canvas(fraction: f64, direction: BarDirection, tone: ChartTone) -> gtk::DrawingArea {
+/// A ranked bar in `tone`, [`RANKED_BAR_HEIGHT`] tall, filling `fraction`
+/// of its width. Its right end is rounded, its left end square.
+fn ranked_bar_canvas(fraction: f64, tone: ChartTone) -> gtk::DrawingArea {
     let fraction = fraction.clamp(0.0, 1.0);
     let area = gtk::DrawingArea::new();
     area.add_css_class("statistics-vbar");
-    match direction {
-        BarDirection::Up => {
-            area.set_content_height((fraction * f64::from(VBAR_HEIGHT)).round() as i32);
-            area.set_hexpand(true);
-        }
-        BarDirection::Right => area.set_content_height(RANKED_BAR_HEIGHT),
-    }
+    area.set_content_height(RANKED_BAR_HEIGHT);
     area.set_draw_func(move |area, cr, width, height| {
-        let (w, h) = match direction {
-            BarDirection::Up => (width as f64, height as f64),
-            BarDirection::Right => (width as f64 * fraction, height as f64),
-        };
+        let w = width as f64 * fraction;
+        let h = height as f64;
         if w <= 0.0 || h <= 0.0 {
             return;
         }
         tone.set_source(cr, area.color());
         let radius = BAR_FILL_RADIUS.min(w / 2.0).min(h / 2.0);
         cr.new_sub_path();
-        match direction {
-            BarDirection::Up => {
-                cr.move_to(0.0, h);
-                cr.arc(radius, radius, radius, PI, 1.5 * PI);
-                cr.arc(w - radius, radius, radius, 1.5 * PI, 2.0 * PI);
-                cr.line_to(w, h);
-            }
-            BarDirection::Right => {
-                cr.move_to(0.0, 0.0);
-                cr.arc(w - radius, radius, radius, 1.5 * PI, 2.0 * PI);
-                cr.arc(w - radius, h - radius, radius, 0.0, 0.5 * PI);
-                cr.line_to(0.0, h);
-            }
-        }
+        cr.move_to(0.0, 0.0);
+        cr.arc(w - radius, radius, radius, 1.5 * PI, 2.0 * PI);
+        cr.arc(w - radius, h - radius, radius, 0.0, 0.5 * PI);
+        cr.line_to(0.0, h);
         cr.close_path();
         let _ = cr.fill();
     });
@@ -522,9 +544,35 @@ mod widget_smoke {
                     },
                 ]
             };
+            let sample_columns = vec![
+                ChartColumn {
+                    label: "1990s".to_owned(),
+                    value: "40".to_owned(),
+                    tooltip: "House: 30\nOther: 10".to_owned(),
+                    segments: vec![
+                        ColumnSegment {
+                            fraction: 0.75,
+                            tone: ChartTone::category(0, 2),
+                        },
+                        ColumnSegment {
+                            fraction: 0.25,
+                            tone: ChartTone::Muted,
+                        },
+                    ],
+                },
+                ChartColumn {
+                    label: "2000s".to_owned(),
+                    value: "20".to_owned(),
+                    tooltip: "Techno: 20".to_owned(),
+                    segments: vec![ColumnSegment {
+                        fraction: 0.5,
+                        tone: ChartTone::category(1, 2),
+                    }],
+                },
+            ];
             let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
             column.append(&donut);
-            column.append(&vertical_bars(sample_bars()));
+            column.append(&stacked_columns(sample_columns));
             column.append(&ranked_bars(sample_bars()));
 
             let window = gtk::Window::new();

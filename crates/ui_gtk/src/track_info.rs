@@ -36,6 +36,8 @@ const DIALOG_SIDE_MARGIN: i32 = 18;
 const HEADER_GAP_BELOW: i32 = 14;
 const NUMBER_ENTRY_WIDTH_CHARS: i32 = 5;
 const PAIR_ENTRY_WIDTH_CHARS: i32 = 4;
+/// Stack name of the Artwork tab, where Ctrl+V pastes the artwork.
+const ARTWORK_PAGE: &str = "artwork";
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn open_track_info_dialog(
@@ -103,7 +105,7 @@ pub(crate) fn open_track_info_dialog(
         initial.artwork_source.clone(),
         initial.has_embedded_artwork,
     );
-    stack.add_titled(&artwork.widget, Some("artwork"), &gettext("Artwork"));
+    stack.add_titled(&artwork.widget, Some(ARTWORK_PAGE), &gettext("Artwork"));
 
     let lyrics = LyricsPage::new(&initial.track.metadata);
     stack.add_titled(&lyrics.widget, Some("lyrics"), &gettext("Lyrics"));
@@ -196,19 +198,30 @@ pub(crate) fn open_track_info_dialog(
     let window_for_escape = window.clone();
     let previous_for_key = previous.clone();
     let next_for_key = next.clone();
+    let pages_for_key = pages.clone();
     key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
+        let control = state.contains(gdk::ModifierType::CONTROL_MASK);
         if key == gdk::Key::Escape {
             window_for_escape.close();
             glib::Propagation::Stop
-        } else if state.contains(gdk::ModifierType::CONTROL_MASK) && key == gdk::Key::bracketleft {
+        } else if control && key == gdk::Key::bracketleft {
             if previous_for_key.is_sensitive() {
                 previous_for_key.emit_clicked();
             }
             glib::Propagation::Stop
-        } else if state.contains(gdk::ModifierType::CONTROL_MASK) && key == gdk::Key::bracketright {
+        } else if control && key == gdk::Key::bracketright {
             if next_for_key.is_sensitive() {
                 next_for_key.emit_clicked();
             }
+            glib::Propagation::Stop
+        } else if control
+            && key.to_lower() == gdk::Key::v
+            && stack.visible_child_name().as_deref() == Some(ARTWORK_PAGE)
+        {
+            // The Artwork tab holds no text field, so a paste there can
+            // only mean the artwork; other tabs keep Ctrl+V for their
+            // fields, which see it first.
+            pages_for_key.artwork.paste();
             glib::Propagation::Stop
         } else {
             glib::Propagation::Proceed

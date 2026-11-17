@@ -56,8 +56,8 @@ pub use duplicate_consolidation::{
 };
 pub use id::{PlaylistFolderId, PlaylistId, SmartPlaylistId, TrackId};
 pub use library_statistics::{
-    DecadeCount, GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LibraryStatistics,
-    OtherGenres, QualityBucket, QualityDistribution, QualityRange, YearCount,
+    DecadeCount, GenreBreakdown, GenreDistribution, GenrePlayCount, GenreRating, GenreShare,
+    LibraryStatistics, OtherGenres, QualityBucket, QualityDistribution, QualityRange, YearCount,
     compute_library_statistics,
 };
 pub use managed_library::{

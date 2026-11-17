@@ -19,10 +19,11 @@
 //! [`crate::chart`] with a hue per slice and a legend; the two top-5
 //! genre rankings (most played, most liked) are ranked horizontal bars,
 //! a hue per genre.
-//! These four cards flow into a responsive two-up grid that reflows to
-//! one column when the window is narrow; the two distributions over time
-//! (release decade, year added) run full width below as vertical-bar
-//! histograms. Every chart is drawn with
+//! The donuts and the rankings each flow into their own responsive two-up
+//! grid that reflows to one column when the window is narrow, so each pair
+//! of cards is only as tall as its own charts; the two distributions over time
+//! (release decade, year added) run full width below as histograms whose
+//! columns stack by genre in the genre donut's tones. Every chart is drawn with
 //! Cairo against the live theme accent, so the page tracks the system
 //! accent in both light and dark themes.
 //!
@@ -36,13 +37,13 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use sustain_app_runtime::{
-    DecadeCount, GenreDistribution, GenrePlayCount, GenreRating, QualityDistribution, QualityRange,
-    YearCount, compute_library_statistics,
+    DecadeCount, GenreBreakdown, GenreDistribution, GenrePlayCount, GenreRating,
+    QualityDistribution, QualityRange, YearCount, compute_library_statistics,
 };
 use sustain_i18n::{gettext, ngettext, pgettext, plural_count, tr_format};
 
 use crate::SharedRuntime;
-use crate::chart::{self, ChartBar, ChartTone, DonutSlice};
+use crate::chart::{self, ChartBar, ChartColumn, ChartTone, ColumnSegment, DonutSlice};
 use crate::status_bar::{duration_text, file_size_text, grouped};
 use crate::track_summary::TrackSummary;
 
@@ -114,30 +115,26 @@ impl StatisticsView {
         self.content
             .append(&headline_figures(&summary, stats.total_plays));
 
-        // The four compact cards reflow into a two-up grid (one column when
-        // narrow); the homogeneous sizing keeps the tiles aligned.
-        let grid = gtk::FlowBox::new();
-        grid.set_orientation(gtk::Orientation::Horizontal);
-        grid.set_min_children_per_line(1);
-        grid.set_max_children_per_line(2);
-        grid.set_column_spacing(CARD_SPACING.unsigned_abs());
-        grid.set_row_spacing(CARD_SPACING.unsigned_abs());
-        grid.set_homogeneous(true);
-        grid.set_selection_mode(gtk::SelectionMode::None);
-        grid.set_hexpand(true);
-        grid.insert(&genre_distribution_section(&stats.genre_distribution), -1);
-        grid.insert(
-            &quality_distribution_section(&stats.quality_distribution),
-            -1,
-        );
-        grid.insert(&most_played_section(&stats.most_played_genres), -1);
-        grid.insert(&most_liked_section(&stats.most_liked_genres), -1);
-        self.content.append(&grid);
+        // The donuts and the rankings each get their own grid: a homogeneous
+        // grid sizes every tile to its tallest, so sharing one would stretch
+        // the short ranking cards to the donuts' height.
+        self.content.append(&card_grid(&[
+            genre_distribution_section(&stats.genre_distribution),
+            quality_distribution_section(&stats.quality_distribution),
+        ]));
+        self.content.append(&card_grid(&[
+            most_played_section(&stats.most_played_genres),
+            most_liked_section(&stats.most_liked_genres),
+        ]));
 
-        self.content
-            .append(&release_years_section(&stats.release_decades));
-        self.content
-            .append(&added_years_section(&stats.added_years));
+        self.content.append(&release_years_section(
+            &stats.release_decades,
+            &stats.genre_distribution,
+        ));
+        self.content.append(&added_years_section(
+            &stats.added_years,
+            &stats.genre_distribution,
+        ));
     }
 
     /// Rebuild only when the page is currently on screen. Used by the
@@ -149,6 +146,24 @@ impl StatisticsView {
             self.refresh();
         }
     }
+}
+
+/// A row of compact cards, two up, reflowing to one column when the
+/// window is narrow; the homogeneous sizing keeps the tiles aligned.
+fn card_grid(cards: &[gtk::Widget]) -> gtk::FlowBox {
+    let grid = gtk::FlowBox::new();
+    grid.set_orientation(gtk::Orientation::Horizontal);
+    grid.set_min_children_per_line(1);
+    grid.set_max_children_per_line(2);
+    grid.set_column_spacing(CARD_SPACING.unsigned_abs());
+    grid.set_row_spacing(CARD_SPACING.unsigned_abs());
+    grid.set_homogeneous(true);
+    grid.set_selection_mode(gtk::SelectionMode::None);
+    grid.set_hexpand(true);
+    for card in cards {
+        grid.insert(card, -1);
+    }
+    grid
 }
 
 /// The local calendar year of a `SystemTime`, or `None` for instants the
@@ -243,9 +258,29 @@ fn donut_center(total: &str, unit: &str) -> String {
     format!("{total}\n{unit}")
 }
 
+/// The tone of the charted genre at `rank` in `distribution`. The genre
+/// donut and the histograms stacked by genre both colour through it, so a
+/// genre reads the same on every chart; the folded tail is
+/// [`ChartTone::Muted`].
+fn genre_tone(rank: usize, distribution: &GenreDistribution) -> ChartTone {
+    ChartTone::category(rank, distribution.entries.len())
+}
+
+/// The label of the genre distribution's folded tail of `genre_count`
+/// genres.
+fn other_genres_label(genre_count: usize) -> String {
+    tr_format!(
+        ngettext(
+            "Other ({count} genre)",
+            "Other ({count} genres)",
+            plural_count(genre_count)
+        ),
+        count = genre_count
+    )
+}
+
 fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
     let total = distribution.total_tracks;
-    let ranked = distribution.entries.len();
     let mut slices: Vec<DonutSlice> = distribution
         .entries
         .iter()
@@ -254,19 +289,12 @@ fn genre_distribution_section(distribution: &GenreDistribution) -> gtk::Widget {
             label: genre_label(&entry.genre),
             fraction: fraction_f64(entry.track_weight, total as f64),
             value: quantity_share_text(entry.track_weight, total as f64),
-            tone: ChartTone::category(rank, ranked),
+            tone: genre_tone(rank, distribution),
         })
         .collect();
     if let Some(other) = distribution.other {
         slices.push(DonutSlice {
-            label: tr_format!(
-                ngettext(
-                    "Other ({count} genre)",
-                    "Other ({count} genres)",
-                    plural_count(other.genre_count)
-                ),
-                count = other.genre_count
-            ),
+            label: other_genres_label(other.genre_count),
             fraction: fraction_f64(other.track_weight, total as f64),
             value: quantity_share_text(other.track_weight, total as f64),
             tone: ChartTone::Muted,
@@ -382,55 +410,120 @@ fn most_liked_section(genres: &[GenreRating]) -> gtk::Widget {
     )
 }
 
-fn release_years_section(decades: &[DecadeCount]) -> gtk::Widget {
-    let max = decades
-        .iter()
-        .map(|decade| decade.track_count)
-        .max()
-        .unwrap_or(0);
-    let bars: Vec<ChartBar> = decades
-        .iter()
-        .map(|decade| ChartBar {
-            label: decade
-                .decade
-                .map(|year| {
-                    // Translators: a decade, as in "1990s".
-                    tr_format!(gettext("{year}s"), year = year)
-                })
-                .unwrap_or_else(|| gettext("Unknown")),
-            fraction: fraction(decade.track_count, max),
-            value: grouped(decade.track_count as u64),
-        })
-        .collect();
-    let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
+fn release_years_section(decades: &[DecadeCount], distribution: &GenreDistribution) -> gtk::Widget {
+    let buckets = decades.iter().map(|decade| {
+        let label = decade
+            .decade
+            .map(|year| {
+                // Translators: a decade, as in "1990s".
+                tr_format!(gettext("{year}s"), year = year)
+            })
+            .unwrap_or_else(|| gettext("Unknown"));
+        (label, decade.track_count, &decade.genres)
+    });
+    let columns = genre_columns(buckets, distribution);
+    let content = (!columns.is_empty()).then(|| chart::stacked_columns(columns));
     section(
         &gettext("Release years"),
-        Some(&gettext("Number of tracks per release decade.")),
+        Some(&gettext(
+            "Number of tracks per release decade, split by genre.",
+        )),
         content,
         &gettext("No release years tagged yet."),
     )
 }
 
-fn added_years_section(years: &[YearCount]) -> gtk::Widget {
-    let max = years.iter().map(|year| year.track_count).max().unwrap_or(0);
-    let bars: Vec<ChartBar> = years
-        .iter()
-        .map(|year| ChartBar {
-            label: year
-                .year
-                .map(|year| year.to_string())
-                .unwrap_or_else(|| gettext("Unknown")),
-            fraction: fraction(year.track_count, max),
-            value: grouped(year.track_count as u64),
-        })
-        .collect();
-    let content = (!bars.is_empty()).then(|| chart::vertical_bars(bars));
+fn added_years_section(years: &[YearCount], distribution: &GenreDistribution) -> gtk::Widget {
+    let buckets = years.iter().map(|year| {
+        let label = year
+            .year
+            .map(|year| year.to_string())
+            .unwrap_or_else(|| gettext("Unknown"));
+        (label, year.track_count, &year.genres)
+    });
+    let columns = genre_columns(buckets, distribution);
+    let content = (!columns.is_empty()).then(|| chart::stacked_columns(columns));
     section(
         &gettext("Year added"),
-        Some(&gettext("Number of tracks added to the library each year.")),
+        Some(&gettext(
+            "Number of tracks added to the library each year, split by genre.",
+        )),
         content,
         &gettext("Nothing added yet."),
     )
+}
+
+/// Histogram columns for labelled `(label, track count, genre split)`
+/// buckets, each stacked by genre in the genre donut's tones, the largest
+/// genre at the foot and the folded tail on top. The tallest bucket
+/// spans the full column height.
+fn genre_columns<'a>(
+    buckets: impl Iterator<Item = (String, usize, &'a GenreBreakdown)> + Clone,
+    distribution: &GenreDistribution,
+) -> Vec<ChartColumn> {
+    let max = buckets
+        .clone()
+        .map(|(_, track_count, _)| track_count)
+        .max()
+        .unwrap_or(0) as f64;
+    buckets
+        .map(|(label, track_count, genres)| {
+            let mut segments: Vec<ColumnSegment> = genres
+                .charted
+                .iter()
+                .enumerate()
+                .map(|(rank, &weight)| ColumnSegment {
+                    fraction: fraction_f64(weight, max),
+                    tone: genre_tone(rank, distribution),
+                })
+                .collect();
+            segments.push(ColumnSegment {
+                fraction: fraction_f64(genres.other, max),
+                tone: ChartTone::Muted,
+            });
+            ChartColumn {
+                label,
+                value: grouped(track_count as u64),
+                tooltip: genre_split_text(genres, track_count, distribution),
+                segments,
+            }
+        })
+        .collect()
+}
+
+/// One line per genre present in a bucket of `track_count` tracks,
+/// largest first: the genre and its weighted count and share.
+fn genre_split_text(
+    genres: &GenreBreakdown,
+    track_count: usize,
+    distribution: &GenreDistribution,
+) -> String {
+    let mut lines: Vec<(f64, String)> = genres
+        .charted
+        .iter()
+        .zip(&distribution.entries)
+        .map(|(&weight, entry)| (weight, genre_label(&entry.genre)))
+        .collect();
+    if let Some(other) = distribution.other {
+        lines.push((genres.other, other_genres_label(other.genre_count)));
+    }
+    // A stable sort keeps the distribution's own order among equal weights.
+    lines.sort_by(|left, right| right.0.total_cmp(&left.0));
+    lines
+        .into_iter()
+        .filter(|(weight, _)| *weight > 0.0)
+        .map(|(weight, genre)| {
+            tr_format!(
+                // Translators: one line of a histogram column's tooltip, a
+                // genre and its track count and share, as in
+                // "House: 120 (40%)".
+                pgettext("statistics genre split", "{genre}: {share}"),
+                genre = genre,
+                share = quantity_share_text(weight, track_count as f64)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `numerator / denominator` as a `0.0..=1.0` bar fraction, guarding the
@@ -550,6 +643,8 @@ fn section(
 mod tests {
     use std::time::Duration;
 
+    use sustain_app_runtime::{GenreShare, OtherGenres};
+
     use super::*;
 
     #[test]
@@ -629,6 +724,85 @@ mod tests {
     fn genre_label_maps_the_untagged_case() {
         assert_eq!(genre_label(&Some("House".to_owned())), "House");
         assert_eq!(genre_label(&None), "Unknown");
+    }
+
+    fn sample_distribution() -> GenreDistribution {
+        GenreDistribution {
+            entries: vec![
+                GenreShare {
+                    genre: Some("House".to_owned()),
+                    track_weight: 3.0,
+                },
+                GenreShare {
+                    genre: None,
+                    track_weight: 1.0,
+                },
+            ],
+            other: Some(OtherGenres {
+                genre_count: 2,
+                track_weight: 1.0,
+            }),
+            total_tracks: 5,
+        }
+    }
+
+    #[test]
+    fn genre_columns_stack_in_the_donut_tones_scaled_to_the_tallest() {
+        let distribution = sample_distribution();
+        let tall = GenreBreakdown {
+            charted: vec![2.0, 1.0],
+            other: 1.0,
+        };
+        let short = GenreBreakdown {
+            charted: vec![1.0, 0.0],
+            other: 0.0,
+        };
+        let columns = genre_columns(
+            [
+                ("1990s".to_owned(), 4, &tall),
+                ("2000s".to_owned(), 1, &short),
+            ]
+            .into_iter(),
+            &distribution,
+        );
+
+        let segments = |column: &ChartColumn| {
+            column
+                .segments
+                .iter()
+                .map(|segment| (segment.fraction, segment.tone))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            segments(&columns[0]),
+            [
+                (0.5, ChartTone::category(0, 2)),
+                (0.25, ChartTone::category(1, 2)),
+                (0.25, ChartTone::Muted),
+            ]
+        );
+        assert_eq!(
+            segments(&columns[1]),
+            [
+                (0.25, ChartTone::category(0, 2)),
+                (0.0, ChartTone::category(1, 2)),
+                (0.0, ChartTone::Muted),
+            ]
+        );
+        assert_eq!(columns[0].value, "4");
+    }
+
+    #[test]
+    fn genre_split_lists_present_genres_largest_first() {
+        let distribution = sample_distribution();
+        let genres = GenreBreakdown {
+            charted: vec![1.0, 0.0],
+            other: 2.0,
+        };
+        assert_eq!(
+            genre_split_text(&genres, 3, &distribution),
+            "Other (2 genres): 2 (67%)\nHouse: 1 (33%)"
+        );
     }
 
     #[test]

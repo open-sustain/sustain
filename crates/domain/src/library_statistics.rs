@@ -161,18 +161,37 @@ pub struct GenreRating {
 /// Track count for one release decade. `decade` is the decade's first
 /// year (e.g. `1990` for the 1990s); `None` collects tracks with no
 /// release year.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DecadeCount {
     pub decade: Option<i32>,
     pub track_count: usize,
+    /// How the decade's tracks split across the genre distribution.
+    pub genres: GenreBreakdown,
 }
 
 /// Track count for one "year added" bucket. `None` collects tracks with
 /// no recorded add date.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct YearCount {
     pub year: Option<i32>,
     pub track_count: usize,
+    /// How the year's tracks split across the genre distribution.
+    pub genres: GenreBreakdown,
+}
+
+/// A subset of the library split across the slices of the
+/// [`GenreDistribution`], so a chart of that subset can colour its genres
+/// exactly as the genre chart does. Contributions are weighted the same
+/// way — a track tagged `House/Deep` gives `0.5` to each — so they sum to
+/// the subset's track count.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenreBreakdown {
+    /// Weighted track contribution per charted genre, index-aligned with
+    /// [`GenreDistribution::entries`].
+    pub charted: Vec<f64>,
+    /// Weighted track contribution of the genres folded into
+    /// [`GenreDistribution::other`].
+    pub other: f64,
 }
 
 /// Compute the whole-library statistics from `tracks`.
@@ -185,15 +204,19 @@ pub fn compute_library_statistics(
     year_of_added: impl Fn(SystemTime) -> Option<i32>,
 ) -> LibraryStatistics {
     let spellings = GenreSpellings::of(tracks);
+    let genre_distribution = genre_distribution(tracks, &spellings);
+    let slots = GenreSlots::of(&genre_distribution);
+    let release_decades = release_decades(tracks, &spellings, &slots);
+    let added_years = added_years(tracks, &spellings, &slots, year_of_added);
     LibraryStatistics {
         total_tracks: tracks.len(),
         total_plays: tracks.iter().map(|track| track.statistics.play_count).sum(),
-        genre_distribution: genre_distribution(tracks, &spellings),
+        genre_distribution,
         quality_distribution: quality_distribution(tracks),
         most_played_genres: most_played_genres(tracks, &spellings),
         most_liked_genres: most_liked_genres(tracks, &spellings),
-        release_decades: release_decades(tracks),
-        added_years: added_years(tracks, year_of_added),
+        release_decades,
+        added_years,
     }
 }
 
@@ -246,6 +269,45 @@ impl<'a> GenreSpellings<'a> {
         let keys = self.keys(track);
         let weight = 1.0 / keys.len() as f64;
         keys.into_iter().map(|genre| (genre, weight)).collect()
+    }
+}
+
+/// Where each genre lands in the genre distribution: the index of its
+/// charted slice, or — absent from the map — the folded "Other" tail.
+struct GenreSlots<'a>(HashMap<Option<&'a str>, usize>);
+
+impl<'a> GenreSlots<'a> {
+    fn of(distribution: &'a GenreDistribution) -> Self {
+        Self(
+            distribution
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(index, share)| (share.genre.as_deref(), index))
+                .collect(),
+        )
+    }
+
+    fn empty_breakdown(&self) -> GenreBreakdown {
+        GenreBreakdown {
+            charted: vec![0.0; self.0.len()],
+            other: 0.0,
+        }
+    }
+
+    /// Add `track`'s weighted genre contributions to `breakdown`.
+    fn add(
+        &self,
+        breakdown: &mut GenreBreakdown,
+        spellings: &GenreSpellings<'a>,
+        track: &'a Track,
+    ) {
+        for (genre, weight) in spellings.weighted(track) {
+            match self.0.get(&genre) {
+                Some(&index) => breakdown.charted[index] += weight,
+                None => breakdown.other += weight,
+            }
+        }
     }
 }
 
@@ -408,45 +470,64 @@ fn decade_of(year: i32) -> i32 {
 /// release year before it is a mistyped tag, not a release.
 const FIRST_RECORDING_YEAR: i32 = 1860;
 
-fn release_decades(tracks: &[Track]) -> Vec<DecadeCount> {
-    let mut counts: HashMap<Option<i32>, usize> = HashMap::new();
-    for track in tracks {
-        let decade = track
+fn release_decades<'a>(
+    tracks: &'a [Track],
+    spellings: &GenreSpellings<'a>,
+    slots: &GenreSlots<'a>,
+) -> Vec<DecadeCount> {
+    year_buckets(tracks, spellings, slots, |track| {
+        track
             .metadata
             .year
             .filter(|year| *year >= FIRST_RECORDING_YEAR)
-            .map(decade_of);
-        *counts.entry(decade).or_insert(0) += 1;
-    }
-    sorted_year_buckets(counts)
-        .into_iter()
-        .map(|(decade, track_count)| DecadeCount {
-            decade,
-            track_count,
-        })
-        .collect()
+            .map(decade_of)
+    })
+    .into_iter()
+    .map(|(decade, (track_count, genres))| DecadeCount {
+        decade,
+        track_count,
+        genres,
+    })
+    .collect()
 }
 
-fn added_years(
-    tracks: &[Track],
+fn added_years<'a>(
+    tracks: &'a [Track],
+    spellings: &GenreSpellings<'a>,
+    slots: &GenreSlots<'a>,
     year_of_added: impl Fn(SystemTime) -> Option<i32>,
 ) -> Vec<YearCount> {
-    let mut counts: HashMap<Option<i32>, usize> = HashMap::new();
-    for track in tracks {
-        let year = track.statistics.date_added_at.and_then(&year_of_added);
-        *counts.entry(year).or_insert(0) += 1;
-    }
-    sorted_year_buckets(counts)
-        .into_iter()
-        .map(|(year, track_count)| YearCount { year, track_count })
-        .collect()
+    year_buckets(tracks, spellings, slots, |track| {
+        track.statistics.date_added_at.and_then(&year_of_added)
+    })
+    .into_iter()
+    .map(|(year, (track_count, genres))| YearCount {
+        year,
+        track_count,
+        genres,
+    })
+    .collect()
 }
 
-/// Order year/decade buckets chronologically, with the "unknown"
-/// (`None`) bucket last so it reads as a trailing remainder rather than
-/// the earliest column.
-fn sorted_year_buckets(counts: HashMap<Option<i32>, usize>) -> Vec<(Option<i32>, usize)> {
-    let mut buckets: Vec<(Option<i32>, usize)> = counts.into_iter().collect();
+/// Count tracks per year bucket (`bucket_of`, `None` for "unknown"),
+/// splitting each bucket across the genre distribution, in chronological
+/// order with the "unknown" bucket last so it reads as a trailing
+/// remainder rather than the earliest column.
+fn year_buckets<'a>(
+    tracks: &'a [Track],
+    spellings: &GenreSpellings<'a>,
+    slots: &GenreSlots<'a>,
+    bucket_of: impl Fn(&Track) -> Option<i32>,
+) -> Vec<(Option<i32>, (usize, GenreBreakdown))> {
+    let mut counts: HashMap<Option<i32>, (usize, GenreBreakdown)> = HashMap::new();
+    for track in tracks {
+        let (count, genres) = counts
+            .entry(bucket_of(track))
+            .or_insert_with(|| (0, slots.empty_breakdown()));
+        *count += 1;
+        slots.add(genres, spellings, track);
+    }
+    let mut buckets: Vec<_> = counts.into_iter().collect();
     buckets.sort_by(|(left, _), (right, _)| match (left, right) {
         (Some(left), Some(right)) => left.cmp(right),
         (Some(_), None) => std::cmp::Ordering::Less,
@@ -522,6 +603,13 @@ mod tests {
 
     fn compute(tracks: &[Track]) -> LibraryStatistics {
         compute_library_statistics(tracks, fake_year)
+    }
+
+    fn counts_per_decade(decades: &[DecadeCount]) -> Vec<(Option<i32>, usize)> {
+        decades
+            .iter()
+            .map(|decade| (decade.decade, decade.track_count))
+            .collect()
     }
 
     fn assert_near(actual: f64, expected: f64) {
@@ -795,21 +883,8 @@ mod tests {
         let decades = compute(&tracks).release_decades;
 
         assert_eq!(
-            decades,
-            vec![
-                DecadeCount {
-                    decade: Some(1990),
-                    track_count: 2,
-                },
-                DecadeCount {
-                    decade: Some(2000),
-                    track_count: 1,
-                },
-                DecadeCount {
-                    decade: None,
-                    track_count: 1,
-                },
-            ]
+            counts_per_decade(&decades),
+            [(Some(1990), 2), (Some(2000), 1), (None, 1)]
         );
     }
 
@@ -822,19 +897,7 @@ mod tests {
         ];
         let decades = compute(&tracks).release_decades;
 
-        assert_eq!(
-            decades,
-            vec![
-                DecadeCount {
-                    decade: Some(1860),
-                    track_count: 1,
-                },
-                DecadeCount {
-                    decade: None,
-                    track_count: 2,
-                },
-            ]
-        );
+        assert_eq!(counts_per_decade(&decades), [(Some(1860), 1), (None, 2)]);
     }
 
     #[test]
@@ -854,21 +917,71 @@ mod tests {
         let years = compute(&tracks).added_years;
 
         assert_eq!(
-            years,
-            vec![
-                YearCount {
-                    year: Some(2014),
-                    track_count: 2,
-                },
-                YearCount {
-                    year: Some(2020),
-                    track_count: 1,
-                },
-                YearCount {
-                    year: None,
-                    track_count: 1,
-                },
-            ]
+            years
+                .iter()
+                .map(|year| (year.year, year.track_count))
+                .collect::<Vec<_>>(),
+            [(Some(2014), 2), (Some(2020), 1), (None, 1)]
         );
+    }
+
+    #[test]
+    fn year_buckets_split_across_the_genre_distribution_slices() {
+        // Fourteen genres, so the two smallest (g12, g13) fold into Other;
+        // every track is released in the 1990s except one in the 2000s.
+        let mut tracks = Vec::new();
+        let mut id = 1;
+        for genre_index in 0..14 {
+            for _ in 0..(14 - genre_index) {
+                tracks.push(with_year(
+                    track(id, Some(&format!("g{genre_index:02}"))),
+                    1995,
+                ));
+                id += 1;
+            }
+        }
+        tracks.push(with_year(track(id, Some("g00/g13")), 2001));
+        let stats = compute(&tracks);
+        let slot = |genre: &str| {
+            stats
+                .genre_distribution
+                .entries
+                .iter()
+                .position(|share| share.genre.as_deref() == Some(genre))
+                .expect("charted genre")
+        };
+
+        let nineties = &stats.release_decades[0].genres;
+        assert_eq!(nineties.charted.len(), GENRE_DISTRIBUTION_TOP_N);
+        assert_near(nineties.charted[slot("g00")], 14.0);
+        assert_near(nineties.charted[slot("g11")], 3.0);
+        // g12 (2 tracks) and g13 (1 track) fold together.
+        assert_near(nineties.other, 3.0);
+
+        // The multi-genre track splits between a charted slice and Other.
+        let noughties = &stats.release_decades[1].genres;
+        assert_near(noughties.charted[slot("g00")], 0.5);
+        assert_near(noughties.other, 0.5);
+        assert_near(noughties.charted.iter().sum::<f64>() + noughties.other, 1.0);
+    }
+
+    #[test]
+    fn year_buckets_count_untagged_tracks_in_the_unknown_slice() {
+        let tracks = [
+            added_at(track(1, None), 2014),
+            added_at(track(2, Some("House")), 2014),
+        ];
+        let stats = compute(&tracks);
+        let unknown = stats
+            .genre_distribution
+            .entries
+            .iter()
+            .position(|share| share.genre.is_none())
+            .expect("untagged slice");
+
+        let genres = &stats.added_years[0].genres;
+        assert_near(genres.charted[unknown], 1.0);
+        assert_near(genres.charted.iter().sum::<f64>(), 2.0);
+        assert_near(genres.other, 0.0);
     }
 }
