@@ -21,21 +21,27 @@ msgstr ""
 msgid ""
 "\"{current_name}\" will be deleted along with every playlist, smart "
 "playlist, and folder inside it. This cannot be undone."
-msgstr "“{current_name}” 및 그 안의 모든 재생 목록, 스마트 재생 목록, 폴더가 삭제됩니다. 이 작업은 되돌릴 수 없습니다."
+msgstr ""
+"“{current_name}” 및 그 안의 모든 재생 목록, 스마트 재생 목록, 폴더가 삭제됩니"
+"다. 이 작업은 되돌릴 수 없습니다."
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:511
 #, rust-format
 msgid ""
 "\"{current_name}\" will be removed from the sidebar. The tracks it currently "
 "matches stay in your library."
-msgstr "“{current_name}”이(가) 사이드바에서 제거됩니다. 현재 조건에 맞는 트랙은 보관함에 그대로 남습니다."
+msgstr ""
+"“{current_name}”이(가) 사이드바에서 제거됩니다. 현재 조건에 맞는 트랙은 보관"
+"함에 그대로 남습니다."
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:505
 #, rust-format
 msgid ""
 "\"{current_name}\" will be removed from the sidebar. The tracks themselves "
 "stay in your library."
-msgstr "“{current_name}”이(가) 사이드바에서 제거됩니다. 트랙 자체는 보관함에 그대로 남습니다."
+msgstr ""
+"“{current_name}”이(가) 사이드바에서 제거됩니다. 트랙 자체는 보관함에 그대로 "
+"남습니다."
 
 #: crates/ui_gtk/src/smart_playlist_editor/model.rs:390
 #, rust-format
@@ -94,7 +100,10 @@ msgid ""
 "A managed-library metadata edit could not finish safely. Sustain retained "
 "its recovery state where needed. Resolve filesystem access and retry the "
 "edit."
-msgstr "관리 보관함의 메타데이터 편집을 안전하게 마치지 못했습니다. Sustain이 필요한 곳에 복구 상태를 보존했습니다. 파일 시스템 접근 문제를 해결한 후 편집을 다시 시도하십시오."
+msgstr ""
+"관리 보관함의 메타데이터 편집을 안전하게 마치지 못했습니다. Sustain이 필요한 "
+"곳에 복구 상태를 보존했습니다. 파일 시스템 접근 문제를 해결한 후 편집을 다시 "
+"시도하십시오."
 
 #: crates/ui_gtk/src/preferences/about_tab.rs:45
 #, rust-format
@@ -211,7 +220,9 @@ msgstr "전체"
 msgid ""
 "Almost always plays the highest-scoring continuation. Predictable picks, "
 "less surprise."
-msgstr "거의 항상 점수가 가장 높은 이어지는 곡을 재생합니다. 예측 가능한 선택, 적은 의외성."
+msgstr ""
+"거의 항상 점수가 가장 높은 이어지는 곡을 재생합니다. 예측 가능한 선택, 적은 "
+"의외성."
 
 #: crates/ui_gtk/src/device_panel.rs:641
 #, rust-format
@@ -371,21 +382,27 @@ msgstr "BPM 범위"
 msgid ""
 "Background BPM analysis is enabled. These tracks are already queued by the "
 "global sweep."
-msgstr "백그라운드 BPM 분석이 켜져 있습니다. 이 트랙들은 이미 전체 작업 대기열에 있습니다."
+msgstr ""
+"백그라운드 BPM 분석이 켜져 있습니다. 이 트랙들은 이미 전체 작업 대기열에 있습"
+"니다."
 
 #: crates/app_runtime/src/lib.rs:2957
 #, rust-format
 msgid ""
 "Background audio analysis is enabled. These tracks are already queued by the "
 "global sweep."
-msgstr "백그라운드 오디오 분석이 켜져 있습니다. 이 트랙들은 이미 전체 작업 대기열에 있습니다."
+msgstr ""
+"백그라운드 오디오 분석이 켜져 있습니다. 이 트랙들은 이미 전체 작업 대기열에 "
+"있습니다."
 
 #: crates/app_runtime/src/lib.rs:2954
 #, rust-format
 msgid ""
 "Background key detection is enabled. These tracks are already queued by the "
 "global sweep."
-msgstr "백그라운드 키 감지가 켜져 있습니다. 이 트랙들은 이미 전체 작업 대기열에 있습니다."
+msgstr ""
+"백그라운드 키 감지가 켜져 있습니다. 이 트랙들은 이미 전체 작업 대기열에 있습"
+"니다."
 
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:364
 #, rust-format
@@ -477,7 +494,8 @@ msgstr "취소하는 중…"
 msgid ""
 "Casts a wider net and spreads picks more evenly across it. More variety, "
 "more deep cuts."
-msgstr "더 넓은 범위에서 고르게 선택합니다. 더 다양하고, 숨은 곡이 더 많습니다."
+msgstr ""
+"더 넓은 범위에서 고르게 선택합니다. 더 다양하고, 숨은 곡이 더 많습니다."
 
 #: crates/ui_gtk/src/track_info/file_page.rs:82
 #, rust-format
@@ -684,7 +702,11 @@ msgid ""
 "features Smart Shuffle uses to match transitions, and reads BPM and key off "
 "the same decode — so turning this on enables and locks both. The heaviest "
 "pass; runs in the background on tracks that are missing it."
-msgstr "각 트랙을 한 번 디코딩하여 컬러 파형과 Smart Shuffle이 전환을 맞추는 데 쓰는 지각 특성을 만들고, 같은 디코딩에서 BPM과 키도 읽습니다. 따라서 이 옵션을 켜면 두 기능도 켜지고 고정됩니다. 가장 무거운 작업이며, 아직 분석되지 않은 트랙을 대상으로 백그라운드에서 실행됩니다."
+msgstr ""
+"각 트랙을 한 번 디코딩하여 컬러 파형과 Smart Shuffle이 전환을 맞추는 데 쓰는 "
+"지각 특성을 만들고, 같은 디코딩에서 BPM과 키도 읽습니다. 따라서 이 옵션을 켜"
+"면 두 기능도 켜지고 고정됩니다. 가장 무거운 작업이며, 아직 분석되지 않은 트랙"
+"을 대상으로 백그라운드에서 실행됩니다."
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:497
 #, rust-format
@@ -743,7 +765,8 @@ msgstr "기기 연결 끊김"
 msgid ""
 "Device forgotten. Its saved playlists, artists, and sync history were "
 "cleared."
-msgstr "기기를 삭제했습니다. 저장된 재생 목록, 아티스트, 동기화 기록이 지워졌습니다."
+msgstr ""
+"기기를 삭제했습니다. 저장된 재생 목록, 아티스트, 동기화 기록이 지워졌습니다."
 
 #: crates/app_runtime/src/device_sync.rs:663
 #, rust-format
@@ -813,7 +836,9 @@ msgstr "YouTube에서 대체 오디오를 다운로드하는 중…"
 msgid ""
 "Draws the playing track's waveform in place of the progress bar, once audio "
 "analysis has measured it."
-msgstr "오디오 분석으로 측정된 후에는 진행 막대 대신 재생 중인 트랙의 파형을 표시합니다."
+msgstr ""
+"오디오 분석으로 측정된 후에는 진행 막대 대신 재생 중인 트랙의 파형을 표시합니"
+"다."
 
 #: crates/ui_gtk/src/duplicates.rs:274 crates/ui_gtk/src/duplicates.rs:278
 #, rust-format
@@ -897,7 +922,8 @@ msgstr "빠름"
 msgid ""
 "Favours strong continuations but mixes in the occasional looser match. The "
 "default."
-msgstr "강하게 이어지는 곡을 우선하되 가끔 느슨한 선택을 섞습니다. 기본값입니다."
+msgstr ""
+"강하게 이어지는 곡을 우선하되 가끔 느슨한 선택을 섞습니다. 기본값입니다."
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:25
 msgid "Features:"
@@ -1048,7 +1074,9 @@ msgstr "높은 볼륨"
 msgid ""
 "Identifies tracks via AcoustID fingerprinting and fills missing fields from "
 "MusicBrainz. Never overwrites a tag that is already set."
-msgstr "AcoustID 지문으로 트랙을 식별하고 MusicBrainz에서 빈 항목을 채웁니다. 이미 설정된 태그는 덮어쓰지 않습니다."
+msgstr ""
+"AcoustID 지문으로 트랙을 식별하고 MusicBrainz에서 빈 항목을 채웁니다. 이미 설"
+"정된 태그는 덮어쓰지 않습니다."
 
 #: crates/ui_gtk/src/track_info/artwork.rs:271
 #, rust-format
@@ -1113,7 +1141,9 @@ msgstr "YouTube에서 오디오를 교체하려면 먼저 yt-dlp와 FFmpeg를 �
 msgid ""
 "It builds the first time you turn Smart Shuffle on, then refreshes whenever "
 "your library or its analysis changes."
-msgstr "Smart Shuffle을 처음 켤 때 만들어지며, 이후 보관함이나 그 분석이 바뀔 때마다 갱신됩니다."
+msgstr ""
+"Smart Shuffle을 처음 켤 때 만들어지며, 이후 보관함이나 그 분석이 바뀔 때마다 "
+"갱신됩니다."
 
 #: crates/app_runtime/src/notifications.rs:680
 #, rust-format
@@ -1246,7 +1276,9 @@ msgid ""
 msgid_plural ""
 "Library folder updated: {missing} of {total} tracks not found at the new "
 "location."
-msgstr[0] "보관함 폴더를 업데이트했습니다: 트랙 {total}개 중 {missing}개를 새 위치에서 찾지 못했습니다."
+msgstr[0] ""
+"보관함 폴더를 업데이트했습니다: 트랙 {total}개 중 {missing}개를 새 위치에서 "
+"찾지 못했습니다."
 
 #: crates/app_runtime/src/notifications.rs:851
 #, rust-format
@@ -1256,7 +1288,9 @@ msgid ""
 msgid_plural ""
 "Library folder updated: {missing} of {total} tracks not found; {unresolved} "
 "could not be checked."
-msgstr[0] "보관함 폴더를 업데이트했습니다: 트랙 {total}개 중 {missing}개를 찾지 못했고, {unresolved}개는 확인하지 못했습니다."
+msgstr[0] ""
+"보관함 폴더를 업데이트했습니다: 트랙 {total}개 중 {missing}개를 찾지 못했고, "
+"{unresolved}개는 확인하지 못했습니다."
 
 #: crates/app_runtime/src/notifications.rs:694
 #, rust-format
@@ -1329,14 +1363,19 @@ msgid ""
 "Looks up cover art from MusicBrainz and the Cover Art Archive, then Deezer "
 "and the iTunes Search API, for tracks that have none. Never replaces artwork "
 "that is already present."
-msgstr "아트워크가 없는 트랙에 대해 MusicBrainz와 Cover Art Archive, 그다음 Deezer와 iTunes Search API에서 커버 아트를 찾습니다. 이미 있는 아트워크는 교체하지 않습니다."
+msgstr ""
+"아트워크가 없는 트랙에 대해 MusicBrainz와 Cover Art Archive, 그다음 Deezer와 "
+"iTunes Search API에서 커버 아트를 찾습니다. 이미 있는 아트워크는 교체하지 않"
+"습니다."
 
 #: crates/ui_gtk/src/preferences/online_tab.rs:54
 #, rust-format
 msgid ""
 "Looks up synchronised and plain lyrics from LRClib for tracks that have "
 "none. Never replaces lyrics that are already present."
-msgstr "가사가 없는 트랙에 대해 LRClib에서 동기화 가사와 일반 가사를 찾습니다. 이미 있는 가사는 교체하지 않습니다."
+msgstr ""
+"가사가 없는 트랙에 대해 LRClib에서 동기화 가사와 일반 가사를 찾습니다. 이미 "
+"있는 가사는 교체하지 않습니다."
 
 #: crates/ui_gtk/src/titlebar.rs:74
 #, rust-format
@@ -1500,7 +1539,9 @@ msgstr "새 스마트 재생 목록"
 msgid ""
 "New tracks are copied into clean artist, album, and track folders. Existing "
 "tracks are organized in the background when this is turned on."
-msgstr "새 트랙은 아티스트, 앨범, 트랙별로 정리된 폴더에 복사됩니다. 이 옵션을 켜면 기존 트랙은 백그라운드에서 정리됩니다."
+msgstr ""
+"새 트랙은 아티스트, 앨범, 트랙별로 정리된 폴더에 복사됩니다. 이 옵션을 켜면 "
+"기존 트랙은 백그라운드에서 정리됩니다."
 
 #: crates/ui_gtk/src/shortcuts.rs:124
 #, rust-format
@@ -1532,7 +1573,9 @@ msgstr "앨범 없음"
 #: crates/ui_gtk/src/device_panel.rs:495
 #, rust-format
 msgid "No artists yet. Add music with artist tags to sync by artist."
-msgstr "아직 아티스트가 없습니다. 아티스트별로 동기화하려면 아티스트 태그가 있는 음악을 추가하십시오."
+msgstr ""
+"아직 아티스트가 없습니다. 아티스트별로 동기화하려면 아티스트 태그가 있는 음악"
+"을 추가하십시오."
 
 #: crates/app_runtime/src/notifications.rs:626
 #, rust-format
@@ -1593,7 +1636,9 @@ msgstr "아직 태그된 발매 연도가 없습니다."
 #, rust-format
 msgid ""
 "No statistics yet — add music to your library to see its breakdown here."
-msgstr "아직 통계가 없습니다. 보관함에 음악을 추가하면 여기에서 분포를 볼 수 있습니다."
+msgstr ""
+"아직 통계가 없습니다. 보관함에 음악을 추가하면 여기에서 분포를 볼 수 있습니"
+"다."
 
 #: crates/ui_gtk/src/statistics.rs:326
 #, rust-format
@@ -1652,7 +1697,9 @@ msgstr "기기 저장 형식"
 msgid ""
 "One or more of the selected files is missing from disk. Restore or remove "
 "it, then consolidate again."
-msgstr "선택한 파일 중 하나 이상이 디스크에 없습니다. 복원하거나 제거한 후 다시 통합하십시오."
+msgstr ""
+"선택한 파일 중 하나 이상이 디스크에 없습니다. 복원하거나 제거한 후 다시 통합"
+"하십시오."
 
 #: crates/ui_gtk/src/preferences/mod.rs:296
 #, rust-format
@@ -1663,14 +1710,17 @@ msgstr "온라인"
 #, rust-format
 msgid ""
 "Online retrieval paused: the library database rejected a write ({detail})."
-msgstr "온라인 검색 일시 중지됨: 보관함 데이터베이스가 쓰기를 거부했습니다({detail})."
+msgstr ""
+"온라인 검색 일시 중지됨: 보관함 데이터베이스가 쓰기를 거부했습니다({detail})."
 
 #: crates/ui_gtk/src/track_info/multi.rs:54
 #, rust-format
 msgid ""
 "Only checked fields are applied to the selected tracks. Unchecked fields "
 "keep each track's existing value."
-msgstr "선택한 항목만 선택된 트랙에 적용됩니다. 선택하지 않은 항목은 각 트랙의 기존 값을 유지합니다."
+msgstr ""
+"선택한 항목만 선택된 트랙에 적용됩니다. 선택하지 않은 항목은 각 트랙의 기존 "
+"값을 유지합니다."
 
 #: crates/ui_gtk/src/duplicates.rs:81
 #, rust-format
@@ -1689,7 +1739,10 @@ msgid ""
 "Vorbis ARTISTSORT/TITLESORT, and friends) plus Sustain's generated leading-"
 "article sort values, so “The Beatles” files under B. Turn off to order every "
 "name as it is shown."
-msgstr "일부 파일에 있는 정렬용 태그(ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT 등)와 Sustain이 앞의 관사를 빼고 생성한 정렬 값으로 보관함을 정렬하므로, “The Beatles”는 B 아래에 놓입니다. 끄면 모든 이름을 표시된 그대로 정렬합니다."
+msgstr ""
+"일부 파일에 있는 정렬용 태그(ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT 등)"
+"와 Sustain이 앞의 관사를 빼고 생성한 정렬 값으로 보관함을 정렬하므로, “The "
+"Beatles”는 B 아래에 놓입니다. 끄면 모든 이름을 표시된 그대로 정렬합니다."
 
 #: crates/ui_gtk/src/preferences/library_tab.rs:104
 #, rust-format
@@ -1706,7 +1759,9 @@ msgstr "정리된 보관함 모드에는 접근 및 쓰기가 가능한 보관�
 msgid ""
 "Organized library mode needs permission to create files and folders in the "
 "selected library folder."
-msgstr "정리된 보관함 모드에는 선택한 보관함 폴더에 파일과 폴더를 만들 권한이 필요합니다."
+msgstr ""
+"정리된 보관함 모드에는 선택한 보관함 폴더에 파일과 폴더를 만들 권한이 필요합"
+"니다."
 
 #: crates/app_runtime/src/notifications.rs:387
 #, rust-format
@@ -1736,13 +1791,17 @@ msgid ""
 "to download the best available audio. The replacement is accepted only when "
 "its duration matches and its bitrate is not junk or worse than the current "
 "file."
-msgstr "YouTube 동영상 URL 하나를 붙여 넣으십시오. Sustain은 설치된 yt-dlp와 FFmpeg를 사용해 가장 좋은 오디오를 다운로드합니다. 재생 시간이 일치하고 비트 전송률이 너무 낮거나 현재 파일보다 나쁘지 않을 때만 교체를 허용합니다."
+msgstr ""
+"YouTube 동영상 URL 하나를 붙여 넣으십시오. Sustain은 설치된 yt-dlp와 FFmpeg"
+"를 사용해 가장 좋은 오디오를 다운로드합니다. 재생 시간이 일치하고 비트 전송률"
+"이 너무 낮거나 현재 파일보다 나쁘지 않을 때만 교체를 허용합니다."
 
 #: crates/app_runtime/src/playback.rs:146
 #, rust-format
 msgid ""
 "Paused: the audio output was disconnected or taken by another application."
-msgstr "일시 중지됨: 오디오 출력 연결이 끊겼거나 다른 응용 프로그램이 사용 중입니다."
+msgstr ""
+"일시 중지됨: 오디오 출력 연결이 끊겼거나 다른 응용 프로그램이 사용 중입니다."
 
 #: crates/app_runtime/src/device_sync.rs:616
 #, rust-format
@@ -1754,7 +1813,8 @@ msgstr "이 기기와 동기화할 재생 목록이나 아티스트를 하나 �
 msgid ""
 "Pick the surviving attributes, a single consolidated file will be preserved "
 "in your library upon confirmation."
-msgstr "유지할 속성을 선택하십시오. 확인하면 통합된 파일 하나만 보관함에 남습니다."
+msgstr ""
+"유지할 속성을 선택하십시오. 확인하면 통합된 파일 하나만 보관함에 남습니다."
 
 #: crates/ui_gtk/src/playlists_header.rs:59
 #, rust-format
@@ -1831,7 +1891,9 @@ msgid ""
 "Playlists and listening stats live only in Sustain's database — your "
 "ratings, tags, and artwork are also written to your music files. Back up "
 "this folder alongside your music:"
-msgstr "재생 목록과 청취 통계는 Sustain 데이터베이스에만 저장됩니다. 등급, 태그, 아트워크는 음악 파일에도 기록됩니다. 음악과 함께 이 폴더를 백업하세요:"
+msgstr ""
+"재생 목록과 청취 통계는 Sustain 데이터베이스에만 저장됩니다. 등급, 태그, 아트"
+"워크는 음악 파일에도 기록됩니다. 음악과 함께 이 폴더를 백업하세요:"
 
 #: crates/ui_gtk/src/device_panel.rs:234
 #, rust-format
@@ -1969,7 +2031,9 @@ msgstr "Smart Shuffle 색인 재구성 중…"
 msgid ""
 "Recovered an interrupted YouTube audio replacement, but retained the "
 "previous pathname because its identity could not be proven."
-msgstr "중단된 YouTube 오디오 교체를 복구했지만, 동일성을 확인할 수 없어 이전 경로를 유지했습니다."
+msgstr ""
+"중단된 YouTube 오디오 교체를 복구했지만, 동일성을 확인할 수 없어 이전 경로를 "
+"유지했습니다."
 
 #: crates/ui_gtk/src/statistics.rs:407
 #, rust-format
@@ -1980,7 +2044,9 @@ msgstr "발매 연도"
 msgid ""
 "Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, and "
 "AcoustID"
-msgstr "MusicBrainz, Cover Art Archive, AcoustID를 통한 원격 아트워크 및 메타데이터 가져오기"
+msgstr ""
+"MusicBrainz, Cover Art Archive, AcoustID를 통한 원격 아트워크 및 메타데이터 "
+"가져오기"
 
 #: crates/app_runtime/src/notifications.rs:974
 #, rust-format
@@ -2086,7 +2152,9 @@ msgstr "선택한 트랙을 파일 관리자에서 보기"
 msgid ""
 "Runs in the background and sets each track's BPM to the measured tempo. "
 "Never replaces a BPM you typed yourself."
-msgstr "백그라운드에서 실행되며 각 트랙의 BPM을 측정된 템포로 설정합니다. 직접 입력한 BPM은 교체하지 않습니다."
+msgstr ""
+"백그라운드에서 실행되며 각 트랙의 BPM을 측정된 템포로 설정합니다. 직접 입력"
+"한 BPM은 교체하지 않습니다."
 
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:39
 #, rust-format
@@ -2094,7 +2162,10 @@ msgid ""
 "Runs in the background on tracks missing a musical key, and measures its own "
 "keys again when detection improves. Never replaces a key from the file's "
 "tags or one you typed."
-msgstr "키가 없는 트랙을 대상으로 백그라운드에서 실행되며, 감지 기능이 개선되면 직접 측정한 키를 다시 측정합니다. 파일 태그에 있던 키나 직접 입력한 키는 교체하지 않습니다."
+msgstr ""
+"키가 없는 트랙을 대상으로 백그라운드에서 실행되며, 감지 기능이 개선되면 직접 "
+"측정한 키를 다시 측정합니다. 파일 태그에 있던 키나 직접 입력한 키는 교체하지 "
+"않습니다."
 
 #: crates/ui_gtk/src/track_info/file_page.rs:75
 #, rust-format
@@ -2171,7 +2242,9 @@ msgstr "가져올 트랙을 하나 이상 선택하십시오."
 msgid ""
 "Sensible choices are pre-selected. Implicit choices: play counts and skips "
 "are summed, oldest date added is preserved."
-msgstr "적절한 항목이 미리 선택되어 있습니다. 자동 처리: 재생 횟수와 건너뛴 횟수는 합산되고, 가장 오래된 추가한 날짜가 유지됩니다."
+msgstr ""
+"적절한 항목이 미리 선택되어 있습니다. 자동 처리: 재생 횟수와 건너뛴 횟수는 합"
+"산되고, 가장 오래된 추가한 날짜가 유지됩니다."
 
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:273
 #, rust-format
@@ -2179,7 +2252,10 @@ msgid ""
 "Sets the tempo window Sustain uses when folding half-time and double-time "
 "detections. Widen it for very slow or fast music; narrow it if results tend "
 "to land at half or double the expected tempo."
-msgstr "Sustain이 절반 템포와 두 배 템포 감지를 보정할 때 사용하는 템포 범위를 설정합니다. 매우 느리거나 빠른 음악에는 넓히고, 결과가 예상 템포의 절반이나 두 배로 나오는 경우가 많으면 좁히세요."
+msgstr ""
+"Sustain이 절반 템포와 두 배 템포 감지를 보정할 때 사용하는 템포 범위를 설정합"
+"니다. 매우 느리거나 빠른 음악에는 넓히고, 결과가 예상 템포의 절반이나 두 배"
+"로 나오는 경우가 많으면 좁히세요."
 
 #: crates/ui_gtk/src/preferences/mod.rs:153
 #, rust-format
@@ -2292,7 +2368,10 @@ msgid ""
 "Smart Shuffle tries to follow your mood by using the current track's genre, "
 "tempo, key, era and discovery period to choose the next track. Turning on "
 "audio analysis allows for even better picks."
-msgstr "스마트 셔플은 현재 트랙의 장르, 템포, 키, 시대, 발견 시기를 바탕으로 다음 트랙을 골라 분위기를 이어 가려고 합니다. 오디오 분석을 켜면 더 나은 선택을 할 수 있습니다."
+msgstr ""
+"스마트 셔플은 현재 트랙의 장르, 템포, 키, 시대, 발견 시기를 바탕으로 다음 트"
+"랙을 골라 분위기를 이어 가려고 합니다. 오디오 분석을 켜면 더 나은 선택을 할 "
+"수 있습니다."
 
 #: crates/ui_gtk/src/queue_view.rs:337
 #, rust-format
@@ -2312,7 +2391,9 @@ msgstr "Smart Shuffle: 재구성한 색인을 직렬화하지 못했습니다."
 #: crates/app_runtime/src/notifications.rs:829
 #, rust-format
 msgid "Some changes could not be mirrored to audio files. Sustain will retry."
-msgstr "일부 변경 사항을 오디오 파일에 반영하지 못했습니다. Sustain이 다시 시도합니다."
+msgstr ""
+"일부 변경 사항을 오디오 파일에 반영하지 못했습니다. Sustain이 다시 시도합니"
+"다."
 
 #: crates/app_runtime/src/notifications.rs:713
 #, rust-format
@@ -2330,7 +2411,10 @@ msgid ""
 "Some selected tracks are not fully analysed ({gaps}). They will still sync, "
 "but that information will be missing on Pioneer players. Run Analyse first "
 "to fill the gaps."
-msgstr "선택한 트랙 중 일부는 완전히 분석되지 않았습니다({gaps}). 그래도 동기화되지만 Pioneer 플레이어에서는 해당 정보가 빠집니다. 먼저 분석을 실행해 빈 부분을 채우십시오."
+msgstr ""
+"선택한 트랙 중 일부는 완전히 분석되지 않았습니다({gaps}). 그래도 동기화되지"
+"만 Pioneer 플레이어에서는 해당 정보가 빠집니다. 먼저 분석을 실행해 빈 부분을 "
+"채우십시오."
 
 #: crates/ui_gtk/src/command_controller.rs:98
 #: crates/ui_gtk/src/track_info/multi.rs:161
@@ -2343,7 +2427,9 @@ msgstr "선택한 트랙 중 일부를 업데이트하지 못했습니다."
 msgid ""
 "Some track changes could not be read from the library database. Sustain will "
 "retry."
-msgstr "일부 트랙 변경 사항을 보관함 데이터베이스에서 읽지 못했습니다. Sustain이 다시 시도합니다."
+msgstr ""
+"일부 트랙 변경 사항을 보관함 데이터베이스에서 읽지 못했습니다. Sustain이 다"
+"시 시도합니다."
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:27
 msgid "Songs, Albums, and Playlists views with a keyboard-friendly table"
@@ -2381,7 +2467,9 @@ msgstr "Sustain"
 msgid ""
 "Sustain could not save listening statistics. The pending play count is "
 "retained in memory and will retry automatically."
-msgstr "Sustain이 청취 통계를 저장하지 못했습니다. 대기 중인 재생 횟수는 메모리에 보관되며 자동으로 다시 시도합니다."
+msgstr ""
+"Sustain이 청취 통계를 저장하지 못했습니다. 대기 중인 재생 횟수는 메모리에 보"
+"관되며 자동으로 다시 시도합니다."
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:19
 msgid ""
@@ -2389,7 +2477,10 @@ msgid ""
 "dense, predictable workflow of iTunes circa 2012. It is built around a fast "
 "main table view, with first-class playlists, smart playlists, ratings, "
 "listening statistics, and search."
-msgstr "Sustain은 2012년 무렵 iTunes의 밀도 높고 예측 가능한 작업 흐름에서 큰 영향을 받은 Linux 기본 음악 보관함 겸 플레이어입니다. 빠른 기본 표 보기를 중심으로 재생 목록, 스마트 재생 목록, 별점, 청취 통계, 검색을 충실히 지원합니다."
+msgstr ""
+"Sustain은 2012년 무렵 iTunes의 밀도 높고 예측 가능한 작업 흐름에서 큰 영향을 "
+"받은 Linux 기본 음악 보관함 겸 플레이어입니다. 빠른 기본 표 보기를 중심으로 "
+"재생 목록, 스마트 재생 목록, 별점, 청취 통계, 검색을 충실히 지원합니다."
 
 #: crates/app_runtime/src/notifications.rs:772
 #, rust-format
@@ -2460,7 +2551,9 @@ msgid ""
 msgid_plural ""
 "Syncing will remove {count} tracks from this device that are no longer in "
 "your selected playlists."
-msgstr[0] "동기화하면 선택한 재생 목록에 더 이상 없는 트랙 {count}개가 이 기기에서 제거됩니다."
+msgstr[0] ""
+"동기화하면 선택한 재생 목록에 더 이상 없는 트랙 {count}개가 이 기기에서 제거"
+"됩니다."
 
 #: crates/app_runtime/src/notifications.rs:996
 #, rust-format
@@ -2492,27 +2585,32 @@ msgstr "해당 파일은 이미 보관함의 다른 트랙에 연결되어 있�
 #, rust-format
 msgid "That track already has BPM analysis — nothing to queue."
 msgid_plural "All {count} tracks already have BPM analysis — nothing to queue."
-msgstr[0] "트랙 {count}개 모두 이미 BPM 분석이 되어 있어 대기열에 넣을 항목이 없습니다."
+msgstr[0] ""
+"트랙 {count}개 모두 이미 BPM 분석이 되어 있어 대기열에 넣을 항목이 없습니다."
 
 #: crates/app_runtime/src/lib.rs:3058
 #, rust-format
 msgid "That track already has analysis — nothing to queue."
 msgid_plural "All {count} tracks already have analysis — nothing to queue."
-msgstr[0] "트랙 {count}개 모두 이미 분석되어 있어 대기열에 넣을 항목이 없습니다."
+msgstr[0] ""
+"트랙 {count}개 모두 이미 분석되어 있어 대기열에 넣을 항목이 없습니다."
 
 #: crates/app_runtime/src/lib.rs:3053
 #, rust-format
 msgid "That track already has audio analysis — nothing to queue."
 msgid_plural ""
 "All {count} tracks already have audio analysis — nothing to queue."
-msgstr[0] "트랙 {count}개 모두 이미 오디오 분석이 되어 있어 대기열에 넣을 항목이 없습니다."
+msgstr[0] ""
+"트랙 {count}개 모두 이미 오디오 분석이 되어 있어 대기열에 넣을 항목이 없습니"
+"다."
 
 #: crates/app_runtime/src/lib.rs:3048
 #, rust-format
 msgid "That track already has key detection — nothing to queue."
 msgid_plural ""
 "All {count} tracks already have key detection — nothing to queue."
-msgstr[0] "트랙 {count}개 모두 이미 키 감지가 되어 있어 대기열에 넣을 항목이 없습니다."
+msgstr[0] ""
+"트랙 {count}개 모두 이미 키 감지가 되어 있어 대기열에 넣을 항목이 없습니다."
 
 #: crates/app_runtime/src/notifications.rs:985
 #, rust-format
@@ -2532,7 +2630,8 @@ msgstr "YouTube 오디오 다운로드가 취소되었습니다."
 #: crates/app_runtime/src/notifications.rs:977
 #, rust-format
 msgid "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
-msgstr "아트워크가 지원되지 않거나 손상되었거나 Sustain의 크기 제한을 넘습니다."
+msgstr ""
+"아트워크가 지원되지 않거나 손상되었거나 Sustain의 크기 제한을 넘습니다."
 
 #: crates/ui_gtk/src/track_context.rs:916
 #, rust-format
@@ -2542,7 +2641,9 @@ msgid ""
 msgid_plural ""
 "The {count} audio files will be moved to the system trash and the tracks "
 "will be removed from the library."
-msgstr[0] "오디오 파일 {count}개가 시스템 휴지통으로 이동되고 트랙이 보관함에서 제거됩니다."
+msgstr[0] ""
+"오디오 파일 {count}개가 시스템 휴지통으로 이동되고 트랙이 보관함에서 제거됩니"
+"다."
 
 #: crates/ui_gtk/src/track_context.rs:927
 #, rust-format
@@ -2554,7 +2655,9 @@ msgid_plural ""
 "The audio files will stay on disk, but the {count} tracks will be removed "
 "from Sustain. Library data for these tracks, including play counts and dates "
 "added, will be removed."
-msgstr[0] "오디오 파일은 디스크에 남지만 트랙 {count}개가 Sustain에서 제거됩니다. 재생 횟수와 추가한 날짜를 포함한 이 트랙들의 보관함 데이터가 삭제됩니다."
+msgstr[0] ""
+"오디오 파일은 디스크에 남지만 트랙 {count}개가 Sustain에서 제거됩니다. 재생 "
+"횟수와 추가한 날짜를 포함한 이 트랙들의 보관함 데이터가 삭제됩니다."
 
 #: crates/ui_gtk/src/verified_duplicates.rs:49
 #, rust-format
@@ -2562,7 +2665,10 @@ msgid ""
 "The best audio file and the highest rating are kept, along with the highest-"
 "resolution artwork. Play counts and skips are summed, and the oldest date "
 "added is kept. Uncheck a group to review it yourself."
-msgstr "가장 좋은 오디오 파일과 가장 높은 별점, 가장 해상도가 높은 아트워크가 유지됩니다. 재생 횟수와 건너뛴 횟수는 합산되고 가장 오래된 추가한 날짜가 유지됩니다. 직접 검토하려면 그룹의 선택을 해제하십시오."
+msgstr ""
+"가장 좋은 오디오 파일과 가장 높은 별점, 가장 해상도가 높은 아트워크가 유지됩"
+"니다. 재생 횟수와 건너뛴 횟수는 합산되고 가장 오래된 추가한 날짜가 유지됩니"
+"다. 직접 검토하려면 그룹의 선택을 해제하십시오."
 
 #: crates/app_runtime/src/notifications.rs:983
 #, rust-format
@@ -2604,7 +2710,8 @@ msgstr "가져온 아트워크를 저장 대기열에 넣지 못했습니다."
 msgid ""
 "The fetched cover art was rejected because it is unsupported, corrupt, or "
 "too large."
-msgstr "가져온 커버 아트가 지원되지 않거나 손상되었거나 너무 커서 거부되었습니다."
+msgstr ""
+"가져온 커버 아트가 지원되지 않거나 손상되었거나 너무 커서 거부되었습니다."
 
 #: crates/app_runtime/src/notifications.rs:677
 #, rust-format
@@ -2680,7 +2787,8 @@ msgstr "선택한 폴더를 검사하지 못했습니다."
 #, rust-format
 msgid ""
 "The selected library folder cannot durably save managed directory changes."
-msgstr "선택한 보관함 폴더는 관리 디렉터리 변경 사항을 영구적으로 저장할 수 없습니다."
+msgstr ""
+"선택한 보관함 폴더는 관리 디렉터리 변경 사항을 영구적으로 저장할 수 없습니다."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:65
 #, rust-format
@@ -2692,21 +2800,25 @@ msgstr "선택한 보관함 폴더는 관리 파일을 영구적으로 저장할
 msgid ""
 "The selected library folder cannot publish Sustain's recovery journal "
 "atomically."
-msgstr "선택한 보관함 폴더는 Sustain의 복구 저널을 원자적으로 게시할 수 없습니다."
+msgstr ""
+"선택한 보관함 폴더는 Sustain의 복구 저널을 원자적으로 게시할 수 없습니다."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:83
 #, rust-format
 msgid ""
 "The selected library folder cannot safely protect Sustain's recovery journal "
 "from overwrite."
-msgstr "선택한 보관함 폴더는 Sustain의 복구 저널을 덮어쓰기로부터 안전하게 보호할 수 없습니다."
+msgstr ""
+"선택한 보관함 폴더는 Sustain의 복구 저널을 덮어쓰기로부터 안전하게 보호할 수 "
+"없습니다."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:71
 #, rust-format
 msgid ""
 "The selected library folder cannot safely refuse overwriting an existing "
 "managed file."
-msgstr "선택한 보관함 폴더는 기존 관리 파일의 덮어쓰기를 안전하게 거부할 수 없습니다."
+msgstr ""
+"선택한 보관함 폴더는 기존 관리 파일의 덮어쓰기를 안전하게 거부할 수 없습니다."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:74
 #, rust-format
@@ -2718,21 +2830,25 @@ msgstr "선택한 보관함 폴더는 관리 경로를 안전하게 제거할 �
 msgid ""
 "The selected library folder could not remove Sustain's filesystem probe "
 "files."
-msgstr "선택한 보관함 폴더에서 Sustain의 파일 시스템 검사 파일을 제거하지 못했습니다."
+msgstr ""
+"선택한 보관함 폴더에서 Sustain의 파일 시스템 검사 파일을 제거하지 못했습니다."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:77
 #, rust-format
 msgid ""
 "The selected library folder did not preserve a managed file after a hard-"
 "link move."
-msgstr "선택한 보관함 폴더가 하드 링크 이동 후 관리 파일을 보존하지 못했습니다."
+msgstr ""
+"선택한 보관함 폴더가 하드 링크 이동 후 관리 파일을 보존하지 못했습니다."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:68
 #, rust-format
 msgid ""
 "The selected library folder does not support the hard-link moves required by "
 "organized library mode."
-msgstr "선택한 보관함 폴더는 정리된 보관함 모드에 필요한 하드 링크 이동을 지원하지 않습니다."
+msgstr ""
+"선택한 보관함 폴더는 정리된 보관함 모드에 필요한 하드 링크 이동을 지원하지 않"
+"습니다."
 
 #: crates/app_runtime/src/notifications.rs:938
 #, rust-format
@@ -2771,7 +2887,9 @@ msgstr "파형 캐시를 열지 못했습니다. 이번 세션에서는 파형�
 msgid ""
 "Their audio shows each of these groups to be copies of one recording. Each "
 "group merges into a single track, keeping the choices shown."
-msgstr "오디오로 확인한 결과 이 그룹들은 각각 같은 녹음의 사본입니다. 각 그룹은 표시된 선택 사항을 유지한 채 하나의 트랙으로 병합됩니다."
+msgstr ""
+"오디오로 확인한 결과 이 그룹들은 각각 같은 녹음의 사본입니다. 각 그룹은 표시"
+"된 선택 사항을 유지한 채 하나의 트랙으로 병합됩니다."
 
 #: crates/ui_gtk/src/smart_playlist_editor/model.rs:379
 #, rust-format
@@ -2891,7 +3009,9 @@ msgstr "트랙 {number}"
 msgid ""
 "Two library modes: leave files in place, or keep the library organized on "
 "disk"
-msgstr "두 가지 보관함 모드: 파일을 원래 위치에 두거나, 디스크의 보관함을 정리된 상태로 유지"
+msgstr ""
+"두 가지 보관함 모드: 파일을 원래 위치에 두거나, 디스크의 보관함을 정리된 상태"
+"로 유지"
 
 #: crates/ui_gtk/src/track_table/columns.rs:69
 #, rust-format
@@ -3311,7 +3431,9 @@ msgstr "값"
 #: crates/app_runtime/src/youtube_audio_replacement.rs:230
 #, rust-format
 msgid "yt-dlp could not download usable audio from that YouTube URL."
-msgstr "yt-dlp가 해당 YouTube URL에서 사용할 수 있는 오디오를 다운로드하지 못했습니다."
+msgstr ""
+"yt-dlp가 해당 YouTube URL에서 사용할 수 있는 오디오를 다운로드하지 못했습니"
+"다."
 
 #: crates/app_runtime/src/youtube_audio_replacement.rs:233
 #, rust-format
@@ -3414,7 +3536,9 @@ msgid ""
 msgid_plural ""
 "{count} duplicate tracks consolidated. Sustain retained recovery files "
 "because cleanup could not finish safely."
-msgstr[0] "중복 트랙 {count}개를 통합했습니다. 정리를 안전하게 마치지 못해 Sustain이 복구 파일을 보존했습니다."
+msgstr[0] ""
+"중복 트랙 {count}개를 통합했습니다. 정리를 안전하게 마치지 못해 Sustain이 복"
+"구 파일을 보존했습니다."
 
 #: crates/app_runtime/src/notifications.rs:806
 #, rust-format
@@ -3441,7 +3565,8 @@ msgstr[0] "파일 {count}개를 가져오지 못함"
 msgid "{count} file could not be imported. The rest of the import went ahead."
 msgid_plural ""
 "{count} files could not be imported. The rest of the import went ahead."
-msgstr[0] "파일 {count}개를 가져오지 못했습니다. 나머지 가져오기는 계속 진행되었습니다."
+msgstr[0] ""
+"파일 {count}개를 가져오지 못했습니다. 나머지 가져오기는 계속 진행되었습니다."
 
 #: crates/ui_gtk/src/status_bar.rs:410
 #, rust-format
@@ -3502,7 +3627,9 @@ msgstr[0] "{count}개 더 이상 확인되지 않음"
 msgid ""
 "{count} of the selected files are missing from disk, so these duplicates "
 "can't be consolidated. Restore or remove them, then try again."
-msgstr "선택한 파일 중 {count}개가 디스크에 없어 이 중복 항목을 통합할 수 없습니다. 복원하거나 제거한 후 다시 시도하십시오."
+msgstr ""
+"선택한 파일 중 {count}개가 디스크에 없어 이 중복 항목을 통합할 수 없습니다. "
+"복원하거나 제거한 후 다시 시도하십시오."
 
 #: crates/ui_gtk/src/device_panel.rs:859
 #, rust-format
@@ -3661,4 +3788,6 @@ msgstr "{year}년대"
 msgid ""
 "“{name}” is missing from disk, so these duplicates can't be consolidated. "
 "Restore or remove it, then try again."
-msgstr "“{name}”이(가) 디스크에 없어 이 중복 항목을 통합할 수 없습니다. 복원하거나 제거한 후 다시 시도하십시오."
+msgstr ""
+"“{name}”이(가) 디스크에 없어 이 중복 항목을 통합할 수 없습니다. 복원하거나 제"
+"거한 후 다시 시도하십시오."

@@ -21,21 +21,28 @@ msgstr ""
 msgid ""
 "\"{current_name}\" will be deleted along with every playlist, smart "
 "playlist, and folder inside it. This cannot be undone."
-msgstr "«{current_name}» verrà eliminata insieme a tutte le playlist, le playlist intelligenti e le cartelle che contiene. L'operazione non può essere annullata."
+msgstr ""
+"«{current_name}» verrà eliminata insieme a tutte le playlist, le playlist "
+"intelligenti e le cartelle che contiene. L'operazione non può essere "
+"annullata."
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:511
 #, rust-format
 msgid ""
 "\"{current_name}\" will be removed from the sidebar. The tracks it currently "
 "matches stay in your library."
-msgstr "«{current_name}» verrà rimossa dalla barra laterale. I brani che include attualmente restano nella libreria."
+msgstr ""
+"«{current_name}» verrà rimossa dalla barra laterale. I brani che include "
+"attualmente restano nella libreria."
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:505
 #, rust-format
 msgid ""
 "\"{current_name}\" will be removed from the sidebar. The tracks themselves "
 "stay in your library."
-msgstr "«{current_name}» verrà rimossa dalla barra laterale. I brani restano nella libreria."
+msgstr ""
+"«{current_name}» verrà rimossa dalla barra laterale. I brani restano nella "
+"libreria."
 
 #: crates/ui_gtk/src/smart_playlist_editor/model.rs:390
 #, rust-format
@@ -75,7 +82,9 @@ msgstr "0 (verrà azzerato con OK)"
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:30
 msgid "5-star ratings, play count, skip count, last played, last skipped"
-msgstr "valutazioni a 5 stelle, riproduzioni, salti, ultima riproduzione, ultimo salto"
+msgstr ""
+"valutazioni a 5 stelle, riproduzioni, salti, ultima riproduzione, ultimo "
+"salto"
 
 #: crates/app_runtime/src/device_sync.rs:599
 #: crates/app_runtime/src/device_sync.rs:655
@@ -94,7 +103,10 @@ msgid ""
 "A managed-library metadata edit could not finish safely. Sustain retained "
 "its recovery state where needed. Resolve filesystem access and retry the "
 "edit."
-msgstr "Una modifica dei metadati della libreria gestita non è stata completata in modo sicuro. Sustain ha conservato lo stato di ripristino dove necessario. Risolvi l'accesso al file system e riprova la modifica."
+msgstr ""
+"Una modifica dei metadati della libreria gestita non è stata completata in "
+"modo sicuro. Sustain ha conservato lo stato di ripristino dove necessario. "
+"Risolvi l'accesso al file system e riprova la modifica."
 
 #: crates/ui_gtk/src/preferences/about_tab.rs:45
 #, rust-format
@@ -211,7 +223,9 @@ msgstr "Tutti"
 msgid ""
 "Almost always plays the highest-scoring continuation. Predictable picks, "
 "less surprise."
-msgstr "Riproduce quasi sempre la continuazione con il punteggio più alto. Scelte prevedibili, poche sorprese."
+msgstr ""
+"Riproduce quasi sempre la continuazione con il punteggio più alto. Scelte "
+"prevedibili, poche sorprese."
 
 #: crates/ui_gtk/src/device_panel.rs:641
 #, rust-format
@@ -229,7 +243,9 @@ msgstr "Analisi"
 #: crates/app_runtime/src/notifications.rs:544
 #, rust-format
 msgid "Analysis paused: the library database rejected a write ({detail})."
-msgstr "Analisi in pausa: il database della libreria ha rifiutato una scrittura ({detail})."
+msgstr ""
+"Analisi in pausa: il database della libreria ha rifiutato una scrittura "
+"({detail})."
 
 #: crates/app_runtime/src/notifications.rs:476
 #, rust-format
@@ -374,21 +390,27 @@ msgstr "Intervallo BPM"
 msgid ""
 "Background BPM analysis is enabled. These tracks are already queued by the "
 "global sweep."
-msgstr "L'analisi BPM in background è attiva. Questi brani sono già in coda nella scansione globale."
+msgstr ""
+"L'analisi BPM in background è attiva. Questi brani sono già in coda nella "
+"scansione globale."
 
 #: crates/app_runtime/src/lib.rs:2957
 #, rust-format
 msgid ""
 "Background audio analysis is enabled. These tracks are already queued by the "
 "global sweep."
-msgstr "L'analisi audio in background è attiva. Questi brani sono già in coda nella scansione globale."
+msgstr ""
+"L'analisi audio in background è attiva. Questi brani sono già in coda nella "
+"scansione globale."
 
 #: crates/app_runtime/src/lib.rs:2954
 #, rust-format
 msgid ""
 "Background key detection is enabled. These tracks are already queued by the "
 "global sweep."
-msgstr "Il rilevamento della tonalità in background è attivo. Questi brani sono già in coda nella scansione globale."
+msgstr ""
+"Il rilevamento della tonalità in background è attivo. Questi brani sono già "
+"in coda nella scansione globale."
 
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:364
 #, rust-format
@@ -481,7 +503,9 @@ msgstr "Annullamento…"
 msgid ""
 "Casts a wider net and spreads picks more evenly across it. More variety, "
 "more deep cuts."
-msgstr "Allarga il campo e distribuisce le scelte in modo più uniforme. Più varietà, più chicche."
+msgstr ""
+"Allarga il campo e distribuisce le scelte in modo più uniforme. Più varietà, "
+"più chicche."
 
 #: crates/ui_gtk/src/track_info/file_page.rs:82
 #, rust-format
@@ -511,7 +535,8 @@ msgstr "Scegli prima una cartella della libreria."
 #: crates/app_runtime/src/notifications.rs:960
 #, rust-format
 msgid "Choose a replacement inside the configured library folder."
-msgstr "Scegli un sostituto all'interno della cartella della libreria configurata."
+msgstr ""
+"Scegli un sostituto all'interno della cartella della libreria configurata."
 
 #: crates/app_runtime/src/notifications.rs:963
 #, rust-format
@@ -688,7 +713,12 @@ msgid ""
 "features Smart Shuffle uses to match transitions, and reads BPM and key off "
 "the same decode — so turning this on enables and locks both. The heaviest "
 "pass; runs in the background on tracks that are missing it."
-msgstr "Decodifica ogni brano una volta per produrre le forme d'onda a colori e le caratteristiche percettive che Smart Shuffle usa per abbinare le transizioni, e legge BPM e tonalità dalla stessa decodifica: attivarla quindi attiva e blocca entrambi. È il passaggio più pesante; viene eseguito in background sui brani che ne sono privi."
+msgstr ""
+"Decodifica ogni brano una volta per produrre le forme d'onda a colori e le "
+"caratteristiche percettive che Smart Shuffle usa per abbinare le "
+"transizioni, e legge BPM e tonalità dalla stessa decodifica: attivarla "
+"quindi attiva e blocca entrambi. È il passaggio più pesante; viene eseguito "
+"in background sui brani che ne sono privi."
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:497
 #, rust-format
@@ -747,7 +777,9 @@ msgstr "Dispositivo scollegato"
 msgid ""
 "Device forgotten. Its saved playlists, artists, and sync history were "
 "cleared."
-msgstr "Dispositivo dimenticato. Le playlist, gli artisti e la cronologia di sincronizzazione salvati sono stati cancellati."
+msgstr ""
+"Dispositivo dimenticato. Le playlist, gli artisti e la cronologia di "
+"sincronizzazione salvati sono stati cancellati."
 
 #: crates/app_runtime/src/device_sync.rs:663
 #, rust-format
@@ -817,7 +849,9 @@ msgstr "Download dell'audio sostitutivo da YouTube…"
 msgid ""
 "Draws the playing track's waveform in place of the progress bar, once audio "
 "analysis has measured it."
-msgstr "Disegna la forma d'onda del brano in riproduzione al posto della barra di avanzamento, una volta che l'analisi audio l'ha misurata."
+msgstr ""
+"Disegna la forma d'onda del brano in riproduzione al posto della barra di "
+"avanzamento, una volta che l'analisi audio l'ha misurata."
 
 #: crates/ui_gtk/src/duplicates.rs:274 crates/ui_gtk/src/duplicates.rs:278
 #, rust-format
@@ -901,7 +935,9 @@ msgstr "Veloce"
 msgid ""
 "Favours strong continuations but mixes in the occasional looser match. The "
 "default."
-msgstr "Privilegia le continuazioni forti ma inserisce di tanto in tanto una scelta più libera. Il valore predefinito."
+msgstr ""
+"Privilegia le continuazioni forti ma inserisce di tanto in tanto una scelta "
+"più libera. Il valore predefinito."
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:25
 msgid "Features:"
@@ -963,7 +999,9 @@ msgstr "File non importati"
 #: crates/ui_gtk/src/preferences/library_tab.rs:42
 #, rust-format
 msgid "Files in this folder are scanned into your Sustain library."
-msgstr "I file in questa cartella vengono analizzati e aggiunti alla libreria di Sustain."
+msgstr ""
+"I file in questa cartella vengono analizzati e aggiunti alla libreria di "
+"Sustain."
 
 #: crates/ui_gtk/src/device_panel.rs:302
 #, rust-format
@@ -1053,7 +1091,9 @@ msgstr "Volume alto"
 msgid ""
 "Identifies tracks via AcoustID fingerprinting and fills missing fields from "
 "MusicBrainz. Never overwrites a tag that is already set."
-msgstr "Identifica i brani tramite l'impronta AcoustID e completa i campi mancanti da MusicBrainz. Non sovrascrive mai un tag già impostato."
+msgstr ""
+"Identifica i brani tramite l'impronta AcoustID e completa i campi mancanti "
+"da MusicBrainz. Non sovrascrive mai un tag già impostato."
 
 #: crates/ui_gtk/src/track_info/artwork.rs:271
 #, rust-format
@@ -1121,7 +1161,9 @@ msgstr "Installa yt-dlp e FFmpeg prima di sostituire l'audio da YouTube."
 msgid ""
 "It builds the first time you turn Smart Shuffle on, then refreshes whenever "
 "your library or its analysis changes."
-msgstr "Viene creato la prima volta che attivi Smart Shuffle, poi aggiornato ogni volta che la libreria o la sua analisi cambiano."
+msgstr ""
+"Viene creato la prima volta che attivi Smart Shuffle, poi aggiornato ogni "
+"volta che la libreria o la sua analisi cambiano."
 
 #: crates/app_runtime/src/notifications.rs:680
 #, rust-format
@@ -1132,7 +1174,9 @@ msgstr "Non è stato possibile copiarlo nella cartella della libreria."
 #, rust-format
 msgid ""
 "It is outside the library folder, and the library keeps files where they are."
-msgstr "Si trova fuori dalla cartella della libreria, e la libreria lascia i file dove sono."
+msgstr ""
+"Si trova fuori dalla cartella della libreria, e la libreria lascia i file "
+"dove sono."
 
 #: crates/app_runtime/src/notifications.rs:678
 #, rust-format
@@ -1256,8 +1300,12 @@ msgid ""
 msgid_plural ""
 "Library folder updated: {missing} of {total} tracks not found at the new "
 "location."
-msgstr[0] "Cartella della libreria aggiornata: {missing} di {total} brano non trovato nella nuova posizione."
-msgstr[1] "Cartella della libreria aggiornata: {missing} di {total} brani non trovati nella nuova posizione."
+msgstr[0] ""
+"Cartella della libreria aggiornata: {missing} di {total} brano non trovato "
+"nella nuova posizione."
+msgstr[1] ""
+"Cartella della libreria aggiornata: {missing} di {total} brani non trovati "
+"nella nuova posizione."
 
 #: crates/app_runtime/src/notifications.rs:851
 #, rust-format
@@ -1267,8 +1315,12 @@ msgid ""
 msgid_plural ""
 "Library folder updated: {missing} of {total} tracks not found; {unresolved} "
 "could not be checked."
-msgstr[0] "Cartella della libreria aggiornata: {missing} di {total} brano non trovato; {unresolved} non verificabili."
-msgstr[1] "Cartella della libreria aggiornata: {missing} di {total} brani non trovati; {unresolved} non verificabili."
+msgstr[0] ""
+"Cartella della libreria aggiornata: {missing} di {total} brano non trovato; "
+"{unresolved} non verificabili."
+msgstr[1] ""
+"Cartella della libreria aggiornata: {missing} di {total} brani non trovati; "
+"{unresolved} non verificabili."
 
 #: crates/app_runtime/src/notifications.rs:694
 #, rust-format
@@ -1308,12 +1360,14 @@ msgstr "Limita a"
 #: crates/ui_gtk/src/preferences/views_tab.rs:26
 #, rust-format
 msgid "Lists the Duplicates view in the left column's Library section."
-msgstr "Mostra la vista Duplicati nella sezione Libreria della colonna sinistra."
+msgstr ""
+"Mostra la vista Duplicati nella sezione Libreria della colonna sinistra."
 
 #: crates/ui_gtk/src/preferences/views_tab.rs:39
 #, rust-format
 msgid "Lists the Statistics view in the left column's Library section."
-msgstr "Mostra la vista Statistiche nella sezione Libreria della colonna sinistra."
+msgstr ""
+"Mostra la vista Statistiche nella sezione Libreria della colonna sinistra."
 
 #: crates/app_runtime/src/lib.rs:968
 #, rust-format
@@ -1341,14 +1395,19 @@ msgid ""
 "Looks up cover art from MusicBrainz and the Cover Art Archive, then Deezer "
 "and the iTunes Search API, for tracks that have none. Never replaces artwork "
 "that is already present."
-msgstr "Cerca le copertine su MusicBrainz e Cover Art Archive, poi su Deezer e sulla iTunes Search API, per i brani che ne sono privi. Non sostituisce mai una copertina già presente."
+msgstr ""
+"Cerca le copertine su MusicBrainz e Cover Art Archive, poi su Deezer e sulla "
+"iTunes Search API, per i brani che ne sono privi. Non sostituisce mai una "
+"copertina già presente."
 
 #: crates/ui_gtk/src/preferences/online_tab.rs:54
 #, rust-format
 msgid ""
 "Looks up synchronised and plain lyrics from LRClib for tracks that have "
 "none. Never replaces lyrics that are already present."
-msgstr "Cerca testi sincronizzati e semplici su LRClib per i brani che ne sono privi. Non sostituisce mai un testo già presente."
+msgstr ""
+"Cerca testi sincronizzati e semplici su LRClib per i brani che ne sono "
+"privi. Non sostituisce mai un testo già presente."
 
 #: crates/ui_gtk/src/titlebar.rs:74
 #, rust-format
@@ -1513,7 +1572,10 @@ msgstr "Nuova playlist intelligente"
 msgid ""
 "New tracks are copied into clean artist, album, and track folders. Existing "
 "tracks are organized in the background when this is turned on."
-msgstr "I nuovi brani vengono copiati in cartelle ordinate per artista, album e brano. I brani esistenti vengono organizzati in background quando questa opzione è attiva."
+msgstr ""
+"I nuovi brani vengono copiati in cartelle ordinate per artista, album e "
+"brano. I brani esistenti vengono organizzati in background quando questa "
+"opzione è attiva."
 
 #: crates/ui_gtk/src/shortcuts.rs:124
 #, rust-format
@@ -1545,7 +1607,9 @@ msgstr "Nessun album"
 #: crates/ui_gtk/src/device_panel.rs:495
 #, rust-format
 msgid "No artists yet. Add music with artist tags to sync by artist."
-msgstr "Ancora nessun artista. Aggiungi musica con tag artista per sincronizzare per artista."
+msgstr ""
+"Ancora nessun artista. Aggiungi musica con tag artista per sincronizzare per "
+"artista."
 
 #: crates/app_runtime/src/notifications.rs:626
 #, rust-format
@@ -1606,7 +1670,9 @@ msgstr "Ancora nessun anno di pubblicazione nei tag."
 #, rust-format
 msgid ""
 "No statistics yet — add music to your library to see its breakdown here."
-msgstr "Ancora nessuna statistica: aggiungi musica alla libreria per vederne qui la ripartizione."
+msgstr ""
+"Ancora nessuna statistica: aggiungi musica alla libreria per vederne qui la "
+"ripartizione."
 
 #: crates/ui_gtk/src/statistics.rs:326
 #, rust-format
@@ -1665,7 +1731,9 @@ msgstr "Formato sul dispositivo"
 msgid ""
 "One or more of the selected files is missing from disk. Restore or remove "
 "it, then consolidate again."
-msgstr "Uno o più file selezionati mancano dal disco. Ripristinali o rimuovili, poi consolida di nuovo."
+msgstr ""
+"Uno o più file selezionati mancano dal disco. Ripristinali o rimuovili, poi "
+"consolida di nuovo."
 
 #: crates/ui_gtk/src/preferences/mod.rs:296
 #, rust-format
@@ -1676,14 +1744,18 @@ msgstr "Online"
 #, rust-format
 msgid ""
 "Online retrieval paused: the library database rejected a write ({detail})."
-msgstr "Recupero online in pausa: il database della libreria ha rifiutato una scrittura ({detail})."
+msgstr ""
+"Recupero online in pausa: il database della libreria ha rifiutato una "
+"scrittura ({detail})."
 
 #: crates/ui_gtk/src/track_info/multi.rs:54
 #, rust-format
 msgid ""
 "Only checked fields are applied to the selected tracks. Unchecked fields "
 "keep each track's existing value."
-msgstr "Solo i campi selezionati vengono applicati ai brani scelti. I campi non selezionati mantengono il valore attuale di ogni brano."
+msgstr ""
+"Solo i campi selezionati vengono applicati ai brani scelti. I campi non "
+"selezionati mantengono il valore attuale di ogni brano."
 
 #: crates/ui_gtk/src/duplicates.rs:81
 #, rust-format
@@ -1702,7 +1774,12 @@ msgid ""
 "Vorbis ARTISTSORT/TITLESORT, and friends) plus Sustain's generated leading-"
 "article sort values, so “The Beatles” files under B. Turn off to order every "
 "name as it is shown."
-msgstr "Ordina la libreria in base ai tag di ordinamento presenti in alcuni file (ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT e simili) e ai valori di ordinamento senza articolo iniziale generati da Sustain, così «The Beatles» finisce sotto la B. Disattiva per ordinare ogni nome così come viene mostrato."
+msgstr ""
+"Ordina la libreria in base ai tag di ordinamento presenti in alcuni file "
+"(ID3 TSOP/TSOT, Vorbis ARTISTSORT/TITLESORT e simili) e ai valori di "
+"ordinamento senza articolo iniziale generati da Sustain, così «The Beatles» "
+"finisce sotto la B. Disattiva per ordinare ogni nome così come viene "
+"mostrato."
 
 #: crates/ui_gtk/src/preferences/library_tab.rs:104
 #, rust-format
@@ -1712,14 +1789,18 @@ msgstr "Organizza la mia libreria"
 #: crates/app_runtime/src/managed_library/capabilities.rs:58
 #, rust-format
 msgid "Organized library mode needs an accessible, writable library folder."
-msgstr "La modalità libreria organizzata richiede una cartella della libreria accessibile e scrivibile."
+msgstr ""
+"La modalità libreria organizzata richiede una cartella della libreria "
+"accessibile e scrivibile."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:62
 #, rust-format
 msgid ""
 "Organized library mode needs permission to create files and folders in the "
 "selected library folder."
-msgstr "La modalità libreria organizzata richiede il permesso di creare file e cartelle nella cartella della libreria selezionata."
+msgstr ""
+"La modalità libreria organizzata richiede il permesso di creare file e "
+"cartelle nella cartella della libreria selezionata."
 
 #: crates/app_runtime/src/notifications.rs:387
 #, rust-format
@@ -1750,25 +1831,34 @@ msgid ""
 "to download the best available audio. The replacement is accepted only when "
 "its duration matches and its bitrate is not junk or worse than the current "
 "file."
-msgstr "Incolla l'URL di un video di YouTube. Sustain usa yt-dlp e FFmpeg installati sul sistema per scaricare il miglior audio disponibile. Il sostituto viene accettato solo se la durata corrisponde e il bitrate non è scadente né peggiore di quello del file attuale."
+msgstr ""
+"Incolla l'URL di un video di YouTube. Sustain usa yt-dlp e FFmpeg installati "
+"sul sistema per scaricare il miglior audio disponibile. Il sostituto viene "
+"accettato solo se la durata corrisponde e il bitrate non è scadente né "
+"peggiore di quello del file attuale."
 
 #: crates/app_runtime/src/playback.rs:146
 #, rust-format
 msgid ""
 "Paused: the audio output was disconnected or taken by another application."
-msgstr "In pausa: l'uscita audio è stata scollegata o presa da un'altra applicazione."
+msgstr ""
+"In pausa: l'uscita audio è stata scollegata o presa da un'altra applicazione."
 
 #: crates/app_runtime/src/device_sync.rs:616
 #, rust-format
 msgid "Pick at least one playlist or artist to sync to this device."
-msgstr "Scegli almeno una playlist o un artista da sincronizzare con questo dispositivo."
+msgstr ""
+"Scegli almeno una playlist o un artista da sincronizzare con questo "
+"dispositivo."
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:133
 #, rust-format
 msgid ""
 "Pick the surviving attributes, a single consolidated file will be preserved "
 "in your library upon confirmation."
-msgstr "Scegli gli attributi da conservare: alla conferma, nella libreria verrà mantenuto un unico file consolidato."
+msgstr ""
+"Scegli gli attributi da conservare: alla conferma, nella libreria verrà "
+"mantenuto un unico file consolidato."
 
 #: crates/ui_gtk/src/playlists_header.rs:59
 #, rust-format
@@ -1817,7 +1907,8 @@ msgstr "Riproduzione"
 #: crates/app_runtime/src/playback.rs:167
 #, rust-format
 msgid "Playback failed for {track_name}. Skipping to the next track."
-msgstr "Riproduzione di {track_name} non riuscita. Passaggio al brano successivo."
+msgstr ""
+"Riproduzione di {track_name} non riuscita. Passaggio al brano successivo."
 
 #: crates/app_runtime/src/playback.rs:153
 #, rust-format
@@ -1845,7 +1936,10 @@ msgid ""
 "Playlists and listening stats live only in Sustain's database — your "
 "ratings, tags, and artwork are also written to your music files. Back up "
 "this folder alongside your music:"
-msgstr "Le playlist e le statistiche di ascolto esistono solo nel database di Sustain — valutazioni, tag e copertine vengono scritti anche nei file musicali. Esegui il backup di questa cartella insieme alla tua musica:"
+msgstr ""
+"Le playlist e le statistiche di ascolto esistono solo nel database di "
+"Sustain — valutazioni, tag e copertine vengono scritti anche nei file "
+"musicali. Esegui il backup di questa cartella insieme alla tua musica:"
 
 #: crates/ui_gtk/src/device_panel.rs:234
 #, rust-format
@@ -1881,7 +1975,9 @@ msgstr "Preparazione dei brani ({completed}/{total})…"
 msgid ""
 "Preview and merge the groups whose audio shows them to be copies of one "
 "recording"
-msgstr "Anteprima e unione dei gruppi il cui audio li rivela copie di una stessa registrazione"
+msgstr ""
+"Anteprima e unione dei gruppi il cui audio li rivela copie di una stessa "
+"registrazione"
 
 #: crates/ui_gtk/src/titlebar.rs:55
 #, rust-format
@@ -1991,7 +2087,10 @@ msgstr "Ricostruzione dell'indice di Smart Shuffle…"
 msgid ""
 "Recovered an interrupted YouTube audio replacement, but retained the "
 "previous pathname because its identity could not be proven."
-msgstr "È stata recuperata una sostituzione audio da YouTube interrotta, ma è stato mantenuto il percorso precedente perché non è stato possibile verificarne l'identità."
+msgstr ""
+"È stata recuperata una sostituzione audio da YouTube interrotta, ma è stato "
+"mantenuto il percorso precedente perché non è stato possibile verificarne "
+"l'identità."
 
 #: crates/ui_gtk/src/statistics.rs:407
 #, rust-format
@@ -2002,7 +2101,9 @@ msgstr "Anni di pubblicazione"
 msgid ""
 "Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, and "
 "AcoustID"
-msgstr "Recupero remoto di copertine e metadati tramite MusicBrainz, Cover Art Archive e AcoustID"
+msgstr ""
+"Recupero remoto di copertine e metadati tramite MusicBrainz, Cover Art "
+"Archive e AcoustID"
 
 #: crates/app_runtime/src/notifications.rs:974
 #, rust-format
@@ -2062,7 +2163,9 @@ msgstr "Sostituisci audio da YouTube"
 msgid ""
 "Replacement installed, but the previous audio file could not be moved to "
 "trash."
-msgstr "Sostituto installato, ma non è stato possibile spostare nel cestino il file audio precedente."
+msgstr ""
+"Sostituto installato, ma non è stato possibile spostare nel cestino il file "
+"audio precedente."
 
 #: crates/ui_gtk/src/preferences/about_tab.rs:76
 #, rust-format
@@ -2109,7 +2212,9 @@ msgstr "Mostra il brano selezionato in File"
 msgid ""
 "Runs in the background and sets each track's BPM to the measured tempo. "
 "Never replaces a BPM you typed yourself."
-msgstr "Viene eseguito in background e imposta il BPM di ogni brano sul tempo misurato. Non sostituisce mai un BPM inserito da te."
+msgstr ""
+"Viene eseguito in background e imposta il BPM di ogni brano sul tempo "
+"misurato. Non sostituisce mai un BPM inserito da te."
 
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:39
 #, rust-format
@@ -2117,7 +2222,10 @@ msgid ""
 "Runs in the background on tracks missing a musical key, and measures its own "
 "keys again when detection improves. Never replaces a key from the file's "
 "tags or one you typed."
-msgstr "Viene eseguito in background sui brani senza tonalità, e rimisura le tonalità che ha rilevato quando il rilevamento migliora. Non sostituisce mai una tonalità dei tag del file o inserita da te."
+msgstr ""
+"Viene eseguito in background sui brani senza tonalità, e rimisura le "
+"tonalità che ha rilevato quando il rilevamento migliora. Non sostituisce mai "
+"una tonalità dei tag del file o inserita da te."
 
 #: crates/ui_gtk/src/track_info/file_page.rs:75
 #, rust-format
@@ -2152,7 +2260,8 @@ msgstr "Scansione parziale: riconciliazione dei file mancanti saltata."
 #: crates/app_runtime/src/notifications.rs:573
 #, rust-format
 msgid "Scan partial: {changes}; missing-file reconciliation skipped."
-msgstr "Scansione parziale: {changes}; riconciliazione dei file mancanti saltata."
+msgstr ""
+"Scansione parziale: {changes}; riconciliazione dei file mancanti saltata."
 
 #: crates/app_runtime/src/notifications.rs:567
 #, rust-format
@@ -2194,7 +2303,9 @@ msgstr "Seleziona almeno un brano da importare."
 msgid ""
 "Sensible choices are pre-selected. Implicit choices: play counts and skips "
 "are summed, oldest date added is preserved."
-msgstr "Le scelte sensate sono preselezionate. Scelte implicite: riproduzioni e salti vengono sommati, la data di aggiunta più vecchia viene conservata."
+msgstr ""
+"Le scelte sensate sono preselezionate. Scelte implicite: riproduzioni e "
+"salti vengono sommati, la data di aggiunta più vecchia viene conservata."
 
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:273
 #, rust-format
@@ -2202,7 +2313,11 @@ msgid ""
 "Sets the tempo window Sustain uses when folding half-time and double-time "
 "detections. Widen it for very slow or fast music; narrow it if results tend "
 "to land at half or double the expected tempo."
-msgstr "Imposta l’intervallo di tempo che Sustain usa per correggere i rilevamenti a metà tempo e a tempo doppio. Allargalo per musica molto lenta o veloce; restringilo se i risultati tendono a cadere a metà o al doppio del tempo atteso."
+msgstr ""
+"Imposta l’intervallo di tempo che Sustain usa per correggere i rilevamenti a "
+"metà tempo e a tempo doppio. Allargalo per musica molto lenta o veloce; "
+"restringilo se i risultati tendono a cadere a metà o al doppio del tempo "
+"atteso."
 
 #: crates/ui_gtk/src/preferences/mod.rs:153
 #, rust-format
@@ -2315,7 +2430,11 @@ msgid ""
 "Smart Shuffle tries to follow your mood by using the current track's genre, "
 "tempo, key, era and discovery period to choose the next track. Turning on "
 "audio analysis allows for even better picks."
-msgstr "La riproduzione casuale intelligente cerca di seguire il tuo umore usando genere, tempo, tonalità, epoca e periodo di scoperta del brano in riproduzione per scegliere il successivo. Attivare l’analisi audio consente scelte ancora migliori."
+msgstr ""
+"La riproduzione casuale intelligente cerca di seguire il tuo umore usando "
+"genere, tempo, tonalità, epoca e periodo di scoperta del brano in "
+"riproduzione per scegliere il successivo. Attivare l’analisi audio consente "
+"scelte ancora migliori."
 
 #: crates/ui_gtk/src/queue_view.rs:337
 #, rust-format
@@ -2335,7 +2454,9 @@ msgstr "Smart Shuffle: impossibile serializzare l'indice ricostruito."
 #: crates/app_runtime/src/notifications.rs:829
 #, rust-format
 msgid "Some changes could not be mirrored to audio files. Sustain will retry."
-msgstr "Non è stato possibile replicare alcune modifiche nei file audio. Sustain riproverà."
+msgstr ""
+"Non è stato possibile replicare alcune modifiche nei file audio. Sustain "
+"riproverà."
 
 #: crates/app_runtime/src/notifications.rs:713
 #, rust-format
@@ -2345,7 +2466,8 @@ msgstr "Non è stato possibile rimuovere alcune cartelle vuote."
 #: crates/app_runtime/src/notifications.rs:821
 #, rust-format
 msgid "Some empty managed-library folders could not be removed."
-msgstr "Non è stato possibile rimuovere alcune cartelle vuote della libreria gestita."
+msgstr ""
+"Non è stato possibile rimuovere alcune cartelle vuote della libreria gestita."
 
 #: crates/ui_gtk/src/device_panel.rs:1083
 #, rust-format
@@ -2353,7 +2475,10 @@ msgid ""
 "Some selected tracks are not fully analysed ({gaps}). They will still sync, "
 "but that information will be missing on Pioneer players. Run Analyse first "
 "to fill the gaps."
-msgstr "Alcuni brani selezionati non sono stati analizzati completamente ({gaps}). Verranno comunque sincronizzati, ma queste informazioni mancheranno sui lettori Pioneer. Esegui prima Analizza per colmare le lacune."
+msgstr ""
+"Alcuni brani selezionati non sono stati analizzati completamente ({gaps}). "
+"Verranno comunque sincronizzati, ma queste informazioni mancheranno sui "
+"lettori Pioneer. Esegui prima Analizza per colmare le lacune."
 
 #: crates/ui_gtk/src/command_controller.rs:98
 #: crates/ui_gtk/src/track_info/multi.rs:161
@@ -2366,11 +2491,14 @@ msgstr "Non è stato possibile aggiornare alcuni brani selezionati."
 msgid ""
 "Some track changes could not be read from the library database. Sustain will "
 "retry."
-msgstr "Non è stato possibile leggere alcune modifiche dei brani dal database della libreria. Sustain riproverà."
+msgstr ""
+"Non è stato possibile leggere alcune modifiche dei brani dal database della "
+"libreria. Sustain riproverà."
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:27
 msgid "Songs, Albums, and Playlists views with a keyboard-friendly table"
-msgstr "Viste Brani, Album e Playlist con una tabella comoda da usare con la tastiera"
+msgstr ""
+"Viste Brani, Album e Playlist con una tabella comoda da usare con la tastiera"
 
 #: crates/ui_gtk/src/preferences/library_tab.rs:273
 #, rust-format
@@ -2404,7 +2532,10 @@ msgstr "Sustain"
 msgid ""
 "Sustain could not save listening statistics. The pending play count is "
 "retained in memory and will retry automatically."
-msgstr "Sustain non è riuscito a salvare le statistiche di ascolto. Il conteggio delle riproduzioni in sospeso è conservato in memoria e verrà ritentato automaticamente."
+msgstr ""
+"Sustain non è riuscito a salvare le statistiche di ascolto. Il conteggio "
+"delle riproduzioni in sospeso è conservato in memoria e verrà ritentato "
+"automaticamente."
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:19
 msgid ""
@@ -2412,13 +2543,19 @@ msgid ""
 "dense, predictable workflow of iTunes circa 2012. It is built around a fast "
 "main table view, with first-class playlists, smart playlists, ratings, "
 "listening statistics, and search."
-msgstr "Sustain è una libreria musicale e un lettore nativo per Linux, fortemente ispirato al flusso di lavoro denso e prevedibile di iTunes intorno al 2012. È costruito attorno a una tabella principale veloce, con playlist, playlist intelligenti, valutazioni, statistiche di ascolto e ricerca di prima classe."
+msgstr ""
+"Sustain è una libreria musicale e un lettore nativo per Linux, fortemente "
+"ispirato al flusso di lavoro denso e prevedibile di iTunes intorno al 2012. "
+"È costruito attorno a una tabella principale veloce, con playlist, playlist "
+"intelligenti, valutazioni, statistiche di ascolto e ricerca di prima classe."
 
 #: crates/app_runtime/src/notifications.rs:772
 #, rust-format
 msgid ""
 "Sustain retained recovery files because cleanup could not finish safely."
-msgstr "Sustain ha conservato i file di ripristino perché la pulizia non è stata completata in modo sicuro."
+msgstr ""
+"Sustain ha conservato i file di ripristino perché la pulizia non è stata "
+"completata in modo sicuro."
 
 #: crates/ui_gtk/src/shortcuts.rs:452
 #, rust-format
@@ -2483,8 +2620,12 @@ msgid ""
 msgid_plural ""
 "Syncing will remove {count} tracks from this device that are no longer in "
 "your selected playlists."
-msgstr[0] "La sincronizzazione rimuoverà da questo dispositivo {count} brano che non è più nelle playlist selezionate."
-msgstr[1] "La sincronizzazione rimuoverà da questo dispositivo {count} brani che non sono più nelle playlist selezionate."
+msgstr[0] ""
+"La sincronizzazione rimuoverà da questo dispositivo {count} brano che non è "
+"più nelle playlist selezionate."
+msgstr[1] ""
+"La sincronizzazione rimuoverà da questo dispositivo {count} brani che non "
+"sono più nelle playlist selezionate."
 
 #: crates/app_runtime/src/notifications.rs:996
 #, rust-format
@@ -2524,7 +2665,8 @@ msgstr[1] "Tutti i {count} brani hanno già l'analisi BPM: niente da accodare."
 msgid "That track already has analysis — nothing to queue."
 msgid_plural "All {count} tracks already have analysis — nothing to queue."
 msgstr[0] "Quel brano è già stato analizzato: niente da accodare."
-msgstr[1] "Tutti i {count} brani sono già stati analizzati: niente da accodare."
+msgstr[1] ""
+"Tutti i {count} brani sono già stati analizzati: niente da accodare."
 
 #: crates/app_runtime/src/lib.rs:3053
 #, rust-format
@@ -2532,15 +2674,19 @@ msgid "That track already has audio analysis — nothing to queue."
 msgid_plural ""
 "All {count} tracks already have audio analysis — nothing to queue."
 msgstr[0] "Quel brano ha già l'analisi audio: niente da accodare."
-msgstr[1] "Tutti i {count} brani hanno già l'analisi audio: niente da accodare."
+msgstr[1] ""
+"Tutti i {count} brani hanno già l'analisi audio: niente da accodare."
 
 #: crates/app_runtime/src/lib.rs:3048
 #, rust-format
 msgid "That track already has key detection — nothing to queue."
 msgid_plural ""
 "All {count} tracks already have key detection — nothing to queue."
-msgstr[0] "Quel brano ha già il rilevamento della tonalità: niente da accodare."
-msgstr[1] "Tutti i {count} brani hanno già il rilevamento della tonalità: niente da accodare."
+msgstr[0] ""
+"Quel brano ha già il rilevamento della tonalità: niente da accodare."
+msgstr[1] ""
+"Tutti i {count} brani hanno già il rilevamento della tonalità: niente da "
+"accodare."
 
 #: crates/app_runtime/src/notifications.rs:985
 #, rust-format
@@ -2550,7 +2696,8 @@ msgstr "Impossibile importare il CD."
 #: crates/app_runtime/src/youtube_audio_replacement.rs:239
 #, rust-format
 msgid "The YouTube audio download exceeded Sustain's time limit."
-msgstr "Il download dell'audio da YouTube ha superato il limite di tempo di Sustain."
+msgstr ""
+"Il download dell'audio da YouTube ha superato il limite di tempo di Sustain."
 
 #: crates/app_runtime/src/youtube_audio_replacement.rs:242
 #, rust-format
@@ -2560,7 +2707,9 @@ msgstr "Il download dell'audio da YouTube è stato annullato."
 #: crates/app_runtime/src/notifications.rs:977
 #, rust-format
 msgid "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
-msgstr "La copertina non è supportata, è danneggiata o supera i limiti di dimensione di Sustain."
+msgstr ""
+"La copertina non è supportata, è danneggiata o supera i limiti di dimensione "
+"di Sustain."
 
 #: crates/ui_gtk/src/track_context.rs:916
 #, rust-format
@@ -2570,8 +2719,12 @@ msgid ""
 msgid_plural ""
 "The {count} audio files will be moved to the system trash and the tracks "
 "will be removed from the library."
-msgstr[0] "Il file audio verrà spostato nel cestino di sistema e il brano verrà rimosso dalla libreria."
-msgstr[1] "I {count} file audio verranno spostati nel cestino di sistema e i brani verranno rimossi dalla libreria."
+msgstr[0] ""
+"Il file audio verrà spostato nel cestino di sistema e il brano verrà rimosso "
+"dalla libreria."
+msgstr[1] ""
+"I {count} file audio verranno spostati nel cestino di sistema e i brani "
+"verranno rimossi dalla libreria."
 
 #: crates/ui_gtk/src/track_context.rs:927
 #, rust-format
@@ -2583,8 +2736,14 @@ msgid_plural ""
 "The audio files will stay on disk, but the {count} tracks will be removed "
 "from Sustain. Library data for these tracks, including play counts and dates "
 "added, will be removed."
-msgstr[0] "Il file audio resterà sul disco, ma il brano verrà rimosso da Sustain. I dati della libreria per questo brano, compresi il conteggio delle riproduzioni e la data di aggiunta, verranno rimossi."
-msgstr[1] "I file audio resteranno sul disco, ma i {count} brani verranno rimossi da Sustain. I dati della libreria per questi brani, compresi i conteggi delle riproduzioni e le date di aggiunta, verranno rimossi."
+msgstr[0] ""
+"Il file audio resterà sul disco, ma il brano verrà rimosso da Sustain. I "
+"dati della libreria per questo brano, compresi il conteggio delle "
+"riproduzioni e la data di aggiunta, verranno rimossi."
+msgstr[1] ""
+"I file audio resteranno sul disco, ma i {count} brani verranno rimossi da "
+"Sustain. I dati della libreria per questi brani, compresi i conteggi delle "
+"riproduzioni e le date di aggiunta, verranno rimossi."
 
 #: crates/ui_gtk/src/verified_duplicates.rs:49
 #, rust-format
@@ -2592,7 +2751,11 @@ msgid ""
 "The best audio file and the highest rating are kept, along with the highest-"
 "resolution artwork. Play counts and skips are summed, and the oldest date "
 "added is kept. Uncheck a group to review it yourself."
-msgstr "Vengono conservati il file audio migliore e la valutazione più alta, insieme alla copertina con la risoluzione più alta. Riproduzioni e salti vengono sommati e viene conservata la data di aggiunta più vecchia. Deseleziona un gruppo per esaminarlo tu stesso."
+msgstr ""
+"Vengono conservati il file audio migliore e la valutazione più alta, insieme "
+"alla copertina con la risoluzione più alta. Riproduzioni e salti vengono "
+"sommati e viene conservata la data di aggiunta più vecchia. Deseleziona un "
+"gruppo per esaminarlo tu stesso."
 
 #: crates/app_runtime/src/notifications.rs:983
 #, rust-format
@@ -2602,12 +2765,14 @@ msgstr "Il disco è cambiato. Reinserisci il disco originale e riprova."
 #: crates/app_runtime/src/notifications.rs:990
 #, rust-format
 msgid "The disc is being imported. Play it once the import is done."
-msgstr "Il disco è in fase di importazione. Riproducilo al termine dell'importazione."
+msgstr ""
+"Il disco è in fase di importazione. Riproducilo al termine dell'importazione."
 
 #: crates/app_runtime/src/youtube_audio_replacement.rs:236
 #, rust-format
 msgid "The downloaded YouTube replacement exceeded Sustain's size limit."
-msgstr "Il sostituto scaricato da YouTube supera il limite di dimensione di Sustain."
+msgstr ""
+"Il sostituto scaricato da YouTube supera il limite di dimensione di Sustain."
 
 #: crates/app_runtime/src/youtube_audio_replacement.rs:131
 #, rust-format
@@ -2617,7 +2782,8 @@ msgstr "Impossibile pubblicare in modo sicuro l'audio scaricato."
 #: crates/app_runtime/src/notifications.rs:948
 #, rust-format
 msgid "The downloaded audio could not safely replace this track."
-msgstr "L'audio scaricato non ha potuto sostituire questo brano in modo sicuro."
+msgstr ""
+"L'audio scaricato non ha potuto sostituire questo brano in modo sicuro."
 
 #: crates/app_runtime/src/notifications.rs:893
 #, rust-format
@@ -2634,7 +2800,9 @@ msgstr "Impossibile accodare il salvataggio della copertina recuperata."
 msgid ""
 "The fetched cover art was rejected because it is unsupported, corrupt, or "
 "too large."
-msgstr "La copertina recuperata è stata rifiutata perché non supportata, danneggiata o troppo grande."
+msgstr ""
+"La copertina recuperata è stata rifiutata perché non supportata, danneggiata "
+"o troppo grande."
 
 #: crates/app_runtime/src/notifications.rs:677
 #, rust-format
@@ -2710,59 +2878,77 @@ msgstr "Impossibile analizzare la cartella selezionata."
 #, rust-format
 msgid ""
 "The selected library folder cannot durably save managed directory changes."
-msgstr "La cartella della libreria selezionata non può salvare in modo durevole le modifiche alle directory gestite."
+msgstr ""
+"La cartella della libreria selezionata non può salvare in modo durevole le "
+"modifiche alle directory gestite."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:65
 #, rust-format
 msgid "The selected library folder cannot durably save managed files."
-msgstr "La cartella della libreria selezionata non può salvare in modo durevole i file gestiti."
+msgstr ""
+"La cartella della libreria selezionata non può salvare in modo durevole i "
+"file gestiti."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:80
 #, rust-format
 msgid ""
 "The selected library folder cannot publish Sustain's recovery journal "
 "atomically."
-msgstr "La cartella della libreria selezionata non può pubblicare in modo atomico il registro di ripristino di Sustain."
+msgstr ""
+"La cartella della libreria selezionata non può pubblicare in modo atomico il "
+"registro di ripristino di Sustain."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:83
 #, rust-format
 msgid ""
 "The selected library folder cannot safely protect Sustain's recovery journal "
 "from overwrite."
-msgstr "La cartella della libreria selezionata non può proteggere in modo sicuro il registro di ripristino di Sustain dalla sovrascrittura."
+msgstr ""
+"La cartella della libreria selezionata non può proteggere in modo sicuro il "
+"registro di ripristino di Sustain dalla sovrascrittura."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:71
 #, rust-format
 msgid ""
 "The selected library folder cannot safely refuse overwriting an existing "
 "managed file."
-msgstr "La cartella della libreria selezionata non può rifiutare in modo sicuro la sovrascrittura di un file gestito esistente."
+msgstr ""
+"La cartella della libreria selezionata non può rifiutare in modo sicuro la "
+"sovrascrittura di un file gestito esistente."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:74
 #, rust-format
 msgid "The selected library folder cannot safely remove managed pathnames."
-msgstr "La cartella della libreria selezionata non può rimuovere in modo sicuro i percorsi gestiti."
+msgstr ""
+"La cartella della libreria selezionata non può rimuovere in modo sicuro i "
+"percorsi gestiti."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:89
 #, rust-format
 msgid ""
 "The selected library folder could not remove Sustain's filesystem probe "
 "files."
-msgstr "La cartella della libreria selezionata non ha potuto rimuovere i file di prova del file system di Sustain."
+msgstr ""
+"La cartella della libreria selezionata non ha potuto rimuovere i file di "
+"prova del file system di Sustain."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:77
 #, rust-format
 msgid ""
 "The selected library folder did not preserve a managed file after a hard-"
 "link move."
-msgstr "La cartella della libreria selezionata non ha conservato un file gestito dopo uno spostamento tramite hard link."
+msgstr ""
+"La cartella della libreria selezionata non ha conservato un file gestito "
+"dopo uno spostamento tramite hard link."
 
 #: crates/app_runtime/src/managed_library/capabilities.rs:68
 #, rust-format
 msgid ""
 "The selected library folder does not support the hard-link moves required by "
 "organized library mode."
-msgstr "La cartella della libreria selezionata non supporta gli spostamenti tramite hard link richiesti dalla modalità libreria organizzata."
+msgstr ""
+"La cartella della libreria selezionata non supporta gli spostamenti tramite "
+"hard link richiesti dalla modalità libreria organizzata."
 
 #: crates/app_runtime/src/notifications.rs:938
 #, rust-format
@@ -2787,21 +2973,28 @@ msgstr "Impossibile aggiornare i metadati del brano."
 #: crates/app_runtime/src/library_mutation.rs:120
 #, rust-format
 msgid "The track was located, but empty library folders could not be removed."
-msgstr "Il brano è stato individuato, ma non è stato possibile rimuovere le cartelle vuote della libreria."
+msgstr ""
+"Il brano è stato individuato, ma non è stato possibile rimuovere le cartelle "
+"vuote della libreria."
 
 #: crates/app_runtime/src/notifications.rs:825
 #, rust-format
 msgid ""
 "The waveform cache could not be opened. Waveforms will not be kept this "
 "session."
-msgstr "Impossibile aprire la cache delle forme d'onda. Le forme d'onda non verranno conservate in questa sessione."
+msgstr ""
+"Impossibile aprire la cache delle forme d'onda. Le forme d'onda non verranno "
+"conservate in questa sessione."
 
 #: crates/ui_gtk/src/verified_duplicates.rs:41
 #, rust-format
 msgid ""
 "Their audio shows each of these groups to be copies of one recording. Each "
 "group merges into a single track, keeping the choices shown."
-msgstr "Il loro audio rivela che ciascuno di questi gruppi è composto da copie di una stessa registrazione. Ogni gruppo viene unito in un unico brano, mantenendo le scelte mostrate."
+msgstr ""
+"Il loro audio rivela che ciascuno di questi gruppi è composto da copie di "
+"una stessa registrazione. Ogni gruppo viene unito in un unico brano, "
+"mantenendo le scelte mostrate."
 
 #: crates/ui_gtk/src/smart_playlist_editor/model.rs:379
 #, rust-format
@@ -2921,7 +3114,9 @@ msgstr "Traccia {number}"
 msgid ""
 "Two library modes: leave files in place, or keep the library organized on "
 "disk"
-msgstr "Due modalità di libreria: lasciare i file dove sono o mantenere la libreria organizzata sul disco"
+msgstr ""
+"Due modalità di libreria: lasciare i file dove sono o mantenere la libreria "
+"organizzata sul disco"
 
 #: crates/ui_gtk/src/track_table/columns.rs:69
 #, rust-format
@@ -3040,7 +3235,9 @@ msgstr "La sostituzione dell'audio da YouTube non è disponibile."
 msgid ""
 "YouTube replacement is available only for present tracks at or below 192 "
 "kbps."
-msgstr "La sostituzione da YouTube è disponibile solo per i brani presenti a 192 kbps o meno."
+msgstr ""
+"La sostituzione da YouTube è disponibile solo per i brani presenti a 192 "
+"kbps o meno."
 
 #: crates/app_runtime/src/notifications.rs:941
 #, rust-format
@@ -3344,7 +3541,8 @@ msgstr "valore"
 #: crates/app_runtime/src/youtube_audio_replacement.rs:230
 #, rust-format
 msgid "yt-dlp could not download usable audio from that YouTube URL."
-msgstr "yt-dlp non è riuscito a scaricare audio utilizzabile da quell'URL di YouTube."
+msgstr ""
+"yt-dlp non è riuscito a scaricare audio utilizzabile da quell'URL di YouTube."
 
 #: crates/app_runtime/src/youtube_audio_replacement.rs:233
 #, rust-format
@@ -3458,8 +3656,12 @@ msgid ""
 msgid_plural ""
 "{count} duplicate tracks consolidated. Sustain retained recovery files "
 "because cleanup could not finish safely."
-msgstr[0] "{count} brano duplicato consolidato. Sustain ha conservato i file di ripristino perché la pulizia non è stata completata in modo sicuro."
-msgstr[1] "{count} brani duplicati consolidati. Sustain ha conservato i file di ripristino perché la pulizia non è stata completata in modo sicuro."
+msgstr[0] ""
+"{count} brano duplicato consolidato. Sustain ha conservato i file di "
+"ripristino perché la pulizia non è stata completata in modo sicuro."
+msgstr[1] ""
+"{count} brani duplicati consolidati. Sustain ha conservato i file di "
+"ripristino perché la pulizia non è stata completata in modo sicuro."
 
 #: crates/app_runtime/src/notifications.rs:806
 #, rust-format
@@ -3489,8 +3691,10 @@ msgstr[1] "Impossibile importare {count} file"
 msgid "{count} file could not be imported. The rest of the import went ahead."
 msgid_plural ""
 "{count} files could not be imported. The rest of the import went ahead."
-msgstr[0] "Impossibile importare {count} file. Il resto dell'importazione è proseguito."
-msgstr[1] "Impossibile importare {count} file. Il resto dell'importazione è proseguito."
+msgstr[0] ""
+"Impossibile importare {count} file. Il resto dell'importazione è proseguito."
+msgstr[1] ""
+"Impossibile importare {count} file. Il resto dell'importazione è proseguito."
 
 #: crates/ui_gtk/src/status_bar.rs:410
 #, rust-format
@@ -3556,7 +3760,9 @@ msgstr[1] "{count} non più verificati"
 msgid ""
 "{count} of the selected files are missing from disk, so these duplicates "
 "can't be consolidated. Restore or remove them, then try again."
-msgstr "{count} dei file selezionati mancano dal disco, quindi questi duplicati non possono essere consolidati. Ripristinali o rimuovili, poi riprova."
+msgstr ""
+"{count} dei file selezionati mancano dal disco, quindi questi duplicati non "
+"possono essere consolidati. Ripristinali o rimuovili, poi riprova."
 
 #: crates/ui_gtk/src/device_panel.rs:859
 #, rust-format
@@ -3731,4 +3937,6 @@ msgstr "Anni {year}"
 msgid ""
 "“{name}” is missing from disk, so these duplicates can't be consolidated. "
 "Restore or remove it, then try again."
-msgstr "«{name}» manca dal disco, quindi questi duplicati non possono essere consolidati. Ripristinalo o rimuovilo, poi riprova."
+msgstr ""
+"«{name}» manca dal disco, quindi questi duplicati non possono essere "
+"consolidati. Ripristinalo o rimuovilo, poi riprova."
