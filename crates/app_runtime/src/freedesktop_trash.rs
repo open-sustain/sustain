@@ -216,11 +216,7 @@ fn create_trash_info(
     let result = (|| {
         writeln!(file, "[Trash Info]")?;
         writeln!(file, "Path={}", encode_uri_path(original_path))?;
-        writeln!(
-            file,
-            "DeletionDate={}",
-            chrono::Local::now().format("%Y-%m-%dT%H:%M:%S")
-        )?;
+        writeln!(file, "DeletionDate={}", local_deletion_date()?)?;
         file.flush()?;
         file.sync_all()?;
         info.sync_parent()
@@ -230,6 +226,13 @@ fn create_trash_info(
         return Err(error);
     }
     Ok(Some(capability))
+}
+
+/// The trash-spec `DeletionDate`: local time, `YYYY-MM-DDThh:mm:ss`.
+fn local_deletion_date() -> io::Result<glib::GString> {
+    glib::DateTime::now_local()
+        .and_then(|now| now.format("%Y-%m-%dT%H:%M:%S"))
+        .map_err(|_| io::Error::other("could not format the local deletion time"))
 }
 
 fn remove_info_file(info: &PinnedFilePath, capability: &RegularFileCapability) -> io::Result<()> {
@@ -335,7 +338,15 @@ mod tests {
         let trash_info =
             fs::read_to_string(trash.join("info/song.flac.trashinfo")).expect("read trash info");
         assert!(trash_info.contains("Path="));
-        assert!(trash_info.contains("DeletionDate="));
+        let deletion_date = trash_info
+            .lines()
+            .find_map(|line| line.strip_prefix("DeletionDate="))
+            .expect("DeletionDate line");
+        let shape: String = deletion_date
+            .chars()
+            .map(|c| if c.is_ascii_digit() { 'd' } else { c })
+            .collect();
+        assert_eq!(shape, "dddd-dd-ddTdd:dd:dd");
     }
 
     #[test]

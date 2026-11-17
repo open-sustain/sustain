@@ -12,7 +12,9 @@ path = "src/lib.rs"
 
 [dependencies]
 async-channel = "2"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Local wall-clock time for freedesktop trash `DeletionDate` stamps; the
+# same `glib::DateTime` the GTK frontend formats dates with.
+glib = "0.21"
 tempfile = "3"
 url = "2"
 # Linux syscall wrappers for `setpriority` and `ioprio_set` used by the
