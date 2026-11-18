@@ -162,6 +162,13 @@ fn atomic_replace(
 
     let (temp_path, mut file) = create_temporary_sibling_file(|| temporary_sibling_path(path))?;
     let write_result = (|| -> io::Result<()> {
+        // The replacement keeps the mode of the file it replaces: a user who
+        // made their settings private keeps them private.
+        match fs::metadata(path) {
+            Ok(existing) => file.set_permissions(existing.permissions())?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         write_body(&mut file)?;
         file.flush()?;
         file.sync_all()
@@ -1220,6 +1227,25 @@ mod tests {
         assert_eq!(store.load_settings(), Ok(good));
         assert_no_temp_litter(&path);
 
+        remove_settings_tree(&path);
+    }
+
+    #[test]
+    fn saving_keeps_the_mode_the_user_gave_the_settings_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = unique_settings_path();
+        let store = TomlSettingsStore::new(&path);
+        let settings = UserSettings::with_library_path(Some(PathBuf::from("/music")));
+        assert_eq!(store.save_settings(settings.clone()), Ok(()));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("restrict settings");
+
+        assert_eq!(store.save_settings(settings), Ok(()));
+
+        let mode = fs::metadata(&path)
+            .expect("settings metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
         remove_settings_tree(&path);
     }
 
