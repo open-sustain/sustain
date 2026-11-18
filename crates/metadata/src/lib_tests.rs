@@ -2378,6 +2378,73 @@ fn a_known_name_the_walk_failed_on_keeps_links_alone_from_naming_its_file() {
 }
 
 #[test]
+fn a_library_folder_given_by_a_link_is_walked_as_where_it_is() {
+    let base = unique_test_directory();
+    fs::create_dir_all(base.join("disk")).expect("create library folder");
+    fs::write(base.join("disk/new.mp3"), b"audio").expect("write a new track");
+    std::os::unix::fs::symlink(base.join("disk"), base.join("Music")).expect("link the library");
+    let known: super::KnownTracks = [(
+        TrackRelativePath::new("closed.mp3").expect("relative"),
+        None,
+    )]
+    .into_iter()
+    .collect();
+    let filesystem = FaultInjectingScanFilesystem {
+        unreadable_path: Some(base.join("Music/closed.mp3")),
+        ..FaultInjectingScanFilesystem::default()
+    };
+
+    let scan = LibraryScanner::new(&RecordingMetadataService::default())
+        .scan_with_filesystem(
+            &base.join("Music"),
+            &std::sync::atomic::AtomicBool::new(false),
+            &known,
+            &filesystem,
+        )
+        .expect("scan library");
+
+    assert_eq!(
+        scan.tracks
+            .iter()
+            .map(|track| track.relative_path.as_path().display().to_string())
+            .collect::<Vec<_>>(),
+        vec!["new.mp3"],
+        "a known name that cannot be looked up holds back no file found where it is"
+    );
+
+    fs::remove_dir_all(base).expect("remove test folders");
+}
+
+#[test]
+fn a_known_track_link_that_leads_to_itself_holds_back_no_new_link() {
+    let root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library folder");
+    fs::create_dir_all(&elsewhere).expect("create linked folder");
+    std::os::unix::fs::symlink(root.join("old.mp3"), root.join("old.mp3")).expect("loop");
+    fs::write(elsewhere.join("song.mp3"), b"audio").expect("write track");
+    std::os::unix::fs::symlink(elsewhere.join("song.mp3"), root.join("new.mp3")).expect("link");
+    let known: super::KnownTracks = [(TrackRelativePath::new("old.mp3").expect("relative"), None)]
+        .into_iter()
+        .collect();
+
+    let scan = LibraryScanner::new(&RecordingMetadataService::default())
+        .scan(&root, &std::sync::atomic::AtomicBool::new(false), &known)
+        .expect("scan library");
+
+    assert_eq!(
+        scan.tracks
+            .iter()
+            .map(|track| track.relative_path.as_path().display().to_string())
+            .collect::<Vec<_>>(),
+        vec!["new.mp3"]
+    );
+
+    fs::remove_dir_all(root).expect("remove test library");
+    fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
 fn a_track_link_that_leads_to_itself_is_one_failure() {
     let root = unique_test_directory();
     fs::create_dir_all(&root).expect("create library folder");

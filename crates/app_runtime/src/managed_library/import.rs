@@ -449,17 +449,25 @@ impl LibraryImportContext<'_> {
         ImportFailureReason,
     > {
         let [library_path, canonical_library_path] = library_paths;
-        let resolved = sustain_metadata::resolve_track_file(file.first_name())
-            .ok()
-            .flatten()
-            .ok_or(ImportFailureReason::Unreadable)?;
-        let where_it_is = reference_relative_path_for_source(&resolved, canonical_library_path);
+        // Where the file is, by every name: two names for one file may
+        // resolve apart, a link to one of its hard links in the library.
+        let resolved: Vec<PathBuf> = file
+            .names
+            .iter()
+            .filter_map(|name| sustain_metadata::resolve_track_file(name).ok().flatten())
+            .collect();
+        let Some(file_path) = resolved.first() else {
+            return Err(ImportFailureReason::Unreadable);
+        };
+        let where_it_is = resolved
+            .iter()
+            .filter_map(|path| reference_relative_path_for_source(path, canonical_library_path));
         let as_named = file.names.iter().filter_map(|name| {
             [library_path, canonical_library_path]
                 .into_iter()
                 .find_map(|library_path| reference_relative_path_for_source(name, library_path))
         });
-        let locations: Vec<_> = where_it_is.into_iter().chain(as_named).collect();
+        let locations: Vec<_> = where_it_is.chain(as_named).collect();
         let Some(relative_path) = locations.first().cloned() else {
             return Err(ImportFailureReason::OutsideLibraryFolder);
         };
@@ -476,7 +484,7 @@ impl LibraryImportContext<'_> {
             .metadata_service
             .read_initial_tags(&tag_source)
             .map_err(|_| ImportFailureReason::UnreadableTags)?;
-        let file_size_bytes = fs::metadata(&resolved).map(|metadata| metadata.len()).ok();
+        let file_size_bytes = fs::metadata(file_path).map(|metadata| metadata.len()).ok();
         Ok(Some((relative_path, tags, file_size_bytes)))
     }
 }
@@ -802,30 +810,46 @@ impl DiscoveredFile {
 
 /// The folders and files an import of `paths` walks, in the order it walks
 /// them. A folder is walked once, under the name walked first, so the
-/// library folder's names come first: a path in the library folder is
-/// spelled as the library's path is, and the library folder is walked
-/// before a dropped folder that holds it. The rest of the order is the
-/// paths', not the drop's.
+/// library folder's names come first: a path in the library folder, by
+/// whatever name, is spelled as the library's path is, and the library
+/// folder is walked before a dropped folder that holds it. The rest of the
+/// order is the paths', not the drop's.
 fn import_roots(paths: Vec<PathBuf>, library_path: &Path) -> Vec<PathBuf> {
     let canonical_library_path = fs::canonicalize(library_path).ok();
     let mut roots = BTreeSet::new();
     for path in paths {
+        let location = if path.starts_with(library_path) {
+            None
+        } else {
+            location_of(&path)
+        };
         let in_library = canonical_library_path
             .as_deref()
-            .filter(|_| !path.starts_with(library_path))
-            .and_then(|canonical| path.strip_prefix(canonical).ok())
+            .zip(location.as_deref())
+            .and_then(|(canonical, location)| location.strip_prefix(canonical).ok())
             .map(|relative| library_path.join(relative));
-        let path = in_library.unwrap_or(path);
         let holds_library = library_path.starts_with(&path)
             || canonical_library_path
                 .as_deref()
-                .is_some_and(|canonical| canonical.starts_with(&path));
+                .zip(location.as_deref())
+                .is_some_and(|(canonical, location)| canonical.starts_with(location));
+        let path = in_library.unwrap_or(path);
         if holds_library {
             roots.insert((false, library_path.to_path_buf()));
         }
         roots.insert((!path.starts_with(library_path), path));
     }
     roots.into_iter().map(|(_, path)| path).collect()
+}
+
+/// Where a dropped path is: a folder's own path, or a file's name in its
+/// folder's own path — a file link keeps its name, which its track takes.
+fn location_of(path: &Path) -> Option<PathBuf> {
+    if fs::metadata(path).is_ok_and(|metadata| metadata.is_dir()) {
+        return fs::canonicalize(path).ok();
+    }
+    let folder = fs::canonicalize(path.parent()?).ok()?;
+    Some(folder.join(path.file_name()?))
 }
 
 /// The supported audio files at or under `paths`, found by a walk that
@@ -955,13 +979,18 @@ fn destination_holds_identical_content(
     source_size: u64,
     content_hash: &TrackContentHash,
 ) -> bool {
-    let Ok(metadata) = fs::metadata(candidate) else {
+    // Only a track file there holds the track: a link a scan would not
+    // take for one does not.
+    let Ok(Some(occupant)) = sustain_metadata::resolve_track_file(candidate) else {
+        return false;
+    };
+    let Ok(metadata) = fs::metadata(&occupant) else {
         return false;
     };
     if !metadata.is_file() || metadata.len() != source_size {
         return false;
     }
-    matches!(hash_file_content(candidate), Ok(hash) if &hash == content_hash)
+    matches!(hash_file_content(&occupant), Ok(hash) if &hash == content_hash)
 }
 
 fn reference_relative_path_for_source(

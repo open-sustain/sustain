@@ -167,7 +167,7 @@ pub(crate) fn walk_files_with(
             if walk.stopped() {
                 break;
             }
-            walk.link(link);
+            walk.link(link, false);
         }
     }
     if !walk.stopped() {
@@ -212,10 +212,12 @@ impl Walk<'_> {
         self.found.cancelled
     }
 
-    /// A root, walked under the name it was given even if it is a link.
+    /// A root, walked under the name it was given even if it is a link. A
+    /// folder a root links to is walked as if it were where the root
+    /// names it: the names under it go through no link of their own.
     fn root(&mut self, path: PathBuf) {
         match self.filesystem.symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => self.link(path),
+            Ok(metadata) if metadata.file_type().is_symlink() => self.link(path, true),
             _ => self.entry(path, false),
         }
     }
@@ -237,13 +239,14 @@ impl Walk<'_> {
         }
     }
 
-    fn link(&mut self, path: PathBuf) {
+    /// A link at `path`, given as a root if `root`.
+    fn link(&mut self, path: PathBuf, root: bool) {
         let Ok(metadata) = self.filesystem.metadata(&path) else {
             self.found.failures.push(path);
             return;
         };
         if metadata.is_dir() {
-            self.directory(path, &metadata, true);
+            self.directory(path, &metadata, !root);
         } else if metadata.is_file() {
             let Ok(own_path) = self.filesystem.canonicalize(&path) else {
                 self.found.failures.push(path);

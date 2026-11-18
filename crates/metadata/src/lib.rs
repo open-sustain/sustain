@@ -517,12 +517,13 @@ pub fn resolve_track_file(path: &Path) -> io::Result<Option<PathBuf>> {
 }
 
 /// Whether looking up a path failed because it names nothing: there is no
-/// entry by its name, or one of the folders on its way is not a folder.
+/// entry by its name, one of the folders on its way is not a folder, or
+/// its links lead round in a loop.
 pub(crate) fn names_nothing(error: &io::Error) -> bool {
     matches!(
         error.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-    )
+    ) || rustix::io::Errno::from_io_error(error) == Some(rustix::io::Errno::LOOP)
 }
 
 pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {
