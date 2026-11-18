@@ -2072,6 +2072,7 @@ name = "sustain-app-runtime"
 version = "0.9.0-beta.8"
 dependencies = [
  "async-channel",
+ "directories",
  "glib",
  "libc",
  "rustix",
@@ -2173,6 +2174,7 @@ dependencies = [
 name = "sustain-library-store"
 version = "0.9.0-beta.8"
 dependencies = [
+ "directories",
  "rusqlite",
  "serde_json",
  "sha2",

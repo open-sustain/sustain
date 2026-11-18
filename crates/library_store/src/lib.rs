@@ -874,31 +874,24 @@ fn tag_mirror_blob_root(database_path: &Path) -> std::path::PathBuf {
 }
 
 /// Resolve the on-disk SQLite library database path Sustain reads from when
-/// no explicit override is supplied. Returns `None` when neither
-/// `XDG_DATA_HOME` nor `HOME` is set, in which case no default location can be
-/// derived and the caller is expected to surface the failure (Sustain has no
-/// reasonable fallback there).
+/// no explicit override is supplied: `<data_dir>/sustain/library.sqlite`,
+/// resolved by the same XDG rule as the settings file and the cache. An
+/// empty or relative `XDG_DATA_HOME` is ignored, as the base-directory
+/// specification requires, so that variable cannot make the library depend
+/// on the working directory. Returns `None` when no home directory can be
+/// found, in which case the caller is expected to surface the failure.
 ///
 /// Exposed publicly so callers that need the resolved path *before* opening
 /// the store (e.g. the application-startup single-instance lock, which
 /// flocks a sidecar in the same directory) can reuse the same resolution
 /// rule rather than re-deriving it.
 pub fn default_database_path() -> Option<std::path::PathBuf> {
-    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
-        return Some(
-            std::path::PathBuf::from(data_home)
-                .join("sustain")
-                .join("library.sqlite"),
-        );
-    }
-
-    std::env::var_os("HOME").map(|home| {
-        std::path::PathBuf::from(home)
-            .join(".local")
-            .join("share")
+    Some(
+        directories::BaseDirs::new()?
+            .data_dir()
             .join("sustain")
-            .join("library.sqlite")
-    })
+            .join("library.sqlite"),
+    )
 }
 
 #[cfg(test)]

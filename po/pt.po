@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-18 11:12+0100\n"
+"POT-Creation-Date: 2026-11-18 11:28+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Portuguese\n"
@@ -1093,15 +1093,6 @@ msgstr "Agrupamento"
 msgid "High volume"
 msgstr "Volume alto"
 
-#: crates/ui_gtk/src/preferences/online_tab.rs:39
-#, rust-format
-msgid ""
-"Identifies tracks via AcoustID fingerprinting and fills missing fields from "
-"MusicBrainz. Never overwrites a tag that is already set."
-msgstr ""
-"Identifica as faixas por impressão digital AcoustID e preenche os campos em "
-"falta a partir do MusicBrainz. Nunca substitui uma etiqueta já definida."
-
 #: crates/ui_gtk/src/track_info/artwork.rs:236
 #, rust-format
 msgid "Images"
@@ -1463,6 +1454,13 @@ msgstr "Vista principal da biblioteca com o tema claro do sistema"
 msgid "Match"
 msgstr "Satisfazer"
 
+#: crates/ui_gtk/src/preferences/online_tab.rs:39
+#, rust-format
+msgid ""
+"Matches tracks on MusicBrainz by their tags and fills missing fields. Never "
+"overwrites a tag that is already set."
+msgstr "Identifica as faixas no MusicBrainz pelas etiquetas e preenche os campos em falta. Nunca substitui uma etiqueta já definida."
+
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:265
 #, rust-format
 msgid "Maximum"
@@ -1754,7 +1752,9 @@ msgstr "Online"
 msgid ""
 "Online retrieval paused: the library database could not be read or written "
 "({detail})."
-msgstr "Obtenção online em pausa: não foi possível ler ou gravar a base de dados da biblioteca ({detail})."
+msgstr ""
+"Obtenção online em pausa: não foi possível ler ou gravar a base de dados da "
+"biblioteca ({detail})."
 
 #: crates/ui_gtk/src/track_info/multi.rs:54
 #, rust-format
@@ -2110,11 +2110,9 @@ msgstr "Anos de lançamento"
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:33
 msgid ""
-"Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, and "
-"AcoustID"
-msgstr ""
-"Obtenção remota de capas e metadados via MusicBrainz, Cover Art Archive e "
-"AcoustID"
+"Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, "
+"Deezer, the iTunes Search API, and LRClib"
+msgstr "Obtenção remota de capas e metadados via MusicBrainz, Cover Art Archive, Deezer, a API de pesquisa do iTunes e LRClib"
 
 #: crates/app_runtime/src/notifications.rs:983
 #, rust-format

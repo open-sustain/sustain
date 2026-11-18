@@ -452,42 +452,66 @@ fn split_primary_artist(input: &str) -> &str {
 /// recordings, and dropping them would hurt precision more than the
 /// feat-strip helps.
 pub(crate) fn clean_recording_title(input: &str) -> String {
-    let chars: Vec<char> = input.chars().collect();
-    let mut output: Vec<char> = Vec::with_capacity(chars.len());
-    let mut i = 0;
-    while i < chars.len() {
-        let ch = chars[i];
+    // The next closer at or after each byte, found in one backward pass,
+    // so every opener finds its closer without rescanning the title.
+    let bytes = input.as_bytes();
+    let mut next_paren = vec![None; bytes.len() + 1];
+    let mut next_bracket = vec![None; bytes.len() + 1];
+    for (index, byte) in bytes.iter().enumerate().rev() {
+        next_paren[index] = if *byte == b')' {
+            Some(index)
+        } else {
+            next_paren[index + 1]
+        };
+        next_bracket[index] = if *byte == b']' {
+            Some(index)
+        } else {
+            next_bracket[index + 1]
+        };
+    }
+
+    // Where each closer's span stops once its trailing whitespace is
+    // trimmed, worked out once per closer however many openers share it.
+    let mut trimmed_end = vec![None; bytes.len()];
+    let mut span_end = |closer: usize| {
+        *trimmed_end[closer].get_or_insert_with(|| input[..closer].trim_end().len())
+    };
+
+    let mut output = String::with_capacity(input.len());
+    let mut resume_at = 0;
+    for (index, ch) in input.char_indices() {
+        if index < resume_at {
+            continue;
+        }
         let close = match ch {
-            '(' => Some(')'),
-            '[' => Some(']'),
+            '(' => next_paren[index + 1],
+            '[' => next_bracket[index + 1],
             _ => None,
         };
-        if let Some(closer) = close
-            && let Some(end_offset) = chars[i + 1..].iter().position(|c| *c == closer)
+        if let Some(end) = close
+            && is_featured_credit(&input[index + 1..span_end(end).max(index + 1)])
         {
-            let inner: String = chars[i + 1..i + 1 + end_offset].iter().collect();
-            if is_featured_credit(&inner) {
-                i += end_offset + 2;
-                while output.last() == Some(&' ') {
-                    output.pop();
-                }
-                continue;
-            }
+            output.truncate(output.trim_end_matches(' ').len());
+            resume_at = end + 1;
+            continue;
         }
         output.push(ch);
-        i += 1;
     }
-    let result: String = output.into_iter().collect();
-    result.trim().to_owned()
+    output.trim().to_owned()
 }
 
+/// Whether a parenthesised span is a feature credit. Only the span's
+/// leading word is examined, so the cost does not grow with its length.
 fn is_featured_credit(inner: &str) -> bool {
-    let lower = inner.trim().to_ascii_lowercase();
     const PREFIXES: &[&str] = &["feat.", "feat ", "featuring ", "ft.", "ft ", "with "];
-    if matches!(lower.as_str(), "feat" | "ft" | "featuring") {
-        return true;
-    }
-    PREFIXES.iter().any(|prefix| lower.starts_with(prefix))
+    const WORDS: &[&str] = &["feat", "ft", "featuring"];
+    let inner = inner.trim();
+    WORDS.iter().any(|word| inner.eq_ignore_ascii_case(word))
+        || PREFIXES.iter().any(|prefix| {
+            inner
+                .get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        })
 }
 
 /// Construct the Lucene query MusicBrainz expects. Each field is
@@ -645,11 +669,25 @@ fn into_disc_release(
     if raw_tracks.len() as u32 != audio_track_count {
         return None;
     }
-    let tracks = raw_tracks
+    // The ripper and the import panel take each title by its index, so the
+    // list must be in disc order: positions 1 to n, each once. A track
+    // without a position cannot be placed.
+    let mut tracks = raw_tracks
         .iter()
-        .enumerate()
-        .map(|(index, track)| into_disc_track(track, index))
-        .collect();
+        .map(|track| {
+            track
+                .position
+                .map(|position| into_disc_track(track, position))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    tracks.sort_by_key(|track| track.position);
+    if !tracks
+        .iter()
+        .map(|track| track.position)
+        .eq(1..=audio_track_count)
+    {
+        return None;
+    }
     let track_total = medium.track_count.unwrap_or(audio_track_count);
     let disc_total = (media.len() > 1).then_some(media.len() as u32);
     let release_group_mbid = release
@@ -697,7 +735,8 @@ fn into_disc_release(
 /// Choose the medium the disc id is attached to. The disc-id endpoint
 /// usually returns only the matching medium, but a release with several
 /// media can carry the explicit `discs` array; prefer that exact match and
-/// fall back to the sole medium when only one was returned.
+/// fall back to the sole medium when only one was returned and it lists
+/// no disc ids — one that lists others is not the disc in the drive.
 fn select_disc_medium<'a>(media: &'a [DiscRawMedium], disc_id: &str) -> Option<&'a DiscRawMedium> {
     if let Some(medium) = media.iter().find(|medium| {
         medium
@@ -709,13 +748,13 @@ fn select_disc_medium<'a>(media: &'a [DiscRawMedium], disc_id: &str) -> Option<&
     }) {
         return Some(medium);
     }
-    if media.len() == 1 {
-        return media.first();
+    match media {
+        [only] if only.discs.as_deref().is_none_or(<[_]>::is_empty) => Some(only),
+        _ => None,
     }
-    None
 }
 
-fn into_disc_track(track: &DiscRawTrack, index: usize) -> DiscTrack {
+fn into_disc_track(track: &DiscRawTrack, position: u32) -> DiscTrack {
     let recording = track.recording.as_ref();
     let title = track
         .title
@@ -743,7 +782,7 @@ fn into_disc_track(track: &DiscRawTrack, index: usize) -> DiscTrack {
         .map(|recording| recording.id.clone())
         .filter(|value| is_non_blank(value));
     DiscTrack {
-        position: track.position.unwrap_or((index + 1) as u32),
+        position,
         title,
         artist_credit,
         duration_ms,
@@ -835,9 +874,11 @@ fn is_non_blank(value: &str) -> bool {
     !value.trim().is_empty()
 }
 
+/// A search reply always carries its result list, empty or not. One
+/// without it (an error object answered with HTTP 200, a cut-off body)
+/// is an invalid response, not a catalogue with no match.
 #[derive(Deserialize)]
 struct SearchPayload {
-    #[serde(default)]
     recordings: Vec<RawRecording>,
 }
 
@@ -1029,10 +1070,73 @@ mod tests {
     /// the `id` field of every disc-lookup fixture.
     const TEST_DISC_ID: &str = "abcdefghijklmnopqrstuvwxyz._";
 
+    #[test]
+    fn a_search_reply_without_its_recordings_is_not_an_empty_search() {
+        assert!(serde_json::from_str::<SearchPayload>(r#"{"error": "busy"}"#).is_err());
+        let empty = serde_json::from_str::<SearchPayload>(r#"{"count": 0, "recordings": []}"#)
+            .expect("an empty search");
+        assert!(empty.recordings.is_empty());
+    }
+
     fn parse_fixture(json: &str, audio_track_count: u32) -> Vec<DiscRelease> {
         let payload: DiscPayload =
             serde_json::from_str(json).expect("fixture parses as a disc payload");
         parse_disc_releases(payload, TEST_DISC_ID, audio_track_count)
+    }
+
+    fn single_release_fixture() -> serde_json::Value {
+        serde_json::from_str(include_str!("../tests/fixtures/discid_single_release.json"))
+            .expect("fixture is JSON")
+    }
+
+    #[test]
+    fn tracks_listed_out_of_order_are_offered_in_disc_order() {
+        let mut disc = single_release_fixture();
+        let in_order = parse_fixture(&disc.to_string(), 2).remove(0);
+        disc["releases"][0]["media"][0]["tracks"]
+            .as_array_mut()
+            .expect("tracks")
+            .reverse();
+
+        let release = parse_fixture(&disc.to_string(), 2).remove(0);
+
+        assert_eq!(release.tracks, in_order.tracks);
+        assert_eq!(release.tracks[0].position, 1);
+    }
+
+    #[test]
+    fn tracks_without_positions_cannot_be_placed() {
+        for omit_the_field in [false, true] {
+            let mut disc = single_release_fixture();
+            for track in disc["releases"][0]["media"][0]["tracks"]
+                .as_array_mut()
+                .expect("tracks")
+            {
+                let track = track.as_object_mut().expect("track object");
+                if omit_the_field {
+                    track.remove("position");
+                } else {
+                    track.insert("position".to_owned(), serde_json::Value::Null);
+                }
+            }
+            assert!(parse_fixture(&disc.to_string(), 2).is_empty());
+        }
+    }
+
+    #[test]
+    fn tracks_whose_positions_are_not_the_disc_order_are_rejected() {
+        let mut disc = single_release_fixture();
+        disc["releases"][0]["media"][0]["tracks"][1]["position"] = 1.into();
+
+        assert!(parse_fixture(&disc.to_string(), 2).is_empty());
+    }
+
+    #[test]
+    fn a_sole_medium_listing_other_disc_ids_is_not_the_disc_in_the_drive() {
+        let mut disc = single_release_fixture();
+        disc["releases"][0]["media"][0]["discs"][0]["id"] = "zbcdefghijklmnopqrstuvwxyz._".into();
+
+        assert!(parse_fixture(&disc.to_string(), 2).is_empty());
     }
 
     #[test]
@@ -1317,6 +1421,19 @@ mod tests {
         assert_eq!(clean_recording_title("Title [feat. X]"), "Title");
         assert_eq!(clean_recording_title("Track (ft. Guest)"), "Track");
         assert_eq!(clean_recording_title("Track (with Guest)"), "Track");
+    }
+
+    #[test]
+    fn a_long_run_of_openers_is_cleaned_without_rescanning_the_title() {
+        let title = format!("Song {})", "(".repeat(100_000));
+        let spaced = format!("Song {}{})", "(".repeat(50_000), " ".repeat(50_000));
+        let started = std::time::Instant::now();
+        assert_eq!(clean_recording_title(&title), title);
+        assert_eq!(clean_recording_title(&spaced), spaced);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "cleanup is linear in the title length"
+        );
     }
 
     #[test]

@@ -845,9 +845,8 @@ Artwork / Tags / Lyrics — that gate which capabilities a paced
 background worker requests for tracks missing the matching data.
 Providers:
 
-- **Artwork** — MusicBrainz + Cover Art Archive lookup, falling back
-  to AcoustID acoustic fingerprinting when the embedded tag set is
-  too sparse for a confident text match. When Cover Art Archive has
+- **Artwork** — MusicBrainz + Cover Art Archive lookup, matched on
+  the track's tags. When Cover Art Archive has
   no cover, or no match is found, the album is looked up on Deezer,
   then on the iTunes Search API, by album artist and album title;
   a cover is taken only from a result whose artist and title are the

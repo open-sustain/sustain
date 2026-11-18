@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-18 11:12+0100\n"
+"POT-Creation-Date: 2026-11-18 11:28+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1055,13 +1055,6 @@ msgstr ""
 msgid "High volume"
 msgstr ""
 
-#: crates/ui_gtk/src/preferences/online_tab.rs:39
-#, rust-format
-msgid ""
-"Identifies tracks via AcoustID fingerprinting and fills missing fields from "
-"MusicBrainz. Never overwrites a tag that is already set."
-msgstr ""
-
 #: crates/ui_gtk/src/track_info/artwork.rs:236
 #, rust-format
 msgid "Images"
@@ -1402,6 +1395,13 @@ msgstr ""
 #: crates/ui_gtk/src/smart_playlist_editor.rs:334
 #, rust-format
 msgid "Match"
+msgstr ""
+
+#: crates/ui_gtk/src/preferences/online_tab.rs:39
+#, rust-format
+msgid ""
+"Matches tracks on MusicBrainz by their tags and fills missing fields. Never "
+"overwrites a tag that is already set."
 msgstr ""
 
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:265
@@ -2013,8 +2013,8 @@ msgstr ""
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:33
 msgid ""
-"Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, and "
-"AcoustID"
+"Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, "
+"Deezer, the iTunes Search API, and LRClib"
 msgstr ""
 
 #: crates/app_runtime/src/notifications.rs:983

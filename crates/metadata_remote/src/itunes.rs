@@ -70,9 +70,10 @@ fn cover_url(query: &AlbumCoverQuery, response: SearchResponse) -> Option<String
     Some(format!("{base}{COVER_SIZE}"))
 }
 
+/// A search reply always carries its result list, empty or not. One
+/// without it is an invalid response, not an album missing from the store.
 #[derive(Deserialize)]
 struct SearchResponse {
-    #[serde(default)]
     results: Vec<StoreAlbum>,
 }
 
@@ -118,6 +119,14 @@ mod tests {
             }
         ]
     }"#;
+
+    #[test]
+    fn a_reply_without_its_result_list_is_not_an_empty_search() {
+        assert!(serde_json::from_str::<SearchResponse>(r#"{"errorMessage": "busy"}"#).is_err());
+        assert!(
+            serde_json::from_str::<SearchResponse>(r#"{"resultCount": 0, "results": []}"#).is_ok()
+        );
+    }
 
     #[test]
     fn the_full_size_cover_comes_from_the_result_that_is_the_album() {

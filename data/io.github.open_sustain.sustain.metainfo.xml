@@ -30,7 +30,7 @@
       <li>5-star ratings, play count, skip count, last played, last skipped</li>
       <li>Up Next queue with Play Next and Add to Queue</li>
       <li>Real-time search with sortable and customizable columns</li>
-      <li>Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, and AcoustID</li>
+      <li>Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, Deezer, the iTunes Search API, and LRClib</li>
       <li>MPRIS, D-Bus, and media-key integration</li>
       <li>Native light and dark themes that follow the system accent color</li>
       <li>Two library modes: leave files in place, or keep the library organized on disk</li>

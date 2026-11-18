@@ -75,7 +75,7 @@ Key features:
  * Up Next queue (Play Next, Add to Queue)
  * Background BPM / key / waveform analysis with paced resource use
  * Online artwork, tag, and lyrics fetching via MusicBrainz, Cover Art
-   Archive, AcoustID, and LRClib
+   Archive, Deezer, the iTunes Search API, and LRClib
  * Native light and dark themes with the system accent color
  * Two library modes: leave files in place, or keep the library
    organised on disk

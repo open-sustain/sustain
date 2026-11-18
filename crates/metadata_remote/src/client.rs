@@ -290,7 +290,8 @@ impl HttpClient {
             self.record_cool_down(host, cool_down);
         }
         eprintln!(
-            "Sustain: remote {url} returned HTTP {status}; holding the host for {} s",
+            "Sustain: {} returned HTTP {status}; holding the host for {} s",
+            logged_host(url),
             cool_down.as_secs()
         );
         Some(cool_down)
@@ -358,8 +359,29 @@ impl HttpClient {
 
         if !sleep_for.is_zero() {
             thread::sleep(sleep_for);
+            // A reply to another request may have held the host while
+            // this one waited for its turn; the hold wins.
+            self.refuse_if_held(host)?;
         }
         Ok(())
+    }
+
+    fn refuse_if_held(&self, host: &'static str) -> RemoteResult<()> {
+        let states = match self.host_states.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => recover_poisoned(poisoned),
+        };
+        let cool_down = states
+            .get(host)
+            .and_then(|entry| entry.held_until)
+            .map_or(Duration::ZERO, |held_until| {
+                held_until.saturating_duration_since(Instant::now())
+            });
+        if cool_down.is_zero() {
+            Ok(())
+        } else {
+            Err(RemoteError::RateLimited { cool_down })
+        }
     }
 }
 
@@ -396,9 +418,15 @@ fn map_ureq_error(error: ureq::Error, url: &str) -> RemoteError {
         // Transport-level failures (DNS, TLS, connect refused, etc.).
         // Log the underlying ureq error so diagnosis isn't blocked by
         // the coarse user-facing `RemoteError::Network` value — this
-        // is the only place provider-side detail surfaces.
+        // is the only place provider-side detail surfaces. The log names
+        // the host only: a lookup URL carries the track's artist, title
+        // and album.
         other => {
-            eprintln!("Sustain: remote request to {url} failed: {other:?}");
+            eprintln!(
+                "Sustain: request to {} failed: {}",
+                logged_host(url),
+                transport_failure_kind(&other)
+            );
             RemoteError::Network
         }
     }
@@ -431,15 +459,40 @@ fn host_from_url(url: &str) -> Option<&'static str> {
 }
 
 fn url_matches_host(url: &str, host: &str) -> bool {
+    url_host(url).eq_ignore_ascii_case(host)
+}
+
+/// What kind of transport failure `error` is, for the log. Fixed text: a
+/// ureq message can quote the request URI or a redirect's `Location`.
+fn transport_failure_kind(error: &ureq::Error) -> String {
+    match error {
+        ureq::Error::Io(io_error) => format!("I/O error ({:?})", io_error.kind()),
+        ureq::Error::HostNotFound => "host not found".to_owned(),
+        ureq::Error::ConnectionFailed => "connection failed".to_owned(),
+        ureq::Error::Timeout(_) => "timed out".to_owned(),
+        ureq::Error::TooManyRedirects | ureq::Error::RedirectFailed => "redirect failed".to_owned(),
+        ureq::Error::Protocol(_) => "HTTP protocol error".to_owned(),
+        ureq::Error::BadUri(_) | ureq::Error::Http(_) => "invalid request".to_owned(),
+        _ => "transport failure".to_owned(),
+    }
+}
+
+/// The host a log line names for `url`, never the URL itself: a lookup's
+/// path and query carry the track's artist, title and album.
+fn logged_host(url: &str) -> &str {
+    url_host(url)
+}
+
+/// The host part of `url`'s authority: no user info, no port.
+fn url_host(url: &str) -> &str {
     let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    let authority = after_scheme.split(['/', '?']).next().unwrap_or("");
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
     let authority = authority
         .split_once('@')
         .map_or(authority, |(_, rest)| rest);
-    let authority = authority
+    authority
         .split_once(':')
-        .map_or(authority, |(host, _)| host);
-    authority.eq_ignore_ascii_case(host)
+        .map_or(authority, |(host, _)| host)
 }
 
 fn recover_poisoned<T>(poisoned: std::sync::PoisonError<MutexGuard<'_, T>>) -> MutexGuard<'_, T> {
@@ -478,6 +531,24 @@ mod tests {
             host_from_url("https://api.acoustid.org/v2/lookup"),
             Some("api.acoustid.org")
         );
+    }
+
+    #[test]
+    fn a_logged_host_carries_none_of_the_lookup() {
+        assert_eq!(
+            logged_host("https://lrclib.net/api/get?artist_name=Artist&track_name=Title"),
+            "lrclib.net"
+        );
+        assert_eq!(
+            logged_host("https://user@cdn.example.org:8443/cover.jpg"),
+            "cdn.example.org"
+        );
+    }
+
+    #[test]
+    fn a_transport_failure_is_logged_without_the_uri_it_quotes() {
+        let error = ureq::Error::BadUri("https://lrclib.net/api/get?track_name=Title".to_owned());
+        assert_eq!(transport_failure_kind(&error), "invalid request");
     }
 
     #[test]
@@ -582,6 +653,15 @@ mod tests {
         assert_eq!(parse_retry_after(&headers), None);
     }
 
+    fn next_request_at(client: &HttpClient, host: &str) -> Option<Instant> {
+        client
+            .host_states
+            .lock()
+            .expect("lock")
+            .get(host)
+            .and_then(|state| state.next_request_at)
+    }
+
     fn held_until(client: &HttpClient, host: &str) -> Option<Instant> {
         client
             .host_states
@@ -637,6 +717,29 @@ mod tests {
         thread::sleep(Duration::from_millis(30));
         assert_eq!(client.take_turn("https://lrclib.net/api/get"), Ok(()));
         assert_eq!(held_until(&client, "lrclib.net"), None);
+    }
+
+    #[test]
+    fn a_request_waiting_for_its_turn_is_refused_when_the_host_is_held_meanwhile() {
+        let client = HttpClient::new(HttpClientConfig {
+            user_agent: "Sustain-test/0".to_owned(),
+        });
+        assert_eq!(client.take_turn("https://musicbrainz.org/ws/2/"), Ok(()));
+        let first_turn = next_request_at(&client, "musicbrainz.org");
+        thread::scope(|scope| {
+            let waiting = scope.spawn(|| client.take_turn("https://musicbrainz.org/ws/2/"));
+            // Once the second request has reserved its turn it sleeps out
+            // the minimum gap; a 429 to another request holds the host
+            // before it wakes.
+            while next_request_at(&client, "musicbrainz.org") == first_turn {
+                thread::yield_now();
+            }
+            client.record_cool_down("musicbrainz.org", Duration::from_secs(30));
+            assert!(matches!(
+                waiting.join().expect("the waiting request returns"),
+                Err(RemoteError::RateLimited { .. })
+            ));
+        });
     }
 
     #[test]

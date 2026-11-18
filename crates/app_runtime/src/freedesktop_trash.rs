@@ -202,17 +202,12 @@ fn filesystem_topdir(path: &Path, source_device: u64) -> io::Result<PathBuf> {
     }
 }
 
+/// `$XDG_DATA_HOME/Trash`. An empty or relative `XDG_DATA_HOME` is
+/// ignored, as the base-directory specification requires.
 fn home_trash_directory() -> io::Result<PathBuf> {
-    if let Some(data_home) = env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(data_home).join("Trash"));
-    }
-    if let Some(home) = env::var_os("HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(home).join(".local/share/Trash"));
-    }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "neither XDG_DATA_HOME nor HOME is configured",
-    ))
+    directories::BaseDirs::new()
+        .map(|dirs| dirs.data_dir().join("Trash"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory is known"))
 }
 
 fn create_trash_info(

@@ -15,8 +15,10 @@
 //! the runtime. Nothing here blocks on slow hardware, and callers run it
 //! lazily (never at startup).
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use sustain_domain::{DeviceKind, DeviceRelativePath, SyncDevice, SyncDeviceId};
@@ -96,7 +98,7 @@ pub fn write_marker(mount: &Path, id: &SyncDeviceId) -> std::io::Result<()> {
 
 /// A mounted filesystem entry from `/proc/mounts`.
 struct MountInfo {
-    device: String,
+    device: PathBuf,
     mount_point: PathBuf,
 }
 
@@ -104,30 +106,39 @@ struct MountInfo {
 /// user-plugged storage (USB sticks, SD cards): a real `/dev` block
 /// device mounted under `/media`, `/run/media`, or `/mnt`.
 fn removable_mounts() -> Vec<MountInfo> {
-    let Ok(contents) = fs::read_to_string("/proc/mounts") else {
+    // The kernel's mount table holds raw path bytes, which need not be
+    // UTF-8; it is parsed as bytes so one such path hides no other mount.
+    let Ok(contents) = fs::read("/proc/mounts") else {
         return Vec::new();
     };
-    let mut mounts = Vec::new();
-    for line in contents.lines() {
-        let mut fields = line.split_whitespace();
-        let Some(device) = fields.next() else {
-            continue;
-        };
-        let Some(raw_mount) = fields.next() else {
-            continue;
-        };
-        if !device.starts_with("/dev/") {
-            continue;
-        }
-        let mount_point = PathBuf::from(decode_mount_escapes(raw_mount));
-        if is_removable_mount(&mount_point) {
-            mounts.push(MountInfo {
-                device: device.to_owned(),
+    parse_removable_mounts(&contents)
+}
+
+fn parse_removable_mounts(contents: &[u8]) -> Vec<MountInfo> {
+    contents
+        .split(|&byte| byte == b'\n')
+        .filter_map(|line| {
+            // Fields are separated by single spaces; the kernel escapes
+            // space, tab, newline and backslash inside a field, but leaves
+            // other bytes, carriage return included, as they are.
+            let mut fields = line.split(|&byte| byte == b' ');
+            let device = fields.next()?;
+            let raw_mount = fields.next()?;
+            if !device.starts_with(b"/dev/") {
+                return None;
+            }
+            let mount_point = mount_table_path(raw_mount);
+            is_removable_mount(&mount_point).then(|| MountInfo {
+                device: mount_table_path(device),
                 mount_point,
-            });
-        }
-    }
-    mounts
+            })
+        })
+        .collect()
+}
+
+/// A path field of the mount table, its octal escapes decoded.
+fn mount_table_path(field: &[u8]) -> PathBuf {
+    PathBuf::from(OsString::from_vec(decode_mount_escapes(field)))
 }
 
 fn is_removable_mount(mount: &Path) -> bool {
@@ -139,30 +150,34 @@ fn is_removable_mount(mount: &Path) -> bool {
 }
 
 /// Decode `/proc/mounts` octal escapes (`\040` space, `\011` tab, …).
-fn decode_mount_escapes(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut out = String::with_capacity(raw.len());
+/// Each escape stands for one byte of the path, not one character.
+fn decode_mount_escapes(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\\'
-            && i + 3 < bytes.len()
-            && bytes[i + 1..i + 4].iter().all(u8::is_ascii_digit)
+    while i < raw.len() {
+        if raw[i] == b'\\'
+            && let Some(byte) = raw.get(i + 1..i + 4).and_then(octal_byte)
         {
-            let octal = &raw[i + 1..i + 4];
-            if let Ok(code) = u8::from_str_radix(octal, 8) {
-                out.push(code as char);
-                i += 4;
-                continue;
-            }
+            out.push(byte);
+            i += 4;
+            continue;
         }
-        out.push(bytes[i] as char);
+        out.push(raw[i]);
         i += 1;
     }
     out
 }
 
+/// The byte three octal digits spell, if they spell one.
+fn octal_byte(digits: &[u8]) -> Option<u8> {
+    let value = digits.iter().try_fold(0_u16, |value, digit| {
+        matches!(digit, b'0'..=b'7').then(|| value * 8 + u16::from(digit - b'0'))
+    })?;
+    u8::try_from(value).ok()
+}
+
 /// Look up a block device's filesystem UUID via `/dev/disk/by-uuid`.
-fn volume_id_for_device(device: &str) -> Option<String> {
+fn volume_id_for_device(device: &Path) -> Option<String> {
     let target = fs::canonicalize(device).ok()?;
     let entries = fs::read_dir("/dev/disk/by-uuid").ok()?;
     for entry in entries.flatten() {
@@ -183,12 +198,10 @@ pub fn discover(known: &[SyncDevice]) -> Vec<ConnectedDevice> {
     let mut devices = Vec::new();
     for mount in removable_mounts() {
         let volume_id = volume_id_for_device(&mount.device);
-        let label = mount
-            .mount_point
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("USB Device")
-            .to_owned();
+        let label = mount.mount_point.file_name().map_or_else(
+            || "USB Device".to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
 
         let marker = read_marker(&mount.mount_point);
         let (id, is_known, has_marker) = if let Some(id) = marker {
@@ -231,6 +244,8 @@ pub fn discover(known: &[SyncDevice]) -> Vec<ConnectedDevice> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::ffi::OsStrExt;
+
     use super::*;
 
     #[test]
@@ -259,8 +274,52 @@ mod tests {
 
     #[test]
     fn decodes_mount_escapes() {
-        assert_eq!(decode_mount_escapes("/media/My\\040Disk"), "/media/My Disk");
-        assert_eq!(decode_mount_escapes("/mnt/plain"), "/mnt/plain");
+        assert_eq!(
+            decode_mount_escapes(b"/media/My\\040Disk"),
+            b"/media/My Disk"
+        );
+        assert_eq!(decode_mount_escapes(b"/mnt/plain"), b"/mnt/plain");
+        assert_eq!(decode_mount_escapes(b"/mnt/not\\9ab"), b"/mnt/not\\9ab");
+    }
+
+    #[test]
+    fn a_non_ascii_mount_point_keeps_its_bytes() {
+        let table = "/dev/sdb1 /media/user/Café vfat rw 0 0\n".as_bytes();
+        let mounts = parse_removable_mounts(table);
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].mount_point, Path::new("/media/user/Café"));
+        assert_eq!(mounts[0].device, Path::new("/dev/sdb1"));
+    }
+
+    #[test]
+    fn an_escaped_byte_above_ascii_is_one_byte_of_the_path() {
+        // The kernel may escape the bytes of "é" (0xC3 0xA9) as octal.
+        let table = b"/dev/sdb1 /media/user/Caf\\303\\251 vfat rw 0 0\n";
+        let mounts = parse_removable_mounts(table);
+        assert_eq!(mounts[0].mount_point, Path::new("/media/user/Café"));
+    }
+
+    #[test]
+    fn a_mount_point_keeps_bytes_the_kernel_leaves_unescaped() {
+        let table = b"/dev/sdb1 /media/Stick\r\xff vfat rw 0 0\n";
+        let mounts = parse_removable_mounts(table);
+        assert_eq!(
+            mounts[0].mount_point.as_os_str().as_bytes(),
+            b"/media/Stick\r\xff"
+        );
+    }
+
+    #[test]
+    fn a_non_utf8_mount_hides_no_other_mount() {
+        let mut table = b"/dev/sdb1 /media/user/\xff vfat rw 0 0\n".to_vec();
+        table.extend_from_slice(b"/dev/sdc1 /media/user/Stick vfat rw 0 0\n");
+        let mounts = parse_removable_mounts(&table);
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(
+            mounts[0].mount_point.as_os_str().as_bytes(),
+            b"/media/user/\xff"
+        );
+        assert_eq!(mounts[1].mount_point, Path::new("/media/user/Stick"));
     }
 
     #[test]

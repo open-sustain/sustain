@@ -36,8 +36,8 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
     let tags_row = build_switch_row(
         &gettext("Fetch missing tags"),
         &gettext(
-            "Identifies tracks via AcoustID fingerprinting and fills missing fields \
-         from MusicBrainz. Never overwrites a tag that is already set.",
+            "Matches tracks on MusicBrainz by their tags and fills missing fields. \
+         Never overwrites a tag that is already set.",
         ),
         initial.tags,
     );

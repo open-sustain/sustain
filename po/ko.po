@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-18 11:12+0100\n"
+"POT-Creation-Date: 2026-11-18 11:28+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Korean\n"
@@ -1074,15 +1074,6 @@ msgstr "그룹"
 msgid "High volume"
 msgstr "높은 볼륨"
 
-#: crates/ui_gtk/src/preferences/online_tab.rs:39
-#, rust-format
-msgid ""
-"Identifies tracks via AcoustID fingerprinting and fills missing fields from "
-"MusicBrainz. Never overwrites a tag that is already set."
-msgstr ""
-"AcoustID 지문으로 트랙을 식별하고 MusicBrainz에서 빈 항목을 채웁니다. 이미 설"
-"정된 태그는 덮어쓰지 않습니다."
-
 #: crates/ui_gtk/src/track_info/artwork.rs:236
 #, rust-format
 msgid "Images"
@@ -1429,6 +1420,13 @@ msgstr "시스템 밝은 테마의 기본 보관함 보기"
 msgid "Match"
 msgstr "다음 규칙 중"
 
+#: crates/ui_gtk/src/preferences/online_tab.rs:39
+#, rust-format
+msgid ""
+"Matches tracks on MusicBrainz by their tags and fills missing fields. Never "
+"overwrites a tag that is already set."
+msgstr "태그로 MusicBrainz에서 트랙을 찾아 비어 있는 필드를 채웁니다. 이미 설정된 태그는 덮어쓰지 않습니다."
+
 #: crates/ui_gtk/src/preferences/analysis_tab.rs:265
 #, rust-format
 msgid "Maximum"
@@ -1716,7 +1714,9 @@ msgstr "온라인"
 msgid ""
 "Online retrieval paused: the library database could not be read or written "
 "({detail})."
-msgstr "온라인 가져오기 일시 중지됨: 보관함 데이터베이스를 읽거나 쓸 수 없습니다({detail})."
+msgstr ""
+"온라인 가져오기 일시 중지됨: 보관함 데이터베이스를 읽거나 쓸 수 없습니다"
+"({detail})."
 
 #: crates/ui_gtk/src/track_info/multi.rs:54
 #, rust-format
@@ -2052,11 +2052,9 @@ msgstr "발매 연도"
 
 #: data/io.github.open_sustain.sustain.metainfo.xml:33
 msgid ""
-"Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, and "
-"AcoustID"
-msgstr ""
-"MusicBrainz, Cover Art Archive, AcoustID를 통한 원격 아트워크 및 메타데이터 "
-"가져오기"
+"Remote artwork and metadata fetching via MusicBrainz, Cover Art Archive, "
+"Deezer, the iTunes Search API, and LRClib"
+msgstr "MusicBrainz, Cover Art Archive, Deezer, iTunes Search API, LRClib을 통한 원격 아트워크 및 메타데이터 가져오기"
 
 #: crates/app_runtime/src/notifications.rs:983
 #, rust-format

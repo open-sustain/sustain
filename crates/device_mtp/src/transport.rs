@@ -12,7 +12,7 @@
 //! and recopies. All gio objects are created and used on the calling
 //! thread (the sync worker) and never cross threads.
 
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 
 use gio::prelude::*;
@@ -54,7 +54,6 @@ impl MtpTransport {
         source_path: &Path,
         expected: &SourceFileStat,
     ) -> io::Result<()> {
-        use std::io::Read;
         let mut buffer = vec![0u8; COPY_CHUNK_BYTES];
         loop {
             let read = source.read(&mut buffer)?;
@@ -140,10 +139,21 @@ impl DeviceTransport for MtpTransport {
                 format!("device file exceeds {limit} bytes: {path}"),
             ));
         }
-        let (bytes, _etag) = file
-            .load_contents(Cancellable::NONE)
-            .map_err(map_glib_error)?;
-        String::from_utf8(bytes.to_vec()).map_err(|_| {
+        // The size query and the transfer are separate requests to the
+        // device: the limit is enforced on the bytes actually read.
+        let mut bytes = Vec::new();
+        file.read(Cancellable::NONE)
+            .map_err(map_glib_error)?
+            .into_read()
+            .take(limit.saturating_add(1))
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > limit {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("device file exceeds {limit} bytes: {path}"),
+            ));
+        }
+        String::from_utf8(bytes).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("device file is not UTF-8: {path}"),
@@ -393,4 +403,35 @@ fn is_not_found(error: &glib::Error) -> bool {
 
 fn is_exists(error: &glib::Error) -> bool {
     error.matches(gio::IOErrorEnum::Exists)
+}
+
+#[cfg(test)]
+mod tests {
+    use sustain_device_sync::{DeviceTransport, MtpTarget};
+    use sustain_domain::DeviceRelativePath;
+
+    use super::MtpTransport;
+
+    /// A transport over a local directory: gio serves `file://` through the
+    /// same `GFile` calls it serves an MTP storage through.
+    fn local_transport(root: &std::path::Path) -> MtpTransport {
+        std::fs::create_dir(root.join("storage")).expect("storage directory");
+        MtpTransport::open(&MtpTarget {
+            volume_uri: glib::filename_to_uri(root, None)
+                .expect("file URI")
+                .to_string(),
+            storage: "storage".to_owned(),
+        })
+    }
+
+    #[test]
+    fn a_device_file_within_its_limit_is_read_whole() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let transport = local_transport(root.path());
+        std::fs::write(root.path().join("storage/marker"), "abc").expect("marker");
+        let path = DeviceRelativePath::new("marker").expect("path");
+
+        assert_eq!(transport.read_to_string(&path, 3).expect("read"), "abc");
+        assert!(transport.read_to_string(&path, 2).is_err());
+    }
 }
