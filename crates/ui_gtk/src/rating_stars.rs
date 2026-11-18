@@ -11,6 +11,12 @@
 //! The stars take the widget's CSS `color` (node name `rating-stars`):
 //! filled stars in that colour, empty stars dimmed against it, so a
 //! selected row's foreground colour carries over to its stars.
+//!
+//! The widget is a slider to assistive technology, valued from 0 (unrated)
+//! to five stars, which assistive technology can also set. An owner that
+//! edits one rating, such as Get Info, builds it
+//! [keyboard operable](RatingStars::keyboard_operable); the track table's
+//! hundreds of ratings carry no key controller.
 
 use std::cell::Cell;
 use std::sync::OnceLock;
@@ -20,6 +26,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene};
 use sustain_app_runtime::Rating;
+use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 
 const FILLED_STAR: &str = "★";
 const EMPTY_STAR: &str = "☆";
@@ -33,6 +40,11 @@ const MIN_STAR_SLOT_WIDTH: i32 = 16;
 const EMPTY_STAR_OPACITY: f32 = 0.4;
 
 const RATING_CHOSEN_SIGNAL: &str = "rating-chosen";
+
+/// Ask for the rating `step` stars away from the current one (an `i32`).
+const STEP_ACTION: &str = "rating.step";
+/// Ask for a rating of the given number of stars (a `u8`).
+const SET_ACTION: &str = "rating.set";
 
 mod imp {
     use super::*;
@@ -49,9 +61,30 @@ mod imp {
         const NAME: &'static str = "SustainRatingStars";
         type Type = super::RatingStars;
         type ParentType = gtk::Widget;
+        type Interfaces = (gtk::AccessibleRange,);
 
         fn class_init(klass: &mut Self::Class) {
             klass.set_css_name("rating-stars");
+            klass.set_accessible_role(gtk::AccessibleRole::Slider);
+
+            klass.install_action(
+                STEP_ACTION,
+                Some(glib::VariantTy::INT32),
+                |stars, _, step| {
+                    if let Some(step) = step.and_then(i32::from_variant) {
+                        stars.choose(rating_after_step(stars.imp().stars.get(), step));
+                    }
+                },
+            );
+            klass.install_action(
+                SET_ACTION,
+                Some(glib::VariantTy::BYTE),
+                |stars, _, rating| {
+                    if let Some(rating) = rating.and_then(u8::from_variant) {
+                        stars.choose(rating.min(Rating::MAX_STARS));
+                    }
+                },
+            );
         }
     }
 
@@ -69,7 +102,26 @@ mod imp {
 
         fn constructed(&self) {
             self.parent_constructed();
-            self.obj().install_click_gesture();
+            let obj = self.obj();
+            obj.update_property(&[
+                gtk::accessible::Property::ValueMin(0.0),
+                gtk::accessible::Property::ValueMax(f64::from(Rating::MAX_STARS)),
+            ]);
+            obj.announce_rating();
+            obj.install_click_gesture();
+        }
+    }
+
+    impl AccessibleImpl for RatingStars {}
+
+    impl AccessibleRangeImpl for RatingStars {
+        /// Assistive technology sets the slider as a click would: by
+        /// asking the owner for the rating. It is set when the owner
+        /// shows the rating asked for.
+        fn set_current_value(&self, value: f64) -> bool {
+            let stars = stars_for_accessible_value(value);
+            self.obj().choose(stars);
+            self.stars.get() == stars
         }
     }
 
@@ -93,12 +145,23 @@ mod imp {
 glib::wrapper! {
     pub struct RatingStars(ObjectSubclass<imp::RatingStars>)
         @extends gtk::Widget,
-        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+        @implements gtk::Accessible, gtk::AccessibleRange, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl RatingStars {
     pub(crate) fn new() -> Self {
         glib::Object::new()
+    }
+
+    /// A rating that takes the keyboard, for an owner that edits one
+    /// rating: it is focusable, the arrow keys and `+`/`-` step it, the
+    /// digit keys set it, End sets the maximum, and Home, Backspace or
+    /// Delete clear it.
+    pub(crate) fn keyboard_operable() -> Self {
+        let stars = Self::new();
+        stars.set_focusable(true);
+        stars.add_controller(keyboard_shortcuts());
+        stars
     }
 
     pub(crate) fn rating(&self) -> Rating {
@@ -107,8 +170,35 @@ impl RatingStars {
 
     pub(crate) fn set_rating(&self, rating: Rating) {
         if self.imp().stars.replace(rating.stars()) != rating.stars() {
+            self.announce_rating();
             self.queue_draw();
         }
+    }
+
+    /// Publish the shown rating as the slider's accessible value.
+    fn announce_rating(&self) {
+        let stars = self.imp().stars.get();
+        let text = if stars == 0 {
+            gettext("Unrated")
+        } else {
+            tr_format!(
+                ngettext(
+                    "{count} star",
+                    "{count} stars",
+                    plural_count(usize::from(stars))
+                ),
+                count = stars
+            )
+        };
+        self.update_property(&[
+            gtk::accessible::Property::ValueNow(f64::from(stars)),
+            gtk::accessible::Property::ValueText(&text),
+        ]);
+    }
+
+    /// Ask the owner for a rating of `stars`, as a click would.
+    fn choose(&self, stars: u8) {
+        self.emit_by_name::<()>(RATING_CHOSEN_SIGNAL, &[&stars]);
     }
 
     /// Calls `chosen` with the rating a click on a star asks for: that
@@ -141,6 +231,10 @@ impl RatingStars {
                 return;
             };
             gesture.set_state(gtk::EventSequenceState::Claimed);
+            if stars.is_focusable() {
+                // A click leaves the keyboard where the pointer was.
+                stars.grab_focus();
+            }
             stars.imp().pressed_star.set(stars.star_at(x));
         });
         gesture.connect_released(|gesture, _n_press, x, y| {
@@ -153,8 +247,7 @@ impl RatingStars {
                 && released_inside
                 && stars.star_at(x) == Some(star)
             {
-                let rating = rating_after_click(stars.imp().stars.get(), star);
-                stars.emit_by_name::<()>(RATING_CHOSEN_SIGNAL, &[&rating]);
+                stars.choose(rating_after_click(stars.imp().stars.get(), star));
             }
         });
         gesture.connect_cancel(|gesture, _sequence| {
@@ -211,6 +304,75 @@ impl RatingStars {
     }
 }
 
+/// The key bindings of [`RatingStars::keyboard_operable`]. They live on
+/// that instance rather than the class: GTK gives every instance of a
+/// class with shortcuts its own shortcut controller, and the track table
+/// realizes hundreds of ratings that never take the keyboard.
+fn keyboard_shortcuts() -> gtk::ShortcutController {
+    let controller = gtk::ShortcutController::new();
+    let bind = |key: gdk::Key, action: &str, argument: glib::Variant| {
+        controller.add_shortcut(gtk::Shortcut::with_arguments(
+            Some(gtk::KeyvalTrigger::new(key, gdk::ModifierType::empty())),
+            Some(gtk::NamedAction::new(action)),
+            &argument,
+        ));
+    };
+    for key in [
+        gdk::Key::Right,
+        gdk::Key::Up,
+        gdk::Key::KP_Right,
+        gdk::Key::KP_Up,
+        gdk::Key::plus,
+        gdk::Key::KP_Add,
+    ] {
+        bind(key, STEP_ACTION, 1_i32.to_variant());
+    }
+    for key in [
+        gdk::Key::Left,
+        gdk::Key::Down,
+        gdk::Key::KP_Left,
+        gdk::Key::KP_Down,
+        gdk::Key::minus,
+        gdk::Key::KP_Subtract,
+    ] {
+        bind(key, STEP_ACTION, (-1_i32).to_variant());
+    }
+    for key in [gdk::Key::Home, gdk::Key::BackSpace, gdk::Key::Delete] {
+        bind(key, SET_ACTION, 0_u8.to_variant());
+    }
+    bind(gdk::Key::End, SET_ACTION, Rating::MAX_STARS.to_variant());
+    let digits = [
+        (gdk::Key::_0, gdk::Key::KP_0),
+        (gdk::Key::_1, gdk::Key::KP_1),
+        (gdk::Key::_2, gdk::Key::KP_2),
+        (gdk::Key::_3, gdk::Key::KP_3),
+        (gdk::Key::_4, gdk::Key::KP_4),
+        (gdk::Key::_5, gdk::Key::KP_5),
+    ];
+    for (stars, (key, keypad_key)) in (0_u8..).zip(digits) {
+        bind(key, SET_ACTION, stars.to_variant());
+        bind(keypad_key, SET_ACTION, stars.to_variant());
+    }
+    controller
+}
+
+/// The rating an accessible slider value asks for: the nearest whole
+/// number of stars, within zero to the maximum.
+fn stars_for_accessible_value(value: f64) -> u8 {
+    if value.is_nan() {
+        return 0;
+    }
+    // Clamped to 0..=MAX_STARS first, so the cast is exact.
+    value.round().clamp(0.0, f64::from(Rating::MAX_STARS)) as u8
+}
+
+/// The rating `step` stars away from `current_stars`, within zero to the
+/// maximum.
+fn rating_after_step(current_stars: u8, step: i32) -> u8 {
+    let stepped = i32::from(current_stars).saturating_add(step);
+    u8::try_from(stepped.clamp(0, i32::from(Rating::MAX_STARS))).unwrap_or(0)
+}
+
 /// The rating a click on `clicked_star` asks for, given the current
 /// rating: clicking the star the rating ends at clears it.
 fn rating_after_click(current_stars: u8, clicked_star: u8) -> u8 {
@@ -227,6 +389,117 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+
+    #[test]
+    fn stepping_stays_between_unrated_and_the_maximum() {
+        assert_eq!(rating_after_step(3, 1), 4);
+        assert_eq!(rating_after_step(3, -1), 2);
+        assert_eq!(rating_after_step(Rating::MAX_STARS, 1), Rating::MAX_STARS);
+        assert_eq!(rating_after_step(0, -1), 0);
+    }
+
+    /// Presses `key`, with no modifier held, on `stars` as its shortcut
+    /// controller would: runs the action bound to that key, with its
+    /// arguments.
+    fn press(stars: &RatingStars, key: gdk::Key) {
+        let controllers = stars.observe_controllers();
+        let shortcut = (0..controllers.n_items())
+            .filter_map(|index| {
+                controllers
+                    .item(index)
+                    .and_downcast::<gtk::ShortcutController>()
+            })
+            .flat_map(|controller| {
+                (0..controller.n_items())
+                    .filter_map(|index| controller.item(index).and_downcast::<gtk::Shortcut>())
+                    .collect::<Vec<_>>()
+            })
+            .find(|shortcut| {
+                shortcut
+                    .trigger()
+                    .and_downcast::<gtk::KeyvalTrigger>()
+                    .is_some_and(|trigger| {
+                        trigger.keyval() == key && trigger.modifiers().is_empty()
+                    })
+            })
+            .expect("a shortcut is bound to the key");
+        let action = shortcut
+            .action()
+            .and_downcast::<gtk::NamedAction>()
+            .expect("a rating key names a rating action");
+        stars
+            .activate_action(&action.action_name(), shortcut.arguments().as_ref())
+            .expect("the rating action exists");
+    }
+
+    #[test]
+    fn the_keys_ask_for_the_stepped_or_typed_rating() {
+        crate::test_support::with_gtk(|| {
+            let stars = RatingStars::keyboard_operable();
+            stars.set_rating(Rating::new(3).expect("valid rating"));
+            stars.connect_rating_chosen(RatingStars::set_rating);
+            let shown_after = |key: gdk::Key| {
+                press(&stars, key);
+                stars.rating().stars()
+            };
+
+            assert!(stars.is_focusable());
+            assert_eq!(shown_after(gdk::Key::Right), 4);
+            assert_eq!(shown_after(gdk::Key::KP_Add), 5);
+            assert_eq!(shown_after(gdk::Key::Up), 5, "the maximum holds");
+            assert_eq!(shown_after(gdk::Key::Left), 4);
+            assert_eq!(shown_after(gdk::Key::minus), 3);
+            assert_eq!(shown_after(gdk::Key::_2), 2);
+            assert_eq!(shown_after(gdk::Key::End), 5);
+            assert_eq!(shown_after(gdk::Key::KP_4), 4);
+            assert_eq!(shown_after(gdk::Key::BackSpace), 0);
+            assert_eq!(shown_after(gdk::Key::Down), 0, "unrated holds");
+        });
+    }
+
+    #[test]
+    fn a_table_rating_carries_no_key_controller() {
+        crate::test_support::with_gtk(|| {
+            let stars = RatingStars::new();
+            let controllers = stars.observe_controllers();
+            let has_shortcuts = (0..controllers.n_items()).any(|index| {
+                controllers
+                    .item(index)
+                    .and_downcast::<gtk::ShortcutController>()
+                    .is_some()
+            });
+            assert!(!has_shortcuts);
+            assert!(!stars.is_focusable());
+        });
+    }
+
+    #[test]
+    fn assistive_technology_sets_the_rating_through_the_slider() {
+        crate::test_support::with_gtk(|| {
+            let stars = RatingStars::new();
+            stars.connect_rating_chosen(RatingStars::set_rating);
+            assert!(stars.is::<gtk::AccessibleRange>());
+
+            assert!(stars.imp().set_current_value(3.6));
+            assert_eq!(stars.rating().stars(), 4);
+            assert!(stars.imp().set_current_value(9.0));
+            assert_eq!(stars.rating().stars(), Rating::MAX_STARS);
+            assert!(stars.imp().set_current_value(-2.0));
+            assert_eq!(stars.rating().stars(), 0);
+        });
+    }
+
+    #[test]
+    fn a_rating_its_owner_refuses_is_not_reported_as_set() {
+        crate::test_support::with_gtk(|| {
+            let stars = RatingStars::new();
+            stars.set_rating(Rating::new(2).expect("valid rating"));
+            stars.connect_rating_chosen(|_stars, _refused| {});
+
+            assert!(!stars.imp().set_current_value(4.0));
+            assert_eq!(stars.rating().stars(), 2);
+        });
+    }
 
     #[test]
     fn clicking_a_star_rates_up_to_it() {

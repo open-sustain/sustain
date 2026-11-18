@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
+use std::cell::RefCell;
 use std::path::PathBuf;
 
 use gtk::prelude::*;
@@ -18,9 +19,47 @@ mod analysis_tab;
 mod encoding_tab;
 mod library_tab;
 mod online_tab;
+mod setting_scale;
 mod shuffle_tab;
 mod switch_row;
 mod views_tab;
+
+thread_local! {
+    /// The open Preferences window, if any. Preferences is one window:
+    /// its tabs install the runtime's single-slot observers (library task,
+    /// Smart Shuffle state), so a second window would take them over from
+    /// the first. Cleared when the window closes.
+    static OPEN_PREFERENCES: RefCell<Option<OpenPreferences>> = const { RefCell::new(None) };
+}
+
+/// The open Preferences window and the tab strip that switches its pages.
+#[derive(Clone)]
+struct OpenPreferences {
+    window: gtk::Window,
+    tabs: PreferencesTabs,
+}
+
+/// The grouped tab buttons, by the page each shows.
+#[derive(Clone)]
+struct PreferencesTabs {
+    buttons: Vec<(&'static str, gtk::ToggleButton)>,
+}
+
+impl PreferencesTabs {
+    /// Show the page named `tab`, or Library for a name that is not a
+    /// tab. Activating the grouped toggle fires its handler, which sets
+    /// the visible stack page.
+    fn show(&self, tab: &str) {
+        let button = self
+            .buttons
+            .iter()
+            .find(|(name, _)| *name == tab)
+            .or_else(|| self.buttons.iter().find(|(name, _)| *name == TAB_LIBRARY));
+        if let Some((_, button)) = button {
+            button.set_active(true);
+        }
+    }
+}
 
 /// Re-applies the Views preferences to the live UI (sidebar rows, Now
 /// Playing chips) the moment a toggle changes, so the user doesn't have
@@ -179,12 +218,20 @@ pub(crate) fn settings_button(
 }
 
 fn open_preferences_window(
-    parent: &gtk::ApplicationWindow,
+    parent: &impl IsA<gtk::Window>,
     command_controller: SharedCommandController,
     database_path: PathBuf,
     hooks: PreferencesHooks,
     initial_tab: &str,
 ) {
+    // Another request while Preferences is open (it is modal, so only the
+    // exported action can make one) brings the open window forward, on
+    // the tab it asks for.
+    if let Some(open) = OPEN_PREFERENCES.with_borrow(Clone::clone) {
+        open.tabs.show(initial_tab);
+        open.window.present();
+        return;
+    }
     let window = gtk::Window::builder()
         .title(gettext("Preferences"))
         .decorated(false)
@@ -264,7 +311,8 @@ fn open_preferences_window(
     let about_page = about_tab::build(&window, &database_path);
     stack.add_named(&about_page, Some(TAB_ABOUT));
 
-    let tab_strip = build_tab_strip(&stack, &window, initial_tab);
+    let (tab_strip, tabs) = build_tab_strip(&stack, &window);
+    tabs.show(initial_tab);
 
     panel.append(&tab_strip);
     panel.append(&stack);
@@ -283,13 +331,22 @@ fn open_preferences_window(
     });
     window.add_controller(key_controller);
 
+    OPEN_PREFERENCES.set(Some(OpenPreferences {
+        window: window.clone(),
+        tabs,
+    }));
+    window.connect_close_request(|_| {
+        OPEN_PREFERENCES.set(None);
+        glib::Propagation::Proceed
+    });
+
     window.present();
     focus_visible_preferences_page(&stack);
 }
 
 /// Builds the headerless drag surface that combines the three icon-above-label
 /// tab buttons and the close button on the trailing end.
-fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window, initial_tab: &str) -> gtk::Widget {
+fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window) -> (gtk::Widget, PreferencesTabs) {
     let library_button = build_tab_button("folder-music-symbolic", &gettext("Library"));
     let encoding_button = build_tab_button("media-optical-symbolic", &gettext("Encoding"));
     let analysis_button = build_tab_button("applications-science-symbolic", &gettext("Analysis"));
@@ -316,19 +373,6 @@ fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window, initial_tab: &str) 
     wire_tab_button(&shuffle_button, stack, TAB_SHUFFLE);
     wire_tab_button(&views_button, stack, TAB_VIEWS);
     wire_tab_button(&about_button, stack, TAB_ABOUT);
-
-    // Land on the requested tab (Library by default). Activating the grouped
-    // toggle fires its handler, which sets the visible stack page.
-    let landing = match initial_tab {
-        TAB_ENCODING => &encoding_button,
-        TAB_ANALYSIS => &analysis_button,
-        TAB_ONLINE => &online_button,
-        TAB_SHUFFLE => &shuffle_button,
-        TAB_VIEWS => &views_button,
-        TAB_ABOUT => &about_button,
-        _ => &library_button,
-    };
-    landing.set_active(true);
 
     let tab_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     tab_box.add_css_class("preferences-tab-buttons");
@@ -372,7 +416,18 @@ fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window, initial_tab: &str) 
     // widgets first, so they continue to work normally.
     let handle = gtk::WindowHandle::new();
     handle.set_child(Some(&strip));
-    handle.upcast()
+    let tabs = PreferencesTabs {
+        buttons: vec![
+            (TAB_LIBRARY, library_button),
+            (TAB_ENCODING, encoding_button),
+            (TAB_ANALYSIS, analysis_button),
+            (TAB_ONLINE, online_button),
+            (TAB_SHUFFLE, shuffle_button),
+            (TAB_VIEWS, views_button),
+            (TAB_ABOUT, about_button),
+        ],
+    };
+    (handle.upcast(), tabs)
 }
 
 fn build_tab_button(icon_name: &str, label_text: &str) -> gtk::ToggleButton {
@@ -415,4 +470,82 @@ fn wire_tab_button(button: &gtk::ToggleButton, stack: &gtk::Stack, page_name: &'
             stack.set_visible_child_name(page_name);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+
+    use sustain_app_runtime::ApplicationRuntime;
+
+    use super::*;
+    use crate::command_controller::UiCommandController;
+
+    fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
+        let mut found = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            found.push(current.clone());
+            found.extend(descendants(&current));
+            child = current.next_sibling();
+        }
+        found
+    }
+
+    fn open_windows_titled(title: &str) -> Vec<gtk::Window> {
+        gtk::Window::list_toplevels()
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
+            .filter(|window| window.is_visible() && window.title().as_deref() == Some(title))
+            .collect()
+    }
+
+    #[test]
+    fn a_second_request_brings_the_open_preferences_window_forward() {
+        crate::test_support::with_gtk(|| {
+            let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+            let command_controller: SharedCommandController =
+                Rc::new(UiCommandController::new(runtime));
+            let hooks = PreferencesHooks {
+                scan_requested: Rc::new(|_| Ok(())),
+                consolidation_requested: Rc::new(|| Ok(())),
+                view_settings_changed: Rc::new(|| {}),
+                sort_tags_changed: Rc::new(|| {}),
+            };
+            let parent = gtk::Window::new();
+            let open = |tab| {
+                open_preferences_window(
+                    &parent,
+                    command_controller.clone(),
+                    PathBuf::from("/nonexistent/library.sqlite3"),
+                    hooks.clone(),
+                    tab,
+                );
+            };
+
+            open(TAB_LIBRARY);
+            open(TAB_ENCODING);
+            let windows = open_windows_titled("Preferences");
+            assert_eq!(windows.len(), 1);
+            let stack = descendants(windows[0].upcast_ref())
+                .into_iter()
+                .find_map(|widget| widget.downcast::<gtk::Stack>().ok())
+                .expect("the window holds its pages in a stack");
+            assert_eq!(
+                stack.visible_child_name().as_deref(),
+                Some(TAB_ENCODING),
+                "the open window shows the asked-for tab"
+            );
+
+            // Once closed, the next request opens a fresh window.
+            windows[0].close();
+            open(TAB_LIBRARY);
+            let reopened = open_windows_titled("Preferences");
+            assert_eq!(reopened.len(), 1);
+            assert_ne!(reopened[0], windows[0]);
+            reopened[0].close();
+        });
+    }
 }

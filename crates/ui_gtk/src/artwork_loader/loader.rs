@@ -164,6 +164,10 @@ pub(super) struct LoaderInner {
     tiles: RefCell<LruCache<ArtworkSource, DecodedArtwork>>,
     details: RefCell<LruCache<ArtworkSource, DecodedArtwork>>,
     pending: RefCell<HashMap<(ArtworkSource, ArtworkVariant), Vec<ArtworkCallback>>>,
+    /// Worker results that reached [`deliver_result`], stale ones
+    /// included, so a test can wait for a result that answers nobody.
+    #[cfg(test)]
+    delivered_results: std::cell::Cell<usize>,
 }
 
 impl LoaderInner {
@@ -225,6 +229,8 @@ impl ArtworkLoader {
             tiles: RefCell::new(LruCache::new(MAX_CACHED_TILE_ARTWORKS)),
             details: RefCell::new(LruCache::new(MAX_CACHED_DETAIL_ARTWORKS)),
             pending: RefCell::new(HashMap::new()),
+            #[cfg(test)]
+            delivered_results: std::cell::Cell::new(0),
         });
 
         spawn_result_drainer(Rc::clone(&inner), result_rx);
@@ -245,8 +251,13 @@ impl ArtworkLoader {
     /// neighbour just resolved the same file never schedules redundant disk
     /// work.
     ///
-    /// The loader has no notion of staleness; callbacks always fire.
-    /// Each caller is responsible for checking, inside its closure,
+    /// The callback fires exactly once, with artwork for the source's
+    /// current generation: a request still waiting when the source is
+    /// invalidated or primed is answered with the new artwork, never
+    /// dropped. Only shutdown, when no view is left, leaves it unfired.
+    ///
+    /// The loader has no notion of view staleness. Each caller is
+    /// responsible for checking, inside its closure,
     /// whether the result still applies to the widget it would update
     /// (e.g. via a per-view generation counter). Keeping that policy
     /// with the caller is what lets one shared loader serve multiple
@@ -328,28 +339,42 @@ impl ArtworkLoader {
     /// the worker pool, so any view holding a stale texture redraws
     /// with the new bytes the next time it asks for them.
     ///
-    /// We do not proactively repaint anything from here: views that
-    /// care about the change are expected to re-issue their request
-    /// (typically via their existing track-row-changed callback).
-    /// That keeps the invalidation hook narrowly responsible and
-    /// avoids reaching across the UI tree from a model-layer cache.
+    /// Requests still waiting for `source` are kept and loaded again at
+    /// the new generation, so they are answered with the new artwork.
+    /// Nothing else is repainted from here: views that already show the
+    /// old artwork are expected to re-issue their request (typically via
+    /// their existing track-row-changed callback). That keeps the
+    /// invalidation hook narrowly responsible and avoids reaching across
+    /// the UI tree from a model-layer cache.
     pub(crate) fn invalidate(&self, source: &ArtworkSource) {
-        // Forget the decoded values (both sizes) and any queued callbacks
-        // before advancing the source generation. Results already in flight
-        // are discarded by the drainer; advancing the repository generation
-        // also prevents those workers from repopulating the on-disk cache
-        // after its matching row is evicted.
+        // Forget the decoded values (both sizes) before advancing the source
+        // generation. Results already in flight are discarded by the
+        // drainer; advancing the repository generation also prevents those
+        // workers from repopulating the on-disk cache after its matching
+        // row is evicted.
         self.inner.tiles.borrow_mut().remove(source);
         self.inner.details.borrow_mut().remove(source);
-        {
-            let mut pending = self.inner.pending.borrow_mut();
-            pending.remove(&(source.clone(), ArtworkVariant::Tile));
-            pending.remove(&(source.clone(), ArtworkVariant::Detail));
-        }
         self.inner.repository.invalidate(source);
+        let generation = self.inner.repository.source_generation(source);
+        for variant in [ArtworkVariant::Tile, ArtworkVariant::Detail] {
+            let waiting = self
+                .inner
+                .pending
+                .borrow()
+                .contains_key(&(source.clone(), variant));
+            if waiting {
+                // As in `request_variant`, a send fails only at shutdown.
+                let _ = self.inner.request_tx.send(WorkerRequest {
+                    source: source.clone(),
+                    generation,
+                    variant,
+                });
+            }
+        }
     }
 
-    /// Insert decoded artwork built from already-in-memory bytes.
+    /// Replace `source`'s artwork with decoded artwork built from
+    /// already-in-memory bytes.
     ///
     /// Used after a remote fetch lands: the tag-write that persists
     /// the bytes is asynchronous, so a naive "invalidate then
@@ -359,10 +384,12 @@ impl ArtworkLoader {
     /// visible on the very next [`Self::cached`] / [`Self::request`]
     /// call without depending on disk write ordering.
     ///
-    /// Only the in-memory cache is touched: the disk cache row was
-    /// dropped by [`Self::invalidate`] and will be repopulated by
-    /// the next miss-driven worker load once the tag write has
-    /// landed and the file fingerprint has updated.
+    /// Priming advances the source generation, so loads already in
+    /// flight cannot overwrite the primed artwork with what the file
+    /// held before the write. Requests still waiting are answered with
+    /// the primed artwork. The disk cache row is dropped and will be
+    /// repopulated by the next miss-driven worker load once the tag
+    /// write has landed and the file fingerprint has updated.
     pub(crate) fn prime(&self, source: ArtworkSource, bytes: Vec<u8>) {
         self.prime_from_bytes(source, Some(bytes));
     }
@@ -378,20 +405,20 @@ impl ArtworkLoader {
     }
 
     fn prime_from_bytes(&self, source: ArtworkSource, bytes: Option<Vec<u8>>) {
+        self.inner.repository.invalidate(&source);
         // Populate both caches so the new cover is visible whether the next
         // reader asks for the tile (now-playing tile) or the detail
         // (lyrics/artwork overlay). Decoding twice is acceptable: priming
         // happens once, on a manual cover accept, not on a hot path.
-        let tile = decode_artwork(bytes.clone(), ArtworkVariant::Tile);
-        let detail = decode_artwork(bytes, ArtworkVariant::Detail);
-        self.inner
-            .tiles
-            .borrow_mut()
-            .insert(source.clone(), tile.artwork);
-        self.inner
-            .details
-            .borrow_mut()
-            .insert(source, detail.artwork);
+        //
+        // Both caches are filled before any callback runs, so a callback
+        // that asks for the other size gets the primed artwork too.
+        let tile = decode_artwork(bytes.clone(), ArtworkVariant::Tile).artwork;
+        let detail = decode_artwork(bytes, ArtworkVariant::Detail).artwork;
+        let tile_callbacks = cache(&self.inner, &source, ArtworkVariant::Tile, tile.clone());
+        let detail_callbacks = cache(&self.inner, &source, ArtworkVariant::Detail, detail.clone());
+        answer(tile_callbacks, &tile);
+        answer(detail_callbacks, &detail);
     }
 }
 
@@ -474,26 +501,269 @@ pub(super) fn spawn_result_drainer(
 /// waiting on it — unless a newer invalidation has superseded the source, in
 /// which case the stale result is dropped.
 fn deliver_result(inner: &LoaderInner, result: WorkerResult) {
+    #[cfg(test)]
+    inner
+        .delivered_results
+        .set(inner.delivered_results.get() + 1);
     if inner.repository.source_generation(&result.source) != result.generation {
         return;
     }
+    let callbacks = cache(
+        inner,
+        &result.source,
+        result.variant,
+        result.decoded.clone(),
+    );
+    answer(callbacks, &result.decoded);
+}
+
+/// Cache `decoded` as the current `variant` of `source`, and take the
+/// requests waiting on it for [`answer`]. Run every `cache` of one update
+/// before any `answer`, so no callback sees the update half applied.
+fn cache(
+    inner: &LoaderInner,
+    source: &ArtworkSource,
+    variant: ArtworkVariant,
+    decoded: DecodedArtwork,
+) -> Vec<ArtworkCallback> {
     inner
-        .cache_for(result.variant)
+        .cache_for(variant)
         .borrow_mut()
-        .insert(result.source.clone(), result.decoded.clone());
-    let callbacks = inner
+        .insert(source.clone(), decoded);
+    inner
         .pending
         .borrow_mut()
-        .remove(&(result.source.clone(), result.variant))
-        .unwrap_or_default();
+        .remove(&(source.clone(), variant))
+        .unwrap_or_default()
+}
+
+/// Call each waiting request with `decoded`. No loader borrow is held,
+/// so a callback may request artwork again.
+fn answer(callbacks: Vec<ArtworkCallback>, decoded: &DecodedArtwork) {
     for callback in callbacks {
-        callback(result.decoded.clone());
+        callback(decoded.clone());
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::LruCache;
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant};
+
+    use gtk::glib;
+    use sustain_app_runtime::{
+        InitialTags, MetadataChange, MetadataError, MetadataResult, MetadataService, Rating,
+    };
+
+    use super::{ArtworkLoader, ArtworkSource, LruCache};
+
+    const VALID_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5,
+        0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64,
+        0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00,
+        0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    /// Artwork reads that wait until the test releases them, so a request
+    /// can be held in flight while the source changes and reads can finish
+    /// in an order the test picks. Each read returns the cover the file
+    /// held when the read started.
+    #[derive(Default)]
+    struct GatedArtwork {
+        state: Mutex<GateState>,
+        changed: Condvar,
+    }
+
+    #[derive(Default)]
+    struct GateState {
+        cover: Option<Vec<u8>>,
+        /// The reads, numbered from 0 in the order they started, that may
+        /// finish.
+        released: HashSet<usize>,
+        started: usize,
+        finished: usize,
+    }
+
+    impl GatedArtwork {
+        fn with_state<T>(&self, f: impl FnOnce(&mut GateState) -> T) -> T {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let value = f(&mut state);
+            self.changed.notify_all();
+            value
+        }
+
+        fn set_cover(&self, cover: Option<Vec<u8>>) {
+            self.with_state(|state| state.cover = cover);
+        }
+
+        /// Let the `read`th read (counting from 0) finish.
+        fn release(&self, read: usize) {
+            self.with_state(|state| state.released.insert(read));
+        }
+
+        fn started(&self) -> usize {
+            self.with_state(|state| state.started)
+        }
+
+        fn finished(&self) -> usize {
+            self.with_state(|state| state.finished)
+        }
+    }
+
+    impl MetadataService for GatedArtwork {
+        fn read_initial_tags(&self, _path: &Path) -> MetadataResult<InitialTags> {
+            Err(MetadataError::ReadFailed)
+        }
+
+        fn write_metadata(&self, _path: &Path, _change: MetadataChange) -> MetadataResult<()> {
+            Err(MetadataError::WriteFailed)
+        }
+
+        fn write_rating(&self, _path: &Path, _rating: Rating) -> MetadataResult<()> {
+            Err(MetadataError::WriteFailed)
+        }
+
+        fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+            let Ok(mut state) = self.state.lock() else {
+                return Err(MetadataError::ReadFailed);
+            };
+            let cover = state.cover.clone();
+            let read = state.started;
+            state.started += 1;
+            self.changed.notify_all();
+            let Ok(mut state) = self
+                .changed
+                .wait_while(state, |state| !state.released.contains(&read))
+            else {
+                return Err(MetadataError::ReadFailed);
+            };
+            state.finished += 1;
+            Ok(cover)
+        }
+
+        fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+            Err(MetadataError::WriteFailed)
+        }
+    }
+
+    /// A loader over [`GatedArtwork`] and a source with no file behind it,
+    /// so no disk-cache row can answer for the gated read.
+    fn gated_loader() -> (Rc<ArtworkLoader>, Arc<GatedArtwork>, ArtworkSource) {
+        let service = Arc::new(GatedArtwork::default());
+        let cache_dir = std::env::temp_dir().join(format!(
+            "sustain-artwork-loader-test-{}",
+            std::process::id()
+        ));
+        let loader = Rc::new(ArtworkLoader::new(service.clone(), cache_dir));
+        let missing = PathBuf::from("/nonexistent/sustain-artwork-loader-test.flac");
+        let source = ArtworkSource::embedded_track(missing.clone(), missing);
+        (loader, service, source)
+    }
+
+    /// Run the main loop until `done` holds or a generous deadline passes.
+    fn run_main_loop_until(done: impl Fn() -> bool) {
+        let context = glib::MainContext::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() && Instant::now() < deadline {
+            context.iteration(false);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn a_request_waiting_when_its_source_is_invalidated_gets_the_new_cover() {
+        crate::test_support::with_gtk(|| {
+            let (loader, service, source) = gated_loader();
+            let answers = Rc::new(RefCell::new(Vec::new()));
+            let answers_for_request = answers.clone();
+            loader.request(
+                source.clone(),
+                Box::new(move |artwork| {
+                    answers_for_request
+                        .borrow_mut()
+                        .push(artwork.tile_texture.is_some());
+                }),
+            );
+            // The first read starts while the file has no cover.
+            run_main_loop_until(|| service.started() >= 1);
+
+            service.set_cover(Some(VALID_PNG.to_vec()));
+            loader.invalidate(&source);
+            run_main_loop_until(|| service.started() >= 2);
+            // The fresh read finishes first; the stale one lands after it.
+            service.release(1);
+            run_main_loop_until(|| service.finished() >= 1 && !answers.borrow().is_empty());
+            service.release(0);
+            run_main_loop_until(|| loader.inner.delivered_results.get() >= 2);
+            assert_eq!(
+                loader.inner.delivered_results.get(),
+                2,
+                "both reads delivered"
+            );
+
+            assert_eq!(
+                *answers.borrow(),
+                [true],
+                "answered once, with the new cover"
+            );
+            let cached = loader.cached(&source).expect("the new cover stays cached");
+            assert!(
+                cached.tile_texture.is_some(),
+                "the stale read must not replace the new cover"
+            );
+        });
+    }
+
+    #[test]
+    fn priming_answers_waiting_requests_and_outlives_loads_already_in_flight() {
+        crate::test_support::with_gtk(|| {
+            let (loader, service, source) = gated_loader();
+            let answered = Rc::new(Cell::new(None));
+            let answered_for_request = answered.clone();
+            let loader_for_request = loader.clone();
+            let source_for_request = source.clone();
+            loader.request(
+                source.clone(),
+                Box::new(move |artwork| {
+                    // A tile answer must already see the primed detail.
+                    let detail = loader_for_request
+                        .cached_detail(&source_for_request)
+                        .is_some_and(|detail| detail.detail_texture.is_some());
+                    answered_for_request.set(Some((artwork.tile_texture.is_some(), detail)));
+                }),
+            );
+            run_main_loop_until(|| service.started() >= 1);
+
+            loader.prime(source.clone(), VALID_PNG.to_vec());
+            assert_eq!(
+                answered.get(),
+                Some((true, true)),
+                "answered with the primed cover, in both sizes"
+            );
+
+            // The load that was in flight finds the file without artwork.
+            // It must not replace the primed cover.
+            service.release(0);
+            run_main_loop_until(|| loader.inner.delivered_results.get() >= 1);
+            assert_eq!(
+                loader.inner.delivered_results.get(),
+                1,
+                "the in-flight read delivered"
+            );
+            let cached = loader
+                .cached(&source)
+                .expect("the primed cover stays cached");
+            assert!(cached.tile_texture.is_some());
+        });
+    }
 
     #[test]
     fn lru_evicts_least_recently_used_when_full() {

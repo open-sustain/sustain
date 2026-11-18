@@ -498,14 +498,11 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
                     if queued
                         && let Some(source) = artwork_source_for_track(&runtime, result.track_id)
                     {
-                        // Drop the existing in-memory + disk-cache
-                        // entry, then prime the in-memory entry with
-                        // the freshly fetched bytes. The disk-cache
-                        // row is left dropped: the next miss after
-                        // the metadata writer lands the tag write
-                        // will rebuild it from the file, with the
-                        // correct post-write fingerprint.
-                        artwork_loader.invalidate(&source);
+                        // Replace the in-memory entry with the freshly
+                        // fetched bytes. Priming drops the disk-cache
+                        // row: the next miss after the metadata writer
+                        // lands the tag write rebuilds it from the
+                        // file, with the correct post-write fingerprint.
                         artwork_loader.prime(source, bytes.clone());
                     }
                     if queued {

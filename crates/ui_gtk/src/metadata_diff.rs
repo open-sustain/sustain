@@ -11,7 +11,10 @@
 //! place is what guarantees an inline edit writes the same thing the
 //! dialog would for the same input.
 
+use std::str::FromStr;
+
 use sustain_app_runtime::{Bpm, FieldChange, MusicalKey};
+use sustain_i18n::{gettext, tr_format};
 
 /// A single-line field's change. Surrounding whitespace is trimmed from a
 /// new value, but untouched text is unchanged even when the stored value
@@ -43,48 +46,78 @@ pub(crate) fn text_diff_preserve_newlines(
     }
 }
 
-pub(crate) fn number_diff(initial: Option<u32>, current: &str) -> FieldChange<u32> {
-    parsed_diff(initial, current, |text| text.parse().ok())
+/// The outcome of reading a typed field: its change, or the message that
+/// says what the field accepts. Malformed text is never silently dropped.
+pub(crate) type ParsedChange<T> = Result<FieldChange<T>, String>;
+
+/// A whole number for the field `label` names, such as "Year".
+pub(crate) fn parse_whole_number<T: FromStr>(label: &str, text: &str) -> Result<T, String> {
+    text.parse().map_err(|_| {
+        // Translators: {label} is a Get Info field, such as "Year".
+        tr_format!(gettext("{label} must be a whole number."), label = label)
+    })
 }
 
-/// Typed text is read with [`MusicalKey::parse`], so any common notation
-/// (`Am`, `A minor`, `8A`, `1m`) sets the key. Text that is not a key is
-/// left unchanged, like an unparsable number.
-pub(crate) fn key_diff(initial: Option<MusicalKey>, current: &str) -> FieldChange<MusicalKey> {
-    parsed_diff(initial, current, MusicalKey::parse)
+/// A key in any notation [`MusicalKey::parse`] reads (`Am`, `A minor`,
+/// `8A`, `1m`).
+pub(crate) fn parse_key(text: &str) -> Result<MusicalKey, String> {
+    MusicalKey::parse(text)
+        .ok_or_else(|| gettext("Key must be a musical key, such as Am, F#, or 8A."))
 }
 
-/// Typed text is read with [`Bpm::parse`], so a whole (`128`) or decimal
-/// (`118.86`) tempo sets the BPM. Text that is not a tempo is left
-/// unchanged, like an unparsable number.
-pub(crate) fn bpm_diff(initial: Option<Bpm>, current: &str) -> FieldChange<Bpm> {
-    parsed_diff(initial, current, Bpm::parse)
+/// A whole (`128`) or decimal (`118.86`) tempo, as [`Bpm`] reads it.
+pub(crate) fn parse_bpm(text: &str) -> Result<Bpm, String> {
+    text.parse::<Bpm>().map_err(|_| {
+        tr_format!(
+            // Translators: {max} is the highest tempo Sustain accepts.
+            gettext("BPM must be a number above 0 and at most {max}."),
+            max = Bpm::MAX_WHOLE
+        )
+    })
 }
 
-pub(crate) fn signed_number_diff(initial: Option<i32>, current: &str) -> FieldChange<i32> {
-    parsed_diff(initial, current, |text| text.parse().ok())
+pub(crate) fn number_diff(label: &str, initial: Option<u32>, current: &str) -> ParsedChange<u32> {
+    parsed_diff(initial, current, |text| parse_whole_number(label, text))
+}
+
+pub(crate) fn signed_number_diff(
+    label: &str,
+    initial: Option<i32>,
+    current: &str,
+) -> ParsedChange<i32> {
+    parsed_diff(initial, current, |text| parse_whole_number(label, text))
+}
+
+pub(crate) fn key_diff(initial: Option<MusicalKey>, current: &str) -> ParsedChange<MusicalKey> {
+    parsed_diff(initial, current, parse_key)
+}
+
+pub(crate) fn bpm_diff(initial: Option<Bpm>, current: &str) -> ParsedChange<Bpm> {
+    parsed_diff(initial, current, parse_bpm)
 }
 
 /// The change typed text makes to a field `parse` reads: blank text clears
 /// a value and leaves an empty field alone; text `parse` accepts sets it,
-/// unless it is the current value; text `parse` rejects changes nothing.
+/// unless it is the current value; text `parse` rejects is an error.
 fn parsed_diff<T: Copy + PartialEq>(
     initial: Option<T>,
     current: &str,
-    parse: impl FnOnce(&str) -> Option<T>,
-) -> FieldChange<T> {
+    parse: impl FnOnce(&str) -> Result<T, String>,
+) -> ParsedChange<T> {
     let trimmed = current.trim();
     if trimmed.is_empty() {
-        return if initial.is_some() {
+        return Ok(if initial.is_some() {
             FieldChange::Clear
         } else {
             FieldChange::Unchanged
-        };
+        });
     }
-    match parse(trimmed) {
-        Some(value) if Some(value) != initial => FieldChange::Set(value),
-        _ => FieldChange::Unchanged,
-    }
+    let value = parse(trimmed)?;
+    Ok(if Some(value) == initial {
+        FieldChange::Unchanged
+    } else {
+        FieldChange::Set(value)
+    })
 }
 
 pub(crate) fn bool_diff(initial: Option<bool>, current: bool) -> FieldChange<bool> {
@@ -104,35 +137,40 @@ mod tests {
     use sustain_app_runtime::{Bpm, FieldChange, MusicalKey};
 
     #[test]
-    fn bpm_diff_reads_whole_and_decimal_tempos_and_ignores_other_text() {
+    fn bpm_diff_reads_whole_and_decimal_tempos_and_rejects_other_text() {
         let tempo = Bpm::from_hundredths(11_886);
-        assert_eq!(bpm_diff(None, ""), FieldChange::Unchanged);
-        assert_eq!(bpm_diff(tempo, " "), FieldChange::Clear);
-        assert_eq!(bpm_diff(tempo, "118.86"), FieldChange::Unchanged);
+        assert_eq!(bpm_diff(None, ""), Ok(FieldChange::Unchanged));
+        assert_eq!(bpm_diff(tempo, " "), Ok(FieldChange::Clear));
+        assert_eq!(bpm_diff(tempo, "118.86"), Ok(FieldChange::Unchanged));
         assert_eq!(
             bpm_diff(tempo, "128"),
-            FieldChange::Set(Bpm::from_whole(128).expect("tempo"))
+            Ok(FieldChange::Set(Bpm::from_whole(128).expect("tempo")))
         );
         assert_eq!(
             bpm_diff(None, "124.5"),
-            FieldChange::Set(Bpm::from_hundredths(12_450).expect("tempo"))
+            Ok(FieldChange::Set(
+                Bpm::from_hundredths(12_450).expect("tempo")
+            ))
         );
         for text in ["0", "656", "fast", "-120"] {
-            assert_eq!(bpm_diff(tempo, text), FieldChange::Unchanged, "{text:?}");
+            assert!(bpm_diff(tempo, text).is_err(), "{text:?}");
         }
     }
 
     #[test]
-    fn key_diff_parses_notations_and_ignores_text_that_is_not_a_key() {
+    fn key_diff_parses_notations_and_rejects_text_that_is_not_a_key() {
         let am = Some(MusicalKey::AMinor);
-        assert_eq!(key_diff(None, ""), FieldChange::Unchanged);
-        assert_eq!(key_diff(am, " "), FieldChange::Clear);
-        assert_eq!(key_diff(am, "Am"), FieldChange::Unchanged);
-        assert_eq!(key_diff(am, "8A"), FieldChange::Unchanged);
-        assert_eq!(key_diff(am, "A minor"), FieldChange::Unchanged);
-        assert_eq!(key_diff(am, "8B"), FieldChange::Set(MusicalKey::CMajor));
-        assert_eq!(key_diff(None, "F#m"), FieldChange::Set(MusicalKey::FsMinor));
-        assert_eq!(key_diff(am, "www.example.com"), FieldChange::Unchanged);
+        assert_eq!(key_diff(None, ""), Ok(FieldChange::Unchanged));
+        assert_eq!(key_diff(am, " "), Ok(FieldChange::Clear));
+        assert_eq!(key_diff(am, "Am"), Ok(FieldChange::Unchanged));
+        assert_eq!(key_diff(am, "8A"), Ok(FieldChange::Unchanged));
+        assert_eq!(key_diff(am, "A minor"), Ok(FieldChange::Unchanged));
+        assert_eq!(key_diff(am, "8B"), Ok(FieldChange::Set(MusicalKey::CMajor)));
+        assert_eq!(
+            key_diff(None, "F#m"),
+            Ok(FieldChange::Set(MusicalKey::FsMinor))
+        );
+        assert!(key_diff(am, "www.example.com").is_err());
     }
 
     #[test]
@@ -171,19 +209,35 @@ mod tests {
     }
 
     #[test]
-    fn number_diff_handles_empty_and_invalid_inputs() {
-        assert_eq!(number_diff(None, ""), FieldChange::Unchanged);
-        assert_eq!(number_diff(Some(3), ""), FieldChange::Clear);
-        assert_eq!(number_diff(Some(3), "abc"), FieldChange::Unchanged);
-        assert_eq!(number_diff(Some(3), "3"), FieldChange::Unchanged);
-        assert_eq!(number_diff(Some(3), "4"), FieldChange::Set(4));
+    fn number_diff_handles_empty_and_rejects_invalid_inputs() {
+        assert_eq!(number_diff("Track", None, ""), Ok(FieldChange::Unchanged));
+        assert_eq!(number_diff("Track", Some(3), ""), Ok(FieldChange::Clear));
+        assert_eq!(
+            number_diff("Track", Some(3), "abc"),
+            Err("Track must be a whole number.".to_owned())
+        );
+        assert_eq!(
+            number_diff("Track", Some(3), "3"),
+            Ok(FieldChange::Unchanged)
+        );
+        assert_eq!(number_diff("Track", Some(3), "4"), Ok(FieldChange::Set(4)));
     }
 
     #[test]
-    fn signed_number_diff_handles_negatives() {
-        assert_eq!(signed_number_diff(Some(2000), "-1"), FieldChange::Set(-1));
-        assert_eq!(signed_number_diff(None, "1998"), FieldChange::Set(1998));
-        assert_eq!(signed_number_diff(Some(1998), ""), FieldChange::Clear);
+    fn signed_number_diff_handles_negatives_and_rejects_typos() {
+        assert_eq!(
+            signed_number_diff("Year", Some(2000), "-1"),
+            Ok(FieldChange::Set(-1))
+        );
+        assert_eq!(
+            signed_number_diff("Year", None, "1998"),
+            Ok(FieldChange::Set(1998))
+        );
+        assert_eq!(
+            signed_number_diff("Year", Some(1998), ""),
+            Ok(FieldChange::Clear)
+        );
+        assert!(signed_number_diff("Year", Some(1998), "20O4").is_err());
     }
 
     #[test]

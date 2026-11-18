@@ -656,10 +656,6 @@ listview.album-track-table > row:focus-visible {
     color: @theme_fg_color;
 }
 
-.smart-playlist-error {
-    color: @error_color;
-}
-
 /* Sidebar section header labels. Small, muted, and bold. Static section
    headers stay inert; the Playlists disclosure header strengthens text and
    caret on hover. */
@@ -973,6 +969,12 @@ popover.queue-popover > contents {
 rating-stars {
     color: alpha(@theme_fg_color, 0.86);
     min-height: 28px;
+}
+
+/* A keyboard-operable rating (Get Info) shows where the keyboard is. */
+rating-stars:focus-visible {
+    outline: 2px solid alpha(@theme_selected_bg_color, 0.6);
+    outline-offset: 1px;
 }
 
 /* A selected row's stars take the row's selection foreground. */

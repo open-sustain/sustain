@@ -17,6 +17,7 @@ use sustain_i18n::gettext;
 use super::super::{
     ApplicationCommand, CdEncodingProfile, CdReadMode, command_controller::SharedCommandController,
 };
+use super::setting_scale::connect_setting_scale;
 use super::{HELPER_MAX_WIDTH_CHARS, HELPER_MIN_WIDTH_CHARS};
 
 pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget {
@@ -42,12 +43,12 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
             move |value| {
                 let profile = value_to_profile(value);
                 let mut settings = controller.runtime().borrow().settings().clone();
-                if settings.encoding.cd_profile == profile {
-                    return;
+                if settings.encoding.cd_profile != profile {
+                    settings.encoding.cd_profile = profile;
+                    // Save failures are reported once by `UiCommandController`.
+                    let _result = controller.dispatch(ApplicationCommand::UpdateSettings(settings));
                 }
-                settings.encoding.cd_profile = profile;
-                // Save failures are reported once by `UiCommandController`.
-                let _result = controller.dispatch(ApplicationCommand::UpdateSettings(settings));
+                profile_to_value(controller.runtime().borrow().settings().encoding.cd_profile)
             },
         );
     }
@@ -65,11 +66,18 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
             move |value| {
                 let mode = value_to_read_mode(value);
                 let mut settings = controller.runtime().borrow().settings().clone();
-                if settings.encoding.cd_read_mode == mode {
-                    return;
+                if settings.encoding.cd_read_mode != mode {
+                    settings.encoding.cd_read_mode = mode;
+                    let _result = controller.dispatch(ApplicationCommand::UpdateSettings(settings));
                 }
-                settings.encoding.cd_read_mode = mode;
-                let _result = controller.dispatch(ApplicationCommand::UpdateSettings(settings));
+                read_mode_to_value(
+                    controller
+                        .runtime()
+                        .borrow()
+                        .settings()
+                        .encoding
+                        .cd_read_mode,
+                )
             },
         );
     }
@@ -79,8 +87,9 @@ pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget 
 
 /// Append a labelled three-stop slider (heading, the discrete scale, its
 /// end/centre mark labels, and a helper line) to `content`. `top_margin`
-/// spaces a later group from the one above it. The handler is wired after the
-/// initial value is set, so seeding the slider never dispatches a write.
+/// spaces a later group from the one above it. `apply` follows the
+/// [`connect_setting_scale`] contract. It is wired after the initial value
+/// is set, so seeding the slider never dispatches a write.
 fn append_three_stop_slider(
     content: &gtk::Box,
     heading: &str,
@@ -88,7 +97,7 @@ fn append_three_stop_slider(
     helper_text: &str,
     initial: f64,
     top_margin: i32,
-    on_change: impl Fn(f64) + 'static,
+    apply: impl Fn(f64) -> f64 + 'static,
 ) {
     let heading_label = gtk::Label::new(Some(heading));
     heading_label.set_xalign(0.0);
@@ -123,7 +132,7 @@ fn append_three_stop_slider(
     helper.set_max_width_chars(HELPER_MAX_WIDTH_CHARS);
     content.append(&helper);
 
-    scale.connect_value_changed(move |scale| on_change(scale.value()));
+    connect_setting_scale(&scale, apply);
 }
 
 fn mark_label(text: &str, align: gtk::Align) -> gtk::Label {

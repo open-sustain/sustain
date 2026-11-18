@@ -37,6 +37,7 @@ const HEADER_GAP_BELOW: i32 = 14;
 const NUMBER_ENTRY_WIDTH_CHARS: i32 = 5;
 const PAIR_ENTRY_WIDTH_CHARS: i32 = 4;
 /// Stack name of the Artwork tab, where Ctrl+V pastes the artwork.
+const DETAILS_PAGE: &str = "details";
 const ARTWORK_PAGE: &str = "artwork";
 
 #[allow(clippy::too_many_arguments)]
@@ -92,7 +93,7 @@ pub(crate) fn open_track_info_dialog(
         &initial.track.statistics,
         runtime.borrow().distinct_genres(),
     );
-    stack.add_titled(&details.widget, Some("details"), &gettext("Details"));
+    stack.add_titled(&details.widget, Some(DETAILS_PAGE), &gettext("Details"));
 
     let artwork = ArtworkPage::new(
         parent,
@@ -158,6 +159,7 @@ pub(crate) fn open_track_info_dialog(
     });
 
     let pages = Rc::new(DialogPages {
+        stack: stack.clone(),
         header,
         details,
         artwork,
@@ -279,11 +281,18 @@ struct LoadedTrack {
 }
 
 struct DialogPages {
+    stack: gtk::Stack,
     header: Header,
     details: DetailsPage,
     artwork: ArtworkPage,
     lyrics: LyricsPage,
     file: FilePage,
+}
+
+impl DialogPages {
+    fn show_details(&self) {
+        self.stack.set_visible_child_name(DETAILS_PAGE);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -342,7 +351,18 @@ fn commit_current(
     command_controller: &SharedCommandController,
 ) -> bool {
     let cursor = cursor.borrow();
-    let mut change = pages.details.metadata_diff(&cursor.baseline_metadata);
+    let mut change = match pages.details.metadata_diff(&cursor.baseline_metadata) {
+        Ok(change) => change,
+        Err(invalid) => {
+            // Nothing is written while a field holds text it cannot take:
+            // the dialog stays on this track, back on that field.
+            drop(cursor);
+            pages.show_details();
+            invalid.entry.grab_focus();
+            command_controller.report_command_warning(invalid.message);
+            return false;
+        }
+    };
     change.lyrics = pages.lyrics.lyrics_diff(&cursor.baseline_metadata);
     let commands = edit_commands(
         cursor.current_track.id,

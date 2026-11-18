@@ -42,7 +42,6 @@ impl ArtworkChangePublisher {
         artwork: Option<Vec<u8>>,
     ) {
         if let Some(source) = artwork_source {
-            self.artwork_loader.invalidate(&source);
             match artwork {
                 Some(bytes) => self.artwork_loader.prime(source, bytes),
                 None => self.artwork_loader.prime_missing(source),
@@ -512,19 +511,31 @@ mod tests {
         with_gtk(|| {
             let frame = gtk::Frame::new(None);
 
+            let shown_image = |frame: &gtk::Frame| {
+                frame
+                    .child()
+                    .expect("frame child present")
+                    .downcast::<gtk::Image>()
+                    .expect("the frame shows an image")
+            };
+
             set_frame_texture(&frame, None, 96);
-            let placeholder = frame.child().expect("placeholder child present");
-            assert!(
-                placeholder.downcast::<gtk::Image>().is_ok(),
+            let placeholder = shown_image(&frame);
+            assert_eq!(placeholder.storage_type(), gtk::ImageType::IconName);
+            assert_eq!(
+                placeholder.icon_name().as_deref(),
+                Some("image-missing-symbolic"),
                 "absent artwork renders the missing-image placeholder"
             );
 
             let texture = texture_from_bytes(VALID_PNG, 96).expect("valid png decodes");
             set_frame_texture(&frame, Some(&texture), 96);
-            let cover = frame.child().expect("cover child present");
-            assert!(
-                cover.downcast::<gtk::Image>().is_ok(),
-                "present artwork renders an image"
+            let cover = shown_image(&frame);
+            assert_eq!(cover.storage_type(), gtk::ImageType::Paintable);
+            assert_eq!(
+                cover.paintable(),
+                Some(texture.upcast::<gtk::gdk::Paintable>()),
+                "present artwork renders the supplied texture"
             );
         });
     }

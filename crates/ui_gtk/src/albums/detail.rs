@@ -164,7 +164,11 @@ fn album_detail_palette_css(palette: ArtworkPalette) -> String {
             background-color: alpha({foreground}, 0.14);
         }}
 
-        .album-track-table .track-table-status-playing {{
+        /* Status icons keep the strict-contrast foreground on artwork:
+           a cover dominated by the theme's warning orange would hide the
+           missing-file mark. The glyph itself tells the states apart. */
+        .album-track-table .track-table-status-playing,
+        .album-track-table .track-table-status-missing {{
             color: {foreground};
         }}
 
@@ -187,4 +191,60 @@ pub(super) fn detail_icon_button(icon_name: &str, tooltip: &str) -> gtk::Button 
     button.set_tooltip_text(Some(tooltip));
     button.set_valign(gtk::Align::Center);
     button
+}
+
+#[cfg(test)]
+mod tests {
+    use gtk::gdk;
+    use gtk::prelude::*;
+
+    use super::album_detail_palette_provider;
+    use crate::artwork_color::ArtworkPalette;
+
+    /// The warning orange of the default GTK theme, filling a whole cover.
+    const WARNING_ORANGE: u32 = 0xe661_00ff;
+
+    #[test]
+    fn the_missing_file_mark_stays_readable_on_a_cover_of_its_own_colour() {
+        crate::test_support::with_gtk(|| {
+            let cover =
+                gtk::gdk_pixbuf::Pixbuf::new(gtk::gdk_pixbuf::Colorspace::Rgb, true, 8, 8, 8)
+                    .expect("allocate cover");
+            cover.fill(WARNING_ORANGE);
+            let palette = ArtworkPalette::from_pixbuf(&cover).expect("cover palette");
+            let display = gdk::Display::default().expect("test display");
+            // A theme whose warning colour is the cover's own orange.
+            let theme = gtk::CssProvider::new();
+            theme.load_from_string(".track-table-status-missing { color: #e66100; }");
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &theme,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let provider = album_detail_palette_provider(palette);
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 2,
+            );
+
+            let table = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            table.add_css_class("album-track-table");
+            let mark = gtk::Image::from_icon_name("dialog-warning-symbolic");
+            mark.add_css_class("track-table-status-missing");
+            table.append(&mark);
+            let window = gtk::Window::new();
+            window.set_child(Some(&table));
+
+            let shown = mark.color();
+            gtk::style_context_remove_provider_for_display(&display, &provider);
+            gtk::style_context_remove_provider_for_display(&display, &theme);
+            window.destroy();
+
+            let foreground =
+                gdk::RGBA::parse(palette.foreground_css()).expect("palette foreground");
+            assert_eq!(shown, foreground);
+            assert_ne!(shown, palette.background_rgba());
+        });
+    }
 }

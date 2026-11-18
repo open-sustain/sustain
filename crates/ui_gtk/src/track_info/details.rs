@@ -13,7 +13,7 @@ use sustain_i18n::{gettext, pgettext};
 use crate::date_format::format_system_time_short;
 
 use crate::metadata_diff::{
-    bool_diff, bpm_diff, key_diff, number_diff, signed_number_diff, text_diff,
+    ParsedChange, bool_diff, bpm_diff, key_diff, number_diff, signed_number_diff, text_diff,
     text_diff_preserve_newlines,
 };
 use crate::rating_stars::RatingStars;
@@ -21,7 +21,7 @@ use crate::status_bar::grouped;
 
 use super::{
     NUMBER_ENTRY_WIDTH_CHARS, PAIR_ENTRY_WIDTH_CHARS,
-    form::{attach_field, attach_paired_field, number_entry, text_entry},
+    form::{attach_field, attach_paired_field, labelled_by, number_entry, text_entry},
 };
 
 #[derive(Clone)]
@@ -126,7 +126,8 @@ impl DetailsPage {
         attach_field(&grid, row, &pgettext("musical key", "Key"), &key);
         row += 1;
 
-        let rating = RatingStars::new();
+        // The one rating this dialog edits takes the keyboard.
+        let rating = RatingStars::keyboard_operable();
         rating.set_halign(gtk::Align::Start);
         rating.set_rating(initial_rating);
         rating.connect_rating_chosen(RatingStars::set_rating);
@@ -202,6 +203,7 @@ impl DetailsPage {
         comments_label.add_css_class("track-info-field-label");
         grid.attach(&comments_label, 0, row, 1, 1);
         grid.attach(&comments_scroll, 1, row, 3, 1);
+        labelled_by(comments.upcast_ref(), &[&comments_label]);
 
         widget.append(&grid);
 
@@ -272,8 +274,17 @@ impl DetailsPage {
             .set_text(&format_stat_date(statistics.last_skipped_at));
     }
 
-    pub(super) fn metadata_diff(&self, initial: &TrackMetadata) -> MetadataChange {
-        MetadataChange {
+    /// The edits typed into the tab, or the first field whose text is not
+    /// a value it accepts.
+    pub(super) fn metadata_diff(
+        &self,
+        initial: &TrackMetadata,
+    ) -> Result<MetadataChange, InvalidField> {
+        let track_number = &self.track_number;
+        let track_total = &self.track_total;
+        let disc_number = &self.disc_number;
+        let disc_total = &self.disc_total;
+        Ok(MetadataChange {
             title: text_diff(initial.title.as_deref(), &self.title.text()),
             artist: text_diff(initial.artist.as_deref(), &self.artist.text()),
             album: text_diff(initial.album.as_deref(), &self.album.text()),
@@ -281,21 +292,31 @@ impl DetailsPage {
             composer: text_diff(initial.composer.as_deref(), &self.composer.text()),
             grouping: text_diff(initial.grouping.as_deref(), &self.grouping.text()),
             genre: text_diff(initial.genre.as_deref(), &self.genre.text()),
-            track_number: number_diff(initial.track_number, &self.track_number.text()),
-            track_total: number_diff(initial.track_total, &self.track_total.text()),
-            disc_number: number_diff(initial.disc_number, &self.disc_number.text()),
-            disc_total: number_diff(initial.disc_total, &self.disc_total.text()),
-            year: signed_number_diff(initial.year, &self.year.text()),
+            track_number: read(track_number, |text| {
+                number_diff(&gettext("Track number"), initial.track_number, text)
+            })?,
+            track_total: read(track_total, |text| {
+                number_diff(&gettext("Track total"), initial.track_total, text)
+            })?,
+            disc_number: read(disc_number, |text| {
+                number_diff(&gettext("Disc number"), initial.disc_number, text)
+            })?,
+            disc_total: read(disc_total, |text| {
+                number_diff(&gettext("Disc total"), initial.disc_total, text)
+            })?,
+            year: read(&self.year, |text| {
+                signed_number_diff(&gettext("Year"), initial.year, text)
+            })?,
             compilation: bool_diff(initial.compilation, self.compilation.is_active()),
-            bpm: bpm_diff(initial.bpm, &self.bpm.text()),
-            key: key_diff(initial.key, &self.key.text()),
+            bpm: read(&self.bpm, |text| bpm_diff(initial.bpm, text))?,
+            key: read(&self.key, |text| key_diff(initial.key, text))?,
             comments: text_diff_preserve_newlines(
                 initial.comments.as_deref(),
                 &self.text_view_text(&self.comments),
             ),
             lyrics: FieldChange::Unchanged,
             ..MetadataChange::default()
-        }
+        })
     }
 
     pub(super) fn current_rating(&self) -> Rating {
@@ -312,6 +333,23 @@ impl DetailsPage {
     }
 }
 
+/// A Details field whose text is not a value it accepts: the entry to
+/// return the user to, and the message saying what it takes.
+pub(super) struct InvalidField {
+    pub(super) entry: gtk::Entry,
+    pub(super) message: String,
+}
+
+fn read<T>(
+    entry: &gtk::Entry,
+    diff: impl FnOnce(&str) -> ParsedChange<T>,
+) -> Result<FieldChange<T>, InvalidField> {
+    diff(&entry.text()).map_err(|message| InvalidField {
+        entry: entry.clone(),
+        message,
+    })
+}
+
 fn set_text(entry: &gtk::Entry, value: Option<&str>) {
     entry.set_text(value.unwrap_or_default());
 }
@@ -324,4 +362,62 @@ fn format_stat_date(value: Option<std::time::SystemTime>) -> String {
     value
         .and_then(format_system_time_short)
         .unwrap_or_else(|| gettext("Never"))
+}
+
+#[cfg(test)]
+mod tests {
+    use gtk::prelude::*;
+    use sustain_app_runtime::{FieldChange, PlayStatistics, Rating, TrackMetadata};
+
+    use super::DetailsPage;
+
+    #[test]
+    fn the_rating_is_operable_from_the_keyboard() {
+        crate::test_support::with_gtk(|| {
+            let page = DetailsPage::new(
+                &TrackMetadata::default(),
+                Rating::new(2).expect("valid rating"),
+                &PlayStatistics::default(),
+                Vec::new(),
+            );
+
+            assert!(page.rating.is_focusable());
+            page.rating
+                .activate_action("rating.step", Some(&1_i32.to_variant()))
+                .expect("the rating takes keyboard steps");
+            assert_eq!(page.current_rating(), Rating::new(3).expect("valid rating"));
+        });
+    }
+
+    #[test]
+    fn a_malformed_number_names_its_field_instead_of_vanishing() {
+        crate::test_support::with_gtk(|| {
+            let initial = TrackMetadata {
+                year: Some(2004),
+                ..TrackMetadata::default()
+            };
+            let page = DetailsPage::new(
+                &initial,
+                Rating::unrated(),
+                &PlayStatistics::default(),
+                Vec::new(),
+            );
+            page.title.set_text("Edited");
+            page.year.set_text("20O4");
+
+            let invalid = page
+                .metadata_diff(&initial)
+                .expect_err("a malformed year is refused");
+            assert_eq!(invalid.entry, page.year);
+            assert_eq!(invalid.message, "Year must be a whole number.");
+
+            page.year.set_text("2005");
+            let change = page
+                .metadata_diff(&initial)
+                .ok()
+                .expect("a well-formed year is accepted");
+            assert_eq!(change.year, FieldChange::Set(2005));
+            assert_eq!(change.title, FieldChange::Set("Edited".to_owned()));
+        });
+    }
 }

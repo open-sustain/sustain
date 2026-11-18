@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use gtk::glib::Propagation;
 use gtk::prelude::*;
+use sustain_app_runtime::UserSettings;
 use sustain_i18n::gettext;
 
 use super::super::{ApplicationCommand, command_controller::SharedCommandController};
-use super::switch_row::build_switch_row;
+use super::switch_row::{build_switch_row, connect_setting_switch};
 
 pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
@@ -69,25 +69,37 @@ enum OnlineFlag {
     Lyrics,
 }
 
+impl OnlineFlag {
+    fn of(self, settings: &mut UserSettings) -> &mut bool {
+        match self {
+            Self::Artwork => &mut settings.online.artwork,
+            Self::Tags => &mut settings.online.tags,
+            Self::Lyrics => &mut settings.online.lyrics,
+        }
+    }
+}
+
 fn wire_online_switch(
     switch: &gtk::Switch,
     command_controller: SharedCommandController,
     flag: OnlineFlag,
 ) {
-    switch.connect_state_set(move |_switch, requested_state| {
-        let mut settings = command_controller.runtime().borrow().settings().clone();
-        match flag {
-            OnlineFlag::Artwork => settings.online.artwork = requested_state,
-            OnlineFlag::Tags => settings.online.tags = requested_state,
-            OnlineFlag::Lyrics => settings.online.lyrics = requested_state,
-        }
-        if command_controller
-            .dispatch(ApplicationCommand::UpdateSettings(settings))
-            .is_ok()
-        {
-            Propagation::Proceed
-        } else {
-            Propagation::Stop
-        }
-    });
+    let command_controller_for_held = command_controller.clone();
+    connect_setting_switch(
+        switch,
+        move |requested_state| {
+            let mut settings = command_controller.runtime().borrow().settings().clone();
+            *flag.of(&mut settings) = requested_state;
+            // A refusal is reported once by `UiCommandController`.
+            let _result = command_controller.dispatch(ApplicationCommand::UpdateSettings(settings));
+        },
+        move || {
+            let mut held = command_controller_for_held
+                .runtime()
+                .borrow()
+                .settings()
+                .clone();
+            *flag.of(&mut held)
+        },
+    );
 }

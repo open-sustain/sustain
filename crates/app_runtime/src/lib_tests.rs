@@ -8943,3 +8943,55 @@ fn smart_shuffle_rebuild_request_does_not_block_the_caller_on_store_reads() {
         "request must not block on the store reads (took {elapsed:?}); they belong on the worker"
     );
 }
+
+#[test]
+fn the_library_task_observer_fires_when_a_task_starts_and_when_it_ends() {
+    use crate::library_task::LibraryTaskKind;
+
+    let mut runtime = ApplicationRuntime::new();
+    let fired = std::rc::Rc::new(std::cell::Cell::new(0));
+    let fired_for_observer = fired.clone();
+    runtime.set_library_task_observer(Box::new(move || {
+        fired_for_observer.set(fired_for_observer.get() + 1);
+    }));
+
+    runtime
+        .start_library_task(
+            LibraryTaskKind::Scan,
+            NotificationCategory::LibraryScan,
+            "Scanning".to_owned(),
+            None,
+        )
+        .expect("the slot is free");
+    assert_eq!(fired.get(), 1);
+
+    // A refused start and a finish for a task that is not running leave
+    // the status unchanged, so they do not fire.
+    assert!(
+        runtime
+            .start_library_task(
+                LibraryTaskKind::Import,
+                NotificationCategory::LibraryScan,
+                "Importing".to_owned(),
+                None,
+            )
+            .is_err()
+    );
+    runtime.finish_library_task(LibraryTaskKind::Import);
+    assert_eq!(fired.get(), 1);
+
+    runtime.finish_library_task(LibraryTaskKind::Scan);
+    assert_eq!(fired.get(), 2);
+    assert!(!runtime.background_task_status().is_running());
+
+    runtime.clear_library_task_observer();
+    runtime
+        .start_library_task(
+            LibraryTaskKind::Scan,
+            NotificationCategory::LibraryScan,
+            "Scanning".to_owned(),
+            None,
+        )
+        .expect("the slot is free");
+    assert_eq!(fired.get(), 2);
+}

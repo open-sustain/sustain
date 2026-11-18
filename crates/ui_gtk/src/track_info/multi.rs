@@ -9,6 +9,7 @@ use sustain_app_runtime::{
 use sustain_i18n::{gettext, ngettext, pgettext, plural_count, tr_format};
 
 use crate::command_controller::SharedCommandController;
+use crate::metadata_diff::{parse_bpm, parse_key, parse_whole_number};
 
 use super::{DIALOG_SIDE_MARGIN, DIALOG_WIDTH, NUMBER_ENTRY_WIDTH_CHARS, PAIR_ENTRY_WIDTH_CHARS};
 
@@ -609,10 +610,7 @@ fn key_change(
     initial: &CommonValue<MusicalKey>,
     value: Option<String>,
 ) -> Result<FieldChange<MusicalKey>, String> {
-    parsed_change(initial, value, |text| {
-        MusicalKey::parse(text)
-            .ok_or_else(|| gettext("Key must be a musical key, such as Am, F#, or 8A."))
-    })
+    parsed_change(initial, value, parse_key)
 }
 
 /// A whole or decimal tempo, as [`Bpm::parse`] reads it.
@@ -620,9 +618,7 @@ fn bpm_change(
     initial: &CommonValue<Bpm>,
     value: Option<String>,
 ) -> Result<FieldChange<Bpm>, String> {
-    parsed_change(initial, value, |text| {
-        text.parse::<Bpm>().map_err(|error| format!("{error}."))
-    })
+    parsed_change(initial, value, parse_bpm)
 }
 
 fn prose_change(initial: &CommonValue<String>, value: Option<String>) -> FieldChange<String> {
@@ -648,12 +644,7 @@ fn number_change<T>(
 where
     T: Clone + Eq + std::str::FromStr,
 {
-    parsed_change(initial, value, |text| {
-        text.parse().map_err(|_| {
-            // Translators: {label} is a Get Info field, such as "Year".
-            tr_format!(gettext("{label} must be a whole number."), label = label)
-        })
-    })
+    parsed_change(initial, value, |text| parse_whole_number(label, text))
 }
 
 /// The change an enabled batch entry makes: blank text clears the field,

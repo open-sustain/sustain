@@ -10,6 +10,7 @@ use super::super::{
     ApplicationCommand, command_controller::SharedCommandController,
     date_format::format_system_time_short, status_bar::grouped,
 };
+use super::setting_scale::connect_setting_scale;
 use super::{HELPER_MAX_WIDTH_CHARS, HELPER_MIN_WIDTH_CHARS};
 use sustain_app_runtime::{SmartShuffleEntropy, SmartShuffleIndexMetadata};
 use sustain_i18n::{gettext, ngettext, tr_format};
@@ -206,15 +207,22 @@ fn build_entropy_section(
 
     let controller = command_controller;
     let caption_for_callback = caption.clone();
-    scale.connect_value_changed(move |s| {
-        let entropy = value_to_entropy(s.value());
-        caption_for_callback.set_text(&entropy_caption(entropy));
+    connect_setting_scale(&scale, move |value| {
+        let entropy = value_to_entropy(value);
         let mut settings = controller.runtime().borrow().settings().clone();
-        if settings.playback.smart_shuffle_entropy == entropy {
-            return;
+        if settings.playback.smart_shuffle_entropy != entropy {
+            settings.playback.smart_shuffle_entropy = entropy;
+            // A refusal is reported once by `UiCommandController`.
+            let _result = controller.dispatch(ApplicationCommand::UpdateSettings(settings));
         }
-        settings.playback.smart_shuffle_entropy = entropy;
-        let _ = controller.dispatch(ApplicationCommand::UpdateSettings(settings));
+        let held = controller
+            .runtime()
+            .borrow()
+            .settings()
+            .playback
+            .smart_shuffle_entropy;
+        caption_for_callback.set_text(&entropy_caption(held));
+        entropy_to_value(held)
     });
 
     container.upcast()

@@ -24,14 +24,19 @@ struct AccentPalette {
     foreground: &'static str,
 }
 
+/// The palette used when the desktop publishes no accent color: the GTK
+/// theme's own selection colors, so a theme whose selection is not blue
+/// keeps its look while Sustain's custom surfaces still follow it.
+const THEME_SELECTION: AccentPalette = AccentPalette {
+    background: "@theme_selected_bg_color",
+    foreground: "@theme_selected_fg_color",
+};
+
 pub(crate) fn install_accent_css() {
     let Some(display) = gdk::Display::default() else {
         return;
     };
-    let Some(settings) = accent_settings() else {
-        install_static_accent_css(&display, accent_palette("blue"));
-        return;
-    };
+    let settings = accent_settings();
 
     let provider = gtk::CssProvider::new();
     gtk::style_context_add_provider_for_display(
@@ -39,11 +44,14 @@ pub(crate) fn install_accent_css() {
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
     );
-    update_accent_css(&provider, &settings);
+    provider.load_from_string(&accent_css(palette_for(settings.as_ref())));
 
+    let Some(settings) = settings else {
+        return;
+    };
     let provider_for_settings = provider.clone();
     settings.connect_changed(Some(ACCENT_COLOR_KEY), move |settings, _key| {
-        update_accent_css(&provider_for_settings, settings);
+        provider_for_settings.load_from_string(&accent_css(palette_for(Some(settings))));
     });
 
     ACCENT_WATCH.with(|watch| {
@@ -52,6 +60,14 @@ pub(crate) fn install_accent_css() {
             _provider: provider,
         }));
     });
+}
+
+/// The palette for the desktop's accent setting, or the theme's own
+/// selection colors when the desktop publishes none.
+fn palette_for(settings: Option<&gio::Settings>) -> AccentPalette {
+    settings.map_or(THEME_SELECTION, |settings| {
+        accent_palette(&settings.string(ACCENT_COLOR_KEY))
+    })
 }
 
 fn accent_settings() -> Option<gio::Settings> {
@@ -71,21 +87,6 @@ fn accent_settings_from(schema_source: &gio::SettingsSchemaSource) -> Option<gio
         gio::SettingsBackend::NONE,
         None,
     ))
-}
-
-fn install_static_accent_css(display: &gdk::Display, palette: AccentPalette) {
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(&accent_css(palette));
-    gtk::style_context_add_provider_for_display(
-        display,
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-    );
-}
-
-fn update_accent_css(provider: &gtk::CssProvider, settings: &gio::Settings) {
-    let accent_name = settings.string(ACCENT_COLOR_KEY);
-    provider.load_from_string(&accent_css(accent_palette(&accent_name)));
 }
 
 fn accent_palette(accent_name: &str) -> AccentPalette {
@@ -245,7 +246,7 @@ fn accent_css(palette: AccentPalette) -> String {
 mod tests {
     use gtk::gio;
 
-    use super::{AccentPalette, accent_css, accent_palette, accent_settings_from};
+    use super::{AccentPalette, accent_css, accent_palette, accent_settings_from, palette_for};
 
     /// A schema source holding only an interface schema with `keys`, as an
     /// installed gsettings-desktop-schemas of some version would.
@@ -291,6 +292,15 @@ mod tests {
         assert!(accent_settings_from(&current_source).is_some());
         std::fs::remove_dir_all(older).expect("remove schema directory");
         std::fs::remove_dir_all(current).expect("remove schema directory");
+    }
+
+    #[test]
+    fn without_a_desktop_accent_the_theme_selection_colors_are_used() {
+        let css = accent_css(palette_for(None));
+
+        assert!(css.contains("background-color: @theme_selected_bg_color;"));
+        assert!(css.contains("color: @theme_selected_fg_color;"));
+        assert!(!css.contains('#'), "no hard-coded color: {css}");
     }
 
     #[test]

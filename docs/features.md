@@ -741,8 +741,8 @@ are accepted in any common notation — `Am`, `Amin`, `A minor`, `G#m`,
 `A♭m`, Camelot (`8A`) or Open Key (`1m`) — and stored as one canonical
 spelling (`Am`, `F#m`, `Eb`, …), so the same key is never split across
 spellings. A key tag that is not a key at all (free text, a URL) is
-ignored at import, leaving the field empty for analysis to fill; a typed
-value that is not a key leaves the field unchanged.
+ignored at import, leaving the field empty for analysis to fill. Typed
+text that is not a key is refused.
 
 The product target is harmonic compatibility for Pioneer/Rekordbox-style
 filtering rather than exact tonic+mode alone. The validation headline is
@@ -936,7 +936,10 @@ existing, and feed both the table and the smart-playlist rule engine.
 
 ### 5-star rating — *iso-iTunes*
 Editable inline in the table and in Get Info. Persists to SQLite *and*
-to the file's native rating frame.
+to the file's native rating frame. In Get Info the stars also take the
+keyboard: Left/Right, Up/Down or `+`/`-` step the rating, `0`–`5` set
+it, End gives five stars, and Home, Backspace or Delete clear it. Screen
+readers present the stars as a slider valued from unrated to five stars.
 
 ### Play count — *iTunes-adjacent*
 Incremented once per playback when the track has actually been heard

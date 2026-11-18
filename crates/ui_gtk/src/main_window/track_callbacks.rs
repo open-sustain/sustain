@@ -43,9 +43,16 @@ pub(super) fn begin_inline_edit_callback(
             let Some(initial) = track_metadata(&runtime, track_id) else {
                 return;
             };
-            let change = field.metadata_change(&initial, &new_text);
+            let change = match field.metadata_change(&initial, &new_text) {
+                Ok(change) => change,
+                Err(message) => {
+                    // The cell shows the stored value again; say why.
+                    command_controller.report_command_warning(message);
+                    return;
+                }
+            };
             if change == MetadataChange::default() {
-                // Re-typed the same value, or an unparsable number: no write.
+                // Re-typed the same value: no write.
                 return;
             }
             // A refused edit is reported by the dispatch; a committed one

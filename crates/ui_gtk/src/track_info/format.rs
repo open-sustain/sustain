@@ -9,6 +9,8 @@ use sustain_i18n::{gettext, ngettext, tr_format};
 
 use crate::date_format::format_system_time_short;
 
+/// The file's kind as its extension names it. An Ogg file can hold
+/// Vorbis, Opus or FLAC, so `.ogg` and `.oga` name only the container.
 pub(super) fn format_kind(path: Option<&Path>) -> String {
     let Some(path) = path else {
         return String::from("\u{2014}");
@@ -20,7 +22,7 @@ pub(super) fn format_kind(path: Option<&Path>) -> String {
     match extension.as_deref() {
         Some("mp3") => gettext("MPEG audio file"),
         Some("flac") => gettext("FLAC audio file"),
-        Some("ogg" | "oga") => gettext("Ogg Vorbis audio file"),
+        Some("ogg" | "oga") => gettext("Ogg audio file"),
         Some("opus") => gettext("Opus audio file"),
         Some("m4a" | "m4b" | "mp4") => gettext("MPEG-4 audio file"),
         Some("aif" | "aiff" | "aifc") => gettext("AIFF audio file"),
@@ -48,20 +50,22 @@ pub(super) fn format_duration_label(duration: Option<Duration>) -> String {
     }
 }
 
+/// A file size in decimal units (1 MB = 1,000,000 bytes), the units the
+/// status bar's library size uses.
 pub(super) fn format_size_label(size: Option<u64>) -> String {
     let Some(size) = size else {
         return String::from("\u{2014}");
     };
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
+    const KB: f64 = 1_000.0;
+    const MB: f64 = KB * 1_000.0;
+    const GB: f64 = MB * 1_000.0;
     let size_f = size as f64;
-    if size_f >= GIB {
-        format!("{:.2} GB", size_f / GIB)
-    } else if size_f >= MIB {
-        format!("{:.2} MB", size_f / MIB)
-    } else if size_f >= KIB {
-        format!("{:.2} KB", size_f / KIB)
+    if size_f >= GB {
+        format!("{:.2} GB", size_f / GB)
+    } else if size_f >= MB {
+        format!("{:.2} MB", size_f / MB)
+    } else if size_f >= KB {
+        format!("{:.2} KB", size_f / KB)
     } else {
         format!("{size} B")
     }
@@ -118,14 +122,17 @@ mod tests {
     fn format_kind_recognises_common_extensions() {
         assert_eq!(format_kind(Some(Path::new("song.mp3"))), "MPEG audio file");
         assert_eq!(format_kind(Some(Path::new("song.flac"))), "FLAC audio file");
+        // Ogg holds Vorbis, Opus or FLAC: the extension names only the container.
+        assert_eq!(format_kind(Some(Path::new("song.ogg"))), "Ogg audio file");
         assert_eq!(format_kind(None), "\u{2014}");
     }
 
     #[test]
-    fn format_size_label_uses_binary_prefixes() {
+    fn format_size_label_uses_the_status_bar_decimal_units() {
         assert_eq!(format_size_label(Some(512)), "512 B");
-        assert_eq!(format_size_label(Some(2_048)), "2.00 KB");
-        assert_eq!(format_size_label(Some(5_242_880)), "5.00 MB");
+        assert_eq!(format_size_label(Some(2_048)), "2.05 KB");
+        assert_eq!(format_size_label(Some(5_242_880)), "5.24 MB");
+        assert_eq!(format_size_label(Some(100_000_000)), "100.00 MB");
         assert_eq!(format_size_label(None), "\u{2014}");
     }
 

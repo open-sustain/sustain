@@ -4,7 +4,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use gtk::glib::Propagation;
 use gtk::prelude::*;
 use sustain_app_runtime::priority::resolve_worker_count;
 use sustain_app_runtime::{AnalysisSettings, BpmRange};
@@ -13,7 +12,8 @@ use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 use super::super::{
     ApplicationCommand, BackgroundResourceUsage, command_controller::SharedCommandController,
 };
-use super::switch_row::build_switch_row;
+use super::setting_scale::connect_setting_scale;
+use super::switch_row::{build_switch_row, connect_setting_switch};
 use super::{HELPER_MAX_WIDTH_CHARS, HELPER_MIN_WIDTH_CHARS};
 
 pub(super) fn build(command_controller: SharedCommandController) -> gtk::Widget {
@@ -145,36 +145,49 @@ fn key_switch_state(analysis: AnalysisSettings) -> SwitchState {
 
 /// Wire a BPM or Key switch. User toggles dispatch the matching flag;
 /// programmatic changes made by the audio handler (while `syncing` is
-/// set) are ignored, since they are not user gestures.
+/// set) dispatch nothing, since they are not user gestures and already
+/// show the held setting.
 fn wire_capability_switch(
     switch: &gtk::Switch,
     command_controller: SharedCommandController,
     flag: CapabilityFlag,
     syncing: Rc<Cell<bool>>,
 ) {
-    switch.connect_state_set(move |_switch, requested_state| {
-        if syncing.get() {
-            return Propagation::Proceed;
-        }
-        let mut settings = command_controller.runtime().borrow().settings().clone();
-        match flag {
-            CapabilityFlag::Bpm => settings.analysis.bpm = requested_state,
-            CapabilityFlag::Key => settings.analysis.key = requested_state,
-        }
-        if command_controller
-            .dispatch(ApplicationCommand::UpdateSettings(settings))
-            .is_ok()
-        {
-            Propagation::Proceed
-        } else {
-            Propagation::Stop
-        }
-    });
+    let flag_of = move |analysis: AnalysisSettings| match flag {
+        CapabilityFlag::Bpm => analysis.bpm,
+        CapabilityFlag::Key => analysis.key,
+    };
+    let command_controller_for_held = command_controller.clone();
+    connect_setting_switch(
+        switch,
+        move |requested_state| {
+            if syncing.get() {
+                return;
+            }
+            let mut settings = command_controller.runtime().borrow().settings().clone();
+            match flag {
+                CapabilityFlag::Bpm => settings.analysis.bpm = requested_state,
+                CapabilityFlag::Key => settings.analysis.key = requested_state,
+            }
+            // A refusal is reported once by `UiCommandController`.
+            let _result = command_controller.dispatch(ApplicationCommand::UpdateSettings(settings));
+        },
+        move || {
+            flag_of(
+                command_controller_for_held
+                    .runtime()
+                    .borrow()
+                    .settings()
+                    .analysis,
+            )
+        },
+    );
 }
 
 /// Wire the Audio analysis switch. Toggling it dispatches the new
-/// `audio` flag, then drives the BPM/Key switches to match and locks them
-/// while audio is on. Audio is the umbrella background job: enabling it
+/// `audio` flag, then drives the BPM/Key switches to the settings the
+/// application holds and locks them while audio is on. Audio is the
+/// umbrella background job: enabling it
 /// forces BPM + key on, and disabling it disables all three capabilities
 /// so stopping the expensive pass cannot accidentally start two cheaper
 /// queues. The `syncing` guard keeps the programmatic `set_active` calls
@@ -188,28 +201,36 @@ fn wire_audio_switch(
 ) {
     let bpm_switch = bpm_switch.clone();
     let key_switch = key_switch.clone();
-    audio_switch.connect_state_set(move |_switch, audio_on| {
-        let mut settings = command_controller.runtime().borrow().settings().clone();
-        settings.analysis = audio_switch_settings(settings.analysis, audio_on);
-        let bpm_state = bpm_switch_state(settings.analysis);
-        let key_state = key_switch_state(settings.analysis);
-        let dispatched = command_controller
-            .dispatch(ApplicationCommand::UpdateSettings(settings))
-            .is_ok();
-        // Mirror the (possibly forced) BPM/Key state onto their switches
-        // without re-entering their handlers, then lock/unlock them.
-        syncing.set(true);
-        bpm_switch.set_active(bpm_state.active);
-        key_switch.set_active(key_state.active);
-        syncing.set(false);
-        bpm_switch.set_sensitive(!bpm_state.locked);
-        key_switch.set_sensitive(!key_state.locked);
-        if dispatched {
-            Propagation::Proceed
-        } else {
-            Propagation::Stop
-        }
-    });
+    let command_controller_for_held = command_controller.clone();
+    connect_setting_switch(
+        audio_switch,
+        move |audio_on| {
+            let mut settings = command_controller.runtime().borrow().settings().clone();
+            settings.analysis = audio_switch_settings(settings.analysis, audio_on);
+            // A refusal is reported once by `UiCommandController`.
+            let _result = command_controller.dispatch(ApplicationCommand::UpdateSettings(settings));
+            let held = command_controller.runtime().borrow().settings().analysis;
+            let bpm_state = bpm_switch_state(held);
+            let key_state = key_switch_state(held);
+            // Mirror the held (possibly forced) BPM/Key state onto their
+            // switches without re-entering their handlers, then lock/unlock
+            // them.
+            syncing.set(true);
+            bpm_switch.set_active(bpm_state.active);
+            key_switch.set_active(key_state.active);
+            syncing.set(false);
+            bpm_switch.set_sensitive(!bpm_state.locked);
+            key_switch.set_sensitive(!key_state.locked);
+        },
+        move || {
+            command_controller_for_held
+                .runtime()
+                .borrow()
+                .settings()
+                .analysis
+                .audio
+        },
+    );
 }
 
 fn audio_switch_settings(current: AnalysisSettings, audio_on: bool) -> AnalysisSettings {
@@ -349,7 +370,20 @@ fn apply_bpm_range(
         return;
     }
     settings.analysis.bpm_range = range;
-    let _ = command_controller.dispatch(ApplicationCommand::UpdateSettings(settings));
+    // A refusal is reported once by `UiCommandController`.
+    let _result = command_controller.dispatch(ApplicationCommand::UpdateSettings(settings));
+    // Show the range the application holds: the requested one, or the
+    // previous one after a refusal.
+    let held = command_controller
+        .runtime()
+        .borrow()
+        .settings()
+        .analysis
+        .bpm_range;
+    syncing.set(true);
+    min_spin.set_value(f64::from(held.min()));
+    max_spin.set_value(f64::from(held.max()));
+    syncing.set(false);
 }
 
 /// Slider with three discrete stops (Innocuous / Balanced /
@@ -423,19 +457,24 @@ fn build_resource_usage_slider(command_controller: SharedCommandController) -> g
 
     let scale_controller = command_controller.clone();
     let caption_for_callback = caption.clone();
-    scale.connect_value_changed(move |s| {
-        let usage = value_to_usage(s.value());
-        // Update the caption immediately even before the runtime
-        // accepts the command — the slider's purpose is to give the
-        // user a preview of "what does this preset mean on my
-        // machine".
-        caption_for_callback.set_text(&caption_text(usage));
+    connect_setting_scale(&scale, move |value| {
+        let usage = value_to_usage(value);
         let mut settings = scale_controller.runtime().borrow().settings().clone();
-        if settings.background_jobs.resource_usage == usage {
-            return;
+        if settings.background_jobs.resource_usage != usage {
+            settings.background_jobs.resource_usage = usage;
+            // A refusal is reported once by `UiCommandController`.
+            let _result = scale_controller.dispatch(ApplicationCommand::UpdateSettings(settings));
         }
-        settings.background_jobs.resource_usage = usage;
-        let _ = scale_controller.dispatch(ApplicationCommand::UpdateSettings(settings));
+        let held = scale_controller
+            .runtime()
+            .borrow()
+            .settings()
+            .background_jobs
+            .resource_usage;
+        // The caption follows every move, so the user sees what each
+        // preset means on this machine as they drag.
+        caption_for_callback.set_text(&caption_text(held));
+        usage_to_value(held)
     });
 
     container.upcast()

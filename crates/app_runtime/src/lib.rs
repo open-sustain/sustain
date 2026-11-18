@@ -610,6 +610,12 @@ pub struct ApplicationRuntime {
     // button state stay live. Same re-entrancy contract as the other
     // observers — defer any re-borrow onto the main loop.
     smart_shuffle_state_observer: Option<SmartShuffleStateObserver>,
+    // Fires whenever the library task slot is taken or freed, so a view
+    // that locks its controls while a scan, import, organization,
+    // consolidation or CD import runs can unlock them when it ends. The
+    // Library preferences tab installs it on open and clears it on
+    // close. Same re-entrancy contract as the other observers.
+    library_task_observer: Option<LibraryTaskObserver>,
 }
 
 /// Callback fired after every mutation of [`NotificationCenter`]. Held
@@ -623,6 +629,11 @@ pub type NotificationObserver = Box<dyn Fn()>;
 /// fires, so observers must defer back-into-runtime reads onto the
 /// main loop (e.g. `glib::idle_add_local_once`).
 pub type SmartShuffleStateObserver = Box<dyn Fn()>;
+
+/// Callback fired whenever [`ApplicationRuntime::background_task_status`]
+/// changes. Same shape and re-entrancy contract as
+/// [`SmartShuffleStateObserver`].
+pub type LibraryTaskObserver = Box<dyn Fn()>;
 
 #[derive(Default)]
 struct TrackColumnLayoutCache {
@@ -829,6 +840,7 @@ impl ApplicationRuntime {
             library_changes: library_changes::LibraryChangeOutbox::default(),
             library_changes_observer: None,
             smart_shuffle_state_observer: None,
+            library_task_observer: None,
         }
     }
 
@@ -2041,7 +2053,9 @@ impl ApplicationRuntime {
         );
         self.library_task
             .occupy(kind, notification_id, cancellation)
-            .inspect_err(|_| self.notifications.dismiss(notification_id))
+            .inspect_err(|_| self.notifications.dismiss(notification_id))?;
+        self.fire_library_task_observer();
+        Ok(())
     }
 
     /// Release the slot the task `kind` holds and dismiss its notification.
@@ -2049,6 +2063,26 @@ impl ApplicationRuntime {
     pub(crate) fn finish_library_task(&mut self, kind: library_task::LibraryTaskKind) {
         if let Some(id) = self.library_task.finish(kind) {
             self.dismiss_notification(id);
+            self.fire_library_task_observer();
+        }
+    }
+
+    /// Install the observer fired whenever a library task starts or ends.
+    /// Pair it with [`Self::clear_library_task_observer`] when the view
+    /// that installed it goes away. Same re-entrancy contract as the
+    /// other observers.
+    pub fn set_library_task_observer(&mut self, observer: LibraryTaskObserver) {
+        self.library_task_observer = Some(observer);
+    }
+
+    /// Drop the observer installed by [`Self::set_library_task_observer`].
+    pub fn clear_library_task_observer(&mut self) {
+        self.library_task_observer = None;
+    }
+
+    fn fire_library_task_observer(&self) {
+        if let Some(observer) = &self.library_task_observer {
+            observer();
         }
     }
 

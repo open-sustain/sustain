@@ -285,7 +285,7 @@ pub(crate) enum SmartPlaylistEditorMode {
 }
 
 pub(crate) fn open_smart_playlist_editor(
-    parent: &gtk::ApplicationWindow,
+    parent: &impl IsA<gtk::Window>,
     command_controller: SharedCommandController,
     on_saved: Rc<dyn Fn()>,
     mode: SmartPlaylistEditorMode,
@@ -410,13 +410,6 @@ pub(crate) fn open_smart_playlist_editor(
     limit_row.append(&limit_selection_combo);
     content.append(&limit_row);
 
-    let error_label = gtk::Label::new(None);
-    error_label.add_css_class("smart-playlist-error");
-    error_label.set_xalign(0.0);
-    error_label.set_wrap(true);
-    error_label.set_visible(false);
-    content.append(&error_label);
-
     let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
     spacer.set_vexpand(true);
     content.append(&spacer);
@@ -441,7 +434,6 @@ pub(crate) fn open_smart_playlist_editor(
     let limit_count_for_ok = limit_count.clone();
     let limit_selection_for_ok = limit_selection_combo.clone();
     let on_saved_for_ok = on_saved.clone();
-    let error_label_for_ok = error_label.clone();
     ok_button.connect_clicked(move |_| {
         let extraction = extract_rule_set(
             &rule_rows_for_ok.borrow(),
@@ -481,10 +473,8 @@ pub(crate) fn open_smart_playlist_editor(
                     window_for_ok.close();
                 }
             }
-            Err(error) => {
-                error_label_for_ok.set_text(&error.message());
-                error_label_for_ok.set_visible(true);
-            }
+            // The editor stays open on the rules so the user can fix them.
+            Err(error) => command_controller_for_ok.report_command_warning(error.message()),
         }
     });
 
@@ -683,4 +673,68 @@ fn limit_selection_from_combo(combo: &gtk::DropDown) -> SmartPlaylistLimitSelect
         .get(index)
         .copied()
         .unwrap_or(SmartPlaylistLimitSelection::Random)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use sustain_app_runtime::ApplicationRuntime;
+
+    use super::*;
+    use crate::command_controller::UiCommandController;
+
+    fn button_labelled(root: &gtk::Widget, label_text: &str) -> Option<gtk::Button> {
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                && button.label().as_deref() == Some(label_text)
+            {
+                return Some(button.clone());
+            }
+            if let Some(found) = button_labelled(&widget, label_text) {
+                return Some(found);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+
+    #[test]
+    fn an_incomplete_rule_is_reported_through_the_notification_lane() {
+        crate::test_support::with_gtk(|| {
+            let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+            let command_controller: SharedCommandController =
+                Rc::new(UiCommandController::new(runtime.clone()));
+            let parent = gtk::Window::new();
+            open_smart_playlist_editor(
+                &parent,
+                command_controller,
+                Rc::new(|| {}),
+                SmartPlaylistEditorMode::Create {
+                    name: "Smart".to_owned(),
+                },
+            );
+            let editor = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
+                .find(|window| window.transient_for().as_ref() == Some(&parent))
+                .expect("the editor window is open");
+
+            // The new editor's only rule is a text rule with no value.
+            button_labelled(editor.upcast_ref(), "OK")
+                .expect("the OK button")
+                .emit_clicked();
+
+            let shown = runtime
+                .borrow()
+                .notifications()
+                .current_ephemeral()
+                .map(|notification| notification.body.clone());
+            assert_eq!(shown.as_deref(), Some("A text rule needs a value."));
+            assert!(editor.is_visible(), "the editor stays open on the rules");
+            editor.destroy();
+        });
+    }
 }

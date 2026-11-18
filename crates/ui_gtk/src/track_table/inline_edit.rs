@@ -29,6 +29,7 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
 use sustain_app_runtime::{MetadataChange, TrackMetadata};
+use sustain_i18n::gettext;
 
 use crate::cell_registry::{BindingRegistry, CellBinding};
 use crate::metadata_diff::{bpm_diff, key_diff, number_diff, signed_number_diff, text_diff};
@@ -78,20 +79,29 @@ impl EditableField {
     /// track's current `initial` metadata. Uses the shared diff helpers so
     /// the result is byte-for-byte what the File Info dialog would produce
     /// for the same input (unchanged stays unchanged, emptied clears the
-    /// tag, unparsable numbers are left unchanged).
-    pub(crate) fn metadata_change(self, initial: &TrackMetadata, new_text: &str) -> MetadataChange {
+    /// tag, text the field cannot take is an error saying what it takes).
+    pub(crate) fn metadata_change(
+        self,
+        initial: &TrackMetadata,
+        new_text: &str,
+    ) -> Result<MetadataChange, String> {
         let mut change = MetadataChange::default();
         match self {
             Self::Title => change.title = text_diff(initial.title.as_deref(), new_text),
             Self::Artist => change.artist = text_diff(initial.artist.as_deref(), new_text),
             Self::Album => change.album = text_diff(initial.album.as_deref(), new_text),
             Self::Genre => change.genre = text_diff(initial.genre.as_deref(), new_text),
-            Self::Year => change.year = signed_number_diff(initial.year, new_text),
-            Self::Bpm => change.bpm = bpm_diff(initial.bpm, new_text),
-            Self::Key => change.key = key_diff(initial.key, new_text),
-            Self::TrackNumber => change.track_number = number_diff(initial.track_number, new_text),
+            Self::Year => {
+                change.year = signed_number_diff(&gettext("Year"), initial.year, new_text)?;
+            }
+            Self::Bpm => change.bpm = bpm_diff(initial.bpm, new_text)?,
+            Self::Key => change.key = key_diff(initial.key, new_text)?,
+            Self::TrackNumber => {
+                change.track_number =
+                    number_diff(&gettext("Track number"), initial.track_number, new_text)?;
+            }
         }
-        change
+        Ok(change)
     }
 }
 
@@ -702,29 +712,32 @@ mod tests {
     #[test]
     fn metadata_change_matches_the_dialog_diff_rules() {
         let metadata = metadata();
+        let change = |field: EditableField, text: &str| {
+            field
+                .metadata_change(&metadata, text)
+                .expect("a value the field accepts")
+        };
         assert_eq!(
-            EditableField::Title.metadata_change(&metadata, "Song"),
+            change(EditableField::Title, "Song"),
             MetadataChange::default(),
             "re-typing the same value is a no-op"
         );
         assert_eq!(
-            EditableField::Title.metadata_change(&metadata, "New").title,
+            change(EditableField::Title, "New").title,
             sustain_app_runtime::FieldChange::Set("New".to_owned())
         );
         assert_eq!(
-            EditableField::Artist
-                .metadata_change(&metadata, "   ")
-                .artist,
+            change(EditableField::Artist, "   ").artist,
             sustain_app_runtime::FieldChange::Clear,
             "emptying a populated field clears the tag"
         );
         assert_eq!(
             EditableField::Year.metadata_change(&metadata, "abc"),
-            MetadataChange::default(),
-            "an unparsable number leaves the field unchanged"
+            Err("Year must be a whole number.".to_owned()),
+            "text a number field cannot take is reported, not dropped"
         );
         assert_eq!(
-            EditableField::Year.metadata_change(&metadata, "2001").year,
+            change(EditableField::Year, "2001").year,
             sustain_app_runtime::FieldChange::Set(2001)
         );
     }

@@ -2,9 +2,10 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gtk::prelude::*;
-use gtk::{gio, glib, glib::Propagation};
+use gtk::{gio, glib};
 use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
 use sustain_i18n::gettext;
 
@@ -14,7 +15,7 @@ use super::super::{
     library_consolidation::LibraryConsolidationRequestedCallback,
     library_scan::LibraryScanRequestedCallback,
 };
-use super::switch_row::build_switch_row;
+use super::switch_row::{build_switch_row, connect_setting_switch};
 use super::{
     HELPER_MAX_WIDTH_CHARS, HELPER_MIN_WIDTH_CHARS, PATH_ENTRY_VISIBLE_CHARS,
     SortTagsChangedCallback,
@@ -66,11 +67,6 @@ pub(super) fn build(
     if let Some(music_dir) = glib::user_special_dir(glib::UserDirectory::Music) {
         path_entry.set_placeholder_text(Some(&music_dir.to_string_lossy()));
     }
-    let library_task_is_running = command_controller
-        .runtime()
-        .borrow()
-        .background_task_status()
-        .is_running();
     if let Some(library_path) = command_controller
         .runtime()
         .borrow()
@@ -89,9 +85,15 @@ pub(super) fn build(
 
     let scan_button = gtk::Button::with_label(&gettext("Scan"));
     scan_button.set_tooltip_text(Some(&gettext("Save library path and scan now")));
-    path_entry.set_sensitive(!library_task_is_running);
-    folder_button.set_sensitive(!library_task_is_running);
-    scan_button.set_sensitive(!library_task_is_running);
+    lock_path_controls_while_library_task_runs(
+        parent_window,
+        &command_controller,
+        [
+            path_entry.clone().upcast(),
+            folder_button.clone().upcast(),
+            scan_button.clone().upcast(),
+        ],
+    );
 
     let library_path_is_valid = library_path_entry_is_valid(&path_entry);
     let management_mode = command_controller
@@ -115,10 +117,19 @@ pub(super) fn build(
     let command_controller_for_organization = command_controller.clone();
     let consolidation_requested_for_organization = consolidation_requested.clone();
     let path_entry_for_organization = path_entry.clone();
-    let path_entry_for_organization_sensitivity = path_entry.clone();
-    let folder_button_for_organization_sensitivity = folder_button.clone();
-    let scan_button_for_organization_sensitivity = scan_button.clone();
-    keep_organized_switch.connect_state_set(move |_switch, requested_state| {
+    let command_controller_for_organized = command_controller.clone();
+    // Whatever the handler below does, the switch shows the mode the
+    // application ends up holding.
+    let organized = move || {
+        command_controller_for_organized
+            .runtime()
+            .borrow()
+            .settings()
+            .library
+            .management_mode
+            == LibraryManagementMode::CopyAddedFilesIntoLibrary
+    };
+    let organize = move |requested_state: bool| {
         // The toggle alters two settings at once: the library path (kept
         // in sync with the entry contents) and the management mode. We
         // build the full target settings and dispatch a single
@@ -139,7 +150,7 @@ pub(super) fn build(
                 NotificationSeverity::Warning,
                 runtime_error_text(&ApplicationRuntimeError::LibraryPathUnavailable),
             );
-            return Propagation::Stop;
+            return;
         }
 
         let mut settings = command_controller_for_organization
@@ -156,23 +167,17 @@ pub(super) fn build(
         // UpdateSettings failures are reported once by `UiCommandController`;
         // a started/failed consolidation reports through the runtime's
         // LibraryConsolidation notification (and the start-failure path in
-        // `consolidation_requested`). This handler only owns the form's
-        // control sensitivity and the cancellation acknowledgement.
+        // `consolidation_requested`). This handler only owns the
+        // cancellation acknowledgement; the path controls follow the
+        // library task through `lock_path_controls_while_library_task_runs`.
         match command_controller_for_organization
             .dispatch(ApplicationCommand::UpdateSettings(settings))
         {
-            Ok(()) if requested_state => match consolidation_requested_for_organization() {
-                Ok(()) => {
-                    path_entry_for_organization_sensitivity.set_sensitive(false);
-                    folder_button_for_organization_sensitivity.set_sensitive(false);
-                    scan_button_for_organization_sensitivity.set_sensitive(false);
-                    Propagation::Proceed
-                }
-                Err(_error) => {
+            Ok(()) if requested_state => {
+                if consolidation_requested_for_organization().is_err() {
                     // The consolidation start failure was already reported
                     // by `consolidation_requested`; roll the mode back so
-                    // the persisted setting matches the toggle's resting
-                    // state.
+                    // organization is not left on with nothing organizing.
                     let mut settings = command_controller_for_organization
                         .runtime()
                         .borrow()
@@ -181,9 +186,8 @@ pub(super) fn build(
                     settings.library.management_mode = LibraryManagementMode::ReferenceFilesInPlace;
                     let _result = command_controller_for_organization
                         .dispatch(ApplicationCommand::UpdateSettings(settings));
-                    Propagation::Stop
                 }
-            },
+            }
             Ok(()) => {
                 if command_controller_for_organization
                     .runtime()
@@ -198,11 +202,11 @@ pub(super) fn build(
                         gettext("Library organization will stop after the current file."),
                     );
                 }
-                Propagation::Proceed
             }
-            Err(_error) => Propagation::Stop,
+            Err(_error) => {}
         }
-    });
+    };
+    connect_setting_switch(&keep_organized_switch, organize, organized);
 
     let keep_organized_for_path_change = keep_organized_switch.clone();
     let command_controller_for_path_change = command_controller.clone();
@@ -279,23 +283,35 @@ pub(super) fn build(
         ),
         sort_tags_enabled,
     );
+    let command_controller_for_held_sort_tags = command_controller.clone();
+    let honors_sort_tags = move || {
+        command_controller_for_held_sort_tags
+            .runtime()
+            .borrow()
+            .settings()
+            .library
+            .honor_sort_tags
+    };
     let command_controller_for_sort_tags = command_controller.clone();
-    sort_tags_row
-        .switch
-        .connect_state_set(move |_switch, requested_state| {
+    let honors_sort_tags_for_apply = honors_sort_tags.clone();
+    connect_setting_switch(
+        &sort_tags_row.switch,
+        move |requested_state| {
             let mut settings = command_controller_for_sort_tags
                 .runtime()
                 .borrow()
                 .settings()
                 .clone();
             settings.library.honor_sort_tags = requested_state;
-            if command_controller_for_sort_tags
-                .dispatch_succeeded(ApplicationCommand::UpdateSettings(settings))
-            {
+            // A refusal is reported once by `UiCommandController`.
+            let _result = command_controller_for_sort_tags
+                .dispatch(ApplicationCommand::UpdateSettings(settings));
+            if honors_sort_tags_for_apply() == requested_state {
                 sort_tags_changed();
             }
-            Propagation::Proceed
-        });
+        },
+        honors_sort_tags,
+    );
 
     content.append(&label_group);
     content.append(&path_row);
@@ -374,6 +390,41 @@ fn save_library_path_from_entry(
     }
 
     command_controller.dispatch(ApplicationCommand::UpdateSettings(settings))
+}
+
+/// Keep `controls` insensitive exactly while a library task runs. A scan,
+/// import or organization started from this page, or from anywhere else,
+/// locks them, and they unlock when it ends, even with the window left
+/// open. The runtime observer is cleared when `window` closes, which
+/// releases the controls.
+fn lock_path_controls_while_library_task_runs(
+    window: &gtk::Window,
+    command_controller: &SharedCommandController,
+    controls: [gtk::Widget; 3],
+) {
+    let runtime = command_controller.runtime();
+    let refresh: Rc<dyn Fn()> = {
+        let runtime = runtime.clone();
+        Rc::new(move || {
+            let running = runtime.borrow().background_task_status().is_running();
+            for control in &controls {
+                control.set_sensitive(!running);
+            }
+        })
+    };
+    refresh();
+    // The runtime is mid-borrow when the observer fires, so the refresh
+    // waits for the main loop.
+    runtime
+        .borrow_mut()
+        .set_library_task_observer(Box::new(move || {
+            let refresh = refresh.clone();
+            glib::idle_add_local_once(move || refresh());
+        }));
+    window.connect_close_request(move |_| {
+        runtime.borrow_mut().clear_library_task_observer();
+        glib::Propagation::Proceed
+    });
 }
 
 fn library_path_entry_is_valid(path_entry: &gtk::Entry) -> bool {

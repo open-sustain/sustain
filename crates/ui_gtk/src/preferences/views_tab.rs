@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use gtk::glib::Propagation;
+use std::rc::Rc;
+
 use gtk::prelude::*;
+use sustain_app_runtime::UserSettings;
 use sustain_i18n::gettext;
 
 use super::super::{ApplicationCommand, command_controller::SharedCommandController};
 use super::ViewSettingsChangedCallback;
-use super::switch_row::build_switch_row;
+use super::switch_row::{build_switch_row, connect_setting_switch};
 
 pub(super) fn build(
     command_controller: SharedCommandController,
@@ -73,29 +75,46 @@ enum ViewFlag {
     NowPlayingWaveform,
 }
 
+impl ViewFlag {
+    fn of(self, settings: &mut UserSettings) -> &mut bool {
+        match self {
+            Self::SidebarDuplicates => &mut settings.ui.sidebar_show_duplicates,
+            Self::SidebarStatistics => &mut settings.ui.sidebar_show_statistics,
+            Self::NowPlayingWaveform => &mut settings.ui.now_playing_waveform,
+        }
+    }
+}
+
 fn wire_view_switch(
     switch: &gtk::Switch,
     command_controller: SharedCommandController,
     view_settings_changed: ViewSettingsChangedCallback,
     flag: ViewFlag,
 ) {
-    switch.connect_state_set(move |_switch, requested_state| {
-        let mut settings = command_controller.runtime().borrow().settings().clone();
-        match flag {
-            ViewFlag::SidebarDuplicates => settings.ui.sidebar_show_duplicates = requested_state,
-            ViewFlag::SidebarStatistics => settings.ui.sidebar_show_statistics = requested_state,
-            ViewFlag::NowPlayingWaveform => settings.ui.now_playing_waveform = requested_state,
-        }
-        if command_controller
-            .dispatch(ApplicationCommand::UpdateSettings(settings))
-            .is_ok()
-        {
-            // Apply the change to the live UI (sidebar rows now, the
-            // Now Playing waveform) without a relaunch.
-            view_settings_changed();
-            Propagation::Proceed
-        } else {
-            Propagation::Stop
-        }
+    let command_controller_for_apply = command_controller.clone();
+    let held = Rc::new(move || {
+        let mut held = command_controller.runtime().borrow().settings().clone();
+        *flag.of(&mut held)
     });
+    let held_for_apply = held.clone();
+    connect_setting_switch(
+        switch,
+        move |requested_state| {
+            let mut settings = command_controller_for_apply
+                .runtime()
+                .borrow()
+                .settings()
+                .clone();
+            *flag.of(&mut settings) = requested_state;
+            // A refusal is reported once by `UiCommandController`.
+            let _result =
+                command_controller_for_apply.dispatch(ApplicationCommand::UpdateSettings(settings));
+            if held_for_apply() == requested_state {
+                // Apply the change to the live UI (sidebar rows now, the
+                // Now Playing waveform) without a relaunch.
+                view_settings_changed();
+            }
+        },
+        move || held(),
+    );
 }

@@ -16,6 +16,13 @@ pub(super) fn attach_field(
     label.add_css_class("track-info-field-label");
     grid.attach(&label, 0, row, 1, 1);
     grid.attach(field, 1, row, 3, 1);
+    labelled_by(field.upcast_ref(), &[&label]);
+}
+
+/// Name `field` for assistive technology by the label(s) shown beside it.
+pub(super) fn labelled_by(field: &gtk::Widget, labels: &[&gtk::Label]) {
+    let labels: Vec<&gtk::Accessible> = labels.iter().map(|label| label.upcast_ref()).collect();
+    field.update_relation(&[gtk::accessible::Relation::LabelledBy(&labels)]);
 }
 
 pub(super) fn attach_paired_field(
@@ -37,6 +44,8 @@ pub(super) fn attach_paired_field(
     separator.add_css_class("dim-label");
     grid.attach(&separator, 2, row, 1, 1);
     grid.attach(second, 3, row, 1, 1);
+    labelled_by(first.upcast_ref(), &[&label]);
+    labelled_by(second.upcast_ref(), &[&label, &separator]);
 }
 
 pub(super) fn attach_readonly_field(grid: &gtk::Grid, row: i32, label_text: &str, value: &str) {
@@ -59,6 +68,7 @@ pub(super) fn attach_readonly_field(grid: &gtk::Grid, row: i32, label_text: &str
     value_label.set_hexpand(true);
     value_label.set_tooltip_text(Some(value));
     grid.attach(&value_label, 1, row, 1, 1);
+    labelled_by(value_label.upcast_ref(), &[&label]);
 }
 
 pub(super) fn text_entry(initial: Option<&str>) -> gtk::Entry {
