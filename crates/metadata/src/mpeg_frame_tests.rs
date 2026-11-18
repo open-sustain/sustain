@@ -3,7 +3,9 @@
 
 use std::{path::PathBuf, time::Duration};
 
-use super::{AudioExtent, audio_extent, first_audio_frame_offset, mpeg_frame_len};
+use super::{
+    AudioExtent, FrameHeader, MAX_FRAME_LEN, audio_extent, first_audio_frame_offset, mpeg_frame_len,
+};
 
 /// One MPEG-1 Layer III, 128 kbps, 44.1 kHz frame is 417 bytes. The 4-byte
 /// header is followed by zeroed payload — only the header is parsed.
@@ -251,6 +253,23 @@ fn a_declared_frame_count_is_taken_without_reading_the_stream_through() {
 }
 
 #[test]
+fn audio_starting_past_the_first_read_window_is_still_found() {
+    // Junk between the tags and the audio, longer than the short first
+    // read: the leading region is read in full before giving up.
+    let mut bytes = vec![0x00; 100 * 1024];
+    bytes.extend_from_slice(&xing_frame(5_000));
+    bytes.extend_from_slice(&mpeg_frames(8));
+
+    assert_eq!(
+        extent_of("late", &bytes),
+        Some(AudioExtent {
+            duration: playing_time(5_000),
+            measured_bitrate_kbps: None,
+        })
+    );
+}
+
+#[test]
 fn a_header_frame_without_a_frame_count_has_its_stream_counted() {
     let mut xing = b"Xing".to_vec();
     xing.extend_from_slice(&0u32.to_be_bytes()); // flags: nothing present
@@ -285,4 +304,16 @@ fn a_file_without_audio_frames_has_no_extent() {
         audio_extent(&std::env::temp_dir().join("sustain_mpeg_frame_test_missing.mp3")),
         None
     );
+}
+
+#[test]
+fn no_parsed_frame_is_longer_than_the_frame_length_bound() {
+    let longest = (0..=u16::MAX)
+        .filter_map(|header| {
+            let [second, third] = header.to_be_bytes();
+            FrameHeader::parse(&[0xFF, second, third, 0x00]).map(|frame| frame.len)
+        })
+        .max();
+
+    assert_eq!(longest, Some(MAX_FRAME_LEN));
 }

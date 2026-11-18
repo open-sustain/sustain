@@ -47,22 +47,26 @@ use std::{
 /// cannot.
 const REQUIRED_CHAINED_FRAMES: usize = 3;
 
-/// Upper bound on how far into the file we look for the first frame. The
-/// audio of a real MP3 begins within at most a few tens of kilobytes of the
-/// start (tag + padding); a file with no frame sync in the first mebibyte is
-/// not something we will rewrite.
+/// Upper bound on how far past the leading ID3v2 tags we look for the first
+/// frame. The audio of a real MP3 begins within at most a few tens of
+/// kilobytes of its tags (padding, junk); a file with no frame sync in the
+/// mebibyte after them is not something we will rewrite. The bound starts
+/// after the tags because a valid tag carrying large artwork can itself
+/// exceed it.
 const MAX_LEADING_REGION_BYTES: usize = 1024 * 1024;
 
 /// Returns the byte offset of the first MPEG audio frame in `bytes`, or
 /// `None` if no chained run of valid frames is found within
-/// [`MAX_LEADING_REGION_BYTES`].
+/// [`MAX_LEADING_REGION_BYTES`] after the leading ID3v2 tags.
 pub(crate) fn first_audio_frame_offset(bytes: &[u8]) -> Option<usize> {
     // Skip any stacked ID3v2 tags up front so their frame contents are not
     // scanned for false syncs. Whatever remains (padding, junk, or audio) is
     // searched frame-by-frame; the chaining check is what actually validates
     // the start, so this skip is an optimisation, not a correctness crutch.
     let scan_start = skip_leading_id3v2_tags(bytes);
-    let scan_limit = bytes.len().min(MAX_LEADING_REGION_BYTES);
+    let scan_limit = bytes
+        .len()
+        .min(scan_start.saturating_add(MAX_LEADING_REGION_BYTES));
 
     let mut offset = scan_start;
     while offset < scan_limit {
@@ -72,6 +76,25 @@ pub(crate) fn first_audio_frame_offset(bytes: &[u8]) -> Option<usize> {
         offset += 1;
     }
     None
+}
+
+/// How much audio [`audio_extent`] reads first, before falling back to the
+/// whole leading region.
+const INITIAL_AUDIO_WINDOW_BYTES: usize = 64 * 1024;
+
+/// The longest frame [`FrameHeader::parse`] accepts: a padded Layer II
+/// frame at 160 kbps and 8 kHz (MPEG-2.5), 144 × 160,000 / 8,000 + 1 bytes.
+const MAX_FRAME_LEN: usize = 2881;
+
+/// Reads from `file` until `buffer` holds `len` bytes; returns whether the
+/// file ended first.
+fn read_up_to(file: &mut File, buffer: &mut Vec<u8>, len: usize) -> Option<bool> {
+    let missing = len.saturating_sub(buffer.len());
+    file.by_ref()
+        .take(missing as u64)
+        .read_to_end(buffer)
+        .ok()?;
+    Some(buffer.len() < len)
 }
 
 /// How long the MPEG audio of a file plays, and the bitrate it averages
@@ -94,12 +117,21 @@ pub(crate) fn audio_extent(path: &Path) -> Option<AudioExtent> {
     let tags_len = leading_id3v2_tags_len(&mut file)?;
     file.seek(SeekFrom::Start(tags_len)).ok()?;
     let mut audio = Vec::new();
-    file.by_ref()
-        .take(MAX_LEADING_REGION_BYTES as u64)
-        .read_to_end(&mut audio)
-        .ok()?;
-
-    let first_frame_offset = first_audio_frame_offset(&audio)?;
+    // Real audio starts right after its tags, so a short window almost
+    // always holds the first frames — and with them a declared count. An
+    // offset found in the window is only trusted when the chains of it and
+    // of every earlier candidate fit inside, so that it is the offset the
+    // whole leading region would yield.
+    let window_is_whole_file = read_up_to(&mut file, &mut audio, INITIAL_AUDIO_WINDOW_BYTES)?;
+    let first_frame_offset = match first_audio_frame_offset(&audio).filter(|&offset| {
+        window_is_whole_file || offset + REQUIRED_CHAINED_FRAMES * MAX_FRAME_LEN <= audio.len()
+    }) {
+        Some(offset) => offset,
+        None => {
+            read_up_to(&mut file, &mut audio, MAX_LEADING_REGION_BYTES)?;
+            first_audio_frame_offset(&audio)?
+        }
+    };
     let first_frame = FrameHeader::parse(&audio[first_frame_offset..])?;
     if let Some(frame_count) = declared_frame_count(&audio[first_frame_offset..], &first_frame) {
         return Some(AudioExtent {

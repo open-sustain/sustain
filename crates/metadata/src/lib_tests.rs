@@ -1645,6 +1645,20 @@ fn write_rating_heals_an_mp3_with_stacked_id3v2_tags() {
 }
 
 #[test]
+fn the_first_frame_is_found_past_padding_that_follows_a_tag_over_a_mebibyte() {
+    // A valid tag carrying large artwork, then junk before the audio.
+    let mut fixture = id3v2_3_tag(&vec![0x00; 2 * 1024 * 1024]);
+    let tag_end = fixture.len();
+    fixture.extend_from_slice(&[0x00; 4096]);
+    fixture.extend_from_slice(&mpeg_audio_frames(6));
+
+    assert_eq!(
+        super::mpeg_frame::first_audio_frame_offset(&fixture),
+        Some(tag_end + 4096)
+    );
+}
+
+#[test]
 fn write_refuses_to_heal_a_leading_region_that_holds_an_ape_tag() {
     // A leading APE tag large enough to push the audio past lofty's write
     // window. Compacting the region would delete the APE tag, which Sustain
