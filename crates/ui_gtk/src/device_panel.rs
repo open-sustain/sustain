@@ -37,6 +37,7 @@ use checklist::{ChecklistEntry, checklist};
 /// Recomputes the status-bar track/duration/size summary for the device
 /// view. Supplied by the main window, which knows the status bar.
 type SummaryRefresh = Rc<dyn Fn()>;
+type DeviceForgottenCallback = Rc<dyn Fn()>;
 
 #[derive(Clone)]
 pub(crate) struct DeviceSyncPanel {
@@ -54,6 +55,9 @@ pub(crate) struct DeviceSyncPanel {
     /// show, selection toggle, and forget so the summary tracks the
     /// device's selected content instead of a stale earlier view.
     on_summary_refresh: Rc<RefCell<Option<SummaryRefresh>>>,
+    /// Leaves the device view once the device it shows has been
+    /// forgotten, as an unplug does.
+    on_device_forgotten: Rc<RefCell<Option<DeviceForgottenCallback>>>,
     /// The Pioneer "Analysis" readiness box, when the current view shows a
     /// Pioneer device. Held so a background analysis completion can refill
     /// the BPM/Key/Waveform rows in place without rebuilding the panel.
@@ -94,6 +98,7 @@ impl DeviceSyncPanel {
             current_device: Rc::new(RefCell::new(None)),
             current_device_connected: Rc::new(Cell::new(false)),
             on_summary_refresh: Rc::new(RefCell::new(None)),
+            on_device_forgotten: Rc::new(RefCell::new(None)),
             readiness_section: Rc::new(RefCell::new(None)),
             readiness_refresh_queued: Rc::new(Cell::new(false)),
             runtime,
@@ -123,6 +128,12 @@ impl DeviceSyncPanel {
     /// panel fires it whenever the device's selected content changes.
     pub(crate) fn set_summary_refresh(&self, refresh: SummaryRefresh) {
         self.on_summary_refresh.replace(Some(refresh));
+    }
+
+    /// Install what the panel runs once the device it shows has been
+    /// forgotten: the view has nothing left to show for it.
+    pub(crate) fn set_device_forgotten_callback(&self, callback: DeviceForgottenCallback) {
+        self.on_device_forgotten.replace(Some(callback));
     }
 
     fn fire_summary_refresh(&self) {
@@ -609,26 +620,26 @@ impl DeviceSyncPanel {
             let panel = self.clone();
             let device_id = device.id.clone();
             forget.connect_clicked(move |_| {
-                panel
+                // The runtime reports the outcome either way; the panel
+                // only lets go of a device that was actually forgotten.
+                if !panel
                     .command_controller
                     .dispatch_succeeded(ApplicationCommand::ForgetDevice {
                         device_id: device_id.clone(),
-                    });
+                    })
+                {
+                    return;
+                }
                 Self::clear(&panel.body);
                 Self::clear(&panel.bottom_bar);
-                let note = gtk::Label::new(Some(&gettext(
-                    "Device forgotten. Its saved playlists, artists, and sync history were cleared.",
-                )));
-                note.set_xalign(0.0);
-                note.set_valign(gtk::Align::Start);
-                note.set_margin_top(18);
-                note.set_margin_start(18);
-                note.set_margin_end(18);
-                panel.body.append(&note);
                 // The selection is gone; the summary now reads empty.
                 panel.current_device.replace(None);
                 panel.current_device_connected.set(false);
                 panel.fire_summary_refresh();
+                let on_forgotten = panel.on_device_forgotten.borrow().clone();
+                if let Some(on_forgotten) = on_forgotten {
+                    on_forgotten();
+                }
             });
         }
         actions.append(&forget);

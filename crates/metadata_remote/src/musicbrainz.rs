@@ -840,25 +840,33 @@ fn extract_track_position(media: &[RawMedium]) -> (Option<u32>, Option<u32>, Opt
             continue;
         };
         if let Some(track) = tracks.first() {
-            return (
-                track.number.as_deref().and_then(parse_track_position),
-                medium.track_count,
-                medium.position,
-            );
+            let numeric_position = track
+                .position
+                .map(i64::from)
+                .or_else(|| medium.track_offset.map(|offset| offset.saturating_add(1)));
+            let position = match numeric_position {
+                // A pregap (hidden track) sits at position 0: it has no
+                // track number, whatever its label says.
+                Some(position) => u32::try_from(position)
+                    .ok()
+                    .filter(|&position| position > 0),
+                None => track.number.as_deref().and_then(parse_track_position),
+            };
+            return (position, medium.track_count, medium.position);
         }
     }
     (None, None, None)
 }
 
+/// The track's printed label as a track number, used only when no
+/// numeric position came with it. Labels can be vinyl sides ("A3") or
+/// disc-prefixed ("1-03"); only a label that is a whole positive integer
+/// says which track it is.
 fn parse_track_position(value: &str) -> Option<u32> {
-    // MusicBrainz exposes the track's printed position, which can be
-    // alphanumeric on vinyl ("A1", "B2"). For our purposes we only
-    // recover the integer prefix when one exists.
-    let digits: String = value
-        .chars()
-        .take_while(|character| character.is_ascii_digit())
-        .collect();
-    digits.parse().ok()
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok().filter(|&position| position > 0)
 }
 
 fn parse_year(value: &str) -> Option<i32> {
@@ -954,18 +962,26 @@ struct RawReleaseGroup {
     id: String,
 }
 
+/// A medium of a recording's release. Lookups list the recording's
+/// track as `tracks`, with its numeric `position`; searches list it as
+/// `track`, with the medium's `track-offset`: its position minus one,
+/// so `-1` for a pregap track at position 0.
 #[derive(Deserialize)]
 struct RawMedium {
     #[serde(default)]
     position: Option<u32>,
     #[serde(rename = "track-count", default)]
     track_count: Option<u32>,
-    #[serde(default)]
+    #[serde(rename = "track-offset", default)]
+    track_offset: Option<i64>,
+    #[serde(alias = "track", default)]
     tracks: Option<Vec<RawTrack>>,
 }
 
 #[derive(Deserialize)]
 struct RawTrack {
+    #[serde(default)]
+    position: Option<u32>,
     #[serde(default)]
     number: Option<String>,
 }
@@ -1252,11 +1268,55 @@ mod tests {
     }
 
     #[test]
-    fn parse_track_position_recovers_integer_prefix() {
+    fn a_printed_track_label_is_a_position_only_when_it_is_a_whole_number() {
         assert_eq!(parse_track_position("3"), Some(3));
         assert_eq!(parse_track_position("12"), Some(12));
         assert_eq!(parse_track_position("A1"), None);
+        assert_eq!(parse_track_position("1-03"), None);
+        assert_eq!(parse_track_position("0"), None);
         assert_eq!(parse_track_position(""), None);
+    }
+
+    fn release_track_number(media: serde_json::Value) -> Option<u32> {
+        let raw: RawRelease = serde_json::from_value(serde_json::json!({
+            "id": "release",
+            "media": media,
+        }))
+        .expect("release payload");
+        into_recording_release(raw).and_then(|release| release.track_number)
+    }
+
+    #[test]
+    fn a_looked_up_track_number_comes_from_its_numeric_position() {
+        for label in ["1-03", "A3"] {
+            let media = serde_json::json!([{
+                "position": 1,
+                "track-count": 12,
+                "tracks": [{"position": 3, "number": label}],
+            }]);
+            assert_eq!(release_track_number(media), Some(3), "{label}");
+        }
+    }
+
+    #[test]
+    fn a_searched_track_number_comes_from_the_medium_track_offset() {
+        let media = serde_json::json!([{
+            "position": 1,
+            "track-count": 12,
+            "track-offset": 2,
+            "track": [{"number": "A3"}],
+        }]);
+        assert_eq!(release_track_number(media), Some(3));
+    }
+
+    #[test]
+    fn a_pregap_track_has_no_track_number() {
+        for media in [
+            serde_json::json!([{"track-offset": -1, "track": [{"number": "0"}]}]),
+            serde_json::json!([{"tracks": [{"position": 0, "number": "1"}]}]),
+        ] {
+            assert_eq!(release_track_number(media.clone()), None, "{media}");
+        }
     }
 
     #[test]

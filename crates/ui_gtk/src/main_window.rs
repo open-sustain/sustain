@@ -603,6 +603,10 @@ pub(crate) fn build_main_window(
         device_panel.current_device_cell(),
     );
     device_panel.set_summary_refresh(visible_summary_refresh.clone());
+    device_panel.set_device_forgotten_callback({
+        let sidebar = sidebar.clone();
+        Rc::new(move || sidebar.restore_persistent_selection())
+    });
     duplicates_view.set_summary_refresh(visible_summary_refresh.clone());
     let library_views_refresh = library_views_refresh_callback(
         &runtime,

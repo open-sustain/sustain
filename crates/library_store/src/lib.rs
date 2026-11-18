@@ -164,15 +164,6 @@ impl AnalysisCapabilities {
             audio: self.audio || other.audio,
         }
     }
-
-    /// The capabilities requested by both sets.
-    pub const fn intersection(self, other: Self) -> Self {
-        Self {
-            bpm: self.bpm && other.bpm,
-            key: self.key && other.key,
-            audio: self.audio && other.audio,
-        }
-    }
 }
 
 /// A track and the requested analysis capabilities it still needs:

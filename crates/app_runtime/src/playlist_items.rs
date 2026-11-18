@@ -199,11 +199,18 @@ impl ApplicationRuntime {
         let source_parent = current_parent_of(library_store, item)?;
 
         if source_parent == target_parent_folder_id {
-            let mut siblings: Vec<PlaylistItem> = siblings_in_folder(library_store, source_parent)?
-                .into_iter()
-                .filter(|sibling| *sibling != item)
-                .collect();
-            let target_index = (position as usize).min(siblings.len());
+            let mut siblings = siblings_in_folder(library_store, source_parent)?;
+            // `position` is a slot among the siblings as they stand, the
+            // item itself included; once the item is lifted out, every slot
+            // after its own moves up by one.
+            let mut target_index = position as usize;
+            if let Some(source_index) = siblings.iter().position(|sibling| *sibling == item) {
+                siblings.remove(source_index);
+                if source_index < target_index {
+                    target_index -= 1;
+                }
+            }
+            let target_index = target_index.min(siblings.len());
             siblings.insert(target_index, item);
             apply_positions(library_store, &siblings, source_parent)?;
         } else {

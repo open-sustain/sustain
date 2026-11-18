@@ -408,6 +408,13 @@ impl ApplicationRuntime {
             .delete_sync_device(&id)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.invalidate_device_sync_plan();
+        self.push_ephemeral_notification(
+            NotificationCategory::DeviceSync,
+            NotificationSeverity::Info,
+            gettext(
+                "Device forgotten. Its saved playlists, artists, and sync history were cleared.",
+            ),
+        );
         Ok(())
     }
 

@@ -1260,6 +1260,7 @@ fn explicit_run_arriving_mid_dispatch_goes_first() {
                 .recv()
                 .expect("test releases the sweep");
         }
+        Ok(())
     });
 
     let analyzed: Arc<Mutex<Vec<(String, AnalysisCapabilities)>>> =
@@ -1644,4 +1645,340 @@ fn a_key_version_bump_runs_only_the_key_pass() {
     scheduler.shutdown();
 
     assert_eq!(*requested.lock().expect("lock"), vec![KEY_ONLY]);
+}
+
+#[test]
+fn writes_rejected_while_the_sweep_stops_do_not_stop_the_next_wake() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let faulty = Arc::new(FaultyStore::new(inner));
+    let mut track_ids = Vec::new();
+    for index in 0..2_i64 {
+        let mut track = touch_in(&library_root, &format!("track_{index}.flac"));
+        track.id = TrackId::new(index + 1).expect("non-zero");
+        track_ids.push(track.id);
+        faulty.save_track(track).expect("save");
+    }
+    faulty.set_fail_record_analysis(true);
+
+    // The first analysis is held until the second track has been handed
+    // to the pool, so the second write is rejected while the supervisor
+    // joins the pool to report the first.
+    let (release_tx, release_rx) = std_mpsc::channel::<()>();
+    let release_rx = Mutex::new(Some(release_rx));
+    let analyzer: AnalyzerFn = Arc::new(move |path, caps, opts, duration| {
+        let held = release_rx.lock().expect("lock release").take();
+        if let Some(release) = held {
+            release.recv().expect("test releases the first analysis");
+        }
+        ok_analyzer()(path, caps, opts, duration)
+    });
+    let (sink, rx) = capturing_sink();
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        analyzer,
+        sink,
+        fixed_clock(1),
+        store,
+        settings_off(),
+        Some(library_root),
+    ));
+    scheduler.request_explicit_run(explicit_work(track_ids, BPM_ONLY));
+    std::thread::sleep(Duration::from_millis(200));
+    release_tx.send(()).expect("analysis waits for its release");
+    wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::PersistenceError { .. })
+    });
+    assert_eq!(faulty.record_analysis_calls(), 2);
+
+    faulty.set_fail_record_analysis(false);
+    scheduler.wake();
+    let after_wake = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(
+            progress,
+            SchedulerProgress::Idle { .. } | SchedulerProgress::PersistenceError { .. }
+        )
+    });
+    scheduler.shutdown();
+
+    assert!(matches!(
+        after_wake,
+        SchedulerProgress::Idle {
+            completed: 2,
+            failed: 0
+        }
+    ));
+}
+
+#[test]
+fn a_settings_change_before_the_first_dispatch_fetches_the_batch_again() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let faulty = Arc::new(FaultyStore::new(inner));
+    let analysis = ok_analyzer()(
+        std::path::Path::new("ignored"),
+        AnalysisCapabilities::all(),
+        AnalysisOptions::default(),
+        None,
+    )
+    .expect("stub analysis");
+    let context = sustain_library_store::AnalysisContext {
+        versions: VERSIONS,
+        now_unix: 1,
+    };
+    // A full batch due only for BPM, then one track due only for Key.
+    let bpm_due_count = super::BATCH_SIZE as i64;
+    let mut key_due = None;
+    for index in 0..=bpm_due_count {
+        let mut track = touch_in(&library_root, &format!("track_{index:03}.flac"));
+        track.id = TrackId::new(index + 1).expect("non-zero");
+        let done = if index < bpm_due_count {
+            KEY_ONLY
+        } else {
+            key_due = Some(track.id);
+            BPM_ONLY
+        };
+        faulty.save_track(track.clone()).expect("save");
+        faulty
+            .record_analysis(track.id, &analysis, done, context)
+            .expect("record the pass already done");
+    }
+
+    // The first sweep counts the run's total; the second fills `pending`
+    // and is held until BPM has been turned off.
+    let (entered_tx, entered_rx) = std_mpsc::channel::<()>();
+    let (release_tx, release_rx) = std_mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let sweeps = AtomicU32::new(0);
+    faulty.run_in_analysis_sweeps(move || {
+        if sweeps.fetch_add(1, Ordering::SeqCst) == 1 {
+            entered_tx.send(()).expect("test waits for the sweep");
+            release_rx
+                .lock()
+                .expect("lock release")
+                .recv()
+                .expect("test releases the sweep");
+        }
+        Ok(())
+    });
+    let analyzed = Arc::new(Mutex::new(Vec::new()));
+    let analyzer: AnalyzerFn = {
+        let analyzed = analyzed.clone();
+        Arc::new(move |path, caps, opts, duration| {
+            analyzed.lock().expect("lock").push(caps);
+            ok_analyzer()(path, caps, opts, duration)
+        })
+    };
+    let (sink, rx) = capturing_sink();
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let key_only_settings = AnalysisSettings {
+        bpm: false,
+        key: true,
+        audio: false,
+        bpm_range: BpmRange::default(),
+    };
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        analyzer,
+        sink,
+        fixed_clock(2),
+        store.clone(),
+        AnalysisSettings {
+            bpm: true,
+            ..key_only_settings
+        },
+        Some(library_root),
+    ));
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("supervisor fills its pending batch");
+    scheduler.update_settings(key_only_settings);
+    release_tx.send(()).expect("sweep waits for its release");
+
+    wait_for(&rx, Duration::from_secs(5), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    scheduler.shutdown();
+
+    assert_eq!(*analyzed.lock().expect("lock"), vec![KEY_ONLY]);
+    let still_due = store
+        .tracks_needing_analysis(KEY_ONLY, VERSIONS, 10)
+        .map(due_ids)
+        .expect("query");
+    assert!(
+        !still_due.contains(&key_due.expect("key-due track saved")),
+        "the Key-due track was analysed"
+    );
+}
+
+#[test]
+fn a_second_request_for_a_running_track_does_not_repeat_its_pass() {
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let track = touch_in(&library_root, "alpha.flac");
+    let track_id = track.id;
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    store.save_track(track).expect("save");
+
+    // The first analysis is held until the same request has been made
+    // again, as a user re-requesting a track still being analysed would.
+    let (entered_tx, entered_rx) = std_mpsc::channel::<()>();
+    let (release_tx, release_rx) = std_mpsc::channel::<()>();
+    let hold = Mutex::new(Some((entered_tx, release_rx)));
+    let calls = Arc::new(AtomicU32::new(0));
+    let analyzer: AnalyzerFn = {
+        let calls = calls.clone();
+        Arc::new(move |path, caps, opts, duration| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let held = hold.lock().expect("lock hold").take();
+            if let Some((entered, release)) = held {
+                entered.send(()).expect("test waits for the analysis");
+                release.recv().expect("test releases the analysis");
+            }
+            ok_analyzer()(path, caps, opts, duration)
+        })
+    };
+    let (sink, rx) = capturing_sink();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        analyzer,
+        sink,
+        fixed_clock(1),
+        store,
+        settings_off(),
+        Some(library_root),
+    ));
+    scheduler.request_explicit_run(explicit_work(vec![track_id], BPM_ONLY));
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the first request is being analysed");
+    scheduler.request_explicit_run(explicit_work(vec![track_id], BPM_ONLY));
+    release_tx.send(()).expect("analysis waits for its release");
+
+    let idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    scheduler.shutdown();
+
+    assert!(matches!(
+        idle,
+        SchedulerProgress::Idle {
+            completed: 1,
+            failed: 0
+        }
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_sweep_failure_that_stops_the_run_settles_its_rejected_writes_first() {
+    use crate::test_store::FaultyStore;
+    use sustain_library_store::StoreError;
+
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let faulty = Arc::new(FaultyStore::new(inner));
+    let analysis = ok_analyzer()(
+        std::path::Path::new("ignored"),
+        AnalysisCapabilities::all(),
+        AnalysisOptions::default(),
+        None,
+    )
+    .expect("stub analysis");
+    // The explicit track needs only Key; the background track only BPM.
+    let mut explicit_track = touch_in(&library_root, "explicit.flac");
+    explicit_track.id = TrackId::new(1).expect("non-zero");
+    let mut background_track = touch_in(&library_root, "background.flac");
+    background_track.id = TrackId::new(2).expect("non-zero");
+    faulty.save_track(explicit_track.clone()).expect("save");
+    faulty.save_track(background_track).expect("save");
+    faulty
+        .record_analysis(
+            explicit_track.id,
+            &analysis,
+            BPM_ONLY,
+            sustain_library_store::AnalysisContext {
+                versions: VERSIONS,
+                now_unix: 1,
+            },
+        )
+        .expect("record the BPM pass already done");
+    faulty.set_fail_record_analysis(true);
+
+    // The first analysis is held until the third sweep, which runs once
+    // both tracks are in the pool, and fails: the run stops on the sweep
+    // failure while the held write is still to be rejected.
+    let (release_tx, release_rx) = std_mpsc::channel::<()>();
+    let release_rx = Mutex::new(Some(release_rx));
+    let analyzer: AnalyzerFn = Arc::new(move |path, caps, opts, duration| {
+        let held = release_rx.lock().expect("lock release").take();
+        if let Some(release) = held {
+            release
+                .recv()
+                .expect("the failing sweep releases the analysis");
+        }
+        ok_analyzer()(path, caps, opts, duration)
+    });
+    let release_tx = Mutex::new(Some(release_tx));
+    let sweeps = AtomicU32::new(0);
+    let sweeps_fail = Arc::new(AtomicBool::new(true));
+    let sweeps_fail_in_hook = sweeps_fail.clone();
+    faulty.run_in_analysis_sweeps(move || {
+        if sweeps.fetch_add(1, Ordering::SeqCst) < 2 || !sweeps_fail_in_hook.load(Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        let held = release_tx.lock().expect("lock release").take();
+        if let Some(release) = held {
+            release
+                .send(())
+                .expect("the analysis waits for its release");
+        }
+        Err(StoreError::StoreUnavailable)
+    });
+
+    let (sink, rx) = capturing_sink();
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        analyzer,
+        sink,
+        fixed_clock(2),
+        store,
+        AnalysisSettings {
+            bpm: true,
+            key: false,
+            audio: false,
+            bpm_range: BpmRange::default(),
+        },
+        Some(library_root),
+    ));
+    scheduler.request_explicit_run(explicit_work(vec![explicit_track.id], KEY_ONLY));
+    wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::PersistenceError { .. })
+    });
+
+    faulty.set_fail_record_analysis(false);
+    sweeps_fail.store(false, Ordering::SeqCst);
+    scheduler.wake();
+    let after_wake = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(
+            progress,
+            SchedulerProgress::Idle { .. } | SchedulerProgress::PersistenceError { .. }
+        )
+    });
+    scheduler.shutdown();
+
+    assert!(
+        matches!(after_wake, SchedulerProgress::Idle { .. }),
+        "the wake after recovery runs the work instead of reporting the old rejection"
+    );
 }

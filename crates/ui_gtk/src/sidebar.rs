@@ -590,18 +590,13 @@ impl PlaylistSidebar {
                         row_parts.content.append(&eject);
                     }
                     let sidebar = self.clone();
-                    let row_widget = row.clone().upcast::<gtk::Widget>();
                     let device = device.clone();
-                    attach_transient_row_gesture(
-                        &row,
-                        move |sidebar_row| {
-                            sidebar.activate_transient_view(sidebar_row);
-                            if let Some(callback) = sidebar.on_device_selected.borrow().as_ref() {
-                                callback(device.clone());
-                            }
-                        },
-                        row_widget,
-                    );
+                    attach_transient_row_gesture(&row, move |sidebar_row| {
+                        sidebar.activate_transient_view(sidebar_row);
+                        if let Some(callback) = sidebar.on_device_selected.borrow().as_ref() {
+                            callback(device.clone());
+                        }
+                    });
                     row
                 }
                 SidebarDeviceEntry::AudioCd(snapshot) => {
@@ -626,18 +621,13 @@ impl PlaylistSidebar {
                     });
                     row_parts.content.append(&eject);
                     let sidebar = self.clone();
-                    let row_widget = row.clone().upcast::<gtk::Widget>();
                     let snapshot = snapshot.clone();
-                    attach_transient_row_gesture(
-                        &row,
-                        move |sidebar_row| {
-                            sidebar.activate_transient_view(sidebar_row);
-                            if let Some(callback) = sidebar.on_cd_selected.borrow().as_ref() {
-                                callback(snapshot.clone());
-                            }
-                        },
-                        row_widget,
-                    );
+                    attach_transient_row_gesture(&row, move |sidebar_row| {
+                        sidebar.activate_transient_view(sidebar_row);
+                        if let Some(callback) = sidebar.on_cd_selected.borrow().as_ref() {
+                            callback(snapshot.clone());
+                        }
+                    });
                     row
                 }
             };
@@ -876,16 +866,18 @@ impl PlaylistSidebar {
 /// Attach the primary-click gesture that activates a transient Devices row.
 /// Shared by the sync-target and audio-CD rows: both claim the gesture,
 /// take over the sidebar highlight, and fire their kind's callback.
-fn attach_transient_row_gesture(
-    row: &gtk::Box,
-    on_pressed: impl Fn(&gtk::Widget) + 'static,
-    row_widget: gtk::Widget,
-) {
+///
+/// The handler reaches its row through the gesture rather than a captured
+/// clone: the row owns the gesture, so a clone would keep every row a
+/// device refresh removes alive.
+fn attach_transient_row_gesture(row: &gtk::Box, on_pressed: impl Fn(&gtk::Widget) + 'static) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(gdk::BUTTON_PRIMARY);
     gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
-        on_pressed(&row_widget);
+        if let Some(row) = gesture.widget() {
+            on_pressed(&row);
+        }
     });
     row.add_controller(gesture);
 }
@@ -1631,6 +1623,33 @@ mod tests {
 
             sidebar.set_devices(&[]);
             assert!(transfer_badges_shown(&sidebar).is_empty());
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    /// Rebuilding the Devices rows releases the rows it replaces.
+    #[test]
+    fn a_device_refresh_releases_the_rows_it_replaces() {
+        let ran = crate::test_support::with_gtk(|| {
+            let sidebar = test_sidebar();
+            let discs = [SidebarDeviceEntry::AudioCd(disc("/dev/sr0", "only"))];
+            sidebar.set_devices(&discs);
+            let replaced = sidebar
+                .devices_body
+                .first_child()
+                .expect("the disc has a row")
+                .downgrade();
+
+            sidebar.set_devices(&discs);
+            let ctx = glib::MainContext::default();
+            while ctx.iteration(false) {}
+
+            assert!(
+                replaced.upgrade().is_none(),
+                "a replaced device row must not keep itself alive"
+            );
         });
         if !ran {
             eprintln!("skipped GTK widget test: no display available");

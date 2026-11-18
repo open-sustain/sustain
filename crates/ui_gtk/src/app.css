@@ -590,7 +590,7 @@ button.playlists-header-icon-button:focus {
 }
 
 .album-track-missing {
-    color: #e66100;
+    color: @warning_color;
 }
 
 /* Album-view track list. A dense virtualized list living inside an
@@ -657,7 +657,7 @@ listview.album-track-table > row:focus-visible {
 }
 
 .smart-playlist-error {
-    color: #e66100;
+    color: @error_color;
 }
 
 /* Sidebar section header labels. Small, muted, and bold. Static section
@@ -985,7 +985,7 @@ rating-stars {
 }
 
 .track-table-status-missing {
-    color: #e66100;
+    color: @warning_color;
 }
 
 columnview.track-table listview row:selected .track-table-status-missing {

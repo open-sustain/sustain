@@ -626,12 +626,12 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
     let mut in_flight = InFlight::default();
     let mut pending: VecDeque<PendingItem> = VecDeque::new();
 
-    loop {
+    'supervisor: loop {
         // 1. Drain commands. A resource-usage flip tears down the
-        //    pool here; we detect that by comparing the
-        //    before/after Option and clear the streaming
-        //    bookkeeping so the next iteration starts fresh.
-        let pool_was_alive = pool.is_some();
+        //    pool here, and so does every path that parks the
+        //    supervisor; whichever retired it, the work it held is
+        //    settled below before a new pool starts.
+        let capabilities_before = capabilities_from(&state.settings);
         match drain_commands(&receiver, &mut state, &mut pool) {
             DrainOutcome::Shutdown => {
                 if let Some(p) = pool.take() {
@@ -642,23 +642,22 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
             }
             DrainOutcome::Continue => {}
         }
-        if pool_was_alive && pool.is_none() {
-            // A command (resource-usage flip or BPM-range change) tore
-            // the pool down and joined its workers, so every outcome it
-            // produced is already in the channel.
-            //
-            // Background items in `pending` can be dropped — the
-            // next refill's `tracks_needing_analysis` query will
-            // surface them again. Explicit items must be preserved,
-            // so we move them to the front of `explicit_queue` (in
-            // original order) before clearing `pending`. Losing
-            // user-initiated work on a settings flip would be a
-            // silent surprise.
-            let unfinished =
-                settle_retired_pool(&outcome_rx, &mut state, &mut in_flight, &progress);
-            requeue_explicit_items(
-                &mut state.explicit_queue,
-                unfinished.chain(pending.drain(..)),
+        if capabilities_from(&state.settings) != capabilities_before {
+            discard_stale_background_work(&mut pending);
+        }
+        if pool.is_none() {
+            // No pool is running: whatever retired the last one joined
+            // its workers, so every outcome it produced is already in
+            // the channel. Settling it here, before any new dispatch,
+            // keeps an old pool's late failure from being taken for
+            // the new pool's.
+            retire_pool(
+                &mut pool,
+                &outcome_rx,
+                &mut state,
+                &mut in_flight,
+                &mut pending,
+                &progress,
             );
         }
 
@@ -671,17 +670,19 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         //     analysis against a store that keeps rejecting it would be
         //     an unbounded hot loop, so stop the sweep and wait for an
         //     explicit wake — the same bounded response the store-query
-        //     error path below uses. `pending`/`explicit_queue` are left
-        //     intact, and explicit work whose result was rejected goes
-        //     back to the queue, so a later wake re-dispatches it.
-        if let Some(detail) = state.pending_persistence_error.take() {
-            if let Some(p) = pool.take() {
-                p.shutdown();
-            }
-            let unfinished =
-                settle_retired_pool(&outcome_rx, &mut state, &mut in_flight, &progress);
-            requeue_explicit_items(&mut state.explicit_queue, unfinished);
-            (progress)(SchedulerProgress::PersistenceError { detail });
+        //     error path below uses. Explicit work, including work whose
+        //     result was rejected, goes back to the queue, so a later wake
+        //     re-dispatches it.
+        if state.pending_persistence_error.is_some() {
+            retire_pool(
+                &mut pool,
+                &outcome_rx,
+                &mut state,
+                &mut in_flight,
+                &mut pending,
+                &progress,
+            );
+            report_rejected_write(&mut state, &progress);
             if !block_for_next_command(&receiver, &mut state, &mut pool) {
                 return;
             }
@@ -737,9 +738,15 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
             ) {
                 Ok(total) => state.total = Some(total),
                 Err(_) => {
-                    if let Some(p) = pool.take() {
-                        p.shutdown();
-                    }
+                    retire_pool(
+                        &mut pool,
+                        &outcome_rx,
+                        &mut state,
+                        &mut in_flight,
+                        &mut pending,
+                        &progress,
+                    );
+                    report_rejected_write(&mut state, &progress);
                     if !block_for_next_command(&receiver, &mut state, &mut pool) {
                         return;
                     }
@@ -811,10 +818,17 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                         // A store error here would be alarming; tear
                         // the pool down and wait for an explicit
                         // nudge so we do not hot-loop on a broken
-                        // database.
-                        if let Some(p) = pool.take() {
-                            p.shutdown();
-                        }
+                        // database. Parking settles the pool first, so
+                        // the wake that follows starts from a clean slate.
+                        retire_pool(
+                            &mut pool,
+                            &outcome_rx,
+                            &mut state,
+                            &mut in_flight,
+                            &mut pending,
+                            &progress,
+                        );
+                        report_rejected_write(&mut state, &progress);
                         if !block_for_next_command(&receiver, &mut state, &mut pool) {
                             return;
                         }
@@ -825,11 +839,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
 
             if pending.is_empty() && in_flight.is_empty() && state.explicit_queue.is_empty() {
                 // Truly caught up: every source drained.
-                if let Some(p) = pool.take() {
-                    p.shutdown();
-                }
-                emit_idle(&progress, &mut state);
-                if !block_for_next_command(&receiver, &mut state, &mut pool) {
+                if !idle_until_next_command(&receiver, &mut state, &mut pool, &progress) {
                     return;
                 }
                 continue;
@@ -849,6 +859,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
             // capability toggle or resource-usage flip mid-batch
             // applies promptly. `command_drain_step` returns false
             // on Shutdown.
+            let capabilities_before = capabilities_from(&state.settings);
             if !command_drain_step(&receiver, &mut state, &mut pool) {
                 if let Some(p) = pool.take() {
                     p.shutdown();
@@ -857,9 +868,15 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                 return;
             }
             if pool.is_none() {
-                // Resource-usage flip tore the pool down between
-                // the work_tx clone above and this iteration.
-                break;
+                // A resource-usage flip retired the pool; the loop top
+                // settles its work before anything else is dispatched.
+                continue 'supervisor;
+            }
+            if capabilities_from(&state.settings) != capabilities_before {
+                discard_stale_background_work(&mut pending);
+                // The background batch is fetched again under the new
+                // settings once `pending` empties.
+                continue 'supervisor;
             }
             // An explicit run the command drain just took in reorders
             // `pending`, so the item to dispatch is read only now.
@@ -868,20 +885,22 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
                 break;
             };
 
-            // Resolve capabilities: explicit items keep what the user
-            // submitted; background items keep only what is still
-            // enabled, so a mid-batch toggle-off takes effect within
-            // one batch.
-            let dispatch_caps = if item.is_explicit {
-                item.capabilities
-            } else {
-                item.capabilities
-                    .intersection(capabilities_from(&state.settings))
+            // What was due when the item was queued may have landed since,
+            // e.g. through an earlier request for the same track, so the
+            // store confirms what is still due. A failed check runs the
+            // item as queued: repeating a pass is harmless, losing it is
+            // not.
+            let dispatch_caps = match library_store.filter_tracks_needing_analysis(
+                &[item.track_id],
+                item.capabilities,
+                analyzer_versions,
+            ) {
+                Ok(due) => due
+                    .first()
+                    .map_or(AnalysisCapabilities::none(), |due| due.capabilities),
+                Err(_) => item.capabilities,
             };
             if dispatch_caps.is_empty() {
-                // Background item whose capability has since been
-                // toggled off. Drop it; the next refill will reflect
-                // the new settings.
                 pending.pop_front();
                 continue;
             }
@@ -928,15 +947,28 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         //    each one frees a queue slot, so the next iteration
         //    can dispatch more from `pending`.
         if in_flight.is_empty() && pending.is_empty() && state.explicit_queue.is_empty() {
-            // Nothing to wait on and nothing to dispatch — block
-            // on the command channel so we don't busy-loop.
-            if !block_for_next_command(&receiver, &mut state, &mut pool) {
+            // Every item of the batch was dropped at dispatch (no longer
+            // due, or its track is gone): the run is over. Going idle
+            // rather than refilling keeps a store that keeps disagreeing
+            // with its own sweep from spinning the supervisor.
+            if !idle_until_next_command(&receiver, &mut state, &mut pool, &progress) {
                 return;
             }
         } else {
             wait_for_outcome_with_timeout(&outcome_rx, &mut state, &mut in_flight, &progress);
         }
     }
+}
+
+/// Drops the background items of `pending`: the sweep chose them under
+/// capability settings that no longer hold, so they may ask for a pass
+/// now disabled or miss one now enabled. Explicit items stay.
+///
+/// The supervisor checks for a capability change around both of its
+/// command drains. Commands it takes in while parked arrive with no pool
+/// running, and the loop top then empties `pending` outright.
+fn discard_stale_background_work(pending: &mut VecDeque<PendingItem>) {
+    pending.retain(|item| item.is_explicit);
 }
 
 fn prioritize_explicit_work(
@@ -1130,18 +1162,51 @@ fn drain_outcomes_nonblocking(
     }
 }
 
-/// Settles the work of a pool that was shut down and joined: applies
-/// every outcome it reported, then returns the items whose result never
-/// landed durably (their write was rejected), in dispatch order. The
-/// in-flight set is empty afterwards, so the next pool starts clean.
-fn settle_retired_pool(
+/// Retires the worker pool, if one runs, and settles what it held: joins
+/// its workers, applies every outcome they reported, and returns to the
+/// front of the explicit queue both the explicit work whose result never
+/// landed durably and the explicit work not yet dispatched. Background
+/// items are dropped; the sweep finds them again. Nothing is in flight
+/// afterwards, so the next pool starts clean.
+fn retire_pool(
+    pool: &mut Option<WorkerPool>,
     outcome_rx: &mpsc::Receiver<WorkOutcome>,
     state: &mut SupervisorState,
     in_flight: &mut InFlight,
+    pending: &mut VecDeque<PendingItem>,
     progress: &ProgressSink,
-) -> std::vec::IntoIter<PendingItem> {
+) {
+    if let Some(retired) = pool.take() {
+        retired.shutdown();
+    }
     drain_outcomes_nonblocking(outcome_rx, state, in_flight, progress);
-    in_flight.take_all()
+    requeue_explicit_items(
+        &mut state.explicit_queue,
+        in_flight.take_all().chain(pending.drain(..)),
+    );
+}
+
+/// Reports the first store write a retired pool saw rejected, if any. Every
+/// rejection the retirement settled is covered by this one report.
+fn report_rejected_write(state: &mut SupervisorState, progress: &ProgressSink) {
+    if let Some(detail) = state.pending_persistence_error.take() {
+        (progress)(SchedulerProgress::PersistenceError { detail });
+    }
+}
+
+/// Ends the run: retires the idle pool, reports the run's totals, and
+/// waits for the next command. Returns false on shutdown.
+fn idle_until_next_command(
+    receiver: &mpsc::Receiver<SchedulerCommand>,
+    state: &mut SupervisorState,
+    pool: &mut Option<WorkerPool>,
+    progress: &ProgressSink,
+) -> bool {
+    if let Some(idle) = pool.take() {
+        idle.shutdown();
+    }
+    emit_idle(progress, state);
+    block_for_next_command(receiver, state, pool)
 }
 
 fn emit_idle(progress: &ProgressSink, state: &mut SupervisorState) {

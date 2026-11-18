@@ -45,6 +45,7 @@ pub(crate) struct FaultyStore {
     fail_attempt_failure: AtomicBool,
     fail_online_attempt: AtomicBool,
     fail_device_manifest: AtomicBool,
+    fail_delete_sync_device: AtomicBool,
     fail_save_tracks: AtomicBool,
     fail_update_track_locations: AtomicBool,
     fail_save_tracks_on_call: AtomicU32,
@@ -64,12 +65,12 @@ pub(crate) struct FaultyStore {
     /// in milliseconds. Zero (the default) is a no-op.
     read_delay_millis: AtomicU64,
     /// Run by every `tracks_needing_analysis` call before it queries
-    /// the inner store.
+    /// the inner store; an error it returns fails the query.
     analysis_sweep_hook: Mutex<Option<AnalysisSweepHook>>,
 }
 
 /// Test code [`FaultyStore`] runs inside its analysis sweep query.
-type AnalysisSweepHook = Box<dyn Fn() + Send>;
+type AnalysisSweepHook = Box<dyn Fn() -> StoreResult<()> + Send>;
 
 impl FaultyStore {
     pub(crate) fn new(inner: Arc<dyn LibraryStore>) -> Self {
@@ -79,6 +80,7 @@ impl FaultyStore {
             fail_attempt_failure: AtomicBool::new(false),
             fail_online_attempt: AtomicBool::new(false),
             fail_device_manifest: AtomicBool::new(false),
+            fail_delete_sync_device: AtomicBool::new(false),
             fail_save_tracks: AtomicBool::new(false),
             fail_update_track_locations: AtomicBool::new(false),
             fail_save_tracks_on_call: AtomicU32::new(0),
@@ -100,8 +102,12 @@ impl FaultyStore {
     }
 
     /// Run `hook` inside every later `tracks_needing_analysis` call,
-    /// before the inner store is queried.
-    pub(crate) fn run_in_analysis_sweeps(&self, hook: impl Fn() + Send + 'static) {
+    /// before the inner store is queried. A sweep whose hook returns an
+    /// error fails with it.
+    pub(crate) fn run_in_analysis_sweeps(
+        &self,
+        hook: impl Fn() -> StoreResult<()> + Send + 'static,
+    ) {
         *self
             .analysis_sweep_hook
             .lock()
@@ -130,6 +136,10 @@ impl FaultyStore {
 
     pub(crate) fn set_fail_online_attempt(&self, on: bool) {
         self.fail_online_attempt.store(on, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_fail_delete_sync_device(&self, on: bool) {
+        self.fail_delete_sync_device.store(on, Ordering::SeqCst);
     }
 
     pub(crate) fn set_fail_device_manifest(&self, on: bool) {
@@ -594,7 +604,7 @@ impl LibraryStore for FaultyStore {
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)?;
         if let Some(hook) = hook.as_ref() {
-            hook();
+            hook()?;
         }
         self.inner
             .tracks_needing_analysis(capabilities, versions, limit)
@@ -727,6 +737,11 @@ impl LibraryStore for FaultyStore {
     }
 
     fn delete_sync_device(&self, id: &SyncDeviceId) -> StoreResult<()> {
+        if self.fail_delete_sync_device.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected delete_sync_device failure".to_owned(),
+            ));
+        }
         self.inner.delete_sync_device(id)
     }
 

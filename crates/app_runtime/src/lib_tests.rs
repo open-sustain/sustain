@@ -163,6 +163,67 @@ fn completing_a_sync_clears_the_syncing_device() {
     assert_eq!(runtime.syncing_device(), None);
 }
 
+/// A runtime over a [`FaultyStore`](crate::test_store::FaultyStore) that
+/// holds the saved configuration of one device.
+fn runtime_with_saved_device() -> (
+    ApplicationRuntime,
+    Arc<crate::test_store::FaultyStore>,
+    SyncDeviceId,
+) {
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    let device_id = SyncDeviceId::new("usb-stick").expect("valid device id");
+    store
+        .save_sync_device(&SyncDevice {
+            id: device_id.clone(),
+            label: "Stick".to_owned(),
+            kind: sustain_domain::DeviceKind::UsbDrive,
+            layout: sustain_domain::DeviceLayout::M3u,
+            sub_path: DeviceRelativePath::root(),
+            files_per_folder_cap: sustain_domain::FilesPerFolderCap::Unlimited,
+            volume_id: None,
+        })
+        .expect("save the device");
+    let runtime = ApplicationRuntime::new()
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    (runtime, store, device_id)
+}
+
+#[test]
+fn forgetting_a_device_reports_through_the_notification_lane() {
+    let (mut runtime, store, device_id) = runtime_with_saved_device();
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::ForgetDevice {
+            device_id: device_id.clone()
+        }),
+        Ok(())
+    );
+
+    assert_eq!(store.sync_device(&device_id), Ok(None));
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("forget notification");
+    assert_eq!(notification.category, NotificationCategory::DeviceSync);
+    assert!(notification.body.starts_with("Device forgotten."));
+}
+
+#[test]
+fn a_device_the_store_fails_to_forget_is_not_reported_forgotten() {
+    let (mut runtime, store, device_id) = runtime_with_saved_device();
+    store.set_fail_delete_sync_device(true);
+
+    assert!(
+        runtime
+            .handle_command(ApplicationCommand::ForgetDevice { device_id })
+            .is_err()
+    );
+    assert!(runtime.notifications().current_ephemeral().is_none());
+}
+
 #[test]
 fn stale_device_sync_completion_is_ignored() {
     let mut runtime = ApplicationRuntime::new();
@@ -5964,6 +6025,49 @@ fn moving_a_playlist_within_its_folder_reorders_siblings() {
         .map(|playlist| playlist.name.as_str())
         .collect();
     assert_eq!(names, vec!["B", "A", "C"]);
+}
+
+#[test]
+fn moving_a_playlist_down_its_folder_lands_in_the_slot_it_was_dropped_on() {
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize");
+    for name in ["A", "B", "C"] {
+        runtime
+            .handle_command(ApplicationCommand::CreatePlaylist {
+                name: name.to_owned(),
+                parent_folder_id: None,
+            })
+            .expect("create");
+    }
+    let playlist_a_id = runtime
+        .playlists()
+        .iter()
+        .find(|playlist| playlist.name == "A")
+        .map(|playlist| playlist.id)
+        .expect("playlist A exists");
+    let names = |runtime: &ApplicationRuntime| {
+        let mut ordered: Vec<&Playlist> = runtime.playlists().iter().collect();
+        ordered.sort_by_key(|playlist| playlist.position);
+        ordered
+            .iter()
+            .map(|playlist| playlist.name.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // Dropping A just above B (slot 1) leaves the order as it was;
+    // dropping it just below B (slot 2) puts it between B and C.
+    for (slot, expected) in [(1, ["A", "B", "C"]), (2, ["B", "A", "C"])] {
+        runtime
+            .handle_command(ApplicationCommand::MovePlaylistItem {
+                item: PlaylistItem::Playlist(playlist_a_id),
+                target_parent_folder_id: None,
+                position: slot,
+            })
+            .expect("move within folder");
+        assert_eq!(names(&runtime), expected, "slot {slot}");
+    }
 }
 
 #[test]

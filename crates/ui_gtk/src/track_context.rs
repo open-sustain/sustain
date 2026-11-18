@@ -537,7 +537,6 @@ impl TrackRowContextMenu {
             .root()
             .and_then(|root| root.focus())
             .map(|widget| widget.downgrade());
-        let popover_for_close = popover.clone();
         let invocation_state = self.invocation_state.clone();
         let action_scope = popover_parent.as_ref().downgrade();
         popover.connect_closed(move |popover| {
@@ -553,7 +552,10 @@ impl TrackRowContextMenu {
             let invocation_state = invocation_state.clone();
             let action_scope = action_scope.clone();
             let local_action_group = local_action_group.clone();
-            let popover_for_close = popover_for_close.clone();
+            // The closed handler borrows its popover instead of owning a
+            // clone: a clone captured here would keep the popover alive
+            // through its own signal handler after it is unparented.
+            let popover_for_close = popover.clone();
             // GtkModelButton pops its containing popover down before asking
             // GtkActionHelper to activate the model-backed action. Preserve
             // the widget ancestry until the current event has completed so
@@ -1223,6 +1225,41 @@ mod tests {
 
             let ctx = glib::MainContext::default();
             while ctx.iteration(false) {}
+            window.destroy();
+        });
+        if !ran {
+            eprintln!("skipped GTK widget test: no display available");
+        }
+    }
+
+    #[test]
+    fn a_dismissed_track_context_popover_is_released() {
+        let ran = crate::test_support::with_gtk(|| {
+            let window = gtk::Window::new();
+            let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            window.set_child(Some(&anchor));
+            window.present();
+            let menu = TrackRowContextMenu::new(
+                TrackContextActionSet::new(Vec::new()),
+                window.clone(),
+                TrackContextInvocationState::default(),
+            );
+
+            menu.popup_at(vec![track_id(4)], vec![track_id(4)], &anchor, 0.0, 0.0);
+            let popover = descendant_of_type(anchor.upcast_ref(), "GtkPopoverMenu")
+                .expect("track context popover was parented to the anchor")
+                .downcast::<gtk::Popover>()
+                .expect("GtkPopoverMenu is a GtkPopover");
+            let released = popover.downgrade();
+            popover.popdown();
+            drop(popover);
+            let ctx = glib::MainContext::default();
+            while ctx.iteration(false) {}
+
+            assert!(
+                released.upgrade().is_none(),
+                "the closed popover must not keep itself alive"
+            );
             window.destroy();
         });
         if !ran {

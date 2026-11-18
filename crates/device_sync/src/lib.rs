@@ -593,6 +593,22 @@ mod tests {
     }
 
     #[test]
+    fn an_android_entry_starting_with_a_hash_is_not_a_comment() {
+        let mut fx = fixture(1);
+        fx.tracks[0].artist = "#1 Dads".to_owned();
+        let mut req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        req.device.kind = DeviceKind::Android;
+        run(fx.dest.path(), &req);
+
+        let m3u =
+            std::fs::read_to_string(fx.dest.path().join("Music/My Set.m3u8")).expect("read m3u");
+        let entries: Vec<&str> = m3u.lines().filter(|line| !line.starts_with('#')).collect();
+        assert_eq!(entries.len(), 1, "{m3u:?}");
+        assert!(entries[0].starts_with("./#1 Dads/"), "{m3u:?}");
+        assert!(fx.dest.path().join("Music").join(entries[0]).is_file());
+    }
+
+    #[test]
     fn m3u_layout_writes_tree_and_playlist() {
         let fx = fixture(3);
         let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);

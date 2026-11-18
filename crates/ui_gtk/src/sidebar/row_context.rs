@@ -95,10 +95,11 @@ fn popup_row_context_menu(anchor: &gtk::Widget, context: SidebarRowContext, x: f
     popover.set_parent(anchor);
     popover.set_menu_model(Some(&menu));
 
-    let popover_for_close = popover.clone();
     let action_scope = anchor.downgrade();
-    popover.connect_closed(move |_| {
-        let popover_for_close = popover_for_close.clone();
+    // The handler uses the popover it is given; owning a clone would keep
+    // the popover alive through its own signal handler once unparented.
+    popover.connect_closed(move |popover| {
+        let popover_for_close = popover.clone();
         let action_scope = action_scope.clone();
         let local_action_group = local_action_group.clone();
         glib::idle_add_local_once(move || {

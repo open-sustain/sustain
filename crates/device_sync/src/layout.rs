@@ -420,7 +420,7 @@ fn write_m3u_playlists(
                 track.duration_ms / 1000,
                 extinf_text(&track.artist),
                 extinf_text(&track.title),
-                rel,
+                m3u_entry(rel),
             ));
         }
         let dest = base.join(&relative);
@@ -657,6 +657,17 @@ fn is_file(transport: &dyn DeviceTransport, path: &DeviceRelativePath) -> Result
 /// tagger wrapped); written as it is, the rest of the tag would read as a
 /// path. Every control character, the line breaks among them, is written
 /// as a space.
+/// An M3U path line for `rel`. A line starting with `#` is a comment
+/// to every M3U reader, so such a path (an artist named `#1 Dads`) is
+/// written as the equivalent `./`-relative path.
+fn m3u_entry(rel: &str) -> std::borrow::Cow<'_, str> {
+    if rel.starts_with('#') {
+        std::borrow::Cow::Owned(format!("./{rel}"))
+    } else {
+        std::borrow::Cow::Borrowed(rel)
+    }
+}
+
 fn extinf_text(tag: &str) -> String {
     tag.chars()
         .map(|character| {

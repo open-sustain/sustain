@@ -111,9 +111,10 @@ fn popup_menu(anchor: &gtk::Widget, x: f64, y: f64) {
     // actions from the window and this anchor's sidebar-local action group.
     popover.set_menu_model(Some(&menu));
 
-    let popover_for_close = popover.clone();
-    popover.connect_closed(move |_| {
-        let popover_for_close = popover_for_close.clone();
+    // The handler uses the popover it is given; owning a clone would keep
+    // the popover alive through its own signal handler once unparented.
+    popover.connect_closed(move |popover| {
+        let popover_for_close = popover.clone();
         // GtkModelButton activates its GAction after popping down. Keep the
         // anchor ancestry alive until that activation has resolved.
         gtk::glib::idle_add_local_once(move || popover_for_close.unparent());

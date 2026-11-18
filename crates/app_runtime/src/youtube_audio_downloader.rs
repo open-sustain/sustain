@@ -138,7 +138,7 @@ fn download_with_limits(
     max_runtime: Duration,
     max_staged_bytes: u64,
 ) -> Result<StagedYoutubeAudio, YoutubeAudioDownloadError> {
-    validate_youtube_url(url)?;
+    let video_url = canonical_youtube_video_url(url)?;
     if shutdown_requested.load(Ordering::Relaxed) {
         return Err(YoutubeAudioDownloadError::Cancelled);
     }
@@ -165,7 +165,7 @@ fn download_with_limits(
         .arg("--output")
         .arg(&output_template)
         .arg("--")
-        .arg(url)
+        .arg(&video_url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -305,7 +305,13 @@ fn staged_directory_size(
     Ok(total)
 }
 
-fn validate_youtube_url(raw: &str) -> Result<(), YoutubeAudioDownloadError> {
+/// The canonical watch URL of the single video `raw` names, or
+/// [`YoutubeAudioDownloadError::InvalidUrl`] when it names none.
+///
+/// Only the video identity is kept, so yt-dlp never receives a playlist,
+/// channel or other collection (`--no-playlist` only chooses the video
+/// when a URL names both), nor the pasted URL's other query parameters.
+fn canonical_youtube_video_url(raw: &str) -> Result<String, YoutubeAudioDownloadError> {
     let url = Url::parse(raw.trim()).map_err(|_| YoutubeAudioDownloadError::InvalidUrl)?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(YoutubeAudioDownloadError::InvalidUrl);
@@ -314,11 +320,40 @@ fn validate_youtube_url(raw: &str) -> Result<(), YoutubeAudioDownloadError> {
         .host_str()
         .map(str::to_ascii_lowercase)
         .ok_or(YoutubeAudioDownloadError::InvalidUrl)?;
-    if host == "youtu.be" || host == "youtube.com" || host.ends_with(".youtube.com") {
-        Ok(())
+    let mut segments = url.path_segments().into_iter().flatten();
+    let video_id = if host == "youtu.be" {
+        segments.next().map(str::to_owned)
+    } else if host == "youtube.com" || host.ends_with(".youtube.com") {
+        match segments.next() {
+            Some("watch" | "watch_popup") => url
+                .query_pairs()
+                .find(|(key, _value)| key == "v")
+                .map(|(_key, value)| value.into_owned()),
+            // `videoseries` (a playlist) and `live_stream` (a channel's
+            // stream) are embed routes, not video IDs, though eleven
+            // characters long.
+            Some("embed") => segments
+                .next()
+                .filter(|route| !matches!(*route, "videoseries" | "live_stream"))
+                .map(str::to_owned),
+            Some("shorts" | "live" | "v") => segments.next().map(str::to_owned),
+            _ => None,
+        }
     } else {
-        Err(YoutubeAudioDownloadError::InvalidUrl)
+        None
+    };
+    match video_id {
+        Some(id) if is_youtube_video_id(&id) => Ok(format!("https://www.youtube.com/watch?v={id}")),
+        _ => Err(YoutubeAudioDownloadError::InvalidUrl),
     }
+}
+
+/// A YouTube video ID: eleven characters of the URL-safe base64 alphabet.
+fn is_youtube_video_id(candidate: &str) -> bool {
+    candidate.len() == 11
+        && candidate
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 #[cfg(test)]
@@ -331,27 +366,47 @@ mod tests {
 
     use super::*;
 
+    const VIDEO_ID: &str = "dQw4w9WgXcQ";
+    const VIDEO_URL: &str = "https://youtu.be/dQw4w9WgXcQ";
+
     #[test]
-    fn accepts_youtube_video_hosts() {
+    fn a_single_video_url_becomes_its_canonical_watch_url() {
         for url in [
-            "https://youtu.be/abc",
-            "https://www.youtube.com/watch?v=abc",
-            "https://music.youtube.com/watch?v=abc",
+            format!("https://youtu.be/{VIDEO_ID}?si=share"),
+            format!("https://www.youtube.com/watch?v={VIDEO_ID}"),
+            format!("https://www.youtube.com/watch?v={VIDEO_ID}&list=PL0123456789"),
+            format!("https://music.youtube.com/watch?v={VIDEO_ID}"),
+            format!("https://m.youtube.com/shorts/{VIDEO_ID}"),
+            format!("https://www.youtube.com/live/{VIDEO_ID}"),
+            format!("https://www.youtube.com/embed/{VIDEO_ID}"),
+            format!("https://www.youtube.com/watch_popup?v={VIDEO_ID}"),
         ] {
-            assert_eq!(validate_youtube_url(url), Ok(()));
+            assert_eq!(
+                canonical_youtube_video_url(&url),
+                Ok(format!("https://www.youtube.com/watch?v={VIDEO_ID}")),
+                "{url}"
+            );
         }
     }
 
     #[test]
-    fn rejects_non_youtube_and_non_http_urls() {
+    fn urls_naming_no_single_video_are_rejected() {
         for url in [
-            "https://example.com/watch?v=abc",
+            "https://www.youtube.com/playlist?list=PL0123456789",
+            "https://www.youtube.com/@channel",
+            "https://www.youtube.com/watch?list=PL0123456789",
+            "https://www.youtube.com/watch?v=short",
+            "https://www.youtube.com/embed/videoseries?list=PL0123456789",
+            "https://www.youtube.com/embed/live_stream?channel=UC0123456789",
+            "https://youtu.be/",
+            "https://example.com/watch?v=dQw4w9WgXcQ",
             "file:///tmp/audio.mp3",
             "not a url",
         ] {
             assert_eq!(
-                validate_youtube_url(url),
-                Err(YoutubeAudioDownloadError::InvalidUrl)
+                canonical_youtube_video_url(url),
+                Err(YoutubeAudioDownloadError::InvalidUrl),
+                "{url}"
             );
         }
     }
@@ -383,6 +438,26 @@ mod tests {
     }
 
     #[test]
+    fn yt_dlp_receives_only_the_canonical_video_url() {
+        let (fixture, executable, _record) = fake_yt_dlp("exit 1");
+        let shutdown = AtomicBool::new(false);
+
+        let result = download_with_limits(
+            &format!("https://youtu.be/{VIDEO_ID}?si=share&list=PL0123456789"),
+            &shutdown,
+            &executable,
+            Duration::from_secs(5),
+            1024,
+        );
+
+        assert!(result.is_err(), "the fake download fails");
+        assert_eq!(
+            fs::read_to_string(fixture.path().join("url.txt")).expect("recorded URL"),
+            format!("https://www.youtube.com/watch?v={VIDEO_ID}")
+        );
+    }
+
+    #[test]
     fn oversized_intermediate_kills_child_and_removes_staging_directory() {
         let (fixture, executable, record) = fake_yt_dlp(
             r#"dd if=/dev/zero of="$directory/oversized.tmp" bs=1 count=256 2>/dev/null
@@ -391,7 +466,7 @@ sleep 5"#,
         let shutdown = AtomicBool::new(false);
 
         let result = download_with_limits(
-            "https://youtu.be/abc",
+            VIDEO_URL,
             &shutdown,
             &executable,
             Duration::from_secs(2),
@@ -416,7 +491,7 @@ sleep 5"#,
         let started_at = Instant::now();
 
         let result = download_with_limits(
-            "https://youtu.be/abc",
+            VIDEO_URL,
             &shutdown,
             &executable,
             Duration::from_secs(1),
@@ -431,10 +506,13 @@ sleep 5"#,
         assert!(!recorded_staging_directory(&record).exists());
     }
 
+    /// A fake yt-dlp that records its staging directory (returned) and the
+    /// URL it was given (in `url.txt` beside it), then runs `body`.
     fn fake_yt_dlp(body: &str) -> (TempDir, PathBuf, PathBuf) {
         let fixture = tempfile::tempdir().expect("fixture directory");
         let executable = fixture.path().join("yt-dlp");
         let record = fixture.path().join("staging-directory.txt");
+        let url_record = fixture.path().join("url.txt");
         let script = format!(
             r#"#!/bin/sh
 previous=""
@@ -448,9 +526,11 @@ while [ "$#" -gt 0 ]; do
 done
 directory=$(dirname "$output")
 printf "%s" "$directory" > "{}"
+printf "%s" "$previous" > "{}"
 {}
 "#,
             record.display(),
+            url_record.display(),
             body,
         );
         fs::write(&executable, script).expect("write fake yt-dlp");

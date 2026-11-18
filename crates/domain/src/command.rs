@@ -75,6 +75,9 @@ pub enum ApplicationCommand {
     MovePlaylistItem {
         item: PlaylistItem,
         target_parent_folder_id: Option<PlaylistFolderId>,
+        /// The slot among the target folder's children as they stand before
+        /// the move, counting the item itself when it is already one of them:
+        /// `0` is before the first child, `n` after the n-th.
         position: u32,
     },
     UpdateMetadata {
