@@ -54,6 +54,23 @@ const DRAIN_BATCH_SIZE: usize = 64;
 const MAX_RETRY_DELAY_SECONDS: i64 = 5 * 60;
 const MAX_LOCATION_RECONCILE_ATTEMPTS: usize = 3;
 const IDLE_WAIT: Duration = Duration::from_secs(60);
+/// How long the worker leaves the outbox alone after the store failed it.
+/// Without a pause, a store that rejects acknowledgements leaves every
+/// attempted row due, and the worker would rewrite the same files in a
+/// loop.
+const STORE_FAILURE_BACKOFF: Duration = Duration::from_secs(60);
+
+/// What one outbox drain left behind, which decides when the next runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DrainOutcome {
+    /// Nothing more is due right now.
+    Settled,
+    /// A full batch ran; more rows may already be due.
+    MoreDue,
+    /// The store failed a query or an acknowledgement. The rows it could
+    /// not acknowledge are still due, so draining stops until the backoff.
+    StoreFailed,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MetadataWriteOutcome {
@@ -390,25 +407,21 @@ fn worker_loop(
     let mut active = false;
     let mut cleanup_pending = true;
     loop {
-        if active {
-            if cleanup_pending {
-                if let Err(error) = library_store.garbage_collect_tag_mirror_artwork() {
-                    eprintln!("Sustain: tag-mirror artwork cleanup failed: {error:?}");
-                }
-                cleanup_pending = false;
+        if active && cleanup_pending {
+            if let Err(error) = library_store.garbage_collect_tag_mirror_artwork() {
+                eprintln!("Sustain: tag-mirror artwork cleanup failed: {error:?}");
             }
+            cleanup_pending = false;
+        }
+        let outcome = active.then(|| {
             drain_due_batch(
                 metadata_service.as_ref(),
                 library_store.as_ref(),
                 library_path.as_ref(),
                 &result_sink,
-            );
-        }
-        let wait = if active {
-            wait_until_next_attempt(library_store.as_ref())
-        } else {
-            IDLE_WAIT
-        };
+            )
+        });
+        let wait = wait_after_drain(outcome, library_store.as_ref());
         match receiver.recv_timeout(wait) {
             Ok(command) => {
                 if !apply_command(
@@ -449,7 +462,9 @@ pub(crate) fn drain_due_synchronously(
     result_sink: Option<&async_channel::Sender<MetadataWriterEvent>>,
 ) {
     let sink = Mutex::new(result_sink.cloned());
-    while drain_due_batch(metadata_service, library_store, library_path, &sink) {}
+    while drain_due_batch(metadata_service, library_store, library_path, &sink)
+        == DrainOutcome::MoreDue
+    {}
 }
 
 fn drain_due_batch(
@@ -457,17 +472,17 @@ fn drain_due_batch(
     library_store: &dyn LibraryStore,
     library_path: Option<&PathBuf>,
     result_sink: &Mutex<Option<async_channel::Sender<MetadataWriterEvent>>>,
-) -> bool {
+) -> DrainOutcome {
     let now_unix = unix_now();
     let pending = match library_store.tag_mirrors_due(now_unix, DRAIN_BATCH_SIZE) {
         Ok(pending) => pending,
         Err(error) => {
             eprintln!("Sustain: tag-mirror outbox query failed: {error:?}");
-            return false;
+            return DrainOutcome::StoreFailed;
         }
     };
     if pending.is_empty() {
-        return false;
+        return DrainOutcome::Settled;
     }
     let batch_is_full = pending.len() == DRAIN_BATCH_SIZE;
     let mut artwork_completed = false;
@@ -496,10 +511,15 @@ fn drain_due_batch(
             MirrorAttempt::Succeeded {
                 availability_changed: _,
             } => {
-                if library_store
-                    .complete_tag_mirror(pending.track_id, pending.generation)
-                    .unwrap_or(false)
-                {
+                let completed =
+                    match library_store.complete_tag_mirror(pending.track_id, pending.generation) {
+                        Ok(completed) => completed,
+                        Err(error) => {
+                            eprintln!("Sustain: tag-mirror completion failed: {error:?}");
+                            return DrainOutcome::StoreFailed;
+                        }
+                    };
+                if completed {
                     artwork_completed |= pending.kinds.artwork;
                     emit_result(
                         result_sink,
@@ -523,15 +543,19 @@ fn drain_due_batch(
         };
         let next_attempt_at_unix =
             now_unix.saturating_add(retry_delay_seconds(pending.attempt_count));
-        if library_store
-            .record_tag_mirror_failure(
-                pending.track_id,
-                pending.generation,
-                next_attempt_at_unix,
-                &error,
-            )
-            .unwrap_or(false)
-        {
+        let recorded = match library_store.record_tag_mirror_failure(
+            pending.track_id,
+            pending.generation,
+            next_attempt_at_unix,
+            &error,
+        ) {
+            Ok(recorded) => recorded,
+            Err(store_error) => {
+                eprintln!("Sustain: tag-mirror failure bookkeeping failed: {store_error:?}");
+                return DrainOutcome::StoreFailed;
+            }
+        };
+        if recorded {
             emit_result(
                 result_sink,
                 MetadataWriteResult {
@@ -545,7 +569,11 @@ fn drain_due_batch(
     if artwork_completed && let Err(error) = library_store.garbage_collect_tag_mirror_artwork() {
         eprintln!("Sustain: tag-mirror artwork cleanup failed: {error:?}");
     }
-    batch_is_full
+    if batch_is_full {
+        DrainOutcome::MoreDue
+    } else {
+        DrainOutcome::Settled
+    }
 }
 
 fn apply_command(
@@ -933,6 +961,18 @@ fn mirror_analysed_field<T: Clone>(value: &Option<T>, set_by_user: bool) -> Fiel
     match value {
         Some(_) if !set_by_user => FieldChange::Unchanged,
         _ => mirror_field(value),
+    }
+}
+
+/// How long the worker sleeps (unless a command wakes it) after a drain;
+/// `None` when the worker is inactive and drained nothing.
+fn wait_after_drain(outcome: Option<DrainOutcome>, library_store: &dyn LibraryStore) -> Duration {
+    match outcome {
+        None => IDLE_WAIT,
+        Some(DrainOutcome::StoreFailed) => STORE_FAILURE_BACKOFF,
+        Some(DrainOutcome::Settled | DrainOutcome::MoreDue) => {
+            wait_until_next_attempt(library_store)
+        }
     }
 }
 
@@ -1338,6 +1378,66 @@ mod tests {
                 .expect("metadata paths")
                 .as_slice(),
             [root.join("relocated.flac")]
+        );
+
+        std::fs::remove_dir_all(root).expect("remove library root");
+    }
+
+    #[test]
+    fn a_rejected_acknowledgement_stops_the_drain_and_backs_off() {
+        let root = unique_test_directory();
+        std::fs::create_dir_all(&root).expect("create library root");
+        let backing: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+        for (id, name) in [(1, "one.flac"), (2, "two.flac")] {
+            std::fs::write(root.join(name), b"audio").expect("write track");
+            let track_id = TrackId::new(id).expect("track id");
+            backing
+                .save_track(Track {
+                    id: track_id,
+                    location: TrackLocation::available(
+                        TrackRelativePath::new(name).expect("relative path"),
+                    ),
+                    metadata: TrackMetadata::default(),
+                    rating: Rating::unrated(),
+                    statistics: Default::default(),
+                    file_size_bytes: None,
+                    has_embedded_artwork: None,
+                    file_modified_at: None,
+                })
+                .expect("save track");
+            backing
+                .apply_track_metadata_change_and_enqueue_mirror(
+                    track_id,
+                    &MetadataChange {
+                        title: FieldChange::Set("Canonical".to_owned()),
+                        ..MetadataChange::default()
+                    },
+                )
+                .expect("queue metadata mirror");
+        }
+        let store = crate::test_store::FaultyStore::new(backing);
+        store.set_fail_tag_mirror_acknowledgement(true);
+        let service = RecordingMetadataService::default();
+        let sink = Mutex::new(None);
+
+        let outcome = drain_due_batch(&service, &store, Some(&root), &sink);
+
+        assert_eq!(outcome, DrainOutcome::StoreFailed);
+        assert_eq!(
+            service.metadata_paths.lock().expect("metadata paths").len(),
+            1,
+            "the drain must stop at the first unacknowledged write"
+        );
+        assert_eq!(
+            wait_until_next_attempt(&store),
+            Duration::ZERO,
+            "both rows are still due"
+        );
+        assert_eq!(
+            wait_after_drain(Some(outcome), &store),
+            STORE_FAILURE_BACKOFF,
+            "rows left due must not be retried immediately"
         );
 
         std::fs::remove_dir_all(root).expect("remove library root");

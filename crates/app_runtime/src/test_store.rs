@@ -50,6 +50,7 @@ pub(crate) struct FaultyStore {
     fail_save_tracks_on_call: AtomicU32,
     fail_flush_durable: AtomicBool,
     fail_track_read: AtomicBool,
+    fail_tag_mirror_acknowledgement: AtomicBool,
     availability_path_replacement: Mutex<Option<TrackLocation>>,
     record_analysis_calls: AtomicU32,
     attempt_failure_calls: AtomicU32,
@@ -82,6 +83,7 @@ impl FaultyStore {
             fail_save_tracks_on_call: AtomicU32::new(0),
             fail_flush_durable: AtomicBool::new(false),
             fail_track_read: AtomicBool::new(false),
+            fail_tag_mirror_acknowledgement: AtomicBool::new(false),
             availability_path_replacement: Mutex::new(None),
             record_analysis_calls: AtomicU32::new(0),
             attempt_failure_calls: AtomicU32::new(0),
@@ -130,6 +132,13 @@ impl FaultyStore {
 
     pub(crate) fn set_fail_device_manifest(&self, on: bool) {
         self.fail_device_manifest.store(on, Ordering::SeqCst);
+    }
+
+    /// Reject both ways of acknowledging a tag-mirror attempt: completing
+    /// it and recording its failure.
+    pub(crate) fn set_fail_tag_mirror_acknowledgement(&self, on: bool) {
+        self.fail_tag_mirror_acknowledgement
+            .store(on, Ordering::SeqCst);
     }
 
     pub(crate) fn set_fail_save_tracks(&self, on: bool) {
@@ -461,6 +470,11 @@ impl LibraryStore for FaultyStore {
     }
 
     fn complete_tag_mirror(&self, track_id: TrackId, generation: u64) -> StoreResult<bool> {
+        if self.fail_tag_mirror_acknowledgement.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected tag-mirror acknowledgement failure".to_owned(),
+            ));
+        }
         self.inner.complete_tag_mirror(track_id, generation)
     }
 
@@ -471,6 +485,11 @@ impl LibraryStore for FaultyStore {
         next_attempt_at_unix: i64,
         error: &str,
     ) -> StoreResult<bool> {
+        if self.fail_tag_mirror_acknowledgement.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected tag-mirror acknowledgement failure".to_owned(),
+            ));
+        }
         self.inner
             .record_tag_mirror_failure(track_id, generation, next_attempt_at_unix, error)
     }
