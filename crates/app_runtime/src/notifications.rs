@@ -622,8 +622,9 @@ pub fn library_import_outcome_text(summary: &LibraryImportSummary) -> String {
         summary.imported_tracks,
         summary.duplicate_files,
         summary.discovered_files,
+        summary.failed_files,
     ) {
-        (0, 0, 0) => gettext("No audio files were found."),
+        (0, 0, 0, 0) => gettext("No audio files were found."),
         _ => match library_import_change_clauses(summary) {
             Some(changes) => tr_format!(
                 // Translators: {changes} is a list such as "3 tracks added,

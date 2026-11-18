@@ -13,7 +13,10 @@ use std::{
     ffi::OsString,
     fs::File,
     io::{self, Write},
-    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::MetadataExt,
+    },
     path::{Path, PathBuf},
 };
 
@@ -27,6 +30,9 @@ use crate::managed_library::file_ops::{
 
 const STICKY_BIT: u32 = 0o1000;
 const MAX_NAME_ATTEMPTS: usize = 10_000;
+const TRASH_INFO_EXTENSION: &str = ".trashinfo";
+/// Linux `NAME_MAX`: the byte limit of one path component.
+const NAME_MAX_BYTES: usize = 255;
 
 pub(crate) fn trash_regular_file(path: &Path, source: &RegularFileCapability) -> io::Result<()> {
     let source_path = PinnedFilePath::existing_parent(path)?;
@@ -129,25 +135,32 @@ fn trash_location(path: &Path, source_device: u64) -> io::Result<TrashLocation> 
     }
 
     let topdir = filesystem_topdir(path, source_device)?;
-    let uid = getuid().as_raw();
-    let shared = topdir.join(".Trash");
-    let root = match open_directory_path(&shared) {
-        Ok(directory) if directory.metadata()?.mode() & STICKY_BIT != 0 => {
-            let user_trash = shared.join(uid.to_string());
-            ensure_private_directory(&user_trash)?;
-            user_trash
-        }
-        _ => {
-            let user_trash = topdir.join(format!(".Trash-{uid}"));
-            ensure_private_directory(&user_trash)?;
-            user_trash
-        }
-    };
+    let root = topdir_trash_root(&topdir, getuid().as_raw())?;
     let info_path = path
         .strip_prefix(&topdir)
         .map_err(|_| io::Error::other("trash source escaped its filesystem top directory"))?
         .to_path_buf();
     Ok(TrashLocation { root, info_path })
+}
+
+/// The trash directory on a volume other than the home trash's. The spec
+/// prefers the user's directory inside a sticky, administrator-provided
+/// `$topdir/.Trash`; when that is absent, not sticky, or its per-user
+/// directory cannot be used, the private `$topdir/.Trash-$uid` serves.
+fn topdir_trash_root(topdir: &Path, uid: u32) -> io::Result<PathBuf> {
+    let shared = topdir.join(".Trash");
+    let shared_is_sticky = open_directory_path(&shared)
+        .and_then(|directory| directory.metadata())
+        .is_ok_and(|metadata| metadata.mode() & STICKY_BIT != 0);
+    if shared_is_sticky {
+        let user_trash = shared.join(uid.to_string());
+        if ensure_private_directory(&user_trash).is_ok() {
+            return Ok(user_trash);
+        }
+    }
+    let user_trash = topdir.join(format!(".Trash-{uid}"));
+    ensure_private_directory(&user_trash)?;
+    Ok(user_trash)
 }
 
 fn ensure_private_directory(path: &Path) -> io::Result<File> {
@@ -240,16 +253,39 @@ fn remove_info_file(info: &PinnedFilePath, capability: &RegularFileCapability) -
         .map_err(|_| io::Error::other("could not remove desktop-trash metadata"))
 }
 
+/// A trash entry name that, with its collision suffix and the
+/// `.trashinfo` extension of its info file, fits one Linux path component.
+/// The info file's `Path=` keeps the complete original name, so a shortened
+/// entry still restores under it.
 fn collision_free_name(original: &std::ffi::OsStr, attempt: usize) -> OsString {
-    let mut name = original.to_os_string();
-    if attempt > 0 {
-        name.push(format!(".{}", attempt + 1));
-    }
+    let suffix = if attempt > 0 {
+        format!(".{}", attempt + 1)
+    } else {
+        String::new()
+    };
+    let budget = NAME_MAX_BYTES - TRASH_INFO_EXTENSION.len() - suffix.len();
+    let mut name = OsString::from_vec(truncated_name(original.as_bytes(), budget).to_vec());
+    name.push(suffix);
     name
 }
 
+/// The longest prefix of `name` within `budget` bytes that does not split a
+/// UTF-8 character, so a UTF-8 name stays readable in a file manager.
+fn truncated_name(name: &[u8], budget: usize) -> &[u8] {
+    if name.len() <= budget {
+        return name;
+    }
+    let mut end = budget;
+    if std::str::from_utf8(name).is_ok() {
+        while std::str::from_utf8(&name[..end]).is_err() {
+            end -= 1;
+        }
+    }
+    &name[..end]
+}
+
 fn trash_info_name(mut trash_name: OsString) -> OsString {
-    trash_name.push(".trashinfo");
+    trash_name.push(TRASH_INFO_EXTENSION);
     trash_name
 }
 
@@ -279,7 +315,8 @@ mod tests {
     use std::{fs, path::Path};
 
     use super::{
-        TrashLocation, encode_uri_path, ensure_private_directory, trash_regular_file_to_location,
+        NAME_MAX_BYTES, TrashLocation, encode_uri_path, ensure_private_directory,
+        topdir_trash_root, trash_regular_file_to_location,
     };
     use crate::managed_library::file_ops::{PinnedFilePath, open_regular_file};
 
@@ -347,6 +384,57 @@ mod tests {
             .map(|c| if c.is_ascii_digit() { 'd' } else { c })
             .collect();
         assert_eq!(shape, "dddd-dd-ddTdd:dd:dd");
+    }
+
+    #[test]
+    fn a_name_that_fills_the_component_limit_is_trashed_under_its_full_name() {
+        let root = tempfile::tempdir().expect("create test root");
+        let trash = root.path().join("Trash");
+        // Multi-byte characters, so truncation has a boundary to respect.
+        let stem = "é".repeat((NAME_MAX_BYTES - ".flac".len()) / 2);
+        let name = format!("{stem}{}.flac", "x".repeat((NAME_MAX_BYTES - 5) % 2));
+        assert_eq!(name.len(), NAME_MAX_BYTES);
+        let source = root.path().join(&name);
+        fs::write(&source, b"audio bytes").expect("write source");
+        let capability = open_regular_file(&source).expect("open source");
+        let source_path = PinnedFilePath::existing_parent(&source).expect("pin source");
+
+        trash_regular_file_to_location(
+            &source_path,
+            &capability,
+            &TrashLocation {
+                root: trash.clone(),
+                info_path: source.clone(),
+            },
+        )
+        .expect("trash a maximal file name");
+
+        let entries = fs::read_dir(trash.join("files"))
+            .expect("list trashed files")
+            .map(|entry| entry.expect("trash entry").file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].to_str().expect("a UTF-8 entry name");
+        assert!(name.starts_with(entry));
+        let info = fs::read_to_string(trash.join("info").join(format!("{entry}.trashinfo")))
+            .expect("read trash info");
+        assert!(info.contains(&encode_uri_path(&source)));
+    }
+
+    #[test]
+    fn an_unusable_shared_user_trash_falls_back_to_the_private_volume_trash() {
+        let topdir = tempfile::tempdir().expect("create volume top directory");
+        let shared = topdir.path().join(".Trash");
+        fs::create_dir(&shared).expect("create shared trash");
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o1777))
+            .expect("make shared trash sticky");
+        let uid = rustix::process::getuid().as_raw();
+        fs::write(shared.join(uid.to_string()), b"").expect("obstruct the user's directory");
+
+        let root = topdir_trash_root(topdir.path(), uid).expect("pick a volume trash");
+
+        assert_eq!(root, topdir.path().join(format!(".Trash-{uid}")));
+        assert!(root.is_dir());
     }
 
     #[test]

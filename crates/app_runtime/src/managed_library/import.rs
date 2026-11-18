@@ -319,7 +319,7 @@ impl LibraryImportContext<'_> {
         } = collect_supported_audio_files(&paths, self.cancellation_requested.as_ref());
         let total_files = files.len();
         if self.cancellation_requested.load(Ordering::SeqCst) {
-            return Ok(cancelled_import_result(total_files));
+            return Ok(cancelled_import_result(total_files, failures, 0));
         }
         let mut seen_locations = self
             .existing_tracks
@@ -333,7 +333,11 @@ impl LibraryImportContext<'_> {
 
         for (index, source_path) in files.iter().enumerate() {
             if self.cancellation_requested.load(Ordering::SeqCst) {
-                return Ok(cancelled_import_result(total_files));
+                return Ok(cancelled_import_result(
+                    total_files,
+                    failures,
+                    duplicate_files,
+                ));
             }
             match self.reference_file(source_path, &canonical_library_path, &mut seen_locations) {
                 Err(reason) => failures.push(ImportFailure {
@@ -776,15 +780,24 @@ fn collect_supported_audio_path(
     }
 }
 
-fn cancelled_import_result(discovered_files: usize) -> LibraryImportResult {
+/// A reference import the user cancelled. Its tracks are saved in one write
+/// at the end, so none were added; what it had already found out about the
+/// files (failures, duplicates) is still reported.
+fn cancelled_import_result(
+    discovered_files: usize,
+    failures: Vec<ImportFailure>,
+    duplicate_files: usize,
+) -> LibraryImportResult {
     LibraryImportResult {
         tracks: Vec::new(),
         summary: LibraryImportSummary {
             discovered_files,
+            duplicate_files,
+            failed_files: failures.len(),
             cancelled: true,
             ..LibraryImportSummary::default()
         },
-        failures: Vec::new(),
+        failures,
     }
 }
 

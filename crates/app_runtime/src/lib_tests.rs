@@ -1451,6 +1451,60 @@ fn managed_import_skips_duplicate_content_hashes_in_same_batch() {
 }
 
 #[test]
+fn cancelling_reference_import_keeps_the_failures_already_found() {
+    let test_root = unique_test_directory();
+    // Named so the outside file sorts, and is examined, first.
+    let external_root = test_root.join("a-outside");
+    let library_root = test_root.join("b-library");
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let outside = external_root.join("outside.flac");
+    let inside = library_root.join("inside.flac");
+    std::fs::write(&outside, b"outside audio").expect("write outside source");
+    std::fs::write(&inside, b"inside audio").expect("write inside source");
+    let settings = UserSettings::with_library_path(Some(library_root.clone()));
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store.clone(), Arc::new(TestMetadataService))
+            .expect("library services initialize");
+    let task = runtime
+        .prepare_library_import(vec![outside.clone(), inside])
+        .expect("prepare import");
+
+    let result = run_library_import_task_with_progress(task, |update| {
+        if update.processed_files == 1 {
+            runtime.request_background_task_cancellation();
+        }
+    })
+    .expect("cancelled import completes");
+
+    assert_eq!(
+        result.failures,
+        vec![super::ImportFailure {
+            path: outside,
+            reason: super::ImportFailureReason::OutsideLibraryFolder,
+        }]
+    );
+    assert_eq!(
+        result.summary,
+        super::LibraryImportSummary {
+            discovered_files: 2,
+            imported_tracks: 0,
+            duplicate_files: 0,
+            failed_files: 1,
+            cancelled: true,
+            stopped_on_error: false,
+        }
+    );
+    assert!(store.tracks().expect("load tracks").is_empty());
+
+    std::fs::remove_dir_all(test_root).expect("remove test root");
+}
+
+#[test]
 fn cancelling_managed_import_keeps_completed_tracks_and_reports_progress() {
     let library_root = unique_test_directory();
     let external_root = unique_test_directory();

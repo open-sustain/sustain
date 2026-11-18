@@ -143,6 +143,20 @@ fn library_import_outcome_lists_added_duplicates_and_failures() {
 }
 
 #[test]
+fn an_unreadable_drop_is_not_announced_as_containing_no_audio() {
+    // A folder that could not be listed contributes no discovered file.
+    let summary = LibraryImportSummary {
+        failed_files: 1,
+        ..LibraryImportSummary::default()
+    };
+
+    assert_eq!(
+        library_import_outcome_text(&summary),
+        "1 file could not be imported."
+    );
+}
+
+#[test]
 fn library_import_partial_error_reports_stopped_state() {
     let summary = LibraryImportSummary {
         discovered_files: 33,

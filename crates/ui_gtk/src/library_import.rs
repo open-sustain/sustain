@@ -6,10 +6,11 @@ use std::{path::PathBuf, rc::Rc, sync::mpsc, time::Duration};
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::{gdk, gio};
+use sustain_app_runtime::{NotificationCategory, NotificationSeverity, runtime_error_text};
 
 use super::{
-    ApplicationRuntimeError, LibraryImportProgress, LibraryImportResult, SharedRuntime,
-    run_library_import_task_with_progress,
+    ApplicationRuntimeError, LibraryImportProgress, LibraryImportResult, LibraryImportTask,
+    SharedRuntime, run_library_import_task_with_progress,
 };
 
 enum LibraryImportWorkerEvent {
@@ -31,10 +32,7 @@ pub(crate) fn library_import_requested_callback(
     let parent = parent.downgrade();
 
     Rc::new(move |paths| {
-        let task = {
-            let mut runtime = runtime.borrow_mut();
-            runtime.prepare_library_import(paths)?
-        };
+        let task = prepare_library_import(&runtime, paths)?;
 
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -46,6 +44,31 @@ pub(crate) fn library_import_requested_callback(
 
         poll_library_import(rx, runtime.clone(), parent.clone());
         Ok(())
+    })
+}
+
+/// An import that starts cleanly reports its running and outcome state
+/// through the runtime's LibraryImport notifications. A *start* failure
+/// (another task running, services unavailable) is reported here, the
+/// single entry point for an import, so it reaches the user through the
+/// same lane. An unsupported managed-library filesystem has already
+/// raised its own persistent warning.
+fn prepare_library_import(
+    runtime: &SharedRuntime,
+    paths: Vec<PathBuf>,
+) -> Result<LibraryImportTask, ApplicationRuntimeError> {
+    let mut runtime = runtime.borrow_mut();
+    runtime.prepare_library_import(paths).inspect_err(|error| {
+        if !matches!(
+            error,
+            ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(_)
+        ) {
+            runtime.push_ephemeral_notification(
+                NotificationCategory::LibraryImport,
+                NotificationSeverity::Error,
+                runtime_error_text(error),
+            );
+        }
     })
 }
 
@@ -137,4 +160,30 @@ fn local_paths_from_file_list(file_list: &gdk::FileList) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(|file: gio::File| file.path())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use sustain_app_runtime::{ApplicationRuntime, NotificationCategory, NotificationSeverity};
+
+    use super::prepare_library_import;
+
+    #[test]
+    fn import_start_failure_reports_through_the_notification_center() {
+        // A fresh runtime has no library services, so preparing an import
+        // fails before any worker or GTK work starts.
+        let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+
+        assert!(prepare_library_import(&runtime, vec!["song.flac".into()]).is_err());
+
+        let runtime = runtime.borrow();
+        let notification = runtime
+            .notifications()
+            .current_ephemeral()
+            .expect("an import start-failure notification");
+        assert_eq!(notification.category, NotificationCategory::LibraryImport);
+        assert_eq!(notification.severity, NotificationSeverity::Error);
+    }
 }

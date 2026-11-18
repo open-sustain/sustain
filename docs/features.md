@@ -141,9 +141,12 @@ Track identity is keyed to a file's path inside the library, so moving or
 renaming a file outside Sustain — in a file manager, or with a tagger that
 rewrites filenames — makes the next scan treat the new path as a new track
 while the original row stays visible as missing, retaining its rating,
-playlist membership, and listening statistics. Use **Locate Missing Track**
-on the missing row to re-attach it to the moved file; the extra row the scan
-added for the new path can then be removed manually.
+playlist membership, and listening statistics. To re-attach it, first remove
+the extra row the scan added for the new path with **Remove from Library**,
+which leaves the file on disk. Then use **Locate Missing Track** on the
+missing row and pick the moved file. A file can belong to only one row, so
+locating it while the extra row still holds it is refused. Anything recorded
+on the extra row in the meantime goes with that row.
 
 ### Replace low-bitrate audio from YouTube — *Sustain-native*
 For a present track at or below 192 kbps, the row context menu exposes
