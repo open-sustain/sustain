@@ -65,6 +65,20 @@ recognizes as malformed (an invalid timestamp or undecodable text) so other
 applications can read them; in **Don't touch my files** mode it never
 writes to a file.
 
+Symbolic links in the library folder are followed, so music kept elsewhere
+can be linked in. One file is one track, however many names reach it —
+links and hard links alike: a file keeps the names the library already
+holds it by, so no track changes path; a new file is added where it
+actually is, or, if only links reach it, under the first of them. A link
+counts only if its name has the same extension as the file it points to
+(`song.mp3` to `take.mp3`); a link named otherwise is ignored, like any
+file that is not audio, and a track whose link is later turned to a file
+of another kind shows as missing. A second link to a folder already scanned, or a link
+back to a parent folder, is skipped without counting as a read failure. A
+link that leads nowhere does count as one, so tracks behind a link to an
+unmounted drive are not reported missing. Edits and tag repairs to a
+linked track write the file the link points to; the link itself stays.
+
 ### Drag-and-drop import — *iso-iTunes*
 Dragging files or folders from Files (or any GNOME-compatible source) onto
 the Music view imports them into the library. Folders are walked
@@ -81,7 +95,12 @@ Behavior follows the active library mode:
   metadata) is imported again.
 - **Don't touch my files** — files are indexed in place. A file that
   lives outside the configured library folder is left out, since
-  reference mode never moves or copies.
+  reference mode never moves or copies, unless the library folder links
+  to it; it is then indexed under the linked name, as a scan would.
+
+Dropped links are followed in both modes, under the same extension rule
+as a scan; in **Keep my library organized** mode the file a link points to is
+what gets copied in.
 
 Drops while another library task (scan, import, or organize) is running
 are rejected by the runtime rather than racing. Managed copies report

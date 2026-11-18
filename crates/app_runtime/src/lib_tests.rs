@@ -1885,6 +1885,547 @@ fn unmanaged_external_import_skips_files_outside_library_path_and_reports_them()
     std::fs::remove_dir_all(external_root).expect("remove external root");
 }
 
+/// The library paths a reference import of `paths` into `library_root`
+/// adds, after one of `existing` already in the library.
+fn reference_imported_paths(
+    library_root: &Path,
+    existing: Option<&Path>,
+    paths: Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    reference_imported_paths_reading_with(
+        Arc::new(TestMetadataService),
+        library_root,
+        existing,
+        paths,
+    )
+}
+
+fn reference_imported_paths_reading_with(
+    metadata_service: Arc<dyn MetadataService>,
+    library_root: &Path,
+    existing: Option<&Path>,
+    paths: Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(library_root.to_path_buf())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, metadata_service)
+    .expect("library services initialize");
+    if let Some(existing) = existing {
+        assert_eq!(
+            runtime.handle_command(ApplicationCommand::AddExternalLibraryItems {
+                paths: vec![existing.to_path_buf()]
+            }),
+            Ok(())
+        );
+    }
+    let task = runtime
+        .prepare_library_import(paths)
+        .expect("import starts");
+    let result = super::run_library_import_task(task).expect("the import completes");
+    assert!(result.failures.is_empty(), "{:?}", result.failures);
+    result
+        .tracks
+        .iter()
+        .map(|track| track.location.relative_path.to_path_buf())
+        .collect()
+}
+
+#[test]
+fn a_reference_import_names_a_linked_folder_track_as_the_library_folder_does() {
+    let library_root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(elsewhere.join("album")).expect("create linked folder");
+    std::fs::write(elsewhere.join("album/song.flac"), b"audio").expect("write linked track");
+    std::os::unix::fs::symlink(elsewhere.join("album"), library_root.join("album"))
+        .expect("link the folder into the library");
+
+    assert_eq!(
+        reference_imported_paths(&library_root, None, vec![library_root.join("album")]),
+        vec![PathBuf::from("album/song.flac")]
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
+fn a_reference_import_through_a_link_to_a_library_file_adds_nothing() {
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(library_root.join("real")).expect("create library folder");
+    let real = library_root.join("real/song.flac");
+    std::fs::write(&real, b"audio").expect("write track");
+    std::os::unix::fs::symlink(library_root.join("real"), library_root.join("alias"))
+        .expect("alias the folder");
+
+    assert_eq!(
+        reference_imported_paths(&library_root, Some(&real), vec![library_root.join("alias")]),
+        Vec::<PathBuf>::new()
+    );
+    assert_eq!(
+        reference_imported_paths(&library_root, None, vec![library_root.join("alias")]),
+        vec![PathBuf::from("real/song.flac")],
+        "a file in the library folder is referenced where it is"
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn a_reference_import_of_a_file_and_its_library_link_keeps_the_link() {
+    // The file's own path sorts before the library's link to it.
+    let base = unique_test_directory();
+    let library_root = base.join("z-library");
+    let elsewhere = base.join("a-elsewhere");
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&elsewhere).expect("create linked folder");
+    let file = elsewhere.join("song.flac");
+    std::fs::write(&file, b"audio").expect("write linked track");
+    std::os::unix::fs::symlink(&file, library_root.join("song.flac")).expect("link the file");
+
+    assert_eq!(
+        reference_imported_paths(
+            &library_root,
+            None,
+            vec![file, library_root.join("song.flac")]
+        ),
+        vec![PathBuf::from("song.flac")]
+    );
+
+    std::fs::remove_dir_all(base).expect("remove test folders");
+}
+
+#[test]
+fn a_reference_import_of_a_folder_and_its_library_link_keeps_the_link() {
+    // The file's own path sorts before the library's link to it.
+    let base = unique_test_directory();
+    let library_root = base.join("z-library");
+    let elsewhere = base.join("a-elsewhere");
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(elsewhere.join("album")).expect("create linked folder");
+    std::fs::write(elsewhere.join("album/song.flac"), b"audio").expect("write linked track");
+    std::os::unix::fs::symlink(elsewhere.join("album"), library_root.join("album"))
+        .expect("link the folder");
+
+    assert_eq!(
+        reference_imported_paths(
+            &library_root,
+            None,
+            vec![elsewhere.join("album"), library_root.join("album")]
+        ),
+        vec![PathBuf::from("album/song.flac")]
+    );
+
+    std::fs::remove_dir_all(base).expect("remove test folders");
+}
+
+#[test]
+fn a_reference_import_names_a_file_the_same_whatever_the_drop_order() {
+    let library_root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&elsewhere).expect("create linked folder");
+    std::fs::write(elsewhere.join("song.flac"), b"audio").expect("write linked track");
+    for name in ["a.flac", "z.flac"] {
+        std::os::unix::fs::symlink(elsewhere.join("song.flac"), library_root.join(name))
+            .expect("link the file");
+    }
+
+    for drop in [["a.flac", "z.flac"], ["z.flac", "a.flac"]] {
+        assert_eq!(
+            reference_imported_paths(
+                &library_root,
+                None,
+                drop.iter().map(|name| library_root.join(name)).collect()
+            ),
+            vec![PathBuf::from("a.flac")]
+        );
+    }
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+fn mp3_frames() -> Vec<u8> {
+    let mut frame = vec![0xFF, 0xFB, 0x90, 0x00];
+    frame.resize(417, 0);
+    frame.repeat(4)
+}
+
+#[test]
+fn a_reference_import_takes_no_link_named_unlike_what_it_links_to() {
+    let library_root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&elsewhere).expect("create linked folder");
+    std::fs::write(elsewhere.join("song.mp3"), mp3_frames()).expect("write MP3 frames");
+    std::fs::write(elsewhere.join("audio"), mp3_frames()).expect("write MP3 frames");
+    for (name, target) in [
+        ("a.flac", "song.mp3"),
+        ("b.mp3", "song.mp3"),
+        ("c.mp3", "audio"),
+    ] {
+        std::os::unix::fs::symlink(elsewhere.join(target), library_root.join(name))
+            .expect("link the file");
+    }
+
+    assert_eq!(
+        reference_imported_paths_reading_with(
+            Arc::new(sustain_metadata::LoftyMetadataService),
+            &library_root,
+            None,
+            vec![library_root.clone()]
+        ),
+        vec![PathBuf::from("b.mp3")]
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
+fn a_managed_import_takes_no_link_named_unlike_what_it_links_to() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(external_root.join("drop")).expect("create external root");
+    std::fs::write(external_root.join("song.mp3"), mp3_frames()).expect("write MP3 frames");
+    std::fs::write(external_root.join("audio"), mp3_frames().repeat(2)).expect("write MP3 frames");
+    for (name, target) in [
+        ("a.flac", "song.mp3"),
+        ("b.mp3", "song.mp3"),
+        ("c.mp3", "audio"),
+    ] {
+        std::os::unix::fs::symlink(
+            external_root.join(target),
+            external_root.join("drop").join(name),
+        )
+        .expect("link the file");
+    }
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store, Arc::new(sustain_metadata::LoftyMetadataService))
+            .expect("library services initialize");
+
+    let task = runtime
+        .prepare_library_import(vec![external_root.join("drop")])
+        .expect("import starts");
+    let result = super::run_library_import_task(task).expect("the import completes");
+    assert!(result.failures.is_empty(), "{:?}", result.failures);
+    assert_eq!(result.tracks.len(), 1);
+    assert_eq!(
+        result.tracks[0]
+            .location
+            .relative_path
+            .as_path()
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some("mp3")
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+/// A reference import of `paths` into the library at `library_root`, which
+/// holds `tracks`.
+fn reference_import_into(
+    library_root: &Path,
+    tracks: &[Track],
+    paths: Vec<PathBuf>,
+) -> super::LibraryImportResult {
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    store
+        .save_tracks(tracks)
+        .expect("the library holds its tracks");
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(library_root.to_path_buf())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(TestMetadataService))
+    .expect("library services initialize");
+    let task = runtime
+        .prepare_library_import(paths)
+        .expect("import starts");
+    let result = super::run_library_import_task(task).expect("the import completes");
+    assert!(result.failures.is_empty(), "{:?}", result.failures);
+    result
+}
+
+#[test]
+fn a_reference_import_knows_a_track_the_library_holds_through_a_folder_alias() {
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(library_root.join("real")).expect("create library folder");
+    std::fs::write(library_root.join("real/song.flac"), b"audio").expect("write track");
+    std::os::unix::fs::symlink(library_root.join("real"), library_root.join("alias"))
+        .expect("alias the folder");
+
+    let result = reference_import_into(
+        &library_root,
+        &[test_track(track_id(1), "alias/song.flac")],
+        vec![library_root.clone()],
+    );
+
+    assert_eq!(result.tracks, Vec::new());
+    assert_eq!(result.summary.duplicate_files, 1);
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn a_reference_import_of_a_library_folder_by_its_resolved_path_knows_its_tracks() {
+    let base = unique_test_directory();
+    std::fs::create_dir_all(base.join("disk/sub/real")).expect("create library folder");
+    std::fs::write(base.join("disk/sub/real/song.flac"), b"audio").expect("write track");
+    std::os::unix::fs::symlink(base.join("disk/sub/real"), base.join("disk/sub/alias"))
+        .expect("alias the folder");
+    std::os::unix::fs::symlink(base.join("disk"), base.join("Music"))
+        .expect("the library path is a link");
+
+    let result = reference_import_into(
+        &base.join("Music"),
+        &[test_track(track_id(1), "sub/alias/song.flac")],
+        vec![base.join("disk/sub")],
+    );
+
+    assert_eq!(result.tracks, Vec::new());
+    assert_eq!(result.summary.duplicate_files, 1);
+
+    std::fs::remove_dir_all(base).expect("remove test folders");
+}
+
+#[test]
+fn a_reference_import_of_a_folder_holding_the_library_keeps_its_linked_albums() {
+    let base = unique_test_directory();
+    std::fs::create_dir_all(base.join("collection/library")).expect("create library root");
+    std::fs::create_dir_all(base.join("collection/archive/album")).expect("create archive");
+    std::fs::write(base.join("collection/archive/album/song.flac"), b"audio")
+        .expect("write archived track");
+    std::os::unix::fs::symlink(
+        base.join("collection/archive/album"),
+        base.join("collection/library/album"),
+    )
+    .expect("link the album into the library");
+    let library_root = base.join("collection/library");
+
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(library_root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(TestMetadataService))
+    .expect("library services initialize");
+    let task = runtime
+        .prepare_library_import(vec![base.join("collection")])
+        .expect("import starts");
+    let result = super::run_library_import_task(task).expect("the import completes");
+
+    assert_eq!(
+        result
+            .tracks
+            .iter()
+            .map(|track| track.location.relative_path.to_path_buf())
+            .collect::<Vec<_>>(),
+        vec![PathBuf::from("album/song.flac")]
+    );
+
+    std::fs::remove_dir_all(base).expect("remove test folders");
+}
+
+#[test]
+fn a_reference_import_names_a_file_where_no_link_leads_as_a_scan_does() {
+    let library_root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&elsewhere).expect("create external folder");
+    std::fs::write(elsewhere.join("song.flac"), b"audio").expect("write external track");
+    std::fs::hard_link(elsewhere.join("song.flac"), library_root.join("z.flac"))
+        .expect("a second name for the file in the library");
+    std::os::unix::fs::symlink(elsewhere.join("song.flac"), library_root.join("a.flac"))
+        .expect("a link to the file");
+
+    assert_eq!(
+        reference_imported_paths(&library_root, None, vec![library_root.clone()]),
+        vec![PathBuf::from("z.flac")]
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(elsewhere).expect("remove external folder");
+}
+
+#[test]
+fn a_managed_import_takes_a_file_a_broken_track_link_leads_to_for_new() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    std::fs::write(external_root.join("other.flac"), b"audio").expect("write dropped file");
+    // The track's link was turned to a file of another kind: the track is
+    // gone, and the file is not it.
+    std::os::unix::fs::symlink(
+        external_root.join("other.flac"),
+        library_root.join("song.mp3"),
+    )
+    .expect("link the track");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    store
+        .save_tracks(&[test_track(track_id(1), "song.mp3")])
+        .expect("the library holds the track");
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store, Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    let task = runtime
+        .prepare_library_import(vec![external_root.join("other.flac")])
+        .expect("import starts");
+    let result = super::run_library_import_task(task).expect("the import completes");
+
+    assert!(result.failures.is_empty(), "{:?}", result.failures);
+    assert_eq!(result.tracks.len(), 1);
+    assert_eq!(result.summary.duplicate_files, 0);
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn a_managed_import_names_a_linked_folder_the_same_whatever_the_drop_order() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(external_root.join("album")).expect("create external album");
+    std::fs::write(external_root.join("album/bad.mp3"), b"not audio").expect("write bad file");
+    for name in ["a", "z"] {
+        std::os::unix::fs::symlink(external_root.join("album"), external_root.join(name))
+            .expect("link the album");
+    }
+
+    for drop in [["a", "z"], ["z", "a"]] {
+        let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+        let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+        settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+        let mut runtime =
+            ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+                .expect("load settings")
+                .with_library_services(store, Arc::new(sustain_metadata::LoftyMetadataService))
+                .expect("library services initialize");
+        let task = runtime
+            .prepare_library_import(drop.iter().map(|name| external_root.join(name)).collect())
+            .expect("import starts");
+        let result = super::run_library_import_task(task).expect("the import completes");
+
+        assert_eq!(
+            result
+                .failures
+                .iter()
+                .map(|failure| failure.path.clone())
+                .collect::<Vec<_>>(),
+            vec![external_root.join("a/bad.mp3")]
+        );
+    }
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn a_reference_import_names_a_linked_folder_the_same_whatever_the_drop_order() {
+    let library_root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(elsewhere.join("album")).expect("create linked folder");
+    std::fs::write(elsewhere.join("album/song.flac"), b"audio").expect("write linked track");
+    for name in ["a", "z"] {
+        std::os::unix::fs::symlink(elsewhere.join("album"), library_root.join(name))
+            .expect("link the folder");
+    }
+
+    for drop in [["a", "z"], ["z", "a"]] {
+        assert_eq!(
+            reference_imported_paths(
+                &library_root,
+                None,
+                drop.iter().map(|name| library_root.join(name)).collect()
+            ),
+            vec![PathBuf::from("a/song.flac")]
+        );
+    }
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
+fn a_reference_import_of_a_folder_holding_a_link_and_of_its_target_keeps_the_link() {
+    let library_root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    std::fs::create_dir_all(library_root.join("music")).expect("create library folder");
+    std::fs::create_dir_all(elsewhere.join("album")).expect("create linked folder");
+    std::fs::write(elsewhere.join("album/song.flac"), b"audio").expect("write linked track");
+    std::os::unix::fs::symlink(elsewhere.join("album"), library_root.join("music/album"))
+        .expect("link the folder");
+
+    assert_eq!(
+        reference_imported_paths(
+            &library_root,
+            None,
+            vec![library_root.join("music"), elsewhere.join("album")]
+        ),
+        vec![PathBuf::from("music/album/song.flac")]
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
+fn a_managed_import_of_a_link_copies_what_it_links_to() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    std::fs::write(external_root.join("source.flac"), b"audio bytes").expect("write source");
+    let link = external_root.join("link.flac");
+    std::os::unix::fs::symlink(external_root.join("source.flac"), &link).expect("link the file");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store, Arc::new(TestMetadataService))
+            .expect("library services initialize");
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::AddExternalLibraryItems { paths: vec![link] }),
+        Ok(())
+    );
+
+    let copy = library_root.join("Unknown Artist/Unknown Album/Track.flac");
+    assert!(
+        !std::fs::symlink_metadata(&copy)
+            .expect("copied file exists")
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read(&copy).expect("read copy"), b"audio bytes");
+    assert_eq!(runtime.library_tracks().len(), 1);
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
 #[test]
 fn managed_import_skips_unreadable_files_and_imports_the_rest() {
     let library_root = unique_test_directory();
@@ -6617,6 +7158,9 @@ fn force_backfill_rewrites_present_tracks_and_skips_missing() {
     for track in [present_a, present_b, missing] {
         assert_eq!(store.save_track(track), Ok(()));
     }
+    for present in ["a.flac", "b.flac"] {
+        std::fs::write(root.join(present), b"audio").expect("write present track");
+    }
 
     let metadata = Arc::new(RecordingMetadataService::new(false));
     let runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
@@ -6661,10 +7205,9 @@ fn force_backfill_records_failures_without_aborting() {
     std::fs::create_dir_all(&root).expect("create test library");
     let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     for id in [1, 2] {
-        assert_eq!(
-            store.save_track(test_track(track_id(id), &format!("track{id}.flac"))),
-            Ok(())
-        );
+        let name = format!("track{id}.flac");
+        assert_eq!(store.save_track(test_track(track_id(id), &name)), Ok(()));
+        std::fs::write(root.join(name), b"audio").expect("write track");
     }
 
     let metadata = Arc::new(RecordingMetadataService::with_metadata_write_failure());
@@ -7981,9 +8524,36 @@ fn file_presence_probes_distinguish_reachable_files_from_directory_entries() {
     std::os::unix::fs::symlink(&absent, &dangling_link).expect("create dangling symlink");
     assert_eq!(probe_file_presence(&dangling_link), FilePresence::Absent);
     assert_eq!(
+        probe_file_presence(&present.join("under-a-file.flac")),
+        FilePresence::Absent
+    );
+    assert_eq!(
         probe_path_entry_presence(&dangling_link),
         FilePresence::Present
     );
+
+    std::fs::remove_dir_all(&dir).expect("remove probe directory");
+}
+
+#[test]
+fn a_track_whose_link_now_leads_to_another_kind_of_file_is_absent() {
+    let dir = unique_test_directory();
+    std::fs::create_dir_all(&dir).expect("create probe directory");
+    std::fs::write(dir.join("song.mp3"), b"x").expect("write the track's file");
+    std::fs::write(dir.join("other.flac"), b"x").expect("write another file");
+    let link = dir.join("track.mp3");
+    std::os::unix::fs::symlink(dir.join("song.mp3"), &link).expect("link the track");
+    assert_eq!(probe_file_presence(&link), FilePresence::Present);
+    assert_eq!(
+        crate::metadata_writer::track_file_to_write(&link).expect("resolve"),
+        dir.join("song.mp3")
+    );
+
+    std::fs::remove_file(&link).expect("unlink");
+    std::os::unix::fs::symlink(dir.join("other.flac"), &link).expect("retarget the link");
+
+    assert_eq!(probe_file_presence(&link), FilePresence::Absent);
+    assert!(crate::metadata_writer::track_file_to_write(&link).is_err());
 
     std::fs::remove_dir_all(&dir).expect("remove probe directory");
 }

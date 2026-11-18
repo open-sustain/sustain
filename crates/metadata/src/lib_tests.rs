@@ -19,7 +19,7 @@ use lofty::{
 use sustain_domain::{Bpm, FieldChange, MetadataChange, MusicalKey, TrackMetadata};
 
 use super::read::{parse_bpm, parse_flag, read_tagged_file, star_rating_value};
-use super::scan::{ScanFilesystem, StdScanFilesystem};
+use super::walk::{StdWalkFilesystem, WalkFilesystem};
 use super::{
     AudioFormat, InitialTagRead, InitialTags, LibraryScanner, LoftyMetadataService,
     MalformedTagError, MetadataError, MetadataRepair, MetadataResult, MetadataService, Rating,
@@ -2106,6 +2106,434 @@ fn scanner_follows_symlinked_tracks_and_folders() {
     fs::remove_dir_all(targets).expect("remove test targets");
 }
 
+/// The paths a scan of `root` indexes, given the tracks the library holds,
+/// once it is checked to have failed nowhere.
+fn scanned_paths_of(root: &Path, known: &[&str]) -> Vec<String> {
+    let known: super::KnownTracks = known
+        .iter()
+        .map(|path| (TrackRelativePath::new(*path).expect("relative"), None))
+        .collect();
+    let scan = LibraryScanner::new(&RecordingMetadataService::default())
+        .scan(root, &std::sync::atomic::AtomicBool::new(false), &known)
+        .expect("scan library");
+    assert!(scan.failures.is_empty(), "{:?}", scan.failures);
+    assert!(scan.complete_for_missing_reconciliation);
+    scan.tracks
+        .iter()
+        .map(|track| track.relative_path.as_path().display().to_string())
+        .collect()
+}
+
+#[test]
+fn another_link_to_a_walked_folder_is_neither_a_failure_nor_a_twin() {
+    let root = unique_test_directory();
+    let targets = unique_test_directory();
+    fs::create_dir_all(root.join("real")).expect("create library folder");
+    fs::create_dir_all(targets.join("album")).expect("create target album");
+    fs::write(root.join("real/x.mp3"), b"audio").expect("write track");
+    fs::write(targets.join("album/song.flac"), b"audio").expect("write target track");
+    std::os::unix::fs::symlink(root.join("real"), root.join("again")).expect("alias folder");
+    std::os::unix::fs::symlink(targets.join("album"), root.join("y")).expect("link album");
+    std::os::unix::fs::symlink(targets.join("album"), root.join("z")).expect("alias album");
+
+    assert_eq!(
+        scanned_paths_of(&root, &[]),
+        vec!["real/x.mp3", "y/song.flac"]
+    );
+
+    fs::remove_dir_all(root).expect("remove test library");
+    fs::remove_dir_all(targets).expect("remove test targets");
+}
+
+#[test]
+fn a_link_back_to_an_ancestor_is_not_a_failure() {
+    let root = unique_test_directory();
+    fs::create_dir_all(root.join("a")).expect("create library folder");
+    fs::write(root.join("a/x.mp3"), b"audio").expect("write track");
+    std::os::unix::fs::symlink(&root, root.join("a/up")).expect("link to the root");
+
+    assert_eq!(scanned_paths_of(&root, &[]), vec!["a/x.mp3"]);
+
+    fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn a_file_is_indexed_where_it_is_rather_than_where_a_link_names_it() {
+    let root = unique_test_directory();
+    fs::create_dir_all(root.join("z-real")).expect("create library folder");
+    fs::write(root.join("z-real/x.mp3"), b"audio").expect("write track");
+    // Both links sort before the file's own name.
+    std::os::unix::fs::symlink(root.join("z-real"), root.join("a-link")).expect("link folder");
+    std::os::unix::fs::symlink(root.join("z-real/x.mp3"), root.join("b.mp3")).expect("link file");
+
+    assert_eq!(scanned_paths_of(&root, &[]), vec!["z-real/x.mp3"]);
+
+    fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn a_file_keeps_the_names_the_library_holds_it_under() {
+    let root = unique_test_directory();
+    fs::create_dir_all(root.join("z-real")).expect("create library folder");
+    fs::write(root.join("z-real/x.mp3"), b"audio").expect("write track");
+    std::os::unix::fs::symlink(root.join("z-real"), root.join("a-link")).expect("link folder");
+    std::os::unix::fs::symlink(root.join("z-real/x.mp3"), root.join("b.mp3")).expect("link file");
+
+    assert_eq!(
+        scanned_paths_of(&root, &["a-link/x.mp3"]),
+        vec!["a-link/x.mp3"]
+    );
+    assert_eq!(
+        scanned_paths_of(&root, &["a-link/x.mp3", "b.mp3"]),
+        vec!["a-link/x.mp3", "b.mp3"]
+    );
+
+    fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn a_known_track_in_a_folder_that_cannot_be_listed_gains_no_twin() {
+    let root = unique_test_directory();
+    fs::create_dir_all(root.join("real")).expect("create library folder");
+    fs::write(root.join("real/x.mp3"), b"audio").expect("write track");
+    std::os::unix::fs::symlink(root.join("real/x.mp3"), root.join("b.mp3")).expect("link file");
+    // The folder can be passed through, not listed.
+    let filesystem = FaultInjectingScanFilesystem {
+        unreadable_directory: Some(root.join("real")),
+        ..FaultInjectingScanFilesystem::default()
+    };
+
+    let known: super::KnownTracks = BTreeMap::from([(
+        TrackRelativePath::new("real/x.mp3").expect("relative"),
+        None,
+    )]);
+    let scan = LibraryScanner::new(&RecordingMetadataService::default())
+        .scan_with_filesystem(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &known,
+            &filesystem,
+        )
+        .expect("scan library");
+
+    let paths: Vec<_> = scan
+        .tracks
+        .iter()
+        .map(|track| track.relative_path.as_path().to_path_buf())
+        .collect();
+    assert_eq!(paths, vec![PathBuf::from("real/x.mp3")]);
+    assert!(!scan.complete_for_missing_reconciliation);
+
+    fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn a_file_is_kept_under_a_name_the_scan_accepts() {
+    let root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library folder");
+    fs::create_dir_all(&elsewhere).expect("create linked folder");
+    fs::write(elsewhere.join("song.flac"), b"audio").expect("write track");
+    std::os::unix::fs::symlink(elsewhere.join("song.flac"), root.join("a.txt"))
+        .expect("link under a name that is not audio");
+    std::os::unix::fs::symlink(elsewhere.join("song.flac"), root.join("b.flac"))
+        .expect("link under an audio name");
+
+    assert_eq!(scanned_paths_of(&root, &[]), vec!["b.flac"]);
+
+    fs::remove_dir_all(root).expect("remove test library");
+    fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
+fn a_link_named_unlike_what_it_links_to_is_no_name_for_it() {
+    let root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library folder");
+    fs::create_dir_all(&elsewhere).expect("create linked folder");
+    fs::write(elsewhere.join("song.mp3"), b"audio").expect("write track");
+    fs::write(elsewhere.join("audio"), b"audio").expect("write unnamed track");
+    fs::write(elsewhere.join("take.opus"), b"audio").expect("write Opus track");
+    for (name, target) in [
+        ("a.flac", "song.mp3"),
+        ("b.mp3", "song.mp3"),
+        ("c.mp3", "audio"),
+        // The same format, but another extension a reader is chosen by.
+        ("d.ogg", "take.opus"),
+    ] {
+        std::os::unix::fs::symlink(elsewhere.join(target), root.join(name)).expect("link");
+    }
+
+    assert_eq!(scanned_paths_of(&root, &[]), vec!["b.mp3"]);
+    assert_eq!(
+        scanned_paths_of(&root, &["a.flac", "c.mp3", "d.ogg"]),
+        vec!["b.mp3"],
+        "a track the library holds under such a name is not kept by it"
+    );
+
+    fs::remove_dir_all(root).expect("remove test library");
+    fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
+fn a_file_links_alone_reach_waits_while_a_known_name_cannot_be_looked_up() {
+    let root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    fs::create_dir_all(root.join("closed")).expect("create closed folder");
+    fs::create_dir_all(&elsewhere).expect("create linked folder");
+    fs::write(elsewhere.join("song.mp3"), b"audio").expect("write track");
+    std::os::unix::fs::symlink(elsewhere.join("song.mp3"), root.join("closed/song.mp3"))
+        .expect("the name the library holds");
+    std::os::unix::fs::symlink(elsewhere.join("song.mp3"), root.join("open.mp3"))
+        .expect("another link");
+    let known: super::KnownTracks = [(
+        TrackRelativePath::new("closed/song.mp3").expect("relative"),
+        None,
+    )]
+    .into_iter()
+    .collect();
+    let filesystem = FaultInjectingScanFilesystem {
+        unreadable_directory: Some(root.join("closed")),
+        unreadable_path: Some(root.join("closed/song.mp3")),
+        ..FaultInjectingScanFilesystem::default()
+    };
+
+    let scan = LibraryScanner::new(&RecordingMetadataService::default())
+        .scan_with_filesystem(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &known,
+            &filesystem,
+        )
+        .expect("scan library");
+
+    assert_eq!(scan.tracks, Vec::new());
+    assert!(!scan.failures.is_empty());
+
+    fs::remove_dir_all(root).expect("remove test library");
+    fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
+fn a_known_name_under_what_is_now_a_file_names_nothing() {
+    let root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library folder");
+    fs::create_dir_all(&elsewhere).expect("create linked folder");
+    fs::write(root.join("album"), b"a file where a folder was").expect("replace the folder");
+    fs::write(elsewhere.join("song.mp3"), b"audio").expect("write track");
+    std::os::unix::fs::symlink(elsewhere.join("song.mp3"), root.join("new.mp3"))
+        .expect("link a new track");
+
+    assert_eq!(
+        scanned_paths_of(&root, &["album/song.mp3"]),
+        vec!["new.mp3"]
+    );
+
+    fs::remove_dir_all(root).expect("remove test library");
+    fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
+fn a_known_name_the_walk_failed_on_keeps_links_alone_from_naming_its_file() {
+    let root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library folder");
+    fs::create_dir_all(&elsewhere).expect("create linked folder");
+    fs::write(elsewhere.join("song.mp3"), b"audio").expect("write track");
+    for name in ["closed.mp3", "open.mp3"] {
+        std::os::unix::fs::symlink(elsewhere.join("song.mp3"), root.join(name)).expect("link");
+    }
+    let known: super::KnownTracks = [(
+        TrackRelativePath::new("closed.mp3").expect("relative"),
+        None,
+    )]
+    .into_iter()
+    .collect();
+    let filesystem = FaultInjectingScanFilesystem {
+        unreadable_path: Some(root.join("closed.mp3")),
+        ..FaultInjectingScanFilesystem::default()
+    };
+
+    let scan = LibraryScanner::new(&RecordingMetadataService::default())
+        .scan_with_filesystem(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &known,
+            &filesystem,
+        )
+        .expect("scan library");
+
+    assert_eq!(scan.tracks, Vec::new());
+    assert_eq!(
+        scan.failures
+            .iter()
+            .map(|failure| failure.path.clone())
+            .collect::<Vec<_>>(),
+        vec![root.join("closed.mp3")]
+    );
+
+    fs::remove_dir_all(root).expect("remove test library");
+    fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+#[test]
+fn a_track_link_that_leads_to_itself_is_one_failure() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library folder");
+    std::os::unix::fs::symlink(root.join("loop.mp3"), root.join("loop.mp3")).expect("link");
+    let known: super::KnownTracks = [(TrackRelativePath::new("loop.mp3").expect("relative"), None)]
+        .into_iter()
+        .collect();
+
+    let scan = LibraryScanner::new(&RecordingMetadataService::default())
+        .scan(&root, &std::sync::atomic::AtomicBool::new(false), &known)
+        .expect("scan library");
+
+    assert_eq!(
+        scan.failures
+            .iter()
+            .map(|failure| failure.path.clone())
+            .collect::<Vec<_>>(),
+        vec![root.join("loop.mp3")]
+    );
+
+    fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn a_repair_through_a_link_leaves_the_link_a_link() {
+    let root = unique_test_directory();
+    let elsewhere = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library folder");
+    fs::create_dir_all(&elsewhere).expect("create linked folder");
+    fs::write(
+        elsewhere.join("song.mp3"),
+        mp3_with_id3v2_4_frames(&[
+            id3v2_4_text_frame("TIT2", "Good Title"),
+            id3v2_4_text_frame("TDRC", "20XX"),
+        ]),
+    )
+    .expect("write fixture");
+    std::os::unix::fs::symlink(elsewhere.join("song.mp3"), root.join("song.mp3")).expect("link");
+
+    let scan = LibraryScanner::new(&LoftyMetadataService)
+        .with_malformed_tag_repair(true)
+        .scan(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &super::KnownTracks::new(),
+        )
+        .expect("scan library");
+
+    assert!(scan.failures.is_empty(), "{:?}", scan.failures);
+    assert!(
+        fs::symlink_metadata(root.join("song.mp3"))
+            .expect("the link is there")
+            .file_type()
+            .is_symlink()
+    );
+    let repaired = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&elsewhere.join("song.mp3"))
+        .expect("read repaired file");
+    assert_eq!(repaired.repair, None);
+
+    fs::remove_dir_all(root).expect("remove test library");
+    fs::remove_dir_all(elsewhere).expect("remove linked folder");
+}
+
+/// Lists one folder of many entries, asking the walk to stop on the first
+/// one listed, and counts the entries listed.
+struct CancellingListing {
+    cancellation: &'static std::sync::atomic::AtomicBool,
+    listed: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl WalkFilesystem for CancellingListing {
+    fn read_directory(
+        &self,
+        path: &Path,
+    ) -> io::Result<Box<dyn Iterator<Item = io::Result<PathBuf>>>> {
+        let cancellation = self.cancellation;
+        let listed = std::rc::Rc::clone(&self.listed);
+        let path = path.to_path_buf();
+        Ok(Box::new((0..1000).map(move |index| {
+            cancellation.store(true, std::sync::atomic::Ordering::SeqCst);
+            listed.set(listed.get() + 1);
+            Ok(path.join(format!("{index}.mp3")))
+        })))
+    }
+
+    fn symlink_metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        fs::symlink_metadata(path)
+    }
+
+    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        fs::metadata(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        fs::canonicalize(path)
+    }
+}
+
+#[test]
+fn a_walk_cancelled_while_listing_a_folder_stops_listing_it() {
+    static CANCELLATION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library folder");
+    let listed = std::rc::Rc::new(std::cell::Cell::new(0));
+
+    let walk = crate::walk::walk_files_with(
+        &crate::walk::WalkRequest {
+            roots: std::slice::from_ref(&root),
+            known: &std::collections::HashSet::new(),
+            accept: &crate::is_audio_name_for,
+            skip: &|_| false,
+            cancellation: &CANCELLATION,
+        },
+        &CancellingListing {
+            cancellation: &CANCELLATION,
+            listed: std::rc::Rc::clone(&listed),
+        },
+    );
+
+    assert!(walk.cancelled);
+    assert_eq!(listed.get(), 1);
+
+    fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn a_library_folder_named_like_sustain_workspace_is_scanned() {
+    let root =
+        unique_test_directory().join(format!("{}music", super::SUSTAIN_WORKSPACE_NAME_PREFIX));
+    fs::create_dir_all(&root).expect("create library folder");
+    fs::write(root.join("x.mp3"), b"audio").expect("write track");
+
+    assert_eq!(scanned_paths_of(&root, &[]), vec!["x.mp3"]);
+
+    fs::remove_dir_all(root.parent().expect("parent")).expect("remove test library");
+}
+
+#[test]
+fn a_file_with_two_names_and_no_link_is_one_track() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create library folder");
+    fs::write(root.join("x.mp3"), b"audio").expect("write track");
+    fs::hard_link(root.join("x.mp3"), root.join("y.mp3")).expect("hard link");
+
+    assert_eq!(scanned_paths_of(&root, &[]), vec!["x.mp3"]);
+    assert_eq!(scanned_paths_of(&root, &["y.mp3"]), vec!["y.mp3"]);
+    assert_eq!(
+        scanned_paths_of(&root, &["x.mp3", "y.mp3"]),
+        vec!["x.mp3", "y.mp3"],
+        "tracks the library holds keep their names"
+    );
+
+    fs::remove_dir_all(root).expect("remove test library");
+}
+
 #[test]
 fn scanner_records_broken_symlinks_as_failures() {
     let root = unique_test_directory();
@@ -2345,16 +2773,14 @@ fn scanner_skips_reparsing_unchanged_files_and_reports_them_present() {
         ScanFingerprint::new(
             unchanged_meta.len(),
             unchanged_meta.modified().expect("mtime"),
-        )
-        .expect("fingerprint"),
+        ),
     );
     known.insert(
         changed_relative.clone(),
         ScanFingerprint::new(
             changed_meta.len() + 1,
             changed_meta.modified().expect("mtime"),
-        )
-        .expect("fingerprint"),
+        ),
     );
 
     let metadata_service = RecordingMetadataService::default();
@@ -2394,7 +2820,7 @@ fn scanner_reparses_when_only_mtime_differs() {
     let mut known = BTreeMap::new();
     known.insert(
         relative.clone(),
-        ScanFingerprint::new(meta.len(), stale_mtime).expect("fingerprint"),
+        ScanFingerprint::new(meta.len(), stale_mtime),
     );
 
     let metadata_service = RecordingMetadataService::default();
@@ -2597,11 +3023,7 @@ struct FaultInjectingScanFilesystem {
     unreadable_path: Option<PathBuf>,
 }
 
-impl ScanFilesystem for FaultInjectingScanFilesystem {
-    fn is_directory(&self, path: &Path) -> bool {
-        StdScanFilesystem.is_directory(path)
-    }
-
+impl WalkFilesystem for FaultInjectingScanFilesystem {
     fn read_directory(
         &self,
         path: &Path,
@@ -2609,7 +3031,7 @@ impl ScanFilesystem for FaultInjectingScanFilesystem {
         if self.unreadable_directory.as_deref() == Some(path) {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
         }
-        let entries = StdScanFilesystem.read_directory(path)?;
+        let entries = StdWalkFilesystem.read_directory(path)?;
         if self.entry_error_directory.as_deref() == Some(path) {
             return Ok(Box::new(entries.chain(std::iter::once(Err(
                 io::Error::from(io::ErrorKind::Other),
@@ -2622,18 +3044,21 @@ impl ScanFilesystem for FaultInjectingScanFilesystem {
         if self.unreadable_path.as_deref() == Some(path) {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
         }
-        StdScanFilesystem.symlink_metadata(path)
+        StdWalkFilesystem.symlink_metadata(path)
     }
 
     fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
         if self.unreadable_path.as_deref() == Some(path) {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
         }
-        StdScanFilesystem.metadata(path)
+        StdWalkFilesystem.metadata(path)
     }
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        StdScanFilesystem.canonicalize(path)
+        if self.unreadable_path.as_deref() == Some(path) {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        StdWalkFilesystem.canonicalize(path)
     }
 }
 

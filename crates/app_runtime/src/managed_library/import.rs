@@ -23,7 +23,7 @@ use sustain_domain::{
     ManagedTrackPathInput, ManagedTrackPathPlanner, PlayStatistics, Track, TrackContentHash,
     TrackLocation,
 };
-use sustain_metadata::{InitialTags, audio_format_from_path, hash_file_content};
+use sustain_metadata::{InitialTags, hash_file_content, is_audio_name_for};
 
 use crate::{
     ApplicationRuntimeError, ApplicationRuntimeResult, ImportFailure, ImportFailureReason,
@@ -166,8 +166,12 @@ impl LibraryImportContext<'_> {
             .validate(&library_path)
             .map_err(ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported)?;
 
-        let DiscoveredFiles { files, failures } =
-            collect_supported_audio_files(&paths, self.cancellation_requested.as_ref());
+        let DiscoveredFiles { files, failures } = collect_supported_audio_files(
+            paths,
+            &library_path,
+            &HashSet::new(),
+            self.cancellation_requested.as_ref(),
+        );
         let mut state = ManagedImportState {
             failures,
             ..ManagedImportState::default()
@@ -184,7 +188,8 @@ impl LibraryImportContext<'_> {
         let mut batch = ManagedImportBatch::new(&self.existing_tracks, library_path);
         let mut next_track_id = library_scan::next_track_id(&self.existing_tracks)?;
 
-        for (index, source_path) in files.iter().enumerate() {
+        for (index, file) in files.iter().enumerate() {
+            let source_path = file.first_name();
             if self.cancellation_requested.load(Ordering::SeqCst) {
                 return self.finish_cancelled_managed_import(
                     &batch.library_path,
@@ -194,14 +199,14 @@ impl LibraryImportContext<'_> {
             }
             match batch.import_file(self.metadata_service.as_ref(), source_path) {
                 Err(reason) => state.failures.push(ImportFailure {
-                    path: source_path.clone(),
+                    path: source_path.to_path_buf(),
                     reason,
                 }),
                 Ok(ManagedFileOutcome::Duplicate) => state.duplicate_files += 1,
                 Ok(ManagedFileOutcome::Copied(copied)) => {
                     let Some(track_id) = sustain_domain::TrackId::new(next_track_id) else {
                         state.pending_copies.push(PendingCopy {
-                            source_path: source_path.clone(),
+                            source_path: source_path.to_path_buf(),
                             copy: copied.copy,
                         });
                         return self.finish_failed_managed_import(
@@ -232,7 +237,7 @@ impl LibraryImportContext<'_> {
                         file_modified_at: None,
                     });
                     state.pending_copies.push(PendingCopy {
-                        source_path: source_path.clone(),
+                        source_path: source_path.to_path_buf(),
                         copy,
                     });
                     if state.pending_tracks.len() >= MANAGED_IMPORT_COMMIT_CHUNK_SIZE
@@ -337,10 +342,22 @@ impl LibraryImportContext<'_> {
         let canonical_library_path = fs::canonicalize(&library_path)
             .map_err(|_| ApplicationRuntimeError::LibraryImportFailed)?;
 
+        // The names the library holds tracks by, so a file it holds under a
+        // name the walk passes by is still told apart from a new one.
+        let known: HashSet<PathBuf> = self
+            .existing_tracks
+            .iter()
+            .map(|track| track.location.absolute_path(&library_path))
+            .collect();
         let DiscoveredFiles {
             files,
             mut failures,
-        } = collect_supported_audio_files(&paths, self.cancellation_requested.as_ref());
+        } = collect_supported_audio_files(
+            paths,
+            &library_path,
+            &known,
+            self.cancellation_requested.as_ref(),
+        );
         let total_files = files.len();
         if self.cancellation_requested.load(Ordering::SeqCst) {
             return Ok(cancelled_import_result(total_files, failures, 0));
@@ -355,7 +372,7 @@ impl LibraryImportContext<'_> {
         let mut tracks = Vec::new();
         let mut duplicate_files = 0;
 
-        for (index, source_path) in files.iter().enumerate() {
+        for (index, file) in files.iter().enumerate() {
             if self.cancellation_requested.load(Ordering::SeqCst) {
                 return Ok(cancelled_import_result(
                     total_files,
@@ -363,9 +380,13 @@ impl LibraryImportContext<'_> {
                     duplicate_files,
                 ));
             }
-            match self.reference_file(source_path, &canonical_library_path, &mut seen_locations) {
+            match self.reference_file(
+                file,
+                [&library_path, &canonical_library_path],
+                &mut seen_locations,
+            ) {
                 Err(reason) => failures.push(ImportFailure {
-                    path: source_path.clone(),
+                    path: file.first_name().to_path_buf(),
                     reason,
                 }),
                 Ok(None) => duplicate_files += 1,
@@ -409,31 +430,53 @@ impl LibraryImportContext<'_> {
     }
 
     /// The library location, tags and size of one file to reference in
-    /// place, or `None` when the library already references it.
+    /// place, given every name the import reached it by, or `None` when
+    /// the library already references it under one of them.
+    ///
+    /// The file is referenced where it is, if that is in the library
+    /// folder. A file the library folder only links to is referenced
+    /// under its first name in the library folder, as a scan would find
+    /// it.
+    /// `library_paths` are the library folder's path as configured and as
+    /// resolved.
     fn reference_file(
         &self,
-        source_path: &Path,
-        canonical_library_path: &Path,
+        file: &DiscoveredFile,
+        library_paths: [&Path; 2],
         seen_locations: &mut BTreeSet<sustain_domain::TrackRelativePath>,
     ) -> Result<
         Option<(sustain_domain::TrackRelativePath, InitialTags, Option<u64>)>,
         ImportFailureReason,
     > {
-        let source_path =
-            fs::canonicalize(source_path).map_err(|_| ImportFailureReason::Unreadable)?;
-        let relative_path =
-            reference_relative_path_for_source(&source_path, canonical_library_path)
-                .ok_or(ImportFailureReason::OutsideLibraryFolder)?;
-        if !seen_locations.insert(relative_path.clone()) {
+        let [library_path, canonical_library_path] = library_paths;
+        let resolved = sustain_metadata::resolve_track_file(file.first_name())
+            .ok()
+            .flatten()
+            .ok_or(ImportFailureReason::Unreadable)?;
+        let where_it_is = reference_relative_path_for_source(&resolved, canonical_library_path);
+        let as_named = file.names.iter().filter_map(|name| {
+            [library_path, canonical_library_path]
+                .into_iter()
+                .find_map(|library_path| reference_relative_path_for_source(name, library_path))
+        });
+        let locations: Vec<_> = where_it_is.into_iter().chain(as_named).collect();
+        let Some(relative_path) = locations.first().cloned() else {
+            return Err(ImportFailureReason::OutsideLibraryFolder);
+        };
+        let tag_source = relative_path.resolve(library_path);
+        let locations: BTreeSet<_> = locations.into_iter().collect();
+        let already_referenced = locations
+            .iter()
+            .any(|location| seen_locations.contains(location));
+        seen_locations.extend(locations);
+        if already_referenced {
             return Ok(None);
         }
         let tags = self
             .metadata_service
-            .read_initial_tags(&source_path)
+            .read_initial_tags(&tag_source)
             .map_err(|_| ImportFailureReason::UnreadableTags)?;
-        let file_size_bytes = fs::metadata(&source_path)
-            .map(|metadata| metadata.len())
-            .ok();
+        let file_size_bytes = fs::metadata(&resolved).map(|metadata| metadata.len()).ok();
         Ok(Some((relative_path, tags, file_size_bytes)))
     }
 }
@@ -558,14 +601,18 @@ impl ManagedImportBatch {
             || self.content_index.contains_matching(size, content_hash)
     }
 
-    /// Copies one file into the library, or says why it cannot be.
+    /// Copies the file `name` resolves to into the library, or says why it
+    /// cannot be. Its tags are read through `name`, as a scan reads a
+    /// track's: the same file, under the name it was dropped by.
     fn import_file(
         &mut self,
         metadata_service: &dyn sustain_metadata::MetadataService,
-        source_path: &Path,
+        name: &Path,
     ) -> Result<ManagedFileOutcome, ImportFailureReason> {
-        let source_path =
-            fs::canonicalize(source_path).map_err(|_| ImportFailureReason::Unreadable)?;
+        let source_path = sustain_metadata::resolve_track_file(name)
+            .ok()
+            .flatten()
+            .ok_or(ImportFailureReason::Unreadable)?;
         if let Some(relative_path) = source_relative_path_inside_library(
             &source_path,
             self.canonical_library_path.as_deref(),
@@ -592,7 +639,7 @@ impl ManagedImportBatch {
             return Ok(ManagedFileOutcome::Duplicate);
         }
 
-        let initial_read = match metadata_service.read_initial_tags_with_diagnostics(&source_path) {
+        let initial_read = match metadata_service.read_initial_tags_with_diagnostics(name) {
             Ok(read) => read,
             Err(_) => {
                 remove_staged_file(staging);
@@ -626,7 +673,7 @@ impl ManagedImportBatch {
             &self.planner,
             &mut self.occupied_paths,
             &self.library_path,
-            &source_path,
+            name,
             &tags.metadata,
             size,
             &content_hash,
@@ -681,7 +728,13 @@ impl LibraryContentIndex {
     fn build(existing_tracks: &[Track], library_path: &Path) -> Self {
         let mut paths_by_size: HashMap<u64, Vec<PathBuf>> = HashMap::new();
         for track in existing_tracks {
-            let path = track.location.absolute_path(library_path);
+            // A track whose path names no file of its own is in no state
+            // to stand for a dropped file.
+            let Ok(Some(path)) =
+                sustain_metadata::resolve_track_file(&track.location.absolute_path(library_path))
+            else {
+                continue;
+            };
             let Ok(metadata) = fs::metadata(&path) else {
                 continue;
             };
@@ -730,64 +783,94 @@ impl LibraryContentIndex {
 /// The supported audio files under the paths an import was given, and the
 /// paths it could not look into.
 struct DiscoveredFiles {
-    files: Vec<PathBuf>,
+    files: Vec<DiscoveredFile>,
     failures: Vec<ImportFailure>,
 }
 
-fn collect_supported_audio_files(paths: &[PathBuf], cancellation: &AtomicBool) -> DiscoveredFiles {
-    let mut discovered = DiscoveredFiles {
-        files: Vec::new(),
-        failures: Vec::new(),
-    };
-    for path in paths {
-        if cancellation.load(Ordering::SeqCst) {
-            break;
-        }
-        collect_supported_audio_path(path, &mut discovered, cancellation);
-    }
-    discovered.files.sort();
-    discovered.files.dedup();
-    discovered
+/// A file an import found, under every supported audio name it reached
+/// it by: the names with no link in them first, as a scan prefers them,
+/// each kind in name order.
+struct DiscoveredFile {
+    names: Vec<PathBuf>,
 }
 
-/// Adds the supported audio files at or under `path`. A path that cannot
-/// be read is recorded and the walk carries on with its siblings.
-fn collect_supported_audio_path(
-    path: &Path,
-    discovered: &mut DiscoveredFiles,
-    cancellation: &AtomicBool,
-) {
-    if cancellation.load(Ordering::SeqCst) {
-        return;
+impl DiscoveredFile {
+    fn first_name(&self) -> &Path {
+        &self.names[0]
     }
-    let unreadable = |discovered: &mut DiscoveredFiles| {
-        discovered.failures.push(ImportFailure {
-            path: path.to_path_buf(),
-            reason: ImportFailureReason::Unreadable,
-        });
-    };
-    let Ok(metadata) = fs::symlink_metadata(path) else {
-        unreadable(discovered);
-        return;
-    };
-    if metadata.file_type().is_dir() {
-        let Ok(entries) = fs::read_dir(path) else {
-            unreadable(discovered);
-            return;
-        };
-        for entry in entries {
-            if cancellation.load(Ordering::SeqCst) {
-                return;
-            }
-            match entry {
-                Ok(entry) => collect_supported_audio_path(&entry.path(), discovered, cancellation),
-                // An entry the folder listing itself failed on has no path
-                // of its own: the folder is what could not be read in full.
-                Err(_) => unreadable(discovered),
-            }
+}
+
+/// The folders and files an import of `paths` walks, in the order it walks
+/// them. A folder is walked once, under the name walked first, so the
+/// library folder's names come first: a path in the library folder is
+/// spelled as the library's path is, and the library folder is walked
+/// before a dropped folder that holds it. The rest of the order is the
+/// paths', not the drop's.
+fn import_roots(paths: Vec<PathBuf>, library_path: &Path) -> Vec<PathBuf> {
+    let canonical_library_path = fs::canonicalize(library_path).ok();
+    let mut roots = BTreeSet::new();
+    for path in paths {
+        let in_library = canonical_library_path
+            .as_deref()
+            .filter(|_| !path.starts_with(library_path))
+            .and_then(|canonical| path.strip_prefix(canonical).ok())
+            .map(|relative| library_path.join(relative));
+        let path = in_library.unwrap_or(path);
+        let holds_library = library_path.starts_with(&path)
+            || canonical_library_path
+                .as_deref()
+                .is_some_and(|canonical| canonical.starts_with(&path));
+        if holds_library {
+            roots.insert((false, library_path.to_path_buf()));
         }
-    } else if metadata.file_type().is_file() && audio_format_from_path(path).is_ok() {
-        discovered.files.push(path.to_path_buf());
+        roots.insert((!path.starts_with(library_path), path));
+    }
+    roots.into_iter().map(|(_, path)| path).collect()
+}
+
+/// The supported audio files at or under `paths`, found by a walk that
+/// follows links as [`sustain_metadata::walk`] describes, given the names
+/// the library at `library_path` already knows files by.
+fn collect_supported_audio_files(
+    paths: Vec<PathBuf>,
+    library_path: &Path,
+    known: &HashSet<PathBuf>,
+    cancellation: &AtomicBool,
+) -> DiscoveredFiles {
+    let paths = import_roots(paths, library_path);
+    let walk = sustain_metadata::walk::walk_files(&sustain_metadata::walk::WalkRequest {
+        roots: &paths,
+        known,
+        accept: &is_audio_name_for,
+        skip: &|_| false,
+        cancellation,
+    });
+    let mut files: Vec<DiscoveredFile> = walk
+        .files
+        .into_iter()
+        .map(|file| {
+            // Sorted, so the name an import picks is not the drop's order.
+            let names: BTreeSet<(bool, PathBuf)> = file
+                .names
+                .into_iter()
+                .map(|name| (name.through_link, name.path))
+                .collect();
+            DiscoveredFile {
+                names: names.into_iter().map(|(_, path)| path).collect(),
+            }
+        })
+        .collect();
+    files.sort_by(|left, right| left.first_name().cmp(right.first_name()));
+    DiscoveredFiles {
+        files,
+        failures: walk
+            .failures
+            .into_iter()
+            .map(|path| ImportFailure {
+                path,
+                reason: ImportFailureReason::Unreadable,
+            })
+            .collect(),
     }
 }
 

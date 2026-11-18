@@ -6,10 +6,11 @@
 //! [`LibraryScanner`] recurses the library root, parsing each supported
 //! file's initial tags via the injected [`crate::MetadataService`]. Files
 //! whose size + mtime fingerprint already matches the stored one are reported
-//! as `unchanged` and never re-parsed (#71). The walk is symlink-aware and
-//! cycle-safe, and a cancellation flag stops it cleanly mid-directory.
+//! as `unchanged` and never re-parsed (#71). The walk follows links as
+//! [`crate::walk`] describes, and a cancellation flag stops it cleanly.
 
 use super::*;
+use crate::walk::{StdWalkFilesystem, WalkFilesystem, WalkRequest, walk_files_with};
 
 /// The name prefix of every file and folder Sustain itself creates inside a
 /// library: staged rips, journals, write handoffs, recovery folders. They
@@ -29,55 +30,17 @@ pub struct LibraryScanner<'a, S: ?Sized> {
     repair_malformed_tags: bool,
 }
 
-pub(crate) trait ScanFilesystem {
-    fn is_directory(&self, path: &Path) -> bool;
-    fn read_directory(
-        &self,
-        path: &Path,
-    ) -> io::Result<Box<dyn Iterator<Item = io::Result<PathBuf>>>>;
-    fn symlink_metadata(&self, path: &Path) -> io::Result<fs::Metadata>;
-    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata>;
-    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct StdScanFilesystem;
-
-impl ScanFilesystem for StdScanFilesystem {
-    fn is_directory(&self, path: &Path) -> bool {
-        path.is_dir()
-    }
-
-    fn read_directory(
-        &self,
-        path: &Path,
-    ) -> io::Result<Box<dyn Iterator<Item = io::Result<PathBuf>>>> {
-        Ok(Box::new(
-            fs::read_dir(path)?.map(|entry| entry.map(|entry| entry.path())),
-        ))
-    }
-
-    fn symlink_metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
-        fs::symlink_metadata(path)
-    }
-
-    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
-        fs::metadata(path)
-    }
-
-    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        fs::canonicalize(path)
-    }
-}
-
-struct ScanWalk<'a, S: ScanFilesystem> {
+/// What scanning one file needs to know and record.
+struct ScanFile<'a> {
     library_path: &'a Path,
     scan: &'a mut LibraryScan,
-    cancellation: &'a AtomicBool,
-    known_fingerprints: &'a BTreeMap<TrackRelativePath, ScanFingerprint>,
-    filesystem: &'a S,
-    visited_directories: HashSet<PathBuf>,
+    known_tracks: &'a KnownTracks,
+    filesystem: &'a dyn WalkFilesystem,
 }
+
+/// The library's tracks, by path, and the size + mtime fingerprint each
+/// was last scanned with, if any.
+pub type KnownTracks = BTreeMap<TrackRelativePath, Option<ScanFingerprint>>;
 
 impl<'a, S> LibraryScanner<'a, S>
 where
@@ -95,48 +58,79 @@ where
         self
     }
 
-    /// Walks `library_path`, parsing each supported file's tags. Files
-    /// whose `(size, mtime)` fingerprint already matches an entry in
-    /// `known_fingerprints` are reported as `unchanged` and not re-parsed
-    /// (#71); pass an empty map to parse everything (a cold scan).
+    /// Walks `library_path` as [`crate::walk`] describes, parsing each
+    /// supported file's tags. Files whose `(size, mtime)` fingerprint
+    /// matches their entry in `known_tracks` are reported as `unchanged`
+    /// and not re-parsed (#71); pass an empty map to parse everything (a
+    /// cold scan).
     pub fn scan(
         &self,
         library_path: &Path,
         cancellation: &AtomicBool,
-        known_fingerprints: &BTreeMap<TrackRelativePath, ScanFingerprint>,
+        known_tracks: &KnownTracks,
     ) -> Result<LibraryScan, LibraryScanError> {
-        self.scan_with_filesystem(
-            library_path,
-            cancellation,
-            known_fingerprints,
-            &StdScanFilesystem,
-        )
+        self.scan_with_filesystem(library_path, cancellation, known_tracks, &StdWalkFilesystem)
     }
 
     pub(crate) fn scan_with_filesystem(
         &self,
         library_path: &Path,
         cancellation: &AtomicBool,
-        known_fingerprints: &BTreeMap<TrackRelativePath, ScanFingerprint>,
-        filesystem: &impl ScanFilesystem,
+        known_tracks: &KnownTracks,
+        filesystem: &dyn WalkFilesystem,
     ) -> Result<LibraryScan, LibraryScanError> {
-        if !filesystem.is_directory(library_path) {
+        if !filesystem
+            .metadata(library_path)
+            .is_ok_and(|metadata| metadata.is_dir())
+        {
             return Err(LibraryScanError::LibraryPathUnavailable);
         }
 
-        let mut scan = LibraryScan::default();
-        {
-            let mut walk = ScanWalk {
-                library_path,
-                scan: &mut scan,
+        let known: HashSet<PathBuf> = known_tracks
+            .keys()
+            .map(|track| track.resolve(library_path))
+            .collect();
+        let walk = walk_files_with(
+            &WalkRequest {
+                roots: &[library_path.to_path_buf()],
+                known: &known,
+                accept: &is_audio_name_for,
+                skip: &is_sustain_workspace_entry,
                 cancellation,
-                known_fingerprints,
-                filesystem,
-                visited_directories: HashSet::new(),
-            };
-            self.scan_directory(library_path, false, &mut walk);
+            },
+            filesystem,
+        );
+        let mut scan = LibraryScan {
+            skipped_unsupported_files: walk.rejected_names,
+            ..LibraryScan::default()
+        };
+        for failure in &walk.failures {
+            scan.record_failure(failure.clone(), MetadataError::ReadFailed);
         }
-        scan.cancelled = scan.cancelled || cancellation.load(Ordering::SeqCst);
+        let kept = walk.files.iter().flat_map(|file| {
+            walk.kept_names(file)
+                .into_iter()
+                .map(move |name| (name.path.clone(), &file.metadata))
+        });
+        for (path, metadata) in kept {
+            if cancellation.load(Ordering::SeqCst) {
+                break;
+            }
+            self.scan_file(
+                path,
+                metadata.len(),
+                metadata.modified().ok(),
+                &mut ScanFile {
+                    library_path,
+                    scan: &mut scan,
+                    known_tracks,
+                    filesystem,
+                },
+            );
+        }
+        // Read once the last file is scanned, so that a cancellation
+        // requested at any point of the scan is seen.
+        scan.cancelled = walk.cancelled || cancellation.load(Ordering::SeqCst);
         scan.complete_for_missing_reconciliation &= !scan.cancelled;
         scan.tracks
             .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -144,99 +138,13 @@ where
         Ok(scan)
     }
 
-    fn scan_directory<F: ScanFilesystem>(
-        &self,
-        directory: &Path,
-        reached_by_symlink: bool,
-        walk: &mut ScanWalk<'_, F>,
-    ) {
-        match walk.filesystem.canonicalize(directory) {
-            Ok(canonical) => {
-                if !walk.visited_directories.insert(canonical) {
-                    if reached_by_symlink {
-                        walk.scan
-                            .record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
-                    }
-                    return;
-                }
-            }
-            Err(_) => {
-                walk.scan
-                    .record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
-                return;
-            }
-        }
-
-        let entries = match walk.filesystem.read_directory(directory) {
-            Ok(entries) => entries,
-            Err(_) => {
-                walk.scan
-                    .record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
-                return;
-            }
-        };
-
-        for entry in entries {
-            if walk.cancellation.load(Ordering::SeqCst) {
-                walk.scan.cancelled = true;
-                return;
-            }
-            let path = match entry {
-                Ok(path) => path,
-                Err(_) => {
-                    walk.scan
-                        .record_failure(directory.to_path_buf(), MetadataError::ReadFailed);
-                    continue;
-                }
-            };
-            if is_sustain_workspace_entry(&path) {
-                continue;
-            }
-            let metadata = match walk.filesystem.symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(_) => {
-                    walk.scan.record_failure(path, MetadataError::ReadFailed);
-                    continue;
-                }
-            };
-            let file_type = metadata.file_type();
-            let (metadata, reached_by_symlink) = if file_type.is_symlink() {
-                match walk.filesystem.metadata(&path) {
-                    Ok(target) => (target, true),
-                    Err(_) => {
-                        walk.scan.record_failure(path, MetadataError::ReadFailed);
-                        continue;
-                    }
-                }
-            } else {
-                (metadata, false)
-            };
-            if metadata.file_type().is_dir() {
-                self.scan_directory(&path, reached_by_symlink, walk);
-                if walk.scan.cancelled {
-                    return;
-                }
-            } else if metadata.file_type().is_file() {
-                // Read the mtime from the stat we already have — no extra
-                // syscall — so an unchanged file can be fingerprinted and
-                // skipped below (#71).
-                self.scan_file(path, metadata.len(), metadata.modified().ok(), walk);
-            }
-        }
-    }
-
-    fn scan_file<F: ScanFilesystem>(
+    fn scan_file(
         &self,
         path: PathBuf,
         file_size_bytes: u64,
         modified_at: Option<SystemTime>,
-        walk: &mut ScanWalk<'_, F>,
+        walk: &mut ScanFile<'_>,
     ) {
-        if audio_format_from_path(&path).is_err() {
-            walk.scan.skipped_unsupported_files += 1;
-            return;
-        }
-
         let relative_path = match path
             .strip_prefix(walk.library_path)
             .ok()
@@ -258,7 +166,7 @@ where
         let fingerprint =
             modified_at.and_then(|modified_at| ScanFingerprint::new(file_size_bytes, modified_at));
         if let Some(fingerprint) = fingerprint
-            && walk.known_fingerprints.get(&relative_path) == Some(&fingerprint)
+            && walk.known_tracks.get(&relative_path) == Some(&Some(fingerprint))
         {
             walk.scan.unchanged.push(relative_path);
             return;
@@ -277,9 +185,17 @@ where
 
         let mut repaired = false;
         if self.repair_malformed_tags && initial_read.repair.is_some() {
+            // Repaired where the file is, so a link to it stays a link.
+            let own_path = match walk.filesystem.canonicalize(&path) {
+                Ok(own_path) => own_path,
+                Err(_) => {
+                    walk.scan.record_failure(path, MetadataError::ReadFailed);
+                    return;
+                }
+            };
             let pass = self
                 .metadata_service
-                .repair_diagnosed_malformations(&path, initial_read);
+                .repair_diagnosed_malformations(&own_path, initial_read);
             initial_read = pass.read;
             repaired = pass.file_changed;
             if let Some(error) = pass.error {

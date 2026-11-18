@@ -12,7 +12,7 @@ use sustain_domain::{
     PlayStatistics, Track, TrackAvailability, TrackId, TrackLocation, TrackRelativePath,
 };
 use sustain_library_store::LibraryStore;
-use sustain_metadata::{LibraryScan, LibraryScanner, ScanFingerprint, ScannedTrack};
+use sustain_metadata::{KnownTracks, LibraryScan, LibraryScanner, ScanFingerprint, ScannedTrack};
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, LibraryScanResult,
@@ -116,13 +116,13 @@ impl ApplicationRuntime {
 }
 
 pub fn run_library_scan_task(task: LibraryScanTask) -> ApplicationRuntimeResult<LibraryScanResult> {
-    let known_fingerprints = existing_scan_fingerprints(&task.existing_tracks);
+    let known_tracks = known_scan_tracks(&task.existing_tracks);
     let scan = LibraryScanner::new(task.metadata_service.as_ref())
         .with_malformed_tag_repair(task.repair_malformed_tags)
         .scan(
             &task.library_path,
             task.cancellation_requested.as_ref(),
-            &known_fingerprints,
+            &known_tracks,
         )
         .map_err(|_| ApplicationRuntimeError::LibraryScanFailed)?;
     let result = reconcile_library_scan(&task.library_path, task.existing_tracks, scan)?;
@@ -260,17 +260,20 @@ fn tracks_by_path(tracks: Vec<Track>) -> BTreeMap<TrackRelativePath, Track> {
         .collect()
 }
 
-/// Build the size + mtime fingerprints the scanner uses to skip
-/// re-parsing unchanged files (#71). Only tracks that carry both a stored
-/// size and a stored mtime contribute an entry; anything else (no scan has
-/// fingerprinted it yet) is simply absent from the map and gets parsed.
-fn existing_scan_fingerprints(tracks: &[Track]) -> BTreeMap<TrackRelativePath, ScanFingerprint> {
+/// The library's tracks as the scanner knows them: each path, which the
+/// scan keeps whatever other names it reaches the file by, with the size +
+/// mtime fingerprint it skips re-parsing an unchanged file by (#71). A
+/// track without both a stored size and a stored mtime has no fingerprint
+/// yet, and gets parsed.
+fn known_scan_tracks(tracks: &[Track]) -> KnownTracks {
     tracks
         .iter()
-        .filter_map(|track| {
-            let fingerprint =
-                ScanFingerprint::new(track.file_size_bytes?, track.file_modified_at?)?;
-            Some((track.location.relative_path.clone(), fingerprint))
+        .map(|track| {
+            let fingerprint = track
+                .file_size_bytes
+                .zip(track.file_modified_at)
+                .and_then(|(size, modified_at)| ScanFingerprint::new(size, modified_at));
+            (track.location.relative_path.clone(), fingerprint)
         })
         .collect()
 }

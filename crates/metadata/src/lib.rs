@@ -41,9 +41,10 @@ mod mpeg_frame;
 mod read;
 mod scan;
 mod tag_write;
+pub mod walk;
 
 pub use hash::{copy_and_hash_reader_content, hash_file_content, hash_reader_content};
-pub use scan::{LibraryScanner, SUSTAIN_WORKSPACE_NAME_PREFIX};
+pub use scan::{KnownTracks, LibraryScanner, SUSTAIN_WORKSPACE_NAME_PREFIX};
 
 use read::{read_tagged_file, valid_embedded_picture};
 use tag_write::{
@@ -483,6 +484,45 @@ impl MetadataService for LoftyMetadataService {
     fn repair_malformed_tags(&self, path: &Path, repair: MetadataRepair) -> MetadataResult<bool> {
         tag_write::repair_malformed_tag_read_error(path, repair)
     }
+}
+
+/// Whether `name` is a supported audio name for the file whose own path is
+/// `file` — the same path, unless `name` goes through a link. A link is a
+/// name for a file only if it carries the file's own extension, so reading
+/// a track through its name reads the file as the file's own name would,
+/// and whatever is done to the track may be done to the file itself.
+pub fn is_audio_name_for(name: &Path, file: &Path) -> bool {
+    let extension = |path: &Path| {
+        path.extension()
+            .map(|extension| extension.to_ascii_lowercase())
+    };
+    audio_format_from_path(name).is_ok() && extension(name) == extension(file)
+}
+
+/// The file a track's path names: the path itself, or the file a link
+/// there leads to, if that is a regular file the path is an audio name for
+/// ([`is_audio_name_for`]). `None` if the path names no such file, which
+/// is what a track whose link was turned to another kind of file is left
+/// with; an error if the path could not be looked up.
+pub fn resolve_track_file(path: &Path) -> io::Result<Option<PathBuf>> {
+    let found = fs::canonicalize(path)
+        .and_then(|own_path| fs::metadata(&own_path).map(|metadata| (own_path, metadata)));
+    match found {
+        Ok((own_path, metadata)) => {
+            Ok((metadata.is_file() && is_audio_name_for(path, &own_path)).then_some(own_path))
+        }
+        Err(error) if names_nothing(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether looking up a path failed because it names nothing: there is no
+/// entry by its name, or one of the folders on its way is not a folder.
+pub(crate) fn names_nothing(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+    )
 }
 
 pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {

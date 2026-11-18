@@ -781,6 +781,17 @@ impl MirrorAttempt {
     }
 }
 
+/// The file a write of the tags of the track at `path` goes to: the file
+/// itself, wherever links on the way lead
+/// ([`sustain_metadata::resolve_track_file`]). A track a link names is the
+/// file it links to, so its tags are that file's; the write to it keeps
+/// the protections of [`sustain_metadata`]'s atomic replacement, which
+/// refuses a link appearing on the resolved path while it writes.
+pub(crate) fn track_file_to_write(path: &std::path::Path) -> std::io::Result<PathBuf> {
+    sustain_metadata::resolve_track_file(path)?
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+}
+
 fn mirror_one(
     metadata_service: &dyn MetadataService,
     library_store: &dyn LibraryStore,
@@ -854,6 +865,15 @@ fn mirror_one(
         };
     }
 
+    let path = match track_file_to_write(&path) {
+        Ok(path) => path,
+        Err(_) => {
+            return MirrorAttempt::Failed {
+                error: "the track file could not be resolved".to_owned(),
+                availability_changed,
+            };
+        }
+    };
     let mut replaced_file = false;
     let outcome = (|| {
         if pending.kinds.metadata {
@@ -1207,6 +1227,84 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).expect("remove library root");
+    }
+
+    #[test]
+    fn a_rating_reaches_the_file_a_track_link_names() {
+        use sustain_metadata::LoftyMetadataService;
+
+        let root = unique_test_directory();
+        let elsewhere = unique_test_directory();
+        std::fs::create_dir_all(&root).expect("create library root");
+        std::fs::create_dir_all(elsewhere.join("album")).expect("create linked folder");
+        let mut frame = vec![0xFF, 0xFB, 0x90, 0x00];
+        frame.resize(417, 0);
+        let file = elsewhere.join("album/song.mp3");
+        std::fs::write(&file, frame.repeat(4)).expect("write MP3 frames");
+        // The track's folder is a link, and so is the track's file.
+        std::os::unix::fs::symlink(elsewhere.join("album"), root.join("album"))
+            .expect("link the folder");
+        std::os::unix::fs::symlink(root.join("album/song.mp3"), root.join("song.mp3"))
+            .expect("link the file");
+
+        let track_id = TrackId::new(1).expect("track id");
+        let store: Arc<dyn LibraryStore> =
+            Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+        let rating = Rating::new(4).expect("rating");
+        store
+            .save_track(Track {
+                id: track_id,
+                location: TrackLocation::available(
+                    TrackRelativePath::new("song.mp3").expect("relative path"),
+                ),
+                metadata: TrackMetadata::default(),
+                rating,
+                statistics: Default::default(),
+                file_size_bytes: None,
+                has_embedded_artwork: None,
+                file_modified_at: None,
+            })
+            .expect("save track");
+        let pending = PendingTagMirror {
+            track_id,
+            generation: 1,
+            kinds: TagMirrorKinds {
+                metadata: false,
+                rating: true,
+                artwork: false,
+            },
+            artwork: TagMirrorArtwork::Unchanged,
+            attempt_count: 0,
+            next_attempt_at_unix: 0,
+            last_error: None,
+        };
+        assert_eq!(
+            mirror_one(&LoftyMetadataService, store.as_ref(), Some(&root), &pending),
+            MirrorAttempt::Succeeded {
+                availability_changed: false,
+            }
+        );
+
+        assert_eq!(
+            LoftyMetadataService
+                .read_initial_tags(&file)
+                .expect("read the linked file")
+                .rating,
+            rating
+        );
+        for link in [root.join("album"), root.join("song.mp3")] {
+            assert!(
+                std::fs::symlink_metadata(&link)
+                    .expect("link remains")
+                    .file_type()
+                    .is_symlink(),
+                "{}",
+                link.display()
+            );
+        }
+
+        std::fs::remove_dir_all(root).expect("remove library root");
+        std::fs::remove_dir_all(elsewhere).expect("remove linked folder");
     }
 
     #[test]

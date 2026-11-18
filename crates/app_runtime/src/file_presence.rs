@@ -19,13 +19,15 @@ pub(crate) enum FilePresence {
     ProbeFailed,
 }
 
-/// Probe whether a track's target can currently be reached. This follows
+/// Probe whether a track's file can currently be reached. This follows
 /// symlinks: a dangling link is not a playable audio file and therefore counts
-/// as absent, and so does anything other than a regular file.
+/// as absent, and so does anything other than a regular file, or a link
+/// turned to a file of another kind
+/// ([`sustain_metadata::resolve_track_file`]).
 pub(crate) fn probe_file_presence(path: &Path) -> FilePresence {
-    match classify_probe(std::fs::metadata(path)) {
-        Ok(metadata) if metadata.is_file() => FilePresence::Present,
-        Ok(_) => FilePresence::Absent,
+    match classify_probe(sustain_metadata::resolve_track_file(path)) {
+        Ok(Some(_)) => FilePresence::Present,
+        Ok(None) => FilePresence::Absent,
         Err(presence) => presence,
     }
 }
@@ -40,9 +42,7 @@ pub(crate) fn probe_path_entry_presence(path: &Path) -> FilePresence {
 }
 
 /// The metadata of an existing entry, or the presence a failed probe means.
-fn classify_probe(
-    result: std::io::Result<std::fs::Metadata>,
-) -> Result<std::fs::Metadata, FilePresence> {
+fn classify_probe<T>(result: std::io::Result<T>) -> Result<T, FilePresence> {
     result.map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             FilePresence::Absent

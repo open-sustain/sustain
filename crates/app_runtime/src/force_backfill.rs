@@ -90,10 +90,13 @@ impl ApplicationRuntime {
                 ForceBackfillOutcome::SkippedMissing
             } else {
                 let path = root.join(track.location.relative_path.as_path());
-                match metadata_service
-                    .write_metadata(&path, metadata_mirror(&track.metadata))
-                    .and_then(|()| metadata_service.write_rating(&path, track.rating))
-                {
+                match crate::metadata_writer::track_file_to_write(&path)
+                    .map_err(|_| sustain_metadata::MetadataError::WriteFailed)
+                    .and_then(|path| {
+                        metadata_service
+                            .write_metadata(&path, metadata_mirror(&track.metadata))
+                            .and_then(|()| metadata_service.write_rating(&path, track.rating))
+                    }) {
                     Ok(()) => {
                         // The file bytes changed, so the cached source
                         // fingerprint no longer describes it — invalidate it
