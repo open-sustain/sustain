@@ -42,6 +42,19 @@ finish-args:
   # this grant ensures Sustain can read tags from and write tag updates
   # back to the picked path.
   - --filesystem=home
+  # Device sync to USB sticks and SD cards: discovery reads the mount
+  # table for block devices mounted under these roots (see
+  # `is_removable_mount` in crates/device_sync/src/identity.rs), and sync
+  # writes to them. The sandbox has no /dev/disk/by-uuid, so a device
+  # whose `.sustain-device-id` marker was deleted is seen as a new one.
+  - --filesystem=/media
+  - --filesystem=/run/media
+  - --filesystem=/mnt
+  # Device sync to Android phones over MTP: gio's volume monitor and the
+  # `mtp://` backend are the host's GVfs daemons, reached over D-Bus and
+  # their private sockets.
+  - --talk-name=org.gtk.vfs.*
+  - --filesystem=xdg-run/gvfsd
   # MPRIS / media-key integration: own the well-known bus name so
   # `playerctl`, gnome-shell's media widget, and lock-screen players
   # drive Sustain transparently. Matches `BUS_NAME` in

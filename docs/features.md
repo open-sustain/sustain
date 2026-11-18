@@ -1308,6 +1308,8 @@ Three on-drive formats, chosen per device:
 
 Android phones are reached over **MTP** through the desktop's GVfs backend — the
 same path the file manager uses, so no special drivers or root access are needed.
+The Debian package recommends `gvfs-backends`, which provides that backend; the
+Flatpak talks to the host's GVfs.
 A connected phone appears in **DEVICES** alongside removable drives and syncs into
 its primary storage (`/sdcard`), defaulting to the `Playlists as .m3u8` format so
 audio lands under `/sdcard/Music/Artist/Album/` and each playlist resolves where
