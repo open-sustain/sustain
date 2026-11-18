@@ -180,7 +180,7 @@ pub(super) fn tracks_needing_analysis(
     capabilities: AnalysisCapabilities,
     versions: AnalyzerVersions,
     limit: usize,
-) -> StoreResult<Vec<TrackId>> {
+) -> StoreResult<Vec<AnalysisDue>> {
     if capabilities.is_empty() {
         return Ok(Vec::new());
     }
@@ -199,13 +199,27 @@ pub(super) fn tracks_needing_analysis(
             i64::from(waveform_cache.is_available()),
         ])
         .map_err(StoreError::from)?;
-    let mut ids = Vec::new();
+    let mut due = Vec::new();
     while let Some(row) = rows.next().map_err(StoreError::from)? {
-        let raw: i64 = row.get(0).map_err(StoreError::from)?;
-        let id = TrackId::new(raw).ok_or(StoreError::InvalidStoredId(raw))?;
-        ids.push(id);
+        due.push(analysis_due_from_row(row)?);
     }
-    Ok(ids)
+    Ok(due)
+}
+
+/// Reads an `(id, bpm_due, key_due, audio_due)` row of the
+/// needing-analysis queries.
+fn analysis_due_from_row(row: &rusqlite::Row<'_>) -> StoreResult<AnalysisDue> {
+    let raw: i64 = row.get(0).map_err(StoreError::from)?;
+    let track_id = TrackId::new(raw).ok_or(StoreError::InvalidStoredId(raw))?;
+    let due = |index: usize| row.get::<_, bool>(index).map_err(StoreError::from);
+    Ok(AnalysisDue {
+        track_id,
+        capabilities: AnalysisCapabilities {
+            bpm: due(1)?,
+            key: due(2)?,
+            audio: due(3)?,
+        },
+    })
 }
 
 pub(super) fn filter_tracks_needing_analysis(
@@ -214,11 +228,12 @@ pub(super) fn filter_tracks_needing_analysis(
     track_ids: &[TrackId],
     capabilities: AnalysisCapabilities,
     versions: AnalyzerVersions,
-) -> StoreResult<Vec<TrackId>> {
+) -> StoreResult<Vec<AnalysisDue>> {
     if capabilities.is_empty() || track_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut needing: HashSet<TrackId> = HashSet::with_capacity(track_ids.len());
+    let mut needing: HashMap<TrackId, AnalysisCapabilities> =
+        HashMap::with_capacity(track_ids.len());
     for chunk in track_ids.chunks(FILTER_IN_LIST_CHUNK_SIZE) {
         let sql = build_filter_tracks_needing_analysis_sql(chunk.len());
         let mut statement = connection.prepare(&sql).map_err(StoreError::from)?;
@@ -235,9 +250,8 @@ pub(super) fn filter_tracks_needing_analysis(
             .query(params_from_iter(params.iter()))
             .map_err(StoreError::from)?;
         while let Some(row) = rows.next().map_err(StoreError::from)? {
-            let raw: i64 = row.get(0).map_err(StoreError::from)?;
-            let id = TrackId::new(raw).ok_or(StoreError::InvalidStoredId(raw))?;
-            needing.insert(id);
+            let due = analysis_due_from_row(row)?;
+            needing.insert(due.track_id, due.capabilities);
         }
     }
     // Preserve caller order — playlist order is what the user
@@ -245,8 +259,12 @@ pub(super) fn filter_tracks_needing_analysis(
     // through to the scheduler.
     Ok(track_ids
         .iter()
-        .copied()
-        .filter(|id| needing.contains(id))
+        .filter_map(|&track_id| {
+            needing.get(&track_id).map(|&capabilities| AnalysisDue {
+                track_id,
+                capabilities,
+            })
+        })
         .collect())
 }
 
@@ -437,19 +455,22 @@ fn build_filter_tracks_needing_analysis_sql(id_count: usize) -> String {
     let audio_version = id_count + 6;
     let cache_available = id_count + 7;
     format!(
-        "SELECT t.id FROM tracks t
-LEFT JOIN track_analysis ta ON ta.track_id = t.id
-WHERE t.is_missing = 0
-  AND t.id IN ({id_placeholders})
-  AND (
-        (?{bpm} = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.bpm_analyzer_version   < ?{bpm_version}))
-     OR (?{key} = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.key_analyzer_version   < ?{key_version}))
-     OR (?{audio} = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?{audio_version}
-                     OR (?{cache_available} = 1 AND NOT EXISTS (
-                            SELECT 1 FROM waveform_cache.track_waveform w
-                            WHERE w.track_id = t.id
-                              AND w.audio_attempt_token = ta.audio_attempt_token))))
-      )"
+        "SELECT id, bpm_due, key_due, audio_due
+FROM (
+    SELECT t.id,
+           (?{bpm} = 1 AND (ta.bpm_attempted_at_unix IS NULL OR ta.bpm_analyzer_version < ?{bpm_version})) AS bpm_due,
+           (?{key} = 1 AND (ta.key_attempted_at_unix IS NULL OR ta.key_analyzer_version < ?{key_version})) AS key_due,
+           (?{audio} = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?{audio_version}
+                        OR (?{cache_available} = 1 AND NOT EXISTS (
+                               SELECT 1 FROM waveform_cache.track_waveform w
+                               WHERE w.track_id = t.id
+                                 AND w.audio_attempt_token = ta.audio_attempt_token)))) AS audio_due
+    FROM tracks t
+    LEFT JOIN track_analysis ta ON ta.track_id = t.id
+    WHERE t.is_missing = 0
+      AND t.id IN ({id_placeholders})
+)
+WHERE bpm_due OR key_due OR audio_due"
     )
 }
 

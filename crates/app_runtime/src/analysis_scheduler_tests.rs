@@ -18,7 +18,7 @@ use sustain_domain::{
     Track, TrackLocation, TrackRelativePath, WaveformSegment, WaveformSegments,
 };
 use sustain_library_store::{
-    AnalysisCapabilities, AnalyzerVersions, LibraryStore, SqliteLibraryStore, TrackId,
+    AnalysisCapabilities, AnalysisDue, AnalyzerVersions, LibraryStore, SqliteLibraryStore, TrackId,
 };
 use tempfile::TempDir;
 
@@ -122,6 +122,23 @@ fn wait_for(
     }
 }
 
+/// The tracks of a needing-analysis result, for tests that only check
+/// which tracks are due.
+fn due_ids(due: Vec<AnalysisDue>) -> Vec<TrackId> {
+    due.into_iter().map(|due| due.track_id).collect()
+}
+
+/// Explicit work asking for `capabilities` on every track in `track_ids`.
+fn explicit_work(track_ids: Vec<TrackId>, capabilities: AnalysisCapabilities) -> Vec<AnalysisDue> {
+    track_ids
+        .into_iter()
+        .map(|track_id| AnalysisDue {
+            track_id,
+            capabilities,
+        })
+        .collect()
+}
+
 fn capability_count(capabilities: AnalysisCapabilities) -> u32 {
     u32::from(capabilities.bpm) + u32::from(capabilities.key) + u32::from(capabilities.audio)
 }
@@ -144,6 +161,7 @@ fn deterministic_config(
         // Tests run with a single worker so progress events arrive
         // in a predictable order regardless of host core count.
         initial_resource_usage: BackgroundResourceUsage::Innocuous,
+        processor_count: 1,
         library_path,
         analyzer_versions: VERSIONS,
     }
@@ -189,6 +207,7 @@ fn scheduler_processes_pending_tracks_with_settings_enabled() {
     // analyzer versions.
     let still_pending = store
         .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 100)
+        .map(due_ids)
         .expect("query");
     assert!(still_pending.is_empty(), "track should be marked attempted");
 
@@ -243,6 +262,7 @@ fn scheduler_records_failures_without_clobbering_run() {
             VERSIONS,
             10,
         )
+        .map(due_ids)
         .expect("query");
     assert!(pending.is_empty());
 
@@ -315,6 +335,7 @@ fn an_analyzer_panic_fails_its_track_and_spares_the_worker() {
             VERSIONS,
             100,
         )
+        .map(due_ids)
         .expect("query");
     assert!(pending.is_empty(), "every attempt is stamped");
 
@@ -426,6 +447,7 @@ fn rejected_record_analysis_halts_without_false_completion() {
     );
     let pending = store
         .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 10)
+        .map(due_ids)
         .expect("query");
     assert_eq!(pending.len(), 1, "the unpersisted track is still pending");
 
@@ -439,6 +461,7 @@ fn rejected_record_analysis_halts_without_false_completion() {
     assert!(matches!(tick, SchedulerProgress::Tick { completed: 1, .. }));
     let pending = store
         .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 10)
+        .map(due_ids)
         .expect("query");
     assert!(pending.is_empty(), "track persisted after recovery");
 
@@ -651,6 +674,7 @@ fn toggling_capabilities_off_stops_the_running_scheduler() {
             VERSIONS,
             100,
         )
+        .map(due_ids)
         .expect("query")
         .len();
     std::thread::sleep(Duration::from_millis(400));
@@ -664,6 +688,7 @@ fn toggling_capabilities_off_stops_the_running_scheduler() {
             VERSIONS,
             100,
         )
+        .map(due_ids)
         .expect("query")
         .len();
     assert_eq!(
@@ -741,6 +766,7 @@ fn assert_track_updated_after(analyzer: AnalyzerFn) {
             bpm_range: BpmRange::default(),
         },
         initial_resource_usage: BackgroundResourceUsage::Innocuous,
+        processor_count: 1,
         library_path: Some(library_root),
         analyzer_versions: VERSIONS,
     });
@@ -800,6 +826,7 @@ fn resource_usage_change_respawns_pool_without_losing_work() {
 
     let still_pending = store
         .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 100)
+        .map(due_ids)
         .expect("query");
     assert!(
         still_pending.is_empty(),
@@ -876,27 +903,17 @@ fn analyzer_receives_the_live_capability_mask() {
 
 #[test]
 fn streaming_dispatch_keeps_workers_fed_across_batch_boundary() {
-    // Regression guard for the "6-second idle gap between
-    // batches" we saw under the old supervisor: it waited for
-    // `in_flight == 0` before re-querying the store, so the
-    // tail end of every BATCH_SIZE-sized burst left N-2
-    // workers spinning. The streaming dispatcher must keep
-    // dispatching across the boundary — concretely, on a pool
-    // with capacity > BATCH_SIZE, we should never see all
-    // workers go simultaneously idle until the whole library
-    // is done.
-    //
-    // We simulate that by pre-populating BATCH_SIZE*3 tracks
-    // and verifying that the analyzer call rate stays smooth
-    // through the run, i.e. there is never a window during
-    // which `analyzer_call_count` plateaus for more than the
-    // per-track slowdown the stub introduces.
+    // Regression guard for the idle gap the old supervisor left
+    // between batches: it waited for `in_flight == 0` before querying
+    // the store again, so one slow track held every other worker idle
+    // until it finished. Two workers run here; the first track to
+    // start is held until a track beyond the first batch has started.
     let temp = TempDir::new().expect("temp dir");
     let library_root = temp.path().to_path_buf();
     let store: Arc<dyn LibraryStore> =
         Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
 
-    let track_count = (super::BATCH_SIZE as i64) * 3;
+    let track_count = (super::BATCH_SIZE as i64) * 2;
     for i in 0..track_count {
         let relative = format!("track_{i:03}.flac");
         let mut track = touch_in(&library_root, &relative);
@@ -904,78 +921,66 @@ fn streaming_dispatch_keeps_workers_fed_across_batch_boundary() {
         store.save_track(track).expect("save");
     }
 
-    // Stub analyzer with a fixed per-track delay. The delay is
-    // long enough that several outcomes overlap with the
-    // dispatcher's outer loop, which is exactly when the old
-    // gated-on-in-flight logic stalled.
-    use std::sync::Mutex;
-    let call_times: Arc<Mutex<Vec<Instant>>> = Arc::new(Mutex::new(Vec::new()));
-    let recorded_times = call_times.clone();
-    let analyzer: AnalyzerFn = Arc::new(move |_path, _caps, _opts, _duration| {
-        if let Ok(mut guard) = recorded_times.lock() {
-            guard.push(Instant::now());
-        }
-        std::thread::sleep(Duration::from_millis(40));
-        ok_analyzer()(
-            std::path::Path::new("ignored"),
-            AnalysisCapabilities::all(),
-            AnalysisOptions::default(),
-            None,
+    let calls = Arc::new(AtomicU32::new(0));
+    let (release_tx, release_rx) = std_mpsc::channel::<()>();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let analyzer: AnalyzerFn = {
+        let calls = calls.clone();
+        Arc::new(move |_path, _caps, _opts, _duration| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                let _ = release_rx
+                    .lock()
+                    .expect("release lock")
+                    .recv_timeout(Duration::from_secs(10));
+            }
+            ok_analyzer()(
+                std::path::Path::new("ignored"),
+                AnalysisCapabilities::all(),
+                AnalysisOptions::default(),
+                None,
+            )
+        })
+    };
+
+    let (sink, rx) = capturing_sink();
+    let scheduler = AnalysisScheduler::start(AnalysisSchedulerConfig {
+        // `Aggressive` keeps two of four processors as headroom, which
+        // leaves exactly two workers.
+        initial_resource_usage: BackgroundResourceUsage::Aggressive,
+        processor_count: 4,
+        ..deterministic_config(
+            analyzer,
+            sink,
+            fixed_clock(1),
+            store.clone(),
+            AnalysisSettings {
+                bpm: true,
+                key: true,
+                audio: true,
+                bpm_range: BpmRange::default(),
+            },
+            Some(library_root),
         )
     });
 
-    let (sink, rx) = capturing_sink();
-    let scheduler = AnalysisScheduler::start(deterministic_config(
-        analyzer,
-        sink,
-        fixed_clock(1),
-        store.clone(),
-        AnalysisSettings {
-            bpm: true,
-            key: true,
-            audio: true,
-            bpm_range: BpmRange::default(),
-        },
-        Some(library_root),
-    ));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while calls.load(Ordering::SeqCst) <= super::BATCH_SIZE as u32 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let started_while_held = calls.load(Ordering::SeqCst);
+    release_tx.send(()).expect("release the held track");
 
-    // Drain to Idle so we know every track was processed.
     let _ = wait_for(
         &rx,
-        Duration::from_secs(30),
-        |progress| matches!(progress, SchedulerProgress::Idle { completed, .. } if *completed as i64 == track_count),
+        Duration::from_secs(10),
+        |progress| matches!(progress, SchedulerProgress::Idle { completed, .. } if i64::from(*completed) == track_count),
     );
     scheduler.shutdown();
 
-    // Inspect the dispatch cadence: pick the largest gap
-    // between consecutive analyzer entries; on the old
-    // gated-batched supervisor this gap was the batch tail
-    // (≈ inter-track-sleep * inflight_count). On the
-    // streaming dispatcher it should be at most one
-    // inter-track sleep plus a touch of supervisor overhead.
-    // We assert "no gap larger than 5x the per-track sleep",
-    // which is a conservative regression bound — the old
-    // behavior under a BATCH_SIZE=16 / 1-worker (Innocuous)
-    // run produced gaps proportional to the whole batch.
-    let times = call_times.lock().expect("lock");
-    assert_eq!(
-        times.len(),
-        track_count as usize,
-        "analyzer should be called once per track",
-    );
-    let mut max_gap = Duration::ZERO;
-    for window in times.windows(2) {
-        let gap = window[1].duration_since(window[0]);
-        if gap > max_gap {
-            max_gap = gap;
-        }
-    }
-    let bound = Duration::from_millis(40 * 5);
     assert!(
-        max_gap <= bound,
-        "dispatch cadence stalled: max gap {:?} exceeded {:?}",
-        max_gap,
-        bound,
+        started_while_held > super::BATCH_SIZE as u32,
+        "the free worker must start the next batch while one track is held; \
+         only {started_while_held} tracks started",
     );
 }
 
@@ -1046,14 +1051,14 @@ fn explicit_run_processes_tracks_with_global_settings_off() {
     // Without the explicit request the scheduler should be idle
     // (no capabilities, nothing to do). Submit the per-playlist
     // batch and expect both tracks to be processed.
-    scheduler.request_explicit_run(
+    scheduler.request_explicit_run(explicit_work(
         vec![track_a.id, track_b.id],
         AnalysisCapabilities {
             bpm: false,
             key: false,
             audio: true,
         },
-    );
+    ));
 
     let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
         matches!(progress, SchedulerProgress::Tick { completed: 2, .. })
@@ -1176,14 +1181,14 @@ fn explicit_run_drains_ahead_of_background_sweep() {
     // accepted its bounded queue slack. Submit the explicit run; the
     // supervisor must put it ahead of any background tracks that are
     // only pending in the supervisor.
-    scheduler.request_explicit_run(
+    scheduler.request_explicit_run(explicit_work(
         vec![explicit_track.id],
         AnalysisCapabilities {
             bpm: false,
             key: true,
             audio: false,
         },
-    );
+    ));
 
     let (release_lock, release_cvar) = &*release_first_background;
     *release_lock.lock().expect("lock release") = true;
@@ -1297,7 +1302,7 @@ fn explicit_run_arriving_mid_dispatch_goes_first() {
         key: true,
         audio: false,
     };
-    scheduler.request_explicit_run(vec![explicit_track.id], key_only);
+    scheduler.request_explicit_run(explicit_work(vec![explicit_track.id], key_only));
     release_tx.send(()).expect("sweep waits for its release");
 
     let _tick = wait_for(
@@ -1405,8 +1410,7 @@ fn a_second_capability_requested_for_a_queued_track_joins_the_first() {
     for capabilities in [BPM_ONLY, KEY_ONLY] {
         super::apply_command(
             super::SchedulerCommand::ExplicitRun {
-                track_ids: vec![track_id],
-                capabilities,
+                work: explicit_work(vec![track_id], capabilities),
             },
             &mut state,
             &mut pool,
@@ -1432,7 +1436,7 @@ fn promoting_a_capability_for_an_already_pending_track_joins_the_pending_item() 
         is_explicit: true,
     }]);
 
-    super::drain_ready_explicit_work(&mut state, &mut pending, &std::collections::HashSet::new());
+    super::drain_ready_explicit_work(&mut state, &mut pending, &super::InFlight::default());
 
     assert!(state.explicit_queue.is_empty());
     assert_eq!(pending.len(), 1);
@@ -1456,7 +1460,7 @@ fn a_full_batch_still_takes_a_new_capability_for_a_track_it_holds() {
         is_explicit: true,
     });
 
-    super::drain_ready_explicit_work(&mut state, &mut pending, &std::collections::HashSet::new());
+    super::drain_ready_explicit_work(&mut state, &mut pending, &super::InFlight::default());
 
     assert!(state.explicit_queue.is_empty());
     assert_eq!(pending.len(), super::BATCH_SIZE);
@@ -1481,4 +1485,163 @@ fn returning_explicit_work_merges_with_a_newer_request_for_the_same_track() {
 
     assert_eq!(queue.len(), 1);
     assert_eq!(queue[0].capabilities, BPM_AND_KEY);
+}
+
+fn settings_off() -> AnalysisSettings {
+    AnalysisSettings {
+        bpm: false,
+        key: false,
+        audio: false,
+        bpm_range: BpmRange::default(),
+    }
+}
+
+#[test]
+fn explicit_work_whose_result_was_rejected_runs_again_on_wake() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let track = touch_in(&library_root, "alpha.flac");
+    let track_id = track.id;
+
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let faulty = Arc::new(FaultyStore::new(inner));
+    faulty.save_track(track).expect("save");
+    faulty.set_fail_record_analysis(true);
+
+    let (sink, rx) = capturing_sink();
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    // Background analysis is off: only the explicit request can bring
+    // the track back after the store recovers.
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        ok_analyzer(),
+        sink,
+        fixed_clock(1_700_000_000),
+        store.clone(),
+        settings_off(),
+        Some(library_root),
+    ));
+    scheduler.request_explicit_run(explicit_work(vec![track_id], BPM_ONLY));
+    wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::PersistenceError { .. })
+    });
+
+    faulty.set_fail_record_analysis(false);
+    scheduler.wake();
+    let idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    scheduler.shutdown();
+
+    assert!(matches!(
+        idle,
+        SchedulerProgress::Idle {
+            completed: 1,
+            failed: 0
+        }
+    ));
+    assert_eq!(faulty.record_analysis_calls(), 2);
+    let still_due = store
+        .tracks_needing_analysis(BPM_ONLY, VERSIONS, 10)
+        .map(due_ids)
+        .expect("query");
+    assert!(still_due.is_empty(), "the explicit BPM run landed");
+}
+
+#[test]
+fn an_explicit_run_counts_its_first_batch_in_the_total() {
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let track_count = super::BATCH_SIZE as i64 + 5;
+    let mut track_ids = Vec::new();
+    for i in 0..track_count {
+        let mut track = touch_in(&library_root, &format!("track_{i:03}.flac"));
+        track.id = TrackId::new(i + 1).expect("non-zero");
+        track_ids.push(track.id);
+        store.save_track(track).expect("save");
+    }
+
+    let (sink, rx) = capturing_sink();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        ok_analyzer(),
+        sink,
+        fixed_clock(1),
+        store,
+        settings_off(),
+        Some(library_root),
+    ));
+    scheduler.request_explicit_run(explicit_work(track_ids, BPM_ONLY));
+    let first_tick = wait_for(&rx, Duration::from_secs(5), |progress| {
+        matches!(progress, SchedulerProgress::Tick { .. })
+    });
+    scheduler.shutdown();
+
+    let SchedulerProgress::Tick { total, .. } = first_tick else {
+        unreachable!("wait_for matched a Tick");
+    };
+    assert_eq!(i64::from(total), track_count);
+}
+
+#[test]
+fn a_key_version_bump_runs_only_the_key_pass() {
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let track = touch_in(&library_root, "alpha.flac");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    store.save_track(track.clone()).expect("save");
+    let analysis = ok_analyzer()(
+        std::path::Path::new("ignored"),
+        AnalysisCapabilities::all(),
+        AnalysisOptions::default(),
+        None,
+    )
+    .expect("stub analysis");
+    store
+        .record_analysis(
+            track.id,
+            &analysis,
+            AnalysisCapabilities::all(),
+            sustain_library_store::AnalysisContext {
+                versions: VERSIONS,
+                now_unix: 1,
+            },
+        )
+        .expect("analyse everything at the current versions");
+
+    let requested = Arc::new(Mutex::new(Vec::new()));
+    let analyzer: AnalyzerFn = {
+        let requested = requested.clone();
+        Arc::new(move |path, capabilities, options, duration| {
+            requested.lock().expect("lock").push(capabilities);
+            ok_analyzer()(path, capabilities, options, duration)
+        })
+    };
+    let (sink, rx) = capturing_sink();
+    let scheduler = AnalysisScheduler::start(AnalysisSchedulerConfig {
+        analyzer_versions: AnalyzerVersions { key: 2, ..VERSIONS },
+        ..deterministic_config(
+            analyzer,
+            sink,
+            fixed_clock(2),
+            store,
+            AnalysisSettings {
+                bpm: true,
+                key: true,
+                audio: true,
+                bpm_range: BpmRange::default(),
+            },
+            Some(library_root),
+        )
+    });
+    wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { completed: 1, .. })
+    });
+    scheduler.shutdown();
+
+    assert_eq!(*requested.lock().expect("lock"), vec![KEY_ONLY]);
 }

@@ -1492,6 +1492,7 @@ impl ApplicationRuntime {
                 library_store,
                 initial_settings: self.settings.analysis,
                 initial_resource_usage: self.settings.background_jobs.resource_usage,
+                processor_count: priority::available_processors(),
                 library_path: self.settings.library.path.clone(),
                 analyzer_versions: sustain_analysis::ANALYZER_VERSIONS,
             },
@@ -2889,7 +2890,7 @@ impl ApplicationRuntime {
             return RunDecision::SchedulerUnavailable;
         };
         let count = filtered.len();
-        scheduler.request_explicit_run(filtered, capabilities);
+        scheduler.request_explicit_run(filtered);
         self.push_ephemeral_notification(
             NotificationCategory::AnalysisBackground,
             NotificationSeverity::Info,

@@ -173,16 +173,20 @@ pub fn priority_for(usage: BackgroundResourceUsage) -> (NiceLevel, IoPriorityCla
     }
 }
 
-/// Number of worker threads to spawn for the given preset on this
-/// machine. Wraps [`std::thread::available_parallelism`] so callers do
-/// not have to handle the fallback; a kernel that cannot report the
-/// CPU count (extremely rare on Linux) collapses to a single worker
-/// rather than crashing the scheduler.
-pub fn resolve_worker_count(usage: BackgroundResourceUsage) -> usize {
-    let cores = std::thread::available_parallelism()
+/// Logical processors this process may run on. Wraps
+/// [`std::thread::available_parallelism`] so callers do not have to
+/// handle the fallback; a kernel that cannot report the CPU count
+/// (extremely rare on Linux) counts as a single processor.
+pub fn available_processors() -> usize {
+    std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(1);
-    usage.worker_count(cores)
+        .unwrap_or(1)
+}
+
+/// Number of worker threads to spawn for the given preset on this
+/// machine.
+pub fn resolve_worker_count(usage: BackgroundResourceUsage) -> usize {
+    usage.worker_count(available_processors())
 }
 
 /// Whether a preset's workers should prefer the machine's efficiency

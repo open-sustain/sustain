@@ -25,7 +25,7 @@ use std::time::Duration;
 use sustain_domain::DeviceRelativePath;
 
 use sustain_library_store::{
-    AcousticFeatures, AnalysisCapabilities, AnalysisContext, AnalyzerVersions,
+    AcousticFeatures, AnalysisCapabilities, AnalysisContext, AnalysisDue, AnalyzerVersions,
     DuplicateConsolidationPlan, LibraryStore, MetadataChange, OnlineCapabilities, OnlineContext,
     PendingTagMirror, PlayStatistics, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId,
     PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, SourceFingerprint, StoreError,
@@ -588,7 +588,7 @@ impl LibraryStore for FaultyStore {
         capabilities: AnalysisCapabilities,
         versions: AnalyzerVersions,
         limit: usize,
-    ) -> StoreResult<Vec<TrackId>> {
+    ) -> StoreResult<Vec<AnalysisDue>> {
         let hook = self
             .analysis_sweep_hook
             .lock()
@@ -605,7 +605,7 @@ impl LibraryStore for FaultyStore {
         track_ids: &[TrackId],
         capabilities: AnalysisCapabilities,
         versions: AnalyzerVersions,
-    ) -> StoreResult<Vec<TrackId>> {
+    ) -> StoreResult<Vec<AnalysisDue>> {
         self.inner
             .filter_tracks_needing_analysis(track_ids, capabilities, versions)
     }

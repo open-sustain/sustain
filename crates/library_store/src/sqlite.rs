@@ -434,7 +434,7 @@ impl LibraryStore for SqliteLibraryStore {
         capabilities: AnalysisCapabilities,
         versions: AnalyzerVersions,
         limit: usize,
-    ) -> StoreResult<Vec<TrackId>> {
+    ) -> StoreResult<Vec<AnalysisDue>> {
         let connection = self.connection_guard()?;
         analysis::tracks_needing_analysis(
             &connection,
@@ -450,7 +450,7 @@ impl LibraryStore for SqliteLibraryStore {
         track_ids: &[TrackId],
         capabilities: AnalysisCapabilities,
         versions: AnalyzerVersions,
-    ) -> StoreResult<Vec<TrackId>> {
+    ) -> StoreResult<Vec<AnalysisDue>> {
         let connection = self.connection_guard()?;
         analysis::filter_tracks_needing_analysis(
             &connection,

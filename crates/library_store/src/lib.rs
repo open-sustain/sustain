@@ -115,10 +115,11 @@ impl From<rusqlite::Error> for StoreError {
 /// On the write path (`record_analysis`, `record_analysis_attempt_failure`)
 /// only the requested capabilities get their `*_attempted_at_unix`
 /// timestamps stamped; the others preserve whatever value was already
-/// stored. On the read path (`tracks_needing_analysis`) a track
-/// qualifies as needing analysis if **any** of the requested
-/// capabilities is either un-attempted (NULL) or stamped by an older
-/// version of its analyzer (see [`AnalyzerVersions`]).
+/// stored. On the read path (`tracks_needing_analysis`) a requested
+/// capability is due for a track when it is either un-attempted (NULL)
+/// or stamped by an older version of its analyzer (see
+/// [`AnalyzerVersions`]); the query reports each track's due set as an
+/// [`AnalysisDue`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AnalysisCapabilities {
     pub bpm: bool,
@@ -163,6 +164,23 @@ impl AnalysisCapabilities {
             audio: self.audio || other.audio,
         }
     }
+
+    /// The capabilities requested by both sets.
+    pub const fn intersection(self, other: Self) -> Self {
+        Self {
+            bpm: self.bpm && other.bpm,
+            key: self.key && other.key,
+            audio: self.audio && other.audio,
+        }
+    }
+}
+
+/// A track and the requested analysis capabilities it still needs:
+/// never empty, and never more than what the query asked for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AnalysisDue {
+    pub track_id: TrackId,
+    pub capabilities: AnalysisCapabilities,
 }
 
 /// Which network-bound retrievals a write or query applies to.
@@ -538,28 +556,29 @@ pub trait LibraryStore: Send + Sync {
         context: AnalysisContext,
     ) -> StoreResult<()>;
 
-    /// Return up to `limit` track IDs that need at least one of the
-    /// requested capabilities re-run. Excludes tracks marked missing.
-    /// Returns an empty list when `capabilities.is_empty()`.
+    /// Return up to `limit` tracks, in id order, that need at least one
+    /// of the requested capabilities run, each with the requested
+    /// capabilities it needs. Excludes tracks marked missing. Returns an
+    /// empty list when `capabilities.is_empty()`.
     fn tracks_needing_analysis(
         &self,
         capabilities: AnalysisCapabilities,
         versions: AnalyzerVersions,
         limit: usize,
-    ) -> StoreResult<Vec<TrackId>>;
+    ) -> StoreResult<Vec<AnalysisDue>>;
 
-    /// Filter `track_ids` down to the subset that still needs at
-    /// least one of the requested capabilities run, preserving input
-    /// order. Same predicate as [`Self::tracks_needing_analysis`]
-    /// (also excludes tracks marked missing). Used by the per-set
-    /// explicit run path so re-analyzing a playlist whose tracks are
-    /// already cached is a no-op.
+    /// Filter `track_ids` down to the tracks that still need at least
+    /// one of the requested capabilities run, preserving input order,
+    /// each with the requested capabilities it needs. Same predicate as
+    /// [`Self::tracks_needing_analysis`] (also excludes tracks marked
+    /// missing). Used by the per-set explicit run path so re-analyzing a
+    /// playlist whose tracks are already cached is a no-op.
     fn filter_tracks_needing_analysis(
         &self,
         track_ids: &[TrackId],
         capabilities: AnalysisCapabilities,
         versions: AnalyzerVersions,
-    ) -> StoreResult<Vec<TrackId>>;
+    ) -> StoreResult<Vec<AnalysisDue>>;
 
     /// Load the stored waveform for a track, if any. Returns `None`
     /// when the track has not been waveform-analyzed yet (or analysis

@@ -1143,20 +1143,22 @@ pub(super) const DELETE_SMART_SHUFFLE_INDEX_SQL: &str =
 ///   ?8 = waveform cache available (1 or 0); an unavailable cache holds
 ///        nothing worth analysing for
 pub(super) const SELECT_TRACKS_NEEDING_ANALYSIS_SQL: &str = r#"
-SELECT t.id
-FROM tracks t
-LEFT JOIN track_analysis ta ON ta.track_id = t.id
-WHERE t.is_missing = 0
-  AND (
-        (?1 = 1 AND (ta.bpm_attempted_at_unix   IS NULL OR ta.bpm_analyzer_version   < ?4))
-     OR (?2 = 1 AND (ta.key_attempted_at_unix   IS NULL OR ta.key_analyzer_version   < ?5))
-     OR (?3 = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?6
-                     OR (?8 = 1 AND NOT EXISTS (
-                            SELECT 1 FROM waveform_cache.track_waveform w
-                            WHERE w.track_id = t.id
-                              AND w.audio_attempt_token = ta.audio_attempt_token))))
-      )
-ORDER BY t.id
+SELECT id, bpm_due, key_due, audio_due
+FROM (
+    SELECT t.id,
+           (?1 = 1 AND (ta.bpm_attempted_at_unix IS NULL OR ta.bpm_analyzer_version < ?4)) AS bpm_due,
+           (?2 = 1 AND (ta.key_attempted_at_unix IS NULL OR ta.key_analyzer_version < ?5)) AS key_due,
+           (?3 = 1 AND (ta.audio_attempted_at_unix IS NULL OR ta.audio_analyzer_version < ?6
+                        OR (?8 = 1 AND NOT EXISTS (
+                               SELECT 1 FROM waveform_cache.track_waveform w
+                               WHERE w.track_id = t.id
+                                 AND w.audio_attempt_token = ta.audio_attempt_token)))) AS audio_due
+    FROM tracks t
+    LEFT JOIN track_analysis ta ON ta.track_id = t.id
+    WHERE t.is_missing = 0
+)
+WHERE bpm_due OR key_due OR audio_due
+ORDER BY id
 LIMIT ?7
 "#;
 

@@ -23,11 +23,11 @@ use sustain_domain::{
 };
 
 use super::{
-    AnalysisCapabilities, AnalysisContext, AnalyzerVersions, DuplicateConsolidationPlan,
-    LibraryStore, OnlineCapabilities, OnlineContext, Playlist, PlaylistFolder, PlaylistFolderId,
-    SmartPlaylist, SmartPlaylistId, SqliteLibraryStore, StoredSmartShuffleIndex,
-    StoredSyncedLyrics, StoredWaveform, SyncedLyrics, TagMirrorArtwork, Track, TrackColumnEntry,
-    TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
+    AnalysisCapabilities, AnalysisContext, AnalysisDue, AnalyzerVersions,
+    DuplicateConsolidationPlan, LibraryStore, OnlineCapabilities, OnlineContext, Playlist,
+    PlaylistFolder, PlaylistFolderId, SmartPlaylist, SmartPlaylistId, SqliteLibraryStore,
+    StoredSmartShuffleIndex, StoredSyncedLyrics, StoredWaveform, SyncedLyrics, TagMirrorArtwork,
+    Track, TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
 use crate::{PlaylistId, StoreResult, TrackId};
 use sustain_domain::SyncedLyricsLine;
@@ -1284,6 +1284,7 @@ fn a_bpm_edit_survives_analysis_until_the_user_clears_it() {
     let needs = |capabilities| {
         store
             .filter_tracks_needing_analysis(&[tagged.id], capabilities, VERSIONS)
+            .map(due_ids)
             .expect("filter")
     };
     let tempo_only = AnalysisCapabilities {
@@ -1351,6 +1352,7 @@ fn a_key_edit_survives_analysis_until_the_user_clears_it() {
     let needs = |capabilities| {
         store
             .filter_tracks_needing_analysis(&[song.id], capabilities, VERSIONS)
+            .map(due_ids)
             .expect("filter")
     };
     let key_only = AnalysisCapabilities {
@@ -1426,6 +1428,7 @@ fn tracks_needing_analysis_lists_only_un_attempted() {
             VERSIONS,
             100,
         )
+        .map(due_ids)
         .expect("query");
     // Only alpha qualifies: beta is missing, gamma is attempted at version 1.
     assert_eq!(needs, vec![alpha.id]);
@@ -1477,6 +1480,7 @@ fn filter_tracks_needing_analysis_drops_cached_and_missing() {
             },
             VERSIONS,
         )
+        .map(due_ids)
         .expect("filter");
     assert_eq!(filtered, vec![alpha.id]);
 
@@ -1493,12 +1497,14 @@ fn filter_tracks_needing_analysis_drops_cached_and_missing() {
             },
             VERSIONS,
         )
+        .map(due_ids)
         .expect("filter");
     assert_eq!(filtered_bpm, vec![alpha.id, gamma.id]);
 
     // Empty capability mask -> empty result, regardless of input.
     let filtered_empty = store
         .filter_tracks_needing_analysis(&all_ids, AnalysisCapabilities::default(), VERSIONS)
+        .map(due_ids)
         .expect("filter");
     assert!(filtered_empty.is_empty());
 
@@ -1513,6 +1519,7 @@ fn filter_tracks_needing_analysis_drops_cached_and_missing() {
             },
             VERSIONS,
         )
+        .map(due_ids)
         .expect("filter");
     assert!(filtered_no_ids.is_empty());
 
@@ -1528,6 +1535,7 @@ fn filter_tracks_needing_analysis_drops_cached_and_missing() {
             },
             every_analyzer_at(2),
         )
+        .map(due_ids)
         .expect("filter");
     assert_eq!(filtered_v2, vec![alpha.id, gamma.id]);
 }
@@ -1560,6 +1568,7 @@ fn failed_attempt_prevents_immediate_retry() {
             VERSIONS,
             100,
         )
+        .map(due_ids)
         .expect("query");
     assert!(
         needs.is_empty(),
@@ -1577,6 +1586,7 @@ fn failed_attempt_prevents_immediate_retry() {
             every_analyzer_at(2),
             100,
         )
+        .map(due_ids)
         .expect("query v2");
     assert_eq!(needs_v2, vec![track.id]);
 }
@@ -1632,9 +1642,11 @@ fn audio_only() -> AnalysisCapabilities {
 fn needs_audio_analysis(store: &dyn LibraryStore, track_id: TrackId) -> bool {
     let needing = store
         .tracks_needing_analysis(audio_only(), VERSIONS, 10)
+        .map(due_ids)
         .expect("query");
     let filtered = store
         .filter_tracks_needing_analysis(&[track_id], audio_only(), VERSIONS)
+        .map(due_ids)
         .expect("filter");
     assert_eq!(needing.contains(&track_id), filtered.contains(&track_id));
     filtered.contains(&track_id)
@@ -1685,7 +1697,9 @@ fn sqlite_lost_waveform_cache_analyses_audio_again() {
         ..AnalysisCapabilities::all()
     };
     assert_eq!(
-        store.tracks_needing_analysis(bpm_and_key, VERSIONS, 10),
+        store
+            .tracks_needing_analysis(bpm_and_key, VERSIONS, 10)
+            .map(due_ids),
         Ok(Vec::new())
     );
     drop(store);
@@ -1841,6 +1855,7 @@ fn single_capability_attempt_leaves_the_others_stale() {
     let needing = |capabilities| {
         store
             .tracks_needing_analysis(capabilities, every_analyzer_at(2), 10)
+            .map(due_ids)
             .expect("query")
     };
     assert_eq!(needing(bpm_only), Vec::new());
@@ -1853,7 +1868,9 @@ fn single_capability_attempt_leaves_the_others_stale() {
     ] {
         assert_eq!(needing(stale), vec![t.id]);
         assert_eq!(
-            store.filter_tracks_needing_analysis(&[t.id], stale, every_analyzer_at(2)),
+            store
+                .filter_tracks_needing_analysis(&[t.id], stale, every_analyzer_at(2))
+                .map(due_ids),
             Ok(vec![t.id])
         );
     }
@@ -1881,6 +1898,7 @@ fn a_key_analyzer_bump_re_enrolls_only_key() {
     let needing = |capabilities| {
         store
             .tracks_needing_analysis(capabilities, key_bumped, 10)
+            .map(due_ids)
             .expect("query")
     };
     assert_eq!(needing(AnalysisCapabilities::all()), vec![t.id]);
@@ -1894,7 +1912,9 @@ fn a_key_analyzer_bump_re_enrolls_only_key() {
     ] {
         assert_eq!(needing(current), Vec::new());
         assert_eq!(
-            store.filter_tracks_needing_analysis(&[t.id], current, key_bumped),
+            store
+                .filter_tracks_needing_analysis(&[t.id], current, key_bumped)
+                .map(due_ids),
             Ok(Vec::new())
         );
     }
@@ -1958,6 +1978,7 @@ fn partial_capability_record_preserves_other_attempts() {
             VERSIONS,
             10,
         )
+        .map(due_ids)
         .expect("q bpm");
     let needs_wave = store
         .tracks_needing_analysis(
@@ -1969,6 +1990,7 @@ fn partial_capability_record_preserves_other_attempts() {
             VERSIONS,
             10,
         )
+        .map(due_ids)
         .expect("q wave");
     let needs_key = store
         .tracks_needing_analysis(
@@ -1980,6 +2002,7 @@ fn partial_capability_record_preserves_other_attempts() {
             VERSIONS,
             10,
         )
+        .map(due_ids)
         .expect("q key");
     assert!(needs_bpm.is_empty(), "bpm should be marked attempted");
     assert!(needs_wave.is_empty(), "waveform should be marked attempted");
@@ -2003,6 +2026,7 @@ fn empty_capabilities_record_is_no_op() {
     // No bookkeeping row → track is still listed as needing analysis.
     let needs = store
         .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 10)
+        .map(due_ids)
         .expect("query");
     assert_eq!(needs, vec![t.id]);
     assert_eq!(store.load_waveform(t.id), Ok(None));
@@ -3084,6 +3108,7 @@ fn audio_replacement_preserves_library_fields_and_invalidates_derived_state() {
     assert_eq!(
         store
             .tracks_needing_analysis(AnalysisCapabilities::all(), VERSIONS, 10)
+            .map(due_ids)
             .expect("tracks needing analysis"),
         vec![track.id]
     );
@@ -3363,4 +3388,42 @@ fn valid_test_artwork() -> Vec<u8> {
         0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00,
         0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ]
+}
+
+/// The tracks of a needing-analysis result, for tests that only check
+/// which tracks are due.
+fn due_ids(due: Vec<AnalysisDue>) -> Vec<TrackId> {
+    due.into_iter().map(|due| due.track_id).collect()
+}
+
+#[test]
+fn a_needing_analysis_query_reports_only_the_capabilities_still_due() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let t = track(1, "a.flac");
+    store.save_track(t.clone()).expect("save");
+    store
+        .record_analysis(
+            t.id,
+            &sample_analysis(Some(120.0), Some(MusicalKey::CMajor)),
+            AnalysisCapabilities::all(),
+            ctx(1_000),
+        )
+        .expect("analyse everything at version 1");
+    let key_bumped = AnalyzerVersions { key: 2, ..VERSIONS };
+    let key_due = vec![AnalysisDue {
+        track_id: t.id,
+        capabilities: AnalysisCapabilities {
+            key: true,
+            ..AnalysisCapabilities::none()
+        },
+    }];
+
+    assert_eq!(
+        store.tracks_needing_analysis(AnalysisCapabilities::all(), key_bumped, 10),
+        Ok(key_due.clone())
+    );
+    assert_eq!(
+        store.filter_tracks_needing_analysis(&[t.id], AnalysisCapabilities::all(), key_bumped),
+        Ok(key_due)
+    );
 }

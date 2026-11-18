@@ -30,7 +30,7 @@ use sustain_domain::{
     UiSettings, UiSidebarSelection, UiWindowSize, UserSettings, VolumePercent,
 };
 use sustain_library_store::{
-    AcousticFeatures, AnalysisCapabilities, AnalysisContext, AnalyzerVersions,
+    AcousticFeatures, AnalysisCapabilities, AnalysisContext, AnalysisDue, AnalyzerVersions,
     DuplicateConsolidationPlan, LibraryStore, OnlineCapabilities, OnlineContext, PendingTagMirror,
     PlaylistFolder, SourceFingerprint, SqliteLibraryStore, StoreError, StoreResult,
     StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
@@ -8526,7 +8526,7 @@ impl LibraryStore for CallCountingLibraryStore {
         capabilities: AnalysisCapabilities,
         versions: AnalyzerVersions,
         limit: usize,
-    ) -> StoreResult<Vec<TrackId>> {
+    ) -> StoreResult<Vec<AnalysisDue>> {
         self.inner
             .tracks_needing_analysis(capabilities, versions, limit)
     }
@@ -8536,7 +8536,7 @@ impl LibraryStore for CallCountingLibraryStore {
         track_ids: &[TrackId],
         capabilities: AnalysisCapabilities,
         versions: AnalyzerVersions,
-    ) -> StoreResult<Vec<TrackId>> {
+    ) -> StoreResult<Vec<AnalysisDue>> {
         self.inner
             .filter_tracks_needing_analysis(track_ids, capabilities, versions)
     }
