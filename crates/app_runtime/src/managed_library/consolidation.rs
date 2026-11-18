@@ -79,18 +79,31 @@ impl LibraryConsolidationContext {
             &self.managed_library_filesystem_validator,
         )?;
 
-        let plan = plan_library_consolidation(&library_path, &self.existing_tracks)?;
+        let Some(plan) = plan_library_consolidation(
+            &library_path,
+            &self.existing_tracks,
+            &self.cancellation_requested,
+        )?
+        else {
+            return Ok(LibraryConsolidationResult {
+                tracks: Vec::new(),
+                summary: LibraryConsolidationSummary {
+                    cancelled: true,
+                    ..LibraryConsolidationSummary::default()
+                },
+            });
+        };
 
-        // Persist any `is_missing` flag corrections discovered during
+        // Persist any availability corrections discovered during
         // planning before touching any files on disk: the flag flip
         // is durable even if a later move fails, and the result we
         // return always carries the corrected tracks so the runtime's
         // in-memory copy matches SQLite. Done in one narrow transaction
         // to keep the cost bounded on a 10k library without overwriting
         // unrelated columns from the planning snapshot.
-        if !plan.missing_track_updates.is_empty() {
+        if !plan.availability_corrections.is_empty() {
             let updates = plan
-                .missing_track_updates
+                .availability_corrections
                 .iter()
                 .map(|track| (track.id, track.location.clone()))
                 .collect::<Vec<_>>();
@@ -99,24 +112,40 @@ impl LibraryConsolidationContext {
                 .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         }
 
+        // A cancellation that arrives before the journal is published moves
+        // nothing and publishes nothing: dropping the plan removes its own
+        // pre-journal recovery links, and every planned move stays pending.
+        if self.cancellation_requested.load(Ordering::SeqCst) {
+            return Ok(LibraryConsolidationResult {
+                tracks: plan.availability_corrections,
+                summary: LibraryConsolidationSummary {
+                    planned_tracks: plan.moves.len(),
+                    moved_tracks: 0,
+                    already_organized_tracks: plan.already_organized_tracks,
+                    missing_tracks: plan.missing_tracks,
+                    empty_directory_cleanup_failed: false,
+                    cancelled: true,
+                },
+            });
+        }
         if plan.moves.is_empty() {
             remove_consolidation_journal_if_present(&library_path)?;
             return Ok(LibraryConsolidationResult {
-                tracks: plan.missing_track_updates,
+                tracks: plan.availability_corrections,
                 summary: LibraryConsolidationSummary {
                     planned_tracks: 0,
                     moved_tracks: 0,
                     already_organized_tracks: plan.already_organized_tracks,
                     missing_tracks: plan.missing_tracks,
                     empty_directory_cleanup_failed: false,
-                    cancelled: self.cancellation_requested.load(Ordering::SeqCst),
+                    cancelled: false,
                 },
             });
         }
 
         write_consolidation_journal(&library_path, &plan.moves)?;
 
-        let mut updated_tracks = plan.missing_track_updates;
+        let mut updated_tracks = plan.availability_corrections;
         let mut moved_tracks = 0;
         let mut cancelled = false;
 
@@ -203,12 +232,13 @@ struct LibraryConsolidationPlan {
     /// count of orphaned rows regardless of whether the SQLite flag
     /// was already correct.
     missing_tracks: usize,
-    /// Subset of the missing tracks whose persisted `is_missing` flag
-    /// was still `false` at plan time. The runner flips and persists
-    /// these in a single transaction so subsequent reads of SQLite
-    /// see the corrected availability, and the per-row warning icon
-    /// in the table lights up.
-    missing_track_updates: Vec<Track>,
+    /// Tracks whose persisted availability disagrees with the disk at
+    /// plan time: a missing source still recorded as available, or an
+    /// already-organized source still recorded as missing. The runner
+    /// persists these in a single transaction so subsequent reads of
+    /// SQLite see the corrected availability, and the per-row warning
+    /// icon in the table follows.
+    availability_corrections: Vec<Track>,
 }
 
 #[derive(Clone, Debug)]
@@ -232,10 +262,14 @@ pub(super) enum JournalTrackPersistence {
     Relocation,
 }
 
+/// Plans every move, pinning each source with a recovery link. `None` when
+/// the user cancelled during planning; the links prepared so far are
+/// removed as the partial plan is dropped, since no journal names them.
 fn plan_library_consolidation(
     library_path: &Path,
     existing_tracks: &[Track],
-) -> ApplicationRuntimeResult<LibraryConsolidationPlan> {
+    cancellation_requested: &AtomicBool,
+) -> ApplicationRuntimeResult<Option<LibraryConsolidationPlan>> {
     let recovery = prepare_consolidation_recovery(library_path)?;
     let planner = ManagedTrackPathPlanner::default();
     let mut occupied_paths = existing_tracks
@@ -245,30 +279,29 @@ fn plan_library_consolidation(
     let mut moves = Vec::new();
     let mut already_organized_tracks = 0;
     let mut missing_tracks = 0;
-    let mut missing_track_updates: Vec<Track> = Vec::new();
-    let mut record_missing_track = |track: &Track| {
-        missing_tracks += 1;
-        // Only push an update when the persisted flag is actually
-        // wrong; an already-missing row needs no rewrite. The runner
-        // commits the whole batch in a single transaction so the
-        // table's missing-file indicator lights up on the very next
-        // refresh.
-        if !track.location.is_missing() {
+    let mut availability_corrections: Vec<Track> = Vec::new();
+    // Only a persisted flag that is actually wrong is rewritten. The
+    // runner commits the whole batch in a single transaction so the
+    // table's missing-file indicator follows on the very next refresh.
+    let mut correct_availability = |track: &Track, availability: TrackAvailability| {
+        if track.location.availability != availability {
             let mut updated = track.clone();
-            updated.location = updated
-                .location
-                .with_availability(TrackAvailability::Missing);
-            missing_track_updates.push(updated);
+            updated.location = updated.location.with_availability(availability);
+            availability_corrections.push(updated);
         }
     };
 
     for track in existing_tracks {
+        if cancellation_requested.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         let source_relative_path = track.location.relative_path.clone();
         let source_path = track.location.absolute_path(library_path);
         let source = match probe_regular_file(&source_path) {
             Ok(RegularFileProbe::Present(source)) => source,
             Ok(RegularFileProbe::MissingOrNonRegular) => {
-                record_missing_track(track);
+                missing_tracks += 1;
+                correct_availability(track, TrackAvailability::Missing);
                 continue;
             }
             Err(_) => return Err(ApplicationRuntimeError::LibraryConsolidationFailed),
@@ -286,6 +319,7 @@ fn plan_library_consolidation(
 
         if plan.relative_path == source_relative_path {
             already_organized_tracks += 1;
+            correct_availability(track, TrackAvailability::Available);
             continue;
         }
 
@@ -307,12 +341,12 @@ fn plan_library_consolidation(
         });
     }
 
-    Ok(LibraryConsolidationPlan {
+    Ok(Some(LibraryConsolidationPlan {
         moves,
         already_organized_tracks,
         missing_tracks,
-        missing_track_updates,
-    })
+        availability_corrections,
+    }))
 }
 
 pub(super) fn plan_managed_track_retarget(
@@ -475,6 +509,14 @@ mod tests {
 
     use super::*;
 
+    fn plan_uncancelled(
+        library_path: &Path,
+        existing_tracks: &[Track],
+    ) -> ApplicationRuntimeResult<LibraryConsolidationPlan> {
+        plan_library_consolidation(library_path, existing_tracks, &AtomicBool::new(false))
+            .map(|plan| plan.expect("a plan nobody cancelled"))
+    }
+
     #[test]
     fn planning_pins_sources_without_retaining_file_descriptors() {
         let root = tempfile::tempdir().expect("create test root");
@@ -487,7 +529,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let plan = plan_library_consolidation(root.path(), &tracks).expect("plan consolidation");
+        let plan = plan_uncancelled(root.path(), &tracks).expect("plan consolidation");
 
         assert_eq!(plan.moves.len(), tracks.len());
         assert_eq!(
@@ -511,18 +553,17 @@ mod tests {
         let root = tempfile::tempdir().expect("create test root");
         let missing = track(1, "missing.flac");
 
-        let plan =
-            plan_library_consolidation(root.path(), std::slice::from_ref(&missing)).expect("plan");
+        let plan = plan_uncancelled(root.path(), std::slice::from_ref(&missing)).expect("plan");
 
         assert_eq!(plan.missing_tracks, 1);
-        assert_eq!(plan.missing_track_updates.len(), 1);
-        assert!(plan.missing_track_updates[0].location.is_missing());
+        assert_eq!(plan.availability_corrections.len(), 1);
+        assert!(plan.availability_corrections[0].location.is_missing());
 
         let unprobeable_name = format!("{}.flac", "x".repeat(256));
         let unprobeable = track(2, &unprobeable_name);
         assert!(
             matches!(
-                plan_library_consolidation(root.path(), &[unprobeable]),
+                plan_uncancelled(root.path(), &[unprobeable]),
                 Err(ApplicationRuntimeError::LibraryConsolidationFailed)
             ),
             "resource and pathname errors must abort instead of becoming missing rows"
@@ -534,7 +575,7 @@ mod tests {
         let redirected = track(3, "redirect/song.flac");
         assert!(
             matches!(
-                plan_library_consolidation(root.path(), &[redirected]),
+                plan_uncancelled(root.path(), &[redirected]),
                 Err(ApplicationRuntimeError::LibraryConsolidationFailed)
             ),
             "unsafe source-parent resolution must abort instead of becoming a missing row"
@@ -548,7 +589,7 @@ mod tests {
         let unprobeable_name = format!("{}.flac", "x".repeat(256));
 
         assert!(matches!(
-            plan_library_consolidation(
+            plan_uncancelled(
                 root.path(),
                 &[track(1, "loose.flac"), track(2, &unprobeable_name)]
             ),
@@ -565,11 +606,11 @@ mod tests {
     fn concurrent_planning_refuses_to_reuse_recovery_namespace() {
         let root = tempfile::tempdir().expect("create test root");
         fs::write(root.path().join("loose.flac"), b"original").expect("write source");
-        let plan = plan_library_consolidation(root.path(), &[track(1, "loose.flac")])
-            .expect("plan consolidation");
+        let plan =
+            plan_uncancelled(root.path(), &[track(1, "loose.flac")]).expect("plan consolidation");
 
         assert!(matches!(
-            plan_library_consolidation(root.path(), &[track(1, "loose.flac")]),
+            plan_uncancelled(root.path(), &[track(1, "loose.flac")]),
             Err(ApplicationRuntimeError::LibraryConsolidationFailed)
         ));
         assert_eq!(
@@ -589,8 +630,8 @@ mod tests {
         let root = tempfile::tempdir().expect("create test root");
         let source = root.path().join("loose.flac");
         fs::write(&source, b"original").expect("write source");
-        let plan = plan_library_consolidation(root.path(), &[track(1, "loose.flac")])
-            .expect("plan consolidation");
+        let plan =
+            plan_uncancelled(root.path(), &[track(1, "loose.flac")]).expect("plan consolidation");
         assert_eq!(
             fs::read(
                 root.path()

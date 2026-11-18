@@ -42,6 +42,15 @@ pub(crate) struct VerifiedFileCopy {
     capability: RegularFileCapability,
 }
 
+impl VerifiedFileCopy {
+    /// Removes the published copy, provided the destination still holds
+    /// exactly the file this copy published.
+    pub(crate) fn remove(&self) -> Result<(), ()> {
+        remove_pinned_regular_file_matching_capability(&self.destination, &self.capability)
+            .map_err(|_| ())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct VerifiedFileStaging {
     temporary: PinnedFilePath,
@@ -495,18 +504,30 @@ fn copy_file_to_staging_verified_inner(
     Ok((bytes_copied, actual_hash))
 }
 
+/// Publishes the staged copy at `destination_path` without overwriting.
+/// Publication owns the staging file: on every failure the staged copy is
+/// removed, so a refused destination never leaves a hidden full copy behind.
 pub(crate) fn publish_staged_file(
     staging: VerifiedFileStaging,
     destination_path: &Path,
 ) -> Result<VerifiedFileCopy, VerifiedFileCopyError> {
-    let destination = PinnedFilePath::creating_parent(destination_path)
-        .map_err(|_| VerifiedFileCopyError::CreateDestinationDirectoryFailed)?;
-    if destination
-        .exists()
-        .map_err(|_| VerifiedFileCopyError::FinalizeFailed)?
-    {
-        remove_staged_file(staging);
-        return Err(VerifiedFileCopyError::DestinationExists);
+    let destination = match PinnedFilePath::creating_parent(destination_path) {
+        Ok(destination) => destination,
+        Err(_) => {
+            remove_staged_file(staging);
+            return Err(VerifiedFileCopyError::CreateDestinationDirectoryFailed);
+        }
+    };
+    match destination.exists() {
+        Ok(false) => {}
+        Ok(true) => {
+            remove_staged_file(staging);
+            return Err(VerifiedFileCopyError::DestinationExists);
+        }
+        Err(_) => {
+            remove_staged_file(staging);
+            return Err(VerifiedFileCopyError::FinalizeFailed);
+        }
     }
 
     // `rename` replaces existing files on Unix. A hard link created in the same
@@ -938,9 +959,7 @@ pub(super) fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
 pub(crate) fn remove_copied_files(copies: &[VerifiedFileCopy]) -> Result<(), ()> {
     let mut failed = false;
     for copy in copies.iter().rev() {
-        if remove_pinned_regular_file_matching_capability(&copy.destination, &copy.capability)
-            .is_err()
-        {
+        if copy.remove().is_err() {
             failed = true;
         }
     }
@@ -1177,9 +1196,40 @@ mod tests {
 
     use super::{
         EmptyDirectoryPruneError, FileMoveError, FileTrashError, VerifiedFileCopyError,
-        copy_file_verified, open_regular_file, prune_empty_ancestor_directories,
+        copy_file_to_staging_verified, copy_file_verified, open_regular_file,
+        prune_empty_ancestor_directories, publish_staged_file,
         trash_regular_file_matching_capability,
     };
+
+    #[test]
+    fn a_refused_destination_parent_removes_the_staged_copy() {
+        let root = unique_test_directory();
+        let source = root.join("source.flac");
+        fs::create_dir_all(&root).expect("create test directory");
+        fs::write(&source, b"audio bytes").expect("write source");
+        // A regular file where the destination's artist folder belongs.
+        fs::write(root.join("Artist"), b"not a folder").expect("obstruct destination parent");
+        let staging = copy_file_to_staging_verified(&source, &root).expect("stage copy");
+
+        let result = publish_staged_file(staging, &root.join("Artist/Album/01 Song.flac"));
+
+        assert!(matches!(
+            result,
+            Err(VerifiedFileCopyError::CreateDestinationDirectoryFailed)
+        ));
+        let mut names = fs::read_dir(&root)
+            .expect("list test directory")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(
+            names,
+            ["Artist", "source.flac"],
+            "no staged copy left behind"
+        );
+
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
 
     #[test]
     fn verified_copy_copies_and_verifies_file_before_finalizing() {

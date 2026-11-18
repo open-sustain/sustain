@@ -36,7 +36,7 @@ use super::{
     file_ops::{
         VerifiedFileCopy, VerifiedFileCopyError, copy_file_to_staging_verified,
         prune_empty_ancestor_directories_for_sources, publish_staged_file,
-        refresh_verified_staging, remove_copied_files, remove_staged_file,
+        refresh_verified_staging, remove_staged_file,
     },
 };
 
@@ -46,18 +46,42 @@ const MANAGED_IMPORT_COMMIT_CHUNK_SIZE: usize = 32;
 struct ManagedImportState {
     imported_tracks: Vec<Track>,
     pending_tracks: Vec<Track>,
-    pending_copied_files: Vec<VerifiedFileCopy>,
+    pending_copies: Vec<PendingCopy>,
     duplicate_files: usize,
-    /// Files skipped one by one, the import carrying on past each.
+    /// Files left out, each with its reason: those skipped one by one as
+    /// the import carried on, and those of a chunk the library refused.
     failures: Vec<ImportFailure>,
-    /// Copied files whose chunk the library store refused, rolled back
-    /// before the import stopped.
-    rolled_back_files: usize,
+}
+
+/// A copy published into the library folder that no committed chunk
+/// references yet, with the file it was copied from.
+struct PendingCopy {
+    source_path: PathBuf,
+    copy: VerifiedFileCopy,
 }
 
 impl ManagedImportState {
-    fn failed_files(&self) -> usize {
-        self.failures.len() + self.rolled_back_files
+    /// Removes the copies no committed chunk references, recording each
+    /// source file as left out, and whether its copy is gone again.
+    fn roll_back_pending_copies(&mut self, library_path: &Path) {
+        self.pending_tracks.clear();
+        let pending_copies = std::mem::take(&mut self.pending_copies);
+        for pending in &pending_copies {
+            let removed = pending.copy.remove().is_ok();
+            self.failures.push(ImportFailure {
+                path: pending.source_path.clone(),
+                reason: if removed {
+                    ImportFailureReason::NotRecorded
+                } else {
+                    ImportFailureReason::NotRecordedCopyKept
+                },
+            });
+        }
+        let destinations = pending_copies
+            .iter()
+            .map(|pending| pending.copy.destination_path.clone())
+            .collect::<Vec<_>>();
+        prune_empty_ancestor_directories_for_sources(library_path, &destinations);
     }
 }
 
@@ -176,7 +200,10 @@ impl LibraryImportContext<'_> {
                 Ok(ManagedFileOutcome::Duplicate) => state.duplicate_files += 1,
                 Ok(ManagedFileOutcome::Copied(copied)) => {
                     let Some(track_id) = sustain_domain::TrackId::new(next_track_id) else {
-                        state.pending_copied_files.push(copied.copy);
+                        state.pending_copies.push(PendingCopy {
+                            source_path: source_path.clone(),
+                            copy: copied.copy,
+                        });
                         return self.finish_failed_managed_import(
                             &batch.library_path,
                             total_files,
@@ -204,7 +231,10 @@ impl LibraryImportContext<'_> {
                         // and self-heals (#71).
                         file_modified_at: None,
                     });
-                    state.pending_copied_files.push(copy);
+                    state.pending_copies.push(PendingCopy {
+                        source_path: source_path.clone(),
+                        copy,
+                    });
                     if state.pending_tracks.len() >= MANAGED_IMPORT_COMMIT_CHUNK_SIZE
                         && let Err(error) =
                             self.commit_managed_import_chunk(&batch.library_path, &mut state)
@@ -243,16 +273,13 @@ impl LibraryImportContext<'_> {
             .save_tracks(&state.pending_tracks)
             .is_err()
         {
-            state.rolled_back_files += state.pending_tracks.len();
-            let _ = rollback_managed_import_files(library_path, &state.pending_copied_files);
-            state.pending_tracks.clear();
-            state.pending_copied_files.clear();
+            state.roll_back_pending_copies(library_path);
             return Err(ManagedImportCommitError::SaveFailed);
         }
 
         let flush_result = self.library_store.flush_durable();
         state.imported_tracks.append(&mut state.pending_tracks);
-        state.pending_copied_files.clear();
+        state.pending_copies.clear();
         if flush_result.is_err() {
             return Err(ManagedImportCommitError::FlushFailed);
         }
@@ -284,10 +311,7 @@ impl LibraryImportContext<'_> {
         mut state: ManagedImportState,
         error: ApplicationRuntimeError,
     ) -> ApplicationRuntimeResult<LibraryImportResult> {
-        state.rolled_back_files += state.pending_copied_files.len();
-        let _ = rollback_managed_import_files(library_path, &state.pending_copied_files);
-        state.pending_tracks.clear();
-        state.pending_copied_files.clear();
+        state.roll_back_pending_copies(library_path);
         stopped_managed_import_or_error(discovered_files, state, error)
     }
 
@@ -469,7 +493,7 @@ fn managed_import_result(
             discovered_files,
             imported_tracks: state.imported_tracks.len(),
             duplicate_files: state.duplicate_files,
-            failed_files: state.failed_files(),
+            failed_files: state.failures.len(),
             cancelled: end == ImportEnd::Cancelled,
             stopped_on_error: end == ImportEnd::StoppedOnError,
         },
@@ -703,19 +727,6 @@ impl LibraryContentIndex {
     }
 }
 
-fn rollback_managed_import_files(
-    library_path: &Path,
-    copied_files: &[VerifiedFileCopy],
-) -> Result<(), ()> {
-    let remove_result = remove_copied_files(copied_files);
-    let cleanup_paths = copied_files
-        .iter()
-        .map(|copy| copy.destination_path.clone())
-        .collect::<Vec<_>>();
-    prune_empty_ancestor_directories_for_sources(library_path, &cleanup_paths);
-    remove_result
-}
-
 /// The supported audio files under the paths an import was given, and the
 /// paths it could not look into.
 struct DiscoveredFiles {
@@ -897,24 +908,38 @@ mod tests {
 
     use sustain_metadata::hash_file_content;
 
-    use super::rollback_managed_import_files;
-    use crate::managed_library::file_ops::copy_file_verified;
+    use super::{ManagedImportState, PendingCopy};
+    use crate::{
+        ImportFailure, ImportFailureReason, managed_library::file_ops::copy_file_verified,
+    };
 
     #[test]
-    fn managed_import_rollback_removes_copies_and_prunes_their_folders() {
+    fn managed_import_rollback_removes_copies_names_their_sources_and_prunes_folders() {
         let root = unique_test_directory();
         let copied = root.join("Artist/Album/song.flac");
         let source = root.join("source.flac");
         fs::create_dir_all(copied.parent().expect("copied parent")).expect("create copied parent");
         fs::write(&source, b"audio").expect("write source");
         let hash = hash_file_content(&source).expect("hash source");
-        let copied_file = copy_file_verified(&source, &copied, &hash).expect("copy file");
+        let copy = copy_file_verified(&source, &copied, &hash).expect("copy file");
+        let mut state = ManagedImportState {
+            pending_copies: vec![PendingCopy {
+                source_path: source.clone(),
+                copy,
+            }],
+            ..ManagedImportState::default()
+        };
+
+        state.roll_back_pending_copies(&root);
 
         assert_eq!(
-            rollback_managed_import_files(&root, std::slice::from_ref(&copied_file)),
-            Ok(())
+            state.failures,
+            vec![ImportFailure {
+                path: source,
+                reason: ImportFailureReason::NotRecorded,
+            }]
         );
-
+        assert!(state.pending_copies.is_empty());
         assert!(root.exists());
         assert!(!root.join("Artist").exists());
 

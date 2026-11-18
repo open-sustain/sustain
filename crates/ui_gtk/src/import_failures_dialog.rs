@@ -17,7 +17,14 @@ use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 
 /// Lists `failures` in a window over `parent`. The list is virtualized, so
 /// an import that left out thousands of files opens it as quickly.
-pub(crate) fn show_import_failures(parent: &gtk::Window, failures: Vec<ImportFailure>) {
+/// Lists the files an import left out. `import_finished` says whether the
+/// import went on past them to the end, or stopped (cancelled, or after an
+/// error) with files it never reached.
+pub(crate) fn show_import_failures(
+    parent: &gtk::Window,
+    failures: Vec<ImportFailure>,
+    import_finished: bool,
+) {
     let window = gtk::Window::builder()
         .title(gettext("Files Not Imported"))
         .transient_for(parent)
@@ -33,14 +40,20 @@ pub(crate) fn show_import_failures(parent: &gtk::Window, failures: Vec<ImportFai
     content.set_margin_start(18);
 
     let count = failures.len();
-    let heading = gtk::Label::new(Some(&tr_format!(
+    let heading = if import_finished {
         ngettext(
             "{count} file could not be imported. The rest of the import went ahead.",
             "{count} files could not be imported. The rest of the import went ahead.",
-            plural_count(count)
-        ),
-        count = count
-    )));
+            plural_count(count),
+        )
+    } else {
+        ngettext(
+            "{count} file could not be imported. The import stopped before finishing.",
+            "{count} files could not be imported. The import stopped before finishing.",
+            plural_count(count),
+        )
+    };
+    let heading = gtk::Label::new(Some(&tr_format!(heading, count = count)));
     heading.set_xalign(0.0);
     heading.set_wrap(true);
     content.append(&heading);
@@ -201,7 +214,7 @@ mod tests {
                     reason: ImportFailureReason::Unreadable,
                 })
                 .collect();
-            show_import_failures(&parent, failures);
+            show_import_failures(&parent, failures, true);
             let dialog = gtk::Window::list_toplevels()
                 .into_iter()
                 .filter_map(|widget| widget.downcast::<gtk::Window>().ok())

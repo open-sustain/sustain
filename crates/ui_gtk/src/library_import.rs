@@ -137,11 +137,16 @@ fn poll_library_import(
         match finished {
             Some(Ok(mut result)) => {
                 let failures = std::mem::take(&mut result.failures);
+                let import_finished = !result.summary.cancelled && !result.summary.stopped_on_error;
                 runtime.borrow_mut().apply_library_import_result(result);
                 if !failures.is_empty()
                     && let Some(parent) = parent.upgrade()
                 {
-                    crate::import_failures_dialog::show_import_failures(&parent, failures);
+                    crate::import_failures_dialog::show_import_failures(
+                        &parent,
+                        failures,
+                        import_finished,
+                    );
                 }
                 glib::ControlFlow::Break
             }

@@ -1097,9 +1097,24 @@ fn managed_import_save_tracks_failure_rolls_back_copied_files() {
     let task = runtime
         .prepare_library_import(vec![source_path.clone()])
         .expect("prepare import");
-    let error = run_library_import_task(task).expect_err("save_tracks failure surfaces");
+    let result = run_library_import_task(task).expect("the refused file is reported");
 
-    assert_eq!(error, ApplicationRuntimeError::LibraryStoreFailed);
+    assert_eq!(
+        result.failures,
+        vec![super::ImportFailure {
+            path: source_path.clone(),
+            reason: super::ImportFailureReason::NotRecorded,
+        }]
+    );
+    assert_eq!(
+        result.summary,
+        super::LibraryImportSummary {
+            discovered_files: 1,
+            failed_files: 1,
+            stopped_on_error: true,
+            ..super::LibraryImportSummary::default()
+        }
+    );
     assert_eq!(store.operation_log(), vec!["save_tracks"]);
     assert_eq!(store.save_tracks_calls(), 1);
     assert_eq!(store.flush_durable_calls(), 0);
@@ -1842,6 +1857,143 @@ fn collect_files(directory: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+fn organized_test_track(id: i64, relative_path: &str) -> Track {
+    let mut track = test_track(track_id(id), relative_path);
+    track.metadata.artist = Some("Artist".to_owned());
+    track.metadata.album = Some("Album".to_owned());
+    track.metadata.title = Some("Song".to_owned());
+    track.metadata.track_number = Some(1);
+    track
+}
+
+fn managed_runtime_over(library_root: &Path, store: Arc<SqliteLibraryStore>) -> ApplicationRuntime {
+    let mut settings = UserSettings::with_library_path(Some(library_root.to_path_buf()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+        .expect("load settings")
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize")
+}
+
+#[test]
+fn consolidation_cancelled_before_it_starts_moves_and_journals_nothing() {
+    let library_root = unique_test_directory();
+    let source_path = library_root.join("Loose/loose.flac");
+    std::fs::create_dir_all(source_path.parent().expect("source parent"))
+        .expect("create source parent");
+    std::fs::write(&source_path, b"audio bytes").expect("write existing file");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    assert_eq!(
+        store.save_track(organized_test_track(21, "Loose/loose.flac")),
+        Ok(())
+    );
+    let mut runtime = managed_runtime_over(&library_root, store);
+
+    let task = runtime
+        .prepare_library_consolidation()
+        .expect("prepare consolidation");
+    runtime.request_background_task_cancellation();
+    let result = run_library_consolidation_task(task).expect("run consolidation");
+
+    assert_eq!(
+        result.summary,
+        LibraryConsolidationSummary {
+            cancelled: true,
+            ..LibraryConsolidationSummary::default()
+        }
+    );
+    assert_eq!(
+        std::fs::read(&source_path).expect("source stays in place"),
+        b"audio bytes"
+    );
+    let mut remaining = Vec::new();
+    collect_files(&library_root, &mut remaining);
+    assert_eq!(remaining, vec![source_path], "no journal or recovery link");
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn consolidation_restoring_a_track_wakes_an_idle_analysis_sweep() {
+    let library_root = unique_test_directory();
+    let organized_path = library_root.join("Artist/Album/01 Song.flac");
+    std::fs::create_dir_all(organized_path.parent().expect("organized parent"))
+        .expect("create organized parent");
+    std::fs::write(&organized_path, b"audio bytes").expect("write returned file");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut track = organized_test_track(21, "Artist/Album/01 Song.flac");
+    track.location = track
+        .location
+        .with_availability(sustain_domain::TrackAvailability::Missing);
+    assert_eq!(store.save_track(track), Ok(()));
+    let mut runtime = managed_runtime_over(&library_root, store);
+    let mut settings = runtime.settings().clone();
+    settings.analysis.bpm = true;
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(settings)),
+        Ok(())
+    );
+    let (sink, progress) = async_channel::unbounded();
+    runtime.set_analysis_progress_sink(sink);
+    runtime
+        .start_analysis_scheduler()
+        .expect("start analysis scheduler");
+    // The only track is missing, so the sweep goes idle with no work.
+    assert_eq!(next_analysis_sweep_idle(&progress), 0);
+
+    let task = runtime
+        .prepare_library_consolidation()
+        .expect("prepare consolidation");
+    let result = run_library_consolidation_task(task).expect("run consolidation");
+    runtime.apply_library_consolidation_result(result);
+
+    assert_eq!(next_analysis_sweep_idle(&progress), 1);
+    runtime.shutdown_analysis_scheduler();
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn consolidation_marks_a_returned_already_organized_file_available() {
+    let library_root = unique_test_directory();
+    let organized_path = library_root.join("Artist/Album/01 Song.flac");
+    std::fs::create_dir_all(organized_path.parent().expect("organized parent"))
+        .expect("create organized parent");
+    std::fs::write(&organized_path, b"audio bytes").expect("write returned file");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut track = organized_test_track(21, "Artist/Album/01 Song.flac");
+    track.location = track
+        .location
+        .with_availability(sustain_domain::TrackAvailability::Missing);
+    assert_eq!(store.save_track(track.clone()), Ok(()));
+    let mut runtime = managed_runtime_over(&library_root, store.clone());
+
+    let task = runtime
+        .prepare_library_consolidation()
+        .expect("prepare consolidation");
+    let result = run_library_consolidation_task(task).expect("run consolidation");
+    runtime.apply_library_consolidation_result(result);
+
+    assert!(
+        !store
+            .track(track.id)
+            .expect("load track")
+            .expect("track")
+            .location
+            .is_missing()
+    );
+    assert!(
+        !runtime
+            .library_tracks()
+            .iter()
+            .find(|runtime_track| runtime_track.id == track.id)
+            .expect("runtime track")
+            .location
+            .is_missing()
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
 #[test]
 fn managed_consolidation_moves_existing_tracks_to_planned_paths() {
     let library_root = unique_test_directory();
@@ -2125,15 +2277,12 @@ fn disabling_managed_mode_requests_consolidation_cancellation() {
             .join("Unknown Artist/Unknown Album/Song.flac")
             .exists()
     );
+    // Cancelled before planning reached the track: nothing was planned.
     assert_eq!(
         runtime.last_library_consolidation_summary(),
         Some(&LibraryConsolidationSummary {
-            planned_tracks: 1,
-            moved_tracks: 0,
-            already_organized_tracks: 0,
-            missing_tracks: 0,
-            empty_directory_cleanup_failed: false,
             cancelled: true,
+            ..LibraryConsolidationSummary::default()
         })
     );
     assert_eq!(

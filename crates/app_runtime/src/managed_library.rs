@@ -168,11 +168,20 @@ impl ApplicationRuntime {
     pub fn apply_library_consolidation_result(&mut self, result: LibraryConsolidationResult) {
         let summary = result.summary;
         self.last_library_consolidation_summary = Some(summary.clone());
-        // `result.tracks` carries both the relocated (still available)
-        // tracks and the ones the planner flagged missing because their
-        // source file had vanished; adopting them publishes both.
+        // `result.tracks` carries the relocated tracks and the planner's
+        // availability corrections; adopting them publishes both. A track
+        // that is available again may be owed background work.
+        let restores_availability = result.tracks.iter().any(|track| {
+            !track.location.is_missing()
+                && self
+                    .library_track(track.id)
+                    .is_some_and(|current| current.location.is_missing())
+        });
         self.adopt_library_track_locations(result.tracks);
         self.refresh_playback_queue_track_ids();
+        if restores_availability {
+            self.wake_background_sweeps();
+        }
         self.finish_library_task(LibraryTaskKind::Organize);
         // An auto-resume that found nothing to move and nothing
         // missing is silenced by the auto-dismiss timer just like any

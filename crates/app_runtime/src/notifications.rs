@@ -686,6 +686,12 @@ pub fn import_failure_reason_text(reason: ImportFailureReason) -> String {
         ImportFailureReason::OutsideLibraryFolder => {
             gettext("It is outside the library folder, and the library keeps files where they are.")
         }
+        ImportFailureReason::NotRecorded => {
+            gettext("The library could not record it, so its copy was removed.")
+        }
+        ImportFailureReason::NotRecordedCopyKept => gettext(
+            "The library could not record it, and its copy could not be removed from the library folder.",
+        ),
     }
 }
 

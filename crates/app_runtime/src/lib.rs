@@ -407,6 +407,12 @@ pub enum ImportFailureReason {
     /// The file lies outside the library folder, which a library that
     /// references files in place cannot point at.
     OutsideLibraryFolder,
+    /// The library refused to record the file, and its copy was removed
+    /// from the library folder again.
+    NotRecorded,
+    /// The library refused to record the file, and its copy could not be
+    /// removed from the library folder.
+    NotRecordedCopyKept,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
