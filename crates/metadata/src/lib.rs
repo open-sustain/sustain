@@ -62,6 +62,7 @@ pub enum AudioFormat {
     Flac,
     Mp4,
     Wav,
+    Aiff,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -279,6 +280,9 @@ impl MetadataService for LoftyMetadataService {
     }
 
     fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()> {
+        if audio_format_from_path(path)? == AudioFormat::Aiff {
+            return Err(MetadataError::WriteFailed);
+        }
         audio_format_from_path(path)?;
         let mut tagged_file = read_tagged_file(path)?;
         ensure_primary_tag(&mut tagged_file);
@@ -330,6 +334,9 @@ impl MetadataService for LoftyMetadataService {
     }
 
     fn write_rating(&self, path: &Path, rating: Rating) -> MetadataResult<()> {
+        if audio_format_from_path(path)? == AudioFormat::Aiff {
+            return Err(MetadataError::WriteFailed);
+        }
         audio_format_from_path(path)?;
         let mut tagged_file = read_tagged_file(path)?;
         ensure_primary_tag(&mut tagged_file);
@@ -387,6 +394,9 @@ impl MetadataService for LoftyMetadataService {
     }
 
     fn write_artwork(&self, path: &Path, artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        if audio_format_from_path(path)? == AudioFormat::Aiff {
+            return Err(MetadataError::WriteFailed);
+        }
         if let Some(bytes) = artwork.as_deref() {
             validate_encoded_artwork(bytes).map_err(MetadataError::ArtworkRejected)?;
         }
@@ -444,6 +454,7 @@ pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {
         // the library, edits — including POPM ratings, USLT lyrics, and
         // APIC artwork — mirror back through the identical write path.
         Some("wav") => Ok(AudioFormat::Wav),
+        Some("aif") | Some("aiff") => Ok(AudioFormat::Aiff),
         _ => Err(MetadataError::UnsupportedAudioFormat),
     }
 }

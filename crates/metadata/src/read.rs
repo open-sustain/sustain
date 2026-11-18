@@ -198,6 +198,7 @@ fn audio_format_from_lofty_file_type(file_type: FileType) -> Option<AudioFormat>
         FileType::Flac => Some(AudioFormat::Flac),
         FileType::Mp4 => Some(AudioFormat::Mp4),
         FileType::Wav => Some(AudioFormat::Wav),
+        FileType::Aiff => Some(AudioFormat::Aiff),
         _ => None,
     }
 }

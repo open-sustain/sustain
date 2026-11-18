@@ -60,12 +60,20 @@ fn detects_supported_audio_formats_case_insensitively() {
         audio_format_from_path(Path::new("/music/a.WAV")),
         Ok(AudioFormat::Wav)
     );
+    assert_eq!(
+        audio_format_from_path(Path::new("/music/a.AIF")),
+        Ok(AudioFormat::Aiff)
+    );
+    assert_eq!(
+        audio_format_from_path(Path::new("/music/a.aiff")),
+        Ok(AudioFormat::Aiff)
+    );
 }
 
 #[test]
 fn rejects_unsupported_audio_formats() {
     assert_eq!(
-        audio_format_from_path(Path::new("/music/a.aiff")),
+        audio_format_from_path(Path::new("/music/a.xyz")),
         Err(MetadataError::UnsupportedAudioFormat)
     );
     assert_eq!(
