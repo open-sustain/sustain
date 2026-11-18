@@ -10,7 +10,11 @@
 //! compaction here is the write-side counterpart to [`crate::mpeg_frame`].
 
 use super::*;
-use lofty::error::{FileEncodingError, UnknownFormatError};
+use lofty::{
+    error::{FileEncodingError, UnknownFormatError},
+    file::FileType,
+    probe::Probe,
+};
 
 pub(crate) fn ensure_primary_tag(tagged_file: &mut TaggedFile) {
     if tagged_file.primary_tag().is_some() {
@@ -114,9 +118,9 @@ fn repair_id3v2_bytes(bytes: &[u8], repair: MetadataRepair) -> MetadataResult<Op
         }
 
         let frame_header = &remaining[..ID3V2_FRAME_HEADER_SIZE];
-        let Some(frame_id) = Id3v2FrameId::parse(&frame_header[..4]) else {
+        if !is_id3v2_frame_id(&frame_header[..4]) {
             return Ok(None);
-        };
+        }
         let frame_size = match header.version {
             Id3v2RawVersion::V23 => u32::from_be_bytes([
                 frame_header[4],
@@ -134,8 +138,7 @@ fn repair_id3v2_bytes(bytes: &[u8], repair: MetadataRepair) -> MetadataResult<Op
             return Ok(None);
         }
         let frame = &bytes[offset..frame_end];
-        let content = &frame[ID3V2_FRAME_HEADER_SIZE..];
-        if should_remove_frame_for_repair(frame_id, content, header.version, repair) {
+        if should_remove_frame_for_repair(frame, header.version, repair) {
             changed = true;
         } else {
             frames.extend_from_slice(frame);
@@ -159,48 +162,46 @@ fn repair_id3v2_bytes(bytes: &[u8], repair: MetadataRepair) -> MetadataResult<Op
     Ok(Some(repaired))
 }
 
+/// Whether `frame` (header included) is one that makes lofty fail to read
+/// the tag with the malformation `repair` heals. lofty itself is the judge:
+/// the frame is parsed alone in a minimal tag, with the options every
+/// Sustain read uses, so exactly the offending frames are dropped and every
+/// valid one — a good recording date next to a bad release date — is kept.
+///
+/// Chapter frames (`CHAP`, `CTOC`) are never removed: they embed whole
+/// sub-frames, and dropping one for a bad child would lose every chapter
+/// boundary and title it holds. Such a malformation stays for the user's
+/// own tagger to fix.
 fn should_remove_frame_for_repair(
-    frame_id: Id3v2FrameId,
-    content: &[u8],
+    frame: &[u8],
     version: Id3v2RawVersion,
     repair: MetadataRepair,
 ) -> bool {
-    match repair {
-        MetadataRepair::MalformedTag(MalformedTagError::BadTimestamp) => {
-            is_id3v2_timestamp_frame(frame_id, version)
-        }
-        MetadataRepair::MalformedTag(MalformedTagError::TextDecode) => {
-            is_malformed_optional_text_frame(frame_id, content)
-        }
-    }
-}
-
-fn is_id3v2_timestamp_frame(frame_id: Id3v2FrameId, version: Id3v2RawVersion) -> bool {
-    match frame_id.as_str() {
-        "TDRC" | "TDOR" | "TDRL" | "TDTG" | "TDEN" => true,
-        "TYER" | "TDAT" | "TIME" | "TRDA" | "TORY" if version == Id3v2RawVersion::V23 => true,
-        _ => false,
-    }
-}
-
-fn is_malformed_optional_text_frame(frame_id: Id3v2FrameId, content: &[u8]) -> bool {
-    let Some((&encoding, payload)) = content.split_first() else {
-        return frame_id.is_text_information() || frame_id.is_language_text();
-    };
-    if !matches!(encoding, 0x00..=0x03) {
-        return frame_id.is_text_information() || frame_id.is_language_text();
-    }
-
-    let utf16_payload = match frame_id.as_str() {
-        _ if frame_id.is_text_information() => payload,
-        "COMM" | "USLT" if payload.len() >= 3 => &payload[3..],
-        "COMM" | "USLT" => return true,
-        _ => return false,
-    };
-    if !matches!(encoding, 0x01 | 0x02) {
+    if frame.starts_with(b"CHAP") || frame.starts_with(b"CTOC") {
         return false;
     }
-    utf16_payload.len() < 2 || utf16_payload.len() % 2 != 0
+    let MetadataRepair::MalformedTag(kind) = repair;
+    // Zero padding ends the probe buffer so lofty's footer searches (APE,
+    // ID3v1) never mistake the frame's own trailing bytes — an attached
+    // file's tag inside a `GEOB`, say — for a footer of the probe.
+    let Ok(tag_len) = u32::try_from(frame.len() + PROBE_PADDING_SIZE) else {
+        return false;
+    };
+    let mut tag = b"ID3".to_vec();
+    tag.push(match version {
+        Id3v2RawVersion::V23 => 3,
+        Id3v2RawVersion::V24 => 4,
+    });
+    tag.extend_from_slice(&[0, 0]);
+    tag.extend_from_slice(&synchsafe_u32(tag_len));
+    tag.extend_from_slice(frame);
+    tag.resize(tag.len() + PROBE_PADDING_SIZE, 0);
+    let read = Probe::new(std::io::Cursor::new(tag))
+        .set_file_type(FileType::Mpeg)
+        .read();
+    read.err()
+        .and_then(|error| read::malformed_tag_error(&error))
+        == Some(kind)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -238,47 +239,11 @@ impl Id3v2RawHeader {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Id3v2FrameId([u8; 4]);
-
-impl Id3v2FrameId {
-    fn parse(bytes: &[u8]) -> Option<Self> {
-        let id: [u8; 4] = bytes.try_into().ok()?;
-        if id
+fn is_id3v2_frame_id(bytes: &[u8]) -> bool {
+    bytes.len() == 4
+        && bytes
             .iter()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
-        {
-            Some(Self(id))
-        } else {
-            None
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match &self.0 {
-            b"TDRC" => "TDRC",
-            b"TDOR" => "TDOR",
-            b"TDRL" => "TDRL",
-            b"TDTG" => "TDTG",
-            b"TDEN" => "TDEN",
-            b"TYER" => "TYER",
-            b"TDAT" => "TDAT",
-            b"TIME" => "TIME",
-            b"TRDA" => "TRDA",
-            b"TORY" => "TORY",
-            b"COMM" => "COMM",
-            b"USLT" => "USLT",
-            _ => "",
-        }
-    }
-
-    fn is_text_information(self) -> bool {
-        self.0[0] == b'T'
-    }
-
-    fn is_language_text(self) -> bool {
-        matches!(&self.0, b"COMM" | b"USLT")
-    }
 }
 
 fn parse_synchsafe_u32(bytes: &[u8]) -> MetadataResult<usize> {
@@ -304,6 +269,8 @@ const ID3V2_HEADER_SIZE: usize = 10;
 /// Opens every APEv2 header and footer.
 const APE_PREAMBLE: &[u8] = b"APETAGEX";
 const ID3V2_FRAME_HEADER_SIZE: usize = 10;
+/// Covers the largest footer lofty looks for at a file's end (ID3v1).
+const PROBE_PADDING_SIZE: usize = 128;
 const MAX_ID3V2_SYNCHSAFE_SIZE: usize = 0x0fff_ffff;
 
 // Persists `tag` — the one tag Sustain edits — over `path`. The file's

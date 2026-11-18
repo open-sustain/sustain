@@ -19,32 +19,35 @@ use lofty::{
     tag::items::timestamp::TimestampParseError,
 };
 
-pub(crate) fn read_tags(
-    path: &Path,
-    backfill_title_from_filename: bool,
-) -> MetadataResult<InitialTagRead> {
+/// The initial values for import: a file whose tag lofty cannot parse
+/// still enters the library from its audio properties and filename, with
+/// the malformation reported so a scan can repair it.
+pub(crate) fn read_initial_tags(path: &Path) -> MetadataResult<InitialTagRead> {
     audio_format_from_path(path)?;
     match read_tagged_file(path) {
         Ok(tagged_file) => Ok(InitialTagRead::clean(initial_tags_from_tagged_file(
             path,
             &tagged_file,
             true,
-            backfill_title_from_filename,
+            true,
         ))),
         Err(MetadataError::MalformedTag(kind)) => {
             let tagged_file = read_tagged_file_without_tags(path)?;
             Ok(InitialTagRead {
-                tags: initial_tags_from_tagged_file(
-                    path,
-                    &tagged_file,
-                    false,
-                    backfill_title_from_filename,
-                ),
+                tags: initial_tags_from_tagged_file(path, &tagged_file, false, true),
                 repair: Some(MetadataRepair::MalformedTag(kind)),
             })
         }
         Err(error) => Err(error),
     }
+}
+
+/// The tag values exactly as written: no filename title, and a tag lofty
+/// cannot parse is an error rather than an empty result.
+pub(crate) fn read_persisted_tags(path: &Path) -> MetadataResult<InitialTags> {
+    audio_format_from_path(path)?;
+    read_tagged_file(path)
+        .map(|tagged_file| initial_tags_from_tagged_file(path, &tagged_file, true, false))
 }
 
 fn initial_tags_from_tagged_file(
@@ -171,12 +174,22 @@ fn metadata_error_from_lofty(
     expected_format: Option<AudioFormat>,
     error: FileParseError,
 ) -> MetadataError {
-    if caused_by::<TimestampParseError>(&error) {
-        MetadataError::MalformedTag(MalformedTagError::BadTimestamp)
-    } else if caused_by::<TextDecodingError>(&error) {
-        MetadataError::MalformedTag(MalformedTagError::TextDecode)
+    match malformed_tag_error(&error) {
+        Some(kind) => MetadataError::MalformedTag(kind),
+        None => {
+            container_format_mismatch(path, expected_format).unwrap_or(MetadataError::ReadFailed)
+        }
+    }
+}
+
+/// The repairable tag malformation behind a lofty read failure, if any.
+pub(crate) fn malformed_tag_error(error: &FileParseError) -> Option<MalformedTagError> {
+    if caused_by::<TimestampParseError>(error) {
+        Some(MalformedTagError::BadTimestamp)
+    } else if caused_by::<TextDecodingError>(error) {
+        Some(MalformedTagError::TextDecode)
     } else {
-        container_format_mismatch(path, expected_format).unwrap_or(MetadataError::ReadFailed)
+        None
     }
 }
 

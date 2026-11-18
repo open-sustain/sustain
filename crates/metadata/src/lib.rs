@@ -45,7 +45,7 @@ mod tag_write;
 pub use hash::{copy_and_hash_reader_content, hash_file_content, hash_reader_content};
 pub use scan::LibraryScanner;
 
-use read::{read_tagged_file, read_tags, valid_embedded_picture};
+use read::{read_tagged_file, valid_embedded_picture};
 use tag_write::{
     PreservedPopularimeter, apply_bool_change, apply_number_change, apply_text_change,
     apply_year_change, atomic_save_id3v2_to_path, atomic_save_tag_to_path, clear_rating,
@@ -130,6 +130,62 @@ pub trait MetadataService: Send + Sync {
     fn repair_malformed_tags(&self, _path: &Path, _repair: MetadataRepair) -> MetadataResult<bool> {
         Ok(false)
     }
+
+    /// Repairs, in place, every malformation `read` diagnoses for `path`,
+    /// re-reading after each repair. One malformation can hide another
+    /// behind it (a bad date, then undecodable text), so each kind is
+    /// repaired as it surfaces — once: a kind that survives its own repair
+    /// stays in the returned read for a later attempt.
+    ///
+    /// The first failure ends the pass. Its read is the last one that
+    /// succeeded, which no longer describes the file when a repair changed
+    /// it and the following re-read failed; `file_changed` tells callers
+    /// to re-stat or re-hash either way.
+    fn repair_diagnosed_malformations(&self, path: &Path, read: InitialTagRead) -> RepairPass {
+        let mut pass = RepairPass {
+            read,
+            file_changed: false,
+            error: None,
+        };
+        let mut attempted = Vec::new();
+        while let Some(repair) = pass.read.repair
+            && !attempted.contains(&repair)
+        {
+            attempted.push(repair);
+            match self.repair_malformed_tags(path, repair) {
+                Ok(true) => pass.file_changed = true,
+                Ok(false) => break,
+                Err(error) => {
+                    // A failure after the atomic exchange (syncing the
+                    // directory) leaves the rewritten file in place.
+                    pass.file_changed = true;
+                    pass.error = Some(error);
+                    break;
+                }
+            }
+            match self.read_initial_tags_with_diagnostics(path) {
+                Ok(read) => pass.read = read,
+                Err(error) => {
+                    pass.error = Some(error);
+                    break;
+                }
+            }
+        }
+        pass
+    }
+}
+
+/// The outcome of [`MetadataService::repair_diagnosed_malformations`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepairPass {
+    /// The last successful read; `read.repair` is the malformation still
+    /// present, if any.
+    pub read: InitialTagRead,
+    /// True when a repair rewrote the file, or failed at a point where it
+    /// may have.
+    pub file_changed: bool,
+    /// The repair or re-read failure that ended the pass early.
+    pub error: Option<MetadataError>,
 }
 
 /// The tag-derived values captured the first time a file enters the
@@ -268,15 +324,15 @@ pub struct LoftyMetadataService;
 
 impl MetadataService for LoftyMetadataService {
     fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
-        read_tags(path, true).map(|read| read.tags)
+        read::read_initial_tags(path).map(|read| read.tags)
     }
 
     fn read_initial_tags_with_diagnostics(&self, path: &Path) -> MetadataResult<InitialTagRead> {
-        read_tags(path, true)
+        read::read_initial_tags(path)
     }
 
     fn read_persisted_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
-        read_tags(path, false).map(|read| read.tags)
+        read::read_persisted_tags(path)
     }
 
     fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()> {

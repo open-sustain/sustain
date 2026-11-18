@@ -248,7 +248,7 @@ where
             return;
         }
 
-        let initial_read = match self
+        let mut initial_read = match self
             .metadata_service
             .read_initial_tags_with_diagnostics(&path)
         {
@@ -259,10 +259,17 @@ where
             }
         };
 
-        let repaired = self.repair_malformed_tags
-            && initial_read
-                .repair
-                .is_some_and(|repair| self.repair_file(&path, repair, walk.scan));
+        let mut repaired = false;
+        if self.repair_malformed_tags && initial_read.repair.is_some() {
+            let pass = self
+                .metadata_service
+                .repair_diagnosed_malformations(&path, initial_read);
+            initial_read = pass.read;
+            repaired = pass.file_changed;
+            if let Some(error) = pass.error {
+                walk.scan.record_failure(path.clone(), error);
+            }
+        }
 
         let (file_size_bytes, mut modified_at) = if repaired {
             match walk.filesystem.metadata(&path) {
@@ -274,28 +281,18 @@ where
                     return;
                 }
             }
-        } else if self.repair_malformed_tags && initial_read.repair.is_some() {
-            // Leave the fingerprint incomplete so a managed-library scan can
-            // retry the repair later instead of permanently treating the
-            // malformed tag as an unchanged file.
-            (file_size_bytes, None)
         } else {
             (file_size_bytes, modified_at)
         };
-
-        let mut tags = initial_read.tags;
-        if repaired {
-            match self.metadata_service.read_initial_tags(&path) {
-                Ok(repaired_tags) => tags = repaired_tags,
-                Err(_) => {
-                    // The tagless fallback was enough to keep the audio file
-                    // indexed, but the repair did not fully restore normal tag
-                    // parsing. Do not fingerprint the row as unchanged; a later
-                    // scan should retry the repair/read path.
-                    modified_at = None;
-                }
-            }
+        if self.repair_malformed_tags && initial_read.repair.is_some() {
+            // The tagless fallback keeps the audio file indexed, but its tag
+            // is still malformed. Leave the fingerprint incomplete so a later
+            // scan retries the repair instead of treating the file as
+            // unchanged.
+            modified_at = None;
         }
+
+        let tags = initial_read.tags;
 
         let InitialTags {
             metadata,
@@ -310,15 +307,5 @@ where
             has_embedded_artwork,
             file_modified_at: modified_at,
         });
-    }
-
-    fn repair_file(&self, path: &Path, repair: MetadataRepair, scan: &mut LibraryScan) -> bool {
-        match self.metadata_service.repair_malformed_tags(path, repair) {
-            Ok(repaired) => repaired,
-            Err(error) => {
-                scan.record_failure(path.to_path_buf(), error);
-                false
-            }
-        }
     }
 }

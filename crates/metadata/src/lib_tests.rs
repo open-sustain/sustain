@@ -1115,6 +1115,109 @@ fn initial_tag_read_recovers_and_repairs_bad_id3v2_timestamp() {
 }
 
 #[test]
+fn repairing_a_bad_timestamp_keeps_the_valid_ones() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("mixed dates.mp3");
+    fs::write(
+        &path,
+        mp3_with_id3v2_4_frames(&[
+            id3v2_4_text_frame("TIT2", "Real Title"),
+            id3v2_4_text_frame("TDRC", "2001-03-04"),
+            id3v2_4_text_frame("TDOR", "20XX"),
+        ]),
+    )
+    .expect("write fixture");
+
+    assert_eq!(
+        LoftyMetadataService.repair_malformed_tags(
+            &path,
+            MetadataRepair::MalformedTag(MalformedTagError::BadTimestamp)
+        ),
+        Ok(true)
+    );
+    let repaired = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&path)
+        .expect("read repaired file");
+    assert_eq!(repaired.repair, None);
+    assert_eq!(repaired.tags.metadata.title.as_deref(), Some("Real Title"));
+    assert_eq!(repaired.tags.metadata.year, Some(2001));
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn repair_never_drops_a_chapter_for_a_bad_date_inside_it() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("chapters.mp3");
+    let mut chapter = b"ch0\0".to_vec();
+    for boundary in [0_u32, 1_000, u32::MAX, u32::MAX] {
+        chapter.extend_from_slice(&boundary.to_be_bytes());
+    }
+    chapter.extend_from_slice(&id3v2_4_text_frame("TIT2", "Intro"));
+    chapter.extend_from_slice(&id3v2_4_text_frame("TDOR", "20XX"));
+    let original = mp3_with_id3v2_4_frames(&[
+        id3v2_4_text_frame("TIT2", "Real Title"),
+        id3v2_4_frame("CHAP", &chapter),
+    ]);
+    fs::write(&path, &original).expect("write fixture");
+    let read = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&path)
+        .expect("fallback read");
+    assert_eq!(
+        read.repair,
+        Some(MetadataRepair::MalformedTag(
+            MalformedTagError::BadTimestamp
+        ))
+    );
+
+    let pass = LoftyMetadataService.repair_diagnosed_malformations(&path, read);
+
+    assert!(!pass.file_changed);
+    assert!(pass.read.repair.is_some());
+    assert_eq!(fs::read(&path).expect("read fixture"), original);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn initial_tag_read_recovers_and_repairs_invalid_utf8_text_frame() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("bad utf8.mp3");
+    let mut composer = vec![0x03]; // UTF-8
+    composer.extend_from_slice(b"Bad \xff byte");
+    fs::write(
+        &path,
+        mp3_with_id3v2_4_frames(&[
+            id3v2_4_text_frame("TIT2", "Real Title"),
+            id3v2_4_frame("TCOM", &composer),
+        ]),
+    )
+    .expect("write fixture");
+
+    let read = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&path)
+        .expect("recover malformed text");
+    assert_eq!(
+        read.repair,
+        Some(MetadataRepair::MalformedTag(MalformedTagError::TextDecode))
+    );
+    assert_eq!(
+        LoftyMetadataService.repair_malformed_tags(&path, read.repair.expect("diagnostic")),
+        Ok(true)
+    );
+    let repaired = LoftyMetadataService
+        .read_initial_tags_with_diagnostics(&path)
+        .expect("read repaired file");
+    assert_eq!(repaired.repair, None);
+    assert_eq!(repaired.tags.metadata.title.as_deref(), Some("Real Title"));
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
 fn initial_tag_read_recovers_and_repairs_bad_utf16_text_frame() {
     let root = unique_test_directory();
     fs::create_dir_all(&root).expect("create test directory");
