@@ -15,9 +15,8 @@ use sustain_metadata::{MetadataService, audio_format_from_path, hash_file_conten
 
 use crate::{
     ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
-    NotificationSeverity, YoutubeAudioDownloadResult, freedesktop_trash,
-    managed_library::file_ops::{copy_file_verified, open_regular_file},
-    metadata_writer::metadata_mirror,
+    NotificationSeverity, YoutubeAudioDownloadResult,
+    managed_library::file_ops::{RegularFileCapability, copy_file_verified, open_regular_file},
     youtube_audio_downloader::{
         MAX_YOUTUBE_REPLACEMENT_DURATION, StagedYoutubeAudio, YoutubeAudioDownloadError,
     },
@@ -245,6 +244,10 @@ fn youtube_audio_download_error_text(error: YoutubeAudioDownloadError) -> String
     }
 }
 
+/// Replace `track_id`'s audio with the `staged` download. Once the
+/// library points at the replacement, `trash_original` moves the original
+/// file to the trash (the desktop trash in production); a failure leaves
+/// the original in place and is reported as retained.
 pub(crate) fn replace_track_audio_from_youtube(
     library_root: &Path,
     management_mode: LibraryManagementMode,
@@ -252,6 +255,7 @@ pub(crate) fn replace_track_audio_from_youtube(
     metadata_service: &dyn MetadataService,
     track_id: sustain_domain::TrackId,
     staged: StagedYoutubeAudio,
+    trash_original: impl FnOnce(&Path, &RegularFileCapability) -> std::io::Result<()>,
 ) -> ApplicationRuntimeResult<YoutubeAudioReplacementOutcome> {
     let canonical_root = fs::canonicalize(library_root)
         .map_err(|_| ApplicationRuntimeError::LibraryPathUnavailable)?;
@@ -274,26 +278,15 @@ pub(crate) fn replace_track_audio_from_youtube(
     let artwork = metadata_service
         .read_artwork(&original_path)
         .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
-    metadata_service
-        .write_metadata(&staged.path, metadata_mirror(&track.metadata))
-        .and_then(|()| metadata_service.write_rating(&staged.path, track.rating))
-        .and_then(|()| metadata_service.write_artwork(&staged.path, artwork.clone()))
-        .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
-
-    let written = metadata_service
-        .read_persisted_tags(&staged.path)
-        .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
-    let written_artwork = metadata_service
-        .read_artwork(&staged.path)
-        .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
-    if !crate::duplicate_consolidation::editable_metadata_matches(
-        &written.metadata,
+    crate::staged_tags::mirror_onto_staged_file(
+        metadata_service,
+        &staged.path,
+        &downloaded.metadata,
         &track.metadata,
-    ) || written.rating != track.rating
-        || written_artwork != artwork
-    {
-        return Err(ApplicationRuntimeError::YoutubeAudioReplacementFailed);
-    }
+        track.rating,
+        &artwork,
+    )
+    .map_err(|_| ApplicationRuntimeError::YoutubeAudioReplacementFailed)?;
 
     let destination_relative_path = replacement_destination(
         &canonical_root,
@@ -347,8 +340,7 @@ pub(crate) fn replace_track_audio_from_youtube(
         .flush_durable()
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
 
-    let original_retained =
-        freedesktop_trash::trash_regular_file(&original_path, &original).is_err();
+    let original_retained = trash_original(&original_path, &original).is_err();
     remove_youtube_replacement_journal_if_present(&canonical_root)?;
     Ok(YoutubeAudioReplacementOutcome { original_retained })
 }
@@ -559,6 +551,55 @@ mod tests {
                 .expect("destination");
 
         assert_eq!(relative.as_path(), Path::new("old (YouTube) 2.opus"));
+    }
+
+    #[test]
+    fn an_analysed_tempo_the_download_does_not_carry_still_verifies() {
+        use sustain_domain::{Bpm, KeyOrigin, MusicalKey};
+        use sustain_metadata::LoftyMetadataService;
+
+        // Four 128 kbps MPEG-1 Layer III frames: a real, if short, MP3.
+        let mut frame = vec![0xFF, 0xFB, 0x90, 0x00];
+        frame.resize(417, 0);
+        let root = tempfile::tempdir().expect("library root");
+        fs::write(root.path().join("old.mp3"), frame.repeat(4)).expect("write original");
+        let staging = tempfile::tempdir().expect("staging directory");
+        let staged_path = staging.path().join("audio.mp3");
+        fs::write(&staged_path, frame.repeat(4)).expect("write download");
+
+        // The library holds a measured tempo and key; the download has no
+        // analysis tags, and the mirror leaves measured values off it.
+        let mut track = sample_track();
+        track.metadata.duration = Some(Duration::ZERO);
+        track.metadata.title = Some("Kept".to_owned());
+        track.metadata.bpm = Bpm::from_whole(120);
+        track.metadata.bpm_set_by_user = false;
+        track.metadata.key = Some(MusicalKey::CMajor);
+        track.metadata.key_origin = KeyOrigin::Measured;
+        let store = sustain_library_store::SqliteLibraryStore::open_in_memory().expect("store");
+        store.save_track(track.clone()).expect("save track");
+
+        replace_track_audio_from_youtube(
+            root.path(),
+            LibraryManagementMode::ReferenceFilesInPlace,
+            &store,
+            &LoftyMetadataService,
+            track.id,
+            StagedYoutubeAudio {
+                _directory: staging,
+                path: staged_path,
+            },
+            // Keep the test's files out of every real trash.
+            |_original, _capability| Ok(()),
+        )
+        .expect("a correctly mirrored download verifies");
+
+        let replaced = store
+            .track(track.id)
+            .expect("load track")
+            .expect("track exists");
+        assert_eq!(replaced.metadata.bpm, Bpm::from_whole(120));
+        assert_eq!(replaced.metadata.title.as_deref(), Some("Kept"));
     }
 
     fn sample_track() -> Track {

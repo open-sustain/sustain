@@ -246,9 +246,12 @@ fn folder_placements(req: &SyncRequest) -> Result<Vec<Placement>, SyncError> {
     let mut placements = Vec::new();
 
     for playlist in &req.playlists {
-        let folder = unique_name(
+        let folder = unique_component(
             &mut used_folders,
-            crate::sanitize::component(&playlist.name, FOLDER_COMPONENT_CAP, "Playlist"),
+            &playlist.name,
+            "",
+            FOLDER_COMPONENT_CAP,
+            "Playlist",
         );
 
         // Recover stable indices from the previous manifest so existing
@@ -320,14 +323,29 @@ fn leading_number(name: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// `base`, or `base (n)` when the device already holds that name in
-/// `used` (by [`device_path_key`]).
-fn unique_name(used: &mut HashSet<String>, base: String) -> String {
+/// `value` sanitized into a component of at most `max_chars` that ends
+/// in `tail` (an extension such as `.m3u8`, or nothing), with ` (n)` before
+/// the tail when the device already holds that name in `used` (by
+/// [`device_path_key`]). The number's room comes out of the name, so a
+/// disambiguated name keeps the cap.
+fn unique_component(
+    used: &mut HashSet<String>,
+    value: &str,
+    tail: &str,
+    max_chars: usize,
+    fallback: &str,
+) -> String {
+    let base = crate::sanitize::component_with_suffix(value, tail, max_chars, fallback);
     if used.insert(device_path_key(&base)) {
         return base;
     }
     for n in 2.. {
-        let candidate = format!("{base} ({n})");
+        let candidate = crate::sanitize::component_with_suffix(
+            value,
+            &format!(" ({n}){tail}"),
+            max_chars,
+            fallback,
+        );
         if used.insert(device_path_key(&candidate)) {
             return candidate;
         }
@@ -364,12 +382,15 @@ pub(crate) fn playlist_files(
             // The number that tells two playlists of one name apart goes
             // before the extension: a device reads "Mix (2).m3u8" as a
             // playlist and "Mix.m3u8 (2)" as nothing.
-            let stem = unique_name(
+            let name = unique_component(
                 &mut used,
-                crate::sanitize::component(&playlist.name, TREE_COMPONENT_CAP, "Playlist"),
+                &playlist.name,
+                ".m3u8",
+                TREE_COMPONENT_CAP,
+                "Playlist",
             );
             let path = playlist_dir
-                .join_component(&format!("{stem}.m3u8"))
+                .join_component(&name)
                 .ok_or_else(|| SyncError::planning("generated an unsafe playlist path"))?;
             Ok((path, playlist))
         })

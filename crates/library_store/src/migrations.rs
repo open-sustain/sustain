@@ -8,7 +8,7 @@
 //! development databases must be deleted and rebuilt by scanning the library.
 
 use rusqlite::Connection;
-use sustain_domain::MusicalKey;
+use sustain_domain::{MusicalKey, TrackMetadata};
 
 use crate::{
     StoreError, StoreResult,
@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 20;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 21;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -145,6 +145,11 @@ const MIGRATIONS: &[Migration] = &[
         description: "repair a library built by the withdrawn draft of migration 15",
         step: MigrationStep::Rust(repair_withdrawn_key_origin_draft),
     },
+    Migration {
+        version: 21,
+        description: "generate the article sort keys migration 3 missed, by the import rule",
+        step: MigrationStep::Rust(fill_missing_generated_sort_fields),
+    },
 ];
 
 const _: () = {
@@ -258,6 +263,63 @@ fn repair_withdrawn_key_origin_draft(connection: &Connection) -> rusqlite::Resul
         "UPDATE tracks SET key_origin = 1 WHERE key_set_by_user = 1;
          ALTER TABLE tracks DROP COLUMN key_set_by_user;",
     )
+}
+
+/// Migration 21. Migration 3 generated leading-article sort keys in SQL,
+/// which recognises an article only before an ASCII space; import applies
+/// the domain rule, which takes any whitespace. "The\u{a0}Beatles" upgraded
+/// through migration 3 kept no sort key and filed under T, while a fresh
+/// import files it under B. Every sort key still missing is filled by
+/// [`TrackMetadata::fill_missing_generated_sort_fields`], the rule import
+/// applies; a key already present, typed or generated, stays as it is.
+/// Filled keys are generated sort keys, which every later build reads, and
+/// a second pass finds nothing missing, so the step is idempotent.
+fn fill_missing_generated_sort_fields(connection: &Connection) -> rusqlite::Result<()> {
+    let mut select = connection.prepare(
+        "SELECT id, title, title_sort, artist, artist_sort, album, album_sort, \
+                album_artist, album_artist_sort, composer, composer_sort \
+         FROM tracks",
+    )?;
+    let stored = select
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                TrackMetadata {
+                    title: row.get(1)?,
+                    title_sort: row.get(2)?,
+                    artist: row.get(3)?,
+                    artist_sort: row.get(4)?,
+                    album: row.get(5)?,
+                    album_sort: row.get(6)?,
+                    album_artist: row.get(7)?,
+                    album_artist_sort: row.get(8)?,
+                    composer: row.get(9)?,
+                    composer_sort: row.get(10)?,
+                    ..TrackMetadata::default()
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut update = connection.prepare(
+        "UPDATE tracks SET title_sort = ?1, artist_sort = ?2, album_sort = ?3, \
+                album_artist_sort = ?4, composer_sort = ?5 \
+         WHERE id = ?6",
+    )?;
+    for (id, stored) in stored {
+        let mut filled = stored.clone();
+        filled.fill_missing_generated_sort_fields();
+        if filled != stored {
+            update.execute(rusqlite::params![
+                filled.title_sort,
+                filled.artist_sort,
+                filled.album_sort,
+                filled.album_artist_sort,
+                filled.composer_sort,
+                id,
+            ])?;
+        }
+    }
+    Ok(())
 }
 
 fn user_version(connection: &Connection) -> StoreResult<u32> {
@@ -1642,6 +1704,62 @@ WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
                 .execute("UPDATE tracks SET key_origin = 3 WHERE id = 1", [])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn upgrade_from_v20_files_an_article_before_any_whitespace_as_import_does() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..20]).expect("schema version 20");
+        connection
+            .execute(
+                "INSERT INTO tracks (id, relative_path, title, artist, artist_sort, album, album_sort) \
+                 VALUES (1, x'61', ?1, ?2, NULL, 'The Album', 'Album (The)'), \
+                        (2, x'62', 'Plain', ?3, 'Beatles, The', NULL, NULL)",
+                rusqlite::params![
+                    "A\u{2003}Song",
+                    "The\u{a0}Beatles",
+                    "The\u{a0}Beatles"
+                ],
+            )
+            .expect("seed version 20 tracks");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        let sort_keys = |id: i64| -> [Option<String>; 3] {
+            connection
+                .query_row(
+                    "SELECT title_sort, artist_sort, album_sort FROM tracks WHERE id = ?1",
+                    [id],
+                    |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?]),
+                )
+                .expect("sort keys")
+        };
+        let mut fresh = TrackMetadata {
+            title: Some("A\u{2003}Song".to_owned()),
+            artist: Some("The\u{a0}Beatles".to_owned()),
+            ..TrackMetadata::default()
+        };
+        fresh.fill_missing_generated_sort_fields();
+        assert_eq!(
+            sort_keys(1),
+            [
+                fresh.title_sort.clone(),
+                fresh.artist_sort.clone(),
+                Some("Album (The)".to_owned())
+            ],
+            "the upgrade files the track where a fresh import does"
+        );
+        assert_eq!(fresh.artist_sort.as_deref(), Some("Beatles (The)"));
+        assert_eq!(
+            sort_keys(2),
+            [None, Some("Beatles, The".to_owned()), None],
+            "a sort key already present stays"
+        );
+        assert_eq!(schema_text(&connection), fresh_schema_text());
     }
 
     #[test]

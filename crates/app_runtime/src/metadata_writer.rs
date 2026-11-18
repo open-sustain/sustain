@@ -723,6 +723,7 @@ fn apply_command(
                         metadata_service,
                         track_id,
                         staged,
+                        crate::freedesktop_trash::trash_regular_file,
                     )
                 });
             let original_retained = outcome

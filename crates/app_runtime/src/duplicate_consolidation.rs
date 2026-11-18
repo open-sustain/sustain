@@ -16,8 +16,8 @@ use std::{
 };
 
 use sustain_domain::{
-    Bpm, DuplicateArtworkQuality, DuplicateConsolidationRequest, DuplicateGroup,
-    DuplicateMatchMode, RecordingEvidence, RecordingIdentity, Track, TrackId, TrackRelativePath,
+    DuplicateArtworkQuality, DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode,
+    RecordingEvidence, RecordingIdentity, Track, TrackId, TrackRelativePath,
     VerifiedDuplicateMerge, duplicate_groups, highest_quality_duplicate_artwork,
     plan_duplicate_consolidation,
 };
@@ -40,7 +40,7 @@ use crate::{
             remove_regular_file_matching_capability,
         },
     },
-    metadata_writer::{VerifiedDuplicateBatchResult, metadata_mirror},
+    metadata_writer::VerifiedDuplicateBatchResult,
     notifications::{runtime_error_text, verified_duplicate_progress_text},
     recording_evidence::{RecordingIdentityCache, WaveformRecordingEvidence},
 };
@@ -646,26 +646,19 @@ fn run_pre_commit(
         artwork.is_some(),
     )
     .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    let change = metadata_mirror(&preliminary.survivor.metadata);
-    // Mirroring deliberately leaves non-user BPM/key tags unchanged. Verify
-    // the source tags with the actual write applied, while retaining the
-    // separately selected library metadata in SQLite.
-    let mut expected_tags = metadata_service
+    let staged = metadata_service
         .read_persisted_tags(&stage_path)
-        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    expected_tags.metadata.apply_change(&change);
-    metadata_service
-        .write_metadata(&stage_path, change)
-        .and_then(|()| metadata_service.write_rating(&stage_path, preliminary.survivor.rating))
-        .and_then(|()| metadata_service.write_artwork(&stage_path, artwork.clone()))
-        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    verify_staged_tags(
+        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?
+        .metadata;
+    crate::staged_tags::mirror_onto_staged_file(
         metadata_service,
         &stage_path,
-        &expected_tags.metadata,
+        &staged,
+        &preliminary.survivor.metadata,
         preliminary.survivor.rating,
         artwork,
-    )?;
+    )
+    .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
 
     let stage = open_regular_file(&stage_path)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
@@ -932,56 +925,6 @@ fn replace_original_with_stage(
 ) -> ApplicationRuntimeResult<()> {
     remove_matching_file(original, original_capability)?;
     create_link(stage, original)
-}
-
-fn verify_staged_tags(
-    service: &dyn MetadataService,
-    stage: &Path,
-    expected_metadata: &sustain_domain::TrackMetadata,
-    expected_rating: sustain_domain::Rating,
-    artwork: &Option<Vec<u8>>,
-) -> ApplicationRuntimeResult<()> {
-    let written = service
-        .read_persisted_tags(stage)
-        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    let written_artwork = service
-        .read_artwork(stage)
-        .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
-    if !editable_metadata_matches(&written.metadata, expected_metadata)
-        || written.rating != expected_rating
-        || &written_artwork != artwork
-    {
-        return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
-    }
-    Ok(())
-}
-
-/// Whether two readings of a track carry the same editable metadata.
-///
-/// BPM compares in whole beats: ID3 `TBPM` and MP4 `tmpo` hold no
-/// fraction, so a tag written from a fractional library tempo reads back
-/// as its nearest whole beat.
-pub(crate) fn editable_metadata_matches(
-    left: &sustain_domain::TrackMetadata,
-    right: &sustain_domain::TrackMetadata,
-) -> bool {
-    left.title == right.title
-        && left.artist == right.artist
-        && left.album == right.album
-        && left.album_artist == right.album_artist
-        && left.composer == right.composer
-        && left.grouping == right.grouping
-        && left.genre == right.genre
-        && left.track_number == right.track_number
-        && left.track_total == right.track_total
-        && left.disc_number == right.disc_number
-        && left.disc_total == right.disc_total
-        && left.year == right.year
-        && left.compilation == right.compilation
-        && left.bpm.map(Bpm::whole) == right.bpm.map(Bpm::whole)
-        && left.key == right.key
-        && left.comments == right.comments
-        && left.lyrics == right.lyrics
 }
 
 fn rollback_pre_commit(library_root: &Path, journal: &Journal) -> ApplicationRuntimeResult<()> {
@@ -1382,31 +1325,14 @@ mod tests {
 
     use std::{fs, path::Path, time::SystemTime};
 
-    use sustain_domain::{PlayStatistics, Rating, TrackLocation, TrackMetadata, TrackRelativePath};
+    use sustain_domain::{
+        Bpm, PlayStatistics, Rating, TrackLocation, TrackMetadata, TrackRelativePath,
+    };
     use sustain_library_store::{LibraryStore, SqliteLibraryStore};
     use sustain_metadata::{InitialTags, MetadataError, MetadataResult};
 
     use super::*;
     use crate::test_waveforms::{analyse, music};
-
-    #[test]
-    fn editable_metadata_matches_compares_bpm_in_whole_beats() {
-        let with_bpm = |bpm| TrackMetadata {
-            bpm,
-            ..TrackMetadata::default()
-        };
-        let library = with_bpm(Bpm::from_hundredths(11_886));
-        // An ID3 or MP4 tag written from 118.86 reads back as 119.
-        assert!(editable_metadata_matches(
-            &with_bpm(Bpm::from_whole(119)),
-            &library
-        ));
-        assert!(!editable_metadata_matches(
-            &with_bpm(Bpm::from_whole(118)),
-            &library
-        ));
-        assert!(!editable_metadata_matches(&with_bpm(None), &library));
-    }
 
     #[test]
     fn consolidation_verifies_preserved_and_mirrored_analysis_tags() {

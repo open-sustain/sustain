@@ -730,14 +730,32 @@ fn copy_metadata_field(
     source: &TrackMetadata,
     field: DuplicateMetadataField,
 ) {
+    // A name and the sort value it files under are one choice: taking a
+    // copy's title with the survivor's sort title would file "An Apple"
+    // under "Zebra (The)".
     match field {
-        DuplicateMetadataField::Title => target.title.clone_from(&source.title),
-        DuplicateMetadataField::Artist => target.artist.clone_from(&source.artist),
-        DuplicateMetadataField::Album => target.album.clone_from(&source.album),
+        DuplicateMetadataField::Title => {
+            target.title.clone_from(&source.title);
+            target.title_sort.clone_from(&source.title_sort);
+        }
+        DuplicateMetadataField::Artist => {
+            target.artist.clone_from(&source.artist);
+            target.artist_sort.clone_from(&source.artist_sort);
+        }
+        DuplicateMetadataField::Album => {
+            target.album.clone_from(&source.album);
+            target.album_sort.clone_from(&source.album_sort);
+        }
         DuplicateMetadataField::AlbumArtist => {
             target.album_artist.clone_from(&source.album_artist);
+            target
+                .album_artist_sort
+                .clone_from(&source.album_artist_sort);
         }
-        DuplicateMetadataField::Composer => target.composer.clone_from(&source.composer),
+        DuplicateMetadataField::Composer => {
+            target.composer.clone_from(&source.composer);
+            target.composer_sort.clone_from(&source.composer_sort);
+        }
         DuplicateMetadataField::Grouping => target.grouping.clone_from(&source.grouping),
         DuplicateMetadataField::Genre => target.genre.clone_from(&source.genre),
         DuplicateMetadataField::TrackNumber => target.track_number = source.track_number,
@@ -1211,6 +1229,43 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![track_id(1), track_id(3)]
         );
+    }
+
+    #[test]
+    fn a_chosen_name_brings_the_sort_value_it_files_under() {
+        let mut kept_audio = track(1, "The Kinks", "The Zebra", "The Album", 200);
+        kept_audio.metadata.fill_missing_generated_sort_fields();
+        let mut chosen = track(2, "Ray Davies", "An Apple", "Arthur", 200);
+        chosen.metadata.composer = Some("The Composer".to_owned());
+        chosen.metadata.album_artist = Some("A Band".to_owned());
+        chosen.metadata.fill_missing_generated_sort_fields();
+        chosen.metadata.artist_sort = Some("Davies, Ray".to_owned());
+        let expected = chosen.metadata.clone();
+
+        let plan = plan_duplicate_consolidation(
+            &[kept_audio, chosen],
+            &[],
+            &DuplicateConsolidationRequest {
+                track_ids: vec![track_id(1), track_id(2)],
+                audio_track_id: track_id(1),
+                metadata: DuplicateMetadataSelection::from_track(track_id(2)),
+                artwork_track_id: track_id(1),
+                rating_track_id: track_id(1),
+            },
+            1234,
+            false,
+        )
+        .expect("plan");
+
+        let merged = &plan.survivor.metadata;
+        assert_eq!(
+            merged.title_sort, expected.title_sort,
+            "An Apple files under Apple"
+        );
+        assert_eq!(merged.artist_sort.as_deref(), Some("Davies, Ray"));
+        assert_eq!(merged.album_sort, expected.album_sort);
+        assert_eq!(merged.album_artist_sort, expected.album_artist_sort);
+        assert_eq!(merged.composer_sort, expected.composer_sort);
     }
 
     #[test]

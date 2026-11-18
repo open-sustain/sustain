@@ -817,6 +817,88 @@ mod tests {
     }
 
     #[test]
+    fn folder_layout_keeps_a_disambiguated_playlist_folder_within_its_cap() {
+        let tracks = vec![
+            named_track(1, "One", "A", "B"),
+            named_track(2, "Two", "A", "B"),
+        ];
+        let name = "Late Night Motorway Driving Mix Vol";
+        let playlists = vec![
+            SyncInputPlaylist {
+                name: name.into(),
+                track_indices: vec![0],
+            },
+            SyncInputPlaylist {
+                name: name.into(),
+                track_indices: vec![1],
+            },
+        ];
+        let req = plan_request(
+            tracks,
+            DeviceLayout::FolderPerPlaylist,
+            playlists,
+            Vec::new(),
+        );
+        let folders: Vec<String> = placement_paths(&req)
+            .iter()
+            .map(|path| path.split('/').next().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(
+            folders,
+            [
+                "Late Night Motorway Driving Mix",
+                "Late Night Motorway Driving (2)"
+            ]
+        );
+        assert!(folders.iter().all(|folder| folder.chars().count() <= 32));
+    }
+
+    #[test]
+    fn a_disambiguated_playlist_file_keeps_its_extension_within_the_cap() {
+        let fx = fixture(1);
+        let mut req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        let name = "N".repeat(60);
+        req.playlists = vec![
+            SyncInputPlaylist {
+                name: name.clone(),
+                track_indices: vec![0],
+            },
+            SyncInputPlaylist {
+                name,
+                track_indices: vec![0],
+            },
+        ];
+        let files: Vec<String> = crate::layout::playlist_files(&req)
+            .expect("playlist files")
+            .into_iter()
+            .map(|(path, _playlist)| path.as_str().to_owned())
+            .collect();
+        assert_eq!(files.len(), 2);
+        assert_ne!(files[0], files[1]);
+        for file in &files {
+            assert!(file.ends_with(".m3u8"), "{file}");
+            assert!(file.chars().count() <= 60, "{file}");
+        }
+    }
+
+    #[test]
+    fn tree_layout_fits_a_long_multibyte_title_in_one_device_name() {
+        // 100 kanji are 300 UTF-8 bytes: within the 120-character cap,
+        // past the 255 bytes a Linux filesystem takes in one name.
+        let mut fx = fixture(1);
+        fx.tracks[0].title = "夜".repeat(100);
+        let req = request(&fx, DeviceLayout::M3u, Vec::new(), false);
+        let paths = placement_paths(&req);
+        let leaf = paths[0].rsplit('/').next().unwrap_or_default();
+        assert!(leaf.len() <= 255, "{} bytes: {leaf}", leaf.len());
+        assert!(leaf.ends_with(".mp3"));
+
+        let outcome = run(fx.dest.path(), &req);
+        assert!(outcome.copy_failures.is_empty());
+        assert!(fx.dest.path().join(&paths[0]).is_file());
+    }
+
+    #[test]
     fn folder_layout_dedups_a_repeated_playlist_entry() {
         // The playlist lists the same track twice and the prior manifest
         // already placed it: without dedup both entries resolve to the same

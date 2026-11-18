@@ -117,6 +117,7 @@ mod playlists;
 mod recording_evidence;
 mod smart_playlists;
 pub mod smart_shuffle_scheduler;
+mod staged_tags;
 #[cfg(test)]
 mod test_store;
 #[cfg(test)]
