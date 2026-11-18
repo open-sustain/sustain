@@ -41,7 +41,8 @@ pub struct CorpusExamples {
     pub choices: Vec<Choice>,
     /// Scored tracks whose downbeat the shipped weights already pick.
     pub shipped_right: usize,
-    /// Tracks that taught nothing: no file, no grid ground truth, no grid,
+    /// Tracks that taught nothing: no file, no grid ground truth, audio
+    /// that does not decode, no grid,
     /// a grid off the ground truth's beats, or bars that do not hold.
     pub skipped: usize,
 }
@@ -86,7 +87,10 @@ pub fn collect(manifest: &Manifest, mut progress: impl FnMut(&str)) -> CorpusExa
             .map(Duration::from_secs_f64);
         let known = entry.path.as_ref().zip(entry.grid_reference(duration));
         let scored = known.and_then(|(path, reference)| {
-            let (grid, bars) = Analyzer::new(path.clone(), options, duration).bar_positions()?;
+            let (grid, bars) = Analyzer::new(path.clone(), options, duration)
+                .bar_positions()
+                .ok()
+                .flatten()?;
             // Numbered 1 on its first beat, the grid's bar starts `offset`
             // beats after the ground truth's downbeat, which therefore
             // falls `offset` beats before the first beat: `4 - offset`

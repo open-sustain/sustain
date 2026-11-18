@@ -119,7 +119,8 @@ impl LabelledTrack {
 pub struct LearnReport {
     /// Tracks whose chroma the weights were learned from.
     pub learned: usize,
-    /// Tracks without a readable key label, a file path, or tonal chroma.
+    /// Tracks without a readable key label, a file path, decodable audio,
+    /// or tonal chroma.
     pub skipped: usize,
 }
 
@@ -152,7 +153,10 @@ fn log_shares(path: &Path, duration_secs: Option<f64>) -> Option<[f32; 12]> {
     let hint = duration_secs
         .filter(|secs| secs.is_finite() && *secs > 0.0)
         .map(Duration::from_secs_f64);
-    Analyzer::new(path.to_path_buf(), AnalysisOptions::default(), hint).key_log_shares()
+    Analyzer::new(path.to_path_buf(), AnalysisOptions::default(), hint)
+        .key_log_shares()
+        .ok()
+        .flatten()
 }
 
 impl KeyWeights {

@@ -1387,17 +1387,10 @@ impl ApplicationRuntime {
         // `analysis_scheduler::AnalysisScheduler::start` directly.
         let analyzer: analysis_scheduler::AnalyzerFn =
             Arc::new(|path, capabilities, options, duration| {
-                // Surface a hard error before constructing the lazy
-                // analyzer so the supervisor can route the track to
-                // `record_analysis_attempt_failure` instead of
-                // silently stamping all-None.
-                let _ = std::fs::File::open(path).map_err(|source| {
-                    sustain_analysis::AnalysisError::OpenFailed {
-                        path: path.display().to_string(),
-                        source,
-                    }
-                })?;
-
+                // A band that cannot open or decode the file answers
+                // `Err`, which `?` hands to the supervisor, so an
+                // undecodable track is recorded as a failed attempt
+                // rather than an analysed track with nothing found.
                 let analyzer =
                     sustain_analysis::Analyzer::new(path.to_path_buf(), options, duration);
 
@@ -1415,9 +1408,9 @@ impl ApplicationRuntime {
                     let waveform = if analyzer.is_long_track() {
                         None
                     } else {
-                        analyzer.waveform()
+                        Some(analyzer.waveform()?)
                     };
-                    let acoustics = analyzer.acoustics();
+                    let acoustics = analyzer.acoustics()?;
                     (waveform, acoustics)
                 } else {
                     (None, None)
@@ -1429,12 +1422,12 @@ impl ApplicationRuntime {
                 // `audio ⇒ bpm ∧ key` settings invariant, an `audio` run
                 // always arrives here with both requested too.
                 let tempo = if capabilities.bpm {
-                    analyzer.tempo()
+                    analyzer.tempo()?
                 } else {
                     None
                 };
                 let key = if capabilities.key {
-                    analyzer.key()
+                    analyzer.key()?
                 } else {
                     None
                 };

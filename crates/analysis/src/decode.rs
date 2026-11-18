@@ -92,11 +92,11 @@ fn decode_region(path: &Path, region: Region) -> Result<DecodedAudio, AnalysisEr
 
     let file = std::fs::File::open(path).map_err(|source| AnalysisError::OpenFailed {
         path: path_label.clone(),
-        source,
+        source: std::sync::Arc::new(source),
     })?;
     let audio_bytes = AudioBytes::new(file).map_err(|source| AnalysisError::OpenFailed {
         path: path_label.clone(),
-        source,
+        source: std::sync::Arc::new(source),
     })?;
     let media_source = MediaSourceStream::new(Box::new(audio_bytes), Default::default());
 
@@ -264,6 +264,13 @@ fn collect_samples(
     // Reused across packets so the interleaved copy does not reallocate
     // every iteration.
     let mut interleaved: Vec<f32> = Vec::new();
+    // Whether the decoder rejected a packet of the track, and whether it
+    // accepted one. A stream the decoder rejects every packet of holds no
+    // audio it can read: a failure, not a silent track. A packet it
+    // accepts counts even when it yields no frames — gapless trimming
+    // drops a whole packet of encoder delay or padding by design.
+    let mut rejected_any = false;
+    let mut accepted_any = false;
 
     loop {
         let packet = match format.next_packet() {
@@ -290,7 +297,10 @@ fn collect_samples(
             // occasionally have a corrupted frame in the middle, and the
             // first packet after a seek can also surface as a recoverable
             // decode error.
-            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(SymphoniaError::DecodeError(_)) => {
+                rejected_any = true;
+                continue;
+            }
             Err(err) => {
                 return Err(AnalysisError::DecoderError {
                     path: path_label.to_string(),
@@ -298,6 +308,8 @@ fn collect_samples(
                 });
             }
         };
+
+        accepted_any = true;
 
         // 0.6 removed `SampleBuffer`; copy the decoded audio into an
         // interleaved `f32` scratch buffer via the audio-buffer API.
@@ -338,6 +350,12 @@ fn collect_samples(
         }
     }
 
+    if rejected_any && !accepted_any {
+        return Err(AnalysisError::DecoderError {
+            path: path_label.to_string(),
+            message: "the decoder rejected every packet of the audio track".to_string(),
+        });
+    }
     Ok(samples)
 }
 
@@ -473,6 +491,34 @@ mod tests {
             .fold(0.0_f32, |peak, s| peak.max(s.abs()));
         assert!(peak > 0.1, "{name}: decoded silence");
         audio
+    }
+
+    #[test]
+    fn a_stream_whose_every_packet_is_undecodable_fails_to_decode() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("sine-alac.m4a");
+        let mut bytes = std::fs::read(fixture).expect("read the fixture");
+        let mdat = bytes
+            .windows(4)
+            .position(|window| window == b"mdat")
+            .expect("the fixture has an mdat box");
+        let size = u32::from_be_bytes(bytes[mdat - 4..mdat].try_into().expect("box size"));
+        let payload = mdat + 4..mdat - 4 + usize::try_from(size).expect("size");
+        // A payload of 0x55 bytes is one the ALAC decoder rejects packet
+        // by packet (a recoverable decode error each time), rather than
+        // failing outright or reading as an empty frame.
+        for byte in &mut bytes[payload] {
+            *byte = 0x55;
+        }
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("corrupt-alac.m4a");
+        std::fs::write(&path, bytes).expect("write the corrupted copy");
+
+        assert!(matches!(
+            decode_full(&path),
+            Err(crate::AnalysisError::DecoderError { .. })
+        ));
     }
 
     #[test]

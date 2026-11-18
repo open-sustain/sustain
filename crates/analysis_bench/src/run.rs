@@ -18,7 +18,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use sustain_analysis::{AcousticFeatures, AnalysisOptions, Analyzer, WaveformSegments};
+use sustain_analysis::{
+    AcousticFeatures, AnalysisError, AnalysisOptions, Analyzer, WaveformSegments,
+};
 
 use crate::manifest::{Manifest, Options, Task, TrackEntry};
 use crate::metrics::{self, DEFAULT_BPM_TOLERANCE, GridAgreement, KeyCategory};
@@ -123,7 +125,7 @@ pub struct TrackResult {
     /// Per-band wall-clock timing. Omitted in reproducible mode.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub timings: Option<BandTimings>,
-    /// Set when the audio source could not be opened.
+    /// Set when the audio source could not be produced, opened or decoded.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub error: Option<String>,
 }
@@ -284,7 +286,8 @@ pub struct BandTimings {
 pub struct Summary {
     /// Number of tracks in the run.
     pub track_count: usize,
-    /// Number of tracks whose source failed to open.
+    /// Number of tracks whose source could not be produced, opened or
+    /// decoded.
     pub error_count: usize,
     /// BPM aggregate, present when any track carried BPM ground truth.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -417,42 +420,26 @@ pub fn run_manifest(manifest: &Manifest, fixtures_dir: &Path, reproducible: bool
     }
 }
 
-/// Analyze a single track entry.
-fn run_track(
-    entry: &TrackEntry,
-    options: &Options,
-    analysis_options: AnalysisOptions,
-    fixtures_dir: &Path,
-    reproducible: bool,
-) -> TrackResult {
-    let tasks = entry.effective_tasks(options);
-    let (path, source, duration_hint) = match resolve_source(entry, fixtures_dir) {
-        Ok(resolved) => resolved,
-        Err(message) => {
-            return TrackResult {
-                id: entry.id.clone(),
-                source: "error".to_string(),
-                tasks,
-                bpm: None,
-                beat_grid: None,
-                key: None,
-                acoustics: None,
-                waveform: None,
-                bpm_score: None,
-                grid_score: None,
-                key_score: None,
-                timings: None,
-                error: Some(message),
-            };
+/// Why `error` stopped the analysis, without the file path its own
+/// message carries: reports name a track by its manifest id only, so a
+/// private corpus stays anonymous.
+fn anonymous_reason(error: &AnalysisError) -> String {
+    match error {
+        AnalysisError::OpenFailed { source, .. } => format!("open failed: {source}"),
+        AnalysisError::DecoderError { message, .. } => format!("decode failed: {message}"),
+        AnalysisError::NoAudioTrack { .. } => "no usable audio track".to_string(),
+        AnalysisError::TooShort { samples, .. } => {
+            format!("too short for analysis ({samples} samples)")
         }
-    };
+        AnalysisError::DspFailed { message, .. } => format!("DSP failed: {message}"),
+    }
+}
 
-    // A real audio source that cannot even be opened is a hard failure;
-    // record it rather than silently reporting empty bands.
-    if entry.path.is_some()
-        && let Err(err) = std::fs::File::open(&path)
-    {
-        return TrackResult {
+impl TrackResult {
+    /// The result of an entry whose audio could not be produced, opened
+    /// or decoded: no bands, only the reason.
+    fn failed(entry: &TrackEntry, source: String, tasks: Vec<Task>, error: String) -> Self {
+        Self {
             id: entry.id.clone(),
             source,
             tasks,
@@ -465,8 +452,33 @@ fn run_track(
             grid_score: None,
             key_score: None,
             timings: None,
-            error: Some(format!("open failed: {err}")),
-        };
+            error: Some(error),
+        }
+    }
+}
+
+/// Analyze a single track entry.
+fn run_track(
+    entry: &TrackEntry,
+    options: &Options,
+    analysis_options: AnalysisOptions,
+    fixtures_dir: &Path,
+    reproducible: bool,
+) -> TrackResult {
+    let tasks = entry.effective_tasks(options);
+    let (path, source, duration_hint) = match resolve_source(entry, fixtures_dir) {
+        Ok(resolved) => resolved,
+        Err(message) => {
+            return TrackResult::failed(entry, "error".to_string(), tasks, message);
+        }
+    };
+
+    // A real audio source that cannot even be opened is a hard failure,
+    // whichever bands the entry asks for.
+    if entry.path.is_some()
+        && let Err(err) = std::fs::File::open(&path)
+    {
+        return TrackResult::failed(entry, source, tasks, format!("open failed: {err}"));
     }
 
     let analyzer = Analyzer::new(path, analysis_options, duration_hint);
@@ -491,19 +503,17 @@ fn run_track(
             continue;
         }
         let started = Instant::now();
-        match task {
-            Task::Waveform => {
-                waveform = analyzer
-                    .waveform()
-                    .map(|tiers| WaveformSummary::of(&tiers.preview, &tiers.detail));
-            }
-            Task::Acoustics => {
-                acoustics = analyzer
-                    .acoustics()
-                    .map(|features| Acoustics::from(&features));
-            }
-            Task::Bpm => {
-                if let Some(tempo) = analyzer.tempo() {
+        // A source that cannot be decoded is a hard failure too; record
+        // it rather than silently reporting empty bands.
+        let ran = match task {
+            Task::Waveform => analyzer.waveform().map(|tiers| {
+                waveform = Some(WaveformSummary::of(&tiers.preview, &tiers.detail));
+            }),
+            Task::Acoustics => analyzer.acoustics().map(|features| {
+                acoustics = features.map(|features| Acoustics::from(&features));
+            }),
+            Task::Bpm => analyzer.tempo().map(|tempo| {
+                if let Some(tempo) = tempo {
                     bpm = Some(tempo.bpm.as_f64());
                     beat_grid = tempo.beat_grid.map(|grid| GridOutput {
                         bpm: grid.tempo().as_f64(),
@@ -511,10 +521,13 @@ fn run_track(
                         first_beat_number: grid.first_beat_number(),
                     });
                 }
-            }
-            Task::Key => {
-                key = analyzer.key().map(|k| k.short_code().to_string());
-            }
+            }),
+            Task::Key => analyzer.key().map(|detected| {
+                key = detected.map(|k| k.short_code().to_string());
+            }),
+        };
+        if let Err(error) = ran {
+            return TrackResult::failed(entry, source, tasks, anonymous_reason(&error));
         }
         let elapsed = millis(started.elapsed());
         timings.total_ms += elapsed;
@@ -893,7 +906,7 @@ fn git_tree_dirty() -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compatible_rates, score_bpm, score_key};
+    use super::{AnalysisError, anonymous_reason, compatible_rates, score_bpm, score_key};
     use crate::metrics::KeyCategory;
     use std::collections::BTreeMap;
 
@@ -915,6 +928,35 @@ mod tests {
         assert_eq!(loose, 70.0);
         // Empty / zero-scored is finite zero, not a divide-by-zero.
         assert_eq!(compatible_rates(&BTreeMap::new(), 0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_failure_reason_never_names_the_private_file() {
+        let path = "/home/someone/private-corpus/unreleased.flac".to_string();
+        let errors = [
+            AnalysisError::OpenFailed {
+                path: path.clone(),
+                source: std::sync::Arc::new(std::io::Error::from(std::io::ErrorKind::NotFound)),
+            },
+            AnalysisError::DecoderError {
+                path: path.clone(),
+                message: "probe failed: unsupported format".to_string(),
+            },
+            AnalysisError::NoAudioTrack { path: path.clone() },
+            AnalysisError::TooShort {
+                path: path.clone(),
+                samples: 3,
+            },
+            AnalysisError::DspFailed {
+                path: path.clone(),
+                message: "stft".to_string(),
+            },
+        ];
+        for error in &errors {
+            let reason = anonymous_reason(error);
+            assert!(!reason.contains("private-corpus"), "{reason}");
+            assert!(!reason.is_empty());
+        }
     }
 
     #[test]

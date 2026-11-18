@@ -1364,14 +1364,64 @@ fn imported_tracks_and_a_cleared_bpm_wake_an_idle_analysis_sweep() {
     std::fs::remove_dir_all(external_root).expect("remove external root");
 }
 
+#[test]
+fn a_track_with_no_decodable_audio_is_recorded_as_a_failed_analysis() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_paths = write_numbered_flac_sources(&external_root, 1);
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut settings = UserSettings::with_library_path(Some(library_root.clone()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    settings.analysis.bpm = true;
+    settings.analysis.key = true;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store, Arc::new(TestMetadataService))
+            .expect("library services initialize");
+    let (sink, progress) = async_channel::unbounded();
+    runtime.set_analysis_progress_sink(sink);
+    runtime
+        .start_analysis_scheduler()
+        .expect("start analysis scheduler");
+    assert_eq!(next_analysis_sweep_outcome(&progress), (0, 0));
+
+    let task = runtime
+        .prepare_library_import(source_paths)
+        .expect("prepare import");
+    let result = run_library_import_task(task).expect("import completes");
+    runtime.apply_library_import_result(result);
+    assert_eq!(
+        next_analysis_sweep_outcome(&progress),
+        (0, 1),
+        "an undecodable file is a failed analysis, not one that found nothing"
+    );
+
+    runtime.shutdown_analysis_scheduler();
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
 /// Wait for the analysis sweep to go idle and return how many tracks
 /// its run attempted. The fixture files hold no decodable audio, so an
 /// attempt may land as completed or failed; both count.
 fn next_analysis_sweep_idle(progress: &async_channel::Receiver<crate::AnalysisProgress>) -> u32 {
+    let (completed, failed) = next_analysis_sweep_outcome(progress);
+    completed + failed
+}
+
+/// Wait for the analysis sweep to go idle and return how many of its
+/// run's tracks were analysed and how many failed.
+fn next_analysis_sweep_outcome(
+    progress: &async_channel::Receiver<crate::AnalysisProgress>,
+) -> (u32, u32) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         match progress.try_recv() {
-            Ok(crate::AnalysisProgress::Idle { completed, failed }) => return completed + failed,
+            Ok(crate::AnalysisProgress::Idle { completed, failed }) => return (completed, failed),
             Ok(crate::AnalysisProgress::Tick { .. }) => {}
             Ok(crate::AnalysisProgress::PersistenceError { detail }) => {
                 panic!("analysis sweep failed to persist: {detail}")

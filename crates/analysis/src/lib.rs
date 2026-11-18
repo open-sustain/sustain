@@ -393,18 +393,18 @@ pub struct Tempo {
 }
 
 /// Failure modes produced by the DSP pipeline. The per-band
-/// [`Analyzer`] methods collapse failures to `None` so the caller can
-/// decide whether a partial result still counts as an attempt; the
-/// scheduler surfaces the typed error from its own file-open probe
-/// before constructing the Analyzer, so this enum is what reaches
-/// `record_analysis_attempt_failure`.
-#[derive(Debug, thiserror::Error)]
+/// [`Analyzer`] methods return one when the audio they read cannot be
+/// opened or decoded, so a caller tells an undecodable file from one that
+/// decoded with nothing to detect; it is what reaches
+/// `record_analysis_attempt_failure`. `Clone`, because one failed decode
+/// answers every band that reads it.
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum AnalysisError {
     #[error("failed to open audio file {path}: {source}")]
     OpenFailed {
         path: String,
         #[source]
-        source: std::io::Error,
+        source: std::sync::Arc<std::io::Error>,
     },
     #[error("audio decoder error for {path}: {message}")]
     DecoderError { path: String, message: String },
@@ -570,27 +570,29 @@ const LOUDNESS_RANGE_GATE_LU: f32 = 20.0;
 /// a preliminary probe. When it is absent the analyzer treats the track
 /// as normal and windows from the start (centering needs a length).
 ///
-/// Failures inside any band collapse to `None`; the caller decides
-/// how to record the attempt. Errors that prevent any band from
-/// producing a result (file does not exist, decoder rejects the
-/// container) surface as `None` from every method — semantically
-/// "we tried, nothing came out". Callers that need a strict
-/// open-fail signal (the scheduler does, so it can route the track
-/// to `record_analysis_attempt_failure`) probe the file with
-/// `std::fs::File::open` before constructing the analyzer.
+/// Every band answers `Err` when the audio it reads cannot be opened or
+/// decoded (the file is gone, the decoder rejects the container, or it
+/// rejects every packet of the audio track). Otherwise it answers what it measured:
+/// [`Self::waveform`] always has tiers, and the other bands answer
+/// `Ok(None)` when the audio holds nothing to measure (too short,
+/// silent, no confident estimate). The two are different outcomes: an
+/// undecodable track is a failed analysis, a decoded track with no
+/// detectable tempo is an analysed one.
 pub struct Analyzer {
     path: PathBuf,
     options: AnalysisOptions,
     duration_hint: Option<Duration>,
     /// Whole-track decode (waveform; acoustics on normal-length tracks).
-    full_audio: OnceCell<Option<DecodedAudio>>,
+    full_audio: OnceCell<Result<DecodedAudio, AnalysisError>>,
     /// Centered acoustics window — only populated on long tracks; normal
-    /// tracks route acoustics through `full_audio`.
-    acoustics_window: OnceCell<Option<DecodedAudio>>,
+    /// tracks route acoustics through `full_audio`. `None` when it
+    /// decoded too short to analyse.
+    acoustics_window: OnceCell<Result<Option<DecodedAudio>, AnalysisError>>,
     /// Centered BPM/key window (a slice of a larger region when one is
     /// in memory, otherwise its own decode). Shared by BPM and key —
     /// they analyze the same audio region; only their spectrograms differ.
-    bpmkey_audio: OnceCell<Option<DecodedAudio>>,
+    /// `None` when it decoded too short to analyse.
+    bpmkey_audio: OnceCell<Result<Option<DecodedAudio>, AnalysisError>>,
     /// Spectrogram for the tempogram, computed at `STFT_FRAME_SIZE`.
     tempo_stft: OnceCell<Option<Vec<Vec<f32>>>>,
 }
@@ -627,29 +629,30 @@ impl Analyzer {
 
     /// Tempogram tempo estimate of the centered BPM/key window, to the
     /// beat, after octave normalization to `[options.min_bpm,
-    /// options.max_bpm]`. Returns `None` if the file cannot be decoded,
-    /// is too short for analysis, or the DSP engine cannot produce a
-    /// confident estimate.
-    fn tempogram_bpm(&self) -> Option<f64> {
-        let stft = self.tempo_stft()?;
-        let window = self.bpmkey_audio()?;
-        let estimate = estimate_bpm_tempogram(
+    /// options.max_bpm]`. `Ok(None)` if the window is too short for
+    /// analysis or the DSP engine cannot produce a confident estimate.
+    fn tempogram_bpm(&self) -> Result<Option<f64>, AnalysisError> {
+        let (Some(stft), Some(window)) = (self.tempo_stft()?, self.bpmkey_audio()?) else {
+            return Ok(None);
+        };
+        let Ok(estimate) = estimate_bpm_tempogram(
             stft,
             window.sample_rate,
             u32::try_from(STFT_HOP_SIZE).unwrap_or(u32::MAX),
             self.options.min_bpm,
             self.options.max_bpm,
             TEMPOGRAM_BPM_RESOLUTION,
-        )
-        .ok()?;
+        ) else {
+            return Ok(None);
+        };
         if !(estimate.bpm > 0.0 && estimate.bpm.is_finite()) {
-            return None;
+            return Ok(None);
         }
-        Some(octave_normalize(
+        Ok(Some(octave_normalize(
             f64::from(estimate.bpm),
             f64::from(self.options.min_bpm),
             f64::from(self.options.max_bpm),
-        ))
+        )))
     }
 
     /// The track's tempo and, on a normal-length track, its beat grid.
@@ -664,110 +667,122 @@ impl Analyzer {
     /// the decode with [`Self::waveform`] and [`Self::acoustics`]). On a
     /// long track — a DJ mix, a classical movement, a podcast — no
     /// constant grid fits, so only the tempo is refined, over the
-    /// centered window. Returns `None` if the file cannot be decoded, is
-    /// too short, or has no measurable beat.
-    pub fn tempo(&self) -> Option<Tempo> {
-        let (onsets, bpm) = self.tracked_tempo()?;
-        let beat_grid = if self.is_long_track() {
-            None
-        } else {
-            onsets.beat_grid(bpm)
-        };
-        Some(Tempo { bpm, beat_grid })
+    /// centered window. `Ok(None)` if the audio is too short or has no
+    /// measurable beat.
+    pub fn tempo(&self) -> Result<Option<Tempo>, AnalysisError> {
+        Ok(self.tracked_tempo()?.map(|(onsets, bpm)| {
+            let beat_grid = if self.is_long_track() {
+                None
+            } else {
+                onsets.beat_grid(bpm)
+            };
+            Tempo { bpm, beat_grid }
+        }))
     }
 
     /// The beat grid [`Self::tempo`] places, and the evidence its bars
     /// were placed by, position 0 being the grid's first beat — what
     /// `analysis-bench learn-downbeat-weights` learns the downbeat model
-    /// from. `None` where [`Self::tempo`] has no grid, or the grid too
-    /// few beats to read bars from.
-    pub fn bar_positions(&self) -> Option<(BeatGrid, BarPositionFeatures)> {
+    /// from. `Ok(None)` where [`Self::tempo`] has no grid, or the grid
+    /// too few beats to read bars from.
+    pub fn bar_positions(&self) -> Result<Option<(BeatGrid, BarPositionFeatures)>, AnalysisError> {
         if self.is_long_track() {
-            return None;
+            return Ok(None);
         }
-        let (onsets, bpm) = self.tracked_tempo()?;
-        let (grid, bars) = onsets.beat_grid_and_bars(bpm)?;
-        Some((grid, bars?))
+        Ok(self.tracked_tempo()?.and_then(|(onsets, bpm)| {
+            let (grid, bars) = onsets.beat_grid_and_bars(bpm)?;
+            Some((grid, bars?))
+        }))
     }
 
     /// The onsets of the audio [`Self::tempo`] reads, and the tempo they
     /// settle on.
-    fn tracked_tempo(&self) -> Option<(beat_tracking::Onsets, Bpm)> {
+    fn tracked_tempo(&self) -> Result<Option<(beat_tracking::Onsets, Bpm)>, AnalysisError> {
         let (min_bpm, max_bpm) = (
             f64::from(self.options.min_bpm),
             f64::from(self.options.max_bpm),
         );
-        let region = if self.is_long_track() {
-            self.bpmkey_audio()?
-        } else {
-            self.full()?
+        let Some(region) = self.tempo_and_key_region()? else {
+            return Ok(None);
         };
-        let onsets = beat_tracking::Onsets::of(&region.samples, region.sample_rate)?;
-        let estimate = onsets.beat_level(self.tempogram_bpm()?, min_bpm, max_bpm);
-        let bpm = onsets.tempo_near(estimate, min_bpm, max_bpm)?;
-        Some((onsets, bpm))
+        let Some(onsets) = beat_tracking::Onsets::of(&region.samples, region.sample_rate) else {
+            return Ok(None);
+        };
+        let Some(tempogram_bpm) = self.tempogram_bpm()? else {
+            return Ok(None);
+        };
+        let estimate = onsets.beat_level(tempogram_bpm, min_bpm, max_bpm);
+        Ok(onsets
+            .tempo_near(estimate, min_bpm, max_bpm)
+            .map(|bpm| (onsets, bpm)))
     }
 
-    /// Detected musical key. Returns `None` if the file cannot be
-    /// decoded, the chroma extraction produces no usable frames, the
-    /// chroma holds no tonal evidence (silence), or the key detector's
-    /// best match does not correspond to one of
-    /// Sustain's 24 canonical [`MusicalKey`] variants.
-    pub fn key(&self) -> Option<MusicalKey> {
-        let chroma = self.key_chroma()?;
-        let detection = detect_key(&chroma, &KeyTemplates::new()).ok().flatten()?;
-        let label = stratum_key_label(&detection.key);
-        map_stratum_key(&label)
+    /// The audio the tempo and the key are read from: the whole track on
+    /// a normal-length track, the centered BPM/key window on a long one.
+    fn tempo_and_key_region(&self) -> Result<Option<&DecodedAudio>, AnalysisError> {
+        if self.is_long_track() {
+            self.bpmkey_audio()
+        } else {
+            self.full().map(Some)
+        }
+    }
+
+    /// Detected musical key. `Ok(None)` if the chroma extraction
+    /// produces no usable frames, the chroma holds no tonal evidence
+    /// (silence), or the key detector's best match does not correspond
+    /// to one of Sustain's 24 canonical [`MusicalKey`] variants.
+    pub fn key(&self) -> Result<Option<MusicalKey>, AnalysisError> {
+        Ok(self.key_chroma()?.and_then(|chroma| {
+            let detection = detect_key(&chroma, &KeyTemplates::new()).ok().flatten()?;
+            map_stratum_key(&stratum_key_label(&detection.key))
+        }))
     }
 
     /// What [`Self::key`] is read from: the log share each pitch class
     /// takes of the key window's chroma (see
-    /// [`sustain_dsp::pitch_class_log_shares`]). Returns `None` if the file
-    /// cannot be decoded, yields no chroma frames, or its chroma holds no
-    /// tonal evidence (silence).
+    /// [`sustain_dsp::pitch_class_log_shares`]). `Ok(None)` if the audio
+    /// yields no chroma frames, or its chroma holds no tonal evidence
+    /// (silence).
     ///
     /// The key templates are learned from these
     /// (`analysis-bench learn-key-weights`), so they match this front end
     /// rather than an idealized one.
-    pub fn key_log_shares(&self) -> Option<[f32; 12]> {
-        pitch_class_log_shares(&self.key_chroma()?).ok().flatten()
+    pub fn key_log_shares(&self) -> Result<Option<[f32; 12]>, AnalysisError> {
+        Ok(self
+            .key_chroma()?
+            .and_then(|chroma| pitch_class_log_shares(&chroma).ok().flatten()))
     }
 
     /// The pitch-class frames [`Self::key`] is read from: the HPCP of the
     /// harmonic part of the whole track, one 12-bin frame per hop, on a
     /// normal-length track, and of the centered BPM/key window on a long
-    /// one. Returns `None` if the file cannot be decoded or yields no
-    /// frames.
+    /// one. `Ok(None)` if the audio yields no frames.
     ///
     /// The whole track is read so the key does not depend on which section
     /// the middle two minutes fall in — a breakdown, a bridge, a long
     /// intro. It is read in segments of at most `KEY_SEGMENT_SECS`, each
     /// with its own spectrogram, so the working set stays that of one
     /// segment however long the track.
-    fn key_chroma(&self) -> Option<Vec<Vec<f32>>> {
-        let region = if self.is_long_track() {
-            self.bpmkey_audio()?
-        } else {
-            self.full()?
-        };
-        segmented_key_chroma(&region.samples, region.sample_rate)
+    fn key_chroma(&self) -> Result<Option<Vec<Vec<f32>>>, AnalysisError> {
+        Ok(self
+            .tempo_and_key_region()?
+            .and_then(|region| segmented_key_chroma(&region.samples, region.sample_rate)))
     }
 
-    /// Both waveform tiers (preview + detail). Returns `None` if the
-    /// file cannot be decoded; an empty-but-valid pair (no segments)
-    /// is still returned as `Some(_)` so the caller can record the
-    /// attempt and persist a zero-length BLOB rather than treating
-    /// "silent track" as a failure.
-    pub fn waveform(&self) -> Option<WaveformTiers> {
+    /// Both waveform tiers (preview + detail) of the whole track. Any
+    /// track that decodes has them, however short or silent; a track that
+    /// decodes to no samples at all answers an empty-but-valid pair (no
+    /// segments), recorded as analysed rather than as a failure.
+    pub fn waveform(&self) -> Result<WaveformTiers, AnalysisError> {
         let full = self.full()?;
-        Some(waveform::build_tiers(&full.samples, full.sample_rate))
+        Ok(waveform::build_tiers(&full.samples, full.sample_rate))
     }
 
     /// Perceptual acoustic features for Smart Shuffle — loudness
     /// (integrated, short-term max, range), onset density, timbral
-    /// band ratios + low-band variation, and tonalness. Returns `None`
-    /// if the file cannot be decoded, is too short, or carries no
-    /// measurable loudness (effectively silent).
+    /// band ratios + low-band variation, and tonalness. `Ok(None)` if the
+    /// audio is too short or carries no measurable loudness (effectively
+    /// silent).
     ///
     /// On a **normal-length** track this measures the whole track (the
     /// loudness guard keys off the short-term *max*, and a loud finale
@@ -780,71 +795,38 @@ impl Analyzer {
     /// the body of the piece. The STFT for the spectral features is
     /// computed here over the region's samples (acoustics is its only
     /// consumer, so it is not cached).
-    pub fn acoustics(&self) -> Option<AcousticFeatures> {
-        let region = self.acoustics_audio()?;
-        let sample_rate = region.sample_rate;
-        let samples = &region.samples;
-        if samples.len() < MIN_SAMPLES_FOR_ANALYSIS {
-            return None;
-        }
-        let stft = compute_stft(samples, STFT_FRAME_SIZE, STFT_HOP_SIZE).ok()?;
-        if stft.is_empty() {
-            return None;
-        }
-
-        let integrated_lufs = measure_integrated_lufs(samples, sample_rate)?;
-        let short_term = measure_short_term_lufs(samples, sample_rate);
-        let short_term_lufs_max = short_term.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        // No measurable short-term window → effectively silent, no
-        // useful loudness signal to offer the picker.
-        if !short_term_lufs_max.is_finite() {
-            return None;
-        }
-        let loudness_range_lu = loudness_range(&short_term);
-
-        let duration_secs = samples.len() as f32 / sample_rate as f32;
-        let onset_rate_hz = onset_density(&stft, duration_secs);
-
-        let bands = band_energies(&stft, sample_rate);
-        let tonalness = mean_tonalness(&stft);
-
-        Some(AcousticFeatures {
-            integrated_lufs,
-            short_term_lufs_max,
-            loudness_range_lu,
-            onset_rate_hz,
-            low_band_ratio: bands.low_ratio,
-            mid_band_ratio: bands.mid_ratio,
-            high_band_ratio: bands.high_ratio,
-            low_band_variation: bands.low_variation,
-            tonalness,
-        })
+    pub fn acoustics(&self) -> Result<Option<AcousticFeatures>, AnalysisError> {
+        Ok(self
+            .acoustics_audio()?
+            .and_then(|region| measure_acoustics(&region.samples, region.sample_rate)))
     }
 
     /// Whole-track decode. Used by the waveform and, on normal-length
     /// tracks, by acoustics.
-    fn full(&self) -> Option<&DecodedAudio> {
+    fn full(&self) -> Result<&DecodedAudio, AnalysisError> {
         self.full_audio
-            .get_or_init(|| decode_full(&self.path).ok())
+            .get_or_init(|| decode_full(&self.path))
             .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// The region acoustics measure: the whole track on normal-length
     /// tracks (shared with the waveform), or a centered
     /// `ACOUSTICS_LONG_WINDOW_SECS` sample on long tracks.
-    fn acoustics_audio(&self) -> Option<&DecodedAudio> {
+    fn acoustics_audio(&self) -> Result<Option<&DecodedAudio>, AnalysisError> {
         if self.is_long_track() {
             self.acoustics_window
                 .get_or_init(|| {
                     let start = self.window_start(ACOUSTICS_LONG_WINDOW_SECS);
-                    match decode_window(&self.path, start, ACOUSTICS_LONG_WINDOW_SECS) {
-                        Ok(audio) if audio.samples.len() >= MIN_SAMPLES_FOR_ANALYSIS => Some(audio),
-                        _ => None,
-                    }
+                    decode_window(&self.path, start, ACOUSTICS_LONG_WINDOW_SECS).map(|audio| {
+                        (audio.samples.len() >= MIN_SAMPLES_FOR_ANALYSIS).then_some(audio)
+                    })
                 })
                 .as_ref()
+                .map(Option::as_ref)
+                .map_err(Clone::clone)
         } else {
-            self.full()
+            self.full().map(Some)
         }
     }
 
@@ -853,43 +835,48 @@ impl Analyzer {
     /// decoded on its own. We only *peek* the larger caches — never
     /// initialize them — so requesting BPM/key alone never triggers a
     /// whole-track or acoustics decode.
-    fn bpmkey_audio(&self) -> Option<&DecodedAudio> {
+    fn bpmkey_audio(&self) -> Result<Option<&DecodedAudio>, AnalysisError> {
         self.bpmkey_audio
             .get_or_init(|| {
+                // Only a region that decoded can be sliced. A larger region
+                // that failed does not answer for this window: a damaged
+                // packet fails only the region it lies in, so the window
+                // is decoded on its own.
                 let cached_region = self
                     .acoustics_window
                     .get()
-                    .and_then(|cell| cell.as_ref())
-                    .or_else(|| self.full_audio.get().and_then(|cell| cell.as_ref()));
+                    .and_then(|cell| cell.as_ref().ok().and_then(Option::as_ref))
+                    .or_else(|| self.full_audio.get().and_then(|cell| cell.as_ref().ok()));
                 let candidate = match cached_region {
                     Some(region) => center_slice(region, BPM_KEY_WINDOW_SECS),
                     None => {
                         let start = self.window_start(BPM_KEY_WINDOW_SECS);
-                        decode_window(&self.path, start, BPM_KEY_WINDOW_SECS).ok()?
+                        decode_window(&self.path, start, BPM_KEY_WINDOW_SECS)?
                     }
                 };
-                (candidate.samples.len() >= MIN_SAMPLES_FOR_ANALYSIS).then_some(candidate)
+                Ok((candidate.samples.len() >= MIN_SAMPLES_FOR_ANALYSIS).then_some(candidate))
             })
             .as_ref()
+            .map(Option::as_ref)
+            .map_err(Clone::clone)
     }
 
     /// Tempogram STFT of the centered BPM/key window, at `STFT_FRAME_SIZE`.
     /// Used only by `tempo`; key has its own larger-frame spectrogram
     /// (`key_stft`) so the two no longer share an STFT size.
-    fn tempo_stft(&self) -> Option<&Vec<Vec<f32>>> {
+    fn tempo_stft(&self) -> Result<Option<&Vec<Vec<f32>>>, AnalysisError> {
         // Pull the decoded window out first: we cannot call
         // `bpmkey_audio()` inside `get_or_init` without borrowing `self`
         // twice.
         if self.tempo_stft.get().is_none() {
-            let computed = match self.bpmkey_audio() {
-                Some(audio) => compute_stft(&audio.samples, STFT_FRAME_SIZE, STFT_HOP_SIZE).ok(),
-                None => None,
-            };
+            let computed = self.bpmkey_audio()?.and_then(|audio| {
+                compute_stft(&audio.samples, STFT_FRAME_SIZE, STFT_HOP_SIZE).ok()
+            });
             // OnceCell::set returns Err only on a concurrent init, which
             // cannot happen (OnceCell is !Sync); ignore that case.
             let _ = self.tempo_stft.set(computed);
         }
-        self.tempo_stft.get().and_then(|cached| cached.as_ref())
+        Ok(self.tempo_stft.get().and_then(Option::as_ref))
     }
 
     /// Start offset (seconds) that centers a `len_secs` window in the
@@ -920,6 +907,47 @@ fn center_slice(region: &DecodedAudio, len_secs: f64) -> DecodedAudio {
         samples,
         sample_rate: region.sample_rate,
     }
+}
+
+/// The perceptual acoustic features of `samples` (see
+/// [`Analyzer::acoustics`]). `None` if they are too short or carry no
+/// measurable loudness (effectively silent).
+fn measure_acoustics(samples: &[f32], sample_rate: u32) -> Option<AcousticFeatures> {
+    if samples.len() < MIN_SAMPLES_FOR_ANALYSIS {
+        return None;
+    }
+    let stft = compute_stft(samples, STFT_FRAME_SIZE, STFT_HOP_SIZE).ok()?;
+    if stft.is_empty() {
+        return None;
+    }
+
+    let integrated_lufs = measure_integrated_lufs(samples, sample_rate)?;
+    let short_term = measure_short_term_lufs(samples, sample_rate);
+    let short_term_lufs_max = short_term.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    // No measurable short-term window → effectively silent, no
+    // useful loudness signal to offer the picker.
+    if !short_term_lufs_max.is_finite() {
+        return None;
+    }
+    let loudness_range_lu = loudness_range(&short_term);
+
+    let duration_secs = samples.len() as f32 / sample_rate as f32;
+    let onset_rate_hz = onset_density(&stft, duration_secs);
+
+    let bands = band_energies(&stft, sample_rate);
+    let tonalness = mean_tonalness(&stft);
+
+    Some(AcousticFeatures {
+        integrated_lufs,
+        short_term_lufs_max,
+        loudness_range_lu,
+        onset_rate_hz,
+        low_band_ratio: bands.low_ratio,
+        mid_band_ratio: bands.mid_ratio,
+        high_band_ratio: bands.high_ratio,
+        low_band_variation: bands.low_variation,
+        tonalness,
+    })
 }
 
 /// Pull `bpm` into `[min, max]` by repeated doubling/halving. Tracks
@@ -1289,8 +1317,9 @@ fn map_stratum_key(name: &str) -> Option<MusicalKey> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AnalysisOptions, Analyzer, BPM_KEY_WINDOW_SECS, key_segments, key_stft_frame_size,
-        map_stratum_key, octave_normalize, segmented_key_chroma, stratum_key_label,
+        AnalysisError, AnalysisOptions, Analyzer, BPM_KEY_WINDOW_SECS, key_segments,
+        key_stft_frame_size, map_stratum_key, octave_normalize, segmented_key_chroma,
+        stratum_key_label,
     };
     use std::path::PathBuf;
     use std::time::Duration;
@@ -1353,23 +1382,77 @@ mod tests {
     }
 
     #[test]
-    fn analyzer_returns_none_for_missing_file() {
-        // Capability-gating boils down to "the method that was not
-        // called did no work". Here we call only `tempo()` on a path
-        // that does not exist; the band-specific result is None and
-        // the unrequested bands are never touched (a successful
-        // `key()`/`waveform()` call would be impossible too, since
-        // the file does not exist — but the point of this test is
-        // that the absence of an explicit Result still surfaces the
-        // failure cleanly).
+    fn every_band_of_a_missing_file_reports_it_unopenable() {
         let analyzer = Analyzer::new(
             PathBuf::from("/does/not/exist/sustain_tests_missing.flac"),
             AnalysisOptions::default(),
             None,
         );
-        assert_eq!(analyzer.tempo(), None);
-        assert_eq!(analyzer.key(), None);
-        assert!(analyzer.waveform().is_none());
+        assert!(matches!(
+            analyzer.tempo(),
+            Err(AnalysisError::OpenFailed { .. })
+        ));
+        assert!(matches!(
+            analyzer.key(),
+            Err(AnalysisError::OpenFailed { .. })
+        ));
+        assert!(matches!(
+            analyzer.waveform(),
+            Err(AnalysisError::OpenFailed { .. })
+        ));
+        assert!(matches!(
+            analyzer.acoustics(),
+            Err(AnalysisError::OpenFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn audio_the_decoder_rejects_is_a_failure_not_an_empty_result() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("not-audio.flac");
+        std::fs::write(&path, b"fLaC but nothing a decoder can read").expect("write");
+        let analyzer = Analyzer::new(&path, AnalysisOptions::default(), None);
+        assert!(matches!(
+            analyzer.waveform(),
+            Err(AnalysisError::DecoderError { .. })
+        ));
+        assert!(matches!(
+            analyzer.acoustics(),
+            Err(AnalysisError::DecoderError { .. })
+        ));
+        assert!(matches!(
+            analyzer.tempo(),
+            Err(AnalysisError::DecoderError { .. })
+        ));
+        assert!(matches!(
+            analyzer.key(),
+            Err(AnalysisError::DecoderError { .. })
+        ));
+    }
+
+    #[test]
+    fn a_long_track_the_decoder_rejects_fails_its_windowed_bands_too() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("not-audio.flac");
+        std::fs::write(&path, b"fLaC but nothing a decoder can read").expect("write");
+        let analyzer = Analyzer::new(
+            &path,
+            AnalysisOptions::default(),
+            Some(Duration::from_secs(20 * 60)),
+        );
+        assert!(analyzer.is_long_track());
+        assert!(matches!(
+            analyzer.acoustics(),
+            Err(AnalysisError::DecoderError { .. })
+        ));
+        assert!(matches!(
+            analyzer.tempo(),
+            Err(AnalysisError::DecoderError { .. })
+        ));
+        assert!(matches!(
+            analyzer.key(),
+            Err(AnalysisError::DecoderError { .. })
+        ));
     }
 
     #[test]
