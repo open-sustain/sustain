@@ -110,8 +110,9 @@ the first frame is drawn.
 
 ### Supported audio formats — *iso-iTunes*
 Scans and imports recognize MP3, FLAC, Ogg Vorbis (`.ogg`, `.oga`),
-Opus, the MP4 family (`.m4a`, `.m4b`, `.mp4`), and WAV (`.wav`). Files
-with other extensions are skipped silently during library walks.
+Opus, the MP4 family (`.m4a`, `.m4b`, `.mp4`), WAV (`.wav`), and AIFF
+(`.aif`, `.aiff`, and AIFF-C `.aifc`). Files with other extensions are
+skipped silently during library walks.
 
 ### Duplicate detection on managed import — *iTunes-adjacent*
 When adding external files in managed mode, Sustain skips files that are
@@ -646,7 +647,7 @@ Pioneer players beat-match with, and display without needless digits
 whole or decimal tempo up to 655 BPM; a zero or out-of-range tag value is
 ignored at import, leaving the field for analysis. Edits mirror to the
 file as precisely as its format allows: Vorbis comments (FLAC, Ogg) keep
-the decimal, while ID3 `TBPM` (MP3, WAV) and MP4 `tmpo` hold whole beats
+the decimal, while ID3 `TBPM` (MP3, WAV, AIFF) and MP4 `tmpo` hold whole beats
 and receive the nearest one — the library keeps the exact value either
 way. Smart-playlist BPM rules compare whole beats.
 
@@ -824,14 +825,16 @@ regular playlist's leading column is independent of the edit gesture.
 When the user edits metadata in Sustain, the change is written to the
 file's native tag format as a courtesy to other tools:
 
-- MP3 / WAV — ID3 (including POPM for ratings)
+- MP3 / WAV / AIFF — ID3 (including POPM for ratings)
 - Ogg / FLAC — Vorbis comments
 - MP4 / M4A — MP4 atoms
 
 Listening statistics (play count, skip count, last played, last skipped)
 are **never** written to file tags. They live exclusively in SQLite.
 Shared frames like ID3 POPM are written carefully so existing
-`play_counter` data belonging to other applications is preserved.
+`play_counter` data belonging to other applications is preserved. Other
+tags are left exactly as they were: an MP3's ID3v1 and APE tags, a
+WAV's RIFF INFO list, and an AIFF's native text chunks.
 
 ### Background metadata retrieval — *iTunes-adjacent*
 The Online tab in Preferences exposes three independent toggles —

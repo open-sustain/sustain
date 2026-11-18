@@ -168,11 +168,11 @@ fn artwork_source_for_track(runtime: &SharedRuntime, track_id: TrackId) -> Optio
 fn install_audio_filters(dialog: &FileDialog) {
     let filter = FileFilter::new();
     filter.set_name(Some(&gettext("Audio Files")));
-    for pattern in [
-        "*.mp3", "*.MP3", "*.ogg", "*.OGG", "*.opus", "*.OPUS", "*.flac", "*.FLAC", "*.m4a",
-        "*.M4A", "*.mp4", "*.MP4", "*.wav", "*.WAV", "*.aiff", "*.AIFF",
+    // Suffixes match in any letter case, as the importer does.
+    for suffix in [
+        "mp3", "ogg", "oga", "opus", "flac", "m4a", "m4b", "mp4", "wav", "aif", "aiff", "aifc",
     ] {
-        filter.add_pattern(pattern);
+        filter.add_suffix(suffix);
     }
     let filters = gio::ListStore::new::<FileFilter>();
     filters.append(&filter);

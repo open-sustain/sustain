@@ -15,7 +15,7 @@
 //! from the start and dropping the lead-in — bounded in memory (the
 //! skipped samples are never retained), only costly in CPU, and only on
 //! the handful of formats that cannot seek. All formats Sustain imports
-//! (FLAC, MP3, M4A/AAC, Ogg/Vorbis, WAV) seek.
+//! (FLAC, MP3, M4A/AAC, Ogg/Vorbis, WAV, AIFF) seek.
 //!
 //! Both decode the track's *presented* audio. An MP4 file records which
 //! of its decoded frames to present, leaving out the AAC encoder's
@@ -492,6 +492,14 @@ mod tests {
         let tagged = assert_sine_decodes("sine-id3v1.flac");
         assert_eq!(plain.samples.len(), 44_100);
         assert_eq!(tagged.samples, plain.samples);
+    }
+
+    #[test]
+    fn decode_full_reads_big_and_little_endian_aiff_alike() {
+        let plain = assert_sine_decodes_at("sine.aiff", 8_000);
+        let aifc = assert_sine_decodes_at("sine-sowt.aifc", 8_000);
+        assert_eq!(plain.samples.len(), 8_000);
+        assert_eq!(aifc.samples, plain.samples);
     }
 
     /// A 2 ms burst half a second into one second of silence, in AAC,

@@ -301,10 +301,19 @@ fn synchsafe_u32(mut value: u32) -> [u8; 4] {
 }
 
 const ID3V2_HEADER_SIZE: usize = 10;
+/// Opens every APEv2 header and footer.
+const APE_PREAMBLE: &[u8] = b"APETAGEX";
 const ID3V2_FRAME_HEADER_SIZE: usize = 10;
 const MAX_ID3V2_SYNCHSAFE_SIZE: usize = 0x0fff_ffff;
 
-// Persists `tagged_file` over `path` via atomic replace-by-rename: the
+// Persists `tag` — the one tag Sustain edits — over `path`. The file's
+// other tag blocks (an MP3's ID3v1 or APE tag, a WAV's RIFF INFO list, an
+// AIFF's native text chunks) are not rewritten: lofty would otherwise
+// re-serialize each of them from its lossy generic conversion — dropping,
+// for example, the timestamps and marker links of AIFF `COMT` comments —
+// without any value of ours to write.
+//
+// The save is an atomic replace-by-rename: the
 // new bytes land in an exclusive sibling temp file, retain the source
 // filesystem metadata, get fsync'd to disk, atomically replace the
 // pathname, and are made durable by syncing the parent directory. The key
@@ -314,14 +323,12 @@ const MAX_ID3V2_SYNCHSAFE_SIZE: usize = 0x0fff_ffff;
 // directory entry, the prior inode is kept alive by outstanding fds.
 // That eliminates the audio glitch caused by lofty's default in-place
 // rewrite happening underneath an active playback read.
-pub(crate) fn atomic_save_to_path(
-    tagged_file: &lofty::file::TaggedFile,
+pub(crate) fn atomic_save_tag_to_path(
+    tag: &Tag,
     path: &Path,
     options: WriteOptions,
 ) -> MetadataResult<()> {
-    atomic_save_lofty(path, |temp_path| {
-        tagged_file.save_to_path(temp_path, options)
-    })
+    atomic_save_lofty(path, |temp_path| tag.save_to_path(temp_path, options))
 }
 
 pub(crate) fn atomic_save_id3v2_to_path(
@@ -368,12 +375,16 @@ fn atomic_save_lofty(
 /// Compacts the MP3 at `path` in place down to its first MPEG audio frame,
 /// dropping the leading region — stacked ID3v2 tags, oversized padding, and
 /// any other non-standard junk some taggers leave behind — while preserving
-/// the audio (and any trailing tags) byte-for-byte.
+/// the audio (and any trailing tags) byte-for-byte. The ID3v2 frames lofty
+/// read from the region (it merges consecutive tags) survive in the tag the
+/// caller rewrites. A leading APE tag would not — Sustain writes only the tag
+/// it edits — so a region holding one is never dropped; a stray `APETAGEX`
+/// elsewhere in the region errs on the same safe side.
 ///
 /// Returns `Ok(true)` when a leading region was removed, `Ok(false)` when the
 /// first frame is already at offset 0 (so there was nothing to heal and the
 /// caller's prior write failure had a different cause), and `Err` when no
-/// audio frame could be located. The first frame is found by validating a
+/// audio frame could be located or the region holds an APE tag. The first frame is found by validating a
 /// chained run of frames (see [`mpeg_frame`]) rather than scanning for a lone
 /// sync, so the cut never lands inside the audio; the byte-exact tail copy is
 /// what makes this a heal rather than a re-encode.
@@ -383,6 +394,12 @@ fn compact_mpeg_leading_region(path: &Path) -> MetadataResult<bool> {
         mpeg_frame::first_audio_frame_offset(&bytes).ok_or(MetadataError::WriteFailed)?;
     if audio_start == 0 {
         return Ok(false);
+    }
+    if bytes[..audio_start]
+        .windows(APE_PREAMBLE.len())
+        .any(|window| window == APE_PREAMBLE)
+    {
+        return Err(MetadataError::WriteFailed);
     }
     fs::write(path, &bytes[audio_start..]).map_err(|_| MetadataError::WriteFailed)?;
     Ok(true)

@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-17 12:29+0100\n"
+"POT-Creation-Date: 2026-11-18 06:53+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Korean\n"
@@ -119,6 +119,11 @@ msgstr "스마트 재생 목록에는 규칙이 하나 이상 필요합니다."
 #, rust-format
 msgid "A text rule needs a value."
 msgstr "텍스트 규칙에는 값이 필요합니다."
+
+#: crates/ui_gtk/src/track_info/format.rs:26
+#, rust-format
+msgid "AIFF audio file"
+msgstr "AIFF 오디오 파일"
 
 #: crates/ui_gtk/src/preferences/mod.rs:302
 #, rust-format
@@ -340,7 +345,7 @@ msgid "Audio analysis"
 msgstr "오디오 분석"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:293
-#: crates/ui_gtk/src/track_info/format.rs:31
+#: crates/ui_gtk/src/track_info/format.rs:32
 #, rust-format
 msgid "Audio file"
 msgstr "오디오 파일"
@@ -1462,7 +1467,7 @@ msgstr "확인된 중복 항목 병합 중({completed}/{total})…"
 msgid "Minimum"
 msgstr "최소"
 
-#: crates/ui_gtk/src/track_info/format.rs:92
+#: crates/ui_gtk/src/track_info/format.rs:93
 #, rust-format
 msgid "Mono"
 msgstr "모노"
@@ -1627,7 +1632,7 @@ msgstr "아직 재생 기록이 없습니다."
 msgid "No ratings recorded yet."
 msgstr "아직 별점 기록이 없습니다."
 
-#: crates/ui_gtk/src/statistics.rs:435
+#: crates/ui_gtk/src/statistics.rs:432
 #, rust-format
 msgid "No release years tagged yet."
 msgstr "아직 태그된 발매 연도가 없습니다."
@@ -1650,7 +1655,7 @@ msgstr "아직 비트 전송률 정보가 있는 트랙이 없습니다."
 msgid "Not enough space — {needed} needed, {free} free"
 msgstr "공간 부족 — {needed} 필요, {free} 남음"
 
-#: crates/ui_gtk/src/statistics.rs:455
+#: crates/ui_gtk/src/statistics.rs:452
 #, rust-format
 msgid "Nothing added yet."
 msgstr "아직 추가된 항목이 없습니다."
@@ -1665,12 +1670,12 @@ msgstr "다음 곡 없음"
 msgid "Now Playing"
 msgstr "지금 재생 중"
 
-#: crates/ui_gtk/src/statistics.rs:452
+#: crates/ui_gtk/src/statistics.rs:449
 #, rust-format
 msgid "Number of tracks added to the library each year, split by genre."
 msgstr "연도별로 보관함에 추가된 트랙 수를 장르별로 나누어 보여 줍니다."
 
-#: crates/ui_gtk/src/statistics.rs:432
+#: crates/ui_gtk/src/statistics.rs:429
 #, rust-format
 msgid "Number of tracks per release decade, split by genre."
 msgstr "발매 연대별 트랙 수를 장르별로 나누어 보여 줍니다."
@@ -2040,7 +2045,7 @@ msgstr ""
 "중단된 YouTube 오디오 교체를 복구했지만, 동일성을 확인할 수 없어 이전 경로를 "
 "유지했습니다."
 
-#: crates/ui_gtk/src/statistics.rs:430
+#: crates/ui_gtk/src/statistics.rs:427
 #, rust-format
 msgid "Release years"
 msgstr "발매 연도"
@@ -2450,7 +2455,7 @@ msgstr "정렬용 태그로 정렬"
 msgid "Statistics"
 msgstr "통계"
 
-#: crates/ui_gtk/src/track_info/format.rs:93
+#: crates/ui_gtk/src/track_info/format.rs:94
 #, rust-format
 msgid "Stereo"
 msgstr "스테레오"
@@ -3030,7 +3035,7 @@ msgid "Type"
 msgstr "유형"
 
 #: crates/ui_gtk/src/device_panel.rs:841 crates/ui_gtk/src/statistics.rs:252
-#: crates/ui_gtk/src/statistics.rs:424 crates/ui_gtk/src/statistics.rs:444
+#: crates/ui_gtk/src/statistics.rs:421 crates/ui_gtk/src/statistics.rs:441
 #, rust-format
 msgid "Unknown"
 msgstr "알 수 없음"
@@ -3122,7 +3127,7 @@ msgctxt "smart playlist field"
 msgid "Year"
 msgstr "연도"
 
-#: crates/ui_gtk/src/statistics.rs:450
+#: crates/ui_gtk/src/statistics.rs:447
 #, rust-format
 msgid "Year added"
 msgstr "추가한 연도"
@@ -3365,7 +3370,7 @@ msgctxt "number of total"
 msgid "of"
 msgstr "/"
 
-#: crates/ui_gtk/src/statistics.rs:571
+#: crates/ui_gtk/src/statistics.rs:568
 #, rust-format
 msgid "of music"
 msgstr "분량의 음악"
@@ -3375,12 +3380,12 @@ msgstr "분량의 음악"
 msgid "of the following rules:"
 msgstr "일치:"
 
-#: crates/ui_gtk/src/statistics.rs:572
+#: crates/ui_gtk/src/statistics.rs:569
 #, rust-format
 msgid "on disk"
 msgstr "디스크 사용량"
 
-#: crates/ui_gtk/src/statistics.rs:575
+#: crates/ui_gtk/src/statistics.rs:572
 #, rust-format
 msgid "play"
 msgid_plural "plays"
@@ -3417,7 +3422,7 @@ msgid "title"
 msgstr "제목"
 
 #: crates/ui_gtk/src/statistics.rs:308 crates/ui_gtk/src/statistics.rs:346
-#: crates/ui_gtk/src/statistics.rs:569
+#: crates/ui_gtk/src/statistics.rs:566
 #, rust-format
 msgid "track"
 msgid_plural "tracks"
@@ -3499,7 +3504,7 @@ msgid "{count} changed since the preview"
 msgid_plural "{count} changed since the preview"
 msgstr[0] "{count}개 미리 보기 이후 변경됨"
 
-#: crates/ui_gtk/src/track_info/format.rs:95
+#: crates/ui_gtk/src/track_info/format.rs:96
 #, rust-format
 msgid "{count} channel"
 msgid_plural "{count} channels"
@@ -3763,7 +3768,7 @@ msgid "{folder} — {reason}"
 msgstr "{folder} — {reason}"
 
 #. Translators: {format} is a file extension in capitals, such as "WAV".
-#: crates/ui_gtk/src/track_info/format.rs:28
+#: crates/ui_gtk/src/track_info/format.rs:29
 #, rust-format
 msgid "{format} audio file"
 msgstr "{format} 오디오 파일"
@@ -3771,7 +3776,7 @@ msgstr "{format} 오디오 파일"
 #. Translators: one line of a histogram column's tooltip, a
 #. genre and its track count and share, as in
 #. "House: 120 (40%)".
-#: crates/ui_gtk/src/statistics.rs:523
+#: crates/ui_gtk/src/statistics.rs:520
 #, rust-format
 msgctxt "statistics genre split"
 msgid "{genre}: {share}"
@@ -3802,7 +3807,7 @@ msgid "{used} of {total}"
 msgstr "{used} / {total}"
 
 #. Translators: a decade, as in "1990s".
-#: crates/ui_gtk/src/statistics.rs:422
+#: crates/ui_gtk/src/statistics.rs:419
 #, rust-format
 msgid "{year}s"
 msgstr "{year}년대"

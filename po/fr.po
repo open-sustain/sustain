@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-17 12:29+0100\n"
+"POT-Creation-Date: 2026-11-18 06:53+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: French\n"
@@ -124,6 +124,11 @@ msgstr "Une liste de lecture intelligente nécessite au moins une règle."
 #, rust-format
 msgid "A text rule needs a value."
 msgstr "Une règle de texte nécessite une valeur."
+
+#: crates/ui_gtk/src/track_info/format.rs:26
+#, rust-format
+msgid "AIFF audio file"
+msgstr "Fichier audio AIFF"
 
 #: crates/ui_gtk/src/preferences/mod.rs:302
 #, rust-format
@@ -350,7 +355,7 @@ msgid "Audio analysis"
 msgstr "Analyse audio"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:293
-#: crates/ui_gtk/src/track_info/format.rs:31
+#: crates/ui_gtk/src/track_info/format.rs:32
 #, rust-format
 msgid "Audio file"
 msgstr "Fichier audio"
@@ -1505,7 +1510,7 @@ msgstr "Fusion des doublons vérifiés ({completed}/{total})..."
 msgid "Minimum"
 msgstr "Minimum"
 
-#: crates/ui_gtk/src/track_info/format.rs:92
+#: crates/ui_gtk/src/track_info/format.rs:93
 #, rust-format
 msgid "Mono"
 msgstr "Mono"
@@ -1676,7 +1681,7 @@ msgstr "Aucune lecture enregistrée pour l’instant."
 msgid "No ratings recorded yet."
 msgstr "Aucune note enregistrée pour l’instant."
 
-#: crates/ui_gtk/src/statistics.rs:435
+#: crates/ui_gtk/src/statistics.rs:432
 #, rust-format
 msgid "No release years tagged yet."
 msgstr "Aucune année de sortie renseignée pour l’instant."
@@ -1699,7 +1704,7 @@ msgstr "Aucun morceau n’a encore de débit renseigné."
 msgid "Not enough space — {needed} needed, {free} free"
 msgstr "Espace insuffisant : {needed} nécessaires, {free} disponibles"
 
-#: crates/ui_gtk/src/statistics.rs:455
+#: crates/ui_gtk/src/statistics.rs:452
 #, rust-format
 msgid "Nothing added yet."
 msgstr "Rien n’a encore été ajouté."
@@ -1714,14 +1719,14 @@ msgstr "Rien à suivre"
 msgid "Now Playing"
 msgstr "En cours de lecture"
 
-#: crates/ui_gtk/src/statistics.rs:452
+#: crates/ui_gtk/src/statistics.rs:449
 #, rust-format
 msgid "Number of tracks added to the library each year, split by genre."
 msgstr ""
 "Nombre de morceaux ajoutés à la bibliothèque chaque année, répartis par "
 "genre."
 
-#: crates/ui_gtk/src/statistics.rs:432
+#: crates/ui_gtk/src/statistics.rs:429
 #, rust-format
 msgid "Number of tracks per release decade, split by genre."
 msgstr "Nombre de morceaux par décennie de sortie, répartis par genre."
@@ -2116,7 +2121,7 @@ msgstr ""
 "Un remplacement audio YouTube interrompu a été récupéré, mais le chemin "
 "précédent a été conservé car son identité n’a pas pu être prouvée."
 
-#: crates/ui_gtk/src/statistics.rs:430
+#: crates/ui_gtk/src/statistics.rs:427
 #, rust-format
 msgid "Release years"
 msgstr "Années de sortie"
@@ -2543,7 +2548,7 @@ msgstr "Trier selon les tags d’ordre de tri"
 msgid "Statistics"
 msgstr "Statistiques"
 
-#: crates/ui_gtk/src/track_info/format.rs:93
+#: crates/ui_gtk/src/track_info/format.rs:94
 #, rust-format
 msgid "Stereo"
 msgstr "Stéréo"
@@ -3165,7 +3170,7 @@ msgid "Type"
 msgstr "Type"
 
 #: crates/ui_gtk/src/device_panel.rs:841 crates/ui_gtk/src/statistics.rs:252
-#: crates/ui_gtk/src/statistics.rs:424 crates/ui_gtk/src/statistics.rs:444
+#: crates/ui_gtk/src/statistics.rs:421 crates/ui_gtk/src/statistics.rs:441
 #, rust-format
 msgid "Unknown"
 msgstr "Inconnu"
@@ -3258,7 +3263,7 @@ msgctxt "smart playlist field"
 msgid "Year"
 msgstr "Année"
 
-#: crates/ui_gtk/src/statistics.rs:450
+#: crates/ui_gtk/src/statistics.rs:447
 #, rust-format
 msgid "Year added"
 msgstr "Année d’ajout"
@@ -3503,7 +3508,7 @@ msgctxt "number of total"
 msgid "of"
 msgstr "sur"
 
-#: crates/ui_gtk/src/statistics.rs:571
+#: crates/ui_gtk/src/statistics.rs:568
 #, rust-format
 msgid "of music"
 msgstr "de musique"
@@ -3513,12 +3518,12 @@ msgstr "de musique"
 msgid "of the following rules:"
 msgstr "des règles suivantes :"
 
-#: crates/ui_gtk/src/statistics.rs:572
+#: crates/ui_gtk/src/statistics.rs:569
 #, rust-format
 msgid "on disk"
 msgstr "sur le disque"
 
-#: crates/ui_gtk/src/statistics.rs:575
+#: crates/ui_gtk/src/statistics.rs:572
 #, rust-format
 msgid "play"
 msgid_plural "plays"
@@ -3556,7 +3561,7 @@ msgid "title"
 msgstr "par titre"
 
 #: crates/ui_gtk/src/statistics.rs:308 crates/ui_gtk/src/statistics.rs:346
-#: crates/ui_gtk/src/statistics.rs:569
+#: crates/ui_gtk/src/statistics.rs:566
 #, rust-format
 msgid "track"
 msgid_plural "tracks"
@@ -3642,7 +3647,7 @@ msgid_plural "{count} changed since the preview"
 msgstr[0] "{count} modifié depuis l’aperçu"
 msgstr[1] "{count} modifiés depuis l’aperçu"
 
-#: crates/ui_gtk/src/track_info/format.rs:95
+#: crates/ui_gtk/src/track_info/format.rs:96
 #, rust-format
 msgid "{count} channel"
 msgid_plural "{count} channels"
@@ -3945,7 +3950,7 @@ msgid "{folder} — {reason}"
 msgstr "{folder} — {reason}"
 
 #. Translators: {format} is a file extension in capitals, such as "WAV".
-#: crates/ui_gtk/src/track_info/format.rs:28
+#: crates/ui_gtk/src/track_info/format.rs:29
 #, rust-format
 msgid "{format} audio file"
 msgstr "Fichier audio {format}"
@@ -3953,7 +3958,7 @@ msgstr "Fichier audio {format}"
 #. Translators: one line of a histogram column's tooltip, a
 #. genre and its track count and share, as in
 #. "House: 120 (40%)".
-#: crates/ui_gtk/src/statistics.rs:523
+#: crates/ui_gtk/src/statistics.rs:520
 #, rust-format
 msgctxt "statistics genre split"
 msgid "{genre}: {share}"
@@ -3984,7 +3989,7 @@ msgid "{used} of {total}"
 msgstr "{used} sur {total}"
 
 #. Translators: a decade, as in "1990s".
-#: crates/ui_gtk/src/statistics.rs:422
+#: crates/ui_gtk/src/statistics.rs:419
 #, rust-format
 msgid "{year}s"
 msgstr "années {year}"

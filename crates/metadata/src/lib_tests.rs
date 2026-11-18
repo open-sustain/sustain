@@ -60,12 +60,24 @@ fn detects_supported_audio_formats_case_insensitively() {
         audio_format_from_path(Path::new("/music/a.WAV")),
         Ok(AudioFormat::Wav)
     );
+    assert_eq!(
+        audio_format_from_path(Path::new("/music/a.AIF")),
+        Ok(AudioFormat::Aiff)
+    );
+    assert_eq!(
+        audio_format_from_path(Path::new("/music/a.aiff")),
+        Ok(AudioFormat::Aiff)
+    );
+    assert_eq!(
+        audio_format_from_path(Path::new("/music/a.aifc")),
+        Ok(AudioFormat::Aiff)
+    );
 }
 
 #[test]
 fn rejects_unsupported_audio_formats() {
     assert_eq!(
-        audio_format_from_path(Path::new("/music/a.aiff")),
+        audio_format_from_path(Path::new("/music/a.wma")),
         Err(MetadataError::UnsupportedAudioFormat)
     );
     assert_eq!(
@@ -538,6 +550,252 @@ fn pcm_wav(sample_rate: u32, bits_per_sample: u16, frames: u32) -> Vec<u8> {
 }
 
 #[test]
+fn read_initial_tags_reports_the_audio_properties_of_aiff_and_aiff_c() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let aiff = root.join("hi-res.aiff");
+    fs::write(&aiff, pcm_aiff(AiffForm::Aiff, 96_000, 24, 960, &[])).expect("write aiff");
+    let aifc = root.join("little-endian.aifc");
+    fs::write(&aifc, pcm_aiff(AiffForm::AifcSowt, 44_100, 16, 441, &[])).expect("write aifc");
+
+    let aiff_metadata = LoftyMetadataService
+        .read_initial_tags(&aiff)
+        .expect("read aiff")
+        .metadata;
+    assert_eq!(aiff_metadata.bit_depth, Some(24));
+    assert_eq!(aiff_metadata.sample_rate_hz, Some(96_000));
+    let aifc_metadata = LoftyMetadataService
+        .read_initial_tags(&aifc)
+        .expect("read aifc")
+        .metadata;
+    assert_eq!(aifc_metadata.bit_depth, Some(16));
+    assert_eq!(aifc_metadata.sample_rate_hz, Some(44_100));
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn read_initial_tags_falls_back_to_aiff_text_chunks_without_an_id3_chunk() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("text-chunks.aiff");
+    let chunks = [
+        (*b"NAME", b"Chunk Title".to_vec()),
+        (*b"AUTH", b"Chunk Artist".to_vec()),
+    ];
+    fs::write(&path, pcm_aiff(AiffForm::Aiff, 44_100, 16, 441, &chunks)).expect("write aiff");
+
+    let metadata = LoftyMetadataService
+        .read_initial_tags(&path)
+        .expect("read aiff")
+        .metadata;
+    assert_eq!(metadata.title.as_deref(), Some("Chunk Title"));
+    assert_eq!(metadata.artist.as_deref(), Some("Chunk Artist"));
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn aiff_edits_mirror_into_an_id3_chunk_and_leave_the_audio_and_text_chunks_alone() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    for (name, form) in [
+        ("edited.aiff", AiffForm::Aiff),
+        ("edited.aifc", AiffForm::AifcSowt),
+    ] {
+        let path = root.join(name);
+        // A `COMT` comment carries a timestamp and a marker link that
+        // lofty's generic tag conversion drops; only an untouched chunk
+        // keeps them.
+        let chunks = [
+            (*b"ANNO", b"Another tool's note".to_vec()),
+            (*b"COMT", aiff_comments_chunk(0x7C25_B080, 3, "Drop here")),
+        ];
+        let original = pcm_aiff(form, 44_100, 16, 441, &chunks);
+        fs::write(&path, &original).expect("write aiff");
+
+        LoftyMetadataService
+            .write_metadata(
+                &path,
+                MetadataChange {
+                    title: FieldChange::Set("Edited Title".to_owned()),
+                    artist: FieldChange::Set("Edited Artist".to_owned()),
+                    ..MetadataChange::default()
+                },
+            )
+            .expect("write metadata");
+        LoftyMetadataService
+            .write_rating(&path, Rating::new(4).expect("valid rating"))
+            .expect("write rating");
+        LoftyMetadataService
+            .write_artwork(&path, Some(tiny_png()))
+            .expect("write artwork");
+
+        let tags = LoftyMetadataService
+            .read_persisted_tags(&path)
+            .expect("re-read written tags");
+        assert_eq!(
+            tags.metadata.title.as_deref(),
+            Some("Edited Title"),
+            "{name}"
+        );
+        assert_eq!(
+            tags.metadata.artist.as_deref(),
+            Some("Edited Artist"),
+            "{name}"
+        );
+        assert_eq!(tags.rating, Rating::new(4).expect("valid rating"), "{name}");
+        assert_eq!(
+            LoftyMetadataService.read_artwork(&path),
+            Ok(Some(tiny_png())),
+            "{name}"
+        );
+
+        let written = fs::read(&path).expect("read written file");
+        assert_eq!(
+            aiff_chunk(&written, *b"SSND"),
+            aiff_chunk(&original, *b"SSND"),
+            "{name}: audio untouched"
+        );
+        for id in [*b"ANNO", *b"COMT"] {
+            assert_eq!(
+                aiff_chunk(&written, id),
+                aiff_chunk(&original, id),
+                "{name}: foreign {} chunk untouched",
+                String::from_utf8_lossy(&id)
+            );
+        }
+        assert!(
+            aiff_chunk(&written, *b"ID3 ").is_some(),
+            "{name}: ID3 chunk"
+        );
+    }
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn aiff_write_rating_preserves_popm_counter_when_clearing_rating() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("cleared.aiff");
+    let id3 = id3v2_3_tag(&popm_frame("other-player@example.com", 196, 23));
+    fs::write(
+        &path,
+        pcm_aiff(AiffForm::Aiff, 44_100, 16, 441, &[(*b"ID3 ", id3)]),
+    )
+    .expect("write fixture");
+
+    LoftyMetadataService
+        .write_rating(&path, Rating::unrated())
+        .expect("clear rating");
+
+    let popm = raw_popm(&path).expect("POPM counter frame survives");
+    assert_eq!(popm.email, "other-player@example.com");
+    assert_eq!(popm.rating, 0);
+    assert_eq!(popm.play_counter, 23);
+    let written = fs::read(&path).expect("read written file");
+    assert!(aiff_chunk(&written, *b"SSND").is_some(), "still an AIFF");
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[derive(Clone, Copy)]
+enum AiffForm {
+    /// A plain `AIFF` form: big-endian PCM.
+    Aiff,
+    /// An `AIFC` form carrying little-endian PCM (`sowt`), as FFmpeg and
+    /// macOS write AIFF-C.
+    AifcSowt,
+}
+
+/// A mono PCM AIFF of `frames` silent samples, followed by `extra_chunks`.
+fn pcm_aiff(
+    form: AiffForm,
+    sample_rate: u32,
+    bits_per_sample: u16,
+    frames: u32,
+    extra_chunks: &[([u8; 4], Vec<u8>)],
+) -> Vec<u8> {
+    let mut common = Vec::new();
+    common.extend_from_slice(&1_u16.to_be_bytes()); // mono
+    common.extend_from_slice(&frames.to_be_bytes());
+    common.extend_from_slice(&bits_per_sample.to_be_bytes());
+    common.extend_from_slice(&ieee_extended(sample_rate));
+    let mut body = Vec::new();
+    match form {
+        AiffForm::Aiff => body.extend_from_slice(b"AIFF"),
+        AiffForm::AifcSowt => {
+            body.extend_from_slice(b"AIFC");
+            push_aiff_chunk(&mut body, *b"FVER", &0xA280_5140_u32.to_be_bytes());
+            common.extend_from_slice(b"sowt");
+            common.extend_from_slice(&[0, 0]); // empty compression name, padded
+        }
+    }
+    push_aiff_chunk(&mut body, *b"COMM", &common);
+    let data_len = frames as usize * usize::from(bits_per_sample / 8);
+    let mut sound = vec![0; 8]; // offset and block size
+    sound.resize(8 + data_len, 0);
+    push_aiff_chunk(&mut body, *b"SSND", &sound);
+    for (id, data) in extra_chunks {
+        push_aiff_chunk(&mut body, *id, data);
+    }
+    let mut bytes = b"FORM".to_vec();
+    bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+/// A `COMT` chunk holding one comment linked to marker `marker_id`.
+fn aiff_comments_chunk(timestamp: u32, marker_id: u16, text: &str) -> Vec<u8> {
+    let mut chunk = 1_u16.to_be_bytes().to_vec();
+    chunk.extend_from_slice(&timestamp.to_be_bytes());
+    chunk.extend_from_slice(&marker_id.to_be_bytes());
+    chunk.extend_from_slice(&(text.len() as u16).to_be_bytes());
+    chunk.extend_from_slice(text.as_bytes());
+    if text.len() % 2 == 1 {
+        chunk.push(0);
+    }
+    chunk
+}
+
+fn push_aiff_chunk(bytes: &mut Vec<u8>, id: [u8; 4], data: &[u8]) {
+    bytes.extend_from_slice(&id);
+    bytes.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(data);
+    if data.len() % 2 == 1 {
+        bytes.push(0);
+    }
+}
+
+/// The first `id` chunk's data in an AIFF `FORM`.
+fn aiff_chunk(bytes: &[u8], id: [u8; 4]) -> Option<&[u8]> {
+    let mut offset = 12;
+    while let Some(header) = bytes.get(offset..offset + 8) {
+        let size = u32::from_be_bytes(header[4..8].try_into().ok()?) as usize;
+        let data = bytes.get(offset + 8..offset + 8 + size)?;
+        if header[..4] == id {
+            return Some(data);
+        }
+        offset += 8 + size + size % 2;
+    }
+    None
+}
+
+/// `value` as the 80-bit IEEE 754 extended float AIFF stores its sample
+/// rate in.
+fn ieee_extended(value: u32) -> [u8; 10] {
+    assert!(value > 0, "a sample rate is positive");
+    let shift = value.leading_zeros();
+    let exponent = 16_383 + 31 - shift as u16;
+    let mantissa = u64::from(value) << (32 + shift);
+    let mut bytes = [0; 10];
+    bytes[..2].copy_from_slice(&exponent.to_be_bytes());
+    bytes[2..].copy_from_slice(&mantissa.to_be_bytes());
+    bytes
+}
+
+#[test]
 fn read_initial_tags_generates_missing_article_sort_fields() {
     let root = unique_test_directory();
     fs::create_dir_all(&root).expect("create test directory");
@@ -919,6 +1177,24 @@ fn initial_tag_read_reports_supported_container_extension_mismatch() {
     fs::remove_dir_all(root).expect("remove test directory");
 }
 
+#[test]
+fn initial_tag_read_reports_aiff_content_behind_another_extension() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("wrong.flac");
+    fs::write(&path, pcm_aiff(AiffForm::Aiff, 44_100, 16, 441, &[])).expect("write fixture");
+
+    assert_eq!(
+        LoftyMetadataService.read_initial_tags_with_diagnostics(&path),
+        Err(MetadataError::ContainerFormatMismatch {
+            expected: AudioFormat::Flac,
+            detected: AudioFormat::Aiff,
+        })
+    );
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
 fn id3v2_3_text_frame(id: &str, text: &str) -> Vec<u8> {
     let mut content = vec![0x00];
     content.extend_from_slice(text.as_bytes());
@@ -1129,20 +1405,18 @@ fn mpeg_audio_frames(count: usize) -> Vec<u8> {
 }
 
 fn mp3_with_popm(email: &str, rating: u8, play_counter: u64) -> Vec<u8> {
+    let mut bytes = id3v2_3_tag(&popm_frame(email, rating, play_counter));
+    bytes.extend_from_slice(&mpeg_audio_frames(4));
+    bytes
+}
+
+/// An ID3v2.3 POPM frame.
+fn popm_frame(email: &str, rating: u8, play_counter: u64) -> Vec<u8> {
     let mut content = email.as_bytes().to_vec();
     content.push(0);
     content.push(rating);
     content.extend_from_slice(&play_counter.to_be_bytes());
-
-    let mut frame = Vec::new();
-    frame.extend_from_slice(b"POPM");
-    frame.extend_from_slice(&(content.len() as u32).to_be_bytes());
-    frame.extend_from_slice(&[0x00, 0x00]);
-    frame.extend_from_slice(&content);
-
-    let mut bytes = id3v2_3_tag(&frame);
-    bytes.extend_from_slice(&mpeg_audio_frames(4));
-    bytes
+    id3v2_3_frame("POPM", &content)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1265,6 +1539,66 @@ fn write_rating_heals_an_mp3_with_stacked_id3v2_tags() {
             );
         },
     );
+}
+
+#[test]
+fn write_refuses_to_heal_a_leading_region_that_holds_an_ape_tag() {
+    // A leading APE tag large enough to push the audio past lofty's write
+    // window. Compacting the region would delete the APE tag, which Sustain
+    // does not rewrite, so the write fails and the file stays as it was.
+    let mut fixture = id3v2_3_tag(&[0x00; 40]);
+    fixture.extend_from_slice(&ape_tag_with_comment(&"a".repeat(2048)));
+    fixture.extend_from_slice(&mpeg_audio_frames(6));
+    let audio_offset =
+        super::mpeg_frame::first_audio_frame_offset(&fixture).expect("fixture has audio");
+    assert!(audio_offset > 1024, "fixture must reproduce the defect");
+
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("leading-ape.mp3");
+    fs::write(&path, &fixture).expect("write fixture");
+    assert!(
+        lofty::read_from_path(&path)
+            .expect("lofty reads the fixture")
+            .tag(TagType::Ape)
+            .is_some(),
+        "lofty sees the leading APE tag"
+    );
+
+    assert_eq!(
+        LoftyMetadataService.write_rating(&path, Rating::new(4).expect("valid rating")),
+        Err(MetadataError::WriteFailed)
+    );
+    assert_eq!(
+        fs::read(&path).expect("read file"),
+        fixture,
+        "file untouched"
+    );
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+/// An APEv2 tag, header and footer included, holding one `Comment` item.
+fn ape_tag_with_comment(comment: &str) -> Vec<u8> {
+    let mut item = (comment.len() as u32).to_le_bytes().to_vec();
+    item.extend_from_slice(&0_u32.to_le_bytes()); // UTF-8 text item
+    item.extend_from_slice(b"Comment\0");
+    item.extend_from_slice(comment.as_bytes());
+    let preamble = |flags: u32| {
+        let mut bytes = b"APETAGEX".to_vec();
+        bytes.extend_from_slice(&2000_u32.to_le_bytes());
+        bytes.extend_from_slice(&(item.len() as u32 + 32).to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes()); // item count
+        bytes.extend_from_slice(&flags.to_le_bytes());
+        bytes.extend_from_slice(&[0; 8]);
+        bytes
+    };
+    const HAS_HEADER: u32 = 1 << 31;
+    const IS_HEADER: u32 = 1 << 29;
+    let mut tag = preamble(HAS_HEADER | IS_HEADER);
+    tag.extend_from_slice(&item);
+    tag.extend_from_slice(&preamble(HAS_HEADER));
+    tag
 }
 
 #[test]

@@ -48,3 +48,15 @@ python3 -c "
 tag = b'TAG' + b'Title'.ljust(30, b'\0') + b'Artist'.ljust(30, b'\0') + b'\0' * 64 + b'\xff'
 open('sine-id3v1.flac', 'wb').write(open('sine.flac', 'rb').read() + tag)"
 ```
+
+AIFF fixtures: the same sine at 8 kHz, big-endian PCM in a plain AIFF,
+and little-endian PCM in an AIFF-C (`sowt`, FFmpeg's choice for
+`pcm_s16le`):
+
+```
+ffmpeg -f lavfi -i "sine=frequency=440:duration=1:sample_rate=8000" -ac 1 \
+  -c:a pcm_s16be -map_metadata -1 -fflags +bitexact -flags:a +bitexact sine.aiff
+ffmpeg -f lavfi -i "sine=frequency=440:duration=1:sample_rate=8000" -ac 1 \
+  -c:a pcm_s16le -map_metadata -1 -fflags +bitexact -flags:a +bitexact \
+  -f aiff sine-sowt.aifc
+```

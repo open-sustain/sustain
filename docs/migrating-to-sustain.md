@@ -14,8 +14,8 @@ When Sustain scans the library folder, it reads each audio file with `lofty`
 and populates the SQLite `tracks` row from the file's embedded tags and audio
 properties.
 
-Audio formats supported: MP3 (ID3), Ogg / FLAC (Vorbis comments), MP4 / M4A
-(MP4 atoms). Other formats are skipped.
+Audio formats supported: MP3 / WAV / AIFF (ID3), Ogg / FLAC (Vorbis comments),
+MP4 / M4A (MP4 atoms). Other formats are skipped.
 
 Fields populated from file tags:
 

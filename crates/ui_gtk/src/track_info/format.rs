@@ -23,6 +23,7 @@ pub(super) fn format_kind(path: Option<&Path>) -> String {
         Some("ogg" | "oga") => gettext("Ogg Vorbis audio file"),
         Some("opus") => gettext("Opus audio file"),
         Some("m4a" | "m4b" | "mp4") => gettext("MPEG-4 audio file"),
+        Some("aif" | "aiff" | "aifc") => gettext("AIFF audio file"),
         Some(other) => tr_format!(
             // Translators: {format} is a file extension in capitals, such as "WAV".
             gettext("{format} audio file"),

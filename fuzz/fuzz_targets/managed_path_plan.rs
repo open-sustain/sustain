@@ -22,7 +22,7 @@ const MAX_COLLISION_DEPTH: u8 = 64;
 const MAX_DECORATED_TEXT_BYTES: usize = 65_536;
 const SOURCE_STEM_BYTE_LIMIT: usize = 4_096;
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "mp3", "ogg", "oga", "opus", "flac", "m4a", "m4b", "mp4", "wav",
+    "mp3", "ogg", "oga", "opus", "flac", "m4a", "m4b", "mp4", "wav", "aif", "aiff", "aifc",
 ];
 const HOSTILE_DECORATIONS: &[&str] = &[
     "",

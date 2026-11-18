@@ -48,7 +48,7 @@ pub use scan::LibraryScanner;
 use read::{read_tagged_file, read_tags, valid_embedded_picture};
 use tag_write::{
     PreservedPopularimeter, apply_bool_change, apply_number_change, apply_text_change,
-    apply_year_change, atomic_save_id3v2_to_path, atomic_save_to_path, clear_rating,
+    apply_year_change, atomic_save_id3v2_to_path, atomic_save_tag_to_path, clear_rating,
     ensure_primary_tag, id3v2_tag_clearing_rating_preserving_counter, popularimeter_from_rating,
     repair_invalid_id3v2_languages,
 };
@@ -62,6 +62,7 @@ pub enum AudioFormat {
     Flac,
     Mp4,
     Wav,
+    Aiff,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -326,7 +327,7 @@ impl MetadataService for LoftyMetadataService {
         apply_text_change(tag, lyrics_key, change.lyrics);
 
         repair_invalid_id3v2_languages(tag);
-        atomic_save_to_path(&tagged_file, path, WriteOptions::default())
+        atomic_save_tag_to_path(tag, path, WriteOptions::default())
     }
 
     fn write_rating(&self, path: &Path, rating: Rating) -> MetadataResult<()> {
@@ -370,7 +371,7 @@ impl MetadataService for LoftyMetadataService {
         }
 
         repair_invalid_id3v2_languages(tag);
-        atomic_save_to_path(&tagged_file, path, WriteOptions::default())
+        atomic_save_tag_to_path(tag, path, WriteOptions::default())
     }
 
     fn read_artwork(&self, path: &Path) -> MetadataResult<Option<Vec<u8>>> {
@@ -420,7 +421,7 @@ impl MetadataService for LoftyMetadataService {
         }
 
         repair_invalid_id3v2_languages(tag);
-        atomic_save_to_path(&tagged_file, path, WriteOptions::default())
+        atomic_save_tag_to_path(tag, path, WriteOptions::default())
     }
 
     fn repair_malformed_tags(&self, path: &Path, repair: MetadataRepair) -> MetadataResult<bool> {
@@ -444,6 +445,11 @@ pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {
         // the library, edits — including POPM ratings, USLT lyrics, and
         // APIC artwork — mirror back through the identical write path.
         Some("wav") => Ok(AudioFormat::Wav),
+        // AIFF has native text chunks, but lofty's primary tag for AIFF
+        // is ID3v2 in an `ID3 ` chunk — the same tag WAV carries — so
+        // edits follow the WAV path and existing text chunks stay
+        // untouched. AIFF-C (`.aifc`) shares the container and the tag.
+        Some("aif") | Some("aiff") | Some("aifc") => Ok(AudioFormat::Aiff),
         _ => Err(MetadataError::UnsupportedAudioFormat),
     }
 }
