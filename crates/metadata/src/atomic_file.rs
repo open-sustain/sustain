@@ -72,7 +72,7 @@ fn atomic_write_via_rename_with<F, N, S>(
 ) -> MetadataResult<()>
 where
     F: FnOnce(&Path) -> MetadataResult<()>,
-    N: FnMut(&OsStr) -> OsString,
+    N: FnMut() -> OsString,
     S: FnOnce(&OwnedFd) -> io::Result<()>,
 {
     let file_name = path.file_name().ok_or(MetadataError::WriteFailed)?;
@@ -87,7 +87,7 @@ where
     let source_stat = regular_file_stat(&source)?;
 
     let (temporary_name, temporary_path, mut temporary) =
-        create_temporary_sibling(&parent, file_name, &mut next_temporary_name)?;
+        create_temporary_sibling(&parent, &mut next_temporary_name)?;
     let temporary_stat = match regular_file_stat(&temporary) {
         Ok(stat) => stat,
         Err(error) => {
@@ -177,14 +177,13 @@ fn open_directory_path(path: &Path) -> MetadataResult<OwnedFd> {
 
 fn create_temporary_sibling<N>(
     parent: &OwnedFd,
-    file_name: &OsStr,
     next_temporary_name: &mut N,
 ) -> MetadataResult<(OsString, PathBuf, File)>
 where
-    N: FnMut(&OsStr) -> OsString,
+    N: FnMut() -> OsString,
 {
     for _ in 0..MAX_TEMPORARY_ATTEMPTS {
-        let temporary_name = next_temporary_name(file_name);
+        let temporary_name = next_temporary_name();
         if !is_single_normal_component(&temporary_name) {
             return Err(MetadataError::WriteFailed);
         }
@@ -212,17 +211,17 @@ fn is_single_normal_component(name: &OsStr) -> bool {
     )
 }
 
-fn temporary_sibling_name(file_name: &OsStr) -> OsString {
+/// A sibling name of bounded length: built from the source's basename, it
+/// would overflow the filesystem's component limit for a long but valid
+/// name and fail every write to that file.
+fn temporary_sibling_name() -> OsString {
     static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
 
     let id = NEXT_TEMPORARY_ID.fetch_add(1, Ordering::Relaxed);
-    let mut name = OsString::from(".");
-    name.push(file_name);
-    name.push(format!(
+    OsString::from(format!(
         ".sustain-tag-write-{}-{id}.tmp",
         std::process::id()
-    ));
-    name
+    ))
 }
 
 fn remove_temporary_if_owned(parent: &OwnedFd, temporary_name: &OsStr, temporary: &File) {
@@ -500,7 +499,7 @@ mod tests {
             |temporary| {
                 fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
             },
-            |_| names.pop_front().expect("candidate name"),
+            || names.pop_front().expect("candidate name"),
             |parent| fsync(parent).map_err(io::Error::from),
         )
         .expect("replace");
@@ -521,6 +520,22 @@ mod tests {
     }
 
     #[test]
+    fn replaces_a_file_whose_name_fills_the_component_limit() {
+        let root = unique_test_directory();
+        fs::create_dir_all(&root).expect("create root");
+        let path = root.join(format!("{}.mp3", "n".repeat(251)));
+        fs::write(&path, b"original").expect("seed audio");
+
+        atomic_write_via_rename(&path, |temporary| {
+            fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
+        })
+        .expect("replace");
+
+        assert_eq!(fs::read(&path).expect("read audio"), b"replacement");
+        fs::remove_dir_all(root).expect("remove root");
+    }
+
+    #[test]
     fn reports_directory_sync_failure_after_atomic_publication() {
         let root = unique_test_directory();
         fs::create_dir_all(&root).expect("create root");
@@ -532,7 +547,7 @@ mod tests {
             |temporary| {
                 fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
             },
-            |_| OsString::from(".owned-temp"),
+            || OsString::from(".owned-temp"),
             |_| Err(io::Error::other("injected directory fsync failure")),
         );
 
