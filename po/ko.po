@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-18 17:10+0100\n"
+"POT-Creation-Date: 2026-11-18 21:25+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Korean\n"
@@ -43,12 +43,12 @@ msgstr ""
 "“{current_name}”이(가) 사이드바에서 제거됩니다. 트랙 자체는 보관함에 그대로 "
 "남습니다."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:390
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:422
 #, rust-format
 msgid "\"{offending}\" is not a valid date (use YYYY-MM-DD)."
 msgstr "“{offending}”은(는) 올바른 날짜가 아닙니다(YYYY-MM-DD 형식 사용)."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:384
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:416
 #, rust-format
 msgid "\"{offending}\" is not a valid rating (0 to 5)."
 msgstr "“{offending}”은(는) 올바른 별점이 아닙니다(0~5)."
@@ -74,7 +74,7 @@ msgctxt "list separator"
 msgid ", "
 msgstr ", "
 
-#: crates/ui_gtk/src/track_info/details.rs:157
+#: crates/ui_gtk/src/track_info/details.rs:156
 #, rust-format
 msgid "0 (will reset on OK)"
 msgstr "0(확인을 누르면 초기화됨)"
@@ -83,8 +83,8 @@ msgstr "0(확인을 누르면 초기화됨)"
 msgid "5-star ratings, play count, skip count, last played, last skipped"
 msgstr "별 5개 등급, 재생 횟수, 건너뛴 횟수, 마지막 재생, 마지막 건너뜀"
 
-#: crates/app_runtime/src/device_sync.rs:606
-#: crates/app_runtime/src/device_sync.rs:662
+#: crates/app_runtime/src/device_sync.rs:607
+#: crates/app_runtime/src/device_sync.rs:663
 #, rust-format
 msgid "A device sync is already running."
 msgstr "기기 동기화가 이미 진행 중입니다."
@@ -94,7 +94,7 @@ msgstr "기기 동기화가 이미 진행 중입니다."
 msgid "A folder cannot be moved inside itself."
 msgstr "폴더를 자기 자신 안으로 옮길 수 없습니다."
 
-#: crates/app_runtime/src/lib.rs:1209
+#: crates/app_runtime/src/lib.rs:1214
 #, rust-format
 msgid ""
 "A managed-library metadata edit could not finish safely. Sustain retained "
@@ -115,7 +115,7 @@ msgstr "Linux 데스크톱용 음악 보관함 관리자이자 플레이어입�
 msgid "A smart playlist needs at least one rule."
 msgstr "스마트 재생 목록에는 규칙이 하나 이상 필요합니다."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:381
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:413
 #, rust-format
 msgid "A text rule needs a value."
 msgstr "텍스트 규칙에는 값이 필요합니다."
@@ -125,7 +125,7 @@ msgstr "텍스트 규칙에는 값이 필요합니다."
 msgid "AIFF audio file"
 msgstr "AIFF 오디오 파일"
 
-#: crates/ui_gtk/src/preferences/mod.rs:324
+#: crates/ui_gtk/src/preferences/mod.rs:359
 #, rust-format
 msgid "About"
 msgstr "정보"
@@ -135,7 +135,7 @@ msgstr "정보"
 msgid "Add Artwork…"
 msgstr "아트워크 추가…"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:590
+#: crates/ui_gtk/src/smart_playlist_editor.rs:636
 #, rust-format
 msgid "Add rule"
 msgstr "규칙 추가"
@@ -165,7 +165,7 @@ msgstr "트랙 추가 중…"
 msgid "Adventurous"
 msgstr "모험적"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:415
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:439
 #, rust-format
 msgid "Aggressive"
 msgstr "적극적"
@@ -178,7 +178,7 @@ msgstr "적극적"
 msgid "Album"
 msgstr "앨범"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:65
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:62
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Album"
@@ -189,7 +189,7 @@ msgstr "앨범"
 msgid "Album Artist"
 msgstr "앨범 아티스트"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:62
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:59
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Album Artist"
@@ -236,7 +236,7 @@ msgid_plural "Analyse {count} missing tracks"
 msgstr[0] "누락된 트랙 {count}개 분석"
 
 #: crates/ui_gtk/src/device_panel.rs:371
-#: crates/ui_gtk/src/preferences/mod.rs:317
+#: crates/ui_gtk/src/preferences/mod.rs:352
 #, rust-format
 msgid "Analysis"
 msgstr "분석"
@@ -289,7 +289,7 @@ msgstr "응용 프로그램"
 msgid "Artist"
 msgstr "아티스트"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:59
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:56
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Artist"
@@ -317,7 +317,7 @@ msgstr "아트워크를 가져왔습니다. 오디오 파일에 저장하는 중
 msgid "Artwork is embedded in the audio file."
 msgstr "아트워크가 오디오 파일에 포함되어 있습니다."
 
-#: crates/app_runtime/src/lib.rs:1132
+#: crates/app_runtime/src/lib.rs:1137
 #, rust-format
 msgid "Artwork updated."
 msgstr "아트워크를 업데이트했습니다."
@@ -366,7 +366,7 @@ msgstr "YouTube 오디오"
 msgid "BPM"
 msgstr "BPM"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:105
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:102
 #, rust-format
 msgctxt "smart playlist field"
 msgid "BPM"
@@ -383,12 +383,12 @@ msgstr "BPM 감지"
 msgid "BPM must be a number above 0 and at most {max}."
 msgstr "BPM은 0보다 크고 {max} 이하인 숫자여야 합니다."
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:240
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:264
 #, rust-format
 msgid "BPM range"
 msgstr "BPM 범위"
 
-#: crates/app_runtime/src/lib.rs:3014
+#: crates/app_runtime/src/lib.rs:3016
 #, rust-format
 msgid ""
 "Background BPM analysis is enabled. These tracks are already queued by the "
@@ -397,7 +397,7 @@ msgstr ""
 "백그라운드 BPM 분석이 켜져 있습니다. 이 트랙들은 이미 전체 작업 대기열에 있습"
 "니다."
 
-#: crates/app_runtime/src/lib.rs:3020
+#: crates/app_runtime/src/lib.rs:3022
 #, rust-format
 msgid ""
 "Background audio analysis is enabled. These tracks are already queued by the "
@@ -406,7 +406,7 @@ msgstr ""
 "백그라운드 오디오 분석이 켜져 있습니다. 이 트랙들은 이미 전체 작업 대기열에 "
 "있습니다."
 
-#: crates/app_runtime/src/lib.rs:3017
+#: crates/app_runtime/src/lib.rs:3019
 #, rust-format
 msgid ""
 "Background key detection is enabled. These tracks are already queued by the "
@@ -415,12 +415,12 @@ msgstr ""
 "백그라운드 키 감지가 켜져 있습니다. 이 트랙들은 이미 전체 작업 대기열에 있습"
 "니다."
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:374
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:398
 #, rust-format
 msgid "Background resource usage"
 msgstr "백그라운드 리소스 사용량"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:414
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:438
 #: crates/ui_gtk/src/preferences/encoding_tab.rs:62
 #: crates/ui_gtk/src/preferences/shuffle_tab.rs:195
 #, rust-format
@@ -447,7 +447,7 @@ msgstr "비트 전송률"
 msgid "Bitrate"
 msgstr "비트 전송률"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:102
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:99
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Bitrate (kbps)"
@@ -486,7 +486,7 @@ msgstr "기기 동기화 계획 계산 중…"
 
 #: crates/ui_gtk/src/confirmation.rs:25
 #: crates/ui_gtk/src/duplicate_consolidation.rs:169
-#: crates/ui_gtk/src/smart_playlist_editor.rs:420
+#: crates/ui_gtk/src/smart_playlist_editor.rs:464
 #: crates/ui_gtk/src/status_bar.rs:168 crates/ui_gtk/src/status_bar.rs:172
 #: crates/ui_gtk/src/track_info/multi.rs:73 crates/ui_gtk/src/track_info.rs:142
 #: crates/ui_gtk/src/verified_duplicates.rs:76
@@ -513,7 +513,7 @@ msgstr ""
 msgid "Channels"
 msgstr "채널"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:339
+#: crates/ui_gtk/src/preferences/library_tab.rs:347
 #, rust-format
 msgid "Choose"
 msgstr "선택"
@@ -523,7 +523,7 @@ msgstr "선택"
 msgid "Choose Artwork"
 msgstr "아트워크 선택"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:338
+#: crates/ui_gtk/src/preferences/library_tab.rs:346
 #, rust-format
 msgid "Choose Library Folder"
 msgstr "보관함 폴더 선택"
@@ -553,8 +553,8 @@ msgstr "폴더 선택"
 msgid "Choose the CD import format"
 msgstr "CD 가져오기 형식 선택"
 
-#: crates/ui_gtk/src/preferences/mod.rs:373
-#: crates/ui_gtk/src/smart_playlist_editor.rs:561
+#: crates/ui_gtk/src/preferences/mod.rs:395
+#: crates/ui_gtk/src/smart_playlist_editor.rs:607
 #, rust-format
 msgid "Close"
 msgstr "닫기"
@@ -575,7 +575,7 @@ msgid "Columns"
 msgstr "열"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:761
-#: crates/ui_gtk/src/track_info/details.rs:201
+#: crates/ui_gtk/src/track_info/details.rs:200
 #: crates/ui_gtk/src/track_info/multi.rs:376
 #, rust-format
 msgid "Comments"
@@ -587,7 +587,7 @@ msgstr "설명"
 msgid "Compilation"
 msgstr "컴필레이션"
 
-#: crates/ui_gtk/src/device_panel.rs:746
+#: crates/ui_gtk/src/device_panel.rs:770
 #, rust-format
 msgid "Complete"
 msgstr "완료"
@@ -599,7 +599,7 @@ msgstr "완료"
 msgid "Composer"
 msgstr "작곡가"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:71
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:68
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Composer"
@@ -665,7 +665,7 @@ msgstr "꺼낼 마운트된 기기를 찾지 못했습니다."
 msgid "Could not reach MusicBrainz; using fallback CD metadata."
 msgstr "MusicBrainz에 연결할 수 없어 대체 CD 메타데이터를 사용합니다."
 
-#: crates/app_runtime/src/device_sync.rs:156
+#: crates/app_runtime/src/device_sync.rs:157
 #, rust-format
 msgid "Could not scan for Android devices: {error}"
 msgstr "Android 기기를 검색하지 못했습니다: {error}"
@@ -690,7 +690,7 @@ msgstr "선택한 아트워크를 사용할 수 없습니다: {error}."
 msgid "Date Added"
 msgstr "추가한 날짜"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:108
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:105
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Date Added"
@@ -746,7 +746,7 @@ msgstr "스마트 재생 목록 삭제"
 msgid "Details"
 msgstr "세부 정보"
 
-#: crates/app_runtime/src/device_sync.rs:424
+#: crates/app_runtime/src/device_sync.rs:425
 #, rust-format
 msgid "Device"
 msgstr "기기"
@@ -771,7 +771,7 @@ msgstr "기기 용량을 알 수 없음"
 msgid "Device disconnected"
 msgstr "기기 연결 끊김"
 
-#: crates/app_runtime/src/device_sync.rs:415
+#: crates/app_runtime/src/device_sync.rs:416
 #, rust-format
 msgid ""
 "Device forgotten. Its saved playlists, artists, and sync history were "
@@ -779,12 +779,12 @@ msgid ""
 msgstr ""
 "기기를 삭제했습니다. 저장된 재생 목록, 아티스트, 동기화 기록이 지워졌습니다."
 
-#: crates/app_runtime/src/device_sync.rs:670
+#: crates/app_runtime/src/device_sync.rs:671
 #, rust-format
 msgid "Device sync failed to start: {detail}"
 msgstr "기기 동기화를 시작하지 못했습니다: {detail}"
 
-#: crates/app_runtime/src/device_sync.rs:723
+#: crates/app_runtime/src/device_sync.rs:724
 #, rust-format
 msgid "Device sync failed: {detail}"
 msgstr "기기 동기화 실패: {detail}"
@@ -804,7 +804,7 @@ msgstr "디스크"
 msgid "Disc Number"
 msgstr "디스크 번호"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:96
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:93
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Disc Number"
@@ -839,12 +839,12 @@ msgstr "설명서"
 msgid "Download and Replace"
 msgstr "다운로드하여 교체"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:81
+#: crates/app_runtime/src/youtube_audio_replacement.rs:80
 #, rust-format
 msgid "Downloading replacement audio from YouTube..."
 msgstr "YouTube에서 대체 오디오를 다운로드하는 중…"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:53
+#: crates/ui_gtk/src/preferences/views_tab.rs:55
 #, rust-format
 msgid ""
 "Draws the playing track's waveform in place of the progress bar, once audio "
@@ -879,7 +879,7 @@ msgstr "중복 항목"
 msgid "Duration"
 msgstr "재생 시간"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:99
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:96
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Duration (seconds)"
@@ -895,7 +895,7 @@ msgstr "편집…"
 msgid "Eject"
 msgstr "꺼내기"
 
-#: crates/ui_gtk/src/preferences/mod.rs:316
+#: crates/ui_gtk/src/preferences/mod.rs:351
 #, rust-format
 msgid "Encoding"
 msgstr "인코딩"
@@ -973,13 +973,13 @@ msgctxt "Get Info page"
 msgid "File"
 msgstr "파일"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:119
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:116
 #, rust-format
 msgctxt "smart playlist field"
 msgid "File"
 msgstr "파일"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:77
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:74
 #, rust-format
 msgctxt "smart playlist field"
 msgid "File Name"
@@ -1028,7 +1028,7 @@ msgstr "오디오 CD를 보관함으로 리핑할 때 사용할 형식입니다.
 msgid "Genre"
 msgstr "장르"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:74
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:71
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Genre"
@@ -1120,12 +1120,12 @@ msgstr "CD 가져오는 중({completed}/{total})…"
 msgid "Importing CD..."
 msgstr "CD 가져오는 중…"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:413
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:437
 #, rust-format
 msgid "Innocuous"
 msgstr "무난함"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:228
+#: crates/app_runtime/src/youtube_audio_replacement.rs:227
 #, rust-format
 msgid "Install yt-dlp and FFmpeg before replacing audio from YouTube."
 msgstr "YouTube에서 오디오를 교체하려면 먼저 yt-dlp와 FFmpeg를 설치하십시오."
@@ -1203,7 +1203,7 @@ msgstr "종류"
 msgid "Last Played"
 msgstr "마지막 재생"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:111
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:108
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Last Played"
@@ -1214,7 +1214,7 @@ msgstr "마지막 재생"
 msgid "Last Skipped"
 msgstr "마지막 건너뜀"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:114
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:111
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Last Skipped"
@@ -1225,12 +1225,12 @@ msgstr "마지막 건너뜀"
 msgid "Last index rebuild: {when}"
 msgstr "마지막 색인 재구성: {when}"
 
-#: crates/ui_gtk/src/track_info/details.rs:175
+#: crates/ui_gtk/src/track_info/details.rs:174
 #, rust-format
 msgid "Last played"
 msgstr "마지막 재생"
 
-#: crates/ui_gtk/src/track_info/details.rs:182
+#: crates/ui_gtk/src/track_info/details.rs:181
 #, rust-format
 msgid "Last skipped"
 msgstr "마지막 건너뜀"
@@ -1240,7 +1240,7 @@ msgstr "마지막 건너뜀"
 msgid "Left alone: {groups}."
 msgstr "그대로 둠: {groups}."
 
-#: crates/ui_gtk/src/preferences/mod.rs:315 crates/ui_gtk/src/sidebar.rs:189
+#: crates/ui_gtk/src/preferences/mod.rs:350 crates/ui_gtk/src/sidebar.rs:189
 #, rust-format
 msgid "Library"
 msgstr "보관함"
@@ -1291,7 +1291,7 @@ msgstr[0] ""
 msgid "Library organization stopped: {moved}, {pending}."
 msgstr "보관함 정리 중지됨: {moved}, {pending}."
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:201
+#: crates/ui_gtk/src/preferences/library_tab.rs:202
 #, rust-format
 msgid "Library organization will stop after the current file."
 msgstr "현재 파일을 처리한 후 보관함 정리를 중지합니다."
@@ -1316,22 +1316,22 @@ msgstr "이 빌드에서는 보관함 검사를 사용할 수 없습니다."
 msgid "Licensed under GPL-3.0-or-later"
 msgstr "GPL-3.0-or-later 라이선스"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:371
+#: crates/ui_gtk/src/smart_playlist_editor.rs:414
 #, rust-format
 msgid "Limit to"
 msgstr "최대"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:26
+#: crates/ui_gtk/src/preferences/views_tab.rs:28
 #, rust-format
 msgid "Lists the Duplicates view in the left column's Library section."
 msgstr "왼쪽 열의 보관함 섹션에 중복 항목 보기를 표시합니다."
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:39
+#: crates/ui_gtk/src/preferences/views_tab.rs:41
 #, rust-format
 msgid "Lists the Statistics view in the left column's Library section."
 msgstr "왼쪽 열의 보관함 섹션에 통계 보기를 표시합니다."
 
-#: crates/app_runtime/src/lib.rs:987
+#: crates/app_runtime/src/lib.rs:992
 #, rust-format
 msgid "Loading library…"
 msgstr "보관함 불러오는 중…"
@@ -1385,7 +1385,7 @@ msgstr "낮은 볼륨"
 msgid "Lyrics"
 msgstr "가사"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:117
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:114
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Lyrics"
@@ -1413,7 +1413,7 @@ msgstr "시스템 어두운 테마의 기본 보관함 보기"
 msgid "Main library view in the system light theme"
 msgstr "시스템 밝은 테마의 기본 보관함 보기"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:334
+#: crates/ui_gtk/src/smart_playlist_editor.rs:377
 #, rust-format
 msgid "Match"
 msgstr "다음 규칙 중"
@@ -1427,7 +1427,7 @@ msgstr ""
 "태그로 MusicBrainz에서 트랙을 찾아 비어 있는 필드를 채웁니다. 이미 설정된 태"
 "그는 덮어쓰지 않습니다."
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:262
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:286
 #, rust-format
 msgid "Maximum"
 msgstr "최대"
@@ -1460,7 +1460,7 @@ msgstr "{groups}을(를) 병합하고 {tracks}을(를) 제거했습니다."
 msgid "Merging verified duplicates ({completed}/{total})..."
 msgstr "확인된 중복 항목 병합 중({completed}/{total})…"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:255
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:279
 #, rust-format
 msgid "Minimum"
 msgstr "최소"
@@ -1492,7 +1492,7 @@ msgstr "휴지통으로 이동"
 msgid "Music"
 msgstr "음악"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:80
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:77
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Music Key"
@@ -1562,7 +1562,7 @@ msgid "Next, right-click to display the queue"
 msgstr "다음 곡, 오른쪽 클릭하면 대기열 표시"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:788
-#: crates/ui_gtk/src/smart_playlist_editor.rs:93
+#: crates/ui_gtk/src/smart_playlist_editor.rs:109
 #: crates/ui_gtk/src/track_table/columns.rs:255
 #, rust-format
 msgid "No"
@@ -1679,7 +1679,7 @@ msgid "Number of tracks per release decade, split by genre."
 msgstr "발매 연대별 트랙 수를 장르별로 나누어 보여 줍니다."
 
 #: crates/ui_gtk/src/import_failures_dialog.rs:77
-#: crates/ui_gtk/src/smart_playlist_editor.rs:421
+#: crates/ui_gtk/src/smart_playlist_editor.rs:465
 #: crates/ui_gtk/src/track_info/multi.rs:74 crates/ui_gtk/src/track_info.rs:143
 #, rust-format
 msgid "OK"
@@ -1704,7 +1704,7 @@ msgstr ""
 "선택한 파일 중 하나 이상이 디스크에 없습니다. 복원하거나 제거한 후 다시 통합"
 "하십시오."
 
-#: crates/ui_gtk/src/preferences/mod.rs:318
+#: crates/ui_gtk/src/preferences/mod.rs:353
 #, rust-format
 msgid "Online"
 msgstr "온라인"
@@ -1737,7 +1737,7 @@ msgstr "보관함을 검사하려면 중복 항목을 여십시오."
 msgid "Opus audio file"
 msgstr "Opus 오디오 파일"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:278
+#: crates/ui_gtk/src/preferences/library_tab.rs:279
 #, rust-format
 msgid ""
 "Order the library by the “sort as” tags some files carry (ID3 TSOP/TSOT, "
@@ -1789,7 +1789,7 @@ msgstr "철저함"
 msgid "Paste Artwork"
 msgstr "아트워크 붙여 넣기"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:226
+#: crates/app_runtime/src/youtube_audio_replacement.rs:225
 #, rust-format
 msgid "Paste a valid YouTube URL."
 msgstr "올바른 YouTube URL을 붙여 넣으십시오."
@@ -1813,7 +1813,7 @@ msgid ""
 msgstr ""
 "일시 중지됨: 오디오 출력 연결이 끊겼거나 다른 응용 프로그램이 사용 중입니다."
 
-#: crates/app_runtime/src/device_sync.rs:623
+#: crates/app_runtime/src/device_sync.rs:624
 #, rust-format
 msgid "Pick at least one playlist or artist to sync to this device."
 msgstr "이 기기와 동기화할 재생 목록이나 아티스트를 하나 이상 선택하십시오."
@@ -1837,7 +1837,7 @@ msgstr "재생"
 msgid "Play / pause"
 msgstr "재생 / 일시 정지"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:87
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:84
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Play Count"
@@ -1854,7 +1854,7 @@ msgid "Play album"
 msgstr "앨범 재생"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:330
-#: crates/ui_gtk/src/track_info/details.rs:161
+#: crates/ui_gtk/src/track_info/details.rs:160
 #, rust-format
 msgid "Play count"
 msgstr "재생 횟수"
@@ -1885,7 +1885,7 @@ msgstr "재생에 실패했습니다. 다음 트랙으로 건너뜁니다."
 msgid "Playback is not available."
 msgstr "재생을 사용할 수 없습니다."
 
-#: crates/app_runtime/src/device_sync.rs:1032
+#: crates/app_runtime/src/device_sync.rs:1056
 #, rust-format
 msgid "Playlist"
 msgstr "재생 목록"
@@ -1919,12 +1919,12 @@ msgstr "재생 목록, 스마트 재생 목록, 재생 목록 폴더"
 msgid "Plays"
 msgstr "재생"
 
-#: crates/ui_gtk/src/preferences/mod.rs:205 crates/ui_gtk/src/shortcuts.rs:139
+#: crates/ui_gtk/src/preferences/mod.rs:236 crates/ui_gtk/src/shortcuts.rs:139
 #, rust-format
 msgid "Preferences"
 msgstr "환경 설정"
 
-#: crates/ui_gtk/src/preferences/mod.rs:174
+#: crates/ui_gtk/src/preferences/mod.rs:203
 #, rust-format
 msgid "Preferences (Ctrl+,)"
 msgstr "환경 설정(Ctrl+,)"
@@ -1961,49 +1961,49 @@ msgstr "이전 트랙(Ctrl+[)"
 msgid "Quality"
 msgstr "품질"
 
-#: crates/app_runtime/src/lib.rs:3077
+#: crates/app_runtime/src/lib.rs:3079
 #, rust-format
 msgid "Queued {count} track for BPM analysis."
 msgid_plural "Queued {count} tracks for BPM analysis."
 msgstr[0] "트랙 {count}개를 BPM 분석 대기열에 넣었습니다."
 
-#: crates/app_runtime/src/lib.rs:3092
+#: crates/app_runtime/src/lib.rs:3094
 #, rust-format
 msgid "Queued {count} track for analysis."
 msgid_plural "Queued {count} tracks for analysis."
 msgstr[0] "트랙 {count}개를 분석 대기열에 넣었습니다."
 
-#: crates/app_runtime/src/lib.rs:3174
+#: crates/app_runtime/src/lib.rs:3176
 #, rust-format
 msgid "Queued {count} track for artwork retrieval."
 msgid_plural "Queued {count} tracks for artwork retrieval."
 msgstr[0] "트랙 {count}개를 아트워크 검색 대기열에 넣었습니다."
 
-#: crates/app_runtime/src/lib.rs:3087
+#: crates/app_runtime/src/lib.rs:3089
 #, rust-format
 msgid "Queued {count} track for audio analysis."
 msgid_plural "Queued {count} tracks for audio analysis."
 msgstr[0] "트랙 {count}개를 오디오 분석 대기열에 넣었습니다."
 
-#: crates/app_runtime/src/lib.rs:3082
+#: crates/app_runtime/src/lib.rs:3084
 #, rust-format
 msgid "Queued {count} track for key detection."
 msgid_plural "Queued {count} tracks for key detection."
 msgstr[0] "트랙 {count}개를 키 감지 대기열에 넣었습니다."
 
-#: crates/app_runtime/src/lib.rs:3169
+#: crates/app_runtime/src/lib.rs:3171
 #, rust-format
 msgid "Queued {count} track for lyrics retrieval."
 msgid_plural "Queued {count} tracks for lyrics retrieval."
 msgstr[0] "트랙 {count}개를 가사 검색 대기열에 넣었습니다."
 
-#: crates/app_runtime/src/lib.rs:3184
+#: crates/app_runtime/src/lib.rs:3186
 #, rust-format
 msgid "Queued {count} track for online retrieval."
 msgid_plural "Queued {count} tracks for online retrieval."
 msgstr[0] "트랙 {count}개를 온라인 검색 대기열에 넣었습니다."
 
-#: crates/app_runtime/src/lib.rs:3179
+#: crates/app_runtime/src/lib.rs:3181
 #, rust-format
 msgid "Queued {count} track for tag enrichment."
 msgid_plural "Queued {count} tracks for tag enrichment."
@@ -2015,13 +2015,13 @@ msgid "Quit Sustain"
 msgstr "Sustain 종료"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:305
-#: crates/ui_gtk/src/track_info/details.rs:135
+#: crates/ui_gtk/src/track_info/details.rs:134
 #: crates/ui_gtk/src/track_table/columns.rs:71
 #, rust-format
 msgid "Rating"
 msgstr "별점"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:82
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:79
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Rating"
@@ -2036,7 +2036,7 @@ msgstr "정렬 및 사용자 지정이 가능한 열과 실시간 검색"
 msgid "Rebuilding the Smart Shuffle index…"
 msgstr "Smart Shuffle 색인 재구성 중…"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:49
+#: crates/app_runtime/src/youtube_audio_replacement.rs:48
 #, rust-format
 msgid ""
 "Recovered an interrupted YouTube audio replacement, but retained the "
@@ -2085,7 +2085,7 @@ msgstr "재생 목록에서 제거"
 msgid "Remove from queue"
 msgstr "대기열에서 제거"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:586
+#: crates/ui_gtk/src/smart_playlist_editor.rs:632
 #, rust-format
 msgid "Remove rule"
 msgstr "규칙 제거"
@@ -2111,7 +2111,7 @@ msgstr "반복"
 msgid "Replace Audio from YouTube"
 msgstr "YouTube에서 오디오 교체"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:165
+#: crates/app_runtime/src/youtube_audio_replacement.rs:164
 #, rust-format
 msgid ""
 "Replacement installed, but the previous audio file could not be moved to "
@@ -2123,7 +2123,7 @@ msgstr "교체를 설치했지만 이전 오디오 파일을 휴지통으로 옮
 msgid "Report a problem"
 msgstr "문제 보고"
 
-#: crates/ui_gtk/src/track_info/details.rs:151
+#: crates/ui_gtk/src/track_info/details.rs:150
 #, rust-format
 msgid "Reset"
 msgstr "초기화"
@@ -2257,7 +2257,7 @@ msgstr ""
 "적절한 항목이 미리 선택되어 있습니다. 자동 처리: 재생 횟수와 건너뛴 횟수는 합"
 "산되고, 가장 오래된 추가한 날짜가 유지됩니다."
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:270
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:294
 #, rust-format
 msgid ""
 "Sets the tempo window Sustain uses when folding half-time and double-time "
@@ -2268,7 +2268,7 @@ msgstr ""
 "니다. 매우 느리거나 빠른 음악에는 넓히고, 결과가 예상 템포의 절반이나 두 배"
 "로 나오는 경우가 많으면 좁히세요."
 
-#: crates/ui_gtk/src/preferences/mod.rs:163
+#: crates/ui_gtk/src/preferences/mod.rs:192
 #, rust-format
 msgid "Settings"
 msgstr "설정"
@@ -2288,12 +2288,12 @@ msgstr "전체 보관함의 장르별 트랙 비율입니다."
 msgid "Show Album"
 msgstr "앨범 보기"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:25
+#: crates/ui_gtk/src/preferences/views_tab.rs:27
 #, rust-format
 msgid "Show Duplicates in the sidebar"
 msgstr "사이드바에 중복 항목 표시"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:38
+#: crates/ui_gtk/src/preferences/views_tab.rs:40
 #, rust-format
 msgid "Show Statistics in the sidebar"
 msgstr "사이드바에 통계 표시"
@@ -2313,7 +2313,7 @@ msgstr "가사 보기"
 msgid "Show sidebar"
 msgstr "사이드바 표시"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:51
+#: crates/ui_gtk/src/preferences/views_tab.rs:53
 #, rust-format
 msgid "Show the waveform in Now Playing"
 msgstr "지금 재생 중에 파형 표시"
@@ -2325,7 +2325,7 @@ msgctxt "playback control"
 msgid "Shuffle"
 msgstr "임의 재생"
 
-#: crates/ui_gtk/src/preferences/mod.rs:321
+#: crates/ui_gtk/src/preferences/mod.rs:356
 #, rust-format
 msgctxt "preferences tab"
 msgid "Shuffle"
@@ -2341,13 +2341,13 @@ msgstr "앨범 임의 재생"
 msgid "Size"
 msgstr "크기"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:90
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:87
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Skip Count"
 msgstr "건너뛴 횟수"
 
-#: crates/ui_gtk/src/track_info/details.rs:168
+#: crates/ui_gtk/src/track_info/details.rs:167
 #, rust-format
 msgid "Skip count"
 msgstr "건너뛴 횟수"
@@ -2358,7 +2358,7 @@ msgstr "건너뛴 횟수"
 msgid "Skips"
 msgstr "건너뜀"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:294
+#: crates/ui_gtk/src/smart_playlist_editor.rs:337
 #, rust-format
 msgid "Smart Playlist"
 msgstr "스마트 재생 목록"
@@ -2389,12 +2389,12 @@ msgstr ""
 msgid "Smart Shuffle will choose the next track."
 msgstr "Smart Shuffle이 다음 트랙을 고릅니다."
 
-#: crates/app_runtime/src/lib.rs:2631
+#: crates/app_runtime/src/lib.rs:2629
 #, rust-format
 msgid "Smart Shuffle: failed to persist the rebuilt index."
 msgstr "Smart Shuffle: 재구성한 색인을 저장하지 못했습니다."
 
-#: crates/app_runtime/src/lib.rs:2617
+#: crates/app_runtime/src/lib.rs:2615
 #, rust-format
 msgid "Smart Shuffle: failed to serialise the rebuilt index."
 msgstr "Smart Shuffle: 재구성한 색인을 직렬화하지 못했습니다."
@@ -2416,7 +2416,7 @@ msgstr "일부 빈 폴더를 제거하지 못했습니다."
 msgid "Some empty managed-library folders could not be removed."
 msgstr "관리 보관함의 일부 빈 폴더를 제거하지 못했습니다."
 
-#: crates/ui_gtk/src/device_panel.rs:1094
+#: crates/ui_gtk/src/device_panel.rs:1118
 #, rust-format
 msgid ""
 "Some selected tracks are not fully analysed ({gaps}). They will still sync, "
@@ -2446,7 +2446,7 @@ msgstr ""
 msgid "Songs, Albums, and Playlists views with a keyboard-friendly table"
 msgstr "키보드로 쓰기 편한 표를 갖춘 노래, 앨범, 재생 목록 보기"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:276
+#: crates/ui_gtk/src/preferences/library_tab.rs:277
 #, rust-format
 msgid "Sort using sort-order tags"
 msgstr "정렬용 태그로 정렬"
@@ -2504,17 +2504,17 @@ msgstr "정리를 안전하게 마치지 못해 Sustain이 복구 파일을 보�
 msgid "Sustain shortcuts"
 msgstr "Sustain 단축키"
 
-#: crates/ui_gtk/src/device_panel.rs:672
+#: crates/ui_gtk/src/device_panel.rs:684
 #, rust-format
 msgid "Sync"
 msgstr "동기화"
 
-#: crates/ui_gtk/src/device_panel.rs:1132
+#: crates/ui_gtk/src/device_panel.rs:1156
 #, rust-format
 msgid "Sync and remove"
 msgstr "동기화 및 제거"
 
-#: crates/ui_gtk/src/device_panel.rs:1134
+#: crates/ui_gtk/src/device_panel.rs:1158
 #, rust-format
 msgid "Sync anyway"
 msgstr "그래도 동기화"
@@ -2529,7 +2529,7 @@ msgstr "동기화 완료: {changes}."
 msgid "Sync complete: {changes}; {unplayable}."
 msgstr "동기화 완료: {changes}. {unplayable}."
 
-#: crates/ui_gtk/src/device_panel.rs:1139
+#: crates/ui_gtk/src/device_panel.rs:1163
 #, rust-format
 msgid "Sync device"
 msgstr "기기 동기화"
@@ -2554,7 +2554,7 @@ msgstr "동기화 중지됨: {changes}."
 msgid "Syncing"
 msgstr "동기화 중"
 
-#: crates/ui_gtk/src/device_panel.rs:1109
+#: crates/ui_gtk/src/device_panel.rs:1133
 #, rust-format
 msgid ""
 "Syncing will remove {count} track from this device that is no longer in your "
@@ -2582,7 +2582,7 @@ msgstr "태그"
 msgid "Take every tag and the rating from this track"
 msgstr "이 트랙의 모든 태그와 별점 사용"
 
-#: crates/app_runtime/src/device_sync.rs:614
+#: crates/app_runtime/src/device_sync.rs:615
 #, rust-format
 msgid "That device is no longer connected."
 msgstr "해당 기기가 더 이상 연결되어 있지 않습니다."
@@ -2592,21 +2592,21 @@ msgstr "해당 기기가 더 이상 연결되어 있지 않습니다."
 msgid "That file is already attached to another library track."
 msgstr "해당 파일은 이미 보관함의 다른 트랙에 연결되어 있습니다."
 
-#: crates/app_runtime/src/lib.rs:3106
+#: crates/app_runtime/src/lib.rs:3108
 #, rust-format
 msgid "That track already has BPM analysis — nothing to queue."
 msgid_plural "All {count} tracks already have BPM analysis — nothing to queue."
 msgstr[0] ""
 "트랙 {count}개 모두 이미 BPM 분석이 되어 있어 대기열에 넣을 항목이 없습니다."
 
-#: crates/app_runtime/src/lib.rs:3121
+#: crates/app_runtime/src/lib.rs:3123
 #, rust-format
 msgid "That track already has analysis — nothing to queue."
 msgid_plural "All {count} tracks already have analysis — nothing to queue."
 msgstr[0] ""
 "트랙 {count}개 모두 이미 분석되어 있어 대기열에 넣을 항목이 없습니다."
 
-#: crates/app_runtime/src/lib.rs:3116
+#: crates/app_runtime/src/lib.rs:3118
 #, rust-format
 msgid "That track already has audio analysis — nothing to queue."
 msgid_plural ""
@@ -2615,7 +2615,7 @@ msgstr[0] ""
 "트랙 {count}개 모두 이미 오디오 분석이 되어 있어 대기열에 넣을 항목이 없습니"
 "다."
 
-#: crates/app_runtime/src/lib.rs:3111
+#: crates/app_runtime/src/lib.rs:3113
 #, rust-format
 msgid "That track already has key detection — nothing to queue."
 msgid_plural ""
@@ -2628,12 +2628,12 @@ msgstr[0] ""
 msgid "The CD could not be imported."
 msgstr "CD를 가져오지 못했습니다."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:240
+#: crates/app_runtime/src/youtube_audio_replacement.rs:239
 #, rust-format
 msgid "The YouTube audio download exceeded Sustain's time limit."
 msgstr "YouTube 오디오 다운로드가 Sustain의 시간 제한을 넘었습니다."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:243
+#: crates/app_runtime/src/youtube_audio_replacement.rs:242
 #, rust-format
 msgid "The YouTube audio download was cancelled."
 msgstr "YouTube 오디오 다운로드가 취소되었습니다."
@@ -2696,12 +2696,12 @@ msgstr "디스크가 바뀌었습니다. 원래 디스크를 다시 넣고 다�
 msgid "The disc is being imported. Play it once the import is done."
 msgstr "디스크를 가져오는 중입니다. 가져오기가 끝나면 재생하십시오."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:237
+#: crates/app_runtime/src/youtube_audio_replacement.rs:236
 #, rust-format
 msgid "The downloaded YouTube replacement exceeded Sustain's size limit."
 msgstr "YouTube에서 다운로드한 대체 파일이 Sustain의 크기 제한을 넘었습니다."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:131
+#: crates/app_runtime/src/youtube_audio_replacement.rs:130
 #, rust-format
 msgid "The downloaded audio could not be published safely."
 msgstr "다운로드한 오디오를 안전하게 게시하지 못했습니다."
@@ -2766,7 +2766,7 @@ msgstr "보관함에 기록할 수 없어 사본을 제거했습니다."
 msgid "The library database could not be updated."
 msgstr "보관함 데이터베이스를 업데이트하지 못했습니다."
 
-#: crates/app_runtime/src/lib.rs:1023
+#: crates/app_runtime/src/lib.rs:1028
 #, rust-format
 msgid "The music library could not be loaded."
 msgstr "음악 보관함을 불러오지 못했습니다."
@@ -2776,7 +2776,7 @@ msgstr "음악 보관함을 불러오지 못했습니다."
 msgid "The music library is still loading."
 msgstr "음악 보관함을 아직 불러오는 중입니다."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:394
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:426
 #, rust-format
 msgid "The number of days must be at least 1."
 msgstr "일수는 1 이상이어야 합니다."
@@ -2919,7 +2919,7 @@ msgstr ""
 "오디오로 확인한 결과 이 그룹들은 각각 같은 녹음의 사본입니다. 각 그룹은 표시"
 "된 선택 사항을 유지한 채 하나의 트랙으로 병합됩니다."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:379
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:411
 #, rust-format
 msgid "This combination of field and operator is not supported."
 msgstr "이 항목과 연산자 조합은 지원되지 않습니다."
@@ -2929,10 +2929,18 @@ msgstr "이 항목과 연산자 조합은 지원되지 않습니다."
 msgid "This device cannot be ejected by the desktop."
 msgstr "이 기기는 데스크톱에서 꺼낼 수 없습니다."
 
-#: crates/app_runtime/src/device_sync.rs:501
+#: crates/app_runtime/src/device_sync.rs:502
 #, rust-format
 msgid "This device's selection is empty."
 msgstr "이 기기의 선택 항목이 비어 있습니다."
+
+#: crates/ui_gtk/src/device_panel.rs:738
+#, rust-format
+msgid ""
+"This drive holds a Pioneer export Sustain did not write, or one a player "
+"changed since. Syncing would erase it: remove the drive's PIONEER folder to "
+"sync."
+msgstr "이 드라이브에는 Sustain이 쓰지 않았거나 이후 플레이어가 변경한 Pioneer 내보내기가 있습니다. 동기화하면 지워집니다. 동기화하려면 드라이브의 PIONEER 폴더를 제거하세요."
 
 #: crates/ui_gtk/src/track_info/artwork.rs:118
 #, rust-format
@@ -2957,7 +2965,7 @@ msgstr "시간"
 msgid "Title"
 msgstr "제목"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:68
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:65
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Title"
@@ -2993,7 +3001,7 @@ msgstr "트랙 이름"
 msgid "Track Number"
 msgstr "트랙 번호"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:93
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:90
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Track Number"
@@ -3004,7 +3012,7 @@ msgstr "트랙 번호"
 msgid "Track Total"
 msgstr "총 트랙 수"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:171
+#: crates/app_runtime/src/youtube_audio_replacement.rs:170
 #, rust-format
 msgid "Track audio replaced from YouTube."
 msgstr "YouTube에서 트랙 오디오를 교체했습니다."
@@ -3050,7 +3058,7 @@ msgctxt "file type column"
 msgid "Type"
 msgstr "유형"
 
-#: crates/ui_gtk/src/device_panel.rs:852 crates/ui_gtk/src/statistics.rs:252
+#: crates/ui_gtk/src/device_panel.rs:876 crates/ui_gtk/src/statistics.rs:252
 #: crates/ui_gtk/src/statistics.rs:421 crates/ui_gtk/src/statistics.rs:441
 #, rust-format
 msgid "Unknown"
@@ -3068,7 +3076,7 @@ msgstr "알 수 없는 앨범"
 msgid "Unknown Artist"
 msgstr "알 수 없는 아티스트"
 
-#: crates/ui_gtk/src/rating_stars.rs:208
+#: crates/ui_gtk/src/rating_stars.rs:182
 #, rust-format
 msgid "Unrated"
 msgstr "평가 안 함"
@@ -3087,7 +3095,7 @@ msgstr "다음에 재생과 대기열에 추가를 지원하는 다음 곡 대�
 msgid "Use the image, or the image file, on the clipboard (Ctrl+V)"
 msgstr "클립보드의 이미지 또는 이미지 파일 사용(Ctrl+V)"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:500
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:524
 #, rust-format
 msgid "Uses {workers} of {total} core on this machine."
 msgid_plural "Uses {workers} of {total} cores on this machine."
@@ -3103,7 +3111,7 @@ msgstr "여러 아티스트"
 msgid "Version {version}"
 msgstr "버전 {version}"
 
-#: crates/ui_gtk/src/preferences/mod.rs:323
+#: crates/ui_gtk/src/preferences/mod.rs:358
 #, rust-format
 msgid "Views"
 msgstr "보기"
@@ -3144,7 +3152,7 @@ msgstr "재생 목록 쓰는 중…"
 msgid "Year"
 msgstr "연도"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:84
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:81
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Year"
@@ -3156,7 +3164,7 @@ msgid "Year added"
 msgstr "추가한 연도"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:788
-#: crates/ui_gtk/src/smart_playlist_editor.rs:92
+#: crates/ui_gtk/src/smart_playlist_editor.rs:108
 #: crates/ui_gtk/src/track_table/columns.rs:255
 #, rust-format
 msgid "Yes"
@@ -3189,189 +3197,189 @@ msgstr "설정을 저장하지 못했습니다."
 msgid "Zoom artwork"
 msgstr "아트워크 확대"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:343
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:340
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "album"
 msgstr "앨범"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:292
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:289
 #, rust-format
 msgctxt "smart playlist match"
 msgid "all"
 msgstr "모두"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:293
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:290
 #, rust-format
 msgctxt "smart playlist match"
 msgid "any"
 msgstr "하나 이상"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:342
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:339
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "artist"
 msgstr "아티스트"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:158
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:155
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "contains"
 msgstr "포함"
 
 #. Translators: follows the day count of "is in the last [7] days".
-#: crates/ui_gtk/src/smart_playlist_editor.rs:137
+#: crates/ui_gtk/src/smart_playlist_editor.rs:156
 #, rust-format
 msgid "days"
 msgstr "일 이내"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:159
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:156
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "does not contain"
 msgstr "포함하지 않음"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:163
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:160
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "ends with"
 msgstr "다음으로 끝남"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:344
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:341
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "genre"
 msgstr "장르"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:336
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:333
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "highest rating"
 msgstr "가장 높은 별점"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:160
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:166
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:184
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:157
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:163
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:181
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is"
 msgstr "같음"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:179
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:176
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is after"
 msgstr "이후"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:178
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:175
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is before"
 msgstr "이전"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:164
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:176
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:182
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:161
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:173
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:179
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is empty"
 msgstr "비어 있음"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:168
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:165
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is greater than"
 msgstr "보다 큼"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:170
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:167
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is greater than or equal to"
 msgstr "이상"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:180
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:177
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is in the last"
 msgstr "최근"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:172
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:169
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is less than"
 msgstr "보다 작음"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:174
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:171
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is less than or equal to"
 msgstr "이하"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:185
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:182
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is missing"
 msgstr "없음"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:161
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:167
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:158
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:164
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is not"
 msgstr "같지 않음"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:181
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:178
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is not in the last"
 msgstr "제외: 최근"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:165
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:177
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:162
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:174
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:180
 #: crates/ui_gtk/src/smart_playlist_editor/model.rs:183
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:186
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is present"
 msgstr "있음"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:333
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:330
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "least often played"
 msgstr "가장 적게 재생한 순"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:321
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:318
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "least recently added"
 msgstr "가장 먼저 추가한 순"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:327
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:324
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "least recently played"
 msgstr "가장 오래전에 재생한 순"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:339
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:336
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "lowest rating"
 msgstr "가장 낮은 별점"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:330
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:327
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "most often played"
 msgstr "가장 많이 재생한 순"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:318
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:315
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "most recently added"
 msgstr "가장 최근에 추가한 순"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:324
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:321
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "most recently played"
@@ -3398,7 +3406,7 @@ msgstr "/"
 msgid "of music"
 msgstr "분량의 음악"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:349
+#: crates/ui_gtk/src/smart_playlist_editor.rs:392
 #, rust-format
 msgid "of the following rules:"
 msgstr "일치:"
@@ -3414,18 +3422,18 @@ msgid "play"
 msgid_plural "plays"
 msgstr[0] "회 재생"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:316
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:313
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "random"
 msgstr "무작위"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:376
+#: crates/ui_gtk/src/smart_playlist_editor.rs:419
 #, rust-format
 msgid "songs, selected by"
 msgstr "곡, 선택 기준:"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:162
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:159
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "starts with"
@@ -3438,7 +3446,7 @@ msgstr "다음으로 시작"
 msgid "the disc in the drive changed during import"
 msgstr "가져오는 도중 드라이브의 디스크가 바뀌었습니다"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:341
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:338
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "title"
@@ -3466,19 +3474,19 @@ msgstr "제목 없는 재생 목록"
 msgid "untitled smart playlist"
 msgstr "제목 없는 스마트 재생 목록"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:63
+#: crates/ui_gtk/src/smart_playlist_editor.rs:79
 #, rust-format
 msgid "value"
 msgstr "값"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:231
+#: crates/app_runtime/src/youtube_audio_replacement.rs:230
 #, rust-format
 msgid "yt-dlp could not download usable audio from that YouTube URL."
 msgstr ""
 "yt-dlp가 해당 YouTube URL에서 사용할 수 있는 오디오를 다운로드하지 못했습니"
 "다."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:234
+#: crates/app_runtime/src/youtube_audio_replacement.rs:233
 #, rust-format
 msgid "yt-dlp returned an unsupported or unsafe audio file."
 msgstr "yt-dlp가 지원되지 않거나 안전하지 않은 오디오 파일을 반환했습니다."
@@ -3633,29 +3641,29 @@ msgid_plural "{count} minutes"
 msgstr[0] "{count}분"
 
 #: crates/app_runtime/src/notifications.rs:324
-#: crates/ui_gtk/src/device_panel.rs:756
+#: crates/ui_gtk/src/device_panel.rs:780
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} missing"
 msgid_plural "{count} missing"
 msgstr[0] "{count}개 없음"
 
-#: crates/ui_gtk/src/device_panel.rs:1070
+#: crates/ui_gtk/src/device_panel.rs:1094
 #, rust-format
 msgid "{count} missing BPM"
 msgstr "BPM 없음 {count}개"
 
-#: crates/ui_gtk/src/device_panel.rs:1088
+#: crates/ui_gtk/src/device_panel.rs:1112
 #, rust-format
 msgid "{count} missing beat grid"
 msgstr "비트 그리드 없음 {count}개"
 
-#: crates/ui_gtk/src/device_panel.rs:1076
+#: crates/ui_gtk/src/device_panel.rs:1100
 #, rust-format
 msgid "{count} missing key"
 msgstr "키 없음 {count}개"
 
-#: crates/ui_gtk/src/device_panel.rs:1082
+#: crates/ui_gtk/src/device_panel.rs:1106
 #, rust-format
 msgid "{count} missing waveform"
 msgstr "파형 없음 {count}개"
@@ -3683,7 +3691,7 @@ msgstr ""
 "선택한 파일 중 {count}개가 디스크에 없어 이 중복 항목을 통합할 수 없습니다. "
 "복원하거나 제거한 후 다시 시도하십시오."
 
-#: crates/ui_gtk/src/device_panel.rs:870
+#: crates/ui_gtk/src/device_panel.rs:894
 #, rust-format
 msgid "{count} other genre — {size}"
 msgid_plural "{count} other genres — {size}"
@@ -3710,7 +3718,7 @@ msgid "{count} song"
 msgid_plural "{count} songs"
 msgstr[0] "노래 {count}곡"
 
-#: crates/ui_gtk/src/rating_stars.rs:212
+#: crates/ui_gtk/src/rating_stars.rs:186
 #, rust-format
 msgid "{count} star"
 msgid_plural "{count} stars"

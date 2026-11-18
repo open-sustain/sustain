@@ -24,9 +24,9 @@ use sustain_device_sync::{
     resolve_source_fingerprint, source_file_stat,
 };
 use sustain_domain::{
-    Clock, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, FrozenClock, Playlist,
-    PlaylistItem, SmartPlaylist, SyncDevice, SyncDeviceId, SyncManifestEntry, Track, TrackId,
-    matching_tracks,
+    Clock, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, FrozenClock, PioneerExportRecord,
+    Playlist, PlaylistItem, SmartPlaylist, SyncDevice, SyncDeviceId, SyncManifestEntry, Track,
+    TrackId, matching_tracks,
 };
 use sustain_i18n::{gettext, tr_format};
 use sustain_library_store::{AnalysisCapabilities, LibraryStore};
@@ -703,6 +703,9 @@ impl ApplicationRuntime {
                     self.dismiss_notification(id);
                 }
                 self.syncing_device = None;
+                // The run changed the device: a plan made before or during
+                // it describes a drive that is no longer there.
+                self.invalidate_device_sync_plan();
                 match result {
                     Ok(outcome) => {
                         let severity = if outcome.cancelled || !outcome.copy_failures.is_empty() {
@@ -860,8 +863,9 @@ impl DeviceSyncPreparation {
 }
 
 /// Records each change a sync makes to the device in the device's saved
-/// manifest as it is made, so that a run the process does not survive
-/// leaves the next one knowing which files are already there.
+/// manifest and Pioneer export record as it is made, so that a run the
+/// process does not survive leaves the next one knowing which files are
+/// already there, and which are Sustain's.
 struct StoreManifestJournal<'a> {
     store: &'a dyn LibraryStore,
     device_id: &'a SyncDeviceId,
@@ -879,32 +883,57 @@ impl ManifestJournal for StoreManifestJournal<'_> {
             .forget_device_manifest_entry(self.device_id, path)
             .map_err(JournalError::from)
     }
+
+    /// Made durable before returning: the drive write it vouches for
+    /// follows at once, and the drive's write is durable.
+    fn record_pioneer_export(&mut self, record: &PioneerExportRecord) -> Result<(), JournalError> {
+        self.store
+            .save_device_pioneer_export(self.device_id, record)
+            .and_then(|()| self.store.flush_durable())
+            .map_err(JournalError::from)
+    }
 }
 
-/// Save the manifest and playlist files a sync reports — however it
-/// ended, they describe what the device holds — in place of what the
-/// journal pieced together.
+/// Save the manifest, playlist files and Pioneer export record a sync
+/// reports — however it ended, they describe what the device holds — in
+/// place of what the journal pieced together.
 fn save_synced_manifest(
     store: &dyn LibraryStore,
     device_id: &SyncDeviceId,
-    synced: Result<SyncOutcome, SyncFailure>,
+    synced: Result<SyncOutcome, Box<SyncFailure>>,
 ) -> Result<SyncOutcome, DeviceSyncFailure> {
-    let save = |manifest: &[SyncManifestEntry], playlist_files: &[DeviceRelativePath]| {
+    let save = |manifest: &[SyncManifestEntry],
+                playlist_files: &[DeviceRelativePath],
+                pioneer_export: &PioneerExportRecord| {
         store
             .save_device_manifest(device_id, manifest)
             .and_then(|()| store.save_device_playlist_files(device_id, playlist_files))
+            .and_then(|()| store.save_device_pioneer_export(device_id, pioneer_export))
     };
     match synced {
-        Ok(outcome) => match save(&outcome.manifest, &outcome.playlist_files) {
+        Ok(outcome) => match save(
+            &outcome.manifest,
+            &outcome.playlist_files,
+            &outcome.pioneer_export,
+        ) {
             Ok(()) => Ok(outcome),
             Err(error) => Err(DeviceSyncFailure::new(format!(
                 "could not save the on-device manifest: {error}"
             ))),
         },
         Err(failure) => {
-            let message = failure.error.to_string();
+            let message = match failure.error {
+                sustain_device_sync::SyncError::Blocked(blocker) => {
+                    notifications::sync_blocker_text(blocker)
+                }
+                ref error => error.to_string(),
+            };
             Err(DeviceSyncFailure::new(
-                match save(&failure.manifest, &failure.playlist_files) {
+                match save(
+                    &failure.manifest,
+                    &failure.playlist_files,
+                    &failure.pioneer_export,
+                ) {
                     Ok(()) => message,
                     Err(_) => format!("{message}; could not save the on-device manifest"),
                 },
@@ -990,6 +1019,7 @@ fn build_worker_sync_request(
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: PioneerExportRecord::default(),
             remove_stale,
             export_date,
         }));
@@ -1009,6 +1039,9 @@ fn build_worker_sync_request(
     let previous_playlist_files = store
         .device_playlist_files(&mount.device_id)
         .map_err(|error| format!("could not load device playlist files: {error:?}"))?;
+    let previous_pioneer_export = store
+        .device_pioneer_export(&mount.device_id)
+        .map_err(|error| format!("could not load device Pioneer export record: {error:?}"))?;
     if cancelled() {
         return Ok(None);
     }
@@ -1088,6 +1121,7 @@ fn build_worker_sync_request(
         playlists: resolved_playlists,
         previous_manifest,
         previous_playlist_files,
+        previous_pioneer_export,
         remove_stale,
         export_date,
     }))
@@ -1376,13 +1410,15 @@ mod tests {
     use sustain_library_store::{LibraryStore, SqliteLibraryStore};
     use sustain_metadata::{InitialTags, MetadataResult, MetadataService};
 
-    use sustain_device_sync::{ManifestJournal, SyncError, SyncFailure, SyncOutcome};
+    use std::collections::BTreeSet;
+    use sustain_device_sync::{ManifestJournal, SyncBlocker, SyncError, SyncFailure, SyncOutcome};
     use sustain_domain::SyncManifestEntry;
+    use sustain_domain::{PioneerDatabase, PioneerExportRecord};
 
     use super::{
         ArtistTracks, ConnectedDevice, DeviceMountIdentity, DevicePlanResult, DevicePlanSnapshot,
-        DeviceSyncPlanState, StoreManifestJournal, build_worker_sync_request, prepare_sync_request,
-        save_synced_manifest, sync_input_track, unix_to_ymd,
+        DeviceSyncPlanState, StoreManifestJournal, build_worker_sync_request, mount_identity,
+        prepare_sync_request, save_synced_manifest, sync_input_track, unix_to_ymd,
     };
     use crate::ApplicationRuntime;
 
@@ -1513,6 +1549,7 @@ mod tests {
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: false,
             export_date: "2026-06-01".to_owned(),
         }
@@ -1829,6 +1866,13 @@ mod tests {
         (store, device.id)
     }
 
+    fn database(size_bytes: u64) -> PioneerDatabase {
+        PioneerDatabase {
+            size_bytes,
+            sha256: format!("{size_bytes:064x}"),
+        }
+    }
+
     fn manifest_entry(track: i64, path: &str) -> SyncManifestEntry {
         SyncManifestEntry {
             track_id: TrackId::new(track).expect("track id"),
@@ -1859,6 +1903,95 @@ mod tests {
     }
 
     #[test]
+    fn the_journal_makes_the_pioneer_export_it_vouches_for_durable() {
+        let (backing, device_id) = store_with_manifest();
+        let store = crate::test_store::FaultyStore::new(std::sync::Arc::new(backing));
+        let record = PioneerExportRecord {
+            databases: BTreeSet::from([database(1), database(2)]),
+            artwork: BTreeSet::from([
+                DeviceRelativePath::new("PIONEER/Artwork/00001/a1.jpg").expect("device path")
+            ]),
+        };
+        let mut journal = StoreManifestJournal {
+            store: &store,
+            device_id: &device_id,
+        };
+        journal
+            .record_pioneer_export(&record)
+            .expect("record the export");
+        assert_eq!(
+            store
+                .device_pioneer_export(&device_id)
+                .expect("load Pioneer export"),
+            record
+        );
+        assert_eq!(store.flush_durable_calls(), 1);
+
+        store.set_fail_flush_durable(true);
+        assert!(
+            journal.record_pioneer_export(&record).is_err(),
+            "a record that may not survive cannot vouch for a drive write"
+        );
+    }
+
+    #[test]
+    fn a_blocked_sync_explains_itself_in_the_user_language() {
+        let (store, device_id) = store_with_manifest();
+        let failure = SyncFailure {
+            error: SyncError::Blocked(SyncBlocker::ForeignPioneerExport),
+            manifest: Vec::new(),
+            playlist_files: Vec::new(),
+            pioneer_export: PioneerExportRecord::default(),
+        };
+        let failed = save_synced_manifest(&store, &device_id, Err(Box::new(failure)))
+            .expect_err("the sync was refused");
+        assert_eq!(
+            failed.message,
+            crate::notifications::sync_blocker_text(SyncBlocker::ForeignPioneerExport)
+        );
+    }
+
+    #[test]
+    fn a_finished_sync_discards_the_plan_made_while_it_ran() {
+        let mut runtime = ApplicationRuntime::new();
+        let receiver = runtime.device_sync_event_receiver();
+        let device = connected("stick", "/mnt/stick");
+        runtime.request_device_sync_plan(&device);
+        let generation = runtime
+            .device_plan_cache
+            .as_ref()
+            .expect("plan requested")
+            .generation;
+        assert!(matches!(
+            runtime
+                .device_sync_scheduler
+                .start_test_task(|_progress, _cancel| Ok(SyncOutcome::default())),
+            crate::DeviceSyncStartOutcome::Started(_)
+        ));
+        loop {
+            let event = receiver.recv_blocking().expect("sync event");
+            let finished = matches!(event, crate::DeviceSyncEvent::Finished { .. });
+            runtime.apply_device_sync_event(event);
+            if finished {
+                break;
+            }
+        }
+
+        assert!(!runtime.apply_device_plan_result(DevicePlanResult {
+            generation,
+            mount: mount_identity(&device),
+            result: Ok(DevicePlanSnapshot {
+                plan: None,
+                capacity: DeviceCapacity::default(),
+            }),
+        }));
+        assert_eq!(
+            runtime.device_sync_plan_state(&device),
+            DeviceSyncPlanState::Unavailable
+        );
+    }
+
+    #[test]
     fn the_manifest_a_sync_reports_is_saved_however_it_ended() {
         let (store, device_id) = store_with_manifest();
         let playlist = |path: &str| DeviceRelativePath::new(path).expect("device path");
@@ -1866,6 +1999,10 @@ mod tests {
             copied: 1,
             manifest: vec![manifest_entry(3, "c.mp3")],
             playlist_files: vec![playlist("Mix.m3u8")],
+            pioneer_export: PioneerExportRecord {
+                databases: BTreeSet::from([database(1)]),
+                artwork: BTreeSet::from([playlist("PIONEER/Artwork/00001/a1.jpg")]),
+            },
             ..SyncOutcome::default()
         };
         let saved = save_synced_manifest(&store, &device_id, Ok(outcome.clone()));
@@ -1880,14 +2017,25 @@ mod tests {
                 .expect("load playlist files"),
             vec![playlist("Mix.m3u8")]
         );
+        assert_eq!(
+            store
+                .device_pioneer_export(&device_id)
+                .expect("load Pioneer export"),
+            outcome.pioneer_export
+        );
 
         let failure = SyncFailure {
             error: SyncError::io("d.mp3", std::io::Error::other("No space left on device")),
             manifest: vec![manifest_entry(4, "d.mp3")],
             playlist_files: vec![playlist("Chill.m3u8")],
+            pioneer_export: PioneerExportRecord {
+                databases: BTreeSet::from([database(1), database(2)]),
+                artwork: BTreeSet::from([playlist("PIONEER/Artwork/00001/a2.jpg")]),
+            },
         };
-        let failed =
-            save_synced_manifest(&store, &device_id, Err(failure)).expect_err("the sync failed");
+        let failed_export = failure.pioneer_export.clone();
+        let failed = save_synced_manifest(&store, &device_id, Err(Box::new(failure)))
+            .expect_err("the sync failed");
         assert_eq!(failed.message, "d.mp3: No space left on device");
         assert_eq!(
             store.device_manifest(&device_id).expect("load manifest"),
@@ -1898,6 +2046,12 @@ mod tests {
                 .device_playlist_files(&device_id)
                 .expect("load playlist files"),
             vec![playlist("Chill.m3u8")]
+        );
+        assert_eq!(
+            store
+                .device_pioneer_export(&device_id)
+                .expect("load Pioneer export"),
+            failed_export
         );
     }
 
@@ -1921,9 +2075,10 @@ mod tests {
             error: SyncError::Empty,
             manifest: Vec::new(),
             playlist_files: Vec::new(),
+            pioneer_export: PioneerExportRecord::default(),
         };
-        let failed =
-            save_synced_manifest(&store, &device_id, Err(failure)).expect_err("the sync failed");
+        let failed = save_synced_manifest(&store, &device_id, Err(Box::new(failure)))
+            .expect_err("the sync failed");
         assert_eq!(
             failed.message,
             "the selection contains no tracks; could not save the on-device manifest"

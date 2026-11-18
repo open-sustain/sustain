@@ -47,7 +47,8 @@ pub use clock::{
 pub use command::ApplicationCommand;
 pub use device_sync::{
     AnlzRecord, DeviceArtistSelection, DeviceKind, DeviceLayout, DeviceRelativePath,
-    DeviceSelection, FilesPerFolderCap, SyncDevice, SyncDeviceId, SyncManifestEntry,
+    DeviceSelection, FilesPerFolderCap, PioneerDatabase, PioneerExportRecord, SyncDevice,
+    SyncDeviceId, SyncManifestEntry,
 };
 pub use duplicate_consolidation::{
     DuplicateArtworkQuality, DuplicateAudioQuality, DuplicateConsolidationError,

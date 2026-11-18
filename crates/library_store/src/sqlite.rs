@@ -668,4 +668,18 @@ impl LibraryStore for SqliteLibraryStore {
         let connection = self.connection_guard()?;
         devices::device_playlist_files(&connection, id)
     }
+
+    fn save_device_pioneer_export(
+        &self,
+        id: &SyncDeviceId,
+        record: &PioneerExportRecord,
+    ) -> StoreResult<()> {
+        let mut connection = self.connection_guard()?;
+        devices::save_device_pioneer_export(&mut connection, id, record)
+    }
+
+    fn device_pioneer_export(&self, id: &SyncDeviceId) -> StoreResult<PioneerExportRecord> {
+        let connection = self.connection_guard()?;
+        devices::device_pioneer_export(&connection, id)
+    }
 }

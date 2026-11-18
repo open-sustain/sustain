@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sustain_domain::DeviceRelativePath;
+use sustain_domain::{DeviceRelativePath, PioneerExportRecord};
 
 use sustain_library_store::{
     AcousticFeatures, AnalysisCapabilities, AnalysisContext, AnalysisDue, AnalyzerVersions,
@@ -824,5 +824,16 @@ impl LibraryStore for FaultyStore {
 
     fn device_playlist_files(&self, id: &SyncDeviceId) -> StoreResult<Vec<DeviceRelativePath>> {
         self.inner.device_playlist_files(id)
+    }
+    fn save_device_pioneer_export(
+        &self,
+        id: &SyncDeviceId,
+        record: &PioneerExportRecord,
+    ) -> StoreResult<()> {
+        self.inner.save_device_pioneer_export(id, record)
+    }
+
+    fn device_pioneer_export(&self, id: &SyncDeviceId) -> StoreResult<PioneerExportRecord> {
+        self.inner.device_pioneer_export(id)
     }
 }

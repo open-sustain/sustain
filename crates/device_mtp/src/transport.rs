@@ -118,7 +118,7 @@ impl DeviceTransport for MtpTransport {
         }
     }
 
-    fn read_to_string(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<String> {
+    fn read_file(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<Vec<u8>> {
         let file = self.resolve(path);
         let info = file
             .query_info(
@@ -153,12 +153,7 @@ impl DeviceTransport for MtpTransport {
                 format!("device file exceeds {limit} bytes: {path}"),
             ));
         }
-        String::from_utf8(bytes).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("device file is not UTF-8: {path}"),
-            )
-        })
+        Ok(bytes)
     }
 
     fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {

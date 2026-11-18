@@ -25,7 +25,7 @@ use gtk::{gdk, glib};
 
 use sustain_app_runtime::{
     ApplicationCommand, CollationKey, ConnectedDevice, DeviceAnalysisReadiness, DeviceLayout,
-    DeviceSyncPlanState, FilesPerFolderCap, PlaylistItem, SyncPlan,
+    DeviceSyncPlanState, FilesPerFolderCap, PlaylistItem, SyncPlan, sync_blocker_text,
 };
 use sustain_i18n::{gettext, ngettext, npgettext, pgettext, phrase_list, plural_count, tr_format};
 
@@ -182,6 +182,34 @@ impl DeviceSyncPanel {
             return;
         }
         if let Some(device) = self.current_device.borrow().clone() {
+            self.refresh_bottom_bar(&device);
+        }
+    }
+
+    /// Plan the shown device afresh if its sync is blocked. What blocks it
+    /// is resolved outside Sustain — the disclaimer asks the user to
+    /// remove a folder from the drive — so the window regaining focus is
+    /// when the user may have done so.
+    pub(crate) fn recheck_blocked_plan(&self) {
+        let blocked = self.current_device.borrow().as_ref().is_some_and(|device| {
+            matches!(
+                self.runtime.borrow().device_sync_plan_state(device),
+                DeviceSyncPlanState::Ready(snapshot)
+                    if snapshot.plan.as_ref().is_some_and(|plan| plan.blocker.is_some())
+            )
+        });
+        if blocked {
+            self.replan();
+        }
+    }
+
+    /// Plan the shown device afresh, if the panel shows a connected one.
+    pub(crate) fn replan(&self) {
+        if !self.root.is_mapped() || !self.current_device_connected.get() {
+            return;
+        }
+        if let Some(device) = self.current_device.borrow().clone() {
+            self.request_plan(&device);
             self.refresh_bottom_bar(&device);
         }
     }
@@ -669,9 +697,23 @@ impl DeviceSyncPanel {
             actions.append(&analyse);
         }
 
+        // A sync the engine would refuse, named beside the Sync button it
+        // greys out, with what the user can do about it.
+        let blocker = plan.as_ref().and_then(|plan| plan.blocker);
+        if let Some(blocker) = blocker {
+            let reason = gtk::Label::new(Some(&sync_blocker_text(blocker)));
+            reason.add_css_class("dim-label");
+            reason.set_wrap(true);
+            reason.set_max_width_chars(48);
+            reason.set_xalign(1.0);
+            actions.append(&reason);
+        }
+
         let sync = gtk::Button::with_label(&gettext("Sync"));
         sync.add_css_class("suggested-action");
-        sync.set_sensitive(connected && !pending && plan.is_some() && !over_capacity);
+        sync.set_sensitive(
+            connected && !pending && plan.is_some() && !over_capacity && blocker.is_none(),
+        );
         {
             let command_controller = self.command_controller.clone();
             let root = self.root.clone();

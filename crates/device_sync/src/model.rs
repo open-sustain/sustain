@@ -11,8 +11,8 @@
 use std::{ops::Deref, path::PathBuf, time::Duration};
 
 use sustain_domain::{
-    BeatGrid, Bpm, DeviceRelativePath, MusicalKey, SourceFileStat, SourceFingerprint, SyncDevice,
-    SyncManifestEntry, TrackContentHash, TrackId, WaveformSegments,
+    BeatGrid, Bpm, DeviceRelativePath, MusicalKey, PioneerExportRecord, SourceFileStat,
+    SourceFingerprint, SyncDevice, SyncManifestEntry, TrackContentHash, TrackId, WaveformSegments,
 };
 use sustain_pioneer::ArtworkSet;
 
@@ -121,6 +121,9 @@ pub struct SyncRequest {
     /// relative to the sync base like the manifest's paths. A recorded
     /// file no playlist of this sync writes is stale; no other file is.
     pub previous_playlist_files: Vec<DeviceRelativePath>,
+    /// The database and artwork the previous syncs left in the device's
+    /// Pioneer export. Empty for other layouts.
+    pub previous_pioneer_export: PioneerExportRecord,
     /// Delete on-device files no longer in the selection.
     pub remove_stale: bool,
     /// `YYYY-MM-DD` stamped into the Pioneer analyze-date field.
@@ -284,6 +287,34 @@ pub struct SyncPlan {
     /// largest first (ties broken by genre name for determinism). Sums to
     /// `bytes_total`. Drives the occupation bar's per-genre stacking.
     pub genre_bytes: Vec<GenreBytes>,
+    /// What keeps the device from syncing at all, if anything.
+    pub blocker: Option<SyncBlocker>,
+}
+
+/// A state of the device a sync refuses to change, until the user
+/// deliberately resolves it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SyncBlocker {
+    /// The drive holds a Pioneer export Sustain did not write, or one
+    /// changed since Sustain wrote it — by rekordbox, or by a player that
+    /// recorded history on it. Writing Sustain's export would erase its
+    /// catalog, history and artwork; the user must remove the drive's
+    /// `PIONEER` folder first.
+    ForeignPioneerExport,
+}
+
+impl std::fmt::Display for SyncBlocker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ForeignPioneerExport => {
+                write!(
+                    f,
+                    "the drive holds a Pioneer export Sustain did not write; \
+                     remove its PIONEER folder to sync"
+                )
+            }
+        }
+    }
 }
 
 /// Stage the engine is in, for progress reporting.
@@ -320,6 +351,9 @@ pub struct SyncOutcome {
     pub manifest: Vec<SyncManifestEntry>,
     /// The playlist files the device holds from Sustain, to persist.
     pub playlist_files: Vec<DeviceRelativePath>,
+    /// The Pioneer database and artwork the device holds from Sustain, to
+    /// persist.
+    pub pioneer_export: PioneerExportRecord,
     /// True if the run stopped early because cancellation was requested.
     pub cancelled: bool,
 }
@@ -355,6 +389,8 @@ pub enum SyncError {
     /// before any filesystem mutation rather than letting two tracks
     /// overwrite each other on the device.
     Planning(String),
+    /// The device is in a state the sync refuses to change.
+    Blocked(SyncBlocker),
 }
 
 impl SyncError {
@@ -381,6 +417,7 @@ impl std::fmt::Display for SyncError {
             Self::Preparation(message) => write!(f, "source preparation failed: {message}"),
             Self::Empty => write!(f, "the selection contains no tracks"),
             Self::Planning(message) => write!(f, "device path planning failed: {message}"),
+            Self::Blocked(blocker) => write!(f, "{blocker}"),
         }
     }
 }
@@ -391,7 +428,7 @@ impl std::error::Error for SyncError {
             Self::Io { source, .. } => Some(source),
             Self::Pdb(error) => Some(error),
             Self::Journal(error) => Some(error.as_ref()),
-            Self::Empty | Self::Planning(_) | Self::Preparation(_) => None,
+            Self::Empty | Self::Planning(_) | Self::Preparation(_) | Self::Blocked(_) => None,
         }
     }
 }
@@ -407,6 +444,9 @@ pub struct SyncFailure {
     /// The playlist files the device holds from Sustain, to persist: the
     /// previous record, less those the run removed, plus those it wrote.
     pub playlist_files: Vec<DeviceRelativePath>,
+    /// The Pioneer database and artwork the device holds from Sustain, to
+    /// persist, kept current as the run changed them.
+    pub pioneer_export: PioneerExportRecord,
 }
 
 impl std::fmt::Display for SyncFailure {

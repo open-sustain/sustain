@@ -376,18 +376,24 @@ pub(super) fn install_smart_shuffle_rebuild_result_consumer(
 /// [`ApplicationRuntime::apply_device_sync_event`], which updates the
 /// progress notification and, on completion, persists the device
 /// manifest and publishes the outcome. A run starting or ending turns the
-/// synced device's sidebar badge on or off.
+/// synced device's sidebar badge on or off; a run ending has the device
+/// panel plan the drive it changed afresh.
 pub(super) fn install_device_sync_event_consumer(
     receiver: DeviceSyncEventReceiver,
     runtime: SharedRuntime,
     sidebar: PlaylistSidebar,
+    device_panel: DeviceSyncPanel,
 ) {
     glib::MainContext::default().spawn_local(async move {
         while let Ok(event) = receiver.recv().await {
             let starts_or_ends = !matches!(event, DeviceSyncEvent::Progress { .. });
+            let ends = matches!(event, DeviceSyncEvent::Finished { .. });
             runtime.borrow_mut().apply_device_sync_event(event);
             if starts_or_ends {
                 sidebar.refresh_transfer_badges();
+            }
+            if ends {
+                device_panel.replan();
             }
         }
     });

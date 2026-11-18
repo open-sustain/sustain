@@ -148,7 +148,7 @@ pub use library_changes::{
 };
 pub use smart_shuffle_scheduler::{SmartShuffleRebuildResult, SmartShuffleScheduler};
 pub use sustain_device_sync::{
-    ConnectedDevice, DeviceCapacity, DeviceTarget, SyncPlan, SyncProgress, SyncStage,
+    ConnectedDevice, DeviceCapacity, DeviceTarget, SyncBlocker, SyncPlan, SyncProgress, SyncStage,
 };
 pub use sustain_smart_shuffle::{
     INDEX_SCHEMA_VERSION as SMART_SHUFFLE_INDEX_SCHEMA_VERSION, PickMode, SmartShuffleError,
@@ -175,8 +175,9 @@ pub use notifications::{
     import_failure_reason_text, library_consolidation_outcome_text,
     library_consolidation_running_text, library_import_outcome_text, library_import_progress_text,
     library_import_running_text, library_path_change_outcome_text, library_scan_outcome_text,
-    library_scan_running_text, runtime_error_text, verified_duplicate_outcome_text,
-    verified_duplicate_progress_text, waveform_cache_unavailable_text,
+    library_scan_running_text, runtime_error_text, sync_blocker_text,
+    verified_duplicate_outcome_text, verified_duplicate_progress_text,
+    waveform_cache_unavailable_text,
 };
 
 pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;

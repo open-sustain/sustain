@@ -515,6 +515,14 @@ pub(crate) fn build_main_window(
     songs_drop_overlay.add_overlay(&songs_drop_indicator);
 
     let device_panel = DeviceSyncPanel::new(runtime.clone(), command_controller.clone());
+    window.connect_is_active_notify({
+        let device_panel = device_panel.clone();
+        move |window| {
+            if window.is_active() {
+                device_panel.recheck_blocked_plan();
+            }
+        }
+    });
     let cd_import_panel = CdImportPanel::new(runtime.clone());
     cd_import_panel_holder.replace(Some(cd_import_panel.clone()));
     install_audio_cd_playback(
@@ -665,7 +673,12 @@ pub(crate) fn build_main_window(
         runtime.clone(),
         device_panel.clone(),
     );
-    install_device_sync_event_consumer(device_sync_event_rx, runtime.clone(), sidebar.clone());
+    install_device_sync_event_consumer(
+        device_sync_event_rx,
+        runtime.clone(),
+        sidebar.clone(),
+        device_panel.clone(),
+    );
     // The sidebar is now the sole navigation surface: its selection
     // chooses which content-stack page is visible (Music → SONGS_VIEW,
     // Albums → ALBUMS_VIEW, an Item → PLAYLISTS_VIEW). The non-default

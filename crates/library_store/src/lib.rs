@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::Path,
     sync::{Mutex, MutexGuard},
 };
@@ -18,7 +18,7 @@ pub use sustain_domain::{
     TrackColumnLayoutScope, TrackColumnSort, TrackId, TrackLocation, TrackRelativePath,
     WaveformSegments,
 };
-use sustain_domain::{BeatGrid, DeviceRelativePath, SmartPlaylistRuleSet};
+use sustain_domain::{BeatGrid, DeviceRelativePath, PioneerExportRecord, SmartPlaylistRuleSet};
 pub use sustain_domain::{SourceFileStat, SourceFingerprint};
 
 mod migrations;
@@ -764,6 +764,18 @@ pub trait LibraryStore: Send + Sync {
 
     /// Load the record of the playlist files Sustain wrote to a device.
     fn device_playlist_files(&self, id: &SyncDeviceId) -> StoreResult<Vec<DeviceRelativePath>>;
+
+    /// Replace the record of the Pioneer export the last sync left on a
+    /// device: the digest of its track database and its artwork files.
+    fn save_device_pioneer_export(
+        &self,
+        id: &SyncDeviceId,
+        record: &PioneerExportRecord,
+    ) -> StoreResult<()>;
+
+    /// Load the record of the Pioneer export Sustain wrote to a device —
+    /// empty when it wrote none.
+    fn device_pioneer_export(&self, id: &SyncDeviceId) -> StoreResult<PioneerExportRecord>;
 }
 
 #[derive(Debug)]

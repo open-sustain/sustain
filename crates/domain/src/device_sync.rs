@@ -14,6 +14,7 @@
 //! `sustain-device-sync` crate; this module is pure data so the storage
 //! layer can persist it without pulling in that machinery.
 
+use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 use crate::PlaylistItem;
@@ -282,6 +283,35 @@ pub struct SyncDevice {
     /// Filesystem volume id, used only to re-recognise a device whose
     /// marker file was deleted. `None` until first observed.
     pub volume_id: Option<String>,
+}
+
+/// The files of a device's Pioneer export that Sustain last wrote, besides
+/// the audio and analysis files its manifest records: the track database
+/// and the artwork thumbnails. A sync replaces or removes only these; a
+/// database Sustain did not leave on the drive belongs to someone else —
+/// rekordbox, or a player that recorded history on it.
+///
+/// A sync records what it is about to write before writing it, so a run
+/// that dies part-way leaves a record that still vouches for whatever it
+/// left on the drive.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PioneerExportRecord {
+    /// The `export.pdb` files Sustain may have left on the device: the one
+    /// it last wrote — and while a sync publishes a new one, that one too.
+    /// Empty if it has written none.
+    pub databases: BTreeSet<PioneerDatabase>,
+    /// The artwork files Sustain wrote, or was about to write, and has not
+    /// removed, relative to the sync base.
+    pub artwork: BTreeSet<DeviceRelativePath>,
+}
+
+/// A Pioneer track database Sustain wrote, as it can be recognised on a
+/// drive: its exact size, and the SHA-256 digest of its bytes.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PioneerDatabase {
+    pub size_bytes: u64,
+    /// Lowercase hexadecimal.
+    pub sha256: String,
 }
 
 /// One row of a device's sync manifest: a track Sustain last wrote to

@@ -9,7 +9,8 @@
 use std::collections::{HashMap, HashSet};
 
 use sustain_domain::{
-    AnlzRecord, CollationKey, DeviceLayout, DeviceRelativePath, SyncManifestEntry,
+    AnlzRecord, CollationKey, DeviceLayout, DeviceRelativePath, PioneerExportRecord,
+    SyncManifestEntry,
 };
 use sustain_pioneer::path_hash::AnlzSlot;
 
@@ -19,6 +20,7 @@ use crate::model::{
     GenreBytes, Placement, PreparedSyncRequest, SyncError, SyncFailure, SyncOutcome, SyncPlan,
     SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
 };
+use crate::pioneer_export;
 use crate::transport::DeviceTransport;
 
 /// The on-device subtree to write under: the Pioneer format owns the drive
@@ -162,6 +164,18 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
         .map(|p| req.tracks[p.track_index].source.stat.size_bytes)
         .sum();
     let genre_bytes = genre_breakdown(req, &placements);
+    let blocker = match req.device.layout {
+        DeviceLayout::Pioneer => match pioneer_export::ensure_database_is_ours(
+            transport,
+            &base,
+            &req.previous_pioneer_export,
+        ) {
+            Ok(()) => None,
+            Err(SyncError::Blocked(blocker)) => Some(blocker),
+            Err(error) => return Err(error),
+        },
+        DeviceLayout::M3u | DeviceLayout::FolderPerPlaylist => None,
+    };
     Ok(SyncPlan {
         to_copy: diff.copy_count(),
         to_update: diff.updates.len(),
@@ -174,6 +188,7 @@ pub fn plan(transport: &dyn DeviceTransport, req: &SyncRequest) -> Result<SyncPl
         bytes_to_copy,
         bytes_total,
         genre_bytes,
+        blocker,
     })
 }
 
@@ -234,18 +249,22 @@ fn genre_breakdown(req: &SyncRequest, placements: &[Placement]) -> Vec<GenreByte
 /// A run that stops on an error still reports what the device holds, in
 /// [`SyncFailure::manifest`]: the files it wrote before the error are on
 /// the device too, and a manifest that forgot them would leave them there
-/// for good once they leave the selection.
+/// for good once they leave the selection. The failure is boxed: it is
+/// the rare path, and carries every record of the device.
 pub fn sync(
     transport: &dyn DeviceTransport,
     req: &PreparedSyncRequest,
     journal: &mut dyn ManifestJournal,
     progress: &mut dyn FnMut(SyncProgress),
     cancel: &dyn Fn() -> bool,
-) -> Result<SyncOutcome, SyncFailure> {
-    let untouched = |error: SyncError| SyncFailure {
-        error,
-        manifest: req.previous_manifest.clone(),
-        playlist_files: req.previous_playlist_files.clone(),
+) -> Result<SyncOutcome, Box<SyncFailure>> {
+    let untouched = |error: SyncError| {
+        Box::new(SyncFailure {
+            error,
+            manifest: req.previous_manifest.clone(),
+            playlist_files: req.previous_playlist_files.clone(),
+            pioneer_export: req.previous_pioneer_export.clone(),
+        })
     };
     if req.tracks.is_empty() {
         return Err(untouched(SyncError::Empty));
@@ -255,10 +274,30 @@ pub fn sync(
             cancelled: true,
             manifest: req.previous_manifest.clone(),
             playlist_files: req.previous_playlist_files.clone(),
+            pioneer_export: req.previous_pioneer_export.clone(),
             ..SyncOutcome::default()
         });
     }
     let base = device_base(req);
+    // Before the drive is changed in any way: a Pioneer export that is
+    // not Sustain's is left exactly as it is.
+    if req.device.layout == DeviceLayout::Pioneer {
+        let record = &req.previous_pioneer_export;
+        pioneer_export::ensure_database_is_ours(transport, &base, record).map_err(untouched)?;
+        let artwork: Vec<DeviceRelativePath> = req
+            .pioneer_assets()
+            .map_err(untouched)?
+            .artwork
+            .files()
+            .map(|(name, _)| {
+                pioneer_export::artwork_bucket()
+                    .join_component(&name)
+                    .expect("generated Pioneer artwork filename is safe")
+            })
+            .collect();
+        pioneer_export::ensure_artwork_is_ours(transport, &base, record, &artwork)
+            .map_err(untouched)?;
+    }
     transport
         .cleanup_stale_temporary_files(&base, cancel)
         .map_err(|error| untouched(SyncError::io(base.as_str(), error)))?;
@@ -277,11 +316,12 @@ pub fn sync(
     let mut run = Run::new(req, &placements, &diff);
     match run.execute(transport, &base, journal, progress, cancel) {
         Ok(()) => Ok(run.into_outcome()),
-        Err(error) => Err(SyncFailure {
+        Err(error) => Err(Box::new(SyncFailure {
             error,
             manifest: run.device_manifest(),
             playlist_files: run.device_playlist_files(),
-        }),
+            pioneer_export: run.pioneer_export.clone(),
+        })),
     }
 }
 
@@ -290,8 +330,8 @@ struct Run<'a> {
     req: &'a PreparedSyncRequest,
     placements: &'a [Placement],
     diff: &'a Diff,
-    /// The analysis pair each previous entry recorded. Until finalize
-    /// establishes a new one, that record still describes what is on the
+    /// The analysis pair each previous entry recorded. Until writing the
+    /// Pioneer export establishes a new one, that record still describes what is on the
     /// device (an audio rewrite does not touch the pair).
     previous_anlz: HashMap<&'a DeviceRelativePath, &'a AnlzRecord>,
     outcome: SyncOutcome,
@@ -310,6 +350,9 @@ struct Run<'a> {
     /// The playlist files the run wrote, and the stale ones it removed.
     playlists_written: Vec<DeviceRelativePath>,
     playlists_removed: HashSet<&'a DeviceRelativePath>,
+    /// The Pioneer database and artwork the device holds from Sustain,
+    /// kept current as the run writes and removes them.
+    pioneer_export: PioneerExportRecord,
 }
 
 impl<'a> Run<'a> {
@@ -346,6 +389,7 @@ impl<'a> Run<'a> {
             removed: HashSet::new(),
             playlists_written: Vec::new(),
             playlists_removed: HashSet::new(),
+            pioneer_export: req.previous_pioneer_export.clone(),
         };
         // Unchanged files stay in the manifest as-is.
         for &index in &diff.unchanged {
@@ -459,15 +503,29 @@ impl<'a> Run<'a> {
                 completed: 0,
                 total: 1,
             });
-            let mut finalized = layout::finalize(
-                req,
-                transport,
-                base,
-                placements,
-                &self.present,
-                &mut self.playlists_written,
-                cancel,
-            )?;
+            let mut finalized = match req.device.layout {
+                DeviceLayout::M3u => {
+                    layout::write_m3u_playlists(
+                        req,
+                        transport,
+                        base,
+                        placements,
+                        &self.present,
+                        &mut self.playlists_written,
+                    )?;
+                    layout::Finalized::default()
+                }
+                DeviceLayout::FolderPerPlaylist => layout::Finalized::default(),
+                DeviceLayout::Pioneer => layout::write_pioneer(
+                    req,
+                    transport,
+                    base,
+                    placements,
+                    &self.present,
+                    &mut self.pioneer_export,
+                    journal,
+                )?,
+            };
             for (entry, index) in self.manifest.iter_mut().zip(&self.entry_placements) {
                 if let Some(anlz) = finalized.anlz.remove(index) {
                     entry.anlz = Some(anlz);
@@ -591,6 +649,7 @@ impl<'a> Run<'a> {
         SyncOutcome {
             manifest: self.device_manifest(),
             playlist_files: self.device_playlist_files(),
+            pioneer_export: self.pioneer_export.clone(),
             ..self.outcome
         }
     }

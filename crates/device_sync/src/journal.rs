@@ -7,11 +7,12 @@
 //! a run that never ends — the process killed, the machine powered off
 //! part-way through a long export — reports nothing. The journal is told
 //! of each change as it is made, so the next run knows which files the
-//! interrupted one already wrote and does not copy them again.
+//! interrupted one already wrote and does not copy them again — and, for
+//! a Pioneer export, which database and artwork are Sustain's own.
 
 use std::error::Error;
 
-use sustain_domain::{DeviceRelativePath, SyncManifestEntry};
+use sustain_domain::{DeviceRelativePath, PioneerExportRecord, SyncManifestEntry};
 
 /// Why the journal could not record a change.
 pub type JournalError = Box<dyn Error + Send + Sync>;
@@ -26,4 +27,9 @@ pub trait ManifestJournal {
     /// The device no longer holds a file the manifest can vouch for at
     /// `path`, spelled exactly so.
     fn forget(&mut self, path: &DeviceRelativePath) -> Result<(), JournalError>;
+
+    /// The device's Pioneer export is now vouched for by `record`, in
+    /// place of the last one. Recorded before each change it covers is
+    /// made, so it vouches for the files a run that dies part-way leaves.
+    fn record_pioneer_export(&mut self, record: &PioneerExportRecord) -> Result<(), JournalError>;
 }

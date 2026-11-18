@@ -78,9 +78,20 @@ pub trait DeviceTransport {
     /// exist. Errors if `path` exists but is not a regular file.
     fn regular_file_len(&self, path: &DeviceRelativePath) -> io::Result<Option<u64>>;
 
-    /// Read a small text file (the identity marker), failing if it is
-    /// larger than `limit` bytes or not valid UTF-8.
-    fn read_to_string(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<String>;
+    /// Read the regular file at `path`, failing if it is larger than
+    /// `limit` bytes.
+    fn read_file(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<Vec<u8>>;
+
+    /// Read a text file, failing if it is larger than `limit` bytes or not
+    /// valid UTF-8.
+    fn read_to_string(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<String> {
+        String::from_utf8(self.read_file(path, limit)?).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("device file is not UTF-8: {path}"),
+            )
+        })
+    }
 
     /// Publish `bytes` to `path`, creating parent directories as needed.
     fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()>;

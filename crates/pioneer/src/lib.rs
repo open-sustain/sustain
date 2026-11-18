@@ -45,6 +45,28 @@ pub use pdb::PdbError;
 /// File name of the track database within `PIONEER/rekordbox/`.
 pub const PDB_RELATIVE_PATH: &str = "PIONEER/rekordbox/export.pdb";
 
+/// The catalogs rekordbox writes beside [`PDB_RELATIVE_PATH`] and Sustain
+/// never does: the extended database, and the OneLibrary database. A drive
+/// holding one carries a catalog Sustain cannot keep in step with its own,
+/// and that references the same audio and artwork.
+pub const FOREIGN_CATALOG_RELATIVE_PATHS: [&str; 2] = [
+    "PIONEER/rekordbox/exportExt.pdb",
+    "PIONEER/rekordbox/exportLibrary.db",
+];
+
+/// The exact track database `bytes` make: what identifies the database a
+/// writer left on a drive.
+pub fn database_identity(bytes: &[u8]) -> sustain_domain::PioneerDatabase {
+    use sha2::{Digest, Sha256};
+    sustain_domain::PioneerDatabase {
+        size_bytes: u64::try_from(bytes.len()).expect("a byte length fits in u64"),
+        sha256: Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    }
+}
+
 /// Root directory of the audio files on the drive (each track stored
 /// once under `Contents/Artist/Album/`).
 pub const CONTENTS_DIR: &str = "Contents";

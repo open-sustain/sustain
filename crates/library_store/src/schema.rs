@@ -670,6 +670,30 @@ WHERE kind IN ('DateBefore', 'DateAfter');
 ALTER TABLE smart_playlist_rules DROP COLUMN date_unix;
 "#;
 
+// Migration 23 records the Pioneer export a sync left on a device, apart
+// from the audio and analysis files the manifest records: the size and
+// SHA-256 of each track database it may have left (two while one is being
+// replaced), and the artwork files. A later sync writes over a database only if it
+// is still exactly one of those, and removes only the artwork recorded
+// here. Devices synced before this migration have no
+// record, so the database on them reads as not Sustain's: syncing one
+// again takes removing its PIONEER folder first, once.
+pub(super) const ADD_SYNC_PIONEER_EXPORT_SQL: &str = r#"
+CREATE TABLE sync_pioneer_databases (
+    device_id  TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+    sha256     TEXT NOT NULL,
+    PRIMARY KEY (device_id, size_bytes, sha256),
+    FOREIGN KEY (device_id) REFERENCES sync_devices(id) ON DELETE CASCADE
+);
+CREATE TABLE sync_pioneer_artwork (
+    device_id      TEXT NOT NULL,
+    on_device_path TEXT NOT NULL,
+    PRIMARY KEY (device_id, on_device_path),
+    FOREIGN KEY (device_id) REFERENCES sync_devices(id) ON DELETE CASCADE
+);
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.

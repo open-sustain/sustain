@@ -37,6 +37,13 @@ impl ManifestJournal for UnrecordedJournal {
     fn forget(&mut self, _path: &DeviceRelativePath) -> Result<(), JournalError> {
         Ok(())
     }
+
+    fn record_pioneer_export(
+        &mut self,
+        _record: &sustain_domain::PioneerExportRecord,
+    ) -> Result<(), JournalError> {
+        Ok(())
+    }
 }
 
 /// Read the phone's volume URI from the environment, skipping (passing)
@@ -196,6 +203,7 @@ fn engine_sync_lays_out_android_paths() {
         }],
         previous_manifest: Vec::new(),
         previous_playlist_files: Vec::new(),
+        previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
         remove_stale: false,
         export_date: "2026-06-07".to_owned(),
     };

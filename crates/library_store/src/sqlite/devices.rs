@@ -6,8 +6,8 @@
 
 use super::*;
 use sustain_domain::{
-    AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PlaylistItem,
-    SyncDevice, SyncDeviceId, SyncManifestEntry,
+    AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PioneerDatabase,
+    PioneerExportRecord, PlaylistItem, SyncDevice, SyncDeviceId, SyncManifestEntry,
 };
 
 pub(super) fn save_sync_device(connection: &Connection, device: &SyncDevice) -> StoreResult<()> {
@@ -363,6 +363,92 @@ pub(super) fn device_playlist_files(
     Ok(paths)
 }
 
+pub(super) fn save_device_pioneer_export(
+    connection: &mut Connection,
+    id: &SyncDeviceId,
+    record: &PioneerExportRecord,
+) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    for table in ["sync_pioneer_databases", "sync_pioneer_artwork"] {
+        transaction
+            .execute(
+                &format!("DELETE FROM {table} WHERE device_id = ?1"),
+                params![id.as_str()],
+            )
+            .map_err(StoreError::from)?;
+    }
+    {
+        let mut insert = transaction
+            .prepare_cached(
+                "INSERT INTO sync_pioneer_databases (device_id, size_bytes, sha256) \
+                 VALUES (?1, ?2, ?3)",
+            )
+            .map_err(StoreError::from)?;
+        for database in &record.databases {
+            let size_bytes = i64::try_from(database.size_bytes).map_err(|_| {
+                StoreError::InvalidStoredEnum(format!(
+                    "device Pioneer database size: {}",
+                    database.size_bytes
+                ))
+            })?;
+            insert
+                .execute(params![id.as_str(), size_bytes, database.sha256])
+                .map_err(StoreError::from)?;
+        }
+        let mut insert = transaction
+            .prepare_cached(
+                "INSERT INTO sync_pioneer_artwork (device_id, on_device_path) VALUES (?1, ?2)",
+            )
+            .map_err(StoreError::from)?;
+        for path in &record.artwork {
+            insert
+                .execute(params![id.as_str(), path.as_str()])
+                .map_err(StoreError::from)?;
+        }
+    }
+    transaction.commit().map_err(StoreError::from)
+}
+
+pub(super) fn device_pioneer_export(
+    connection: &Connection,
+    id: &SyncDeviceId,
+) -> StoreResult<PioneerExportRecord> {
+    let mut statement = connection
+        .prepare("SELECT size_bytes, sha256 FROM sync_pioneer_databases WHERE device_id = ?1")
+        .map_err(StoreError::from)?;
+    let mut rows = statement
+        .query(params![id.as_str()])
+        .map_err(StoreError::from)?;
+    let mut databases = BTreeSet::new();
+    while let Some(row) = rows.next().map_err(StoreError::from)? {
+        let size_bytes: i64 = row.get(0).map_err(StoreError::from)?;
+        databases.insert(PioneerDatabase {
+            size_bytes: u64::try_from(size_bytes).map_err(|_| {
+                StoreError::InvalidStoredEnum(format!("device Pioneer database size: {size_bytes}"))
+            })?,
+            sha256: row.get(1).map_err(StoreError::from)?,
+        });
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT on_device_path FROM sync_pioneer_artwork \
+             WHERE device_id = ?1 ORDER BY on_device_path",
+        )
+        .map_err(StoreError::from)?;
+    let mut rows = statement
+        .query(params![id.as_str()])
+        .map_err(StoreError::from)?;
+    let mut artwork = BTreeSet::new();
+    while let Some(row) = rows.next().map_err(StoreError::from)? {
+        let raw: String = row.get(0).map_err(StoreError::from)?;
+        let path = DeviceRelativePath::new(raw.clone()).ok_or_else(|| {
+            StoreError::InvalidStoredEnum(format!("device Pioneer artwork path: {raw}"))
+        })?;
+        artwork.insert(path);
+    }
+    Ok(PioneerExportRecord { databases, artwork })
+}
+
 fn device_from_row(row: &rusqlite::Row<'_>) -> StoreResult<SyncDevice> {
     let id_text: String = row.get(0).map_err(StoreError::from)?;
     let id = SyncDeviceId::new(id_text.clone()).ok_or(StoreError::InvalidStoredEnum(format!(
@@ -416,8 +502,9 @@ fn selection_from_columns(kind: i64, item_id: i64) -> StoreResult<PlaylistItem> 
 mod tests {
     use crate::{LibraryStore, SqliteLibraryStore, StoreError};
     use sustain_domain::{
-        AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, PlaylistId,
-        PlaylistItem, SmartPlaylistId, SyncDevice, SyncDeviceId, SyncManifestEntry, TrackId,
+        AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap,
+        PioneerExportRecord, PlaylistId, PlaylistItem, SmartPlaylistId, SyncDevice, SyncDeviceId,
+        SyncManifestEntry, TrackId,
     };
 
     fn device_path(path: &str) -> DeviceRelativePath {
@@ -604,6 +691,73 @@ mod tests {
         );
         store.delete_sync_device(&d.id).expect("delete");
         assert!(store.device_playlist_files(&d.id).expect("load").is_empty());
+    }
+
+    #[test]
+    fn a_pioneer_export_record_is_saved_in_place_of_the_last_one() {
+        let store = SqliteLibraryStore::open_in_memory().expect("store");
+        let d = device("dev-pioneer");
+        store.save_sync_device(&d).expect("save");
+        let other = device("dev-other");
+        store.save_sync_device(&other).expect("save other");
+        let record = |databases: &[&str], artwork: &[&str]| PioneerExportRecord {
+            databases: databases
+                .iter()
+                .zip(1_u64..)
+                .map(|(digest, size_bytes)| sustain_domain::PioneerDatabase {
+                    size_bytes,
+                    sha256: (*digest).to_owned(),
+                })
+                .collect(),
+            artwork: artwork.iter().map(|path| device_path(path)).collect(),
+        };
+        let other_record = record(&["other"], &["PIONEER/Artwork/00001/a1.jpg"]);
+        store
+            .save_device_pioneer_export(&other.id, &other_record)
+            .expect("save other record");
+        assert_eq!(
+            store.device_pioneer_export(&d.id).expect("load"),
+            PioneerExportRecord::default()
+        );
+
+        // While a sync publishes a new database, both digests are recorded.
+        let publishing = record(
+            &["first", "second"],
+            &[
+                "PIONEER/Artwork/00001/a2.jpg",
+                "PIONEER/Artwork/00001/a1.jpg",
+            ],
+        );
+        store
+            .save_device_pioneer_export(&d.id, &publishing)
+            .expect("save");
+        assert_eq!(
+            store.device_pioneer_export(&d.id).expect("load"),
+            publishing
+        );
+        let published = record(&["second"], &["PIONEER/Artwork/00001/a3.jpg"]);
+        store
+            .save_device_pioneer_export(&d.id, &published)
+            .expect("replace");
+        assert_eq!(store.device_pioneer_export(&d.id).expect("load"), published);
+        assert_eq!(
+            store.device_pioneer_export(&other.id).expect("load other"),
+            other_record
+        );
+
+        // Deleting a device forgets its record, in both tables.
+        store.delete_sync_device(&d.id).expect("delete");
+        let connection = store.connection_guard().expect("connection");
+        for table in ["sync_pioneer_databases", "sync_pioneer_artwork"] {
+            let rows: i64 = connection
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE device_id = ?1"),
+                    rusqlite::params![d.id.as_str()],
+                    |row| row.get(0),
+                )
+                .expect("count");
+            assert_eq!(rows, 0, "{table}");
+        }
     }
 
     #[test]

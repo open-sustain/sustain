@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-18 17:10+0100\n"
+"POT-Creation-Date: 2026-11-18 21:25+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Portuguese\n"
@@ -44,12 +44,12 @@ msgstr ""
 "«{current_name}» será removida da barra lateral. As próprias faixas "
 "permanecem na sua biblioteca."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:390
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:422
 #, rust-format
 msgid "\"{offending}\" is not a valid date (use YYYY-MM-DD)."
 msgstr "«{offending}» não é uma data válida (use AAAA-MM-DD)."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:384
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:416
 #, rust-format
 msgid "\"{offending}\" is not a valid rating (0 to 5)."
 msgstr "«{offending}» não é uma classificação válida (0 a 5)."
@@ -75,7 +75,7 @@ msgctxt "list separator"
 msgid ", "
 msgstr ", "
 
-#: crates/ui_gtk/src/track_info/details.rs:157
+#: crates/ui_gtk/src/track_info/details.rs:156
 #, rust-format
 msgid "0 (will reset on OK)"
 msgstr "0 (será reposto ao clicar em OK)"
@@ -86,8 +86,8 @@ msgstr ""
 "classificações de 5 estrelas, reproduções, saltos, última reprodução, último "
 "salto"
 
-#: crates/app_runtime/src/device_sync.rs:606
-#: crates/app_runtime/src/device_sync.rs:662
+#: crates/app_runtime/src/device_sync.rs:607
+#: crates/app_runtime/src/device_sync.rs:663
 #, rust-format
 msgid "A device sync is already running."
 msgstr "Já está em curso uma sincronização de dispositivo."
@@ -97,7 +97,7 @@ msgstr "Já está em curso uma sincronização de dispositivo."
 msgid "A folder cannot be moved inside itself."
 msgstr "Uma pasta não pode ser movida para dentro de si própria."
 
-#: crates/app_runtime/src/lib.rs:1209
+#: crates/app_runtime/src/lib.rs:1214
 #, rust-format
 msgid ""
 "A managed-library metadata edit could not finish safely. Sustain retained "
@@ -119,7 +119,7 @@ msgstr ""
 msgid "A smart playlist needs at least one rule."
 msgstr "Uma lista inteligente precisa de pelo menos uma regra."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:381
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:413
 #, rust-format
 msgid "A text rule needs a value."
 msgstr "Uma regra de texto precisa de um valor."
@@ -129,7 +129,7 @@ msgstr "Uma regra de texto precisa de um valor."
 msgid "AIFF audio file"
 msgstr "Ficheiro de áudio AIFF"
 
-#: crates/ui_gtk/src/preferences/mod.rs:324
+#: crates/ui_gtk/src/preferences/mod.rs:359
 #, rust-format
 msgid "About"
 msgstr "Acerca"
@@ -139,7 +139,7 @@ msgstr "Acerca"
 msgid "Add Artwork…"
 msgstr "Adicionar capa…"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:590
+#: crates/ui_gtk/src/smart_playlist_editor.rs:636
 #, rust-format
 msgid "Add rule"
 msgstr "Adicionar regra"
@@ -169,7 +169,7 @@ msgstr "A adicionar faixas…"
 msgid "Adventurous"
 msgstr "Aventureiro"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:415
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:439
 #, rust-format
 msgid "Aggressive"
 msgstr "Agressivo"
@@ -182,7 +182,7 @@ msgstr "Agressivo"
 msgid "Album"
 msgstr "Álbum"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:65
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:62
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Album"
@@ -193,7 +193,7 @@ msgstr "Álbum"
 msgid "Album Artist"
 msgstr "Artista do álbum"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:62
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:59
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Album Artist"
@@ -241,7 +241,7 @@ msgstr[0] "Analisar {count} faixa em falta"
 msgstr[1] "Analisar {count} faixas em falta"
 
 #: crates/ui_gtk/src/device_panel.rs:371
-#: crates/ui_gtk/src/preferences/mod.rs:317
+#: crates/ui_gtk/src/preferences/mod.rs:352
 #, rust-format
 msgid "Analysis"
 msgstr "Análise"
@@ -298,7 +298,7 @@ msgstr "Aplicação"
 msgid "Artist"
 msgstr "Artista"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:59
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:56
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Artist"
@@ -326,7 +326,7 @@ msgstr "Capa obtida. A guardá-la no ficheiro de áudio."
 msgid "Artwork is embedded in the audio file."
 msgstr "A capa está incorporada no ficheiro de áudio."
 
-#: crates/app_runtime/src/lib.rs:1132
+#: crates/app_runtime/src/lib.rs:1137
 #, rust-format
 msgid "Artwork updated."
 msgstr "Capa atualizada."
@@ -375,7 +375,7 @@ msgstr "Áudio do YouTube"
 msgid "BPM"
 msgstr "BPM"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:105
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:102
 #, rust-format
 msgctxt "smart playlist field"
 msgid "BPM"
@@ -392,12 +392,12 @@ msgstr "Deteção de BPM"
 msgid "BPM must be a number above 0 and at most {max}."
 msgstr "O BPM tem de ser um número superior a 0 e no máximo {max}."
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:240
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:264
 #, rust-format
 msgid "BPM range"
 msgstr "Intervalo de BPM"
 
-#: crates/app_runtime/src/lib.rs:3014
+#: crates/app_runtime/src/lib.rs:3016
 #, rust-format
 msgid ""
 "Background BPM analysis is enabled. These tracks are already queued by the "
@@ -406,7 +406,7 @@ msgstr ""
 "A análise de BPM em segundo plano está ativada. Estas faixas já estão na "
 "fila da passagem global."
 
-#: crates/app_runtime/src/lib.rs:3020
+#: crates/app_runtime/src/lib.rs:3022
 #, rust-format
 msgid ""
 "Background audio analysis is enabled. These tracks are already queued by the "
@@ -415,7 +415,7 @@ msgstr ""
 "A análise de áudio em segundo plano está ativada. Estas faixas já estão na "
 "fila da passagem global."
 
-#: crates/app_runtime/src/lib.rs:3017
+#: crates/app_runtime/src/lib.rs:3019
 #, rust-format
 msgid ""
 "Background key detection is enabled. These tracks are already queued by the "
@@ -424,12 +424,12 @@ msgstr ""
 "A deteção de tonalidade em segundo plano está ativada. Estas faixas já estão "
 "na fila da passagem global."
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:374
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:398
 #, rust-format
 msgid "Background resource usage"
 msgstr "Utilização de recursos em segundo plano"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:414
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:438
 #: crates/ui_gtk/src/preferences/encoding_tab.rs:62
 #: crates/ui_gtk/src/preferences/shuffle_tab.rs:195
 #, rust-format
@@ -456,7 +456,7 @@ msgstr "Taxa de bits"
 msgid "Bitrate"
 msgstr "Taxa de bits"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:102
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:99
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Bitrate (kbps)"
@@ -496,7 +496,7 @@ msgstr "A calcular o plano de sincronização do dispositivo…"
 
 #: crates/ui_gtk/src/confirmation.rs:25
 #: crates/ui_gtk/src/duplicate_consolidation.rs:169
-#: crates/ui_gtk/src/smart_playlist_editor.rs:420
+#: crates/ui_gtk/src/smart_playlist_editor.rs:464
 #: crates/ui_gtk/src/status_bar.rs:168 crates/ui_gtk/src/status_bar.rs:172
 #: crates/ui_gtk/src/track_info/multi.rs:73 crates/ui_gtk/src/track_info.rs:142
 #: crates/ui_gtk/src/verified_duplicates.rs:76
@@ -524,7 +524,7 @@ msgstr ""
 msgid "Channels"
 msgstr "Canais"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:339
+#: crates/ui_gtk/src/preferences/library_tab.rs:347
 #, rust-format
 msgid "Choose"
 msgstr "Escolher"
@@ -534,7 +534,7 @@ msgstr "Escolher"
 msgid "Choose Artwork"
 msgstr "Escolher capa"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:338
+#: crates/ui_gtk/src/preferences/library_tab.rs:346
 #, rust-format
 msgid "Choose Library Folder"
 msgstr "Escolher pasta da biblioteca"
@@ -564,8 +564,8 @@ msgstr "Escolher pasta"
 msgid "Choose the CD import format"
 msgstr "Escolher o formato de importação de CD"
 
-#: crates/ui_gtk/src/preferences/mod.rs:373
-#: crates/ui_gtk/src/smart_playlist_editor.rs:561
+#: crates/ui_gtk/src/preferences/mod.rs:395
+#: crates/ui_gtk/src/smart_playlist_editor.rs:607
 #, rust-format
 msgid "Close"
 msgstr "Fechar"
@@ -586,7 +586,7 @@ msgid "Columns"
 msgstr "Colunas"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:761
-#: crates/ui_gtk/src/track_info/details.rs:201
+#: crates/ui_gtk/src/track_info/details.rs:200
 #: crates/ui_gtk/src/track_info/multi.rs:376
 #, rust-format
 msgid "Comments"
@@ -598,7 +598,7 @@ msgstr "Comentários"
 msgid "Compilation"
 msgstr "Compilação"
 
-#: crates/ui_gtk/src/device_panel.rs:746
+#: crates/ui_gtk/src/device_panel.rs:770
 #, rust-format
 msgid "Complete"
 msgstr "Completo"
@@ -610,7 +610,7 @@ msgstr "Completo"
 msgid "Composer"
 msgstr "Compositor"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:71
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:68
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Composer"
@@ -678,7 +678,7 @@ msgstr ""
 "Não foi possível contactar o MusicBrainz; a usar metadados de CD "
 "alternativos."
 
-#: crates/app_runtime/src/device_sync.rs:156
+#: crates/app_runtime/src/device_sync.rs:157
 #, rust-format
 msgid "Could not scan for Android devices: {error}"
 msgstr "Não foi possível procurar dispositivos Android: {error}"
@@ -703,7 +703,7 @@ msgstr "Não foi possível usar a capa selecionada: {error}."
 msgid "Date Added"
 msgstr "Data de adição"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:108
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:105
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Date Added"
@@ -760,7 +760,7 @@ msgstr "Eliminar lista inteligente"
 msgid "Details"
 msgstr "Detalhes"
 
-#: crates/app_runtime/src/device_sync.rs:424
+#: crates/app_runtime/src/device_sync.rs:425
 #, rust-format
 msgid "Device"
 msgstr "Dispositivo"
@@ -785,7 +785,7 @@ msgstr "Capacidade do dispositivo indisponível"
 msgid "Device disconnected"
 msgstr "Dispositivo desligado"
 
-#: crates/app_runtime/src/device_sync.rs:415
+#: crates/app_runtime/src/device_sync.rs:416
 #, rust-format
 msgid ""
 "Device forgotten. Its saved playlists, artists, and sync history were "
@@ -794,12 +794,12 @@ msgstr ""
 "Dispositivo esquecido. As listas de reprodução, artistas e histórico de "
 "sincronização guardados foram apagados."
 
-#: crates/app_runtime/src/device_sync.rs:670
+#: crates/app_runtime/src/device_sync.rs:671
 #, rust-format
 msgid "Device sync failed to start: {detail}"
 msgstr "Não foi possível iniciar a sincronização do dispositivo: {detail}"
 
-#: crates/app_runtime/src/device_sync.rs:723
+#: crates/app_runtime/src/device_sync.rs:724
 #, rust-format
 msgid "Device sync failed: {detail}"
 msgstr "A sincronização do dispositivo falhou: {detail}"
@@ -819,7 +819,7 @@ msgstr "Disco"
 msgid "Disc Number"
 msgstr "Número do disco"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:96
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:93
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Disc Number"
@@ -854,12 +854,12 @@ msgstr "Documentação"
 msgid "Download and Replace"
 msgstr "Transferir e substituir"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:81
+#: crates/app_runtime/src/youtube_audio_replacement.rs:80
 #, rust-format
 msgid "Downloading replacement audio from YouTube..."
 msgstr "A transferir o áudio de substituição do YouTube…"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:53
+#: crates/ui_gtk/src/preferences/views_tab.rs:55
 #, rust-format
 msgid ""
 "Draws the playing track's waveform in place of the progress bar, once audio "
@@ -894,7 +894,7 @@ msgstr "Duplicados"
 msgid "Duration"
 msgstr "Duração"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:99
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:96
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Duration (seconds)"
@@ -910,7 +910,7 @@ msgstr "Editar…"
 msgid "Eject"
 msgstr "Ejetar"
 
-#: crates/ui_gtk/src/preferences/mod.rs:316
+#: crates/ui_gtk/src/preferences/mod.rs:351
 #, rust-format
 msgid "Encoding"
 msgstr "Codificação"
@@ -989,13 +989,13 @@ msgctxt "Get Info page"
 msgid "File"
 msgstr "Ficheiro"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:119
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:116
 #, rust-format
 msgctxt "smart playlist field"
 msgid "File"
 msgstr "Ficheiro"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:77
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:74
 #, rust-format
 msgctxt "smart playlist field"
 msgid "File Name"
@@ -1046,7 +1046,7 @@ msgstr "Formato usado ao extrair CD de áudio para a sua biblioteca."
 msgid "Genre"
 msgstr "Género"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:74
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:71
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Genre"
@@ -1142,12 +1142,12 @@ msgstr "A importar CD ({completed}/{total})…"
 msgid "Importing CD..."
 msgstr "A importar CD…"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:413
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:437
 #, rust-format
 msgid "Innocuous"
 msgstr "Inofensivo"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:228
+#: crates/app_runtime/src/youtube_audio_replacement.rs:227
 #, rust-format
 msgid "Install yt-dlp and FFmpeg before replacing audio from YouTube."
 msgstr ""
@@ -1229,7 +1229,7 @@ msgstr "Tipo"
 msgid "Last Played"
 msgstr "Última reprodução"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:111
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:108
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Last Played"
@@ -1240,7 +1240,7 @@ msgstr "Última reprodução"
 msgid "Last Skipped"
 msgstr "Último salto"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:114
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:111
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Last Skipped"
@@ -1251,12 +1251,12 @@ msgstr "Último salto"
 msgid "Last index rebuild: {when}"
 msgstr "Última reconstrução do índice: {when}"
 
-#: crates/ui_gtk/src/track_info/details.rs:175
+#: crates/ui_gtk/src/track_info/details.rs:174
 #, rust-format
 msgid "Last played"
 msgstr "Última reprodução"
 
-#: crates/ui_gtk/src/track_info/details.rs:182
+#: crates/ui_gtk/src/track_info/details.rs:181
 #, rust-format
 msgid "Last skipped"
 msgstr "Último salto"
@@ -1266,7 +1266,7 @@ msgstr "Último salto"
 msgid "Left alone: {groups}."
 msgstr "Deixados como estão: {groups}."
 
-#: crates/ui_gtk/src/preferences/mod.rs:315 crates/ui_gtk/src/sidebar.rs:189
+#: crates/ui_gtk/src/preferences/mod.rs:350 crates/ui_gtk/src/sidebar.rs:189
 #, rust-format
 msgid "Library"
 msgstr "Biblioteca"
@@ -1325,7 +1325,7 @@ msgstr[1] ""
 msgid "Library organization stopped: {moved}, {pending}."
 msgstr "Organização da biblioteca parada: {moved}, {pending}."
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:201
+#: crates/ui_gtk/src/preferences/library_tab.rs:202
 #, rust-format
 msgid "Library organization will stop after the current file."
 msgstr "A organização da biblioteca vai parar após o ficheiro atual."
@@ -1350,22 +1350,22 @@ msgstr "A análise da biblioteca não está disponível nesta compilação."
 msgid "Licensed under GPL-3.0-or-later"
 msgstr "Licenciado sob GPL-3.0-or-later"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:371
+#: crates/ui_gtk/src/smart_playlist_editor.rs:414
 #, rust-format
 msgid "Limit to"
 msgstr "Limitar a"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:26
+#: crates/ui_gtk/src/preferences/views_tab.rs:28
 #, rust-format
 msgid "Lists the Duplicates view in the left column's Library section."
 msgstr "Mostra a vista Duplicados na secção Biblioteca da coluna esquerda."
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:39
+#: crates/ui_gtk/src/preferences/views_tab.rs:41
 #, rust-format
 msgid "Lists the Statistics view in the left column's Library section."
 msgstr "Mostra a vista Estatísticas na secção Biblioteca da coluna esquerda."
 
-#: crates/app_runtime/src/lib.rs:987
+#: crates/app_runtime/src/lib.rs:992
 #, rust-format
 msgid "Loading library…"
 msgstr "A carregar a biblioteca…"
@@ -1419,7 +1419,7 @@ msgstr "Volume baixo"
 msgid "Lyrics"
 msgstr "Letra"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:117
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:114
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Lyrics"
@@ -1447,7 +1447,7 @@ msgstr "Vista principal da biblioteca com o tema escuro do sistema"
 msgid "Main library view in the system light theme"
 msgstr "Vista principal da biblioteca com o tema claro do sistema"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:334
+#: crates/ui_gtk/src/smart_playlist_editor.rs:377
 #, rust-format
 msgid "Match"
 msgstr "Satisfazer"
@@ -1461,7 +1461,7 @@ msgstr ""
 "Identifica as faixas no MusicBrainz pelas etiquetas e preenche os campos em "
 "falta. Nunca substitui uma etiqueta já definida."
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:262
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:286
 #, rust-format
 msgid "Maximum"
 msgstr "Máximo"
@@ -1495,7 +1495,7 @@ msgstr "{groups} fundidos, {tracks} removidas."
 msgid "Merging verified duplicates ({completed}/{total})..."
 msgstr "A fundir duplicados verificados ({completed}/{total})…"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:255
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:279
 #, rust-format
 msgid "Minimum"
 msgstr "Mínimo"
@@ -1527,7 +1527,7 @@ msgstr "Mover para o lixo"
 msgid "Music"
 msgstr "Música"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:80
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:77
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Music Key"
@@ -1598,7 +1598,7 @@ msgid "Next, right-click to display the queue"
 msgstr "Seguinte; clique direito para mostrar a fila"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:788
-#: crates/ui_gtk/src/smart_playlist_editor.rs:93
+#: crates/ui_gtk/src/smart_playlist_editor.rs:109
 #: crates/ui_gtk/src/track_table/columns.rs:255
 #, rust-format
 msgid "No"
@@ -1717,7 +1717,7 @@ msgid "Number of tracks per release decade, split by genre."
 msgstr "Número de faixas por década de lançamento, divididas por género."
 
 #: crates/ui_gtk/src/import_failures_dialog.rs:77
-#: crates/ui_gtk/src/smart_playlist_editor.rs:421
+#: crates/ui_gtk/src/smart_playlist_editor.rs:465
 #: crates/ui_gtk/src/track_info/multi.rs:74 crates/ui_gtk/src/track_info.rs:143
 #, rust-format
 msgid "OK"
@@ -1742,7 +1742,7 @@ msgstr ""
 "Um ou mais dos ficheiros selecionados não existem no disco. Restaure-os ou "
 "remova-os e volte a consolidar."
 
-#: crates/ui_gtk/src/preferences/mod.rs:318
+#: crates/ui_gtk/src/preferences/mod.rs:353
 #, rust-format
 msgid "Online"
 msgstr "Online"
@@ -1775,7 +1775,7 @@ msgstr "Abra Duplicados para analisar a biblioteca."
 msgid "Opus audio file"
 msgstr "Ficheiro de áudio Opus"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:278
+#: crates/ui_gtk/src/preferences/library_tab.rs:279
 #, rust-format
 msgid ""
 "Order the library by the “sort as” tags some files carry (ID3 TSOP/TSOT, "
@@ -1831,7 +1831,7 @@ msgstr "Paranoico"
 msgid "Paste Artwork"
 msgstr "Colar capa"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:226
+#: crates/app_runtime/src/youtube_audio_replacement.rs:225
 #, rust-format
 msgid "Paste a valid YouTube URL."
 msgstr "Cole um URL válido do YouTube."
@@ -1856,7 +1856,7 @@ msgid ""
 msgstr ""
 "Em pausa: a saída de áudio foi desligada ou ocupada por outra aplicação."
 
-#: crates/app_runtime/src/device_sync.rs:623
+#: crates/app_runtime/src/device_sync.rs:624
 #, rust-format
 msgid "Pick at least one playlist or artist to sync to this device."
 msgstr ""
@@ -1883,7 +1883,7 @@ msgstr "Reproduzir"
 msgid "Play / pause"
 msgstr "Reproduzir / pausa"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:87
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:84
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Play Count"
@@ -1900,7 +1900,7 @@ msgid "Play album"
 msgstr "Reproduzir álbum"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:330
-#: crates/ui_gtk/src/track_info/details.rs:161
+#: crates/ui_gtk/src/track_info/details.rs:160
 #, rust-format
 msgid "Play count"
 msgstr "Reproduções"
@@ -1931,7 +1931,7 @@ msgstr "A reprodução falhou. A saltar para a faixa seguinte."
 msgid "Playback is not available."
 msgstr "A reprodução não está disponível."
 
-#: crates/app_runtime/src/device_sync.rs:1032
+#: crates/app_runtime/src/device_sync.rs:1056
 #, rust-format
 msgid "Playlist"
 msgstr "Lista de reprodução"
@@ -1967,12 +1967,12 @@ msgstr "Listas de reprodução, listas inteligentes e pastas de listas"
 msgid "Plays"
 msgstr "Reproduções"
 
-#: crates/ui_gtk/src/preferences/mod.rs:205 crates/ui_gtk/src/shortcuts.rs:139
+#: crates/ui_gtk/src/preferences/mod.rs:236 crates/ui_gtk/src/shortcuts.rs:139
 #, rust-format
 msgid "Preferences"
 msgstr "Preferências"
 
-#: crates/ui_gtk/src/preferences/mod.rs:174
+#: crates/ui_gtk/src/preferences/mod.rs:203
 #, rust-format
 msgid "Preferences (Ctrl+,)"
 msgstr "Preferências (Ctrl+,)"
@@ -2011,56 +2011,56 @@ msgstr "Faixa anterior (Ctrl+[)"
 msgid "Quality"
 msgstr "Qualidade"
 
-#: crates/app_runtime/src/lib.rs:3077
+#: crates/app_runtime/src/lib.rs:3079
 #, rust-format
 msgid "Queued {count} track for BPM analysis."
 msgid_plural "Queued {count} tracks for BPM analysis."
 msgstr[0] "{count} faixa na fila para análise de BPM."
 msgstr[1] "{count} faixas na fila para análise de BPM."
 
-#: crates/app_runtime/src/lib.rs:3092
+#: crates/app_runtime/src/lib.rs:3094
 #, rust-format
 msgid "Queued {count} track for analysis."
 msgid_plural "Queued {count} tracks for analysis."
 msgstr[0] "{count} faixa na fila para análise."
 msgstr[1] "{count} faixas na fila para análise."
 
-#: crates/app_runtime/src/lib.rs:3174
+#: crates/app_runtime/src/lib.rs:3176
 #, rust-format
 msgid "Queued {count} track for artwork retrieval."
 msgid_plural "Queued {count} tracks for artwork retrieval."
 msgstr[0] "{count} faixa na fila para obtenção de capa."
 msgstr[1] "{count} faixas na fila para obtenção de capa."
 
-#: crates/app_runtime/src/lib.rs:3087
+#: crates/app_runtime/src/lib.rs:3089
 #, rust-format
 msgid "Queued {count} track for audio analysis."
 msgid_plural "Queued {count} tracks for audio analysis."
 msgstr[0] "{count} faixa na fila para análise de áudio."
 msgstr[1] "{count} faixas na fila para análise de áudio."
 
-#: crates/app_runtime/src/lib.rs:3082
+#: crates/app_runtime/src/lib.rs:3084
 #, rust-format
 msgid "Queued {count} track for key detection."
 msgid_plural "Queued {count} tracks for key detection."
 msgstr[0] "{count} faixa na fila para deteção de tonalidade."
 msgstr[1] "{count} faixas na fila para deteção de tonalidade."
 
-#: crates/app_runtime/src/lib.rs:3169
+#: crates/app_runtime/src/lib.rs:3171
 #, rust-format
 msgid "Queued {count} track for lyrics retrieval."
 msgid_plural "Queued {count} tracks for lyrics retrieval."
 msgstr[0] "{count} faixa na fila para obtenção de letra."
 msgstr[1] "{count} faixas na fila para obtenção de letra."
 
-#: crates/app_runtime/src/lib.rs:3184
+#: crates/app_runtime/src/lib.rs:3186
 #, rust-format
 msgid "Queued {count} track for online retrieval."
 msgid_plural "Queued {count} tracks for online retrieval."
 msgstr[0] "{count} faixa na fila para obtenção online."
 msgstr[1] "{count} faixas na fila para obtenção online."
 
-#: crates/app_runtime/src/lib.rs:3179
+#: crates/app_runtime/src/lib.rs:3181
 #, rust-format
 msgid "Queued {count} track for tag enrichment."
 msgid_plural "Queued {count} tracks for tag enrichment."
@@ -2073,13 +2073,13 @@ msgid "Quit Sustain"
 msgstr "Sair do Sustain"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:305
-#: crates/ui_gtk/src/track_info/details.rs:135
+#: crates/ui_gtk/src/track_info/details.rs:134
 #: crates/ui_gtk/src/track_table/columns.rs:71
 #, rust-format
 msgid "Rating"
 msgstr "Classificação"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:82
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:79
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Rating"
@@ -2094,7 +2094,7 @@ msgstr "Pesquisa em tempo real com colunas ordenáveis e personalizáveis"
 msgid "Rebuilding the Smart Shuffle index…"
 msgstr "A reconstruir o índice do Smart Shuffle…"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:49
+#: crates/app_runtime/src/youtube_audio_replacement.rs:48
 #, rust-format
 msgid ""
 "Recovered an interrupted YouTube audio replacement, but retained the "
@@ -2143,7 +2143,7 @@ msgstr "Remover da lista de reprodução"
 msgid "Remove from queue"
 msgstr "Remover da fila"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:586
+#: crates/ui_gtk/src/smart_playlist_editor.rs:632
 #, rust-format
 msgid "Remove rule"
 msgstr "Remover regra"
@@ -2169,7 +2169,7 @@ msgstr "Repetir"
 msgid "Replace Audio from YouTube"
 msgstr "Substituir áudio a partir do YouTube"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:165
+#: crates/app_runtime/src/youtube_audio_replacement.rs:164
 #, rust-format
 msgid ""
 "Replacement installed, but the previous audio file could not be moved to "
@@ -2183,7 +2183,7 @@ msgstr ""
 msgid "Report a problem"
 msgstr "Comunicar um problema"
 
-#: crates/ui_gtk/src/track_info/details.rs:151
+#: crates/ui_gtk/src/track_info/details.rs:150
 #, rust-format
 msgid "Reset"
 msgstr "Repor"
@@ -2319,7 +2319,7 @@ msgstr ""
 "As opções sensatas estão pré-selecionadas. Escolhas implícitas: as "
 "reproduções e os saltos são somados e a data de adição mais antiga é mantida."
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:270
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:294
 #, rust-format
 msgid ""
 "Sets the tempo window Sustain uses when folding half-time and double-time "
@@ -2330,7 +2330,7 @@ msgstr ""
 "tempo e a tempo duplo. Alargue-o para música muito lenta ou rápida; reduza-o "
 "se os resultados tendem a ficar em metade ou no dobro do tempo esperado."
 
-#: crates/ui_gtk/src/preferences/mod.rs:163
+#: crates/ui_gtk/src/preferences/mod.rs:192
 #, rust-format
 msgid "Settings"
 msgstr "Definições"
@@ -2350,12 +2350,12 @@ msgstr "Proporção de faixas por género em toda a biblioteca."
 msgid "Show Album"
 msgstr "Mostrar álbum"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:25
+#: crates/ui_gtk/src/preferences/views_tab.rs:27
 #, rust-format
 msgid "Show Duplicates in the sidebar"
 msgstr "Mostrar Duplicados na barra lateral"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:38
+#: crates/ui_gtk/src/preferences/views_tab.rs:40
 #, rust-format
 msgid "Show Statistics in the sidebar"
 msgstr "Mostrar Estatísticas na barra lateral"
@@ -2375,7 +2375,7 @@ msgstr "Mostrar letra"
 msgid "Show sidebar"
 msgstr "Mostrar barra lateral"
 
-#: crates/ui_gtk/src/preferences/views_tab.rs:51
+#: crates/ui_gtk/src/preferences/views_tab.rs:53
 #, rust-format
 msgid "Show the waveform in Now Playing"
 msgstr "Mostrar a forma de onda em A reproduzir"
@@ -2387,7 +2387,7 @@ msgctxt "playback control"
 msgid "Shuffle"
 msgstr "Aleatório"
 
-#: crates/ui_gtk/src/preferences/mod.rs:321
+#: crates/ui_gtk/src/preferences/mod.rs:356
 #, rust-format
 msgctxt "preferences tab"
 msgid "Shuffle"
@@ -2403,13 +2403,13 @@ msgstr "Álbum aleatório"
 msgid "Size"
 msgstr "Tamanho"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:90
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:87
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Skip Count"
 msgstr "Saltos"
 
-#: crates/ui_gtk/src/track_info/details.rs:168
+#: crates/ui_gtk/src/track_info/details.rs:167
 #, rust-format
 msgid "Skip count"
 msgstr "Saltos"
@@ -2420,7 +2420,7 @@ msgstr "Saltos"
 msgid "Skips"
 msgstr "Saltos"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:294
+#: crates/ui_gtk/src/smart_playlist_editor.rs:337
 #, rust-format
 msgid "Smart Playlist"
 msgstr "Lista inteligente"
@@ -2452,12 +2452,12 @@ msgstr ""
 msgid "Smart Shuffle will choose the next track."
 msgstr "O Smart Shuffle vai escolher a faixa seguinte."
 
-#: crates/app_runtime/src/lib.rs:2631
+#: crates/app_runtime/src/lib.rs:2629
 #, rust-format
 msgid "Smart Shuffle: failed to persist the rebuilt index."
 msgstr "Smart Shuffle: não foi possível guardar o índice reconstruído."
 
-#: crates/app_runtime/src/lib.rs:2617
+#: crates/app_runtime/src/lib.rs:2615
 #, rust-format
 msgid "Smart Shuffle: failed to serialise the rebuilt index."
 msgstr "Smart Shuffle: não foi possível serializar o índice reconstruído."
@@ -2479,7 +2479,7 @@ msgstr "Não foi possível remover algumas pastas vazias."
 msgid "Some empty managed-library folders could not be removed."
 msgstr "Não foi possível remover algumas pastas vazias da biblioteca gerida."
 
-#: crates/ui_gtk/src/device_panel.rs:1094
+#: crates/ui_gtk/src/device_panel.rs:1118
 #, rust-format
 msgid ""
 "Some selected tracks are not fully analysed ({gaps}). They will still sync, "
@@ -2510,7 +2510,7 @@ msgid "Songs, Albums, and Playlists views with a keyboard-friendly table"
 msgstr ""
 "Vistas Músicas, Álbuns e Listas com uma tabela prática de usar com o teclado"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:276
+#: crates/ui_gtk/src/preferences/library_tab.rs:277
 #, rust-format
 msgid "Sort using sort-order tags"
 msgstr "Ordenar com etiquetas de ordenação"
@@ -2572,17 +2572,17 @@ msgstr ""
 msgid "Sustain shortcuts"
 msgstr "Atalhos do Sustain"
 
-#: crates/ui_gtk/src/device_panel.rs:672
+#: crates/ui_gtk/src/device_panel.rs:684
 #, rust-format
 msgid "Sync"
 msgstr "Sincronizar"
 
-#: crates/ui_gtk/src/device_panel.rs:1132
+#: crates/ui_gtk/src/device_panel.rs:1156
 #, rust-format
 msgid "Sync and remove"
 msgstr "Sincronizar e remover"
 
-#: crates/ui_gtk/src/device_panel.rs:1134
+#: crates/ui_gtk/src/device_panel.rs:1158
 #, rust-format
 msgid "Sync anyway"
 msgstr "Sincronizar mesmo assim"
@@ -2597,7 +2597,7 @@ msgstr "Sincronização concluída: {changes}."
 msgid "Sync complete: {changes}; {unplayable}."
 msgstr "Sincronização concluída: {changes}; {unplayable}."
 
-#: crates/ui_gtk/src/device_panel.rs:1139
+#: crates/ui_gtk/src/device_panel.rs:1163
 #, rust-format
 msgid "Sync device"
 msgstr "Sincronizar dispositivo"
@@ -2622,7 +2622,7 @@ msgstr "Sincronização parada: {changes}."
 msgid "Syncing"
 msgstr "A sincronizar"
 
-#: crates/ui_gtk/src/device_panel.rs:1109
+#: crates/ui_gtk/src/device_panel.rs:1133
 #, rust-format
 msgid ""
 "Syncing will remove {count} track from this device that is no longer in your "
@@ -2653,7 +2653,7 @@ msgstr "Etiquetas"
 msgid "Take every tag and the rating from this track"
 msgstr "Usar todas as etiquetas e a classificação desta faixa"
 
-#: crates/app_runtime/src/device_sync.rs:614
+#: crates/app_runtime/src/device_sync.rs:615
 #, rust-format
 msgid "That device is no longer connected."
 msgstr "Esse dispositivo já não está ligado."
@@ -2663,21 +2663,21 @@ msgstr "Esse dispositivo já não está ligado."
 msgid "That file is already attached to another library track."
 msgstr "Esse ficheiro já está associado a outra faixa da biblioteca."
 
-#: crates/app_runtime/src/lib.rs:3106
+#: crates/app_runtime/src/lib.rs:3108
 #, rust-format
 msgid "That track already has BPM analysis — nothing to queue."
 msgid_plural "All {count} tracks already have BPM analysis — nothing to queue."
 msgstr[0] "Essa faixa já tem análise de BPM — nada a pôr na fila."
 msgstr[1] "As {count} faixas já têm análise de BPM — nada a pôr na fila."
 
-#: crates/app_runtime/src/lib.rs:3121
+#: crates/app_runtime/src/lib.rs:3123
 #, rust-format
 msgid "That track already has analysis — nothing to queue."
 msgid_plural "All {count} tracks already have analysis — nothing to queue."
 msgstr[0] "Essa faixa já está analisada — nada a pôr na fila."
 msgstr[1] "As {count} faixas já estão analisadas — nada a pôr na fila."
 
-#: crates/app_runtime/src/lib.rs:3116
+#: crates/app_runtime/src/lib.rs:3118
 #, rust-format
 msgid "That track already has audio analysis — nothing to queue."
 msgid_plural ""
@@ -2685,7 +2685,7 @@ msgid_plural ""
 msgstr[0] "Essa faixa já tem análise de áudio — nada a pôr na fila."
 msgstr[1] "As {count} faixas já têm análise de áudio — nada a pôr na fila."
 
-#: crates/app_runtime/src/lib.rs:3111
+#: crates/app_runtime/src/lib.rs:3113
 #, rust-format
 msgid "That track already has key detection — nothing to queue."
 msgid_plural ""
@@ -2699,13 +2699,13 @@ msgstr[1] ""
 msgid "The CD could not be imported."
 msgstr "Não foi possível importar o CD."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:240
+#: crates/app_runtime/src/youtube_audio_replacement.rs:239
 #, rust-format
 msgid "The YouTube audio download exceeded Sustain's time limit."
 msgstr ""
 "A transferência do áudio do YouTube excedeu o limite de tempo do Sustain."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:243
+#: crates/app_runtime/src/youtube_audio_replacement.rs:242
 #, rust-format
 msgid "The YouTube audio download was cancelled."
 msgstr "A transferência do áudio do YouTube foi cancelada."
@@ -2778,13 +2778,13 @@ msgid "The disc is being imported. Play it once the import is done."
 msgstr ""
 "O disco está a ser importado. Reproduza-o quando a importação terminar."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:237
+#: crates/app_runtime/src/youtube_audio_replacement.rs:236
 #, rust-format
 msgid "The downloaded YouTube replacement exceeded Sustain's size limit."
 msgstr ""
 "A substituição transferida do YouTube excede o limite de tamanho do Sustain."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:131
+#: crates/app_runtime/src/youtube_audio_replacement.rs:130
 #, rust-format
 msgid "The downloaded audio could not be published safely."
 msgstr "Não foi possível publicar o áudio transferido em segurança."
@@ -2853,7 +2853,7 @@ msgstr ""
 msgid "The library database could not be updated."
 msgstr "Não foi possível atualizar a base de dados da biblioteca."
 
-#: crates/app_runtime/src/lib.rs:1023
+#: crates/app_runtime/src/lib.rs:1028
 #, rust-format
 msgid "The music library could not be loaded."
 msgstr "Não foi possível carregar a biblioteca de música."
@@ -2863,7 +2863,7 @@ msgstr "Não foi possível carregar a biblioteca de música."
 msgid "The music library is still loading."
 msgstr "A biblioteca de música ainda está a carregar."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:394
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:426
 #, rust-format
 msgid "The number of days must be at least 1."
 msgstr "O número de dias tem de ser pelo menos 1."
@@ -3019,7 +3019,7 @@ msgstr ""
 "O áudio mostra que cada um destes grupos são cópias de uma mesma gravação. "
 "Cada grupo é fundido numa única faixa, mantendo as escolhas apresentadas."
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:379
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:411
 #, rust-format
 msgid "This combination of field and operator is not supported."
 msgstr "Esta combinação de campo e operador não é suportada."
@@ -3029,10 +3029,18 @@ msgstr "Esta combinação de campo e operador não é suportada."
 msgid "This device cannot be ejected by the desktop."
 msgstr "Este dispositivo não pode ser ejetado pelo ambiente de trabalho."
 
-#: crates/app_runtime/src/device_sync.rs:501
+#: crates/app_runtime/src/device_sync.rs:502
 #, rust-format
 msgid "This device's selection is empty."
 msgstr "A seleção deste dispositivo está vazia."
+
+#: crates/ui_gtk/src/device_panel.rs:738
+#, rust-format
+msgid ""
+"This drive holds a Pioneer export Sustain did not write, or one a player "
+"changed since. Syncing would erase it: remove the drive's PIONEER folder to "
+"sync."
+msgstr "Esta unidade contém uma exportação Pioneer que o Sustain não escreveu, ou que um leitor alterou desde então. Sincronizar apagá-la-ia: remova a pasta PIONEER da unidade para sincronizar."
 
 #: crates/ui_gtk/src/track_info/artwork.rs:118
 #, rust-format
@@ -3057,7 +3065,7 @@ msgstr "Tempo"
 msgid "Title"
 msgstr "Título"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:68
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:65
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Title"
@@ -3093,7 +3101,7 @@ msgstr "Nome da faixa"
 msgid "Track Number"
 msgstr "Número da faixa"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:93
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:90
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Track Number"
@@ -3104,7 +3112,7 @@ msgstr "Número da faixa"
 msgid "Track Total"
 msgstr "Total de faixas"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:171
+#: crates/app_runtime/src/youtube_audio_replacement.rs:170
 #, rust-format
 msgid "Track audio replaced from YouTube."
 msgstr "Áudio da faixa substituído a partir do YouTube."
@@ -3150,7 +3158,7 @@ msgctxt "file type column"
 msgid "Type"
 msgstr "Tipo"
 
-#: crates/ui_gtk/src/device_panel.rs:852 crates/ui_gtk/src/statistics.rs:252
+#: crates/ui_gtk/src/device_panel.rs:876 crates/ui_gtk/src/statistics.rs:252
 #: crates/ui_gtk/src/statistics.rs:421 crates/ui_gtk/src/statistics.rs:441
 #, rust-format
 msgid "Unknown"
@@ -3168,7 +3176,7 @@ msgstr "Álbum desconhecido"
 msgid "Unknown Artist"
 msgstr "Artista desconhecido"
 
-#: crates/ui_gtk/src/rating_stars.rs:208
+#: crates/ui_gtk/src/rating_stars.rs:182
 #, rust-format
 msgid "Unrated"
 msgstr "Sem classificação"
@@ -3188,7 +3196,7 @@ msgid "Use the image, or the image file, on the clipboard (Ctrl+V)"
 msgstr ""
 "Usar a imagem, ou o ficheiro de imagem, da área de transferência (Ctrl+V)"
 
-#: crates/ui_gtk/src/preferences/analysis_tab.rs:500
+#: crates/ui_gtk/src/preferences/analysis_tab.rs:524
 #, rust-format
 msgid "Uses {workers} of {total} core on this machine."
 msgid_plural "Uses {workers} of {total} cores on this machine."
@@ -3205,7 +3213,7 @@ msgstr "Vários artistas"
 msgid "Version {version}"
 msgstr "Versão {version}"
 
-#: crates/ui_gtk/src/preferences/mod.rs:323
+#: crates/ui_gtk/src/preferences/mod.rs:358
 #, rust-format
 msgid "Views"
 msgstr "Vistas"
@@ -3246,7 +3254,7 @@ msgstr "A escrever listas de reprodução…"
 msgid "Year"
 msgstr "Ano"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:84
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:81
 #, rust-format
 msgctxt "smart playlist field"
 msgid "Year"
@@ -3258,7 +3266,7 @@ msgid "Year added"
 msgstr "Ano de adição"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:788
-#: crates/ui_gtk/src/smart_playlist_editor.rs:92
+#: crates/ui_gtk/src/smart_playlist_editor.rs:108
 #: crates/ui_gtk/src/track_table/columns.rs:255
 #, rust-format
 msgid "Yes"
@@ -3293,189 +3301,189 @@ msgstr "Não foi possível guardar as suas definições."
 msgid "Zoom artwork"
 msgstr "Ampliar capa"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:343
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:340
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "album"
 msgstr "álbum"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:292
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:289
 #, rust-format
 msgctxt "smart playlist match"
 msgid "all"
 msgstr "cada uma"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:293
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:290
 #, rust-format
 msgctxt "smart playlist match"
 msgid "any"
 msgstr "qualquer uma"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:342
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:339
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "artist"
 msgstr "artista"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:158
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:155
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "contains"
 msgstr "contém"
 
 #. Translators: follows the day count of "is in the last [7] days".
-#: crates/ui_gtk/src/smart_playlist_editor.rs:137
+#: crates/ui_gtk/src/smart_playlist_editor.rs:156
 #, rust-format
 msgid "days"
 msgstr "dias"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:159
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:156
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "does not contain"
 msgstr "não contém"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:163
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:160
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "ends with"
 msgstr "termina em"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:344
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:341
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "genre"
 msgstr "género"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:336
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:333
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "highest rating"
 msgstr "classificação mais alta"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:160
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:166
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:184
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:157
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:163
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:181
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is"
 msgstr "é"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:179
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:176
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is after"
 msgstr "é posterior a"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:178
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:175
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is before"
 msgstr "é anterior a"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:164
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:176
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:182
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:161
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:173
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:179
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is empty"
 msgstr "está vazio"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:168
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:165
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is greater than"
 msgstr "é maior que"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:170
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:167
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is greater than or equal to"
 msgstr "é maior ou igual a"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:180
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:177
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is in the last"
 msgstr "está nos últimos"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:172
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:169
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is less than"
 msgstr "é menor que"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:174
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:171
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is less than or equal to"
 msgstr "é menor ou igual a"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:185
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:182
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is missing"
 msgstr "está em falta"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:161
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:167
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:158
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:164
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is not"
 msgstr "não é"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:181
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:178
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is not in the last"
 msgstr "não está nos últimos"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:165
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:177
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:162
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:174
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:180
 #: crates/ui_gtk/src/smart_playlist_editor/model.rs:183
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:186
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "is present"
 msgstr "está presente"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:333
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:330
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "least often played"
 msgstr "menos reproduzidas"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:321
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:318
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "least recently added"
 msgstr "adicionadas há mais tempo"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:327
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:324
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "least recently played"
 msgstr "reproduzidas há mais tempo"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:339
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:336
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "lowest rating"
 msgstr "classificação mais baixa"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:330
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:327
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "most often played"
 msgstr "mais reproduzidas"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:318
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:315
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "most recently added"
 msgstr "adicionadas mais recentemente"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:324
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:321
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "most recently played"
@@ -3502,7 +3510,7 @@ msgstr "de"
 msgid "of music"
 msgstr "de música"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:349
+#: crates/ui_gtk/src/smart_playlist_editor.rs:392
 #, rust-format
 msgid "of the following rules:"
 msgstr "das seguintes regras:"
@@ -3519,18 +3527,18 @@ msgid_plural "plays"
 msgstr[0] "reprodução"
 msgstr[1] "reproduções"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:316
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:313
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "random"
 msgstr "aleatória"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:376
+#: crates/ui_gtk/src/smart_playlist_editor.rs:419
 #, rust-format
 msgid "songs, selected by"
 msgstr "faixas, seleção:"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:162
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:159
 #, rust-format
 msgctxt "smart playlist operator"
 msgid "starts with"
@@ -3543,7 +3551,7 @@ msgstr "começa por"
 msgid "the disc in the drive changed during import"
 msgstr "o disco na unidade mudou durante a importação"
 
-#: crates/ui_gtk/src/smart_playlist_editor/model.rs:341
+#: crates/ui_gtk/src/smart_playlist_editor/model.rs:338
 #, rust-format
 msgctxt "smart playlist limit"
 msgid "title"
@@ -3572,19 +3580,19 @@ msgstr "lista sem título"
 msgid "untitled smart playlist"
 msgstr "lista inteligente sem título"
 
-#: crates/ui_gtk/src/smart_playlist_editor.rs:63
+#: crates/ui_gtk/src/smart_playlist_editor.rs:79
 #, rust-format
 msgid "value"
 msgstr "valor"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:231
+#: crates/app_runtime/src/youtube_audio_replacement.rs:230
 #, rust-format
 msgid "yt-dlp could not download usable audio from that YouTube URL."
 msgstr ""
 "O yt-dlp não conseguiu transferir áudio utilizável a partir desse URL do "
 "YouTube."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:234
+#: crates/app_runtime/src/youtube_audio_replacement.rs:233
 #, rust-format
 msgid "yt-dlp returned an unsupported or unsafe audio file."
 msgstr "O yt-dlp devolveu um ficheiro de áudio não suportado ou inseguro."
@@ -3765,7 +3773,7 @@ msgstr[0] "{count} minuto"
 msgstr[1] "{count} minutos"
 
 #: crates/app_runtime/src/notifications.rs:324
-#: crates/ui_gtk/src/device_panel.rs:756
+#: crates/ui_gtk/src/device_panel.rs:780
 #, rust-format
 msgctxt "count of tracks"
 msgid "{count} missing"
@@ -3773,22 +3781,22 @@ msgid_plural "{count} missing"
 msgstr[0] "{count} em falta"
 msgstr[1] "{count} em falta"
 
-#: crates/ui_gtk/src/device_panel.rs:1070
+#: crates/ui_gtk/src/device_panel.rs:1094
 #, rust-format
 msgid "{count} missing BPM"
 msgstr "{count} sem BPM"
 
-#: crates/ui_gtk/src/device_panel.rs:1088
+#: crates/ui_gtk/src/device_panel.rs:1112
 #, rust-format
 msgid "{count} missing beat grid"
 msgstr "{count} sem grelha de batidas"
 
-#: crates/ui_gtk/src/device_panel.rs:1076
+#: crates/ui_gtk/src/device_panel.rs:1100
 #, rust-format
 msgid "{count} missing key"
 msgstr "{count} sem tonalidade"
 
-#: crates/ui_gtk/src/device_panel.rs:1082
+#: crates/ui_gtk/src/device_panel.rs:1106
 #, rust-format
 msgid "{count} missing waveform"
 msgstr "{count} sem forma de onda"
@@ -3819,7 +3827,7 @@ msgstr ""
 "duplicados não podem ser consolidados. Restaure-os ou remova-os e tente "
 "novamente."
 
-#: crates/ui_gtk/src/device_panel.rs:870
+#: crates/ui_gtk/src/device_panel.rs:894
 #, rust-format
 msgid "{count} other genre — {size}"
 msgid_plural "{count} other genres — {size}"
@@ -3850,7 +3858,7 @@ msgid_plural "{count} songs"
 msgstr[0] "{count} música"
 msgstr[1] "{count} músicas"
 
-#: crates/ui_gtk/src/rating_stars.rs:212
+#: crates/ui_gtk/src/rating_stars.rs:186
 #, rust-format
 msgid "{count} star"
 msgid_plural "{count} stars"

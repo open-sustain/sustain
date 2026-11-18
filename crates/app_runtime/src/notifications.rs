@@ -1029,6 +1029,18 @@ pub fn device_sync_progress_text(progress: sustain_device_sync::SyncProgress) ->
     }
 }
 
+/// Why a device cannot be synced, and how the user lets it be: shown
+/// beside the greyed-out Sync button, and as the failure of a sync that
+/// found it only once running.
+pub fn sync_blocker_text(blocker: sustain_device_sync::SyncBlocker) -> String {
+    match blocker {
+        sustain_device_sync::SyncBlocker::ForeignPioneerExport => gettext(
+            "This drive holds a Pioneer export Sustain did not write, or one a player \
+             changed since. Syncing would erase it: remove the drive's PIONEER folder to sync.",
+        ),
+    }
+}
+
 pub fn device_sync_outcome_text(outcome: &sustain_device_sync::SyncOutcome) -> String {
     let failed = outcome.copy_failures.len();
     if outcome.cancelled {

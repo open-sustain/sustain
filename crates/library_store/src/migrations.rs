@@ -13,18 +13,18 @@ use sustain_domain::{MusicalKey, TrackMetadata};
 use crate::{
     StoreError, StoreResult,
     schema::{
-        ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_SYNC_PLAYLIST_FILES_SQL,
-        ADD_TRACK_BEAT_GRID_SQL, ADD_TRACK_BIT_DEPTH_SQL, ADD_TRACK_BPM_SET_BY_USER_SQL,
-        ADD_TRACK_COLUMN_SORT_SQL, ADD_TRACK_KEY_ORIGIN_SQL, BACKFILL_GENERATED_SORT_FIELDS_SQL,
-        INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
-        NORMALIZE_EMPTY_TRACK_METADATA_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL,
-        RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
-        STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
-        VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
+        ADD_SYNC_DEVICE_ARTISTS_SQL, ADD_SYNC_MANIFEST_ANLZ_SQL, ADD_SYNC_PIONEER_EXPORT_SQL,
+        ADD_SYNC_PLAYLIST_FILES_SQL, ADD_TRACK_BEAT_GRID_SQL, ADD_TRACK_BIT_DEPTH_SQL,
+        ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL, ADD_TRACK_KEY_ORIGIN_SQL,
+        BACKFILL_GENERATED_SORT_FIELDS_SQL, INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL,
+        MOVE_WAVEFORMS_TO_CACHE_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL,
+        RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL, RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL,
+        SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL, STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL,
+        VERSION_ANALYSIS_PER_CAPABILITY_SQL, VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 22;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 23;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -155,6 +155,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 22,
         description: "store smart playlist date rules as calendar days",
         step: MigrationStep::Sql(STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL),
+    },
+    Migration {
+        version: 23,
+        description: "record the Pioneer export a sync left on a device",
+        step: MigrationStep::Sql(ADD_SYNC_PIONEER_EXPORT_SQL),
     },
 ];
 
@@ -368,6 +373,8 @@ mod tests {
         "sync_device_playlists",
         "sync_devices",
         "sync_manifest",
+        "sync_pioneer_artwork",
+        "sync_pioneer_databases",
         "sync_playlist_files",
         "tag_mirror_outbox",
         "track_acoustics",

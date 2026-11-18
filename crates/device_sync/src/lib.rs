@@ -20,6 +20,7 @@ pub mod identity;
 pub mod journal;
 mod layout;
 pub mod model;
+mod pioneer_export;
 mod sanitize;
 mod source;
 pub mod transport;
@@ -33,8 +34,8 @@ pub use identity::{
 pub use journal::{JournalError, ManifestJournal};
 pub use model::{
     DeviceCapacity, GenreBytes, PioneerTrackAnalysis, Placement, PreparedPioneerAssets,
-    PreparedSyncRequest, SourceSnapshot, SyncError, SyncFailure, SyncInputPlaylist, SyncInputTrack,
-    SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
+    PreparedSyncRequest, SourceSnapshot, SyncBlocker, SyncError, SyncFailure, SyncInputPlaylist,
+    SyncInputTrack, SyncOutcome, SyncPlan, SyncProgress, SyncRequest, SyncStage, SyncTrackFailure,
 };
 pub use source::{ensure_source_unchanged, resolve_source_fingerprint, source_file_stat};
 pub use transport::{DeviceTarget, DeviceTransport, DirectoryWorkBudget, MtpTarget};
@@ -49,7 +50,7 @@ mod tests {
     };
     use sustain_domain::{
         AnlzRecord, BeatGrid, Bpm, DeviceKind, DeviceLayout, DeviceRelativePath, FilesPerFolderCap,
-        SourceFileStat, SyncDevice, SyncDeviceId, TrackId,
+        PioneerExportRecord, SourceFileStat, SyncDevice, SyncDeviceId, TrackId,
     };
 
     struct Fixture {
@@ -57,6 +58,16 @@ mod tests {
         dest: tempfile::TempDir,
         tracks: Vec<SyncInputTrack>,
     }
+
+    // A 2×2 solid-green PNG — enough for the artwork pipeline to
+    // decode, resize, and re-encode.
+    const COVER_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x02, 0x00, 0x00, 0x00, 0xfd,
+        0xd4, 0x9a, 0x73, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x60,
+        0xf8, 0xcf, 0x00, 0x42, 0x10, 0x0a, 0x00, 0x1b, 0xf2, 0x03, 0xfd, 0xd4, 0x2f, 0x04, 0x80,
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
 
     fn fixture(count: usize) -> Fixture {
         let src = tempfile::tempdir().expect("src dir");
@@ -118,20 +129,25 @@ mod tests {
 
     /// A journal replaying each change over the manifest a run starts
     /// from.
-    struct ReplayJournal(std::collections::BTreeMap<String, sustain_domain::SyncManifestEntry>);
+    struct ReplayJournal {
+        manifest: std::collections::BTreeMap<String, sustain_domain::SyncManifestEntry>,
+        pioneer_export: PioneerExportRecord,
+    }
 
     impl ReplayJournal {
-        fn over(manifest: &[sustain_domain::SyncManifestEntry]) -> Self {
-            Self(
-                manifest
+        fn over(req: &SyncRequest) -> Self {
+            Self {
+                manifest: req
+                    .previous_manifest
                     .iter()
                     .map(|entry| (entry.on_device_path.as_str().to_owned(), entry.clone()))
                     .collect(),
-            )
+                pioneer_export: req.previous_pioneer_export.clone(),
+            }
         }
 
         fn manifest(&self) -> Vec<sustain_domain::SyncManifestEntry> {
-            self.0.values().cloned().collect()
+            self.manifest.values().cloned().collect()
         }
     }
 
@@ -140,13 +156,21 @@ mod tests {
             &mut self,
             entry: &sustain_domain::SyncManifestEntry,
         ) -> Result<(), JournalError> {
-            self.0
+            self.manifest
                 .insert(entry.on_device_path.as_str().to_owned(), entry.clone());
             Ok(())
         }
 
         fn forget(&mut self, path: &DeviceRelativePath) -> Result<(), JournalError> {
-            self.0.remove(path.as_str());
+            self.manifest.remove(path.as_str());
+            Ok(())
+        }
+
+        fn record_pioneer_export(
+            &mut self,
+            record: &PioneerExportRecord,
+        ) -> Result<(), JournalError> {
+            self.pioneer_export = record.clone();
             Ok(())
         }
     }
@@ -178,19 +202,42 @@ mod tests {
         req: &PreparedSyncRequest,
         progress: &mut dyn FnMut(SyncProgress),
         cancel: &dyn Fn() -> bool,
-    ) -> Result<SyncOutcome, SyncFailure> {
-        let mut journal = ReplayJournal::over(&req.previous_manifest);
+    ) -> Result<SyncOutcome, Box<SyncFailure>> {
+        journaled_sync_keeping_journal(transport, req, progress, cancel).0
+    }
+
+    /// [`journaled_sync`], also returning what its journal holds: all
+    /// that survives a run whose process dies.
+    fn journaled_sync_keeping_journal(
+        transport: &dyn DeviceTransport,
+        req: &PreparedSyncRequest,
+        progress: &mut dyn FnMut(SyncProgress),
+        cancel: &dyn Fn() -> bool,
+    ) -> (Result<SyncOutcome, Box<SyncFailure>>, ReplayJournal) {
+        let mut journal = ReplayJournal::over(req);
         let result = sync(transport, req, &mut journal, progress, cancel);
-        let reported = match &result {
-            Ok(outcome) => &outcome.manifest,
-            Err(failure) => &failure.manifest,
+        let (reported, reported_export) = match &result {
+            Ok(outcome) => (&outcome.manifest, &outcome.pioneer_export),
+            Err(failure) => (&failure.manifest, &failure.pioneer_export),
         };
         assert_eq!(
             tracked_files(&journal.manifest()),
             tracked_files(reported),
             "the journal replays to the manifest the run reports"
         );
-        result
+        // The journal vouches for at least what the run reports.
+        assert!(
+            journal
+                .pioneer_export
+                .databases
+                .is_superset(&reported_export.databases)
+                && journal
+                    .pioneer_export
+                    .artwork
+                    .is_superset(&reported_export.artwork),
+            "the journal vouches for the Pioneer export the run reports"
+        );
+        (result, journal)
     }
 
     /// A device whose copy to `fail_path` fails, either as an error the
@@ -237,8 +284,8 @@ mod tests {
             self.root.regular_file_len(path)
         }
 
-        fn read_to_string(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<String> {
-            self.root.read_to_string(path, limit)
+        fn read_file(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<Vec<u8>> {
+            self.root.read_file(path, limit)
         }
 
         fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {
@@ -311,8 +358,8 @@ mod tests {
             self.0.regular_file_len(&folded(path))
         }
 
-        fn read_to_string(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<String> {
-            self.0.read_to_string(&folded(path), limit)
+        fn read_file(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<Vec<u8>> {
+            self.0.read_file(&folded(path), limit)
         }
 
         fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {
@@ -368,8 +415,24 @@ mod tests {
             }],
             previous_manifest: prev,
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: remove,
             export_date: "2026-01-01".into(),
+        }
+    }
+
+    /// A request for the same tracks, carrying everything `previous` left
+    /// on the device.
+    fn resync_request(
+        fx: &Fixture,
+        layout: DeviceLayout,
+        previous: &SyncOutcome,
+        remove: bool,
+    ) -> SyncRequest {
+        SyncRequest {
+            previous_playlist_files: previous.playlist_files.clone(),
+            previous_pioneer_export: previous.pioneer_export.clone(),
+            ..request(fx, layout, previous.manifest.clone(), remove)
         }
     }
 
@@ -428,6 +491,7 @@ mod tests {
                 .collect(),
             previous_manifest: previous.manifest.clone(),
             previous_playlist_files: previous.playlist_files.clone(),
+            previous_pioneer_export: previous.pioneer_export.clone(),
             ..request(fx, layout, Vec::new(), remove)
         }
     }
@@ -697,6 +761,7 @@ mod tests {
             playlists,
             previous_manifest: prev,
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         }
@@ -938,7 +1003,7 @@ mod tests {
     fn pioneer_layout_seeds_colour_waveform_settings_but_keeps_existing_ones() {
         let fx = fixture(1);
         let settings = fx.dest.path().join("PIONEER/DEVSETTING.DAT");
-        run(
+        let first = run(
             fx.dest.path(),
             &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
         );
@@ -951,7 +1016,7 @@ mod tests {
         std::fs::write(&settings, b"set on the player").expect("player settings");
         run(
             fx.dest.path(),
-            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+            &resync_request(&fx, DeviceLayout::Pioneer, &first, false),
         );
         assert_eq!(
             std::fs::read(&settings).expect("settings"),
@@ -1073,7 +1138,7 @@ mod tests {
 
         let second = run(
             fx.dest.path(),
-            &request(&fx, DeviceLayout::Pioneer, first.manifest.clone(), false),
+            &resync_request(&fx, DeviceLayout::Pioneer, &first, false),
         );
         assert_eq!(anlz_of(&second.manifest, RUDE_BOY), record);
         assert_eq!(std::fs::read(&dat).expect("dat"), b"untouched");
@@ -1091,7 +1156,7 @@ mod tests {
         let third = run_prepared(
             fx.dest.path(),
             &prepared_with(
-                &request(&fx, DeviceLayout::Pioneer, second.manifest.clone(), false),
+                &resync_request(&fx, DeviceLayout::Pioneer, &second, false),
                 analyses.clone(),
             ),
         );
@@ -1110,7 +1175,7 @@ mod tests {
         let fourth = run_prepared(
             fx.dest.path(),
             &prepared_with(
-                &request(&fx, DeviceLayout::Pioneer, third.manifest.clone(), false),
+                &resync_request(&fx, DeviceLayout::Pioneer, &third, false),
                 analyses,
             ),
         );
@@ -1131,7 +1196,7 @@ mod tests {
         fx.tracks.remove(0);
         let second = run(
             fx.dest.path(),
-            &request(&fx, DeviceLayout::Pioneer, first.manifest.clone(), true),
+            &resync_request(&fx, DeviceLayout::Pioneer, &first, true),
         );
         assert_eq!(second.removed, 1);
         assert_eq!(anlz_of(&second.manifest, AQUARIUS), kept);
@@ -1158,7 +1223,7 @@ mod tests {
         fx.tracks.remove(0);
         let second = run(
             fx.dest.path(),
-            &request(&fx, DeviceLayout::Pioneer, first.manifest.clone(), false),
+            &resync_request(&fx, DeviceLayout::Pioneer, &first, false),
         );
         assert_eq!(anlz_of(&second.manifest, RUDE_BOY), stale);
         assert!(fx.dest.path().join(stale.dat_path.as_str()).is_file());
@@ -1189,7 +1254,10 @@ mod tests {
         fx.tracks.remove(0);
         let second = run(
             fx.dest.path(),
-            &request(&fx, DeviceLayout::Pioneer, legacy, true),
+            &SyncRequest {
+                previous_manifest: legacy,
+                ..resync_request(&fx, DeviceLayout::Pioneer, &first, true)
+            },
         );
         assert_eq!(second.removed, 1);
         // The surviving track takes the lowest free slot, which the removed
@@ -1204,18 +1272,486 @@ mod tests {
         assert!(aquarius_dat.with_extension("EXT").is_file());
     }
 
+    /// Every regular file under `dir` with its bytes.
+    fn snapshot(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut files = std::collections::BTreeMap::new();
+        let mut pending = vec![dir.to_path_buf()];
+        while let Some(current) = pending.pop() {
+            for entry in std::fs::read_dir(&current).expect("read dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    let bytes = std::fs::read(&path).expect("read file");
+                    files.insert(path, bytes);
+                }
+            }
+        }
+        files
+    }
+
+    /// `req` prepared with the same cover on every track.
+    fn prepared_with_covers(req: &SyncRequest) -> PreparedSyncRequest {
+        let mut assets = PreparedPioneerAssets::new();
+        for _ in &req.tracks {
+            assets.push_track(PioneerTrackAnalysis::default(), Some(COVER_PNG));
+        }
+        PreparedSyncRequest::new(req.clone(), Some(assets)).expect("prepared Pioneer request")
+    }
+
+    fn sync_blocked(dest: &Path, req: &PreparedSyncRequest) -> Box<SyncFailure> {
+        let failure = journaled_sync(&transport(dest), req, &mut |_| {}, &|| false)
+            .expect_err("the sync is blocked");
+        assert!(
+            matches!(
+                failure.error,
+                SyncError::Blocked(SyncBlocker::ForeignPioneerExport)
+            ),
+            "{failure}"
+        );
+        failure
+    }
+
+    fn pdb_on(dest: &Path) -> PathBuf {
+        dest.join(sustain_pioneer::PDB_RELATIVE_PATH)
+    }
+
+    fn artwork_on(dest: &Path, name: &str) -> PathBuf {
+        dest.join(sustain_pioneer::artwork::ARTWORK_BUCKET)
+            .join(name)
+    }
+
+    #[test]
+    fn a_pioneer_export_sustain_did_not_write_blocks_the_sync_and_stays_untouched() {
+        let fx = fixture(2);
+        let dest = fx.dest.path();
+        std::fs::create_dir_all(pdb_on(dest).parent().expect("parent")).expect("rekordbox dir");
+        std::fs::write(pdb_on(dest), b"a rekordbox catalog").expect("foreign pdb");
+        // A temporary file left by an interrupted write: the sync would
+        // clean it up first thing, were it let in.
+        std::fs::write(dest.join(".sustain-write-123-456.tmp"), b"partial").expect("temp");
+        let before = snapshot(dest);
+
+        let req = request(&fx, DeviceLayout::Pioneer, Vec::new(), true);
+        assert_eq!(
+            plan(&transport(dest), &req).expect("plan").blocker,
+            Some(SyncBlocker::ForeignPioneerExport)
+        );
+        let failure = sync_blocked(dest, &prepared_with_covers(&req));
+        assert!(failure.manifest.is_empty());
+        assert_eq!(failure.pioneer_export, PioneerExportRecord::default());
+        assert_eq!(
+            snapshot(dest),
+            before,
+            "the drive is left exactly as it was"
+        );
+
+        // Removing the export is the deliberate act that lets a sync in.
+        std::fs::remove_dir_all(dest.join("PIONEER")).expect("remove PIONEER");
+        assert_eq!(plan(&transport(dest), &req).expect("plan").blocker, None);
+        let outcome = journaled_sync(
+            &transport(dest),
+            &prepared_with_covers(&req),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("sync ok");
+        assert_eq!(outcome.copied, 2);
+        assert_eq!(
+            outcome.pioneer_export.databases,
+            std::collections::BTreeSet::from([sustain_pioneer::database_identity(
+                &std::fs::read(pdb_on(dest)).expect("pdb")
+            )])
+        );
+    }
+
+    #[test]
+    fn sustains_own_export_is_written_over_until_something_else_changes_it() {
+        let mut fx = fixture(2);
+        let dest = fx.dest.path();
+        let first = run(
+            dest,
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        fx.tracks[0].title = "Retitled".into();
+        let again = resync_request(&fx, DeviceLayout::Pioneer, &first, false);
+        assert_eq!(plan(&transport(dest), &again).expect("plan").blocker, None);
+        let second = run(dest, &again);
+        // Once published, only the new database is Sustain's.
+        assert_eq!(
+            second.pioneer_export.databases,
+            std::collections::BTreeSet::from([sustain_pioneer::database_identity(
+                &std::fs::read(pdb_on(dest)).expect("pdb")
+            )])
+        );
+
+        // A player recording history writes into the database.
+        let mut changed = std::fs::read(pdb_on(dest)).expect("pdb");
+        changed.extend_from_slice(b"history");
+        std::fs::write(pdb_on(dest), &changed).expect("player write");
+        let before = snapshot(dest);
+        let after_player = resync_request(&fx, DeviceLayout::Pioneer, &second, false);
+        assert_eq!(
+            plan(&transport(dest), &after_player).expect("plan").blocker,
+            Some(SyncBlocker::ForeignPioneerExport)
+        );
+        let failure = sync_blocked(dest, &prepared(&after_player));
+        assert_eq!(failure.pioneer_export, second.pioneer_export);
+        assert_eq!(failure.manifest, second.manifest);
+        assert_eq!(snapshot(dest), before);
+    }
+
+    #[test]
+    fn a_device_with_no_record_of_its_export_holds_a_foreign_one() {
+        let fx = fixture(1);
+        let dest = fx.dest.path();
+        let first = run(
+            dest,
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        // As a device synced before Sustain kept the record.
+        let unrecorded = SyncRequest {
+            previous_pioneer_export: PioneerExportRecord::default(),
+            ..resync_request(&fx, DeviceLayout::Pioneer, &first, false)
+        };
+        assert_eq!(
+            plan(&transport(dest), &unrecorded).expect("plan").blocker,
+            Some(SyncBlocker::ForeignPioneerExport)
+        );
+    }
+
+    #[test]
+    fn a_deleted_export_is_written_afresh() {
+        let fx = fixture(2);
+        let dest = fx.dest.path();
+        let first = journaled_sync(
+            &transport(dest),
+            &prepared_with_covers(&request(&fx, DeviceLayout::Pioneer, Vec::new(), false)),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("first sync");
+        std::fs::remove_dir_all(dest.join("PIONEER")).expect("remove PIONEER");
+
+        let again = resync_request(&fx, DeviceLayout::Pioneer, &first, false);
+        assert_eq!(plan(&transport(dest), &again).expect("plan").blocker, None);
+        let second = journaled_sync(
+            &transport(dest),
+            &prepared_with_covers(&again),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("resync");
+        assert!(pdb_on(dest).is_file());
+        assert!(artwork_on(dest, "a1.jpg").is_file());
+        assert_eq!(second.pioneer_export.artwork, first.pioneer_export.artwork);
+    }
+
+    #[test]
+    fn artwork_sustain_did_not_write_is_left_in_place() {
+        let fx = fixture(2);
+        let dest = fx.dest.path();
+        std::fs::create_dir_all(artwork_on(dest, "")).expect("artwork dir");
+        std::fs::write(artwork_on(dest, "a9.jpg"), b"someone else's").expect("artwork");
+
+        let first = journaled_sync(
+            &transport(dest),
+            &prepared_with_covers(&request(&fx, DeviceLayout::Pioneer, Vec::new(), false)),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("first sync");
+        let written = std::collections::BTreeSet::from([
+            device_path("PIONEER/Artwork/00001/a1.jpg"),
+            device_path("PIONEER/Artwork/00001/a1_m.jpg"),
+        ]);
+        assert_eq!(first.pioneer_export.artwork, written);
+
+        // Covers dropped: Sustain's own thumbnails go, the other file stays.
+        let second = run(
+            dest,
+            &resync_request(&fx, DeviceLayout::Pioneer, &first, false),
+        );
+        assert!(second.pioneer_export.artwork.is_empty());
+        assert!(!artwork_on(dest, "a1.jpg").exists());
+        assert!(!artwork_on(dest, "a1_m.jpg").exists());
+        assert_eq!(
+            std::fs::read(artwork_on(dest, "a9.jpg")).expect("kept"),
+            b"someone else's"
+        );
+    }
+
+    /// A device that counts the files read from it, and whose write of
+    /// `failing_write`'s file fails — after publishing it, as a failed
+    /// directory sync does, or before.
+    struct FaultyDevice {
+        inner: DeviceRoot,
+        failing_write: Option<FailingWrite>,
+        reads: std::cell::Cell<usize>,
+    }
+
+    struct FailingWrite {
+        path: &'static str,
+        after_publishing: bool,
+    }
+
+    impl FaultyDevice {
+        fn failing(dest: &Path, path: &'static str, after_publishing: bool) -> Self {
+            Self {
+                inner: transport(dest),
+                failing_write: Some(FailingWrite {
+                    path,
+                    after_publishing,
+                }),
+                reads: std::cell::Cell::new(0),
+            }
+        }
+    }
+
+    impl DeviceTransport for FaultyDevice {
+        fn capacity(&self) -> io::Result<DeviceCapacity> {
+            self.inner.capacity()
+        }
+
+        fn ensure_dir_all(&self, path: &DeviceRelativePath) -> io::Result<()> {
+            DeviceTransport::ensure_dir_all(&self.inner, path)
+        }
+
+        fn is_regular_file(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+            DeviceTransport::is_regular_file(&self.inner, path)
+        }
+
+        fn regular_file_len(&self, path: &DeviceRelativePath) -> io::Result<Option<u64>> {
+            DeviceTransport::regular_file_len(&self.inner, path)
+        }
+
+        fn read_file(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<Vec<u8>> {
+            self.reads.set(self.reads.get() + 1);
+            DeviceTransport::read_file(&self.inner, path, limit)
+        }
+
+        fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {
+            let Some(failing) = self
+                .failing_write
+                .as_ref()
+                .filter(|failing| failing.path == path.as_str())
+            else {
+                return DeviceTransport::write_file(&self.inner, path, bytes);
+            };
+            if failing.after_publishing {
+                DeviceTransport::write_file(&self.inner, path, bytes)?;
+            }
+            Err(io::Error::other("directory sync failed"))
+        }
+
+        fn copy_file(
+            &self,
+            source: &Path,
+            path: &DeviceRelativePath,
+            expected: &SourceFileStat,
+        ) -> io::Result<()> {
+            DeviceTransport::copy_file(&self.inner, source, path, expected)
+        }
+
+        fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+            DeviceTransport::remove_file_if_exists(&self.inner, path)
+        }
+
+        fn remove_dir_if_empty(&self, path: &DeviceRelativePath) -> io::Result<bool> {
+            DeviceTransport::remove_dir_if_empty(&self.inner, path)
+        }
+
+        fn remove_tree_if_exists(
+            &self,
+            path: &DeviceRelativePath,
+            cancel: &dyn Fn() -> bool,
+        ) -> io::Result<bool> {
+            DeviceTransport::remove_tree_if_exists(&self.inner, path, cancel)
+        }
+
+        fn cleanup_stale_temporary_files(
+            &self,
+            path: &DeviceRelativePath,
+            cancel: &dyn Fn() -> bool,
+        ) -> io::Result<()> {
+            DeviceTransport::cleanup_stale_temporary_files(&self.inner, path, cancel)
+        }
+    }
+
+    #[test]
+    fn an_export_whose_process_dies_leaves_a_record_that_vouches_for_it() {
+        let mut fx = fixture(2);
+        let dest = fx.dest.path();
+        let first = run(
+            dest,
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+
+        // The second run publishes the first of its covers, then dies
+        // before reporting: only what it journaled survives.
+        fx.tracks[0].title = "Retitled".into();
+        let failing = FaultyDevice::failing(dest, "PIONEER/Artwork/00001/a1_m.jpg", false);
+        let (result, journal) = journaled_sync_keeping_journal(
+            &failing,
+            &prepared_with_covers(&resync_request(&fx, DeviceLayout::Pioneer, &first, false)),
+            &mut |_| {},
+            &|| false,
+        );
+        result.expect_err("the cover write failed");
+        assert!(artwork_on(dest, "a1.jpg").is_file());
+
+        let survived = SyncRequest {
+            previous_manifest: journal.manifest(),
+            previous_pioneer_export: journal.pioneer_export.clone(),
+            ..request(&fx, DeviceLayout::Pioneer, Vec::new(), false)
+        };
+        assert_eq!(
+            plan(&transport(dest), &survived).expect("plan").blocker,
+            None
+        );
+        journaled_sync(
+            &transport(dest),
+            &prepared_with_covers(&survived),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("the next sync carries on");
+    }
+
+    #[test]
+    fn a_database_write_that_fails_leaves_either_database_vouched_for() {
+        for after_publishing in [true, false] {
+            let mut fx = fixture(1);
+            let dest = fx.dest.path();
+            let first = run(
+                dest,
+                &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+            );
+            fx.tracks[0].title = "Retitled".into();
+            let failing =
+                FaultyDevice::failing(dest, sustain_pioneer::PDB_RELATIVE_PATH, after_publishing);
+            let failure = journaled_sync(
+                &failing,
+                &prepared(&resync_request(&fx, DeviceLayout::Pioneer, &first, false)),
+                &mut |_| {},
+                &|| false,
+            )
+            .expect_err("the database write failed");
+            let on_drive =
+                sustain_pioneer::database_identity(&std::fs::read(pdb_on(dest)).expect("pdb"));
+            assert!(
+                failure.pioneer_export.databases.contains(&on_drive),
+                "after_publishing: {after_publishing}"
+            );
+            let next = SyncRequest {
+                previous_manifest: failure.manifest.clone(),
+                previous_pioneer_export: failure.pioneer_export.clone(),
+                ..request(&fx, DeviceLayout::Pioneer, Vec::new(), false)
+            };
+            run(dest, &next);
+        }
+    }
+
+    #[test]
+    fn a_database_of_a_size_sustain_never_wrote_is_not_read() {
+        let fx = fixture(1);
+        let dest = fx.dest.path();
+        let first = run(
+            dest,
+            &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+        );
+        let again = resync_request(&fx, DeviceLayout::Pioneer, &first, false);
+        let device = FaultyDevice {
+            inner: transport(dest),
+            failing_write: None,
+            reads: std::cell::Cell::new(0),
+        };
+        assert_eq!(plan(&device, &again).expect("plan").blocker, None);
+        assert_eq!(
+            device.reads.get(),
+            1,
+            "its own database is read to be recognised"
+        );
+
+        let mut grown = std::fs::read(pdb_on(dest)).expect("pdb");
+        grown.extend_from_slice(b"history");
+        std::fs::write(pdb_on(dest), grown).expect("player write");
+        assert_eq!(
+            plan(&device, &again).expect("plan").blocker,
+            Some(SyncBlocker::ForeignPioneerExport)
+        );
+        assert_eq!(
+            device.reads.get(),
+            1,
+            "a database of another size is not read"
+        );
+    }
+
+    #[test]
+    fn a_catalog_sustain_never_writes_blocks_the_sync() {
+        for catalog in sustain_pioneer::FOREIGN_CATALOG_RELATIVE_PATHS {
+            let fx = fixture(1);
+            let dest = fx.dest.path();
+            let first = run(
+                dest,
+                &request(&fx, DeviceLayout::Pioneer, Vec::new(), false),
+            );
+            // rekordbox converted Sustain's export, leaving its database be.
+            std::fs::write(dest.join(catalog), b"OneLibrary").expect("catalog");
+            let before = snapshot(dest);
+            let again = resync_request(&fx, DeviceLayout::Pioneer, &first, true);
+            assert_eq!(
+                plan(&transport(dest), &again).expect("plan").blocker,
+                Some(SyncBlocker::ForeignPioneerExport),
+                "{catalog}"
+            );
+            sync_blocked(dest, &prepared(&again));
+            assert_eq!(snapshot(dest), before, "{catalog}");
+        }
+    }
+
+    #[test]
+    fn covers_the_drive_database_names_outlive_a_failed_publication() {
+        let fx = fixture(1);
+        let dest = fx.dest.path();
+        let first = journaled_sync(
+            &transport(dest),
+            &prepared_with_covers(&request(&fx, DeviceLayout::Pioneer, Vec::new(), false)),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect("first sync");
+        // The cover leaves the selection, but the new database never lands.
+        let failing = FaultyDevice::failing(dest, sustain_pioneer::PDB_RELATIVE_PATH, false);
+        let failure = journaled_sync(
+            &failing,
+            &prepared(&resync_request(&fx, DeviceLayout::Pioneer, &first, false)),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect_err("the database write failed");
+        assert!(artwork_on(dest, "a1.jpg").is_file());
+        assert!(artwork_on(dest, "a1_m.jpg").is_file());
+        assert_eq!(failure.pioneer_export.artwork, first.pioneer_export.artwork);
+    }
+
+    #[test]
+    fn artwork_a_sync_would_write_over_blocks_it() {
+        let fx = fixture(1);
+        let dest = fx.dest.path();
+        std::fs::create_dir_all(artwork_on(dest, "")).expect("artwork dir");
+        std::fs::write(artwork_on(dest, "a1_m.jpg"), b"someone else's").expect("artwork");
+        let before = snapshot(dest);
+
+        sync_blocked(
+            dest,
+            &prepared_with_covers(&request(&fx, DeviceLayout::Pioneer, Vec::new(), false)),
+        );
+        assert_eq!(snapshot(dest), before);
+    }
+
     #[test]
     fn pioneer_layout_writes_cover_thumbnails() {
-        // A 2×2 solid-green PNG — enough for the artwork pipeline to
-        // decode, resize, and re-encode.
-        const COVER_PNG: &[u8] = &[
-            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
-            0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x02, 0x00, 0x00,
-            0x00, 0xfd, 0xd4, 0x9a, 0x73, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x78,
-            0xda, 0x63, 0x60, 0xf8, 0xcf, 0x00, 0x42, 0x10, 0x0a, 0x00, 0x1b, 0xf2, 0x03, 0xfd,
-            0xd4, 0x2f, 0x04, 0x80, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42,
-            0x60, 0x82,
-        ];
         let mut repeated_assets = PreparedPioneerAssets::new();
         for _ in 0..10_000 {
             repeated_assets.push_track(PioneerTrackAnalysis::default(), Some(COVER_PNG));
@@ -1239,6 +1775,7 @@ mod tests {
             }],
             previous_manifest: Vec::new(),
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };
@@ -1290,7 +1827,7 @@ mod tests {
         fx.tracks[0].artist = "Daft Punk".into();
         let corrected = journaled_sync(
             &device(),
-            &prepared(&request(&fx, DeviceLayout::Pioneer, first.manifest, true)),
+            &prepared(&resync_request(&fx, DeviceLayout::Pioneer, &first, true)),
             &mut |_| {},
             &|| false,
         )
@@ -1417,6 +1954,7 @@ mod tests {
             }],
             previous_manifest: first.manifest.clone(),
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };
@@ -1447,6 +1985,7 @@ mod tests {
             }],
             previous_manifest: first.manifest.clone(),
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: remove,
             export_date: "2026-01-01".into(),
         };
@@ -1490,6 +2029,7 @@ mod tests {
             }],
             previous_manifest: first.manifest.clone(),
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
@@ -1576,6 +2116,7 @@ mod tests {
             }],
             previous_manifest: first.manifest.clone(),
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
@@ -1650,7 +2191,7 @@ mod tests {
         // the process: only the journal survives.
         let transport =
             CopyFailureTransport::fatal(transport(fx.dest.path()), placements[2].rel_path.clone());
-        let mut journal = ReplayJournal::over(&[]);
+        let mut journal = ReplayJournal::over(&req);
         sync(
             &transport,
             &prepared(&req),
@@ -1680,6 +2221,13 @@ mod tests {
             }
 
             fn forget(&mut self, _path: &DeviceRelativePath) -> Result<(), JournalError> {
+                Ok(())
+            }
+
+            fn record_pioneer_export(
+                &mut self,
+                _record: &PioneerExportRecord,
+            ) -> Result<(), JournalError> {
                 Ok(())
             }
         }
@@ -1728,6 +2276,7 @@ mod tests {
             }],
             previous_manifest: first.manifest,
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: true,
             export_date: "2026-01-01".into(),
         };
@@ -1943,21 +2492,18 @@ mod tests {
             playlists: Vec::new(),
             previous_manifest: Vec::new(),
             previous_playlist_files: Vec::new(),
+            previous_pioneer_export: sustain_domain::PioneerExportRecord::default(),
             remove_stale: false,
             export_date: "2026-01-01".into(),
         };
-        assert!(matches!(
-            journaled_sync(
-                &transport(fx.dest.path()),
-                &prepared(&req),
-                &mut |_| {},
-                &|| false
-            ),
-            Err(SyncFailure {
-                error: SyncError::Empty,
-                ..
-            })
-        ));
+        let failure = journaled_sync(
+            &transport(fx.dest.path()),
+            &prepared(&req),
+            &mut |_| {},
+            &|| false,
+        )
+        .expect_err("an empty selection fails");
+        assert!(matches!(failure.error, SyncError::Empty));
     }
 
     fn walk_files(dir: PathBuf) -> usize {

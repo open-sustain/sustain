@@ -115,11 +115,7 @@ impl DeviceRoot {
         }
     }
 
-    pub(crate) fn read_to_string(
-        &self,
-        path: &DeviceRelativePath,
-        limit: u64,
-    ) -> io::Result<String> {
+    pub(crate) fn read_file(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<Vec<u8>> {
         let (parent, file_name) = split_parent(path)?;
         let parent = self.open_dir(&parent, false)?;
         let fd = openat(
@@ -146,12 +142,7 @@ impl DeviceRoot {
                 format!("device file exceeds {limit} bytes: {path}"),
             ));
         }
-        String::from_utf8(bytes).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("device file is not UTF-8: {path}"),
-            )
-        })
+        Ok(bytes)
     }
 
     pub(crate) fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {
@@ -369,8 +360,8 @@ impl DeviceTransport for DeviceRoot {
         self.regular_file_len(path)
     }
 
-    fn read_to_string(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<String> {
-        self.read_to_string(path, limit)
+    fn read_file(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<Vec<u8>> {
+        self.read_file(path, limit)
     }
 
     fn write_file(&self, path: &DeviceRelativePath, bytes: &[u8]) -> io::Result<()> {

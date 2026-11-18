@@ -16,17 +16,20 @@
 //! - **Pioneer** — a deduplicated `Contents/Artist/Album` tree plus the
 //!   `export.pdb` database and per-track ANLZ waveform files.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use sustain_domain::{AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, WaveformSegments};
+use sustain_domain::{
+    AnlzRecord, DeviceKind, DeviceLayout, DeviceRelativePath, PioneerExportRecord, WaveformSegments,
+};
 use sustain_pioneer::{
-    AnlzInput, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz, artwork::ARTWORK_BUCKET,
-    device_setting, path_hash, pdb,
+    AnlzInput, PioneerFileType, PioneerPlaylist, PioneerTrack, anlz, device_setting, path_hash, pdb,
 };
 
+use crate::journal::ManifestJournal;
 use crate::model::{
     Placement, PreparedSyncRequest, SyncError, SyncInputPlaylist, SyncInputTrack, SyncRequest,
 };
+use crate::pioneer_export;
 use crate::transport::DeviceTransport;
 
 const MUSIC_DIR: &str = "Music";
@@ -147,7 +150,8 @@ fn allocate_unique_path(
     )))
 }
 
-/// What [`finalize`] established on the device beyond the audio files.
+/// What [`write_pioneer`] established on the device beyond the audio
+/// files.
 #[derive(Default)]
 pub(crate) struct Finalized {
     /// The Pioneer analysis pair each present placement (by index into
@@ -155,32 +159,7 @@ pub(crate) struct Finalized {
     pub(crate) anlz: HashMap<usize, AnlzRecord>,
 }
 
-/// Write the layout's index/database files after audio is in place.
-/// `present` holds the indices (into `placements`) that are known to exist
-/// on the device after the copy phase: unchanged files plus successful
-/// writes from this run. Recoverable copy failures are intentionally absent.
-/// Each playlist file is pushed onto `playlist_files` as it lands, so a
-/// run that stops part-way still knows which it wrote.
-pub(crate) fn finalize(
-    req: &PreparedSyncRequest,
-    transport: &dyn DeviceTransport,
-    base: &DeviceRelativePath,
-    placements: &[Placement],
-    present: &HashSet<usize>,
-    playlist_files: &mut Vec<DeviceRelativePath>,
-    cancel: &dyn Fn() -> bool,
-) -> Result<Finalized, SyncError> {
-    match req.device.layout {
-        DeviceLayout::M3u => {
-            write_m3u_playlists(req, transport, base, placements, present, playlist_files)?;
-            Ok(Finalized::default())
-        }
-        DeviceLayout::FolderPerPlaylist => Ok(Finalized::default()),
-        DeviceLayout::Pioneer => write_pioneer(req, transport, base, placements, present, cancel),
-    }
-}
-
-/// True when the layout writes index/database files in [`finalize`]
+/// True when the layout writes its index/database files after the audio
 /// even if no audio changed (the selection itself may have changed).
 pub fn always_finalizes(layout: DeviceLayout) -> bool {
     matches!(layout, DeviceLayout::M3u | DeviceLayout::Pioneer)
@@ -397,7 +376,13 @@ pub(crate) fn playlist_files(
         .collect()
 }
 
-fn write_m3u_playlists(
+/// Write the M3U playlist files after audio is in place. `present` holds
+/// the indices (into `placements`) that are known to exist on the device
+/// after the copy phase: unchanged files plus successful writes from this
+/// run. Recoverable copy failures are intentionally absent. Each playlist
+/// file is pushed onto `written` as it lands, so a run that stops
+/// part-way still knows which it wrote.
+pub(crate) fn write_m3u_playlists(
     req: &SyncRequest,
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
@@ -457,13 +442,19 @@ fn write_m3u_playlists(
 // Pioneer database + ANLZ
 // ---------------------------------------------------------------------
 
-fn write_pioneer(
+/// Write the Pioneer database, analysis files and artwork after audio is
+/// in place, for the placements in `present` (see
+/// [`write_m3u_playlists`]). `record` is kept current — and journaled
+/// before each change it covers — as artwork and the database are
+/// written and removed.
+pub(crate) fn write_pioneer(
     req: &PreparedSyncRequest,
     transport: &dyn DeviceTransport,
     base: &DeviceRelativePath,
     placements: &[Placement],
     present: &HashSet<usize>,
-    cancel: &dyn Fn() -> bool,
+    record: &mut PioneerExportRecord,
+    journal: &mut dyn ManifestJournal,
 ) -> Result<Finalized, SyncError> {
     let assets = req.pioneer_assets()?;
     // Present placements in placement order: their PDB row order.
@@ -604,35 +595,39 @@ fn write_pioneer(
         })
         .collect();
 
-    // Render the cover thumbnails onto the drive (clearing any stale set
-    // from a previous, differently-numbered export) before stamping the
-    // matching id↔path rows into the PDB.
-    let artwork_bucket = base.join(
-        &DeviceRelativePath::new(ARTWORK_BUCKET)
-            .expect("static Pioneer artwork bucket path is safe"),
-    );
-    transport
-        .remove_tree_if_exists(&artwork_bucket, cancel)
-        .map_err(|error| SyncError::io(artwork_bucket.as_str(), error))?;
-    if !assets.artwork.is_empty() {
-        transport
-            .ensure_dir_all(&artwork_bucket)
-            .map_err(|error| SyncError::io(artwork_bucket.as_str(), error))?;
-        for (name, bytes) in assets.artwork.files() {
-            let path = artwork_bucket
+    // Render the cover thumbnails onto the drive before stamping the
+    // matching id↔path rows into the PDB. Every file is recorded as
+    // Sustain's before it is written, so a run that dies part-way leaves
+    // none the next run takes for someone else's.
+    let artwork: BTreeMap<DeviceRelativePath, &[u8]> = assets
+        .artwork
+        .files()
+        .map(|(name, bytes)| {
+            let path = pioneer_export::artwork_bucket()
                 .join_component(&name)
                 .expect("generated Pioneer artwork filename is safe");
-            transport
-                .write_file(&path, bytes)
-                .map_err(|error| SyncError::io(path.as_str(), error))?;
-        }
+            (path, bytes)
+        })
+        .collect();
+    let stale: Vec<DeviceRelativePath> = record
+        .artwork
+        .iter()
+        .filter(|path| !artwork.contains_key(*path))
+        .cloned()
+        .collect();
+    record.artwork.extend(artwork.keys().cloned());
+    journal
+        .record_pioneer_export(record)
+        .map_err(SyncError::Journal)?;
+    for (path, bytes) in &artwork {
+        let on_device = base.join(path);
+        transport
+            .write_file(&on_device, bytes)
+            .map_err(|error| SyncError::io(on_device.as_str(), error))?;
     }
     let artwork_rows = assets.artwork.rows();
 
-    let pdb_path = base.join(
-        &DeviceRelativePath::new(sustain_pioneer::PDB_RELATIVE_PATH)
-            .expect("static Pioneer PDB path is safe"),
-    );
+    let pdb_path = base.join(&pioneer_export::database_path());
     let bytes = pdb::build(
         &pioneer_tracks,
         &pioneer_playlists,
@@ -640,9 +635,34 @@ fn write_pioneer(
         &req.export_date,
     )
     .map_err(SyncError::Pdb)?;
+    // Until the new database is known to be published, either it or the
+    // one it replaces may be what the drive holds.
+    let database = sustain_pioneer::database_identity(&bytes);
+    record.databases.insert(database.clone());
+    journal
+        .record_pioneer_export(record)
+        .map_err(SyncError::Journal)?;
     transport
         .write_file(&pdb_path, &bytes)
         .map_err(|error| SyncError::io(pdb_path.as_str(), error))?;
+    record.databases = BTreeSet::from([database]);
+    journal
+        .record_pioneer_export(record)
+        .map_err(SyncError::Journal)?;
+
+    // Only now that no database on the drive names them do the covers the
+    // previous one used go. Of the artwork already there, only the files
+    // Sustain recorded writing are its own to remove.
+    for path in stale {
+        let on_device = base.join(&path);
+        transport
+            .remove_file_if_exists(&on_device)
+            .map_err(|error| SyncError::io(on_device.as_str(), error))?;
+        record.artwork.remove(&path);
+    }
+    journal
+        .record_pioneer_export(record)
+        .map_err(SyncError::Journal)?;
 
     // Without a settings file, players show the waveforms in BLUE
     // monochrome. A drive that has one keeps it: from then on the

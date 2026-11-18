@@ -1304,7 +1304,14 @@ Three on-drive formats, chosen per device:
   plays. Only formats Pioneer players can play are exported: MP3, AAC/ALAC
   (M4A), FLAC, WAV and AIFF. Tracks in any other format (Opus, Ogg Vorbis…)
   are left off the drive, and the sync summary says how many. (Hot cues and
-  memory cues are not written.)
+  memory cues are not written.) Sustain only ever writes over an export it
+  wrote itself: if the drive holds a database Sustain did not write — one
+  rekordbox exported, or Sustain's own after a player recorded history in it —
+  the Sync button is greyed out with a note explaining why, and nothing on
+  the drive is touched until the user removes its `PIONEER` folder; the
+  panel checks again when the user returns to Sustain's window. Artwork
+  files Sustain did not write are likewise never deleted. A sync cut short —
+  even by a crash — still leaves its own export recognised as Sustain's.
 
 Android phones are reached over **MTP** through the desktop's GVfs backend — the
 same path the file manager uses, so no special drivers or root access are needed.
