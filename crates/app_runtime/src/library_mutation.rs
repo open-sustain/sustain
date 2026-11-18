@@ -13,7 +13,6 @@ use sustain_domain::{
     TrackLocation, TrackRelativePath,
 };
 use sustain_i18n::gettext;
-use sustain_library_store::TagMirrorArtwork;
 use sustain_metadata::audio_format_from_path;
 
 use crate::{
@@ -246,16 +245,8 @@ impl ApplicationRuntime {
             .library_store
             .clone()
             .ok_or(ApplicationRuntimeError::LibraryServicesUnavailable)?;
-        let artwork = match artwork {
-            Some(bytes) => TagMirrorArtwork::Set(
-                library_store
-                    .publish_tag_mirror_artwork(&bytes)
-                    .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?,
-            ),
-            None => TagMirrorArtwork::Clear,
-        };
         library_store
-            .enqueue_tag_mirror_artwork(track_id, artwork)
+            .enqueue_tag_mirror_artwork(track_id, artwork.as_deref())
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         self.nudge_metadata_writer();
 

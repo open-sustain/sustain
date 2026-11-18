@@ -719,14 +719,18 @@ fn attempt_artwork(
         );
         return AttemptOutcome::Failed;
     }
-    if !tag_writer.enqueue_artwork(track.id, Some(artwork.bytes)) {
-        eprintln!(
-            "Sustain: artwork mirror enqueue failed for {}",
-            absolute_path.display()
-        );
-        return AttemptOutcome::Failed;
+    match tag_writer.enqueue_retrieved_artwork(track.id, &artwork.bytes) {
+        Ok(true) => AttemptOutcome::Succeeded,
+        // The user chose artwork while the fetch was in flight.
+        Ok(false) => AttemptOutcome::NoMatch,
+        Err(error) => {
+            eprintln!(
+                "Sustain: artwork mirror enqueue failed for {}: {error:?}",
+                absolute_path.display()
+            );
+            AttemptOutcome::Failed
+        }
     }
-    AttemptOutcome::Succeeded
 }
 
 fn attempt_lyrics(

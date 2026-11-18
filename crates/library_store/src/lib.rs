@@ -385,16 +385,27 @@ pub trait LibraryStore: Send + Sync {
     /// recovery journal until this succeeds.
     fn flush_durable(&self) -> StoreResult<()>;
 
-    /// Durably publish bounded artwork bytes before SQLite is allowed to
-    /// reference them from [`Self::enqueue_tag_mirror_artwork`].
-    fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork>;
-    /// Retain an embedded-artwork set/clear intent. Set payloads must have
-    /// already been published through [`Self::publish_tag_mirror_artwork`].
+    /// Retain the user's embedded-artwork decision for the outbox: `Some`
+    /// sets the cover to these validated bytes, `None` clears it. The bytes
+    /// are durably published and referenced in one step that payload
+    /// collection cannot interleave with. Setting a cover also records the
+    /// track as carrying embedded artwork, so missing-artwork retrieval
+    /// leaves it alone from that moment on.
     fn enqueue_tag_mirror_artwork(
         &self,
         track_id: TrackId,
-        artwork: TagMirrorArtwork,
+        artwork: Option<&[u8]>,
     ) -> StoreResult<()>;
+    /// Like [`Self::enqueue_tag_mirror_artwork`] setting `bytes`, for
+    /// artwork found by online retrieval: retained only while the track
+    /// still has none — no embedded artwork and no pending artwork decision
+    /// — so a late reply never replaces a cover the user chose meanwhile.
+    /// Returns whether it was retained.
+    fn enqueue_retrieved_tag_mirror_artwork(
+        &self,
+        track_id: TrackId,
+        bytes: &[u8],
+    ) -> StoreResult<bool>;
     /// Return retry-eligible work ordered by its next attempt time.
     fn tag_mirrors_due(&self, now_unix: i64, limit: usize) -> StoreResult<Vec<PendingTagMirror>>;
     /// Earliest deferred retry, used by the actor to sleep without polling.
@@ -722,6 +733,10 @@ pub trait LibraryStore: Send + Sync {
 pub struct SqliteLibraryStore {
     connection: Mutex<Connection>,
     tag_mirror_blobs: tag_mirror::TagMirrorBlobStore,
+    /// Held from publishing an artwork payload until SQLite references it,
+    /// and by collection from its reference snapshot until its last unlink:
+    /// otherwise collection could delete a payload between the two.
+    tag_mirror_artwork_publication: Mutex<()>,
     freshly_created: bool,
     waveform_cache: WaveformCacheStatus,
 }
@@ -739,14 +754,9 @@ impl SqliteLibraryStore {
         }
         let freshly_created = !path.exists();
         let connection = Connection::open(path).map_err(StoreError::from)?;
-        let blob_root = path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("tag-outbox")
-            .join("blobs");
         Self::from_connection(
             connection,
-            tag_mirror::TagMirrorBlobStore::new(blob_root),
+            tag_mirror::TagMirrorBlobStore::new(tag_mirror_blob_root(path)),
             freshly_created,
             Some(&cache_dir.as_ref().join(waveform_cache::FILE_NAME)),
         )
@@ -791,6 +801,7 @@ impl SqliteLibraryStore {
         Ok(Self {
             connection: Mutex::new(connection),
             tag_mirror_blobs,
+            tag_mirror_artwork_publication: Mutex::new(()),
             freshly_created,
             waveform_cache,
         })
@@ -814,6 +825,25 @@ impl SqliteLibraryStore {
             .lock()
             .map_err(|_| StoreError::StoreUnavailable)
     }
+
+    /// Taken before [`Self::connection_guard`], never after it.
+    fn tag_mirror_artwork_publication_guard(&self) -> StoreResult<MutexGuard<'_, ()>> {
+        self.tag_mirror_artwork_publication
+            .lock()
+            .map_err(|_| StoreError::StoreUnavailable)
+    }
+}
+
+/// Where the tag-mirror outbox keeps the artwork payloads of the database at
+/// `database_path`: beside it. A bare file name's parent is the empty path,
+/// which stands for the working directory.
+fn tag_mirror_blob_root(database_path: &Path) -> std::path::PathBuf {
+    database_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join("tag-outbox")
+        .join("blobs")
 }
 
 /// Resolve the on-disk SQLite library database path Sustain reads from when

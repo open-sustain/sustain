@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use super::*;
 use crate::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork, TagMirrorKinds};
@@ -116,11 +116,61 @@ pub(super) fn fill_missing_track_metadata_and_enqueue(
     Ok(changed)
 }
 
-pub(super) fn enqueue_artwork(
+/// The user's set/clear decision. The track is recorded as carrying (or not
+/// carrying) embedded artwork in the same transaction.
+pub(super) fn enqueue_user_artwork(
+    connection: &mut Connection,
+    track_id: TrackId,
+    artwork: TagMirrorArtwork,
+) -> StoreResult<()> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    enqueue_artwork(&transaction, track_id, artwork)?;
+    transaction.commit().map_err(StoreError::from)
+}
+
+/// Retrieved artwork, retained only for a track that has no embedded
+/// artwork and no pending artwork decision.
+pub(super) fn enqueue_retrieved_artwork(
+    connection: &mut Connection,
+    track_id: TrackId,
+    artwork: StoredTagMirrorArtwork,
+) -> StoreResult<bool> {
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    let lacks_artwork: bool = transaction
+        .query_row(
+            r#"
+            SELECT COALESCE(t.has_embedded_artwork, 0) = 0
+                AND NOT EXISTS (
+                    SELECT 1 FROM tag_mirror_outbox o
+                    WHERE o.track_id = t.id AND o.artwork_action <> 0
+                )
+            FROM tracks t
+            WHERE t.id = ?1
+            "#,
+            params![track_id.get()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StoreError::from)?
+        .unwrap_or(false);
+    if !lacks_artwork {
+        return Ok(false);
+    }
+    enqueue_artwork(&transaction, track_id, TagMirrorArtwork::Set(artwork))?;
+    transaction.commit().map_err(StoreError::from)?;
+    Ok(true)
+}
+
+fn enqueue_artwork(
     connection: &Connection,
     track_id: TrackId,
     artwork: TagMirrorArtwork,
 ) -> StoreResult<()> {
+    let carries_cover = match artwork {
+        TagMirrorArtwork::Unchanged => None,
+        TagMirrorArtwork::Clear => Some(false),
+        TagMirrorArtwork::Set(_) => Some(true),
+    };
     enqueue(
         connection,
         track_id,
@@ -129,7 +179,16 @@ pub(super) fn enqueue_artwork(
             ..TagMirrorKinds::default()
         },
         artwork,
-    )
+    )?;
+    if let Some(carries_cover) = carries_cover {
+        connection
+            .execute(
+                "UPDATE tracks SET has_embedded_artwork = ?2 WHERE id = ?1",
+                params![track_id.get(), carries_cover],
+            )
+            .map_err(StoreError::from)?;
+    }
+    Ok(())
 }
 
 fn enqueue(
@@ -217,18 +276,41 @@ pub(super) fn next_attempt_at(connection: &Connection) -> StoreResult<Option<i64
         .map_err(StoreError::from)
 }
 
+/// Settles the intent the writer has just applied to the file. An applied
+/// artwork intent also records what the file now carries: a scan between
+/// enqueue and completion read the file before the write and may have
+/// recorded the old state, which would otherwise outlive the intent.
 pub(super) fn complete(
-    connection: &Connection,
+    connection: &mut Connection,
     track_id: TrackId,
     generation: u64,
 ) -> StoreResult<bool> {
-    connection
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    transaction
+        .execute(
+            r#"
+            UPDATE tracks
+            SET has_embedded_artwork = (
+                SELECT artwork_action = 2 FROM tag_mirror_outbox
+                WHERE track_id = ?1 AND generation = ?2
+            )
+            WHERE id = ?1 AND EXISTS (
+                SELECT 1 FROM tag_mirror_outbox
+                WHERE track_id = ?1 AND generation = ?2 AND artwork_action <> 0
+            )
+            "#,
+            params![track_id.get(), generation as i64],
+        )
+        .map_err(StoreError::from)?;
+    let completed = transaction
         .execute(
             "DELETE FROM tag_mirror_outbox WHERE track_id = ?1 AND generation = ?2",
             params![track_id.get(), generation as i64],
         )
-        .map(|changed| changed > 0)
-        .map_err(StoreError::from)
+        .map_err(StoreError::from)?
+        > 0;
+    transaction.commit().map_err(StoreError::from)?;
+    Ok(completed)
 }
 
 pub(super) fn record_failure(

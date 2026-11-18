@@ -34,8 +34,8 @@ use sustain_library_store::{
     DuplicateConsolidationPlan, LibraryStore, OnlineCapabilities, OnlineContext, PendingTagMirror,
     PlaylistFolder, SourceFingerprint, SqliteLibraryStore, StoreError, StoreResult,
     StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork, StoredWaveform,
-    SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork, TrackAnalysis,
-    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
+    SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TrackAnalysis, TrackColumnEntry,
+    TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort,
 };
 use sustain_metadata::{
     InitialTagRead, InitialTags, LibraryScan, MalformedTagError, MetadataChange, MetadataError,
@@ -8176,16 +8176,21 @@ impl LibraryStore for CallCountingLibraryStore {
         self.inner.flush_durable()
     }
 
-    fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork> {
-        self.inner.publish_tag_mirror_artwork(bytes)
-    }
-
     fn enqueue_tag_mirror_artwork(
         &self,
         track_id: TrackId,
-        artwork: TagMirrorArtwork,
+        artwork: Option<&[u8]>,
     ) -> StoreResult<()> {
         self.inner.enqueue_tag_mirror_artwork(track_id, artwork)
+    }
+
+    fn enqueue_retrieved_tag_mirror_artwork(
+        &self,
+        track_id: TrackId,
+        bytes: &[u8],
+    ) -> StoreResult<bool> {
+        self.inner
+            .enqueue_retrieved_tag_mirror_artwork(track_id, bytes)
     }
 
     fn tag_mirrors_due(&self, now_unix: i64, limit: usize) -> StoreResult<Vec<PendingTagMirror>> {

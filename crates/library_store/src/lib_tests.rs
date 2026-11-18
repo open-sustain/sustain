@@ -2913,10 +2913,7 @@ fn background_results_for_a_track_no_longer_in_the_library_are_dropped() {
         store.record_synced_lyrics(gone, &sample_synced_lyrics(), "lrclib"),
         Ok(())
     );
-    assert_eq!(
-        store.enqueue_tag_mirror_artwork(gone, TagMirrorArtwork::Clear),
-        Ok(())
-    );
+    assert_eq!(store.enqueue_tag_mirror_artwork(gone, None), Ok(()));
 
     assert_eq!(store.load_waveform(gone), Ok(None));
     assert_eq!(store.load_beat_grid(gone), Ok(None));
@@ -3179,6 +3176,125 @@ fn tag_mirror_outbox_coalesces_latest_canonical_projection() {
 }
 
 #[test]
+fn setting_a_cover_marks_the_track_as_carrying_artwork() {
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory store");
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+
+    store
+        .enqueue_tag_mirror_artwork(track.id, Some(&valid_test_artwork()))
+        .expect("enqueue artwork");
+
+    let stored = store.track(track.id).expect("load track").expect("track");
+    assert_eq!(stored.has_embedded_artwork, Some(true));
+}
+
+#[test]
+fn an_applied_cover_decision_outlives_a_scan_that_read_the_file_before_it() {
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory store");
+    let artwork = valid_test_artwork();
+    let covered = track(1, "covered.flac");
+    let cleared = Track {
+        has_embedded_artwork: Some(true),
+        ..track(2, "cleared.flac")
+    };
+    store
+        .save_tracks(&[covered.clone(), cleared.clone()])
+        .expect("save tracks");
+    store
+        .enqueue_tag_mirror_artwork(covered.id, Some(&artwork))
+        .expect("user sets a cover");
+    store
+        .enqueue_tag_mirror_artwork(cleared.id, None)
+        .expect("user clears the cover");
+    // A scan that read both files before the writer reached them records
+    // what the files carried then.
+    store
+        .reconcile_scanned_tracks(&[
+            Track {
+                has_embedded_artwork: Some(false),
+                ..covered.clone()
+            },
+            Track {
+                has_embedded_artwork: Some(true),
+                ..cleared.clone()
+            },
+        ])
+        .expect("stale scan");
+
+    for pending in store.tag_mirrors_due(i64::MAX, 10).expect("due mirrors") {
+        assert!(
+            store
+                .complete_tag_mirror(pending.track_id, pending.generation)
+                .expect("complete mirror")
+        );
+    }
+
+    let carries = [&covered, &cleared].map(|track| {
+        store
+            .track(track.id)
+            .expect("load track")
+            .expect("track")
+            .has_embedded_artwork
+    });
+    assert_eq!(carries, [Some(true), Some(false)]);
+    let retained = [&covered, &cleared].map(|track| {
+        store
+            .enqueue_retrieved_tag_mirror_artwork(track.id, &artwork)
+            .expect("enqueue retrieved artwork")
+    });
+    assert_eq!(retained, [false, true]);
+}
+
+#[test]
+fn retrieved_artwork_never_replaces_a_cover_decision() {
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory store");
+    let artwork = valid_test_artwork();
+    let lacking = track(1, "lacking.flac");
+    let chosen = track(2, "chosen.flac");
+    let cleared = track(3, "cleared.flac");
+    let embedded = Track {
+        has_embedded_artwork: Some(true),
+        ..track(4, "embedded.flac")
+    };
+    for track in [&lacking, &chosen, &cleared, &embedded] {
+        store.save_track(track.clone()).expect("save track");
+    }
+    store
+        .enqueue_tag_mirror_artwork(chosen.id, Some(&artwork))
+        .expect("user sets a cover");
+    store
+        .enqueue_tag_mirror_artwork(cleared.id, None)
+        .expect("user clears the cover");
+
+    let retained = [&lacking, &chosen, &cleared, &embedded].map(|track| {
+        store
+            .enqueue_retrieved_tag_mirror_artwork(track.id, &artwork)
+            .expect("enqueue retrieved artwork")
+    });
+
+    assert_eq!(retained, [true, false, false, false]);
+    let pending = store.tag_mirrors_due(i64::MAX, 10).expect("load outbox");
+    let cleared_intent = pending
+        .iter()
+        .find(|mirror| mirror.track_id == cleared.id)
+        .expect("the clear is still pending");
+    assert_eq!(cleared_intent.artwork, TagMirrorArtwork::Clear);
+}
+
+#[test]
+fn a_bare_database_file_name_keeps_its_artwork_in_the_working_directory() {
+    assert_eq!(
+        super::tag_mirror_blob_root(std::path::Path::new("bare.sqlite")),
+        std::path::Path::new("./tag-outbox/blobs")
+    );
+    assert_eq!(
+        super::tag_mirror_blob_root(std::path::Path::new("/data/library.sqlite")),
+        std::path::Path::new("/data/tag-outbox/blobs")
+    );
+}
+
+#[test]
 fn sqlite_tag_mirror_artwork_survives_reopen_and_is_collected_after_completion() {
     let dir = unique_store_test_directory("tag_outbox_artwork");
     std::fs::create_dir_all(&dir).expect("create test directory");
@@ -3189,13 +3305,15 @@ fn sqlite_tag_mirror_artwork_survives_reopen_and_is_collected_after_completion()
     let artwork = {
         let store = SqliteLibraryStore::open(&database, dir.join("cache")).expect("open store");
         store.save_track(track.clone()).expect("save track");
-        let artwork = store
-            .publish_tag_mirror_artwork(&bytes)
-            .expect("publish artwork blob");
         store
-            .enqueue_tag_mirror_artwork(track.id, TagMirrorArtwork::Set(artwork.clone()))
+            .enqueue_tag_mirror_artwork(track.id, Some(&bytes))
             .expect("enqueue artwork mirror");
-        artwork
+        let pending = store.tag_mirrors_due(0, 10).expect("load outbox");
+        match pending[0].artwork.clone() {
+            TagMirrorArtwork::Set(artwork) => Some(artwork),
+            _ => None,
+        }
+        .expect("a set-artwork intent")
     };
 
     let blob_path = dir

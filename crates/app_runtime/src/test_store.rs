@@ -30,8 +30,8 @@ use sustain_library_store::{
     PendingTagMirror, PlayStatistics, Playlist, PlaylistFolder, PlaylistFolderId, PlaylistId,
     PlaylistItem, Rating, SmartPlaylist, SmartPlaylistId, SourceFingerprint, StoreError,
     StoreResult, StoredSmartShuffleIndex, StoredSyncedLyrics, StoredTagMirrorArtwork,
-    StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, TagMirrorArtwork,
-    Track, TrackAnalysis, TrackAudioProperties, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
+    StoredWaveform, SyncDevice, SyncDeviceId, SyncManifestEntry, SyncedLyrics, Track,
+    TrackAnalysis, TrackAudioProperties, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
     TrackLocation, TrackRelativePath,
 };
 
@@ -449,16 +449,21 @@ impl LibraryStore for FaultyStore {
         self.inner.flush_durable()
     }
 
-    fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork> {
-        self.inner.publish_tag_mirror_artwork(bytes)
-    }
-
     fn enqueue_tag_mirror_artwork(
         &self,
         track_id: TrackId,
-        artwork: TagMirrorArtwork,
+        artwork: Option<&[u8]>,
     ) -> StoreResult<()> {
         self.inner.enqueue_tag_mirror_artwork(track_id, artwork)
+    }
+
+    fn enqueue_retrieved_tag_mirror_artwork(
+        &self,
+        track_id: TrackId,
+        bytes: &[u8],
+    ) -> StoreResult<bool> {
+        self.inner
+            .enqueue_retrieved_tag_mirror_artwork(track_id, bytes)
     }
 
     fn tag_mirrors_due(&self, now_unix: i64, limit: usize) -> StoreResult<Vec<PendingTagMirror>> {

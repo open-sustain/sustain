@@ -31,8 +31,8 @@ use sustain_domain::{
     TrackAvailability, TrackMetadata, VerifiedDuplicateMerge,
 };
 use sustain_library_store::{
-    LibraryStore, PendingTagMirror, StoreError, StoredTagMirrorArtwork, TagMirrorArtwork,
-    TagMirrorKinds, TrackId,
+    LibraryStore, PendingTagMirror, StoreError, StoreResult, StoredTagMirrorArtwork,
+    TagMirrorArtwork, TagMirrorKinds, TrackId,
 };
 use sustain_metadata::{MetadataError, MetadataService};
 
@@ -372,23 +372,21 @@ impl MetadataWriteHandle {
         Ok(changed)
     }
 
-    pub(crate) fn enqueue_artwork(&self, track_id: TrackId, artwork: Option<Vec<u8>>) -> bool {
-        let artwork = match artwork {
-            Some(bytes) => match self.library_store.publish_tag_mirror_artwork(&bytes) {
-                Ok(artwork) => TagMirrorArtwork::Set(artwork),
-                Err(_) => return false,
-            },
-            None => TagMirrorArtwork::Clear,
-        };
-        if self
+    /// Queue artwork found by online retrieval; see
+    /// [`LibraryStore::enqueue_retrieved_tag_mirror_artwork`]. `Ok(false)`
+    /// means the track gained artwork in the meantime.
+    pub(crate) fn enqueue_retrieved_artwork(
+        &self,
+        track_id: TrackId,
+        bytes: &[u8],
+    ) -> StoreResult<bool> {
+        let retained = self
             .library_store
-            .enqueue_tag_mirror_artwork(track_id, artwork)
-            .is_err()
-        {
-            return false;
+            .enqueue_retrieved_tag_mirror_artwork(track_id, bytes)?;
+        if retained {
+            self.nudge();
         }
-        self.nudge();
-        true
+        Ok(retained)
     }
 
     fn nudge(&self) {
@@ -1474,11 +1472,8 @@ mod tests {
             .update_track_rating_and_enqueue_mirror(track_id, rating)
             .expect("queue rating");
         let artwork = valid_artwork();
-        let published_artwork = store
-            .publish_tag_mirror_artwork(&artwork)
-            .expect("publish artwork");
         store
-            .enqueue_tag_mirror_artwork(track_id, TagMirrorArtwork::Set(published_artwork))
+            .enqueue_tag_mirror_artwork(track_id, Some(&artwork))
             .expect("queue artwork");
 
         let service = Arc::new(RecordingMetadataService::default());

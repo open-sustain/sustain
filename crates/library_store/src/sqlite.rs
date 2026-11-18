@@ -234,17 +234,29 @@ impl LibraryStore for SqliteLibraryStore {
         }
     }
 
-    fn publish_tag_mirror_artwork(&self, bytes: &[u8]) -> StoreResult<StoredTagMirrorArtwork> {
-        self.tag_mirror_blobs.publish(bytes)
-    }
-
     fn enqueue_tag_mirror_artwork(
         &self,
         track_id: TrackId,
-        artwork: TagMirrorArtwork,
+        artwork: Option<&[u8]>,
     ) -> StoreResult<()> {
-        let connection = self.connection_guard()?;
-        tag_mirror::enqueue_artwork(&connection, track_id, artwork)
+        let _publication = self.tag_mirror_artwork_publication_guard()?;
+        let artwork = match artwork {
+            Some(bytes) => TagMirrorArtwork::Set(self.tag_mirror_blobs.publish(bytes)?),
+            None => TagMirrorArtwork::Clear,
+        };
+        let mut connection = self.connection_guard()?;
+        tag_mirror::enqueue_user_artwork(&mut connection, track_id, artwork)
+    }
+
+    fn enqueue_retrieved_tag_mirror_artwork(
+        &self,
+        track_id: TrackId,
+        bytes: &[u8],
+    ) -> StoreResult<bool> {
+        let _publication = self.tag_mirror_artwork_publication_guard()?;
+        let artwork = self.tag_mirror_blobs.publish(bytes)?;
+        let mut connection = self.connection_guard()?;
+        tag_mirror::enqueue_retrieved_artwork(&mut connection, track_id, artwork)
     }
 
     fn tag_mirrors_due(&self, now_unix: i64, limit: usize) -> StoreResult<Vec<PendingTagMirror>> {
@@ -258,8 +270,8 @@ impl LibraryStore for SqliteLibraryStore {
     }
 
     fn complete_tag_mirror(&self, track_id: TrackId, generation: u64) -> StoreResult<bool> {
-        let connection = self.connection_guard()?;
-        tag_mirror::complete(&connection, track_id, generation)
+        let mut connection = self.connection_guard()?;
+        tag_mirror::complete(&mut connection, track_id, generation)
     }
 
     fn record_tag_mirror_failure(
@@ -284,6 +296,7 @@ impl LibraryStore for SqliteLibraryStore {
     }
 
     fn garbage_collect_tag_mirror_artwork(&self) -> StoreResult<()> {
+        let _publication = self.tag_mirror_artwork_publication_guard()?;
         let snapshot = std::time::SystemTime::now();
         let referenced = {
             let connection = self.connection_guard()?;
