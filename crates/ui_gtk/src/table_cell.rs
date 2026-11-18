@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn children_replace_the_text() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let list_item = glib::Object::new::<gtk::ListItem>();
             let cell = TableCell::with_text(&list_item, 0.0);
             cell.set_text("Title");
@@ -385,8 +385,5 @@ mod tests {
             assert!(cell.first_child().is_none());
             assert_eq!(cell.text(), "Title");
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 }

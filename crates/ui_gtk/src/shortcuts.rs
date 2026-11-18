@@ -730,7 +730,7 @@ mod tests {
 
     #[test]
     fn editable_focus_detection_yields_to_text_widgets() {
-        let _ran = with_gtk(|| {
+        with_gtk(|| {
             assert!(widget_or_ancestor_accepts_text(
                 gtk::Entry::new().upcast::<gtk::Widget>()
             ));
@@ -742,7 +742,7 @@ mod tests {
 
     #[test]
     fn shortcuts_overlay_constructs_on_the_gtk_thread() {
-        let _ran = with_gtk(|| {
+        with_gtk(|| {
             let window = gtk::ApplicationWindow::default();
             let overlay = build_shortcuts_overlay(&window);
 

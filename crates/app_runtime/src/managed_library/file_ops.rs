@@ -71,6 +71,16 @@ pub(crate) struct FileIdentity {
     pub(crate) inode: u64,
 }
 
+impl FileIdentity {
+    /// The identity of the file `metadata` describes.
+    pub(crate) fn of(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RegularFileCapability {
     file: Arc<File>,
@@ -628,7 +638,7 @@ pub(crate) fn move_file_without_copy_or_overwrite(
     move_file_without_copy_or_overwrite_matching_capability(source_path, destination_path, &source)
 }
 
-pub(super) fn move_file_without_copy_or_overwrite_matching_capability(
+pub(crate) fn move_file_without_copy_or_overwrite_matching_capability(
     source_path: &Path,
     destination_path: &Path,
     source: &RegularFileCapability,
@@ -701,10 +711,7 @@ pub(super) fn probe_regular_file(path: &Path) -> io::Result<RegularFileProbe> {
         return Ok(RegularFileProbe::MissingOrNonRegular);
     }
     Ok(RegularFileProbe::Present(RegularFileCapability {
-        identity: FileIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        },
+        identity: FileIdentity::of(&metadata),
         file: Arc::new(file),
     }))
 }
@@ -723,10 +730,7 @@ pub(crate) fn regular_file_capability_from_file(
         return Err(FileMoveError::SourceIsNotFile);
     }
     Ok(RegularFileCapability {
-        identity: FileIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        },
+        identity: FileIdentity::of(&metadata),
         file: Arc::new(file),
     })
 }

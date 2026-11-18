@@ -1295,16 +1295,20 @@ mod tests {
     }
 
     fn unique_settings_path() -> PathBuf {
-        // A monotonic process-wide counter, not the wall clock: two tests
-        // running in parallel can read `SystemTime::now()` at the same
-        // instant, collide on the directory, and one's teardown
-        // (`remove_dir_all`) then nukes the other's dir mid-write. The
-        // counter guarantees a distinct root per call.
+        // The process id and a monotonic process-wide counter, not the
+        // wall clock: two tests running in parallel can read
+        // `SystemTime::now()` at the same instant, collide on the
+        // directory, and one's teardown (`remove_dir_all`) then nukes the
+        // other's dir mid-write. The counter separates the tests of one
+        // run, the process id separates concurrent runs.
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique_suffix = COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir()
-            .join(format!("sustain_settings_test_{unique_suffix}"))
+            .join(format!(
+                "sustain_settings_test_{}_{unique_suffix}",
+                std::process::id()
+            ))
             .join("sustain")
             .join("settings.toml")
     }

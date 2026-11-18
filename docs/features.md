@@ -258,8 +258,8 @@ reason for each.
 ### Statistics — *Sustain-native*
 The third entry under LIBRARY opens a single scrollable page of
 whole-library diagnostic charts coloured from the system accent colour.
-A row of headline figures opens it — tracks, listening time, size on
-disk, and total plays — its tiles reflowing onto fewer per line in a
+A row of headline figures opens it — tracks, total library duration,
+size on disk, and total plays — its tiles reflowing onto fewer per line in a
 narrow window. Large figures are shown whole with their thousands
 grouped; the small fractional weights of multi-genre tracks keep a
 tenth, so a real contribution never reads as zero:
@@ -599,9 +599,8 @@ disables shuffle; Shuffle Play explicitly enables Pure shuffle.
 ### MPRIS / media keys — *Sustain-native*
 A D-Bus MPRIS2 service exposes playback controls to the desktop:
 play/pause/next/prev media keys, the GNOME Now Playing widget, and any
-MPRIS-aware lock screen all drive Sustain transparently. The bus name
-is derived from the resolved database path so dev and installed builds
-don't collide.
+MPRIS-aware lock screen all drive Sustain transparently. The service
+uses the fixed bus name `org.mpris.MediaPlayer2.sustain`.
 
 ### Pause when the audio output goes away — *iTunes-adjacent*
 When the device Sustain plays to disappears — Bluetooth headphones
@@ -862,8 +861,8 @@ or stored lyrics is not contacted), every attempt is stamped so
 the next sweep does not re-fetch the same track, and per-host rate
 limits hold network use polite even on a fresh library.
 
-Each capability also has a manual entry point. The Get Info Artwork
-tab can trigger an immediate lookup, and the per-playlist and
+Each capability also has a manual entry point. Now Playing offers an
+immediate artwork lookup for a track without a cover, and the per-playlist and
 per-track **Retrieve** submenus run the chosen capability against a
 target set independent of the global toggles. Unlike the background
 sweep, a manual retrieval ignores the per-track attempt stamp, so it
@@ -1315,9 +1314,11 @@ it and takes its tracks out of the queue.
 A second Sustain process targeting the same library database is
 refused on startup. The first instance's window is raised and focused
 instead. The lock is held on a sidecar `.lock` file next to
-`library.sqlite`; the GTK application ID is derived from the resolved
-database path so dev builds and installed builds don't compete for the
-same name.
+`library.sqlite`, so the lock follows the resolved database path: a
+build pointed at another database gets its own lock. The GTK
+application ID (`io.github.open_sustain.sustain`) and the MPRIS bus
+name are fixed, so two builds running against different databases at
+once still share those desktop names.
 
 ---
 

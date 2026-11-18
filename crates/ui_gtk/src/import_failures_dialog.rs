@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn the_dialog_lists_every_failure() {
-        if !crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let parent = gtk::Window::new();
             let failures = (0..3)
                 .map(|index| ImportFailure {
@@ -227,9 +227,7 @@ mod tests {
             assert_eq!(list.model().map(|model| model.n_items()), Some(3));
             dialog.destroy();
             parent.destroy();
-        }) {
-            eprintln!("SMOKE: no display, skipping");
-        }
+        });
     }
 
     fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {

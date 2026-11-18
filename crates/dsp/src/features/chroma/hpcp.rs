@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (C) 2026 AnnoyingTechnology
 //! Harmonic Pitch Class Profile (HPCP) chroma for tonal analysis.
 //!
 //! **Sustain-authored — not vendored from stratum-dsp.** Re-derived from

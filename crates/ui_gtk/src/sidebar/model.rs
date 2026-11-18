@@ -333,7 +333,7 @@ mod tests {
     /// stays collapsed even when the update recreates its row.
     #[test]
     fn an_update_keeps_unchanged_rows_and_collapsed_folders() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let mixes = folder(1, "Mixes", None, 1);
             let snapshot = |inside_name: &str, other_position: u32, four_position: u32| {
                 let other = folder(2, "Other", None, other_position);
@@ -373,8 +373,5 @@ mod tests {
                 "an unchanged row keeps its object"
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 }

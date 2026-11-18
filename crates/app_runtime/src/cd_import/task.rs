@@ -24,10 +24,12 @@ use sustain_domain::{
     FieldChange, ManagedTrackPathInput, ManagedTrackPathPlanner, MetadataChange, PlayStatistics,
     Track, TrackLocation, TrackMetadata, TrackRelativePath,
 };
+use sustain_metadata::SUSTAIN_WORKSPACE_NAME_PREFIX;
 
 use super::{CdImportProgress, CdImportResult, CdImportSummary, CdImportTask};
 use crate::managed_library::file_ops::{
-    move_file_without_copy_or_overwrite, remove_file_and_sync_parent,
+    move_file_without_copy_or_overwrite_matching_capability, open_regular_file,
+    remove_file_and_sync_parent, remove_regular_file_matching_capability,
 };
 use crate::{ApplicationRuntimeError, ApplicationRuntimeResult, cd_import::journal, library_scan};
 
@@ -207,37 +209,47 @@ impl WorkerContext<'_> {
     /// Publish the staged file with the no-overwrite managed move, then
     /// commit and durably flush the row — recording the transition in the
     /// crash-recovery journal across the filesystem/SQLite boundary. Any
-    /// failure rolls back this track's side effects only.
+    /// failure rolls back this track's side effects only, through the same
+    /// journal recovery a crash would take: the rip is removed wherever no
+    /// durable row claims it, and a rollback that cannot complete keeps the
+    /// entry for the next import.
     fn publish_and_commit(
         &self,
         staging: &Path,
         destination: &Path,
         track: &Track,
     ) -> Result<(), String> {
-        journal::write_pending(&self.task.library_path, destination, staging)
-            .map_err(|error| error_text(&error))?;
-
-        if move_file_without_copy_or_overwrite(staging, destination).is_err() {
-            let _ = remove_file_and_sync_parent(staging);
-            let _ = journal::clear_pending(&self.task.library_path);
-            return Err(error_text(&ApplicationRuntimeError::CdImportFailed));
+        let root = &self.task.library_path;
+        let store = self.task.library_store.as_ref();
+        let rip = open_regular_file(staging)
+            .map_err(|_| error_text(&ApplicationRuntimeError::CdImportFailed))?;
+        if let Err(error) = journal::write_pending(root, destination, staging, rip.identity()) {
+            let _ = remove_regular_file_matching_capability(staging, &rip);
+            return Err(error_text(&error));
         }
 
-        if self.task.library_store.save_track(track.clone()).is_err()
-            || self.task.library_store.flush_durable().is_err()
-        {
-            // The file is published but the row is not durable — remove the
-            // file and any half-written row so disk and database agree.
-            let _ = self.task.library_store.delete_track(track.id);
-            let _ = remove_file_and_sync_parent(destination);
-            let _ = journal::clear_pending(&self.task.library_path);
-            return Err(error_text(&ApplicationRuntimeError::LibraryStoreFailed));
-        }
-
-        // Committed and durable. A failure to clear the journal is
-        // self-healing: recovery will see the row and keep the file.
-        let _ = journal::clear_pending(&self.task.library_path);
-        Ok(())
+        let failure =
+            if move_file_without_copy_or_overwrite_matching_capability(staging, destination, &rip)
+                .is_err()
+            {
+                ApplicationRuntimeError::CdImportFailed
+            } else if store.save_track(track.clone()).is_err() {
+                // The insert is atomic: nothing of this track reached SQLite,
+                // and `track.id` may well name another track's row.
+                ApplicationRuntimeError::LibraryStoreFailed
+            } else if store.flush_durable().is_err() {
+                // The row is this import's own; withdraw it so recovery sees
+                // the published file as the orphan it is.
+                let _ = store.delete_track(track.id);
+                ApplicationRuntimeError::LibraryStoreFailed
+            } else {
+                // Committed and durable. A failure to clear the journal is
+                // self-healing: recovery will see the row and keep the file.
+                let _ = journal::clear_pending(root);
+                return Ok(());
+            };
+        let _ = journal::recover(root, store);
+        Err(error_text(&failure))
     }
 
     fn tag_staged_file(
@@ -321,7 +333,7 @@ fn plan_destination(
 
 fn staging_path(library_path: &Path, extension: &str, index: usize) -> PathBuf {
     library_path.join(format!(
-        ".sustain-cd-rip-{}-{index}.{extension}",
+        "{SUSTAIN_WORKSPACE_NAME_PREFIX}cd-rip-{}-{index}.{extension}",
         std::process::id()
     ))
 }

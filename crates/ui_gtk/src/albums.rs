@@ -2213,7 +2213,7 @@ mod tests {
 
     #[test]
     fn realized_row_can_be_aligned_to_viewport_top() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let store = gtk::gio::ListStore::new::<gtk::glib::BoxedAnyObject>();
             replace_row_store(
                 &store,
@@ -2275,14 +2275,11 @@ mod tests {
             );
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn the_detail_panel_moves_to_the_row_that_takes_the_detail_position() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let panel = gtk::Overlay::new();
             let mut departing = AlbumRowWidgets::new();
             let mut entering = AlbumRowWidgets::new();
@@ -2298,14 +2295,11 @@ mod tests {
             entering.set_detail(None);
             assert!(panel.parent().is_none());
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn loaded_artwork_cannot_change_cover_requisition() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let cover = build_cover_widget(ALBUM_TILE_COVER_SIZE, "album-cover");
             let before = cover_requisition(&cover);
             let initial_visual = cover.first_child().expect("stable picture overlay");
@@ -2325,14 +2319,11 @@ mod tests {
                 "texture changes reuse the existing picture widget"
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn album_tile_title_offset_is_stable_across_artwork_and_selection_states() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let (placeholder, placeholder_title) = album_tile_for_alignment_test(false, None);
             let (loaded, loaded_title) =
                 album_tile_for_alignment_test(false, Some(oversized_texture()));
@@ -2377,14 +2368,11 @@ mod tests {
             window.set_child(None::<&gtk::Widget>);
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn album_tile_captions_never_widen_the_tile_past_the_cover() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let long = "A ludicrously long album title that would overflow the tile column";
             for cover_size in [ALBUM_TILE_COVER_SIZE, ALBUM_TILE_COVER_SIZE_EXPANDED] {
                 let tile = build_album_tile_content(long, long, cover_size);
@@ -2400,9 +2388,6 @@ mod tests {
                 );
             }
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     fn albums_for_test(count: usize) -> Vec<AlbumViewModel> {

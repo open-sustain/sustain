@@ -497,16 +497,16 @@ mod tests {
     }
 }
 
-/// Headless widget smoke test: builds each primitive with sample data,
-/// maps them, and spins the loop, proving the widget machinery and CSS
-/// classes hold together without a panic. Skips cleanly with no display.
+/// Widget smoke test: builds each primitive with sample data, maps them,
+/// and spins the loop, proving the widget machinery and CSS classes hold
+/// together without a panic.
 #[cfg(test)]
 mod widget_smoke {
     use super::*;
 
     #[test]
     fn primitives_build_and_map() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let donut = donut(
                 vec![
                     DonutSlice {
@@ -589,8 +589,5 @@ mod widget_smoke {
             window.set_child(None::<&gtk::Widget>);
             window.destroy();
         });
-        if !ran {
-            eprintln!("SMOKE: no display, skipping");
-        }
     }
 }

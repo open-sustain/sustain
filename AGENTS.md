@@ -27,7 +27,7 @@ Project and application naming:
 - Target platform: Linux on Debian, Wayland-first
 - Packaging: Debian package as the primary distribution format
 - License: GPL-3.0-or-later (declared in `[workspace.package]`); do not relicense or add dependencies with incompatible licenses
-- Every new `.rs` file starts with `// SPDX-License-Identifier: GPL-3.0-or-later` then `// Copyright (C) 2026 AnnoyingTechnology`
+- Every new `.rs` file starts with `// SPDX-License-Identifier: GPL-3.0-or-later` then `// Copyright (C) 2026 AnnoyingTechnology` (in `crates/dsp` the first line is `// SPDX-License-Identifier: MIT OR Apache-2.0` instead; see `crates/dsp/PROVENANCE.md`)
 
 ## Product Direction
 

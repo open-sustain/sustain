@@ -300,10 +300,9 @@ fn tags_and_damage_around_the_frames_are_not_counted() {
 fn a_file_without_audio_frames_has_no_extent() {
     assert_eq!(extent_of("no_audio", &[0x7E; 4096]), None);
     assert_eq!(extent_of("empty", &[]), None);
-    assert_eq!(
-        audio_extent(&std::env::temp_dir().join("sustain_mpeg_frame_test_missing.mp3")),
-        None
-    );
+    // Beneath a file, so no other process can ever create it.
+    let missing = TemporaryFile::holding("missing_parent", b"");
+    assert_eq!(audio_extent(&missing.0.join("missing.mp3")), None);
 }
 
 #[test]

@@ -176,6 +176,23 @@ mod gst_backend {
                 .build()
                 .map_err(|_| CdImportError::MissingGstElement(factory.to_owned()))
         }
+
+        /// The `cdparanoiasrc` element reading `request`'s track. Requires
+        /// an initialized GStreamer; reads nothing until the pipeline runs.
+        pub(super) fn configured_source(request: &EncodeRequest) -> CdImportResult<gst::Element> {
+            let source = Self::make(SOURCE_FACTORY)?;
+            source.set_property("device", path_to_gst_string(&request.device_path)?);
+            // `cdparanoiasrc`'s `track` is a `guint` (range 1–99); set it with
+            // the `u32` track number directly. Passing an `i32` here makes
+            // GObject reject the value type and panics the worker thread.
+            source.set_property("track", request.track);
+            // Error-correction depth and read-speed cap for the chosen read
+            // mode. The paranoia-mode nick is a trusted constant, never user
+            // input; `read-speed` is a plain `gint` (`-1` = full drive speed).
+            source.set_property_from_str("paranoia-mode", request.read_mode.paranoia_mode_nick());
+            source.set_property("read-speed", request.read_mode.read_speed());
+            Ok(source)
+        }
     }
 
     impl CdEncoder for GStreamerCdEncoder {
@@ -198,17 +215,7 @@ mod gst_backend {
             gst::init().map_err(|_| CdImportError::GstInitFailed)?;
 
             let pipeline = gst::Pipeline::new();
-            let source = Self::make(SOURCE_FACTORY)?;
-            source.set_property("device", path_to_gst_string(&request.device_path)?);
-            // `cdparanoiasrc`'s `track` is a `guint` (range 1–99); set it with
-            // the `u32` track number directly. Passing an `i32` here makes
-            // GObject reject the value type and panics the worker thread.
-            source.set_property("track", request.track);
-            // Error-correction depth and read-speed cap for the chosen read
-            // mode. The paranoia-mode nick is a trusted constant, never user
-            // input; `read-speed` is a plain `gint` (`-1` = full drive speed).
-            source.set_property_from_str("paranoia-mode", request.read_mode.paranoia_mode_nick());
-            source.set_property("read-speed", request.read_mode.read_speed());
+            let source = Self::configured_source(request)?;
 
             let convert = Self::make(CONVERT_FACTORY)?;
             let resample = Self::make(RESAMPLE_FACTORY)?;
@@ -368,26 +375,56 @@ mod tests {
     }
 
     #[test]
-    fn cdparanoiasrc_accepts_the_u32_track_and_full_paranoia_mode() {
+    fn the_encoder_configures_cdparanoiasrc_for_the_requested_track_and_read_mode() {
         // Regression guard for the worker-crashing property mismatch:
         // `cdparanoiasrc.track` is a `guint`, so setting it with an `i32`
         // makes GObject reject the value and panics the rip thread (surfacing
-        // only as a generic "could not be imported"). Build the real element
-        // and set the properties exactly as the encoder does. Skips cleanly
-        // where the cdparanoia plugin is not installed (e.g. minimal CI).
+        // only as a generic "could not be imported"). Builds the source the
+        // encoder itself builds; no drive is read. Skips cleanly where the
+        // cdparanoia plugin is not installed (e.g. minimal CI).
         use gst::prelude::*;
         use gstreamer as gst;
 
-        if gst::init().is_err() {
+        if gst::init().is_err() || gst::ElementFactory::find(SOURCE_FACTORY).is_none() {
             return;
         }
-        let Ok(source) = gst::ElementFactory::make("cdparanoiasrc").build() else {
-            return;
-        };
-        // Must not panic: the `u32` track number and the `full` flag nick.
-        source.set_property("track", 7u32);
-        source.set_property_from_str("paranoia-mode", "full");
+        let source = GStreamerCdEncoder::configured_source(&EncodeRequest {
+            device_path: PathBuf::from("/dev/sr7"),
+            track: 7,
+            profile: CdEncodingProfile::Flac,
+            read_mode: CdReadMode::Paranoid,
+            destination: PathBuf::from("/nonexistent/track.flac"),
+        })
+        .expect("configure the source");
+
         assert_eq!(source.property::<u32>("track"), 7);
+        assert_eq!(source.property::<String>("device"), "/dev/sr7");
+        assert_eq!(source.property::<i32>("read-speed"), 1);
+        // The exact mask, probed one bit at a time: matching named flags
+        // would not do, because `full` overlaps every other mode's bits.
+        let paranoia_bits = |element: &gst::Element| {
+            let value = element.property_value("paranoia-mode");
+            let flags = gst::glib::FlagsClass::with_type(value.type_())
+                .expect("paranoia-mode is a flags property");
+            (0..u32::BITS)
+                .map(|bit| 1_u32 << bit)
+                .filter(|&bit| flags.is_set(&value, bit))
+                .fold(0, |mask, bit| mask | bit)
+        };
+        let reference = gst::ElementFactory::make(SOURCE_FACTORY)
+            .build()
+            .expect("reference source");
+        reference.set_property_from_str("paranoia-mode", CdReadMode::Paranoid.paranoia_mode_nick());
+        assert_eq!(paranoia_bits(&source), paranoia_bits(&reference));
+        assert_ne!(
+            paranoia_bits(&source),
+            paranoia_bits(
+                &gst::ElementFactory::make(SOURCE_FACTORY)
+                    .build()
+                    .expect("default source")
+            ),
+            "the requested mode differs from the element's default"
+        );
     }
 
     #[test]

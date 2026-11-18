@@ -43,7 +43,7 @@ mod scan;
 mod tag_write;
 
 pub use hash::{copy_and_hash_reader_content, hash_file_content, hash_reader_content};
-pub use scan::LibraryScanner;
+pub use scan::{LibraryScanner, SUSTAIN_WORKSPACE_NAME_PREFIX};
 
 use read::{read_tagged_file, valid_embedded_picture};
 use tag_write::{

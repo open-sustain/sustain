@@ -248,7 +248,6 @@ struct DialogCursor {
     current_track: Track,
     baseline_metadata: sustain_app_runtime::TrackMetadata,
     baseline_rating: sustain_app_runtime::Rating,
-    baseline_play_count: u64,
 }
 
 impl DialogCursor {
@@ -259,7 +258,6 @@ impl DialogCursor {
             current_track: track.clone(),
             baseline_metadata: track.metadata.clone(),
             baseline_rating: track.rating,
-            baseline_play_count: track.statistics.play_count,
         };
         cursor.replace_current(index, track);
         cursor
@@ -269,7 +267,6 @@ impl DialogCursor {
         self.index = index;
         self.baseline_metadata = track.metadata.clone();
         self.baseline_rating = track.rating;
-        self.baseline_play_count = track.statistics.play_count;
         self.current_track = track;
     }
 }
@@ -345,28 +342,15 @@ fn commit_current(
     command_controller: &SharedCommandController,
 ) -> bool {
     let cursor = cursor.borrow();
-    let track_id = cursor.current_track.id;
     let mut change = pages.details.metadata_diff(&cursor.baseline_metadata);
     change.lyrics = pages.lyrics.lyrics_diff(&cursor.baseline_metadata);
-    let new_rating = pages.details.current_rating();
-    let reset_clicked = pages.details.play_count_reset_requested();
-
-    let mut commands = Vec::new();
-    if change != MetadataChange::default() {
-        commands.push(ApplicationCommand::UpdateMetadata {
-            track_id,
-            change: Box::new(change),
-        });
-    }
-    if new_rating != cursor.baseline_rating {
-        commands.push(ApplicationCommand::SetRating {
-            track_id,
-            rating: new_rating,
-        });
-    }
-    if reset_clicked && cursor.baseline_play_count > 0 {
-        commands.push(ApplicationCommand::ResetPlayCount { track_id });
-    }
+    let commands = edit_commands(
+        cursor.current_track.id,
+        change,
+        cursor.baseline_rating,
+        pages.details.current_rating(),
+        pages.details.play_count_reset_requested(),
+    );
     drop(cursor);
 
     // Every command is attempted even after one fails; the views follow
@@ -376,6 +360,35 @@ fn commit_current(
         all_succeeded &= command_controller.dispatch(command).is_ok();
     }
     all_succeeded
+}
+
+/// The commands one track's edits make. Reset is dispatched whenever the
+/// user asked for it: it clears skips as well as plays, so a track with
+/// no plays can still have history to reset.
+fn edit_commands(
+    track_id: TrackId,
+    change: MetadataChange,
+    baseline_rating: sustain_app_runtime::Rating,
+    new_rating: sustain_app_runtime::Rating,
+    reset_requested: bool,
+) -> Vec<ApplicationCommand> {
+    let mut commands = Vec::new();
+    if change != MetadataChange::default() {
+        commands.push(ApplicationCommand::UpdateMetadata {
+            track_id,
+            change: Box::new(change),
+        });
+    }
+    if new_rating != baseline_rating {
+        commands.push(ApplicationCommand::SetRating {
+            track_id,
+            rating: new_rating,
+        });
+    }
+    if reset_requested {
+        commands.push(ApplicationCommand::ResetPlayCount { track_id });
+    }
+    commands
 }
 
 fn refresh_navigation_buttons(
@@ -533,7 +546,24 @@ mod tests {
         PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
     };
 
-    use super::{DialogCursor, Direction, find_valid_index_by};
+    use super::{DialogCursor, Direction, edit_commands, find_valid_index_by};
+    use sustain_app_runtime::{ApplicationCommand, MetadataChange};
+
+    #[test]
+    fn a_requested_reset_is_dispatched_for_a_track_with_skips_but_no_plays() {
+        let track_id = TrackId::new(1).expect("track id");
+        let commands = edit_commands(
+            track_id,
+            MetadataChange::default(),
+            Rating::unrated(),
+            Rating::unrated(),
+            true,
+        );
+        assert!(matches!(
+            commands.as_slice(),
+            [ApplicationCommand::ResetPlayCount { track_id: reset }] if *reset == track_id
+        ));
+    }
 
     #[test]
     fn advancing_cursor_re_snapshots_the_new_track_baseline() {
@@ -547,7 +577,6 @@ mod tests {
         assert_eq!(cursor.current_track.id, second.id);
         assert_eq!(cursor.baseline_metadata, second.metadata);
         assert_eq!(cursor.baseline_rating, second.rating);
-        assert_eq!(cursor.baseline_play_count, 4);
     }
 
     #[test]

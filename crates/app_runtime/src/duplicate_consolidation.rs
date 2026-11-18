@@ -1033,12 +1033,21 @@ fn cleanup_committed(library_root: &Path, journal: &Journal) -> ApplicationRunti
         .filter(|entry| entry.track_id != journal.survivor_id)
     {
         let source = entry.source.resolve(library_root);
-        let backup = open_regular_file(&entry.backup.resolve(library_root))
-            .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
+        let backup_path = entry.backup.resolve(library_root);
+        let backup = match open_regular_file(&backup_path) {
+            Ok(backup) => backup,
+            // Every donor source is removed before any backup, so a missing
+            // backup means an earlier cleanup already got past this donor.
+            // A file now at its source path is not ours to remove.
+            Err(_) if path_is_missing(&backup_path) => continue,
+            Err(_) => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
+        };
         match path_refers_to_capability(&source, &backup) {
             Ok(true) => remove_matching_file(&source, &backup)?,
+            // Not the donor: a file the user put there since. Not ours.
+            Ok(false) => {}
             Err(_) if path_is_missing(&source) => {}
-            _ => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
+            Err(_) => return Err(ApplicationRuntimeError::DuplicateConsolidationFailed),
         }
     }
     cleanup_recovery_files(library_root, journal)?;
@@ -1115,8 +1124,15 @@ fn pinned_recovery_child(
     .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)
 }
 
+/// Whether `path` names nothing: it is absent, or one of its ancestors is
+/// not a directory, so no file can exist there.
 fn path_is_missing(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+    fs::symlink_metadata(path).is_err_and(|error| {
+        matches!(
+            error.kind(),
+            io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+        )
+    })
 }
 
 fn remove_journal(library_root: &Path) -> ApplicationRuntimeResult<()> {
@@ -1650,6 +1666,132 @@ mod tests {
             b"external replacement"
         );
         assert!(journal_path(&root).exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// The last window of a committed merge: cleanup has removed the donor
+    /// and every recovery file, but not yet the journal. Recovery finishes
+    /// the cleanup, and a file that appeared at the donor path since is not
+    /// the donor and is kept.
+    #[test]
+    fn recovery_finishes_a_committed_cleanup_interrupted_before_the_journal_removal() {
+        let root = test_root("committed-cleanup");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("keep.flac"), b"audio").expect("write survivor");
+        fs::write(root.join("remove.flac"), b"duplicate").expect("write duplicate");
+        let survivor = track(1, "keep.flac", "Old");
+        let removed = track(2, "remove.flac", "Old");
+        let tracks = [&survivor, &removed];
+        let journal = plan_journal(&root, survivor.id, &tracks).expect("plan journal");
+        write_journal(&root, &journal).expect("write journal");
+        fs::remove_file(root.join("remove.flac")).expect("cleanup removed the donor");
+        let recovery_directory = journal
+            .stage
+            .resolve(&root)
+            .parent()
+            .expect("recovery directory")
+            .to_path_buf();
+        assert!(!recovery_directory.exists(), "no recovery files were made");
+        fs::write(root.join("remove.flac"), b"user's new file").expect("write newcomer");
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+        store.save_track(survivor).expect("save survivor");
+
+        assert_eq!(
+            recover_duplicate_consolidation_journal(&root, &store),
+            Ok(())
+        );
+        assert!(!journal_path(&root).exists());
+        assert_eq!(
+            fs::read(root.join("keep.flac")).expect("survivor"),
+            b"audio"
+        );
+        assert_eq!(
+            fs::read(root.join("remove.flac")).expect("newcomer survives"),
+            b"user's new file"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A committed merge interrupted before any backup was removed, after
+    /// the user put a new file at the donor path: the newcomer is not the
+    /// donor, so recovery keeps it and still finishes the cleanup.
+    #[test]
+    fn recovery_keeps_a_newcomer_at_a_donor_path_while_its_backup_survives() {
+        let root = test_root("committed-newcomer");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("keep.flac"), b"audio").expect("write survivor");
+        fs::write(root.join("remove.flac"), b"duplicate").expect("write duplicate");
+        let survivor = track(1, "keep.flac", "Old");
+        let removed = track(2, "remove.flac", "Old");
+        let tracks = [&survivor, &removed];
+        let journal = plan_journal(&root, survivor.id, &tracks).expect("plan journal");
+        write_journal(&root, &journal).expect("write journal");
+        let donor_backup = journal
+            .entries
+            .iter()
+            .find(|entry| entry.track_id == removed.id)
+            .expect("donor entry")
+            .backup
+            .resolve(&root);
+        fs::create_dir_all(donor_backup.parent().expect("recovery directory"))
+            .expect("create recovery directory");
+        fs::hard_link(root.join("remove.flac"), &donor_backup).expect("back up the donor");
+        fs::remove_file(root.join("remove.flac")).expect("the merge removed the donor");
+        fs::write(root.join("remove.flac"), b"user's new file").expect("write newcomer");
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+        store.save_track(survivor).expect("save survivor");
+
+        assert_eq!(
+            recover_duplicate_consolidation_journal(&root, &store),
+            Ok(())
+        );
+        assert!(!journal_path(&root).exists());
+        assert!(!donor_backup.exists(), "the backup is cleaned up");
+        assert_eq!(
+            fs::read(root.join("remove.flac")).expect("newcomer survives"),
+            b"user's new file"
+        );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A committed merge whose donor folder has since been replaced by a
+    /// file: no donor can exist under it, so recovery finishes.
+    #[test]
+    fn recovery_finishes_when_a_donor_folder_became_a_file() {
+        let root = test_root("committed-donor-folder");
+        fs::create_dir_all(root.join("Album")).expect("create album folder");
+        fs::write(root.join("keep.flac"), b"audio").expect("write survivor");
+        fs::write(root.join("Album/remove.flac"), b"duplicate").expect("write duplicate");
+        let survivor = track(1, "keep.flac", "Old");
+        let removed = track(2, "Album/remove.flac", "Old");
+        let tracks = [&survivor, &removed];
+        let journal = plan_journal(&root, survivor.id, &tracks).expect("plan journal");
+        write_journal(&root, &journal).expect("write journal");
+        let donor_backup = journal
+            .entries
+            .iter()
+            .find(|entry| entry.track_id == removed.id)
+            .expect("donor entry")
+            .backup
+            .resolve(&root);
+        fs::create_dir_all(donor_backup.parent().expect("recovery directory"))
+            .expect("create recovery directory");
+        fs::hard_link(root.join("Album/remove.flac"), &donor_backup).expect("back up the donor");
+        fs::remove_dir_all(root.join("Album")).expect("the merge removed the donor");
+        fs::write(root.join("Album"), b"user's file").expect("a file takes the folder's name");
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+        store.save_track(survivor).expect("save survivor");
+
+        assert_eq!(
+            recover_duplicate_consolidation_journal(&root, &store),
+            Ok(())
+        );
+        assert!(!journal_path(&root).exists());
+        assert!(!donor_backup.exists(), "the backup is cleaned up");
+        assert_eq!(
+            fs::read(root.join("Album")).expect("user's file"),
+            b"user's file"
+        );
         fs::remove_dir_all(root).expect("cleanup");
     }
 

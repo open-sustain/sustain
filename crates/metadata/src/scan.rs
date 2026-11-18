@@ -11,6 +11,19 @@
 
 use super::*;
 
+/// The name prefix of every file and folder Sustain itself creates inside a
+/// library: staged rips, journals, write handoffs, recovery folders. They
+/// are in-flight state owned by the operation that made them, never library
+/// tracks, so the scan does not descend into or adopt them.
+pub const SUSTAIN_WORKSPACE_NAME_PREFIX: &str = ".sustain-";
+
+fn is_sustain_workspace_entry(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        name.as_encoded_bytes()
+            .starts_with(SUSTAIN_WORKSPACE_NAME_PREFIX.as_bytes())
+    })
+}
+
 pub struct LibraryScanner<'a, S: ?Sized> {
     metadata_service: &'a S,
     repair_malformed_tags: bool,
@@ -176,6 +189,9 @@ where
                     continue;
                 }
             };
+            if is_sustain_workspace_entry(&path) {
+                continue;
+            }
             let metadata = match walk.filesystem.symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(_) => {

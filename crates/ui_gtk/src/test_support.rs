@@ -76,16 +76,18 @@ fn gtk_thread() -> &'static GtkThread {
 /// with every other GTK test, and propagates any panic back to the
 /// caller so assertions inside `work` still fail the calling test.
 ///
-/// Returns `true` when GTK was available and `work` ran; `false` under a
-/// headless environment, where the caller should skip its assertions.
-pub(crate) fn with_gtk<F>(work: F) -> bool
+/// A test that needs GTK fails without a display rather than passing
+/// with its assertions unrun: run the widget tests under a display
+/// server, as CI does with `xvfb-run`.
+pub(crate) fn with_gtk<F>(work: F)
 where
     F: FnOnce() + Send + 'static,
 {
     let thread = gtk_thread();
-    if !thread.available {
-        return false;
-    }
+    assert!(
+        thread.available,
+        "GTK could not initialize: widget tests need a display (run under xvfb-run)"
+    );
     let (done_tx, done_rx) = mpsc::channel();
     thread
         .jobs
@@ -94,9 +96,8 @@ where
             done: done_tx,
         })
         .expect("gtk test thread accepts jobs");
-    match done_rx.recv().expect("gtk test thread reports completion") {
-        Ok(()) => true,
-        Err(panic) => std::panic::resume_unwind(panic),
+    if let Err(panic) = done_rx.recv().expect("gtk test thread reports completion") {
+        std::panic::resume_unwind(panic);
     }
 }
 
@@ -109,7 +110,7 @@ mod tests {
     /// would, without a single owning thread, trip gtk4's "initialize
     /// GTK from two different threads" panic or a `g_static_resource_init`
     /// critical. Funnelled through [`with_gtk`] they must all complete
-    /// cleanly, and report one coherent availability.
+    /// cleanly.
     #[test]
     fn concurrent_with_gtk_calls_serialize_safely() {
         let handles: Vec<_> = (0..16)
@@ -118,20 +119,13 @@ mod tests {
                     with_gtk(|| {
                         let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
                         column.append(&gtk::Label::new(Some("probe")));
-                    })
+                    });
                 })
             })
             .collect();
 
-        let ran: Vec<bool> = handles
-            .into_iter()
-            .map(|handle| handle.join().expect("worker thread did not panic"))
-            .collect();
-
-        let ran_count = ran.iter().filter(|&&did| did).count();
-        assert!(
-            ran_count == 0 || ran_count == ran.len(),
-            "with_gtk reported inconsistent availability across threads: {ran:?}"
-        );
+        for handle in handles {
+            handle.join().expect("worker thread did not panic");
+        }
     }
 }

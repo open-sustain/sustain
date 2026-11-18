@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn it_makes_room_for_its_icon_before_its_child() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let label = gtk::Label::new(Some("Mixes"));
             let alone = gtk::Label::new(Some("Mixes"));
             let row = LeadingIcon::new(&label);
@@ -209,8 +209,5 @@ mod tests {
             assert_eq!(row.icon_name().as_deref(), Some("folder-symbolic"));
             assert_eq!(row.child().as_ref(), Some(label.upcast_ref()));
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 }

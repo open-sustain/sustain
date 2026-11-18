@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn playlist_row_context_popover_uses_nested_submenus() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let popover = playlist_row_context_popover();
             assert_eq!(
                 popover.flags(),
@@ -562,14 +562,11 @@ mod tests {
                 "playlist row context menus should use desktop nested submenus"
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn playlist_row_context_model_contains_run_submenus_for_playlists() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let context = row_context(PlaylistItem::Playlist(playlist_id(5)));
             let action_group = gio::SimpleActionGroup::new();
             let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -627,14 +624,11 @@ mod tests {
                 .expect("Retrieve All is separated from individual capabilities");
             assert_menu_item_action(&retrieve_all, 0, "All", "playlist-row-context.retrieve-all");
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn folder_row_context_model_does_not_offer_run_submenus() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let context = row_context(PlaylistItem::Folder(folder_id(7)));
             let action_group = gio::SimpleActionGroup::new();
             let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -649,14 +643,11 @@ mod tests {
             assert_menu_item_action(&menu, 0, "Rename", "playlist-row-context.rename");
             assert_menu_item_action(&menu, 1, "Delete Folder…", "playlist-row-context.delete");
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn playlist_row_context_analysis_actions_invoke_callbacks_and_reflect_global_toggles() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let context = row_context(PlaylistItem::Playlist(playlist_id(11)));
             let received = Rc::new(RefCell::new(None));
             let received_for_callback = received.clone();
@@ -705,14 +696,11 @@ mod tests {
                 ))
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn playlist_row_context_retrieve_actions_disable_while_busy() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let context = row_context(PlaylistItem::SmartPlaylist(smart_playlist_id(13)));
             context
                 .actions
@@ -733,14 +721,11 @@ mod tests {
             assert_action_enabled(&action_group, RETRIEVE_ARTWORK_ACTION, false);
             assert_action_enabled(&action_group, RETRIEVE_ALL_ACTION, false);
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn playlist_row_context_retrieve_action_invokes_callback_when_idle() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let context = row_context(PlaylistItem::SmartPlaylist(smart_playlist_id(17)));
             let received = Rc::new(RefCell::new(None));
             let received_for_callback = received.clone();
@@ -783,14 +768,11 @@ mod tests {
                 ))
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn playlist_row_context_popup_with_submenus_does_not_panic() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let window = gtk::Window::new();
             let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
             window.set_child(Some(&anchor));
@@ -809,14 +791,11 @@ mod tests {
             while ctx.iteration(false) {}
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn a_row_rebound_to_another_item_renames_only_that_item() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let renamed: Rc<RefCell<Vec<(PlaylistItem, String)>>> = Rc::default();
             let renamed_for_callback = renamed.clone();
             let on_rename: RenameCallbackHolder = Rc::new(RefCell::new(Some(Rc::new(
@@ -947,9 +926,6 @@ mod tests {
             );
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     fn row_context(item: PlaylistItem) -> SidebarRowContext {

@@ -14,6 +14,7 @@ use crate::date_format::format_system_time_short;
 
 use crate::metadata_diff::{
     bool_diff, bpm_diff, key_diff, number_diff, signed_number_diff, text_diff,
+    text_diff_preserve_newlines,
 };
 use crate::rating_stars::RatingStars;
 
@@ -287,7 +288,7 @@ impl DetailsPage {
             compilation: bool_diff(initial.compilation, self.compilation.is_active()),
             bpm: bpm_diff(initial.bpm, &self.bpm.text()),
             key: key_diff(initial.key, &self.key.text()),
-            comments: text_diff(
+            comments: text_diff_preserve_newlines(
                 initial.comments.as_deref(),
                 &self.text_view_text(&self.comments),
             ),

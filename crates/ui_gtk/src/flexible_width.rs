@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn it_gives_a_natural_width_apart_from_its_minimum() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let child = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             child.set_size_request(20, 10);
             let flexible = FlexibleWidth::new(&child, 50, 100);
@@ -137,8 +137,5 @@ mod tests {
 
             assert_eq!(widths(&FlexibleWidth::space(12, 36)), (12, 36));
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 }

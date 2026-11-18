@@ -2564,14 +2564,19 @@ fn sqlite_cascade_delete_clears_online_status() {
             online_ctx(1_000),
         )
         .expect("record");
+    // Query only the attempted capability: artwork and tags are due
+    // regardless, so they cannot tell whether the attempt survived.
+    let lyrics = OnlineCapabilities {
+        artwork: false,
+        tags: false,
+        lyrics: true,
+    };
+    assert_eq!(store.tracks_needing_online(lyrics, 1, 10), Ok(Vec::new()));
     store.delete_track(t.id).expect("delete");
     // Re-add and query — the cascading delete must have dropped
     // the bookkeeping row, so the track qualifies again.
     store.save_track(t.clone()).expect("re-save");
-    let needs = store
-        .tracks_needing_online(OnlineCapabilities::all(), 1, 10)
-        .expect("query");
-    assert_eq!(needs, vec![t.id]);
+    assert_eq!(store.tracks_needing_online(lyrics, 1, 10), Ok(vec![t.id]));
 }
 
 // -------- end online status storage --------
@@ -2882,6 +2887,51 @@ fn duplicate_consolidation_commits_survivor_playlist_and_cache_changes() {
     assert!(store.tag_mirrors_due(0, 10).expect("outbox").is_empty());
     assert_eq!(store.source_fingerprint(track_id(1)), Ok(None));
     assert_eq!(store.source_fingerprint(track_id(2)), Ok(None));
+}
+
+/// The filesystem half of a merge rolls back on the assumption that SQLite
+/// still describes the original participants, so a statement failing late
+/// in the plan must undo the earlier survivor and playlist writes too.
+#[test]
+fn a_duplicate_consolidation_failing_late_leaves_the_library_untouched() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let mut survivor = track(1, "keep.flac");
+    survivor.metadata.title = Some("Old".to_owned());
+    let removed = track(2, "remove.flac");
+    store.save_track(survivor.clone()).expect("save survivor");
+    store.save_track(removed.clone()).expect("save removed");
+    let original_playlist = playlist(1, "Mix", vec![entry(1, 2, 0)]);
+    store
+        .save_playlist(original_playlist.clone())
+        .expect("save playlist");
+    store
+        .connection
+        .lock()
+        .expect("store connection")
+        .execute_batch(
+            "CREATE TEMP TRIGGER fail_track_delete BEFORE DELETE ON tracks
+             BEGIN SELECT RAISE(ABORT, 'late failure'); END;",
+        )
+        .expect("install the late failure");
+
+    let mut chosen = survivor.clone();
+    chosen.metadata.title = Some("New".to_owned());
+    let outcome = store.commit_duplicate_consolidation(&DuplicateConsolidationPlan {
+        survivor: chosen,
+        removed_track_ids: vec![removed.id],
+        rewritten_playlists: vec![playlist(1, "Mix", vec![entry(1, 1, 0)])],
+    });
+    assert!(
+        matches!(&outcome, Err(crate::StoreError::Database(detail)) if detail.contains("late failure")),
+        "the commit reached the late failure: {outcome:?}"
+    );
+
+    assert_eq!(store.track(survivor.id), Ok(Some(survivor)));
+    assert_eq!(store.track(removed.id), Ok(Some(removed)));
+    assert_eq!(
+        store.playlist(original_playlist.id),
+        Ok(Some(original_playlist))
+    );
 }
 
 #[test]

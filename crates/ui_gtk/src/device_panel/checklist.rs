@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn a_long_list_builds_only_the_rows_on_screen() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let names = (0..5_000)
                 .map(|index| format!("Artist {index}"))
                 .collect::<Vec<_>>();
@@ -278,8 +278,5 @@ mod tests {
             assert_eq!(*reported.borrow(), vec![0, 3]);
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 }

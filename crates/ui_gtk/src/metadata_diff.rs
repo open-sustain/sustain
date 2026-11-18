@@ -13,9 +13,13 @@
 
 use sustain_app_runtime::{Bpm, FieldChange, MusicalKey};
 
+/// A single-line field's change. Surrounding whitespace is trimmed from a
+/// new value, but untouched text is unchanged even when the stored value
+/// carries whitespace of its own.
 pub(crate) fn text_diff(initial: Option<&str>, current: &str) -> FieldChange<String> {
     let trimmed_current = current.trim();
     match (initial, trimmed_current) {
+        (Some(value), _) if value == current => FieldChange::Unchanged,
         (Some(value), candidate) if value == candidate => FieldChange::Unchanged,
         (None, "") => FieldChange::Unchanged,
         (_, "") => FieldChange::Clear,
@@ -135,6 +139,23 @@ mod tests {
     fn text_diff_preserves_unchanged_value() {
         assert_eq!(text_diff(Some("hello"), "hello"), FieldChange::Unchanged);
         assert_eq!(text_diff(None, ""), FieldChange::Unchanged);
+    }
+
+    #[test]
+    fn untouched_text_is_unchanged_even_with_surrounding_whitespace() {
+        assert_eq!(
+            text_diff(Some("  verse "), "  verse "),
+            FieldChange::Unchanged
+        );
+        assert_eq!(
+            text_diff_preserve_newlines(Some("  verse\n"), "  verse\n"),
+            FieldChange::Unchanged
+        );
+        // An edit still trims the new single-line value.
+        assert_eq!(
+            text_diff(Some("  verse "), " chorus "),
+            FieldChange::Set("chorus".to_owned())
+        );
     }
 
     #[test]

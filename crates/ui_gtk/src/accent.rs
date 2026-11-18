@@ -55,8 +55,17 @@ pub(crate) fn install_accent_css() {
 }
 
 fn accent_settings() -> Option<gio::Settings> {
-    let schema_source = gio::SettingsSchemaSource::default()?;
-    let schema = schema_source.lookup(INTERFACE_SCHEMA, true)?;
+    accent_settings_from(&gio::SettingsSchemaSource::default()?)
+}
+
+/// The interface settings holding the accent color, if `schema_source` has
+/// them. The `accent-color` key arrived in gsettings-desktop-schemas 47;
+/// reading it from an older interface schema aborts the process, so a
+/// schema without it counts as absent.
+fn accent_settings_from(schema_source: &gio::SettingsSchemaSource) -> Option<gio::Settings> {
+    let schema = schema_source
+        .lookup(INTERFACE_SCHEMA, true)
+        .filter(|schema| schema.has_key(ACCENT_COLOR_KEY))?;
     Some(gio::Settings::new_full(
         &schema,
         gio::SettingsBackend::NONE,
@@ -234,7 +243,55 @@ fn accent_css(palette: AccentPalette) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccentPalette, accent_css, accent_palette};
+    use gtk::gio;
+
+    use super::{AccentPalette, accent_css, accent_palette, accent_settings_from};
+
+    /// A schema source holding only an interface schema with `keys`, as an
+    /// installed gsettings-desktop-schemas of some version would.
+    fn interface_schema_source(
+        name: &str,
+        keys: &str,
+    ) -> (std::path::PathBuf, gio::SettingsSchemaSource) {
+        let directory = std::env::temp_dir().join(format!(
+            "sustain_accent_schema_{}_{name}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create schema directory");
+        std::fs::write(
+            directory.join("org.gnome.desktop.interface.gschema.xml"),
+            format!(
+                r#"<schemalist><schema id="org.gnome.desktop.interface" path="/org/gnome/desktop/interface/">{keys}</schema></schemalist>"#
+            ),
+        )
+        .expect("write schema");
+        let status = std::process::Command::new("glib-compile-schemas")
+            .arg(&directory)
+            .status()
+            .expect("run glib-compile-schemas");
+        assert!(status.success(), "glib-compile-schemas failed");
+        let source = gio::SettingsSchemaSource::from_directory(&directory, None, false)
+            .expect("load compiled schemas");
+        (directory, source)
+    }
+
+    #[test]
+    fn an_interface_schema_older_than_accent_colors_counts_as_absent() {
+        let color_scheme =
+            r#"<key name="color-scheme" type="s"><default>'default'</default></key>"#;
+        let (older, older_source) = interface_schema_source("older", color_scheme);
+        let (current, current_source) = interface_schema_source(
+            "current",
+            &format!(
+                r#"{color_scheme}<key name="accent-color" type="s"><default>'blue'</default></key>"#
+            ),
+        );
+
+        assert!(accent_settings_from(&older_source).is_none());
+        assert!(accent_settings_from(&current_source).is_some());
+        std::fs::remove_dir_all(older).expect("remove schema directory");
+        std::fs::remove_dir_all(current).expect("remove schema directory");
+    }
 
     #[test]
     fn accent_palette_uses_gnome_green() {

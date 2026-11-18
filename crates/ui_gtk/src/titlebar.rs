@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn the_top_bar_fits_half_a_full_hd_screen() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let now_playing = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             let titlebar =
                 build_titlebar(now_playing, VolumePercent::from_clamped(VolumePercent::MAX));
@@ -427,14 +427,11 @@ mod tests {
                 "natural width {natural}"
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn the_search_entry_never_covers_the_now_playing_area() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let now_playing = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             let titlebar = build_titlebar(
                 now_playing.clone(),
@@ -457,9 +454,6 @@ mod tests {
                 assert!(search_end <= bar_end, "window width {width}");
             }
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]

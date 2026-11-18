@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn lyrics_take_the_artwork_secondary_colour_not_black_or_white() {
-        if !crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             // A near-black dominant cover: the computed `foreground` would be
             // white, so if the lyrics came out as the secondary accent below
             // (a warm orange) we know we used the artwork colour, not the
@@ -290,14 +290,12 @@ mod tests {
                 (rgba.blue() - 60.0 / 255.0).abs() < 0.01,
                 "blue = secondary"
             );
-        }) {
-            eprintln!("SMOKE: no display, skipping");
-        }
+        });
     }
 
     #[test]
     fn overlay_builds_as_a_non_modal_transient_window() {
-        if !crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let parent = gtk::ApplicationWindow::default();
             let overlay = build(
                 &parent,
@@ -313,8 +311,6 @@ mod tests {
             assert!(overlay.child().is_some());
             overlay.close();
             parent.close();
-        }) {
-            eprintln!("SMOKE: no display, skipping");
-        }
+        });
     }
 }

@@ -813,9 +813,8 @@ mod tests {
     }
 }
 
-/// Headless widget smoke test. Mirrors `shuffle_tab`'s `size_probe`: it
-/// needs a display, so it skips cleanly under headless CI and runs on the
-/// maintainer's machine. Builds the page over an empty library, maps it,
+/// Widget smoke test; like every GTK test it needs a display (CI runs it
+/// under `xvfb-run`). Builds the page over an empty library, maps it,
 /// and spins the loop so the CSS resolves — proving the widget machinery
 /// and CSS classes hold together without a panic.
 #[cfg(test)]
@@ -830,7 +829,7 @@ mod widget_smoke {
 
     #[test]
     fn empty_library_page_builds_and_maps() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
             let view = StatisticsView::new(runtime);
             view.refresh();
@@ -851,8 +850,5 @@ mod widget_smoke {
             window.set_child(None::<&gtk::Widget>);
             window.destroy();
         });
-        if !ran {
-            eprintln!("SMOKE: no display, skipping");
-        }
     }
 }

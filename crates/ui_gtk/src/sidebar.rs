@@ -1474,7 +1474,7 @@ mod tests {
     /// or every row the sidebar drops stays alive behind it.
     #[test]
     fn widgets_of_rows_that_leave_the_sidebar_are_released() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let factory = build_row_factory(
                 Default::default(),
                 Default::default(),
@@ -1527,16 +1527,13 @@ mod tests {
             );
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     /// The previous session's selection lands once the library has loaded,
     /// and is what gets persisted until then.
     #[test]
     fn launch_selection_lands_when_applied() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let sidebar = test_sidebar();
             let shown = record_selection_changes(&sidebar);
             sidebar.defer_launch_selection(SidebarSelection::Albums);
@@ -1551,16 +1548,13 @@ mod tests {
             assert_eq!(sidebar.current_selection(), Some(SidebarSelection::Albums));
             assert_eq!(*shown.borrow(), [Some(SidebarSelection::Albums)]);
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     /// A view the user opens while the library loads is not overridden by
     /// the previous session's selection when the load ends.
     #[test]
     fn navigation_during_the_load_supersedes_the_launch_selection() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let library_row = test_sidebar();
             library_row.defer_launch_selection(SidebarSelection::Albums);
             library_row.select_statistics();
@@ -1586,9 +1580,6 @@ mod tests {
                 Some(SidebarSelection::Music)
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     /// Only the row of the disc being ripped shows the rip badge, with
@@ -1596,7 +1587,7 @@ mod tests {
     /// on that disc.
     #[test]
     fn only_the_disc_being_ripped_shows_the_rip_badge() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let sidebar = test_sidebar();
             let first = disc("/dev/sr0", "first");
             let second = disc("/dev/sr1", "second");
@@ -1624,15 +1615,12 @@ mod tests {
             sidebar.set_devices(&[]);
             assert!(transfer_badges_shown(&sidebar).is_empty());
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     /// Rebuilding the Devices rows releases the rows it replaces.
     #[test]
     fn a_device_refresh_releases_the_rows_it_replaces() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let sidebar = test_sidebar();
             let discs = [SidebarDeviceEntry::AudioCd(disc("/dev/sr0", "only"))];
             sidebar.set_devices(&discs);
@@ -1651,16 +1639,13 @@ mod tests {
                 "a replaced device row must not keep itself alive"
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     /// The sync badge marks the device being synced, not the disc beside
     /// it, and a rip marks the disc, not the device.
     #[test]
     fn the_device_being_synced_shows_the_transfer_badge() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let sidebar = test_sidebar();
             let stick = ConnectedDevice {
                 id: SyncDeviceId::new("usb-stick").expect("valid device id"),
@@ -1686,9 +1671,6 @@ mod tests {
             sidebar.show_transfer_badges(Some(&cd.identity()), None);
             assert_eq!(transfer_badges_shown(&sidebar), [false, true]);
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     fn disc(device: &str, disc_id: &str) -> TocSnapshot {

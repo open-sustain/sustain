@@ -1480,7 +1480,7 @@ mod tests {
 
     #[test]
     fn search_replacement_restripes_rows_in_their_new_sorted_positions() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             // In the initial sort, rows A, C, and E sit at even positions.
             // Search swaps new payloads into the existing row objects, so
             // GTK rebinds no cell; striping must still follow each row's
@@ -1534,14 +1534,11 @@ mod tests {
 
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn in_place_replacement_repaints_group_bands() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             // Duplicates bands rows by candidate group. A rescan swaps new
             // payloads into the realized rows, so the band must follow the
             // payload rather than whatever the cell was bound with.
@@ -1577,14 +1574,11 @@ mod tests {
 
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn update_rows_redraws_only_the_cells_of_updated_tracks() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let table = build_track_table(
                 vec![named_row(1, "A"), named_row(2, "B")],
                 None,
@@ -1619,9 +1613,6 @@ mod tests {
 
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
@@ -2099,7 +2090,7 @@ mod tests {
     /// table.
     #[test]
     fn cells_of_rows_that_leave_the_table_are_released() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let window = gtk::Window::new();
             let context_menu = TrackRowContextMenu::new(
                 TrackContextActionSet::new(Vec::new()),
@@ -2144,9 +2135,6 @@ mod tests {
             );
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     fn collect_descendants(root: &gtk::Widget, widgets: &mut Vec<glib::WeakRef<gtk::Widget>>) {

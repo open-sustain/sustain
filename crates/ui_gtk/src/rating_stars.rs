@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn each_star_owns_an_equal_slot() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let stars = RatingStars::new();
             let slot = f64::from(stars.star_slot_width());
             assert_eq!(stars.star_at(0.0), Some(1));
@@ -257,14 +257,11 @@ mod tests {
             assert_eq!(stars.star_at(slot * 5.0), None);
             assert_eq!(stars.star_at(-1.0), None);
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn rating_chosen_reports_the_rating_a_click_asks_for() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let stars = RatingStars::new();
             stars.set_rating(Rating::new(3).expect("valid rating"));
             let chosen: Rc<RefCell<Vec<u8>>> = Rc::default();
@@ -285,8 +282,5 @@ mod tests {
                 "the widget shows its rating until its owner sets the new one"
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 }

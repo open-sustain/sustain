@@ -501,17 +501,15 @@ mod tests {
         // The picker worker decodes off the GTK thread; garbage must
         // degrade to no texture (the file's bytes are still applied and a
         // placeholder shown) rather than producing a bogus image.
-        if !with_gtk(|| {
+        with_gtk(|| {
             assert!(texture_from_bytes(b"definitely not an image", 320).is_none());
             assert!(texture_from_bytes(VALID_PNG, 320).is_some());
-        }) {
-            eprintln!("SMOKE: no display, skipping");
-        }
+        });
     }
 
     #[test]
     fn frame_shows_placeholder_without_texture_and_image_with_one() {
-        if !with_gtk(|| {
+        with_gtk(|| {
             let frame = gtk::Frame::new(None);
 
             set_frame_texture(&frame, None, 96);
@@ -528,9 +526,7 @@ mod tests {
                 cover.downcast::<gtk::Image>().is_ok(),
                 "present artwork renders an image"
             );
-        }) {
-            eprintln!("SMOKE: no display, skipping");
-        }
+        });
     }
 
     #[test]

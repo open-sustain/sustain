@@ -1654,7 +1654,7 @@ mod tests {
 
     #[test]
     fn all_tracks_ticked_by_default_and_unticking_all_blocks_import() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let panel = panel();
             panel.show_disc(snapshot("disc-a", 3));
             assert_eq!(panel.store.n_items(), 3);
@@ -1677,14 +1677,11 @@ mod tests {
             set_selected(&panel, 0, true);
             assert!(panel.panel_ready_for_import());
         });
-        if !ran {
-            eprintln!("SMOKE: no display, skipping");
-        }
     }
 
     #[test]
     fn multiple_releases_preselect_the_most_reasonable_and_show_the_selector() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let panel = panel();
             panel.show_disc(snapshot("disc-a", 3));
             // No releases yet (fallback) → import-ready on the panel's terms.
@@ -1699,14 +1696,11 @@ mod tests {
             assert!(panel.panel_ready_for_import());
             assert_eq!(panel.title_label.text(), "Second");
         });
-        if !ran {
-            eprintln!("SMOKE: no display, skipping");
-        }
     }
 
     #[test]
     fn single_release_auto_selects_and_hides_the_selector() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let panel = panel();
             panel.show_disc(snapshot("disc-a", 2));
             panel.apply_releases(vec![release_named("Only", 2)], false);
@@ -1714,14 +1708,11 @@ mod tests {
             assert!(panel.panel_ready_for_import());
             assert_eq!(panel.title_label.text(), "Only");
         });
-        if !ran {
-            eprintln!("SMOKE: no display, skipping");
-        }
     }
 
     #[test]
     fn import_progress_marks_done_ripping_and_pending_rows() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let panel = panel();
             panel.show_disc(snapshot("disc-a", 3));
             panel.begin_import_display(vec![1, 2, 3]);
@@ -1739,14 +1730,11 @@ mod tests {
             assert_eq!(row_status(&panel, 2), CdRipStatus::Done);
             assert_eq!(row_status(&panel, 3), CdRipStatus::Pending);
         });
-        if !ran {
-            eprintln!("SMOKE: no display, skipping");
-        }
     }
 
     #[test]
     fn forgetting_the_disc_clears_the_page_and_disables_import() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let panel = panel();
             panel.show_disc(snapshot("disc-a", 2));
             // A default runtime has no library path, so the button is disabled
@@ -1762,14 +1750,11 @@ mod tests {
             assert!(!panel.panel_ready_for_import());
             assert!(!panel.import_button.is_sensitive());
         });
-        if !ran {
-            eprintln!("SMOKE: no display, skipping");
-        }
     }
 
     #[test]
     fn the_track_being_played_shows_the_speaker() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let runtime = Rc::new(RefCell::new(
                 ApplicationRuntime::new()
                     .with_playback_service(Box::new(sustain_playback::NullPlaybackService::new())),
@@ -1800,14 +1785,11 @@ mod tests {
             panel.show_disc(snapshot("disc-b", 3));
             assert!(playing_rows(&panel).is_empty());
         });
-        if !ran {
-            eprintln!("SMOKE: no display, skipping");
-        }
     }
 
     #[test]
     fn renaming_a_track_describes_the_disc_anew() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let panel = panel();
             panel.show_disc(snapshot("disc-a", 2));
             let described = Rc::new(RefCell::new(Vec::new()));
@@ -1829,8 +1811,5 @@ mod tests {
                 Some("Renamed")
             );
         });
-        if !ran {
-            eprintln!("SMOKE: no display, skipping");
-        }
     }
 }

@@ -124,7 +124,9 @@ the workspace-wide "new `.rs` files are GPL-3.0-or-later" rule in the root
   is GPLv3-compatible (see <https://www.apache.org/licenses/GPL-compatibility.html>).
 
 Do **not** "fix" a header in this crate to GPL. New files here are
-`MIT OR Apache-2.0` on purpose.
+`MIT OR Apache-2.0` on purpose. A Sustain-authored file still carries the
+workspace's second header line, `// Copyright (C) 2026 AnnoyingTechnology`;
+vendored files keep their upstream attribution instead.
 
 ## Re-merging upstream changes
 

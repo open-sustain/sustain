@@ -431,6 +431,173 @@ fn editable_metadata_survives_a_container_round_trip_on_every_format() {
     });
 }
 
+/// Every editable field set, then cleared, through the public writer on a
+/// real file of each container, and read back through the public reader.
+/// Building a `Tag` by hand would skip the writer's own field dispatch.
+#[test]
+fn every_editable_field_is_written_and_cleared_on_disk_in_every_container() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let analysis_testdata = Path::new(env!("CARGO_MANIFEST_DIR")).join("../analysis/testdata");
+    let mut mp3 = dump_id3v2(Tag::new(TagType::Id3v2));
+    mp3.extend_from_slice(&mpeg_audio_frames(4));
+    fs::write(root.join("edit.mp3"), mp3).expect("write MP3");
+    fs::write(
+        root.join("edit.aiff"),
+        pcm_aiff(AiffForm::Aiff, 44_100, 16, 64, &[]),
+    )
+    .expect("write AIFF");
+    let metadata_testdata = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+    for fixture in [
+        analysis_testdata.join("sine.flac"),
+        analysis_testdata.join("sine-aac.m4a"),
+        metadata_testdata.join("sine.wav"),
+        metadata_testdata.join("sine.ogg"),
+        metadata_testdata.join("sine.opus"),
+    ] {
+        let extension = fixture.extension().expect("fixture extension");
+        fs::copy(&fixture, root.join("edit").with_extension(extension)).expect("copy fixture");
+    }
+
+    for name in [
+        "edit.mp3",
+        "edit.aiff",
+        "edit.wav",
+        "edit.flac",
+        "edit.ogg",
+        "edit.opus",
+        "edit.m4a",
+    ] {
+        let path = root.join(name);
+        LoftyMetadataService
+            .write_metadata(&path, every_field(true))
+            .unwrap_or_else(|error| unreachable!("write {name}: {error:?}"));
+        let written = LoftyMetadataService
+            .read_persisted_tags(&path)
+            .unwrap_or_else(|error| unreachable!("read {name}: {error:?}"))
+            .metadata;
+        let mut expected = every_field_metadata();
+        if matches!(name, "edit.flac" | "edit.ogg" | "edit.opus") {
+            // Lofty's generic tag has no Vorbis key for composer sort order,
+            // so `COMPOSERSORT` is neither written nor read (#329).
+            expected.composer_sort = None;
+        }
+        assert_eq!(
+            editable_fields(&written),
+            editable_fields(&expected),
+            "{name}"
+        );
+
+        LoftyMetadataService
+            .write_metadata(&path, every_field(false))
+            .unwrap_or_else(|error| unreachable!("clear {name}: {error:?}"));
+        let cleared = LoftyMetadataService
+            .read_persisted_tags(&path)
+            .unwrap_or_else(|error| unreachable!("read {name}: {error:?}"))
+            .metadata;
+        assert_eq!(
+            editable_fields(&cleared),
+            editable_fields(&TrackMetadata::default()),
+            "{name}"
+        );
+    }
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+/// A value for every editable field, representable in every container
+/// (whole-beat BPM for ID3v2 and MP4).
+fn every_field_metadata() -> TrackMetadata {
+    TrackMetadata {
+        title: Some("Title".to_owned()),
+        artist: Some("Artist".to_owned()),
+        album: Some("Album".to_owned()),
+        album_artist: Some("Album Artist".to_owned()),
+        composer: Some("Composer".to_owned()),
+        grouping: Some("Grouping".to_owned()),
+        genre: Some("Genre".to_owned()),
+        track_number: Some(3),
+        track_total: Some(12),
+        disc_number: Some(2),
+        disc_total: Some(3),
+        year: Some(1999),
+        compilation: Some(true),
+        bpm: Bpm::from_whole(127),
+        key: Some(MusicalKey::EbMinor),
+        comments: Some("Comment".to_owned()),
+        lyrics: Some("Lyrics".to_owned()),
+        title_sort: Some("Title Sort".to_owned()),
+        artist_sort: Some("Artist Sort".to_owned()),
+        album_sort: Some("Album Sort".to_owned()),
+        album_artist_sort: Some("Album Artist Sort".to_owned()),
+        composer_sort: Some("Composer Sort".to_owned()),
+        ..TrackMetadata::default()
+    }
+}
+
+/// A change that sets every editable field to its value from
+/// [`every_field_metadata`], or clears every one.
+fn every_field(set: bool) -> MetadataChange {
+    fn field_change<T>(set: bool, value: Option<T>) -> FieldChange<T> {
+        match value {
+            Some(value) if set => FieldChange::Set(value),
+            _ => FieldChange::Clear,
+        }
+    }
+    let values = every_field_metadata();
+    MetadataChange {
+        title: field_change(set, values.title),
+        artist: field_change(set, values.artist),
+        album: field_change(set, values.album),
+        album_artist: field_change(set, values.album_artist),
+        composer: field_change(set, values.composer),
+        grouping: field_change(set, values.grouping),
+        genre: field_change(set, values.genre),
+        track_number: field_change(set, values.track_number),
+        track_total: field_change(set, values.track_total),
+        disc_number: field_change(set, values.disc_number),
+        disc_total: field_change(set, values.disc_total),
+        year: field_change(set, values.year),
+        compilation: field_change(set, values.compilation),
+        bpm: field_change(set, values.bpm),
+        key: field_change(set, values.key),
+        comments: field_change(set, values.comments),
+        lyrics: field_change(set, values.lyrics),
+        title_sort: field_change(set, values.title_sort),
+        artist_sort: field_change(set, values.artist_sort),
+        album_sort: field_change(set, values.album_sort),
+        album_artist_sort: field_change(set, values.album_artist_sort),
+        composer_sort: field_change(set, values.composer_sort),
+    }
+}
+
+/// The editable fields of `metadata`, in `MetadataChange` order.
+fn editable_fields(metadata: &TrackMetadata) -> Vec<String> {
+    vec![
+        format!("title {:?}", metadata.title),
+        format!("artist {:?}", metadata.artist),
+        format!("album {:?}", metadata.album),
+        format!("album_artist {:?}", metadata.album_artist),
+        format!("composer {:?}", metadata.composer),
+        format!("grouping {:?}", metadata.grouping),
+        format!("genre {:?}", metadata.genre),
+        format!("track_number {:?}", metadata.track_number),
+        format!("track_total {:?}", metadata.track_total),
+        format!("disc_number {:?}", metadata.disc_number),
+        format!("disc_total {:?}", metadata.disc_total),
+        format!("year {:?}", metadata.year),
+        format!("compilation {:?}", metadata.compilation),
+        format!("bpm {:?}", metadata.bpm),
+        format!("key {:?}", metadata.key),
+        format!("comments {:?}", metadata.comments),
+        format!("lyrics {:?}", metadata.lyrics),
+        format!("title_sort {:?}", metadata.title_sort),
+        format!("artist_sort {:?}", metadata.artist_sort),
+        format!("album_sort {:?}", metadata.album_sort),
+        format!("album_artist_sort {:?}", metadata.album_artist_sort),
+        format!("composer_sort {:?}", metadata.composer_sort),
+    ]
+}
+
 #[test]
 fn write_metadata_writes_sort_order_fields() {
     let root = unique_test_directory();
@@ -1792,6 +1959,48 @@ fn scanner_recurses_and_ignores_unsupported_files() {
     assert_eq!(scan.skipped_unsupported_files, 1);
     assert_eq!(scan.failures, Vec::new());
     assert!(!scan.cancelled);
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+/// A staged rip keeps its audio extension, so only its name marks it as
+/// Sustain's in-flight state; a scan running meanwhile must not adopt it,
+/// nor anything inside one of Sustain's recovery folders.
+#[test]
+fn scanner_skips_sustain_workspace_files_and_folders() {
+    let root = unique_test_directory();
+    let recovery = root.join(".sustain-duplicate-consolidation-1");
+    fs::create_dir_all(&recovery).expect("create recovery folder");
+    fs::write(root.join("song.flac"), b"not real audio").expect("write test file");
+    fs::write(root.join(".sustain-cd-rip-1-0.flac"), b"not real audio").expect("write staged rip");
+    fs::write(recovery.join("backup.mp3"), b"not real audio").expect("write backup");
+    fs::write(root.join(".hidden.mp3"), b"not real audio").expect("write hidden file");
+
+    let metadata_service = FakeMetadataService::for_paths([
+        root.join("song.flac"),
+        root.join(".sustain-cd-rip-1-0.flac"),
+        recovery.join("backup.mp3"),
+        root.join(".hidden.mp3"),
+    ]);
+    let scan = LibraryScanner::new(&metadata_service)
+        .scan(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
+        )
+        .expect("scan test directory");
+
+    let mut scanned_paths = scan
+        .tracks
+        .iter()
+        .map(|track| track.relative_path.as_path().to_path_buf())
+        .collect::<Vec<_>>();
+    scanned_paths.sort();
+    assert_eq!(
+        scanned_paths,
+        vec![PathBuf::from(".hidden.mp3"), PathBuf::from("song.flac")]
+    );
+    assert_eq!(scan.failures, Vec::new());
 
     fs::remove_dir_all(root).expect("remove test directory");
 }

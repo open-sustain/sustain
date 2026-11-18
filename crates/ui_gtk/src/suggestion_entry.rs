@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn attach_suggestions_constructs_without_panicking() {
-        if !crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             // Empty candidates: nothing is attached, and no popover is parented.
             let empty = gtk::Entry::new();
             attach_suggestions(&empty, Vec::new());
@@ -293,16 +293,14 @@ mod tests {
             attach_suggestions(&entry, vec!["Rock".to_owned(), "Hip-Hop".to_owned()]);
             entry.set_text("ro");
             assert!(!has_focus_within(&entry));
-        }) {
-            eprintln!("SMOKE: no display, skipping");
-        }
+        });
     }
 
     /// Typing into the focused entry opens the list of matching values;
     /// filling it programmatically, unfocused, does not (#301).
     #[test]
     fn typing_into_the_focused_entry_opens_the_suggestions() {
-        if !crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let entry = gtk::Entry::new();
             attach_suggestions(&entry, vec!["Deep House".to_owned(), "Rock".to_owned()]);
             let popover = std::iter::successors(entry.first_child(), |child| child.next_sibling())
@@ -337,9 +335,7 @@ mod tests {
             entry.set_text("jazz");
             assert!(!popover.is_visible(), "nothing matches, so no list");
             window.destroy();
-        }) {
-            eprintln!("SMOKE: no display, skipping");
-        }
+        });
     }
 
     /// An entry removed from its parent goes away with its popover: the
@@ -347,7 +343,7 @@ mod tests {
     /// is only ever removed from its cell).
     #[test]
     fn a_removed_entry_is_disposed_with_its_popover() {
-        if !crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let parent = gtk::Box::new(gtk::Orientation::Vertical, 0);
             let entry = gtk::Entry::new();
             attach_suggestions(&entry, vec!["Rock".to_owned(), "Hip-Hop".to_owned()]);
@@ -364,8 +360,6 @@ mod tests {
 
             assert!(entry_weak.upgrade().is_none(), "the entry was disposed");
             assert!(popover_weak.upgrade().is_none(), "its popover went with it");
-        }) {
-            eprintln!("SMOKE: no display, skipping");
-        }
+        });
     }
 }

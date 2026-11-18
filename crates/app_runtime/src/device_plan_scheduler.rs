@@ -331,22 +331,79 @@ mod tests {
     }
 
     #[test]
-    fn invalidation_cancels_pending_request() {
+    fn invalidation_cancels_the_running_plan() {
         let scheduler = DevicePlanScheduler::new();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (observed_tx, observed_rx) = mpsc::channel();
         scheduler
             .request_plan(
                 DevicePlanGeneration::new(1),
                 mount(),
-                Box::new(|cancelled| {
+                Box::new(move |cancelled| {
+                    started_tx.send(()).expect("test waits for the start");
                     while !cancelled() {
                         std::thread::sleep(Duration::from_millis(1));
                     }
+                    observed_tx
+                        .send(())
+                        .expect("test waits for the cancellation");
                     None
                 }),
             )
-            .expect("queue first plan");
+            .expect("queue plan");
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the plan starts");
+
         scheduler.cancel_before(DevicePlanGeneration::new(2));
-        std::thread::sleep(Duration::from_millis(50));
+
+        // Observed while the scheduler is alive, so shutdown cannot be
+        // what released the running plan.
+        observed_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the running plan sees the invalidation");
         assert!(scheduler.result_receiver().try_recv().is_err());
+    }
+
+    #[test]
+    fn invalidation_discards_the_queued_plan() {
+        let scheduler = DevicePlanScheduler::new();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel::<()>();
+        scheduler
+            .request_plan(
+                DevicePlanGeneration::new(1),
+                mount(),
+                Box::new(move |_| {
+                    started_tx.send(()).expect("test waits for the start");
+                    resume_rx.recv().expect("test resumes the plan");
+                    None
+                }),
+            )
+            .expect("queue busy plan");
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the busy plan starts");
+        scheduler
+            .request_plan(
+                DevicePlanGeneration::new(2),
+                mount(),
+                Box::new(|_| Some(Ok(snapshot(2)))),
+            )
+            .expect("queue second plan");
+
+        scheduler.cancel_before(DevicePlanGeneration::new(3));
+
+        assert!(
+            scheduler
+                .shared
+                .worker
+                .lock()
+                .expect("device-plan worker state")
+                .pending
+                .is_none(),
+            "the queued obsolete plan is discarded"
+        );
+        resume_tx.send(()).expect("resume the busy plan");
     }
 }

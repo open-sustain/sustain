@@ -21,7 +21,8 @@
 use std::thread;
 
 use sustain_app_runtime::priority::{
-    IoPriorityClass, NiceLevel, apply_to_current_thread, priority_for, resolve_worker_count,
+    IoPriorityClass, NiceLevel, PriorityError, apply_to_current_thread, priority_for,
+    resolve_worker_count,
 };
 use sustain_domain::BackgroundResourceUsage;
 
@@ -42,16 +43,31 @@ fn current_ioprio() -> libc::c_int {
 #[test]
 fn apply_to_current_thread_lowers_nice() {
     let handle = thread::spawn(|| {
-        apply_to_current_thread(NiceLevel::Background, IoPriorityClass::BestEffortLow)
-            .expect("Linux setpriority + ioprio_set must succeed for unprivileged self-nicing");
-        // Asking for a nicer value than baseline is always allowed for
-        // an unprivileged process, so the kernel honours +10 verbatim
-        // when no CAP_SYS_NICE is required.
-        assert_eq!(
-            current_nice(),
-            10,
-            "Background preset should land at nice 10"
-        );
+        let inherited = current_nice();
+        let outcome =
+            apply_to_current_thread(NiceLevel::Background, IoPriorityClass::BestEffortLow);
+        if inherited <= 10 {
+            // Asking for a nicer value than the current one is always
+            // allowed for an unprivileged thread, so the kernel honours
+            // +10 verbatim.
+            outcome.expect("Linux setpriority + ioprio_set must succeed for self-nicing");
+            assert_eq!(
+                current_nice(),
+                10,
+                "Background preset should land at nice 10"
+            );
+        } else {
+            // A harness already nicer than +10 needs CAP_SYS_NICE to come
+            // back up: either the raise is allowed, or the wrapper reports
+            // the kernel's refusal and the thread keeps its priority.
+            match outcome {
+                Ok(()) => assert_eq!(current_nice(), 10),
+                Err(error) => {
+                    assert!(matches!(error, PriorityError::NiceFailed(_)), "{error}");
+                    assert_eq!(current_nice(), inherited);
+                }
+            }
+        }
     });
     handle.join().expect("thread join");
 }

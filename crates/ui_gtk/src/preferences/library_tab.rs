@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn flipping_the_sort_tag_switch_saves_it_and_re_files_the_lists() {
-        if !crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
             let command_controller: SharedCommandController =
                 Rc::new(UiCommandController::new(runtime.clone()));
@@ -445,8 +445,6 @@ mod tests {
 
             assert!(!runtime.borrow().settings().library.honor_sort_tags);
             assert_eq!(re_filed.get(), 1);
-        }) {
-            eprintln!("SMOKE: no display, skipping");
-        }
+        });
     }
 }

@@ -1067,7 +1067,7 @@ mod tests {
 
     #[test]
     fn model_button_activates_anchor_scoped_action_after_popdown() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let calls = Rc::new(Cell::new(0));
             let calls_for_action = calls.clone();
             let actions = gtk::gio::SimpleActionGroup::new();
@@ -1112,14 +1112,11 @@ mod tests {
             );
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn track_context_popover_uses_nested_submenus() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let popover = track_context_popover();
             assert_eq!(
                 popover.flags(),
@@ -1127,9 +1124,6 @@ mod tests {
                 "track context menus should use desktop nested submenus, not sliding submenus"
             );
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
@@ -1199,7 +1193,7 @@ mod tests {
 
     #[test]
     fn track_context_popup_with_playlist_submenu_does_not_panic() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let window = gtk::Window::new();
             let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
             window.set_child(Some(&anchor));
@@ -1227,14 +1221,11 @@ mod tests {
             while ctx.iteration(false) {}
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]
     fn a_dismissed_track_context_popover_is_released() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let window = gtk::Window::new();
             let anchor = gtk::Box::new(gtk::Orientation::Vertical, 0);
             window.set_child(Some(&anchor));
@@ -1262,9 +1253,6 @@ mod tests {
             );
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     /// A chosen action runs with keyboard focus back where it was before the
@@ -1272,7 +1260,7 @@ mod tests {
     /// focused row to move focus off it.
     #[test]
     fn chosen_action_runs_with_focus_returned_from_the_menu() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let window = gtk::Window::new();
             let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
             let focused_before = gtk::Button::with_label("row");
@@ -1314,9 +1302,6 @@ mod tests {
             while ctx.iteration(false) {}
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     #[test]

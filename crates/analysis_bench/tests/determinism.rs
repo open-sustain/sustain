@@ -62,6 +62,24 @@ synthetic = { kind = "triad", root_pc = 0, secs = 4.0 }
 key = "C"
 "#;
 
+/// The ids of `MANIFEST`'s tracks, spelled out rather than read back from
+/// the parsed manifest, so a parse that silently drops tracks fails.
+const CORPUS_IDS: [&str; 5] = [
+    "silence_stereo",
+    "tone_440_stereo",
+    "ramp",
+    "click_120",
+    "triad_c_major",
+];
+
+fn report_ids(report: &Report) -> Vec<&str> {
+    report
+        .tracks
+        .iter()
+        .map(|track| track.id.as_str())
+        .collect()
+}
+
 fn run_once(manifest: &Manifest, fixtures: &Path) -> Report {
     // Reproducible mode drops env + timings, leaving only outputs/scores.
     run_manifest(manifest, fixtures, true)
@@ -76,9 +94,10 @@ fn deterministic_outputs_are_stable_across_runs() {
     let first = run_once(&manifest, first_dir.path());
     let second = run_once(&manifest, second_dir.path());
 
-    assert_eq!(first.tracks.len(), second.tracks.len());
+    // Both runs cover the whole corpus: two empty reports agree vacuously.
+    assert_eq!(report_ids(&first), CORPUS_IDS);
+    assert_eq!(report_ids(&second), CORPUS_IDS);
     for (a, b) in first.tracks.iter().zip(&second.tracks) {
-        assert_eq!(a.id, b.id);
         // Decode → mono → waveform → BPM → key → acoustics are all
         // deterministic with the vendored DSP (see the module docs).
         assert_eq!(a.bpm, b.bpm, "{}: BPM not deterministic", a.id);
@@ -102,6 +121,7 @@ fn every_synthetic_fixture_decodes_without_error() {
     let dir = TempDir::new().expect("temp dir");
     let report = run_manifest(&manifest, dir.path(), false);
 
+    assert_eq!(report_ids(&report), CORPUS_IDS);
     assert_eq!(
         report.summary.error_count, 0,
         "no fixture should fail to decode"

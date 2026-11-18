@@ -709,12 +709,11 @@ mod tests {
         let client = HttpClient::new(HttpClientConfig {
             user_agent: "Sustain-test/0".to_owned(),
         });
-        client.record_cool_down("lrclib.net", Duration::from_millis(20));
-        assert!(matches!(
-            client.take_turn("https://lrclib.net/api/get"),
-            Err(RemoteError::RateLimited { .. })
-        ));
-        thread::sleep(Duration::from_millis(30));
+        // A hold ending the instant it is recorded has passed by the next
+        // request, without the test racing a wall-clock window. Requests
+        // refused while a hold lasts are covered above.
+        client.record_cool_down("lrclib.net", Duration::ZERO);
+        assert!(held_until(&client, "lrclib.net").is_some());
         assert_eq!(client.take_turn("https://lrclib.net/api/get"), Ok(()));
         assert_eq!(held_until(&client, "lrclib.net"), None);
     }

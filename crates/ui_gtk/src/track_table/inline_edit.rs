@@ -733,7 +733,7 @@ mod tests {
     /// user has moved focus elsewhere, their typing goes there.
     #[test]
     fn an_armed_edit_opens_only_while_focus_stays_in_the_table() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let begin_edit: BeginEditCallback = Rc::new(|_, _| {
                 Some(EditSession {
                     seed: String::new(),
@@ -793,16 +793,13 @@ mod tests {
             }));
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     /// Enter and Escape hand focus back to the table, so the arrow keys keep
     /// moving through the rows after an inline edit (#300).
     #[test]
     fn ending_an_edit_from_the_keyboard_returns_focus_to_the_table() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let begin_edit: BeginEditCallback = Rc::new(|_, _| {
                 Some(EditSession {
                     seed: String::new(),
@@ -866,16 +863,13 @@ mod tests {
             }
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     /// A session's suggestions are offered by its editor, and the editor goes
     /// away with them once the edit ends (#301).
     #[test]
     fn a_suggesting_editor_is_released_when_the_edit_ends() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let begin_edit: BeginEditCallback = Rc::new(|_, _| {
                 Some(EditSession {
                     seed: String::new(),
@@ -934,9 +928,6 @@ mod tests {
             assert!(entry.upgrade().is_none(), "the ended editor was released");
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 
     /// The track each commit was bound to, and the committed text.
@@ -944,7 +935,7 @@ mod tests {
 
     #[test]
     fn a_re_sort_commits_the_open_edit_to_the_track_it_was_opened_on() {
-        let ran = crate::test_support::with_gtk(|| {
+        crate::test_support::with_gtk(|| {
             let commits: Commits = Rc::default();
             let commits_for_hook = commits.clone();
             let begin_edit: BeginEditCallback = Rc::new(move |item, _field| {
@@ -1020,8 +1011,5 @@ mod tests {
             );
             window.destroy();
         });
-        if !ran {
-            eprintln!("skipped GTK widget test: no display available");
-        }
     }
 }

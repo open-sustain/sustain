@@ -105,6 +105,9 @@ struct FakeEncoder {
     fail_track: Option<u32>,
     cancel_after_track: Option<u32>,
     cancellation: Arc<AtomicBool>,
+    /// Where the failing track's partial output was written, as a real
+    /// encoder leaves it when it fails mid-track.
+    failed_destination: Mutex<Option<PathBuf>>,
 }
 
 impl FakeEncoder {
@@ -113,6 +116,7 @@ impl FakeEncoder {
             fail_track: None,
             cancel_after_track: None,
             cancellation,
+            failed_destination: Mutex::new(None),
         }
     }
 }
@@ -134,6 +138,13 @@ impl CdEncoder for FakeEncoder {
         progress(EncodeProgress { percent: 50 });
         progress(EncodeProgress { percent: 100 });
         if self.fail_track == Some(request.track) {
+            std::fs::write(&request.destination, b"partial")
+                .map_err(|_| CdImportError::EncodeFailed("write".to_owned()))?;
+            let mut failed_destination = self
+                .failed_destination
+                .lock()
+                .map_err(|_| CdImportError::EncodeFailed("poisoned".to_owned()))?;
+            *failed_destination = Some(request.destination.clone());
             return Err(CdImportError::EncodeFailed("synthetic failure".to_owned()));
         }
         std::fs::write(&request.destination, b"placeholder audio bytes")
@@ -352,6 +363,14 @@ fn encoder_error_keeps_earlier_tracks_and_removes_staging() {
     );
     assert_eq!(harness.store.tracks().expect("rows").len(), 1);
     assert_eq!(published_files(&harness.root).len(), 1);
+    let partial = harness
+        .encoder
+        .failed_destination
+        .lock()
+        .expect("failed destination lock")
+        .clone()
+        .expect("track 2 started encoding");
+    assert!(!partial.exists(), "the partial staging file is removed");
     harness.cleanup();
 }
 
@@ -654,4 +673,54 @@ fn both_library_modes_place_ripped_files_beneath_the_library_root() {
         );
         let _ = std::fs::remove_dir_all(root);
     }
+}
+
+/// A row inserted after the task's snapshot can take the id the task
+/// planned. The insert then fails on that id, and the rollback must not
+/// delete the other track's row: it only withdraws the published rip.
+#[test]
+fn a_failed_insert_rolls_back_the_rip_without_touching_the_conflicting_row() {
+    let (harness, disc) = Harness::new();
+    let task = harness.task(&disc, &[1]);
+    let other = Track {
+        id: sustain_domain::TrackId::new(1).expect("track id"),
+        location: sustain_domain::TrackLocation::available(
+            sustain_domain::TrackRelativePath::new("Other/Song.flac").expect("relative path"),
+        ),
+        metadata: TrackMetadata::default(),
+        rating: sustain_domain::Rating::unrated(),
+        statistics: sustain_domain::PlayStatistics::default(),
+        file_size_bytes: None,
+        has_embedded_artwork: None,
+        file_modified_at: None,
+    };
+    harness
+        .store
+        .save_track(other.clone())
+        .expect("concurrent row");
+
+    let result = harness.run(task);
+
+    assert!(result.summary.failure.is_some(), "the failure is reported");
+    assert_eq!(result.summary.imported_tracks, 0);
+    assert_eq!(
+        harness.store.tracks().expect("rows"),
+        vec![other],
+        "the conflicting row survives"
+    );
+    assert!(
+        published_files(&harness.root).is_empty(),
+        "the rip is withdrawn"
+    );
+    assert!(
+        std::fs::read_dir(&harness.root)
+            .expect("library root")
+            .flatten()
+            .all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".sustain-cd-")),
+        "no staging file or journal remains"
+    );
+    harness.cleanup();
 }
