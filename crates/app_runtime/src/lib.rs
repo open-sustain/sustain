@@ -42,7 +42,8 @@ pub use sustain_domain::{
 use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities, StoreError};
 pub use sustain_metadata::{
-    AudioFormat, MalformedTagError, MetadataError, MetadataService, ScanFailure,
+    AudioFormat, InitialTags, MalformedTagError, MetadataError, MetadataResult, MetadataService,
+    ScanFailure,
 };
 pub use sustain_metadata_remote::{
     AudioFingerprint, DiscRelease, DiscTrack, FetchedArtwork, RemoteError, RemoteMetadataService,

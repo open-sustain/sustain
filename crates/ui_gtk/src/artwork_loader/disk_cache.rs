@@ -134,7 +134,12 @@ impl ArtworkRepository {
 
         match source {
             ArtworkSource::EmbeddedTrack { file_path, .. } => {
-                let bytes = self.metadata_service.read_artwork(file_path).ok().flatten();
+                // Only a successful read may be cached, absence included: a
+                // failed one (permissions, a file mid-replacement) would
+                // otherwise pin "no artwork" to an unchanged fingerprint.
+                let Ok(bytes) = self.metadata_service.read_artwork(file_path) else {
+                    return DecodedArtwork::default();
+                };
                 let decoded = decode_artwork(bytes, variant);
                 if let (Some(cache), Some(fingerprint)) = (&self.disk_cache, fingerprint) {
                     cache.store(source, fingerprint, &decoded.cache_entry, || {
@@ -770,7 +775,8 @@ mod tests {
     use crate::artwork_color::{ArtworkPaletteComponents, RgbColorComponents};
 
     use super::{
-        ArtworkDiskCache, ArtworkFileFingerprint, ArtworkSource, ArtworkVariant, CachedArtwork,
+        ArtworkDiskCache, ArtworkFileFingerprint, ArtworkRepository, ArtworkSource, ArtworkVariant,
+        CachedArtwork,
     };
 
     static NEXT_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
@@ -782,6 +788,71 @@ mod tests {
         0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00,
         0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ];
+
+    /// Every artwork read fails, as for a file the user cannot read yet.
+    struct UnreadableArtwork;
+
+    impl sustain_app_runtime::MetadataService for UnreadableArtwork {
+        fn read_initial_tags(
+            &self,
+            _path: &std::path::Path,
+        ) -> sustain_app_runtime::MetadataResult<sustain_app_runtime::InitialTags> {
+            Err(sustain_app_runtime::MetadataError::ReadFailed)
+        }
+
+        fn write_metadata(
+            &self,
+            _path: &std::path::Path,
+            _change: sustain_app_runtime::MetadataChange,
+        ) -> sustain_app_runtime::MetadataResult<()> {
+            Err(sustain_app_runtime::MetadataError::WriteFailed)
+        }
+
+        fn write_rating(
+            &self,
+            _path: &std::path::Path,
+            _rating: sustain_app_runtime::Rating,
+        ) -> sustain_app_runtime::MetadataResult<()> {
+            Err(sustain_app_runtime::MetadataError::WriteFailed)
+        }
+
+        fn read_artwork(
+            &self,
+            _path: &std::path::Path,
+        ) -> sustain_app_runtime::MetadataResult<Option<Vec<u8>>> {
+            Err(sustain_app_runtime::MetadataError::ReadFailed)
+        }
+
+        fn write_artwork(
+            &self,
+            _path: &std::path::Path,
+            _artwork: Option<Vec<u8>>,
+        ) -> sustain_app_runtime::MetadataResult<()> {
+            Err(sustain_app_runtime::MetadataError::WriteFailed)
+        }
+    }
+
+    #[test]
+    fn a_failed_artwork_read_is_not_cached_as_absent_artwork() {
+        let (dir, _cache) = test_cache();
+        let audio_path = dir.0.join("song.flac");
+        fs::write(&audio_path, b"audio").expect("write audio file");
+        let source = ArtworkSource::embedded_track(PathBuf::from("song.flac"), audio_path);
+        let fingerprint = source.file_fingerprint().expect("audio file fingerprint");
+        let repository =
+            ArtworkRepository::new(std::sync::Arc::new(UnreadableArtwork), dir.0.clone());
+
+        let decoded = repository.load(&source, 0, ArtworkVariant::Tile);
+
+        assert!(decoded.tile_texture.is_none());
+        let disk_cache = repository.disk_cache.as_ref().expect("disk cache opens");
+        assert!(
+            disk_cache
+                .load(&source, fingerprint, ArtworkVariant::Tile)
+                .is_none(),
+            "a failed read must stay retryable"
+        );
+    }
 
     #[test]
     fn a_decode_superseded_before_its_store_is_not_cached() {
