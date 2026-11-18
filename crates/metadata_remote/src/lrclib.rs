@@ -7,9 +7,10 @@
 //! database with an extremely simple HTTP API and no authentication.
 //! Two endpoints matter for Sustain today:
 //!
-//! 1. `GET /api/get` — exact lookup by artist, title, album, and
-//!    duration. Returns plain and/or synced lyrics when all four
-//!    fields match a record; 404 otherwise. This is the cheap,
+//! 1. `GET /api/get` — exact lookup by artist and title, plus album
+//!    and duration when the track has them. Returns plain and/or
+//!    synced lyrics when the given fields match a record; 404
+//!    otherwise. This is the cheap,
 //!    deterministic path and the only one we use here today.
 //! 2. `GET /api/search` — fuzzy search when the exact lookup misses.
 //!    Not wired in this pass; the exact endpoint covers the

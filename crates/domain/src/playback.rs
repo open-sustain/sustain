@@ -95,7 +95,10 @@ pub enum PlaybackCommand {
     /// Shuffle controls that always want a definite outcome (e.g. the
     /// Album header's "Shuffle" button always wants Pure).
     SetShuffleMode(ShuffleMode),
-    ToggleRepeat,
+    /// Advance to the next mode in the repeat cycle
+    /// (`Off → All → One → Off`). The transport's repeat button
+    /// dispatches this on every click.
+    CycleRepeatMode,
     Pause,
     Resume,
     TogglePlayPause,

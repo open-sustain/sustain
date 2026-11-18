@@ -54,10 +54,13 @@ impl RepeatMode {
         !matches!(self, Self::Off)
     }
 
-    pub const fn toggled_for_single_button(self) -> Self {
+    /// Next mode in the transport button's cycle, in iTunes's order
+    /// (`Off → All → One → Off`).
+    pub const fn next_in_cycle(self) -> Self {
         match self {
             Self::Off => Self::All,
-            Self::One | Self::All => Self::Off,
+            Self::All => Self::One,
+            Self::One => Self::Off,
         }
     }
 }
@@ -83,10 +86,10 @@ impl PlaybackOptions {
         }
     }
 
-    pub const fn with_repeat_toggled(self) -> Self {
+    pub const fn with_repeat_cycled(self) -> Self {
         Self {
             shuffle_mode: self.shuffle_mode,
-            repeat_mode: self.repeat_mode.toggled_for_single_button(),
+            repeat_mode: self.repeat_mode.next_in_cycle(),
         }
     }
 
@@ -127,14 +130,14 @@ mod tests {
     }
 
     #[test]
-    fn playback_options_toggle_repeat_without_affecting_shuffle() {
+    fn playback_options_cycle_repeat_without_affecting_shuffle() {
         let options = PlaybackOptions {
             shuffle_mode: ShuffleMode::Smart,
             repeat_mode: RepeatMode::Off,
         };
 
         assert_eq!(
-            options.with_repeat_toggled(),
+            options.with_repeat_cycled(),
             PlaybackOptions {
                 shuffle_mode: ShuffleMode::Smart,
                 repeat_mode: RepeatMode::All,
@@ -159,19 +162,10 @@ mod tests {
     }
 
     #[test]
-    fn playback_options_toggle_repeat_disables_repeat_one() {
-        let options = PlaybackOptions {
-            shuffle_mode: ShuffleMode::Off,
-            repeat_mode: RepeatMode::One,
-        };
-
-        assert_eq!(
-            options.with_repeat_toggled(),
-            PlaybackOptions {
-                shuffle_mode: ShuffleMode::Off,
-                repeat_mode: RepeatMode::Off,
-            }
-        );
+    fn repeat_cycles_through_every_mode_in_itunes_order() {
+        assert_eq!(RepeatMode::Off.next_in_cycle(), RepeatMode::All);
+        assert_eq!(RepeatMode::All.next_in_cycle(), RepeatMode::One);
+        assert_eq!(RepeatMode::One.next_in_cycle(), RepeatMode::Off);
     }
 
     #[test]

@@ -10,20 +10,25 @@ This document is the contract that script must respect.
 
 ## What the scan does
 
-When Sustain scans the library folder, it reads each audio file with `lofty`
-and populates the SQLite `tracks` row from the file's embedded tags and audio
-properties.
+When Sustain scans the library folder and finds a file it has no row for, it
+reads the file with `lofty` and populates a new SQLite `tracks` row from the
+file's embedded tags and audio properties. Tags are only initial values:
+once a row exists, a rescan refreshes technical properties (duration,
+bitrate, size, artwork presence) but never replaces the row's metadata,
+rating, or history with what the file's tags say. SQLite is the durable
+store.
 
-Audio formats supported: MP3 / WAV / AIFF (ID3), Ogg / FLAC (Vorbis comments),
-MP4 / M4A (MP4 atoms). Other formats are skipped.
+Audio formats supported: MP3, WAV, AIFF (ID3v2), FLAC, Ogg Vorbis, Opus
+(Vorbis comments), MP4 / M4A (MP4 atoms). Other formats are skipped.
 
 Fields populated from file tags:
 
 - `title`, `artist`, `album`, `album_artist`, `composer`, `grouping`, `genre`
 - `track_number`, `track_total`, `disc_number`, `disc_total`
-- `year`, `compilation`, `bpm`, `musical_key`, `comments`, `lyrics`
-- `rating` (read from POPM / MP4 `rate` atom / Vorbis `FMPS_RATING` via lofty;
-  whatever the file format carries)
+- `year`, `compilation`, `bpm_hundredths` (the tempo × 100), `musical_key`,
+  `comments`, `lyrics`
+- `rating` (0–5 stars, from an ID3 `POPM` frame, a Vorbis `RATING` comment,
+  or an MP4 `rate` atom; `FMPS_RATING` is not read)
 - artwork (embedded `CoverFront` picture, or the first picture if none is
   flagged as cover)
 
@@ -34,7 +39,7 @@ Fields populated from audio properties:
 Fields populated from filesystem / scan context:
 
 - `relative_path` (relative to the configured library folder)
-- `content_hash`, `file_size_bytes`
+- `file_size_bytes`, `file_modified_at_unix`
 - `date_added_at_unix` — **set to the scan time, not the original add date**
 
 ## What the scan does not recover
@@ -66,8 +71,13 @@ $XDG_DATA_HOME/sustain/library.sqlite
 is unset)
 
 For each track present in both your source library and Sustain's database,
-match by `relative_path` (or by `content_hash` if your source provides
-matching hashes) and update:
+match by `relative_path` and update the fields below. `relative_path` is a
+BLOB holding the path's raw bytes (Linux file names need not be UTF-8), so
+bind it as bytes — in Python, `os.fsencode(path)` — never as text: a TEXT
+value never equals a BLOB in SQLite, so a text-bound lookup matches no row,
+even for a plain ASCII path. A source that does not record the same relative
+paths needs a matcher that reports ambiguous candidates instead of taking
+the first one (see the source-specific guides).
 
 - `play_count` — total plays from the source
 - `skip_count` — total skips from the source (iTunes has this; Rhythmbox does
@@ -79,16 +89,17 @@ matching hashes) and update:
 
 Ratings are already picked up by the scan if they live in the file tags. If
 your source library stores ratings only in its own database (Rhythmbox does
-this; iTunes optionally writes POPM to tags but the library xml is the
-canonical store), either:
+this; iTunes optionally writes POPM to tags but the library XML is the
+canonical store), write them directly to the `tracks.rating` column
+(integer 0–5, 0 meaning unrated). A rescan keeps that value: the row, not
+the file, is the durable store, so there is no need to rewrite audio files
+for a backfill. Ratings the user later changes inside Sustain are mirrored
+to the file's tags as a courtesy to other applications.
 
-1. write the ratings to the file tags before the scan, then let Sustain
-   pick them up, or
-2. write them directly to the `tracks.rating` column (integer 0–5) — but
-   Sustain treats the file tag as the durable source on rescan, so any
-   rating that lives only in SQLite will be overwritten by `NULL` the next
-   time the file is scanned if the tag is empty. Option 1 is the correct
-   one.
+Tempo and key carry their origin: `bpm_set_by_user = 1` and `key_origin = 1`
+mark a value as the user's own, which analysis never replaces and Sustain
+mirrors to the file's tags. Leave both at their default for values from a
+source library's tags, so analysis may refine them.
 
 ## Merging history onto existing rows
 
@@ -97,11 +108,13 @@ rather than blanket-overwriting:
 
 - `date_added_at_unix` — **min** (oldest wins; recovers the original add date
   that the scan stamped to "now").
-- `play_count` — choose a strategy and document it: `max(sustain, external)`
-  when the external era is already represented in Sustain; `sustain + external`
-  only when the two eras provably do not overlap; or the "smart" rule
-  `sustain >= external ? sustain : sustain + external` for the common case
-  where one era partially absorbs the other.
+- `play_count` — two totals cannot tell how far two histories overlap, so
+  choose a rule from what you know and record it: `max(sustain, external)`
+  when one history contains the other (for example, Sustain's plays were
+  all made after it imported the external count); `sustain + external`
+  only when the two histories provably do not overlap. When the overlap is
+  unknown, keep Sustain's value and decide by hand; no formula on the
+  totals alone is right in general.
 - `skip_count` — **max**.
 - `last_played_at_unix`, `last_skipped_at_unix` — **max** (most recent wins).
 - A field that is absent in the external source must leave Sustain's value
@@ -116,10 +129,12 @@ Field-by-field specs for individual source libraries:
 
 ## Schema reference
 
-The authoritative schema baseline is in
-`crates/library_store/src/schema.rs` under the `CREATE TABLE` statements.
-Read it directly rather than relying on documentation; the schema is the
-single source of truth.
+The schema is built by the ordered migrations in
+`crates/library_store/src/migrations.rs`: the `CREATE TABLE` baseline in
+`crates/library_store/src/schema.rs` plus every later migration (several
+add, rename, or drop `tracks` columns). Inspect the database you are
+writing to — `PRAGMA table_info(tracks);` — rather than relying on
+documentation or on the baseline alone.
 
 Relevant tables for a migration script:
 

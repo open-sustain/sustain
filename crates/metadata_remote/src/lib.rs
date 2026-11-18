@@ -13,11 +13,12 @@
 //! * **Cover Art Archive** — the artwork sibling of MusicBrainz
 //!   ([`cover_art_archive::CoverArtArchiveClient`]). Fetches front
 //!   cover bytes for a release or release-group MBID.
-//! * **AcoustID** — fingerprint-based identification fallback
-//!   ([`acoustid::AcoustIdClient`]). Used when local tags are too
-//!   sparse for MusicBrainz to match by text. The actual Chromaprint
-//!   fingerprint computation lives outside this crate; the client
-//!   here accepts a precomputed [`acoustid::AudioFingerprint`].
+//! * **AcoustID** — fingerprint-based identification
+//!   ([`acoustid::AcoustIdClient`]), consulted only for a query that
+//!   carries a fingerprint. The Chromaprint computation lives outside
+//!   this crate and the application does not compute one yet, so its
+//!   queries never reach AcoustID; the client accepts a precomputed
+//!   [`acoustid::AudioFingerprint`].
 //! * **Deezer** and the **iTunes Search API** — album covers looked
 //!   up by artist and album title when Cover Art Archive has none
 //!   ([`deezer::DeezerClient`], [`itunes::ItunesClient`]). Neither

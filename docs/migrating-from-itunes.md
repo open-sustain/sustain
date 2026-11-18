@@ -15,7 +15,8 @@ two interesting sections: `Tracks` (dict keyed by stringified track ID) and
 
 | Key                   | Type / encoding                              | Sustain column           |
 |-----------------------|----------------------------------------------|--------------------------|
-| `Persistent ID`       | 16-hex string                                | not stored; use internally to resolve playlist references |
+| Track ID (the `Tracks` dict key, repeated as `Track ID`) | int | not stored; map each to the matched `tracks.id` to resolve `Playlist Items` |
+| `Persistent ID`       | 16-hex string                                | not stored                |
 | `Name`                | string                                       | `title`                  |
 | `Artist`              | string                                       | `artist`                 |
 | `Album`               | string                                       | `album`                  |
@@ -29,7 +30,7 @@ two interesting sections: `Tracks` (dict keyed by stringified track ID) and
 | `Year`                | int                                          | `year`                   |
 | `Bit Rate`            | int (kbps)                                   | `bitrate_kbps`           |
 | `Sample Rate`         | int (Hz)                                     | `sample_rate_hz`         |
-| `BPM`                 | int                                          | `bpm`                    |
+| `BPM`                 | int                                          | `bpm_hundredths` (×100)  |
 | `Date Added`          | plist date (ISO-8601)                        | `date_added_at_unix`     |
 | `Play Date UTC`       | plist date (ISO-8601)                        | `last_played_at_unix`    |
 | `Skip Date`           | plist date (ISO-8601)                        | `last_skipped_at_unix`   |
@@ -38,7 +39,7 @@ two interesting sections: `Tracks` (dict keyed by stringified track ID) and
 | `Rating`              | int **0..=100 in steps of 20**               | `rating` (÷20 → 0..=5)   |
 | `Rating Computed`     | bool                                         | gate: only use `Rating` as a user rating when this is missing or false |
 | `Comments`            | string                                       | `comments`               |
-| `Location`            | `file://` URI (HFS+ percent-encoding on macOS exports) | matched on basename, not consumed as a path |
+| `Location`            | `file://` URI (HFS+ percent-encoding on macOS exports) | matched against `relative_path`, see below |
 | `Disabled`            | bool — track is unticked in iTunes           | optional: skip or import as-is |
 
 Quirks worth hard-coding:
@@ -50,8 +51,14 @@ Quirks worth hard-coding:
   play history — not a user rating. Do not treat it as authoritative.
 - `Location` paths in libraries exported from macOS use HFS percent-encoding
   and reference the user's iTunes Media folder, which usually no longer
-  exists on the Linux machine doing the import. Use the basename only;
-  ignore the directory prefix.
+  exists on the Linux machine doing the import. Percent-decode the URI,
+  strip the iTunes Media folder prefix (`…/iTunes Media/Music/`), and
+  compare the remainder with each row's `relative_path`. When the Linux
+  library is laid out differently, match on the longest path suffix that
+  identifies exactly one row. A file name alone is not enough:
+  `Live/01 Intro.mp3` and `Studio/01 Intro.mp3` are different tracks.
+  Report every ambiguous or unmatched entry instead of taking the first
+  candidate.
 - iTunes optionally writes ratings to file tags as POPM (MP3). If Sustain
   has already scanned the file and ingested a POPM rating, that is the
   authoritative value — only fill `tracks.rating` from the XML when Sustain
@@ -71,7 +78,7 @@ For the rest:
 - `Folder: true` → write to `playlist_folders`; no items.
 - Otherwise → write to `playlists`, then walk `Playlist Items` (an array of
   `{Track ID: N}` dicts, in playlist order) and emit `playlist_entries` with
-  the matched Sustain `tracks.id`.
+  the Sustain `tracks.id` that track ID was matched to.
 - Hierarchy: `Parent Persistent ID` on a child references `Playlist
   Persistent ID` on its parent folder.
 - Smart playlists carry `Smart Info` and `Smart Criteria` as base64-encoded

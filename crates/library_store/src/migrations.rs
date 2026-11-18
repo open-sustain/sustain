@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 19;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 20;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -140,6 +140,11 @@ const MIGRATIONS: &[Migration] = &[
         description: "record the playlist files a sync wrote to a device",
         step: MigrationStep::Sql(ADD_SYNC_PLAYLIST_FILES_SQL),
     },
+    Migration {
+        version: 20,
+        description: "repair a library built by the withdrawn draft of migration 15",
+        step: MigrationStep::Rust(repair_withdrawn_key_origin_draft),
+    },
 ];
 
 const _: () = {
@@ -227,6 +232,32 @@ fn normalize_musical_keys(connection: &Connection) -> rusqlite::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Migration 20. For a short while before any release, `main` defined
+/// migration 15 as a `tracks.key_set_by_user` flag; it was then rewritten
+/// as `tracks.key_origin`. A library opened by a build from that window
+/// recorded version 15 without `key_origin`, so every later build fails to
+/// read its tracks. This step gives such a library the column the current
+/// migration 15 adds, carries each typed key over as
+/// [`KeyOrigin::Typed`](sustain_domain::KeyOrigin) (every other key stays
+/// imported, as the current migration 15 leaves it), and drops the
+/// withdrawn flag, leaving the schema a fresh library has. On every other
+/// library `key_origin` already exists and the step changes nothing.
+fn repair_withdrawn_key_origin_draft(connection: &Connection) -> rusqlite::Result<()> {
+    let has_key_origin = connection.query_row(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info('tracks') WHERE name = 'key_origin')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if has_key_origin {
+        return Ok(());
+    }
+    connection.execute_batch(ADD_TRACK_KEY_ORIGIN_SQL)?;
+    connection.execute_batch(
+        "UPDATE tracks SET key_origin = 1 WHERE key_set_by_user = 1;
+         ALTER TABLE tracks DROP COLUMN key_set_by_user;",
+    )
 }
 
 fn user_version(connection: &Connection) -> StoreResult<u32> {
@@ -1507,6 +1538,145 @@ mod tests {
             )
             .expect("track");
         assert_eq!(kept, (Some(6_400), Some("Am".to_string())));
+    }
+
+    /// Migration 15 as `main` briefly defined it before it became
+    /// `key_origin` (37e2331), verbatim.
+    const WITHDRAWN_MIGRATION_15_SQL: &str = r#"
+ALTER TABLE tracks ADD COLUMN key_set_by_user INTEGER NOT NULL DEFAULT 0
+    CHECK (key_set_by_user IN (0, 1));
+UPDATE track_analysis SET key_attempted_at_unix = NULL
+WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
+"#;
+
+    /// Every schema object's SQL text, by name.
+    fn schema_text(connection: &Connection) -> Vec<(String, Option<String>)> {
+        connection
+            .prepare("SELECT name, sql FROM sqlite_schema ORDER BY name")
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("schema")
+    }
+
+    fn fresh_schema_text() -> Vec<(String, Option<String>)> {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending(&connection).expect("fresh schema");
+        schema_text(&connection)
+    }
+
+    fn keys_and_origins(connection: &Connection) -> Vec<(Option<String>, i64)> {
+        connection
+            .prepare("SELECT musical_key, key_origin FROM tracks ORDER BY id")
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows")
+    }
+
+    #[test]
+    fn upgrade_from_the_withdrawn_migration_15_draft_restores_the_key_origin_schema() {
+        let mut draft_registry = MIGRATIONS[..19].to_vec();
+        draft_registry[14] = Migration {
+            version: 15,
+            description: "remember which keys the user typed",
+            step: MigrationStep::Sql(WITHDRAWN_MIGRATION_15_SQL),
+        };
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &draft_registry)
+            .expect("schema version 19 through the withdrawn draft");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path, musical_key, key_set_by_user, play_count) \
+                     VALUES (1, x'61', 'Am', 1, 42), (2, x'62', 'C', 0, 0), (3, x'63', NULL, 0, 0);
+                 INSERT INTO playlists (id, name) VALUES (1, 'Mix');
+                 INSERT INTO playlist_entries (playlist_id, track_id, position) VALUES (1, 1, 0);",
+            )
+            .expect("seed draft tracks");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        // The typed key stays the user's; every other key is imported, as
+        // the current migration 15 leaves it.
+        assert_eq!(
+            keys_and_origins(&connection),
+            [
+                (Some("Am".to_owned()), 1),
+                (Some("C".to_owned()), 0),
+                (None, 0)
+            ]
+        );
+        // The rest of each row and the rows that reference it survive.
+        assert_eq!(
+            connection
+                .query_row("SELECT play_count FROM tracks WHERE id = 1", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .expect("play count"),
+            42
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT track_id FROM playlist_entries WHERE playlist_id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .expect("playlist entry"),
+            1
+        );
+        assert_eq!(schema_text(&connection), fresh_schema_text());
+        assert_eq!(
+            connection.execute("UPDATE tracks SET key_origin = 2 WHERE id = 2", []),
+            Ok(1),
+            "a measured key can be stored"
+        );
+        assert!(
+            connection
+                .execute("UPDATE tracks SET key_origin = 3 WHERE id = 1", [])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn upgrade_from_v19_leaves_every_key_origin_alone() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..19]).expect("schema version 19");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path, musical_key, key_origin) \
+                     VALUES (1, x'61', 'Am', 1), (2, x'62', 'C', 2), (3, x'63', 'G', 0);",
+            )
+            .expect("seed version 19 tracks");
+        let changes_before = connection.total_changes();
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            connection.total_changes(),
+            changes_before,
+            "the repair writes nothing to a library that does not need it"
+        );
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            keys_and_origins(&connection),
+            [
+                (Some("Am".to_owned()), 1),
+                (Some("C".to_owned()), 2),
+                (Some("G".to_owned()), 0)
+            ]
+        );
+        assert_eq!(schema_text(&connection), fresh_schema_text());
     }
 
     #[test]

@@ -11,9 +11,9 @@
 //!   — every caller has to reach it through `libc::syscall`. Once `libc`
 //!   is a required dependency for that, `setpriority` lives in the same
 //!   place rather than pulling in a second crate to wrap one function.
-//! * The workspace bans `unsafe_code` everywhere else; the audited
-//!   `#![allow(unsafe_code)]` at the top of this file is the only
-//!   exception, and it covers a small, audited set of
+//! * The workspace bans `unsafe_code`; this file's audited
+//!   `#![allow(unsafe_code)]` is one of its few exceptions (the i18n
+//!   crate's locale adoption is another), and it covers a small, audited set of
 //!   `unsafe { libc::… }` calls — the two priority syscalls plus the
 //!   best-effort E-core affinity helper. The safe public API takes typed
 //!   enums so callers cannot pass an out-of-range nice value or an

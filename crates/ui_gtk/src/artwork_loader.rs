@@ -12,7 +12,7 @@
 //!
 //! `ArtworkLoader` separates that work and is shared by every view
 //! that needs an artwork texture or palette (Albums grid, album-detail
-//! panel, integrated top bar's now-playing tile, future zoom modal).
+//! panel, integrated top bar's now-playing tile, artwork zoom overlay).
 //!
 //! * A small pool of worker threads consumes requests from a shared queue
 //!   and runs the **entire** decode pipeline off the main thread: source

@@ -19,7 +19,7 @@ pub(crate) type AddToPlaylistCallback = Rc<dyn Fn(PlaylistId, Vec<TrackId>)>;
 /// submenu of the track context menu. The request carries either
 /// a single capability or the `All` bundle.
 pub(crate) type TrackAnalyzeRunCallback = Rc<dyn Fn(Vec<TrackId>, AnalysisRunRequest)>;
-/// Invoked when the user picks any entry inside the "Fetch"
+/// Invoked when the user picks any entry inside the "Retrieve"
 /// submenu of the track context menu.
 pub(crate) type TrackRetrieveRunCallback = Rc<dyn Fn(Vec<TrackId>, OnlineRunRequest)>;
 /// Queries whether an analysis capability is globally enabled (i.e.
@@ -27,7 +27,7 @@ pub(crate) type TrackRetrieveRunCallback = Rc<dyn Fn(Vec<TrackId>, OnlineRunRequ
 /// capability returns `true` here are rendered insensitive.
 pub(crate) type TrackAnalyzeEnabledQuery = Rc<dyn Fn(AnalysisCapability) -> bool>;
 /// Queries whether the online retrieval process is running right now.
-/// When it returns `true` the Fetch submenu entries are rendered
+/// When it returns `true` the Retrieve submenu entries are rendered
 /// insensitive — a manual retrieval is offered whenever the process is
 /// idle (regardless of the background toggle) and suppressed only while
 /// a run is in flight (issue #61).
@@ -443,7 +443,7 @@ impl TrackRowContextMenu {
         self
     }
 
-    /// Install the "Fetch\u{2026}" submenu. Counterpart of
+    /// Install the "Retrieve\u{2026}" submenu. Counterpart of
     /// [`Self::with_analyze_menu`] for the online scheduler. Unlike
     /// Analyze, the entries are insensitive only while the retrieval
     /// process is running (`busy`), not when the background toggle is
@@ -674,7 +674,7 @@ impl TrackRowContextMenu {
         }
         if let Some(retrieve) = &self.retrieve {
             section.append_submenu(
-                Some(&gettext("Fetch\u{2026}")),
+                Some(&gettext("Retrieve\u{2026}")),
                 &retrieve_submenu_model(
                     retrieve,
                     action_group,

@@ -19,8 +19,9 @@
 //! middle `BPM_KEY_WINDOW_SECS` of the track — not the opening seconds.
 //! The intro of a track (especially electronic music) is the least
 //! representative part: sparse, tame, often beatless. The middle is
-//! where the groove actually lives. The window is seeked to, so even on
-//! a long file we never decode the lead-in.
+//! where the groove actually lives. The window is seeked to, so a long
+//! file's lead-in is not decoded; only a file whose format cannot seek
+//! is decoded from the top, its lead-in dropped as it streams.
 //!
 //! The key reads the **whole** normal-length track, so it does not hang
 //! on which section the middle falls in, a segment of at most

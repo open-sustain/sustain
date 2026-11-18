@@ -5,7 +5,7 @@
 //!   * **Detail** — `DETAIL_SEGMENTS_PER_SECOND` segments per second
 //!     of audio. Time-resolution; suitable for the active-track
 //!     scrubber and for re-encoding into hardware-specific formats
-//!     downstream (e.g. Pioneer PWV3/PWV5 in a future export crate).
+//!     downstream (the Pioneer export's PWV3/PWV5 waveforms).
 //!   * **Preview** — `PREVIEW_SEGMENT_COUNT` segments, fixed
 //!     regardless of track length. Suitable for a thumbnail / pre-roll
 //!     waveform; derived by bucketing detail segments so we do not

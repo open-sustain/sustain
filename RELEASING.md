@@ -29,11 +29,17 @@ release.
    - working tree is not clean
    - local `main` is not in sync with `origin/main`
    - the target tag `vX.Y.Z[-track.N]` already exists locally or on origin
-4. Runs the full CI gate (unless `--skip-gate`):
+4. Runs the Rust part of the CI gate (unless `--skip-gate`):
    - `cargo fmt --all -- --check`
    - `cargo clippy --workspace --all-targets --locked -- -D warnings`
    - `cargo test --workspace --locked --no-fail-fast`
    - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --no-deps --document-private-items`
+
+   CI also runs checks this step does not: `typos`, the translation
+   catalog check (`cargo run -q --locked -p xtask -- i18n-check`), and its
+   dependency and license jobs. The helper pushes before CI has run them,
+   so run `typos` and the i18n check yourself first and let CI on the
+   preceding commit go green before releasing.
 5. Asks for confirmation, then:
    - rewrites `[workspace.package].version` in `Cargo.toml`
    - prepends a `<release version=… date=… type=…/>` entry inside
@@ -43,7 +49,8 @@ release.
 6. Shows the staged diff and asks for a final confirmation.
 7. Commits as `Release: bump workspace to X.Y.Z`, tags `vX.Y.Z`, and
    pushes the commit and then the tag to `origin`.
-8. Prints the URL of the running Release workflow.
+8. Prints the repository's Actions page, where the Release run for the
+   tag appears (`gh run list --workflow Release` finds it directly).
 
 The Release workflow handles the rest: build .deb (amd64 + arm64),
 verify install on Ubuntu 25.10 + 26.04, build Flatpak bundle, create
@@ -111,7 +118,8 @@ Start a new minor on alpha after the previous minor shipped stable:
 ./release minor alpha
 ```
 
-Preview a release without touching git:
+Preview a release without committing, tagging, or pushing (the edits
+are staged to show the diff, then restored):
 
 ```sh
 ./release patch alpha --dry-run
@@ -124,15 +132,21 @@ pushing the commit but before pushing the tag — the local state is
 recoverable:
 
 - **Commit on `main` but no tag pushed yet:** delete the local tag
-  with `git tag -d vX.Y.Z`, undo the commit with `git reset --soft
-  HEAD~1`, fix whatever was wrong, re-run `./release`. Do not push if
-  you intend to discard the commit.
+  with `git tag -d vX.Y.Z`, then undo the commit and its version edits
+  with `git reset --hard HEAD~1`. The helper refused to start on a dirty
+  tree, so the release commit holds only its own edits and this discards
+  nothing else. Fix whatever was wrong in a normal commit, then re-run
+  `./release`, which again needs a clean tree. Do not push if you intend
+  to discard the commit.
 - **Commit pushed, tag not pushed:** the commit is on origin; push the
   tag manually (`git push origin vX.Y.Z`) once you are happy with the
   state. The Release workflow only runs once the tag is pushed.
-- **Tag pushed but workflow failed:** fix the underlying problem in a
-  new commit (do not amend the release commit), then either re-run the
-  failed workflow from the Actions tab, or cut the next release.
+- **Tag pushed but workflow failed:** a re-run builds the tagged
+  revision again, so it only helps with a transient failure (a runner or
+  network hiccup); re-run the failed workflow from the Actions tab. A
+  failure caused by the code needs a fix in a new commit (do not amend
+  the release commit) shipped as the next release, with its own version
+  and tag.
   *Never* force-push or delete a published tag — the GitHub release
   and any downstream `.deb` install would point at a now-missing SHA.
 

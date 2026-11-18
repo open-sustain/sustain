@@ -55,8 +55,15 @@ Scan runs off the GTK main thread. SQLite writes are batched and the
 database runs in WAL mode. The status bar surfaces the spinner, a Cancel
 button, and the final summary. Cancellation is cooperative and skips the
 missing-files sweep so the un-walked portion of the library isn't
-mis-reported as missing. Unchanged files on a rescan are detected cheaply
-via `mtime + size` rather than re-decoded.
+mis-reported as missing; so does a scan that could not read part of the
+folder. Unchanged files on a rescan are detected cheaply via
+`mtime + size` rather than re-parsed. A file whose size or mtime changed is
+parsed again for its technical properties (duration, bitrate, size,
+embedded-artwork presence); its library fields stay as SQLite holds them.
+In **Keep my library organized** mode, a scan also repairs MP3 tags it
+recognizes as malformed (an invalid timestamp or undecodable text) so other
+applications can read them; in **Don't touch my files** mode it never
+writes to a file.
 
 ### Drag-and-drop import — *iso-iTunes*
 Dragging files or folders from Files (or any GNOME-compatible source) onto
@@ -67,8 +74,11 @@ state while a drag is hovered.
 Behavior follows the active library mode:
 
 - **Keep my library organized** — files are copied into the managed
-  `Artist/Album/NN Title.ext` layout, deduplicated by content hash so a
-  re-drop of the same audio isn't ingested twice.
+  `Artist/Album/NN Title.ext` layout, skipping any file byte-identical to
+  one already in the library, so re-dropping an unchanged file doesn't
+  ingest it twice. The comparison covers the whole file, tags included: a
+  copy whose tags differ (for example, after editing the managed copy's
+  metadata) is imported again.
 - **Don't touch my files** — files are indexed in place. A file that
   lives outside the configured library folder is left out, since
   reference mode never moves or copies.
@@ -105,8 +115,9 @@ moving files, with hidden hard-link recovery handles for the exact files being
 moved. On the next startup Sustain reconciles the journal so a
 crash mid-batch can't desync SQLite from the filesystem. Reconciliation
 runs unconditionally during library-service initialization, before any
-tracks reach the UI, so an interrupted batch is rolled forward before
-the first frame is drawn.
+tracks reach the UI, so before the first frame is drawn every move of an
+interrupted batch is either completed or undone, according to how far it
+got, and SQLite agrees with the files on disk.
 
 ### Supported audio formats — *iso-iTunes*
 Scans and imports recognize MP3, FLAC, Ogg Vorbis (`.ogg`, `.oga`),
@@ -115,9 +126,11 @@ Opus, the MP4 family (`.m4a`, `.m4b`, `.mp4`), WAV (`.wav`), and AIFF
 skipped silently during library walks.
 
 ### Duplicate detection on managed import — *iTunes-adjacent*
-When adding external files in managed mode, Sustain skips files that are
-already present in the library by content hash, with file-size as a
-cheap pre-filter. Plain in-place scans do **not** hash file contents.
+When adding external files in managed mode, Sustain skips files whose
+bytes are identical to a file already in the library (a whole-file hash,
+with file size as a cheap pre-filter); nothing about the hash is stored.
+A track's identity in the library is its relative path, not its content.
+Plain in-place scans do **not** hash file contents.
 
 ### Path-affecting metadata edits — *iso-iTunes*
 Editing artist, album artist, composer, album, title, track number, disc
@@ -150,7 +163,7 @@ on the extra row in the meantime goes with that row.
 
 ### Replace low-bitrate audio from YouTube — *Sustain-native*
 For a present track at or below 192 kbps, the row context menu exposes
-**Fetch... → Audio from YouTube**. Paste one YouTube video URL and Sustain
+**Retrieve… → Audio from YouTube**. Paste one YouTube video URL and Sustain
 asks the separately-installed `yt-dlp` and FFmpeg tools for the best available
 audio. Before publishing anything, Sustain rejects unsupported output,
 material duration mismatches, unknown or junk-level bitrate, and downloads
@@ -181,17 +194,24 @@ context menu.
 
 ### Albums — *iTunes-adjacent*
 The Albums entry under LIBRARY opens a full-width album-cover grid.
-Tiles group by album (title + album artist + year). Clicking the
-cover button on a tile plays the album in isolation. The grid
-intentionally searches album-level fields only (title, artist, year),
-not individual track titles.
+Tiles group by album title and album artist (the track artist when no
+album artist is set; compilations without one share a bucket), so two
+releases with the same title and artist share a tile, which shows the
+first year any of its tracks carries. Clicking a tile opens its detail
+panel below the row, whose Play and Shuffle buttons play the album in
+isolation; a track there plays from that track. The grid intentionally
+searches album-level fields only (title, artist, year), not individual
+track titles.
 
 ### Duplicates — *iTunes-adjacent*
 The Duplicates entry under LIBRARY runs a deferred, off-thread scan and
 shows only candidate groups. Loose matching folds case, diacritics, and
-whitespace for artist + title. A **Strict matching** toggle also requires
-the same album and a duration within two seconds. Groups stay adjacent
-and visually banded.
+whitespace for artist + title, and still keeps apart two tracks whose
+durations differ by more than 30%, or where only one is marked live (the
+word "live" in its title or album). A **Strict matching** toggle also
+requires the same album and a duration within two seconds; two tracks
+that both lack a duration pass that check. Groups stay adjacent and
+visually banded.
 
 When both tracks of a candidate pair carry an analysed waveform, the scan
 also compares their audio — *Sustain-native*. It aligns the two
@@ -216,7 +236,9 @@ this way. The audio file defaults to the highest quality (highest
 bitrate, lossless breaking a tie) but stays overridable, so a 16-bit
 FLAC can be kept over a larger 24-bit one; metadata fields default to a
 cherry-pick of populated values, with the oldest populated year
-preferred; the rating defaults to the highest available; and a per-column
+preferred and the compilation flag taken from an original release when
+one is in the group (a "not a compilation" value first, then an unset
+flag, and "compilation" only when no copy says otherwise); the rating defaults to the highest available; and a per-column
 "Track N" button takes every tag and the rating from one track at once.
 Embedded artwork is previewed asynchronously and
 presets the highest-resolution available image. Play count, skips, and
@@ -242,7 +264,9 @@ affect cold-start time.
 same recording. Groups that only the tags suggest are left for manual
 review. A preview lists each group with the file it keeps (codec,
 bitrate, duration, size and path), how many copies it removes, and the
-value it keeps for every field the copies disagree on. Any group can be
+value it keeps for every editable metadata field the copies disagree on;
+the rating and artwork follow the stated rule (highest rating,
+highest-resolution artwork) and are not itemised. Any group can be
 unchecked, and one confirmation starts the batch. Each group merges
 exactly like **Consolidate to single track** with its preset choices:
 best audio, highest rating, highest-resolution artwork, cherry-picked
@@ -252,11 +276,12 @@ edited, re-rated or replaced since the preview, or whose audio no longer
 verifies, is left alone; a play in the meantime does not count as a
 change. The batch runs in the background, one journaled merge at a time;
 **Cancel** stops it before the next merge. The final notification
-reports how many groups merged and how many were left alone, with the
-reason for each.
+reports how many groups merged and how many tracks they removed, then
+counts the groups left alone by reason (changed since the preview, no
+longer verified, failed, cancelled).
 
 ### Statistics — *Sustain-native*
-The third entry under LIBRARY opens a single scrollable page of
+The last entry under LIBRARY opens a single scrollable page of
 whole-library diagnostic charts coloured from the system accent colour.
 A row of headline figures opens it — tracks, total library duration,
 size on disk, and total plays — its tiles reflowing onto fewer per line in a
@@ -310,20 +335,22 @@ slides the sidebar in and out. Collapsed, the Music and Albums views
 occupy the full window width; the button stays in place so the
 sidebar can be brought back. The collapsed state is persisted across
 launches. While the sidebar is collapsed there is no in-app switcher
-for the LIBRARY entries — bring the sidebar back to change view.
+for the LIBRARY entries — bring the sidebar back to change view (actions
+such as **Show Album** still switch views). Dragging the divider resizes
+the sidebar, and the width is kept across launches.
 
-### Collapsible sections — *iTunes-adjacent*
-The LIBRARY and PLAYLISTS headers are disclosure rows: each carries a
-caret (▾ open, ▸ folded) and the whole row is the toggle. Clicking a
-header folds that section, hiding its rows; folding LIBRARY lets the
-PLAYLISTS list rise to fill the freed space. The two sections fold
-independently. With a header focused, **Left** folds it and **Right**
-unfolds it. Each section's fold state is persisted across launches.
+### Collapsible playlists section — *iTunes-adjacent*
+The PLAYLISTS header is a disclosure row: it carries a caret (▾ open,
+▸ folded) and the whole row is the toggle. Clicking it folds the
+section, hiding its rows. With the header focused, **Left** folds it and
+**Right** unfolds it. The fold state is persisted across launches. The
+LIBRARY heading is static. Preferences can hide the Duplicates and
+Statistics entries.
 
 ### Selection persistence — *Sustain-native*
 The sidebar's active row (Music, Albums, Statistics, or a specific playlist), its
-collapsed state, and the fold state of the LIBRARY and PLAYLISTS
-sections are restored on next launch. Transient views such as Duplicates
+collapsed state, and the fold state of the PLAYLISTS section are restored
+on next launch. Transient views such as Duplicates
 and connected devices are deliberately not restored.
 
 ### Window size — *iso-iTunes*
@@ -342,7 +369,10 @@ Deleting a playlist does not remove its tracks from the library.
 
 ### Playlist folders — *iso-iTunes*
 Playlists and folders can be nested inside folders. Sidebar drag-and-drop
-moves entries between folders.
+moves entries between folders. Every sidebar playlist, smart playlist, and
+folder has a right-click **Rename** (inline) and **Delete**; deleting a
+folder asks for confirmation and removes every playlist, smart playlist,
+and folder inside it, while the tracks stay in the library.
 
 ### Smart playlists — *iso-iTunes*
 Rule-based saved queries with iTunes-style operators: `is`,
@@ -383,7 +413,9 @@ playlist's name in bold next to Play and Shuffle buttons that match the
 album-detail header's behaviour, with a muted second line summarising
 the visible set as `N songs, X hours/minutes/days`. Search filtering
 updates the summary so the count always matches what's drawn below.
-The header hides for folder selections and for empty states.
+An empty playlist, or one whose tracks the search filters out entirely,
+keeps its header with a zero summary; a folder selection, which is not
+itself a playable track set, shows no header.
 
 ### Per-playlist analysis & online retrieval — *Sustain-native*
 Right-clicking a playlist or smart playlist exposes two submenus —
@@ -415,8 +447,9 @@ The same **Analyze** and **Retrieve** submenus appear on the track
 context menu (Music view and the playlist track table), so the user can
 target the currently-selected tracks instead of a whole playlist.
 Naming, menu shape, and gating semantics match the per-playlist version
-exactly — Analyze greys out when globally covered, Retrieve greys out
-only while a run is in flight.
+exactly — an individual Analyze capability greys out while its
+background toggle is on (Analyze → All stays available), and Retrieve
+greys out only while a run is in flight.
 
 **Analyze** filters the input through the library store before
 dispatching, so a re-run on tracks that already have the requested
@@ -490,8 +523,10 @@ visible.
 Shuffle and repeat toggle buttons sit in the now-playing tile.
 Shuffle cycles through Off → Pure → Smart (see *Smart Shuffle*
 below) and the chosen mode is persisted across restarts. Repeat
-cycles through Off → Repeat-One → Repeat-All; repeat state is
-session-only and not persisted.
+cycles through Off → Repeat All → Repeat One, Repeat One drawn with
+the single-song glyph; repeat state is session-only and not persisted.
+Repeat One replays a track that ends by itself, while Next and Previous
+still step through the list.
 
 ### Smart Shuffle — *Sustain-native*
 A "Smart" third state on the transport's shuffle button chooses each
@@ -549,11 +584,11 @@ survives restarts. There is no cold-start gate: Smart Shuffle works from
 the first track, degrading gracefully on tracks with sparse metadata or
 no audio analysis.
 
-Smart Shuffle only applies to library-wide queues. Single-album or
-single-playlist playback uses Pure shuffle even when Smart is the
-persisted setting, because "what follows this well from the whole
-library" is not a meaningful question inside a closed set the user has
-already chosen.
+Smart Shuffle applies to the whole library and to regular playlists,
+the stable sets a listener returns to. Playing an album, a smart
+playlist, search results, the Duplicates groups, or an audio CD uses
+Pure shuffle even when Smart is the persisted setting, because those
+are narrow or ad-hoc sets the user has chosen for a specific listen.
 
 ### Play order follows the list — *iso-iTunes*
 Double-clicking a track plays the list it sits in — Music, a playlist, a
@@ -653,15 +688,16 @@ the decimal, while ID3 `TBPM` (MP3, WAV, AIFF) and MP4 `tmpo` hold whole beats
 and receive the nearest one — the library keeps the exact value either
 way. Smart-playlist BPM rules compare whole beats.
 
-Current validation snapshot, with the default 76–155 BPM band: every
-private-reference track whose labelled tempo falls inside the band lands
-within +/-2 BPM (22/22). The all-core private set scores 84.6% overall
-because four deliberately-kept labels sit at or below the 76 BPM floor;
-GiantSteps Tempo scores 61.3% within +/-2 BPM because much of its fast
-160–185 BPM material is outside the shipped range and folds to half
-tempo. Those misses are range artefacts, not known tempogram defects.
-Against Rekordbox's own analysis of 3,902 dance tracks, 88.1% of tempos
-match to within 0.05 BPM and 95.1% to the whole beat.
+Validation of the version 10 tempo estimator (June 2026, before the
+beat tracker described below measured tempos to the hundredth), with the
+default 76–155 BPM band and a +/-2 BPM tolerance: every private-reference
+track whose labelled tempo falls inside the band landed within tolerance
+(22/22). The all-core private set scored 84.6% overall because four
+deliberately-kept labels sit at or below the 76 BPM floor; GiantSteps
+Tempo scored 61.3%, largely because much of its fast 160–185 BPM material
+is outside the shipped range and folds to half tempo. With the current
+beat tracker, against Rekordbox's own analysis of 3,902 dance tracks,
+88.1% of tempos match to within 0.05 BPM and 95.1% to the whole beat.
 
 ### Beat grid — *Sustain-native*
 Tempo analysis also places a constant beat grid: every beat of the track
@@ -750,9 +786,14 @@ it on forces the BPM and Key toggles on and locks them. Turning Audio
 off stops all three background capabilities together, so cancelling the
 heavy pass cannot accidentally start BPM and Key queues. With any toggle
 on, a paced multi-worker pool walks `tracks_needing_analysis` and runs
-only the missing capabilities per track; tracks whose value is already
-populated (whether from prior analysis or from a file tag at import) are
-skipped. Worker count and CPU/IO priority follow the Background resource
+only the capabilities due per track: an enabled capability is due until
+the track has an attempt recorded at the current analyzer version, and
+the Audio pass is also due again when the waveform cache has lost the
+track's waveform. A value read from a file tag does not make a
+capability less due. What a run may replace is the field's own rule:
+the measured BPM replaces an imported one but never a typed one, and a
+measured key fills an empty key or replaces an earlier measurement but
+leaves an imported or typed key alone. Worker count and CPU/IO priority follow the Background resource
 usage slider in the same tab; on Intel hybrid CPUs the polite presets
 (Innocuous, Balanced) additionally pin their workers to the efficiency
 cores, keeping background analysis off the performance cores playback
@@ -779,11 +820,14 @@ track is tagged with an existing spelling rather than a near-duplicate
 that would splinter listening stats and smart-playlist membership.
 A genre the library already spells several ways is offered once, under
 the spelling most tracks use.
-The File tab shows path, duration, bitrate, sample rate, and channels.
+The File tab shows the file kind, duration, size on disk, bit rate,
+sample rate, channels, modification date, and location.
 The Artwork tab shows the embedded cover (or a missing-art placeholder)
 with add, paste, and remove actions. Paste (also `Ctrl+V` on that tab)
 takes an image copied from another application, or an image file copied
-in a file manager. The Lyrics tab shows the raw lyrics text.
+in a file manager. The Lyrics tab edits the plain lyrics text: changing
+or clearing it saves like any other field and is mirrored to the file's
+lyrics tag. (Now Playing's lyrics face only displays them.)
 
 Opening Get Info on a track is `Ctrl+I` or the row context menu.
 Previous/Next buttons walk the displayed track order without closing the
@@ -850,16 +894,22 @@ Providers:
   then on the iTunes Search API, by album artist and album title;
   a cover is taken only from a result whose artist and title are the
   album's, so a same-named album by someone else is never embedded.
-- **Tags** — MusicBrainz fills missing fields (title, artist, album,
-  album artist, year, track number, genre…) from a matched release.
+- **Tags** — MusicBrainz fills missing title, artist, album, year,
+  genre, and (for a track with an album) track number, track total, and
+  disc number from a matched release. Album artist is not filled.
 - **Lyrics** — LRClib lookup, preferring synced LRC when available
   and falling back to plain text.
 
 The worker is intentionally conservative: capabilities are
 missing-only (a track that already has artwork, a populated field,
-or stored lyrics is not contacted), every attempt is stamped so
-the next sweep does not re-fetch the same track, and per-host rate
-limits hold network use polite even on a fresh library.
+or both plain and synced lyrics is not contacted), every completed
+attempt — a match, no match, or a failure — is stamped so the next
+sweep does not re-fetch the same track, and per-host rate limits hold
+network use polite even on a fresh library. A track that already has
+plain lyrics can still be looked up for its timed lines. A provider's
+"too many requests" answer is the exception: it stops the run for the
+provider's cool-down and leaves the interrupted capability unstamped,
+so the track is tried again once the cool-down has passed.
 
 Each capability also has a manual entry point. Now Playing offers an
 immediate artwork lookup for a track without a cover, and the per-playlist and
@@ -871,9 +921,11 @@ the "missing-only" rule (a track that already has the data is skipped)
 and never overwrites an existing value.
 
 ### Artwork cache — *Sustain-native*
-Embedded artwork is decoded once and cached in SQLite. Now Playing,
-the Albums grid, and Get Info all draw from the same cache; editing or
-clearing artwork invalidates the cache so every surface refreshes.
+Embedded artwork is cached in SQLite, one image per display size and
+source fingerprint, each generated the first time a surface asks for that
+size. Now Playing, the Albums grid, and Get Info all draw from the same
+cache; editing or clearing artwork invalidates it so every surface
+refreshes.
 
 ---
 
@@ -886,22 +938,25 @@ existing, and feed both the table and the smart-playlist rule engine.
 Editable inline in the table and in Get Info. Persists to SQLite *and*
 to the file's native rating frame.
 
-### Play count — *iso-iTunes*
-Incremented when a track plays past a completion threshold (not on
-every start). Reset button exists in Get Info. SQLite-only.
+### Play count — *iTunes-adjacent*
+Incremented once per playback when the track has actually been heard
+for half its duration, or for 10 minutes on a track longer than 20
+minutes (paused time does not count; this threshold is Sustain's own).
+Reset button exists in Get Info. SQLite-only.
 
-### Skip count — *iso-iTunes*
-Incremented when the user skips a track before the completion
-threshold. Column is hidden by default; surface it through the column
+### Skip count — *iTunes-adjacent*
+Incremented when the user presses Next before the track has reached
+the play threshold; reaching the end, Previous, or picking another
+track does not count as a skip. Column is hidden by default; surface it through the column
 selector. SQLite-only.
 
 ### Last played — *iso-iTunes*
 Timestamp of the most recent threshold-crossing playback. SQLite-only.
 
-### Last skipped — *iTunes-adjacent*
-Timestamp of the most recent pre-threshold skip. Column hidden by
-default. SQLite-only. iTunes tracked the count but not the timestamp;
-Sustain stores both so smart-playlist rules can use it.
+### Last skipped — *iso-iTunes*
+Timestamp of the most recent pre-threshold skip (iTunes' Skip Date,
+which the iTunes import carries over). Column hidden by default.
+SQLite-only; smart-playlist rules can use it.
 
 ---
 
@@ -966,9 +1021,12 @@ maximized or fullscreen) and explicit resize handles on every edge and
 corner. The Preferences window uses the same frame style.
 
 ### Status bar with notifications lane — *iTunes-adjacent*
-The bottom bar shows total track count, total play duration, and total
-library size on disk on the left, and a single notification lane on the
-right. Every background-task update, command outcome, and async
+The bottom bar keeps the sidebar toggle and Settings entry on the left,
+a centred summary in the middle, and a single notification lane on the
+right. The summary counts the tracks, play duration, and size on disk of
+the set being shown: the library under the current search in Songs and
+Albums, the selected playlist (as filtered) in Playlists, and the tracks of
+the candidate groups in Duplicates. Every background-task update, command outcome, and async
 tag-write result flows through the same lane via `NotificationCenter`.
 The lane owns its own auto-dismiss and animation; producers never poke
 a status widget directly.
@@ -1004,9 +1062,12 @@ thousands separator.
 Right-clicking a track (or selection) in the Music view or a playlist
 view exposes the following actions, separated into visually distinct
 groups. Rows backed by keyboard shortcuts show the registered shortcut
-at the right edge of the menu:
+at the right edge of the menu. The menu follows iTunes; its Analyze and
+Retrieve submenus are *Sustain-native* (see *Per-track analysis & online
+retrieval*):
 
-- **Add to Playlist** — submenu showing all playlists, nested by folder
+- **Add to Playlist** — submenu listing every regular playlist, each
+  labelled with its folder path (`Folder / Playlist`)
 - **Play Next** — insert at head of the Up Next queue
 - **Add to Queue** — append to the tail of the Up Next queue
 - **Get Info** — open the multi-tab editor (`Ctrl+I`)
@@ -1016,11 +1077,13 @@ at the right edge of the menu:
   location (`Ctrl+R`)
 - **Analyze** — submenu (BPM / Key / Audio / All) running the
   chosen analysis pass on the selected tracks; per-capability items
-  are insensitive when the matching global toggle is on
-- **Retrieve** — submenu (Lyrics / Tags / Artwork / All) running the
-  chosen online retrieval pass on the selected tracks; same
-  insensitive-when-globally-covered policy
-- **Remove from playlist** — when invoked from a playlist view; removes
+  are insensitive when the matching global toggle is on, All stays
+  available
+- **Retrieve** — submenu (Lyrics / Tags / Artwork / All, plus Audio from
+  YouTube for a low-bitrate track) running the chosen online retrieval
+  on the selected tracks; insensitive only while a retrieval run is in
+  flight, whatever the background toggles
+- **Remove from Playlist** — in a regular playlist's view; removes
   from that playlist only, leaves the track in the library
 - **Remove from library** — delete the library record only, leave the
   file on disk
@@ -1089,6 +1152,13 @@ manually editing Sustain's database track tags or bulk-importing
 external library history into SQLite. Listening statistics remain
 SQLite-only and are never written to file tags.
 
+Two exceptions follow the per-edit mirror rules. BPM is written only
+when `bpm_set_by_user` is set and the key only when its `key_origin` is
+typed (`1`); imported and measured values stay library-only, so a database
+edit meant to reach the files must also record that provenance. A track
+whose row is marked missing is skipped, even if its file has returned
+since the last scan; rescan first to clear the mark.
+
 ---
 
 ## Keyboard shortcuts — *iso-iTunes*
@@ -1139,6 +1209,9 @@ generated `.sustain-device-id` marker written at its root (with the filesystem
 volume id as a fallback if the marker is deleted), so the panel reopens with the
 playlists and artists you ticked for that device pre-filled. The marker is only
 written on first sync — Sustain never touches a device until you ask it to.
+**Forget device** in the panel discards that saved configuration — ticked
+playlists and artists, layout, and the sync history — without touching
+the files on the device.
 
 Re-syncing is **incremental**. Per device, Sustain keeps a manifest of what it
 wrote there (track → on-device path + content fingerprint), resolves the ticked
@@ -1258,7 +1331,9 @@ from Sustain's own library model.
 The disc is identified by a **MusicBrainz Disc ID** computed from its table of
 contents (via libdiscid) — a single disc-id lookup, not per-track title guessing.
 When exactly one release matches it is used automatically; when several pressings
-match, a release selector appears and a choice is required before importing; when
+match, a release selector appears with the most likely one preselected (a regular
+album over a compilation, then the earliest pressing), which the user can change
+before importing; when
 nothing matches, or there is no network, a valid `Audio CD` / `Unknown Artist` /
 `Track NN` fallback is rendered so an offline import still works. The chosen
 release's front cover is fetched once from the Cover Art Archive, shown in the
@@ -1324,9 +1399,21 @@ once still share those desktop names.
 
 ## Key locations
 
-- Config: `~/.config/sustain/settings.toml`
-- Database: `~/.local/share/sustain/library.sqlite`
-- Lock file: `~/.local/share/sustain/library.sqlite.lock`
+By default Sustain follows the XDG base directories:
+
+- Config: `$XDG_CONFIG_HOME/sustain/settings.toml` (`~/.config/sustain/settings.toml`)
+- Database: `$XDG_DATA_HOME/sustain/library.sqlite` (`~/.local/share/sustain/library.sqlite`)
+- Lock file: the database path with `.lock` appended
+- Cache (artwork, waveforms): `$XDG_CACHE_HOME/sustain` (`~/.cache/sustain`)
+
+Developer flags isolate an instance from those locations (`sustain --help`):
+`--config <path>` and `--database <path>` pin one file each, and
+`--local-scope` (alias `--dev`) keeps `sustain.toml`, `sustain.sqlite`,
+and `sustain.cache/` in the working directory. As soon as any of them is
+given, Sustain never falls back to the XDG locations: unpinned slots
+sit beside the named file, or in the working directory under
+`--local-scope`. `--profile` prints startup performance landmarks to
+stderr.
 
 ---
 

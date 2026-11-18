@@ -32,7 +32,7 @@ XML, streamable. Only `<entry type="song">` is relevant; skip `iradio`,
 | `<duration>`        | int (seconds)                                | `duration_seconds`       |
 | `<file-size>`       | int (bytes)                                  | `file_size_bytes`        |
 | `<bitrate>`         | int (kbps)                                   | `bitrate_kbps`           |
-| `<beats-per-minute>`| int                                          | `bpm`                    |
+| `<beats-per-minute>`| int                                          | `bpm_hundredths` (×100)  |
 | `<comment>`         | string                                       | `comments`               |
 | `<rating>`          | float **in system locale** (0..=5)           | `rating` (0..=5 int)     |
 | `<play-count>`      | int                                          | `play_count`             |
@@ -51,11 +51,11 @@ Quirks worth hard-coding:
 - Rhythmbox does **not** track skip counts. Leave `skip_count` and
   `last_skipped_at_unix` alone.
 - Rhythmbox does **not** write ratings to file tags — only to its own DB.
-  Consequence: if you backfill `tracks.rating` from Rhythmbox without also
-  embedding the rating into the audio file (POPM frame on MP3, `RATING`
-  Vorbis comment on FLAC/Ogg, iTunes MP4 `rate` atom), the next Sustain
-  rescan will overwrite the rating column with `NULL`. Either embed and let
-  the scan pick it up, or accept that rescans erase the work.
+  Backfill `tracks.rating` directly; a Sustain rescan keeps it, because the
+  library row, not the file, is the durable store. There is no need to
+  embed ratings into the audio files first.
+- `<location>` is a percent-encoded URI: decode it to the path's raw bytes
+  and bind `relative_path` as a BLOB (see the main guide).
 
 ## playlists.xml
 

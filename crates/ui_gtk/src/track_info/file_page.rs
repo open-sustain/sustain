@@ -83,8 +83,6 @@ fn build_grid(track: &Track, absolute_path: Option<&Path>) -> gtk::Grid {
         &format_channels(track.metadata.channels),
     );
     row += 1;
-    attach_readonly_field(&grid, row, &gettext("Format"), &format_kind(absolute_path));
-    row += 1;
     attach_readonly_field(
         &grid,
         row,

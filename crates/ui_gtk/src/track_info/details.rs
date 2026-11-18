@@ -17,6 +17,7 @@ use crate::metadata_diff::{
     text_diff_preserve_newlines,
 };
 use crate::rating_stars::RatingStars;
+use crate::status_bar::grouped;
 
 use super::{
     NUMBER_ENTRY_WIDTH_CHARS, PAIR_ENTRY_WIDTH_CHARS,
@@ -144,7 +145,7 @@ impl DetailsPage {
         let play_count_label = gtk::Label::new(None);
         play_count_label.set_xalign(0.0);
         play_count_label.set_hexpand(true);
-        play_count_label.set_text(&initial_statistics.play_count.to_string());
+        play_count_label.set_text(&grouped(initial_statistics.play_count));
         let reset_button = gtk::Button::with_label(&gettext("Reset"));
         let reset_state = stats_reset.clone();
         let play_label_for_reset = play_count_label.clone();
@@ -161,7 +162,7 @@ impl DetailsPage {
         let skip_count_label = gtk::Label::new(None);
         skip_count_label.set_xalign(0.0);
         skip_count_label.set_hexpand(true);
-        skip_count_label.set_text(&initial_statistics.skip_count.to_string());
+        skip_count_label.set_text(&grouped(initial_statistics.skip_count));
         attach_field(&grid, row, &gettext("Skip count"), &skip_count_label);
         row += 1;
 
@@ -262,9 +263,9 @@ impl DetailsPage {
         self.play_count_reset.set(false);
         self.reset_button.set_sensitive(true);
         self.play_count_label
-            .set_text(&statistics.play_count.to_string());
+            .set_text(&grouped(statistics.play_count));
         self.skip_count_label
-            .set_text(&statistics.skip_count.to_string());
+            .set_text(&grouped(statistics.skip_count));
         self.last_played_label
             .set_text(&format_stat_date(statistics.last_played_at));
         self.last_skipped_label

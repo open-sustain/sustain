@@ -44,8 +44,8 @@ impl ApplicationRuntime {
                 self.on_shuffle_mode_changed();
                 self.persist_playback_shuffle_mode()
             }
-            PlaybackCommand::ToggleRepeat => {
-                self.playback_queue.toggle_repeat_mode();
+            PlaybackCommand::CycleRepeatMode => {
+                self.playback_queue.cycle_repeat_mode();
                 Ok(())
             }
             PlaybackCommand::PlayTrack { track_id, queue } => {
@@ -125,7 +125,9 @@ impl ApplicationRuntime {
             NotificationSeverity::Error,
             self.playback_backend_error_text(&error),
         );
-        self.play_next_track()
+        // The failed track did not end: replaying it under Repeat One
+        // would fail again, forever.
+        self.play_track_after_current()
     }
 
     /// The sound server asked playback to pause — the output device went
@@ -455,7 +457,20 @@ impl ApplicationRuntime {
         Ok(())
     }
 
+    /// Continue after the current track ended by itself: play it again
+    /// under Repeat One, otherwise move on.
     fn play_next_track(&mut self) -> ApplicationRuntimeResult<()> {
+        self.play_adjacent_playable_track(|runtime| {
+            runtime
+                .playback_queue
+                .repeated_track_id()
+                .or_else(|| runtime.next_track_candidate())
+        })
+    }
+
+    /// Step past the current track, which Repeat One does not hold back:
+    /// the user skipped it, or it failed to play.
+    fn play_track_after_current(&mut self) -> ApplicationRuntimeResult<()> {
         self.play_adjacent_playable_track(Self::next_track_candidate)
     }
 
@@ -592,7 +607,7 @@ impl ApplicationRuntime {
             let now = self.clock.now();
             self.commit_skip_increment(track_id, now)?;
         }
-        self.play_next_track()
+        self.play_track_after_current()
     }
 
     /// Drive play-statistics accounting from the injected monotonic clock.

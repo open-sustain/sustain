@@ -40,8 +40,10 @@ fn playback_queue_wraps_at_edges_when_repeat_all_is_enabled() {
     assert_eq!(last_queue.next_track_id(), Some(track_id(1)));
 }
 
+/// Repeat One replays a track that ends by itself, while the user's
+/// Next and Previous still step through the list, as in iTunes.
 #[test]
-fn playback_queue_repeats_current_track_when_repeat_one_is_enabled() {
+fn playback_queue_repeats_only_a_track_that_ends_under_repeat_one() {
     let queue = queue_with_options(
         track_id(2),
         PlaybackOptions {
@@ -50,8 +52,23 @@ fn playback_queue_repeats_current_track_when_repeat_one_is_enabled() {
         },
     );
 
-    assert_eq!(queue.previous_track_id(), Some(track_id(2)));
-    assert_eq!(queue.next_track_id(), Some(track_id(2)));
+    assert_eq!(queue.repeated_track_id(), Some(track_id(2)));
+    assert_eq!(queue.previous_track_id(), Some(track_id(1)));
+    assert_eq!(queue.next_track_id(), Some(track_id(3)));
+}
+
+#[test]
+fn playback_queue_repeats_nothing_outside_repeat_one() {
+    for repeat_mode in [RepeatMode::Off, RepeatMode::All] {
+        let queue = queue_with_options(
+            track_id(2),
+            PlaybackOptions {
+                shuffle_mode: ShuffleMode::Off,
+                repeat_mode,
+            },
+        );
+        assert_eq!(queue.repeated_track_id(), None, "{repeat_mode:?}");
+    }
 }
 
 #[test]
@@ -619,6 +636,38 @@ fn lazy_queue_move_to_track_within_history_walks_cursor() {
     assert_eq!(
         queue.play_order_track_ids(),
         &[track_id(1), track_id(3), track_id(2)]
+    );
+}
+
+#[test]
+fn lazy_queue_replaying_the_current_entry_keeps_its_place_in_history() {
+    // Repeat One replays the current track through `move_to_track`. When
+    // that track also appears later in the history, the replay must stay
+    // on the entry being played rather than jump to the later copy, which
+    // would drop everything picked in between from Up Next.
+    let mut queue = queue_with_options(
+        track_id(1),
+        PlaybackOptions {
+            shuffle_mode: ShuffleMode::Smart,
+            repeat_mode: RepeatMode::One,
+        },
+    );
+    for pick in [2, 3, 1] {
+        assert!(queue.lazy_append_pick(track_id(pick)));
+        assert!(queue.move_to_track(track_id(pick)));
+    }
+    // history = [1, 2, 3, 1]; step back to its first entry.
+    for previous in [3, 2, 1] {
+        assert!(queue.move_to_track(track_id(previous)));
+    }
+    assert_eq!(queue.next_track_id(), Some(track_id(2)));
+
+    assert!(queue.move_to_track(track_id(1)));
+    assert_eq!(queue.current_track_id(), Some(track_id(1)));
+    assert_eq!(queue.next_track_id(), Some(track_id(2)));
+    assert_eq!(
+        queue.play_order_track_ids(),
+        &[track_id(1), track_id(2), track_id(3), track_id(1)]
     );
 }
 

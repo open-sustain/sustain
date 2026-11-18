@@ -7,12 +7,13 @@
 //! Given the track playing now, Smart Shuffle chooses a next track
 //! from the library that feels like a *continuation* of it — the same
 //! mood, flow, and thread the listener is already inside. It is a
-//! **sequencer**, not a recommender: every score is a function of the
-//! *pair* (X, Y), never of the candidate Y in isolation. In a
-//! hand-curated library every track is already liked, so there is
-//! nothing to learn about whether the user likes Y; what remains is
-//! the largely-objective, perceptual question of whether Y *follows* X
-//! well.
+//! **sequencer**, not a recommender: the affinity at the heart of every
+//! score is a function of the *pair* (X, Y). In a hand-curated library
+//! every track is already liked, so there is nothing to learn about
+//! whether the user likes Y; what remains is the largely-objective,
+//! perceptual question of whether Y *follows* X well. The only terms
+//! about Y alone are the user's own rating, as a small prior, and
+//! penalties against repeating what was just heard.
 //!
 //! ## No learning, by design
 //!

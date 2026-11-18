@@ -253,7 +253,7 @@ pub fn pick_next_track(
                 &scored,
                 pool_size,
                 &probabilities,
-                chosen.track.id,
+                chosen_index,
             )
         });
 
@@ -532,24 +532,32 @@ pub struct PickDebugEntry {
     pub chosen: bool,
 }
 
-/// Top candidates with their score breakdown, ordered by score.
+/// Top candidates with their score breakdown, ordered by score; always
+/// includes the chosen candidate, appended last when it ranks below the
+/// top sample.
 #[derive(Clone, Debug)]
 pub struct PickDebug {
     pub seed_track_id: TrackId,
     pub entries: Vec<PickDebugEntry>,
 }
 
+/// Describe the top [`DEBUG_TOP_K`] candidates, plus the chosen one when
+/// temperature sampling reached below that sample: the trace exists to
+/// explain the pick, so it never omits it. `chosen_rank` is the 0-based
+/// position of the pick in `scored`, whose first `pool_size` entries
+/// form the pool.
 fn build_debug(
     seed_track_id: TrackId,
     scored: &[Scored<'_>],
     pool_size: usize,
     probabilities: &[f32],
-    chosen_id: TrackId,
+    chosen_rank: usize,
 ) -> PickDebug {
-    let entries = scored
-        .iter()
-        .take(DEBUG_TOP_K)
-        .enumerate()
+    let top = 0..scored.len().min(DEBUG_TOP_K);
+    let chosen_below_top = (!top.contains(&chosen_rank)).then_some(chosen_rank);
+    let entries = top
+        .chain(chosen_below_top)
+        .filter_map(|rank| scored.get(rank).map(|entry| (rank, entry)))
         .map(|(rank, entry)| {
             let in_pool = rank < pool_size;
             PickDebugEntry {
@@ -575,7 +583,7 @@ fn build_debug(
                 total_score: entry.score,
                 pool_rank: in_pool.then_some(rank + 1),
                 sample_prob: probabilities.get(rank).copied().filter(|_| in_pool),
-                chosen: entry.track.id == chosen_id,
+                chosen: rank == chosen_rank,
             }
         })
         .collect();
@@ -665,7 +673,10 @@ mod tests {
         TrackMetadata, TrackRelativePath,
     };
 
-    use super::{PickContext, PickMode, SAME_ALBUM_PENALTY, pick_next_track, same_album_penalty};
+    use super::{
+        DEBUG_TOP_K, PickContext, PickMode, SAME_ALBUM_PENALTY, Scored, build_debug,
+        pick_next_track, same_album_penalty,
+    };
 
     fn track(id: i64, metadata: TrackMetadata) -> Track {
         Track {
@@ -704,6 +715,53 @@ mod tests {
                 ..TrackMetadata::default()
             },
         )
+    }
+
+    fn scored(track: &Track, score: f32) -> Scored<'_> {
+        Scored {
+            track,
+            affinity: None,
+            affinity_value: 0.5,
+            rating_prior: 0.0,
+            recency_penalty: 0.0,
+            streak_penalty: 0.0,
+            album_penalty: 0.0,
+            session_penalty: 0.0,
+            score,
+        }
+    }
+
+    #[test]
+    fn the_trace_always_includes_the_chosen_candidate() {
+        let tracks: Vec<Track> = (1..=10)
+            .map(|id| track(id, TrackMetadata::default()))
+            .collect();
+        let ranked: Vec<Scored<'_>> = tracks
+            .iter()
+            .enumerate()
+            .map(|(rank, t)| scored(t, 1.0 - rank as f32 / 10.0))
+            .collect();
+        let probabilities = [0.1_f32; 10];
+        let seed = TrackId::new(99).expect("valid id");
+
+        let below = build_debug(seed, &ranked, 10, &probabilities, 8);
+        let ids: Vec<i64> = below.entries.iter().map(|e| e.track_id.get()).collect();
+        assert_eq!(ids, [1, 2, 3, 4, 5, 6, 9]);
+        let chosen: Vec<i64> = below
+            .entries
+            .iter()
+            .filter(|e| e.chosen)
+            .map(|e| e.track_id.get())
+            .collect();
+        assert_eq!(chosen, [9]);
+        let last = below.entries.last().expect("chosen entry");
+        assert_eq!(last.pool_rank, Some(9));
+        assert_eq!(last.sample_prob, Some(0.1));
+
+        let within = build_debug(seed, &ranked, 10, &probabilities, 2);
+        assert_eq!(within.entries.len(), DEBUG_TOP_K);
+        assert!(within.entries[2].chosen);
+        assert_eq!(within.entries.iter().filter(|e| e.chosen).count(), 1);
     }
 
     #[test]

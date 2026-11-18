@@ -52,6 +52,7 @@ pub(crate) struct FaultyStore {
     fail_flush_durable: AtomicBool,
     fail_track_read: AtomicBool,
     fail_record_synced_lyrics: AtomicBool,
+    fail_load_synced_lyrics: AtomicBool,
     fail_tag_mirror_acknowledgement: AtomicBool,
     availability_path_replacement: Mutex<Option<TrackLocation>>,
     record_analysis_calls: AtomicU32,
@@ -87,6 +88,7 @@ impl FaultyStore {
             fail_flush_durable: AtomicBool::new(false),
             fail_track_read: AtomicBool::new(false),
             fail_record_synced_lyrics: AtomicBool::new(false),
+            fail_load_synced_lyrics: AtomicBool::new(false),
             fail_tag_mirror_acknowledgement: AtomicBool::new(false),
             availability_path_replacement: Mutex::new(None),
             record_analysis_calls: AtomicU32::new(0),
@@ -175,6 +177,10 @@ impl FaultyStore {
 
     pub(crate) fn set_fail_record_synced_lyrics(&self, on: bool) {
         self.fail_record_synced_lyrics.store(on, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_fail_load_synced_lyrics(&self, on: bool) {
+        self.fail_load_synced_lyrics.store(on, Ordering::SeqCst);
     }
 
     pub(crate) fn replace_path_before_next_availability_update(&self, location: TrackLocation) {
@@ -669,6 +675,11 @@ impl LibraryStore for FaultyStore {
     }
 
     fn load_synced_lyrics(&self, track_id: TrackId) -> StoreResult<Option<StoredSyncedLyrics>> {
+        if self.fail_load_synced_lyrics.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected synced-lyrics read failure".to_owned(),
+            ));
+        }
         self.inner.load_synced_lyrics(track_id)
     }
 

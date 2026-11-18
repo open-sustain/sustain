@@ -288,7 +288,7 @@ fn runtime_handles_every_application_command_intentionally() {
             Ok(()),
         ),
         (
-            ApplicationCommand::Playback(PlaybackCommand::ToggleRepeat),
+            ApplicationCommand::Playback(PlaybackCommand::CycleRepeatMode),
             Ok(()),
         ),
         (
@@ -3397,11 +3397,13 @@ fn runtime_sets_shuffle_mode_without_playback_service() {
 }
 
 #[test]
-fn runtime_toggles_repeat_without_playback_service() {
+fn runtime_cycles_repeat_without_playback_service() {
     let mut runtime = ApplicationRuntime::new();
 
     assert_eq!(
-        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::ToggleRepeat)),
+        runtime.handle_command(ApplicationCommand::Playback(
+            PlaybackCommand::CycleRepeatMode
+        )),
         Ok(())
     );
 
@@ -3476,6 +3478,77 @@ fn runtime_play_next_track_skips_missing_tracks() {
             track_id: playable(3),
             position: std::time::Duration::ZERO,
         }
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+/// Under Repeat One a track that ends by itself plays again, while the
+/// user's Next still moves on, as in iTunes.
+#[test]
+fn repeat_one_replays_a_finished_track_but_lets_the_user_skip() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: library_queue(&runtime),
+        })),
+        Ok(())
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            runtime.handle_command(ApplicationCommand::Playback(
+                PlaybackCommand::CycleRepeatMode
+            )),
+            Ok(())
+        );
+    }
+    assert_eq!(runtime.playback_options().repeat_mode, RepeatMode::One);
+    let playing = |runtime: &ApplicationRuntime| match runtime.playback_state() {
+        PlaybackState::Playing { track_id, position } => Some((track_id, position)),
+        _ => None,
+    };
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::Seek(
+            std::time::Duration::from_secs(30)
+        ))),
+        Ok(())
+    );
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayNextTrack)),
+        Ok(())
+    );
+    assert_eq!(
+        playing(&runtime),
+        Some((playable(1), std::time::Duration::ZERO)),
+        "the ended track replays from the start"
+    );
+
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(
+            PlaybackCommand::SkipCurrentTrack
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        playing(&runtime).map(|(track_id, _)| track_id),
+        Some(playable(2)),
+        "Next moves on"
+    );
+
+    assert_eq!(
+        runtime.handle_playback_backend_error(PlaybackBackendError {
+            track_id: Some(playable(2)),
+            message: "No decoder available.".to_owned(),
+        }),
+        Ok(())
+    );
+    assert_eq!(
+        playing(&runtime).map(|(track_id, _)| track_id),
+        Some(playable(3)),
+        "a track that failed to play is not replayed"
     );
 
     std::fs::remove_dir_all(root).expect("remove test library");

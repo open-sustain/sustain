@@ -828,10 +828,20 @@ fn attempt_lyrics(
         .lyrics
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty());
-    let has_synced = library_store
-        .load_synced_lyrics(track.id)
-        .map(|stored| stored.is_some())
-        .unwrap_or(false);
+    // An unreadable synced-lyrics row is not an absent one: guessing absence
+    // would contact the provider for a track that may already be complete.
+    let has_synced = match library_store.load_synced_lyrics(track.id) {
+        Ok(stored) => stored.is_some(),
+        Err(error) => {
+            eprintln!(
+                "Sustain: reading synced lyrics failed for {}: {error:?}",
+                absolute_path.display()
+            );
+            return AttemptOutcome::Failed {
+                changed_track: false,
+            };
+        }
+    };
 
     if has_plain && has_synced {
         return AttemptOutcome::NoMatch;

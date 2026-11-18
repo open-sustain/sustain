@@ -2356,3 +2356,40 @@ fn plain_lyrics_committed_before_a_synced_lyrics_failure_are_announced() {
 
     scheduler.shutdown();
 }
+
+#[test]
+fn an_unreadable_synced_lyrics_row_fails_the_attempt_without_contacting_the_provider() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp");
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let faulty = Arc::new(FaultyStore::new(inner));
+    let mut track = track_with_metadata(temp.path(), "alpha.flac");
+    track.metadata.lyrics = Some("Existing".to_owned());
+    faulty.save_track(track.clone()).expect("save");
+    faulty.set_fail_load_synced_lyrics(true);
+
+    let remote = Arc::new(StubRemote::default().with_lyrics(Ok(Some(FetchedLyrics {
+        plain: None,
+        synced_lrc: Some("[00:01.00]Fetched".to_owned()),
+    }))));
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let (scheduler, rx, _writer) =
+        explicit_only_scheduler(remote.clone(), store, temp.path(), None);
+    let _startup_idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(vec![track.id], lyrics_only());
+    let idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    assert!(
+        matches!(idle, SchedulerProgress::Idle { failed: 1, .. }),
+        "{idle:?}"
+    );
+    assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 0);
+
+    scheduler.shutdown();
+}

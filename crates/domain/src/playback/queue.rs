@@ -252,26 +252,38 @@ impl PlaybackQueue {
         self.rebuild_layout(shuffle_seed);
     }
 
-    pub fn toggle_repeat_mode(&mut self) {
-        self.options = self.options.with_repeat_toggled();
+    pub fn cycle_repeat_mode(&mut self) {
+        self.options = self.options.with_repeat_cycled();
     }
 
     pub fn set_repeat_mode(&mut self, repeat_mode: RepeatMode) {
         self.options.repeat_mode = repeat_mode;
     }
 
-    /// The next track to play after the current one. Eager layouts
-    /// return the precomputed neighbour; Lazy layouts return the
+    /// The track the user steps forward to from the current one. Eager
+    /// layouts return the precomputed neighbour; Lazy layouts return the
     /// already-picked-but-not-yet-played track at `cursor + 1`, or
     /// `None` when the picker has not been consulted yet — in which
     /// case the caller checks [`Self::needs_lazy_pick`] and calls the
-    /// picker to extend the history.
+    /// picker to extend the history. Repeat One does not hold a step on
+    /// the current track: it only replays a track that ends by itself
+    /// (see [`Self::repeated_track_id`]).
     pub fn next_track_id(&self) -> Option<PlayableId> {
         self.adjacent_track_id(TrackStep::Next)
     }
 
+    /// The track the user steps back to from the current one.
     pub fn previous_track_id(&self) -> Option<PlayableId> {
         self.adjacent_track_id(TrackStep::Previous)
+    }
+
+    /// The track to play again when the current one ends by itself:
+    /// the current track under Repeat One, otherwise `None`, and the
+    /// continuation is [`Self::next_track_id`].
+    pub fn repeated_track_id(&self) -> Option<PlayableId> {
+        (self.options.repeat_mode == RepeatMode::One)
+            .then_some(self.current_track_id)
+            .flatten()
     }
 
     /// Whether continuation tracks are selected on demand by Smart Shuffle
@@ -362,15 +374,17 @@ impl PlaybackQueue {
                 // sequence (explicit library activation); fold it in by
                 // truncating any speculative future picks and pushing
                 // the new selection as the head of a fresh sub-sequence.
-                let adjacent = played_history
-                    .get(cursor.saturating_add(1))
-                    .filter(|entry| entry.track_id == track_id)
-                    .map(|_| cursor.saturating_add(1))
-                    .or_else(|| {
-                        cursor
-                            .checked_sub(1)
-                            .filter(|index| played_history[*index].track_id == track_id)
-                    });
+                // Nearest first: the next entry (Next), the current one
+                // (a replay stays where it is), the previous one (Previous).
+                let at = |index: usize| {
+                    played_history
+                        .get(index)
+                        .filter(|entry| entry.track_id == track_id)
+                        .map(|_| index)
+                };
+                let adjacent = at(cursor.saturating_add(1))
+                    .or_else(|| at(*cursor))
+                    .or_else(|| cursor.checked_sub(1).and_then(at));
                 if let Some(index) = adjacent.or_else(|| {
                     played_history
                         .iter()
@@ -731,10 +745,6 @@ impl PlaybackQueue {
 
     fn adjacent_track_id(&self, step: TrackStep) -> Option<PlayableId> {
         let current_track_id = self.current_track_id?;
-        if self.options.repeat_mode == RepeatMode::One {
-            return Some(current_track_id);
-        }
-
         match &self.layout {
             PlaybackQueueLayout::Eager { play_order } => {
                 let current_index = play_order

@@ -26,7 +26,7 @@ use model::{
 use progress_hit_area::ProgressHitArea;
 use sustain_app_runtime::{
     ApplicationCommand, NotificationCategory, NotificationId, NotificationSeverity, NowPlaying,
-    NowPlayingItem, PlayableId, PlaybackCommand, ShuffleMode, Track, TrackId,
+    NowPlayingItem, PlayableId, PlaybackCommand, RepeatMode, ShuffleMode, Track, TrackId,
 };
 use sustain_i18n::{gettext, pgettext};
 
@@ -241,7 +241,7 @@ impl NowPlayingView {
             &elapsed,
         );
 
-        let repeat_icon = gtk::Image::from_icon_name("media-playlist-repeat-symbolic");
+        let repeat_icon = gtk::Image::from_icon_name(REPEAT_ICON);
         repeat_icon.add_css_class("now-playing-side-icon");
         repeat_icon.set_pixel_size(NOW_PLAYING_ICON_SIZE);
         repeat_icon.set_halign(gtk::Align::Center);
@@ -755,7 +755,7 @@ impl NowPlayingView {
             self.duration.set(Duration::ZERO);
             self.lyrics_chip.set_visible(false);
             sync_shuffle_icon(&self.shuffle_icon, now_playing.options.shuffle_mode);
-            sync_playback_option_icon(&self.repeat_icon, now_playing.options.repeat_enabled());
+            sync_repeat_icon(&self.repeat_icon, now_playing.options.repeat_mode);
             return;
         };
 
@@ -774,7 +774,7 @@ impl NowPlayingView {
         self.hit_area
             .set_position(progress_fraction(position, duration), true);
         sync_shuffle_icon(&self.shuffle_icon, now_playing.options.shuffle_mode);
-        sync_playback_option_icon(&self.repeat_icon, now_playing.options.repeat_enabled());
+        sync_repeat_icon(&self.repeat_icon, now_playing.options.repeat_mode);
         self.prefetch_next_artwork();
     }
 }
@@ -816,9 +816,9 @@ fn install_playback_option_controls(
     let command_controller_for_repeat = command_controller;
     let view_for_repeat = view.clone();
     view.repeat_button.connect_clicked(move |_| {
-        if command_controller_for_repeat
-            .dispatch_succeeded(ApplicationCommand::Playback(PlaybackCommand::ToggleRepeat))
-        {
+        if command_controller_for_repeat.dispatch_succeeded(ApplicationCommand::Playback(
+            PlaybackCommand::CycleRepeatMode,
+        )) {
             view_for_repeat.refresh(
                 &command_controller_for_repeat
                     .runtime()
@@ -961,8 +961,19 @@ fn side_status_chrome(
     (status, button)
 }
 
-fn sync_playback_option_icon(icon: &gtk::Image, enabled: bool) {
-    if enabled {
+const REPEAT_ICON: &str = "media-playlist-repeat-symbolic";
+const REPEAT_ONE_ICON: &str = "media-playlist-repeat-song-symbolic";
+
+/// Tri-state visual sync for the repeat icon. Off is the muted glyph;
+/// All and One share the active accent glyph, One drawn as the
+/// single-song variant.
+fn sync_repeat_icon(icon: &gtk::Image, mode: RepeatMode) {
+    icon.set_icon_name(Some(if mode == RepeatMode::One {
+        REPEAT_ONE_ICON
+    } else {
+        REPEAT_ICON
+    }));
+    if mode.is_enabled() {
         icon.add_css_class("now-playing-side-icon-active");
     } else {
         icon.remove_css_class("now-playing-side-icon-active");
@@ -991,7 +1002,34 @@ fn time_label() -> gtk::Label {
 
 #[cfg(test)]
 mod tests {
-    use super::synced_lyrics_text;
+    use super::{REPEAT_ICON, REPEAT_ONE_ICON, RepeatMode, sync_repeat_icon, synced_lyrics_text};
+    use crate::test_support::with_gtk;
+    use gtk::prelude::*;
+
+    /// Each repeat mode has its own look: Off muted, All active, One
+    /// active with the single-song glyph.
+    #[test]
+    fn the_repeat_icon_distinguishes_every_mode() {
+        with_gtk(|| {
+            let icon = gtk::Image::from_icon_name(REPEAT_ICON);
+            let look = |mode| {
+                sync_repeat_icon(&icon, mode);
+                (
+                    icon.icon_name().map(|name| name.to_string()),
+                    icon.has_css_class("now-playing-side-icon-active"),
+                )
+            };
+            let (all, one, off) = (
+                look(RepeatMode::All),
+                look(RepeatMode::One),
+                look(RepeatMode::Off),
+            );
+            assert_eq!(all, (Some(REPEAT_ICON.to_owned()), true));
+            assert_eq!(one, (Some(REPEAT_ONE_ICON.to_owned()), true));
+            assert_eq!(off, (Some(REPEAT_ICON.to_owned()), false));
+            assert_ne!(all.0, one.0, "Repeat One must not look like Repeat All");
+        });
+    }
 
     #[test]
     fn synced_lyrics_are_rendered_as_readable_plain_lines() {
