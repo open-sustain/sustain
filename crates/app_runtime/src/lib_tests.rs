@@ -7533,6 +7533,12 @@ fn file_presence_probes_distinguish_reachable_files_from_directory_entries() {
 
     assert_eq!(probe_file_presence(&present), FilePresence::Present);
     assert_eq!(probe_file_presence(&absent), FilePresence::Absent);
+    let reused_as_directory = dir.join("reused.flac");
+    std::fs::create_dir(&reused_as_directory).expect("create directory at a track path");
+    assert_eq!(
+        probe_file_presence(&reused_as_directory),
+        FilePresence::Absent
+    );
     let dangling_link = dir.join("dangling");
     std::os::unix::fs::symlink(&absent, &dangling_link).expect("create dangling symlink");
     assert_eq!(probe_file_presence(&dangling_link), FilePresence::Absent);
