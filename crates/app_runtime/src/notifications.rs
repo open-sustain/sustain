@@ -548,7 +548,9 @@ pub fn analysis_background_persistence_error_text(detail: &str) -> String {
 
 pub fn online_background_persistence_error_text(detail: &str) -> String {
     tr_format!(
-        gettext("Online retrieval paused: the library database rejected a write ({detail})."),
+        gettext(
+            "Online retrieval paused: the library database could not be read or written ({detail})."
+        ),
         detail = detail
     )
 }

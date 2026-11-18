@@ -62,7 +62,7 @@
 //! visible "do this next" contract.
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -622,15 +622,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
             // user-initiated work on a settings flip would be a
             // silent surprise.
             in_flight.clear();
-            let preserved: Vec<PendingItem> = pending
-                .iter()
-                .filter(|item| item.is_explicit)
-                .copied()
-                .collect();
-            for item in preserved.into_iter().rev() {
-                state.explicit_queue.push_front(item);
-            }
-            pending.clear();
+            requeue_explicit_items(&mut state.explicit_queue, pending.drain(..));
         }
 
         prioritize_explicit_work(&mut state, &mut pending, &in_flight);
@@ -914,6 +906,57 @@ fn prioritize_explicit_work(
     drain_ready_explicit_work(state, pending, in_flight);
 }
 
+/// Queues an explicit request. A track already queued is not queued twice;
+/// it takes on the newly requested capabilities instead.
+fn queue_explicit_request(
+    explicit_queue: &mut VecDeque<PendingItem>,
+    track_ids: Vec<TrackId>,
+    capabilities: AnalysisCapabilities,
+) {
+    let mut positions: HashMap<TrackId, usize> = explicit_queue
+        .iter()
+        .enumerate()
+        .map(|(position, item)| (item.track_id, position))
+        .collect();
+    for track_id in track_ids {
+        match positions.get(&track_id) {
+            Some(&position) => {
+                let queued = &mut explicit_queue[position];
+                queued.capabilities = queued.capabilities.union(capabilities);
+            }
+            None => {
+                positions.insert(track_id, explicit_queue.len());
+                explicit_queue.push_back(PendingItem {
+                    track_id,
+                    capabilities,
+                    is_explicit: true,
+                });
+            }
+        }
+    }
+}
+
+/// Puts the explicit items of a discarded batch back at the front of the
+/// queue, in their order. A track queued again meanwhile is merged into
+/// its returning item. Background items are dropped: they resurface from
+/// `tracks_needing_analysis`.
+fn requeue_explicit_items(
+    explicit_queue: &mut VecDeque<PendingItem>,
+    items: impl Iterator<Item = PendingItem>,
+) {
+    let returning = items.filter(|item| item.is_explicit).collect::<Vec<_>>();
+    for mut item in returning.into_iter().rev() {
+        if let Some(position) = explicit_queue
+            .iter()
+            .position(|queued| queued.track_id == item.track_id)
+            && let Some(queued) = explicit_queue.remove(position)
+        {
+            item.capabilities = item.capabilities.union(queued.capabilities);
+        }
+        explicit_queue.push_front(item);
+    }
+}
+
 fn drain_ready_explicit_work(
     state: &mut SupervisorState,
     pending: &mut VecDeque<PendingItem>,
@@ -921,10 +964,6 @@ fn drain_ready_explicit_work(
 ) {
     let queued = state.explicit_queue.len();
     for _ in 0..queued {
-        if pending.len() >= BATCH_SIZE {
-            break;
-        }
-
         let Some(item) = state.explicit_queue.pop_front() else {
             break;
         };
@@ -932,11 +971,17 @@ fn drain_ready_explicit_work(
             state.explicit_queue.push_back(item);
             continue;
         }
-        if pending
-            .iter()
-            .any(|pending_item| pending_item.is_explicit && pending_item.track_id == item.track_id)
+        // Joining an item already pending takes no room in the batch.
+        if let Some(promoted) = pending
+            .iter_mut()
+            .find(|pending_item| pending_item.is_explicit && pending_item.track_id == item.track_id)
         {
+            promoted.capabilities = promoted.capabilities.union(item.capabilities);
             continue;
+        }
+        if pending.len() >= BATCH_SIZE {
+            state.explicit_queue.push_front(item);
+            break;
         }
         pending.push_back(item);
     }
@@ -1161,27 +1206,11 @@ fn apply_command(
             if capabilities.is_empty() {
                 return;
             }
-            // Dedup against everything we already know about: the
-            // explicit queue itself (user double-clicked) and any
-            // background-sourced entries we have already lined up.
-            // Items already in flight are filtered at refill time
-            // (the `in_flight` HashSet check), so we don't see them
-            // here.
-            let already_queued: HashSet<TrackId> = state
-                .explicit_queue
-                .iter()
-                .map(|item| item.track_id)
-                .collect();
-            for track_id in track_ids {
-                if already_queued.contains(&track_id) {
-                    continue;
-                }
-                state.explicit_queue.push_back(PendingItem {
-                    track_id,
-                    capabilities,
-                    is_explicit: true,
-                });
-            }
+            // A track already queued (the user double-clicked) is not
+            // queued twice; it takes on the newly requested capabilities,
+            // so asking for Key after BPM gets both. Items already in
+            // flight are handled at refill time (the `in_flight` check).
+            queue_explicit_request(&mut state.explicit_queue, track_ids, capabilities);
         }
         SchedulerCommand::Wake | SchedulerCommand::Shutdown => {
             // Shutdown is handled at the caller; Wake has no side

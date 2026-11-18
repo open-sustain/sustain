@@ -154,6 +154,15 @@ impl AnalysisCapabilities {
     pub const fn is_empty(self) -> bool {
         !(self.bpm || self.key || self.audio)
     }
+
+    /// Every capability requested by either set.
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            bpm: self.bpm || other.bpm,
+            key: self.key || other.key,
+            audio: self.audio || other.audio,
+        }
+    }
 }
 
 /// Which network-bound retrievals a write or query applies to.
@@ -189,6 +198,24 @@ impl OnlineCapabilities {
 
     pub const fn is_empty(self) -> bool {
         !(self.artwork || self.tags || self.lyrics)
+    }
+
+    /// Every capability requested by either set.
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            artwork: self.artwork || other.artwork,
+            tags: self.tags || other.tags,
+            lyrics: self.lyrics || other.lyrics,
+        }
+    }
+
+    /// The capabilities of this set that `other` does not name.
+    pub const fn without(self, other: Self) -> Self {
+        Self {
+            artwork: self.artwork && !other.artwork,
+            tags: self.tags && !other.tags,
+            lyrics: self.lyrics && !other.lyrics,
+        }
     }
 }
 

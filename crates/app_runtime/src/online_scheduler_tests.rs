@@ -701,7 +701,7 @@ fn rejected_online_attempt_stamp_halts_the_sweep() {
     let (_writer, tag_writer) = spawn_tag_writer(metadata, store.clone(), temp.path());
 
     let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
-        remote_service: remote,
+        remote_service: remote.clone(),
         tag_writer,
         library_store: store.clone(),
         progress: sink,
@@ -748,12 +748,20 @@ fn rejected_online_attempt_stamp_halts_the_sweep() {
         "the un-stamped track is still eligible"
     );
 
-    // Recovery: once the store accepts writes, an explicit wake resumes.
+    // Recovery: once the store accepts writes, an explicit wake records
+    // the stamp the provider's answer is still owed, without asking the
+    // provider again, and counts the track.
     faulty.set_fail_online_attempt(false);
     scheduler.wake();
-    let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
-        matches!(progress, SchedulerProgress::Tick { completed: 1, .. })
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { completed: 1, .. })
     });
+    assert_eq!(faulty.online_attempt_calls(), 2);
+    assert_eq!(
+        remote.lyrics_calls.load(Ordering::SeqCst),
+        1,
+        "the recorded answer is stamped, not fetched again"
+    );
 
     scheduler.shutdown();
 }
@@ -2021,4 +2029,330 @@ fn a_candidate_genre_adopts_the_spelling_most_of_the_library_uses() {
     );
     // Nothing in the library: the top-voted candidate as it comes.
     assert_eq!(adopted(&[("Rock", 9)]).as_deref(), Some("DEEP HOUSE"));
+}
+
+#[test]
+fn a_second_capability_requested_for_a_queued_track_joins_the_first() {
+    let track_id = TrackId::new(1).expect("valid track id");
+    let mut queue = std::collections::VecDeque::new();
+    let artwork = OnlineCapabilities {
+        artwork: true,
+        ..OnlineCapabilities::none()
+    };
+    let lyrics = OnlineCapabilities {
+        lyrics: true,
+        ..OnlineCapabilities::none()
+    };
+
+    super::queue_explicit_request(&mut queue, vec![track_id], artwork);
+    super::queue_explicit_request(&mut queue, vec![track_id], lyrics);
+
+    assert_eq!(queue.len(), 1);
+    assert_eq!(
+        queue[0].capabilities,
+        OnlineCapabilities {
+            artwork: true,
+            lyrics: true,
+            ..OnlineCapabilities::none()
+        }
+    );
+}
+
+fn lyrics_only() -> OnlineCapabilities {
+    OnlineCapabilities {
+        artwork: false,
+        tags: false,
+        lyrics: true,
+    }
+}
+
+fn explicit_only_scheduler(
+    remote: Arc<StubRemote>,
+    store: Arc<dyn LibraryStore>,
+    library_root: &Path,
+    track_updated: Option<super::TrackUpdatedSink>,
+) -> (
+    OnlineScheduler,
+    std_mpsc::Receiver<SchedulerProgress>,
+    MetadataWriter,
+) {
+    let metadata = Arc::new(StubMetadata::default());
+    let (sink, rx) = capturing_sink();
+    let (writer, tag_writer) = spawn_tag_writer(metadata, store.clone(), library_root);
+    let scheduler = OnlineScheduler::start(OnlineSchedulerConfig {
+        remote_service: remote,
+        tag_writer,
+        library_store: store,
+        progress: sink,
+        track_updated,
+        clock: fixed_clock(1),
+        initial_settings: OnlineSettings {
+            artwork: false,
+            tags: false,
+            lyrics: false,
+        },
+        library_path: Some(library_root.to_path_buf()),
+        provider_version: 1,
+    });
+    (scheduler, rx, writer)
+}
+
+#[test]
+fn an_unreadable_track_row_halts_the_sweep_and_keeps_the_explicit_request() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp");
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let faulty = Arc::new(FaultyStore::new(inner));
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    faulty.save_track(track.clone()).expect("save");
+    faulty.set_fail_track_read(true);
+
+    let remote = Arc::new(StubRemote::default());
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let (scheduler, rx, _writer) =
+        explicit_only_scheduler(remote.clone(), store, temp.path(), None);
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(vec![track.id], lyrics_only());
+    let _error = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::PersistenceError { .. })
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        rx.try_recv().is_err(),
+        "an unreadable row halts the worker instead of moving on"
+    );
+    assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 0);
+
+    faulty.set_fail_track_read(false);
+    scheduler.wake();
+    let _tick = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Tick { completed: 1, .. })
+    });
+    assert_eq!(
+        remote.lyrics_calls.load(Ordering::SeqCst),
+        1,
+        "the explicit request survives the failed read"
+    );
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn a_rejected_stamp_keeps_the_rest_of_the_explicit_batch() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp");
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let faulty = Arc::new(FaultyStore::new(inner));
+    let first = track_with_metadata(temp.path(), "alpha.flac");
+    let mut second = track_with_metadata(temp.path(), "beta.flac");
+    second.id = TrackId::new(2).expect("non-zero");
+    faulty.save_track(first.clone()).expect("save");
+    faulty.save_track(second.clone()).expect("save");
+    faulty.set_fail_online_attempt(true);
+
+    let remote = Arc::new(StubRemote::default());
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let (scheduler, rx, _writer) =
+        explicit_only_scheduler(remote.clone(), store, temp.path(), None);
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(vec![first.id, second.id], lyrics_only());
+    let _error = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::PersistenceError { .. })
+    });
+    assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 1);
+
+    faulty.set_fail_online_attempt(false);
+    scheduler.wake();
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { completed: 2, .. })
+    });
+    assert_eq!(
+        remote.lyrics_calls.load(Ordering::SeqCst),
+        2,
+        "the second track is still fetched, the first is not fetched again"
+    );
+    assert_eq!(faulty.online_attempt_calls(), 3);
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn a_track_changed_before_a_rate_limit_is_announced_as_updated() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    store.save_track(track.clone()).expect("save");
+
+    // Artwork runs before lyrics: the cover lands, then lyrics hit a 429.
+    let remote = Arc::new(
+        StubRemote::default()
+            .with_artwork(Ok(Some(FetchedArtwork {
+                bytes: valid_artwork(),
+                provider: ArtworkProvider::CoverArtArchive,
+            })))
+            .with_lyrics(Err(RemoteError::RateLimited {
+                cool_down: Duration::from_secs(30),
+            })),
+    );
+    let (notify_tx, notify_rx) = std_mpsc::channel::<TrackId>();
+    let track_updated: super::TrackUpdatedSink = Arc::new(move |id| {
+        let _ = notify_tx.send(id);
+    });
+    let (scheduler, _rx, _writer) =
+        explicit_only_scheduler(remote.clone(), store, temp.path(), Some(track_updated));
+
+    scheduler.request_explicit_run(
+        vec![track.id],
+        OnlineCapabilities {
+            artwork: true,
+            tags: false,
+            lyrics: true,
+        },
+    );
+    assert_eq!(
+        notify_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the new cover is announced"),
+        track.id
+    );
+    assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 1);
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn a_track_cut_off_by_a_rate_limit_resumes_without_repeating_what_it_finished() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    store.save_track(track.clone()).expect("save");
+
+    // Artwork finds nothing; lyrics are then held by a short cool-down.
+    let remote = Arc::new(
+        StubRemote::default()
+            .with_artwork(Ok(None))
+            .with_lyrics(Err(RemoteError::RateLimited {
+                cool_down: Duration::from_millis(300),
+            })),
+    );
+    let (scheduler, rx, _writer) =
+        explicit_only_scheduler(remote.clone(), store, temp.path(), None);
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(
+        vec![track.id],
+        OnlineCapabilities {
+            artwork: true,
+            tags: false,
+            lyrics: true,
+        },
+    );
+    wait_until("the rate-limited lyrics request", || {
+        remote.lyrics_calls.load(Ordering::SeqCst) > 0
+    });
+    *remote.lyrics.lock().expect("lock") = Some(Ok(None));
+
+    let _idle = wait_for(&rx, Duration::from_secs(3), |progress| {
+        matches!(progress, SchedulerProgress::Idle { completed: 1, .. })
+    });
+    assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        remote.artwork_calls.load(Ordering::SeqCst),
+        1,
+        "the artwork lookup already finished and is not asked again"
+    );
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn explicit_tracks_still_waiting_in_the_batch_count_as_remaining() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let first = track_with_metadata(temp.path(), "alpha.flac");
+    let mut second = track_with_metadata(temp.path(), "beta.flac");
+    second.id = TrackId::new(2).expect("non-zero");
+    store.save_track(first.clone()).expect("save");
+    store.save_track(second.clone()).expect("save");
+
+    let remote = Arc::new(StubRemote::default());
+    let (scheduler, rx, _writer) = explicit_only_scheduler(remote, store, temp.path(), None);
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(vec![first.id, second.id], lyrics_only());
+    let tick = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Tick { .. })
+    });
+    assert_eq!(
+        tick,
+        SchedulerProgress::Tick {
+            completed: 1,
+            failed: 0,
+            remaining: 1,
+        }
+    );
+
+    scheduler.shutdown();
+}
+
+#[test]
+fn plain_lyrics_committed_before_a_synced_lyrics_failure_are_announced() {
+    use crate::test_store::FaultyStore;
+
+    let temp = TempDir::new().expect("temp");
+    let inner: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let faulty = Arc::new(FaultyStore::new(inner));
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    faulty.save_track(track.clone()).expect("save");
+    faulty.set_fail_record_synced_lyrics(true);
+
+    let remote = Arc::new(StubRemote::default().with_lyrics(Ok(Some(FetchedLyrics {
+        plain: Some("Plain words".to_owned()),
+        synced_lrc: Some("[00:01.00]Plain words".to_owned()),
+    }))));
+    let (notify_tx, notify_rx) = std_mpsc::channel::<TrackId>();
+    let track_updated: super::TrackUpdatedSink = Arc::new(move |id| {
+        let _ = notify_tx.send(id);
+    });
+    let store: Arc<dyn LibraryStore> = faulty.clone();
+    let (scheduler, _rx, _writer) =
+        explicit_only_scheduler(remote, store.clone(), temp.path(), Some(track_updated));
+
+    scheduler.request_explicit_run(vec![track.id], lyrics_only());
+    assert_eq!(
+        notify_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the committed plain lyrics are announced"),
+        track.id
+    );
+    assert_eq!(
+        store
+            .track(track.id)
+            .expect("read")
+            .expect("track")
+            .metadata
+            .lyrics
+            .as_deref(),
+        Some("Plain words")
+    );
+
+    scheduler.shutdown();
 }

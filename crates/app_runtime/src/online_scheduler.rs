@@ -178,6 +178,16 @@ struct PendingItem {
     is_explicit: bool,
 }
 
+impl PendingItem {
+    /// The same request, less the capabilities already attempted.
+    const fn without(self, attempted: OnlineCapabilities) -> Self {
+        Self {
+            capabilities: self.capabilities.without(attempted),
+            ..self
+        }
+    }
+}
+
 pub(crate) struct OnlineScheduler {
     sender: Sender<SchedulerCommand>,
     handle: Option<JoinHandle<()>>,
@@ -268,12 +278,32 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
         completed: 0,
         failed: 0,
         explicit_queue: VecDeque::new(),
+        unrecorded_attempt: None,
     };
 
     'outer: loop {
         match drain_commands(&receiver, &mut state) {
             DrainOutcome::Shutdown => return,
             DrainOutcome::Continue => {}
+        }
+
+        if let Some(unrecorded) = state.unrecorded_attempt {
+            if let Err(error) = library_store.record_online_attempt(
+                unrecorded.track_id,
+                unrecorded.attempted,
+                unrecorded.context,
+            ) {
+                (progress)(SchedulerProgress::PersistenceError {
+                    detail: format!("{error:?}"),
+                });
+                match receiver.recv() {
+                    Ok(SchedulerCommand::Shutdown) | Err(_) => return,
+                    Ok(command) => apply_command(command, &mut state),
+                }
+                continue;
+            }
+            state.unrecorded_attempt = None;
+            state.count_outcome(unrecorded.outcome);
         }
 
         let bg_capabilities = effective_capabilities(&state.settings);
@@ -306,7 +336,10 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
             let room = BATCH_SIZE.saturating_sub(batch.len());
             match library_store.tracks_needing_online(bg_capabilities, provider_version, room) {
                 Ok(ids) => {
-                    for id in ids {
+                    // A track the user asked for is already in the batch
+                    // with its explicit mask; it is not run twice.
+                    let explicit_ids = batch.iter().map(|item| item.track_id).collect::<Vec<_>>();
+                    for id in ids.into_iter().filter(|id| !explicit_ids.contains(id)) {
                         batch.push(PendingItem {
                             track_id: id,
                             capabilities: bg_capabilities,
@@ -317,6 +350,8 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 Err(_) => {
                     // Store error: block on the command channel so
                     // we do not hot-loop against a broken database.
+                    // The explicit items already taken keep their place.
+                    requeue_explicit_items(&mut state.explicit_queue, batch.into_iter());
                     match receiver.recv() {
                         Ok(SchedulerCommand::Shutdown) | Err(_) => return,
                         Ok(command) => apply_command(command, &mut state),
@@ -396,8 +431,27 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 continue;
             }
 
-            let Ok(Some(track)) = library_store.track(item.track_id) else {
-                continue;
+            let track = match library_store.track(item.track_id) {
+                Ok(Some(track)) => track,
+                // Removed from the library since it was queued.
+                Ok(None) => continue,
+                Err(error) => {
+                    // The row could not be read: surface it and wait for
+                    // a wake rather than sweeping the same track again.
+                    // Explicit work keeps its place in the queue.
+                    (progress)(SchedulerProgress::PersistenceError {
+                        detail: format!("{error:?}"),
+                    });
+                    requeue_explicit_items(
+                        &mut state.explicit_queue,
+                        std::iter::once(item).chain(batch.by_ref()),
+                    );
+                    match receiver.recv() {
+                        Ok(SchedulerCommand::Shutdown) | Err(_) => return,
+                        Ok(command) => apply_command(command, &mut state),
+                    }
+                    continue 'outer;
+                }
             };
             let absolute_path = track.location.absolute_path(&library_path);
             let dispatch_settings = OnlineSettings {
@@ -415,7 +469,7 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 &mut genre_bias,
             );
 
-            if matches!(report.outcome, ProcessOutcome::Succeeded)
+            if report.changed_track
                 && let Some(notify) = track_updated.as_deref()
             {
                 notify(item.track_id);
@@ -439,12 +493,29 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                     // over the network every batch. Surface the failure
                     // and wait for an explicit wake rather than
                     // hot-looping — the same bounded response the
-                    // store-query error path above uses. The track is
-                    // not counted as completed/failed; the
+                    // store-query error path above uses. The stamp is
+                    // retried first after the wake, so the provider is
+                    // not asked again, and the rest of the batch's
+                    // explicit work keeps its place in the queue. The
+                    // track is not counted as completed/failed; the
                     // PersistenceError is the authoritative signal.
                     (progress)(SchedulerProgress::PersistenceError {
                         detail: format!("{error:?}"),
                     });
+                    state.unrecorded_attempt = Some(UnrecordedAttempt {
+                        track_id: item.track_id,
+                        attempted: report.attempted,
+                        context,
+                        outcome: report.outcome,
+                    });
+                    // A rate-limited track is itself unfinished: the
+                    // capabilities the limit cut off are still owed.
+                    let unfinished = matches!(report.outcome, ProcessOutcome::RateLimited(_))
+                        .then(|| item.without(report.attempted));
+                    requeue_explicit_items(
+                        &mut state.explicit_queue,
+                        unfinished.into_iter().chain(batch.by_ref()),
+                    );
                     match receiver.recv() {
                         Ok(SchedulerCommand::Shutdown) | Err(_) => return,
                         Ok(command) => apply_command(command, &mut state),
@@ -460,35 +531,25 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 }
             }
 
-            match report.outcome {
-                ProcessOutcome::Succeeded | ProcessOutcome::NoMatch => {
-                    state.completed = state.completed.saturating_add(1);
-                }
-                ProcessOutcome::Failed => {
-                    state.failed = state.failed.saturating_add(1);
-                }
-                ProcessOutcome::RateLimited(cool_down) => {
-                    // Stop the batch entirely on a rate-limit signal:
-                    // the HTTP client refuses every request to the held
-                    // host until the cool-down has passed, so the
-                    // remaining tracks would only be refused too. The
-                    // track is neither done nor failed — it is tried
-                    // again — so it reports no progress. The explicit
-                    // items left, this one first, go back where they
-                    // came from; background items come back with the
-                    // next sweep.
-                    let unfinished = std::iter::once(item)
-                        .chain(batch)
-                        .filter(|item| item.is_explicit);
-                    for item in unfinished.rev() {
-                        state.explicit_queue.push_front(item);
-                    }
-                    rate_limited_for = Some(cool_down);
-                    break;
-                }
+            state.count_outcome(report.outcome);
+            if let ProcessOutcome::RateLimited(cool_down) = report.outcome {
+                // Stop the batch entirely on a rate-limit signal: the
+                // HTTP client refuses every request to the held host
+                // until the cool-down has passed, so the remaining
+                // tracks would only be refused too. The explicit items
+                // left, this one first, go back where they came from.
+                requeue_explicit_items(
+                    &mut state.explicit_queue,
+                    std::iter::once(item.without(report.attempted)).chain(batch),
+                );
+                rate_limited_for = Some(cool_down);
+                break;
             }
 
-            let remaining = remaining_background.saturating_add(state.explicit_queue.len() as u32);
+            let explicit_in_batch = batch.as_slice().iter().filter(|item| item.is_explicit);
+            let remaining = remaining_background
+                .saturating_add(state.explicit_queue.len() as u32)
+                .saturating_add(explicit_in_batch.count() as u32);
             (progress)(SchedulerProgress::Tick {
                 completed: state.completed,
                 failed: state.failed,
@@ -546,6 +607,9 @@ enum ProcessOutcome {
 struct ProcessReport {
     outcome: ProcessOutcome,
     attempted: OnlineCapabilities,
+    /// At least one capability committed new data for the track, whatever
+    /// the overall outcome: a later capability can still be rate limited.
+    changed_track: bool,
 }
 
 fn process_track(
@@ -560,6 +624,7 @@ fn process_track(
     let query = query_from_metadata(&track.metadata);
     let mut any_success = false;
     let mut any_failure = false;
+    let mut partly_changed = false;
     let mut rate_limited_for = None;
     let mut attempted = OnlineCapabilities::none();
 
@@ -588,8 +653,9 @@ fn process_track(
             AttemptOutcome::NoMatch => {
                 attempted.tags = true;
             }
-            AttemptOutcome::Failed => {
+            AttemptOutcome::Failed { changed_track } => {
                 any_failure = true;
+                partly_changed |= changed_track;
                 attempted.tags = true;
             }
             AttemptOutcome::RateLimited(cool_down) => {
@@ -614,8 +680,9 @@ fn process_track(
             AttemptOutcome::NoMatch => {
                 attempted.artwork = true;
             }
-            AttemptOutcome::Failed => {
+            AttemptOutcome::Failed { changed_track } => {
                 any_failure = true;
+                partly_changed |= changed_track;
                 attempted.artwork = true;
             }
             AttemptOutcome::RateLimited(cool_down) => {
@@ -640,8 +707,9 @@ fn process_track(
             AttemptOutcome::NoMatch => {
                 attempted.lyrics = true;
             }
-            AttemptOutcome::Failed => {
+            AttemptOutcome::Failed { changed_track } => {
                 any_failure = true;
+                partly_changed |= changed_track;
                 attempted.lyrics = true;
             }
             AttemptOutcome::RateLimited(cool_down) => {
@@ -659,14 +727,22 @@ fn process_track(
     } else {
         ProcessOutcome::NoMatch
     };
-    ProcessReport { outcome, attempted }
+    ProcessReport {
+        outcome,
+        attempted,
+        changed_track: any_success || partly_changed,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AttemptOutcome {
     Succeeded,
     NoMatch,
-    Failed,
+    /// The capability failed. A failure partway through can still have
+    /// committed some of its data, which the library view must learn of.
+    Failed {
+        changed_track: bool,
+    },
     RateLimited(Duration),
 }
 
@@ -676,7 +752,9 @@ enum AttemptOutcome {
 fn attempt_outcome_for_remote_error(error: &RemoteError) -> AttemptOutcome {
     match error {
         RemoteError::RateLimited { cool_down } => AttemptOutcome::RateLimited(*cool_down),
-        _ => AttemptOutcome::Failed,
+        _ => AttemptOutcome::Failed {
+            changed_track: false,
+        },
     }
 }
 
@@ -717,7 +795,9 @@ fn attempt_artwork(
             "Sustain: artwork fetch returned rejected bytes for {}: {error}",
             absolute_path.display()
         );
-        return AttemptOutcome::Failed;
+        return AttemptOutcome::Failed {
+            changed_track: false,
+        };
     }
     match tag_writer.enqueue_retrieved_artwork(track.id, &artwork.bytes) {
         Ok(true) => AttemptOutcome::Succeeded,
@@ -728,7 +808,9 @@ fn attempt_artwork(
                 "Sustain: artwork mirror enqueue failed for {}: {error:?}",
                 absolute_path.display()
             );
-            AttemptOutcome::Failed
+            AttemptOutcome::Failed {
+                changed_track: false,
+            }
         }
     }
 }
@@ -785,7 +867,9 @@ fn attempt_lyrics(
                     "Sustain: persist of lyrics column failed for {}: {error:?}",
                     absolute_path.display()
                 );
-                return AttemptOutcome::Failed;
+                return AttemptOutcome::Failed {
+                    changed_track: false,
+                };
             }
         }
     }
@@ -797,7 +881,9 @@ fn attempt_lyrics(
         if let Err(error) = library_store.record_synced_lyrics(track.id, &parsed, LRCLIB_SOURCE_TAG)
         {
             eprintln!("Sustain: synced lyrics persist failed: {error:?}");
-            return AttemptOutcome::Failed;
+            return AttemptOutcome::Failed {
+                changed_track: wrote_anything,
+            };
         }
         wrote_anything = true;
     }
@@ -818,6 +904,35 @@ struct WorkerState {
     /// Items here keep their own capability mask, independent of the
     /// global `OnlineSettings`.
     explicit_queue: VecDeque<PendingItem>,
+    /// A completed attempt whose stamp the store rejected, retried before
+    /// any new work so the provider is not asked again.
+    unrecorded_attempt: Option<UnrecordedAttempt>,
+}
+
+impl WorkerState {
+    /// Counts a track whose attempt is stamped. A rate-limited track is
+    /// neither done nor failed: it is tried again, so it reports no
+    /// progress.
+    fn count_outcome(&mut self, outcome: ProcessOutcome) {
+        match outcome {
+            ProcessOutcome::Succeeded | ProcessOutcome::NoMatch => {
+                self.completed = self.completed.saturating_add(1);
+            }
+            ProcessOutcome::Failed => self.failed = self.failed.saturating_add(1),
+            ProcessOutcome::RateLimited(_) => {}
+        }
+    }
+}
+
+/// A track the provider answered for whose attempt stamp the store
+/// rejected. Its outcome is counted once the stamp is recorded.
+#[derive(Clone, Copy, Debug)]
+struct UnrecordedAttempt {
+    track_id: TrackId,
+    attempted: OnlineCapabilities,
+    /// When the provider was asked, not when the stamp finally lands.
+    context: OnlineContext,
+    outcome: ProcessOutcome,
 }
 
 enum DrainOutcome {
@@ -838,6 +953,62 @@ fn drain_commands(
     DrainOutcome::Continue
 }
 
+/// Puts the explicit items of an interrupted batch back at the front of the
+/// queue, in their order. A track queued again meanwhile is merged into
+/// its returning item; an item with nothing left to attempt is done.
+/// Background items are dropped: unstamped, they come back with the next
+/// sweep.
+fn requeue_explicit_items(
+    explicit_queue: &mut VecDeque<PendingItem>,
+    items: impl Iterator<Item = PendingItem>,
+) {
+    let returning = items
+        .filter(|item| item.is_explicit && !item.capabilities.is_empty())
+        .collect::<Vec<_>>();
+    for mut item in returning.into_iter().rev() {
+        if let Some(position) = explicit_queue
+            .iter()
+            .position(|queued| queued.track_id == item.track_id)
+            && let Some(queued) = explicit_queue.remove(position)
+        {
+            item.capabilities = item.capabilities.union(queued.capabilities);
+        }
+        explicit_queue.push_front(item);
+    }
+}
+
+/// Queues an explicit request. A track already queued is not queued twice
+/// (a double-clicking user does not queue the same playlist twice); it
+/// takes on the newly requested capabilities instead, so asking for lyrics
+/// after artwork gets both.
+fn queue_explicit_request(
+    explicit_queue: &mut VecDeque<PendingItem>,
+    track_ids: Vec<TrackId>,
+    capabilities: OnlineCapabilities,
+) {
+    let mut positions: std::collections::HashMap<TrackId, usize> = explicit_queue
+        .iter()
+        .enumerate()
+        .map(|(position, item)| (item.track_id, position))
+        .collect();
+    for track_id in track_ids {
+        match positions.get(&track_id) {
+            Some(&position) => {
+                let queued = &mut explicit_queue[position];
+                queued.capabilities = queued.capabilities.union(capabilities);
+            }
+            None => {
+                positions.insert(track_id, explicit_queue.len());
+                explicit_queue.push_back(PendingItem {
+                    track_id,
+                    capabilities,
+                    is_explicit: true,
+                });
+            }
+        }
+    }
+}
+
 fn apply_command(command: SchedulerCommand, state: &mut WorkerState) {
     match command {
         SchedulerCommand::SettingsChanged(settings) => {
@@ -853,23 +1024,7 @@ fn apply_command(command: SchedulerCommand, state: &mut WorkerState) {
             if capabilities.is_empty() {
                 return;
             }
-            // Dedup against the existing queue so a double-clicking
-            // user does not queue the same playlist twice.
-            let already_queued: std::collections::HashSet<TrackId> = state
-                .explicit_queue
-                .iter()
-                .map(|item| item.track_id)
-                .collect();
-            for track_id in track_ids {
-                if already_queued.contains(&track_id) {
-                    continue;
-                }
-                state.explicit_queue.push_back(PendingItem {
-                    track_id,
-                    capabilities,
-                    is_explicit: true,
-                });
-            }
+            queue_explicit_request(&mut state.explicit_queue, track_ids, capabilities);
         }
         SchedulerCommand::Wake | SchedulerCommand::Shutdown => {
             // Shutdown is handled at the caller; Wake has no side
@@ -1072,7 +1227,9 @@ fn attempt_tags(
                 "Sustain: tag enrichment persist failed for {}: {error:?}",
                 absolute_path.display()
             );
-            AttemptOutcome::Failed
+            AttemptOutcome::Failed {
+                changed_track: false,
+            }
         }
     }
 }

@@ -1366,3 +1366,119 @@ fn configured_bpm_range_reaches_the_analyzer() {
 
     scheduler.shutdown();
 }
+
+fn idle_supervisor_state() -> super::SupervisorState {
+    super::SupervisorState {
+        settings: AnalysisSettings::default(),
+        resource_usage: BackgroundResourceUsage::default(),
+        library_path: None,
+        completed: 0,
+        failed: 0,
+        total: None,
+        explicit_queue: std::collections::VecDeque::new(),
+        pending_persistence_error: None,
+    }
+}
+
+const BPM_ONLY: AnalysisCapabilities = AnalysisCapabilities {
+    bpm: true,
+    key: false,
+    audio: false,
+};
+const KEY_ONLY: AnalysisCapabilities = AnalysisCapabilities {
+    bpm: false,
+    key: true,
+    audio: false,
+};
+const BPM_AND_KEY: AnalysisCapabilities = AnalysisCapabilities {
+    bpm: true,
+    key: true,
+    audio: false,
+};
+
+#[test]
+fn a_second_capability_requested_for_a_queued_track_joins_the_first() {
+    let track_id = TrackId::new(1).expect("valid track id");
+    let mut state = idle_supervisor_state();
+    let mut pool = None;
+
+    for capabilities in [BPM_ONLY, KEY_ONLY] {
+        super::apply_command(
+            super::SchedulerCommand::ExplicitRun {
+                track_ids: vec![track_id],
+                capabilities,
+            },
+            &mut state,
+            &mut pool,
+        );
+    }
+
+    assert_eq!(state.explicit_queue.len(), 1);
+    assert_eq!(state.explicit_queue[0].capabilities, BPM_AND_KEY);
+}
+
+#[test]
+fn promoting_a_capability_for_an_already_pending_track_joins_the_pending_item() {
+    let track_id = TrackId::new(1).expect("valid track id");
+    let mut state = idle_supervisor_state();
+    state.explicit_queue.push_back(super::PendingItem {
+        track_id,
+        capabilities: KEY_ONLY,
+        is_explicit: true,
+    });
+    let mut pending = std::collections::VecDeque::from([super::PendingItem {
+        track_id,
+        capabilities: BPM_ONLY,
+        is_explicit: true,
+    }]);
+
+    super::drain_ready_explicit_work(&mut state, &mut pending, &std::collections::HashSet::new());
+
+    assert!(state.explicit_queue.is_empty());
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].capabilities, BPM_AND_KEY);
+}
+
+#[test]
+fn a_full_batch_still_takes_a_new_capability_for_a_track_it_holds() {
+    let mut state = idle_supervisor_state();
+    let mut pending = (1..=super::BATCH_SIZE as i64)
+        .map(|id| super::PendingItem {
+            track_id: TrackId::new(id).expect("valid track id"),
+            capabilities: BPM_ONLY,
+            is_explicit: true,
+        })
+        .collect::<std::collections::VecDeque<_>>();
+    let held = pending[0].track_id;
+    state.explicit_queue.push_back(super::PendingItem {
+        track_id: held,
+        capabilities: KEY_ONLY,
+        is_explicit: true,
+    });
+
+    super::drain_ready_explicit_work(&mut state, &mut pending, &std::collections::HashSet::new());
+
+    assert!(state.explicit_queue.is_empty());
+    assert_eq!(pending.len(), super::BATCH_SIZE);
+    assert_eq!(pending[0].capabilities, BPM_AND_KEY);
+}
+
+#[test]
+fn returning_explicit_work_merges_with_a_newer_request_for_the_same_track() {
+    let track_id = TrackId::new(1).expect("valid track id");
+    let mut queue = std::collections::VecDeque::from([super::PendingItem {
+        track_id,
+        capabilities: KEY_ONLY,
+        is_explicit: true,
+    }]);
+    let returning = [super::PendingItem {
+        track_id,
+        capabilities: BPM_ONLY,
+        is_explicit: true,
+    }];
+
+    super::requeue_explicit_items(&mut queue, returning.into_iter());
+
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].capabilities, BPM_AND_KEY);
+}
