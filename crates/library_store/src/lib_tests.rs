@@ -9,12 +9,13 @@ use std::{
 };
 
 use sustain_domain::{
-    AcousticFeatures, BeatGrid, Bpm, FieldChange, KeyOrigin, MetadataChange, PlayStatistics,
-    PlaylistEntry, Rating, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
-    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SourceFileStat, SourceFingerprint,
-    TrackAudioProperties, TrackContentHash, TrackLocation, TrackMetadata, TrackRelativePath,
+    AcousticFeatures, BeatGrid, Bpm, CalendarDate, FieldChange, KeyOrigin, MetadataChange,
+    PlayStatistics, PlaylistEntry, Rating, SmartPlaylistBoolField, SmartPlaylistBoolRule,
+    SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
+    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
+    SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField, SmartPlaylistTextOperator,
+    SourceFileStat, SourceFingerprint, TrackAudioProperties, TrackContentHash, TrackLocation,
+    TrackMetadata, TrackRelativePath,
 };
 
 use sustain_domain::{
@@ -787,11 +788,11 @@ fn sqlite_store_round_trips_every_rule_variant() {
                 },
                 SmartPlaylistRule::DateBefore {
                     field: SmartPlaylistDateField::LastPlayed,
-                    date: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+                    date: CalendarDate::new(2023, 11, 14).expect("a valid date"),
                 },
                 SmartPlaylistRule::DateAfter {
                     field: SmartPlaylistDateField::DateAdded,
-                    date: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000),
+                    date: CalendarDate::new(2020, 9, 13).expect("a valid date"),
                 },
                 SmartPlaylistRule::DateInLast {
                     field: SmartPlaylistDateField::LastPlayed,

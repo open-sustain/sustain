@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use sustain_device_mtp::MtpTransport;
 use sustain_device_sync::{
@@ -24,8 +24,9 @@ use sustain_device_sync::{
     resolve_source_fingerprint, source_file_stat,
 };
 use sustain_domain::{
-    DeviceLayout, DeviceRelativePath, FilesPerFolderCap, Playlist, PlaylistItem, SmartPlaylist,
-    SyncDevice, SyncDeviceId, SyncManifestEntry, Track, TrackId, matching_tracks,
+    Clock, DeviceLayout, DeviceRelativePath, FilesPerFolderCap, FrozenClock, Playlist,
+    PlaylistItem, SmartPlaylist, SyncDevice, SyncDeviceId, SyncManifestEntry, Track, TrackId,
+    matching_tracks,
 };
 use sustain_i18n::{gettext, tr_format};
 use sustain_library_store::{AnalysisCapabilities, LibraryStore};
@@ -527,7 +528,7 @@ impl ApplicationRuntime {
             mount: mount.clone(),
             store,
             library_path: self.settings.library.path.clone(),
-            now: self.clock.now(),
+            clock: self.clock.clone(),
             export_date: unix_to_ymd(self.clock_unix_secs()),
         };
         if self
@@ -637,7 +638,7 @@ impl ApplicationRuntime {
             store,
             metadata_service,
             library_path: self.settings.library.path.clone(),
-            now: self.clock.now(),
+            clock: self.clock.clone(),
             export_date: unix_to_ymd(self.clock_unix_secs()),
             remove_stale,
         };
@@ -790,7 +791,7 @@ struct DevicePlanPreparation {
     mount: DeviceMountIdentity,
     store: Arc<dyn LibraryStore>,
     library_path: Option<PathBuf>,
-    now: SystemTime,
+    clock: Arc<dyn Clock>,
     export_date: String,
 }
 
@@ -799,7 +800,7 @@ struct DeviceSyncPreparation {
     store: Arc<dyn LibraryStore>,
     metadata_service: Arc<dyn MetadataService>,
     library_path: Option<PathBuf>,
-    now: SystemTime,
+    clock: Arc<dyn Clock>,
     export_date: String,
     remove_stale: bool,
 }
@@ -814,7 +815,7 @@ impl DeviceSyncPreparation {
             self.store.as_ref(),
             &self.mount,
             self.library_path.as_deref(),
-            self.now,
+            self.clock.as_ref(),
             self.export_date,
             self.remove_stale,
             cancelled,
@@ -939,7 +940,7 @@ impl DevicePlanPreparation {
             self.store.as_ref(),
             &self.mount,
             self.library_path.as_deref(),
-            self.now,
+            self.clock.as_ref(),
             self.export_date,
             false,
             cancelled,
@@ -967,7 +968,7 @@ fn build_worker_sync_request(
     store: &dyn LibraryStore,
     mount: &DeviceMountIdentity,
     library_path: Option<&std::path::Path>,
-    now: SystemTime,
+    clock: &dyn Clock,
     export_date: String,
     remove_stale: bool,
     cancelled: &dyn Fn() -> bool,
@@ -1019,13 +1020,21 @@ fn build_worker_sync_request(
     let mut index_of: HashMap<TrackId, usize> = HashMap::new();
     let mut tracks = Vec::new();
     let mut resolved_playlists = Vec::new();
+    // Every exported smart playlist is evaluated at the same instant, so
+    // a track at the edge of a relative-date window cannot land in two
+    // playlists that exclude each other, or in neither.
+    let clock = FrozenClock::new(clock);
     for item in selection {
         if cancelled() {
             return Ok(None);
         }
-        let Some(track_ids) =
-            snapshot_playlist_track_ids(item, &library_tracks, &playlists, &smart_playlists, now)
-        else {
+        let Some(track_ids) = snapshot_playlist_track_ids(
+            item,
+            &library_tracks,
+            &playlists,
+            &smart_playlists,
+            &clock,
+        ) else {
             continue;
         };
         let name = snapshot_playlist_name(item, &playlists, &smart_playlists)
@@ -1228,7 +1237,7 @@ fn snapshot_playlist_track_ids(
     tracks: &[Track],
     playlists: &[Playlist],
     smart_playlists: &[SmartPlaylist],
-    now: SystemTime,
+    clock: &dyn Clock,
 ) -> Option<Vec<TrackId>> {
     match item {
         PlaylistItem::Playlist(id) => {
@@ -1247,7 +1256,7 @@ fn snapshot_playlist_track_ids(
             .iter()
             .find(|playlist| playlist.id == id)
             .map(|playlist| {
-                matching_tracks(tracks, &playlist.rules, now)
+                matching_tracks(tracks, &playlist.rules, clock)
                     .into_iter()
                     .map(|track| track.id)
                     .collect()
@@ -1676,7 +1685,7 @@ mod tests {
                 volume_id: None,
             },
             Some(temp.path()),
-            std::time::UNIX_EPOCH,
+            &crate::LocalClock,
             "2026-06-14".to_owned(),
             false,
             &|| false,

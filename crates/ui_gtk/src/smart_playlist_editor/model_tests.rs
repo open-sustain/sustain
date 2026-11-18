@@ -4,41 +4,6 @@
 use super::*;
 
 #[test]
-fn parse_iso_date_accepts_padded_dates() {
-    let date = parse_iso_date("2024-05-23").expect("valid date");
-    let elapsed = date
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("after epoch");
-    let expected_days: u64 = (1970..2024)
-        .map(|y| if is_leap_year(y) { 366 } else { 365 })
-        .sum::<u64>()
-        + 31
-        + 29
-        + 31
-        + 30
-        + 22;
-    assert_eq!(elapsed.as_secs(), expected_days * 86_400);
-}
-
-#[test]
-fn parse_iso_date_rejects_invalid_dates() {
-    assert!(parse_iso_date("2024-02-30").is_none());
-    assert!(parse_iso_date("2024-13-01").is_none());
-    assert!(parse_iso_date("not-a-date").is_none());
-    assert!(parse_iso_date("2024-05").is_none());
-    assert!(parse_iso_date("2024-05-23-extra").is_none());
-    assert!(parse_iso_date("1969-12-31").is_none());
-}
-
-#[test]
-fn leap_year_rules_match_gregorian_calendar() {
-    assert!(is_leap_year(2000));
-    assert!(!is_leap_year(1900));
-    assert!(is_leap_year(2024));
-    assert!(!is_leap_year(2023));
-}
-
-#[test]
 fn extract_rule_text_is_empty_creates_text_is_empty_variant() {
     let rule = extract_rule(
         EditorField::Text(SmartPlaylistTextField::Genre),
@@ -167,23 +132,16 @@ fn extract_rule_date_before_parses_iso_value() {
     let rule = extract_rule(
         EditorField::Date(SmartPlaylistDateField::DateAdded),
         EditorOperator::DateBefore,
-        &ValueInput::Date("2024-05-23".to_owned()),
+        &ValueInput::Date(" 2024-05-23 ".to_owned()),
     )
     .expect("extracts");
-    match rule {
-        SmartPlaylistRule::DateBefore { field, date } => {
-            assert_eq!(field, SmartPlaylistDateField::DateAdded);
-            let expected = parse_iso_date("2024-05-23").expect("valid");
-            assert_eq!(date, expected);
+    assert_eq!(
+        rule,
+        SmartPlaylistRule::DateBefore {
+            field: SmartPlaylistDateField::DateAdded,
+            date: CalendarDate::new(2024, 5, 23).expect("a valid date"),
         }
-        other => assert_eq!(
-            other,
-            SmartPlaylistRule::DateBefore {
-                field: SmartPlaylistDateField::DateAdded,
-                date: parse_iso_date("2024-05-23").expect("valid"),
-            }
-        ),
-    }
+    );
 }
 
 #[test]

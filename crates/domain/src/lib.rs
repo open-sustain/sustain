@@ -7,6 +7,7 @@ mod acoustic;
 mod analyzer_versions;
 mod beat_grid;
 mod bpm;
+mod calendar_date;
 mod clock;
 mod command;
 mod device_sync;
@@ -39,7 +40,10 @@ pub use acoustic::AcousticFeatures;
 pub use analyzer_versions::AnalyzerVersions;
 pub use beat_grid::{BEATS_PER_BAR, Beat, BeatGrid, InvalidBeatGrid};
 pub use bpm::{Bpm, InvalidBpm};
-pub use clock::{Clock, MonotonicClock, SystemClock, SystemMonotonicClock};
+pub use calendar_date::{CalendarDate, unix_seconds_floor};
+pub use clock::{
+    Calendar, Clock, FixedOffsetCalendar, FrozenClock, MonotonicClock, SystemMonotonicClock,
+};
 pub use command::ApplicationCommand;
 pub use device_sync::{
     AnlzRecord, DeviceArtistSelection, DeviceKind, DeviceLayout, DeviceRelativePath,
@@ -90,7 +94,7 @@ pub use smart_playlist::{
     SmartPlaylistTextField, SmartPlaylistTextOperator,
 };
 pub use smart_playlist_defaults::default_smart_playlists;
-pub use smart_playlist_evaluation::{matching_tracks, track_matches_rule, track_matches_rule_set};
+pub use smart_playlist_evaluation::{SmartPlaylistMatcher, matching_tracks, track_matches_rule};
 pub use statistics::PlayStatistics;
 pub use synced_lyrics::{SyncedLyrics, SyncedLyricsLine};
 pub use text::{

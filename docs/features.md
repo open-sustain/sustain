@@ -388,6 +388,13 @@ display but do not independently make a track match. Match mode is
 `Most Often Played`, `Random`, etc. Smart playlists are re-evaluated
 live on every query.
 
+Date rules `is before` / `is after` name a calendar day. A track's date
+is read in the local time zone, the same way the library displays its
+dates, and the rule compares the day it falls on: "Date Added is before
+2024-01-01" matches tracks the library shows as added on December 31 or
+earlier, and "is after 2024-01-01" those it shows as added on January 2
+or later.
+
 ### Default smart playlists — *iso-iTunes* / *Sustain-native*
 A freshly created library is seeded with five iTunes-style starter
 smart playlists — **Recently Added**, **Recently Played**,
@@ -404,7 +411,9 @@ delete or edit them.
 ### Smart playlist editor — *iso-iTunes*
 A dedicated editor dialog mirrors the iTunes 11 layout: match mode at
 the top, one row per rule with field/operator/value widgets, a limit
-section, and OK/Cancel.
+section, and OK/Cancel. Opening a smart playlist and saving it keeps
+every rule and limit the user did not change exactly as stored, even a
+value outside the range its control can show.
 
 ### Playlist header — *iTunes-adjacent*
 The playlist view draws a header strip above the track table, the

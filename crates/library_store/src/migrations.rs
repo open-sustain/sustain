@@ -19,11 +19,12 @@ use crate::{
         INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL, MOVE_WAVEFORMS_TO_CACHE_SQL,
         NORMALIZE_EMPTY_TRACK_METADATA_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL,
         RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
-        VERSION_ANALYSIS_PER_CAPABILITY_SQL, VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
+        STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
+        VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 21;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 22;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -149,6 +150,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 21,
         description: "generate the article sort keys migration 3 missed, by the import rule",
         step: MigrationStep::Rust(fill_missing_generated_sort_fields),
+    },
+    Migration {
+        version: 22,
+        description: "store smart playlist date rules as calendar days",
+        step: MigrationStep::Sql(STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL),
     },
 ];
 
@@ -344,6 +350,9 @@ fn has_application_tables(connection: &Connection) -> StoreResult<bool> {
 #[cfg(test)]
 mod tests {
     use rusqlite::Connection;
+    use sustain_domain::{
+        CalendarDate, SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistRule,
+    };
 
     use super::*;
 
@@ -1704,6 +1713,76 @@ WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
                 .execute("UPDATE tracks SET key_origin = 3 WHERE id = 1", [])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn upgrade_from_v21_reads_each_date_rule_as_the_day_it_named() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..21]).expect("schema version 21");
+        connection
+            .execute_batch(
+                "INSERT INTO smart_playlists (id, name, match_kind) VALUES (1, 'Dated', 'All');
+                 INSERT INTO smart_playlist_rules
+                     (smart_playlist_id, position, kind, field, date_unix, days_value)
+                 VALUES
+                     -- The editor's UTC midnight for 2024-01-01.
+                     (1, 0, 'DateBefore', 'DateAdded', 1704067200, NULL),
+                     -- A command's noon on 2024-01-01.
+                     (1, 1, 'DateAfter', 'LastPlayed', 1704110400, NULL),
+                     -- Before 1970.
+                     (1, 2, 'DateBefore', 'DateAdded', -86400, NULL),
+                     -- Beyond the calendar on either side.
+                     (1, 3, 'DateBefore', 'DateAdded', 300000000000, NULL),
+                     (1, 4, 'DateAfter', 'DateAdded', -70000000000, NULL),
+                     -- Not a calendar rule.
+                     (1, 5, 'DateInLast', 'LastPlayed', NULL, 7),
+                     -- A day before 1970, which version 21 stored as NULL.
+                     (1, 6, 'DateAfter', 'LastPlayed', NULL, NULL);",
+            )
+            .expect("seed version 21 rules");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        let date = |text: &str| CalendarDate::parse_iso(text).expect("a valid date");
+        assert_eq!(
+            crate::load_smart_playlist_rules(&connection, SmartPlaylistId::new(1).expect("an id"))
+                .expect("load"),
+            vec![
+                SmartPlaylistRule::DateBefore {
+                    field: SmartPlaylistDateField::DateAdded,
+                    date: date("2024-01-01"),
+                },
+                SmartPlaylistRule::DateAfter {
+                    field: SmartPlaylistDateField::LastPlayed,
+                    date: date("2024-01-01"),
+                },
+                SmartPlaylistRule::DateBefore {
+                    field: SmartPlaylistDateField::DateAdded,
+                    date: date("1969-12-31"),
+                },
+                SmartPlaylistRule::DateBefore {
+                    field: SmartPlaylistDateField::DateAdded,
+                    date: date("9999-12-31"),
+                },
+                SmartPlaylistRule::DateAfter {
+                    field: SmartPlaylistDateField::DateAdded,
+                    date: date("0001-01-01"),
+                },
+                SmartPlaylistRule::DateInLast {
+                    field: SmartPlaylistDateField::LastPlayed,
+                    days: std::num::NonZeroU32::new(7).expect("positive days"),
+                },
+                SmartPlaylistRule::DateAfter {
+                    field: SmartPlaylistDateField::LastPlayed,
+                    date: date("0001-01-01"),
+                },
+            ]
+        );
+        assert_eq!(schema_text(&connection), fresh_schema_text());
     }
 
     #[test]

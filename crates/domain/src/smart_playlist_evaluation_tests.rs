@@ -2,20 +2,52 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use std::num::NonZeroU32;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use crate::{
-    PlayStatistics, Rating, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
-    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, Track, TrackId, TrackLocation,
-    TrackMetadata, TrackRelativePath,
+    Calendar, CalendarDate, Clock, FixedOffsetCalendar, PlayStatistics, Rating,
+    SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistLimit,
+    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
+    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
+    SmartPlaylistTextOperator, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
 };
 
-use super::{matching_tracks, track_matches_rule, track_matches_rule_set};
+use super::{SmartPlaylistMatcher, matching_tracks, track_matches_rule};
 
 fn unix(seconds: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)
+}
+
+/// A clock stopped at an instant, reading its days in UTC.
+struct UtcClock(SystemTime);
+
+impl Clock for UtcClock {
+    fn now(&self) -> SystemTime {
+        self.0
+    }
+
+    fn calendar(&self) -> Arc<dyn Calendar> {
+        Arc::new(FixedOffsetCalendar::UTC)
+    }
+}
+
+/// A clock stopped at an instant, reading its days in a fixed zone
+/// `offset_hours` ahead of UTC.
+struct ZonedClock {
+    now: SystemTime,
+    offset_hours: i32,
+}
+
+impl Clock for ZonedClock {
+    fn now(&self) -> SystemTime {
+        self.now
+    }
+
+    fn calendar(&self) -> Arc<dyn Calendar> {
+        Arc::new(FixedOffsetCalendar::new(self.offset_hours * 3_600))
+    }
 }
 
 fn relative(path: &str) -> TrackRelativePath {
@@ -52,7 +84,7 @@ fn track(id: i64, genre: Option<&str>, play_count: u64, year: Option<i32>) -> Tr
 
 #[test]
 fn file_is_missing_and_is_present_match_on_availability() {
-    let now = unix(10_000);
+    let now = &UtcClock(unix(10_000));
     let mut missing = track(1, None, 0, None);
     missing.location = TrackLocation::missing(relative("track-1.flac"));
     let present = track(2, None, 0, None); // available by default
@@ -81,7 +113,7 @@ fn file_is_missing_and_is_present_match_on_availability() {
 
 #[test]
 fn has_lyrics_bool_rule_uses_non_blank_plain_lyrics() {
-    let now = unix(10_000);
+    let now = &UtcClock(unix(10_000));
     let mut with_lyrics = track(1, None, 0, None);
     with_lyrics.metadata.lyrics = Some("A lyric line".to_owned());
     let mut blank_lyrics = track(2, None, 0, None);
@@ -105,7 +137,7 @@ fn text_contains_is_case_insensitive() {
         value: "trip".to_owned(),
     };
 
-    assert!(track_matches_rule(&track, &rule, unix(2_000)));
+    assert!(track_matches_rule(&track, &rule, &UtcClock(unix(2_000))));
 }
 
 #[test]
@@ -117,7 +149,7 @@ fn text_contains_folds_accents_like_search() {
         value: "deja".to_owned(),
     };
 
-    assert!(track_matches_rule(&track, &rule, unix(2_000)));
+    assert!(track_matches_rule(&track, &rule, &UtcClock(unix(2_000))));
 }
 
 #[test]
@@ -129,7 +161,7 @@ fn text_is_not_rejects_exact_match() {
         value: "Jazz".to_owned(),
     };
 
-    assert!(!track_matches_rule(&track, &rule, unix(2_000)));
+    assert!(!track_matches_rule(&track, &rule, &UtcClock(unix(2_000))));
 }
 
 #[test]
@@ -141,7 +173,7 @@ fn missing_text_field_does_not_match_text_rule() {
         value: "Rock".to_owned(),
     };
 
-    assert!(!track_matches_rule(&track, &rule, unix(2_000)));
+    assert!(!track_matches_rule(&track, &rule, &UtcClock(unix(2_000))));
 }
 
 #[test]
@@ -153,7 +185,7 @@ fn number_greater_than_or_equal_matches_play_count() {
         value: 5,
     };
 
-    assert!(track_matches_rule(&track, &rule, unix(2_000)));
+    assert!(track_matches_rule(&track, &rule, &UtcClock(unix(2_000))));
 }
 
 #[test]
@@ -165,7 +197,7 @@ fn missing_number_field_does_not_match_number_rule() {
         value: 2000,
     };
 
-    assert!(!track_matches_rule(&track, &rule, unix(2_000)));
+    assert!(!track_matches_rule(&track, &rule, &UtcClock(unix(2_000))));
 }
 
 #[test]
@@ -176,8 +208,16 @@ fn number_is_empty_matches_only_missing_numeric_field() {
         field: SmartPlaylistNumberField::Year,
     };
 
-    assert!(!track_matches_rule(&with_year, &rule, unix(2_000)));
-    assert!(track_matches_rule(&without_year, &rule, unix(2_000)));
+    assert!(!track_matches_rule(
+        &with_year,
+        &rule,
+        &UtcClock(unix(2_000))
+    ));
+    assert!(track_matches_rule(
+        &without_year,
+        &rule,
+        &UtcClock(unix(2_000))
+    ));
 }
 
 #[test]
@@ -188,8 +228,16 @@ fn number_is_present_matches_only_populated_numeric_field() {
         field: SmartPlaylistNumberField::Year,
     };
 
-    assert!(track_matches_rule(&with_year, &rule, unix(2_000)));
-    assert!(!track_matches_rule(&without_year, &rule, unix(2_000)));
+    assert!(track_matches_rule(
+        &with_year,
+        &rule,
+        &UtcClock(unix(2_000))
+    ));
+    assert!(!track_matches_rule(
+        &without_year,
+        &rule,
+        &UtcClock(unix(2_000))
+    ));
 }
 
 #[test]
@@ -201,7 +249,7 @@ fn rating_rule_uses_rating_stars() {
         value: Rating::new(4).expect("valid rating"),
     };
 
-    assert!(track_matches_rule(&track, &rule, unix(2_000)));
+    assert!(track_matches_rule(&track, &rule, &UtcClock(unix(2_000))));
 }
 
 #[test]
@@ -213,8 +261,8 @@ fn date_in_last_uses_injected_clock() {
         days: NonZeroU32::new(2).expect("positive days"),
     };
 
-    let now_inside_window = unix(900_000 + 86_400);
-    let now_outside_window = unix(900_000 + 5 * 86_400);
+    let now_inside_window = &UtcClock(unix(900_000 + 86_400));
+    let now_outside_window = &UtcClock(unix(900_000 + 5 * 86_400));
 
     assert!(track_matches_rule(&track, &rule, now_inside_window));
     assert!(!track_matches_rule(&track, &rule, now_outside_window));
@@ -228,7 +276,7 @@ fn date_not_in_last_treats_missing_date_as_matching() {
         days: NonZeroU32::new(7).expect("positive days"),
     };
 
-    assert!(track_matches_rule(&track, &rule, unix(2_000)));
+    assert!(track_matches_rule(&track, &rule, &UtcClock(unix(2_000))));
 }
 
 #[test]
@@ -251,7 +299,7 @@ fn match_all_requires_every_rule_to_match() {
         limit: None,
     };
 
-    assert!(track_matches_rule_set(&track, &rules, unix(2_000)));
+    assert!(SmartPlaylistMatcher::new(&rules, &UtcClock(unix(2_000))).matches(&track));
 }
 
 #[test]
@@ -274,7 +322,7 @@ fn match_any_passes_when_one_rule_matches() {
         limit: None,
     };
 
-    assert!(track_matches_rule_set(&track, &rules, unix(2_000)));
+    assert!(SmartPlaylistMatcher::new(&rules, &UtcClock(unix(2_000))).matches(&track));
 }
 
 #[test]
@@ -286,7 +334,7 @@ fn empty_rule_set_matches_nothing() {
         limit: None,
     };
 
-    assert!(!track_matches_rule_set(&track, &rules, unix(2_000)));
+    assert!(!SmartPlaylistMatcher::new(&rules, &UtcClock(unix(2_000))).matches(&track));
 }
 
 #[test]
@@ -314,7 +362,7 @@ fn limit_truncates_to_count_after_sorting_by_play_count() {
         }),
     };
 
-    let matched = matching_tracks(&tracks, &rules, unix(2_000));
+    let matched = matching_tracks(&tracks, &rules, &UtcClock(unix(2_000)));
     let matched_ids: Vec<i64> = matched.iter().map(|track| track.id.get()).collect();
 
     assert_eq!(matched_ids, vec![1, 4]);
@@ -342,7 +390,7 @@ fn limit_sorted_by_title_folds_accents_like_search() {
         }),
     };
 
-    let matched = matching_tracks(&tracks, &rules, unix(2_000));
+    let matched = matching_tracks(&tracks, &rules, &UtcClock(unix(2_000)));
     let matched_ids: Vec<i64> = matched.iter().map(|track| track.id.get()).collect();
 
     assert_eq!(matched_ids, vec![1]);
@@ -372,7 +420,7 @@ fn limit_sorted_by_most_recently_added_puts_newer_first() {
         }),
     };
 
-    let matched = matching_tracks(&tracks, &rules, unix(2_000));
+    let matched = matching_tracks(&tracks, &rules, &UtcClock(unix(2_000)));
     let matched_ids: Vec<i64> = matched.iter().map(|track| track.id.get()).collect();
 
     assert_eq!(matched_ids, vec![2, 3, 1]);
@@ -400,9 +448,9 @@ fn random_limit_order_is_seeded_by_the_injected_clock() {
         }),
     };
 
-    let first = matching_tracks(&tracks, &rules, unix(2_000));
-    let second = matching_tracks(&tracks, &rules, unix(2_000));
-    let later = matching_tracks(&tracks, &rules, unix(2_001));
+    let first = matching_tracks(&tracks, &rules, &UtcClock(unix(2_000)));
+    let second = matching_tracks(&tracks, &rules, &UtcClock(unix(2_000)));
+    let later = matching_tracks(&tracks, &rules, &UtcClock(unix(2_001)));
     let first_ids: Vec<i64> = first.iter().map(|track| track.id.get()).collect();
     let second_ids: Vec<i64> = second.iter().map(|track| track.id.get()).collect();
     let later_ids: Vec<i64> = later.iter().map(|track| track.id.get()).collect();
@@ -410,4 +458,206 @@ fn random_limit_order_is_seeded_by_the_injected_clock() {
     assert_eq!(first_ids, second_ids);
     assert_ne!(first_ids, vec![1, 2, 3, 4, 5]);
     assert_ne!(first_ids, later_ids);
+}
+
+fn date_rule_track(date_added_unix: u64) -> Track {
+    let mut track = track(1, None, 0, None);
+    track.statistics.date_added_at = Some(unix(date_added_unix));
+    track
+}
+
+fn calendar_date(text: &str) -> CalendarDate {
+    CalendarDate::parse_iso(text).expect("a valid date")
+}
+
+/// 2024-01-01T00:00:00Z.
+const NEW_YEAR_2024_UTC: u64 = 1_704_067_200;
+
+#[test]
+fn before_a_day_means_on_an_earlier_day_in_the_users_calendar() {
+    // In Paris (UTC+1), 00:30 on January 1 is 23:30 UTC on December 31:
+    // the library shows that track as added on January 1.
+    let paris = ZonedClock {
+        now: unix(NEW_YEAR_2024_UTC + 30 * 86_400),
+        offset_hours: 1,
+    };
+    let rule = SmartPlaylistRule::DateBefore {
+        field: SmartPlaylistDateField::DateAdded,
+        date: calendar_date("2024-01-01"),
+    };
+    let added_just_after_local_midnight = date_rule_track(NEW_YEAR_2024_UTC - 30 * 60);
+    let added_late_on_new_years_eve = date_rule_track(NEW_YEAR_2024_UTC - 90 * 60);
+
+    assert!(!track_matches_rule(
+        &added_just_after_local_midnight,
+        &rule,
+        &paris
+    ));
+    assert!(track_matches_rule(
+        &added_late_on_new_years_eve,
+        &rule,
+        &paris
+    ));
+}
+
+#[test]
+fn after_a_day_means_on_a_later_day_in_the_users_calendar() {
+    let utc = UtcClock(unix(NEW_YEAR_2024_UTC + 30 * 86_400));
+    let rule = SmartPlaylistRule::DateAfter {
+        field: SmartPlaylistDateField::DateAdded,
+        date: calendar_date("2024-01-01"),
+    };
+    let late_on_the_day = date_rule_track(NEW_YEAR_2024_UTC + 86_400 - 1);
+    let first_instant_of_the_next_day = date_rule_track(NEW_YEAR_2024_UTC + 86_400);
+
+    assert!(!track_matches_rule(&late_on_the_day, &rule, &utc));
+    assert!(track_matches_rule(
+        &first_instant_of_the_next_day,
+        &rule,
+        &utc
+    ));
+}
+
+#[test]
+fn nothing_is_after_the_last_supported_day() {
+    let utc = UtcClock(unix(NEW_YEAR_2024_UTC));
+    let rule = SmartPlaylistRule::DateAfter {
+        field: SmartPlaylistDateField::DateAdded,
+        date: calendar_date("9999-12-31"),
+    };
+
+    assert!(!track_matches_rule(
+        &date_rule_track(u64::from(u32::MAX) * 100),
+        &rule,
+        &utc
+    ));
+}
+
+/// A calendar whose offset steps back across midnight, as St. John's did
+/// on 2009-11-01: from 00:01 at 02:31 UTC back to 23:01 the evening
+/// before.
+struct SteppedBackCalendar;
+
+/// 2009-11-01T02:31:00Z.
+const STEP_BACK_UTC: u64 = 1_257_042_660;
+
+impl Calendar for SteppedBackCalendar {
+    fn date_of(&self, instant: SystemTime) -> CalendarDate {
+        let offset = if instant < unix(STEP_BACK_UTC) {
+            -9_000
+        } else {
+            -12_600
+        };
+        CalendarDate::of_instant(instant, offset)
+    }
+}
+
+struct SteppedBackClock;
+
+impl Clock for SteppedBackClock {
+    fn now(&self) -> SystemTime {
+        unix(STEP_BACK_UTC + 86_400)
+    }
+
+    fn calendar(&self) -> Arc<dyn Calendar> {
+        Arc::new(SteppedBackCalendar)
+    }
+}
+
+#[test]
+fn a_date_on_a_day_the_clock_stepped_back_into_is_on_that_day() {
+    // At 02:31 UTC the clock reads October 31, 23:01, after having read
+    // November 1 for a minute.
+    let after_the_step = date_rule_track(STEP_BACK_UTC);
+    let before = SmartPlaylistRule::DateBefore {
+        field: SmartPlaylistDateField::DateAdded,
+        date: calendar_date("2009-11-01"),
+    };
+    let after = SmartPlaylistRule::DateAfter {
+        field: SmartPlaylistDateField::DateAdded,
+        date: calendar_date("2009-10-31"),
+    };
+
+    assert!(track_matches_rule(
+        &after_the_step,
+        &before,
+        &SteppedBackClock
+    ));
+    assert!(!track_matches_rule(
+        &after_the_step,
+        &after,
+        &SteppedBackClock
+    ));
+}
+
+/// A clock a second later each time it is read, which counts the
+/// calendars it hands out.
+#[derive(Default)]
+struct TickingClock {
+    reads: AtomicU64,
+    calendars_read: AtomicU64,
+}
+
+impl Clock for TickingClock {
+    fn now(&self) -> SystemTime {
+        unix(1_000_000 + self.reads.fetch_add(1, Ordering::Relaxed))
+    }
+
+    fn calendar(&self) -> Arc<dyn Calendar> {
+        self.calendars_read.fetch_add(1, Ordering::Relaxed);
+        Arc::new(FixedOffsetCalendar::UTC)
+    }
+}
+
+#[test]
+fn every_rule_of_a_pass_reads_the_same_present() {
+    let days = NonZeroU32::new(1).expect("positive days");
+    let rules = SmartPlaylistRuleSet {
+        match_kind: SmartPlaylistMatchKind::All,
+        rules: vec![
+            SmartPlaylistRule::DateInLast {
+                field: SmartPlaylistDateField::LastPlayed,
+                days,
+            },
+            SmartPlaylistRule::DateNotInLast {
+                field: SmartPlaylistDateField::LastPlayed,
+                days,
+            },
+        ],
+        limit: None,
+    };
+    let matcher = SmartPlaylistMatcher::new(&rules, &TickingClock::default());
+
+    // Around the window's edge, a track played inside one reading's
+    // window but outside a later one's would match both rules.
+    for seconds in 1_000_000 - 86_400 - 5..1_000_000 - 86_400 + 5 {
+        let mut played = track(1, None, 0, None);
+        played.statistics.last_played_at = Some(unix(seconds));
+        assert!(!matcher.matches(&played), "played at {seconds}");
+    }
+}
+
+#[test]
+fn a_pass_reads_the_users_calendar_once_for_every_track() {
+    let rules = SmartPlaylistRuleSet {
+        match_kind: SmartPlaylistMatchKind::All,
+        rules: vec![SmartPlaylistRule::DateBefore {
+            field: SmartPlaylistDateField::DateAdded,
+            date: CalendarDate::new(2024, 1, 1).expect("a valid date"),
+        }],
+        limit: None,
+    };
+    let tracks = [
+        track(1, None, 0, None),
+        track(2, None, 0, None),
+        track(3, None, 0, None),
+    ];
+    let clock = TickingClock::default();
+
+    let matcher = SmartPlaylistMatcher::new(&rules, &clock);
+    for track in &tracks {
+        assert!(matcher.matches(track));
+    }
+
+    assert_eq!(clock.calendars_read.load(Ordering::Relaxed), 1);
 }

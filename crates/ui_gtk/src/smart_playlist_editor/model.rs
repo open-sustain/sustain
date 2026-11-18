@@ -1,13 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{
-    num::NonZeroU32,
-    time::{Duration, SystemTime},
-};
+use std::{cell::RefCell, num::NonZeroU32, rc::Rc};
 
 use sustain_app_runtime::{
-    Rating, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
+    CalendarDate, Rating, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
     SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
     SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
     SmartPlaylistTextOperator,
@@ -345,6 +342,41 @@ pub(super) fn limit_selection_label(selection: SmartPlaylistLimitSelection) -> S
     }
 }
 
+/// A stored value the editor saves as it was until the user edits its
+/// control.
+///
+/// A control can hold less than the value it shows: a spin button clamps
+/// to its range. Opening and saving a smart playlist must leave every
+/// rule the user did not edit exactly as it was stored, so the value is
+/// rebuilt from the control only once the user has edited it — even if
+/// the edit is later undone, since the control then shows the user's
+/// choice and not the stored value.
+#[derive(Clone, Debug)]
+pub(super) struct StoredUntilEdited<T>(Rc<RefCell<Option<T>>>);
+
+impl<T: Clone> StoredUntilEdited<T> {
+    pub(super) fn new(value: T) -> Self {
+        Self(Rc::new(RefCell::new(Some(value))))
+    }
+
+    /// The user edited the control: from now on it holds the value.
+    pub(super) fn edited(&self) {
+        self.0.borrow_mut().take();
+    }
+
+    /// The stored value while the control is unedited, otherwise the
+    /// value `rebuild` reads from the control.
+    pub(super) fn value_or_rebuilt<E>(
+        &self,
+        rebuild: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        match self.0.borrow().clone() {
+            Some(value) => Ok(value),
+            None => rebuild(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum ValueInput {
     Text(String),
@@ -519,11 +551,13 @@ fn read_rating(value: &ValueInput) -> Result<Rating, RuleError> {
     }
 }
 
-fn read_date(value: &ValueInput) -> Result<SystemTime, RuleError> {
+fn read_date(value: &ValueInput) -> Result<CalendarDate, RuleError> {
     match value {
-        ValueInput::Date(text) => parse_iso_date(text.trim()).ok_or(RuleError::InvalidDate {
-            offending: text.clone(),
-        }),
+        ValueInput::Date(text) => {
+            CalendarDate::parse_iso(text.trim()).ok_or(RuleError::InvalidDate {
+                offending: text.clone(),
+            })
+        }
         _ => Err(RuleError::FieldOperatorMismatch),
     }
 }
@@ -638,12 +672,12 @@ pub(super) fn decompose_rule(
         SmartPlaylistRule::DateBefore { field, date } => (
             EditorField::Date(*field),
             EditorOperator::DateBefore,
-            ValueInput::Date(format_iso_date(*date)),
+            ValueInput::Date(date.to_string()),
         ),
         SmartPlaylistRule::DateAfter { field, date } => (
             EditorField::Date(*field),
             EditorOperator::DateAfter,
-            ValueInput::Date(format_iso_date(*date)),
+            ValueInput::Date(date.to_string()),
         ),
         SmartPlaylistRule::DateInLast { field, days } => (
             EditorField::Date(*field),
@@ -731,87 +765,6 @@ pub(super) fn automatic_name_for_single_text_rule(
 
 fn is_short_single_line_text(value: &str) -> bool {
     !value.is_empty() && value.chars().count() <= 64 && !value.chars().any(char::is_control)
-}
-
-fn format_iso_date(date: SystemTime) -> String {
-    let seconds = date
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    let mut remaining_days = seconds / 86_400;
-    let mut year: i32 = 1970;
-    loop {
-        let year_days = if is_leap_year(year) { 366 } else { 365 } as u64;
-        if remaining_days < year_days {
-            break;
-        }
-        remaining_days -= year_days;
-        year += 1;
-    }
-    let mut month: u32 = 1;
-    while month <= 12 {
-        let month_days = u64::from(days_in_month(year, month));
-        if remaining_days < month_days {
-            break;
-        }
-        remaining_days -= month_days;
-        month += 1;
-    }
-    let day = (remaining_days + 1) as u32;
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
-fn parse_iso_date(text: &str) -> Option<SystemTime> {
-    let mut parts = text.split('-');
-    let year: i32 = parts.next()?.parse().ok()?;
-    let month: u32 = parts.next()?.parse().ok()?;
-    let day: u32 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) {
-        return None;
-    }
-    let max_day = days_in_month(year, month);
-    if !(1..=max_day).contains(&day) {
-        return None;
-    }
-    let days = days_since_unix_epoch(year, month, day)?;
-    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(days * 86_400))
-}
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if is_leap_year(year) {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 0,
-    }
-}
-
-fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
-}
-
-fn days_since_unix_epoch(year: i32, month: u32, day: u32) -> Option<u64> {
-    if year < 1970 {
-        return None;
-    }
-    let mut days: u64 = 0;
-    for y in 1970..year {
-        days += if is_leap_year(y) { 366 } else { 365 };
-    }
-    for m in 1..month {
-        days += u64::from(days_in_month(year, m));
-    }
-    days += u64::from(day - 1);
-    Some(days)
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ async-channel = "2"
 directories = "6.0.0"
 # Local wall-clock time for freedesktop trash `DeletionDate` stamps; the
 # same `glib::DateTime` the GTK frontend formats dates with.
-glib = "0.21"
+glib = { version = "0.21", features = ["v2_68"] }
 tempfile = "3"
 url = "2"
 # Linux syscall wrappers for `setpriority` and `ioprio_set` used by the

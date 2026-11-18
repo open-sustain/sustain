@@ -645,6 +645,31 @@ UPDATE track_online_status SET
 ALTER TABLE track_online_status DROP COLUMN provider_version;
 "#;
 
+// A "before" or "after" date rule names a day on the calendar, not an
+// instant: the editor stored each as the UTC midnight that begins the
+// day the user typed, so that day is the instant's UTC date. Rules a
+// command stored with a time of day keep the day it fell on in UTC. An
+// instant outside the calendar's years 1 to 9999 becomes the nearest day
+// within them, 0001-01-01 or 9999-12-31: the rule keeps its sense, but
+// a date on that day itself now falls on the other side of it.
+//
+// Version 21 stored a day before 1970 as NULL, the one instant it could
+// not write, and then could not load the rule. Which day it was is lost.
+// The first day stands in for it: it selects what version 21 meant to,
+// comparing that day's start with dates the library records from 1970
+// on — nothing before it, everything after it.
+pub(super) const STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL: &str = r#"
+ALTER TABLE smart_playlist_rules ADD COLUMN calendar_date TEXT;
+UPDATE smart_playlist_rules
+SET calendar_date = CASE
+    WHEN date_unix IS NULL OR date_unix < -62135596800 THEN '0001-01-01'
+    WHEN date_unix >= 253402300800 THEN '9999-12-31'
+    ELSE date(date_unix, 'unixepoch')
+END
+WHERE kind IN ('DateBefore', 'DateAfter');
+ALTER TABLE smart_playlist_rules DROP COLUMN date_unix;
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.

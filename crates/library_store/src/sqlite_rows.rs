@@ -8,11 +8,11 @@ use std::{
 
 use rusqlite::{Connection, Row, params};
 use sustain_domain::{
-    Bpm, KeyOrigin, MusicalKey, PlayStatistics, PlaylistEntry, SmartPlaylistBoolField,
-    SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
-    SmartPlaylistMatchKind, SmartPlaylistNumberField, SmartPlaylistNumberOperator,
-    SmartPlaylistRule, SmartPlaylistTextField, SmartPlaylistTextOperator, TrackLocation,
-    TrackMetadata, TrackRelativePath, WaveformSegment,
+    Bpm, CalendarDate, KeyOrigin, MusicalKey, PlayStatistics, PlaylistEntry,
+    SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField, SmartPlaylistLimit,
+    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
+    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistTextField,
+    SmartPlaylistTextOperator, TrackLocation, TrackMetadata, TrackRelativePath, WaveformSegment,
 };
 
 use crate::{
@@ -507,7 +507,7 @@ pub(crate) struct RuleColumns {
     pub(crate) number_operator: Option<&'static str>,
     pub(crate) number_value: Option<i64>,
     pub(crate) rating_stars: Option<i64>,
-    pub(crate) date_unix: Option<i64>,
+    pub(crate) calendar_date: Option<String>,
     pub(crate) days_value: Option<i64>,
     pub(crate) bool_value: Option<bool>,
 }
@@ -565,13 +565,13 @@ pub(crate) fn rule_to_columns(rule: &SmartPlaylistRule) -> RuleColumns {
         SmartPlaylistRule::DateBefore { field, date } => RuleColumns {
             kind: "DateBefore",
             field: Some(date_field_name(*field)),
-            date_unix: system_time_to_unix(*date),
+            calendar_date: Some(date.to_string()),
             ..RuleColumns::default()
         },
         SmartPlaylistRule::DateAfter { field, date } => RuleColumns {
             kind: "DateAfter",
             field: Some(date_field_name(*field)),
-            date_unix: system_time_to_unix(*date),
+            calendar_date: Some(date.to_string()),
             ..RuleColumns::default()
         },
         SmartPlaylistRule::DateInLast { field, days } => RuleColumns {
@@ -621,7 +621,7 @@ pub(crate) fn load_smart_playlist_rules(
         .prepare(
             r#"
             SELECT kind, field, text_operator, text_value, number_operator, number_value,
-                   rating_stars, date_unix, days_value, bool_value
+                   rating_stars, calendar_date, days_value, bool_value
             FROM smart_playlist_rules
             WHERE smart_playlist_id = ?1
             ORDER BY position
@@ -648,7 +648,7 @@ fn rule_from_row(row: &Row<'_>) -> StoreResult<SmartPlaylistRule> {
     let number_operator_name_value = optional_string(row, 4)?;
     let number_value = optional_i64(row, 5)?;
     let rating_stars = optional_i64(row, 6)?;
-    let date_unix = optional_i64(row, 7)?;
+    let calendar_date = optional_string(row, 7)?;
     let days_value = optional_i64(row, 8)?;
     let bool_value = optional_i64(row, 9)?;
 
@@ -683,10 +683,13 @@ fn rule_from_row(row: &Row<'_>) -> StoreResult<SmartPlaylistRule> {
             StoreError::InvalidStoredEnum(format!("{kind} rule missing number_value"))
         })
     };
-    let require_date_unix = || -> StoreResult<SystemTime> {
-        date_unix
-            .ok_or_else(|| StoreError::InvalidStoredEnum(format!("{kind} rule missing date_unix")))
-            .map(unix_to_system_time)
+    let require_calendar_date = || -> StoreResult<CalendarDate> {
+        let text = calendar_date.as_deref().ok_or_else(|| {
+            StoreError::InvalidStoredEnum(format!("{kind} rule missing calendar_date"))
+        })?;
+        CalendarDate::parse_iso(text).ok_or_else(|| {
+            StoreError::InvalidStoredEnum(format!("{kind} rule calendar_date={text}"))
+        })
     };
     let require_days_value = || -> StoreResult<NonZeroU32> {
         days_value
@@ -751,11 +754,11 @@ fn rule_from_row(row: &Row<'_>) -> StoreResult<SmartPlaylistRule> {
         }),
         "DateBefore" => Ok(SmartPlaylistRule::DateBefore {
             field: date_field_from_name(rule_field_name()?)?,
-            date: require_date_unix()?,
+            date: require_calendar_date()?,
         }),
         "DateAfter" => Ok(SmartPlaylistRule::DateAfter {
             field: date_field_from_name(rule_field_name()?)?,
-            date: require_date_unix()?,
+            date: require_calendar_date()?,
         }),
         "DateInLast" => Ok(SmartPlaylistRule::DateInLast {
             field: date_field_from_name(rule_field_name()?)?,

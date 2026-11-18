@@ -199,19 +199,23 @@ pub(super) fn library_view_update_callback(
                 // check tells the two apart; a track that left the library
                 // counts too, as it may have held another out of a limited
                 // playlist.
-                let touched_ids = update.track_ids.iter().copied().collect();
-                let visible_track_ids = playlists_table.contained_track_ids(&touched_ids);
+                let visible_track_ids = playlists_table
+                    .contained_track_ids(&update.track_ids.iter().copied().collect());
                 let runtime = runtime.borrow();
-                touched_ids.iter().any(|track_id| {
-                    let status = runtime.smart_playlist_track_status(smart_id, *track_id);
-                    let was_in_table = visible_track_ids.contains(track_id);
-                    matches!(
-                        (status, was_in_table),
-                        (SmartPlaylistTrackStatus::Included, false)
-                            | (SmartPlaylistTrackStatus::Excluded, true)
-                            | (SmartPlaylistTrackStatus::RequiresFullRebuild, _)
-                    )
-                })
+                let statuses = runtime.smart_playlist_track_statuses(smart_id, &update.track_ids);
+                update
+                    .track_ids
+                    .iter()
+                    .zip(statuses)
+                    .any(|(track_id, status)| {
+                        let was_in_table = visible_track_ids.contains(track_id);
+                        matches!(
+                            (status, was_in_table),
+                            (SmartPlaylistTrackStatus::Included, false)
+                                | (SmartPlaylistTrackStatus::Excluded, true)
+                                | (SmartPlaylistTrackStatus::RequiresFullRebuild, _)
+                        )
+                    })
             }
             _ => false,
         };

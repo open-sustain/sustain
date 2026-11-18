@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{num::NonZeroU32, time::SystemTime};
+use std::num::NonZeroU32;
 
-use crate::{PlaylistFolderId, Rating, SmartPlaylistId};
+use crate::{CalendarDate, PlaylistFolderId, Rating, SmartPlaylistId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SmartPlaylist {
@@ -99,13 +99,17 @@ pub enum SmartPlaylistRule {
         operator: SmartPlaylistNumberOperator,
         value: Rating,
     },
+    /// Matches a date that falls on a day before `date` in the user's
+    /// calendar, the way the library displays its dates.
     DateBefore {
         field: SmartPlaylistDateField,
-        date: SystemTime,
+        date: CalendarDate,
     },
+    /// Matches a date that falls on a day after `date` in the user's
+    /// calendar.
     DateAfter {
         field: SmartPlaylistDateField,
-        date: SystemTime,
+        date: CalendarDate,
     },
     DateInLast {
         field: SmartPlaylistDateField,

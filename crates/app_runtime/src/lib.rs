@@ -15,29 +15,30 @@ use std::{
 pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, BackgroundJobsSettings, BackgroundResourceUsage, Bpm,
-    BpmRange, CdEncodingProfile, CdReadMode, Clock, CollationKey, DEFAULT_PLAYBACK_VOLUME_PERCENT,
-    DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath, DuplicateArtworkQuality,
-    DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode, DuplicateMergeChoices,
-    DuplicateMetadataField, DuplicateMetadataFieldSelection, DuplicateMetadataSelection,
-    EncodingSettings, FieldChange, FilesPerFolderCap, GenreBreakdown, GenreDistribution,
-    GenrePlayCount, GenreRating, GenreShare, LazyPickContext, LibraryManagementMode,
-    LibrarySettings, LibraryStatistics, MetadataChange, MonotonicClock, MusicalKey, OtherGenres,
-    PlayStatistics, PlayableId, PlaybackCommand, PlaybackLocation, PlaybackOptions, PlaybackQueue,
-    PlaybackQueueEntry, PlaybackQueueEntryKind, PlaybackQueueRequest, PlaybackQueueSource,
-    PlaybackSession, PlaybackSettings, PlaybackSource, PlaybackState, Playlist, PlaylistEntry,
-    PlaylistFolder, PlaylistFolderId, PlaylistId, PlaylistItem, PlaylistTree, PlaylistTreeNode,
-    QualityBucket, QualityDistribution, QualityRange, Rating, RepeatMode, ShuffleMode,
-    SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule, SmartPlaylistDateField,
-    SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
-    SmartPlaylistTextField, SmartPlaylistTextOperator, SmartShuffleEntropy, Spellings, SyncDevice,
-    SyncDeviceId, SyncedLyrics, SystemClock, SystemMonotonicClock, Track, TrackAvailability,
-    TrackColumnEntry, TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort, TrackContentHash,
-    TrackFields, TrackId, TrackLocation, TrackMetadata, TrackRelativePath, UiSettings,
-    UiSidebarSelection, UiWindowSize, UserSettings, VerifiedDuplicateMerge, VolumePercent,
-    WaveformSegment, WaveformSegments, YearCount, compare_optional_text,
-    compute_library_statistics, default_duplicate_merge_choices, duplicate_audio_quality,
-    effective_sort_key, highest_quality_duplicate_artwork, matching_tracks, track_matches_rule_set,
+    BpmRange, CalendarDate, CdEncodingProfile, CdReadMode, Clock, CollationKey,
+    DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath,
+    DuplicateArtworkQuality, DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode,
+    DuplicateMergeChoices, DuplicateMetadataField, DuplicateMetadataFieldSelection,
+    DuplicateMetadataSelection, EncodingSettings, FieldChange, FilesPerFolderCap, GenreBreakdown,
+    GenreDistribution, GenrePlayCount, GenreRating, GenreShare, LazyPickContext,
+    LibraryManagementMode, LibrarySettings, LibraryStatistics, MetadataChange, MonotonicClock,
+    MusicalKey, OtherGenres, PlayStatistics, PlayableId, PlaybackCommand, PlaybackLocation,
+    PlaybackOptions, PlaybackQueue, PlaybackQueueEntry, PlaybackQueueEntryKind,
+    PlaybackQueueRequest, PlaybackQueueSource, PlaybackSession, PlaybackSettings, PlaybackSource,
+    PlaybackState, Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistId,
+    PlaylistItem, PlaylistTree, PlaylistTreeNode, QualityBucket, QualityDistribution, QualityRange,
+    Rating, RepeatMode, ShuffleMode, SmartPlaylist, SmartPlaylistBoolField, SmartPlaylistBoolRule,
+    SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistLimit, SmartPlaylistLimitSelection,
+    SmartPlaylistMatchKind, SmartPlaylistMatcher, SmartPlaylistNumberField,
+    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
+    SmartPlaylistTextOperator, SmartShuffleEntropy, Spellings, SyncDevice, SyncDeviceId,
+    SyncedLyrics, SystemMonotonicClock, Track, TrackAvailability, TrackColumnEntry,
+    TrackColumnLayout, TrackColumnLayoutScope, TrackColumnSort, TrackContentHash, TrackFields,
+    TrackId, TrackLocation, TrackMetadata, TrackRelativePath, UiSettings, UiSidebarSelection,
+    UiWindowSize, UserSettings, VerifiedDuplicateMerge, VolumePercent, WaveformSegment,
+    WaveformSegments, YearCount, compare_optional_text, compute_library_statistics,
+    default_duplicate_merge_choices, duplicate_audio_quality, effective_sort_key,
+    highest_quality_duplicate_artwork, matching_tracks,
 };
 use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 use sustain_library_store::{AnalysisCapabilities, LibraryStore, OnlineCapabilities, StoreError};
@@ -56,7 +57,9 @@ use sustain_settings::SettingsStore;
 
 pub mod analysis_scheduler;
 pub mod priority;
+
 pub use analysis_scheduler::SchedulerProgress as AnalysisProgress;
+pub use local_clock::LocalClock;
 pub use priority::{IoPriorityClass, NiceLevel, resolve_worker_count};
 
 /// Watermark stamped into `track_online_status.provider_version` so a
@@ -103,6 +106,7 @@ mod freedesktop_trash;
 mod library_hydration;
 mod library_mutation;
 mod library_scan;
+mod local_clock;
 pub mod managed_library;
 pub(crate) mod metadata_writer;
 pub mod notifications;
@@ -834,7 +838,7 @@ impl ApplicationRuntime {
             smart_shuffle_metadata: None,
             track_updated_sink: None,
             track_reconciliation: track_reconciliation::TrackReconciliation::default(),
-            clock: Arc::new(SystemClock),
+            clock: Arc::new(LocalClock),
             monotonic_clock: Arc::new(SystemMonotonicClock::new()),
             notifications: NotificationCenter::new(),
             notification_observer: None,
@@ -2737,12 +2741,12 @@ impl ApplicationRuntime {
         matching_tracks(
             &self.library_tracks,
             &smart_playlist.rules,
-            self.clock.now(),
+            self.clock.as_ref(),
         )
     }
 
-    /// Where a single track stands relative to a smart playlist after
-    /// a background mutation: included, excluded, or
+    /// Where each of `track_ids` stands relative to a smart playlist
+    /// after a background mutation: included, excluded, or
     /// "indeterminable without a full re-evaluation". The third case
     /// covers limit-based smart playlists (Top-N), where updating
     /// track X can evict track Y from the visible set — partial
@@ -2750,36 +2754,40 @@ impl ApplicationRuntime {
     ///
     /// The UI shell uses this to decide whether a track update can
     /// be applied as an in-place row refresh (preserves scroll and
-    /// selection) or has to fall back to a full table rebuild.
-    /// Calling this with a non-existent smart-playlist id returns
-    /// [`SmartPlaylistTrackStatus::Excluded`] — the track is not in
-    /// the (empty) view.
-    pub fn smart_playlist_track_status(
-        &self,
+    /// selection) or has to fall back to a full table rebuild. The rules
+    /// are resolved once for the whole batch, against one reading of the
+    /// clock, and each status is evaluated only once asked for, so a
+    /// caller can stop at the first that matters. A non-existent
+    /// smart-playlist id excludes every track — none is in the (empty)
+    /// view.
+    pub fn smart_playlist_track_statuses<'a>(
+        &'a self,
         smart_playlist_id: SmartPlaylistId,
-        track_id: TrackId,
-    ) -> SmartPlaylistTrackStatus {
-        let Some(smart_playlist) = self
+        track_ids: &'a [TrackId],
+    ) -> impl Iterator<Item = SmartPlaylistTrackStatus> + 'a {
+        let smart_playlist = self
             .smart_playlists
             .iter()
-            .find(|smart_playlist| smart_playlist.id == smart_playlist_id)
-        else {
-            return SmartPlaylistTrackStatus::Excluded;
-        };
-        if smart_playlist.rules.limit.is_some() {
-            // Limit-based: a per-track check cannot capture the
-            // eviction effect, so admit we don't know and let the
-            // caller rebuild.
-            return SmartPlaylistTrackStatus::RequiresFullRebuild;
-        }
-        let Some(track) = self.library_track(track_id) else {
-            return SmartPlaylistTrackStatus::Excluded;
-        };
-        if track_matches_rule_set(track, &smart_playlist.rules, self.clock.now()) {
-            SmartPlaylistTrackStatus::Included
-        } else {
-            SmartPlaylistTrackStatus::Excluded
-        }
+            .find(|smart_playlist| smart_playlist.id == smart_playlist_id);
+        // Limit-based: a per-track check cannot capture the eviction
+        // effect, so admit we don't know and let the caller rebuild.
+        let limited = smart_playlist.is_some_and(|playlist| playlist.rules.limit.is_some());
+        let matcher = smart_playlist
+            .map(|playlist| SmartPlaylistMatcher::new(&playlist.rules, self.clock.as_ref()));
+        track_ids.iter().map(move |&track_id| {
+            if limited {
+                return SmartPlaylistTrackStatus::RequiresFullRebuild;
+            }
+            let included = matcher.as_ref().is_some_and(|matcher| {
+                self.library_track(track_id)
+                    .is_some_and(|track| matcher.matches(track))
+            });
+            if included {
+                SmartPlaylistTrackStatus::Included
+            } else {
+                SmartPlaylistTrackStatus::Excluded
+            }
+        })
     }
 
     /// Resolve the track IDs of a playlist sidebar entry. Regular
@@ -2972,7 +2980,7 @@ fn index_metadata(index: &SmartShuffleIndex) -> SmartShuffleIndexMetadata {
     }
 }
 
-/// Outcome of [`ApplicationRuntime::smart_playlist_track_status`].
+/// Outcome of [`ApplicationRuntime::smart_playlist_track_statuses`], per track.
 /// Drives the UI shell's decision between an in-place row refresh
 /// and a full table rebuild after a background track mutation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -3,86 +3,92 @@
 
 use std::{
     cmp::Reverse,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
-    CollationKey, MusicalKey, SmartPlaylistBoolField, SmartPlaylistDateField, SmartPlaylistLimit,
-    SmartPlaylistLimitSelection, SmartPlaylistMatchKind, SmartPlaylistNumberField,
-    SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, SmartPlaylistTextField,
-    SmartPlaylistTextOperator, Track, normalize_search_text,
+    Calendar, Clock, CollationKey, MusicalKey, SmartPlaylistBoolField, SmartPlaylistDateField,
+    SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
+    SmartPlaylistNumberField, SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet,
+    SmartPlaylistTextField, SmartPlaylistTextOperator, Track, normalize_search_text,
 };
 
 const SECONDS_PER_DAY: u64 = 86_400;
 
+/// The tracks of `tracks` that `rules` select, as `clock` reads the
+/// current time and the user's calendar.
 pub fn matching_tracks<'a>(
     tracks: &'a [Track],
     rules: &SmartPlaylistRuleSet,
-    now: SystemTime,
+    clock: &dyn Clock,
 ) -> Vec<&'a Track> {
-    let prepared = PreparedRuleSet::new(rules, now);
-    let mut matched: Vec<&Track> = tracks
-        .iter()
-        .filter(|track| prepared.matches(track))
-        .collect();
-
-    if let Some(limit) = rules.limit {
-        apply_limit(&mut matched, limit, now);
-    }
-
-    matched
+    SmartPlaylistMatcher::new(rules, clock).select(tracks)
 }
 
-pub fn track_matches_rule_set(
-    track: &Track,
-    rules: &SmartPlaylistRuleSet,
+pub fn track_matches_rule(track: &Track, rule: &SmartPlaylistRule, clock: &dyn Clock) -> bool {
+    rule_matches(
+        track,
+        rule,
+        &rule_constants(rule, clock.now()),
+        clock.calendar().as_ref(),
+    )
+}
+
+/// A rule set ready to evaluate, for one evaluation pass: the present and
+/// the user's calendar are read once, so every rule and the limit agree
+/// on them, and each rule's constants — text needles search-normalized,
+/// relative-date windows resolved to instants — are resolved once, so
+/// evaluating a 10,000-track library does not redo that work per track.
+pub struct SmartPlaylistMatcher<'rules> {
+    rule_set: &'rules SmartPlaylistRuleSet,
     now: SystemTime,
-) -> bool {
-    PreparedRuleSet::new(rules, now).matches(track)
+    calendar: Arc<dyn Calendar>,
+    constants: Vec<RuleConstants>,
 }
 
-pub fn track_matches_rule(track: &Track, rule: &SmartPlaylistRule, now: SystemTime) -> bool {
-    rule_matches(track, rule, &rule_constants(rule, now))
-}
-
-/// A rule set with its per-rule constants resolved once for one
-/// evaluation pass — text needles search-normalized up front,
-/// relative-date windows anchored to a single cutoff — so evaluating a
-/// 10,000-track library does not redo that work per track.
-struct PreparedRuleSet<'rules> {
-    match_kind: SmartPlaylistMatchKind,
-    rules: Vec<(&'rules SmartPlaylistRule, RuleConstants)>,
-}
-
-impl<'rules> PreparedRuleSet<'rules> {
-    fn new(rules: &'rules SmartPlaylistRuleSet, now: SystemTime) -> Self {
+impl<'rules> SmartPlaylistMatcher<'rules> {
+    /// `rule_set`, as `clock` reads the present and the user's calendar
+    /// now.
+    pub fn new(rule_set: &'rules SmartPlaylistRuleSet, clock: &dyn Clock) -> Self {
+        let now = clock.now();
         Self {
-            match_kind: rules.match_kind,
-            rules: rules
+            rule_set,
+            now,
+            calendar: clock.calendar(),
+            constants: rule_set
                 .rules
                 .iter()
-                .map(|rule| (rule, rule_constants(rule, now)))
+                .map(|rule| rule_constants(rule, now))
                 .collect(),
         }
     }
 
-    /// Whether `track` matches the rule set. An empty rule set matches
-    /// nothing.
-    fn matches(&self, track: &Track) -> bool {
-        if self.rules.is_empty() {
+    /// Whether `track` matches the rules, regardless of any limit. An
+    /// empty rule set matches nothing.
+    pub fn matches(&self, track: &Track) -> bool {
+        if self.constants.is_empty() {
             return false;
         }
-
-        match self.match_kind {
-            SmartPlaylistMatchKind::All => self
-                .rules
-                .iter()
-                .all(|(rule, constants)| rule_matches(track, rule, constants)),
-            SmartPlaylistMatchKind::Any => self
-                .rules
-                .iter()
-                .any(|(rule, constants)| rule_matches(track, rule, constants)),
+        let calendar = self.calendar.as_ref();
+        let mut rules = self.rule_set.rules.iter().zip(&self.constants);
+        match self.rule_set.match_kind {
+            SmartPlaylistMatchKind::All => {
+                rules.all(|(rule, constants)| rule_matches(track, rule, constants, calendar))
+            }
+            SmartPlaylistMatchKind::Any => {
+                rules.any(|(rule, constants)| rule_matches(track, rule, constants, calendar))
+            }
         }
+    }
+
+    /// The tracks of `tracks` the rule set selects, its limit applied.
+    pub fn select<'a>(&self, tracks: &'a [Track]) -> Vec<&'a Track> {
+        let mut matched: Vec<&Track> = tracks.iter().filter(|track| self.matches(track)).collect();
+        if let Some(limit) = self.rule_set.limit {
+            apply_limit(&mut matched, limit, self.now);
+        }
+        matched
     }
 }
 
@@ -93,8 +99,8 @@ enum RuleConstants {
     None,
     /// The text rule's value, already [`normalize_search_text`]-folded.
     TextNeedle(String),
-    /// The absolute cutoff a relative-date rule compares against.
-    DateCutoff(SystemTime),
+    /// The start of a relative date rule's window.
+    WindowStart(SystemTime),
 }
 
 fn rule_constants(rule: &SmartPlaylistRule, now: SystemTime) -> RuleConstants {
@@ -104,7 +110,7 @@ fn rule_constants(rule: &SmartPlaylistRule, now: SystemTime) -> RuleConstants {
         }
         SmartPlaylistRule::DateInLast { days, .. }
         | SmartPlaylistRule::DateNotInLast { days, .. } => {
-            RuleConstants::DateCutoff(relative_date_cutoff(now, days.get()))
+            RuleConstants::WindowStart(relative_date_cutoff(now, days.get()))
         }
         SmartPlaylistRule::TextIsEmpty { .. }
         | SmartPlaylistRule::TextIsPresent { .. }
@@ -127,10 +133,15 @@ fn relative_date_cutoff(now: SystemTime, days: u32) -> SystemTime {
         .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
-/// Evaluates one rule against one track. `constants` must come from
-/// [`rule_constants`] for this same rule; the `unreachable!` arms guard
-/// that pairing.
-fn rule_matches(track: &Track, rule: &SmartPlaylistRule, constants: &RuleConstants) -> bool {
+/// Evaluates one rule against one track, reading its dates in `calendar`.
+/// `constants` must come from [`rule_constants`] for this same rule; the
+/// `unreachable!` arms guard that pairing.
+fn rule_matches(
+    track: &Track,
+    rule: &SmartPlaylistRule,
+    constants: &RuleConstants,
+    calendar: &dyn Calendar,
+) -> bool {
     match rule {
         SmartPlaylistRule::Text {
             field, operator, ..
@@ -158,26 +169,21 @@ fn rule_matches(track: &Track, rule: &SmartPlaylistRule, constants: &RuleConstan
             *operator,
             i64::from(value.stars()),
         ),
+        // A calendar rule compares the day the track's date falls on in
+        // the user's calendar — the day the library shows — with its day.
         SmartPlaylistRule::DateBefore { field, date } => {
-            date_field_value(track, *field).is_some_and(|track_date| track_date < *date)
+            date_field_value(track, *field).is_some_and(|instant| calendar.date_of(instant) < *date)
         }
         SmartPlaylistRule::DateAfter { field, date } => {
-            date_field_value(track, *field).is_some_and(|track_date| track_date > *date)
+            date_field_value(track, *field).is_some_and(|instant| calendar.date_of(instant) > *date)
         }
         SmartPlaylistRule::DateInLast { field, .. } => {
-            let RuleConstants::DateCutoff(cutoff) = constants else {
-                unreachable!("relative-date rule prepared without a cutoff");
-            };
-            date_field_value(track, *field).is_some_and(|track_date| track_date >= *cutoff)
+            let window_start = window_start(constants);
+            date_field_value(track, *field).is_some_and(|instant| instant >= window_start)
         }
         SmartPlaylistRule::DateNotInLast { field, .. } => {
-            let RuleConstants::DateCutoff(cutoff) = constants else {
-                unreachable!("relative-date rule prepared without a cutoff");
-            };
-            match date_field_value(track, *field) {
-                Some(track_date) => track_date < *cutoff,
-                None => true,
-            }
+            let window_start = window_start(constants);
+            date_field_value(track, *field).is_none_or(|instant| instant < window_start)
         }
         SmartPlaylistRule::DateIsEmpty { field } => date_field_value(track, *field).is_none(),
         SmartPlaylistRule::DateIsPresent { field } => date_field_value(track, *field).is_some(),
@@ -185,6 +191,13 @@ fn rule_matches(track: &Track, rule: &SmartPlaylistRule, constants: &RuleConstan
         SmartPlaylistRule::FileIsMissing => track.location.is_missing(),
         SmartPlaylistRule::FileIsPresent => !track.location.is_missing(),
     }
+}
+
+fn window_start(constants: &RuleConstants) -> SystemTime {
+    let RuleConstants::WindowStart(start) = constants else {
+        unreachable!("relative date rule prepared without its window");
+    };
+    *start
 }
 
 fn bool_field_value(track: &Track, field: SmartPlaylistBoolField) -> bool {

@@ -5835,7 +5835,7 @@ fn runtime_creates_updates_and_deletes_smart_playlists() {
 }
 
 #[test]
-fn smart_playlist_track_status_distinguishes_included_excluded_and_unknowable() {
+fn smart_playlist_track_statuses_distinguish_included_excluded_and_unknowable() {
     // Three scenarios in one test:
     //   1. Limit-less rule, track matches      -> Included.
     //   2. Limit-less rule, track doesn't      -> Excluded.
@@ -5891,12 +5891,13 @@ fn smart_playlist_track_status_distinguishes_included_excluded_and_unknowable() 
     let smart_id_value = smart_id(1);
 
     assert_eq!(
-        runtime.smart_playlist_track_status(smart_id_value, matching.id),
-        SmartPlaylistTrackStatus::Included
-    );
-    assert_eq!(
-        runtime.smart_playlist_track_status(smart_id_value, non_matching.id),
-        SmartPlaylistTrackStatus::Excluded
+        runtime
+            .smart_playlist_track_statuses(smart_id_value, &[matching.id, non_matching.id])
+            .collect::<Vec<_>>(),
+        [
+            SmartPlaylistTrackStatus::Included,
+            SmartPlaylistTrackStatus::Excluded
+        ]
     );
 
     // Re-rule with a limit; even the previously-Included track
@@ -5921,8 +5922,10 @@ fn smart_playlist_track_status_distinguishes_included_excluded_and_unknowable() 
         })
         .expect("update smart playlist");
     assert_eq!(
-        runtime.smart_playlist_track_status(smart_id_value, matching.id),
-        SmartPlaylistTrackStatus::RequiresFullRebuild
+        runtime
+            .smart_playlist_track_statuses(smart_id_value, &[matching.id])
+            .collect::<Vec<_>>(),
+        [SmartPlaylistTrackStatus::RequiresFullRebuild]
     );
 }
 
@@ -6027,6 +6030,10 @@ impl FakeClock {
 impl Clock for FakeClock {
     fn now(&self) -> std::time::SystemTime {
         *self.now.lock().expect("fake clock lock")
+    }
+
+    fn calendar(&self) -> Arc<dyn sustain_domain::Calendar> {
+        Arc::new(sustain_domain::FixedOffsetCalendar::UTC)
     }
 }
 
