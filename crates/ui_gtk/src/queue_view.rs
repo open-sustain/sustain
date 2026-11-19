@@ -249,7 +249,7 @@ impl QueueView {
             empty_state,
             is_open,
         };
-        install_right_click_open(next_button, previous_button, &popover, &view);
+        install_queue_open(next_button, previous_button, &popover, &view);
         view
     }
 
@@ -299,43 +299,63 @@ fn rebuild_queue_model(
     stack.set_visible_child_name(QUEUE_PAGE_LIST);
 }
 
-/// Open the queue on a secondary (right) click of the Next button. The
-/// popover is autohide, so click-outside and Escape dismiss it; we only
-/// have to build the model and pop it up. The model is rebuilt on each
-/// open so the queue is always current.
-fn install_right_click_open(
+/// Open the queue on a secondary (right) click of the Next button, or on
+/// the Menu key or Shift+F10 while it has focus, the keyboard's context
+/// menu keys. The popover is autohide, so click-outside and Escape
+/// dismiss it; we only have to build the model and pop it up. The model
+/// is rebuilt on each open so the queue is always current.
+fn install_queue_open(
     next_button: &gtk::Button,
     previous_button: &gtk::Button,
     popover: &gtk::Popover,
     view: &QueueView,
 ) {
+    let open = Rc::new({
+        let popover = popover.clone();
+        let view = view.clone();
+        let previous_button = previous_button.downgrade();
+        move |next_button: &gtk::Button| {
+            view.rebuild();
+            if let Some(previous_button) = previous_button.upgrade()
+                && let (Some(next), Some(previous)) = (
+                    next_button.compute_bounds(next_button),
+                    previous_button.compute_bounds(next_button),
+                )
+            {
+                popover.set_offset(
+                    start_edge_alignment_offset(&next, &previous, popover.direction()),
+                    0,
+                );
+            }
+            view.is_open.set(true);
+            popover.popup();
+        }
+    });
+
     let gesture = gtk::GestureClick::new();
     gesture.set_button(gdk::BUTTON_SECONDARY);
-
-    let popover = popover.clone();
-    let view = view.clone();
-    let previous_button = previous_button.downgrade();
+    let open_on_click = open.clone();
     gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
         // Claim the press so it does not also reach the window-drag handler
         // on the titlebar handle behind the button.
         gesture.set_state(gtk::EventSequenceState::Claimed);
-        view.rebuild();
-        if let (Some(next_button), Some(previous_button)) = (
-            gesture.widget().and_downcast::<gtk::Button>(),
-            previous_button.upgrade(),
-        ) && let (Some(next), Some(previous)) = (
-            next_button.compute_bounds(&next_button),
-            previous_button.compute_bounds(&next_button),
-        ) {
-            popover.set_offset(
-                start_edge_alignment_offset(&next, &previous, popover.direction()),
-                0,
-            );
+        if let Some(next_button) = gesture.widget().and_downcast::<gtk::Button>() {
+            open_on_click(&next_button);
         }
-        view.is_open.set(true);
-        popover.popup();
     });
     next_button.add_controller(gesture);
+
+    let keys = gtk::ShortcutController::new();
+    keys.add_shortcut(gtk::Shortcut::new(
+        gtk::ShortcutTrigger::parse_string("Menu|<Shift>F10"),
+        Some(gtk::CallbackAction::new(move |widget, _| {
+            if let Some(next_button) = widget.downcast_ref::<gtk::Button>() {
+                open(next_button);
+            }
+            glib::Propagation::Stop
+        })),
+    ));
+    next_button.add_controller(keys);
 }
 
 /// How far to move a popover whose start edge GTK lines up with its
@@ -814,6 +834,60 @@ mod tests {
     };
     use gtk::graphene::Rect;
     use sustain_app_runtime::{PlayableId, TrackId};
+
+    #[test]
+    fn the_menu_key_on_the_next_button_opens_the_queue() {
+        crate::test_support::with_gtk(|| {
+            use gtk::prelude::*;
+            let runtime = crate::test_support::runtime_with_tracks(Vec::new());
+            let command_controller: crate::command_controller::SharedCommandController =
+                std::rc::Rc::new(crate::command_controller::UiCommandController::new(
+                    runtime.clone(),
+                ));
+            let next = gtk::Button::new();
+            let previous = gtk::Button::new();
+            let controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            controls.append(&previous);
+            controls.append(&next);
+            let window = gtk::Window::new();
+            window.set_child(Some(&controls));
+            window.present();
+            let view = super::QueueView::new(
+                runtime,
+                command_controller,
+                crate::test_support::artwork_loader(),
+                std::rc::Rc::new(|| {}),
+                &next,
+                &previous,
+            );
+
+            let controllers = next.observe_controllers();
+            let keys = (0..controllers.n_items())
+                .find_map(|index| {
+                    controllers
+                        .item(index)
+                        .and_downcast::<gtk::ShortcutController>()
+                })
+                .expect("the Next button handles keys");
+            let shortcut = keys
+                .item(0)
+                .and_downcast::<gtk::Shortcut>()
+                .expect("a shortcut");
+            let trigger = shortcut.trigger().expect("a trigger").to_str();
+            assert!(
+                trigger.contains("Menu") && trigger.contains("F10"),
+                "the context-menu keys, not {trigger}"
+            );
+            shortcut.action().expect("an action").activate(
+                gtk::ShortcutActionFlags::empty(),
+                &next,
+                None,
+            );
+
+            assert!(view.is_open.get(), "the queue opened");
+            window.destroy();
+        });
+    }
 
     fn track_id(value: i64) -> PlayableId {
         PlayableId::Library(TrackId::new(value).expect("valid test track id"))

@@ -23,7 +23,8 @@ const STATUS_ICON_MISSING: &str = "dialog-warning-symbolic";
 
 /// Pop `menu` up for the selected tracks on a secondary click on a row of
 /// `table`, first selecting the clicked row if it is not part of the
-/// selection.
+/// selection; or, from the keyboard, on the Menu key or Shift+F10, at the
+/// focused row.
 pub(super) fn install_context_menu(
     table: &gtk::ColumnView,
     menu: TrackRowContextMenu,
@@ -33,6 +34,8 @@ pub(super) fn install_context_menu(
     gesture.set_button(gdk::BUTTON_SECONDARY);
     gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
 
+    let menu_for_click = menu.clone();
+    let selection_for_click = selection.clone();
     gesture.connect_released(move |gesture, _n_press, x, y| {
         let Some(table) = gesture.widget().and_downcast::<gtk::ColumnView>() else {
             return;
@@ -49,24 +52,61 @@ pub(super) fn install_context_menu(
         if position == gtk::INVALID_LIST_POSITION {
             return;
         }
-        if !selection.is_selected(position) {
-            selection.select_item(position, true);
+        if !selection_for_click.is_selected(position) {
+            selection_for_click.select_item(position, true);
         }
-
-        let track_ids = collect_selected_track_ids(&selection);
-        if track_ids.is_empty() {
-            return;
-        }
-        menu.popup_at_parent(
-            track_ids,
-            super::ordered_track_ids(&selection),
-            &table,
-            &cell,
-            x,
-            y,
-        );
+        popup_for_selection(&menu_for_click, &selection_for_click, &table, &cell, x, y);
     });
     table.add_controller(gesture);
+
+    let keys = gtk::ShortcutController::new();
+    keys.add_shortcut(gtk::Shortcut::new(
+        gtk::ShortcutTrigger::parse_string("Menu|<Shift>F10"),
+        Some(gtk::CallbackAction::new(move |table, _| {
+            // Under the focused row, the one the keyboard is on; under the
+            // table's top edge when focus is elsewhere in it.
+            let focused = table
+                .root()
+                .and_then(|root| root.focus())
+                .filter(|focus| focus.is_ancestor(table));
+            let anchor = focused.as_ref().unwrap_or(table);
+            popup_for_selection(
+                &menu,
+                &selection,
+                anchor,
+                anchor,
+                0.0,
+                f64::from(anchor.height()),
+            );
+            glib::Propagation::Stop
+        })),
+    ));
+    table.add_controller(keys);
+}
+
+/// Pop `menu` up for the selected tracks from `popover_parent`, a widget
+/// of the table, at (`x`, `y`) in `point_in`'s coordinates. Nothing
+/// selected, nothing to act on: no menu.
+fn popup_for_selection(
+    menu: &TrackRowContextMenu,
+    selection: &gtk::MultiSelection,
+    point_in: &impl IsA<gtk::Widget>,
+    popover_parent: &impl IsA<gtk::Widget>,
+    x: f64,
+    y: f64,
+) {
+    let track_ids = collect_selected_track_ids(selection);
+    if track_ids.is_empty() {
+        return;
+    }
+    menu.popup_at_parent(
+        track_ids,
+        super::ordered_track_ids(selection),
+        point_in,
+        popover_parent,
+        x,
+        y,
+    );
 }
 
 /// Which bound cells a refresh re-derives from their row payload.
@@ -580,7 +620,67 @@ fn apply_row_band(cell: &TableCell, list_item: &gtk::ListItem) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{RowDropPosition, drag_drop::drop_position_from_offset};
+    use gtk::glib;
+    use gtk::prelude::*;
+
+    use super::super::{
+        RowDropPosition, build_track_table, drag_drop::drop_position_from_offset,
+        row::TrackTableRow,
+    };
+    use crate::track_context::{
+        TrackContextActionSet, TrackContextInvocationState, TrackRowContextMenu,
+    };
+
+    #[test]
+    fn the_menu_key_opens_the_track_menu_for_the_selection() {
+        crate::test_support::with_gtk(|| {
+            let window = gtk::Window::new();
+            let menu = TrackRowContextMenu::new(
+                TrackContextActionSet::new(Vec::new()),
+                window.clone(),
+                TrackContextInvocationState::default(),
+            );
+            let table = build_track_table(
+                vec![TrackTableRow::test_row(1)],
+                None,
+                Some(menu),
+                None,
+                None,
+                None,
+            );
+            window.set_default_size(700, 260);
+            window.set_child(Some(&table.widget()));
+            window.present();
+            let context = glib::MainContext::default();
+            while context.iteration(false) {}
+            table.selection.select_item(0, true);
+
+            let controllers = table.table.observe_controllers();
+            let keys = (0..controllers.n_items())
+                .filter_map(|index| {
+                    controllers
+                        .item(index)
+                        .and_downcast::<gtk::ShortcutController>()
+                })
+                .find_map(|keys| {
+                    let shortcut = keys.item(0).and_downcast::<gtk::Shortcut>()?;
+                    let trigger = shortcut.trigger()?.to_str();
+                    (trigger.contains("Menu") && trigger.contains("F10")).then_some(shortcut)
+                })
+                .expect("the table opens its menu from the context-menu keys");
+            keys.action().expect("an action").activate(
+                gtk::ShortcutActionFlags::empty(),
+                &table.table,
+                None,
+            );
+
+            let opened = crate::test_support::descendants(&table.widget())
+                .iter()
+                .any(|widget| widget.type_().name() == "GtkPopoverMenu");
+            assert!(opened, "the track menu opened");
+            window.destroy();
+        });
+    }
 
     #[test]
     fn drop_position_splits_row_height_in_half() {

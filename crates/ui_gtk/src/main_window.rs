@@ -737,8 +737,8 @@ pub(crate) fn build_main_window(
         let previous_button = titlebar.previous_button();
         let queue_view_holder = queue_view_holder.clone();
         Box::new(move || {
-            // The queue popover is hidden behind a secondary click on the Next
-            // button. Construct it after the first-idle landmark so startup
+            // The queue popover opens on a secondary click on the Next
+            // button, or the Menu key or Shift+F10 while it has focus. Construct it after the first-idle landmark so startup
             // does not realize its list factory before the first paint.
             let queue_view = QueueView::new(
                 runtime,
