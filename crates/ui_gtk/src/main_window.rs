@@ -495,7 +495,13 @@ pub(crate) fn build_main_window(
     playlists_table_holder.replace(Some(playlists_table.clone()));
     install_queue_resort(&songs_table, &command_controller, songs_list_source);
     install_queue_resort(&playlists_table, &command_controller, playlists_list_source);
-    install_track_column_layout_persistence(&runtime, &songs_table, &playlists_table, &sidebar);
+    let playlists_columns_scope = PlaylistsColumnsScope::default();
+    install_track_column_layout_persistence(
+        &runtime,
+        &songs_table,
+        &playlists_table,
+        &playlists_columns_scope,
+    );
     playback_changed();
     sustain_profiler::profile_mark!(window_profile, "tables/playback wired");
     let playlists_header = PlaylistsHeader::new();
@@ -697,6 +703,7 @@ pub(crate) fn build_main_window(
     sidebar.set_selection_changed(sidebar_selection_changed_callback(
         &runtime,
         &playlists_table,
+        &playlists_columns_scope,
         &playlists_refresh,
         &content_stack,
         visible_summary_refresh.clone(),
@@ -1877,7 +1884,7 @@ fn install_track_column_layout_persistence(
     runtime: &SharedRuntime,
     songs_table: &TrackTable,
     playlists_table: &TrackTable,
-    sidebar: &PlaylistSidebar,
+    playlists_columns_scope: &PlaylistsColumnsScope,
 ) {
     let runtime_for_songs = runtime.clone();
     songs_table.set_layout_changed_callback(Rc::new(move |layout| {
@@ -1886,17 +1893,14 @@ fn install_track_column_layout_persistence(
             .save_track_column_layout(TrackColumnLayoutScope::Default, &layout);
     }));
 
+    // The scope the columns belong to, not the sidebar's live selection: a
+    // save still pending when the selection moves is flushed for the
+    // playlist it was made in (#365).
     let runtime_for_playlists = runtime.clone();
-    let sidebar_for_playlists = sidebar.clone();
+    let scope_for_playlists = playlists_columns_scope.clone();
     playlists_table.set_layout_changed_callback(Rc::new(move |layout| {
-        let scope = match sidebar_for_playlists.current_selection() {
-            Some(SidebarSelection::Item(PlaylistItem::Playlist(id))) => {
-                TrackColumnLayoutScope::Playlist(id)
-            }
-            Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(id))) => {
-                TrackColumnLayoutScope::SmartPlaylist(id)
-            }
-            _ => return,
+        let Some(scope) = scope_for_playlists.get() else {
+            return;
         };
         let _ = runtime_for_playlists
             .borrow()
@@ -1913,12 +1917,27 @@ fn install_track_column_layout_persistence(
 
 /// The layout `selection` shows in the playlists table: its own, else the
 /// default one, else `factory` — never the previous selection's (#365).
-fn layout_for_selection(
-    runtime: &ApplicationRuntime,
+/// The scope whose columns the playlists table shows: a playlist's or
+/// smart playlist's own, and none for any other selection, whose column
+/// changes are not kept.
+#[derive(Clone, Default)]
+pub(super) struct PlaylistsColumnsScope(Rc<Cell<Option<TrackColumnLayoutScope>>>);
+
+impl PlaylistsColumnsScope {
+    pub(super) fn get(&self) -> Option<TrackColumnLayoutScope> {
+        self.0.get()
+    }
+
+    pub(super) fn set(&self, scope: Option<TrackColumnLayoutScope>) {
+        self.0.set(scope);
+    }
+}
+
+/// The override scope of `selection`'s columns, if it has one.
+pub(super) fn layout_scope_of(
     selection: Option<SidebarSelection>,
-    factory: TrackColumnLayout,
-) -> TrackColumnLayout {
-    let override_scope = match selection {
+) -> Option<TrackColumnLayoutScope> {
+    match selection {
         Some(SidebarSelection::Item(PlaylistItem::Playlist(id))) => {
             Some(TrackColumnLayoutScope::Playlist(id))
         }
@@ -1926,8 +1945,15 @@ fn layout_for_selection(
             Some(TrackColumnLayoutScope::SmartPlaylist(id))
         }
         _ => None,
-    };
-    if let Some(scope) = override_scope
+    }
+}
+
+fn layout_for_selection(
+    runtime: &ApplicationRuntime,
+    selection: Option<SidebarSelection>,
+    factory: TrackColumnLayout,
+) -> TrackColumnLayout {
+    if let Some(scope) = layout_scope_of(selection)
         && let Ok(Some(layout)) = runtime.load_track_column_layout(scope)
     {
         return layout;

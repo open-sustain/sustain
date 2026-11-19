@@ -308,6 +308,7 @@ fn resolve_move_target(
 pub(super) fn sidebar_selection_changed_callback(
     runtime: &SharedRuntime,
     playlists_table: &TrackTable,
+    playlists_columns_scope: &PlaylistsColumnsScope,
     playlists_refresh: &PlaylistsViewRefreshContext,
     content_stack: &ContentStack,
     visible_summary_refresh: VisibleSummaryRefreshCallback,
@@ -315,6 +316,7 @@ pub(super) fn sidebar_selection_changed_callback(
 ) -> crate::sidebar::SidebarSelectionChangedCallback {
     let runtime = runtime.clone();
     let playlists_table = playlists_table.clone();
+    let playlists_columns_scope = playlists_columns_scope.clone();
     let playlists_refresh = playlists_refresh.clone();
     let content_stack = content_stack.clone();
     let current_search_text = current_search_text.clone();
@@ -334,6 +336,10 @@ pub(super) fn sidebar_selection_changed_callback(
             Some(SidebarSelection::Item(PlaylistItem::Playlist(_)))
         );
         let layout_profile = sustain_profiler::ProfileScope::start();
+        // A column change still waiting for its save belongs to the
+        // outgoing selection, whose columns the table still shows.
+        playlists_table.flush_pending_layout_save();
+        playlists_columns_scope.set(layout_scope_of(selection));
         let mut layout = layout_for_selection(
             &runtime.borrow(),
             selection,
