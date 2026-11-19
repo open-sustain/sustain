@@ -5325,6 +5325,52 @@ fn runtime_set_rating_applies_optimistic_update_and_reports_tag_write_failure() 
 }
 
 #[test]
+fn a_fetched_cover_is_not_applied_over_artwork_set_since_the_fetch_began() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create test library");
+    std::fs::write(root.join("track.flac"), b"not real audio").expect("write fake track");
+    let track_id = track_id(1);
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    assert_eq!(store.save_track(test_track(track_id, "track.flac")), Ok(()));
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store, Arc::new(RecordingMetadataService::new(false)))
+    .expect("library services initialize");
+    let fetched_at = sustain_domain::ArtworkRevision::default();
+    let fetched = || ApplicationCommand::SetFetchedArtwork {
+        track_id,
+        artwork: crate::test_artwork::valid_artwork(),
+        fetched_at,
+    };
+
+    // The user clears the cover while the fetch is out (#372).
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::SetArtwork {
+            track_id,
+            artwork: None,
+        }),
+        Ok(())
+    );
+    assert_eq!(
+        runtime.handle_command(fetched()),
+        Err(ApplicationRuntimeError::FetchedArtworkSuperseded)
+    );
+
+    // A fetch from the current revision applies.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::SetFetchedArtwork {
+            track_id,
+            artwork: crate::test_artwork::valid_artwork(),
+            fetched_at: fetched_at.next(),
+        }),
+        Ok(())
+    );
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
 fn runtime_rejects_invalid_artwork_before_submitting_tag_write() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");

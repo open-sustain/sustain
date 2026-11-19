@@ -251,6 +251,13 @@ impl ApplicationRuntime {
             ApplicationCommand::SetArtwork { track_id, artwork } => {
                 self.set_artwork(track_id, artwork)?;
             }
+            ApplicationCommand::SetFetchedArtwork {
+                track_id,
+                artwork,
+                fetched_at,
+            } => {
+                self.set_fetched_artwork(track_id, artwork, fetched_at)?;
+            }
             ApplicationCommand::FetchArtwork { track_id } => {
                 self.fetch_artwork(track_id)?;
             }

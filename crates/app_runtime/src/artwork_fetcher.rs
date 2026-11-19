@@ -63,6 +63,9 @@ pub enum ArtworkFetchOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArtworkFetchResult {
     pub track_id: TrackId,
+    /// The track's artwork revision when the fetch started; see
+    /// [`sustain_domain::ApplicationCommand::SetFetchedArtwork`].
+    pub fetched_at: sustain_domain::ArtworkRevision,
     pub outcome: ArtworkFetchOutcome,
 }
 

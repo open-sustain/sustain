@@ -44,7 +44,7 @@ pub use calendar_date::{CalendarDate, unix_seconds_floor};
 pub use clock::{
     Calendar, Clock, FixedOffsetCalendar, FrozenClock, MonotonicClock, SystemMonotonicClock,
 };
-pub use command::ApplicationCommand;
+pub use command::{ApplicationCommand, ArtworkRevision};
 pub use device_sync::{
     AnlzRecord, DeviceArtistSelection, DeviceKind, DeviceLayout, DeviceRelativePath,
     DeviceSelection, FilesPerFolderCap, PioneerDatabase, PioneerExportRecord, SyncDevice,

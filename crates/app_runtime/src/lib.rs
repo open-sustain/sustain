@@ -124,6 +124,8 @@ mod smart_playlists;
 pub mod smart_shuffle_scheduler;
 mod staged_tags;
 #[cfg(test)]
+mod test_artwork;
+#[cfg(test)]
 mod test_store;
 #[cfg(test)]
 mod test_waveforms;
@@ -186,6 +188,9 @@ pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ApplicationRuntimeError {
     ArtworkFetchingUnavailable,
+    /// A fetched cover arrived after the track's artwork was set or
+    /// cleared by other means, so it was not applied.
+    FetchedArtworkSuperseded,
     ArtworkRejected,
     /// CD ripping was requested but no optical probe / encoder backend is
     /// installed (e.g. a build without the `optical` feature).
@@ -513,6 +518,9 @@ pub struct ApplicationRuntime {
     remote_metadata_service: Option<Arc<dyn RemoteMetadataService>>,
     artwork_fetcher: Option<artwork_fetcher::ArtworkFetcher>,
     artwork_fetch_result_sink: Option<async_channel::Sender<ArtworkFetchResult>>,
+    /// Each track's artwork revision this session, bumped by every set or
+    /// clear; a track absent here is at the default revision.
+    artwork_revisions: BTreeMap<TrackId, sustain_domain::ArtworkRevision>,
     analysis_scheduler: Option<analysis_scheduler::AnalysisScheduler>,
     analysis_progress_sink: Option<async_channel::Sender<analysis_scheduler::SchedulerProgress>>,
     analysis_notification_id: Option<NotificationId>,
@@ -806,6 +814,7 @@ impl ApplicationRuntime {
             remote_metadata_service: None,
             artwork_fetcher: None,
             artwork_fetch_result_sink: None,
+            artwork_revisions: BTreeMap::new(),
             analysis_scheduler: None,
             analysis_progress_sink: None,
             analysis_notification_id: None,

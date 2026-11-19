@@ -91,6 +91,14 @@ pub enum ApplicationCommand {
         track_id: TrackId,
         artwork: Option<Vec<u8>>,
     },
+    /// Apply a remotely fetched cover, `artwork`, to `track_id` only if
+    /// the track's artwork is still at `fetched_at`, the revision its fetch
+    /// started from: a cover chosen or cleared since wins (#372).
+    SetFetchedArtwork {
+        track_id: TrackId,
+        artwork: Vec<u8>,
+        fetched_at: ArtworkRevision,
+    },
     /// Trigger an explicit remote artwork lookup for `track_id`.
     /// The runtime enqueues the work on the background fetcher and
     /// returns immediately; the outcome is delivered later through
@@ -186,4 +194,17 @@ pub enum ApplicationCommand {
     AnalyzeDeviceTracks {
         device_id: SyncDeviceId,
     },
+}
+
+/// How many times a track's artwork was set this session: a fetch that
+/// started from one revision applies only while it is still current.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ArtworkRevision(u64);
+
+impl ArtworkRevision {
+    /// The revision after this one.
+    #[must_use]
+    pub fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
 }

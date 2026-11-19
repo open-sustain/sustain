@@ -248,9 +248,32 @@ impl ApplicationRuntime {
         library_store
             .enqueue_tag_mirror_artwork(track_id, artwork.as_deref())
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        let revision = self.artwork_revision(track_id).next();
+        self.artwork_revisions.insert(track_id, revision);
         self.nudge_metadata_writer();
 
         Ok(())
+    }
+
+    /// Set `artwork`, fetched from revision `fetched_at`, unless the
+    /// track's artwork was set or cleared since (#372).
+    pub(super) fn set_fetched_artwork(
+        &mut self,
+        track_id: TrackId,
+        artwork: Vec<u8>,
+        fetched_at: sustain_domain::ArtworkRevision,
+    ) -> ApplicationRuntimeResult<()> {
+        if self.artwork_revision(track_id) != fetched_at {
+            return Err(ApplicationRuntimeError::FetchedArtworkSuperseded);
+        }
+        self.set_artwork(track_id, Some(artwork))
+    }
+
+    fn artwork_revision(&self, track_id: TrackId) -> sustain_domain::ArtworkRevision {
+        self.artwork_revisions
+            .get(&track_id)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Submit a remote artwork fetch for `track_id`. Returns
@@ -275,11 +298,16 @@ impl ApplicationRuntime {
             .ok_or(ApplicationRuntimeError::ArtworkFetchingUnavailable)?;
 
         let query = query_from_metadata(&track.metadata);
+        let fetched_at = self.artwork_revision(track_id);
         let sink = self.artwork_fetch_result_sink();
         let completion: crate::artwork_fetcher::ArtworkFetchCompletionCallback =
             Box::new(move |outcome| {
                 if let Some(sink) = sink {
-                    let _ = sink.try_send(ArtworkFetchResult { track_id, outcome });
+                    let _ = sink.try_send(ArtworkFetchResult {
+                        track_id,
+                        fetched_at,
+                        outcome,
+                    });
                 }
             });
         fetcher.submit(ArtworkFetchRequest { query, completion });

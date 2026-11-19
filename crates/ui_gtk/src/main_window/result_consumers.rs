@@ -495,12 +495,16 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
             use sustain_app_runtime::ArtworkFetchOutcome;
             let (severity, body) = match &result.outcome {
                 ArtworkFetchOutcome::Fetched(bytes) => {
-                    let queued = command_controller
-                        .dispatch(sustain_app_runtime::ApplicationCommand::SetArtwork {
+                    let applied = command_controller.dispatch(
+                        sustain_app_runtime::ApplicationCommand::SetFetchedArtwork {
                             track_id: result.track_id,
-                            artwork: Some(bytes.clone()),
-                        })
-                        .is_ok();
+                            artwork: bytes.clone(),
+                            fetched_at: result.fetched_at,
+                        },
+                    );
+                    let queued = applied.is_ok();
+                    // Only accepted bytes reach the cache: a superseded
+                    // fetch leaves the chosen cover showing.
                     if queued
                         && let Some(source) = artwork_source_for_track(&runtime, result.track_id)
                     {
@@ -515,6 +519,14 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
                         (
                             sustain_app_runtime::NotificationSeverity::Info,
                             gettext("Artwork fetched. Saving it to the audio file."),
+                        )
+                    } else if let Err(
+                        error @ sustain_app_runtime::ApplicationRuntimeError::FetchedArtworkSuperseded,
+                    ) = &applied
+                    {
+                        (
+                            sustain_app_runtime::NotificationSeverity::Info,
+                            sustain_app_runtime::runtime_error_text(error),
                         )
                     } else {
                         (

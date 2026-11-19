@@ -985,6 +985,9 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> String {
         ApplicationRuntimeError::ArtworkFetchingUnavailable => {
             gettext("Remote artwork retrieval is not available in this build.")
         }
+        ApplicationRuntimeError::FetchedArtworkSuperseded => {
+            gettext("The fetched cover was not used: the track's artwork changed meanwhile.")
+        }
         ApplicationRuntimeError::ArtworkRejected => {
             gettext("The artwork is unsupported, corrupt, or exceeds Sustain's size limits.")
         }
