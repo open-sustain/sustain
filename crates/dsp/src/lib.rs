@@ -15,8 +15,8 @@
 //! `stratum-dsp` that `sustain-analysis` calls, and now also carries a small
 //! set of **clearly-marked Sustain-authored DSP extensions** (re-derived from
 //! the literature, not vendored). It is pure DSP: it takes mono `f32` samples
-//! (or a precomputed magnitude spectrogram) and returns tempo, key, onsets,
-//! and loudness. It has **no** I/O, decoding, storage, or UI dependencies; its
+//! (or a precomputed magnitude spectrogram) and returns tempo, key and
+//! onsets. It has **no** I/O, decoding, storage, or UI dependencies; its
 //! only external crates are `rustfft` (FFT) and `log`.
 //!
 //! The public surface is deliberately narrow — exactly the primitives the
@@ -41,8 +41,6 @@
 //!   band-summed chroma here remains available, but the key detector now reads
 //!   its profile from [`compute_hpcp`].
 //! * [`detect_spectral_flux_onsets`] — spectral-flux onset frames.
-//! * [`normalize`] (+ [`NormalizationConfig`], [`NormalizationMethod`],
-//!   [`LoudnessMetadata`]) — ITU-R BS.1770-4 loudness measurement/normalization.
 //!
 //! All fallible entry points return [`AnalysisError`].
 //!
@@ -68,7 +66,6 @@
 mod analysis;
 mod error;
 mod features;
-mod preprocessing;
 
 pub use analysis::result::Key;
 pub use error::AnalysisError;
@@ -83,6 +80,3 @@ pub use features::key::KeyDetectionResult;
 pub use features::onset::spectral_flux::detect_spectral_flux_onsets;
 pub use features::period::tempogram::estimate_bpm_tempogram;
 pub use features::period::BpmEstimate;
-pub use preprocessing::normalization::{
-    normalize, LoudnessMetadata, NormalizationConfig, NormalizationMethod,
-};

@@ -118,11 +118,52 @@ pub(crate) fn load_smart_shuffle_index(
         return Ok(None);
     }
     match SmartShuffleIndex::from_blob(&stored.index_blob) {
-        Ok(index) => Ok(Some(index)),
-        Err(_) => {
+        // Acoustics another analyzer measured do not compare with current
+        // ones; the rebuild replaces them with the current analyzer's.
+        Ok(index)
+            if index.acoustics_analyzer_version() == sustain_analysis::ANALYZER_VERSIONS.audio =>
+        {
+            Ok(Some(index))
+        }
+        _ => {
             // Same derived-data policy as the stale-schema path above.
             let _ = store.clear_smart_shuffle_index();
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sustain_library_store::{LibraryStore, SqliteLibraryStore, StoredSmartShuffleIndex};
+
+    use super::load_smart_shuffle_index;
+    use crate::{SMART_SHUFFLE_INDEX_SCHEMA_VERSION, SmartShuffleIndex};
+
+    fn store_index_measured_by(store: &SqliteLibraryStore, audio_analyzer_version: u32) {
+        let index = SmartShuffleIndex::build(&[], &[], audio_analyzer_version, 0);
+        store
+            .save_smart_shuffle_index(&StoredSmartShuffleIndex {
+                index_blob: index.to_blob().expect("serialise"),
+                schema_version: SMART_SHUFFLE_INDEX_SCHEMA_VERSION,
+            })
+            .expect("save index");
+    }
+
+    #[test]
+    fn an_index_of_the_current_analyzer_is_restored() {
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory store");
+        store_index_measured_by(&store, sustain_analysis::ANALYZER_VERSIONS.audio);
+
+        assert!(matches!(load_smart_shuffle_index(&store), Ok(Some(_))));
+    }
+
+    #[test]
+    fn an_index_of_acoustics_another_analyzer_measured_is_discarded() {
+        let store = SqliteLibraryStore::open_in_memory().expect("in-memory store");
+        store_index_measured_by(&store, sustain_analysis::ANALYZER_VERSIONS.audio - 1);
+
+        assert!(matches!(load_smart_shuffle_index(&store), Ok(None)));
+        assert_eq!(store.load_smart_shuffle_index(), Ok(None));
     }
 }

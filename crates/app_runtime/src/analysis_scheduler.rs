@@ -149,8 +149,14 @@ pub enum SchedulerProgress {
     /// The pool has caught up: either the queue is empty or every
     /// requested capability is currently disabled. UI side: dismiss
     /// the persistent "analysing" notification, emit an ephemeral
-    /// summary if `completed + failed > 0`.
-    Idle { completed: u32, failed: u32 },
+    /// summary if `completed + failed > 0`. `audio_recorded` says
+    /// whether the run recorded an audio attempt, analysed or failed: each
+    /// replaced its track's acoustics.
+    Idle {
+        completed: u32,
+        failed: u32,
+        audio_recorded: bool,
+    },
     /// A durable store write was rejected by SQLite — either the
     /// analysis result or the failed-attempt stamp. The completed DSP
     /// work was *not* persisted, so the track would resurface in
@@ -369,6 +375,8 @@ impl InFlight {
 /// worker is still chewing on it).
 struct WorkOutcome {
     track_id: TrackId,
+    /// Whether the work was an audio attempt.
+    audio: bool,
     kind: OutcomeKind,
 }
 
@@ -550,6 +558,7 @@ fn worker_loop(ctx: WorkerCtx) {
         };
         let outcome = WorkOutcome {
             track_id: item.track_id,
+            audio: item.capabilities.audio,
             kind,
         };
 
@@ -567,6 +576,9 @@ struct SupervisorState {
     library_path: Option<PathBuf>,
     completed: u32,
     failed: u32,
+    /// Whether the active run recorded an audio attempt. Reset only after
+    /// `Idle`.
+    audio_recorded: bool,
     /// Stable denominator for the active run. Reset only after `Idle`.
     total: Option<u32>,
     /// User-initiated work, drained ahead of the background sweep.
@@ -601,6 +613,7 @@ fn supervisor_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: AnalysisS
         library_path,
         completed: 0,
         failed: 0,
+        audio_recorded: false,
         total: None,
         explicit_queue: VecDeque::new(),
         pending_persistence_error: None,
@@ -1118,7 +1131,11 @@ fn apply_outcome(
     in_flight: &mut InFlight,
     progress: &ProgressSink,
 ) {
-    let WorkOutcome { track_id, kind } = outcome;
+    let WorkOutcome {
+        track_id,
+        audio,
+        kind,
+    } = outcome;
     match kind {
         OutcomeKind::PersistenceFailed(detail) => {
             // Record the failure (keeping the first of several) and
@@ -1138,6 +1155,7 @@ fn apply_outcome(
             state.failed = state.failed.saturating_add(1);
         }
     }
+    state.audio_recorded |= audio;
     in_flight.remove(track_id);
     let processed = state.completed.saturating_add(state.failed);
     let total = state.total.unwrap_or(processed).max(processed);
@@ -1213,9 +1231,11 @@ fn emit_idle(progress: &ProgressSink, state: &mut SupervisorState) {
     (progress)(SchedulerProgress::Idle {
         completed: state.completed,
         failed: state.failed,
+        audio_recorded: state.audio_recorded,
     });
     state.completed = 0;
     state.failed = 0;
+    state.audio_recorded = false;
     state.total = None;
 }
 

@@ -274,7 +274,7 @@ pub fn pair_digest(dat: &[u8], ext: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sustain_domain::{Bpm, WaveformSegment, WaveformSegments};
+    use sustain_domain::{BandScale, Bpm, WaveformSegment, WaveformSegments};
 
     fn tier(count: usize) -> WaveformSegments {
         WaveformSegments {
@@ -288,6 +288,7 @@ mod tests {
                 };
                 count
             ],
+            band_scale: BandScale::EVEN,
         }
     }
 

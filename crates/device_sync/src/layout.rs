@@ -507,10 +507,7 @@ pub(crate) fn write_pioneer(
     let slots = path_hash::assign_slots(&slot_requests, &reserved)
         .map_err(|error| SyncError::planning(error.to_string()))?;
 
-    let empty = WaveformSegments {
-        segment_duration_ms: 0.0,
-        segments: Vec::new(),
-    };
+    let empty = WaveformSegments::empty();
     let mut finalized = Finalized::default();
     let mut pioneer_tracks = Vec::with_capacity(exported.len());
     let mut row_for: HashMap<usize, usize> = HashMap::new();

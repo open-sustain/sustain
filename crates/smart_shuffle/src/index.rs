@@ -49,7 +49,11 @@ use crate::SmartShuffleError;
 /// analysed track's [`AcousticFeatures`] plus the library-derived robust
 /// normalization ranges (§8) for the collection-scaled timbral terms. A
 /// version-1 blob has neither, so it is discarded and rebuilt.
-pub const INDEX_SCHEMA_VERSION: u32 = 2;
+///
+/// Version 3: the index records which audio analyzer measured the
+/// acoustics it caches, so the runtime can discard an index whose
+/// acoustics an analyzer change made incomparable with current ones.
+pub const INDEX_SCHEMA_VERSION: u32 = 3;
 
 /// Lower percentile for the robust normalization ranges (§8). The 5th
 /// percentile, paired with [`ROBUST_UPPER_PERCENTILE`], ignores the
@@ -141,6 +145,8 @@ pub struct SmartShuffleIndex {
     /// entry (not yet analysed) is masked (§5). `BTreeMap` for
     /// deterministic serialisation.
     acoustics: BTreeMap<i64, AcousticFeatures>,
+    /// Version of the audio analyzer that measured `acoustics`.
+    acoustics_analyzer_version: u32,
     /// Robust normalization ranges for the collection-scaled acoustic
     /// features, derived from `acoustics` (§8).
     normalization: AcousticNormalization,
@@ -163,11 +169,13 @@ impl SmartShuffleIndex {
     /// can never be picked, so they must not skew the IDF document
     /// frequencies, the normalization ranges, or the coverage figure.
     /// `acoustics` is the store's full set of analysed tracks; entries
-    /// for unavailable or unknown tracks are ignored. `built_at_unix` is
-    /// supplied by the caller's clock.
+    /// for unavailable or unknown tracks are ignored; all of them were
+    /// measured by audio analyzer `acoustics_analyzer_version`.
+    /// `built_at_unix` is supplied by the caller's clock.
     pub fn build(
         tracks: &[Track],
         acoustics: &[(TrackId, AcousticFeatures)],
+        acoustics_analyzer_version: u32,
         built_at_unix: i64,
     ) -> Self {
         // Document frequency: how many tracks carry each genre token.
@@ -220,6 +228,7 @@ impl SmartShuffleIndex {
             schema_version: INDEX_SCHEMA_VERSION,
             genre_idf,
             acoustics,
+            acoustics_analyzer_version,
             normalization,
             indexed_track_count,
             analysis_coverage,
@@ -231,6 +240,11 @@ impl SmartShuffleIndex {
     /// analysed (so the acoustic terms and the loudness guard mask it).
     pub fn acoustics(&self, track_id: TrackId) -> Option<&AcousticFeatures> {
         self.acoustics.get(&track_id.get())
+    }
+
+    /// Version of the audio analyzer that measured the cached acoustics.
+    pub fn acoustics_analyzer_version(&self) -> u32 {
+        self.acoustics_analyzer_version
     }
 
     /// The library-derived robust normalization ranges (§8).
@@ -391,7 +405,7 @@ mod tests {
         // "rock" appears on 9 tracks, "shoegaze" on 1.
         let mut tracks: Vec<Track> = (0..9).map(|i| track(i + 1, Some("Rock"))).collect();
         tracks.push(track(10, Some("Shoegaze")));
-        let index = SmartShuffleIndex::build(&tracks, &[], 0);
+        let index = SmartShuffleIndex::build(&tracks, &[], 1, 0);
         assert_eq!(index.indexed_track_count(), 10);
         assert!(
             index.genre_token_idf("shoegaze") > index.genre_token_idf("rock"),
@@ -404,7 +418,7 @@ mod tests {
         let mut present = track(1, Some("Rock"));
         present.location =
             TrackLocation::missing(TrackRelativePath::new("t/1.flac").expect("relative path"));
-        let index = SmartShuffleIndex::build(&[present], &[], 0);
+        let index = SmartShuffleIndex::build(&[present], &[], 1, 0);
         assert_eq!(index.indexed_track_count(), 0);
     }
 
@@ -429,6 +443,7 @@ mod tests {
         let index = SmartShuffleIndex::build(
             &[track(1, Some("Rock"))],
             &[(TrackId::new(1).expect("id"), acoustics(2.0))],
+            16,
             123,
         );
         let blob = index.to_blob().expect("serialise");
@@ -436,6 +451,7 @@ mod tests {
         assert_eq!(restored, index);
         assert_eq!(restored.schema_version(), INDEX_SCHEMA_VERSION);
         assert_eq!(restored.built_at_unix(), 123);
+        assert_eq!(restored.acoustics_analyzer_version(), 16);
     }
 
     #[test]
@@ -453,6 +469,7 @@ mod tests {
                 // …as is one for a track not in the library at all.
                 (TrackId::new(99).expect("id"), acoustics(9.0)),
             ],
+            1,
             0,
         );
         assert!(index.acoustics(TrackId::new(1).expect("id")).is_some());
@@ -470,6 +487,7 @@ mod tests {
                 (TrackId::new(1).expect("id"), acoustics(1.0)),
                 (TrackId::new(2).expect("id"), acoustics(2.0)),
             ],
+            1,
             0,
         );
         assert!((index.analysis_coverage() - 0.5).abs() < 1e-6);

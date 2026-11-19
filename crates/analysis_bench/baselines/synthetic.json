@@ -44,8 +44,8 @@
         "detail_segments": 1200,
         "preview_duration_ms": 20.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "a947e50590de8025",
-        "detail_hash": "d0549f149dd63a25"
+        "preview_hash": "980df415fe265648",
+        "detail_hash": "f03baa0fd21df048"
       }
     },
     {
@@ -65,8 +65,8 @@
         "detail_segments": 1200,
         "preview_duration_ms": 20.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "a947e50590de8025",
-        "detail_hash": "d0549f149dd63a25"
+        "preview_hash": "980df415fe265648",
+        "detail_hash": "f03baa0fd21df048"
       }
     },
     {
@@ -81,8 +81,8 @@
       "bpm": null,
       "key": "Am",
       "acoustics": {
-        "integrated_lufs": -45.095444,
-        "short_term_lufs_max": -45.091675,
+        "integrated_lufs": -9.929832,
+        "short_term_lufs_max": -9.929742,
         "loudness_range_lu": 0.0,
         "onset_rate_hz": 9.375,
         "low_band_ratio": 0.9981185,
@@ -96,8 +96,8 @@
         "detail_segments": 1200,
         "preview_duration_ms": 20.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "3dfb5e1a31f99b58",
-        "detail_hash": "2341ad0fe50b84ce"
+        "preview_hash": "994eefa48129fe34",
+        "detail_hash": "59a9d5b3310906ea"
       }
     },
     {
@@ -112,8 +112,8 @@
       "bpm": null,
       "key": "Am",
       "acoustics": {
-        "integrated_lufs": -32.93875,
-        "short_term_lufs_max": -32.937897,
+        "integrated_lufs": -6.699978,
+        "short_term_lufs_max": -6.699956,
         "loudness_range_lu": 0.0,
         "onset_rate_hz": 17.0,
         "low_band_ratio": 2.2710904e-7,
@@ -127,8 +127,8 @@
         "detail_segments": 1200,
         "preview_duration_ms": 20.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "f44a2f1a8bf25740",
-        "detail_hash": "013f5179a7fc7c32"
+        "preview_hash": "42f95ec192552d9e",
+        "detail_hash": "ad32f76bb5e99090"
       }
     },
     {
@@ -143,9 +143,9 @@
       "bpm": null,
       "key": "Gm",
       "acoustics": {
-        "integrated_lufs": -40.735886,
-        "short_term_lufs_max": -40.735886,
-        "loudness_range_lu": 12.04129,
+        "integrated_lufs": -26.273436,
+        "short_term_lufs_max": -35.024044,
+        "loudness_range_lu": 0.0,
         "onset_rate_hz": 0.5,
         "low_band_ratio": 1.0,
         "mid_band_ratio": 5.564876e-11,
@@ -158,8 +158,8 @@
         "detail_segments": 1200,
         "preview_duration_ms": 20.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "96555333a18e8817",
-        "detail_hash": "ca63ff0b90fe4b5b"
+        "preview_hash": "1e7c4a2fbb8e7b63",
+        "detail_hash": "c694219795988cc7"
       }
     },
     {
@@ -179,9 +179,9 @@
       },
       "key": "Ebm",
       "acoustics": {
-        "integrated_lufs": -41.628326,
-        "short_term_lufs_max": -41.628326,
-        "loudness_range_lu": 0.0,
+        "integrated_lufs": -27.765514,
+        "short_term_lufs_max": -29.526424,
+        "loudness_range_lu": 0.9691001,
         "onset_rate_hz": 2.25,
         "low_band_ratio": 0.88597995,
         "mid_band_ratio": 0.10716483,
@@ -194,8 +194,8 @@
         "detail_segments": 3000,
         "preview_duration_ms": 50.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "61d50beb4f972955",
-        "detail_hash": "6827e572f89d362d"
+        "preview_hash": "93a44982a33613d3",
+        "detail_hash": "ce266776897c551b"
       },
       "bpm_score": {
         "ground_truth": 90.0,
@@ -221,8 +221,8 @@
       },
       "key": "Ebm",
       "acoustics": {
-        "integrated_lufs": -41.628326,
-        "short_term_lufs_max": -41.628326,
+        "integrated_lufs": -27.765512,
+        "short_term_lufs_max": -28.734613,
         "loudness_range_lu": 0.0,
         "onset_rate_hz": 3.0,
         "low_band_ratio": 0.8859797,
@@ -236,8 +236,8 @@
         "detail_segments": 3000,
         "preview_duration_ms": 50.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "961ed81dd08cd965",
-        "detail_hash": "210571c598bb1e45"
+        "preview_hash": "1b5e22d1441099e3",
+        "detail_hash": "2236acdcb8e50783"
       },
       "bpm_score": {
         "ground_truth": 120.0,
@@ -263,9 +263,9 @@
       },
       "key": "Ebm",
       "acoustics": {
-        "integrated_lufs": -41.628326,
-        "short_term_lufs_max": -41.0484,
-        "loudness_range_lu": 0.57992554,
+        "integrated_lufs": -27.76856,
+        "short_term_lufs_max": -28.065145,
+        "loudness_range_lu": 0.6694679,
         "onset_rate_hz": 3.4,
         "low_band_ratio": 0.88597965,
         "mid_band_ratio": 0.1071651,
@@ -278,8 +278,8 @@
         "detail_segments": 3000,
         "preview_duration_ms": 50.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "56aaa496544859d7",
-        "detail_hash": "83719d79b76f1187"
+        "preview_hash": "e6b1bae0f3589a3d",
+        "detail_hash": "113b12d44c44eded"
       },
       "bpm_score": {
         "ground_truth": 128.0,
@@ -305,9 +305,9 @@
       },
       "key": "Ebm",
       "acoustics": {
-        "integrated_lufs": -41.628326,
-        "short_term_lufs_max": -41.0484,
-        "loudness_range_lu": 0.57992554,
+        "integrated_lufs": -27.76629,
+        "short_term_lufs_max": -28.065145,
+        "loudness_range_lu": 0.0,
         "onset_rate_hz": 3.6,
         "low_band_ratio": 0.8859796,
         "mid_band_ratio": 0.107165135,
@@ -320,8 +320,8 @@
         "detail_segments": 3000,
         "preview_duration_ms": 50.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "306c1221341df523",
-        "detail_hash": "e755d504310e5996"
+        "preview_hash": "ae70bdf343245379",
+        "detail_hash": "be05a24f997679c8"
       },
       "bpm_score": {
         "ground_truth": 140.0,
@@ -347,9 +347,9 @@
       },
       "key": "C",
       "acoustics": {
-        "integrated_lufs": -42.235542,
-        "short_term_lufs_max": -42.102737,
-        "loudness_range_lu": 0.106170654,
+        "integrated_lufs": -14.561555,
+        "short_term_lufs_max": -14.5582075,
+        "loudness_range_lu": 0.003853788,
         "onset_rate_hz": 17.15,
         "low_band_ratio": 0.03389491,
         "mid_band_ratio": 0.9661051,
@@ -362,8 +362,8 @@
         "detail_segments": 3000,
         "preview_duration_ms": 50.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "1bb9d62239377b96",
-        "detail_hash": "cdc845373a023ce6"
+        "preview_hash": "50cf7d55cfd0d039",
+        "detail_hash": "04ce36e3aedfcb11"
       },
       "key_score": {
         "ground_truth": "C",
@@ -388,9 +388,9 @@
       },
       "key": "G",
       "acoustics": {
-        "integrated_lufs": -38.641853,
-        "short_term_lufs_max": -38.60244,
-        "loudness_range_lu": 0.026794434,
+        "integrated_lufs": -14.514734,
+        "short_term_lufs_max": -14.510959,
+        "loudness_range_lu": 0.006164832,
         "onset_rate_hz": 12.15,
         "low_band_ratio": 0.00008831424,
         "mid_band_ratio": 0.99991167,
@@ -403,8 +403,8 @@
         "detail_segments": 3000,
         "preview_duration_ms": 50.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "33880fb15beff41c",
-        "detail_hash": "c2aa6c8626f4aba9"
+        "preview_hash": "399f7d9cd60e88f7",
+        "detail_hash": "a2ae1d437f1d9976"
       },
       "key_score": {
         "ground_truth": "G",
@@ -429,9 +429,9 @@
       },
       "key": "Am",
       "acoustics": {
-        "integrated_lufs": -40.92018,
-        "short_term_lufs_max": -40.853195,
-        "loudness_range_lu": 0.059448242,
+        "integrated_lufs": -14.552164,
+        "short_term_lufs_max": -14.549674,
+        "loudness_range_lu": 0.0031328085,
         "onset_rate_hz": 17.1,
         "low_band_ratio": 0.03389476,
         "mid_band_ratio": 0.9661052,
@@ -444,8 +444,8 @@
         "detail_segments": 3000,
         "preview_duration_ms": 50.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "091c30445a043392",
-        "detail_hash": "00c281c1e4f07727"
+        "preview_hash": "19d63c3bdedef9fb",
+        "detail_hash": "d1d615c84b5fa7c6"
       },
       "key_score": {
         "ground_truth": "Am",
@@ -470,9 +470,9 @@
       },
       "key": "D",
       "acoustics": {
-        "integrated_lufs": -40.478745,
-        "short_term_lufs_max": -40.24475,
-        "loudness_range_lu": 0.3827362,
+        "integrated_lufs": -14.540675,
+        "short_term_lufs_max": -14.525603,
+        "loudness_range_lu": 0.019121129,
         "onset_rate_hz": 14.416667,
         "low_band_ratio": 0.017714523,
         "mid_band_ratio": 0.9822743,
@@ -485,8 +485,8 @@
         "detail_segments": 3600,
         "preview_duration_ms": 60.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "9b21e2f825a6113c",
-        "detail_hash": "cb0e7d14afd8fb68"
+        "preview_hash": "769fb323437cc977",
+        "detail_hash": "058e83442c7bf072"
       },
       "key_score": {
         "ground_truth": "Am",
@@ -511,9 +511,9 @@
       },
       "key": "Am",
       "acoustics": {
-        "integrated_lufs": -39.91561,
-        "short_term_lufs_max": -38.695496,
-        "loudness_range_lu": 2.1041794,
+        "integrated_lufs": -14.53563,
+        "short_term_lufs_max": -14.504439,
+        "loudness_range_lu": 0.042665247,
         "onset_rate_hz": 13.75,
         "low_band_ratio": 0.017273974,
         "mid_band_ratio": 0.9827184,
@@ -526,8 +526,8 @@
         "detail_segments": 3600,
         "preview_duration_ms": 60.0,
         "detail_duration_ms": 6.6666665,
-        "preview_hash": "22afd2a6755a1e0c",
-        "detail_hash": "1c573aac1d84432f"
+        "preview_hash": "d07eee5ef3c5f8ca",
+        "detail_hash": "13bc401f12e522c2"
       },
       "key_score": {
         "ground_truth": "Am",

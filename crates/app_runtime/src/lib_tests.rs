@@ -1837,7 +1837,9 @@ fn next_analysis_sweep_outcome(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         match progress.try_recv() {
-            Ok(crate::AnalysisProgress::Idle { completed, failed }) => return (completed, failed),
+            Ok(crate::AnalysisProgress::Idle {
+                completed, failed, ..
+            }) => return (completed, failed),
             Ok(crate::AnalysisProgress::Tick { .. }) => {}
             Ok(crate::AnalysisProgress::PersistenceError { detail }) => {
                 panic!("analysis sweep failed to persist: {detail}")
@@ -9376,14 +9378,8 @@ fn request_run_skips_tracks_whose_capability_is_already_cached() {
         bpm: None,
         key: None,
         beat_grid: None,
-        waveform_preview: sustain_domain::WaveformSegments {
-            segment_duration_ms: 0.0,
-            segments: Vec::new(),
-        },
-        waveform_detail: sustain_domain::WaveformSegments {
-            segment_duration_ms: 0.0,
-            segments: Vec::new(),
-        },
+        waveform_preview: sustain_domain::WaveformSegments::empty(),
+        waveform_detail: sustain_domain::WaveformSegments::empty(),
         acoustics: None,
     };
     store
@@ -9890,8 +9886,11 @@ impl LibraryStore for CallCountingLibraryStore {
         self.inner.load_beat_grids(track_ids)
     }
 
-    fn load_all_acoustics(&self) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
-        self.inner.load_all_acoustics()
+    fn load_all_acoustics(
+        &self,
+        versions: sustain_domain::AnalyzerVersions,
+    ) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
+        self.inner.load_all_acoustics(versions)
     }
 
     fn record_synced_lyrics(

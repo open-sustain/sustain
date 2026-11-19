@@ -15,10 +15,14 @@
 //! RMS energy in three frequency bands. Amplitudes are normalized to
 //! the track's loudest segment, so the loudest part of any track sits
 //! at 255 and quieter material scales below it — visually consistent
-//! across tracks regardless of their absolute peak level.
+//! across tracks regardless of their absolute peak level. Each band energy
+//! is normalized the same way to its own loudest segment, so a faint band
+//! keeps the resolution its shape needs; the tier's `BandScale` records
+//! how the band peaks compare, the balance a segment's colour is read
+//! from.
 
 use sustain_domain::{
-    DETAIL_SEGMENTS_PER_SECOND, PREVIEW_SEGMENT_COUNT, WaveformSegment, WaveformSegments,
+    BandScale, DETAIL_SEGMENTS_PER_SECOND, PREVIEW_SEGMENT_COUNT, WaveformSegment, WaveformSegments,
 };
 
 use crate::bands::ThreeBandSplitter;
@@ -50,13 +54,10 @@ pub(crate) fn build_tiers(samples: &[f32], sample_rate: u32) -> WaveformTiers {
 fn empty_tiers(sample_rate: u32) -> WaveformTiers {
     let rate = sample_rate.max(1) as f32;
     WaveformTiers {
-        preview: WaveformSegments {
-            segment_duration_ms: 0.0,
-            segments: Vec::new(),
-        },
+        preview: WaveformSegments::empty(),
         detail: WaveformSegments {
             segment_duration_ms: 1_000.0 / rate,
-            segments: Vec::new(),
+            ..WaveformSegments::empty()
         },
     }
 }
@@ -75,12 +76,11 @@ fn build_detail(samples: &[f32], sample_rate: u32) -> WaveformSegments {
 
     // Pre-compute the peak across every segment so we can normalize in
     // a single pass below. The IIR splitter is single-pass and
-    // stateful, so we collect raw f32 accumulators first and only
+    // stateful, so we collect raw accumulators first and only
     // quantize to u8 at the end.
     let mut accum: Vec<RawSegment> = Vec::with_capacity(segment_count);
 
-    let splitter = ThreeBandSplitter::new(sample_rate);
-    let mut splitter = splitter;
+    let mut splitter = ThreeBandSplitter::new(sample_rate);
 
     for segment_index in 0..segment_count {
         let start = segment_index * sample_rate_usize / detail_rate;
@@ -97,20 +97,18 @@ fn build_detail(samples: &[f32], sample_rate: u32) -> WaveformSegments {
             if abs > peak {
                 peak = abs;
             }
-            if let Some(splitter) = splitter.as_mut() {
-                let (l, m, h) = splitter.process(sample);
-                low_sq += (l as f64).powi(2);
-                mid_sq += (m as f64).powi(2);
-                high_sq += (h as f64).powi(2);
-            }
+            let (l, m, h) = splitter.process(sample);
+            low_sq += l * l;
+            mid_sq += m * m;
+            high_sq += h * h;
         }
 
         let n = chunk.len().max(1) as f64;
         accum.push(RawSegment {
             peak,
-            low_rms: (low_sq / n).sqrt() as f32,
-            mid_rms: (mid_sq / n).sqrt() as f32,
-            high_rms: (high_sq / n).sqrt() as f32,
+            low_rms: (low_sq / n).sqrt(),
+            mid_rms: (mid_sq / n).sqrt(),
+            high_rms: (high_sq / n).sqrt(),
         });
     }
 
@@ -119,44 +117,51 @@ fn build_detail(samples: &[f32], sample_rate: u32) -> WaveformSegments {
         .map(|seg| seg.peak)
         .fold(0.0_f32, f32::max)
         .max(f32::EPSILON);
-    let track_low_peak = accum
-        .iter()
-        .map(|seg| seg.low_rms)
-        .fold(0.0_f32, f32::max)
-        .max(f32::EPSILON);
-    let track_mid_peak = accum
-        .iter()
-        .map(|seg| seg.mid_rms)
-        .fold(0.0_f32, f32::max)
-        .max(f32::EPSILON);
-    let track_high_peak = accum
-        .iter()
-        .map(|seg| seg.high_rms)
-        .fold(0.0_f32, f32::max)
-        .max(f32::EPSILON);
+    // Each band is scaled to its own loudest segment. A band without
+    // energy takes the least positive peak, so it reads zero, and the
+    // scale relates the peaks the bytes were scaled to.
+    let band_peak = |band: fn(&RawSegment) -> f64| {
+        accum
+            .iter()
+            .map(band)
+            .fold(0.0_f64, f64::max)
+            .max(f64::MIN_POSITIVE)
+    };
+    let low_peak = band_peak(|seg| seg.low_rms);
+    let mid_peak = band_peak(|seg| seg.mid_rms);
+    let high_peak = band_peak(|seg| seg.high_rms);
 
     let segments = accum
         .into_iter()
         .map(|seg| WaveformSegment {
             amplitude: quantize(seg.peak / track_peak),
-            low_band: quantize(seg.low_rms / track_low_peak),
-            mid_band: quantize(seg.mid_rms / track_mid_peak),
-            high_band: quantize(seg.high_rms / track_high_peak),
+            low_band: quantize((seg.low_rms / low_peak) as f32),
+            mid_band: quantize((seg.mid_rms / mid_peak) as f32),
+            high_band: quantize((seg.high_rms / high_peak) as f32),
         })
         .collect();
 
     WaveformSegments {
         segment_duration_ms: 1_000.0 / DETAIL_SEGMENTS_PER_SECOND as f32,
         segments,
+        band_scale: band_scale(low_peak, mid_peak, high_peak),
+    }
+}
+
+/// How the bands' loudest segments compare: each band peak relative to
+/// the strongest.
+fn band_scale(low_peak: f64, mid_peak: f64, high_peak: f64) -> BandScale {
+    let strongest = low_peak.max(mid_peak).max(high_peak);
+    BandScale {
+        low: (low_peak / strongest) as f32,
+        mid: (mid_peak / strongest) as f32,
+        high: (high_peak / strongest) as f32,
     }
 }
 
 fn build_preview(detail: &WaveformSegments) -> WaveformSegments {
     if detail.segments.is_empty() {
-        return WaveformSegments {
-            segment_duration_ms: 0.0,
-            segments: Vec::new(),
-        };
+        return WaveformSegments::empty();
     }
 
     // If the detail tier is already shorter than the preview budget
@@ -166,6 +171,7 @@ fn build_preview(detail: &WaveformSegments) -> WaveformSegments {
         return WaveformSegments {
             segment_duration_ms: detail.segment_duration_ms,
             segments: detail.segments.clone(),
+            band_scale: detail.band_scale,
         };
     }
 
@@ -187,6 +193,7 @@ fn build_preview(detail: &WaveformSegments) -> WaveformSegments {
         segment_duration_ms: detail.segment_duration_ms * detail_len as f32
             / PREVIEW_SEGMENT_COUNT as f32,
         segments,
+        band_scale: detail.band_scale,
     }
 }
 
@@ -231,9 +238,9 @@ fn quantize(normalized: f32) -> u8 {
 /// before knowing the track-wide peak.
 struct RawSegment {
     peak: f32,
-    low_rms: f32,
-    mid_rms: f32,
-    high_rms: f32,
+    low_rms: f64,
+    mid_rms: f64,
+    high_rms: f64,
 }
 
 #[cfg(test)]
@@ -319,22 +326,102 @@ mod tests {
 
     #[test]
     fn low_tone_dominates_low_band_after_normalization() {
-        // Mostly-bass tone should drive the low band higher than the
-        // high band on a per-segment basis after normalization.
-        // (Both bands are normalized to their own peaks, so the
-        // assertion is on a representative segment chosen after the
-        // IIR filters have reached steady state.)
+        // A bass tone's low band outweighs its high band once the bands
+        // are compared on their shared scale. (The segment is chosen
+        // after the IIR filters have reached steady state.)
         let samples = sine(80.0, 2.0, 0.5);
         let tiers = build_tiers(&samples, SAMPLE_RATE);
         // Skip the first 10% of segments — IIR transient.
         let start = tiers.detail.segments.len() / 10;
-        let mid_segment = tiers.detail.segments[start + 50];
+        let [low, _, high] = tiers
+            .detail
+            .band_scale
+            .balanced(&tiers.detail.segments[start + 50]);
         assert!(
-            mid_segment.low_band > mid_segment.high_band,
-            "low band {} should dominate high band {} on 80 Hz tone",
-            mid_segment.low_band,
-            mid_segment.high_band
+            low > high,
+            "low band {low} should dominate high band {high} on 80 Hz tone"
         );
+    }
+
+    #[test]
+    fn a_tone_lights_its_own_band_alone() {
+        // A 1 kHz tone is mid-band: its low and high bands carry only
+        // faint leakage, however their own bytes are scaled.
+        let samples = sine(1_000.0, 2.0, 0.5);
+        let tiers = build_tiers(&samples, SAMPLE_RATE);
+        let [low, mid, high] = tiers
+            .detail
+            .band_scale
+            .balanced(&tiers.detail.segments[tiers.detail.segments.len() / 2]);
+
+        assert!(mid >= 0.98, "mid band {mid}");
+        assert!(low < 0.25, "low band {low}");
+        assert!(high < 0.25, "high band {high}");
+        assert_eq!(tiers.preview.band_scale, tiers.detail.band_scale);
+    }
+
+    #[test]
+    fn a_faint_band_keeps_the_shape_of_its_energy() {
+        // A loud bass under a faint high tone that swells and fades: the
+        // high band's own bytes still trace the swell, which recording
+        // identity compares, though on the shared scale it barely shows.
+        let samples: Vec<f32> = (0..SAMPLE_RATE as usize * 4)
+            .map(|i| {
+                let t = i as f32 / SAMPLE_RATE as f32;
+                let swell = 0.5 - 0.5 * (TAU * 0.5 * t).cos();
+                0.8 * (TAU * 150.0 * t).sin() + 0.0008 * swell * (TAU * 6_000.0 * t).sin()
+            })
+            .collect();
+        let tiers = build_tiers(&samples, SAMPLE_RATE);
+        let settled = &tiers.detail.segments[30..];
+        let highest = settled.iter().map(|seg| seg.high_band).max().unwrap_or(0);
+        let lowest = settled.iter().map(|seg| seg.high_band).min().unwrap_or(0);
+
+        assert!(
+            highest - lowest >= 20,
+            "high band spans {lowest}..{highest}"
+        );
+        assert!(tiers.detail.band_scale.high < 0.01);
+    }
+
+    #[test]
+    fn a_whisper_keeps_the_balance_of_its_bands() {
+        // The same mix at a level far below one float epsilon: its bands
+        // compare as they do at full level.
+        let mix = |gain: f32| -> Vec<f32> {
+            sine(80.0, 2.0, 0.5)
+                .iter()
+                .zip(sine(1_000.0, 2.0, 0.25))
+                .map(|(low, mid)| gain * (low + mid))
+                .collect()
+        };
+        let balance = |samples: &[f32]| {
+            let tiers = build_tiers(samples, SAMPLE_RATE);
+            tiers
+                .detail
+                .band_scale
+                .balanced(&tiers.detail.segments[tiers.detail.segments.len() / 2])
+        };
+        let loud = balance(&mix(1.0));
+        let whisper = balance(&mix(1e-12));
+
+        for (loud, whisper) in loud.iter().zip(whisper) {
+            assert!(
+                (loud - whisper).abs() < 0.01,
+                "{loud:?} against {whisper:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn samples_far_beyond_full_scale_still_scale_the_bands() {
+        let mut samples = sine(1_000.0, 1.0, 0.5);
+        samples.extend([f32::MAX, f32::MAX]);
+        let scale = build_tiers(&samples, SAMPLE_RATE).detail.band_scale;
+
+        for band in [scale.low, scale.mid, scale.high] {
+            assert!((0.0..=1.0).contains(&band), "{scale:?}");
+        }
     }
 
     #[test]

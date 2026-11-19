@@ -6,7 +6,14 @@
 //! *windowed* decode that seeks to an offset and collects a bounded
 //! span — used to pull a centered analysis window without decoding the
 //! material on either side of it. Both produce interleaved-collapsed
-//! mono `f32` samples plus the original sample rate.
+//! mono `f32` samples plus the original sample rate, and the region's
+//! loudness, metered channel by channel before the channels are mixed
+//! (`loudness`).
+//!
+//! A decoded sample that is not a finite number (a NaN or an infinity a
+//! float file can hold) is read as silence. It carries no level, and one
+//! would otherwise poison every stateful filter after it — the loudness
+//! meter, the waveform's band split — for the rest of the track.
 //!
 //! The windowed path seeks rather than decode-and-discards: reaching
 //! the centre of a two-hour file by discarding the first ~56 minutes
@@ -41,6 +48,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::Time;
 
+use crate::loudness::{Loudness, LoudnessMeter};
 use crate::{AnalysisError, mp4_presentation};
 
 /// One contiguous block of mono `f32` samples plus the rate they were
@@ -49,6 +57,12 @@ use crate::{AnalysisError, mp4_presentation};
 pub(crate) struct DecodedAudio {
     pub(crate) samples: Vec<f32>,
     pub(crate) sample_rate: u32,
+}
+
+/// A decoded region: its mono samples, and the loudness of its channels.
+pub(crate) struct DecodedRegion {
+    pub(crate) audio: DecodedAudio,
+    pub(crate) loudness: Loudness,
 }
 
 /// Which span of the track to decode.
@@ -65,7 +79,7 @@ enum Region {
 /// Decode the entire audio file to mono `f32`. Used by the waveform
 /// pass on normal-length tracks (and acoustics, which reuses the same
 /// decode) so the result reflects the whole track.
-pub(crate) fn decode_full(path: &Path) -> Result<DecodedAudio, AnalysisError> {
+pub(crate) fn decode_full(path: &Path) -> Result<DecodedRegion, AnalysisError> {
     decode_region(path, Region::Full)
 }
 
@@ -77,7 +91,7 @@ pub(crate) fn decode_window(
     path: &Path,
     start_secs: f64,
     len_secs: f64,
-) -> Result<DecodedAudio, AnalysisError> {
+) -> Result<DecodedRegion, AnalysisError> {
     decode_region(
         path,
         Region::Window {
@@ -87,7 +101,7 @@ pub(crate) fn decode_window(
     )
 }
 
-fn decode_region(path: &Path, region: Region) -> Result<DecodedAudio, AnalysisError> {
+fn decode_region(path: &Path, region: Region) -> Result<DecodedRegion, AnalysisError> {
     let path_label = path.display().to_string();
 
     let file = std::fs::File::open(path).map_err(|source| AnalysisError::OpenFailed {
@@ -203,18 +217,23 @@ fn decode_region(path: &Path, region: Region) -> Result<DecodedAudio, AnalysisEr
         }
     };
 
+    let mut meter = LoudnessMeter::new(sample_rate);
     let samples = collect_samples(
         &mut *format,
         &mut *decoder,
         track_id,
         skip_samples,
         max_samples,
+        &mut meter,
         &path_label,
     )?;
 
-    Ok(DecodedAudio {
-        samples,
-        sample_rate,
+    Ok(DecodedRegion {
+        audio: DecodedAudio {
+            samples,
+            sample_rate,
+        },
+        loudness: meter.finish(),
     })
 }
 
@@ -251,13 +270,15 @@ fn seek_to(
 
 /// Drive the decode loop, collapsing every packet of `track_id` to mono,
 /// dropping the first `skip_samples` mono samples, and stopping once
-/// `max_samples` have been retained (or at end-of-stream).
+/// `max_samples` have been retained (or at end-of-stream). Every frame
+/// retained is also metered, channel by channel, by `meter`.
 fn collect_samples(
     format: &mut dyn FormatReader,
     decoder: &mut dyn AudioDecoder,
     track_id: u32,
     mut skip_samples: usize,
     max_samples: Option<usize>,
+    meter: &mut LoudnessMeter,
     path_label: &str,
 ) -> Result<Vec<f32>, AnalysisError> {
     let mut samples: Vec<f32> = Vec::new();
@@ -314,38 +335,33 @@ fn collect_samples(
         // 0.6 removed `SampleBuffer`; copy the decoded audio into an
         // interleaved `f32` scratch buffer via the audio-buffer API.
         // `num_planes` is the channel count for interleaved audio.
-        let channel_count = decoded.num_planes();
+        let channel_count = decoded.num_planes().max(1);
         interleaved.resize(decoded.samples_interleaved(), 0.0);
         decoded.copy_to_slice_interleaved(&mut interleaved);
+        for sample in &mut interleaved {
+            if !sample.is_finite() {
+                *sample = 0.0;
+            }
+        }
+        meter.set_layout(decoded.spec().channels(), channel_count);
 
         // Collapse to mono on the fly, honoring the lead-in skip and the
         // collection cap so a windowed decode never materializes more
-        // than the window it was asked for.
-        if channel_count <= 1 {
-            for &sample in &interleaved {
-                if skip_samples > 0 {
-                    skip_samples -= 1;
-                    continue;
-                }
-                samples.push(sample);
-                if max_samples.is_some_and(|cap| samples.len() >= cap) {
-                    return Ok(samples);
-                }
+        // than the window it was asked for. The mono sample is the mean
+        // of the channels; if any one saturates we accept the attenuation.
+        // It is summed in f64, so channels far beyond full scale cannot
+        // overflow the sum.
+        let inverse = 1.0 / channel_count as f64;
+        for frame in interleaved.chunks_exact(channel_count) {
+            if skip_samples > 0 {
+                skip_samples -= 1;
+                continue;
             }
-        } else {
-            // Average across channels for mono. Sum-then-divide on f32
-            // is fine; if any one channel saturates we accept the
-            // attenuation.
-            let inverse = 1.0_f32 / channel_count as f32;
-            for frame in interleaved.chunks_exact(channel_count) {
-                if skip_samples > 0 {
-                    skip_samples -= 1;
-                    continue;
-                }
-                samples.push(frame.iter().sum::<f32>() * inverse);
-                if max_samples.is_some_and(|cap| samples.len() >= cap) {
-                    return Ok(samples);
-                }
+            meter.push_frame(frame);
+            let sum: f64 = frame.iter().copied().map(f64::from).sum();
+            samples.push((sum * inverse) as f32);
+            if max_samples.is_some_and(|cap| samples.len() >= cap) {
+                return Ok(samples);
             }
         }
     }
@@ -413,6 +429,62 @@ mod tests {
     }
 
     #[test]
+    fn a_sample_that_is_not_a_number_is_read_as_silence() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("nonfinite.wav");
+        let mut samples = crate::test_audio::sine(48_000, 4.0, 1_000.0, 0.1);
+        samples[1_000] = f32::NAN;
+        samples[2_000] = f32::INFINITY;
+        crate::test_audio::write_float_wav(&path, 48_000, 1, &samples);
+
+        let region = decode_full(&path).expect("decode the fixture");
+
+        assert!(region.audio.samples.iter().all(|sample| sample.is_finite()));
+        assert_eq!(region.audio.samples[1_000], 0.0);
+        assert_eq!(region.audio.samples[2_000], 0.0);
+        let integrated = region.loudness.integrated().expect("the tone is measured");
+        assert!(
+            (integrated - -23.0).abs() < 0.1,
+            "the tone after them reads as it is: {integrated}"
+        );
+    }
+
+    #[test]
+    fn channels_far_beyond_full_scale_mix_to_a_number() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("beyond.wav");
+        let mut interleaved = vec![0.0; 640];
+        interleaved.extend([f32::MAX, f32::MAX]);
+        crate::test_audio::write_float_wav(&path, 48_000, 2, &interleaved);
+
+        let region = decode_full(&path).expect("decode the fixture");
+
+        assert_eq!(region.audio.samples.last(), Some(&f32::MAX));
+    }
+
+    #[test]
+    fn channels_are_metered_before_they_are_mixed() {
+        // Opposite polarity: the mono mix is silent, the channels are not.
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("opposite.wav");
+        let tone = crate::test_audio::sine(48_000, 4.0, 1_000.0, 0.1);
+        let interleaved: Vec<f32> = tone.iter().flat_map(|sample| [*sample, -*sample]).collect();
+        crate::test_audio::write_float_wav(&path, 48_000, 2, &interleaved);
+
+        let region = decode_full(&path).expect("decode the fixture");
+
+        assert!(region.audio.samples.iter().all(|sample| *sample == 0.0));
+        let integrated = region
+            .loudness
+            .integrated()
+            .expect("the channels are measured");
+        assert!(
+            (integrated - -20.0).abs() < 0.1,
+            "both channels count: {integrated}"
+        );
+    }
+
+    #[test]
     fn decode_full_reads_the_older_mpeg_audio_layers_an_mp3_file_may_hold() {
         // Layers I and II also travel in `.mp3` files, and play.
         let layer_one = ([0xFF, 0xFF, 0x90, 0x00], 312, 384); // 288 kbps
@@ -422,7 +494,9 @@ mod tests {
             let path = dir.path().join("older-layer.mp3");
             write_silent_mpeg_audio(&path, header, frame_len, 100);
 
-            let audio = decode_full(&path).expect("decode an older MPEG audio layer");
+            let audio = decode_full(&path)
+                .expect("decode an older MPEG audio layer")
+                .audio;
             assert_eq!(audio.sample_rate, 44_100);
             assert_eq!(audio.samples.len(), 100 * samples_per_frame);
         }
@@ -436,7 +510,7 @@ mod tests {
         let frames = sample_rate * 4; // 4 s
         write_ramp_wav(&path, sample_rate, frames);
 
-        let audio = decode_full(&path).expect("decode full");
+        let audio = decode_full(&path).expect("decode full").audio;
         assert_eq!(audio.sample_rate, sample_rate);
         assert_eq!(audio.samples.len(), frames as usize);
     }
@@ -450,7 +524,7 @@ mod tests {
         write_ramp_wav(&path, sample_rate, frames);
 
         // Pull 1 s starting 2 s in — the centre of the file.
-        let audio = decode_window(&path, 2.0, 1.0).expect("decode window");
+        let audio = decode_window(&path, 2.0, 1.0).expect("decode window").audio;
         assert_eq!(audio.sample_rate, sample_rate);
         // Roughly one second of samples (seek lands on a frame boundary).
         let collected = audio.samples.len() as i64;
@@ -481,7 +555,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("testdata")
             .join(name);
-        let audio = decode_full(&path).expect("decode the fixture");
+        let audio = decode_full(&path).expect("decode the fixture").audio;
         assert_eq!(audio.sample_rate, sample_rate);
         let seconds = audio.samples.len() as f64 / f64::from(sample_rate);
         assert!((seconds - 1.0).abs() < 0.05, "{name}: decoded {seconds} s");
@@ -560,7 +634,8 @@ mod tests {
             None => decode_full(&path),
             Some((start_secs, len_secs)) => decode_window(&path, start_secs, len_secs),
         }
-        .expect("decode m4a");
+        .expect("decode m4a")
+        .audio;
         let onset = audio
             .samples
             .iter()
@@ -606,7 +681,7 @@ mod tests {
 
         // start_secs == 0 takes the no-seek fast path; the first sample is
         // frame 0 and we collect the requested span.
-        let audio = decode_window(&path, 0.0, 1.0).expect("decode window");
+        let audio = decode_window(&path, 0.0, 1.0).expect("decode window").audio;
         assert!(recovered_index(audio.samples[0], frames) < 8.0);
         let collected = audio.samples.len() as i64;
         assert!((collected - sample_rate as i64).abs() < 256);

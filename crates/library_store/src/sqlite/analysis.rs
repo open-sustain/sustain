@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use sustain_domain::Bpm;
+use sustain_domain::{BandScale, Bpm};
 
 use super::*;
 
@@ -33,7 +33,10 @@ pub(super) fn record_analysis(
         track_id,
         capabilities,
         context,
-        waveform,
+        AudioOutcome {
+            waveform,
+            acoustics: analysis.acoustics.as_ref(),
+        },
     )?;
 
     if capabilities.bpm
@@ -76,29 +79,6 @@ pub(super) fn record_analysis(
             .map_err(StoreError::from)?;
     }
 
-    if capabilities.audio
-        && let Some(acoustics) = analysis.acoustics
-        && acoustics.all_finite()
-    {
-        transaction
-            .execute(
-                UPSERT_TRACK_ACOUSTICS_SQL,
-                params![
-                    track_id.get(),
-                    f64::from(acoustics.integrated_lufs),
-                    f64::from(acoustics.short_term_lufs_max),
-                    f64::from(acoustics.loudness_range_lu),
-                    f64::from(acoustics.onset_rate_hz),
-                    f64::from(acoustics.low_band_ratio),
-                    f64::from(acoustics.mid_band_ratio),
-                    f64::from(acoustics.high_band_ratio),
-                    f64::from(acoustics.low_band_variation),
-                    f64::from(acoustics.tonalness),
-                ],
-            )
-            .map_err(StoreError::from)?;
-    }
-
     transaction.commit().map_err(StoreError::from)
 }
 
@@ -122,21 +102,31 @@ pub(super) fn record_analysis_attempt_failure(
         track_id,
         capabilities,
         context,
-        None,
+        AudioOutcome {
+            waveform: None,
+            acoustics: None,
+        },
     )?;
     transaction.commit().map_err(StoreError::from)
 }
 
+/// What an audio attempt measured. A failed one measured nothing.
+struct AudioOutcome<'a> {
+    waveform: Option<(&'a WaveformSegments, &'a WaveformSegments)>,
+    acoustics: Option<&'a AcousticFeatures>,
+}
+
 /// Stamp an attempt at `capabilities` and, for an audio attempt, record
-/// its waveform outcome under a fresh token — while the cache is
-/// available: an in-memory stand-in would only grow for nothing.
+/// its outcome: the acoustics it measured, or none, and its waveform
+/// under a fresh token — while the cache is available: an in-memory
+/// stand-in would only grow for nothing.
 fn record_attempt(
     connection: &Connection,
     waveform_cache: &WaveformCacheStatus,
     track_id: TrackId,
     capabilities: AnalysisCapabilities,
     context: AnalysisContext,
-    waveform: Option<(&WaveformSegments, &WaveformSegments)>,
+    audio: AudioOutcome<'_>,
 ) -> StoreResult<()> {
     let audio_attempt_token = if capabilities.audio {
         let token: i64 = connection
@@ -153,10 +143,13 @@ fn record_attempt(
         context,
         audio_attempt_token,
     )?;
+    if capabilities.audio {
+        record_acoustics(connection, track_id, audio.acoustics)?;
+    }
     if let Some(token) = audio_attempt_token
         && waveform_cache.is_available()
     {
-        let (preview, detail) = waveform.unzip();
+        let (preview, detail) = audio.waveform.unzip();
         connection
             .execute(
                 UPSERT_TRACK_WAVEFORM_SQL,
@@ -165,12 +158,48 @@ fn record_attempt(
                     token,
                     preview.map(|preview| f64::from(preview.segment_duration_ms)),
                     preview.map(|preview| waveform_segments_to_blob(&preview.segments)),
+                    preview.map(|preview| f64::from(preview.band_scale.low)),
+                    preview.map(|preview| f64::from(preview.band_scale.mid)),
+                    preview.map(|preview| f64::from(preview.band_scale.high)),
                     detail.map(|detail| f64::from(detail.segment_duration_ms)),
                     detail.map(|detail| waveform_segments_to_blob(&detail.segments)),
+                    detail.map(|detail| f64::from(detail.band_scale.low)),
+                    detail.map(|detail| f64::from(detail.band_scale.mid)),
+                    detail.map(|detail| f64::from(detail.band_scale.high)),
                 ],
             )
             .map_err(StoreError::from)?;
     }
+    Ok(())
+}
+
+/// Record the acoustics of an audio attempt. An attempt that measured
+/// nothing usable leaves the track without acoustics: a row an earlier
+/// attempt or analyzer measured must not outlive it.
+fn record_acoustics(
+    connection: &Connection,
+    track_id: TrackId,
+    acoustics: Option<&AcousticFeatures>,
+) -> StoreResult<()> {
+    match acoustics.filter(|acoustics| acoustics.all_finite()) {
+        Some(acoustics) => connection.execute(
+            UPSERT_TRACK_ACOUSTICS_SQL,
+            params![
+                track_id.get(),
+                f64::from(acoustics.integrated_lufs),
+                f64::from(acoustics.short_term_lufs_max),
+                f64::from(acoustics.loudness_range_lu),
+                f64::from(acoustics.onset_rate_hz),
+                f64::from(acoustics.low_band_ratio),
+                f64::from(acoustics.mid_band_ratio),
+                f64::from(acoustics.high_band_ratio),
+                f64::from(acoustics.low_band_variation),
+                f64::from(acoustics.tonalness),
+            ],
+        ),
+        None => connection.execute(DELETE_TRACK_ACOUSTICS_SQL, params![track_id.get()]),
+    }
+    .map_err(StoreError::from)?;
     Ok(())
 }
 
@@ -281,20 +310,28 @@ pub(super) fn load_waveform(
     let Some(row) = rows.next().map_err(StoreError::from)? else {
         return Ok(None);
     };
-    let preview_duration: f64 = row.get(0).map_err(StoreError::from)?;
-    let preview_bytes: Vec<u8> = row.get(1).map_err(StoreError::from)?;
-    let detail_duration: f64 = row.get(2).map_err(StoreError::from)?;
-    let detail_bytes: Vec<u8> = row.get(3).map_err(StoreError::from)?;
     Ok(Some(StoredWaveform {
-        preview: WaveformSegments {
-            segment_duration_ms: preview_duration as f32,
-            segments: blob_to_waveform_segments(&preview_bytes),
-        },
-        detail: WaveformSegments {
-            segment_duration_ms: detail_duration as f32,
-            segments: blob_to_waveform_segments(&detail_bytes),
-        },
+        preview: waveform_tier(row, 0).map_err(StoreError::from)?,
+        detail: waveform_tier(row, 5).map_err(StoreError::from)?,
     }))
+}
+
+/// The waveform tier in the five columns of `row` from `first`: segment
+/// duration, segments, then the low, mid and high band scales.
+fn waveform_tier(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<WaveformSegments> {
+    let duration: f64 = row.get(first)?;
+    let bytes: Vec<u8> = row.get(first + 1)?;
+    let scale =
+        |offset: usize| -> rusqlite::Result<f32> { Ok(row.get::<_, f64>(first + offset)? as f32) };
+    Ok(WaveformSegments {
+        segment_duration_ms: duration as f32,
+        segments: blob_to_waveform_segments(&bytes),
+        band_scale: BandScale {
+            low: scale(2)?,
+            mid: scale(3)?,
+            high: scale(4)?,
+        },
+    })
 }
 
 pub(super) fn load_waveform_preview(
@@ -305,14 +342,7 @@ pub(super) fn load_waveform_preview(
         .query_row(
             SELECT_TRACK_WAVEFORM_PREVIEW_SQL,
             params![track_id.get()],
-            |row| {
-                let duration: f64 = row.get(0)?;
-                let bytes: Vec<u8> = row.get(1)?;
-                Ok(WaveformSegments {
-                    segment_duration_ms: duration as f32,
-                    segments: blob_to_waveform_segments(&bytes),
-                })
-            },
+            |row| waveform_tier(row, 0),
         )
         .optional()
         .map_err(StoreError::from)
@@ -409,11 +439,14 @@ fn beat_grid_from_row(
 
 pub(super) fn load_all_acoustics(
     connection: &Connection,
+    versions: AnalyzerVersions,
 ) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
     let mut statement = connection
         .prepare(SELECT_ALL_TRACK_ACOUSTICS_SQL)
         .map_err(StoreError::from)?;
-    let mut rows = statement.query([]).map_err(StoreError::from)?;
+    let mut rows = statement
+        .query(params![versions.audio])
+        .map_err(StoreError::from)?;
     let mut out = Vec::new();
     while let Some(row) = rows.next().map_err(StoreError::from)? {
         let raw: i64 = row.get(0).map_err(StoreError::from)?;

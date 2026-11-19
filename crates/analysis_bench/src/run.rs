@@ -182,9 +182,11 @@ pub struct WaveformSummary {
     pub preview_duration_ms: f32,
     /// Milliseconds covered by each detail segment.
     pub detail_duration_ms: f32,
-    /// FNV-1a hash (hex) of the preview segment bytes.
+    /// FNV-1a hash (hex) of the preview tier: its segment bytes and band
+    /// scale.
     pub preview_hash: String,
-    /// FNV-1a hash (hex) of the detail segment bytes.
+    /// FNV-1a hash (hex) of the detail tier: its segment bytes and band
+    /// scale.
     pub detail_hash: String,
 }
 
@@ -833,20 +835,26 @@ fn millis(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
 
-/// FNV-1a hash of the quantized segment bytes, as zero-padded hex.
+/// FNV-1a hash of a tier — its quantized segment bytes, then its band
+/// scale — as zero-padded hex.
 fn hash_segments(segments: &WaveformSegments) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for segment in &segments.segments {
-        for byte in [
+    let scale = segments.band_scale;
+    let segment_bytes = segments.segments.iter().flat_map(|segment| {
+        [
             segment.amplitude,
             segment.low_band,
             segment.mid_band,
             segment.high_band,
-        ] {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
+        ]
+    });
+    let scale_bytes = [scale.low, scale.mid, scale.high]
+        .into_iter()
+        .flat_map(|band| band.to_bits().to_le_bytes());
+    let hash = segment_bytes
+        .chain(scale_bytes)
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
     format!("{hash:016x}")
 }
 
@@ -906,9 +914,38 @@ fn git_tree_dirty() -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AnalysisError, anonymous_reason, compatible_rates, score_bpm, score_key};
+    use super::{
+        AnalysisError, anonymous_reason, compatible_rates, hash_segments, score_bpm, score_key,
+    };
     use crate::metrics::KeyCategory;
     use std::collections::BTreeMap;
+    use sustain_analysis::{BandScale, WaveformSegment, WaveformSegments};
+
+    #[test]
+    fn a_tier_hash_tells_band_scales_apart() {
+        let tier = |band_scale| WaveformSegments {
+            segment_duration_ms: 10.0,
+            segments: vec![WaveformSegment {
+                amplitude: 255,
+                low_band: 255,
+                mid_band: 255,
+                high_band: 0,
+            }],
+            band_scale,
+        };
+        let red = BandScale {
+            low: 1.0,
+            mid: 0.25,
+            high: 0.0,
+        };
+        let green = BandScale {
+            low: 0.25,
+            mid: 1.0,
+            high: 0.0,
+        };
+
+        assert_ne!(hash_segments(&tier(red)), hash_segments(&tier(green)));
+    }
 
     #[test]
     fn compatible_rates_partition_categories() {

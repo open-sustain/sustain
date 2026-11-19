@@ -12,7 +12,7 @@ rust-version.workspace = true
 # files in this directory, and docs/licensing.md for the attribution record.
 license = "MIT OR Apache-2.0"
 publish.workspace = true
-description = "Minimal vendored DSP core (STFT, tempogram BPM, chroma/key, spectral-flux onsets, BS.1770 loudness) for Sustain."
+description = "Minimal vendored DSP core (STFT, tempogram BPM, chroma/key, spectral-flux onsets) for Sustain."
 
 [lib]
 name = "sustain_dsp"

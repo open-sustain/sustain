@@ -666,7 +666,10 @@ fn leading_reason(entry: &PickDebugEntry) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
+    use std::{
+        collections::HashMap,
+        time::{Duration, SystemTime},
+    };
 
     use sustain_domain::{
         Bpm, PlayStatistics, Rating, SmartShuffleEntropy, Track, TrackId, TrackLocation,
@@ -838,18 +841,45 @@ mod tests {
         assert_eq!(first.track_id, second.track_id);
     }
 
+    /// How often each track is picked after each of `seeds`, one pick
+    /// per seed: the sampler is deterministic per seed, so a property of
+    /// its distribution is read over many seeds rather than off one draw.
+    fn pick_counts(
+        seeds: &[Track],
+        candidates: &[&Track],
+        entropy: SmartShuffleEntropy,
+        now: SystemTime,
+    ) -> HashMap<TrackId, usize> {
+        let mut counts = HashMap::new();
+        for seed in seeds {
+            let history = [seed];
+            let context = PickContext {
+                entropy,
+                now,
+                ..ctx(seed, candidates, &history)
+            };
+            let (pick, _) = pick_next_track(None, context).expect("pick");
+            *counts.entry(pick.track_id).or_insert(0) += 1;
+        }
+        counts
+    }
+
     #[test]
     fn focused_mode_prefers_the_strongest_continuation() {
-        // A clearly-best match (same genre + tempo) among many poor
-        // ones must win under Focused (near-argmax) sampling.
-        let seed = track(
-            100,
-            TrackMetadata {
-                genre: Some("Ambient".to_owned()),
-                bpm: Bpm::from_whole(80),
-                ..TrackMetadata::default()
-            },
-        );
+        // A clearly-best match (same genre + tempo) among many poor ones
+        // is picked more often than any of them under Focused sampling.
+        let seeds: Vec<Track> = (1_000..1_200)
+            .map(|id| {
+                track(
+                    id,
+                    TrackMetadata {
+                        genre: Some("Ambient".to_owned()),
+                        bpm: Bpm::from_whole(80),
+                        ..TrackMetadata::default()
+                    },
+                )
+            })
+            .collect();
         let best = track(
             200,
             TrackMetadata {
@@ -870,26 +900,44 @@ mod tests {
             ));
         }
         let refs: Vec<&Track> = candidates.iter().collect();
-        let history = [&seed];
+        let counts = pick_counts(
+            &seeds,
+            &refs,
+            SmartShuffleEntropy::Focused,
+            SystemTime::UNIX_EPOCH,
+        );
+
+        let best_count = counts.get(&best.id).copied().unwrap_or(0);
+        assert!(
+            counts
+                .iter()
+                .all(|(id, count)| *id == best.id || *count < best_count),
+            "{counts:?}"
+        );
+        // Every candidate's metadata compares with the seed's.
+        let history = [&seeds[0]];
         let context = PickContext {
             entropy: SmartShuffleEntropy::Focused,
-            ..ctx(&seed, &refs, &history)
+            ..ctx(&seeds[0], &refs, &history)
         };
         let (pick, _) = pick_next_track(None, context).expect("pick");
-        assert_eq!(pick.track_id, best.id);
         assert_eq!(pick.mode, PickMode::Perceptual);
     }
 
     #[test]
     fn recently_played_tracks_are_demoted() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(3 * 60 * 60);
-        let seed = track(
-            1,
-            TrackMetadata {
-                genre: Some("Rock".to_owned()),
-                ..TrackMetadata::default()
-            },
-        );
+        let seeds: Vec<Track> = (1_000..1_200)
+            .map(|id| {
+                track(
+                    id,
+                    TrackMetadata {
+                        genre: Some("Rock".to_owned()),
+                        ..TrackMetadata::default()
+                    },
+                )
+            })
+            .collect();
         // Two identical candidates; one was played one minute ago.
         let fresh = track(
             2,
@@ -906,17 +954,12 @@ mod tests {
             },
         );
         stale.statistics.last_played_at = Some(now - Duration::from_secs(60));
-        let candidates = [&fresh, &stale];
-        let history = [&seed];
-        let context = PickContext {
-            entropy: SmartShuffleEntropy::Focused,
-            now,
-            ..ctx(&seed, &candidates, &history)
-        };
-        let (pick, _) = pick_next_track(None, context).expect("pick");
-        assert_eq!(
-            pick.track_id, fresh.id,
-            "the just-played track should be demoted"
+        let counts = pick_counts(&seeds, &[&fresh, &stale], SmartShuffleEntropy::Focused, now);
+
+        let picked = |track: &Track| counts.get(&track.id).copied().unwrap_or(0);
+        assert!(
+            picked(&stale) * 5 <= picked(&fresh),
+            "the just-played track should be demoted: {counts:?}"
         );
     }
 }

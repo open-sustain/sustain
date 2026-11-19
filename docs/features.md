@@ -795,7 +795,16 @@ perceptual acoustic features (integrated and short-term loudness,
 loudness range, onset density, low/mid/high band-energy ratios, low-band
 variation, and tonalness) that Smart Shuffle's continuity terms and
 loudness guard consume — and, off the same decode, the track's BPM and
-key. The pass scales to track length: a normal-length track is measured
+key. Loudness is measured as ITU-R BS.1770-4 and EBU R128 define it, the
+way broadcast meters read it (FFmpeg's `ebur128` reads the same integrated
+loudness for mono and stereo at 44.1 and 48 kHz, but weighs the rear pair
+of a 7.1 layout as surround): each channel
+K-weighted on its own and weighted by its position (surround channels
+count for more, the LFE not at all), integrated over gated 400 ms blocks,
+with short-term loudness over 3 s windows and the loudness range of EBU
+Tech 3342. Exported colour waveforms compare the low, mid and high bands
+on one scale, so a column's colour shows the balance between them. The
+pass scales to track length: a normal-length track is measured
 whole, while a **long** track (over 15 minutes — classical movements, DJ
 mixes, podcasts) has its acoustics measured over a centered 8-minute
 sample and skips the waveform entirely, keeping the working set bounded

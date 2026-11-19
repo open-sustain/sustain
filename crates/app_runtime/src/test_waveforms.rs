@@ -54,10 +54,12 @@ pub(crate) fn analyse(
         waveform_preview: WaveformSegments {
             segment_duration_ms: 25.0,
             segments: vec![WaveformSegment::silent(); PREVIEW_SEGMENT_COUNT],
+            band_scale: sustain_domain::BandScale::EVEN,
         },
         waveform_detail: WaveformSegments {
             segment_duration_ms: 1_000.0 / DETAIL_SEGMENTS_PER_SECOND as f32,
             segments: audio,
+            band_scale: sustain_domain::BandScale::EVEN,
         },
         acoustics: None,
     };

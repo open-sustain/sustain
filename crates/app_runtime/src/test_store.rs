@@ -655,9 +655,12 @@ impl LibraryStore for FaultyStore {
         self.inner.load_beat_grids(track_ids)
     }
 
-    fn load_all_acoustics(&self) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
+    fn load_all_acoustics(
+        &self,
+        versions: sustain_domain::AnalyzerVersions,
+    ) -> StoreResult<Vec<(TrackId, AcousticFeatures)>> {
         self.sleep_read_delay();
-        self.inner.load_all_acoustics()
+        self.inner.load_all_acoustics(versions)
     }
 
     fn record_synced_lyrics(

@@ -9,9 +9,13 @@
 //! decoded audio shared between bands. Callers pick exactly which bands
 //! they want by calling [`Analyzer::tempo`], [`Analyzer::key`],
 //! [`Analyzer::acoustics`], and [`Analyzer::waveform`] independently —
-//! a method that is never called does zero work. This is the API the
-//! background scheduler uses, so toggling off (say) waveform generation
-//! in Preferences actually skips the waveform decode pass.
+//! a method that is never called does no work of its own. This is the API
+//! the background scheduler uses, so toggling off (say) waveform
+//! generation in Preferences actually skips the waveform decode pass. The
+//! one exception is loudness: every decode meters it channel by channel,
+//! because the channels are gone once mixed down to the mono the bands
+//! read, so a tempo- or key-only decode pays for a meter it does not read
+//! (about half a millisecond per second of 48 kHz stereo).
 //!
 //! ## Analysis windows
 //!
@@ -84,7 +88,10 @@ mod bands;
 mod beat_tracking;
 mod decode;
 mod downbeat;
+mod loudness;
 mod mp4_presentation;
+#[cfg(test)]
+mod test_audio;
 mod waveform;
 
 use std::cell::OnceCell;
@@ -96,17 +103,17 @@ use std::path::PathBuf;
 // is the domain layer — the storage crate needs them but should not
 // pull in symphonia / stratum-dsp.
 pub use sustain_domain::{
-    AcousticFeatures, AnalyzerVersions, BeatGrid, Bpm, DETAIL_SEGMENTS_PER_SECOND, MusicalKey,
-    PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment, WaveformSegments,
+    AcousticFeatures, AnalyzerVersions, BandScale, BeatGrid, Bpm, DETAIL_SEGMENTS_PER_SECOND,
+    MusicalKey, PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment, WaveformSegments,
 };
 
 use std::time::Duration;
 
-use decode::{DecodedAudio, decode_full, decode_window};
+use decode::{DecodedAudio, DecodedRegion, decode_full, decode_window};
 use sustain_dsp::{
-    CHROMA_FMAX_HZ, Hpcp, KeyTemplates, NormalizationConfig, NormalizationMethod, TuningEvidence,
-    compute_hpcp, compute_stft, detect_key, detect_spectral_flux_onsets, emphasize_harmonic,
-    estimate_bpm_tempogram, normalize, pitch_class_log_shares,
+    CHROMA_FMAX_HZ, Hpcp, KeyTemplates, TuningEvidence, compute_hpcp, compute_stft, detect_key,
+    detect_spectral_flux_onsets, emphasize_harmonic, estimate_bpm_tempogram,
+    pitch_class_log_shares,
 };
 
 pub use downbeat::{BAR_FEATURE_COUNT, BarPositionFeatures};
@@ -325,6 +332,43 @@ pub use waveform::WaveformTiers;
 /// 41 of GTZAN's 933 and 17 of Ballroom's 523 come right and none goes
 /// wrong. Every tempo and grid is measured again.
 ///
+/// Audio version 16 (#344): loudness is ITU-R BS.1770-4's. It used to be
+/// read from the mono mix through a filter that was not the K-weighting,
+/// over disjoint blocks gated only absolutely; a 1 kHz tone read 9.5 LU
+/// low and a 100 Hz one 48 LU low. It is now metered during decode,
+/// channel by channel through the two-stage K-weighting, weighted by
+/// channel position (the LFE not at all), over 400 ms blocks overlapping
+/// by 75 % and gated absolutely and relatively (`loudness`). It reads the
+/// EBU Tech 3341 and 3342 reference cases as specified, and the integrated
+/// loudness of mono and stereo tones at 44.1 and 48 kHz as FFmpeg's
+/// `ebur128` does within 0.1 LU (FFmpeg weighs the rear
+/// channels of a 7.1 layout as surround ones; BS.1770-4 weighs them as the
+/// front ones, as here). Short-term windows are 3 s, 100 ms apart, the
+/// last ending at the end of the stream, and ungated; the loudness
+/// range's relative gate is taken against their mean, not the loudest.
+/// The acoustic pass needs one second of audio, not 44,100 samples, so a
+/// clip at a low sample rate is measured like any other, and one shorter
+/// than a second at a high rate no longer is. Each waveform
+/// band keeps its own scale, and the tiers now record how the band peaks
+/// compare (`BandScale`), so the colour an export draws from them shows
+/// the balance between the bands; each band filter stands on its own, so
+/// a band the sample rate cannot carry reads zero without silencing the
+/// others; and a decoded sample that is not a finite number is read as
+/// silence rather than poisoning the filters after it. Every track's
+/// acoustics and waveform are measured again.
+///
+/// Tempo and key are not measured again, though they read the same decode.
+/// Three changes reach them: non-finite samples now read as silence,
+/// channels are mixed in f64 (a quiet channel beside loud ones that cancel
+/// is far less often rounded away), and the windows tempo and a long
+/// track's key are read from now need one second of audio rather than
+/// 44,100 samples (`MIN_ANALYSIS_SECS`). A file that decodes to non-finite
+/// samples, a multichannel file whose loud channels cancel, or a window
+/// between one second and 44,100 samples long can now yield a different
+/// tempo or key, but such files are too rare to
+/// measure every library's tempo and key again for. They keep their
+/// earlier result until a tempo or key version measures them again.
+///
 /// Deliberately *not* gated here: the audio *decoder* library version.
 /// The symphonia 0.5 → 0.6 migration changes some lossy-format (e.g. MP3)
 /// decoded samples slightly — enough to shift waveform/acoustics and,
@@ -345,7 +389,7 @@ pub use waveform::WaveformTiers;
 pub const ANALYZER_VERSIONS: AnalyzerVersions = AnalyzerVersions {
     bpm: 17,
     key: 17,
-    audio: 15,
+    audio: 16,
 };
 
 /// DSP tunables exposed to callers. The default mirrors Sustain's
@@ -438,11 +482,25 @@ const LONG_TRACK_THRESHOLD_SECS: f64 = 15.0 * 60.0;
 /// otherwise be gigabytes of working set per worker).
 const ACOUSTICS_LONG_WINDOW_SECS: f64 = 8.0 * 60.0;
 
-/// Minimum number of samples the DSP engine needs to do anything
-/// meaningful. Roughly one second at 44.1 kHz; below that the FFT
-/// windows do not have enough material to analyze and `stratum-dsp`
-/// either errors or returns garbage.
-const MIN_SAMPLES_FOR_ANALYSIS: usize = 44_100;
+/// The least audio, in seconds, three regions must hold to be analysed:
+/// the region acoustics measure, the centered BPM/key window the tempogram
+/// reads, and that window when it is the one a long track's key is read
+/// from. Below that the FFT windows do not have enough material and the
+/// DSP either errors or returns garbage. A duration, not a sample count,
+/// so a track at a low sample rate is held to the same length as any
+/// other (#344). The key of a normal-length track reads the whole track
+/// and no minimum.
+///
+/// Up to audio version 15 this was 44,100 samples whatever the rate. Only
+/// a region between one second and 44,100 samples long is affected: at a
+/// rate below 44.1 kHz it is now analysed, at a rate above it no longer
+/// is.
+const MIN_ANALYSIS_SECS: f64 = 1.0;
+
+/// Whether `audio` is long enough to analyse (`MIN_ANALYSIS_SECS`).
+fn long_enough(audio: &DecodedAudio) -> bool {
+    audio.samples.len() as f64 >= MIN_ANALYSIS_SECS * f64::from(audio.sample_rate)
+}
 
 /// STFT frame size for the tempogram. Matches stratum-dsp's own
 /// default (`AnalysisConfig::frame_size`); short enough to keep onset
@@ -525,21 +583,10 @@ const TEMPOGRAM_BPM_RESOLUTION: f32 = 1.0;
 const ACOUSTIC_LOW_MID_HZ: f32 = 250.0;
 const ACOUSTIC_MID_HIGH_HZ: f32 = 4_000.0;
 
-/// Short-term loudness window and hop, in seconds. EBU R128 defines
-/// short-term loudness over a 3 s window; we slide it by 1 s and take
-/// the max as the loud *boundary* a transition can hit (§7).
-const SHORT_TERM_WINDOW_SECS: f32 = 3.0;
-const SHORT_TERM_HOP_SECS: f32 = 1.0;
-
 /// Percentile threshold for spectral-flux onset detection. 0.8 keeps
 /// only the strongest flux peaks (matches the upstream example), so
 /// the count reflects real rhythmic events rather than noise.
 const ONSET_FLUX_PERCENTILE: f32 = 0.8;
-
-/// Relative gate (LU below the loudest short-term window) below which
-/// windows are dropped from the loudness-range estimate, à la the
-/// EBU R128 relative gate.
-const LOUDNESS_RANGE_GATE_LU: f32 = 20.0;
 
 /// Capability-driven, stateful analyzer for one audio file. Cheap to
 /// construct — the constructor does no I/O — and caches the decoded
@@ -583,11 +630,11 @@ pub struct Analyzer {
     options: AnalysisOptions,
     duration_hint: Option<Duration>,
     /// Whole-track decode (waveform; acoustics on normal-length tracks).
-    full_audio: OnceCell<Result<DecodedAudio, AnalysisError>>,
+    full_audio: OnceCell<Result<DecodedRegion, AnalysisError>>,
     /// Centered acoustics window — only populated on long tracks; normal
     /// tracks route acoustics through `full_audio`. `None` when it
     /// decoded too short to analyse.
-    acoustics_window: OnceCell<Result<Option<DecodedAudio>, AnalysisError>>,
+    acoustics_window: OnceCell<Result<Option<DecodedRegion>, AnalysisError>>,
     /// Centered BPM/key window (a slice of a larger region when one is
     /// in memory, otherwise its own decode). Shared by BPM and key —
     /// they analyze the same audio region; only their spectrograms differ.
@@ -723,7 +770,7 @@ impl Analyzer {
         if self.is_long_track() {
             self.bpmkey_audio()
         } else {
-            self.full().map(Some)
+            self.full().map(|region| Some(&region.audio))
         }
     }
 
@@ -775,7 +822,10 @@ impl Analyzer {
     /// segments), recorded as analysed rather than as a failure.
     pub fn waveform(&self) -> Result<WaveformTiers, AnalysisError> {
         let full = self.full()?;
-        Ok(waveform::build_tiers(&full.samples, full.sample_rate))
+        Ok(waveform::build_tiers(
+            &full.audio.samples,
+            full.audio.sample_rate,
+        ))
     }
 
     /// Perceptual acoustic features for Smart Shuffle — loudness
@@ -796,14 +846,12 @@ impl Analyzer {
     /// computed here over the region's samples (acoustics is its only
     /// consumer, so it is not cached).
     pub fn acoustics(&self) -> Result<Option<AcousticFeatures>, AnalysisError> {
-        Ok(self
-            .acoustics_audio()?
-            .and_then(|region| measure_acoustics(&region.samples, region.sample_rate)))
+        Ok(self.acoustics_audio()?.and_then(measure_acoustics))
     }
 
     /// Whole-track decode. Used by the waveform and, on normal-length
     /// tracks, by acoustics.
-    fn full(&self) -> Result<&DecodedAudio, AnalysisError> {
+    fn full(&self) -> Result<&DecodedRegion, AnalysisError> {
         self.full_audio
             .get_or_init(|| decode_full(&self.path))
             .as_ref()
@@ -813,14 +861,13 @@ impl Analyzer {
     /// The region acoustics measure: the whole track on normal-length
     /// tracks (shared with the waveform), or a centered
     /// `ACOUSTICS_LONG_WINDOW_SECS` sample on long tracks.
-    fn acoustics_audio(&self) -> Result<Option<&DecodedAudio>, AnalysisError> {
+    fn acoustics_audio(&self) -> Result<Option<&DecodedRegion>, AnalysisError> {
         if self.is_long_track() {
             self.acoustics_window
                 .get_or_init(|| {
                     let start = self.window_start(ACOUSTICS_LONG_WINDOW_SECS);
-                    decode_window(&self.path, start, ACOUSTICS_LONG_WINDOW_SECS).map(|audio| {
-                        (audio.samples.len() >= MIN_SAMPLES_FOR_ANALYSIS).then_some(audio)
-                    })
+                    decode_window(&self.path, start, ACOUSTICS_LONG_WINDOW_SECS)
+                        .map(|region| long_enough(&region.audio).then_some(region))
                 })
                 .as_ref()
                 .map(Option::as_ref)
@@ -846,15 +893,16 @@ impl Analyzer {
                     .acoustics_window
                     .get()
                     .and_then(|cell| cell.as_ref().ok().and_then(Option::as_ref))
-                    .or_else(|| self.full_audio.get().and_then(|cell| cell.as_ref().ok()));
+                    .or_else(|| self.full_audio.get().and_then(|cell| cell.as_ref().ok()))
+                    .map(|region| &region.audio);
                 let candidate = match cached_region {
                     Some(region) => center_slice(region, BPM_KEY_WINDOW_SECS),
                     None => {
                         let start = self.window_start(BPM_KEY_WINDOW_SECS);
-                        decode_window(&self.path, start, BPM_KEY_WINDOW_SECS)?
+                        decode_window(&self.path, start, BPM_KEY_WINDOW_SECS)?.audio
                     }
                 };
-                Ok((candidate.samples.len() >= MIN_SAMPLES_FOR_ANALYSIS).then_some(candidate))
+                Ok(long_enough(&candidate).then_some(candidate))
             })
             .as_ref()
             .map(Option::as_ref)
@@ -909,11 +957,13 @@ fn center_slice(region: &DecodedAudio, len_secs: f64) -> DecodedAudio {
     }
 }
 
-/// The perceptual acoustic features of `samples` (see
-/// [`Analyzer::acoustics`]). `None` if they are too short or carry no
+/// The perceptual acoustic features of `region` (see
+/// [`Analyzer::acoustics`]). `None` if it is too short or carries no
 /// measurable loudness (effectively silent).
-fn measure_acoustics(samples: &[f32], sample_rate: u32) -> Option<AcousticFeatures> {
-    if samples.len() < MIN_SAMPLES_FOR_ANALYSIS {
+fn measure_acoustics(region: &DecodedRegion) -> Option<AcousticFeatures> {
+    let DecodedRegion { audio, loudness } = region;
+    let (samples, sample_rate) = (&audio.samples, audio.sample_rate);
+    if !long_enough(audio) {
         return None;
     }
     let stft = compute_stft(samples, STFT_FRAME_SIZE, STFT_HOP_SIZE).ok()?;
@@ -921,21 +971,24 @@ fn measure_acoustics(samples: &[f32], sample_rate: u32) -> Option<AcousticFeatur
         return None;
     }
 
-    let integrated_lufs = measure_integrated_lufs(samples, sample_rate)?;
-    let short_term = measure_short_term_lufs(samples, sample_rate);
-    let short_term_lufs_max = short_term.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let integrated_lufs = loudness.integrated()?;
+    let short_term = loudness.short_term();
+    let short_term_lufs_max = short_term.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     // No measurable short-term window → effectively silent, no
     // useful loudness signal to offer the picker.
     if !short_term_lufs_max.is_finite() {
         return None;
     }
-    let loudness_range_lu = loudness_range(&short_term);
+    let short_term_lufs_max = short_term_lufs_max as f32;
+    let loudness_range_lu = loudness::loudness_range(&short_term);
 
     let duration_secs = samples.len() as f32 / sample_rate as f32;
     let onset_rate_hz = onset_density(&stft, duration_secs);
 
-    let bands = band_energies(&stft, sample_rate);
-    let tonalness = mean_tonalness(&stft);
+    // The timbre is read from the mono mix: one whose channels cancel out
+    // holds no spectrum to read it from, however loud its channels.
+    let bands = band_energies(&stft, sample_rate)?;
+    let tonalness = mean_tonalness(&stft)?;
 
     Some(AcousticFeatures {
         integrated_lufs,
@@ -1046,83 +1099,6 @@ fn odd_kernel(span: f32, resolution: f32) -> usize {
     raw | 1
 }
 
-/// Normalization config that asks stratum-dsp for an ITU-R BS.1770-4
-/// loudness *measurement*. We only consume the measured value, not the
-/// gained audio, so the target/headroom are irrelevant — but they must
-/// be set for the LUFS path to run.
-fn loudness_config() -> NormalizationConfig {
-    NormalizationConfig {
-        target_loudness_lufs: -14.0,
-        max_headroom_db: 1.0,
-        method: NormalizationMethod::Loudness,
-    }
-}
-
-/// Integrated (gated) loudness in LUFS via stratum-dsp's BS.1770-4
-/// measurement. `normalize` applies gain in place, so we measure on a
-/// scratch copy and keep only `measured_lufs` (the *input* loudness).
-fn measure_integrated_lufs(samples: &[f32], sample_rate: u32) -> Option<f32> {
-    let mut scratch = samples.to_vec();
-    normalize(&mut scratch, loudness_config(), sample_rate as f32)
-        .ok()
-        .and_then(|metadata| metadata.measured_lufs)
-        .filter(|value| value.is_finite())
-}
-
-/// Short-term loudness (LUFS) sampled over sliding ~3 s windows.
-/// Measuring each window with stratum-dsp's own LUFS path yields a
-/// faithful short-term curve without re-implementing K-weighting. A
-/// clip shorter than one window is measured whole.
-fn measure_short_term_lufs(samples: &[f32], sample_rate: u32) -> Vec<f32> {
-    let window = (SHORT_TERM_WINDOW_SECS * sample_rate as f32) as usize;
-    let hop = ((SHORT_TERM_HOP_SECS * sample_rate as f32) as usize).max(1);
-    if window == 0 || samples.len() < window {
-        return measure_integrated_lufs(samples, sample_rate)
-            .into_iter()
-            .collect();
-    }
-    let mut values = Vec::new();
-    let mut start = 0;
-    while start + window <= samples.len() {
-        if let Some(lufs) = measure_integrated_lufs(&samples[start..start + window], sample_rate) {
-            values.push(lufs);
-        }
-        start += hop;
-    }
-    values
-}
-
-/// Loudness range (LU): the spread between quiet and loud passages,
-/// approximated as the 95th minus 10th percentile of the short-term
-/// loudness values after dropping windows more than
-/// [`LOUDNESS_RANGE_GATE_LU`] below the loudest (the relative gate).
-fn loudness_range(short_term: &[f32]) -> f32 {
-    if short_term.len() < 2 {
-        return 0.0;
-    }
-    let max = short_term.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let gate = max - LOUDNESS_RANGE_GATE_LU;
-    let mut gated: Vec<f32> = short_term
-        .iter()
-        .copied()
-        .filter(|value| *value >= gate)
-        .collect();
-    if gated.len() < 2 {
-        return 0.0;
-    }
-    gated.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    (percentile(&gated, 0.95) - percentile(&gated, 0.10)).max(0.0)
-}
-
-/// Nearest-rank percentile of an already-sorted slice. `q` in `[0, 1]`.
-fn percentile(sorted: &[f32], q: f32) -> f32 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let index = ((sorted.len() - 1) as f32 * q).round() as usize;
-    sorted[index.min(sorted.len() - 1)]
-}
-
 /// Onset density in events per second from the spectral-flux detector.
 fn onset_density(stft: &[Vec<f32>], duration_secs: f32) -> f32 {
     if duration_secs <= 0.0 {
@@ -1146,7 +1122,8 @@ struct BandEnergies {
 /// return each band's fraction of the total, plus the coefficient of
 /// variation of the low band over time (the "kick-drum check": low =
 /// steady dominant pulse, high = fluid/ambient or syncopated low end).
-fn band_energies(stft: &[Vec<f32>], sample_rate: u32) -> BandEnergies {
+/// `None` when the spectrum holds no energy at all.
+fn band_energies(stft: &[Vec<f32>], sample_rate: u32) -> Option<BandEnergies> {
     let bin_hz = sample_rate as f32 / STFT_FRAME_SIZE as f32;
     let (mut low_total, mut mid_total, mut high_total) = (0.0_f64, 0.0_f64, 0.0_f64);
     let mut low_fractions: Vec<f32> = Vec::with_capacity(stft.len());
@@ -1172,21 +1149,12 @@ fn band_energies(stft: &[Vec<f32>], sample_rate: u32) -> BandEnergies {
         high_total += high;
     }
     let grand = low_total + mid_total + high_total;
-    let (low_ratio, mid_ratio, high_ratio) = if grand > 0.0 {
-        (
-            (low_total / grand) as f32,
-            (mid_total / grand) as f32,
-            (high_total / grand) as f32,
-        )
-    } else {
-        (0.0, 0.0, 0.0)
-    };
-    BandEnergies {
-        low_ratio,
-        mid_ratio,
-        high_ratio,
+    (grand > 0.0).then(|| BandEnergies {
+        low_ratio: (low_total / grand) as f32,
+        mid_ratio: (mid_total / grand) as f32,
+        high_ratio: (high_total / grand) as f32,
         low_variation: coefficient_of_variation(&low_fractions),
-    }
+    })
 }
 
 /// Coefficient of variation (stddev / mean), clamped to a sane ceiling
@@ -1207,14 +1175,15 @@ fn coefficient_of_variation(values: &[f32]) -> f32 {
 /// Mean tonalness across frames: `1 − spectral_flatness`. Spectral
 /// flatness (geometric ÷ arithmetic mean of the power spectrum) is ≈1
 /// for noise and ≈0 for a pure tone, so its complement rises with how
-/// *pitched* the material is. Silent frames are skipped.
+/// *pitched* the material is. Silent frames are skipped; `None` when
+/// every frame is.
 ///
 /// We use spectral flatness rather than the brief's suggested
 /// chroma-energy ratio because it is self-contained (no dependency on
 /// the key-detection chroma pass running) and is the textbook
 /// pitched-vs-noisy measure; the brief explicitly left this open ("or
 /// the key detector's own confidence").
-fn mean_tonalness(stft: &[Vec<f32>]) -> f32 {
+fn mean_tonalness(stft: &[Vec<f32>]) -> Option<f32> {
     let mut sum = 0.0_f64;
     let mut count = 0_u64;
     for frame in stft {
@@ -1223,11 +1192,7 @@ fn mean_tonalness(stft: &[Vec<f32>]) -> f32 {
             count += 1;
         }
     }
-    if count == 0 {
-        0.0
-    } else {
-        (sum / count as f64) as f32
-    }
+    (count > 0).then(|| (sum / count as f64) as f32)
 }
 
 /// Tonalness of a single frame, or `None` if the frame is silent. The
@@ -1538,6 +1503,50 @@ mod tests {
     }
 
     #[test]
+    fn a_clip_at_a_low_sample_rate_is_measured_as_any_other() {
+        // Four seconds at 8 kHz: 32,000 samples, fewer than one second
+        // holds at 44.1 kHz. A low tone, then a mid one.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("low-rate.wav");
+        let mut samples = crate::test_audio::sine(8_000, 2.0, 100.0, 0.3);
+        samples.extend(crate::test_audio::sine(8_000, 2.0, 1_000.0, 0.3));
+        crate::test_audio::write_float_wav(&path, 8_000, 1, &samples);
+        let analyzer = Analyzer::new(&path, AnalysisOptions::default(), None);
+
+        let acoustics = analyzer.acoustics().expect("decode the clip");
+        let waveform = analyzer.waveform().expect("decode the clip");
+
+        assert!(acoustics.is_some(), "the clip has acoustic features");
+        let segments = &waveform.detail.segments;
+        let (low, mid) = (
+            segments[segments.len() / 4],
+            segments[segments.len() * 3 / 4],
+        );
+        assert!(
+            low.low_band > low.mid_band,
+            "the low tone lights the low band: {low:?}"
+        );
+        assert!(
+            mid.mid_band > mid.low_band,
+            "the mid tone lights the mid band: {mid:?}"
+        );
+    }
+
+    #[test]
+    fn a_mix_whose_channels_cancel_out_has_no_timbre_to_report() {
+        // Loud in each channel, silent in the mono mix the spectrum is
+        // read from: its band ratios and tonalness are not measured.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("opposite.wav");
+        let tone = crate::test_audio::sine(44_100, 4.0, 1_000.0, 0.3);
+        let interleaved: Vec<f32> = tone.iter().flat_map(|sample| [*sample, -*sample]).collect();
+        crate::test_audio::write_float_wav(&path, 44_100, 2, &interleaved);
+        let analyzer = Analyzer::new(&path, AnalysisOptions::default(), None);
+
+        assert_eq!(analyzer.acoustics().expect("decode the file"), None);
+    }
+
+    #[test]
     fn the_key_frame_keeps_its_duration_across_sample_rates() {
         assert_eq!(key_stft_frame_size(44_100), 8_192);
         assert_eq!(key_stft_frame_size(48_000), 8_192);
@@ -1572,8 +1581,7 @@ mod tests {
 #[cfg(test)]
 mod acoustic_tests {
     use super::{
-        STFT_FRAME_SIZE, band_energies, coefficient_of_variation, frame_tonalness, loudness_range,
-        mean_tonalness, measure_integrated_lufs, percentile,
+        STFT_FRAME_SIZE, band_energies, coefficient_of_variation, frame_tonalness, mean_tonalness,
     };
 
     const SAMPLE_RATE: u32 = 44_100;
@@ -1586,20 +1594,11 @@ mod acoustic_tests {
         frame
     }
 
-    fn sine(freq: f32, secs: f32, amplitude: f32) -> Vec<f32> {
-        let count = (secs * SAMPLE_RATE as f32) as usize;
-        (0..count)
-            .map(|i| {
-                amplitude * (std::f32::consts::TAU * freq * i as f32 / SAMPLE_RATE as f32).sin()
-            })
-            .collect()
-    }
-
     #[test]
     fn band_ratios_follow_the_dominant_frequency() {
         // Bin 5 ≈ 108 Hz (low band); bin 500 ≈ 10.8 kHz (high band).
         let low_heavy = vec![frame_with_energy_at_bin(5, 1.0); 4];
-        let bands = band_energies(&low_heavy, SAMPLE_RATE);
+        let bands = band_energies(&low_heavy, SAMPLE_RATE).expect("energy");
         assert!(
             bands.low_ratio > 0.99,
             "low tone should land in the low band, got low={} mid={} high={}",
@@ -1609,7 +1608,7 @@ mod acoustic_tests {
         );
 
         let high_heavy = vec![frame_with_energy_at_bin(500, 1.0); 4];
-        let bands = band_energies(&high_heavy, SAMPLE_RATE);
+        let bands = band_energies(&high_heavy, SAMPLE_RATE).expect("energy");
         assert!(bands.high_ratio > 0.99, "high tone → high band");
     }
 
@@ -1617,7 +1616,12 @@ mod acoustic_tests {
     fn steady_low_band_has_low_variation_jittery_has_high() {
         // Identical low-band frames → zero variation.
         let steady = vec![frame_with_energy_at_bin(5, 1.0); 8];
-        assert!(band_energies(&steady, SAMPLE_RATE).low_variation < 1e-3);
+        assert!(
+            band_energies(&steady, SAMPLE_RATE)
+                .expect("energy")
+                .low_variation
+                < 1e-3
+        );
 
         // Alternating low-only / high-only frames → the low-band
         // fraction swings between ~1 and ~0, a high coefficient of
@@ -1629,7 +1633,12 @@ mod acoustic_tests {
                 1.0,
             ));
         }
-        assert!(band_energies(&jittery, SAMPLE_RATE).low_variation > 0.5);
+        assert!(
+            band_energies(&jittery, SAMPLE_RATE)
+                .expect("energy")
+                .low_variation
+                > 0.5
+        );
     }
 
     #[test]
@@ -1649,22 +1658,8 @@ mod acoustic_tests {
 
         // Mean across frames sits between the two.
         let mixed = vec![peaky.clone(), flat.clone()];
-        let mean = mean_tonalness(&mixed);
+        let mean = mean_tonalness(&mixed).expect("a frame");
         assert!(mean > flat_tonalness && mean < peaky_tonalness);
-    }
-
-    #[test]
-    fn percentile_and_loudness_range() {
-        let sorted = [-20.0, -18.0, -16.0, -14.0, -12.0];
-        assert_eq!(percentile(&sorted, 0.0), -20.0);
-        assert_eq!(percentile(&sorted, 1.0), -12.0);
-
-        // Range over a spread set is positive; a flat set is ~0.
-        let varied = [-30.0, -22.0, -18.0, -10.0, -8.0];
-        assert!(loudness_range(&varied) > 0.0);
-        let flat = [-14.0, -14.0, -14.0, -14.0];
-        assert_eq!(loudness_range(&flat), 0.0);
-        assert_eq!(loudness_range(&[-14.0]), 0.0);
     }
 
     #[test]
@@ -1673,20 +1668,5 @@ mod acoustic_tests {
         assert_eq!(coefficient_of_variation(&[0.5]), 0.0);
         assert_eq!(coefficient_of_variation(&[0.3, 0.3, 0.3]), 0.0);
         assert!(coefficient_of_variation(&[0.1, 0.9]) > 0.0);
-    }
-
-    #[test]
-    fn louder_audio_measures_higher_lufs() {
-        // Same 440 Hz tone at two amplitudes 14 dB apart. The louder
-        // one must report a higher integrated LUFS (exercises the
-        // stratum-dsp BS.1770-4 path end to end).
-        let loud = sine(440.0, 2.0, 0.5);
-        let quiet = sine(440.0, 2.0, 0.1);
-        let loud_lufs = measure_integrated_lufs(&loud, SAMPLE_RATE).expect("loud lufs");
-        let quiet_lufs = measure_integrated_lufs(&quiet, SAMPLE_RATE).expect("quiet lufs");
-        assert!(
-            loud_lufs > quiet_lufs + 3.0,
-            "louder tone should measure clearly higher: {loud_lufs} vs {quiet_lufs}"
-        );
     }
 }

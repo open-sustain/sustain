@@ -85,7 +85,7 @@ fn in_cluster_pairs_outscore_cross_cluster_by_a_wide_margin() {
         (tracks[2].id, techno_acoustics(-6.0, 6.0)),
         (tracks[3].id, techno_acoustics(-6.5, 6.2)),
     ];
-    let index = SmartShuffleIndex::build(&tracks, &acoustics, 0);
+    let index = SmartShuffleIndex::build(&tracks, &acoustics, 1, 0);
 
     let in_cluster = compute_affinity(Some(&index), &tracks[0], &tracks[1])
         .expect("ambient pair shares features")
@@ -125,7 +125,7 @@ fn loudness_guard_excludes_a_loud_jump_under_every_exploration_mode() {
         ),
         (safe.id, ambient_acoustics(-19.0, 0.5)),
     ];
-    let index = SmartShuffleIndex::build(&tracks, &acoustics, 0);
+    let index = SmartShuffleIndex::build(&tracks, &acoustics, 1, 0);
     let candidates = [&loud_jump, &safe];
     let history = [&seed];
 
@@ -167,7 +167,7 @@ fn loudness_guard_yields_no_pick_when_the_only_candidate_is_a_loud_jump() {
             },
         ),
     ];
-    let index = SmartShuffleIndex::build(&tracks, &acoustics, 0);
+    let index = SmartShuffleIndex::build(&tracks, &acoustics, 1, 0);
     let candidates = [&loud_jump];
     let history = [&seed];
     let context = PickContext {
@@ -210,7 +210,7 @@ fn loudness_guard_tolerates_the_descent_it_forbids_on_ascent() {
             },
         ),
     ];
-    let index = SmartShuffleIndex::build(&tracks, &acoustics, 0);
+    let index = SmartShuffleIndex::build(&tracks, &acoustics, 1, 0);
     let candidates = [&quieter];
     let history = [&seed];
     let context = PickContext {
@@ -238,7 +238,7 @@ fn unanalysed_candidate_is_masked_on_acoustic_terms_not_penalized() {
         (seed.id, ambient_acoustics(-20.0, 0.5)),
         (analysed.id, ambient_acoustics(-20.0, 0.5)),
     ];
-    let index = SmartShuffleIndex::build(&tracks, &acoustics, 0);
+    let index = SmartShuffleIndex::build(&tracks, &acoustics, 1, 0);
 
     let analysed_breakdown =
         compute_affinity(Some(&index), &seed, &analysed).expect("shares features");

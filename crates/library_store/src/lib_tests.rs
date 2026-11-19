@@ -19,8 +19,8 @@ use sustain_domain::{
 };
 
 use sustain_domain::{
-    DETAIL_SEGMENTS_PER_SECOND, MusicalKey, PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment,
-    WaveformSegments,
+    BandScale, DETAIL_SEGMENTS_PER_SECOND, MusicalKey, PREVIEW_SEGMENT_COUNT, TrackAnalysis,
+    WaveformSegment, WaveformSegments,
 };
 
 use super::{
@@ -950,6 +950,11 @@ fn sample_analysis(bpm: Option<f64>, key: Option<MusicalKey>) -> TrackAnalysis {
                 high_band: ((i * 7) % 256) as u8,
             })
             .collect(),
+        band_scale: BandScale {
+            low: 1.0,
+            mid: 0.5,
+            high: 0.25,
+        },
     };
     let detail = WaveformSegments {
         segment_duration_ms: 1_000.0 / DETAIL_SEGMENTS_PER_SECOND as f32,
@@ -961,6 +966,11 @@ fn sample_analysis(bpm: Option<f64>, key: Option<MusicalKey>) -> TrackAnalysis {
                 high_band: ((i + 3) % 256) as u8,
             })
             .collect(),
+        band_scale: BandScale {
+            low: 0.75,
+            mid: 1.0,
+            high: 0.125,
+        },
     };
     TrackAnalysis {
         bpm,
@@ -1028,12 +1038,8 @@ fn record_analysis_round_trips_waveform_bytes() {
         .load_waveform(track.id)
         .expect("load")
         .expect("waveform exists");
-    assert_eq!(stored.preview.segments, analysis.waveform_preview.segments);
-    assert_eq!(stored.detail.segments, analysis.waveform_detail.segments);
-    assert!(
-        (stored.preview.segment_duration_ms - analysis.waveform_preview.segment_duration_ms).abs()
-            < 1e-3
-    );
+    assert_eq!(stored.preview, analysis.waveform_preview);
+    assert_eq!(stored.detail, analysis.waveform_detail);
 }
 
 #[test]
@@ -1114,9 +1120,101 @@ fn record_analysis_ignores_non_finite_acoustics() {
 
     assert!(
         store
-            .load_all_acoustics()
+            .load_all_acoustics(VERSIONS)
             .expect("load acoustics")
             .is_empty()
+    );
+}
+
+#[test]
+fn an_audio_attempt_without_acoustics_removes_the_ones_measured_before() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+    let mut measured = sample_analysis(None, None);
+    measured.acoustics = Some(finite_acoustics());
+    store
+        .record_analysis(track.id, &measured, AnalysisCapabilities::all(), ctx(1))
+        .expect("record measured analysis");
+
+    for acoustics in [
+        None,
+        Some(AcousticFeatures {
+            integrated_lufs: f32::NAN,
+            ..finite_acoustics()
+        }),
+    ] {
+        store
+            .record_analysis(track.id, &measured, AnalysisCapabilities::all(), ctx(1))
+            .expect("record measured analysis");
+        let unmeasured = TrackAnalysis {
+            acoustics,
+            ..sample_analysis(None, None)
+        };
+        store
+            .record_analysis(track.id, &unmeasured, AnalysisCapabilities::all(), ctx(2))
+            .expect("record unmeasured analysis");
+
+        assert_eq!(store.load_all_acoustics(VERSIONS), Ok(Vec::new()));
+    }
+}
+
+#[test]
+fn a_failed_audio_attempt_removes_the_acoustics_measured_before() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+    let mut measured = sample_analysis(None, None);
+    measured.acoustics = Some(finite_acoustics());
+    let earlier = AnalysisContext {
+        versions: every_analyzer_at(1),
+        now_unix: 1,
+    };
+    store
+        .record_analysis(track.id, &measured, AnalysisCapabilities::all(), earlier)
+        .expect("record measured analysis");
+
+    let current = every_analyzer_at(2);
+    store
+        .record_analysis_attempt_failure(
+            track.id,
+            AnalysisCapabilities::all(),
+            AnalysisContext {
+                versions: current,
+                now_unix: 2,
+            },
+        )
+        .expect("record failed attempt");
+
+    assert_eq!(store.load_all_acoustics(current), Ok(Vec::new()));
+}
+
+#[test]
+fn acoustics_are_loaded_only_from_the_current_audio_analyzer() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let earlier = track(1, "a.flac");
+    let current = track(2, "b.flac");
+    store.save_track(earlier.clone()).expect("save track");
+    store.save_track(current.clone()).expect("save track");
+    let mut analysis = sample_analysis(None, None);
+    analysis.acoustics = Some(finite_acoustics());
+    for (track, version) in [(&earlier, 1), (&current, 2)] {
+        store
+            .record_analysis(
+                track.id,
+                &analysis,
+                AnalysisCapabilities::all(),
+                AnalysisContext {
+                    versions: every_analyzer_at(version),
+                    now_unix: 1,
+                },
+            )
+            .expect("record analysis");
+    }
+
+    assert_eq!(
+        store.load_all_acoustics(every_analyzer_at(2)),
+        Ok(vec![(current.id, finite_acoustics())])
     );
 }
 
@@ -2041,10 +2139,12 @@ fn stored_waveform_equality_is_well_defined() {
         preview: WaveformSegments {
             segment_duration_ms: 25.0,
             segments: vec![WaveformSegment::silent()],
+            band_scale: BandScale::EVEN,
         },
         detail: WaveformSegments {
             segment_duration_ms: 6.0,
             segments: vec![WaveformSegment::silent()],
+            band_scale: BandScale::EVEN,
         },
     };
     assert_eq!(stored.clone(), stored);
@@ -2992,7 +3092,7 @@ fn background_results_for_a_track_no_longer_in_the_library_are_dropped() {
 
     assert_eq!(store.load_waveform(gone), Ok(None));
     assert_eq!(store.load_beat_grid(gone), Ok(None));
-    assert_eq!(store.load_all_acoustics(), Ok(Vec::new()));
+    assert_eq!(store.load_all_acoustics(VERSIONS), Ok(Vec::new()));
     assert_eq!(store.load_synced_lyrics(gone), Ok(None));
     assert_eq!(store.tag_mirrors_due(i64::MAX, 10), Ok(Vec::new()));
 }
@@ -3150,7 +3250,7 @@ fn audio_replacement_preserves_library_fields_and_invalidates_derived_state() {
     assert_eq!(store.load_beat_grid(track.id), Ok(None));
     assert!(
         store
-            .load_all_acoustics()
+            .load_all_acoustics(VERSIONS)
             .expect("load acoustics")
             .is_empty()
     );

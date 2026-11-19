@@ -1439,14 +1439,8 @@ impl ApplicationRuntime {
                 let (waveform_preview, waveform_detail) = match waveform {
                     Some(tiers) => (tiers.preview, tiers.detail),
                     None => (
-                        sustain_analysis::WaveformSegments {
-                            segment_duration_ms: 0.0,
-                            segments: Vec::new(),
-                        },
-                        sustain_analysis::WaveformSegments {
-                            segment_duration_ms: 0.0,
-                            segments: Vec::new(),
-                        },
+                        sustain_analysis::WaveformSegments::empty(),
+                        sustain_analysis::WaveformSegments::empty(),
                     ),
                 };
                 Ok(sustain_analysis::TrackAnalysis {
@@ -1588,7 +1582,11 @@ impl ApplicationRuntime {
                 );
                 self.analysis_persistence_error_id = Some(id);
             }
-            analysis_scheduler::SchedulerProgress::Idle { completed, failed } => {
+            analysis_scheduler::SchedulerProgress::Idle {
+                completed,
+                failed,
+                audio_recorded,
+            } => {
                 if let Some(id) = self.analysis_notification_id.take() {
                     self.dismiss_notification(id);
                 }
@@ -1607,12 +1605,14 @@ impl ApplicationRuntime {
                     );
                 }
                 // Acoustics are the only analysis output the Smart
-                // Shuffle index caches, so a finished batch that produced
-                // any results while audio analysis was on is an
-                // index-changing event — rebuild on the background worker
-                // (coalesced, milliseconds). BPM/key-only batches do not
-                // touch the index, so they do not trigger one.
-                if completed > 0 && self.settings.analysis.audio {
+                // Shuffle index caches, and every audio attempt the run
+                // recorded replaced its track's — with new ones, or, when
+                // it measured none or failed, with none. That is an
+                // index-changing event, whether the run was the background
+                // sweep or one the user asked for: rebuild on the
+                // background worker (coalesced, milliseconds). BPM/key-only
+                // runs do not touch the index, so they do not trigger one.
+                if audio_recorded {
                     self.request_smart_shuffle_rebuild();
                 }
             }
@@ -2577,8 +2577,13 @@ impl ApplicationRuntime {
             // them for the timbral terms and the loudness guard, but
             // Smart Shuffle works without them. A load error degrades
             // gracefully to a zero-coverage, metadata-only index.
-            let acoustics = store.load_all_acoustics().unwrap_or_default();
-            Some(smart_shuffle_scheduler::RebuildInputs { tracks, acoustics })
+            let versions = sustain_analysis::ANALYZER_VERSIONS;
+            let acoustics = store.load_all_acoustics(versions).unwrap_or_default();
+            Some(smart_shuffle_scheduler::RebuildInputs {
+                tracks,
+                acoustics,
+                acoustics_analyzer_version: versions.audio,
+            })
         });
         let now = self.clock.now();
         let scheduled = self.smart_shuffle_scheduler.request_rebuild(prepare, now);

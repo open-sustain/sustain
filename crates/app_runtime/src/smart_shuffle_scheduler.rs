@@ -53,6 +53,8 @@ pub struct SmartShuffleRebuildResult {
 pub struct RebuildInputs {
     pub tracks: Vec<Track>,
     pub acoustics: Vec<(TrackId, AcousticFeatures)>,
+    /// Version of the audio analyzer that measured `acoustics`.
+    pub acoustics_analyzer_version: u32,
 }
 
 /// Worker-run preparation: clones/loads the library snapshot and the
@@ -147,8 +149,17 @@ impl SmartShuffleScheduler {
             // preparation failed (e.g. a store read error): publish
             // nothing so the existing index survives untouched.
             match prepare() {
-                Some(RebuildInputs { tracks, acoustics }) => {
-                    let index = SmartShuffleIndex::build(&tracks, &acoustics, built_at_unix);
+                Some(RebuildInputs {
+                    tracks,
+                    acoustics,
+                    acoustics_analyzer_version,
+                }) => {
+                    let index = SmartShuffleIndex::build(
+                        &tracks,
+                        &acoustics,
+                        acoustics_analyzer_version,
+                        built_at_unix,
+                    );
                     flag.store(false, Ordering::Release);
                     // `send_blocking` cannot meaningfully fail on an
                     // unbounded channel whose receiver is owned by the
@@ -206,6 +217,7 @@ mod tests {
             Some(RebuildInputs {
                 tracks,
                 acoustics: Vec::new(),
+                acoustics_analyzer_version: 1,
             })
         })
     }
@@ -232,6 +244,7 @@ mod tests {
             Some(RebuildInputs {
                 tracks: vec![track(1, "Rock")],
                 acoustics: Vec::new(),
+                acoustics_analyzer_version: 1,
             })
         });
 
@@ -263,6 +276,7 @@ mod tests {
             Some(RebuildInputs {
                 tracks: vec![track(1, "Rock")],
                 acoustics: Vec::new(),
+                acoustics_analyzer_version: 1,
             })
         });
 

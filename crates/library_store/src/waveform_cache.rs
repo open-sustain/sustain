@@ -36,20 +36,35 @@ pub(crate) const FILE_NAME: &str = "waveform-cache.sqlite";
 /// Schema name the cache file is attached under.
 pub(crate) const SCHEMA: &str = "waveform_cache";
 
-const CACHE_SCHEMA_VERSION: i64 = 1;
+/// Version 2 stores each tier's band scale.
+const CACHE_SCHEMA_VERSION: i64 = 2;
 
+// A waveform's columns are all set, or all NULL when its attempt produced
+// none.
 const CREATE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS waveform_cache.track_waveform (
     track_id                    INTEGER PRIMARY KEY,
     audio_attempt_token         INTEGER NOT NULL,
     preview_segment_duration_ms REAL,
     preview_segments            BLOB,
+    preview_low_band_scale      REAL CHECK (preview_low_band_scale BETWEEN 0 AND 1),
+    preview_mid_band_scale      REAL CHECK (preview_mid_band_scale BETWEEN 0 AND 1),
+    preview_high_band_scale     REAL CHECK (preview_high_band_scale BETWEEN 0 AND 1),
     detail_segment_duration_ms  REAL,
     detail_segments             BLOB,
+    detail_low_band_scale       REAL CHECK (detail_low_band_scale BETWEEN 0 AND 1),
+    detail_mid_band_scale       REAL CHECK (detail_mid_band_scale BETWEEN 0 AND 1),
+    detail_high_band_scale      REAL CHECK (detail_high_band_scale BETWEEN 0 AND 1),
     CHECK (
         (preview_segment_duration_ms IS NULL) = (preview_segments IS NULL)
-        AND (preview_segments IS NULL) = (detail_segment_duration_ms IS NULL)
+        AND (preview_segments IS NULL) = (preview_low_band_scale IS NULL)
+        AND (preview_low_band_scale IS NULL) = (preview_mid_band_scale IS NULL)
+        AND (preview_mid_band_scale IS NULL) = (preview_high_band_scale IS NULL)
+        AND (preview_high_band_scale IS NULL) = (detail_segment_duration_ms IS NULL)
         AND (detail_segment_duration_ms IS NULL) = (detail_segments IS NULL)
+        AND (detail_segments IS NULL) = (detail_low_band_scale IS NULL)
+        AND (detail_low_band_scale IS NULL) = (detail_mid_band_scale IS NULL)
+        AND (detail_mid_band_scale IS NULL) = (detail_high_band_scale IS NULL)
     )
 );
 "#;

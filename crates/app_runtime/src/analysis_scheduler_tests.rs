@@ -72,10 +72,12 @@ fn ok_analyzer() -> AnalyzerFn {
             waveform_preview: WaveformSegments {
                 segment_duration_ms: 25.0,
                 segments: vec![WaveformSegment::silent(); PREVIEW_SEGMENT_COUNT],
+                band_scale: sustain_domain::BandScale::EVEN,
             },
             waveform_detail: WaveformSegments {
                 segment_duration_ms: 6.67,
                 segments: vec![WaveformSegment::silent(); 512],
+                band_scale: sustain_domain::BandScale::EVEN,
             },
             acoustics: None,
         })
@@ -323,6 +325,7 @@ fn an_analyzer_panic_fails_its_track_and_spares_the_worker() {
         SchedulerProgress::Idle {
             completed: 1,
             failed: poisoned as u32,
+            audio_recorded: false,
         }
     );
     let pending = store
@@ -1380,6 +1383,7 @@ fn idle_supervisor_state() -> super::SupervisorState {
         library_path: None,
         completed: 0,
         failed: 0,
+        audio_recorded: false,
         total: None,
         explicit_queue: std::collections::VecDeque::new(),
         pending_persistence_error: None,
@@ -1540,7 +1544,8 @@ fn explicit_work_whose_result_was_rejected_runs_again_on_wake() {
         idle,
         SchedulerProgress::Idle {
             completed: 1,
-            failed: 0
+            failed: 0,
+            audio_recorded: false,
         }
     ));
     assert_eq!(faulty.record_analysis_calls(), 2);
@@ -1549,6 +1554,52 @@ fn explicit_work_whose_result_was_rejected_runs_again_on_wake() {
         .map(due_ids)
         .expect("query");
     assert!(still_due.is_empty(), "the explicit BPM run landed");
+}
+
+/// A failed audio attempt still replaces what the track measured before,
+/// so the run reports it: Smart Shuffle rebuilds on that report.
+#[test]
+fn a_failed_explicit_audio_run_reports_the_audio_it_recorded() {
+    let temp = TempDir::new().expect("temp dir");
+    let library_root = temp.path().to_path_buf();
+    let track = touch_in(&library_root, "alpha.flac");
+    let track_id = track.id;
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    store.save_track(track).expect("save");
+
+    let (sink, rx) = capturing_sink();
+    let scheduler = AnalysisScheduler::start(deterministic_config(
+        err_analyzer(),
+        sink,
+        fixed_clock(1_700_000_000),
+        store,
+        settings_off(),
+        Some(library_root),
+    ));
+    scheduler.request_explicit_run(explicit_work(
+        vec![track_id],
+        AnalysisCapabilities {
+            bpm: false,
+            key: false,
+            audio: true,
+        },
+    ));
+    // The run's Idle, not the empty one the scheduler may report at
+    // start-up before the request arrives.
+    let idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { failed: 1, .. })
+    });
+    scheduler.shutdown();
+
+    assert_eq!(
+        idle,
+        SchedulerProgress::Idle {
+            completed: 0,
+            failed: 1,
+            audio_recorded: true,
+        }
+    );
 }
 
 #[test]
@@ -1709,7 +1760,8 @@ fn writes_rejected_while_the_sweep_stops_do_not_stop_the_next_wake() {
         after_wake,
         SchedulerProgress::Idle {
             completed: 2,
-            failed: 0
+            failed: 0,
+            audio_recorded: false,
         }
     ));
 }
@@ -1871,7 +1923,8 @@ fn a_second_request_for_a_running_track_does_not_repeat_its_pass() {
         idle,
         SchedulerProgress::Idle {
             completed: 1,
-            failed: 0
+            failed: 0,
+            audio_recorded: false,
         }
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);

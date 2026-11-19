@@ -1604,10 +1604,7 @@ mod tests {
             .save_device_artist_selection(&device.id, &["Artist A".to_owned()])
             .expect("save artist selection");
         let tempo = |hundredths| Bpm::from_hundredths(hundredths).expect("tempo");
-        let empty = WaveformSegments {
-            segment_duration_ms: 0.0,
-            segments: Vec::new(),
-        };
+        let empty = WaveformSegments::empty();
         // 1: measured, so the grid agrees with the BPM analysis set.
         // 2: measured, but the user typed half the tempo, so the grid no
         // longer describes it. 3: never measured.

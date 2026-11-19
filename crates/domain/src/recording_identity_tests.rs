@@ -2,7 +2,7 @@
 // Copyright (C) 2026 AnnoyingTechnology
 
 use super::*;
-use crate::WaveformSegment;
+use crate::{BandScale, WaveformSegment};
 
 const RATE: usize = DETAIL_SEGMENTS_PER_SECOND as usize;
 
@@ -75,6 +75,7 @@ fn profile(segments: Vec<WaveformSegment>) -> RecordingProfile {
     RecordingProfile::from_detail(&WaveformSegments {
         segment_duration_ms: 1_000.0 / DETAIL_SEGMENTS_PER_SECOND as f32,
         segments,
+        band_scale: BandScale::EVEN,
     })
     .expect("long enough to judge")
 }
@@ -204,6 +205,7 @@ fn too_short_or_silent_waveforms_are_not_judged() {
     let detail = |segments| WaveformSegments {
         segment_duration_ms: 1_000.0 / DETAIL_SEGMENTS_PER_SECOND as f32,
         segments,
+        band_scale: BandScale::EVEN,
     };
     assert!(RecordingProfile::from_detail(&detail(music(15, 20.0))).is_none());
     assert!(RecordingProfile::from_detail(&detail(silence(200.0))).is_none());
@@ -224,6 +226,7 @@ fn a_waveform_at_another_resolution_is_not_judged() {
         RecordingProfile::from_detail(&WaveformSegments {
             segment_duration_ms: 10.0,
             segments: music(17, 200.0),
+            band_scale: BandScale::EVEN,
         })
         .is_none()
     );

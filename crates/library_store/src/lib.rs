@@ -32,16 +32,16 @@ pub use tag_mirror::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork,
 pub use waveform_cache::WaveformCacheStatus;
 
 use schema::{
-    DELETE_SMART_SHUFFLE_INDEX_SQL, DELETE_TRACK_BEAT_GRID_SQL, DELETE_TRACK_SYNCED_LYRICS_SQL,
-    FORGET_TRACK_BPM_ATTEMPT_SQL, FORGET_TRACK_KEY_ATTEMPT_SQL, RECONCILE_SCANNED_TRACK_SQL,
-    RECORD_MEASURED_TRACK_KEY_SQL, REPLACE_TRACK_BPM_UNLESS_SET_BY_USER_SQL, SAVE_TRACK_SQL,
-    SELECT_ALL_TRACK_ACOUSTICS_SQL, SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL,
-    SELECT_TRACK_BEAT_GRID_SQL, SELECT_TRACK_BY_ID_SQL, SELECT_TRACK_SYNCED_LYRICS_SQL,
-    SELECT_TRACK_WAVEFORM_PREVIEW_SQL, SELECT_TRACK_WAVEFORM_SQL,
-    SELECT_TRACKS_NEEDING_ANALYSIS_SQL, SELECT_TRACKS_NEEDING_ONLINE_SQL,
-    SELECT_WAVEFORM_VERSIONS_SQL, UPSERT_SMART_SHUFFLE_INDEX_SQL, UPSERT_TRACK_ACOUSTICS_SQL,
-    UPSERT_TRACK_ANALYSIS_SQL, UPSERT_TRACK_BEAT_GRID_SQL, UPSERT_TRACK_ONLINE_STATUS_SQL,
-    UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
+    DELETE_SMART_SHUFFLE_INDEX_SQL, DELETE_TRACK_ACOUSTICS_SQL, DELETE_TRACK_BEAT_GRID_SQL,
+    DELETE_TRACK_SYNCED_LYRICS_SQL, FORGET_TRACK_BPM_ATTEMPT_SQL, FORGET_TRACK_KEY_ATTEMPT_SQL,
+    RECONCILE_SCANNED_TRACK_SQL, RECORD_MEASURED_TRACK_KEY_SQL,
+    REPLACE_TRACK_BPM_UNLESS_SET_BY_USER_SQL, SAVE_TRACK_SQL, SELECT_ALL_TRACK_ACOUSTICS_SQL,
+    SELECT_ALL_TRACKS_SQL, SELECT_SMART_SHUFFLE_INDEX_SQL, SELECT_TRACK_BEAT_GRID_SQL,
+    SELECT_TRACK_BY_ID_SQL, SELECT_TRACK_SYNCED_LYRICS_SQL, SELECT_TRACK_WAVEFORM_PREVIEW_SQL,
+    SELECT_TRACK_WAVEFORM_SQL, SELECT_TRACKS_NEEDING_ANALYSIS_SQL,
+    SELECT_TRACKS_NEEDING_ONLINE_SQL, SELECT_WAVEFORM_VERSIONS_SQL, UPSERT_SMART_SHUFFLE_INDEX_SQL,
+    UPSERT_TRACK_ACOUSTICS_SQL, UPSERT_TRACK_ANALYSIS_SQL, UPSERT_TRACK_BEAT_GRID_SQL,
+    UPSERT_TRACK_ONLINE_STATUS_SQL, UPSERT_TRACK_SYNCED_LYRICS_SQL, UPSERT_TRACK_WAVEFORM_SQL,
 };
 use sqlite_rows::{
     blob_to_waveform_segments, build_limit, duration_to_seconds, key_origin_to_db,
@@ -597,10 +597,17 @@ pub trait LibraryStore: Send + Sync {
     /// selection, where a query per track would stall the caller.
     fn load_beat_grids(&self, track_ids: &[TrackId]) -> StoreResult<HashMap<TrackId, BeatGrid>>;
 
-    /// Load every track's acoustic features in one sweep, for the
-    /// Smart Shuffle index rebuild. Tracks without an acoustics row
-    /// are simply absent from the result — the scorer masks them.
-    fn load_all_acoustics(&self) -> StoreResult<Vec<(TrackId, AcousticFeatures)>>;
+    /// Load every track's acoustic features measured by the audio
+    /// analyzer `versions.audio`, in one sweep, for the Smart Shuffle
+    /// index rebuild and duplicate detection. Tracks without such a row
+    /// are simply absent from the result — the scorer masks them. A row
+    /// from an earlier analyzer is left out rather than compared with
+    /// current ones: analyzers measure on different scales, and the row
+    /// is replaced once the track is re-analyzed.
+    fn load_all_acoustics(
+        &self,
+        versions: AnalyzerVersions,
+    ) -> StoreResult<Vec<(TrackId, AcousticFeatures)>>;
 
     /// Persist time-coded lyrics for a track. Overwrites any previous
     /// entry — synced lyrics are a single-shot store-or-replace, not

@@ -21,11 +21,12 @@
 //!
 //! The amplitudes are already normalized to the track peak by the DSP
 //! pass, so there is no resampling of audio here — only down/up-sampling
-//! of the segment arrays and bit-packing.
+//! of the segment arrays and bit-packing. The colour encodings compare
+//! the bands on the scale they share, through the tier's [`BandScale`].
 
 use std::time::Duration;
 
-use sustain_domain::{WaveformSegment, WaveformSegments};
+use sustain_domain::{BandScale, WaveformSegment, WaveformSegments};
 
 /// Bytes-per-second of the Pioneer detail waveforms. Matches the
 /// resolution Sustain's detail tier is produced at.
@@ -82,8 +83,8 @@ pub fn build(
             .iter()
             .map(|s| encode_mono(s.amplitude, 7))
             .collect(),
-        pwv4: encode_pwv4(&preview_1200),
-        pwv5: encode_pwv5(&detail_n),
+        pwv4: encode_pwv4(&preview_1200, detail.band_scale),
+        pwv5: encode_pwv5(&detail_n, detail.band_scale),
         detail_entries: detail_entries as u32,
     }
 }
@@ -143,6 +144,11 @@ fn scale(value: u8, max: u8) -> u8 {
     ((value as u16 * max as u16) / 255) as u8
 }
 
+/// Scale a 0–1 level into 0–`max`, to the nearest step.
+fn level(value: f32, max: u8) -> u8 {
+    (value.clamp(0.0, 1.0) * f32::from(max)).round() as u8
+}
+
 /// Pack a monochrome entry: `whiteness:3 | height:5` (height 0–31).
 fn encode_mono(amplitude: u8, whiteness: u8) -> u8 {
     let height = scale(amplitude, 31);
@@ -150,23 +156,25 @@ fn encode_mono(amplitude: u8, whiteness: u8) -> u8 {
 }
 
 /// PWV4: 6 bytes per entry, each a level in 0–127. Bytes 3, 4 and 5
-/// carry the low, mid and high band energies — the player derives both
-/// the column's colour and its height from them. Byte 2 carries the
+/// carry the low, mid and high band energies, on the scale the bands
+/// share — the player derives both the column's colour and its height
+/// from them. Byte 2 carries the
 /// energy below ~10 kHz, here the louder of the low and mid bands.
 /// Bytes 0 and 1 are undocumented (dysentery's analysis sees them only
 /// tint the blue rendering); in rekordbox's own files byte 0 follows the
 /// overall level and byte 1 sits near its complement, `255 − byte 0`,
 /// which is what is written here.
-fn encode_pwv4(segments: &[WaveformSegment]) -> Vec<u8> {
+fn encode_pwv4(segments: &[WaveformSegment], band_scale: BandScale) -> Vec<u8> {
     let mut out = Vec::with_capacity(segments.len() * 6);
     for seg in segments {
-        let level = scale(seg.amplitude, 127);
-        out.push(level);
-        out.push(255 - level);
-        out.push(scale(seg.low_band.max(seg.mid_band), 127));
-        out.push(scale(seg.low_band, 127));
-        out.push(scale(seg.mid_band, 127));
-        out.push(scale(seg.high_band, 127));
+        let overall = scale(seg.amplitude, 127);
+        let [low, mid, high] = band_scale.balanced(seg);
+        out.push(overall);
+        out.push(255 - overall);
+        out.push(level(low.max(mid), 127));
+        out.push(level(low, 127));
+        out.push(level(mid, 127));
+        out.push(level(high, 127));
     }
     out
 }
@@ -174,10 +182,10 @@ fn encode_pwv4(segments: &[WaveformSegment]) -> Vec<u8> {
 /// PWV5: one big-endian `u16` per entry, `red:3 | green:3 | blue:3 |
 /// height:5 | unused:2` (crate-digger's ANLZ analysis). The height
 /// carries the loudness; the colour carries the band balance only.
-fn encode_pwv5(segments: &[WaveformSegment]) -> Vec<u8> {
+fn encode_pwv5(segments: &[WaveformSegment], band_scale: BandScale) -> Vec<u8> {
     let mut out = Vec::with_capacity(segments.len() * 2);
     for seg in segments {
-        let (red, green, blue) = band_colour(seg);
+        let (red, green, blue) = band_colour(seg, band_scale);
         let height = scale(seg.amplitude, 31);
         let entry = u16::from(red) << 13
             | u16::from(green) << 10
@@ -194,18 +202,14 @@ fn encode_pwv5(segments: &[WaveformSegment]) -> Vec<u8> {
 /// same way — their strongest channel sits at or near full intensity
 /// whatever the height — so quiet passages keep their hue instead of
 /// fading to black. A segment with no band energy has no colour.
-fn band_colour(seg: &WaveformSegment) -> (u8, u8, u8) {
-    let strongest = seg.low_band.max(seg.mid_band).max(seg.high_band);
-    if strongest == 0 {
+fn band_colour(seg: &WaveformSegment, band_scale: BandScale) -> (u8, u8, u8) {
+    let [low, mid, high] = band_scale.balanced(seg);
+    let strongest = low.max(mid).max(high);
+    if strongest <= 0.0 {
         return (0, 0, 0);
     }
-    let channel =
-        |band: u8| ((u16::from(band) * 7 + u16::from(strongest) / 2) / u16::from(strongest)) as u8;
-    (
-        channel(seg.low_band),
-        channel(seg.mid_band),
-        channel(seg.high_band),
-    )
+    let channel = |band: f32| level(band / strongest, 7);
+    (channel(low), channel(mid), channel(high))
 }
 
 #[cfg(test)]
@@ -225,6 +229,7 @@ mod tests {
         WaveformSegments {
             segment_duration_ms: 1_000.0 / f32::from(DETAIL_ENTRIES_PER_SECOND),
             segments: vec![seg(amp); count],
+            band_scale: BandScale::EVEN,
         }
     }
 
@@ -243,10 +248,7 @@ mod tests {
 
     #[test]
     fn empty_waveforms_resample_to_silence() {
-        let empty = WaveformSegments {
-            segment_duration_ms: 0.0,
-            segments: Vec::new(),
-        };
+        let empty = WaveformSegments::empty();
         let wf = build(&empty, &empty, 2000, Duration::ZERO);
         assert_eq!(wf.pwav.len(), 400);
         assert!(wf.pwav.iter().all(|&b| b == encode_mono(0, 5)));
@@ -259,6 +261,7 @@ mod tests {
         let detail = WaveformSegments {
             segment_duration_ms: 1_000.0 / f32::from(DETAIL_ENTRIES_PER_SECOND),
             segments: vec![seg(200); 900],
+            band_scale: BandScale::EVEN,
         };
         let wf = build(&preview, &detail, 8000, Duration::ZERO);
         assert_eq!(wf.detail_entries, 900);
@@ -292,7 +295,7 @@ mod tests {
             high_band: 0,
         };
         let entry = u16::from_be_bytes(
-            encode_pwv5(&[loud_bass])[..]
+            encode_pwv5(&[loud_bass], BandScale::EVEN)[..]
                 .try_into()
                 .expect("one entry is two bytes"),
         );
@@ -317,9 +320,33 @@ mod tests {
             mid_band: 100,
             high_band: 50,
         };
-        assert_eq!(band_colour(&quiet), band_colour(&loud));
-        assert_eq!(band_colour(&loud).0, 7);
-        assert_eq!(band_colour(&WaveformSegment::silent()), (0, 0, 0));
+        let even = BandScale::EVEN;
+        assert_eq!(band_colour(&quiet, even), band_colour(&loud, even));
+        assert_eq!(band_colour(&loud, even).0, 7);
+        assert_eq!(band_colour(&WaveformSegment::silent(), even), (0, 0, 0));
+    }
+
+    #[test]
+    fn colour_compares_the_bands_on_the_scale_they_share() {
+        // Each band's bytes peak at 255, but the mid band peaks at a
+        // quarter of the low band's energy and the high band carries none.
+        let column = WaveformSegment {
+            amplitude: 255,
+            low_band: 255,
+            mid_band: 255,
+            high_band: 0,
+        };
+        let band_scale = BandScale {
+            low: 1.0,
+            mid: 0.25,
+            high: 0.0,
+        };
+
+        assert_eq!(band_colour(&column, band_scale), (7, 2, 0));
+        assert_eq!(
+            encode_pwv4(&[column], band_scale),
+            vec![127, 128, 127, 127, 32, 0]
+        );
     }
 
     #[test]
@@ -330,7 +357,10 @@ mod tests {
             mid_band: 102,
             high_band: 51,
         };
-        assert_eq!(encode_pwv4(&[column]), vec![127, 128, 127, 127, 50, 25]);
+        assert_eq!(
+            encode_pwv4(&[column], BandScale::EVEN),
+            vec![127, 128, 127, 127, 51, 25]
+        );
     }
 
     #[test]

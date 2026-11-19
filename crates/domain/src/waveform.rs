@@ -28,17 +28,23 @@ pub const PREVIEW_SEGMENT_COUNT: usize = 400;
 pub const DETAIL_SEGMENTS_PER_SECOND: u32 = 150;
 
 /// A single waveform segment: peak amplitude plus per-band RMS
-/// energies, all quantized to `u8`. 4 bytes total.
+/// energies, all quantized to `u8`. 4 bytes total. Each band is
+/// quantized against its own loudest segment, so a faint band keeps the
+/// resolution its shape needs; its tier's [`BandScale`] relates the
+/// bands to each other.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WaveformSegment {
     /// Peak amplitude during the segment window, normalized to the
     /// loudest segment in the track (0 = silence, 255 = track peak).
     pub amplitude: u8,
-    /// RMS energy in the low band (≤ ~250 Hz), 0–255.
+    /// RMS energy in the low band (≤ ~250 Hz), 0–255, relative to the
+    /// band's loudest segment in the track.
     pub low_band: u8,
-    /// RMS energy in the mid band (~250 Hz – 4 kHz), 0–255.
+    /// RMS energy in the mid band (~250 Hz – 4 kHz), 0–255, relative to
+    /// the band's loudest segment in the track.
     pub mid_band: u8,
-    /// RMS energy in the high band (≥ ~4 kHz), 0–255.
+    /// RMS energy in the high band (≥ ~4 kHz), 0–255, relative to the
+    /// band's loudest segment in the track.
     pub high_band: u8,
 }
 
@@ -55,6 +61,43 @@ impl WaveformSegment {
     }
 }
 
+/// How the band energies of a tier relate to each other. Each band's
+/// bytes are scaled to its own loudest segment; its scale is that
+/// segment's energy relative to the loudest segment of the track's
+/// strongest band. The strongest band's scale is 1, a band with no energy
+/// at all has 0. Every scale lies in 0–1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BandScale {
+    /// Scale of the low band.
+    pub low: f32,
+    /// Scale of the mid band.
+    pub mid: f32,
+    /// Scale of the high band.
+    pub high: f32,
+}
+
+impl BandScale {
+    /// Bands that peak equally loud: their bytes already compare with
+    /// each other as they are.
+    pub const EVEN: Self = Self {
+        low: 1.0,
+        mid: 1.0,
+        high: 1.0,
+    };
+
+    /// `segment`'s low, mid and high band energies on one scale shared by
+    /// the three bands, each in 0–1: the balance between them, which the
+    /// segment's colour is read from.
+    pub fn balanced(self, segment: &WaveformSegment) -> [f32; 3] {
+        let level = |byte: u8, scale: f32| f32::from(byte) / 255.0 * scale;
+        [
+            level(segment.low_band, self.low),
+            level(segment.mid_band, self.mid),
+            level(segment.high_band, self.high),
+        ]
+    }
+}
+
 /// A waveform tier (preview or detail). The renderer multiplies its
 /// horizontal pixel position by `segment_duration_ms` to map a screen
 /// column back to a time offset within the track.
@@ -64,6 +107,19 @@ pub struct WaveformSegments {
     pub segment_duration_ms: f32,
     /// The segments themselves, in time order.
     pub segments: Vec<WaveformSegment>,
+    /// How the segments' band energies relate to each other.
+    pub band_scale: BandScale,
+}
+
+impl WaveformSegments {
+    /// A tier without segments: the waveform of no audio.
+    pub const fn empty() -> Self {
+        Self {
+            segment_duration_ms: 0.0,
+            segments: Vec::new(),
+            band_scale: BandScale::EVEN,
+        }
+    }
 }
 
 /// Result of analyzing a single track. Produced by `sustain_analysis`,

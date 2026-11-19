@@ -48,7 +48,6 @@ column below describes the change *beyond* that header.
 | `src/features/period/{tempogram,novelty}.rs` | trimmed (`tempogram` folded to full-band; `novelty` reduced to the full-band curves) |
 | `src/features/period/{tempogram_fft,tempogram_autocorr}.rs` | near-verbatim: `no_run`→`ignore` doc fence + one `#[allow(dead_code)]` diagnostic field each |
 | `src/features/period/mod.rs` | `src/features/period/mod.rs` (trimmed to `BpmEstimate`) |
-| `src/preprocessing/normalization.rs` | `no_run`→`ignore` doc fences; otherwise verbatim |
 | `src/lib.rs`, the `mod.rs` files | Sustain-authored: curated public surface + trimmed module declarations |
 
 ## Adaptations (and why)
@@ -91,6 +90,12 @@ deviations, all recorded so a future upstream change can be re-merged:
   and `AutocorrTempogramResult.strength` are computed and asserted by their own
   modules' tests but read by neither Sustain's consumer nor (post-trim)
   non-test code, so they carry a documented allow rather than being amputated.
+- **Loudness removed (#344).** `preprocessing/normalization.rs` (`normalize`
+  and its config and metadata types) was vendored for the acoustics pass's
+  loudness. Its filter was not BS.1770's K-weighting, and it gated only
+  absolutely, over disjoint blocks of a mono mix. `sustain-analysis` now meters
+  BS.1770 loudness itself, channel by channel during decode, so the module and
+  its exports were removed.
 
 ## Sustain-authored additions (not vendored)
 
@@ -132,7 +137,7 @@ vendored files keep their upstream attribution instead.
 
 Every vendored file differs from `5f4b416` by at least the added SPDX header.
 Beyond that, `error.rs` is byte-identical; `spectral_flux.rs`,
-`tempogram_fft.rs`, `tempogram_autocorr.rs`, and `normalization.rs` differ only
+`tempogram_fft.rs` and `tempogram_autocorr.rs` differ only
 by the mechanical `no_run`→`ignore` doc-fence change (plus the one dead-code
 allow in each of the two tempogram backends), so they diff to a small, obvious
 delta. The trimmed files (`extractor.rs`, `detector.rs`, `templates.rs`,

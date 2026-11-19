@@ -110,6 +110,6 @@ pub use track_column_layout::{
 };
 pub use track_fields::TrackFields;
 pub use waveform::{
-    DETAIL_SEGMENTS_PER_SECOND, PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment,
+    BandScale, DETAIL_SEGMENTS_PER_SECOND, PREVIEW_SEGMENT_COUNT, TrackAnalysis, WaveformSegment,
     WaveformSegments,
 };

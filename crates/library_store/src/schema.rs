@@ -967,33 +967,53 @@ ON CONFLICT(track_id) DO UPDATE SET
     tonalness           = excluded.tonalness
 "#;
 
-/// Load every track's acoustic features for the Smart Shuffle index
-/// rebuild. Column order matches `LibraryStore::load_all_acoustics`.
+/// Remove a track's acoustic features, when its audio attempt measured
+/// none.
+pub(super) const DELETE_TRACK_ACOUSTICS_SQL: &str =
+    "DELETE FROM track_acoustics WHERE track_id = ?1";
+
+/// Load the acoustic features audio analyzer ?1 measured, for the Smart
+/// Shuffle index rebuild and duplicate detection. Column order matches
+/// `LibraryStore::load_all_acoustics`.
 pub(super) const SELECT_ALL_TRACK_ACOUSTICS_SQL: &str = r#"
-SELECT track_id, integrated_lufs, short_term_lufs_max, loudness_range_lu,
+SELECT acoustics.track_id, integrated_lufs, short_term_lufs_max, loudness_range_lu,
        onset_rate_hz, low_band_ratio, mid_band_ratio, high_band_ratio,
        low_band_variation, tonalness
-FROM track_acoustics
+FROM track_acoustics AS acoustics
+JOIN track_analysis AS analysis ON analysis.track_id = acoustics.track_id
+WHERE analysis.audio_analyzer_version = ?1
 "#;
 
 /// Record the waveform outcome of the audio attempt holding token ?2:
-/// the segments, or NULL in all four columns when it produced none.
+/// both tiers, or NULL in every tier column when it produced none.
 pub(super) const UPSERT_TRACK_WAVEFORM_SQL: &str = r#"
 INSERT INTO waveform_cache.track_waveform (
     track_id,
     audio_attempt_token,
     preview_segment_duration_ms,
     preview_segments,
+    preview_low_band_scale,
+    preview_mid_band_scale,
+    preview_high_band_scale,
     detail_segment_duration_ms,
-    detail_segments
+    detail_segments,
+    detail_low_band_scale,
+    detail_mid_band_scale,
+    detail_high_band_scale
 )
-VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
 ON CONFLICT(track_id) DO UPDATE SET
     audio_attempt_token = excluded.audio_attempt_token,
     preview_segment_duration_ms = excluded.preview_segment_duration_ms,
     preview_segments = excluded.preview_segments,
+    preview_low_band_scale = excluded.preview_low_band_scale,
+    preview_mid_band_scale = excluded.preview_mid_band_scale,
+    preview_high_band_scale = excluded.preview_high_band_scale,
     detail_segment_duration_ms = excluded.detail_segment_duration_ms,
-    detail_segments = excluded.detail_segments
+    detail_segments = excluded.detail_segments,
+    detail_low_band_scale = excluded.detail_low_band_scale,
+    detail_mid_band_scale = excluded.detail_mid_band_scale,
+    detail_high_band_scale = excluded.detail_high_band_scale
 "#;
 
 /// "Set `tracks.bpm_hundredths` to the measured tempo unless the user
@@ -1054,8 +1074,14 @@ pub(super) const SELECT_TRACK_WAVEFORM_SQL: &str = r#"
 SELECT
     w.preview_segment_duration_ms,
     w.preview_segments,
+    w.preview_low_band_scale,
+    w.preview_mid_band_scale,
+    w.preview_high_band_scale,
     w.detail_segment_duration_ms,
-    w.detail_segments
+    w.detail_segments,
+    w.detail_low_band_scale,
+    w.detail_mid_band_scale,
+    w.detail_high_band_scale
 FROM track_analysis ta
 JOIN waveform_cache.track_waveform w
   ON w.track_id = ta.track_id AND w.audio_attempt_token = ta.audio_attempt_token
@@ -1067,7 +1093,10 @@ WHERE ta.track_id = ?1 AND w.detail_segments IS NOT NULL
 pub(super) const SELECT_TRACK_WAVEFORM_PREVIEW_SQL: &str = r#"
 SELECT
     w.preview_segment_duration_ms,
-    w.preview_segments
+    w.preview_segments,
+    w.preview_low_band_scale,
+    w.preview_mid_band_scale,
+    w.preview_high_band_scale
 FROM track_analysis ta
 JOIN waveform_cache.track_waveform w
   ON w.track_id = ta.track_id AND w.audio_attempt_token = ta.audio_attempt_token

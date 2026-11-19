@@ -114,7 +114,7 @@ impl DuplicateGroupsTask {
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
         let acoustics = self
             .store
-            .load_all_acoustics()
+            .load_all_acoustics(sustain_analysis::ANALYZER_VERSIONS)
             .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?
             .into_iter()
             .collect();
