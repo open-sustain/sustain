@@ -4235,7 +4235,7 @@ fn runtime_track_column_layout_save_updates_the_hot_path_cache() {
         SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"),
         counts.clone(),
     ));
-    let runtime = ApplicationRuntime::new()
+    let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
     let layout = sample_track_column_layout();
@@ -4252,6 +4252,35 @@ fn runtime_track_column_layout_save_updates_the_hot_path_cache() {
         counts.track_column_layout_loads.load(Ordering::SeqCst),
         0,
         "loading immediately after a successful save should use the updated runtime snapshot",
+    );
+}
+
+#[test]
+fn a_failed_column_layout_save_surfaces_a_notification() {
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store.set_fail_save_track_column_layout(true);
+    let mut runtime = ApplicationRuntime::new()
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize");
+
+    let result = runtime.save_track_column_layout(
+        TrackColumnLayoutScope::Default,
+        &sample_track_column_layout(),
+    );
+
+    assert_eq!(result, Err(ApplicationRuntimeError::LibraryStoreFailed));
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("a column-layout save failure notification");
+    assert_eq!(notification.category, NotificationCategory::ColumnLayout);
+    assert_eq!(notification.severity, NotificationSeverity::Warning);
+    // Not kept as saved: the next load asks the store again.
+    assert_eq!(
+        runtime.load_track_column_layout(TrackColumnLayoutScope::Default),
+        Ok(None)
     );
 }
 

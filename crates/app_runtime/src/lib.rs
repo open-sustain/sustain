@@ -2708,17 +2708,27 @@ impl ApplicationRuntime {
         Ok(layout)
     }
 
+    /// Save `layout` as `scope`'s columns. A failure reaches the user as a
+    /// notification (#365): the columns stay as set this session, but will
+    /// not survive a restart.
     pub fn save_track_column_layout(
-        &self,
+        &mut self,
         scope: TrackColumnLayoutScope,
         layout: &TrackColumnLayout,
     ) -> ApplicationRuntimeResult<()> {
-        let Some(store) = self.library_store.as_deref() else {
+        let saved = self
+            .library_store
+            .as_deref()
+            .ok_or(StoreError::StoreUnavailable)
+            .and_then(|store| store.save_track_column_layout(scope, layout));
+        if saved.is_err() {
+            self.push_ephemeral_notification(
+                NotificationCategory::ColumnLayout,
+                NotificationSeverity::Warning,
+                gettext("Column changes could not be saved and will not survive a restart."),
+            );
             return Err(ApplicationRuntimeError::LibraryStoreFailed);
-        };
-        store
-            .save_track_column_layout(scope, layout)
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        }
         self.track_column_layouts
             .borrow_mut()
             .store(scope, Some(layout.clone()));

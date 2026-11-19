@@ -93,6 +93,9 @@ pub enum NotificationCategory {
     /// the in-memory preference still took effect; the user only needs to
     /// know it will not survive a restart.
     Settings,
+    /// A table's column layout could not be saved. Always ephemeral: the
+    /// columns stay as the user set them this session.
+    ColumnLayout,
     /// The waveform cache could not be opened at startup, so analysis
     /// waveforms are not kept this session. Always ephemeral.
     WaveformCache,

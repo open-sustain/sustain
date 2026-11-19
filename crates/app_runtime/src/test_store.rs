@@ -54,6 +54,7 @@ pub(crate) struct FaultyStore {
     fail_record_synced_lyrics: AtomicBool,
     fail_load_synced_lyrics: AtomicBool,
     fail_tag_mirror_acknowledgement: AtomicBool,
+    fail_save_track_column_layout: AtomicBool,
     availability_path_replacement: Mutex<Option<TrackLocation>>,
     record_analysis_calls: AtomicU32,
     attempt_failure_calls: AtomicU32,
@@ -90,6 +91,7 @@ impl FaultyStore {
             fail_record_synced_lyrics: AtomicBool::new(false),
             fail_load_synced_lyrics: AtomicBool::new(false),
             fail_tag_mirror_acknowledgement: AtomicBool::new(false),
+            fail_save_track_column_layout: AtomicBool::new(false),
             availability_path_replacement: Mutex::new(None),
             record_analysis_calls: AtomicU32::new(0),
             attempt_failure_calls: AtomicU32::new(0),
@@ -138,6 +140,11 @@ impl FaultyStore {
 
     pub(crate) fn set_fail_online_attempt(&self, on: bool) {
         self.fail_online_attempt.store(on, Ordering::SeqCst);
+    }
+
+    pub(crate) fn set_fail_save_track_column_layout(&self, on: bool) {
+        self.fail_save_track_column_layout
+            .store(on, Ordering::SeqCst);
     }
 
     pub(crate) fn set_fail_delete_sync_device(&self, on: bool) {
@@ -592,6 +599,11 @@ impl LibraryStore for FaultyStore {
         scope: TrackColumnLayoutScope,
         layout: &TrackColumnLayout,
     ) -> StoreResult<()> {
+        if self.fail_save_track_column_layout.load(Ordering::SeqCst) {
+            return Err(StoreError::Database(
+                "injected save_track_column_layout failure".to_owned(),
+            ));
+        }
         self.inner.save_track_column_layout(scope, layout)
     }
 

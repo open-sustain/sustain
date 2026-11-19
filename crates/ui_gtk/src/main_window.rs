@@ -1888,8 +1888,9 @@ fn install_track_column_layout_persistence(
 ) {
     let runtime_for_songs = runtime.clone();
     songs_table.set_layout_changed_callback(Rc::new(move |layout| {
+        // A failure is reported by the runtime as a notification.
         let _ = runtime_for_songs
-            .borrow()
+            .borrow_mut()
             .save_track_column_layout(TrackColumnLayoutScope::Default, &layout);
     }));
 
@@ -1902,8 +1903,9 @@ fn install_track_column_layout_persistence(
         let Some(scope) = scope_for_playlists.get() else {
             return;
         };
+        // A failure is reported by the runtime as a notification.
         let _ = runtime_for_playlists
-            .borrow()
+            .borrow_mut()
             .save_track_column_layout(scope, &layout);
     }));
 
