@@ -44,7 +44,9 @@ mod tag_write;
 pub mod walk;
 
 pub use hash::{copy_and_hash_reader_content, hash_file_content, hash_reader_content};
-pub use scan::{KnownTracks, LibraryScanner, SUSTAIN_WORKSPACE_NAME_PREFIX};
+pub use scan::{
+    KnownTracks, LibraryScanner, SUSTAIN_WORKSPACE_NAME_PREFIX, is_sustain_workspace_entry,
+};
 
 use read::{read_tagged_file, valid_embedded_picture};
 use tag_write::{

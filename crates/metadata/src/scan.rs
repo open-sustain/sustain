@@ -18,7 +18,9 @@ use crate::walk::{StdWalkFilesystem, WalkFilesystem, WalkRequest, walk_files_wit
 /// tracks, so the scan does not descend into or adopt them.
 pub const SUSTAIN_WORKSPACE_NAME_PREFIX: &str = ".sustain-";
 
-fn is_sustain_workspace_entry(path: &Path) -> bool {
+/// Whether `path` names a file or folder Sustain itself made, by the
+/// [`SUSTAIN_WORKSPACE_NAME_PREFIX`] its name starts with.
+pub fn is_sustain_workspace_entry(path: &Path) -> bool {
     path.file_name().is_some_and(|name| {
         name.as_encoded_bytes()
             .starts_with(SUSTAIN_WORKSPACE_NAME_PREFIX.as_bytes())

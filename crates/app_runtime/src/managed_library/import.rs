@@ -10,6 +10,7 @@
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -633,41 +634,51 @@ impl ManagedImportBatch {
         // staging file. The staged descriptor is then rewound and hashed
         // independently before publication, retaining the read-back
         // integrity assertion without a second source read (#146).
+        // Staged under the name it was dropped by, as its tags are read,
+        // spelled as UTF-8 so any library filesystem takes it: the title a
+        // name gives an untitled track is read that way anyway.
+        let staged_name = OsString::from(
+            name.file_name()
+                .ok_or(ImportFailureReason::Unreadable)?
+                .to_string_lossy()
+                .into_owned(),
+        );
         let mut staging =
-            copy_file_to_staging_verified(&source_path, &self.library_path).map_err(|error| {
-                match error {
+            copy_file_to_staging_verified(&source_path, &staged_name, &self.library_path).map_err(
+                |error| match error {
                     VerifiedFileCopyError::SourceUnavailable
                     | VerifiedFileCopyError::SourceIsNotFile => ImportFailureReason::Unreadable,
                     _ => ImportFailureReason::CopyFailed,
-                }
-            })?;
+                },
+            )?;
         let original_content_hash = staging.content_hash.clone();
         if self.is_duplicate(staging.bytes_copied, &original_content_hash) {
             remove_staged_file(staging);
             return Ok(ManagedFileOutcome::Duplicate);
         }
 
-        let initial_read = match metadata_service.read_initial_tags_with_diagnostics(name) {
+        // The tags are the staged copy's, which is read as the source would
+        // be: they are those of the bytes the library gets, whatever happens
+        // to the source meanwhile. The copy is the library's to repair; the
+        // source is not.
+        let initial_read = match metadata_service.read_initial_tags_with_diagnostics(staging.path())
+        {
             Ok(read) => read,
             Err(_) => {
                 remove_staged_file(staging);
                 return Err(ImportFailureReason::UnreadableTags);
             }
         };
-        let mut tags = initial_read.tags;
-        let repaired_staging = initial_read.repair.is_some_and(|repair| {
-            matches!(
-                metadata_service.repair_malformed_tags(staging.path(), repair),
-                Ok(true)
-            )
-        });
-        if repaired_staging {
-            if refresh_verified_staging(&mut staging).is_err() {
+        let pass = metadata_service.repair_diagnosed_malformations(staging.path(), initial_read);
+        let tags = pass.read.tags;
+        if pass.file_changed {
+            // A repair that may have rewritten the copy is verified again.
+            // One that rewrote it and then failed leaves a copy whose tags
+            // nothing vouches for, so the file is not imported; refreshing
+            // first lets the discard remove the copy the repair left.
+            if refresh_verified_staging(&mut staging).is_err() || pass.error.is_some() {
                 remove_staged_file(staging);
                 return Err(ImportFailureReason::CopyFailed);
-            }
-            if let Ok(repaired_tags) = metadata_service.read_initial_tags(staging.path()) {
-                tags = repaired_tags;
             }
             if self.is_duplicate(staging.bytes_copied, &staging.content_hash) {
                 remove_staged_file(staging);
@@ -866,7 +877,7 @@ fn collect_supported_audio_files(
         roots: &paths,
         known,
         accept: &is_audio_name_for,
-        skip: &|_| false,
+        skip: &sustain_metadata::is_sustain_workspace_entry,
         cancellation,
     });
     let mut files: Vec<DiscoveredFile> = walk

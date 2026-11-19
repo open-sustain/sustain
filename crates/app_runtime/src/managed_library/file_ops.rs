@@ -409,7 +409,10 @@ pub(crate) fn copy_file_verified(
         .ok_or(VerifiedFileCopyError::DestinationHasNoParent)?;
     ensure_directory_all(destination_parent)
         .map_err(|_| VerifiedFileCopyError::CreateDestinationDirectoryFailed)?;
-    let staging = copy_file_to_staging_verified(source_path, destination_parent)?;
+    let staged_name = destination_path
+        .file_name()
+        .ok_or(VerifiedFileCopyError::DestinationHasNoParent)?;
+    let staging = copy_file_to_staging_verified(source_path, staged_name, destination_parent)?;
     if &staging.content_hash != expected_hash {
         let actual = staging.content_hash.clone();
         remove_staged_file(staging);
@@ -421,8 +424,13 @@ pub(crate) fn copy_file_verified(
     publish_staged_file(staging, destination_path)
 }
 
+/// Copy the file at `source_path` into a staging file named `staged_name`,
+/// in a workspace folder of its own in `staging_directory`, and verify the
+/// copy. The name is the one the copy is to be read by: what it is read
+/// and repaired as before publication goes by it.
 pub(crate) fn copy_file_to_staging_verified(
     source_path: &Path,
+    staged_name: &OsStr,
     staging_directory: &Path,
 ) -> Result<VerifiedFileStaging, VerifiedFileCopyError> {
     let source = open_regular_file(source_path).map_err(map_source_copy_error)?;
@@ -432,12 +440,22 @@ pub(crate) fn copy_file_to_staging_verified(
         .map_err(|_| VerifiedFileCopyError::SourceUnavailable)?;
     ensure_directory_all(staging_directory)
         .map_err(|_| VerifiedFileCopyError::CreateDestinationDirectoryFailed)?;
-    let temporary = create_temporary_copy_path(staging_directory)?;
-    let temporary_file = temporary
-        .create_new_file()
-        .map_err(|_| VerifiedFileCopyError::CreateTemporaryFileFailed)?;
-    let capability = regular_file_capability_from_file(temporary_file)
-        .map_err(|_| VerifiedFileCopyError::CreateTemporaryFileFailed)?;
+    let temporary = create_temporary_copy_path(staging_directory, staged_name)?;
+    let workspace = temporary
+        .path()
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or(VerifiedFileCopyError::CreateTemporaryFileFailed)?;
+    let Ok(file) = temporary.create_new_file() else {
+        remove_staging_directory(&workspace);
+        return Err(VerifiedFileCopyError::CreateTemporaryFileFailed);
+    };
+    let Ok(capability) = regular_file_capability_from_file(file) else {
+        // The file was made, in a folder of this copy's own, a moment ago.
+        let _ = fs::remove_file(temporary.path());
+        remove_staging_directory(&workspace);
+        return Err(VerifiedFileCopyError::CreateTemporaryFileFailed);
+    };
     let result = copy_file_to_staging_verified_inner(
         &source,
         &capability,
@@ -452,7 +470,7 @@ pub(crate) fn copy_file_to_staging_verified(
             capability,
         }),
         Err(error) => {
-            let _ = remove_pinned_regular_file_matching_capability(&temporary, &capability);
+            discard_staging(&temporary, &capability);
             Err(error)
         }
     }
@@ -560,7 +578,13 @@ pub(crate) fn publish_staged_file(
         .is_err()
     {
         let _ = remove_pinned_regular_file_matching_capability(&destination, &staging.capability);
+        if let Some(directory) = staging.temporary.path().parent() {
+            remove_staging_directory(directory);
+        }
         return Err(VerifiedFileCopyError::FinalizeFailed);
+    }
+    if let Some(directory) = staging.temporary.path().parent() {
+        remove_staging_directory(directory);
     }
 
     Ok(VerifiedFileCopy {
@@ -572,7 +596,7 @@ pub(crate) fn publish_staged_file(
 }
 
 pub(crate) fn remove_staged_file(staging: VerifiedFileStaging) {
-    let _ = remove_pinned_regular_file_matching_capability(&staging.temporary, &staging.capability);
+    discard_staging(&staging.temporary, &staging.capability);
 }
 
 pub(crate) fn refresh_verified_staging(
@@ -589,12 +613,17 @@ pub(crate) fn refresh_verified_staging(
     {
         return Err(VerifiedFileCopyError::FinalizeFailed);
     }
+    // The staged file is this one now, so removing the staging removes it
+    // even if verifying it fails below.
+    staging.capability = capability;
 
-    let metadata = capability
+    let metadata = staging
+        .capability
         .file
         .metadata()
         .map_err(|_| VerifiedFileCopyError::FinalizeFailed)?;
-    let mut reader = capability
+    let mut reader = staging
+        .capability
         .try_clone_file()
         .map_err(|_| VerifiedFileCopyError::FinalizeFailed)?;
     let content_hash =
@@ -602,32 +631,58 @@ pub(crate) fn refresh_verified_staging(
 
     staging.bytes_copied = metadata.len();
     staging.content_hash = content_hash;
-    staging.capability = capability;
     Ok(())
 }
 
-fn create_temporary_copy_path(parent: &Path) -> Result<PinnedFilePath, VerifiedFileCopyError> {
+/// A staging path for a copy of the file named `file_name`: that name, in
+/// a workspace folder of its own made in `parent`. A staged copy is read
+/// and repaired before it is published, and metadata operations go by a
+/// file's name — its format by the extension, a missing title by the rest
+/// — so the copy is read as its source would be (#375). The workspace
+/// prefix keeps a scan or an import from taking it for a track.
+fn create_temporary_copy_path(
+    parent: &Path,
+    file_name: &OsStr,
+) -> Result<PinnedFilePath, VerifiedFileCopyError> {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
 
     for attempt in 0..100u32 {
-        let temporary_name = format!(
-            ".sustain-copy-{}-{unique}-{attempt}.tmp",
+        let directory = parent.join(format!(
+            ".sustain-copy-{}-{unique}-{attempt}",
             std::process::id()
-        );
-        let temporary = PinnedFilePath::existing_parent(&parent.join(temporary_name))
-            .map_err(|_| VerifiedFileCopyError::CreateTemporaryFileFailed)?;
-        if !temporary
-            .exists()
-            .map_err(|_| VerifiedFileCopyError::CreateTemporaryFileFailed)?
-        {
-            return Ok(temporary);
+        ));
+        match mkdirat(CWD, &directory, PRIVATE_DIRECTORY_MODE) {
+            Ok(()) => {
+                return PinnedFilePath::existing_parent(&directory.join(file_name)).map_err(|_| {
+                    remove_staging_directory(&directory);
+                    VerifiedFileCopyError::CreateTemporaryFileFailed
+                });
+            }
+            Err(Errno::EXIST) => {}
+            Err(_) => return Err(VerifiedFileCopyError::CreateTemporaryFileFailed),
         }
     }
 
     Err(VerifiedFileCopyError::CreateTemporaryFileFailed)
+}
+
+/// Remove the workspace folder a staged copy was made in, once the copy
+/// is gone from it. A folder left behind by a crash is empty, or holds an
+/// unpublished copy; either way scans pass it by.
+fn remove_staging_directory(directory: &Path) {
+    let _ = fs::remove_dir(directory);
+}
+
+/// Remove a staged copy and the workspace folder it was made in.
+fn discard_staging(temporary: &PinnedFilePath, capability: &RegularFileCapability) {
+    if remove_pinned_regular_file_matching_capability(temporary, capability).is_ok()
+        && let Some(directory) = temporary.path().parent()
+    {
+        remove_staging_directory(directory);
+    }
 }
 
 pub(crate) fn move_file_without_copy_or_overwrite(
@@ -1213,7 +1268,9 @@ mod tests {
         fs::write(&source, b"audio bytes").expect("write source");
         // A regular file where the destination's artist folder belongs.
         fs::write(root.join("Artist"), b"not a folder").expect("obstruct destination parent");
-        let staging = copy_file_to_staging_verified(&source, &root).expect("stage copy");
+        let staging =
+            copy_file_to_staging_verified(&source, std::ffi::OsStr::new("song.flac"), &root)
+                .expect("stage copy");
 
         let result = publish_staged_file(staging, &root.join("Artist/Album/01 Song.flac"));
 

@@ -1103,12 +1103,23 @@ fn managed_import_repairs_owned_staging_copy_not_external_source() {
     let repaired_paths = metadata_service.repaired_paths();
     assert_eq!(repaired_paths.len(), 1);
     assert_ne!(repaired_paths[0], source_path);
-    assert_eq!(repaired_paths[0].parent(), Some(library_root.as_path()));
+    // Staged under the source's own name, in a workspace folder of its own
+    // in the library folder.
+    assert_eq!(
+        repaired_paths[0].file_name(),
+        Some(std::ffi::OsStr::new("source.flac"))
+    );
+    let workspace = repaired_paths[0].parent().expect("a staging folder");
+    assert_eq!(workspace.parent(), Some(library_root.as_path()));
     assert!(
-        repaired_paths[0]
+        workspace
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with(".sustain-copy-"))
+    );
+    assert!(
+        !workspace.exists(),
+        "the staging folder is gone once published"
     );
     assert_eq!(
         std::fs::read(&source_path).expect("source remains untouched"),
@@ -1134,6 +1145,410 @@ fn managed_import_repairs_owned_staging_copy_not_external_source() {
 
     std::fs::remove_dir_all(library_root).expect("remove library root");
     std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+/// An MP3 whose ID3v2.4 tag holds `frames`, each an id and its content
+/// (the text encoding byte first, for a text frame).
+fn mp3_with_id3v2_4_frames(frames: &[(&str, &[u8])]) -> Vec<u8> {
+    fn synchsafe(value: usize) -> [u8; 4] {
+        let value = u32::try_from(value).expect("a small tag");
+        [
+            ((value >> 21) & 0x7f) as u8,
+            ((value >> 14) & 0x7f) as u8,
+            ((value >> 7) & 0x7f) as u8,
+            (value & 0x7f) as u8,
+        ]
+    }
+    let mut body = Vec::new();
+    for (id, content) in frames {
+        body.extend_from_slice(id.as_bytes());
+        body.extend_from_slice(&synchsafe(content.len()));
+        body.extend_from_slice(&[0x00, 0x00]);
+        body.extend_from_slice(content);
+    }
+    let mut bytes = b"ID3\x04\x00\x00".to_vec();
+    bytes.extend_from_slice(&synchsafe(body.len()));
+    bytes.extend_from_slice(&body);
+    bytes.extend_from_slice(&mp3_frames());
+    bytes
+}
+
+/// A managed import of `source` into an empty library at `library_root`,
+/// read and repaired by `metadata_service`.
+fn managed_import_with(
+    metadata_service: Arc<dyn MetadataService>,
+    library_root: &Path,
+    source: &Path,
+) -> super::LibraryImportResult {
+    let result = managed_import_allowing_failures(metadata_service, library_root, source);
+    assert!(result.failures.is_empty(), "{:?}", result.failures);
+    result
+}
+
+/// Imports `source` into `library_root`, managed, failed files included.
+fn managed_import_allowing_failures(
+    metadata_service: Arc<dyn MetadataService>,
+    library_root: &Path,
+    source: &Path,
+) -> super::LibraryImportResult {
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut settings = UserSettings::with_library_path(Some(library_root.to_path_buf()));
+    settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings)))
+            .expect("load settings")
+            .with_library_services(store, metadata_service)
+            .expect("library services initialize");
+    let task = runtime
+        .prepare_library_import(vec![source.to_path_buf()])
+        .expect("import starts");
+    super::run_library_import_task(task).expect("the import completes")
+}
+
+/// No folder Sustain stages in is left in `library_root`.
+fn assert_no_workspace_left(library_root: &Path) {
+    let left: Vec<_> = std::fs::read_dir(library_root)
+        .expect("list the library folder")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".sustain-"))
+        .map(|entry| entry.path())
+        .collect();
+    assert_eq!(left, Vec::<PathBuf>::new());
+}
+
+#[test]
+fn a_managed_import_repairs_a_malformed_tag_and_keeps_what_it_held() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_path = external_root.join("bad timestamp.mp3");
+    let source = mp3_with_id3v2_4_frames(&[("TIT2", b"\x00Good Title"), ("TDRC", b"\x0020XX")]);
+    std::fs::write(&source_path, &source).expect("write external source");
+
+    let result = managed_import_with(
+        Arc::new(sustain_metadata::LoftyMetadataService),
+        &library_root,
+        &source_path,
+    );
+
+    assert_eq!(result.tracks.len(), 1);
+    assert_eq!(
+        result.tracks[0].metadata.title.as_deref(),
+        Some("Good Title")
+    );
+    let copied = result.tracks[0].location.absolute_path(&library_root);
+    assert_eq!(
+        sustain_metadata::LoftyMetadataService
+            .read_initial_tags_with_diagnostics(&copied)
+            .expect("read the copy")
+            .repair,
+        None,
+        "the copy is repaired"
+    );
+    assert_eq!(
+        std::fs::read(&source_path).expect("read the source"),
+        source,
+        "the source is not"
+    );
+    assert_no_workspace_left(&library_root);
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn a_managed_import_titles_a_repaired_untitled_track_by_its_source_name() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_path = external_root.join("Concert.mp3");
+    std::fs::write(
+        &source_path,
+        mp3_with_id3v2_4_frames(&[("TDRC", b"\x0020XX")]),
+    )
+    .expect("write external source");
+
+    let result = managed_import_with(
+        Arc::new(sustain_metadata::LoftyMetadataService),
+        &library_root,
+        &source_path,
+    );
+
+    assert_eq!(result.tracks.len(), 1);
+    assert_eq!(result.tracks[0].metadata.title.as_deref(), Some("Concert"));
+    assert_eq!(
+        sustain_metadata::LoftyMetadataService
+            .read_initial_tags_with_diagnostics(
+                &result.tracks[0].location.absolute_path(&library_root)
+            )
+            .expect("read the copy")
+            .repair,
+        None,
+        "the copy is repaired"
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn a_managed_import_repairs_every_malformation_a_tag_has() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_path = external_root.join("two faults.mp3");
+    std::fs::write(
+        &source_path,
+        mp3_with_id3v2_4_frames(&[
+            ("TIT2", b"\x00Real Title"),
+            ("TALB", b"\x00Real Album"),
+            ("TDRC", b"\x0020XX"),
+            ("TCOM", b"\x03Bad \xff byte"),
+        ]),
+    )
+    .expect("write external source");
+
+    let result = managed_import_with(
+        Arc::new(sustain_metadata::LoftyMetadataService),
+        &library_root,
+        &source_path,
+    );
+
+    assert_eq!(result.tracks.len(), 1);
+    assert_eq!(
+        result.tracks[0].metadata.title.as_deref(),
+        Some("Real Title")
+    );
+    assert_eq!(
+        result.tracks[0].metadata.album.as_deref(),
+        Some("Real Album")
+    );
+    let copied = result.tracks[0].location.absolute_path(&library_root);
+    assert_eq!(
+        sustain_metadata::LoftyMetadataService
+            .read_initial_tags_with_diagnostics(&copied)
+            .expect("read the copy")
+            .repair,
+        None
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn a_managed_import_titles_a_dropped_link_by_the_name_it_was_dropped_by() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    std::fs::write(
+        external_root.join("take.mp3"),
+        mp3_with_id3v2_4_frames(&[("TDRC", b"\x0020XX")]),
+    )
+    .expect("write external source");
+    std::os::unix::fs::symlink(
+        external_root.join("take.mp3"),
+        external_root.join("Concert.mp3"),
+    )
+    .expect("link the source");
+
+    let result = managed_import_with(
+        Arc::new(sustain_metadata::LoftyMetadataService),
+        &library_root,
+        &external_root.join("Concert.mp3"),
+    );
+
+    assert_eq!(result.tracks.len(), 1);
+    assert_eq!(result.tracks[0].metadata.title.as_deref(), Some("Concert"));
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+/// Tags that say which file they were read from: a staged copy, or not.
+struct TagsTellingWhereRead;
+
+impl MetadataService for TagsTellingWhereRead {
+    fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
+        let staged = path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|folder| folder.to_string_lossy().starts_with(".sustain-copy-"));
+        Ok(initial_tags_with_title(if staged {
+            "the copy"
+        } else {
+            "elsewhere"
+        }))
+    }
+
+    fn write_metadata(&self, _path: &Path, _change: MetadataChange) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn write_rating(&self, _path: &Path, _rating: Rating) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_managed_import_takes_the_tags_of_the_copy_it_publishes() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    std::fs::write(external_root.join("source.flac"), b"audio").expect("write external source");
+
+    let result = managed_import_with(
+        Arc::new(TagsTellingWhereRead),
+        &library_root,
+        &external_root.join("source.flac"),
+    );
+
+    assert_eq!(result.tracks.len(), 1);
+    assert_eq!(result.tracks[0].metadata.title.as_deref(), Some("the copy"));
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+/// A repair that rewrites the file, then fails as a directory sync after
+/// the exchange can.
+struct RepairFailingAfterRewrite;
+
+impl MetadataService for RepairFailingAfterRewrite {
+    fn read_initial_tags(&self, path: &Path) -> MetadataResult<InitialTags> {
+        self.read_initial_tags_with_diagnostics(path)
+            .map(|read| read.tags)
+    }
+
+    fn read_initial_tags_with_diagnostics(&self, path: &Path) -> MetadataResult<InitialTagRead> {
+        let repaired = std::fs::read(path)
+            .map_err(|_| sustain_metadata::MetadataError::ReadFailed)?
+            == b"repaired";
+        Ok(InitialTagRead {
+            tags: initial_tags_with_title(if repaired { "Repaired" } else { "Fallback" }),
+            repair: (!repaired).then_some(MetadataRepair::MalformedTag(
+                MalformedTagError::BadTimestamp,
+            )),
+        })
+    }
+
+    fn repair_malformed_tags(&self, path: &Path, _repair: MetadataRepair) -> MetadataResult<bool> {
+        let replacement = path.with_file_name(".sustain-test-replacement");
+        std::fs::write(&replacement, b"repaired").expect("write the replacement");
+        std::fs::rename(&replacement, path).expect("exchange it");
+        Err(sustain_metadata::MetadataError::WriteFailed)
+    }
+
+    fn write_metadata(&self, _path: &Path, _change: MetadataChange) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn write_rating(&self, _path: &Path, _rating: Rating) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_managed_import_leaves_out_a_copy_its_repair_rewrote_then_failed_on() {
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_path = external_root.join("source.flac");
+    std::fs::write(&source_path, b"malformed").expect("write external source");
+
+    let result = managed_import_allowing_failures(
+        Arc::new(RepairFailingAfterRewrite),
+        &library_root,
+        &source_path,
+    );
+
+    assert!(result.tracks.is_empty(), "{:?}", result.tracks);
+    assert_eq!(
+        result.failures,
+        vec![crate::ImportFailure {
+            path: source_path.clone(),
+            reason: crate::ImportFailureReason::CopyFailed,
+        }]
+    );
+    assert_eq!(
+        std::fs::read_dir(&library_root)
+            .expect("list the library folder")
+            .count(),
+        0
+    );
+    assert_eq!(
+        std::fs::read(&source_path).expect("read the source"),
+        b"malformed"
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn a_managed_import_titles_a_track_whose_name_is_not_utf8_as_its_name_reads() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let library_root = unique_test_directory();
+    let external_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    std::fs::create_dir_all(&external_root).expect("create external root");
+    let source_path = external_root.join(std::ffi::OsStr::from_bytes(b"Song\xe9.mp3"));
+    std::fs::write(&source_path, mp3_frames()).expect("write external source");
+
+    let result = managed_import_with(
+        Arc::new(sustain_metadata::LoftyMetadataService),
+        &library_root,
+        &source_path,
+    );
+
+    assert_eq!(result.tracks.len(), 1);
+    assert_eq!(
+        result.tracks[0].metadata.title.as_deref(),
+        Some("Song\u{fffd}")
+    );
+    assert_no_workspace_left(&library_root);
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+    std::fs::remove_dir_all(external_root).expect("remove external root");
+}
+
+#[test]
+fn an_import_takes_no_file_sustain_left_in_its_workspace_for_a_track() {
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(library_root.join(".sustain-copy-1-2-0")).expect("create workspace");
+    std::fs::write(library_root.join(".sustain-copy-1-2-0/song.flac"), b"audio")
+        .expect("a copy an interrupted import left");
+    std::fs::write(library_root.join("track.flac"), b"other audio").expect("write a track");
+
+    assert_eq!(
+        reference_imported_paths(&library_root, None, vec![library_root.clone()]),
+        vec![PathBuf::from("track.flac")]
+    );
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
 }
 
 #[test]
@@ -7083,7 +7498,17 @@ impl MetadataService for RepairingImportMetadataService {
         Ok(initial_tags_with_title("Repaired Track"))
     }
 
-    fn read_initial_tags_with_diagnostics(&self, _path: &Path) -> MetadataResult<InitialTagRead> {
+    /// Malformed until repaired, as a real file is.
+    fn read_initial_tags_with_diagnostics(&self, path: &Path) -> MetadataResult<InitialTagRead> {
+        if self
+            .repaired_paths()
+            .iter()
+            .any(|repaired| repaired == path)
+        {
+            return Ok(InitialTagRead::clean(initial_tags_with_title(
+                "Repaired Track",
+            )));
+        }
         Ok(InitialTagRead {
             tags: initial_tags_with_title("Fallback Track"),
             repair: Some(MetadataRepair::MalformedTag(
