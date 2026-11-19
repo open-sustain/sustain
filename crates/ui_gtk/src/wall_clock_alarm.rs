@@ -101,15 +101,17 @@ impl WallClockAlarm {
     /// instant already past rings at once. Either way, it rings when the
     /// wall clock is set.
     pub(crate) fn set(&self, at: Option<SystemTime>) {
-        // Re-arming forgets whatever the timer has to report and the
-        // watch has not read yet — its instant came, or the wall clock
-        // was set — so that is read first, and still rings.
-        let at = if self.take_unread_report() {
-            Some(UNIX_EPOCH)
-        } else {
-            at
-        };
+        // Re-arming forgets a ring the watch has not delivered yet, so
+        // one owed still rings: the timer reported its instant or the
+        // wall clock being set, or the instant it replaced had come by
+        // the time it was replaced — which the kernel reports a moment
+        // later rather than as it comes.
+        let replaced = self.state.rings_at.get();
+        let reported = self.take_unread_report();
         self.arm(at);
+        if reported || replaced.is_some_and(|instant| instant <= SystemTime::now()) {
+            self.arm(Some(UNIX_EPOCH));
+        }
     }
 
     /// Rings the alarm from the main loop as soon as it runs, for a

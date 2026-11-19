@@ -139,3 +139,28 @@ fn what_the_timer_reported_still_rings_after_re_arming() {
         }
     });
 }
+
+#[test]
+fn an_instant_that_has_come_rings_after_re_arming_before_the_timer_reports_it() {
+    with_gtk(|| {
+        for later in [None, Some(SystemTime::now() + Duration::from_secs(60))] {
+            let (alarm, rings) = counted_alarm();
+            alarm.set(Some(SystemTime::now() - Duration::from_secs(1)));
+            // The kernel reports an instant already past a moment after it
+            // is set, not as it is set: until then the timer has nothing
+            // to read. Taking the report here leaves it in that state.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut taken = alarm.take_unread_report();
+            while !taken && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+                taken = alarm.take_unread_report();
+            }
+            assert!(taken, "the timer never reported its instant");
+            alarm.set(later);
+
+            run_main_loop(Duration::from_millis(200), || false);
+
+            assert_eq!(rings.get(), 1, "re-armed to {later:?}");
+        }
+    });
+}
