@@ -140,7 +140,7 @@ prints the relevant milestones to stderr when profiling is enabled:
 ```
 [PROFILE] ... main() entered
 [PROFILE] ... activate: window.present() returned at <ms>ms
-[PROFILE] ... activate: first idle reached at <ms>ms     <-- the budget gate
+[PROFILE] ... activate: first idle reached at <ms>ms since main() entered   <-- the budget gate
 ```
 
 Any change that pushes `first idle` past 225 ms is a regression and
@@ -221,7 +221,11 @@ work do not belong in either file.
 
 # Git
 
-Before committing, run the same gate CI runs: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --no-deps --document-private-items`.
+Before committing, run the same gate CI runs: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && env -u WAYLAND_DISPLAY GDK_DISABLE=gl GSK_RENDERER=cairo xvfb-run -a cargo test --workspace --locked --no-fail-fast && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --locked --no-deps --document-private-items`.
+The widget tests open real GTK windows. Run them inside `xvfb-run` with
+`WAYLAND_DISPLAY` unset: GTK prefers Wayland over the X display xvfb-run
+provides, so under a desktop session they would otherwise open on the
+user's screen and steal focus.
 Push only on green — shipping a regression a local run would have caught is a process failure, not a CI quirk.
 CI also runs `typos` (configured in `.typos.toml`), which that gate does not cover: run `typos` as well before pushing. A test string in another language is enough to trip it.
 
