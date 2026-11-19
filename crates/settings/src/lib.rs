@@ -111,6 +111,20 @@ impl TomlSettingsStore {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// The document at [`Self::path`], or an empty one when there is no
+    /// file. A file that does not parse fails: settings are only saved
+    /// after they loaded, so another writer changed it since, and a save
+    /// would erase that change.
+    fn document_on_disk(&self) -> SettingsResult<SettingsDocument> {
+        match fs::read_to_string(&self.path) {
+            Ok(document) => toml::from_str(&document).map_err(|_| SettingsError::SaveFailed),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Ok(SettingsDocument::default())
+            }
+            Err(_) => Err(SettingsError::SaveFailed),
+        }
+    }
 }
 
 impl SettingsStore for TomlSettingsStore {
@@ -126,7 +140,7 @@ impl SettingsStore for TomlSettingsStore {
     }
 
     fn save_settings(&self, settings: UserSettings) -> SettingsResult<()> {
-        let document = SettingsDocument::from_settings(settings);
+        let document = SettingsDocument::from_settings(settings, self.document_on_disk()?);
         let serialized =
             toml::to_string_pretty(&document).map_err(|_| SettingsError::SaveFailed)?;
         atomic_replace(&self.path, |file| file.write_all(serialized.as_bytes()))
@@ -276,6 +290,9 @@ fn temporary_sibling_path(path: &Path) -> PathBuf {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct SettingsDocument {
+    /// Sections and top-level keys this build does not know, kept as they are (#360).
+    #[serde(flatten)]
+    unknown: toml::Table,
     #[serde(default)]
     library: LibrarySettingsDocument,
     #[serde(default)]
@@ -294,6 +311,9 @@ struct SettingsDocument {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct LibrarySettingsDocument {
+    /// Keys this build does not know, kept as they are (#360).
+    #[serde(flatten)]
+    unknown: toml::Table,
     path: Option<PathBuf>,
     #[serde(default)]
     management_mode: LibraryManagementModeDocument,
@@ -304,6 +324,7 @@ struct LibrarySettingsDocument {
 impl Default for LibrarySettingsDocument {
     fn default() -> Self {
         Self {
+            unknown: toml::Table::new(),
             path: None,
             management_mode: LibraryManagementModeDocument::default(),
             honor_sort_tags: default_honor_sort_tags(),
@@ -317,6 +338,9 @@ fn default_honor_sort_tags() -> bool {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct PlaybackSettingsDocument {
+    /// Keys this build does not know, kept as they are (#360).
+    #[serde(flatten)]
+    unknown: toml::Table,
     /// Percent (0..=100). Defaults to [`DEFAULT_PLAYBACK_VOLUME_PERCENT`]
     /// when absent from disk, and is clamped on read so a hand-edited TOML
     /// with an out-of-range value can never crash the app at startup.
@@ -384,6 +408,9 @@ impl SmartShuffleEntropyDocument {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct UiSettingsDocument {
+    /// Keys this build does not know, kept as they are (#360).
+    #[serde(flatten)]
+    unknown: toml::Table,
     #[serde(default)]
     search_text: String,
     #[serde(default)]
@@ -413,6 +440,7 @@ struct UiSettingsDocument {
 impl Default for UiSettingsDocument {
     fn default() -> Self {
         Self {
+            unknown: toml::Table::new(),
             search_text: String::new(),
             sidebar_selection: UiSidebarSelectionDocument::default(),
             sidebar_collapsed: false,
@@ -435,6 +463,9 @@ fn default_view_visible() -> bool {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AnalysisSettingsDocument {
+    /// Keys this build does not know, kept as they are (#360).
+    #[serde(flatten)]
+    unknown: toml::Table,
     #[serde(default)]
     bpm: bool,
     #[serde(default)]
@@ -450,6 +481,7 @@ struct AnalysisSettingsDocument {
 impl Default for AnalysisSettingsDocument {
     fn default() -> Self {
         Self {
+            unknown: toml::Table::new(),
             bpm: false,
             key: false,
             audio: false,
@@ -469,6 +501,9 @@ fn default_max_bpm() -> u16 {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct OnlineSettingsDocument {
+    /// Keys this build does not know, kept as they are (#360).
+    #[serde(flatten)]
+    unknown: toml::Table,
     #[serde(default)]
     artwork: bool,
     #[serde(default)]
@@ -479,6 +514,9 @@ struct OnlineSettingsDocument {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct BackgroundJobsSettingsDocument {
+    /// Keys this build does not know, kept as they are (#360).
+    #[serde(flatten)]
+    unknown: toml::Table,
     #[serde(default)]
     resource_usage: BackgroundResourceUsageDocument,
 }
@@ -494,6 +532,9 @@ enum BackgroundResourceUsageDocument {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct EncodingSettingsDocument {
+    /// Keys this build does not know, kept as they are (#360).
+    #[serde(flatten)]
+    unknown: toml::Table,
     #[serde(default)]
     cd_profile: CdEncodingProfileDocument,
     #[serde(default)]
@@ -557,6 +598,7 @@ impl CdReadModeDocument {
 impl Default for PlaybackSettingsDocument {
     fn default() -> Self {
         Self {
+            unknown: toml::Table::new(),
             volume_percent: DEFAULT_PLAYBACK_VOLUME_PERCENT,
             shuffle_mode: ShuffleModeDocument::default(),
             smart_shuffle_entropy: SmartShuffleEntropyDocument::default(),
@@ -593,9 +635,14 @@ enum UiSidebarSelectionDocument {
 }
 
 impl SettingsDocument {
-    fn from_settings(settings: UserSettings) -> Self {
+    /// `previous`, the document on disk, holding `settings`: each value
+    /// the model owns is the model's, and what `previous` holds that this
+    /// build does not know stays as it is.
+    fn from_settings(settings: UserSettings, previous: Self) -> Self {
         Self {
+            unknown: previous.unknown,
             library: LibrarySettingsDocument {
+                unknown: previous.library.unknown,
                 path: settings.library.path,
                 management_mode: LibraryManagementModeDocument::from_domain(
                     settings.library.management_mode,
@@ -603,6 +650,7 @@ impl SettingsDocument {
                 honor_sort_tags: settings.library.honor_sort_tags,
             },
             playback: PlaybackSettingsDocument {
+                unknown: previous.playback.unknown,
                 volume_percent: settings.playback.volume.get(),
                 shuffle_mode: ShuffleModeDocument::from_domain(settings.playback.shuffle_mode),
                 smart_shuffle_entropy: SmartShuffleEntropyDocument::from_domain(
@@ -610,6 +658,7 @@ impl SettingsDocument {
                 ),
             },
             ui: UiSettingsDocument {
+                unknown: previous.ui.unknown,
                 search_text: settings.ui.search_text,
                 sidebar_selection: UiSidebarSelectionDocument::from_domain(
                     settings.ui.sidebar_selection,
@@ -626,6 +675,7 @@ impl SettingsDocument {
                 window_maximized: settings.ui.window_maximized,
             },
             analysis: AnalysisSettingsDocument {
+                unknown: previous.analysis.unknown,
                 bpm: settings.analysis.bpm,
                 key: settings.analysis.key,
                 audio: settings.analysis.audio,
@@ -633,16 +683,19 @@ impl SettingsDocument {
                 max_bpm: settings.analysis.bpm_range.max(),
             },
             online: OnlineSettingsDocument {
+                unknown: previous.online.unknown,
                 artwork: settings.online.artwork,
                 tags: settings.online.tags,
                 lyrics: settings.online.lyrics,
             },
             background_jobs: BackgroundJobsSettingsDocument {
+                unknown: previous.background_jobs.unknown,
                 resource_usage: BackgroundResourceUsageDocument::from_domain(
                     settings.background_jobs.resource_usage,
                 ),
             },
             encoding: EncodingSettingsDocument {
+                unknown: previous.encoding.unknown,
                 cd_profile: CdEncodingProfileDocument::from_domain(settings.encoding.cd_profile),
                 cd_read_mode: CdReadModeDocument::from_domain(settings.encoding.cd_read_mode),
             },
@@ -874,6 +927,74 @@ mod tests {
             .and_then(|parent| parent.parent())
             .expect("test path has two parents");
         fs::remove_dir_all(root).expect("remove test settings directory");
+    }
+
+    #[test]
+    fn a_save_keeps_the_keys_this_build_does_not_know() {
+        let path = unique_settings_path();
+        fs::create_dir_all(path.parent().expect("settings parent")).expect("create parent");
+        fs::write(
+            &path,
+            "former = 1\n\
+             [library]\npath = \"/music\"\n\
+             [ui]\nview_mode = \"albums\"\nwindow_width = 800\nwindow_height = 600\n\
+             [playback]\nshuffle_enabled = true\n\
+             [future]\nflag = \"on\"\n",
+        )
+        .expect("write settings");
+        let store = TomlSettingsStore::new(&path);
+        let mut settings = store.load_settings().expect("load");
+
+        // A value the model owns and clears leaves the file with it.
+        settings.library.path = None;
+        settings.ui.window_size = None;
+        assert_eq!(store.save_settings(settings.clone()), Ok(()));
+
+        let saved: toml::Table = toml::from_str(&fs::read_to_string(&path).expect("read"))
+            .expect("parse saved settings");
+        assert_eq!(saved["former"].as_integer(), Some(1));
+        assert_eq!(saved["ui"]["view_mode"].as_str(), Some("albums"));
+        assert_eq!(saved["playback"]["shuffle_enabled"].as_bool(), Some(true));
+        assert_eq!(saved["future"]["flag"].as_str(), Some("on"));
+        assert!(
+            !saved["library"]
+                .as_table()
+                .expect("library")
+                .contains_key("path")
+        );
+        assert!(
+            !saved["ui"]
+                .as_table()
+                .expect("ui")
+                .contains_key("window_width")
+        );
+        assert_eq!(store.load_settings(), Ok(settings));
+        fs::remove_dir_all(
+            path.parent()
+                .and_then(Path::parent)
+                .expect("test path has two parents"),
+        )
+        .expect("remove test settings directory");
+    }
+
+    #[test]
+    fn a_save_over_a_file_changed_into_unparseable_text_leaves_it() {
+        let path = unique_settings_path();
+        let store = TomlSettingsStore::new(&path);
+        assert_eq!(store.save_settings(UserSettings::default()), Ok(()));
+        fs::write(&path, "[library\n").expect("break settings");
+
+        assert_eq!(
+            store.save_settings(UserSettings::default()),
+            Err(super::SettingsError::SaveFailed)
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read"), "[library\n");
+        fs::remove_dir_all(
+            path.parent()
+                .and_then(Path::parent)
+                .expect("test path has two parents"),
+        )
+        .expect("remove test settings directory");
     }
 
     #[test]
