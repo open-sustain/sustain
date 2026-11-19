@@ -35,6 +35,21 @@ fn metadata_text_param(value: &Option<String>) -> Option<&str> {
     value.as_deref().filter(|value| !value.trim().is_empty())
 }
 
+impl SqliteLibraryStore {
+    /// Move the pending artwork payloads this database left in the folder
+    /// every database beside it used to share into its own.
+    pub(crate) fn adopt_legacy_tag_mirror_artwork(&self, legacy_root: &Path) -> StoreResult<()> {
+        let _publication = self.tag_mirror_artwork_publication_guard()?;
+        let snapshot = std::time::SystemTime::now();
+        let referenced = {
+            let connection = self.connection_guard()?;
+            tag_mirror::referenced_artwork(&connection)?
+        };
+        self.tag_mirror_blobs
+            .adopt_legacy_payloads(legacy_root, &referenced, snapshot)
+    }
+}
+
 impl LibraryStore for SqliteLibraryStore {
     fn save_track(&self, track: Track) -> StoreResult<()> {
         let connection = self.connection_guard()?;

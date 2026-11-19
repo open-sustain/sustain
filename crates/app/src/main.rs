@@ -5,10 +5,12 @@
 
 mod instance_lock;
 mod launch;
+mod storage_layout;
 
 use std::{process, sync::Arc};
 
 use crate::instance_lock::{AcquireOutcome, InstanceLock};
+use crate::storage_layout::{StorageLayout, StoragePart};
 
 /// Canonical reverse-DNS GApplication id. Must match the basename of
 /// the installed `.desktop` entry and the file name shipped under
@@ -57,9 +59,11 @@ fn main() {
     sustain_profiler::profile_startup!(startup_profile, "locale bound");
 
     // Resolve the config, database, and artwork-cache locations up front
-    // (issue #7). The database path is resolved before anything else so the
-    // single-instance lock is keyed off the exact same path the library store
-    // will open. See `launch.rs` for the precedence rules and
+    // (issue #7), then locate each by where it really is and refuse a
+    // layout whose parts would write over one another (#358). Everything
+    // below — the instance locks, the library store, the settings store —
+    // is keyed off these located paths. See `launch.rs` for the precedence
+    // rules, `storage_layout.rs` for the location rules and
     // `instance_lock.rs` for the integrity rationale.
     let defaults = launch::XdgDefaults {
         config: sustain_settings::default_settings_path(),
@@ -74,34 +78,61 @@ fn main() {
             process::exit(1);
         }
     };
-    // Log the resolved locations so a developer sees immediately which
+    let layout = match StorageLayout::locate(&paths) {
+        Ok(layout) => layout,
+        Err(error) => {
+            eprintln!("Sustain: refusing to start: {error}.");
+            process::exit(1);
+        }
+    };
+    // Log the located paths so a developer sees immediately which
     // database, settings file, and cache the running instance is touching.
-    eprintln!("Sustain: settings {}", paths.config.display());
-    eprintln!("Sustain: database {}", paths.database.display());
-    eprintln!("Sustain: artwork  {}", paths.cache_dir.display());
+    eprintln!("Sustain: settings {}", layout.settings.display());
+    eprintln!("Sustain: database {}", layout.database.display());
+    eprintln!("Sustain: artwork  {}", layout.cache_dir.display());
 
-    let _instance_lock: InstanceLock = match instance_lock::acquire(&paths.database) {
+    let _instance_lock: InstanceLock = match instance_lock::acquire(&layout) {
         AcquireOutcome::Acquired(lock) => lock,
-        AcquireOutcome::Held { lock_path } => {
-            if cli.force_backfill {
-                // The backfill rewrites audio files; a second writer on the
-                // same library could clobber a concurrent tag write. There is
-                // no window to raise for a headless command — refuse instead.
-                eprintln!(
-                    "Sustain: another instance is running for this library ({}). Close it before running --force-backfill.",
-                    lock_path.display()
-                );
-                process::exit(1);
+        AcquireOutcome::Held {
+            part: StoragePart::Database,
+            lock_path,
+        } if !cli.force_backfill => {
+            // Hand the activate off to the primary instance so its window
+            // is raised/focused.
+            match sustain_ui_gtk::forward_activate(GTK_APPLICATION_ID) {
+                sustain_ui_gtk::ForwardedActivation::Forwarded => {
+                    eprintln!(
+                        "Sustain: another instance is already running for this library ({}). Raised its window.",
+                        lock_path.display()
+                    );
+                    process::exit(0);
+                }
+                sustain_ui_gtk::ForwardedActivation::NoWindowToRaise => {
+                    eprintln!(
+                        "Sustain: the library is busy: another Sustain process without a window holds it ({}).",
+                        lock_path.display()
+                    );
+                    process::exit(1);
+                }
+                sustain_ui_gtk::ForwardedActivation::Failed(error) => {
+                    eprintln!(
+                        "Sustain: another instance is already running for this library ({}), but its window could not be raised ({error}).",
+                        lock_path.display()
+                    );
+                    process::exit(1);
+                }
             }
+        }
+        AcquireOutcome::Held { part, lock_path } => {
+            // A backfill rewrites audio files; a second writer on the same
+            // library could clobber a concurrent tag write, and there is no
+            // window to raise for a headless command. Settings another
+            // library's instance holds would be saved whole over by both.
             eprintln!(
-                "Sustain: another instance is already running for this library ({}). Raising its window.",
+                "Sustain: the {part} is in use by another Sustain process ({}). Close it first.",
                 lock_path.display()
             );
-            // Hand the activate off to the primary instance so its window
-            // is raised/focused, then exit with whatever GTK reported for
-            // the brief remote registration.
-            let exit_code = sustain_ui_gtk::forward_activate(GTK_APPLICATION_ID);
-            process::exit(i32::from(exit_code));
+            process::exit(1);
         }
         AcquireOutcome::Failed { lock_path, error } => {
             eprintln!(
@@ -117,7 +148,7 @@ fn main() {
 
     startup_profile.activate();
     sustain_profiler::profile_startup!(startup_profile, "instance lock acquired");
-    let settings_store = sustain_settings::TomlSettingsStore::new(&paths.config);
+    let settings_store = sustain_settings::TomlSettingsStore::new(&layout.settings);
     let settings_path = settings_store.path().to_path_buf();
     let mut runtime = match sustain_app_runtime::ApplicationRuntime::with_settings_store(Box::new(
         settings_store,
@@ -139,7 +170,7 @@ fn main() {
     };
 
     sustain_profiler::profile_startup!(startup_profile, "settings store opened");
-    match sustain_library_store::SqliteLibraryStore::open(&paths.database, &paths.cache_dir) {
+    match sustain_library_store::SqliteLibraryStore::open(&layout.database, &layout.cache_dir) {
         Ok(library_store) => {
             sustain_profiler::profile_startup!(startup_profile, "SQLite store opened");
             let was_freshly_created = library_store.was_freshly_created();
@@ -199,7 +230,7 @@ fn main() {
             );
             eprintln!(
                 "Delete {} and restart Sustain to rebuild it by scanning your library.",
-                paths.database.display()
+                layout.database.display()
             );
             process::exit(1);
         }
@@ -264,13 +295,14 @@ fn main() {
     // force `GSK_RENDERER` here. If it becomes visually broken, prefer documenting
     // `GSK_RENDERER=ngl` / `GSK_RENDERER=gl` as a user workaround before changing
     // the app default.
-    sustain_ui_gtk::run(
+    let exit_code = sustain_ui_gtk::run(
         runtime,
         GTK_APPLICATION_ID,
-        paths.cache_dir,
-        paths.database,
+        layout.cache_dir,
+        layout.database,
         parsed_args.gtk_arguments,
     );
+    process::exit(i32::from(exit_code));
 }
 
 /// Drive the `--force-backfill` command to completion and exit.

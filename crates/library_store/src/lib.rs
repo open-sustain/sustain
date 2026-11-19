@@ -803,12 +803,18 @@ impl SqliteLibraryStore {
         }
         let freshly_created = !path.exists();
         let connection = Connection::open(path).map_err(StoreError::from)?;
-        Self::from_connection(
+        let store = Self::from_connection(
             connection,
             tag_mirror::TagMirrorBlobStore::new(tag_mirror_blob_root(path)),
             freshly_created,
             Some(&cache_dir.as_ref().join(waveform_cache::FILE_NAME)),
-        )
+        )?;
+        // Taking over the payloads an earlier build left does not keep the
+        // library closed: what is left of them stays, to be taken on the
+        // next open, and a write still waiting for one fails to read it
+        // and is retried, as any.
+        let _ = store.adopt_legacy_tag_mirror_artwork(&legacy_tag_mirror_blob_root(path));
+        Ok(store)
     }
 
     /// An in-memory library, with an in-memory waveform cache.
@@ -884,9 +890,19 @@ impl SqliteLibraryStore {
 }
 
 /// Where the tag-mirror outbox keeps the artwork payloads of the database at
-/// `database_path`: beside it. A bare file name's parent is the empty path,
+/// `database_path`: in a folder of its own beside it, named after it as
+/// SQLite names its journal (`library.sqlite-tag-outbox`), so databases
+/// side by side never collect each other's payloads.
+pub fn tag_mirror_blob_root(database_path: &Path) -> std::path::PathBuf {
+    let mut name = database_path.as_os_str().to_os_string();
+    name.push("-tag-outbox");
+    std::path::PathBuf::from(name)
+}
+
+/// The folder every database in one directory kept its outbox payloads in
+/// before each had its own. A bare file name's parent is the empty path,
 /// which stands for the working directory.
-fn tag_mirror_blob_root(database_path: &Path) -> std::path::PathBuf {
+fn legacy_tag_mirror_blob_root(database_path: &Path) -> std::path::PathBuf {
     database_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

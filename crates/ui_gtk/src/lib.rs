@@ -170,7 +170,7 @@ pub fn run(
     artwork_cache_dir: PathBuf,
     database_path: PathBuf,
     gtk_arguments: Vec<String>,
-) {
+) -> glib::ExitCode {
     let run_profile = sustain_profiler::ProfileScope::start();
     sustain_profiler::profile_mark!(run_profile, "ui_gtk::run entered");
     let app = gtk::Application::builder()
@@ -379,7 +379,7 @@ pub fn run(
     sustain_profiler::profile_mark!(run_profile, "connect_activate installed");
 
     sustain_profiler::profile_mark!(run_profile, "app.run() entered");
-    app.run_with_args(&gtk_arguments);
+    let exit_code = app.run_with_args(&gtk_arguments);
 
     // Stop producers before joining the tag-mirror actor. Canonical edits and
     // pending file-tag intent are already durable in SQLite, so deferred
@@ -393,6 +393,7 @@ pub fn run(
     runtime_guard.shutdown_artwork_fetcher();
     runtime_guard.shutdown_youtube_audio_downloader();
     runtime_guard.shutdown_metadata_writer();
+    exit_code
 }
 
 /// Quit by closing every window. Each window's close handler runs — the
@@ -419,32 +420,80 @@ pub(crate) fn start_background_schedulers(runtime: &mut ApplicationRuntime) {
     }
 }
 
-/// Activate the already-running Sustain primary instance that owns
-/// `application_id`, then return.
+/// What became of an activation forwarded to the running Sustain.
+#[derive(Debug)]
+pub enum ForwardedActivation {
+    /// The running Sustain's window was asked to come to the front.
+    Forwarded,
+    /// No Sustain window is running to take it: whatever holds the
+    /// library is not the application (such as `--force-backfill`), or
+    /// it has not registered on the session bus yet.
+    NoWindowToRaise,
+    /// The session bus could not be reached, or did not take the message.
+    Failed(glib::Error),
+}
+
+/// Ask the already-running Sustain that owns `application_id` to raise
+/// its window, then return.
 ///
 /// Used by `sustain-app` when the per-database single-instance lock is
-/// already held: instead of opening a second window, we forward an
-/// `activate` to the primary so it raises/focuses its existing window. The
-/// returned `ExitCode` is whatever `gtk::Application::run` reports for the
-/// short-lived remote registration (`0` on success, non-zero when the
-/// inter-process registration itself failed).
-///
-/// **Must not be called from the primary process.** The caller is expected
-/// to have already determined that another instance owns the lock; calling
-/// this from the primary would just register a second `gtk::Application`
-/// against the same id and either dispatch activate to itself or fail to
-/// register, depending on timing.
-pub fn forward_activate(application_id: &str) -> glib::ExitCode {
-    let app = gtk::Application::builder()
-        .application_id(application_id)
-        .build();
-    // The primary's connect_activate handler raises its window. Our
-    // local activate signal handler is only reached if no primary
-    // existed at register time — in which case we deliberately do
-    // nothing (and exit), because spinning up a second main loop here
-    // would defeat the single-instance guarantee.
-    app.connect_activate(|_app| {});
-    app.run_with_args(&["sustain"])
+/// already held: instead of opening a second window, we send the primary
+/// the `org.freedesktop.Application.Activate` call GApplication itself
+/// sends, so it raises/focuses its existing window. This process only
+/// calls the primary; it never registers `application_id`, so it can
+/// neither stand in for a primary that is missing nor take the name from
+/// one still starting up. With no primary on the bus it reports
+/// [`ForwardedActivation::NoWindowToRaise`].
+pub fn forward_activate(application_id: &str) -> ForwardedActivation {
+    let connection =
+        match gtk::gio::bus_get_sync(gtk::gio::BusType::Session, gtk::gio::Cancellable::NONE) {
+            Ok(connection) => connection,
+            Err(error) => return ForwardedActivation::Failed(error),
+        };
+    // The object path GApplication exports itself at.
+    let object_path = format!("/{}", application_id.replace('.', "/").replace('-', "_"));
+    match connection.call_sync(
+        Some(application_id),
+        &object_path,
+        "org.freedesktop.Application",
+        "Activate",
+        Some(&activation_parameters(
+            std::env::var("XDG_ACTIVATION_TOKEN").ok(),
+            std::env::var("DESKTOP_STARTUP_ID").ok(),
+        )),
+        None,
+        gtk::gio::DBusCallFlags::NO_AUTO_START,
+        -1,
+        gtk::gio::Cancellable::NONE,
+    ) {
+        Ok(_) => ForwardedActivation::Forwarded,
+        // The name has no owner: `dbus-daemon` and `dbus-broker` say so
+        // under different names.
+        Err(error)
+            if error.matches(gtk::gio::DBusError::ServiceUnknown)
+                || error.matches(gtk::gio::DBusError::NameHasNoOwner) =>
+        {
+            ForwardedActivation::NoWindowToRaise
+        }
+        Err(error) => ForwardedActivation::Failed(error),
+    }
+}
+
+/// The `(a{sv})` argument of `org.freedesktop.Application.Activate`: the
+/// platform data GApplication sends, whose launcher activation token lets
+/// the primary's window take the focus.
+fn activation_parameters(
+    activation_token: Option<String>,
+    desktop_startup_id: Option<String>,
+) -> glib::Variant {
+    let platform_data = glib::VariantDict::new(None);
+    if let Some(token) = activation_token {
+        platform_data.insert("activation-token", token);
+    }
+    if let Some(id) = desktop_startup_id {
+        platform_data.insert("desktop-startup-id", id);
+    }
+    glib::Variant::tuple_from_iter([platform_data.end()])
 }
 
 fn start_mpris(
@@ -458,4 +507,33 @@ fn start_mpris(
             let _ = command_tx.try_send(command);
         }),
     })
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use super::activation_parameters;
+    use gtk::glib;
+
+    #[test]
+    fn an_activation_carries_the_platform_data_activate_takes() {
+        let parameters =
+            activation_parameters(Some("token".to_owned()), Some("startup".to_owned()));
+
+        assert_eq!(parameters.type_().as_str(), "(a{sv})");
+        let platform_data = glib::VariantDict::new(Some(&parameters.child_value(0)));
+        assert_eq!(
+            platform_data
+                .lookup::<String>("activation-token")
+                .ok()
+                .flatten(),
+            Some("token".to_owned())
+        );
+        assert_eq!(
+            platform_data
+                .lookup::<String>("desktop-startup-id")
+                .ok()
+                .flatten(),
+            Some("startup".to_owned())
+        );
+    }
 }

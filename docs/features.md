@@ -1428,12 +1428,26 @@ it and takes its tracks out of the queue.
 
 A second Sustain process targeting the same library database is
 refused on startup. The first instance's window is raised and focused
-instead. The lock is held on a sidecar `.lock` file next to
-`library.sqlite`, so the lock follows the resolved database path: a
-build pointed at another database gets its own lock. The GTK
-application ID (`io.github.open_sustain.sustain`) and the MPRIS bus
-name are fixed, so two builds running against different databases at
-once still share those desktop names.
+instead; if what holds the library has no window (a `--force-backfill`
+run), the launch exits with "the library is busy". The lock is held on a
+sidecar `.lock` file beside where the database really is, so a database
+given by a link is locked as the file it leads to, and a build pointed
+at another database gets its own lock. The folder holding the settings
+file is locked too, so two instances on different libraries cannot
+share one settings file and save it over each other: one Sustain runs
+per settings folder. The GTK application ID
+(`io.github.open_sustain.sustain`) and the MPRIS bus name are fixed, so
+two builds running against different databases at once still share
+those desktop names.
+
+Before anything is locked or opened, every location is placed where it
+really is, and Sustain refuses to start, naming the paths, when they
+would write over one another: a settings file named as the database,
+its journal, its lock or its pending-artwork folder, a database or
+settings file inside the cache folder, a database or settings file with
+several hard links or named as a folder (ending in `/`, `.` or `..`), or
+a link to nothing. A settings file given by a link is saved where the
+link leads, so the link stays a link.
 
 ---
 
@@ -1444,6 +1458,7 @@ By default Sustain follows the XDG base directories:
 - Config: `$XDG_CONFIG_HOME/sustain/settings.toml` (`~/.config/sustain/settings.toml`)
 - Database: `$XDG_DATA_HOME/sustain/library.sqlite` (`~/.local/share/sustain/library.sqlite`)
 - Lock file: the database path with `.lock` appended
+- Pending artwork tag writes: the database path with `-tag-outbox` appended
 - Cache (artwork, waveforms): `$XDG_CACHE_HOME/sustain` (`~/.cache/sustain`)
 
 Developer flags isolate an instance from those locations (`sustain --help`):

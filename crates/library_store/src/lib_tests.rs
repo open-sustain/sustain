@@ -3359,15 +3359,322 @@ fn retrieved_artwork_never_replaces_a_cover_decision() {
 }
 
 #[test]
-fn a_bare_database_file_name_keeps_its_artwork_in_the_working_directory() {
+fn each_database_keeps_its_artwork_payloads_in_a_folder_named_after_it() {
     assert_eq!(
         super::tag_mirror_blob_root(std::path::Path::new("bare.sqlite")),
-        std::path::Path::new("./tag-outbox/blobs")
+        std::path::Path::new("bare.sqlite-tag-outbox")
     );
     assert_eq!(
         super::tag_mirror_blob_root(std::path::Path::new("/data/library.sqlite")),
-        std::path::Path::new("/data/tag-outbox/blobs")
+        std::path::Path::new("/data/library.sqlite-tag-outbox")
     );
+}
+
+/// The artwork payload the first pending mirror of `store` refers to.
+fn pending_artwork(store: &SqliteLibraryStore) -> crate::StoredTagMirrorArtwork {
+    match store.tag_mirrors_due(0, 10).expect("load outbox")[0]
+        .artwork
+        .clone()
+    {
+        TagMirrorArtwork::Set(artwork) => Some(artwork),
+        _ => None,
+    }
+    .expect("a set-artwork intent")
+}
+
+#[test]
+fn databases_side_by_side_do_not_collect_each_others_artwork() {
+    let dir = unique_store_test_directory("tag_outbox_side_by_side");
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    let bytes = valid_test_artwork();
+    let first = SqliteLibraryStore::open(dir.join("first.sqlite"), dir.join("cache"))
+        .expect("open the first store");
+    let second = SqliteLibraryStore::open(dir.join("second.sqlite"), dir.join("cache"))
+        .expect("open the second store");
+    let track = track(1, "a.flac");
+    for store in [&first, &second] {
+        store.save_track(track.clone()).expect("save track");
+        store
+            .enqueue_tag_mirror_artwork(track.id, Some(&bytes))
+            .expect("enqueue artwork mirror");
+    }
+    let artwork = pending_artwork(&second);
+
+    let generation = first.tag_mirrors_due(0, 10).expect("load outbox")[0].generation;
+    assert!(
+        first
+            .complete_tag_mirror(track.id, generation)
+            .expect("complete the first mirror")
+    );
+    first
+        .garbage_collect_tag_mirror_artwork()
+        .expect("collect the first store's payloads");
+
+    assert_eq!(
+        second
+            .read_tag_mirror_artwork(&artwork)
+            .expect("the second store's payload is still there"),
+        bytes
+    );
+    drop((first, second));
+    std::fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+/// Open a store at `database`, save one track and leave an artwork
+/// mirror of it pending, then put its payload in the folder every database
+/// beside it used to share, as a build before per-database folders did.
+fn leave_pending_artwork_in_the_shared_folder(
+    database: &std::path::Path,
+    cache: &std::path::Path,
+) -> crate::StoredTagMirrorArtwork {
+    let store = SqliteLibraryStore::open(database, cache).expect("open store");
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+    store
+        .enqueue_tag_mirror_artwork(track.id, Some(&valid_test_artwork()))
+        .expect("enqueue artwork mirror");
+    let artwork = pending_artwork(&store);
+    drop(store);
+    let payload_name = format!("sha256-{}", artwork.digest());
+    let legacy_root = database
+        .parent()
+        .expect("a folder")
+        .join("tag-outbox")
+        .join("blobs");
+    std::fs::create_dir_all(&legacy_root).expect("create the shared folder");
+    let own_payload = super::tag_mirror_blob_root(database).join(&payload_name);
+    if own_payload.exists() {
+        std::fs::rename(own_payload, legacy_root.join(&payload_name))
+            .expect("put the payload where it used to be");
+    }
+    artwork
+}
+
+#[test]
+fn a_database_takes_its_pending_artwork_from_the_folder_it_shared() {
+    let dir = unique_store_test_directory("tag_outbox_legacy");
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    let database = dir.join("library.sqlite");
+    let artwork = leave_pending_artwork_in_the_shared_folder(&database, &dir.join("cache"));
+    std::fs::write(
+        dir.join("tag-outbox/blobs")
+            .join(format!("sha256-{}", "0".repeat(64))),
+        b"stale",
+    )
+    .expect("leave a payload nothing refers to");
+
+    let store = SqliteLibraryStore::open(&database, dir.join("cache")).expect("reopen store");
+    assert_eq!(
+        store
+            .read_tag_mirror_artwork(&artwork)
+            .expect("the pending payload came with its database"),
+        valid_test_artwork()
+    );
+
+    let generation = store.tag_mirrors_due(0, 10).expect("load outbox")[0].generation;
+    assert!(
+        store
+            .complete_tag_mirror(track(1, "a.flac").id, generation)
+            .expect("complete the mirror")
+    );
+    drop(store);
+    SqliteLibraryStore::open(&database, dir.join("cache")).expect("reopen store again");
+    assert!(
+        !dir.join("tag-outbox").exists(),
+        "the shared folder goes once nothing in it is pending"
+    );
+    std::fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+#[test]
+fn a_damaged_payload_in_the_shared_folder_is_left_where_it_is() {
+    let dir = unique_store_test_directory("tag_outbox_legacy_damaged");
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    let database = dir.join("library.sqlite");
+    let artwork = leave_pending_artwork_in_the_shared_folder(&database, &dir.join("cache"));
+    let legacy_payload = dir
+        .join("tag-outbox/blobs")
+        .join(format!("sha256-{}", artwork.digest()));
+    let mut damaged = valid_test_artwork();
+    damaged.push(0);
+    std::fs::write(&legacy_payload, &damaged).expect("damage the payload");
+
+    drop(SqliteLibraryStore::open(&database, dir.join("cache")).expect("reopen store"));
+
+    let adopted: Vec<_> = std::fs::read_dir(super::tag_mirror_blob_root(&database))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(adopted, Vec::<std::path::PathBuf>::new());
+    assert_eq!(
+        std::fs::read(&legacy_payload).expect("the damaged payload is left"),
+        damaged
+    );
+    std::fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+#[test]
+fn an_unreadable_payload_in_the_shared_folder_leaves_the_others_to_be_taken() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unique_store_test_directory("tag_outbox_legacy_unreadable");
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    let database = dir.join("library.sqlite");
+    let store = SqliteLibraryStore::open(&database, dir.join("cache")).expect("open store");
+    let mut other_bytes = valid_test_artwork();
+    other_bytes.push(0);
+    let mut artworks = Vec::new();
+    for (track, bytes) in [
+        (track(1, "a.flac"), valid_test_artwork()),
+        (track(2, "b.flac"), other_bytes),
+    ] {
+        store.save_track(track.clone()).expect("save track");
+        store
+            .enqueue_tag_mirror_artwork(track.id, Some(&bytes))
+            .expect("enqueue artwork mirror");
+        artworks.push((
+            store
+                .tag_mirrors_due(0, 10)
+                .expect("load outbox")
+                .into_iter()
+                .find_map(|due| match due.artwork {
+                    TagMirrorArtwork::Set(artwork) if due.track_id == track.id => Some(artwork),
+                    _ => None,
+                })
+                .expect("a set-artwork intent"),
+            bytes,
+        ));
+    }
+    drop(store);
+    let legacy_root = dir.join("tag-outbox/blobs");
+    std::fs::create_dir_all(&legacy_root).expect("create the shared folder");
+    for (artwork, _) in &artworks {
+        let name = format!("sha256-{}", artwork.digest());
+        std::fs::rename(
+            super::tag_mirror_blob_root(&database).join(&name),
+            legacy_root.join(&name),
+        )
+        .expect("put the payload where it used to be");
+    }
+    // The payload taken first is the one that cannot be read.
+    artworks.sort_by(|(left, _), (right, _)| left.digest().cmp(right.digest()));
+    let unreadable = legacy_root.join(format!("sha256-{}", artworks[0].0.digest()));
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000))
+        .expect("make a payload unreadable");
+    let denied = std::fs::File::open(&unreadable).is_err();
+
+    let store = SqliteLibraryStore::open(&database, dir.join("cache")).expect("reopen store");
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o600))
+        .expect("restore the payload");
+
+    // Root reads every file; there is nothing unreadable then.
+    if denied {
+        let (artwork, bytes) = &artworks[1];
+        assert_eq!(
+            &store
+                .read_tag_mirror_artwork(artwork)
+                .expect("the readable payload came with it"),
+            bytes
+        );
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+#[test]
+fn a_shared_folder_that_cannot_be_tidied_does_not_keep_a_library_closed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unique_store_test_directory("tag_outbox_legacy_read_only");
+    let legacy_root = dir.join("tag-outbox/blobs");
+    std::fs::create_dir_all(&legacy_root).expect("create the shared folder");
+    std::fs::write(
+        legacy_root.join(format!("sha256-{}", "0".repeat(64))),
+        b"stale",
+    )
+    .expect("leave a payload nothing refers to");
+    std::fs::set_permissions(&legacy_root, std::fs::Permissions::from_mode(0o500))
+        .expect("make the shared folder read-only");
+
+    let opened = SqliteLibraryStore::open(dir.join("library.sqlite"), dir.join("cache"));
+    std::fs::set_permissions(&legacy_root, std::fs::Permissions::from_mode(0o700))
+        .expect("restore the shared folder");
+
+    opened.expect("the library opens");
+    std::fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+#[test]
+fn a_payload_two_databases_wait_for_stays_for_the_second_one() {
+    let dir = unique_store_test_directory("tag_outbox_legacy_shared");
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    let first = dir.join("first.sqlite");
+    let second = dir.join("second.sqlite");
+    leave_pending_artwork_in_the_shared_folder(&first, &dir.join("cache"));
+    let artwork = leave_pending_artwork_in_the_shared_folder(&second, &dir.join("cache"));
+
+    drop(SqliteLibraryStore::open(&first, dir.join("cache")).expect("open the first store"));
+    let second = SqliteLibraryStore::open(&second, dir.join("cache")).expect("open the second");
+
+    assert_eq!(
+        second
+            .read_tag_mirror_artwork(&artwork)
+            .expect("the second database's payload came with it"),
+        valid_test_artwork()
+    );
+    drop(second);
+    std::fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+#[test]
+fn a_file_named_as_the_shared_artwork_folder_does_not_keep_a_library_closed() {
+    let dir = unique_store_test_directory("tag_outbox_file");
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    std::fs::write(dir.join("tag-outbox"), b"a file").expect("write a file of that name");
+
+    SqliteLibraryStore::open(dir.join("library.sqlite"), dir.join("cache"))
+        .expect("the library opens");
+
+    assert_eq!(
+        std::fs::read(dir.join("tag-outbox")).expect("the file is left"),
+        b"a file"
+    );
+    std::fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+#[test]
+fn the_artwork_collectors_remove_only_files_the_outbox_wrote() {
+    let dir = unique_store_test_directory("tag_outbox_foreign");
+    std::fs::create_dir_all(&dir).expect("create test directory");
+    let database = dir.join("library.sqlite");
+    let legacy_root = dir.join("tag-outbox").join("blobs");
+    let own_root = super::tag_mirror_blob_root(&database);
+    for root in [&legacy_root, &own_root] {
+        std::fs::create_dir_all(root).expect("create a payload folder");
+        for name in ["settings.toml", ".tmp-settings.toml"] {
+            std::fs::write(root.join(name), b"kept").expect("write a foreign file");
+        }
+    }
+
+    let store = SqliteLibraryStore::open(&database, dir.join("cache")).expect("open store");
+    store
+        .garbage_collect_tag_mirror_artwork()
+        .expect("collect unreferenced payloads");
+
+    for root in [&legacy_root, &own_root] {
+        for name in ["settings.toml", ".tmp-settings.toml"] {
+            assert_eq!(
+                std::fs::read(root.join(name)).expect("the foreign file is left"),
+                b"kept"
+            );
+        }
+    }
+    drop(store);
+    std::fs::remove_dir_all(dir).expect("remove test directory");
 }
 
 #[test]
@@ -3392,10 +3699,8 @@ fn sqlite_tag_mirror_artwork_survives_reopen_and_is_collected_after_completion()
         .expect("a set-artwork intent")
     };
 
-    let blob_path = dir
-        .join("tag-outbox")
-        .join("blobs")
-        .join(format!("sha256-{}", artwork.digest()));
+    let blob_path =
+        super::tag_mirror_blob_root(&database).join(format!("sha256-{}", artwork.digest()));
     assert!(blob_path.is_file());
 
     let store = SqliteLibraryStore::open(&database, dir.join("cache")).expect("reopen store");

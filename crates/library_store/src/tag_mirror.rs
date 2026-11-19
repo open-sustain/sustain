@@ -185,41 +185,57 @@ impl TagMirrorBlobStore {
         referenced: &BTreeSet<String>,
         snapshot: SystemTime,
     ) -> StoreResult<()> {
-        let entries = match fs::read_dir(&self.root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(StoreError::Database(error.to_string())),
+        if remove_unreferenced_store_files(&self.root, referenced, snapshot)? {
+            sync_directory(&self.root)?;
+        }
+        Ok(())
+    }
+
+    /// Take over the payloads this database left in `legacy_root`, the
+    /// folder every database in one directory used to share and collect.
+    /// The payloads `referenced` by its outbox are copied into this store;
+    /// the folder is then collected as this database's garbage collection
+    /// used to collect it — keeping what it still refers to, and what was
+    /// written since `snapshot` — so another database beside it keeps a
+    /// payload both refer to until this one's writes are done, and the
+    /// folder goes once nothing in it is pending.
+    pub(crate) fn adopt_legacy_payloads(
+        &self,
+        legacy_root: &Path,
+        referenced: &BTreeSet<String>,
+        snapshot: SystemTime,
+    ) -> StoreResult<()> {
+        let Some(entries) = store_entries(legacy_root)? else {
+            return Ok(());
         };
-        let mut removed = false;
-        for entry in entries {
-            let entry = entry.map_err(|error| StoreError::Database(error.to_string()))?;
-            if !entry
-                .file_type()
-                .map_err(|error| StoreError::Database(error.to_string()))?
-                .is_file()
+        for (name, file) in entries {
+            if let StoreFile::Payload(digest) = file
+                && referenced.contains(&digest)
+                && !self.root.join(&name).exists()
             {
-                continue;
-            }
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let referenced_blob = name
-                .strip_prefix("sha256-")
-                .is_some_and(|digest| referenced.contains(digest));
-            if !referenced_blob {
-                if entry
-                    .metadata()
-                    .and_then(|metadata| metadata.modified())
-                    .is_ok_and(|modified| modified.duration_since(snapshot).is_ok())
-                {
-                    continue;
+                let mut bytes = Vec::new();
+                let read = File::open(legacy_root.join(&name)).and_then(|file| {
+                    file.take((MAX_ENCODED_ARTWORK_BYTES + 1) as u64)
+                        .read_to_end(&mut bytes)
+                });
+                // Each payload is taken on its own: one that cannot be read,
+                // is damaged or cannot be written here is left where it is,
+                // for the write waiting for it to fail on as it would here,
+                // and the others are taken all the same.
+                if read.is_ok() && sha256_hex(&bytes) == digest {
+                    let _ = self.publish(&bytes);
                 }
-                fs::remove_file(entry.path())
-                    .map_err(|error| StoreError::Database(error.to_string()))?;
-                removed = true;
             }
         }
-        if removed {
-            sync_directory(&self.root)?;
+        remove_unreferenced_store_files(legacy_root, referenced, snapshot)?;
+        // Tidying only: a folder that cannot go yet (one still holding
+        // pending payloads or other files, or a link) stays, and is
+        // tried again on the next open.
+        for folder in [Some(legacy_root), legacy_root.parent()]
+            .into_iter()
+            .flatten()
+        {
+            let _ = fs::remove_dir(folder);
         }
         Ok(())
     }
@@ -237,6 +253,105 @@ impl Drop for TagMirrorBlobStore {
     }
 }
 
+/// A file the blob store writes in its folder.
+enum StoreFile {
+    /// `sha256-<digest>`, a published payload.
+    Payload(String),
+    /// `.tmp-…`, a payload being published.
+    Temporary,
+}
+
+impl StoreFile {
+    fn from_name(name: &str) -> Option<Self> {
+        if let Some(digest) = name.strip_prefix("sha256-") {
+            return (digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+            .then(|| Self::Payload(digest.to_owned()));
+        }
+        // `.tmp-<pid>-<counter>`, as `publish` names it.
+        let temporary = name
+            .strip_prefix(".tmp-")
+            .and_then(|rest| rest.split_once('-'));
+        temporary
+            .is_some_and(|(pid, counter)| is_decimal(pid) && is_decimal(counter))
+            .then_some(Self::Temporary)
+    }
+}
+
+fn is_decimal(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// The regular files the blob store wrote in `root`, by name, or `None`
+/// when there is no such folder. A collector only ever removes what the
+/// store wrote, whatever else the folder holds or wherever it leads.
+fn store_entries(root: &Path) -> StoreResult<Option<Vec<(String, StoreFile)>>> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(StoreError::Database(error.to_string())),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| StoreError::Database(error.to_string()))?;
+        if !entry
+            .file_type()
+            .map_err(|error| StoreError::Database(error.to_string()))?
+            .is_file()
+        {
+            continue;
+        }
+        if let Some(name) = entry.file_name().to_str()
+            && let Some(file) = StoreFile::from_name(name)
+        {
+            files.push((name.to_owned(), file));
+        }
+    }
+    // In the order of their names, not the order the folder lists them.
+    files.sort_by(|(left, _), (right, _)| left.cmp(right));
+    Ok(Some(files))
+}
+
+/// Remove the files the blob store wrote in `root` that are neither a
+/// payload `referenced` nor written since `snapshot`. Whether any was.
+fn remove_unreferenced_store_files(
+    root: &Path,
+    referenced: &BTreeSet<String>,
+    snapshot: SystemTime,
+) -> StoreResult<bool> {
+    let Some(entries) = store_entries(root)? else {
+        return Ok(false);
+    };
+    let mut removed = false;
+    for (name, file) in entries {
+        if matches!(&file, StoreFile::Payload(digest) if referenced.contains(digest)) {
+            continue;
+        }
+        let path = root.join(&name);
+        if fs::symlink_metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified.duration_since(snapshot).is_ok())
+        {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => removed = true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(StoreError::Database(error.to_string())),
+        }
+    }
+    Ok(removed)
+}
+
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
@@ -251,7 +366,13 @@ fn ensure_directory_all(path: &Path) -> StoreResult<()> {
     let parent = path
         .parent()
         .ok_or_else(|| StoreError::Database("artwork blob directory has no parent".into()))?;
-    ensure_directory_all(parent)?;
+    // A bare name's parent is the empty path, the working directory.
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        ensure_directory_all(parent)?;
+        parent
+    };
     match fs::create_dir(path) {
         Ok(()) => sync_directory(parent),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
@@ -323,5 +444,16 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_folder_named_by_a_bare_name_is_made_in_the_working_directory() {
+        let name = format!("sustain-bare-outbox-{}", std::process::id());
+        let _ = fs::remove_dir(&name);
+
+        super::ensure_directory_all(std::path::Path::new(&name)).expect("make the folder");
+
+        assert!(std::path::Path::new(&name).is_dir());
+        fs::remove_dir(&name).expect("remove the folder");
     }
 }

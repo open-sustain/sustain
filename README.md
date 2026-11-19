@@ -146,8 +146,10 @@ anything other than the installed user's real library. Explicit
 `--config` / `--database` win over `--local-scope`, and whenever any of
 these flags is present Sustain never falls back to the XDG locations, so
 the instance is fully self-contained. The resolved paths are printed at
-startup. The single-instance lock keys off the resolved database path,
-so a dev instance and the installed one coexist.
+startup. The single-instance lock keys off the database itself, so a
+dev instance never writes the installed library. Both register the
+same desktop application ID, though: while one runs, launching the
+other raises the running one's window instead of opening a second.
 
 
 ### A note on the AI development
