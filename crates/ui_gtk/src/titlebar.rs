@@ -309,6 +309,12 @@ impl Titlebar {
         self.next.clone()
     }
 
+    /// The transport Previous button, where the transport controls start.
+    /// The play-queue popover lines up with it.
+    pub(crate) fn previous_button(&self) -> gtk::Button {
+        self.previous.clone()
+    }
+
     pub(crate) fn set_search_text(&self, text: &str) {
         self.search.set_text(text);
     }

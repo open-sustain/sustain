@@ -646,13 +646,15 @@ while playing the full library never buries it behind thousands of
 implicit successors.
 
 ### Queue popover — *Sustain-native*
-Right-clicking the transport **Next** button opens an autohiding arrow
-popover anchored to it. The list shows every curated Up Next track,
+Right-clicking the transport **Next** button opens an autohiding
+popover, its arrow on Next, its start edge lined up with the start of the
+transport controls. The list shows every curated Up Next track,
 followed by a read-only peek at the next ten tracks from the source
 continuation; the full library playthrough remains internal rather than
 becoming a thousands-row browser. Each row is a two-line cell — title
 over artist — with artwork or the neutral missing-artwork tile on the
-left and striped backgrounds matching the library tables. Double-clicking
+left and striped backgrounds matching the library tables; the first row
+is untinted, so the arrow flows into it. Double-clicking
 any row starts that track within the existing queue. Curated rows reorder
 by drag-and-drop and evict via a cross that fades in on hover; both edits
 update the live queue immediately. The list scrolls inside the popover once

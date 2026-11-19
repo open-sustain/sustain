@@ -893,12 +893,10 @@ popover.queue-popover > contents {
     padding: 6px 8px;
 }
 
-.queue-row-even {
+/* Every other row from the second; the first keeps the popover's own
+   surface, so the arrow above it flows into it without a seam (#379). */
+.queue-row-tinted {
     background-color: alpha(@theme_fg_color, 0.025);
-}
-
-.queue-row-odd {
-    background-color: transparent;
 }
 
 /* Source-playthrough rows are a bounded, read-only peek below explicit

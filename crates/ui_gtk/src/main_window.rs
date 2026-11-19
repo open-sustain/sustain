@@ -717,6 +717,7 @@ pub(crate) fn build_main_window(
         let artwork_loader = artwork_loader.clone();
         let playback_changed = playback_changed.clone();
         let next_button = titlebar.next_button();
+        let previous_button = titlebar.previous_button();
         let queue_view_holder = queue_view_holder.clone();
         Box::new(move || {
             // The queue popover is hidden behind a secondary click on the Next
@@ -728,6 +729,7 @@ pub(crate) fn build_main_window(
                 artwork_loader,
                 playback_changed,
                 &next_button,
+                &previous_button,
             );
             queue_view_holder.replace(Some(queue_view));
         })

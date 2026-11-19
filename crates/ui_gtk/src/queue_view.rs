@@ -57,6 +57,7 @@ const QUEUE_CONTINUATION_PREVIEW_ROWS: usize = 10;
 /// Fixed popover content width. Titles and artists ellipsize within it so
 /// a long title never stretches the popover.
 const QUEUE_CONTENT_WIDTH: i32 = 304;
+const QUEUE_ROW_TINTED_CLASS: &str = "queue-row-tinted";
 
 const QUEUE_PAGE_LIST: &str = "list";
 const QUEUE_PAGE_EMPTY: &str = "empty";
@@ -138,6 +139,7 @@ impl QueueView {
         artwork_loader: ArtworkLoader,
         playback_changed: PlaybackChangedCallback,
         next_button: &gtk::Button,
+        previous_button: &gtk::Button,
     ) -> Self {
         let store = gio::ListStore::new::<glib::BoxedAnyObject>();
         let stack = gtk::Stack::new();
@@ -154,6 +156,9 @@ impl QueueView {
         popover.set_autohide(true);
         popover.set_position(gtk::PositionType::Bottom);
         popover.set_has_arrow(true);
+        // Anchored by its start edge to Next's, then moved to Previous's
+        // at each opening (#379).
+        popover.set_halign(gtk::Align::Start);
 
         let on_mutated: Rc<dyn Fn()> = {
             let runtime = runtime.clone();
@@ -215,16 +220,6 @@ impl QueueView {
         popover.set_child(Some(&content));
         popover.set_parent(next_button);
 
-        install_right_click_open(
-            next_button,
-            &popover,
-            &runtime,
-            &store,
-            &stack,
-            &empty_state,
-            &is_open,
-        );
-
         {
             let store = store.clone();
             let is_open = is_open.clone();
@@ -247,13 +242,20 @@ impl QueueView {
             });
         }
 
-        Self {
+        let view = Self {
             runtime,
             store,
             stack,
             empty_state,
             is_open,
-        }
+        };
+        install_right_click_open(next_button, previous_button, &popover, &view);
+        view
+    }
+
+    /// Rebuild the queue from the runtime.
+    fn rebuild(&self) {
+        rebuild_queue_model(&self.runtime, &self.store, &self.stack, &self.empty_state);
     }
 
     /// Rebuild the visible queue if the popover is currently open. Wired
@@ -261,7 +263,7 @@ impl QueueView {
     /// auto-advancing a track while the queue is on screen keeps it live.
     pub(crate) fn refresh_if_visible(&self) {
         if self.is_open.get() {
-            rebuild_queue_model(&self.runtime, &self.store, &self.stack, &self.empty_state);
+            self.rebuild();
         }
     }
 }
@@ -303,31 +305,57 @@ fn rebuild_queue_model(
 /// open so the queue is always current.
 fn install_right_click_open(
     next_button: &gtk::Button,
+    previous_button: &gtk::Button,
     popover: &gtk::Popover,
-    runtime: &SharedRuntime,
-    store: &gio::ListStore,
-    stack: &gtk::Stack,
-    empty_state: &QueueEmptyState,
-    is_open: &Rc<Cell<bool>>,
+    view: &QueueView,
 ) {
     let gesture = gtk::GestureClick::new();
     gesture.set_button(gdk::BUTTON_SECONDARY);
 
     let popover = popover.clone();
-    let runtime = runtime.clone();
-    let store = store.clone();
-    let stack = stack.clone();
-    let empty_state = empty_state.clone();
-    let is_open = is_open.clone();
+    let view = view.clone();
+    let previous_button = previous_button.downgrade();
     gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
         // Claim the press so it does not also reach the window-drag handler
         // on the titlebar handle behind the button.
         gesture.set_state(gtk::EventSequenceState::Claimed);
-        rebuild_queue_model(&runtime, &store, &stack, &empty_state);
-        is_open.set(true);
+        view.rebuild();
+        if let (Some(next_button), Some(previous_button)) = (
+            gesture.widget().and_downcast::<gtk::Button>(),
+            previous_button.upgrade(),
+        ) && let (Some(next), Some(previous)) = (
+            next_button.compute_bounds(&next_button),
+            previous_button.compute_bounds(&next_button),
+        ) {
+            popover.set_offset(
+                start_edge_alignment_offset(&next, &previous, popover.direction()),
+                0,
+            );
+        }
+        view.is_open.set(true);
         popover.popup();
     });
     next_button.add_controller(gesture);
+}
+
+/// How far to move a popover whose start edge GTK lines up with its
+/// anchor's, `anchor`, so it lines up with the first transport control's,
+/// `controls_start`, both in the anchor's coordinates: it hangs from the
+/// controls, as far from the window's edge as they are, rather than
+/// reaching past them towards it (#379). Measured at each opening, as the
+/// top bar's gaps shrink in a narrow window. GTK keeps the arrow on the
+/// anchor.
+fn start_edge_alignment_offset(
+    anchor: &gtk::graphene::Rect,
+    controls_start: &gtk::graphene::Rect,
+    direction: gtk::TextDirection,
+) -> i32 {
+    let offset = if direction == gtk::TextDirection::Rtl {
+        controls_start.x() + controls_start.width() - (anchor.x() + anchor.width())
+    } else {
+        controls_start.x() - anchor.x()
+    };
+    offset.round() as i32
 }
 
 fn empty_queue_text(uses_lazy_continuation: bool) -> (String, Option<String>) {
@@ -679,14 +707,18 @@ fn apply_queue_missing_artwork(image: &gtk::Image) {
     image.set_icon_name(Some(QUEUE_ARTWORK_MISSING_ICON));
 }
 
+/// Tints every other row, starting with the second: the first keeps the
+/// popover's own surface, so the arrow above it flows into it (#379).
 fn apply_queue_row_tint(row: &gtk::Box, position: u32) {
-    row.remove_css_class("queue-row-even");
-    row.remove_css_class("queue-row-odd");
-    if position.is_multiple_of(2) {
-        row.add_css_class("queue-row-even");
+    if queue_row_is_tinted(position) {
+        row.add_css_class(QUEUE_ROW_TINTED_CLASS);
     } else {
-        row.add_css_class("queue-row-odd");
+        row.remove_css_class(QUEUE_ROW_TINTED_CLASS);
     }
+}
+
+fn queue_row_is_tinted(position: u32) -> bool {
+    !position.is_multiple_of(2)
 }
 
 fn apply_queue_row_kind(row: &gtk::Box, entry: PlaybackQueueEntry) {
@@ -776,7 +808,11 @@ fn peek_queue_payload(target: &gtk::DropTarget) -> Option<PlayableId> {
 
 #[cfg(test)]
 mod tests {
-    use super::{empty_queue_text, parse_queue_payload, queue_drag_payload};
+    use super::{
+        empty_queue_text, parse_queue_payload, queue_drag_payload, queue_row_is_tinted,
+        start_edge_alignment_offset,
+    };
+    use gtk::graphene::Rect;
     use sustain_app_runtime::{PlayableId, TrackId};
 
     fn track_id(value: i64) -> PlayableId {
@@ -801,6 +837,31 @@ mod tests {
         assert_eq!(parse_queue_payload("tracks:42"), None);
         assert_eq!(parse_queue_payload("playlist:7"), None);
         assert_eq!(parse_queue_payload("queue-track:not-a-number"), None);
+    }
+
+    #[test]
+    fn the_first_row_is_untinted_then_every_other() {
+        let tinted: Vec<bool> = (0..4).map(queue_row_is_tinted).collect();
+        assert_eq!(tinted, [false, true, false, true]);
+    }
+
+    #[test]
+    fn the_popover_moves_to_the_start_edge_of_the_controls() {
+        let next = Rect::new(0.0, 0.0, 42.0, 42.0);
+        // Left to right, Previous starts at its left edge, 100 before
+        // Next's.
+        let previous = Rect::new(-100.0, 0.0, 30.0, 42.0);
+        assert_eq!(
+            start_edge_alignment_offset(&next, &previous, gtk::TextDirection::Ltr),
+            -100
+        );
+        // Right to left, Previous starts at its right edge, 88 after
+        // Next's.
+        let previous = Rect::new(100.0, 0.0, 30.0, 42.0);
+        assert_eq!(
+            start_edge_alignment_offset(&next, &previous, gtk::TextDirection::Rtl),
+            88
+        );
     }
 
     #[test]
