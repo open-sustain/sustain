@@ -763,6 +763,14 @@ fn write_rating_preserves_popm_counter_when_clearing_rating() {
     assert_eq!(popm.email, "other-player@example.com");
     assert_eq!(popm.rating, 0);
     assert_eq!(popm.play_counter, 23);
+    // The counter kept, the file still reads back as unrated.
+    assert_eq!(
+        LoftyMetadataService
+            .read_persisted_tags(&path)
+            .expect("read back")
+            .rating,
+        Rating::unrated()
+    );
 
     fs::remove_dir_all(root).expect("remove test directory");
 }
