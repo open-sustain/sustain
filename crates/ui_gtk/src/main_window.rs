@@ -47,6 +47,7 @@ use super::{
         LIBRARY_DROP_INDICATOR_CLASS, install_file_drop_target, library_import_requested_callback,
     },
     library_scan::library_scan_requested_callback,
+    local_time_zone_monitor::LocalTimeZoneMonitor,
     missing_track::{
         LocateMissingTrackCallback, PendingLocatedPlaybacks, locate_missing_track_callback,
         missing_track_relocation_completed_callback, play_track_or_offer_locate,
@@ -562,12 +563,20 @@ pub(crate) fn build_main_window(
     // is wasted work and dominates startup time on large libraries
     // (measured: ~672ms for 8890 rows in `replace_rows`).
     let playlists_dirty: Rc<Cell<bool>> = Rc::new(Cell::new(true));
+    let time_zone = LocalTimeZoneMonitor::new().expect("watch the local time zone");
+    install_local_time_zone_redraw(
+        &time_zone,
+        &[&songs_table, &playlists_table],
+        &duplicates_view,
+        &statistics_view,
+    );
     let playlists_refresh = PlaylistsViewRefreshContext::new(
         &content_stack,
         &playlists_table,
         &playlists_header,
         &status_bar,
         &playlists_dirty,
+        &time_zone,
     );
     install_playlists_view_activator(&playlists_refresh, &runtime, &sidebar, &current_search_text);
     let songs_refresh =
@@ -941,7 +950,10 @@ pub(crate) fn build_main_window(
     let runtime_for_close = runtime.clone();
     let sidebar_for_close = sidebar.clone();
     let collapse_controller_for_close = collapse_controller.clone();
+    // The window's views listen to the time zone while it is open.
+    let time_zone_for_close = time_zone.clone();
     window.connect_close_request(move |window| {
+        time_zone_for_close.stop();
         songs_table_for_close.flush_pending_edits();
         playlists_table_for_close.flush_pending_edits();
         duplicates_view_for_close.flush_pending_edits();
@@ -1600,6 +1612,28 @@ fn install_albums_view_activator(content_stack: &ContentStack, albums_view: &Alb
     let albums_view = albums_view.clone();
     content_stack.connect_visible_child_name_notify(move |stack| {
         albums_view.set_shown(stack.visible_child_name().as_deref() == Some(ALBUMS_VIEW));
+    });
+}
+
+/// Redraws what shows local dates when the local time zone changes: the
+/// cells on screen of every track table, and the Statistics page if it is
+/// shown (its Year Added buckets are local years). Dialogs show what they
+/// read when they opened, statistics included.
+fn install_local_time_zone_redraw(
+    time_zone: &LocalTimeZoneMonitor,
+    tables: &[&TrackTable],
+    duplicates_view: &DuplicatesView,
+    statistics_view: &StatisticsView,
+) {
+    let tables: Vec<TrackTable> = tables.iter().map(|table| (*table).clone()).collect();
+    let duplicates_view = duplicates_view.clone();
+    let statistics_view = statistics_view.clone();
+    time_zone.connect_change(move || {
+        for table in &tables {
+            table.refresh_bound_cells();
+        }
+        duplicates_view.refresh_bound_cells();
+        statistics_view.refresh_if_visible();
     });
 }
 

@@ -421,7 +421,10 @@ is read in the local time zone, the same way the library displays its
 dates, and the rule compares the day it falls on: "Date Added is before
 2024-01-01" matches tracks the library shows as added on December 31 or
 earlier, and "is after 2024-01-01" those it shows as added on January 2
-or later.
+or later. When the local time zone changes while Sustain runs, the dates
+the track tables show and the Statistics page's years follow it at once,
+just as the rules do. An open dialog is left as it is by a zone change
+alone.
 
 ### Default smart playlists — *iso-iTunes* / *Sustain-native*
 A freshly created library is seeded with five iTunes-style starter

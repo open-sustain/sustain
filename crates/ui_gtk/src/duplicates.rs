@@ -192,6 +192,14 @@ impl DuplicatesView {
         }
     }
 
+    /// See [`TrackTable::refresh_bound_cells`].
+    pub(crate) fn refresh_bound_cells(&self) {
+        let table = self.table.borrow().clone();
+        if let Some(table) = table {
+            table.refresh_bound_cells();
+        }
+    }
+
     /// See [`TrackTable::flush_pending_edits`].
     pub(crate) fn flush_pending_edits(&self) {
         let table = self.table.borrow().clone();

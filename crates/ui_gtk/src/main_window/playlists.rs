@@ -28,8 +28,6 @@ pub(super) struct PlaylistsViewRefreshContext {
     /// set; or the local time zone, which calendar rules ("before
     /// 2024-01-01") read dates in, changes.
     reevaluation_alarm: WallClockAlarm,
-    /// Rings the alarm when the local time zone changes.
-    _time_zone_monitor: Rc<LocalTimeZoneMonitor>,
 }
 
 impl PlaylistsViewRefreshContext {
@@ -39,12 +37,12 @@ impl PlaylistsViewRefreshContext {
         playlists_header: &PlaylistsHeader,
         status_bar: &StatusBar,
         playlists_dirty: &Rc<Cell<bool>>,
+        time_zone: &LocalTimeZoneMonitor,
     ) -> Self {
         let reevaluation_alarm = WallClockAlarm::new()
             .expect("create the timer that re-evaluates the shown smart playlist");
         let alarm = reevaluation_alarm.clone();
-        let time_zone_monitor =
-            LocalTimeZoneMonitor::new(move || alarm.ring_now()).expect("watch the local time zone");
+        time_zone.connect_change(move || alarm.ring_now());
         Self {
             content_stack: content_stack.clone(),
             playlists_table: playlists_table.clone(),
@@ -52,7 +50,6 @@ impl PlaylistsViewRefreshContext {
             status_bar: status_bar.clone(),
             playlists_dirty: playlists_dirty.clone(),
             reevaluation_alarm,
-            _time_zone_monitor: Rc::new(time_zone_monitor),
         }
     }
 

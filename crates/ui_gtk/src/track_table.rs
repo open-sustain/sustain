@@ -207,7 +207,10 @@ impl TrackTable {
     /// own. This is the correctness half of the in-place swap — it is what
     /// makes the cheap swap show the right data — so do not drop it when
     /// reworking either caller.
-    fn refresh_bound_cells(&self) {
+    ///
+    /// It is also how cells follow a change to how a row reads rather
+    /// than to the row: the local time zone, which dates show in.
+    pub(crate) fn refresh_bound_cells(&self) {
         self.refresh_cells(RefreshScope::AllRows);
     }
 
@@ -1611,6 +1614,41 @@ mod tests {
             );
             assert_eq!(untouched.text(), "probe");
 
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn refreshing_bound_cells_redraws_every_one_from_its_unchanged_row() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(
+                vec![named_row(1, "A"), named_row(2, "B")],
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let window = gtk::Window::new();
+            window.set_default_size(700, 260);
+            window.set_child(Some(&table.widget()));
+            window.present();
+            drain_main_context();
+            let root = window
+                .child()
+                .expect("window retains the mapped track table");
+            // Probes: only re-deriving the cells overwrites them, as a
+            // change to the local time zone needs for dates.
+            for name in ["A", "B"] {
+                cell_containing_text(&root, name)
+                    .expect("the row's name cell is realized")
+                    .set_text("probe");
+            }
+
+            table.refresh_bound_cells();
+
+            assert!(cell_containing_text(&root, "A").is_some());
+            assert!(cell_containing_text(&root, "B").is_some());
             window.destroy();
         });
     }

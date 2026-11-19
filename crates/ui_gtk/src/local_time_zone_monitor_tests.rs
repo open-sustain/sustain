@@ -36,10 +36,9 @@ fn point_zone_at(directory: &Path, zone: &str) {
 fn counted_monitor(directory: &Path) -> (LocalTimeZoneMonitor, Rc<Cell<u32>>) {
     let changes = Rc::new(Cell::new(0));
     let counter = changes.clone();
-    let monitor = LocalTimeZoneMonitor::watching(&directory.join("localtime"), move || {
-        counter.set(counter.get() + 1);
-    })
-    .expect("watch the zone file");
+    let monitor =
+        LocalTimeZoneMonitor::watching(&directory.join("localtime")).expect("watch the zone file");
+    monitor.connect_change(move || counter.set(counter.get() + 1));
     (monitor, changes)
 }
 
@@ -48,6 +47,16 @@ fn run_main_loop_until(done: impl Fn() -> bool) {
     let context = glib::MainContext::default();
     let deadline = Instant::now() + Duration::from_secs(5);
     while !done() && Instant::now() < deadline {
+        context.iteration(false);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// Runs the main loop for `duration`.
+fn run_main_loop_for(duration: Duration) {
+    let context = glib::MainContext::default();
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
         context.iteration(false);
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -68,6 +77,41 @@ fn pointing_the_zone_elsewhere_is_a_change() {
 }
 
 #[test]
+fn every_listener_hears_of_a_change() {
+    with_gtk(|| {
+        let directory = zone_directory("listeners", "/usr/share/zoneinfo/UTC");
+        let (monitor, first) = counted_monitor(&directory);
+        let second = Rc::new(Cell::new(0));
+        let counter = second.clone();
+        monitor.connect_change(move || counter.set(counter.get() + 1));
+
+        point_zone_at(&directory, "/usr/share/zoneinfo/Europe/Paris");
+        run_main_loop_until(|| first.get() > 0 && second.get() > 0);
+
+        assert!(
+            first.get() > 0 && second.get() > 0,
+            "a listener missed the change"
+        );
+        std::fs::remove_dir_all(&directory).expect("remove the test directory");
+    });
+}
+
+#[test]
+fn a_stopped_watch_hears_of_no_change() {
+    with_gtk(|| {
+        let directory = zone_directory("stopped", "/usr/share/zoneinfo/UTC");
+        let (monitor, changes) = counted_monitor(&directory);
+        monitor.stop();
+
+        point_zone_at(&directory, "/usr/share/zoneinfo/Europe/Paris");
+        run_main_loop_for(Duration::from_millis(300));
+
+        assert_eq!(changes.get(), 0);
+        std::fs::remove_dir_all(&directory).expect("remove the test directory");
+    });
+}
+
+#[test]
 fn an_untouched_zone_is_no_change() {
     with_gtk(|| {
         let directory = zone_directory("untouched", "/usr/share/zoneinfo/UTC");
@@ -75,12 +119,7 @@ fn an_untouched_zone_is_no_change() {
         // Something else in the same directory changes.
         std::fs::write(directory.join("hostname"), "sustain").expect("write a neighbour");
 
-        let context = glib::MainContext::default();
-        let deadline = Instant::now() + Duration::from_millis(300);
-        while Instant::now() < deadline {
-            context.iteration(false);
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        run_main_loop_for(Duration::from_millis(300));
 
         assert_eq!(changes.get(), 0);
         std::fs::remove_dir_all(&directory).expect("remove the test directory");

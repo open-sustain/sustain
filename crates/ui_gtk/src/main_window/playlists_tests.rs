@@ -78,6 +78,7 @@ impl ShownSmartPlaylist {
             &PlaylistsHeader::new(),
             &StatusBar::new(Rc::new(|| {})),
             &Rc::new(Cell::new(true)),
+            &LocalTimeZoneMonitor::new().expect("watch the local time zone"),
         );
         let sidebar = PlaylistSidebar::new(runtime.clone(), false);
         sidebar.select_item(PlaylistItem::SmartPlaylist(
