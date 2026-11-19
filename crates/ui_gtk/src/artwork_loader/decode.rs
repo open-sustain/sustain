@@ -54,28 +54,45 @@ pub(super) struct DecodedArtworkRecord {
     pub(super) cache_entry: CachedArtwork,
 }
 
+/// What loading a source's artwork came to.
+pub(crate) enum ArtworkLoad {
+    /// The cover, or the confirmed absence of one: a texture-less
+    /// [`DecodedArtwork`]. Both may be cached.
+    Settled(DecodedArtwork),
+    /// The artwork could not be read or decoded, which may not last (a
+    /// file mid-replacement, the image loader unavailable). Its waiters
+    /// get the placeholder, but nothing is cached, so the next request
+    /// tries again.
+    Failed,
+}
+
+impl ArtworkLoad {
+    /// What to show for this outcome now.
+    pub(crate) fn shown(&self) -> DecodedArtwork {
+        match self {
+            Self::Settled(decoded) => decoded.clone(),
+            Self::Failed => DecodedArtwork::default(),
+        }
+    }
+}
+
+/// Decode `bytes`, a source's embedded artwork or `None` for none. `None`
+/// when there are bytes but they do not decode.
 pub(super) fn decode_artwork(
     bytes: Option<Vec<u8>>,
     variant: ArtworkVariant,
-) -> DecodedArtworkRecord {
+) -> Option<DecodedArtworkRecord> {
     let Some(bytes) = bytes else {
-        return DecodedArtworkRecord::default();
+        return Some(DecodedArtworkRecord::default());
     };
     let encoded_bytes_len = bytes.len();
-    let dimensions = match validate_encoded_artwork(&bytes) {
-        Ok(dimensions) => dimensions,
-        Err(_) => return DecodedArtworkRecord::default(),
-    };
+    let dimensions = validate_encoded_artwork(&bytes).ok()?;
     let max_side = match variant {
         ArtworkVariant::Tile => TILE_TEXTURE_MAX_SIDE,
         ArtworkVariant::Detail => DETAIL_TEXTURE_MAX_SIDE,
     };
-    let Some((decode_width, decode_height)) = scaled_dimensions(dimensions, max_side) else {
-        return DecodedArtworkRecord::default();
-    };
-    let Some(pixbuf) = pixbuf_from_bytes_at_scale(bytes, decode_width, decode_height) else {
-        return DecodedArtworkRecord::default();
-    };
+    let (decode_width, decode_height) = scaled_dimensions(dimensions, max_side)?;
+    let pixbuf = pixbuf_from_bytes_at_scale(bytes, decode_width, decode_height)?;
 
     // Produce only the requested texture size. Tile scrolling must not pay for
     // the 396px detail PNG; a later detail request merges that variant into the
@@ -103,10 +120,10 @@ pub(super) fn decode_artwork(
         Some(encoded_bytes_len),
     );
 
-    DecodedArtworkRecord {
+    Some(DecodedArtworkRecord {
         artwork,
         cache_entry,
-    }
+    })
 }
 
 /// Assemble the in-memory [`DecodedArtwork`] for a single requested size.

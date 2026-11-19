@@ -15,7 +15,7 @@ use gtk::glib;
 use hashlink::LinkedHashMap;
 use sustain_app_runtime::MetadataService;
 
-use super::decode::{ArtworkVariant, DecodedArtwork, decode_artwork};
+use super::decode::{ArtworkLoad, ArtworkVariant, DecodedArtwork, decode_artwork};
 use super::disk_cache::{ArtworkRepository, ArtworkSource};
 
 const WORKER_COUNT_MIN: usize = 4;
@@ -194,7 +194,7 @@ pub(super) struct WorkerResult {
     source: ArtworkSource,
     generation: u64,
     variant: ArtworkVariant,
-    decoded: DecodedArtwork,
+    load: ArtworkLoad,
 }
 
 impl ArtworkLoader {
@@ -413,12 +413,16 @@ impl ArtworkLoader {
         //
         // Both caches are filled before any callback runs, so a callback
         // that asks for the other size gets the primed artwork too.
-        let tile = decode_artwork(bytes.clone(), ArtworkVariant::Tile).artwork;
-        let detail = decode_artwork(bytes, ArtworkVariant::Detail).artwork;
-        let tile_callbacks = cache(&self.inner, &source, ArtworkVariant::Tile, tile.clone());
-        let detail_callbacks = cache(&self.inner, &source, ArtworkVariant::Detail, detail.clone());
-        answer(tile_callbacks, &tile);
-        answer(detail_callbacks, &detail);
+        let load = |variant| match decode_artwork(bytes.clone(), variant) {
+            Some(decoded) => ArtworkLoad::Settled(decoded.artwork),
+            None => ArtworkLoad::Failed,
+        };
+        let tile = load(ArtworkVariant::Tile);
+        let detail = load(ArtworkVariant::Detail);
+        let tile_callbacks = settle(&self.inner, &source, ArtworkVariant::Tile, &tile);
+        let detail_callbacks = settle(&self.inner, &source, ArtworkVariant::Detail, &detail);
+        answer(tile_callbacks, &tile.shown());
+        answer(detail_callbacks, &detail.shown());
     }
 }
 
@@ -440,7 +444,7 @@ pub(super) fn worker_loop(
                 Err(_) => return,
             }
         };
-        let decoded = repository.load(&request.source, request.generation, request.variant);
+        let load = repository.load(&request.source, request.generation, request.variant);
         // Intentionally block when the main loop already has one completed
         // result per worker waiting. This bounds transient GdkTextures outside
         // the LRUs; the send only errors once the receiver is gone at shutdown.
@@ -449,7 +453,7 @@ pub(super) fn worker_loop(
                 source: request.source,
                 generation: request.generation,
                 variant: request.variant,
-                decoded,
+                load,
             })
             .is_err()
         {
@@ -508,28 +512,26 @@ fn deliver_result(inner: &LoaderInner, result: WorkerResult) {
     if inner.repository.source_generation(&result.source) != result.generation {
         return;
     }
-    let callbacks = cache(
-        inner,
-        &result.source,
-        result.variant,
-        result.decoded.clone(),
-    );
-    answer(callbacks, &result.decoded);
+    let callbacks = settle(inner, &result.source, result.variant, &result.load);
+    answer(callbacks, &result.load.shown());
 }
 
-/// Cache `decoded` as the current `variant` of `source`, and take the
-/// requests waiting on it for [`answer`]. Run every `cache` of one update
-/// before any `answer`, so no callback sees the update half applied.
-fn cache(
+/// Cache a settled `load` as the current `variant` of `source` (a failed
+/// one is not cached, so the next request retries), and take the requests
+/// waiting on it for [`answer`]. Run every `settle` of one update before
+/// any `answer`, so no callback sees the update half applied.
+fn settle(
     inner: &LoaderInner,
     source: &ArtworkSource,
     variant: ArtworkVariant,
-    decoded: DecodedArtwork,
+    load: &ArtworkLoad,
 ) -> Vec<ArtworkCallback> {
-    inner
-        .cache_for(variant)
-        .borrow_mut()
-        .insert(source.clone(), decoded);
+    if let ArtworkLoad::Settled(decoded) = load {
+        inner
+            .cache_for(variant)
+            .borrow_mut()
+            .insert(source.clone(), decoded.clone());
+    }
     inner
         .pending
         .borrow_mut()
@@ -718,6 +720,36 @@ mod tests {
             assert!(
                 cached.tile_texture.is_some(),
                 "the stale read must not replace the new cover"
+            );
+        });
+    }
+
+    #[test]
+    fn artwork_that_fails_to_decode_is_shown_as_none_but_not_cached() {
+        crate::test_support::with_gtk(|| {
+            let (loader, service, source) = gated_loader();
+            service.set_cover(Some(b"not an image".to_vec()));
+            let answers = Rc::new(RefCell::new(Vec::new()));
+            let answers_for_request = answers.clone();
+            loader.request(
+                source.clone(),
+                Box::new(move |artwork| {
+                    answers_for_request
+                        .borrow_mut()
+                        .push(artwork.tile_texture.is_some());
+                }),
+            );
+            service.release(0);
+            run_main_loop_until(|| !answers.borrow().is_empty());
+
+            assert_eq!(
+                *answers.borrow(),
+                [false],
+                "the waiter gets the placeholder"
+            );
+            assert!(
+                loader.cached(&source).is_none(),
+                "a failure is not cached as the absence of a cover"
             );
         });
     }

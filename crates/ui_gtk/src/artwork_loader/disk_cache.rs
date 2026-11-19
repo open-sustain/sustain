@@ -16,11 +16,13 @@ use sustain_artwork::{ArtworkDimensions, MAX_ENCODED_ARTWORK_BYTES, validate_dim
 use crate::artwork_color::{ArtworkPalette, ArtworkPaletteComponents};
 
 use super::decode::{
-    ArtworkVariant, DecodedArtwork, decode_artwork, palette_components_from_cache_row,
+    ArtworkLoad, ArtworkVariant, DecodedArtwork, decode_artwork, palette_components_from_cache_row,
     texture_from_png,
 };
 
-const CACHE_SCHEMA_VERSION: i64 = 3;
+// 4: a decode failure is no longer stored as a cover's absence; the
+// version drops the rows earlier versions may have stored for one.
+const CACHE_SCHEMA_VERSION: i64 = 4;
 const CACHE_SOURCE_KIND_EMBEDDED_TRACK: &str = "embedded-track";
 const CACHE_MAX_BYTES: i64 = 5_i64 * 1024 * 1024 * 1024;
 
@@ -136,12 +138,12 @@ impl ArtworkRepository {
         source: &ArtworkSource,
         generation: u64,
         variant: ArtworkVariant,
-    ) -> DecodedArtwork {
+    ) -> ArtworkLoad {
         let fingerprint = source.file_fingerprint();
         if let (Some(cache), Some(fingerprint)) = (self.disk_cache(), fingerprint)
             && let Some(decoded) = cache.load(source, fingerprint, variant)
         {
-            return decoded;
+            return ArtworkLoad::Settled(decoded);
         }
 
         match source {
@@ -150,15 +152,18 @@ impl ArtworkRepository {
                 // failed one (permissions, a file mid-replacement) would
                 // otherwise pin "no artwork" to an unchanged fingerprint.
                 let Ok(bytes) = self.metadata_service.read_artwork(file_path) else {
-                    return DecodedArtwork::default();
+                    return ArtworkLoad::Failed;
                 };
-                let decoded = decode_artwork(bytes, variant);
+                // Nor may a failed decode, which is not absence either.
+                let Some(decoded) = decode_artwork(bytes, variant) else {
+                    return ArtworkLoad::Failed;
+                };
                 if let (Some(cache), Some(fingerprint)) = (self.disk_cache(), fingerprint) {
                     cache.store(source, fingerprint, &decoded.cache_entry, || {
                         self.source_generation(source) == generation
                     });
                 }
-                decoded.artwork
+                ArtworkLoad::Settled(decoded.artwork)
             }
         }
     }
@@ -874,7 +879,7 @@ mod tests {
 
         let decoded = repository.load(&source, 0, ArtworkVariant::Tile);
 
-        assert!(decoded.tile_texture.is_none());
+        assert!(matches!(decoded, super::ArtworkLoad::Failed));
         let disk_cache = repository.disk_cache().expect("disk cache opens");
         assert!(
             disk_cache
