@@ -55,6 +55,13 @@ fn gtk_thread() -> &'static GtkThread {
                     // Process-global style setup belongs to the one
                     // thread that owns GTK, done once for all jobs.
                     crate::app_css::install_app_css();
+                    // GTK's own input method, not the desktop's: an
+                    // input-method module such as IBus keeps text widgets
+                    // alive, which the tests that a closed window is
+                    // released would see as a leak.
+                    if let Some(settings) = gtk::Settings::default() {
+                        settings.set_gtk_im_module(Some("gtk-im-context-simple"));
+                    }
                 }
                 ready_tx
                     .send(available)
