@@ -123,9 +123,12 @@ struct PendingAlbumScroll {
     album_key: AlbumKey,
 }
 
+/// What a detail panel was built from. The whole album, not its key: a
+/// regroup or a patch that changes the album's tracks or fields, shown or
+/// not when it lands, leaves a panel that no longer matches.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AlbumDetailKey {
-    album_key: AlbumKey,
+    album: AlbumViewModel,
     selected_column: usize,
     columns: usize,
     playing_track_id: Option<TrackId>,
@@ -1181,13 +1184,13 @@ impl AlbumsView {
         };
         row.show_detail();
 
+        let force_rebuild = refresh.refreshes_detail_for(&album.key);
         let detail_key = AlbumDetailKey {
-            album_key: album.key.clone(),
+            album: album.clone(),
             selected_column,
             columns,
             playing_track_id: self.playing_track_id.get(),
         };
-        let force_rebuild = refresh.refreshes_detail_for(&album.key);
         let built = self
             .detail_panel
             .borrow()
