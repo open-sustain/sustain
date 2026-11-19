@@ -143,6 +143,8 @@ impl ArtworkPage {
             refresh,
             current_track_id: Cell::new(track_id),
             current_artwork_source: RefCell::new(None),
+            edit_generation: Cell::new(0),
+            staged: RefCell::new(None),
         });
         {
             let editor = editor.clone();
@@ -177,6 +179,10 @@ impl ArtworkPage {
         self.editor
             .current_artwork_source
             .replace(artwork_source.clone());
+        // Another track: the edit staged for the last one was committed or
+        // is dropped, and one still loading for it is superseded.
+        self.editor.start_edit();
+        self.editor.staged.replace(None);
         let generation = self.load_generation.get().wrapping_add(1);
         self.load_generation.set(generation);
         (self.editor.refresh)(None, has_embedded_artwork);
@@ -201,10 +207,19 @@ impl ArtworkPage {
     pub(super) fn paste(&self) {
         self.editor.paste(self.widget.clipboard());
     }
+
+    /// Write the staged artwork edit, if any, to its track: what OK and
+    /// navigating to another track do. `false` when the write failed; the
+    /// edit stays staged, so the dialog can try again.
+    pub(super) fn commit(&self) -> bool {
+        self.editor.commit()
+    }
 }
 
-/// The artwork edits — choose a file, paste, remove — applied to the
-/// track the page shows when the edit starts.
+/// The artwork edits — choose a file, paste, remove — staged for the
+/// track the page shows when the edit starts, and written with the rest
+/// of the dialog's edits: on OK, or on moving to another track. Cancel
+/// drops them, as it drops the other fields'.
 struct ArtworkEditor {
     parent_window: gtk::Window,
     command_controller: SharedCommandController,
@@ -212,6 +227,16 @@ struct ArtworkEditor {
     refresh: ArtworkRefreshCallback,
     current_track_id: Cell<TrackId>,
     current_artwork_source: RefCell<Option<ArtworkSource>>,
+    /// Advanced by every edit and every change of track, so an image
+    /// still loading for a superseded edit is not staged when it lands.
+    edit_generation: Cell<u64>,
+    staged: RefCell<Option<StagedArtwork>>,
+}
+
+/// An artwork edit not yet written: the new cover, or `None` to remove it.
+struct StagedArtwork {
+    target: ArtworkTarget,
+    artwork: Option<Vec<u8>>,
 }
 
 /// Where new artwork comes from: an image file, or encoded image bytes
@@ -221,19 +246,49 @@ enum ArtworkInput {
     Bytes(Vec<u8>),
 }
 
-/// The track an artwork edit targets, captured when the edit starts so a
-/// slow read cannot land on the track navigated to in the meantime.
+/// The track an artwork edit targets, and the edit, captured when the
+/// edit starts so a slow read cannot land on the track navigated to in
+/// the meantime, nor over a later edit.
 struct ArtworkTarget {
     track_id: TrackId,
     artwork_source: Option<ArtworkSource>,
+    edit_generation: u64,
 }
 
 impl ArtworkEditor {
+    fn start_edit(&self) -> u64 {
+        let generation = self.edit_generation.get().wrapping_add(1);
+        self.edit_generation.set(generation);
+        generation
+    }
+
+    /// Start an edit of the shown track.
     fn target(&self) -> ArtworkTarget {
         ArtworkTarget {
             track_id: self.current_track_id.get(),
             artwork_source: self.current_artwork_source.borrow().clone(),
+            edit_generation: self.start_edit(),
         }
+    }
+
+    fn commit(&self) -> bool {
+        let Some(staged) = self.staged.borrow_mut().take() else {
+            return true;
+        };
+        let StagedArtwork { target, artwork } = staged;
+        if !self
+            .command_controller
+            .dispatch_succeeded(ApplicationCommand::SetArtwork {
+                track_id: target.track_id,
+                artwork: artwork.clone(),
+            })
+        {
+            self.staged.replace(Some(StagedArtwork { target, artwork }));
+            return false;
+        }
+        self.publisher
+            .publish(target.track_id, target.artwork_source, artwork);
+        true
     }
 
     fn choose(self: &Rc<Self>) {
@@ -289,17 +344,11 @@ impl ArtworkEditor {
 
     fn remove(&self) {
         let target = self.target();
-        if self
-            .command_controller
-            .dispatch_succeeded(ApplicationCommand::SetArtwork {
-                track_id: target.track_id,
-                artwork: None,
-            })
-        {
-            self.publisher
-                .publish(target.track_id, target.artwork_source, None);
-            (self.refresh)(None, false);
-        }
+        self.staged.replace(Some(StagedArtwork {
+            target,
+            artwork: None,
+        }));
+        (self.refresh)(None, false);
     }
 
     /// Read and decode `input` off the GTK thread, then apply it to
@@ -340,25 +389,17 @@ impl ArtworkEditor {
     }
 
     fn apply(&self, target: ArtworkTarget, outcome: LoadedArtwork) {
+        // A later edit, or another track, took over while this loaded.
+        if target.edit_generation != self.edit_generation.get() {
+            return;
+        }
         match outcome {
             LoadedArtwork::Ready { bytes, texture } => {
-                let cache_bytes = bytes.clone();
-                if self
-                    .command_controller
-                    .dispatch_succeeded(ApplicationCommand::SetArtwork {
-                        track_id: target.track_id,
-                        artwork: Some(bytes),
-                    })
-                {
-                    self.publisher.publish(
-                        target.track_id,
-                        target.artwork_source,
-                        Some(cache_bytes),
-                    );
-                    if self.current_track_id.get() == target.track_id {
-                        (self.refresh)(texture, true);
-                    }
-                }
+                self.staged.replace(Some(StagedArtwork {
+                    target,
+                    artwork: Some(bytes),
+                }));
+                (self.refresh)(texture, true);
             }
             LoadedArtwork::Failed(error) => {
                 eprintln!("sustain: failed to read new artwork: {error}");
@@ -473,7 +514,7 @@ fn texture_from_bytes(bytes: &[u8], size: i32) -> Option<gdk::Texture> {
 /// Outcome of the off-thread read+decode of new artwork, chosen or pasted.
 enum LoadedArtwork {
     /// Valid bytes (always) plus a decoded preview texture when the
-    /// pixbuf decode succeeded. The bytes are still applied even if the
+    /// pixbuf decode succeeded. The bytes are still staged even if the
     /// texture is `None` (a format the policy accepts but pixbuf cannot
     /// render) so the file's tag is updated and a placeholder shown.
     Ready {
@@ -485,10 +526,83 @@ enum LoadedArtwork {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_ENCODED_ARTWORK_BYTES, read_capped, set_frame_texture, texture_from_bytes};
+    use std::{cell::Cell, cell::RefCell, rc::Rc};
+
+    use super::{
+        ArtworkPage, LoadedArtwork, MAX_ENCODED_ARTWORK_BYTES, read_capped, set_frame_texture,
+        texture_from_bytes,
+    };
     use crate::test_support::with_gtk;
     use gtk::prelude::*;
     use gtk::{gio, glib};
+
+    /// An artwork page on track 1, and how many artwork changes it has
+    /// published.
+    fn artwork_page() -> (ArtworkPage, Rc<Cell<usize>>) {
+        let runtime =
+            crate::test_support::runtime_with_tracks(vec![crate::test_support::track(1, "One")]);
+        let command_controller: crate::command_controller::SharedCommandController =
+            Rc::new(crate::command_controller::UiCommandController::new(runtime));
+        let published = Rc::new(Cell::new(0));
+        let counter = published.clone();
+        let artwork_changed: crate::ArtworkChangedHolder =
+            Rc::new(RefCell::new(Some(Rc::new(move |_: &[_]| {
+                counter.set(counter.get() + 1);
+            }))));
+        let page = ArtworkPage::new(
+            &gtk::Window::new(),
+            &command_controller,
+            &artwork_changed,
+            Rc::new(|| {}),
+            sustain_app_runtime::TrackId::new(1).expect("valid id"),
+            gtk::Frame::new(None),
+            &crate::test_support::artwork_loader(),
+            None,
+            true,
+        );
+        (page, published)
+    }
+
+    #[test]
+    fn an_artwork_edit_waits_for_ok_and_cancel_drops_it() {
+        with_gtk(|| {
+            let (page, published) = artwork_page();
+
+            page.editor.remove();
+            assert_eq!(published.get(), 0, "nothing is written before OK");
+            // Cancel: the dialog closes without committing.
+            drop(page);
+            assert_eq!(published.get(), 0);
+
+            let (page, published) = artwork_page();
+            page.editor.remove();
+            assert!(page.commit(), "OK writes the removal");
+            assert_eq!(published.get(), 1);
+            assert!(page.commit(), "and only once");
+            assert_eq!(published.get(), 1);
+        });
+    }
+
+    #[test]
+    fn an_image_that_loads_after_a_later_edit_is_dropped() {
+        with_gtk(|| {
+            let (page, _published) = artwork_page();
+            let pasted = page.editor.target();
+            page.editor.remove();
+
+            page.editor.apply(
+                pasted,
+                LoadedArtwork::Ready {
+                    bytes: VALID_PNG.to_vec(),
+                    texture: None,
+                },
+            );
+
+            let staged = page.editor.staged.borrow();
+            let staged = staged.as_ref().expect("the removal stays staged");
+            assert!(staged.artwork.is_none(), "not the late image");
+        });
+    }
 
     fn read_capped_blocking(payload: Vec<u8>) -> Vec<u8> {
         let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(payload));

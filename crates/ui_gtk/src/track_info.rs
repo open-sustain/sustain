@@ -391,6 +391,7 @@ fn commit_current(
     for command in commands {
         all_succeeded &= command_controller.dispatch(command).is_ok();
     }
+    all_succeeded &= pages.artwork.commit();
     all_succeeded
 }
 
