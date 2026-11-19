@@ -2505,7 +2505,7 @@ fn a_reference_import_names_a_file_the_same_whatever_the_drop_order() {
     std::fs::remove_dir_all(elsewhere).expect("remove linked folder");
 }
 
-fn mp3_frames() -> Vec<u8> {
+pub(crate) fn mp3_frames() -> Vec<u8> {
     let mut frame = vec![0xFF, 0xFB, 0x90, 0x00];
     frame.resize(417, 0);
     frame.repeat(4)
@@ -5362,10 +5362,8 @@ fn runtime_update_metadata_writes_tags_and_updates_store_cache() {
     let writes = metadata_service.metadata_writes();
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].0, track_path);
-    assert_eq!(writes[0].1.title, FieldChange::Set("New".to_owned()));
-    assert_eq!(writes[0].1.artist, FieldChange::Clear);
-    assert_eq!(writes[0].1.album, FieldChange::Clear);
-    assert_eq!(writes[0].1.year, FieldChange::Set(2001));
+    // The file takes the edited fields and leaves the rest as it holds them.
+    assert_eq!(writes[0].1, change);
     assert_eq!(
         runtime.library_tracks()[0].metadata.title.as_deref(),
         Some("New")
@@ -5481,25 +5479,10 @@ fn managed_metadata_update_moves_file_when_planned_path_changes() {
                 title: FieldChange::Set("Song".to_owned()),
                 artist: FieldChange::Set("Artist".to_owned()),
                 album: FieldChange::Set("Album".to_owned()),
+                // The track total the edit left alone stays as the file
+                // holds it.
                 track_number: FieldChange::Set(3),
-                album_artist: FieldChange::Clear,
-                composer: FieldChange::Clear,
-                grouping: FieldChange::Clear,
-                genre: FieldChange::Clear,
-                track_total: FieldChange::Clear,
-                disc_number: FieldChange::Clear,
-                disc_total: FieldChange::Clear,
-                year: FieldChange::Clear,
-                compilation: FieldChange::Clear,
-                bpm: FieldChange::Clear,
-                key: FieldChange::Clear,
-                comments: FieldChange::Clear,
-                lyrics: FieldChange::Clear,
-                title_sort: FieldChange::Clear,
-                artist_sort: FieldChange::Clear,
-                album_sort: FieldChange::Clear,
-                album_artist_sort: FieldChange::Clear,
-                composer_sort: FieldChange::Clear,
+                ..MetadataChange::default()
             }
         )]
     );
@@ -5618,11 +5601,7 @@ fn managed_metadata_update_keeps_file_in_place_for_non_path_fields() {
     let writes = metadata_service.metadata_writes();
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].0, track_path);
-    assert_eq!(writes[0].1.title, FieldChange::Set("Song".to_owned()));
-    assert_eq!(writes[0].1.artist, FieldChange::Set("Artist".to_owned()));
-    assert_eq!(writes[0].1.album, FieldChange::Set("Album".to_owned()));
-    assert_eq!(writes[0].1.genre, FieldChange::Set("Rock".to_owned()));
-    assert_eq!(writes[0].1.year, FieldChange::Set(1999));
+    assert_eq!(writes[0].1, change);
     assert_eq!(
         runtime.library_tracks()[0].location.relative_path.as_path(),
         Path::new("Artist/Album/01 Song.flac")
@@ -5672,9 +5651,7 @@ fn runtime_update_metadata_applies_optimistic_update_and_reports_tag_write_failu
     let writes = metadata_service.metadata_writes();
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].0, track_path);
-    assert_eq!(writes[0].1.title, FieldChange::Set("New".to_owned()));
-    assert_eq!(writes[0].1.artist, FieldChange::Clear);
-    assert_eq!(writes[0].1.album, FieldChange::Clear);
+    assert_eq!(writes[0].1, change);
     // Optimistic state holds even though the disk tag write failed.
     assert_eq!(
         runtime.library_tracks()[0].metadata.title.as_deref(),
@@ -8464,7 +8441,7 @@ fn rapid_double_skip_does_not_double_count() {
     std::fs::remove_dir_all(root).expect("remove test library");
 }
 
-fn unique_test_directory() -> PathBuf {
+pub(crate) fn unique_test_directory() -> PathBuf {
     static NEXT_SUFFIX: AtomicU64 = AtomicU64::new(0);
 
     let unique_suffix = std::time::SystemTime::now()

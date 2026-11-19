@@ -18,13 +18,14 @@ use crate::{
         ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL, ADD_TRACK_KEY_ORIGIN_SQL,
         BACKFILL_GENERATED_SORT_FIELDS_SQL, INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL,
         MOVE_WAVEFORMS_TO_CACHE_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL,
-        RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL, RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL,
-        SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL, STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL,
-        VERSION_ANALYSIS_PER_CAPABILITY_SQL, VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
+        RECORD_TAG_MIRROR_FIELDS_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL,
+        RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
+        STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
+        VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 23;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 24;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -160,6 +161,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 23,
         description: "record the Pioneer export a sync left on a device",
         step: MigrationStep::Sql(ADD_SYNC_PIONEER_EXPORT_SQL),
+    },
+    Migration {
+        version: 24,
+        description: "record which fields a pending tag mirror writes",
+        step: MigrationStep::Sql(RECORD_TAG_MIRROR_FIELDS_SQL),
     },
 ];
 
@@ -1720,6 +1726,114 @@ WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
                 .execute("UPDATE tracks SET key_origin = 3 WHERE id = 1", [])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn upgrade_from_v23_keeps_each_pending_mirror_as_the_fields_it_meant() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..23]).expect("schema version 23");
+        let digest = "a".repeat(64);
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO tracks (id, relative_path) VALUES
+                     (1, x'61'), (2, x'62'), (3, x'63'), (4, x'64');
+                 INSERT INTO tag_mirror_outbox
+                     (track_id, mirror_metadata, mirror_rating, artwork_action,
+                      artwork_digest, artwork_size_bytes, generation,
+                      attempt_count, next_attempt_at_unix, last_error)
+                 VALUES
+                     (1, 1, 0, 0, NULL, NULL, 3, 2, 50, 'busy'),
+                     (2, 0, 1, 0, NULL, NULL, 1, 0, 0, NULL),
+                     (3, 1, 1, 1, NULL, NULL, 7, 0, 0, NULL),
+                     (4, 0, 0, 2, '{digest}', 10, 1, 0, 0, NULL);"
+            ))
+            .expect("seed version 23 mirrors");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        let mut statement = connection
+            .prepare(
+                "SELECT track_id, fields, artwork_action, artwork_digest, artwork_size_bytes, \
+                        generation, attempt_count, next_attempt_at_unix, last_error \
+                 FROM tag_mirror_outbox ORDER BY track_id",
+            )
+            .expect("prepare");
+        type Row = (
+            i64,
+            i64,
+            i64,
+            Option<String>,
+            Option<i64>,
+            i64,
+            i64,
+            i64,
+            Option<String>,
+        );
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            })
+            .expect("query")
+            .collect::<Result<Vec<Row>, _>>()
+            .expect("rows");
+        let metadata = crate::tag_mirror::fields_from_stored(rows[0].1);
+        let rating = crate::tag_mirror::fields_from_stored(rows[1].1);
+        let both = crate::tag_mirror::fields_from_stored(rows[2].1);
+        assert_eq!(metadata, Some(sustain_domain::TrackFields::TAG_METADATA));
+        assert_eq!(rating, Some(sustain_domain::TrackFields::RATING));
+        assert_eq!(both, Some(crate::TAG_MIRROR_FIELDS));
+        assert_eq!(
+            rows,
+            [
+                (
+                    1,
+                    rows[0].1,
+                    0,
+                    None,
+                    None,
+                    3,
+                    2,
+                    50,
+                    Some("busy".to_owned())
+                ),
+                (2, rows[1].1, 0, None, None, 1, 0, 0, None),
+                (3, rows[2].1, 1, None, None, 7, 0, 0, None),
+                (4, 0, 2, Some(digest), Some(10), 1, 0, 0, None),
+            ]
+        );
+        assert_eq!(schema_text(&connection), fresh_schema_text());
+        connection
+            .execute(
+                "INSERT INTO tracks (id, relative_path) VALUES (5, x'65')",
+                [],
+            )
+            .expect("a track with no mirror");
+        let insert = |fields: i64| {
+            connection.execute(
+                "INSERT INTO tag_mirror_outbox (track_id, fields, generation) VALUES (5, ?1, 1)",
+                [fields],
+            )
+        };
+        assert!(insert(0).is_err(), "a mirror writes something");
+        assert!(
+            insert(1 << 23).is_err(),
+            "no field is stored past the rating"
+        );
+        assert_eq!(insert(1 << 22), Ok(1));
     }
 
     #[test]

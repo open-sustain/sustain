@@ -15,7 +15,9 @@
 //! the `sustain --force-backfill` CLI command (#143).
 
 use crate::metadata_writer::metadata_mirror;
-use crate::{ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, Track};
+use crate::{
+    ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, Track, TrackFields,
+};
 
 /// What happened to one track during a force-backfill pass.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -94,7 +96,10 @@ impl ApplicationRuntime {
                     .map_err(|_| sustain_metadata::MetadataError::WriteFailed)
                     .and_then(|path| {
                         metadata_service
-                            .write_metadata(&path, metadata_mirror(&track.metadata))
+                            .write_metadata(
+                                &path,
+                                metadata_mirror(&track.metadata, TrackFields::TAG_METADATA),
+                            )
                             .and_then(|()| metadata_service.write_rating(&path, track.rating))
                     }) {
                     Ok(()) => {

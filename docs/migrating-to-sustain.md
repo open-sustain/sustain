@@ -27,8 +27,11 @@ Fields populated from file tags:
 - `track_number`, `track_total`, `disc_number`, `disc_total`
 - `year`, `compilation`, `bpm_hundredths` (the tempo × 100), `musical_key`,
   `comments`, `lyrics`
-- `rating` (0–5 stars, from an ID3 `POPM` frame, a Vorbis `RATING` comment,
-  or an MP4 `rate` atom; `FMPS_RATING` is not read)
+- `rating` (0–5 stars). It is read from the first ID3 `POPM` frame, in
+  its owner's scale, or from the first Vorbis `RATING` or
+  `RATING:<owner>` comment, as a percentage or a fraction of five stars,
+  or from an MP4 `rate` atom. A rating byte of 0 means unrated.
+  `FMPS_RATING` is not read.
 - artwork (embedded `CoverFront` picture, or the first picture if none is
   flagged as cover)
 

@@ -12,8 +12,10 @@ use std::ops::{BitOr, BitOrAssign};
 
 use crate::{Track, TrackMetadata};
 
-/// A set of [`Track`] fields. Fields that only ever change together, such
-/// as a track number and its total, share one member.
+/// A set of [`Track`] fields. A value that means nothing without its
+/// companion, such as a BPM and whether the user set it, shares its
+/// member; every value that can change on its own has a member of its own,
+/// so a change names exactly what changed.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct TrackFields(u32);
 
@@ -26,33 +28,46 @@ impl TrackFields {
     pub const COMPOSER: Self = Self(1 << 4);
     pub const GROUPING: Self = Self(1 << 5);
     pub const GENRE: Self = Self(1 << 6);
-    /// The track number and the album's track total.
     pub const TRACK_NUMBER: Self = Self(1 << 7);
-    /// The disc number and the disc total.
-    pub const DISC_NUMBER: Self = Self(1 << 8);
-    pub const YEAR: Self = Self(1 << 9);
-    pub const COMPILATION: Self = Self(1 << 10);
+    pub const TRACK_TOTAL: Self = Self(1 << 8);
+    pub const DISC_NUMBER: Self = Self(1 << 9);
+    pub const DISC_TOTAL: Self = Self(1 << 10);
+    pub const YEAR: Self = Self(1 << 11);
+    pub const COMPILATION: Self = Self(1 << 12);
     /// The BPM and whether the user set it.
-    pub const BPM: Self = Self(1 << 11);
+    pub const BPM: Self = Self(1 << 13);
     /// The key and where it came from.
-    pub const KEY: Self = Self(1 << 12);
-    pub const COMMENTS: Self = Self(1 << 13);
-    pub const LYRICS: Self = Self(1 << 14);
-    /// Every "sort as" name.
-    pub const SORT_NAMES: Self = Self(1 << 15);
-    pub const DURATION: Self = Self(1 << 16);
+    pub const KEY: Self = Self(1 << 14);
+    pub const COMMENTS: Self = Self(1 << 15);
+    pub const LYRICS: Self = Self(1 << 16);
+    pub const TITLE_SORT: Self = Self(1 << 17);
+    pub const ARTIST_SORT: Self = Self(1 << 18);
+    pub const ALBUM_SORT: Self = Self(1 << 19);
+    pub const ALBUM_ARTIST_SORT: Self = Self(1 << 20);
+    pub const COMPOSER_SORT: Self = Self(1 << 21);
+    pub const DURATION: Self = Self(1 << 22);
     /// Bitrate, sample rate, bit depth and channels.
-    pub const AUDIO_FORMAT: Self = Self(1 << 17);
-    pub const RATING: Self = Self(1 << 18);
+    pub const AUDIO_FORMAT: Self = Self(1 << 23);
+    pub const RATING: Self = Self(1 << 24);
     /// Play and skip counts and their dates.
-    pub const STATISTICS: Self = Self(1 << 19);
+    pub const STATISTICS: Self = Self(1 << 25);
     /// The file's path and whether it is there.
-    pub const LOCATION: Self = Self(1 << 20);
+    pub const LOCATION: Self = Self(1 << 26);
     /// The file's size and modification time.
-    pub const FILE: Self = Self(1 << 21);
+    pub const FILE: Self = Self(1 << 27);
     /// Whether the file embeds artwork.
-    pub const EMBEDDED_ARTWORK: Self = Self(1 << 22);
-    pub const ALL: Self = Self((1 << 23) - 1);
+    pub const EMBEDDED_ARTWORK: Self = Self(1 << 28);
+    pub const ALL: Self = Self((1 << 29) - 1);
+    /// Every "sort as" name.
+    pub const SORT_NAMES: Self = Self::TITLE_SORT
+        .union(Self::ARTIST_SORT)
+        .union(Self::ALBUM_SORT)
+        .union(Self::ALBUM_ARTIST_SORT)
+        .union(Self::COMPOSER_SORT);
+    /// The metadata a file's tags carry: every editable field from the
+    /// title to the "sort as" names. A tag mirror writes these, and the
+    /// rating, to the file.
+    pub const TAG_METADATA: Self = Self((1 << 22) - 1);
 
     /// The fields that differ between `old` and `new`, two versions of one
     /// track.
@@ -124,14 +139,10 @@ impl TrackFields {
         fields.include_if(Self::COMPOSER, *composer != new.composer);
         fields.include_if(Self::GROUPING, *grouping != new.grouping);
         fields.include_if(Self::GENRE, *genre != new.genre);
-        fields.include_if(
-            Self::TRACK_NUMBER,
-            *track_number != new.track_number || *track_total != new.track_total,
-        );
-        fields.include_if(
-            Self::DISC_NUMBER,
-            *disc_number != new.disc_number || *disc_total != new.disc_total,
-        );
+        fields.include_if(Self::TRACK_NUMBER, *track_number != new.track_number);
+        fields.include_if(Self::TRACK_TOTAL, *track_total != new.track_total);
+        fields.include_if(Self::DISC_NUMBER, *disc_number != new.disc_number);
+        fields.include_if(Self::DISC_TOTAL, *disc_total != new.disc_total);
         fields.include_if(Self::YEAR, *year != new.year);
         fields.include_if(Self::COMPILATION, *compilation != new.compilation);
         fields.include_if(
@@ -141,14 +152,14 @@ impl TrackFields {
         fields.include_if(Self::KEY, *key != new.key || *key_origin != new.key_origin);
         fields.include_if(Self::COMMENTS, *comments != new.comments);
         fields.include_if(Self::LYRICS, *lyrics != new.lyrics);
+        fields.include_if(Self::TITLE_SORT, *title_sort != new.title_sort);
+        fields.include_if(Self::ARTIST_SORT, *artist_sort != new.artist_sort);
+        fields.include_if(Self::ALBUM_SORT, *album_sort != new.album_sort);
         fields.include_if(
-            Self::SORT_NAMES,
-            *title_sort != new.title_sort
-                || *artist_sort != new.artist_sort
-                || *album_sort != new.album_sort
-                || *album_artist_sort != new.album_artist_sort
-                || *composer_sort != new.composer_sort,
+            Self::ALBUM_ARTIST_SORT,
+            *album_artist_sort != new.album_artist_sort,
         );
+        fields.include_if(Self::COMPOSER_SORT, *composer_sort != new.composer_sort);
         fields.include_if(Self::DURATION, *duration != new.duration);
         fields.include_if(
             Self::AUDIO_FORMAT,
@@ -163,6 +174,11 @@ impl TrackFields {
     /// Every field of either set; `|` in constant expressions.
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+
+    /// The fields both sets hold.
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
     }
 
     pub const fn is_empty(self) -> bool {

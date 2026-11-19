@@ -13,18 +13,8 @@ use std::{
 };
 
 use lofty::{
-    config::{GlobalOptions, WriteOptions, apply_global_options},
-    file::TaggedFile,
-    id3::v2::{Frame, Id3v2Tag, PopularimeterFrame},
+    config::{GlobalOptions, ParseOptions, apply_global_options},
     picture::{Picture, PictureType},
-    prelude::{Accessor, AudioFile, TaggedFileExt},
-    tag::{
-        ItemKey, Tag, TagExt, TagItem, TagType,
-        items::{
-            Lang, UNKNOWN_LANGUAGE,
-            popularimeter::{Popularimeter, StarRating},
-        },
-    },
 };
 use sha2::{Digest, Sha256};
 use sustain_artwork::{ArtworkPolicyError, MAX_ENCODED_ARTWORK_BYTES, validate_encoded_artwork};
@@ -38,6 +28,7 @@ mod atomic_file;
 use atomic_file::atomic_write_via_rename;
 mod hash;
 mod mpeg_frame;
+mod native;
 mod read;
 mod scan;
 mod tag_write;
@@ -46,14 +37,6 @@ pub mod walk;
 pub use hash::{copy_and_hash_reader_content, hash_file_content, hash_reader_content};
 pub use scan::{
     KnownTracks, LibraryScanner, SUSTAIN_WORKSPACE_NAME_PREFIX, is_sustain_workspace_entry,
-};
-
-use read::{read_tagged_file, valid_embedded_picture};
-use tag_write::{
-    PreservedPopularimeter, apply_bool_change, apply_number_change, apply_text_change,
-    apply_year_change, atomic_save_id3v2_to_path, atomic_save_tag_to_path, clear_rating,
-    ensure_primary_tag, id3v2_tag_clearing_rating_preserving_counter, popularimeter_from_rating,
-    repair_invalid_id3v2_languages,
 };
 
 pub type MetadataResult<T> = Result<T, MetadataError>;
@@ -127,6 +110,24 @@ pub trait MetadataService: Send + Sync {
     }
 
     fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()>;
+
+    /// `change` as the file at `path` can hold it: writing `change` there
+    /// leaves the file's tags reading as they did with this change
+    /// applied. A value the file's tag format cannot hold (a fractional
+    /// tempo in ID3, a disc number past 65535 in MP4) is carried as the
+    /// nearest value it holds, or cleared when it holds none.
+    ///
+    /// Test doubles that store values exactly may rely on the default;
+    /// the production implementation overrides it with the format's own
+    /// carriage.
+    fn carried_change(
+        &self,
+        _path: &Path,
+        change: MetadataChange,
+    ) -> MetadataResult<MetadataChange> {
+        Ok(change)
+    }
+
     fn write_rating(&self, path: &Path, rating: Rating) -> MetadataResult<()>;
     fn read_artwork(&self, path: &Path) -> MetadataResult<Option<Vec<u8>>>;
     fn write_artwork(&self, path: &Path, artwork: Option<Vec<u8>>) -> MetadataResult<()>;
@@ -340,110 +341,34 @@ impl MetadataService for LoftyMetadataService {
 
     fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()> {
         audio_format_from_path(path)?;
-        let mut tagged_file = read_tagged_file(path)?;
-        ensure_primary_tag(&mut tagged_file);
-        let tag = tagged_file
-            .primary_tag_mut()
-            .ok_or(MetadataError::WriteFailed)?;
-
-        apply_text_change(tag, ItemKey::TrackTitle, change.title);
-        apply_text_change(tag, ItemKey::TrackArtist, change.artist);
-        apply_text_change(tag, ItemKey::AlbumTitle, change.album);
-        apply_text_change(tag, ItemKey::AlbumArtist, change.album_artist);
-        apply_text_change(tag, ItemKey::Composer, change.composer);
-        apply_text_change(tag, ItemKey::ContentGroup, change.grouping);
-        apply_text_change(tag, ItemKey::Genre, change.genre);
-        apply_text_change(tag, ItemKey::TrackTitleSortOrder, change.title_sort);
-        apply_text_change(tag, ItemKey::TrackArtistSortOrder, change.artist_sort);
-        apply_text_change(tag, ItemKey::AlbumTitleSortOrder, change.album_sort);
-        apply_text_change(tag, ItemKey::AlbumArtistSortOrder, change.album_artist_sort);
-        // Lofty 0.24 has ID3v2/MP4 mappings for composer sort, but no Vorbis
-        // `COMPOSERSORT` mapping. Inserting the generic key into a Vorbis tag is
-        // silently discarded on merge, so keep SQLite authoritative rather than
-        // pretending we mirrored a field the backend cannot round-trip.
-        if tag.tag_type() != TagType::VorbisComments {
-            apply_text_change(tag, ItemKey::ComposerSortOrder, change.composer_sort);
+        let mut tag = native::parse(path, ParseOptions::new())?.into_editable_tag()?;
+        if tag.apply_change(&change) {
+            tag.save(path)?;
         }
-        apply_number_change(tag, ItemKey::TrackNumber, change.track_number);
-        apply_number_change(tag, ItemKey::TrackTotal, change.track_total);
-        apply_number_change(tag, ItemKey::DiscNumber, change.disc_number);
-        apply_number_change(tag, ItemKey::DiscTotal, change.disc_total);
-        apply_year_change(tag, change.year);
-        apply_bool_change(tag, ItemKey::FlagCompilation, change.compilation);
-        let bpm_key = bpm_item_key(tag.tag_type());
-        apply_number_change(
-            tag,
-            bpm_key,
-            change.bpm.map(|bpm| bpm_tag_text(bpm_key, bpm)),
-        );
-        apply_text_change(
-            tag,
-            ItemKey::InitialKey,
-            change.key.map(|key| key.short_code().to_owned()),
-        );
-        apply_text_change(tag, ItemKey::Comment, change.comments);
-        let lyrics_key = lyrics_item_key(tag.tag_type());
-        apply_text_change(tag, lyrics_key, change.lyrics);
+        Ok(())
+    }
 
-        repair_invalid_id3v2_languages(tag);
-        atomic_save_tag_to_path(tag, path, WriteOptions::default())
+    fn carried_change(
+        &self,
+        path: &Path,
+        change: MetadataChange,
+    ) -> MetadataResult<MetadataChange> {
+        audio_format_from_path(path)?;
+        let parsed = native::parse(path, ParseOptions::new().read_properties(false))?;
+        Ok(parsed.family().carriage().carried_change(change))
     }
 
     fn write_rating(&self, path: &Path, rating: Rating) -> MetadataResult<()> {
         audio_format_from_path(path)?;
-        let mut tagged_file = read_tagged_file(path)?;
-        ensure_primary_tag(&mut tagged_file);
-        let tag = tagged_file
-            .primary_tag_mut()
-            .ok_or(MetadataError::WriteFailed)?;
-
-        // Preserve any existing POPM play counter when overwriting the
-        // frame with a new rating. Sustain itself never reads or writes
-        // this counter — listening statistics live in SQLite, per the
-        // persistence policy in AGENTS.md — but other applications
-        // (MusicBee, Foobar2000, …) store play counts in the POPM
-        // counter field, and silently zeroing them out on every rating
-        // edit would clobber data that doesn't belong to us.
-        let preserved_popularimeter = tag.ratings().next().map(|popularimeter| {
-            PreservedPopularimeter::from_parts(
-                popularimeter.email().to_owned(),
-                popularimeter.play_counter,
-            )
-        });
-        let preserved_counter = preserved_popularimeter
-            .as_ref()
-            .map(|popularimeter| popularimeter.play_counter)
-            .unwrap_or(0);
-
-        if rating == Rating::unrated() {
-            if let Some(id3v2) =
-                id3v2_tag_clearing_rating_preserving_counter(tag, preserved_popularimeter)
-            {
-                return atomic_save_id3v2_to_path(&id3v2, path, WriteOptions::default());
-            }
-            clear_rating(tag);
-        } else {
-            tag.insert_text(
-                ItemKey::Popularimeter,
-                popularimeter_from_rating(rating, preserved_counter).to_string(),
-            );
+        let mut tag = native::parse(path, ParseOptions::new())?.into_editable_tag()?;
+        if tag.set_rating(rating) {
+            tag.save(path)?;
         }
-
-        repair_invalid_id3v2_languages(tag);
-        atomic_save_tag_to_path(tag, path, WriteOptions::default())
+        Ok(())
     }
 
     fn read_artwork(&self, path: &Path) -> MetadataResult<Option<Vec<u8>>> {
-        audio_format_from_path(path)?;
-        let tagged_file = read_tagged_file(path)?;
-        let Some(tag) = tagged_file
-            .primary_tag()
-            .or_else(|| tagged_file.first_tag())
-        else {
-            return Ok(None);
-        };
-
-        Ok(valid_embedded_picture(tag).map(|picture| picture.data().to_vec()))
+        read::read_cover(path)
     }
 
     fn write_artwork(&self, path: &Path, artwork: Option<Vec<u8>>) -> MetadataResult<()> {
@@ -451,36 +376,19 @@ impl MetadataService for LoftyMetadataService {
             validate_encoded_artwork(bytes).map_err(MetadataError::ArtworkRejected)?;
         }
         audio_format_from_path(path)?;
-        let mut tagged_file = read_tagged_file(path)?;
-        ensure_primary_tag(&mut tagged_file);
-        let tag = tagged_file
-            .primary_tag_mut()
-            .ok_or(MetadataError::WriteFailed)?;
-
-        // Drop every existing CoverFront picture before writing the new one
-        // (or leaving the slot empty). Walk in reverse so the indices stay
-        // valid as we remove entries.
-        let cover_indices: Vec<usize> = tag
-            .pictures()
-            .iter()
-            .enumerate()
-            .filter(|(_, picture)| picture.pic_type() == PictureType::CoverFront)
-            .map(|(index, _)| index)
-            .collect();
-        for index in cover_indices.into_iter().rev() {
-            let _removed = tag.remove_picture(index);
+        let cover = artwork
+            .map(|bytes| {
+                let mut picture = Picture::from_reader(&mut io::Cursor::new(bytes))
+                    .map_err(|_| MetadataError::WriteFailed)?;
+                picture.set_pic_type(PictureType::CoverFront);
+                Ok(picture)
+            })
+            .transpose()?;
+        let mut tag = native::parse(path, ParseOptions::new())?.into_editable_tag()?;
+        if tag.set_cover(cover)? {
+            tag.save(path)?;
         }
-
-        if let Some(bytes) = artwork {
-            let mut cursor = std::io::Cursor::new(bytes);
-            let mut picture =
-                Picture::from_reader(&mut cursor).map_err(|_| MetadataError::WriteFailed)?;
-            picture.set_pic_type(PictureType::CoverFront);
-            tag.push_picture(picture);
-        }
-
-        repair_invalid_id3v2_languages(tag);
-        atomic_save_tag_to_path(tag, path, WriteOptions::default())
+        Ok(())
     }
 
     fn repair_malformed_tags(&self, path: &Path, repair: MetadataRepair) -> MetadataResult<bool> {
@@ -553,57 +461,11 @@ pub fn audio_format_from_path(path: &Path) -> MetadataResult<AudioFormat> {
     }
 }
 
-/// The tag item that carries beats-per-minute in `tag_type`.
-///
-/// Lofty models BPM as two distinct keys: the decimal [`ItemKey::Bpm`]
-/// and the integer [`ItemKey::IntegerBpm`]. They map to different
-/// container fields, and not every format defines both. ID3v2 only has
-/// the integer `TBPM` frame and MP4 the integer `tmpo` atom — neither
-/// maps [`ItemKey::Bpm`], so writing it there silently drops the value.
-/// Vorbis comments conversely only define a decimal `BPM` field. Prefer
-/// the integer key wherever the format maps it and fall back to the
-/// decimal key otherwise. Used for both reading and writing so the value
-/// round-trips on every format.
 /// Whether `error`, or an error it reports as its cause, is an `E`. lofty
 /// reports a failure as the operation that failed (parsing or encoding a
 /// file) and carries why in the error's source chain.
 fn caused_by<E: std::error::Error + 'static>(error: &(dyn std::error::Error + 'static)) -> bool {
     std::iter::successors(Some(error), |error| error.source()).any(|error| error.is::<E>())
-}
-
-fn bpm_item_key(tag_type: TagType) -> ItemKey {
-    if ItemKey::IntegerBpm.map_key(tag_type).is_some() {
-        ItemKey::IntegerBpm
-    } else {
-        ItemKey::Bpm
-    }
-}
-
-/// The text `bpm` is written as under `bpm_key`: whole beats in an integer
-/// field, which cannot hold a fraction, the exact tempo in a decimal one.
-/// The library keeps the exact tempo either way.
-fn bpm_tag_text(bpm_key: ItemKey, bpm: Bpm) -> String {
-    if bpm_key == ItemKey::IntegerBpm {
-        bpm.whole().to_string()
-    } else {
-        bpm.to_string()
-    }
-}
-
-/// The tag item that carries unsynchronized lyrics in `tag_type`.
-///
-/// ID3v2 exposes lyrics only through the `USLT` frame
-/// ([`ItemKey::UnsyncLyrics`]) and deliberately leaves [`ItemKey::Lyrics`]
-/// unmapped, so writing the plain key to an MP3 silently drops the text.
-/// MP4 (`©lyr`) and Vorbis (`LYRICS`) accept [`ItemKey::Lyrics`]. Prefer
-/// the plain key where the format maps it and fall back to the
-/// unsynchronized key otherwise, symmetrically for read and write.
-fn lyrics_item_key(tag_type: TagType) -> ItemKey {
-    if ItemKey::Lyrics.map_key(tag_type).is_some() {
-        ItemKey::Lyrics
-    } else {
-        ItemKey::UnsyncLyrics
-    }
 }
 
 #[cfg(test)]

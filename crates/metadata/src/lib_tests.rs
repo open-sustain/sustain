@@ -10,23 +10,17 @@ use std::{
 use lofty::{
     config::WriteOptions,
     id3::v2::Id3v2Tag,
-    mp4::Ilst,
-    ogg::tag::VorbisComments,
-    picture::{Picture, PictureType},
     prelude::{Accessor, AudioFile, TaggedFileExt},
-    tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType},
+    tag::{ItemKey, Tag, TagExt, TagType},
 };
 use sustain_domain::{Bpm, FieldChange, MetadataChange, MusicalKey, TrackMetadata};
 
-use super::read::{parse_bpm, parse_flag, read_tagged_file, star_rating_value};
+use super::read::parse_flag;
 use super::walk::{StdWalkFilesystem, WalkFilesystem};
 use super::{
     AudioFormat, InitialTagRead, InitialTags, LibraryScanner, LoftyMetadataService,
     MalformedTagError, MetadataError, MetadataRepair, MetadataResult, MetadataService, Rating,
-    ScanFingerprint, apply_bool_change, apply_number_change, apply_text_change, apply_year_change,
-    atomic_write_via_rename, audio_format_from_path, bpm_item_key, bpm_tag_text, hash_file_content,
-    lyrics_item_key, popularimeter_from_rating, repair_invalid_id3v2_languages,
-    valid_embedded_picture,
+    ScanFingerprint, atomic_write_via_rename, audio_format_from_path, hash_file_content,
 };
 use sustain_domain::TrackRelativePath;
 
@@ -94,343 +88,6 @@ fn parse_flag_accepts_yes_no_case_insensitively() {
     assert_eq!(parse_flag("No"), Some(false));
 }
 
-#[test]
-fn parse_bpm_reads_whole_and_decimal_tempos_within_range() {
-    assert_eq!(parse_bpm("655"), Bpm::from_whole(655));
-    assert_eq!(parse_bpm(" 118.86 "), Bpm::from_hundredths(11_886));
-    assert_eq!(parse_bpm("656"), None);
-    assert_eq!(parse_bpm("0"), None);
-    assert_eq!(parse_bpm("fast"), None);
-}
-
-#[test]
-fn bpm_is_written_whole_to_integer_fields_and_exact_to_decimal_ones() {
-    let tempo = Bpm::from_hundredths(11_886).expect("tempo");
-    assert_eq!(bpm_tag_text(ItemKey::IntegerBpm, tempo), "119");
-    assert_eq!(bpm_tag_text(ItemKey::Bpm, tempo), "118.86");
-}
-
-#[test]
-fn year_update_replaces_the_higher_priority_recording_date() {
-    let mut tag = Tag::new(TagType::VorbisComments);
-    tag.insert_text(ItemKey::RecordingDate, "1998-09-30".to_owned());
-
-    apply_year_change(&mut tag, FieldChange::Set(2015));
-
-    assert_eq!(tag.date().map(|date| date.year), Some(2015));
-    assert_eq!(tag.get_string(ItemKey::RecordingDate), Some("2015-09-30"));
-    assert_eq!(tag.get_string(ItemKey::Year), None);
-}
-
-#[test]
-fn year_clear_removes_recording_date_and_year_items() {
-    let mut tag = Tag::new(TagType::VorbisComments);
-    tag.insert_text(ItemKey::RecordingDate, "1998-09-30".to_owned());
-    tag.insert_text(ItemKey::Year, "1998".to_owned());
-
-    apply_year_change(&mut tag, FieldChange::Clear);
-
-    assert_eq!(tag.get_string(ItemKey::RecordingDate), None);
-    assert_eq!(tag.get_string(ItemKey::Year), None);
-}
-
-#[test]
-fn year_update_outside_loftys_timestamp_range_keeps_a_textual_year() {
-    let mut tag = Tag::new(TagType::VorbisComments);
-    tag.insert_text(ItemKey::RecordingDate, "1998-09-30".to_owned());
-
-    apply_year_change(&mut tag, FieldChange::Set(10_000));
-
-    assert_eq!(tag.get_string(ItemKey::RecordingDate), None);
-    assert_eq!(tag.get_string(ItemKey::Year), Some("10000"));
-}
-
-#[test]
-fn bpm_and_lyrics_keys_follow_the_container_format() {
-    // ID3v2 and MP4 only define an integer BPM (`TBPM` / `tmpo`); Vorbis
-    // only a decimal `BPM`. ID3v2 only defines unsynchronized lyrics
-    // (`USLT`); MP4 and Vorbis accept the plain lyrics key.
-    assert_eq!(bpm_item_key(TagType::Id3v2), ItemKey::IntegerBpm);
-    assert_eq!(bpm_item_key(TagType::Mp4Ilst), ItemKey::IntegerBpm);
-    assert_eq!(bpm_item_key(TagType::VorbisComments), ItemKey::Bpm);
-
-    assert_eq!(lyrics_item_key(TagType::Id3v2), ItemKey::UnsyncLyrics);
-    assert_eq!(lyrics_item_key(TagType::Mp4Ilst), ItemKey::Lyrics);
-    assert_eq!(lyrics_item_key(TagType::VorbisComments), ItemKey::Lyrics);
-}
-
-/// Write BPM and lyrics into a fresh `tag_type` tag exactly as
-/// `write_metadata` does, round-trip it through the container-specific
-/// representation — the lossy boundary lofty crosses on save + re-read,
-/// supplied by `to_container_and_back` — then assert both survive, the
-/// tempo to the precision the format holds (`expected_bpm`).
-fn assert_bpm_and_lyrics_round_trip(
-    tag_type: TagType,
-    expected_bpm: Option<Bpm>,
-    to_container_and_back: impl Fn(Tag) -> Tag,
-) {
-    let mut tag = Tag::new(tag_type);
-    let bpm_key = bpm_item_key(tag_type);
-    let tempo = Bpm::from_hundredths(12_745).expect("tempo");
-    apply_number_change(
-        &mut tag,
-        bpm_key,
-        FieldChange::Set(bpm_tag_text(bpm_key, tempo)),
-    );
-    apply_text_change(
-        &mut tag,
-        lyrics_item_key(tag_type),
-        FieldChange::Set("first line\nsecond line".to_owned()),
-    );
-
-    let back = to_container_and_back(tag);
-
-    assert_eq!(
-        back.get_string(bpm_key).and_then(parse_bpm),
-        expected_bpm,
-        "bpm lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(lyrics_item_key(tag_type)),
-        Some("first line\nsecond line"),
-        "lyrics lost for {tag_type:?}"
-    );
-}
-
-#[test]
-fn bpm_and_lyrics_survive_a_container_round_trip_on_every_format() {
-    // Regression for #148: a survivor whose BPM/lyrics came from SQLite was
-    // written with `ItemKey::Bpm`/`ItemKey::Lyrics`, which ID3v2 maps to no
-    // frame at all, so the value vanished on save and consolidation's
-    // read-back verification could never match. Writing the key the format
-    // actually defines makes both fields round-trip everywhere.
-    // ID3v2 and MP4 hold whole beats; Vorbis keeps the hundredths.
-    assert_bpm_and_lyrics_round_trip(TagType::Id3v2, Bpm::from_whole(127), |tag| {
-        Tag::from(Id3v2Tag::from(tag))
-    });
-    assert_bpm_and_lyrics_round_trip(TagType::Mp4Ilst, Bpm::from_whole(127), |tag| {
-        Tag::from(Ilst::from(tag))
-    });
-    assert_bpm_and_lyrics_round_trip(
-        TagType::VorbisComments,
-        Bpm::from_hundredths(12_745),
-        |tag| Tag::from(VorbisComments::from(tag)),
-    );
-}
-
-fn assert_full_editable_metadata_round_trip(
-    tag_type: TagType,
-    to_container_and_back: impl Fn(Tag) -> Tag,
-) {
-    let mut tag = Tag::new(tag_type);
-    apply_text_change(
-        &mut tag,
-        ItemKey::TrackTitle,
-        FieldChange::Set("Title".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::TrackArtist,
-        FieldChange::Set("Artist".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::AlbumTitle,
-        FieldChange::Set("Album".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::AlbumArtist,
-        FieldChange::Set("Album Artist".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::Composer,
-        FieldChange::Set("Composer".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::ContentGroup,
-        FieldChange::Set("Grouping".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::Genre,
-        FieldChange::Set("Genre".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::TrackTitleSortOrder,
-        FieldChange::Set("Title Sort".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::TrackArtistSortOrder,
-        FieldChange::Set("Artist Sort".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::AlbumTitleSortOrder,
-        FieldChange::Set("Album Sort".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::AlbumArtistSortOrder,
-        FieldChange::Set("Album Artist Sort".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::ComposerSortOrder,
-        FieldChange::Set("Composer Sort".to_owned()),
-    );
-    apply_number_change(&mut tag, ItemKey::TrackNumber, FieldChange::Set(7_u32));
-    apply_number_change(&mut tag, ItemKey::TrackTotal, FieldChange::Set(12_u32));
-    apply_number_change(&mut tag, ItemKey::DiscNumber, FieldChange::Set(2_u32));
-    apply_number_change(&mut tag, ItemKey::DiscTotal, FieldChange::Set(3_u32));
-    apply_year_change(&mut tag, FieldChange::Set(1998));
-    apply_bool_change(&mut tag, ItemKey::FlagCompilation, FieldChange::Set(true));
-    apply_number_change(&mut tag, bpm_item_key(tag_type), FieldChange::Set(127_u32));
-    apply_text_change(
-        &mut tag,
-        ItemKey::InitialKey,
-        FieldChange::Set("8A".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        ItemKey::Comment,
-        FieldChange::Set("Comment".to_owned()),
-    );
-    apply_text_change(
-        &mut tag,
-        lyrics_item_key(tag_type),
-        FieldChange::Set("Lyrics".to_owned()),
-    );
-
-    let back = to_container_and_back(tag);
-
-    assert_eq!(
-        back.title().as_deref(),
-        Some("Title"),
-        "title lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.artist().as_deref(),
-        Some("Artist"),
-        "artist lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.album().as_deref(),
-        Some("Album"),
-        "album lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(ItemKey::AlbumArtist),
-        Some("Album Artist"),
-        "album artist lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(ItemKey::Composer),
-        Some("Composer"),
-        "composer lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(ItemKey::ContentGroup),
-        Some("Grouping"),
-        "grouping lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.genre().as_deref(),
-        Some("Genre"),
-        "genre lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(ItemKey::TrackTitleSortOrder),
-        Some("Title Sort"),
-        "title sort lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(ItemKey::TrackArtistSortOrder),
-        Some("Artist Sort"),
-        "artist sort lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(ItemKey::AlbumTitleSortOrder),
-        Some("Album Sort"),
-        "album sort lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(ItemKey::AlbumArtistSortOrder),
-        Some("Album Artist Sort"),
-        "album artist sort lost for {tag_type:?}"
-    );
-    if tag_type == TagType::VorbisComments {
-        assert_eq!(
-            back.get_string(ItemKey::ComposerSortOrder),
-            None,
-            "Lofty currently has no Vorbis COMPOSERSORT mapping"
-        );
-    } else {
-        assert_eq!(
-            back.get_string(ItemKey::ComposerSortOrder),
-            Some("Composer Sort"),
-            "composer sort lost for {tag_type:?}"
-        );
-    }
-    assert_eq!(back.track(), Some(7), "track number lost for {tag_type:?}");
-    assert_eq!(
-        back.track_total(),
-        Some(12),
-        "track total lost for {tag_type:?}"
-    );
-    assert_eq!(back.disk(), Some(2), "disc number lost for {tag_type:?}");
-    assert_eq!(
-        back.disk_total(),
-        Some(3),
-        "disc total lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.date().map(|date| i32::from(date.year)),
-        Some(1998),
-        "year lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(ItemKey::FlagCompilation)
-            .and_then(parse_flag),
-        Some(true),
-        "compilation flag lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(bpm_item_key(tag_type))
-            .and_then(|value| value.trim().parse::<u32>().ok()),
-        Some(127),
-        "bpm lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(ItemKey::InitialKey),
-        Some("8A"),
-        "key lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.comment().as_deref(),
-        Some("Comment"),
-        "comment lost for {tag_type:?}"
-    );
-    assert_eq!(
-        back.get_string(lyrics_item_key(tag_type)),
-        Some("Lyrics"),
-        "lyrics lost for {tag_type:?}"
-    );
-}
-
-#[test]
-fn editable_metadata_survives_a_container_round_trip_on_every_format() {
-    assert_full_editable_metadata_round_trip(TagType::Id3v2, |tag| Tag::from(Id3v2Tag::from(tag)));
-    assert_full_editable_metadata_round_trip(TagType::Mp4Ilst, |tag| Tag::from(Ilst::from(tag)));
-    assert_full_editable_metadata_round_trip(TagType::VorbisComments, |tag| {
-        Tag::from(VorbisComments::from(tag))
-    });
-}
-
 /// Every editable field set, then cleared, through the public writer on a
 /// real file of each container, and read back through the public reader.
 /// Building a `Tag` by hand would skip the writer's own field dispatch.
@@ -476,15 +133,9 @@ fn every_editable_field_is_written_and_cleared_on_disk_in_every_container() {
             .read_persisted_tags(&path)
             .unwrap_or_else(|error| unreachable!("read {name}: {error:?}"))
             .metadata;
-        let mut expected = every_field_metadata();
-        if matches!(name, "edit.flac" | "edit.ogg" | "edit.opus") {
-            // Lofty's generic tag has no Vorbis key for composer sort order,
-            // so `COMPOSERSORT` is neither written nor read (#329).
-            expected.composer_sort = None;
-        }
         assert_eq!(
             editable_fields(&written),
-            editable_fields(&expected),
+            editable_fields(&every_field_metadata()),
             "{name}"
         );
 
@@ -1072,37 +723,11 @@ fn write_metadata_writes_the_key_short_code() {
         )
         .expect("write key");
 
-    let tagged = read_tagged_file(&path).expect("re-read file");
+    let tagged = lofty::read_from_path(&path).expect("re-read file");
     let tag = tagged.primary_tag().expect("tag");
     assert_eq!(tag.get_string(ItemKey::InitialKey), Some("Ebm"));
 
     fs::remove_dir_all(root).expect("remove test directory");
-}
-
-fn assert_rating_round_trip(tag_type: TagType, to_container_and_back: impl Fn(Tag) -> Tag) {
-    let mut tag = Tag::new(tag_type);
-    let rating = Rating::new(4).expect("rating");
-    tag.insert_text(
-        ItemKey::Popularimeter,
-        popularimeter_from_rating(rating, 23).to_string(),
-    );
-
-    let back = to_container_and_back(tag);
-    let rating = back
-        .ratings()
-        .next()
-        .map(|rating| star_rating_value(rating.rating()));
-
-    assert_eq!(rating, Some(4), "rating lost for {tag_type:?}");
-}
-
-#[test]
-fn rating_survives_a_container_round_trip_on_every_format() {
-    assert_rating_round_trip(TagType::Id3v2, |tag| Tag::from(Id3v2Tag::from(tag)));
-    assert_rating_round_trip(TagType::Mp4Ilst, |tag| Tag::from(Ilst::from(tag)));
-    assert_rating_round_trip(TagType::VorbisComments, |tag| {
-        Tag::from(VorbisComments::from(tag))
-    });
 }
 
 #[test]
@@ -1139,96 +764,6 @@ fn write_rating_preserves_popm_counter_when_clearing_rating() {
     assert_eq!(popm.play_counter, 23);
 
     fs::remove_dir_all(root).expect("remove test directory");
-}
-
-#[test]
-fn id3v2_drops_the_plain_bpm_and_lyrics_keys() {
-    // Documents why the fix was needed: ID3v2 maps neither `ItemKey::Bpm`
-    // nor `ItemKey::Lyrics`, so the old write path lost both on save.
-    let mut tag = Tag::new(TagType::Id3v2);
-    tag.insert_text(ItemKey::Bpm, "127".to_owned());
-    tag.insert_text(ItemKey::Lyrics, "a line".to_owned());
-
-    let back = Tag::from(Id3v2Tag::from(tag));
-
-    assert_eq!(back.get_string(ItemKey::Bpm), None);
-    assert_eq!(back.get_string(ItemKey::IntegerBpm), None);
-    assert_eq!(back.get_string(ItemKey::Lyrics), None);
-    assert_eq!(back.get_string(ItemKey::UnsyncLyrics), None);
-}
-
-#[test]
-fn repairs_only_malformed_id3v2_language_frames() {
-    // #193: COMM/USLT carry a 3-byte ISO-639-2 language lofty accepts on
-    // read but refuses to write. Both surface on the abstract tag as items
-    // bearing a `lang`; the repair heals the malformed ones to `XXX` and
-    // leaves valid ones — and the text/description — untouched.
-    let mut tag = Tag::new(TagType::Id3v2);
-
-    let mut malformed_comment = TagItem::new(ItemKey::Comment, ItemValue::Text("note".to_owned()));
-    malformed_comment.set_lang([0, 0, 0]);
-    malformed_comment.set_description("desc".to_owned());
-    tag.push_unchecked(malformed_comment);
-
-    let mut valid_comment = TagItem::new(ItemKey::Comment, ItemValue::Text("keep".to_owned()));
-    valid_comment.set_lang(*b"eng");
-    tag.push_unchecked(valid_comment);
-
-    let mut malformed_lyrics =
-        TagItem::new(ItemKey::UnsyncLyrics, ItemValue::Text("la la".to_owned()));
-    malformed_lyrics.set_lang([0, 0, 0]);
-    tag.push_unchecked(malformed_lyrics);
-
-    repair_invalid_id3v2_languages(&mut tag);
-
-    let comments: Vec<&TagItem> = tag.get_items(ItemKey::Comment).collect();
-    let healed = comments
-        .iter()
-        .find(|item| item.description() == "desc")
-        .expect("the malformed comment survives");
-    assert_eq!(healed.lang(), b"XXX", "malformed language healed to XXX");
-    assert_eq!(
-        healed.value().text(),
-        Some("note"),
-        "comment text preserved"
-    );
-
-    let untouched = comments
-        .iter()
-        .find(|item| item.value().text() == Some("keep"))
-        .expect("the valid comment survives");
-    assert_eq!(
-        untouched.lang(),
-        b"eng",
-        "a valid language is left untouched"
-    );
-
-    let lyrics = tag
-        .get_items(ItemKey::UnsyncLyrics)
-        .next()
-        .expect("lyrics survive");
-    assert_eq!(lyrics.lang(), b"XXX", "USLT language healed too");
-    assert_eq!(
-        lyrics.value().text(),
-        Some("la la"),
-        "lyrics text preserved"
-    );
-}
-
-#[test]
-fn repair_leaves_valid_language_tags_byte_for_byte_unchanged() {
-    // Acceptance criterion: a file without the defect must serialize exactly
-    // as before, so the repair must be a true no-op on valid input.
-    let mut tag = Tag::new(TagType::Id3v2);
-    let mut comment = TagItem::new(ItemKey::Comment, ItemValue::Text("comment".to_owned()));
-    comment.set_lang(*b"eng");
-    tag.push_unchecked(comment);
-
-    let before = dump_id3v2(tag.clone());
-    repair_invalid_id3v2_languages(&mut tag);
-    let after = dump_id3v2(tag);
-
-    assert_eq!(before, after);
 }
 
 /// Serializes `tag` as ID3v2 exactly as the save path would, returning the
@@ -1465,13 +1000,13 @@ fn initial_tag_read_reports_aiff_content_behind_another_extension() {
     fs::remove_dir_all(root).expect("remove test directory");
 }
 
-fn id3v2_3_text_frame(id: &str, text: &str) -> Vec<u8> {
+pub(crate) fn id3v2_3_text_frame(id: &str, text: &str) -> Vec<u8> {
     let mut content = vec![0x00];
     content.extend_from_slice(text.as_bytes());
     id3v2_3_frame(id, &content)
 }
 
-fn id3v2_3_frame(id: &str, content: &[u8]) -> Vec<u8> {
+pub(crate) fn id3v2_3_frame(id: &str, content: &[u8]) -> Vec<u8> {
     let mut frame = Vec::new();
     frame.extend_from_slice(id.as_bytes());
     frame.extend_from_slice(&(content.len() as u32).to_be_bytes());
@@ -1480,7 +1015,7 @@ fn id3v2_3_frame(id: &str, content: &[u8]) -> Vec<u8> {
     frame
 }
 
-fn mp3_with_id3v2_3_frames(frames: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn mp3_with_id3v2_3_frames(frames: &[Vec<u8>]) -> Vec<u8> {
     let body = frames.concat();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"ID3");
@@ -1491,13 +1026,13 @@ fn mp3_with_id3v2_3_frames(frames: &[Vec<u8>]) -> Vec<u8> {
     bytes
 }
 
-fn id3v2_4_text_frame(id: &str, text: &str) -> Vec<u8> {
+pub(crate) fn id3v2_4_text_frame(id: &str, text: &str) -> Vec<u8> {
     let mut content = vec![0x00];
     content.extend_from_slice(text.as_bytes());
     id3v2_4_frame(id, &content)
 }
 
-fn id3v2_4_frame(id: &str, content: &[u8]) -> Vec<u8> {
+pub(crate) fn id3v2_4_frame(id: &str, content: &[u8]) -> Vec<u8> {
     let mut frame = Vec::new();
     frame.extend_from_slice(id.as_bytes());
     frame.extend_from_slice(&synchsafe_size(content.len() as u32));
@@ -1506,7 +1041,7 @@ fn id3v2_4_frame(id: &str, content: &[u8]) -> Vec<u8> {
     frame
 }
 
-fn mp3_with_id3v2_4_frames(frames: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn mp3_with_id3v2_4_frames(frames: &[Vec<u8>]) -> Vec<u8> {
     let body = frames.concat();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"ID3");
@@ -1610,13 +1145,21 @@ fn write_metadata_heals_invalid_comment_language() {
     // A metadata write that does not touch the comment still carries the
     // pre-existing malformed frame through, so it must heal it too.
     assert_write_heals_invalid_language(|service, path| {
-        service.write_metadata(path, MetadataChange::default())
+        service.write_metadata(
+            path,
+            MetadataChange {
+                title: FieldChange::Set("Title".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
     });
 }
 
 #[test]
 fn write_artwork_heals_invalid_comment_language() {
-    assert_write_heals_invalid_language(|service, path| service.write_artwork(path, None));
+    assert_write_heals_invalid_language(|service, path| {
+        service.write_artwork(path, Some(tiny_png()))
+    });
 }
 
 #[test]
@@ -1644,7 +1187,7 @@ fn write_preserves_a_valid_comment_language() {
     fs::remove_dir_all(root).expect("remove test directory");
 }
 
-fn synchsafe_size(mut value: u32) -> [u8; 4] {
+pub(crate) fn synchsafe_size(mut value: u32) -> [u8; 4] {
     let mut out = [0u8; 4];
     for slot in out.iter_mut().rev() {
         *slot = (value & 0x7f) as u8;
@@ -1664,7 +1207,7 @@ fn id3v2_3_tag(payload: &[u8]) -> Vec<u8> {
 
 /// `count` MPEG-1 Layer III, 128 kbps, 44.1 kHz frames (417 bytes each).
 /// Only the 4-byte header is parsed by lofty, so zeroed payload is fine.
-fn mpeg_audio_frames(count: usize) -> Vec<u8> {
+pub(crate) fn mpeg_audio_frames(count: usize) -> Vec<u8> {
     let mut bytes = Vec::new();
     for _ in 0..count {
         let mut frame = vec![0xFF, 0xFB, 0x90, 0x00];
@@ -1719,7 +1262,7 @@ fn raw_popm(path: &Path) -> Option<RawPopm> {
 }
 
 /// A 1×1 PNG that passes Sustain's artwork policy.
-fn tiny_png() -> Vec<u8> {
+pub(crate) fn tiny_png() -> Vec<u8> {
     vec![
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5,
@@ -1902,29 +1445,6 @@ fn write_artwork_heals_an_mp3_with_oversized_padding() {
                 "the written artwork survived the heal"
             );
         },
-    );
-}
-
-#[test]
-fn embedded_picture_selection_skips_invalid_front_cover() {
-    let valid = vec![
-        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
-        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5,
-        0x1c, 0x0c, 0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64,
-        0xf8, 0x0f, 0x00, 0x01, 0x05, 0x01, 0x01, 0x27, 0x18, 0xe3, 0x66, 0x00, 0x00, 0x00, 0x00,
-        0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-    ];
-    let mut tag = Tag::new(TagType::Id3v2);
-    tag.push_picture(
-        Picture::unchecked(b"not an image".to_vec())
-            .pic_type(PictureType::CoverFront)
-            .build(),
-    );
-    tag.push_picture(Picture::unchecked(valid.clone()).build());
-
-    assert_eq!(
-        valid_embedded_picture(&tag).map(Picture::data),
-        Some(valid.as_slice())
     );
 }
 
@@ -3129,7 +2649,7 @@ impl WalkFilesystem for FaultInjectingScanFilesystem {
     }
 }
 
-fn unique_test_directory() -> PathBuf {
+pub(crate) fn unique_test_directory() -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     // A wall-clock timestamp is not actually unique: two tests on

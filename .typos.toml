@@ -30,6 +30,8 @@ WRONLY = "WRONLY"
 # `typos` splits the ID3v2 "Lead performer(s)" frame id `TPE1` at the
 # digit, so the alphabetic frame-prefix token is intentional.
 TPE = "TPE"
+# The ID3v2 "Part of a set" (disc number) frame id, matched verbatim.
+TPOS = "TPOS"
 # The ISO base media (MP4) track box type `trak`, a four-character code
 # matched verbatim when the analyzer reads an MP4 edit list.
 trak = "trak"

@@ -47,7 +47,9 @@ fn a_shown_track_field_patches_albums_in_place() {
     for field in [
         TrackFields::TITLE,
         TrackFields::DISC_NUMBER,
+        TrackFields::DISC_TOTAL,
         TrackFields::TRACK_NUMBER,
+        TrackFields::TRACK_TOTAL,
         TrackFields::DURATION,
         TrackFields::LOCATION,
     ] {

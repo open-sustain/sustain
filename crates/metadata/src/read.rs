@@ -5,16 +5,17 @@
 //!
 //! These are the *initial* values Sustain captures the first time a file
 //! enters the library — editable metadata, star rating, and the embedded-
-//! artwork bit — plus the small parsers and the shared `read_tagged_file`
-//! open primitive they build on. Per Sustain's persistence policy these are
-//! consulted only at first import; once a track has a library row SQLite is
-//! authoritative.
+//! artwork bit — from the tag [`crate::native`] reads. Per Sustain's
+//! persistence policy these are consulted only at first import; once a
+//! track has a library row SQLite is authoritative.
 
 use super::*;
+use crate::native;
 use lofty::{
     config::ParseOptions,
     error::{FileParseError, TextDecodingError},
     file::FileType,
+    file::{AudioFile, TaggedFileExt},
     probe::Probe,
     tag::items::timestamp::TimestampParseError,
 };
@@ -24,17 +25,12 @@ use lofty::{
 /// the malformation reported so a scan can repair it.
 pub(crate) fn read_initial_tags(path: &Path) -> MetadataResult<InitialTagRead> {
     audio_format_from_path(path)?;
-    match read_tagged_file(path) {
-        Ok(tagged_file) => Ok(InitialTagRead::clean(initial_tags_from_tagged_file(
-            path,
-            &tagged_file,
-            true,
-            true,
-        ))),
+    match native::parse(path, ParseOptions::new()) {
+        Ok(parsed) => Ok(InitialTagRead::clean(initial_tags(path, &parsed, true))),
         Err(MetadataError::MalformedTag(kind)) => {
-            let tagged_file = read_tagged_file_without_tags(path)?;
+            let parsed = native::parse(path, ParseOptions::new().read_tags(false))?;
             Ok(InitialTagRead {
-                tags: initial_tags_from_tagged_file(path, &tagged_file, false, true),
+                tags: initial_tags(path, &parsed, true),
                 repair: Some(MetadataRepair::MalformedTag(kind)),
             })
         }
@@ -46,103 +42,54 @@ pub(crate) fn read_initial_tags(path: &Path) -> MetadataResult<InitialTagRead> {
 /// cannot parse is an error rather than an empty result.
 pub(crate) fn read_persisted_tags(path: &Path) -> MetadataResult<InitialTags> {
     audio_format_from_path(path)?;
-    read_tagged_file(path)
-        .map(|tagged_file| initial_tags_from_tagged_file(path, &tagged_file, true, false))
+    native::parse(path, ParseOptions::new()).map(|parsed| initial_tags(path, &parsed, false))
 }
 
-fn initial_tags_from_tagged_file(
+/// The cover the file at `path` carries.
+pub(crate) fn read_cover(path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+    audio_format_from_path(path)?;
+    let parsed = native::parse(path, ParseOptions::new())?;
+    Ok(parsed.with_readable_tag(|tag| {
+        tag.and_then(native::EditableTag::cover)
+            .map(|picture| picture.data().to_vec())
+    }))
+}
+
+fn initial_tags(
     path: &Path,
-    tagged_file: &TaggedFile,
-    read_tags: bool,
+    parsed: &native::ParsedFile,
     backfill_title_from_filename: bool,
 ) -> InitialTags {
-    let tag = tagged_file
-        .primary_tag()
-        .or_else(|| tagged_file.first_tag())
-        .filter(|_| read_tags);
-    let properties = tagged_file.properties();
+    let (mut metadata, rating, has_embedded_artwork) = parsed.with_readable_tag(|tag| {
+        tag.map_or_else(
+            || (TrackMetadata::default(), Rating::unrated(), false),
+            |tag| (tag.metadata(), tag.rating(), tag.cover().is_some()),
+        )
+    });
+    let properties = parsed.rest.properties();
     // lofty guesses the length and bitrate of an MP3 that declares no
     // frame count from its first frame alone; see `mpeg_frame`.
-    let mpeg_audio_extent = (tagged_file.file_type() == FileType::Mpeg)
+    let mpeg_audio_extent = (parsed.rest.file_type() == FileType::Mpeg)
         .then(|| mpeg_frame::audio_extent(path))
         .flatten();
 
-    let mut metadata = TrackMetadata {
-        title: tag.and_then(|tag| tag.title().map(|value| value.into_owned())),
-        artist: tag.and_then(|tag| tag.artist().map(|value| value.into_owned())),
-        album: tag.and_then(|tag| tag.album().map(|value| value.into_owned())),
-        album_artist: tag
-            .and_then(|tag| tag.get_string(ItemKey::AlbumArtist))
-            .map(ToOwned::to_owned),
-        composer: tag
-            .and_then(|tag| tag.get_string(ItemKey::Composer))
-            .map(ToOwned::to_owned),
-        grouping: tag
-            .and_then(|tag| tag.get_string(ItemKey::ContentGroup))
-            .map(ToOwned::to_owned),
-        genre: tag.and_then(|tag| tag.genre().map(|value| value.into_owned())),
-        track_number: tag.and_then(Accessor::track),
-        track_total: tag.and_then(Accessor::track_total),
-        disc_number: tag.and_then(Accessor::disk),
-        disc_total: tag.and_then(Accessor::disk_total),
-        year: tag.and_then(|tag| tag.date().map(|date| i32::from(date.year))),
-        compilation: tag
-            .and_then(|tag| tag.get_string(ItemKey::FlagCompilation))
-            .and_then(parse_flag),
-        bpm: tag
-            .and_then(|tag| tag.get_string(bpm_item_key(tag.tag_type())))
-            .and_then(parse_bpm),
-        // A BPM read from tags came from whichever tool wrote them, not
-        // from the user's hand in Sustain.
-        bpm_set_by_user: false,
-        // A key tag that is not a key in any notation (free text, a URL)
-        // is dropped here rather than imported as a value.
-        key: tag
-            .and_then(|tag| tag.get_string(ItemKey::InitialKey))
-            .and_then(MusicalKey::parse),
-        key_origin: KeyOrigin::Imported,
-        comments: tag.and_then(|tag| tag.comment().map(|value| value.into_owned())),
-        lyrics: tag
-            .and_then(|tag| tag.get_string(lyrics_item_key(tag.tag_type())))
-            .map(ToOwned::to_owned),
-        // Tag-derived "sort as" names (issue #13). Read once at import
-        // alongside the display fields; only used for ordering and full-file
-        // metadata mirrors, never displayed.
-        title_sort: tag
-            .and_then(|tag| tag.get_string(ItemKey::TrackTitleSortOrder))
-            .map(ToOwned::to_owned),
-        artist_sort: tag
-            .and_then(|tag| tag.get_string(ItemKey::TrackArtistSortOrder))
-            .map(ToOwned::to_owned),
-        album_sort: tag
-            .and_then(|tag| tag.get_string(ItemKey::AlbumTitleSortOrder))
-            .map(ToOwned::to_owned),
-        album_artist_sort: tag
-            .and_then(|tag| tag.get_string(ItemKey::AlbumArtistSortOrder))
-            .map(ToOwned::to_owned),
-        composer_sort: tag
-            .and_then(|tag| tag.get_string(ItemKey::ComposerSortOrder))
-            .map(ToOwned::to_owned),
-        duration: Some(mpeg_audio_extent.map_or(properties.duration(), |extent| extent.duration)),
-        bitrate_kbps: mpeg_audio_extent
-            .and_then(|extent| extent.measured_bitrate_kbps)
-            .or(properties.audio_bitrate())
-            .or(properties.overall_bitrate()),
-        sample_rate_hz: properties.sample_rate(),
-        bit_depth: properties.bit_depth(),
-        channels: properties.channels(),
-    };
-    metadata.normalize_text_fields();
+    // A BPM or key read from tags came from whichever tool wrote them,
+    // not from the user's hand in Sustain.
+    metadata.bpm_set_by_user = false;
+    metadata.key_origin = KeyOrigin::Imported;
+    metadata.duration =
+        Some(mpeg_audio_extent.map_or(properties.duration(), |extent| extent.duration));
+    metadata.bitrate_kbps = mpeg_audio_extent
+        .and_then(|extent| extent.measured_bitrate_kbps)
+        .or(properties.audio_bitrate())
+        .or(properties.overall_bitrate());
+    metadata.sample_rate_hz = properties.sample_rate();
+    metadata.bit_depth = properties.bit_depth();
+    metadata.channels = properties.channels();
     if backfill_title_from_filename {
         metadata.ensure_title_from_filename(path);
         metadata.fill_missing_generated_sort_fields();
     }
-
-    let rating = tag
-        .and_then(|tag| tag.ratings().next())
-        .and_then(|rating| Rating::new(star_rating_value(rating.rating())))
-        .unwrap_or_else(Rating::unrated);
-    let has_embedded_artwork = tag.and_then(valid_embedded_picture).is_some();
 
     InitialTags {
         metadata,
@@ -151,34 +98,19 @@ fn initial_tags_from_tagged_file(
     }
 }
 
-pub(crate) fn read_tagged_file(path: &Path) -> MetadataResult<TaggedFile> {
-    // Lofty's allocation guard is thread-local. Reapply Sustain's policy at
-    // every metadata entry point so worker threads and future Lofty defaults
-    // cannot drift away from the application's encoded-artwork cap.
+/// Applies Sustain's lofty policy for the reading thread: lofty's
+/// allocation guard is thread-local, so it is reapplied at every metadata
+/// entry point, keeping worker threads and future lofty defaults from
+/// drifting away from the application's encoded-artwork cap.
+pub(crate) fn apply_read_policy() {
     apply_global_options(GlobalOptions::new().allocation_limit(MAX_ENCODED_ARTWORK_BYTES));
-    let expected_format = audio_format_from_path(path).ok();
-    lofty::read_from_path(path)
-        .map_err(|error| metadata_error_from_lofty(path, expected_format, error))
 }
 
-fn read_tagged_file_without_tags(path: &Path) -> MetadataResult<TaggedFile> {
-    apply_global_options(GlobalOptions::new().allocation_limit(MAX_ENCODED_ARTWORK_BYTES));
-    let expected_format = audio_format_from_path(path).ok();
-    Probe::open(path)
-        .and_then(|probe| probe.options(ParseOptions::new().read_tags(false)).read())
-        .map_err(|error| metadata_error_from_lofty(path, expected_format, error))
-}
-
-fn metadata_error_from_lofty(
-    path: &Path,
-    expected_format: Option<AudioFormat>,
-    error: FileParseError,
-) -> MetadataError {
+pub(crate) fn metadata_error_from_lofty(path: &Path, error: FileParseError) -> MetadataError {
     match malformed_tag_error(&error) {
         Some(kind) => MetadataError::MalformedTag(kind),
-        None => {
-            container_format_mismatch(path, expected_format).unwrap_or(MetadataError::ReadFailed)
-        }
+        None => container_format_mismatch(path, audio_format_from_path(path).ok())
+            .unwrap_or(MetadataError::ReadFailed),
     }
 }
 
@@ -193,7 +125,10 @@ pub(crate) fn malformed_tag_error(error: &FileParseError) -> Option<MalformedTag
     }
 }
 
-fn container_format_mismatch(path: &Path, expected: Option<AudioFormat>) -> Option<MetadataError> {
+pub(crate) fn container_format_mismatch(
+    path: &Path,
+    expected: Option<AudioFormat>,
+) -> Option<MetadataError> {
     let expected = expected?;
     let detected = detected_audio_format_from_content(path)?;
     (detected != expected).then_some(MetadataError::ContainerFormatMismatch { expected, detected })
@@ -204,10 +139,10 @@ fn detected_audio_format_from_content(path: &Path) -> Option<AudioFormat> {
     audio_format_from_lofty_file_type(probe.file_type()?)
 }
 
-fn audio_format_from_lofty_file_type(file_type: FileType) -> Option<AudioFormat> {
+pub(crate) fn audio_format_from_lofty_file_type(file_type: FileType) -> Option<AudioFormat> {
     match file_type {
         FileType::Mpeg => Some(AudioFormat::Mp3),
-        FileType::Vorbis | FileType::Opus => Some(AudioFormat::Ogg),
+        FileType::Vorbis | FileType::Opus | FileType::Speex => Some(AudioFormat::Ogg),
         FileType::Flac => Some(AudioFormat::Flac),
         FileType::Mp4 => Some(AudioFormat::Mp4),
         FileType::Wav => Some(AudioFormat::Wav),
@@ -216,34 +151,10 @@ fn audio_format_from_lofty_file_type(file_type: FileType) -> Option<AudioFormat>
     }
 }
 
-pub(crate) fn valid_embedded_picture(tag: &Tag) -> Option<&Picture> {
-    tag.get_picture_type(PictureType::CoverFront)
-        .filter(|picture| validate_encoded_artwork(picture.data()).is_ok())
-        .or_else(|| {
-            tag.pictures()
-                .iter()
-                .find(|picture| validate_encoded_artwork(picture.data()).is_ok())
-        })
-}
-
 pub(crate) fn parse_flag(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" => Some(true),
         "0" | "false" | "no" => Some(false),
         _ => None,
-    }
-}
-
-pub(crate) fn parse_bpm(value: &str) -> Option<Bpm> {
-    Bpm::parse(value)
-}
-
-pub(crate) fn star_rating_value(rating: StarRating) -> u8 {
-    match rating {
-        StarRating::One => 1,
-        StarRating::Two => 2,
-        StarRating::Three => 3,
-        StarRating::Four => 4,
-        StarRating::Five => 5,
     }
 }

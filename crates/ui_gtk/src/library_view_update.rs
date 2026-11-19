@@ -26,7 +26,9 @@ const ALBUM_GROUPING: TrackFields = TrackFields::ARTIST
 /// track is missing, and the title of a track that has none.
 const ALBUM_TRACK: TrackFields = TrackFields::TITLE
     .union(TrackFields::DISC_NUMBER)
+    .union(TrackFields::DISC_TOTAL)
     .union(TrackFields::TRACK_NUMBER)
+    .union(TrackFields::TRACK_TOTAL)
     .union(TrackFields::DURATION)
     .union(TrackFields::LOCATION);
 

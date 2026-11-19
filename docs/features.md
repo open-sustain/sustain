@@ -914,10 +914,72 @@ file's native tag format as a courtesy to other tools:
 
 Listening statistics (play count, skip count, last played, last skipped)
 are **never** written to file tags. They live exclusively in SQLite.
-Shared frames like ID3 POPM are written carefully so existing
-`play_counter` data belonging to other applications is preserved. Other
-tags are left exactly as they were: an MP3's ID3v1 and APE tags, a
-WAV's RIFF INFO list, and an AIFF's native text chunks.
+
+Sustain edits the format's own tag and rewrites only the items of the
+fields that changed. Everything else stays as the file holds it:
+- comment keys it does not use, such as a FLAC `CUESHEET` or a `MOOD`;
+- a field's second value, such as a second `ARTIST`;
+- the order of the items;
+- frames other tools own.
+
+A write that would change nothing leaves the file untouched. A file
+without the format's own tag (an MP3 holding only ID3v1, a FLAC holding
+only ID3v2) gets one on its first edit, holding every value Sustain read
+from the other tag, which stays as it was. Items that several
+applications share follow one owner rule each:
+
+- **Comments (ID3)**: the `COMM` frames with no description. A described
+  comment such as iTunes' `iTunNORM` is never touched.
+- **Lyrics (ID3)**: the `USLT` frames with no description. Sustain shows
+  the first of them, or a described frame such as a translation when the
+  file holds no other. An edit rewrites the first undescribed frame (or
+  adds one) and a clear removes the undescribed frames; described lyrics
+  are never touched.
+- **Album artist (ID3)**: `TPE2`, or a `TXXX:ALBUMARTIST` /
+  `TXXX:ALBUM ARTIST` frame some taggers write instead. An edit writes
+  `TPE2` and removes those aliases, so no stale value lingers.
+- **Rating (ID3)**: the first `POPM` frame, read and written in its
+  owner's scale (Picard's 51 per star, or the Windows Media Player steps
+  every other owner uses). Only that frame's rating byte changes, so its
+  owner and `play_counter` stay. Clearing the rating sets the byte to 0
+  ("unknown") while the frame holds a counter or another owner's frame
+  follows; otherwise the frame is removed. A file without one gets a
+  `MusicBee` frame. Other owners' frames are left exactly as they were.
+- **Rating (Vorbis)**: the first `RATING` or `RATING:<owner>` comment
+  Sustain can read. A whole number is a percentage (20 per star); a
+  decimal is a fraction of five stars. Sustain keeps that comment's key
+  and its scale. A file without one gets a plain `RATING` percentage.
+- **Rating (MP4)**: the `rate` atom.
+- **Track and disc numbers (Vorbis)**: `TRACKNUMBER` and `TRACKTOTAL`
+  (`DISCNUMBER`, `DISCTOTAL`) are separate comments, and an edit rewrites
+  only the one that changed. A number holding its total (`3/12`) holds
+  both, so rewriting either splits it into the two comments.
+- **Date (Vorbis)**: a `DATE` comment, before a `YEAR` one. A year edit
+  keeps the date's month and day (a 29 February moved to a year without
+  one keeps only its month).
+- **Cover (ID3, Vorbis)**: every front-cover picture; other pictures stay.
+  Sustain shows the first front cover that decodes, or else the first
+  picture that does. Setting the cover leaves one front cover; clearing it
+  removes every front cover, even one that does not decode.
+- **Cover (MP4)**: MP4 images carry no type, so every `covr` image (across
+  every `covr` atom) is a candidate cover and Sustain shows the first.
+  Setting the cover replaces that image and keeps the others byte for
+  byte. Clearing it removes every image, because any image left behind
+  would show up as the cover again.
+
+A value is written as the format holds it:
+- ID3 `TBPM` and MP4 `tmpo` hold whole beats, so a tempo is rounded.
+- An ID3 genre typed as an ID3v1 number (`17`) reads back as its name
+  (`Rock`).
+- ID3 text ends at a NUL character, where ID3v2.4 separates values.
+- A value the format cannot hold at all clears the field instead: an MP4
+  track or disc number past 65535, a number of 0 in ID3 or MP4, or a year
+  outside 0–9999.
+
+Duplicate consolidation and YouTube replacement verify a rewritten file
+against exactly those values. The other tags in a file are left exactly
+as they were: an MP3's ID3v1 and APE tags, a WAV's RIFF INFO list, and an
+AIFF's native text chunks.
 
 ### Background metadata retrieval — *iTunes-adjacent*
 The Online tab in Preferences exposes three independent toggles —
@@ -1029,8 +1091,9 @@ field, Sustain generates leading-English-article values such as
 `The Beatles` -> `Beatles (The)`. The Library preference for honoring sort
 tags is enabled by default; disabling it makes text columns sort by the
 display fields only, and the lists re-file the moment the switch flips. The Albums grid files each album the same way, by
-artist and then title, so `The Beatles` sits under B there too. Full metadata mirrors preserve stored sort fields where
-the active metadata backend can round-trip the standard file tag.
+artist and then title, so `The Beatles` sits under B there too. Full metadata mirrors write the
+stored sort fields to every format's standard sort tags, including Vorbis
+`COMPOSERSORT`.
 
 ### Column customization — *iso-iTunes*
 Column visibility, order, and width are user-customizable via the

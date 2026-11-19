@@ -15,21 +15,64 @@ use std::{
 use sha2::{Digest, Sha256};
 use sustain_artwork::{MAX_ENCODED_ARTWORK_BYTES, validate_encoded_artwork};
 
+use sustain_domain::TrackFields;
+
 use crate::{StoreError, StoreResult, TrackId};
 
 static TEMPORARY_SUFFIX: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct TagMirrorKinds {
-    pub metadata: bool,
-    pub rating: bool,
-    pub artwork: bool,
+/// The fields a tag mirror can write: the tags' metadata and the rating.
+pub const TAG_MIRROR_FIELDS: TrackFields = TrackFields::TAG_METADATA.union(TrackFields::RATING);
+
+/// The bit each mirrored field is stored as in `tag_mirror_outbox.fields`.
+/// Persisted: a field keeps its bit forever, whatever `TrackFields` does
+/// with its own representation (migration 24).
+const STORED_FIELDS: [(TrackFields, i64); 23] = [
+    (TrackFields::TITLE, 1 << 0),
+    (TrackFields::ARTIST, 1 << 1),
+    (TrackFields::ALBUM, 1 << 2),
+    (TrackFields::ALBUM_ARTIST, 1 << 3),
+    (TrackFields::COMPOSER, 1 << 4),
+    (TrackFields::GROUPING, 1 << 5),
+    (TrackFields::GENRE, 1 << 6),
+    (TrackFields::TRACK_NUMBER, 1 << 7),
+    (TrackFields::TRACK_TOTAL, 1 << 8),
+    (TrackFields::DISC_NUMBER, 1 << 9),
+    (TrackFields::DISC_TOTAL, 1 << 10),
+    (TrackFields::YEAR, 1 << 11),
+    (TrackFields::COMPILATION, 1 << 12),
+    (TrackFields::BPM, 1 << 13),
+    (TrackFields::KEY, 1 << 14),
+    (TrackFields::COMMENTS, 1 << 15),
+    (TrackFields::LYRICS, 1 << 16),
+    (TrackFields::TITLE_SORT, 1 << 17),
+    (TrackFields::ARTIST_SORT, 1 << 18),
+    (TrackFields::ALBUM_SORT, 1 << 19),
+    (TrackFields::ALBUM_ARTIST_SORT, 1 << 20),
+    (TrackFields::COMPOSER_SORT, 1 << 21),
+    (TrackFields::RATING, 1 << 22),
+];
+
+/// `fields`, which must lie within [`TAG_MIRROR_FIELDS`], as stored.
+pub(crate) fn stored_fields(fields: TrackFields) -> i64 {
+    debug_assert!(TAG_MIRROR_FIELDS.contains(fields));
+    STORED_FIELDS
+        .iter()
+        .filter(|(field, _)| fields.contains(*field))
+        .fold(0, |stored, (_, bit)| stored | bit)
 }
 
-impl TagMirrorKinds {
-    pub const fn is_empty(self) -> bool {
-        !(self.metadata || self.rating || self.artwork)
+/// The fields `stored` names, or `None` for a bit no field is stored as.
+pub(crate) fn fields_from_stored(stored: i64) -> Option<TrackFields> {
+    let mut remaining = stored;
+    let mut fields = TrackFields::NONE;
+    for (field, bit) in STORED_FIELDS {
+        if stored & bit != 0 {
+            fields |= field;
+            remaining &= !bit;
+        }
     }
+    (remaining == 0).then_some(fields)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,7 +115,9 @@ pub enum TagMirrorArtwork {
 pub struct PendingTagMirror {
     pub track_id: TrackId,
     pub generation: u64,
-    pub kinds: TagMirrorKinds,
+    /// The fields to write, within [`TAG_MIRROR_FIELDS`]: the library's
+    /// current value of each, whatever it was when the mirror was queued.
+    pub fields: TrackFields,
     pub artwork: TagMirrorArtwork,
     pub attempt_count: u32,
     pub next_attempt_at_unix: i64,
@@ -395,7 +440,31 @@ mod tests {
         time::{Duration, SystemTime},
     };
 
-    use super::TagMirrorBlobStore;
+    use sustain_domain::TrackFields;
+
+    use super::{
+        STORED_FIELDS, TAG_MIRROR_FIELDS, TagMirrorBlobStore, fields_from_stored, stored_fields,
+    };
+
+    #[test]
+    fn every_mirrored_field_has_its_own_stored_bit() {
+        let union = STORED_FIELDS
+            .iter()
+            .fold(TrackFields::NONE, |fields, (field, _)| fields | *field);
+        assert_eq!(union, TAG_MIRROR_FIELDS);
+        for (index, (field, bit)) in STORED_FIELDS.iter().enumerate() {
+            assert_eq!(*bit, 1 << index, "{field:?} keeps its stored bit");
+            assert_eq!(fields_from_stored(*bit), Some(*field));
+        }
+        // Migration 24 stores a pending mirror's old flags as these values.
+        assert_eq!(stored_fields(TrackFields::TAG_METADATA), (1 << 22) - 1);
+        assert_eq!(stored_fields(TrackFields::RATING), 1 << 22);
+        assert_eq!(
+            fields_from_stored(stored_fields(TAG_MIRROR_FIELDS)),
+            Some(TAG_MIRROR_FIELDS)
+        );
+        assert_eq!(fields_from_stored(1 << 23), None);
+    }
 
     static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(1);
 

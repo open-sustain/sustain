@@ -928,8 +928,7 @@ mod tests {
         assert_eq!(stored.file_modified_at, None);
         let mirrors = fixture.store.tag_mirrors_due(0, 10).expect("load mirrors");
         assert_eq!(mirrors.len(), 1);
-        assert!(mirrors[0].kinds.metadata);
-        assert!(mirrors[0].kinds.rating);
+        assert_eq!(mirrors[0].fields, sustain_library_store::TAG_MIRROR_FIELDS);
     }
 
     #[test]

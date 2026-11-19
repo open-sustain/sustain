@@ -48,7 +48,7 @@ fn each_changed_field_is_named() {
 }
 
 #[test]
-fn companion_fields_report_their_shared_member() {
+fn each_value_reports_its_own_member_and_a_companion_its_shared_one() {
     let old = track();
     let mut new = track();
     new.metadata.track_total = Some(12);
@@ -59,9 +59,9 @@ fn companion_fields_report_their_shared_member() {
 
     assert_eq!(
         TrackFields::between(&old, &new),
-        TrackFields::TRACK_NUMBER
+        TrackFields::TRACK_TOTAL
             | TrackFields::BPM
-            | TrackFields::SORT_NAMES
+            | TrackFields::ALBUM_ARTIST_SORT
             | TrackFields::AUDIO_FORMAT
             | TrackFields::FILE
     );
@@ -103,4 +103,51 @@ fn set_operations_agree() {
     assert!(!grouping.intersects(TrackFields::RATING));
     assert!(TrackFields::ALL.contains(grouping));
     assert!(grouping.contains(TrackFields::NONE));
+}
+
+#[test]
+fn tag_metadata_is_the_editable_metadata_and_nothing_else() {
+    let editable = [
+        TrackFields::TITLE,
+        TrackFields::ARTIST,
+        TrackFields::ALBUM,
+        TrackFields::ALBUM_ARTIST,
+        TrackFields::COMPOSER,
+        TrackFields::GROUPING,
+        TrackFields::GENRE,
+        TrackFields::TRACK_NUMBER,
+        TrackFields::TRACK_TOTAL,
+        TrackFields::DISC_NUMBER,
+        TrackFields::DISC_TOTAL,
+        TrackFields::YEAR,
+        TrackFields::COMPILATION,
+        TrackFields::BPM,
+        TrackFields::KEY,
+        TrackFields::COMMENTS,
+        TrackFields::LYRICS,
+        TrackFields::TITLE_SORT,
+        TrackFields::ARTIST_SORT,
+        TrackFields::ALBUM_SORT,
+        TrackFields::ALBUM_ARTIST_SORT,
+        TrackFields::COMPOSER_SORT,
+    ];
+    let union = editable
+        .into_iter()
+        .fold(TrackFields::NONE, |fields, field| fields | field);
+    assert_eq!(union, TrackFields::TAG_METADATA);
+    for other in [
+        TrackFields::DURATION,
+        TrackFields::AUDIO_FORMAT,
+        TrackFields::RATING,
+        TrackFields::STATISTICS,
+        TrackFields::LOCATION,
+        TrackFields::FILE,
+        TrackFields::EMBEDDED_ARTWORK,
+    ] {
+        assert!(!TrackFields::TAG_METADATA.intersects(other));
+    }
+    assert_eq!(
+        (TrackFields::TITLE | TrackFields::RATING).intersection(TrackFields::TAG_METADATA),
+        TrackFields::TITLE
+    );
 }

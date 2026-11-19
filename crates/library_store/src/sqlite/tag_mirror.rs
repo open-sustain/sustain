@@ -8,7 +8,12 @@ use std::collections::BTreeSet;
 use rusqlite::{OptionalExtension, params};
 
 use super::*;
-use crate::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork, TagMirrorKinds};
+use sustain_domain::TrackFields;
+
+use crate::{
+    PendingTagMirror, StoredTagMirrorArtwork, TAG_MIRROR_FIELDS, TagMirrorArtwork,
+    tag_mirror::{fields_from_stored, stored_fields},
+};
 
 pub(super) fn update_track_rating_and_enqueue(
     connection: &mut Connection,
@@ -16,16 +21,9 @@ pub(super) fn update_track_rating_and_enqueue(
     rating: Rating,
 ) -> StoreResult<()> {
     let transaction = connection.transaction().map_err(StoreError::from)?;
+    let before = tracks::track(&transaction, track_id)?;
     tracks::update_track_rating(&transaction, track_id, rating)?;
-    enqueue(
-        &transaction,
-        track_id,
-        TagMirrorKinds {
-            rating: true,
-            ..TagMirrorKinds::default()
-        },
-        TagMirrorArtwork::Unchanged,
-    )?;
+    enqueue_changed_fields(&transaction, track_id, before)?;
     transaction.commit().map_err(StoreError::from)
 }
 
@@ -35,16 +33,9 @@ pub(super) fn apply_track_metadata_change_and_enqueue(
     change: &MetadataChange,
 ) -> StoreResult<()> {
     let transaction = connection.transaction().map_err(StoreError::from)?;
+    let before = tracks::track(&transaction, track_id)?;
     tracks::apply_track_metadata_change(&transaction, track_id, change)?;
-    enqueue(
-        &transaction,
-        track_id,
-        TagMirrorKinds {
-            metadata: true,
-            ..TagMirrorKinds::default()
-        },
-        TagMirrorArtwork::Unchanged,
-    )?;
+    enqueue_changed_fields(&transaction, track_id, before)?;
     transaction.commit().map_err(StoreError::from)
 }
 
@@ -55,20 +46,15 @@ pub(super) fn apply_track_metadata_change_and_location_and_enqueue(
     location: &TrackLocation,
 ) -> StoreResult<()> {
     let transaction = connection.transaction().map_err(StoreError::from)?;
+    let before = tracks::track(&transaction, track_id)?;
     tracks::apply_track_metadata_change(&transaction, track_id, change)?;
     tracks::update_track_location(&transaction, track_id, location)?;
-    enqueue(
-        &transaction,
-        track_id,
-        TagMirrorKinds {
-            metadata: true,
-            ..TagMirrorKinds::default()
-        },
-        TagMirrorArtwork::Unchanged,
-    )?;
+    enqueue_changed_fields(&transaction, track_id, before)?;
     transaction.commit().map_err(StoreError::from)
 }
 
+/// The track's audio is now another file, which takes every field the
+/// library holds.
 pub(super) fn relocate_track_and_enqueue(
     connection: &mut Connection,
     track_id: TrackId,
@@ -81,11 +67,7 @@ pub(super) fn relocate_track_and_enqueue(
     enqueue(
         &transaction,
         track_id,
-        TagMirrorKinds {
-            metadata: true,
-            rating: true,
-            ..TagMirrorKinds::default()
-        },
+        TAG_MIRROR_FIELDS,
         TagMirrorArtwork::Unchanged,
     )?;
     transaction.commit().map_err(StoreError::from)
@@ -99,21 +81,28 @@ pub(super) fn fill_missing_track_metadata_and_enqueue(
     let transaction = connection.transaction().map_err(StoreError::from)?;
     let before = tracks::track(&transaction, track_id)?;
     tracks::fill_missing_track_metadata(&transaction, track_id, change)?;
-    let after = tracks::track(&transaction, track_id)?;
-    let changed = before.map(|track| track.metadata) != after.map(|track| track.metadata);
-    if changed {
-        enqueue(
-            &transaction,
-            track_id,
-            TagMirrorKinds {
-                metadata: true,
-                ..TagMirrorKinds::default()
-            },
-            TagMirrorArtwork::Unchanged,
-        )?;
-    }
+    let changed = enqueue_changed_fields(&transaction, track_id, before)?;
     transaction.commit().map_err(StoreError::from)?;
     Ok(changed)
+}
+
+/// Queue a mirror of the fields a tag carries that differ between
+/// `before` and the track as it now stands: a write that changed nothing
+/// in the file's fields mirrors nothing. Returns whether any did differ.
+fn enqueue_changed_fields(
+    connection: &Connection,
+    track_id: TrackId,
+    before: Option<Track>,
+) -> StoreResult<bool> {
+    let (Some(before), Some(after)) = (before, tracks::track(connection, track_id)?) else {
+        return Ok(false);
+    };
+    let fields = TrackFields::between(&before, &after).intersection(TAG_MIRROR_FIELDS);
+    if fields.is_empty() {
+        return Ok(false);
+    }
+    enqueue(connection, track_id, fields, TagMirrorArtwork::Unchanged)?;
+    Ok(true)
 }
 
 /// The user's set/clear decision. The track is recorded as carrying (or not
@@ -171,15 +160,7 @@ fn enqueue_artwork(
         TagMirrorArtwork::Clear => Some(false),
         TagMirrorArtwork::Set(_) => Some(true),
     };
-    enqueue(
-        connection,
-        track_id,
-        TagMirrorKinds {
-            artwork: true,
-            ..TagMirrorKinds::default()
-        },
-        artwork,
-    )?;
+    enqueue(connection, track_id, TrackFields::NONE, artwork)?;
     if let Some(carries_cover) = carries_cover {
         connection
             .execute(
@@ -194,7 +175,7 @@ fn enqueue_artwork(
 fn enqueue(
     connection: &Connection,
     track_id: TrackId,
-    kinds: TagMirrorKinds,
+    fields: TrackFields,
     artwork: TagMirrorArtwork,
 ) -> StoreResult<()> {
     let (artwork_action, artwork_digest, artwork_size_bytes) = artwork_parts(&artwork);
@@ -202,14 +183,13 @@ fn enqueue(
         .execute(
             r#"
             INSERT INTO tag_mirror_outbox (
-                track_id, mirror_metadata, mirror_rating, artwork_action,
+                track_id, fields, artwork_action,
                 artwork_digest, artwork_size_bytes, generation
             )
-            SELECT ?1, ?2, ?3, ?4, ?5, ?6, 1
+            SELECT ?1, ?2, ?3, ?4, ?5, 1
             WHERE EXISTS (SELECT 1 FROM tracks WHERE id = ?1)
             ON CONFLICT(track_id) DO UPDATE SET
-                mirror_metadata = MAX(tag_mirror_outbox.mirror_metadata, excluded.mirror_metadata),
-                mirror_rating = MAX(tag_mirror_outbox.mirror_rating, excluded.mirror_rating),
+                fields = tag_mirror_outbox.fields | excluded.fields,
                 artwork_action = CASE
                     WHEN excluded.artwork_action <> 0 THEN excluded.artwork_action
                     ELSE tag_mirror_outbox.artwork_action
@@ -229,8 +209,7 @@ fn enqueue(
             "#,
             params![
                 track_id.get(),
-                kinds.metadata,
-                kinds.rating,
+                stored_fields(fields),
                 artwork_action,
                 artwork_digest,
                 artwork_size_bytes,
@@ -249,7 +228,7 @@ pub(super) fn due(
     let mut statement = connection
         .prepare(
             r#"
-            SELECT track_id, generation, mirror_metadata, mirror_rating,
+            SELECT track_id, generation, fields,
                    artwork_action, artwork_digest, artwork_size_bytes,
                    attempt_count, next_attempt_at_unix, last_error
             FROM tag_mirror_outbox
@@ -376,16 +355,20 @@ fn pending_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingTagMirro
             "invalid outbox generation",
         ));
     }
-    let artwork_action = row.get::<_, i64>(4)?;
+    let fields = row.get::<_, i64>(2)?;
+    let fields = fields_from_stored(fields).ok_or_else(|| {
+        conversion_error(2, rusqlite::types::Type::Integer, "invalid mirrored fields")
+    })?;
+    let artwork_action = row.get::<_, i64>(3)?;
     let artwork = match artwork_action {
         0 => TagMirrorArtwork::Unchanged,
         1 => TagMirrorArtwork::Clear,
         2 => {
-            let digest = row.get::<_, String>(5)?;
-            let size_bytes = row.get::<_, i64>(6)?;
+            let digest = row.get::<_, String>(4)?;
+            let size_bytes = row.get::<_, i64>(5)?;
             if size_bytes <= 0 {
                 return Err(conversion_error(
-                    6,
+                    5,
                     rusqlite::types::Type::Integer,
                     "invalid stored artwork size",
                 ));
@@ -393,7 +376,7 @@ fn pending_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingTagMirro
             let stored = StoredTagMirrorArtwork::from_stored_parts(digest, size_bytes as u64)
                 .map_err(|_| {
                     conversion_error(
-                        5,
+                        4,
                         rusqlite::types::Type::Text,
                         "invalid stored artwork reference",
                     )
@@ -402,16 +385,16 @@ fn pending_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingTagMirro
         }
         _ => {
             return Err(conversion_error(
-                4,
+                3,
                 rusqlite::types::Type::Integer,
                 "invalid artwork action",
             ));
         }
     };
-    let attempt_count = row.get::<_, i64>(7)?;
+    let attempt_count = row.get::<_, i64>(6)?;
     if !(0..=i64::from(u32::MAX)).contains(&attempt_count) {
         return Err(conversion_error(
-            7,
+            6,
             rusqlite::types::Type::Integer,
             "invalid attempt count",
         ));
@@ -419,15 +402,11 @@ fn pending_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingTagMirro
     Ok(PendingTagMirror {
         track_id,
         generation: generation as u64,
-        kinds: TagMirrorKinds {
-            metadata: row.get(2)?,
-            rating: row.get(3)?,
-            artwork: artwork_action != 0,
-        },
+        fields,
         artwork,
         attempt_count: attempt_count as u32,
-        next_attempt_at_unix: row.get(8)?,
-        last_error: row.get(9)?,
+        next_attempt_at_unix: row.get(7)?,
+        last_error: row.get(8)?,
     })
 }
 

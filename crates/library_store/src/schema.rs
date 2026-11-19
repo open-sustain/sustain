@@ -694,6 +694,51 @@ CREATE TABLE sync_pioneer_artwork (
 );
 "#;
 
+// Migration 24 records which fields a pending tag mirror writes, so a
+// mirror touches only the items the library changed (#329). The two flags
+// it replaces meant "every metadata field" and "the rating"; a pending row
+// keeps exactly that meaning as the full set of each. The stored bits are
+// `tag_mirror::STORED_FIELDS`: bits 0-21 the editable metadata, bit 22 the
+// rating.
+pub(super) const RECORD_TAG_MIRROR_FIELDS_SQL: &str = r#"
+CREATE TABLE tag_mirror_outbox_fields (
+    track_id                   INTEGER PRIMARY KEY
+                                 REFERENCES tracks(id) ON DELETE CASCADE,
+    fields                     INTEGER NOT NULL DEFAULT 0,
+    artwork_action             INTEGER NOT NULL DEFAULT 0,
+    artwork_digest             TEXT,
+    artwork_size_bytes         INTEGER,
+    generation                 INTEGER NOT NULL,
+    attempt_count              INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at_unix       INTEGER NOT NULL DEFAULT 0,
+    last_error                 TEXT,
+    CHECK (fields BETWEEN 0 AND 8388607),
+    CHECK (artwork_action IN (0, 1, 2)),
+    CHECK (fields <> 0 OR artwork_action <> 0),
+    CHECK (generation > 0),
+    CHECK (attempt_count >= 0),
+    CHECK (next_attempt_at_unix >= 0),
+    CHECK (
+        (artwork_action = 2 AND artwork_digest IS NOT NULL
+                            AND artwork_size_bytes BETWEEN 1 AND 16777216)
+        OR
+        (artwork_action <> 2 AND artwork_digest IS NULL AND artwork_size_bytes IS NULL)
+    )
+);
+INSERT INTO tag_mirror_outbox_fields (
+    track_id, fields, artwork_action, artwork_digest, artwork_size_bytes,
+    generation, attempt_count, next_attempt_at_unix, last_error
+)
+SELECT track_id,
+       (CASE mirror_metadata WHEN 1 THEN 4194303 ELSE 0 END)
+           | (CASE mirror_rating WHEN 1 THEN 4194304 ELSE 0 END),
+       artwork_action, artwork_digest, artwork_size_bytes,
+       generation, attempt_count, next_attempt_at_unix, last_error
+FROM tag_mirror_outbox;
+DROP TABLE tag_mirror_outbox;
+ALTER TABLE tag_mirror_outbox_fields RENAME TO tag_mirror_outbox;
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.

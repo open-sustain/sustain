@@ -3125,8 +3125,10 @@ fn managed_retarget_commits_metadata_location_and_outbox_together() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].track_id, track.id);
     assert_eq!(pending[0].generation, 2);
-    assert!(pending[0].kinds.metadata);
-    assert!(pending[0].kinds.rating);
+    assert_eq!(
+        pending[0].fields,
+        sustain_domain::TrackFields::TITLE | sustain_domain::TrackFields::RATING
+    );
 }
 
 #[test]
@@ -3167,8 +3169,7 @@ fn relocation_resets_source_observations_and_queues_canonical_mirrors() {
     assert_eq!(store.source_fingerprint(track.id), Ok(None));
     let mirrors = store.tag_mirrors_due(0, 10).expect("load mirrors");
     assert_eq!(mirrors.len(), 1);
-    assert!(mirrors[0].kinds.metadata);
-    assert!(mirrors[0].kinds.rating);
+    assert_eq!(mirrors[0].fields, crate::TAG_MIRROR_FIELDS);
 }
 
 #[test]
@@ -3298,9 +3299,11 @@ fn tag_mirror_outbox_coalesces_latest_canonical_projection() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].track_id, track.id);
     assert_eq!(pending[0].generation, 2);
-    assert!(pending[0].kinds.metadata);
-    assert!(pending[0].kinds.rating);
-    assert!(!pending[0].kinds.artwork);
+    assert_eq!(
+        pending[0].fields,
+        sustain_domain::TrackFields::TITLE | sustain_domain::TrackFields::RATING
+    );
+    assert_eq!(pending[0].artwork, TagMirrorArtwork::Unchanged);
     assert_eq!(
         store
             .track(track.id)
@@ -3886,4 +3889,78 @@ fn a_needing_analysis_query_reports_only_the_capabilities_still_due() {
         store.filter_tracks_needing_analysis(&[t.id], AnalysisCapabilities::all(), key_bumped),
         Ok(key_due)
     );
+}
+
+#[test]
+fn a_tag_mirror_writes_only_the_fields_the_commit_changed() {
+    use sustain_domain::TrackFields;
+
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let mut track = track(1, "a.flac");
+    track.metadata.title = Some("Song".to_owned());
+    track.metadata.genre = Some("Rock".to_owned());
+    track.metadata.year = Some(1999);
+    store.save_track(track.clone()).expect("save track");
+
+    // Every field restated, one of them different: only that one is
+    // mirrored, as a dialog that sends its whole form would.
+    let restated = MetadataChange {
+        title: FieldChange::Set("Song".to_owned()),
+        genre: FieldChange::Set("Jazz".to_owned()),
+        year: FieldChange::Set(1999),
+        ..MetadataChange::default()
+    };
+    store
+        .apply_track_metadata_change_and_enqueue_mirror(track.id, &restated)
+        .expect("metadata commit");
+    let pending = store.tag_mirrors_due(0, 10).expect("pending");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].fields, TrackFields::GENRE);
+
+    // A commit that changes nothing adds nothing to the pending mirror.
+    store
+        .apply_track_metadata_change_and_enqueue_mirror(track.id, &restated)
+        .expect("unchanged commit");
+    store
+        .update_track_rating_and_enqueue_mirror(track.id, Rating::unrated())
+        .expect("unchanged rating");
+    let pending = store.tag_mirrors_due(0, 10).expect("pending");
+    assert_eq!(pending[0].fields, TrackFields::GENRE);
+    assert_eq!(pending[0].generation, 1);
+
+    // Background enrichment fills only what is absent; the pending set
+    // grows by exactly the fields it filled.
+    let filled = store
+        .fill_missing_track_metadata_and_enqueue_mirror(
+            track.id,
+            &MetadataChange {
+                title: FieldChange::Set("Another".to_owned()),
+                composer: FieldChange::Set("Composer".to_owned()),
+                ..MetadataChange::default()
+            },
+        )
+        .expect("fill");
+    assert!(filled);
+    let pending = store.tag_mirrors_due(0, 10).expect("pending");
+    assert_eq!(
+        pending[0].fields,
+        TrackFields::GENRE | TrackFields::COMPOSER
+    );
+}
+
+#[test]
+fn a_mirror_with_nothing_to_write_is_not_queued() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let track = track(1, "a.flac");
+    store.save_track(track.clone()).expect("save track");
+
+    store
+        .apply_track_metadata_change_and_enqueue_mirror(track.id, &MetadataChange::default())
+        .expect("empty change");
+    let filled = store
+        .fill_missing_track_metadata_and_enqueue_mirror(track.id, &MetadataChange::default())
+        .expect("empty fill");
+
+    assert!(!filled);
+    assert!(store.tag_mirrors_due(0, 10).expect("pending").is_empty());
 }

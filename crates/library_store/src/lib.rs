@@ -28,7 +28,9 @@ mod sqlite_rows;
 mod tag_mirror;
 mod waveform_cache;
 
-pub use tag_mirror::{PendingTagMirror, StoredTagMirrorArtwork, TagMirrorArtwork, TagMirrorKinds};
+pub use tag_mirror::{
+    PendingTagMirror, StoredTagMirrorArtwork, TAG_MIRROR_FIELDS, TagMirrorArtwork,
+};
 pub use waveform_cache::WaveformCacheStatus;
 
 use schema::{

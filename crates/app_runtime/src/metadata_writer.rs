@@ -28,11 +28,11 @@ use std::{
 
 use sustain_domain::{
     DuplicateConsolidationRequest, FieldChange, LibraryManagementMode, MetadataChange,
-    TrackAvailability, TrackMetadata, VerifiedDuplicateMerge,
+    TrackAvailability, TrackFields, TrackMetadata, VerifiedDuplicateMerge,
 };
 use sustain_library_store::{
     LibraryStore, PendingTagMirror, StoreError, StoreResult, StoredTagMirrorArtwork,
-    TagMirrorArtwork, TagMirrorKinds, TrackId,
+    TagMirrorArtwork, TrackId,
 };
 use sustain_metadata::{MetadataError, MetadataService};
 
@@ -485,7 +485,7 @@ fn drain_due_batch(
     let batch_is_full = pending.len() == DRAIN_BATCH_SIZE;
     let mut artwork_completed = false;
     for pending in pending {
-        let kind = primary_kind(pending.kinds);
+        let kind = primary_kind(&pending);
         // Mirroring parses and rewrites a file Sustain did not write. A
         // bug the tag library trips there is that mirror's failure:
         // unwinding further would end the one worker every tag write goes
@@ -518,7 +518,7 @@ fn drain_due_batch(
                         }
                     };
                 if completed {
-                    artwork_completed |= pending.kinds.artwork;
+                    artwork_completed |= pending.artwork != TagMirrorArtwork::Unchanged;
                     emit_result(
                         result_sink,
                         MetadataWriteResult {
@@ -876,26 +876,25 @@ fn mirror_one(
     };
     let mut replaced_file = false;
     let outcome = (|| {
-        if pending.kinds.metadata {
+        let metadata_fields = pending.fields.intersection(TrackFields::TAG_METADATA);
+        if !metadata_fields.is_empty() {
             metadata_service
-                .write_metadata(&path, metadata_mirror(&track.metadata))
+                .write_metadata(&path, metadata_mirror(&track.metadata, metadata_fields))
                 .map_err(metadata_error)?;
             replaced_file = true;
         }
-        if pending.kinds.rating {
+        if pending.fields.contains(TrackFields::RATING) {
             metadata_service
                 .write_rating(&path, track.rating)
                 .map_err(metadata_error)?;
             replaced_file = true;
         }
-        if pending.kinds.artwork {
-            let artwork = match &pending.artwork {
-                TagMirrorArtwork::Unchanged => {
-                    return Err("artwork mirror intent is incomplete".to_owned());
-                }
-                TagMirrorArtwork::Clear => None,
-                TagMirrorArtwork::Set(artwork) => Some(read_artwork(library_store, artwork)?),
-            };
+        let artwork = match &pending.artwork {
+            TagMirrorArtwork::Unchanged => None,
+            TagMirrorArtwork::Clear => Some(None),
+            TagMirrorArtwork::Set(artwork) => Some(Some(read_artwork(library_store, artwork)?)),
+        };
+        if let Some(artwork) = artwork {
             metadata_service
                 .write_artwork(&path, artwork)
                 .map_err(metadata_error)?;
@@ -934,34 +933,66 @@ fn read_artwork(
         .map_err(store_error)
 }
 
-/// The library's metadata as the change that writes it to a track's file.
-pub(crate) fn metadata_mirror(metadata: &TrackMetadata) -> MetadataChange {
+/// The library's value of each of `fields` as the change that writes it to
+/// a track's file; every other field is left as the file holds it.
+pub(crate) fn metadata_mirror(metadata: &TrackMetadata, fields: TrackFields) -> MetadataChange {
+    let field = |member: TrackFields| fields.contains(member);
+    let mirror = |member: TrackFields, value: &Option<String>| {
+        if field(member) {
+            mirror_field(value)
+        } else {
+            FieldChange::Unchanged
+        }
+    };
+    let mirror_number = |member: TrackFields, value: &Option<u32>| {
+        if field(member) {
+            mirror_field(value)
+        } else {
+            FieldChange::Unchanged
+        }
+    };
     MetadataChange {
-        title: mirror_field(&metadata.title),
-        artist: mirror_field(&metadata.artist),
-        album: mirror_field(&metadata.album),
-        album_artist: mirror_field(&metadata.album_artist),
-        composer: mirror_field(&metadata.composer),
-        grouping: mirror_field(&metadata.grouping),
-        genre: mirror_field(&metadata.genre),
-        track_number: mirror_field(&metadata.track_number),
-        track_total: mirror_field(&metadata.track_total),
-        disc_number: mirror_field(&metadata.disc_number),
-        disc_total: mirror_field(&metadata.disc_total),
-        year: mirror_field(&metadata.year),
-        compilation: mirror_field(&metadata.compilation),
-        bpm: mirror_analysed_field(&metadata.bpm, metadata.bpm_set_by_user),
-        key: mirror_analysed_field(
-            &metadata.key,
-            metadata.key_origin == sustain_domain::KeyOrigin::Typed,
-        ),
-        comments: mirror_field(&metadata.comments),
-        lyrics: mirror_field(&metadata.lyrics),
-        title_sort: mirror_field(&metadata.title_sort),
-        artist_sort: mirror_field(&metadata.artist_sort),
-        album_sort: mirror_field(&metadata.album_sort),
-        album_artist_sort: mirror_field(&metadata.album_artist_sort),
-        composer_sort: mirror_field(&metadata.composer_sort),
+        title: mirror(TrackFields::TITLE, &metadata.title),
+        artist: mirror(TrackFields::ARTIST, &metadata.artist),
+        album: mirror(TrackFields::ALBUM, &metadata.album),
+        album_artist: mirror(TrackFields::ALBUM_ARTIST, &metadata.album_artist),
+        composer: mirror(TrackFields::COMPOSER, &metadata.composer),
+        grouping: mirror(TrackFields::GROUPING, &metadata.grouping),
+        genre: mirror(TrackFields::GENRE, &metadata.genre),
+        track_number: mirror_number(TrackFields::TRACK_NUMBER, &metadata.track_number),
+        track_total: mirror_number(TrackFields::TRACK_TOTAL, &metadata.track_total),
+        disc_number: mirror_number(TrackFields::DISC_NUMBER, &metadata.disc_number),
+        disc_total: mirror_number(TrackFields::DISC_TOTAL, &metadata.disc_total),
+        year: if field(TrackFields::YEAR) {
+            mirror_field(&metadata.year)
+        } else {
+            FieldChange::Unchanged
+        },
+        compilation: if field(TrackFields::COMPILATION) {
+            mirror_field(&metadata.compilation)
+        } else {
+            FieldChange::Unchanged
+        },
+        bpm: if field(TrackFields::BPM) {
+            mirror_analysed_field(&metadata.bpm, metadata.bpm_set_by_user)
+        } else {
+            FieldChange::Unchanged
+        },
+        key: if field(TrackFields::KEY) {
+            mirror_analysed_field(
+                &metadata.key,
+                metadata.key_origin == sustain_domain::KeyOrigin::Typed,
+            )
+        } else {
+            FieldChange::Unchanged
+        },
+        comments: mirror(TrackFields::COMMENTS, &metadata.comments),
+        lyrics: mirror(TrackFields::LYRICS, &metadata.lyrics),
+        title_sort: mirror(TrackFields::TITLE_SORT, &metadata.title_sort),
+        artist_sort: mirror(TrackFields::ARTIST_SORT, &metadata.artist_sort),
+        album_sort: mirror(TrackFields::ALBUM_SORT, &metadata.album_sort),
+        album_artist_sort: mirror(TrackFields::ALBUM_ARTIST_SORT, &metadata.album_artist_sort),
+        composer_sort: mirror(TrackFields::COMPOSER_SORT, &metadata.composer_sort),
     }
 }
 
@@ -1010,10 +1041,10 @@ fn retry_delay_seconds(attempt_count: u32) -> i64 {
         .min(MAX_RETRY_DELAY_SECONDS)
 }
 
-fn primary_kind(kinds: TagMirrorKinds) -> MetadataWriteKind {
-    if kinds.artwork {
+fn primary_kind(pending: &PendingTagMirror) -> MetadataWriteKind {
+    if pending.artwork != TagMirrorArtwork::Unchanged {
         MetadataWriteKind::Artwork
-    } else if kinds.metadata {
+    } else if pending.fields.intersects(TrackFields::TAG_METADATA) {
         MetadataWriteKind::Metadata
     } else {
         MetadataWriteKind::Rating
@@ -1144,8 +1175,14 @@ mod tests {
         );
         let writes = service.writes.lock().expect("writes lock");
         assert_eq!(writes.len(), 2);
-        assert_eq!(writes[1].title, FieldChange::Set("Latest".to_owned()));
-        assert_eq!(writes[1].artist, FieldChange::Clear);
+        // The file takes the edited field and nothing else.
+        assert_eq!(
+            writes[1],
+            MetadataChange {
+                title: FieldChange::Set("Latest".to_owned()),
+                ..MetadataChange::default()
+            }
+        );
         drop(writes);
 
         writer.shutdown();
@@ -1201,11 +1238,7 @@ mod tests {
         let pending = PendingTagMirror {
             track_id,
             generation: 1,
-            kinds: TagMirrorKinds {
-                metadata: false,
-                rating: true,
-                artwork: false,
-            },
+            fields: TrackFields::RATING,
             artwork: TagMirrorArtwork::Unchanged,
             attempt_count: 0,
             next_attempt_at_unix: 0,
@@ -1268,11 +1301,7 @@ mod tests {
         let pending = PendingTagMirror {
             track_id,
             generation: 1,
-            kinds: TagMirrorKinds {
-                metadata: false,
-                rating: true,
-                artwork: false,
-            },
+            fields: TrackFields::RATING,
             artwork: TagMirrorArtwork::Unchanged,
             attempt_count: 0,
             next_attempt_at_unix: 0,
@@ -2010,7 +2039,7 @@ mod tests {
             key_origin: sustain_domain::KeyOrigin::Measured,
             ..TrackMetadata::default()
         };
-        let mirror = metadata_mirror(&measured);
+        let mirror = metadata_mirror(&measured, TrackFields::TAG_METADATA);
         assert_eq!(mirror.title, FieldChange::Set("Title".to_owned()));
         assert_eq!(mirror.bpm, FieldChange::Unchanged);
         assert_eq!(mirror.key, FieldChange::Unchanged);
@@ -2019,23 +2048,57 @@ mod tests {
             key_origin: sustain_domain::KeyOrigin::Imported,
             ..measured.clone()
         };
-        assert_eq!(metadata_mirror(&imported).key, FieldChange::Unchanged);
+        assert_eq!(
+            metadata_mirror(&imported, TrackFields::TAG_METADATA).key,
+            FieldChange::Unchanged
+        );
 
         let typed = TrackMetadata {
             bpm_set_by_user: true,
             key_origin: sustain_domain::KeyOrigin::Typed,
             ..measured
         };
-        let mirror = metadata_mirror(&typed);
+        let mirror = metadata_mirror(&typed, TrackFields::TAG_METADATA);
         assert_eq!(mirror.bpm, FieldChange::Set(typed.bpm.expect("tempo")));
         assert_eq!(
             mirror.key,
             FieldChange::Set(sustain_domain::MusicalKey::AMinor)
         );
 
-        let mirror = metadata_mirror(&TrackMetadata::default());
+        let mirror = metadata_mirror(&TrackMetadata::default(), TrackFields::TAG_METADATA);
         assert_eq!(mirror.bpm, FieldChange::Clear);
         assert_eq!(mirror.key, FieldChange::Clear);
+    }
+
+    #[test]
+    fn the_mirror_writes_only_the_fields_it_was_queued_for() {
+        let metadata = TrackMetadata {
+            title: Some("Title".to_owned()),
+            genre: Some("Jazz".to_owned()),
+            track_number: Some(3),
+            track_total: Some(12),
+            title_sort: Some("Title, The".to_owned()),
+            ..TrackMetadata::default()
+        };
+        let mirror = metadata_mirror(
+            &metadata,
+            TrackFields::GENRE | TrackFields::TRACK_NUMBER | TrackFields::TITLE_SORT,
+        );
+        // A track total or another sort name the edit did not change stays
+        // as the file holds it, even where the library holds none.
+        assert_eq!(
+            mirror,
+            MetadataChange {
+                genre: FieldChange::Set("Jazz".to_owned()),
+                track_number: FieldChange::Set(3),
+                title_sort: FieldChange::Set("Title, The".to_owned()),
+                ..MetadataChange::default()
+            }
+        );
+        assert_eq!(
+            metadata_mirror(&metadata, TrackFields::RATING),
+            MetadataChange::default()
+        );
     }
 
     fn valid_artwork() -> Vec<u8> {
