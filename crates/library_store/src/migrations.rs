@@ -178,13 +178,37 @@ const _: () = {
     }
 };
 
+/// Bring the database to the current schema. A database without one (a
+/// new file, or an empty one created beforehand) is created as a library
+/// whole, starter smart playlists included, in one transaction: an open
+/// interrupted at any point leaves it without a schema, to be created
+/// again next time, never a library that missed its starter set (#360).
 pub(crate) fn apply_pending(connection: &Connection) -> StoreResult<()> {
-    apply_pending_from_registry(connection, MIGRATIONS)
+    migrate(
+        connection,
+        MIGRATIONS,
+        crate::sqlite::write_starter_smart_playlists,
+    )
 }
 
+/// The schema of `migrations` alone, for tests that build the database an
+/// earlier registry made: their registries can end before the tables a new
+/// library's starter content needs.
+#[cfg(test)]
 fn apply_pending_from_registry(
     connection: &Connection,
     migrations: &[Migration],
+) -> StoreResult<()> {
+    migrate(connection, migrations, |_| Ok(()))
+}
+
+/// Apply every migration of `migrations` the database has not; a database
+/// without a schema gets all of them and `new_library_content` in one
+/// transaction, and any other gets each in its own.
+fn migrate(
+    connection: &Connection,
+    migrations: &[Migration],
+    new_library_content: impl FnOnce(&Connection) -> StoreResult<()>,
 ) -> StoreResult<()> {
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
@@ -198,29 +222,50 @@ fn apply_pending_from_registry(
         return Err(StoreError::UnversionedDatabaseNotEmpty);
     }
 
-    for migration in migrations
+    let mut pending = migrations
         .iter()
-        .filter(|migration| migration.version > current)
-    {
-        connection
-            .execute_batch("BEGIN IMMEDIATE;")
-            .map_err(StoreError::from)?;
-        let outcome = match migration.step {
-            MigrationStep::Sql(sql) => connection.execute_batch(sql),
-            MigrationStep::Rust(rewrite) => rewrite(connection),
-        }
-        .and_then(|()| connection.pragma_update(None, "user_version", migration.version))
-        .and_then(|()| connection.execute_batch("COMMIT;"));
-        if let Err(error) = outcome {
-            let _ = connection.execute_batch("ROLLBACK;");
-            return Err(StoreError::MigrationFailed {
-                version: migration.version,
-                description: migration.description,
-                detail: error.to_string(),
-            });
-        }
+        .filter(|migration| migration.version > current);
+    if current == 0 {
+        return in_transaction(connection, || {
+            pending.try_for_each(|migration| run_migration(connection, migration))?;
+            new_library_content(connection)
+        });
     }
-    Ok(())
+    pending.try_for_each(|migration| {
+        in_transaction(connection, || run_migration(connection, migration))
+    })
+}
+
+fn run_migration(connection: &Connection, migration: &Migration) -> StoreResult<()> {
+    match migration.step {
+        MigrationStep::Sql(sql) => connection.execute_batch(sql),
+        MigrationStep::Rust(rewrite) => rewrite(connection),
+    }
+    .and_then(|()| connection.pragma_update(None, "user_version", migration.version))
+    .map_err(|error| StoreError::MigrationFailed {
+        version: migration.version,
+        description: migration.description,
+        detail: error.to_string(),
+    })
+}
+
+/// Run `work` in an immediate transaction, committed only if it succeeds.
+fn in_transaction(
+    connection: &Connection,
+    work: impl FnOnce() -> StoreResult<()>,
+) -> StoreResult<()> {
+    connection
+        .execute_batch("BEGIN IMMEDIATE;")
+        .map_err(StoreError::from)?;
+    let outcome = work().and_then(|()| {
+        connection
+            .execute_batch("COMMIT;")
+            .map_err(StoreError::from)
+    });
+    if outcome.is_err() {
+        let _ = connection.execute_batch("ROLLBACK;");
+    }
+    outcome
 }
 
 /// Migration 7. Keys used to be stored as whatever text the file's key tag
@@ -396,6 +441,25 @@ mod tests {
         "track_synced_lyrics",
         "tracks",
     ];
+
+    #[test]
+    fn a_library_whose_creation_fails_is_left_without_a_schema() {
+        let connection = Connection::open_in_memory().expect("open database");
+
+        let failed = migrate(&connection, MIGRATIONS, |_| {
+            Err(StoreError::StoreUnavailable)
+        });
+
+        assert!(matches!(failed, Err(StoreError::StoreUnavailable)));
+        assert_eq!(user_version(&connection).expect("version"), 0);
+        assert!(!has_application_tables(&connection).expect("tables"));
+        // The next open creates it whole, starter set included.
+        apply_pending(&connection).expect("create the library");
+        let starter: i64 = connection
+            .query_row("SELECT COUNT(*) FROM smart_playlists", [], |row| row.get(0))
+            .expect("count smart playlists");
+        assert_eq!(starter, 7);
+    }
 
     #[test]
     fn fresh_database_applies_every_migration() {
@@ -2059,6 +2123,8 @@ WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
             },
         ];
 
+        // An existing library: a new one is created in one transaction.
+        apply_pending_from_registry(&connection, &migrations[..1]).expect("schema version 1");
         assert!(matches!(
             apply_pending_from_registry(&connection, &migrations),
             Err(StoreError::MigrationFailed { version: 2, .. })
@@ -2118,6 +2184,8 @@ WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
             },
         ];
 
+        // An existing library: a new one is created in one transaction.
+        apply_pending_from_registry(&connection, &migrations[..1]).expect("schema version 1");
         assert!(matches!(
             apply_pending_from_registry(&connection, &migrations),
             Err(StoreError::MigrationFailed { version: 2, .. })

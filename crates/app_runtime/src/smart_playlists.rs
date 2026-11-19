@@ -3,7 +3,6 @@
 
 use sustain_domain::{
     PlaylistFolderId, SmartPlaylist, SmartPlaylistId, SmartPlaylistRuleSet, TrackColumnLayoutScope,
-    default_smart_playlists,
 };
 
 use crate::{
@@ -11,22 +10,6 @@ use crate::{
 };
 
 impl ApplicationRuntime {
-    // Installs the iTunes-style starter set on a freshly created
-    // database. Caller is responsible for invoking this exactly once,
-    // immediately after the library DB file is created (see
-    // `SqliteLibraryStore::was_freshly_created`). Calling it on a DB
-    // that already holds smart playlists will collide on the seeded ids
-    // — that is a caller bug, not a state to recover from here.
-    pub fn seed_default_smart_playlists(&mut self) -> ApplicationRuntimeResult<()> {
-        let library_store = self.library_store()?;
-        for smart_playlist in default_smart_playlists(1) {
-            library_store
-                .save_smart_playlist(smart_playlist)
-                .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        }
-        self.reload_playlist_state()
-    }
-
     pub(super) fn create_smart_playlist(
         &mut self,
         name: String,

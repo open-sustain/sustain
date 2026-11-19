@@ -10,6 +10,16 @@ pub(super) fn save_smart_playlist(
     smart_playlist: SmartPlaylist,
 ) -> StoreResult<()> {
     let transaction = connection.transaction().map_err(StoreError::from)?;
+    write_smart_playlist(&transaction, smart_playlist)?;
+    transaction.commit().map_err(StoreError::from)
+}
+
+/// Write `smart_playlist` and its rules, inside a transaction the caller
+/// holds and commits.
+pub(super) fn write_smart_playlist(
+    transaction: &Connection,
+    smart_playlist: SmartPlaylist,
+) -> StoreResult<()> {
     let (limit_count, limit_selection) = match smart_playlist.rules.limit {
         Some(limit) => (
             Some(i64::from(limit.count.get())),
@@ -80,8 +90,7 @@ pub(super) fn save_smart_playlist(
             )
             .map_err(StoreError::from)?;
     }
-
-    transaction.commit().map_err(StoreError::from)
+    Ok(())
 }
 
 pub(super) fn smart_playlist(

@@ -6706,7 +6706,7 @@ fn runtime_rejects_blank_playlist_names() {
 
 #[test]
 fn runtime_creates_renames_and_deletes_playlist_folders() {
-    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(library_without_starter_set());
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -6774,7 +6774,7 @@ fn runtime_rejects_creating_folder_under_missing_parent() {
 
 #[test]
 fn deleting_a_folder_cascades_and_reloads_runtime_state() {
-    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(library_without_starter_set());
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -6817,7 +6817,7 @@ fn deleting_a_folder_cascades_and_reloads_runtime_state() {
 
 #[test]
 fn runtime_creates_updates_and_deletes_smart_playlists() {
-    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(library_without_starter_set());
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -6869,7 +6869,7 @@ fn smart_playlist_track_verdicts_distinguish_included_excluded_and_unknowable() 
     //      (single-track inspection can't reason about eviction).
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
-    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(library_without_starter_set());
 
     let matching = Track {
         id: track_id(1),
@@ -6955,16 +6955,24 @@ fn smart_playlist_track_verdicts_distinguish_included_excluded_and_unknowable() 
     );
 }
 
+/// An in-memory library whose user deleted the starter smart playlists a
+/// new library opens with: playlist tests start from an empty sidebar.
+fn library_without_starter_set() -> SqliteLibraryStore {
+    let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    for smart_playlist in store.smart_playlists().expect("starter set") {
+        store
+            .delete_smart_playlist(smart_playlist.id)
+            .expect("delete a starter playlist");
+    }
+    store
+}
+
 #[test]
-fn seeding_default_smart_playlists_installs_the_starter_set() {
+fn a_new_library_opens_with_the_starter_set() {
     let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
-    let mut runtime = ApplicationRuntime::new()
+    let runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
-
-    runtime
-        .seed_default_smart_playlists()
-        .expect("seed succeeds on fresh library");
 
     let names: Vec<&str> = runtime
         .smart_playlists()
@@ -7042,7 +7050,7 @@ fn a_smart_playlist_selection_knows_when_time_changes_it() {
     use std::time::{Duration, SystemTime};
 
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
-    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(library_without_starter_set());
     // Played one and three days ago, and never.
     for (id, days_ago) in [(1, Some(1)), (2, Some(3)), (3, None)] {
         let mut track = test_track(track_id(id), &format!("track-{id}.flac"));
@@ -7173,7 +7181,7 @@ fn runtime_rejects_smart_playlist_without_rules() {
 
 #[test]
 fn new_siblings_get_distinct_positions_across_types() {
-    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(library_without_starter_set());
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -7244,7 +7252,7 @@ fn moving_a_playlist_within_its_folder_reorders_siblings() {
 
 #[test]
 fn moving_a_playlist_down_its_folder_lands_in_the_slot_it_was_dropped_on() {
-    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(library_without_starter_set());
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");
@@ -7287,7 +7295,7 @@ fn moving_a_playlist_down_its_folder_lands_in_the_slot_it_was_dropped_on() {
 
 #[test]
 fn moving_a_playlist_across_folders_resequences_both_sides() {
-    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(library_without_starter_set());
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store, Arc::new(TestMetadataService))
         .expect("library services initialize");

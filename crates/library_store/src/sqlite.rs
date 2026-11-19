@@ -701,3 +701,13 @@ impl LibraryStore for SqliteLibraryStore {
         devices::device_pioneer_export(&connection, id)
     }
 }
+
+/// Write the starter smart playlists a new library opens with, inside the
+/// transaction that creates the library (#360).
+pub(crate) fn write_starter_smart_playlists(transaction: &Connection) -> StoreResult<()> {
+    sustain_domain::default_smart_playlists(1)
+        .into_iter()
+        .try_for_each(|smart_playlist| {
+            smart_playlists::write_smart_playlist(transaction, smart_playlist)
+        })
+}

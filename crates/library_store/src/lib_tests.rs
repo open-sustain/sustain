@@ -385,9 +385,9 @@ fn sqlite_store_round_trips_repeated_playlist_entries() {
 }
 
 #[test]
-fn sqlite_store_reports_freshly_created_only_on_first_open() {
+fn a_new_library_gets_the_starter_set_once_even_from_a_precreated_empty_file() {
     let dir = std::env::temp_dir().join(format!(
-        "sustain_freshness_{}",
+        "sustain_starter_set_{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock after unix epoch")
@@ -395,15 +395,22 @@ fn sqlite_store_reports_freshly_created_only_on_first_open() {
     ));
     std::fs::create_dir_all(&dir).expect("create test directory");
     let path = dir.join("library.sqlite");
+    // Created beforehand: no schema, so still a new library.
+    std::fs::write(&path, b"").expect("pre-create the database file");
 
-    let first =
-        SqliteLibraryStore::open(&path, dir.join("cache")).expect("open creates the database file");
-    assert!(first.was_freshly_created());
+    let first = SqliteLibraryStore::open(&path, dir.join("cache")).expect("create the library");
+    let starter = first.smart_playlists().expect("smart playlists");
+    assert_eq!(starter, sustain_domain::default_smart_playlists(1));
+    for smart_playlist in &starter {
+        first
+            .delete_smart_playlist(smart_playlist.id)
+            .expect("delete a starter playlist");
+    }
     drop(first);
 
-    let second =
-        SqliteLibraryStore::open(&path, dir.join("cache")).expect("reopen existing database");
-    assert!(!second.was_freshly_created());
+    // The user's deletions stand: an existing library is never seeded.
+    let second = SqliteLibraryStore::open(&path, dir.join("cache")).expect("reopen the library");
+    assert_eq!(second.smart_playlists(), Ok(Vec::new()));
     drop(second);
 
     std::fs::remove_dir_all(&dir).expect("clean up test directory");
@@ -740,6 +747,11 @@ fn sqlite_store_cascade_deletes_folder_and_contents() {
 #[test]
 fn sqlite_store_saves_and_loads_smart_playlists() {
     let store = SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    for starter in store.smart_playlists().expect("starter set") {
+        store
+            .delete_smart_playlist(starter.id)
+            .expect("delete a starter playlist");
+    }
     let smart = smart_playlist_with_rules(1, "Recent", None, 0, simple_text_rule_set());
 
     assert_eq!(store.save_smart_playlist(smart.clone()), Ok(()));

@@ -173,7 +173,6 @@ fn main() {
     match sustain_library_store::SqliteLibraryStore::open(&layout.database, &layout.cache_dir) {
         Ok(library_store) => {
             sustain_profiler::profile_startup!(startup_profile, "SQLite store opened");
-            let was_freshly_created = library_store.was_freshly_created();
             if let sustain_library_store::WaveformCacheStatus::Unavailable { reason } =
                 library_store.waveform_cache_status()
             {
@@ -212,9 +211,6 @@ fn main() {
                     startup_profile,
                     "library services installed (track hydration deferred)"
                 );
-            }
-            if was_freshly_created && let Err(error) = runtime.seed_default_smart_playlists() {
-                eprintln!("Sustain: failed to seed default smart playlists ({error:?}).");
             }
         }
         Err(sustain_library_store::StoreError::DatabaseAhead { current, supported }) => {

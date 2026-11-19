@@ -795,7 +795,6 @@ pub struct SqliteLibraryStore {
     /// and by collection from its reference snapshot until its last unlink:
     /// otherwise collection could delete a payload between the two.
     tag_mirror_artwork_publication: Mutex<()>,
-    freshly_created: bool,
     waveform_cache: WaveformCacheStatus,
 }
 
@@ -810,12 +809,10 @@ impl SqliteLibraryStore {
             std::fs::create_dir_all(parent)
                 .map_err(|error| StoreError::Database(error.to_string()))?;
         }
-        let freshly_created = !path.exists();
         let connection = Connection::open(path).map_err(StoreError::from)?;
         let store = Self::from_connection(
             connection,
             tag_mirror::TagMirrorBlobStore::new(tag_mirror_blob_root(path)),
-            freshly_created,
             Some(&cache_dir.as_ref().join(waveform_cache::FILE_NAME)),
         )?;
         // Taking over the payloads an earlier build left does not keep the
@@ -832,7 +829,6 @@ impl SqliteLibraryStore {
         Self::from_connection(
             connection,
             tag_mirror::TagMirrorBlobStore::new_ephemeral(),
-            true,
             None,
         )
     }
@@ -842,7 +838,6 @@ impl SqliteLibraryStore {
     fn from_connection(
         connection: Connection,
         tag_mirror_blobs: tag_mirror::TagMirrorBlobStore,
-        freshly_created: bool,
         waveform_cache_path: Option<&Path>,
     ) -> StoreResult<Self> {
         // SQLite silently ignores WAL on `:memory:` databases, so tests
@@ -866,7 +861,6 @@ impl SqliteLibraryStore {
             connection: Mutex::new(connection),
             tag_mirror_blobs,
             tag_mirror_artwork_publication: Mutex::new(()),
-            freshly_created,
             waveform_cache,
         })
     }
@@ -874,14 +868,6 @@ impl SqliteLibraryStore {
     /// Whether analysis waveforms persist across sessions.
     pub fn waveform_cache_status(&self) -> &WaveformCacheStatus {
         &self.waveform_cache
-    }
-
-    // True when this open() call brought the database file into
-    // existence. Callers (typically the runtime at startup) use this to
-    // decide whether to perform one-shot first-run setup such as seeding
-    // the default smart playlists. Always true for in-memory stores.
-    pub fn was_freshly_created(&self) -> bool {
-        self.freshly_created
     }
 
     fn connection_guard(&self) -> StoreResult<MutexGuard<'_, Connection>> {

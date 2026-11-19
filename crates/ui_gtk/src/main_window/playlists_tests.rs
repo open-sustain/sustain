@@ -9,7 +9,7 @@ use std::{
 };
 
 use sustain_app_runtime::{
-    ApplicationCommand, Rating, SmartPlaylistDateField, SmartPlaylistId, SmartPlaylistMatchKind,
+    ApplicationCommand, Rating, SmartPlaylistDateField, SmartPlaylistMatchKind,
     SmartPlaylistNumberOperator, SmartPlaylistRule, SmartPlaylistRuleSet, Track,
 };
 
@@ -81,9 +81,15 @@ impl ShownSmartPlaylist {
             &LocalTimeZoneMonitor::new().expect("watch the local time zone"),
         );
         let sidebar = PlaylistSidebar::new(runtime.clone(), false);
-        sidebar.select_item(PlaylistItem::SmartPlaylist(
-            SmartPlaylistId::new(1).expect("positive id"),
-        ));
+        // The one created above, after the starter set a library opens with.
+        let created = runtime
+            .borrow()
+            .smart_playlists()
+            .iter()
+            .find(|smart_playlist| smart_playlist.name == "Smart")
+            .expect("the created smart playlist")
+            .id;
+        sidebar.select_item(PlaylistItem::SmartPlaylist(created));
         let search_text = Rc::new(RefCell::new(String::new()));
         install_playlists_view_activator(&view, &runtime, &sidebar, &search_text);
         content_stack.set_visible_child_name(PLAYLISTS_VIEW);
