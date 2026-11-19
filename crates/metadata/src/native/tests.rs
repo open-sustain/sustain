@@ -1478,3 +1478,38 @@ fn an_edit_never_lands_over_another_tools_edit_made_since_the_read() {
         );
     });
 }
+
+#[test]
+fn a_year_no_tag_can_hold_clears_the_year_rather_than_write_another() {
+    with_directory(|root| {
+        let mp3 = root.join("year.mp3");
+        write_mp3(&mp3, &Id3v2Tag::new());
+        let flac = root.join("year.flac");
+        write_flac(&flac, &[]);
+        let m4a = root.join("year.m4a");
+        write_m4a(&m4a, &Ilst::default());
+        let service = LoftyMetadataService;
+        let write_year = |path: &Path, year: i32| {
+            let change = MetadataChange {
+                year: FieldChange::Set(year),
+                ..MetadataChange::default()
+            };
+            service.write_metadata(path, change).expect("write year");
+            service
+                .read_persisted_tags(path)
+                .expect("read")
+                .metadata
+                .year
+        };
+
+        for path in [&mp3, &flac, &m4a] {
+            // Four digits are the bounds a tag's date holds (#368).
+            assert_eq!(write_year(path, 0), Some(0), "{path:?}");
+            assert_eq!(write_year(path, 9999), Some(9999), "{path:?}");
+            for beyond in [10_000, -1, i32::MAX] {
+                write_year(path, 1998);
+                assert_eq!(write_year(path, beyond), None, "{beyond} in {path:?}");
+            }
+        }
+    });
+}
