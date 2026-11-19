@@ -463,6 +463,20 @@ impl AlbumsView {
         self.albums.borrow().len()
     }
 
+    /// The tracks of the albums the grid admits under the current search,
+    /// summed: what the Albums page shows, which its own filter (album
+    /// title, artist, year) decides, not the track search (#363).
+    pub(crate) fn summary(&self) -> crate::track_summary::TrackSummary {
+        let runtime = self.runtime.borrow();
+        let albums = self.albums.borrow();
+        crate::track_summary::TrackSummary::of_tracks(
+            albums
+                .iter()
+                .flat_map(|album| &album.tracks)
+                .filter_map(|track| runtime.library_track(track.id)),
+        )
+    }
+
     /// Re-derive `albums` from `all_albums` according to the active search,
     /// clear selection, and rebuild the virtual row model.
     fn apply_search(&self) {

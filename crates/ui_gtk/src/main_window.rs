@@ -623,6 +623,7 @@ pub(crate) fn build_main_window(
         &playlists_table,
         &playlists_header,
         &duplicates_view,
+        &albums_view,
         &current_search_text,
         device_panel.current_device_cell(),
     );
@@ -1769,6 +1770,7 @@ fn visible_summary_refresh_callback(
     playlists_table: &TrackTable,
     playlists_header: &PlaylistsHeader,
     duplicates_view: &DuplicatesView,
+    albums_view: &AlbumsView,
     current_search_text: &Rc<RefCell<String>>,
     current_device: Rc<RefCell<Option<ConnectedDevice>>>,
 ) -> VisibleSummaryRefreshCallback {
@@ -1779,6 +1781,7 @@ fn visible_summary_refresh_callback(
     let playlists_table = playlists_table.clone();
     let playlists_header = playlists_header.clone();
     let duplicates_view = duplicates_view.clone();
+    let albums_view = albums_view.clone();
     let current_search_text = current_search_text.clone();
 
     Rc::new(move || {
@@ -1805,8 +1808,10 @@ fn visible_summary_refresh_callback(
             }
             // The duplicate groups, which the search does not filter.
             Some(DUPLICATES_VIEW) => duplicates_view.summary(),
-            // The Albums page and the other library pages: the library
-            // under the current search, summed without building its rows.
+            // The albums the grid admits, which its own filter decides.
+            Some(ALBUMS_VIEW) => albums_view.summary(),
+            // The other library pages: the library under the current
+            // search, summed without building its rows.
             _ => {
                 let runtime = runtime.borrow();
                 let normalized = normalize_query(&current_search_text.borrow());
