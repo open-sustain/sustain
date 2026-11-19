@@ -701,6 +701,24 @@ impl TrackTable {
         );
     }
 
+    /// The layout the table is built with: every column in its built
+    /// order, at its default visibility and width, and no sort. What a view
+    /// shows when nothing persisted describes its columns (#365).
+    pub(crate) fn factory_layout(&self) -> TrackColumnLayout {
+        TrackColumnLayout {
+            entries: self
+                .managed_columns
+                .iter()
+                .map(|managed| TrackColumnEntry {
+                    column_id: managed.column_id.to_owned(),
+                    visible: managed.kind.default_visible(),
+                    width_px: managed.kind.default_width().max(0) as u32,
+                })
+                .collect(),
+            sort: None,
+        }
+    }
+
     /// Apply a persisted layout: reorder columns, set visibility, set widths.
     /// Any managed column missing from `layout` keeps its factory defaults and
     /// is appended after the explicit entries.
@@ -1769,6 +1787,40 @@ mod tests {
             assert_eq!(store_track_name(&table, 0).as_deref(), Some("Updated 1"));
             assert_eq!(store_track_name(&table, 1).as_deref(), Some("Track 2"));
             assert_eq!(store_track_name(&table, 2).as_deref(), Some("Updated 3"));
+        });
+    }
+
+    #[test]
+    fn the_factory_layout_resets_a_table_to_how_it_was_built() {
+        crate::test_support::with_gtk(|| {
+            let table = build_track_table(vec![named_row(1, "A")], None, None, None, None, None);
+            let factory = table.factory_layout();
+            assert_eq!(
+                read_current_layout(&table.table, &table.managed_columns),
+                factory
+            );
+
+            // Another playlist's columns: reversed, one hidden, one wider,
+            // sorted.
+            let mut other = factory.clone();
+            other.entries.reverse();
+            other.entries[0].visible = !other.entries[0].visible;
+            other.entries[1].width_px += 40;
+            other.sort = Some(TrackColumnSort {
+                column_id: "track_name".to_owned(),
+                ascending: false,
+            });
+            table.apply_layout(&other);
+            assert_ne!(
+                read_current_layout(&table.table, &table.managed_columns),
+                factory
+            );
+
+            table.apply_layout(&factory);
+            assert_eq!(
+                read_current_layout(&table.table, &table.managed_columns),
+                factory
+            );
         });
     }
 

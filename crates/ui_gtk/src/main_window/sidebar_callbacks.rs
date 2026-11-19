@@ -334,18 +334,21 @@ pub(super) fn sidebar_selection_changed_callback(
             Some(SidebarSelection::Item(PlaylistItem::Playlist(_)))
         );
         let layout_profile = sustain_profiler::ProfileScope::start();
-        if let Some(mut layout) = layout_for_selection(&runtime.borrow(), selection) {
-            // A regular playlist always lands on the play-order (status) sort
-            // applied just below, so drop any persisted column sort here: letting
-            // apply_layout install it would only have apply_playlist_default_sort
-            // immediately resort the whole model a second time. Avoiding that
-            // double resort is part of the #226 playlist-switch freeze fix; do
-            // not restore the sort on this path without re-measuring switches.
-            if regular_playlist_selected {
-                layout.sort = None;
-            }
-            playlists_table.apply_layout(&layout);
+        let mut layout = layout_for_selection(
+            &runtime.borrow(),
+            selection,
+            playlists_table.factory_layout(),
+        );
+        // A regular playlist always lands on the play-order (status) sort
+        // applied just below, so drop any persisted column sort here: letting
+        // apply_layout install it would only have apply_playlist_default_sort
+        // immediately resort the whole model a second time. Avoiding that
+        // double resort is part of the #226 playlist-switch freeze fix; do
+        // not restore the sort on this path without re-measuring switches.
+        if regular_playlist_selected {
+            layout.sort = None;
         }
+        playlists_table.apply_layout(&layout);
         if regular_playlist_selected {
             playlists_table.apply_playlist_default_sort();
         }

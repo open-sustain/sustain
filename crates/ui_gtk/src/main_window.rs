@@ -1911,10 +1911,13 @@ fn install_track_column_layout_persistence(
     }
 }
 
+/// The layout `selection` shows in the playlists table: its own, else the
+/// default one, else `factory` — never the previous selection's (#365).
 fn layout_for_selection(
     runtime: &ApplicationRuntime,
     selection: Option<SidebarSelection>,
-) -> Option<TrackColumnLayout> {
+    factory: TrackColumnLayout,
+) -> TrackColumnLayout {
     let override_scope = match selection {
         Some(SidebarSelection::Item(PlaylistItem::Playlist(id))) => {
             Some(TrackColumnLayoutScope::Playlist(id))
@@ -1927,12 +1930,13 @@ fn layout_for_selection(
     if let Some(scope) = override_scope
         && let Ok(Some(layout)) = runtime.load_track_column_layout(scope)
     {
-        return Some(layout);
+        return layout;
     }
     runtime
         .load_track_column_layout(TrackColumnLayoutScope::Default)
         .ok()
         .flatten()
+        .unwrap_or(factory)
 }
 
 fn runtime_library_table_rows(
