@@ -167,7 +167,7 @@ pub(crate) struct PlaylistSidebar {
     /// The currently highlighted *transient* row (a device today, the
     /// future Duplicates scan), for single-selection CSS. Mutually
     /// exclusive with the persistent highlight.
-    active_transient_row: Rc<RefCell<Option<gtk::Widget>>>,
+    active_transient: Rc<RefCell<Option<ActiveTransient>>>,
     /// The persistent selection live just before a transient view took
     /// over. While a transient view is active this is what gets persisted
     /// and restored — never the transient view itself, which could fail
@@ -228,7 +228,7 @@ impl PlaylistSidebar {
         let on_cd_eject: Rc<RefCell<Option<SidebarCdEjectCallback>>> = Rc::new(RefCell::new(None));
         let on_duplicates_selected: Rc<RefCell<Option<SidebarDuplicatesSelectedCallback>>> =
             Rc::new(RefCell::new(None));
-        let active_transient_row: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
+        let active_transient: Rc<RefCell<Option<ActiveTransient>>> = Rc::new(RefCell::new(None));
         let persistent_selection = Rc::new(Cell::new(SidebarSelection::Music));
         let launch_selection = Rc::new(Cell::new(None));
 
@@ -347,7 +347,7 @@ impl PlaylistSidebar {
         selection.set_selected(gtk::INVALID_LIST_POSITION);
 
         let duplicates_sidebar_row = duplicates_row.clone().upcast::<gtk::Widget>();
-        let sidebar_active_transient_row = active_transient_row.clone();
+        let sidebar_active_transient = active_transient.clone();
         let persistent_selection_for_duplicates = persistent_selection.clone();
         let launch_selection_for_duplicates = launch_selection.clone();
         let library_state_for_duplicates = library_state.clone();
@@ -359,8 +359,9 @@ impl PlaylistSidebar {
         let on_duplicates_selected_for_gesture = on_duplicates_selected.clone();
         connect_row_activation(&duplicates_row, move |_| {
             activate_transient_view_state(
+                TransientSubject::Duplicates,
                 &duplicates_sidebar_row,
-                &sidebar_active_transient_row,
+                &sidebar_active_transient,
                 &persistent_selection_for_duplicates,
                 &launch_selection_for_duplicates,
                 &library_state_for_duplicates,
@@ -406,7 +407,7 @@ impl PlaylistSidebar {
             on_cd_eject,
             transfer_badges: Rc::new(RefCell::new(Vec::new())),
             on_duplicates_selected,
-            active_transient_row,
+            active_transient,
             persistent_selection,
             launch_selection,
         }
@@ -541,13 +542,13 @@ impl PlaylistSidebar {
     }
 
     /// Rebuild the Devices section from the current set of transient
-    /// entries — removable sync targets and inserted audio CDs. Clears the
-    /// previous rows and any highlight.
+    /// entries — removable sync targets and inserted audio CDs. A device
+    /// whose view is shown keeps its highlight on its new row; Duplicates,
+    /// not a Devices row, keeps its own.
     pub(crate) fn set_devices(&self, entries: &[SidebarDeviceEntry]) {
         while let Some(child) = self.devices_body.first_child() {
             self.devices_body.remove(&child);
         }
-        self.active_transient_row.replace(None);
         self.transfer_badges.borrow_mut().clear();
         let has_devices = !entries.is_empty();
         self.devices_header.set_visible(has_devices);
@@ -585,10 +586,15 @@ impl PlaylistSidebar {
                         });
                         row_parts.content.append(&eject);
                     }
+                    let subject = DeviceRowSubject::SyncTarget(device.id.clone());
+                    self.rebind_active_device_row(&subject, &row);
                     let sidebar = self.clone();
                     let device = device.clone();
                     connect_row_activation(&row, move |sidebar_row| {
-                        sidebar.activate_transient_view(sidebar_row);
+                        sidebar.activate_transient_view(
+                            TransientSubject::Device(subject.clone()),
+                            sidebar_row,
+                        );
                         if let Some(callback) = sidebar.on_device_selected.borrow().as_ref() {
                             callback(device.clone());
                         }
@@ -616,10 +622,15 @@ impl PlaylistSidebar {
                         }
                     });
                     row_parts.content.append(&eject);
+                    let subject = DeviceRowSubject::Disc(snapshot.identity());
+                    self.rebind_active_device_row(&subject, &row);
                     let sidebar = self.clone();
                     let snapshot = snapshot.clone();
                     connect_row_activation(&row, move |sidebar_row| {
-                        sidebar.activate_transient_view(sidebar_row);
+                        sidebar.activate_transient_view(
+                            TransientSubject::Device(subject.clone()),
+                            sidebar_row,
+                        );
                         if let Some(callback) = sidebar.on_cd_selected.borrow().as_ref() {
                             callback(snapshot.clone());
                         }
@@ -665,10 +676,11 @@ impl PlaylistSidebar {
     /// what [`Self::persisted_selection`] reports and what is restored on
     /// the next launch. Transient views are never persisted: re-opening
     /// one at startup could fail (the device is gone) or be expensive.
-    pub(crate) fn activate_transient_view(&self, row: &gtk::Widget) {
+    fn activate_transient_view(&self, subject: TransientSubject, row: &gtk::Widget) {
         activate_transient_view_state(
+            subject,
             row,
-            &self.active_transient_row,
+            &self.active_transient,
             &self.persistent_selection,
             &self.launch_selection,
             &self.library_state,
@@ -683,8 +695,20 @@ impl PlaylistSidebar {
     /// Drop the transient-view highlight — called when a persistent
     /// sidebar surface (a library row or a playlist) becomes active.
     pub(crate) fn clear_transient_highlight(&self) {
-        if let Some(previous) = self.active_transient_row.borrow_mut().take() {
-            previous.remove_css_class("selected");
+        if let Some(previous) = self.active_transient.borrow_mut().take() {
+            previous.row.remove_css_class("selected");
+        }
+    }
+
+    /// Move the highlight of the shown device's view onto `row`, the row a
+    /// Devices rebuild made for `subject`, if `subject` is that device.
+    fn rebind_active_device_row(&self, subject: &DeviceRowSubject, row: &gtk::Box) {
+        let mut active = self.active_transient.borrow_mut();
+        if let Some(active) = active.as_mut()
+            && active.subject == TransientSubject::Device(subject.clone())
+        {
+            row.add_css_class("selected");
+            active.row = row.clone().upcast();
         }
     }
 
@@ -695,7 +719,7 @@ impl PlaylistSidebar {
     pub(crate) fn persisted_selection(&self) -> Option<SidebarSelection> {
         if let Some(selection) = self.launch_selection.get() {
             Some(selection)
-        } else if self.active_transient_row.borrow().is_some() {
+        } else if self.active_transient.borrow().is_some() {
             Some(self.persistent_selection.get())
         } else {
             self.current_selection()
@@ -772,7 +796,7 @@ impl PlaylistSidebar {
     /// selection, and column sort. A caller whose change alters what the
     /// shown item displays (its name, its rules) updates that view itself.
     pub(crate) fn refresh(&self) {
-        let transient_active = self.active_transient_row.borrow().is_some();
+        let transient_active = self.active_transient.borrow().is_some();
         let previous = self.current_selection();
         let rename = *self.pending_rename.borrow();
         // Suppress the selection callback while we update the tree and
@@ -949,6 +973,20 @@ fn sidebar_eject_button(on_eject: impl Fn() + 'static) -> gtk::Button {
     // click ejects without also opening the row.
     eject.connect_clicked(move |_| on_eject());
     eject
+}
+
+/// The transient view the sidebar highlights: identified by what it
+/// shows, not by its row, so a rebuild of the Devices rows keeps it.
+#[derive(Clone, Debug, PartialEq)]
+enum TransientSubject {
+    Duplicates,
+    Device(DeviceRowSubject),
+}
+
+/// The shown transient view and the row that currently stands for it.
+struct ActiveTransient {
+    subject: TransientSubject,
+    row: gtk::Widget,
 }
 
 /// What a Devices row stands for, so a transfer badge lands on its row.
@@ -1149,8 +1187,9 @@ fn current_selection(
 
 #[allow(clippy::too_many_arguments)]
 fn activate_transient_view_state(
+    subject: TransientSubject,
     row: &gtk::Widget,
-    active_transient_row: &Rc<RefCell<Option<gtk::Widget>>>,
+    active_transient: &Rc<RefCell<Option<ActiveTransient>>>,
     persistent_selection: &Rc<Cell<SidebarSelection>>,
     launch_selection: &Rc<Cell<Option<SidebarSelection>>>,
     library_state: &Rc<Cell<LibraryRowState>>,
@@ -1164,13 +1203,13 @@ fn activate_transient_view_state(
     // Entering the transient state from a persistent one: snapshot the
     // persistent selection. Switching transient-to-transient keeps the
     // original snapshot.
-    if active_transient_row.borrow().is_none()
+    if active_transient.borrow().is_none()
         && let Some(selection) = current_selection(library_state.get(), selection)
     {
         persistent_selection.set(selection);
     }
-    if let Some(previous) = active_transient_row.borrow_mut().take() {
-        previous.remove_css_class("selected");
+    if let Some(previous) = active_transient.borrow_mut().take() {
+        previous.row.remove_css_class("selected");
     }
     // Clear the persistent highlight without firing the selection callback:
     // that would switch the content area back to a library or playlist view.
@@ -1181,7 +1220,10 @@ fn activate_transient_view_state(
     *on_selection_changed.borrow_mut() = suspended;
 
     row.add_css_class("selected");
-    active_transient_row.replace(Some(row.clone()));
+    active_transient.replace(Some(ActiveTransient {
+        subject,
+        row: row.clone(),
+    }));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1636,8 +1678,10 @@ mod tests {
 
             let transient = test_sidebar();
             transient.defer_launch_selection(SidebarSelection::Albums);
-            transient
-                .activate_transient_view(gtk::Box::new(gtk::Orientation::Vertical, 0).upcast_ref());
+            transient.activate_transient_view(
+                super::TransientSubject::Duplicates,
+                gtk::Box::new(gtk::Orientation::Vertical, 0).upcast_ref(),
+            );
             let shown = record_selection_changes(&transient);
             transient.apply_launch_selection();
             assert!(shown.borrow().is_empty(), "the transient view stays shown");
@@ -1645,6 +1689,61 @@ mod tests {
                 transient.persisted_selection(),
                 Some(SidebarSelection::Music)
             );
+        });
+    }
+
+    /// A device plugged in while Duplicates is shown neither forgets the
+    /// view to restore at launch nor strands Duplicates' highlight.
+    #[test]
+    fn a_devices_rebuild_keeps_the_shown_transient_view() {
+        crate::test_support::with_gtk(|| {
+            let sidebar = test_sidebar();
+            sidebar.select_albums();
+            sidebar.activate_transient_view(
+                super::TransientSubject::Duplicates,
+                sidebar.duplicates_row.upcast_ref(),
+            );
+
+            sidebar.set_devices(&[SidebarDeviceEntry::AudioCd(disc("/dev/sr0", "disc"))]);
+
+            assert_eq!(
+                sidebar.persisted_selection(),
+                Some(SidebarSelection::Albums)
+            );
+            // What leaving the view for a library row or playlist does.
+            sidebar.clear_transient_highlight();
+            assert!(
+                !sidebar.duplicates_row.has_css_class("selected"),
+                "leaving Duplicates clears its highlight"
+            );
+        });
+    }
+
+    /// The shown device's highlight follows it onto the row a rebuild
+    /// makes for it.
+    #[test]
+    fn a_devices_rebuild_keeps_the_shown_device_highlighted() {
+        crate::test_support::with_gtk(|| {
+            let sidebar = test_sidebar();
+            let shown = disc("/dev/sr0", "disc");
+            let entries = [SidebarDeviceEntry::AudioCd(shown.clone())];
+            sidebar.set_devices(&entries);
+            let row = sidebar.devices_body.first_child().expect("the disc's row");
+            sidebar.activate_transient_view(
+                super::TransientSubject::Device(super::DeviceRowSubject::Disc(shown.identity())),
+                &row,
+            );
+
+            sidebar.set_devices(&entries);
+
+            let rebuilt = sidebar
+                .devices_body
+                .first_child()
+                .expect("the disc's new row");
+            assert_ne!(rebuilt, row);
+            assert!(rebuilt.has_css_class("selected"));
+            sidebar.clear_transient_highlight();
+            assert!(!rebuilt.has_css_class("selected"));
         });
     }
 
