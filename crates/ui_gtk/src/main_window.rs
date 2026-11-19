@@ -126,6 +126,7 @@ use playback::{
 use playlists::{
     PlaylistsViewRefreshContext, add_to_playlist_callback, add_to_playlist_provider,
     install_playlists_view_activator, refresh_playlists_view_if_visible,
+    update_playlists_view_tracks,
 };
 use result_consumers::{
     ArtworkFetchResultConsumerContext, LibraryHydrationResultConsumerContext,
@@ -633,7 +634,6 @@ pub(crate) fn build_main_window(
         albums_view: &albums_view,
         duplicates_view: &duplicates_view,
         statistics_view: &statistics_view,
-        playlists_table: &playlists_table,
         playlists_refresh: &playlists_refresh,
         sidebar: &sidebar,
         titlebar: &titlebar,

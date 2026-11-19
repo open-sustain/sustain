@@ -6861,7 +6861,7 @@ fn runtime_creates_updates_and_deletes_smart_playlists() {
 }
 
 #[test]
-fn smart_playlist_track_statuses_distinguish_included_excluded_and_unknowable() {
+fn smart_playlist_track_verdicts_distinguish_included_excluded_and_unknowable() {
     // Three scenarios in one test:
     //   1. Limit-less rule, track matches      -> Included.
     //   2. Limit-less rule, track doesn't      -> Excluded.
@@ -6918,8 +6918,8 @@ fn smart_playlist_track_statuses_distinguish_included_excluded_and_unknowable() 
 
     assert_eq!(
         runtime
-            .smart_playlist_track_statuses(smart_id_value, &[matching.id, non_matching.id])
-            .collect::<Vec<_>>(),
+            .smart_playlist_track_verdicts(smart_id_value, &[matching.id, non_matching.id])
+            .statuses,
         [
             SmartPlaylistTrackStatus::Included,
             SmartPlaylistTrackStatus::Excluded
@@ -6949,8 +6949,8 @@ fn smart_playlist_track_statuses_distinguish_included_excluded_and_unknowable() 
         .expect("update smart playlist");
     assert_eq!(
         runtime
-            .smart_playlist_track_statuses(smart_id_value, &[matching.id])
-            .collect::<Vec<_>>(),
+            .smart_playlist_track_verdicts(smart_id_value, &[matching.id])
+            .statuses,
         [SmartPlaylistTrackStatus::RequiresFullRebuild]
     );
 }
@@ -7034,6 +7034,65 @@ fn smart_playlist_evaluation_uses_injected_clock() {
         0,
         "track played outside the window must not match"
     );
+}
+
+#[test]
+fn a_smart_playlist_selection_knows_when_time_changes_it() {
+    use std::num::NonZeroU32;
+    use std::time::{Duration, SystemTime};
+
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    // Played one and three days ago, and never.
+    for (id, days_ago) in [(1, Some(1)), (2, Some(3)), (3, None)] {
+        let mut track = test_track(track_id(id), &format!("track-{id}.flac"));
+        track.statistics.last_played_at =
+            days_ago.map(|days: u64| now - Duration::from_secs(days * 86_400));
+        store.save_track(track).expect("save track");
+    }
+    store
+        .save_smart_playlist(SmartPlaylist {
+            id: smart_id(1),
+            name: "Recently Played".to_owned(),
+            parent_folder_id: None,
+            position: 0,
+            rules: SmartPlaylistRuleSet {
+                match_kind: SmartPlaylistMatchKind::All,
+                rules: vec![SmartPlaylistRule::DateInLast {
+                    field: SmartPlaylistDateField::LastPlayed,
+                    days: NonZeroU32::new(7).expect("positive days"),
+                }],
+                limit: None,
+            },
+        })
+        .expect("save smart playlist");
+    let runtime = ApplicationRuntime::new()
+        .with_library_services(store, Arc::new(TestMetadataService))
+        .expect("library services initialize")
+        .with_clock(Arc::new(FakeClock::new(now)));
+    // The track played three days ago leaves the seven-day window first.
+    let first_exit = now + Duration::from_secs(4 * 86_400) + Duration::from_nanos(1);
+
+    let selection = runtime.smart_playlist_selection(smart_id(1));
+    let mut selected: Vec<_> = selection.tracks.iter().map(|track| track.id).collect();
+    selected.sort();
+    assert_eq!(selected, [track_id(1), track_id(2)]);
+    assert_eq!(selection.changes_at, Some(first_exit));
+    assert_eq!(
+        runtime
+            .smart_playlist_track_verdicts(smart_id(1), &[track_id(1), track_id(3)])
+            .changes_at,
+        Some(now + Duration::from_secs(6 * 86_400) + Duration::from_nanos(1))
+    );
+    assert_eq!(
+        runtime
+            .smart_playlist_track_verdicts(smart_id(1), &[track_id(3)])
+            .changes_at,
+        None
+    );
+    let unknown = runtime.smart_playlist_selection(smart_id(2));
+    assert!(unknown.tracks.is_empty());
+    assert_eq!(unknown.changes_at, None);
 }
 
 #[derive(Debug)]

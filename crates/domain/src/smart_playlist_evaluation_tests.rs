@@ -661,3 +661,83 @@ fn a_pass_reads_the_users_calendar_once_for_every_track() {
 
     assert_eq!(clock.calendars_read.load(Ordering::Relaxed), 1);
 }
+
+fn played_at(id: i64, seconds: Option<u64>) -> Track {
+    let mut track = track(id, Some("Jazz"), 0, None);
+    track.statistics.last_played_at = seconds.map(unix);
+    track
+}
+
+fn played_rule(in_last: bool, days: u32) -> SmartPlaylistRule {
+    let field = SmartPlaylistDateField::LastPlayed;
+    let days = NonZeroU32::new(days).expect("positive days");
+    if in_last {
+        SmartPlaylistRule::DateInLast { field, days }
+    } else {
+        SmartPlaylistRule::DateNotInLast { field, days }
+    }
+}
+
+fn rule_set(rules: Vec<SmartPlaylistRule>) -> SmartPlaylistRuleSet {
+    SmartPlaylistRuleSet {
+        match_kind: SmartPlaylistMatchKind::Any,
+        rules,
+        limit: None,
+    }
+}
+
+#[test]
+fn a_relative_verdict_changes_the_instant_the_window_passes_the_date() {
+    let track = played_at(1, Some(900_000));
+    for in_last in [true, false] {
+        let rules = rule_set(vec![played_rule(in_last, 2)]);
+        let changes_at = SmartPlaylistMatcher::new(&rules, &UtcClock(unix(950_000)))
+            .verdict_changes_at(&track)
+            .expect("the date is in the window");
+        let before =
+            SmartPlaylistMatcher::new(&rules, &UtcClock(changes_at - Duration::from_nanos(1)));
+        let after = SmartPlaylistMatcher::new(&rules, &UtcClock(changes_at));
+
+        assert_eq!(before.matches(&track), in_last);
+        assert_eq!(after.matches(&track), !in_last);
+    }
+}
+
+#[test]
+fn a_selection_changes_when_its_first_track_leaves_a_window() {
+    let rules = rule_set(vec![played_rule(true, 10), played_rule(false, 2)]);
+    let tracks = [
+        // Inside both windows: leaves the two-day one first.
+        played_at(1, Some(10_000_000)),
+        // Inside the ten-day window only.
+        played_at(2, Some(10_000_000 - 5 * 86_400)),
+        // Before both windows, and never played: time cannot move them.
+        played_at(3, Some(10_000_000 - 20 * 86_400)),
+        played_at(4, None),
+    ];
+    let matcher = SmartPlaylistMatcher::new(&rules, &UtcClock(unix(10_000_000)));
+    let first_exit = unix(10_000_000 + 2 * 86_400) + Duration::from_nanos(1);
+
+    assert_eq!(matcher.verdict_changes_at(&tracks[0]), Some(first_exit));
+    assert_eq!(
+        matcher.verdict_changes_at(&tracks[1]),
+        Some(unix(10_000_000 + 5 * 86_400) + Duration::from_nanos(1))
+    );
+    assert_eq!(matcher.verdict_changes_at(&tracks[2]), None);
+    assert_eq!(matcher.verdict_changes_at(&tracks[3]), None);
+    assert_eq!(matcher.selection_changes_at(&tracks), Some(first_exit));
+    assert_eq!(matcher.selection_changes_at(&tracks[2..]), None);
+}
+
+#[test]
+fn a_selection_without_relative_rules_never_changes_with_time() {
+    let rules = rule_set(vec![SmartPlaylistRule::DateIsPresent {
+        field: SmartPlaylistDateField::LastPlayed,
+    }]);
+    let matcher = SmartPlaylistMatcher::new(&rules, &UtcClock(unix(10_000_000)));
+
+    assert_eq!(
+        matcher.selection_changes_at(&[played_at(1, Some(999_999))]),
+        None
+    );
+}

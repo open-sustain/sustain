@@ -407,6 +407,15 @@ display but do not independently make a track match. Match mode is
 `Most Often Played`, `Random`, etc. Smart playlists are re-evaluated
 live on every query.
 
+A shown smart playlist also keeps up with the clock: when a track leaves
+an `is in the last N days` window (or enters an `is not in the last N
+days` one) just because time passed, the view updates at that moment,
+keeping the user's place in the table. The moment follows the wall clock,
+so it holds across suspend. Setting the system clock, or changing the
+local time zone that `is before` / `is after` read dates in, re-evaluates
+the view at once. Only a smart playlist with such a date rule is
+re-evaluated this way; a `Random` limit on it picks again each time.
+
 Date rules `is before` / `is after` name a calendar day. A track's date
 is read in the local time zone, the same way the library displays its
 dates, and the rule compares the day it falls on: "Date Added is before

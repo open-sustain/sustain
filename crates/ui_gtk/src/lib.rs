@@ -45,6 +45,7 @@ mod library_consolidation;
 mod library_import;
 mod library_scan;
 mod library_view_update;
+mod local_time_zone_monitor;
 mod main_window;
 mod metadata_diff;
 mod missing_track;
@@ -72,6 +73,7 @@ mod track_summary;
 mod track_table;
 mod util;
 mod verified_duplicates;
+mod wall_clock_alarm;
 mod window_chrome;
 mod youtube_audio_replacement;
 

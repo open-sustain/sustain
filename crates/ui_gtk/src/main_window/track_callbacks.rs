@@ -113,7 +113,6 @@ pub(super) struct LibraryViewUpdateContext<'a> {
     pub(super) albums_view: &'a AlbumsView,
     pub(super) duplicates_view: &'a DuplicatesView,
     pub(super) statistics_view: &'a StatisticsView,
-    pub(super) playlists_table: &'a TrackTable,
     pub(super) playlists_refresh: &'a PlaylistsViewRefreshContext,
     pub(super) sidebar: &'a PlaylistSidebar,
     pub(super) titlebar: &'a Titlebar,
@@ -131,7 +130,6 @@ pub(super) fn library_view_update_callback(
     let albums_view = ctx.albums_view.clone();
     let duplicates_view = ctx.duplicates_view.clone();
     let statistics_view = ctx.statistics_view.clone();
-    let playlists_table = ctx.playlists_table.clone();
     let playlists_refresh = ctx.playlists_refresh.clone();
     let sidebar = ctx.sidebar.clone();
     let titlebar = ctx.titlebar.clone();
@@ -185,52 +183,15 @@ pub(super) fn library_view_update_callback(
             statistics_view.refresh_if_visible();
         }
 
-        playlists_table.remove_rows(&touched.departed);
-        let playlist_rows_changed = match sidebar.current_selection() {
-            Some(SidebarSelection::Item(PlaylistItem::Playlist(playlist_id))) => {
-                update.playlist_entries.contains(&playlist_id)
-            }
-            Some(SidebarSelection::Item(PlaylistItem::SmartPlaylist(smart_id))) => {
-                // Smart-playlist *membership* may change with the edit —
-                // but in the overwhelmingly common case (BPM/key/waveform
-                // scan updating a track that either already matches or
-                // already doesn't) the set is unchanged and only the row's
-                // data needs to repaint. The runtime's per-track status
-                // check tells the two apart; a track that left the library
-                // counts too, as it may have held another out of a limited
-                // playlist.
-                let visible_track_ids = playlists_table
-                    .contained_track_ids(&update.track_ids.iter().copied().collect());
-                let runtime = runtime.borrow();
-                let statuses = runtime.smart_playlist_track_statuses(smart_id, &update.track_ids);
-                update
-                    .track_ids
-                    .iter()
-                    .zip(statuses)
-                    .any(|(track_id, status)| {
-                        let was_in_table = visible_track_ids.contains(track_id);
-                        matches!(
-                            (status, was_in_table),
-                            (SmartPlaylistTrackStatus::Included, false)
-                                | (SmartPlaylistTrackStatus::Excluded, true)
-                                | (SmartPlaylistTrackStatus::RequiresFullRebuild, _)
-                        )
-                    })
-            }
-            _ => false,
-        };
-        if playlist_rows_changed {
-            schedule_playlists_structural_refresh(
-                runtime.clone(),
-                playlists_refresh.clone(),
-                sidebar.clone(),
-                current_search_text.clone(),
-            );
-        } else {
-            // In-place row updates are idempotent for a hidden table; no
-            // visibility gating needed.
-            playlists_table.update_rows(&touched.rows);
-        }
+        update_playlists_view_tracks(
+            &runtime,
+            &playlists_refresh,
+            &sidebar,
+            &current_search_text,
+            update,
+            &touched.rows,
+            &touched.departed,
+        );
 
         // A track joining or leaving can flip the library between empty
         // and not, which decides whether the Play button can cold-start
@@ -282,34 +243,6 @@ pub(super) fn artwork_changed_callback(
     Rc::new(move |track_ids: &[TrackId]| {
         library_view_update(&LibraryViewUpdate::for_artwork(track_ids));
     })
-}
-
-/// Re-derive the shown playlist's rows on the next idle, once for a burst
-/// of track changes, keeping the user's place in the table; a hidden view
-/// is rebuilt on its next visit.
-pub(super) fn schedule_playlists_structural_refresh(
-    runtime: SharedRuntime,
-    playlists_refresh: PlaylistsViewRefreshContext,
-    sidebar: PlaylistSidebar,
-    current_search_text: Rc<RefCell<String>>,
-) {
-    if !playlists_refresh.is_visible() {
-        playlists_refresh.mark_dirty();
-        return;
-    }
-    if playlists_refresh.mark_dirty_and_was_dirty() {
-        return;
-    }
-    glib::idle_add_local_once(move || {
-        let search_text = current_search_text.borrow().clone();
-        refresh_playlists_view_if_visible(
-            &runtime,
-            &playlists_refresh,
-            sidebar.current_selection(),
-            &search_text,
-            RowSetUpdate::Reconcile,
-        );
-    });
 }
 
 #[allow(clippy::too_many_arguments)]

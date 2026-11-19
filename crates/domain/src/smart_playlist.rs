@@ -22,6 +22,21 @@ pub struct SmartPlaylistRuleSet {
 }
 
 impl SmartPlaylistRuleSet {
+    /// Whether what the rules select depends on the time, not only on the
+    /// tracks: a relative date rule reads the present, and a calendar
+    /// date rule reads dates in the user's time zone.
+    pub fn reads_the_time(&self) -> bool {
+        self.rules.iter().any(|rule| {
+            matches!(
+                rule,
+                SmartPlaylistRule::DateInLast { .. }
+                    | SmartPlaylistRule::DateNotInLast { .. }
+                    | SmartPlaylistRule::DateBefore { .. }
+                    | SmartPlaylistRule::DateAfter { .. }
+            )
+        })
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
@@ -204,9 +219,41 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::{
-        SmartPlaylistLimit, SmartPlaylistLimitSelection, SmartPlaylistMatchKind,
-        SmartPlaylistRuleSet,
+        SmartPlaylistDateField, SmartPlaylistLimit, SmartPlaylistLimitSelection,
+        SmartPlaylistMatchKind, SmartPlaylistRule, SmartPlaylistRuleSet,
     };
+    use crate::CalendarDate;
+
+    #[test]
+    fn rule_sets_with_date_rules_read_the_time() {
+        let field = SmartPlaylistDateField::LastPlayed;
+        let days = NonZeroU32::new(7).expect("positive days");
+        let date = CalendarDate::new(2024, 1, 1).expect("a valid date");
+        let reading = [
+            SmartPlaylistRule::DateInLast { field, days },
+            SmartPlaylistRule::DateNotInLast { field, days },
+            SmartPlaylistRule::DateBefore { field, date },
+            SmartPlaylistRule::DateAfter { field, date },
+        ];
+        // Whether a date is there or not holds at any time.
+        let timeless = [
+            SmartPlaylistRule::DateIsEmpty { field },
+            SmartPlaylistRule::DateIsPresent { field },
+            SmartPlaylistRule::FileIsMissing,
+        ];
+        let rule_set = |rules: Vec<SmartPlaylistRule>| SmartPlaylistRuleSet {
+            rules,
+            ..SmartPlaylistRuleSet::default()
+        };
+
+        for rule in reading {
+            assert!(
+                rule_set(vec![timeless[0].clone(), rule.clone()]).reads_the_time(),
+                "{rule:?} reads the time"
+            );
+        }
+        assert!(!rule_set(timeless.to_vec()).reads_the_time());
+    }
 
     #[test]
     fn rule_sets_default_to_matching_all_rules_without_a_limit() {

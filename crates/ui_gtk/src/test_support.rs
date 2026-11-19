@@ -157,6 +157,38 @@ pub(crate) fn artwork_loader() -> crate::artwork_loader::ArtworkLoader {
 
 /// A runtime whose library holds `tracks`, kept in an in-memory store.
 pub(crate) fn runtime_with_tracks(tracks: Vec<sustain_app_runtime::Track>) -> crate::SharedRuntime {
+    runtime_with_tracks_and_clock(tracks, std::sync::Arc::new(sustain_app_runtime::LocalClock))
+}
+
+/// A clock that reads whatever it was last set to, in the local calendar.
+pub(crate) struct SettableClock(std::sync::Mutex<std::time::SystemTime>);
+
+impl SettableClock {
+    pub(crate) fn new(now: std::time::SystemTime) -> Self {
+        Self(std::sync::Mutex::new(now))
+    }
+
+    pub(crate) fn set(&self, now: std::time::SystemTime) {
+        *self.0.lock().expect("the clock is not poisoned") = now;
+    }
+}
+
+impl sustain_app_runtime::Clock for SettableClock {
+    fn now(&self) -> std::time::SystemTime {
+        *self.0.lock().expect("the clock is not poisoned")
+    }
+
+    fn calendar(&self) -> std::sync::Arc<dyn sustain_app_runtime::Calendar> {
+        sustain_app_runtime::Clock::calendar(&sustain_app_runtime::LocalClock)
+    }
+}
+
+/// A runtime whose library holds `tracks`, kept in an in-memory store,
+/// reading the time from `clock`.
+pub(crate) fn runtime_with_tracks_and_clock(
+    tracks: Vec<sustain_app_runtime::Track>,
+    clock: std::sync::Arc<dyn sustain_app_runtime::Clock>,
+) -> crate::SharedRuntime {
     use sustain_library_store::LibraryStore;
 
     let store = sustain_library_store::SqliteLibraryStore::open_in_memory()
@@ -166,7 +198,8 @@ pub(crate) fn runtime_with_tracks(tracks: Vec<sustain_app_runtime::Track>) -> cr
     }
     let runtime = sustain_app_runtime::ApplicationRuntime::new()
         .with_library_services(std::sync::Arc::new(store), std::sync::Arc::new(NoFiles))
-        .expect("the runtime takes the store");
+        .expect("the runtime takes the store")
+        .with_clock(clock);
     std::rc::Rc::new(std::cell::RefCell::new(runtime))
 }
 

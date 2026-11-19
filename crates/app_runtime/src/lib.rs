@@ -10,12 +10,13 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
+    time::SystemTime,
 };
 
 pub use sustain_cd_import::{DiscIdentity, RawTocTrack, TocSnapshot, TocTrack};
 pub use sustain_domain::{
     AnalysisSettings, ApplicationCommand, BackgroundJobsSettings, BackgroundResourceUsage, Bpm,
-    BpmRange, CalendarDate, CdEncodingProfile, CdReadMode, Clock, CollationKey,
+    BpmRange, Calendar, CalendarDate, CdEncodingProfile, CdReadMode, Clock, CollationKey,
     DEFAULT_PLAYBACK_VOLUME_PERCENT, DecadeCount, DeviceKind, DeviceLayout, DeviceRelativePath,
     DuplicateArtworkQuality, DuplicateConsolidationRequest, DuplicateGroup, DuplicateMatchMode,
     DuplicateMergeChoices, DuplicateMetadataField, DuplicateMetadataFieldSelection,
@@ -2737,11 +2738,7 @@ impl ApplicationRuntime {
         &self,
         smart_playlist_id: SmartPlaylistId,
     ) -> Vec<&Track> {
-        let Some(smart_playlist) = self
-            .smart_playlists
-            .iter()
-            .find(|smart_playlist| smart_playlist.id == smart_playlist_id)
-        else {
+        let Some(smart_playlist) = self.smart_playlist(smart_playlist_id) else {
             return Vec::new();
         };
         matching_tracks(
@@ -2751,49 +2748,90 @@ impl ApplicationRuntime {
         )
     }
 
+    /// The tracks a smart playlist selects now, and the earliest instant
+    /// time passing alone can change them — a track leaving a relative
+    /// date rule's window — so a view showing them knows when to look
+    /// again. Both come from one reading of the clock. An unknown id
+    /// selects nothing, for good.
+    pub fn smart_playlist_selection(
+        &self,
+        smart_playlist_id: SmartPlaylistId,
+    ) -> SmartPlaylistSelection<'_> {
+        let Some(smart_playlist) = self.smart_playlist(smart_playlist_id) else {
+            return SmartPlaylistSelection {
+                tracks: Vec::new(),
+                changes_at: None,
+            };
+        };
+        let matcher = SmartPlaylistMatcher::new(&smart_playlist.rules, self.clock.as_ref());
+        SmartPlaylistSelection {
+            tracks: matcher.select(&self.library_tracks),
+            changes_at: matcher.selection_changes_at(&self.library_tracks),
+        }
+    }
+
+    fn smart_playlist(&self, smart_playlist_id: SmartPlaylistId) -> Option<&SmartPlaylist> {
+        self.smart_playlists
+            .iter()
+            .find(|smart_playlist| smart_playlist.id == smart_playlist_id)
+    }
+
     /// Where each of `track_ids` stands relative to a smart playlist
-    /// after a background mutation: included, excluded, or
-    /// "indeterminable without a full re-evaluation". The third case
-    /// covers limit-based smart playlists (Top-N), where updating
-    /// track X can evict track Y from the visible set — partial
+    /// after a background mutation — included, excluded, or
+    /// "indeterminable without a full re-evaluation" — and the earliest
+    /// instant time passing alone changes a verdict on one of them. The
+    /// third status covers limit-based smart playlists (Top-N), where
+    /// updating track X can evict track Y from the visible set — partial
     /// inspection of just track X is not enough.
     ///
     /// The UI shell uses this to decide whether a track update can
     /// be applied as an in-place row refresh (preserves scroll and
-    /// selection) or has to fall back to a full table rebuild. The rules
-    /// are resolved once for the whole batch, against one reading of the
-    /// clock, and each status is evaluated only once asked for, so a
-    /// caller can stop at the first that matters. A non-existent
+    /// selection) or has to fall back to a full table rebuild, and, when
+    /// the rows stay, when to look at them again. The statuses and the
+    /// instant come from one reading of the clock, so a verdict that
+    /// changes between them cannot be missed. A non-existent
     /// smart-playlist id excludes every track — none is in the (empty)
     /// view.
-    pub fn smart_playlist_track_statuses<'a>(
-        &'a self,
+    pub fn smart_playlist_track_verdicts(
+        &self,
         smart_playlist_id: SmartPlaylistId,
-        track_ids: &'a [TrackId],
-    ) -> impl Iterator<Item = SmartPlaylistTrackStatus> + 'a {
-        let smart_playlist = self
-            .smart_playlists
-            .iter()
-            .find(|smart_playlist| smart_playlist.id == smart_playlist_id);
+        track_ids: &[TrackId],
+    ) -> SmartPlaylistTrackVerdicts {
+        let Some(smart_playlist) = self.smart_playlist(smart_playlist_id) else {
+            return SmartPlaylistTrackVerdicts {
+                statuses: vec![SmartPlaylistTrackStatus::Excluded; track_ids.len()],
+                changes_at: None,
+            };
+        };
+        let matcher = SmartPlaylistMatcher::new(&smart_playlist.rules, self.clock.as_ref());
         // Limit-based: a per-track check cannot capture the eviction
         // effect, so admit we don't know and let the caller rebuild.
-        let limited = smart_playlist.is_some_and(|playlist| playlist.rules.limit.is_some());
-        let matcher = smart_playlist
-            .map(|playlist| SmartPlaylistMatcher::new(&playlist.rules, self.clock.as_ref()));
-        track_ids.iter().map(move |&track_id| {
-            if limited {
-                return SmartPlaylistTrackStatus::RequiresFullRebuild;
-            }
-            let included = matcher.as_ref().is_some_and(|matcher| {
-                self.library_track(track_id)
-                    .is_some_and(|track| matcher.matches(track))
-            });
-            if included {
-                SmartPlaylistTrackStatus::Included
-            } else {
-                SmartPlaylistTrackStatus::Excluded
-            }
-        })
+        let limited = smart_playlist.rules.limit.is_some();
+        let tracks: Vec<Option<&Track>> = track_ids
+            .iter()
+            .map(|&track_id| self.library_track(track_id))
+            .collect();
+        let statuses = tracks
+            .iter()
+            .map(|track| {
+                if limited {
+                    SmartPlaylistTrackStatus::RequiresFullRebuild
+                } else if track.is_some_and(|track| matcher.matches(track)) {
+                    SmartPlaylistTrackStatus::Included
+                } else {
+                    SmartPlaylistTrackStatus::Excluded
+                }
+            })
+            .collect();
+        let changes_at = tracks
+            .into_iter()
+            .flatten()
+            .filter_map(|track| matcher.verdict_changes_at(track))
+            .min();
+        SmartPlaylistTrackVerdicts {
+            statuses,
+            changes_at,
+        }
     }
 
     /// Resolve the track IDs of a playlist sidebar entry. Regular
@@ -2986,7 +3024,27 @@ fn index_metadata(index: &SmartShuffleIndex) -> SmartShuffleIndexMetadata {
     }
 }
 
-/// Outcome of [`ApplicationRuntime::smart_playlist_track_statuses`], per track.
+/// What [`ApplicationRuntime::smart_playlist_selection`] returns.
+#[derive(Debug)]
+pub struct SmartPlaylistSelection<'a> {
+    /// The selected tracks, the playlist's limit applied.
+    pub tracks: Vec<&'a Track>,
+    /// The earliest instant time passing alone can change `tracks`, or
+    /// `None` when only a change to the library can.
+    pub changes_at: Option<SystemTime>,
+}
+
+/// What [`ApplicationRuntime::smart_playlist_track_verdicts`] returns.
+#[derive(Debug, Eq, PartialEq)]
+pub struct SmartPlaylistTrackVerdicts {
+    /// Each track's status, in the order asked for.
+    pub statuses: Vec<SmartPlaylistTrackStatus>,
+    /// The earliest instant time passing alone changes a verdict on one
+    /// of the tracks, or `None` when only a change to them can.
+    pub changes_at: Option<SystemTime>,
+}
+
+/// Outcome of [`ApplicationRuntime::smart_playlist_track_verdicts`], per track.
 /// Drives the UI shell's decision between an in-place row refresh
 /// and a full table rebuild after a background track mutation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

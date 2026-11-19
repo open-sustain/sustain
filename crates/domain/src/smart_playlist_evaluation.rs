@@ -90,6 +90,50 @@ impl<'rules> SmartPlaylistMatcher<'rules> {
         }
         matched
     }
+
+    /// The earliest instant, after the present this matcher read, at
+    /// which time passing alone can change what the rule set selects
+    /// from `tracks`: the first time one of them leaves a relative date
+    /// rule's window. `None` when the selection cannot change until a
+    /// track does.
+    pub fn selection_changes_at(&self, tracks: &[Track]) -> Option<SystemTime> {
+        if !self
+            .constants
+            .iter()
+            .any(|constants| matches!(constants, RuleConstants::WindowStart(_)))
+        {
+            return None;
+        }
+        tracks
+            .iter()
+            .filter_map(|track| self.verdict_changes_at(track))
+            .min()
+    }
+
+    /// The earliest instant, after the present this matcher read, at
+    /// which time passing alone can change a rule's verdict on `track`:
+    /// when its date leaves a relative date rule's window, which it does
+    /// once the window starts after it. `None` when no rule's verdict on
+    /// it depends on the time. A date before the window has left it for
+    /// good, and an empty date never enters it.
+    pub fn verdict_changes_at(&self, track: &Track) -> Option<SystemTime> {
+        self.rule_set
+            .rules
+            .iter()
+            .zip(&self.constants)
+            .filter_map(|(rule, constants)| {
+                let (SmartPlaylistRule::DateInLast { field, days }
+                | SmartPlaylistRule::DateNotInLast { field, days }) = rule
+                else {
+                    return None;
+                };
+                let date = date_field_value(track, *field)?;
+                (date >= window_start(constants))
+                    .then(|| date.checked_add(window_span(days.get()) + Duration::from_nanos(1)))
+                    .flatten()
+            })
+            .min()
+    }
 }
 
 /// One rule's evaluation-ready constants: whatever the rule can resolve
@@ -129,8 +173,13 @@ fn rule_constants(rule: &SmartPlaylistRule, now: SystemTime) -> RuleConstants {
 }
 
 fn relative_date_cutoff(now: SystemTime, days: u32) -> SystemTime {
-    now.checked_sub(Duration::from_secs(u64::from(days) * SECONDS_PER_DAY))
+    now.checked_sub(window_span(days))
         .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+/// The length of a relative date rule's `days`-day window.
+fn window_span(days: u32) -> Duration {
+    Duration::from_secs(u64::from(days) * SECONDS_PER_DAY)
 }
 
 /// Evaluates one rule against one track, reading its dates in `calendar`.

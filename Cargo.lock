@@ -2260,6 +2260,7 @@ dependencies = [
  "gtk4",
  "hashlink",
  "rusqlite",
+ "rustix",
  "sustain-app-runtime",
  "sustain-artwork",
  "sustain-desktop",
