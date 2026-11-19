@@ -19,14 +19,14 @@
   <meta property="og:description" content="The dense, fast, iTunes-style music library you wanted, rebuilt native for Linux. Free and open source." />
   <meta property="og:image" content="https://open-sustain.github.io/sustain/assets/screenshot-light-songs.png" />
   <meta property="og:image:type" content="image/png" />
-  <meta property="og:image:width" content="1833" />
-  <meta property="og:image:height" content="1020" />
-  <meta property="og:image:alt" content="Sustain's Songs view: a dense, sortable track table with star ratings, BPM, key and play counts." />
+  <meta property="og:image:width" content="3840" />
+  <meta property="og:image:height" content="2396" />
+  <meta property="og:image:alt" content="Sustain's 4+ Stars smart playlist in light mode, with a sortable track table and the Now Playing waveform." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Sustain (iTunes for Linux)" />
   <meta name="twitter:description" content="The dense, fast, iTunes-style music library you wanted, rebuilt native for Linux. Free and open source." />
   <meta name="twitter:image" content="https://open-sustain.github.io/sustain/assets/screenshot-light-songs.png" />
-  <meta name="twitter:image:alt" content="Sustain's Songs view: a dense, sortable track table with star ratings, BPM, key and play counts." />
+  <meta name="twitter:image:alt" content="Sustain's 4+ Stars smart playlist in light mode, with a sortable track table and the Now Playing waveform." />
 
   <link rel="icon" type="image/png" href="assets/icon-256.png" />
   <link rel="stylesheet" href="style.css" />
@@ -78,15 +78,15 @@
         <figure class="hero-shot">
           <picture>
             <source srcset="assets/screenshot-light-songs.webp" type="image/webp" />
-            <img src="assets/screenshot-light-songs.png"
-                 alt="Sustain's Songs view: a dense, sortable track table with star ratings, BPM, key and play counts." />
+            <img src="assets/screenshot-light-songs.png" width="3840" height="2396"
+                 alt="Sustain's 4+ Stars smart playlist in light mode, with a sortable track table, star ratings, BPM, key, play counts and the Now Playing waveform." />
           </picture>
         </figure>
         <figure class="hero-shot">
           <picture>
             <source srcset="assets/screenshot-dark-albums.webp" type="image/webp" />
-            <img src="assets/screenshot-dark-albums.png"
-                 alt="Sustain's Albums grid in dark mode: a wall of cover art with an expanded album track list." />
+            <img src="assets/screenshot-dark-albums.png" width="3030" height="1778"
+                 alt="Sustain's Albums view in dark mode, with search results above the expanded track list and cover of Black Classical Music." />
           </picture>
         </figure>
       </div>
@@ -153,11 +153,15 @@
         </article>
         <article>
           <h3>Consolidate duplicates</h3>
-          <p>Merge duplicate copies of a track into one keeper, with the best of each field preselected (highest-quality audio, available artwork, present tags over blanks, the earliest release date and every choice overridable).</p>
+          <p>When waveforms are available, Sustain compares them to tell duplicate copies apart from different performances and edits. Preview and merge verified copies in a batch while preserving listening history and playlist membership. For individual merges, you can still choose which audio, artwork and tags to keep.</p>
         </article>
         <article>
-          <h3>Rip your CDs</h3>
-          <p>Insert a CD, encode it to your library in MP3 or lossless FLAC. Artwork and track names are pulled automatically. Multiple error correction levels are available.</p>
+          <h3>Play and rip CDs</h3>
+          <p>Play an audio CD straight from the drive, or rip it to your library in MP3 or lossless FLAC with a choice of error correction levels. Track names and cover art are fetched when available.</p>
+        </article>
+        <article>
+          <h3>Now Playing waveform</h3>
+          <p>Show the track's waveform in place of the usual progress bar. The display is optional, and the played portion takes its color from the cover art.</p>
         </article>
         <article>
           <h3>Playlists &amp; smart playlists</h3>
@@ -166,6 +170,10 @@
         <article>
           <h3>Ratings &amp; listening history</h3>
           <p>5-star ratings, play counts, skip counts, last-played and last-skipped, kept in your own library, fed to the smart-playlist engine.</p>
+        </article>
+        <article>
+          <h3>Library statistics</h3>
+          <p>See your track count, total duration and disk usage. Explore bitrate and release decades, see when tracks joined your library, and find your most-played and most-liked genres.</p>
         </article>
         <article>
           <h3>Instant search &amp; columns</h3>
@@ -268,8 +276,8 @@
       <figure class="shot">
         <picture>
           <source srcset="assets/screenshot-dark-sync-pioneer-rekordbox.webp" type="image/webp" />
-          <img src="assets/screenshot-dark-sync-pioneer-rekordbox.png"
-               alt="Sustain's device sync panel: a USB stick with playlists ticked to sync, the Pioneer (Rekordbox / XDJ) on-drive format selected, per-metric analysis readiness, and a genre-stacked disk-occupation bar." />
+          <img src="assets/screenshot-dark-sync-pioneer-rekordbox.png" width="3180" height="1828"
+               alt="Sustain's USB sync panel with playlist and artist selection, the Pioneer (Rekordbox / XDJ) format, analysis readiness and a disk usage bar." />
         </picture>
         <figcaption>Device sync · Pioneer / Rekordbox export</figcaption>
       </figure>
@@ -277,8 +285,8 @@
       <figure class="shot">
         <picture>
           <source srcset="assets/screenshot-statistics.webp" type="image/webp" />
-          <img src="assets/screenshot-statistics.png"
-               alt="Sustain's Statistics view in dark mode: donut charts breaking the library down by genre, audio quality and most-played genres, with most-liked-genres, release-year and date-added histograms below." />
+          <img src="assets/screenshot-statistics.png" width="3094" height="2306"
+               alt="Sustain's Statistics view in dark mode, with library totals, genre and audio quality breakdowns, most played and most liked genres, and release years." />
         </picture>
         <figcaption>Library statistics</figcaption>
       </figure>
