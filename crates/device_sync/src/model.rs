@@ -299,7 +299,8 @@ pub enum SyncBlocker {
     /// changed since Sustain wrote it — by rekordbox, or by a player that
     /// recorded history on it. Writing Sustain's export would erase its
     /// catalog, history and artwork; the user must remove the drive's
-    /// `PIONEER` folder first.
+    /// `PIONEER/rekordbox` and `PIONEER/Artwork` folders first. The rest
+    /// of `PIONEER`, the player's settings and profile, is not in the way.
     ForeignPioneerExport,
 }
 
@@ -310,7 +311,7 @@ impl std::fmt::Display for SyncBlocker {
                 write!(
                     f,
                     "the drive holds a Pioneer export Sustain did not write; \
-                     remove its PIONEER folder to sync"
+                     remove its PIONEER/rekordbox and PIONEER/Artwork folders to sync"
                 )
             }
         }

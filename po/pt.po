@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-19 20:38+0100\n"
+"POT-Creation-Date: 2026-11-19 20:44+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Portuguese\n"
@@ -583,7 +583,9 @@ msgstr "Recolher barra lateral"
 #: crates/app_runtime/src/lib.rs:2737
 #, rust-format
 msgid "Column changes could not be saved and will not survive a restart."
-msgstr "Não foi possível guardar as alterações das colunas, que se perderão ao reiniciar."
+msgstr ""
+"Não foi possível guardar as alterações das colunas, que se perderão ao "
+"reiniciar."
 
 #: crates/ui_gtk/src/track_table.rs:1409
 #, rust-format
@@ -770,12 +772,12 @@ msgstr "Detalhes"
 msgid "Device"
 msgstr "Dispositivo"
 
-#: crates/app_runtime/src/notifications.rs:1082
+#: crates/app_runtime/src/notifications.rs:1083
 #, rust-format
 msgid "Device already up to date."
 msgstr "O dispositivo já está atualizado."
 
-#: crates/app_runtime/src/notifications.rs:1079
+#: crates/app_runtime/src/notifications.rs:1080
 #, rust-format
 msgid "Device already up to date; {unplayable}."
 msgstr "O dispositivo já está atualizado; {unplayable}."
@@ -2592,12 +2594,12 @@ msgstr "Sincronizar e remover"
 msgid "Sync anyway"
 msgstr "Sincronizar mesmo assim"
 
-#: crates/app_runtime/src/notifications.rs:1107
+#: crates/app_runtime/src/notifications.rs:1108
 #, rust-format
 msgid "Sync complete: {changes}."
 msgstr "Sincronização concluída: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1109
+#: crates/app_runtime/src/notifications.rs:1110
 #, rust-format
 msgid "Sync complete: {changes}; {unplayable}."
 msgstr "Sincronização concluída: {changes}; {unplayable}."
@@ -2607,17 +2609,17 @@ msgstr "Sincronização concluída: {changes}; {unplayable}."
 msgid "Sync device"
 msgstr "Sincronizar dispositivo"
 
-#: crates/app_runtime/src/notifications.rs:1113
+#: crates/app_runtime/src/notifications.rs:1114
 #, rust-format
 msgid "Sync partial: {changes}."
 msgstr "Sincronização parcial: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1115
+#: crates/app_runtime/src/notifications.rs:1116
 #, rust-format
 msgid "Sync partial: {changes}; {unplayable}."
 msgstr "Sincronização parcial: {changes}; {unplayable}."
 
-#: crates/app_runtime/src/notifications.rs:1061
+#: crates/app_runtime/src/notifications.rs:1062
 #, rust-format
 msgid "Sync stopped: {changes}."
 msgstr "Sincronização parada: {changes}."
@@ -3048,12 +3050,10 @@ msgstr "A seleção deste dispositivo está vazia."
 #, rust-format
 msgid ""
 "This drive holds a Pioneer export Sustain did not write, or one a player "
-"changed since. Syncing would erase it: remove the drive's PIONEER folder to "
-"sync."
-msgstr ""
-"Esta unidade contém uma exportação Pioneer que o Sustain não escreveu, ou "
-"que um leitor alterou desde então. Sincronizar apagá-la-ia: remova a pasta "
-"PIONEER da unidade para sincronizar."
+"changed since. Syncing would erase it: remove the drive's PIONEER/rekordbox "
+"and PIONEER/Artwork folders to sync. The player's settings beside them can "
+"stay."
+msgstr "Esta unidade contém uma exportação Pioneer que o Sustain não escreveu, ou que um leitor alterou desde então. Sincronizar apagá-la-ia: remova as pastas PIONEER/rekordbox e PIONEER/Artwork da unidade para sincronizar. As definições do leitor ao lado podem ficar."
 
 #: crates/ui_gtk/src/track_info/artwork.rs:129
 #, rust-format
@@ -3895,7 +3895,7 @@ msgstr[0] "{count} faixa"
 msgstr[1] "{count} faixas"
 
 #: crates/app_runtime/src/notifications.rs:650
-#: crates/app_runtime/src/notifications.rs:1089
+#: crates/app_runtime/src/notifications.rs:1090
 #, rust-format
 msgid "{count} track added"
 msgid_plural "{count} tracks added"
@@ -3916,7 +3916,7 @@ msgid_plural "{count} tracks indexed ({percent}% audio profiled)"
 msgstr[0] "{count} faixa indexada ({percent}% com perfil de áudio)"
 msgstr[1] "{count} faixas indexadas ({percent}% com perfil de áudio)"
 
-#: crates/app_runtime/src/notifications.rs:1069
+#: crates/app_runtime/src/notifications.rs:1070
 #, rust-format
 msgid "{count} track left off: the device cannot play its format"
 msgid_plural "{count} tracks left off: the device cannot play their format"

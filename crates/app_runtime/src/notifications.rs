@@ -1042,7 +1042,8 @@ pub fn sync_blocker_text(blocker: sustain_device_sync::SyncBlocker) -> String {
     match blocker {
         sustain_device_sync::SyncBlocker::ForeignPioneerExport => gettext(
             "This drive holds a Pioneer export Sustain did not write, or one a player \
-             changed since. Syncing would erase it: remove the drive's PIONEER folder to sync.",
+             changed since. Syncing would erase it: remove the drive's PIONEER/rekordbox \
+             and PIONEER/Artwork folders to sync. The player's settings beside them can stay.",
         ),
     }
 }

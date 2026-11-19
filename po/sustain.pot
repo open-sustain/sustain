@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-19 20:38+0100\n"
+"POT-Creation-Date: 2026-11-19 20:44+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -740,12 +740,12 @@ msgstr ""
 msgid "Device"
 msgstr ""
 
-#: crates/app_runtime/src/notifications.rs:1082
+#: crates/app_runtime/src/notifications.rs:1083
 #, rust-format
 msgid "Device already up to date."
 msgstr ""
 
-#: crates/app_runtime/src/notifications.rs:1079
+#: crates/app_runtime/src/notifications.rs:1080
 #, rust-format
 msgid "Device already up to date; {unplayable}."
 msgstr ""
@@ -2457,12 +2457,12 @@ msgstr ""
 msgid "Sync anyway"
 msgstr ""
 
-#: crates/app_runtime/src/notifications.rs:1107
+#: crates/app_runtime/src/notifications.rs:1108
 #, rust-format
 msgid "Sync complete: {changes}."
 msgstr ""
 
-#: crates/app_runtime/src/notifications.rs:1109
+#: crates/app_runtime/src/notifications.rs:1110
 #, rust-format
 msgid "Sync complete: {changes}; {unplayable}."
 msgstr ""
@@ -2472,17 +2472,17 @@ msgstr ""
 msgid "Sync device"
 msgstr ""
 
-#: crates/app_runtime/src/notifications.rs:1113
+#: crates/app_runtime/src/notifications.rs:1114
 #, rust-format
 msgid "Sync partial: {changes}."
 msgstr ""
 
-#: crates/app_runtime/src/notifications.rs:1115
+#: crates/app_runtime/src/notifications.rs:1116
 #, rust-format
 msgid "Sync partial: {changes}; {unplayable}."
 msgstr ""
 
-#: crates/app_runtime/src/notifications.rs:1061
+#: crates/app_runtime/src/notifications.rs:1062
 #, rust-format
 msgid "Sync stopped: {changes}."
 msgstr ""
@@ -2861,8 +2861,9 @@ msgstr ""
 #, rust-format
 msgid ""
 "This drive holds a Pioneer export Sustain did not write, or one a player "
-"changed since. Syncing would erase it: remove the drive's PIONEER folder to "
-"sync."
+"changed since. Syncing would erase it: remove the drive's PIONEER/rekordbox "
+"and PIONEER/Artwork folders to sync. The player's settings beside them can "
+"stay."
 msgstr ""
 
 #: crates/ui_gtk/src/track_info/artwork.rs:129
@@ -3684,7 +3685,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: crates/app_runtime/src/notifications.rs:650
-#: crates/app_runtime/src/notifications.rs:1089
+#: crates/app_runtime/src/notifications.rs:1090
 #, rust-format
 msgid "{count} track added"
 msgid_plural "{count} tracks added"
@@ -3705,7 +3706,7 @@ msgid_plural "{count} tracks indexed ({percent}% audio profiled)"
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/app_runtime/src/notifications.rs:1069
+#: crates/app_runtime/src/notifications.rs:1070
 #, rust-format
 msgid "{count} track left off: the device cannot play its format"
 msgid_plural "{count} tracks left off: the device cannot play their format"

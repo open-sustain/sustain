@@ -677,7 +677,8 @@ ALTER TABLE smart_playlist_rules DROP COLUMN date_unix;
 // is still exactly one of those, and removes only the artwork recorded
 // here. Devices synced before this migration have no
 // record, so the database on them reads as not Sustain's: syncing one
-// again takes removing its PIONEER folder first, once.
+// again takes removing its PIONEER/rekordbox and PIONEER/Artwork folders
+// first, once.
 pub(super) const ADD_SYNC_PIONEER_EXPORT_SQL: &str = r#"
 CREATE TABLE sync_pioneer_databases (
     device_id  TEXT NOT NULL,
