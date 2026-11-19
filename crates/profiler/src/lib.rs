@@ -110,6 +110,14 @@ impl StartupProfiler {
         self.started_at.is_some()
     }
 
+    /// A scope on this profiler's origin, the process start, for a
+    /// landmark later in startup that must count everything before it.
+    /// `None` when profiling was not requested.
+    pub fn origin(&self) -> Option<ProfileScope> {
+        self.started_at
+            .map(|started_at| ProfileScope { started_at })
+    }
+
     /// Activate process-global profiling and flush records captured before the
     /// primary-instance lock was acquired.
     pub fn activate(&mut self) {

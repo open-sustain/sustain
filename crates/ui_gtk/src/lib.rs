@@ -184,6 +184,7 @@ pub fn run(
     artwork_cache_dir: PathBuf,
     database_path: PathBuf,
     gtk_arguments: Vec<String>,
+    startup_origin: Option<sustain_profiler::ProfileScope>,
 ) -> glib::ExitCode {
     let run_profile = sustain_profiler::ProfileScope::start();
     sustain_profiler::profile_mark!(run_profile, "ui_gtk::run entered");
@@ -373,12 +374,14 @@ pub fn run(
             }
             // Fires after the main loop has finished its current dispatch
             // batch — i.e. roughly when the window has had a chance to map.
+            // The budget gate counts from the process start, not from
+            // activate: everything main() did before it is cold start too.
             let profile_for_idle = activate_profile;
             gtk::glib::idle_add_local_once(move || {
-                if let Some(profile) = profile_for_idle {
+                if let Some(origin) = startup_origin {
                     sustain_profiler::profile!(
-                        "activate: first idle reached at {:.1}ms",
-                        profile.elapsed_ms()
+                        "activate: first idle reached at {:.1}ms since main() entered",
+                        origin.elapsed_ms()
                     );
                 }
                 main_window.run_deferred_startup();

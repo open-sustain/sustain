@@ -29,8 +29,8 @@ pub(super) struct LibraryHydrationResultConsumerContext {
     pub(super) current_search_text: Rc<RefCell<String>>,
     pub(super) library_views_refresh: LibraryViewsRefreshCallback,
     pub(super) post_hydration_startup: PostHydrationStartup,
-    /// The clock of the `activate:` startup landmarks, first idle among
-    /// them, when profiling.
+    /// The clock of the `activate:` per-phase startup landmarks, when
+    /// profiling.
     pub(super) launch_profile: Option<sustain_profiler::ProfileScope>,
 }
 

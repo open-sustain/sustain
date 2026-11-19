@@ -297,6 +297,7 @@ fn main() {
         layout.cache_dir,
         layout.database,
         parsed_args.gtk_arguments,
+        startup_profile.origin(),
     );
     process::exit(i32::from(exit_code));
 }
