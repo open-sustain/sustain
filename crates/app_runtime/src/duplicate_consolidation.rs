@@ -32,8 +32,8 @@ use crate::{
     managed_library::{
         ManagedLibraryFilesystemValidator,
         file_ops::{
-            FileIdentity, PinnedFilePath, RegularFileCapability, open_regular_file,
-            path_refers_to_capability, publish_file_capability,
+            FileContentVersion, FileIdentity, PinnedFilePath, RegularFileCapability,
+            open_regular_file, path_refers_to_capability, publish_file_capability,
             publish_pinned_file_without_overwrite, regular_file_capability_from_file,
             regular_file_identity, remove_file_and_sync_parent,
             remove_pinned_regular_file_matching_capability,
@@ -630,7 +630,7 @@ fn run_pre_commit(
     let survivor_entry = survivor_entry(journal);
     let survivor_source = survivor_entry.source.resolve(library_root);
     let stage_path = journal.stage.resolve(library_root);
-    copy_to_stage(
+    let staged_version = copy_to_stage(
         survivor_entry
             .source_capability
             .as_ref()
@@ -668,6 +668,7 @@ fn run_pre_commit(
             .source_capability
             .as_ref()
             .ok_or(ApplicationRuntimeError::DuplicateConsolidationFailed)?,
+        staged_version,
         &stage,
     )?;
     for entry in journal
@@ -840,10 +841,12 @@ fn create_link(source: &RegularFileCapability, destination: &Path) -> Applicatio
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)
 }
 
+/// Copy `source` to a new file at `destination`, returning the version of
+/// `source` the copy holds.
 fn copy_to_stage(
     source: &RegularFileCapability,
     destination: &Path,
-) -> ApplicationRuntimeResult<()> {
+) -> ApplicationRuntimeResult<FileContentVersion> {
     let destination = PinnedFilePath::creating_parent(destination)
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     if destination
@@ -862,6 +865,10 @@ fn copy_to_stage(
     )
     .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
     let result = (|| {
+        // Taken before reading: an edit while copying changes it too.
+        let copied_version = source
+            .content_version()
+            .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
         let mut source_file = source
             .try_clone_file()
             .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)?;
@@ -901,7 +908,7 @@ fn copy_to_stage(
         {
             return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
         }
-        Ok(())
+        Ok(copied_version)
     })();
     if result.is_err() {
         let _ =
@@ -918,11 +925,20 @@ fn remove_matching_file(
         .map_err(|_| ApplicationRuntimeError::DuplicateConsolidationFailed)
 }
 
+/// Replace `original` with `stage`, made from `original` at version
+/// `staged`. An original edited in place since keeps its identity, so its
+/// version is what shows the edit: the replacement is refused rather than
+/// put the stage's older bytes over it (#383). Only an edit in the instant
+/// between this check and the unlink cannot be seen.
 fn replace_original_with_stage(
     original: &Path,
     original_capability: &RegularFileCapability,
+    staged: FileContentVersion,
     stage: &RegularFileCapability,
 ) -> ApplicationRuntimeResult<()> {
+    if original_capability.content_version().ok() != Some(staged) {
+        return Err(ApplicationRuntimeError::DuplicateConsolidationFailed);
+    }
     remove_matching_file(original, original_capability)?;
     create_link(stage, original)
 }
@@ -1540,6 +1556,39 @@ mod tests {
         );
         assert_eq!(store.track(track_id(2)), Ok(None));
         assert!(!journal_path(&root).exists());
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_survivor_edited_in_place_after_staging_is_not_replaced() {
+        let root = test_root("edited-in-place");
+        fs::create_dir_all(&root).expect("create root");
+        let survivor = root.join("keep.flac");
+        let stage_path = root.join("stage.flac");
+        fs::write(&survivor, b"audio").expect("write survivor");
+        let original = open_regular_file(&survivor).expect("survivor capability");
+        let staged = copy_to_stage(&original, &stage_path).expect("stage");
+        let stage = open_regular_file(&stage_path).expect("stage capability");
+
+        // Another tool's edit in place: same inode, same size.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&survivor)
+            .and_then(|mut file| file.write_all(b"AUDIO"))
+            .expect("edit in place");
+
+        assert_eq!(
+            replace_original_with_stage(&survivor, &original, staged, &stage),
+            Err(ApplicationRuntimeError::DuplicateConsolidationFailed)
+        );
+        assert_eq!(fs::read(&survivor).expect("survivor"), b"AUDIO");
+
+        // Staged again from the edit, the replacement goes ahead.
+        fs::remove_file(&stage_path).expect("remove the old stage");
+        let staged = copy_to_stage(&original, &stage_path).expect("stage again");
+        let stage = open_regular_file(&stage_path).expect("stage capability");
+        replace_original_with_stage(&survivor, &original, staged, &stage).expect("replace");
+        assert!(path_refers_to_capability(&survivor, &stage).expect("survivor"));
         fs::remove_dir_all(root).expect("cleanup");
     }
 

@@ -65,6 +65,16 @@ impl VerifiedFileStaging {
     }
 }
 
+/// What a file held at one moment, as far as the filesystem tells: its
+/// size and its modification and status-change times. Any write to the
+/// file changes at least its status-change time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FileContentVersion {
+    size: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FileIdentity {
     pub(crate) device: u64,
@@ -103,6 +113,17 @@ pub(crate) struct PinnedFilePath {
 impl RegularFileCapability {
     pub(crate) fn identity(&self) -> FileIdentity {
         self.identity
+    }
+
+    /// The version of the file's content now. An edit in place keeps the
+    /// file's identity but changes its version (#383).
+    pub(crate) fn content_version(&self) -> io::Result<FileContentVersion> {
+        let metadata = self.file.metadata()?;
+        Ok(FileContentVersion {
+            size: metadata.size(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+        })
     }
 
     pub(crate) fn try_clone_file(&self) -> io::Result<File> {
