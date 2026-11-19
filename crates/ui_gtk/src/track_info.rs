@@ -153,9 +153,13 @@ pub(crate) fn open_track_info_dialog(
     // `set_activates_default` in their form factories.
     window.set_default_widget(Some(&ok));
 
-    let window_for_cancel = window.clone();
+    // The handlers below belong to widgets of this window: they reach the
+    // window, and the buttons that own them, weakly (#370).
+    let window_for_cancel = window.downgrade();
     cancel.connect_clicked(move |_| {
-        window_for_cancel.close();
+        if let Some(window) = window_for_cancel.upgrade() {
+            window.close();
+        }
     });
 
     let pages = Rc::new(DialogPages {
@@ -169,14 +173,19 @@ pub(crate) fn open_track_info_dialog(
     refresh_navigation_buttons(runtime, &cursor, &previous, &next);
 
     let navigate = {
-        let window = window.clone();
+        let window = window.downgrade();
         let runtime = runtime.clone();
         let cursor = cursor.clone();
         let pages = pages.clone();
         let command_controller = command_controller.clone();
-        let previous = previous.clone();
-        let next = next.clone();
+        let previous = previous.downgrade();
+        let next = next.downgrade();
         Rc::new(move |direction| {
+            let (Some(window), Some(previous), Some(next)) =
+                (window.upgrade(), previous.upgrade(), next.upgrade())
+            else {
+                return;
+            };
             if !commit_current(&cursor, &pages, &command_controller) {
                 return;
             }
@@ -197,14 +206,15 @@ pub(crate) fn open_track_info_dialog(
     next.connect_clicked(move |_| navigate(Direction::Next));
 
     let key_controller = gtk::EventControllerKey::new();
-    let window_for_escape = window.clone();
     let previous_for_key = previous.clone();
     let next_for_key = next.clone();
     let pages_for_key = pages.clone();
-    key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
+    key_controller.connect_key_pressed(move |controller, key, _keycode, state| {
         let control = state.contains(gdk::ModifierType::CONTROL_MASK);
         if key == gdk::Key::Escape {
-            window_for_escape.close();
+            if let Some(window) = controller.widget().and_downcast::<gtk::Window>() {
+                window.close();
+            }
             glib::Propagation::Stop
         } else if control && key == gdk::Key::bracketleft {
             if previous_for_key.is_sensitive() {
@@ -232,12 +242,14 @@ pub(crate) fn open_track_info_dialog(
     window.add_controller(key_controller);
 
     let command_controller = command_controller.clone();
-    let window_for_ok = window.clone();
+    let window_for_ok = window.downgrade();
     let cursor_for_ok = cursor.clone();
     let pages_for_ok = pages.clone();
     ok.connect_clicked(move |_| {
-        if commit_current(&cursor_for_ok, &pages_for_ok, &command_controller) {
-            window_for_ok.close();
+        if commit_current(&cursor_for_ok, &pages_for_ok, &command_controller)
+            && let Some(window) = window_for_ok.upgrade()
+        {
+            window.close();
         }
     });
 
@@ -560,7 +572,8 @@ fn build_header(track: &Track) -> Header {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use gtk::prelude::*;
+    use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
     use sustain_app_runtime::{
         PlayStatistics, Rating, Track, TrackId, TrackLocation, TrackMetadata, TrackRelativePath,
@@ -568,6 +581,37 @@ mod tests {
 
     use super::{DialogCursor, Direction, edit_commands, find_valid_index_by};
     use sustain_app_runtime::{ApplicationCommand, MetadataChange};
+
+    #[test]
+    fn the_closed_dialog_is_released() {
+        crate::test_support::with_gtk(|| {
+            // A genre gives the Genre field its suggestion list.
+            let mut first = track(1, "One", 0, 0);
+            first.metadata.genre = Some("Rock".to_owned());
+            let runtime =
+                crate::test_support::runtime_with_tracks(vec![first, track(2, "Two", 0, 0)]);
+            let command_controller: crate::command_controller::SharedCommandController = Rc::new(
+                crate::command_controller::UiCommandController::new(runtime.clone()),
+            );
+            let artwork_loader = crate::test_support::artwork_loader();
+            let parent = gtk::Window::new();
+            super::open_track_info_dialog(
+                &parent,
+                &runtime,
+                &command_controller,
+                &Rc::new(RefCell::new(None)),
+                Rc::new(|| {}),
+                &artwork_loader,
+                vec![
+                    TrackId::new(1).expect("track id"),
+                    TrackId::new(2).expect("track id"),
+                ],
+                0,
+            );
+            crate::test_support::assert_closes_and_disposes("Get Info - One");
+            parent.destroy();
+        });
+    }
 
     #[test]
     fn a_requested_reset_is_dispatched_for_a_track_with_skips_but_no_plays() {

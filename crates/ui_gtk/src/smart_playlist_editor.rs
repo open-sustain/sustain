@@ -440,12 +440,16 @@ pub(crate) fn open_smart_playlist_editor(
         limit_selection_combo.set_sensitive(true);
     }
 
-    let limit_count_for_toggle = limit_count.clone();
-    let limit_selection_for_toggle = limit_selection_combo.clone();
+    let limit_count_for_toggle = limit_count.downgrade();
+    let limit_selection_for_toggle = limit_selection_combo.downgrade();
     limit_check.connect_toggled(move |check| {
         let active = check.is_active();
-        limit_count_for_toggle.set_sensitive(active);
-        limit_selection_for_toggle.set_sensitive(active);
+        if let Some(limit_count) = limit_count_for_toggle.upgrade() {
+            limit_count.set_sensitive(active);
+        }
+        if let Some(limit_selection) = limit_selection_for_toggle.upgrade() {
+            limit_selection.set_sensitive(active);
+        }
     });
 
     limit_row.append(&limit_check);
@@ -465,28 +469,40 @@ pub(crate) fn open_smart_playlist_editor(
     let ok_button = gtk::Button::with_label(&gettext("OK"));
     ok_button.add_css_class("suggested-action");
 
-    let window_for_cancel = window.clone();
+    let window_for_cancel = window.downgrade();
     cancel_button.connect_clicked(move |_| {
-        window_for_cancel.close();
+        if let Some(window) = window_for_cancel.upgrade() {
+            window.close();
+        }
     });
 
-    let window_for_ok = window.clone();
+    // The OK handler owns the rule rows: it is the one that reads them, and
+    // it lives outside them, so holding them closes no cycle. Every widget
+    // it reads it reaches weakly, as the dialog's other handlers do (#370).
+    let window_for_ok = window.downgrade();
     let command_controller_for_ok = command_controller.clone();
-    let rule_rows_for_ok = rule_rows.clone();
-    let match_combo_for_ok = match_combo.clone();
-    let limit_check_for_ok = limit_check.clone();
-    let limit_count_for_ok = limit_count.clone();
-    let limit_selection_for_ok = limit_selection_combo.clone();
+    let match_combo_for_ok = match_combo.downgrade();
+    let limit_check_for_ok = limit_check.downgrade();
+    let limit_count_for_ok = limit_count.downgrade();
+    let limit_selection_for_ok = limit_selection_combo.downgrade();
     let opened_limit_count_for_ok = opened_limit_count;
     let on_saved_for_ok = on_saved.clone();
     ok_button.connect_clicked(move |_| {
+        let (Some(match_combo), Some(limit_check), Some(limit_count), Some(limit_selection)) = (
+            match_combo_for_ok.upgrade(),
+            limit_check_for_ok.upgrade(),
+            limit_count_for_ok.upgrade(),
+            limit_selection_for_ok.upgrade(),
+        ) else {
+            return;
+        };
         let extraction = extract_rule_set(
-            &rule_rows_for_ok.borrow(),
-            &match_combo_for_ok,
-            &limit_check_for_ok,
-            &limit_count_for_ok,
+            &rule_rows.borrow(),
+            &match_combo,
+            &limit_check,
+            &limit_count,
             opened_limit_count_for_ok.as_ref(),
-            &limit_selection_for_ok,
+            &limit_selection,
         );
         match extraction {
             Ok(rule_set) => {
@@ -516,7 +532,9 @@ pub(crate) fn open_smart_playlist_editor(
                 let dispatched = command_controller_for_ok.dispatch_succeeded(command);
                 if dispatched {
                     on_saved_for_ok();
-                    window_for_ok.close();
+                    if let Some(window) = window_for_ok.upgrade() {
+                        window.close();
+                    }
                 }
             }
             // The editor stays open on the rules so the user can fix them.
@@ -533,15 +551,17 @@ pub(crate) fn open_smart_playlist_editor(
     frame.append(&panel);
     window.set_child(Some(&frame));
 
+    // The controller belongs to the window and reaches it through itself,
+    // not a capture (#370).
     let key_controller = gtk::EventControllerKey::new();
-    let window_for_escape = window.clone();
-    key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-        if key == gdk::Key::Escape {
-            window_for_escape.close();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+    key_controller.connect_key_pressed(move |controller, key, _keycode, _state| {
+        if key != gdk::Key::Escape {
+            return glib::Propagation::Proceed;
         }
+        if let Some(window) = controller.widget().and_downcast::<gtk::Window>() {
+            window.close();
+        }
+        glib::Propagation::Stop
     });
     window.add_controller(key_controller);
 
@@ -570,6 +590,11 @@ fn append_rule_row(rules_container: &gtk::Box, rule_rows: &Rc<RefCell<Vec<RuleRo
     append_rule_row_with(rules_container, rule_rows, None);
 }
 
+/// The rule rows as a row's own buttons see them: the rows own those
+/// buttons, so the buttons reach the rows, and the container holding
+/// them, weakly (#370).
+type WeakRuleRows = std::rc::Weak<RefCell<Vec<RuleRow>>>;
+
 fn append_rule_row_with(
     rules_container: &gtk::Box,
     rule_rows: &Rc<RefCell<Vec<RuleRow>>>,
@@ -584,10 +609,10 @@ fn append_rule_row_with(
     rule_rows.borrow_mut().push(row);
 
     connect_row_buttons(
-        row_buttons,
-        row_widget,
-        rule_rows.clone(),
-        rules_container.clone(),
+        &row_buttons,
+        &row_widget,
+        Rc::downgrade(rule_rows),
+        rules_container,
     );
 }
 
@@ -609,9 +634,11 @@ fn close_row_for(window: &gtk::Window) -> gtk::Box {
     close_button.set_valign(gtk::Align::Center);
     close_button.set_hexpand(true);
 
-    let window_for_close = window.clone();
+    let window_for_close = window.downgrade();
     close_button.connect_clicked(move |_| {
-        window_for_close.close();
+        if let Some(window) = window_for_close.upgrade() {
+            window.close();
+        }
     });
     close_row.append(&close_button);
     close_row
@@ -646,32 +673,39 @@ fn rule_row_buttons() -> RuleRowButtons {
 }
 
 fn connect_row_buttons(
-    buttons: RuleRowButtons,
-    row_widget: gtk::Box,
-    rule_rows: Rc<RefCell<Vec<RuleRow>>>,
-    rules_container: gtk::Box,
+    buttons: &RuleRowButtons,
+    row_widget: &gtk::Box,
+    rule_rows: WeakRuleRows,
+    rules_container: &gtk::Box,
 ) {
     let rule_rows_for_remove = rule_rows.clone();
-    let rules_container_for_remove = rules_container.clone();
-    let row_widget_for_remove = row_widget.clone();
+    let rules_container_for_remove = rules_container.downgrade();
+    let row_widget_for_remove = row_widget.downgrade();
     buttons.remove_button.connect_clicked(move |_| {
-        let mut rows = rule_rows_for_remove.borrow_mut();
+        let (Some(rule_rows), Some(rules_container), Some(row_widget)) = (
+            rule_rows_for_remove.upgrade(),
+            rules_container_for_remove.upgrade(),
+            row_widget_for_remove.upgrade(),
+        ) else {
+            return;
+        };
+        let mut rows = rule_rows.borrow_mut();
         if rows.len() <= 1 {
             return;
         }
-        if let Some(index) = rows
-            .iter()
-            .position(|row| row.container == row_widget_for_remove)
-        {
+        if let Some(index) = rows.iter().position(|row| row.container == row_widget) {
             rows.remove(index);
-            rules_container_for_remove.remove(&row_widget_for_remove);
+            rules_container.remove(&row_widget);
         }
     });
 
-    let rule_rows_for_add = rule_rows.clone();
-    let rules_container_for_add = rules_container.clone();
+    let rules_container_for_add = rules_container.downgrade();
     buttons.add_button.connect_clicked(move |_| {
-        append_rule_row(&rules_container_for_add, &rule_rows_for_add);
+        if let (Some(rule_rows), Some(rules_container)) =
+            (rule_rows.upgrade(), rules_container_for_add.upgrade())
+        {
+            append_rule_row(&rules_container, &rule_rows);
+        }
     });
 }
 
@@ -855,6 +889,46 @@ mod tests {
             limit_count.set_text("10000");
             limit_count.update();
             assert_eq!(extract(&limit_count).get(), 10_000);
+        });
+    }
+
+    #[test]
+    fn the_closed_editor_is_released() {
+        crate::test_support::with_gtk(|| {
+            let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+            let command_controller: SharedCommandController =
+                Rc::new(UiCommandController::new(runtime));
+            let parent = gtk::Window::new();
+            open_smart_playlist_editor(
+                &parent,
+                command_controller,
+                Rc::new(|| {}),
+                SmartPlaylistEditorMode::Create {
+                    name: "Smart".to_owned(),
+                },
+            );
+            // A row the user added holds the same handlers as the first.
+            let editor = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
+                .find(|window| window.transient_for().as_ref() == Some(&parent))
+                .expect("the editor window is open");
+            let add_buttons = |editor: &gtk::Window| {
+                crate::test_support::descendants(editor.upcast_ref())
+                    .into_iter()
+                    .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+                    .filter(|button| button.tooltip_text().as_deref() == Some("Add rule"))
+                    .collect::<Vec<_>>()
+            };
+            add_buttons(&editor)
+                .first()
+                .expect("the row's add button")
+                .emit_clicked();
+            assert_eq!(add_buttons(&editor).len(), 2, "the click added a rule row");
+            drop(editor);
+
+            crate::test_support::assert_closes_and_disposes("Smart Playlist");
+            parent.destroy();
         });
     }
 

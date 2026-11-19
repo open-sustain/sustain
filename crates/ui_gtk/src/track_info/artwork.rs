@@ -104,12 +104,23 @@ impl ArtworkPage {
         buttons.append(&remove_button);
         page.append(&buttons);
 
+        // The page's buttons own the editor, which owns this refresh: it
+        // reaches the widgets it updates, the Remove button among them,
+        // weakly (#370).
         let refresh: ArtworkRefreshCallback = {
-            let frame = frame.clone();
-            let header_cover = header_cover.clone();
-            let note = note.clone();
-            let remove_button = remove_button.clone();
+            let frame = frame.downgrade();
+            let header_cover = header_cover.downgrade();
+            let note = note.downgrade();
+            let remove_button = remove_button.downgrade();
             Rc::new(move |texture: Option<gdk::Texture>, has_artwork: bool| {
+                let (Some(frame), Some(header_cover), Some(note), Some(remove_button)) = (
+                    frame.upgrade(),
+                    header_cover.upgrade(),
+                    note.upgrade(),
+                    remove_button.upgrade(),
+                ) else {
+                    return;
+                };
                 set_frame_texture(&frame, texture.as_ref(), ARTWORK_PREVIEW_SIZE);
                 set_frame_texture(&header_cover, texture.as_ref(), COVER_THUMB_SIZE);
                 note.set_text(&if has_artwork {

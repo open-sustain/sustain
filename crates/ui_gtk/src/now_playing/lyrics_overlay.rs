@@ -90,14 +90,17 @@ fn build(
     });
 
     let key = gtk::EventControllerKey::new();
-    let window_for_escape = window.clone();
-    key.connect_key_pressed(move |_controller, key, _keycode, _state| {
-        if key == gdk::Key::Escape {
-            window_for_escape.close();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+    // The key controller belongs to the window: it reaches the window
+    // through the controller rather than a capture, which would keep the
+    // closed window alive (#370).
+    key.connect_key_pressed(move |controller, key, _keycode, _state| {
+        if key != gdk::Key::Escape {
+            return glib::Propagation::Proceed;
         }
+        if let Some(window) = controller.widget().and_downcast::<gtk::Window>() {
+            window.close();
+        }
+        glib::Propagation::Stop
     });
     window.add_controller(key);
 
@@ -167,10 +170,14 @@ fn install_flip_handler(
 ) {
     let click = gtk::GestureClick::new();
     click.set_button(gdk::BUTTON_PRIMARY);
-    let stack = stack.clone();
+    // The gesture belongs to a page of the stack, so it holds the stack
+    // weakly (#370).
+    let stack = stack.downgrade();
     click.connect_released(move |gesture, _n_press, _x, _y| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
-        stack.set_visible_child_name(destination);
+        if let Some(stack) = stack.upgrade() {
+            stack.set_visible_child_name(destination);
+        }
     });
     widget.add_controller(click);
 }
@@ -231,7 +238,7 @@ fn apply_lyrics_palette(view: &gtk::TextView, palette: ArtworkPalette) {
 
 #[cfg(test)]
 mod tests {
-    use super::{LyricsOverlayFace, apply_lyrics_palette, build, stack_name};
+    use super::{LyricsOverlayFace, apply_lyrics_palette, build, open, stack_name};
     use crate::artwork_color::{ArtworkPalette, ArtworkPaletteComponents, RgbColorComponents};
     use gtk::prelude::*;
 
@@ -290,6 +297,31 @@ mod tests {
                 (rgba.blue() - 60.0 / 255.0).abs() < 0.01,
                 "blue = secondary"
             );
+        });
+    }
+
+    #[test]
+    fn the_closed_overlay_is_released() {
+        crate::test_support::with_gtk(|| {
+            let parent = gtk::ApplicationWindow::default();
+            let pixels = gtk::glib::Bytes::from_owned(vec![0_u8; 4 * 4 * 4]);
+            let artwork = gtk::gdk::MemoryTexture::new(
+                4,
+                4,
+                gtk::gdk::MemoryFormat::R8g8b8a8,
+                &pixels,
+                4 * 4,
+            );
+            // Artwork and lyrics both: each face flips to the other.
+            open(
+                &parent,
+                Some(artwork.upcast_ref()),
+                None,
+                Some("A lyric line"),
+                LyricsOverlayFace::Lyrics,
+            );
+            crate::test_support::assert_closes_and_disposes("Now Playing");
+            parent.destroy();
         });
     }
 

@@ -22,6 +22,7 @@ sustain-i18n = { path = "../i18n" }
 sustain-profiler = { path = "../profiler" }
 
 [dev-dependencies]
+sustain-library-store = { path = "../library_store" }
 sustain-playback = { path = "../playback" }
 
 [lints]

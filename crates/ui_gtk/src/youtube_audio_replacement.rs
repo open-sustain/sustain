@@ -81,10 +81,13 @@ fn open_dialog(
     window.set_child(Some(&content));
 
     let submit: Rc<dyn Fn()> = {
-        let window = window.clone();
-        let entry = entry.clone();
+        let window = window.downgrade();
+        let entry = entry.downgrade();
         let command_controller = command_controller.clone();
         Rc::new(move || {
+            let (Some(window), Some(entry)) = (window.upgrade(), entry.upgrade()) else {
+                return;
+            };
             if command_controller.dispatch_succeeded(
                 ApplicationCommand::ReplaceTrackAudioFromYoutube {
                     track_id,
@@ -96,8 +99,12 @@ fn open_dialog(
         })
     };
     cancel.connect_clicked({
-        let window = window.clone();
-        move |_| window.close()
+        let window = window.downgrade();
+        move |_| {
+            if let Some(window) = window.upgrade() {
+                window.close();
+            }
+        }
     });
     download.connect_clicked({
         let submit = submit.clone();
@@ -106,18 +113,42 @@ fn open_dialog(
     entry.connect_activate(move |_| submit());
 
     let key_controller = gtk::EventControllerKey::new();
-    {
-        let window = window.clone();
-        key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-            if key == gdk::Key::Escape {
+    key_controller.connect_key_pressed(|controller, key, _keycode, _state| {
+        if key == gdk::Key::Escape {
+            if let Some(window) = controller.widget().and_downcast::<gtk::Window>() {
                 window.close();
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
             }
-        });
-    }
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
     window.add_controller(key_controller);
 
     window.present();
+}
+
+#[cfg(test)]
+mod tests {
+    use gtk::prelude::*;
+
+    #[test]
+    fn the_closed_dialog_is_released() {
+        crate::test_support::with_gtk(|| {
+            let runtime =
+                crate::test_support::runtime_with_tracks(vec![crate::test_support::track(
+                    1, "One",
+                )]);
+            let command_controller: crate::command_controller::SharedCommandController =
+                std::rc::Rc::new(crate::command_controller::UiCommandController::new(runtime));
+            let parent = gtk::Window::new();
+            super::open_dialog(
+                &parent,
+                &command_controller,
+                sustain_app_runtime::TrackId::new(1).expect("track id"),
+            );
+            crate::test_support::assert_closes_and_disposes("Replace Audio from YouTube");
+            parent.destroy();
+        });
+    }
 }

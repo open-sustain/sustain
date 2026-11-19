@@ -230,6 +230,20 @@ mod tests {
         });
     }
 
+    #[test]
+    fn the_closed_dialog_is_released() {
+        crate::test_support::with_gtk(|| {
+            let parent = gtk::Window::new();
+            let failures = vec![ImportFailure {
+                path: PathBuf::from("/music/0.flac"),
+                reason: ImportFailureReason::Unreadable,
+            }];
+            show_import_failures(&parent, failures, true);
+            crate::test_support::assert_closes_and_disposes("Files Not Imported");
+            parent.destroy();
+        });
+    }
+
     fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
         let mut found = Vec::new();
         let mut child = widget.first_child();

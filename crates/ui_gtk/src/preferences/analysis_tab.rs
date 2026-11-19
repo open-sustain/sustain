@@ -199,12 +199,17 @@ fn wire_audio_switch(
     command_controller: SharedCommandController,
     syncing: Rc<Cell<bool>>,
 ) {
-    let bpm_switch = bpm_switch.clone();
-    let key_switch = key_switch.clone();
+    // The switches are widgets of the same page: reached weakly (#370).
+    let bpm_switch = bpm_switch.downgrade();
+    let key_switch = key_switch.downgrade();
     let command_controller_for_held = command_controller.clone();
     connect_setting_switch(
         audio_switch,
         move |audio_on| {
+            let (Some(bpm_switch), Some(key_switch)) = (bpm_switch.upgrade(), key_switch.upgrade())
+            else {
+                return;
+            };
             let mut settings = command_controller.runtime().borrow().settings().clone();
             settings.analysis = audio_switch_settings(settings.analysis, audio_on);
             // A refusal is reported once by `UiCommandController`.
@@ -334,16 +339,20 @@ fn wire_bpm_range_spins(
     command_controller: SharedCommandController,
 ) {
     let syncing = Rc::new(Cell::new(false));
+    // Each spin's handler reads both spins, itself included: it holds them
+    // weakly, or the pair would outlive the window (#370).
     for spin in [min_spin, max_spin] {
-        let min_spin = min_spin.clone();
-        let max_spin = max_spin.clone();
+        let min_spin = min_spin.downgrade();
+        let max_spin = max_spin.downgrade();
         let command_controller = command_controller.clone();
         let syncing = syncing.clone();
         spin.connect_value_changed(move |_| {
             if syncing.get() {
                 return;
             }
-            apply_bpm_range(&min_spin, &max_spin, &command_controller, &syncing);
+            if let (Some(min_spin), Some(max_spin)) = (min_spin.upgrade(), max_spin.upgrade()) {
+                apply_bpm_range(&min_spin, &max_spin, &command_controller, &syncing);
+            }
         });
     }
 }

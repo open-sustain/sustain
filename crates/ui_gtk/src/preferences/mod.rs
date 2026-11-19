@@ -308,7 +308,7 @@ fn open_preferences_window(
     let views_page = views_tab::build(command_controller, hooks.view_settings_changed);
     stack.add_named(&views_page, Some(TAB_VIEWS));
 
-    let about_page = about_tab::build(&window, &database_path);
+    let about_page = about_tab::build(&database_path);
     stack.add_named(&about_page, Some(TAB_ABOUT));
 
     let (tab_strip, tabs) = build_tab_strip(&stack, &window);
@@ -319,15 +319,17 @@ fn open_preferences_window(
     frame.append(&panel);
     window.set_child(Some(&frame));
 
+    // The controller belongs to the window and reaches it through itself,
+    // not a capture (#370).
     let key_controller = gtk::EventControllerKey::new();
-    let window_for_escape = window.clone();
-    key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-        if key == gdk::Key::Escape {
-            window_for_escape.close();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+    key_controller.connect_key_pressed(move |controller, key, _keycode, _state| {
+        if key != gdk::Key::Escape {
+            return glib::Propagation::Proceed;
         }
+        if let Some(window) = controller.widget().and_downcast::<gtk::Window>() {
+            window.close();
+        }
+        glib::Propagation::Stop
     });
     window.add_controller(key_controller);
 
@@ -396,9 +398,11 @@ fn build_tab_strip(stack: &gtk::Stack, window: &gtk::Window) -> (gtk::Widget, Pr
     close_button.set_valign(gtk::Align::Center);
     close_button.set_margin_end(8);
 
-    let window_for_close = window.clone();
+    let window_for_close = window.downgrade();
     close_button.connect_clicked(move |_| {
-        window_for_close.close();
+        if let Some(window) = window_for_close.upgrade() {
+            window.close();
+        }
     });
 
     let strip = gtk::CenterBox::new();
@@ -452,21 +456,25 @@ fn build_tab_button(icon_name: &str, label_text: &str) -> gtk::ToggleButton {
 }
 
 fn focus_visible_preferences_page(stack: &gtk::Stack) {
-    let stack = stack.clone();
+    // Weak: a window closed before the idle runs has released its stack,
+    // and there is nothing left to focus.
+    let stack = stack.downgrade();
     glib::idle_add_local_once(move || {
-        if let Some(page) = stack.visible_child() {
+        if let Some(page) = stack.upgrade().and_then(|stack| stack.visible_child()) {
             let _focused = page.child_focus(gtk::DirectionType::TabForward);
         }
     });
 }
 
 fn wire_tab_button(button: &gtk::ToggleButton, stack: &gtk::Stack, page_name: &'static str) {
-    let stack = stack.clone();
+    let stack = stack.downgrade();
     button.connect_toggled(move |btn| {
         // Only the newly-activated radio fires this callback with
         // `is_active() == true`; the previously-active one fires with
         // `false` and we ignore it so we don't switch pages twice.
-        if btn.is_active() {
+        if btn.is_active()
+            && let Some(stack) = stack.upgrade()
+        {
             stack.set_visible_child_name(page_name);
         }
     });
@@ -500,6 +508,31 @@ mod tests {
             .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
             .filter(|window| window.is_visible() && window.title().as_deref() == Some(title))
             .collect()
+    }
+
+    #[test]
+    fn the_closed_preferences_window_is_released() {
+        crate::test_support::with_gtk(|| {
+            let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+            let command_controller: SharedCommandController =
+                Rc::new(UiCommandController::new(runtime));
+            let hooks = PreferencesHooks {
+                scan_requested: Rc::new(|_| Ok(())),
+                consolidation_requested: Rc::new(|| Ok(())),
+                view_settings_changed: Rc::new(|| {}),
+                sort_tags_changed: Rc::new(|| {}),
+            };
+            let parent = gtk::Window::new();
+            open_preferences_window(
+                &parent,
+                command_controller,
+                PathBuf::from("/nonexistent/library.sqlite3"),
+                hooks,
+                TAB_LIBRARY,
+            );
+            crate::test_support::assert_closes_and_disposes("Preferences");
+            parent.destroy();
+        });
     }
 
     #[test]

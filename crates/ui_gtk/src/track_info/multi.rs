@@ -79,14 +79,19 @@ pub(crate) fn open_multi_track_info_dialog(
     window.set_child(Some(&outer));
     window.set_default_widget(Some(&ok));
 
-    let window_for_cancel = window.clone();
-    cancel.connect_clicked(move |_| window_for_cancel.close());
+    let window_for_cancel = window.downgrade();
+    cancel.connect_clicked(move |_| {
+        if let Some(window) = window_for_cancel.upgrade() {
+            window.close();
+        }
+    });
 
     let key_controller = gtk::EventControllerKey::new();
-    let window_for_escape = window.clone();
-    key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
+    key_controller.connect_key_pressed(|controller, key, _keycode, _state| {
         if key == gdk::Key::Escape {
-            window_for_escape.close();
+            if let Some(window) = controller.widget().and_downcast::<gtk::Window>() {
+                window.close();
+            }
             glib::Propagation::Stop
         } else {
             glib::Propagation::Proceed
@@ -94,9 +99,14 @@ pub(crate) fn open_multi_track_info_dialog(
     });
     window.add_controller(key_controller);
 
-    let window_for_ok = window.clone();
+    let window_for_ok = window.downgrade();
     let command_controller = command_controller.clone();
     ok.connect_clicked(move |_| {
+        let close = || {
+            if let Some(window) = window_for_ok.upgrade() {
+                window.close();
+            }
+        };
         let change = match details.metadata_change() {
             Ok(change) => change,
             Err(message) => {
@@ -105,12 +115,12 @@ pub(crate) fn open_multi_track_info_dialog(
             }
         };
         if change == MetadataChange::default() {
-            window_for_ok.close();
+            close();
             return;
         }
 
         if dispatch_batch_metadata_change(&command_controller, &track_ids, &change) == 0 {
-            window_for_ok.close();
+            close();
         }
     });
 
@@ -684,6 +694,32 @@ mod tests {
         CommonValue, OptionalBool, OptionalEntry, OptionalTextView, number_change, prose_change,
         text_change,
     };
+
+    #[test]
+    fn the_closed_dialog_is_released() {
+        crate::test_support::with_gtk(|| {
+            // A genre gives the Genre field its suggestion list.
+            let mut first = crate::test_support::track(1, "One");
+            first.metadata.genre = Some("Rock".to_owned());
+            let runtime = crate::test_support::runtime_with_tracks(vec![
+                first,
+                crate::test_support::track(2, "Two"),
+            ]);
+            let command_controller: crate::command_controller::SharedCommandController =
+                std::rc::Rc::new(crate::command_controller::UiCommandController::new(runtime));
+            let parent = gtk::Window::new();
+            super::open_multi_track_info_dialog(
+                &parent,
+                &command_controller,
+                vec![
+                    sustain_app_runtime::TrackId::new(1).expect("track id"),
+                    sustain_app_runtime::TrackId::new(2).expect("track id"),
+                ],
+            );
+            crate::test_support::assert_closes_and_disposes("Get Info - 2 Tracks");
+            parent.destroy();
+        });
+    }
 
     #[test]
     fn unchecked_batch_fields_are_unchanged() {

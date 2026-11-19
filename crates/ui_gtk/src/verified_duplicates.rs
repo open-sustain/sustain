@@ -80,13 +80,20 @@ pub(crate) fn open_verified_duplicates_preview(
     buttons.append(&merge_button);
     content.append(&buttons);
 
-    let checks = Rc::new(checks);
+    // The handlers below belong to widgets of this window, so they reach
+    // the window and its widgets weakly: a strong capture would keep the
+    // closed window alive (#370).
+    let checks: Rc<[glib::WeakRef<gtk::CheckButton>]> =
+        checks.iter().map(ObjectExt::downgrade).collect();
     let merges = Rc::new(merges);
     let update_merge_button = {
         let checks = checks.clone();
-        let merge_button = merge_button.clone();
+        let merge_button = merge_button.downgrade();
         move || {
-            let included = checks.iter().filter(|check| check.is_active()).count();
+            let Some(merge_button) = merge_button.upgrade() else {
+                return;
+            };
+            let included = included(&checks).count();
             merge_button.set_label(&tr_format!(
                 ngettext(
                     "Merge {included} Group",
@@ -99,43 +106,59 @@ pub(crate) fn open_verified_duplicates_preview(
         }
     };
     update_merge_button();
-    for check in checks.iter() {
+    for check in checks.iter().filter_map(glib::WeakRef::upgrade) {
         let update_merge_button = update_merge_button.clone();
         check.connect_toggled(move |_| update_merge_button());
     }
 
-    let window_for_cancel = window.clone();
-    cancel.connect_clicked(move |_| window_for_cancel.close());
-    let window_for_merge = window.clone();
+    let window_for_cancel = window.downgrade();
+    cancel.connect_clicked(move |_| {
+        if let Some(window) = window_for_cancel.upgrade() {
+            window.close();
+        }
+    });
+    let window_for_merge = window.downgrade();
     let command_controller = command_controller.clone();
     merge_button.connect_clicked(move |_| {
-        let included = merges
+        let chosen = merges
             .iter()
             .zip(checks.iter())
-            .filter(|(_, check)| check.is_active())
+            .filter(|(_, check)| check.upgrade().is_some_and(|check| check.is_active()))
             .map(|(merge, _)| merge.clone())
             .collect::<Vec<_>>();
         if command_controller
-            .dispatch_succeeded(ApplicationCommand::ConsolidateVerifiedDuplicates(included))
+            .dispatch_succeeded(ApplicationCommand::ConsolidateVerifiedDuplicates(chosen))
+            && let Some(window) = window_for_merge.upgrade()
         {
-            window_for_merge.close();
+            window.close();
         }
     });
 
     window.set_child(Some(&content));
     window.set_default_widget(Some(&cancel));
     let key_controller = gtk::EventControllerKey::new();
-    let window_for_escape = window.clone();
+    let window_for_escape = window.downgrade();
     key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-        if key == gdk::Key::Escape {
-            window_for_escape.close();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+        if key != gdk::Key::Escape {
+            return glib::Propagation::Proceed;
         }
+        if let Some(window) = window_for_escape.upgrade() {
+            window.close();
+        }
+        glib::Propagation::Stop
     });
     window.add_controller(key_controller);
     window.present();
+}
+
+/// The checks of the groups the user left in.
+fn included(
+    checks: &[glib::WeakRef<gtk::CheckButton>],
+) -> impl Iterator<Item = gtk::CheckButton> + '_ {
+    checks
+        .iter()
+        .filter_map(glib::WeakRef::upgrade)
+        .filter(CheckButtonExt::is_active)
 }
 
 /// One group: whether it is included, what it is, the file it keeps, and
@@ -232,4 +255,30 @@ fn row_label(text: &str, classes: &[&str]) -> gtk::Label {
         label.add_css_class(class);
     }
     label
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use sustain_app_runtime::ApplicationRuntime;
+
+    use super::*;
+    use crate::command_controller::UiCommandController;
+    use crate::test_support::track;
+
+    #[test]
+    fn the_closed_preview_is_released() {
+        crate::test_support::with_gtk(|| {
+            let runtime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+            let command_controller: SharedCommandController =
+                Rc::new(UiCommandController::new(runtime));
+            let merge = VerifiedDuplicateMerge::new(vec![track(1, "Song"), track(2, "Song")])
+                .expect("two copies merge");
+            let parent = gtk::Window::new();
+            open_verified_duplicates_preview(Some(&parent), &command_controller, vec![merge]);
+            crate::test_support::assert_closes_and_disposes("Merge Verified Duplicates");
+            parent.destroy();
+        });
+    }
 }

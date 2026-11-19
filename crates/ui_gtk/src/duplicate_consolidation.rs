@@ -30,13 +30,53 @@ const ARTWORK_PREVIEW_SIZE: i32 = 68;
 /// long path or tag value cannot stretch a track column.
 const COLUMN_TEXT_MAX_WIDTH_CHARS: i32 = 36;
 
-#[derive(Clone)]
 struct MetadataSelector {
     field: DuplicateMetadataField,
     /// One radio button per duplicate track, index-aligned to the dialog's
     /// `tracks` slice. Exactly one is active, naming the track this field is
     /// taken from.
     buttons: Vec<gtk::CheckButton>,
+}
+
+impl MetadataSelector {
+    fn choice(&self) -> MetadataChoice {
+        MetadataChoice {
+            field: self.field,
+            choice: RadioChoice::of(&self.buttons),
+        }
+    }
+}
+
+/// A radio group as the dialog's handlers see it. The handlers belong to
+/// widgets of the dialog, so they hold its buttons weakly: a strong
+/// capture would keep the closed dialog alive (#370).
+#[derive(Clone)]
+struct RadioChoice(Rc<[glib::WeakRef<gtk::CheckButton>]>);
+
+impl RadioChoice {
+    fn of(buttons: &[gtk::CheckButton]) -> Self {
+        Self(buttons.iter().map(ObjectExt::downgrade).collect())
+    }
+
+    /// The index of the active button, while the dialog is open.
+    fn active_index(&self) -> Option<usize> {
+        self.0
+            .iter()
+            .position(|button| button.upgrade().is_some_and(|button| button.is_active()))
+    }
+
+    fn select(&self, index: usize) {
+        if let Some(button) = self.0.get(index).and_then(glib::WeakRef::upgrade) {
+            button.set_active(true);
+        }
+    }
+}
+
+/// A metadata field's radio group, held weakly like [`RadioChoice`].
+#[derive(Clone)]
+struct MetadataChoice {
+    field: DuplicateMetadataField,
+    choice: RadioChoice,
 }
 
 pub(crate) fn consolidate_duplicates_callback(
@@ -154,6 +194,13 @@ fn open_dialog(
     let artwork_buttons = build_selection_radios(tracks.len(), 0);
     let rating_buttons =
         build_selection_radios(tracks.len(), track_index(&tracks, defaults.rating_track_id));
+    // Built once: every "Track N" header and the Consolidate button share
+    // these weak views of the radio groups.
+    let metadata_choices: Rc<[MetadataChoice]> = metadata_selectors
+        .iter()
+        .map(MetadataSelector::choice)
+        .collect();
+    let rating_choice = RadioChoice::of(&rating_buttons);
 
     let (table, artwork_frames) = build_consolidation_table(
         &tracks,
@@ -161,6 +208,8 @@ fn open_dialog(
         &artwork_buttons,
         &rating_buttons,
         &metadata_selectors,
+        &metadata_choices,
+        &rating_choice,
     );
     content.append(&table);
 
@@ -171,34 +220,33 @@ fn open_dialog(
     consolidate.add_css_class("destructive-action");
     consolidate.set_sensitive(false);
     consolidate.set_tooltip_text(Some(&gettext("Waiting for artwork previews")));
-    let window_for_cancel = window.clone();
-    cancel.connect_clicked(move |_| window_for_cancel.close());
-    let window_for_confirm = window.clone();
+    let window_for_cancel = window.downgrade();
+    cancel.connect_clicked(move |_| {
+        if let Some(window) = window_for_cancel.upgrade() {
+            window.close();
+        }
+    });
+    let window_for_confirm = window.downgrade();
     let command_controller = command_controller.clone();
     let tracks_for_confirm = tracks.clone();
-    let metadata_selectors_for_confirm = metadata_selectors.clone();
-    let audio_buttons_for_confirm = audio_buttons.clone();
-    let artwork_buttons_for_confirm = artwork_buttons.clone();
-    let rating_buttons_for_confirm = rating_buttons.clone();
+    let metadata_for_confirm = metadata_choices;
+    let audio_for_confirm = RadioChoice::of(&audio_buttons);
+    let artwork_for_confirm = RadioChoice::of(&artwork_buttons);
+    let rating_for_confirm = rating_choice;
     consolidate.connect_clicked(move |_| {
-        let Some(audio_track_id) =
-            selected_track_id(&tracks_for_confirm, &audio_buttons_for_confirm)
+        let Some(audio_track_id) = selected_track_id(&tracks_for_confirm, &audio_for_confirm)
         else {
             return;
         };
-        let Some(artwork_track_id) =
-            selected_track_id(&tracks_for_confirm, &artwork_buttons_for_confirm)
+        let Some(artwork_track_id) = selected_track_id(&tracks_for_confirm, &artwork_for_confirm)
         else {
             return;
         };
-        let Some(rating_track_id) =
-            selected_track_id(&tracks_for_confirm, &rating_buttons_for_confirm)
+        let Some(rating_track_id) = selected_track_id(&tracks_for_confirm, &rating_for_confirm)
         else {
             return;
         };
-        let Some(metadata) =
-            selected_metadata(&tracks_for_confirm, &metadata_selectors_for_confirm)
-        else {
+        let Some(metadata) = selected_metadata(&tracks_for_confirm, &metadata_for_confirm) else {
             return;
         };
         let request = DuplicateConsolidationRequest {
@@ -210,8 +258,9 @@ fn open_dialog(
         };
         if command_controller
             .dispatch_succeeded(ApplicationCommand::ConsolidateDuplicateTracks(request))
+            && let Some(window) = window_for_confirm.upgrade()
         {
-            window_for_confirm.close();
+            window.close();
         }
     });
     buttons.append(&cancel);
@@ -230,15 +279,17 @@ fn open_dialog(
     window.set_child(Some(&content));
     window.set_default_widget(Some(&cancel));
 
+    // The controller belongs to the window and reaches it through itself,
+    // not a capture (#370).
     let key_controller = gtk::EventControllerKey::new();
-    let window_for_escape = window.clone();
-    key_controller.connect_key_pressed(move |_controller, key, _keycode, _state| {
-        if key == gdk::Key::Escape {
-            window_for_escape.close();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+    key_controller.connect_key_pressed(move |controller, key, _keycode, _state| {
+        if key != gdk::Key::Escape {
+            return glib::Propagation::Proceed;
         }
+        if let Some(window) = controller.widget().and_downcast::<gtk::Window>() {
+            window.close();
+        }
+        glib::Propagation::Stop
     });
     window.add_controller(key_controller);
 
@@ -258,6 +309,8 @@ fn build_consolidation_table(
     artwork_buttons: &[gtk::CheckButton],
     rating_buttons: &[gtk::CheckButton],
     metadata_selectors: &[MetadataSelector],
+    metadata_choices: &Rc<[MetadataChoice]>,
+    rating_choice: &RadioChoice,
 ) -> (gtk::ScrolledWindow, Vec<gtk::Frame>) {
     let grid = gtk::Grid::new();
     // Each cell carries its own 4px margin, so the grid adds no spacing itself.
@@ -267,7 +320,7 @@ fn build_consolidation_table(
     let mut row = 0;
     for (index, track) in tracks.iter().enumerate() {
         grid.attach(
-            &build_track_header(index, track, rating_buttons, metadata_selectors),
+            &build_track_header(index, track, metadata_choices, rating_choice),
             column_index(index),
             row,
             1,
@@ -381,8 +434,8 @@ fn column_index(index: usize) -> i32 {
 fn build_track_header(
     index: usize,
     track: &Track,
-    rating_buttons: &[gtk::CheckButton],
-    metadata_selectors: &[MetadataSelector],
+    metadata_choices: &Rc<[MetadataChoice]>,
+    rating_choice: &RadioChoice,
 ) -> gtk::Box {
     let column = gtk::Box::new(gtk::Orientation::Vertical, 4);
     column.set_hexpand(true);
@@ -397,17 +450,13 @@ fn build_track_header(
         "Take every tag and the rating from this track",
     )));
     {
-        let selectors = metadata_selectors.to_vec();
-        let rating_buttons = rating_buttons.to_vec();
+        let metadata = Rc::clone(metadata_choices);
+        let rating = rating_choice.clone();
         select_all.connect_clicked(move |_| {
-            for selector in &selectors {
-                if let Some(button) = selector.buttons.get(index) {
-                    button.set_active(true);
-                }
+            for selector in metadata.iter() {
+                selector.choice.select(index);
             }
-            if let Some(button) = rating_buttons.get(index) {
-                button.set_active(true);
-            }
+            rating.select(index);
         });
     }
     column.append(&select_all);
@@ -623,17 +672,19 @@ fn install_artwork_previews(
         });
     }
 
+    // A preview can land after the dialog closed, and the dialog's own
+    // widgets hold none of this: its widgets are reached weakly (#370).
     let apply_result: Rc<dyn Fn(usize, DecodedArtwork)> = {
-        let artwork_frames = artwork_frames.clone();
+        let artwork_frames: Vec<_> = artwork_frames.iter().map(ObjectExt::downgrade).collect();
         let qualities = qualities.clone();
         let remaining = remaining.clone();
         let manually_selected = manually_selected.clone();
         let syncing_selection = syncing_selection.clone();
-        let artwork_buttons = artwork_buttons.to_vec();
-        let consolidate = consolidate.clone();
+        let artwork_choice = RadioChoice::of(artwork_buttons);
+        let consolidate = consolidate.downgrade();
         Rc::new(move |index, decoded| {
-            if let Some(frame) = artwork_frames.get(index) {
-                set_artwork_preview(frame, Some(&decoded));
+            if let Some(frame) = artwork_frames.get(index).and_then(glib::WeakRef::upgrade) {
+                set_artwork_preview(&frame, Some(&decoded));
             }
             if let Some(slot) = qualities.borrow_mut().get_mut(index) {
                 *slot = artwork_quality(&decoded);
@@ -645,14 +696,15 @@ fn install_artwork_previews(
             }
             if !manually_selected.get()
                 && let Some(best) = highest_quality_duplicate_artwork(&qualities.borrow())
-                && let Some(button) = artwork_buttons.get(best)
             {
                 syncing_selection.set(true);
-                button.set_active(true);
+                artwork_choice.select(best);
                 syncing_selection.set(false);
             }
-            consolidate.set_sensitive(true);
-            consolidate.set_tooltip_text(None);
+            if let Some(consolidate) = consolidate.upgrade() {
+                consolidate.set_sensitive(true);
+                consolidate.set_tooltip_text(None);
+            }
         })
     };
 
@@ -711,26 +763,22 @@ fn build_metadata_selectors(
 
 /// Index, into the dialog's `tracks` slice, of the active radio in a group.
 /// `None` only if the group is somehow empty.
-fn active_index(buttons: &[gtk::CheckButton]) -> Option<usize> {
-    buttons.iter().position(|button| button.is_active())
-}
-
 fn selected_track_id(
     tracks: &[Track],
-    buttons: &[gtk::CheckButton],
+    choice: &RadioChoice,
 ) -> Option<sustain_app_runtime::TrackId> {
-    let index = active_index(buttons)?;
+    let index = choice.active_index()?;
     tracks.get(index).map(|track| track.id)
 }
 
 fn selected_metadata(
     tracks: &[Track],
-    selectors: &[MetadataSelector],
+    selectors: &[MetadataChoice],
 ) -> Option<DuplicateMetadataSelection> {
     selectors
         .iter()
         .map(|selector| {
-            let index = active_index(&selector.buttons)?;
+            let index = selector.choice.active_index()?;
             let track = tracks.get(index)?;
             Some(DuplicateMetadataFieldSelection {
                 field: selector.field,
@@ -834,7 +882,31 @@ fn format_file_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::rating_stars;
+    use sustain_app_runtime::ApplicationRuntime;
+
+    use super::*;
+    use crate::command_controller::UiCommandController;
+    use crate::test_support::track;
+
+    #[test]
+    fn the_closed_dialog_is_released() {
+        crate::test_support::with_gtk(|| {
+            let runtime: SharedRuntime = Rc::new(RefCell::new(ApplicationRuntime::new()));
+            let command_controller: SharedCommandController =
+                Rc::new(UiCommandController::new(runtime.clone()));
+            let artwork_loader = crate::test_support::artwork_loader();
+            let parent = gtk::Window::new();
+            open_dialog(
+                &parent,
+                &runtime,
+                &command_controller,
+                &artwork_loader,
+                vec![track(1, "One"), track(2, "Two")],
+            );
+            crate::test_support::assert_closes_and_disposes("Consolidate Duplicate Tracks");
+            parent.destroy();
+        });
+    }
 
     #[test]
     fn rating_stars_fills_then_empties_to_five() {

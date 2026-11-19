@@ -101,6 +101,149 @@ where
     }
 }
 
+/// A metadata service with no files behind it: every read finds nothing
+/// and every write fails. For widget tests that need an
+/// [`ArtworkLoader`](crate::artwork_loader::ArtworkLoader) but load no
+/// artwork.
+struct NoFiles;
+
+impl sustain_app_runtime::MetadataService for NoFiles {
+    fn read_initial_tags(
+        &self,
+        _path: &std::path::Path,
+    ) -> sustain_app_runtime::MetadataResult<sustain_app_runtime::InitialTags> {
+        Err(sustain_app_runtime::MetadataError::ReadFailed)
+    }
+
+    fn write_metadata(
+        &self,
+        _path: &std::path::Path,
+        _change: sustain_app_runtime::MetadataChange,
+    ) -> sustain_app_runtime::MetadataResult<()> {
+        Err(sustain_app_runtime::MetadataError::WriteFailed)
+    }
+
+    fn write_rating(
+        &self,
+        _path: &std::path::Path,
+        _rating: sustain_app_runtime::Rating,
+    ) -> sustain_app_runtime::MetadataResult<()> {
+        Err(sustain_app_runtime::MetadataError::WriteFailed)
+    }
+
+    fn read_artwork(
+        &self,
+        _path: &std::path::Path,
+    ) -> sustain_app_runtime::MetadataResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    fn write_artwork(
+        &self,
+        _path: &std::path::Path,
+        _artwork: Option<Vec<u8>>,
+    ) -> sustain_app_runtime::MetadataResult<()> {
+        Err(sustain_app_runtime::MetadataError::WriteFailed)
+    }
+}
+
+/// An artwork loader over [`NoFiles`], caching under a directory of its
+/// own in the system temporary directory.
+pub(crate) fn artwork_loader() -> crate::artwork_loader::ArtworkLoader {
+    let cache_dir =
+        std::env::temp_dir().join(format!("sustain-ui-test-artwork-{}", std::process::id()));
+    crate::artwork_loader::ArtworkLoader::new(std::sync::Arc::new(NoFiles), cache_dir)
+}
+
+/// A runtime whose library holds `tracks`, kept in an in-memory store.
+pub(crate) fn runtime_with_tracks(tracks: Vec<sustain_app_runtime::Track>) -> crate::SharedRuntime {
+    use sustain_library_store::LibraryStore;
+
+    let store = sustain_library_store::SqliteLibraryStore::open_in_memory()
+        .expect("an in-memory library store opens");
+    for track in tracks {
+        store.save_track(track).expect("the store saves the track");
+    }
+    let runtime = sustain_app_runtime::ApplicationRuntime::new()
+        .with_library_services(std::sync::Arc::new(store), std::sync::Arc::new(NoFiles))
+        .expect("the runtime takes the store");
+    std::rc::Rc::new(std::cell::RefCell::new(runtime))
+}
+
+/// A track `id` titled `title`, available at `<id>.flac`.
+pub(crate) fn track(id: i64, title: &str) -> sustain_app_runtime::Track {
+    sustain_app_runtime::Track {
+        id: sustain_app_runtime::TrackId::new(id).expect("positive track id"),
+        location: sustain_app_runtime::TrackLocation::available(
+            sustain_app_runtime::TrackRelativePath::new(std::path::PathBuf::from(format!(
+                "{id}.flac"
+            )))
+            .expect("valid relative path"),
+        ),
+        metadata: sustain_app_runtime::TrackMetadata {
+            title: Some(title.to_owned()),
+            ..sustain_app_runtime::TrackMetadata::default()
+        },
+        rating: sustain_app_runtime::Rating::new(0).expect("rating in range"),
+        statistics: sustain_app_runtime::PlayStatistics::default(),
+        file_size_bytes: None,
+        has_embedded_artwork: None,
+        file_modified_at: None,
+    }
+}
+
+/// Closes the open window titled `title` and asserts it is gone: once the
+/// main loop has run, neither the window nor any widget it held is still
+/// alive. A handler that strongly captures a widget of its own tree keeps
+/// that widget, or the whole tree, alive after the window closes (#370);
+/// this is the check every dialog's disposal test makes.
+pub(crate) fn assert_closes_and_disposes(title: &str) {
+    use gtk::prelude::*;
+
+    let window = gtk::Window::list_toplevels()
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
+        .find(|window| window.title().as_deref() == Some(title))
+        .expect("a window with the dialog's title is open");
+    let widgets: Vec<_> = descendants(window.upcast_ref())
+        .iter()
+        .map(ObjectExt::downgrade)
+        .collect();
+    let weak_window = window.downgrade();
+    window.close();
+    drop(window);
+    let context = gtk::glib::MainContext::default();
+    while context.iteration(false) {}
+
+    assert!(
+        weak_window.upgrade().is_none(),
+        "the closed {title:?} window is still alive"
+    );
+    let alive: Vec<_> = widgets
+        .iter()
+        .filter_map(|widget| widget.upgrade())
+        .map(|widget| widget.type_().name())
+        .collect();
+    assert!(
+        alive.is_empty(),
+        "widgets of the closed {title:?} window are still alive: {alive:?}"
+    );
+}
+
+/// Every widget below `widget`, depth first.
+pub(crate) fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
+    use gtk::prelude::*;
+
+    let mut found = Vec::new();
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        found.push(current.clone());
+        found.extend(descendants(&current));
+        child = current.next_sibling();
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::with_gtk;

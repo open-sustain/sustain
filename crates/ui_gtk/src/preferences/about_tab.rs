@@ -23,7 +23,7 @@ const DOCUMENTATION_URL: &str =
     "https://github.com/open-sustain/sustain/blob/main/docs/features.md";
 const ISSUES_URL: &str = "https://github.com/open-sustain/sustain/issues";
 
-pub(super) fn build(parent_window: &gtk::Window, database_path: &Path) -> gtk::Widget {
+pub(super) fn build(database_path: &Path) -> gtk::Widget {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
     content.set_margin_top(24);
     content.set_margin_end(24);
@@ -67,18 +67,12 @@ pub(super) fn build(parent_window: &gtk::Window, database_path: &Path) -> gtk::W
 
     let docs_button = gtk::Button::with_label(&gettext("Documentation"));
     docs_button.set_tooltip_text(Some(DOCUMENTATION_URL));
-    let docs_parent = parent_window.clone();
-    docs_button.connect_clicked(move |_| {
-        launch_uri(&docs_parent, DOCUMENTATION_URL);
-    });
+    docs_button.connect_clicked(|button| launch_uri(button, DOCUMENTATION_URL));
     actions.append(&docs_button);
 
     let issues_button = gtk::Button::with_label(&gettext("Report a problem"));
     issues_button.set_tooltip_text(Some(ISSUES_URL));
-    let issues_parent = parent_window.clone();
-    issues_button.connect_clicked(move |_| {
-        launch_uri(&issues_parent, ISSUES_URL);
-    });
+    issues_button.connect_clicked(|button| launch_uri(button, ISSUES_URL));
     actions.append(&issues_button);
 
     content.append(&actions);
@@ -159,9 +153,12 @@ fn centered_helper_label(text: &str) -> gtk::Label {
 /// logged: on a properly-configured Linux desktop, this only fails
 /// when no default browser is registered, and there is no meaningful
 /// fallback Sustain can offer.
-fn launch_uri(parent: &gtk::Window, url: &'static str) {
+/// Opens `url` over the window `button` is in, found when it is clicked:
+/// a handler capturing that window would keep it alive once closed (#370).
+fn launch_uri(button: &gtk::Button, url: &'static str) {
+    let parent = button.root().and_downcast::<gtk::Window>();
     let launcher = gtk::UriLauncher::new(url);
-    launcher.launch(Some(parent), None::<&gio::Cancellable>, move |result| {
+    launcher.launch(parent.as_ref(), None::<&gio::Cancellable>, move |result| {
         if let Err(error) = result {
             eprintln!("Sustain: failed to open {url} in the default browser ({error:?})");
         }

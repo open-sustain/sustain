@@ -116,7 +116,9 @@ pub(super) fn build(
 
     let command_controller_for_organization = command_controller.clone();
     let consolidation_requested_for_organization = consolidation_requested.clone();
-    let path_entry_for_organization = path_entry.clone();
+    // The switch and the entry each update the other: their handlers reach
+    // one another weakly, so the pair does not outlive the window (#370).
+    let path_entry_for_organization = path_entry.downgrade();
     let command_controller_for_organized = command_controller.clone();
     // Whatever the handler below does, the switch shows the mode the
     // application ends up holding.
@@ -135,7 +137,10 @@ pub(super) fn build(
         // build the full target settings and dispatch a single
         // UpdateSettings — two dispatches would do every UpdateSettings-
         // side-effect twice on the GTK main loop.
-        let path_text = path_entry_for_organization.text().trim().to_owned();
+        let Some(path_entry) = path_entry_for_organization.upgrade() else {
+            return;
+        };
+        let path_text = path_entry.text().trim().to_owned();
         let library_path = if path_text.is_empty() {
             None
         } else {
@@ -208,9 +213,12 @@ pub(super) fn build(
     };
     connect_setting_switch(&keep_organized_switch, organize, organized);
 
-    let keep_organized_for_path_change = keep_organized_switch.clone();
+    let keep_organized_for_path_change = keep_organized_switch.downgrade();
     let command_controller_for_path_change = command_controller.clone();
     path_entry.connect_changed(move |entry| {
+        let Some(keep_organized_for_path_change) = keep_organized_for_path_change.upgrade() else {
+            return;
+        };
         let path_is_valid = library_path_entry_is_valid(entry);
         let library_task_is_running = command_controller_for_path_change
             .runtime()
@@ -229,21 +237,28 @@ pub(super) fn build(
         let _result = save_library_path_from_entry(&command_controller_for_entry, entry);
     });
 
-    let parent_for_folder = parent_window.clone();
+    // The chooser opens over the window the button is in, found when it is
+    // clicked: capturing that window would keep it alive once closed
+    // (#370). The entry is reached weakly for the same reason.
     let command_controller_for_folder = command_controller.clone();
-    let path_entry_for_folder = path_entry.clone();
-    folder_button.connect_clicked(move |_| {
-        open_library_folder_chooser(
-            &parent_for_folder,
-            &command_controller_for_folder,
-            &path_entry_for_folder,
-        );
+    let path_entry_for_folder = path_entry.downgrade();
+    folder_button.connect_clicked(move |button| {
+        let (Some(parent), Some(path_entry)) = (
+            button.root().and_downcast::<gtk::Window>(),
+            path_entry_for_folder.upgrade(),
+        ) else {
+            return;
+        };
+        open_library_folder_chooser(&parent, &command_controller_for_folder, &path_entry);
     });
 
     let command_controller_for_scan = command_controller.clone();
-    let path_entry_for_scan = path_entry.clone();
+    let path_entry_for_scan = path_entry.downgrade();
     let scan_requested_for_scan = scan_requested.clone();
     scan_button.connect_clicked(move |_| {
+        let Some(path_entry_for_scan) = path_entry_for_scan.upgrade() else {
+            return;
+        };
         if path_entry_for_scan.text().trim().is_empty() {
             notify_library_task(
                 &command_controller_for_scan,
