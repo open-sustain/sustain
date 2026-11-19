@@ -166,6 +166,18 @@ pub(crate) type LibraryHydrationResultReceiver = async_channel::Receiver<
     sustain_app_runtime::ApplicationRuntimeResult<LibraryHydrationSnapshot>,
 >;
 
+/// Initialize GIO's default VFS on the calling thread, before any other
+/// thread can make a first use of GIO (#384).
+///
+/// GLib builds an extension point's default (the GSettings backend, say)
+/// while holding its module lock, and the dconf backend's constructor
+/// asks for the default VFS. A thread that is meanwhile initializing the
+/// VFS waits for that same module lock, so neither finishes. With the VFS
+/// initialized first, the constructor's request returns at once.
+pub(crate) fn initialize_gio_vfs() {
+    gtk::gio::Vfs::default();
+}
+
 pub fn run(
     mut runtime: ApplicationRuntime,
     application_id: &str,
@@ -175,6 +187,7 @@ pub fn run(
 ) -> glib::ExitCode {
     let run_profile = sustain_profiler::ProfileScope::start();
     sustain_profiler::profile_mark!(run_profile, "ui_gtk::run entered");
+    initialize_gio_vfs();
     let app = gtk::Application::builder()
         .application_id(application_id)
         .build();

@@ -71,22 +71,25 @@ fn palette_for(settings: Option<&gio::Settings>) -> AccentPalette {
 }
 
 fn accent_settings() -> Option<gio::Settings> {
-    accent_settings_from(&gio::SettingsSchemaSource::default()?)
+    accent_settings_from(
+        &gio::SettingsSchemaSource::default()?,
+        gio::SettingsBackend::NONE,
+    )
 }
 
 /// The interface settings holding the accent color, if `schema_source` has
 /// them. The `accent-color` key arrived in gsettings-desktop-schemas 47;
 /// reading it from an older interface schema aborts the process, so a
-/// schema without it counts as absent.
-fn accent_settings_from(schema_source: &gio::SettingsSchemaSource) -> Option<gio::Settings> {
+/// schema without it counts as absent. `backend` is the desktop's default
+/// one when `None`.
+fn accent_settings_from(
+    schema_source: &gio::SettingsSchemaSource,
+    backend: Option<&gio::SettingsBackend>,
+) -> Option<gio::Settings> {
     let schema = schema_source
         .lookup(INTERFACE_SCHEMA, true)
         .filter(|schema| schema.has_key(ACCENT_COLOR_KEY))?;
-    Some(gio::Settings::new_full(
-        &schema,
-        gio::SettingsBackend::NONE,
-        None,
-    ))
+    Some(gio::Settings::new_full(&schema, backend, None))
 }
 
 fn accent_palette(accent_name: &str) -> AccentPalette {
@@ -288,8 +291,11 @@ mod tests {
             ),
         );
 
-        assert!(accent_settings_from(&older_source).is_none());
-        assert!(accent_settings_from(&current_source).is_some());
+        // In memory: a test reads no desktop settings, and builds no
+        // dconf backend off the GTK thread (#384).
+        let backend = gio::memory_settings_backend_new();
+        assert!(accent_settings_from(&older_source, Some(&backend)).is_none());
+        assert!(accent_settings_from(&current_source, Some(&backend)).is_some());
         std::fs::remove_dir_all(older).expect("remove schema directory");
         std::fs::remove_dir_all(current).expect("remove schema directory");
     }

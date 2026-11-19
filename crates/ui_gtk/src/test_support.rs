@@ -46,6 +46,10 @@ fn gtk_thread() -> &'static GtkThread {
         std::thread::Builder::new()
             .name("sustain-gtk-test".to_owned())
             .spawn(move || {
+                // Artwork tests decode on their own harness threads, so
+                // this thread may be the second to use GIO: the VFS goes
+                // first, as in the app (#384).
+                crate::initialize_gio_vfs();
                 let available = gtk::init().is_ok();
                 if available {
                     // Process-global style setup belongs to the one
