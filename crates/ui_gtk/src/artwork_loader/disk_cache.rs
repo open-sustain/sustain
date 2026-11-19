@@ -6,7 +6,7 @@ use std::{
     fs,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -78,7 +78,12 @@ pub(super) struct ArtworkFileFingerprint {
 
 pub(super) struct ArtworkRepository {
     metadata_service: Arc<dyn MetadataService>,
-    disk_cache: Option<ArtworkDiskCache>,
+    cache_dir: PathBuf,
+    /// Opened on first use, which is a worker's load in practice: opening
+    /// creates the database and its schema, and can wait on another
+    /// connection's lock, none of which startup or the GTK thread should
+    /// pay for. `None` once opening failed: the resident cache alone.
+    disk_cache: OnceLock<Option<ArtworkDiskCache>>,
     source_generations: Mutex<HashMap<ArtworkSource, u64>>,
 }
 
@@ -86,9 +91,16 @@ impl ArtworkRepository {
     pub(super) fn new(metadata_service: Arc<dyn MetadataService>, cache_dir: PathBuf) -> Self {
         Self {
             metadata_service,
-            disk_cache: ArtworkDiskCache::open(&cache_dir),
+            cache_dir,
+            disk_cache: OnceLock::new(),
             source_generations: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn disk_cache(&self) -> Option<&ArtworkDiskCache> {
+        self.disk_cache
+            .get_or_init(|| ArtworkDiskCache::open(&self.cache_dir))
+            .as_ref()
     }
 
     pub(super) fn source_generation(&self, source: &ArtworkSource) -> u64 {
@@ -114,7 +126,7 @@ impl ArtworkRepository {
             let generation = generations.entry(source.clone()).or_default();
             *generation = generation.saturating_add(1);
         }
-        if let Some(disk_cache) = &self.disk_cache {
+        if let Some(disk_cache) = self.disk_cache() {
             disk_cache.delete(source);
         }
     }
@@ -126,7 +138,7 @@ impl ArtworkRepository {
         variant: ArtworkVariant,
     ) -> DecodedArtwork {
         let fingerprint = source.file_fingerprint();
-        if let (Some(cache), Some(fingerprint)) = (&self.disk_cache, fingerprint)
+        if let (Some(cache), Some(fingerprint)) = (self.disk_cache(), fingerprint)
             && let Some(decoded) = cache.load(source, fingerprint, variant)
         {
             return decoded;
@@ -141,7 +153,7 @@ impl ArtworkRepository {
                     return DecodedArtwork::default();
                 };
                 let decoded = decode_artwork(bytes, variant);
-                if let (Some(cache), Some(fingerprint)) = (&self.disk_cache, fingerprint) {
+                if let (Some(cache), Some(fingerprint)) = (self.disk_cache(), fingerprint) {
                     cache.store(source, fingerprint, &decoded.cache_entry, || {
                         self.source_generation(source) == generation
                     });
@@ -833,6 +845,24 @@ mod tests {
     }
 
     #[test]
+    fn the_disk_cache_is_opened_by_its_first_use_not_by_the_repository() {
+        let index = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+        let dir = TestCacheDir(std::env::temp_dir().join(format!(
+            "sustain-ui-artwork-cache-test-{}-{index}",
+            std::process::id()
+        )));
+        let _ = fs::remove_dir_all(&dir.0);
+        let repository =
+            ArtworkRepository::new(std::sync::Arc::new(UnreadableArtwork), dir.0.clone());
+        assert!(!dir.0.exists(), "building the repository touches no file");
+
+        let source = ArtworkSource::embedded_track(PathBuf::from("song.flac"), dir.0.join("x"));
+        repository.invalidate(&source);
+
+        assert!(dir.0.join("artwork-cache.sqlite").exists());
+    }
+
+    #[test]
     fn a_failed_artwork_read_is_not_cached_as_absent_artwork() {
         let (dir, _cache) = test_cache();
         let audio_path = dir.0.join("song.flac");
@@ -845,7 +875,7 @@ mod tests {
         let decoded = repository.load(&source, 0, ArtworkVariant::Tile);
 
         assert!(decoded.tile_texture.is_none());
-        let disk_cache = repository.disk_cache.as_ref().expect("disk cache opens");
+        let disk_cache = repository.disk_cache().expect("disk cache opens");
         assert!(
             disk_cache
                 .load(&source, fingerprint, ArtworkVariant::Tile)
