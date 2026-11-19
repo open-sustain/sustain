@@ -3599,10 +3599,14 @@ fn a_shared_folder_that_cannot_be_tidied_does_not_keep_a_library_closed() {
     .expect("leave a payload nothing refers to");
     std::fs::set_permissions(&legacy_root, std::fs::Permissions::from_mode(0o500))
         .expect("make the shared folder read-only");
+    // Root writes in every folder; nothing is read-only to it then.
+    let denied = std::fs::File::create(legacy_root.join("probe")).is_err();
 
     let opened = SqliteLibraryStore::open(dir.join("library.sqlite"), dir.join("cache"));
-    std::fs::set_permissions(&legacy_root, std::fs::Permissions::from_mode(0o700))
-        .expect("restore the shared folder");
+    if denied {
+        std::fs::set_permissions(&legacy_root, std::fs::Permissions::from_mode(0o700))
+            .expect("restore the shared folder");
+    }
 
     opened.expect("the library opens");
     std::fs::remove_dir_all(dir).expect("remove test directory");
