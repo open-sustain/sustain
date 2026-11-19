@@ -65,6 +65,10 @@ pub enum MetadataError {
     /// what was read was not made: it would have undone the change.
     /// Reading the file again and redoing the write makes it.
     SourceChanged,
+    /// The file opens with an ID3v2 tag carrying an extended header, which
+    /// lofty's ID3v2 writer miscounts: a save would overwrite the start of
+    /// the audio (#376). The write is refused and the file left as it is.
+    Id3v2ExtendedHeader,
     ReadFailed,
 }
 

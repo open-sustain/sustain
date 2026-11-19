@@ -2755,3 +2755,39 @@ pub(crate) fn unique_test_directory() -> PathBuf {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("sustain_metadata_test_{}_{id}", std::process::id()))
 }
+
+#[test]
+fn a_tag_save_refuses_a_leading_id3v2_tag_with_an_extended_header() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create root");
+    // A v2.3 and a v2.4 header flagging an extended header, then a
+    // 6-byte extended header and bytes standing in for the audio.
+    for major in [3_u8, 4] {
+        let path = root.join(format!("v2{major}.mp3"));
+        let mut bytes = vec![b'I', b'D', b'3', major, 0, 0x40, 0, 0, 0, 6];
+        bytes.extend_from_slice(&[0, 0, 0, 6, 0, 0]);
+        bytes.extend_from_slice(b"audio stream");
+        fs::write(&path, &bytes).expect("seed file");
+
+        let mut saved = false;
+        let result = crate::tag_write::atomic_save_lofty(&path, read_now(&path), |_| {
+            saved = true;
+            Ok(())
+        });
+
+        assert_eq!(result, Err(MetadataError::Id3v2ExtendedHeader));
+        assert!(!saved, "lofty's writer is never run on the file");
+        assert_eq!(fs::read(&path).expect("read file"), bytes);
+    }
+    // Without the flag the save goes ahead.
+    let path = root.join("plain.mp3");
+    fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00audio stream").expect("seed file");
+    let mut saved = false;
+    crate::tag_write::atomic_save_lofty(&path, read_now(&path), |_| {
+        saved = true;
+        Ok(())
+    })
+    .expect("save");
+    assert!(saved);
+    fs::remove_dir_all(root).expect("remove root");
+}

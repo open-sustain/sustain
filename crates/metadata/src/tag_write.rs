@@ -233,11 +233,36 @@ const MAX_ID3V2_SYNCHSAFE_SIZE: usize = 0x0fff_ffff;
 // directory entry, the prior inode is kept alive by outstanding fds.
 // That eliminates the audio glitch caused by lofty's default in-place
 // rewrite happening underneath an active playback read.
+/// Whether `path` opens with an ID3v2.3 or v2.4 tag whose header flags an
+/// extended header (bit 6 of the flags byte in both versions).
+///
+/// lofty 0.25 (`id3::find_id3v2`) reads the extended header and then skips
+/// the declared tag size, which already counts it, so the range its writer
+/// replaces runs that many bytes into the audio (#376). The tag it finds is
+/// the one at the start of the file, so that is the one checked. A file
+/// changed between this check and the save is refused by the save's
+/// version check.
+fn leading_id3v2_has_extended_header(path: &Path) -> MetadataResult<bool> {
+    const EXTENDED_HEADER_FLAG: u8 = 0x40;
+    let mut header = [0_u8; 6];
+    let mut file = std::fs::File::open(path).map_err(|_| MetadataError::ReadFailed)?;
+    match file.read_exact(&mut header) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+        Err(_) => return Err(MetadataError::ReadFailed),
+    }
+    let [i, d, three, major, _revision, flags] = header;
+    Ok(&[i, d, three] == b"ID3" && matches!(major, 3 | 4) && flags & EXTENDED_HEADER_FLAG != 0)
+}
+
 pub(crate) fn atomic_save_lofty(
     path: &Path,
     read: SourceVersion,
     mut save: impl FnMut(&Path) -> Result<(), FileEncodingError>,
 ) -> MetadataResult<()> {
+    if leading_id3v2_has_extended_header(path)? {
+        return Err(MetadataError::Id3v2ExtendedHeader);
+    }
     let is_mp3 = audio_format_from_path(path) == Ok(AudioFormat::Mp3);
     atomic_write_via_rename(path, read, |temp_path| {
         match save(temp_path) {
