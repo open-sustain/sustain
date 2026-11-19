@@ -53,19 +53,41 @@ const TEMPORARY_MODE: Mode = Mode::RUSR.union(Mode::WUSR);
 const MAX_TEMPORARY_ATTEMPTS: usize = 100;
 const MAX_XATTR_READ_ATTEMPTS: usize = 4;
 
-/// Replace `path` with a durably published sibling copy after applying
-/// `modify_temp`. This never falls back to an in-place write.
-pub(super) fn atomic_write_via_rename<F>(path: &Path, modify_temp: F) -> MetadataResult<()>
+/// The version of a file that a replacement of it was prepared from:
+/// what it was when the caller started reading it. A replacement made
+/// from what was read must not land over a file changed since, or it
+/// loses the other change (#377).
+#[derive(Clone, Copy)]
+pub(crate) struct SourceVersion(Stat);
+
+impl SourceVersion {
+    /// The version of `file`, open for reading, now. Taken before reading
+    /// from it, it covers what is read: a change made while reading
+    /// changes the version too.
+    pub(crate) fn of(file: &File) -> MetadataResult<Self> {
+        fstat(file).map(Self).map_err(|_| MetadataError::ReadFailed)
+    }
+}
+
+/// Replace `path`, which must still be at version `read`, with a durably
+/// published sibling copy after applying `modify_temp`. This never falls
+/// back to an in-place write.
+pub(super) fn atomic_write_via_rename<F>(
+    path: &Path,
+    read: SourceVersion,
+    modify_temp: F,
+) -> MetadataResult<()>
 where
     F: FnOnce(&Path) -> MetadataResult<()>,
 {
-    atomic_write_via_rename_with(path, modify_temp, temporary_sibling_name, |parent| {
+    atomic_write_via_rename_with(path, read, modify_temp, temporary_sibling_name, |parent| {
         fsync(parent).map_err(io::Error::from)
     })
 }
 
 fn atomic_write_via_rename_with<F, N, S>(
     path: &Path,
+    read: SourceVersion,
     modify_temp: F,
     mut next_temporary_name: N,
     sync_parent: S,
@@ -85,6 +107,11 @@ where
         .map_err(|_| MetadataError::WriteFailed)?;
     let mut source = File::from(source_fd);
     let source_stat = regular_file_stat(&source)?;
+    // Changed since the caller read it: copying it now would put what
+    // the caller made of the old file over the new one.
+    if !same_source_version(&read.0, &source_stat) {
+        return Err(MetadataError::SourceChanged);
+    }
 
     let (temporary_name, temporary_path, mut temporary) =
         create_temporary_sibling(&parent, &mut next_temporary_name)?;
@@ -439,7 +466,7 @@ fn ensure_source_unchanged(
         || !same_source_version(original, &open_source)
         || !same_source_version(original, &pathname_source)
     {
-        return Err(MetadataError::WriteFailed);
+        return Err(MetadataError::SourceChanged);
     }
     Ok(())
 }
@@ -465,9 +492,11 @@ mod tests {
     use std::{
         collections::VecDeque,
         ffi::OsString,
-        fs, io,
+        fs::{self, File},
+        io,
         os::unix::fs::{MetadataExt, PermissionsExt, symlink},
         path::{Path, PathBuf},
+        time::{Duration, SystemTime},
     };
 
     use rustix::{
@@ -475,8 +504,13 @@ mod tests {
         io::Errno,
     };
 
-    use super::{atomic_write_via_rename, atomic_write_via_rename_with};
+    use super::{SourceVersion, atomic_write_via_rename, atomic_write_via_rename_with};
     use crate::MetadataError;
+
+    /// The version of the file at `path` as a caller reading it now sees.
+    fn read_now(path: &std::path::Path) -> SourceVersion {
+        SourceVersion::of(&File::open(path).expect("open the file")).expect("stat it")
+    }
 
     #[test]
     fn retries_exclusive_temp_collisions_without_following_symlinks() {
@@ -496,6 +530,7 @@ mod tests {
         ]);
         atomic_write_via_rename_with(
             &path,
+            read_now(&path),
             |temporary| {
                 fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
             },
@@ -520,13 +555,54 @@ mod tests {
     }
 
     #[test]
+    fn refuses_to_replace_a_file_changed_since_it_was_read() {
+        let root = unique_test_directory();
+        fs::create_dir_all(&root).expect("create root");
+        let path = root.join("audio.bin");
+        fs::write(&path, b"original").expect("seed audio");
+        let read = read_now(&path);
+
+        let replace = |read| {
+            atomic_write_via_rename(&path, read, |temporary| {
+                fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
+            })
+        };
+
+        // Another tool's edits since the read, each the same size as the
+        // file it changes: in place at a later modification time...
+        fs::write(&path, b"OTHERTOO").expect("edit in place");
+        File::options()
+            .write(true)
+            .open(&path)
+            .expect("open the edited file")
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+            .expect("date the edit");
+        let in_place = replace(read);
+        // ...and a new file renamed over it.
+        let read = read_now(&path);
+        fs::write(root.join("staged"), b"othertoo").expect("stage");
+        fs::rename(root.join("staged"), &path).expect("rename over");
+        let renamed = replace(read);
+
+        assert_eq!(in_place, Err(MetadataError::SourceChanged));
+        assert_eq!(renamed, Err(MetadataError::SourceChanged));
+        assert_eq!(fs::read(&path).expect("read audio"), b"othertoo");
+        assert_eq!(
+            fs::read_dir(&root).expect("list root").count(),
+            1,
+            "no staging file is left behind"
+        );
+        fs::remove_dir_all(root).expect("remove root");
+    }
+
+    #[test]
     fn replaces_a_file_whose_name_fills_the_component_limit() {
         let root = unique_test_directory();
         fs::create_dir_all(&root).expect("create root");
         let path = root.join(format!("{}.mp3", "n".repeat(251)));
         fs::write(&path, b"original").expect("seed audio");
 
-        atomic_write_via_rename(&path, |temporary| {
+        atomic_write_via_rename(&path, read_now(&path), |temporary| {
             fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
         })
         .expect("replace");
@@ -544,6 +620,7 @@ mod tests {
 
         let result = atomic_write_via_rename_with(
             &path,
+            read_now(&path),
             |temporary| {
                 fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
             },
@@ -583,7 +660,7 @@ mod tests {
         }
         let before = fs::metadata(&path).expect("source metadata");
 
-        atomic_write_via_rename(&path, |temporary| {
+        atomic_write_via_rename(&path, read_now(&path), |temporary| {
             fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)?;
             setxattr(
                 temporary,
@@ -620,7 +697,7 @@ mod tests {
         fs::write(&path, b"original").expect("seed audio");
         fs::hard_link(&path, &other_link).expect("create hard link");
 
-        atomic_write_via_rename(&path, |temporary| {
+        atomic_write_via_rename(&path, read_now(&path), |temporary| {
             fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
         })
         .expect("replace");
@@ -640,7 +717,7 @@ mod tests {
         fs::write(&target, b"target bytes").expect("seed target");
         symlink(&target, &path).expect("seed audio symlink");
 
-        let result = atomic_write_via_rename(&path, |temporary| {
+        let result = atomic_write_via_rename(&path, read_now(&path), |temporary| {
             fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
         });
 
@@ -660,9 +737,13 @@ mod tests {
         fs::write(&target, b"target bytes").expect("seed target");
         symlink(&outside, root.join("Linked")).expect("seed parent symlink");
 
-        let result = atomic_write_via_rename(&root.join("Linked/audio.bin"), |temporary| {
-            fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
-        });
+        let result = atomic_write_via_rename(
+            &root.join("Linked/audio.bin"),
+            read_now(&root.join("Linked/audio.bin")),
+            |temporary| {
+                fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
+            },
+        );
 
         assert_eq!(result, Err(MetadataError::WriteFailed));
         assert_eq!(fs::read(&target).expect("read target"), b"target bytes");
@@ -681,7 +762,7 @@ mod tests {
         fs::write(&path, b"original").expect("seed audio");
         fs::write(outside.join("audio.bin"), b"unrelated").expect("seed unrelated audio");
 
-        atomic_write_via_rename(&path, |temporary| {
+        atomic_write_via_rename(&path, read_now(&path), |temporary| {
             fs::rename(&album, &displaced).map_err(|_| MetadataError::WriteFailed)?;
             symlink(&outside, &album).map_err(|_| MetadataError::WriteFailed)?;
             fs::write(temporary, b"replacement").map_err(|_| MetadataError::WriteFailed)
@@ -706,12 +787,12 @@ mod tests {
         let path = root.join("audio.bin");
         fs::write(&path, b"original").expect("seed audio");
 
-        let result = atomic_write_via_rename(&path, |temporary| {
+        let result = atomic_write_via_rename(&path, read_now(&path), |temporary| {
             fs::write(temporary, b"staged replacement").map_err(|_| MetadataError::WriteFailed)?;
             fs::write(&path, b"newer external bytes").map_err(|_| MetadataError::WriteFailed)
         });
 
-        assert_eq!(result, Err(MetadataError::WriteFailed));
+        assert_eq!(result, Err(MetadataError::SourceChanged));
         assert_eq!(
             fs::read(&path).expect("read audio"),
             b"newer external bytes"
@@ -728,7 +809,7 @@ mod tests {
         let path = root.join("audio.bin");
         fs::write(&path, b"original").expect("seed audio");
 
-        let result = atomic_write_via_rename(&path, |temporary| {
+        let result = atomic_write_via_rename(&path, read_now(&path), |temporary| {
             fs::remove_file(temporary).map_err(|_| MetadataError::WriteFailed)?;
             fs::write(temporary, b"unowned replacement").map_err(|_| MetadataError::WriteFailed)
         });

@@ -936,7 +936,12 @@ fields that changed. Everything else stays as the file holds it:
 - the order of the items;
 - frames other tools own.
 
-A write that would change nothing leaves the file untouched. A file
+A write that would change nothing leaves the file untouched. A write
+does not land over a file another tool changed after Sustain read it:
+the file keeps the other tool's change, and Sustain retries its write
+later against the file as it now is. (Only a change made in the very
+instant Sustain swaps its copy in cannot be noticed: Linux has no way to
+replace a file only if it is unchanged.) A file
 without the format's own tag (an MP3 holding only ID3v1, a FLAC holding
 only ID3v2) gets one on its first edit, holding every value Sustain read
 from the other tag, which stays as it was. Items that several

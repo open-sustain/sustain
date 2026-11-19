@@ -1454,3 +1454,27 @@ fn a_flac_holding_only_an_id3v2_3_tag_reads_its_year() {
         );
     });
 }
+
+#[test]
+fn an_edit_never_lands_over_another_tools_edit_made_since_the_read() {
+    with_directory(|root| {
+        let path = root.join("track.flac");
+        write_flac(&path, &[("TITLE", "Old")]);
+        let parsed = super::parse(&path, ParseOptions::new()).expect("parse");
+        let read = parsed.version();
+        let mut tag = parsed.into_editable_tag().expect("editable tag");
+        assert!(tag.apply_change(&change(|change| {
+            change.title = FieldChange::Set("New".to_owned());
+        })));
+
+        // Another tagger rewrites the file between Sustain's read and its
+        // save.
+        write_flac(&path, &[("TITLE", "Old"), ("CUESHEET", "FILE track.wav")]);
+
+        assert_eq!(tag.save(&path, read), Err(MetadataError::SourceChanged));
+        assert_eq!(
+            vorbis_items(&path),
+            items(&[("TITLE", "Old"), ("CUESHEET", "FILE track.wav")])
+        );
+    });
+}

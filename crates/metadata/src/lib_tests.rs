@@ -20,7 +20,8 @@ use super::walk::{StdWalkFilesystem, WalkFilesystem};
 use super::{
     AudioFormat, InitialTagRead, InitialTags, LibraryScanner, LoftyMetadataService,
     MalformedTagError, MetadataError, MetadataRepair, MetadataResult, MetadataService, Rating,
-    ScanFingerprint, atomic_write_via_rename, audio_format_from_path, hash_file_content,
+    ScanFingerprint, SourceVersion, atomic_write_via_rename, audio_format_from_path,
+    hash_file_content,
 };
 use sustain_domain::TrackRelativePath;
 
@@ -2262,7 +2263,7 @@ fn atomic_write_keeps_open_readers_on_the_original_inode() {
     // currently playing track.
     let mut pre_existing_reader = fs::File::open(&path).expect("open before replace");
 
-    atomic_write_via_rename(&path, |temp_path| {
+    atomic_write_via_rename(&path, read_now(&path), |temp_path| {
         fs::write(temp_path, b"replacement-payload").map_err(|_| MetadataError::WriteFailed)
     })
     .expect("atomic write succeeds");
@@ -2285,6 +2286,11 @@ fn atomic_write_keeps_open_readers_on_the_original_inode() {
     fs::remove_dir_all(root).expect("remove test directory");
 }
 
+/// The version of the file at `path` as a caller reading it now sees.
+fn read_now(path: &Path) -> SourceVersion {
+    SourceVersion::of(&fs::File::open(path).expect("open the file")).expect("stat it")
+}
+
 #[test]
 fn atomic_write_leaves_no_temp_file_when_modify_step_fails() {
     let root = unique_test_directory();
@@ -2292,8 +2298,9 @@ fn atomic_write_leaves_no_temp_file_when_modify_step_fails() {
     let path = root.join("audio.bin");
     fs::write(&path, b"original").expect("seed original file");
 
-    let result =
-        atomic_write_via_rename(&path, |_temp_path| Err::<(), _>(MetadataError::WriteFailed));
+    let result = atomic_write_via_rename(&path, read_now(&path), |_temp_path| {
+        Err::<(), _>(MetadataError::WriteFailed)
+    });
     assert_eq!(result, Err(MetadataError::WriteFailed));
 
     // The destination still holds the original content — failure
@@ -2447,6 +2454,92 @@ fn scanner_retries_later_when_repair_does_not_restore_full_tag_reading() {
     );
 
     fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn scanner_reads_again_a_file_another_tool_changed_before_its_repair() {
+    let root = unique_test_directory();
+    fs::create_dir_all(&root).expect("create test directory");
+    let path = root.join("song.mp3");
+    fs::write(&path, b"audio").expect("write file");
+
+    let scan = LibraryScanner::new(&ChangedBeforeRepairMetadataService::default())
+        .with_malformed_tag_repair(true)
+        .scan(
+            &root,
+            &std::sync::atomic::AtomicBool::new(false),
+            &BTreeMap::new(),
+        )
+        .expect("scan test directory");
+
+    assert!(scan.failures.is_empty());
+    assert_eq!(scan.tracks.len(), 1);
+    assert_eq!(
+        scan.tracks[0].metadata.title.as_deref(),
+        Some("Fixed by another tool")
+    );
+
+    fs::remove_dir_all(root).expect("remove test directory");
+}
+
+/// A file whose tag is malformed when first read, and which another tool
+/// fixes before Sustain's repair of it is saved.
+#[derive(Default)]
+struct ChangedBeforeRepairMetadataService {
+    reads: std::sync::atomic::AtomicUsize,
+}
+
+impl MetadataService for ChangedBeforeRepairMetadataService {
+    fn read_initial_tags(&self, _path: &Path) -> MetadataResult<InitialTags> {
+        Err(MetadataError::ReadFailed)
+    }
+
+    fn read_initial_tags_with_diagnostics(&self, _path: &Path) -> MetadataResult<InitialTagRead> {
+        let first = self
+            .reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            == 0;
+        Ok(InitialTagRead {
+            tags: InitialTags {
+                metadata: TrackMetadata {
+                    title: Some(
+                        if first {
+                            "Fallback"
+                        } else {
+                            "Fixed by another tool"
+                        }
+                        .to_owned(),
+                    ),
+                    ..TrackMetadata::default()
+                },
+                rating: Rating::unrated(),
+                has_embedded_artwork: false,
+            },
+            repair: first.then_some(MetadataRepair::MalformedTag(
+                MalformedTagError::BadTimestamp,
+            )),
+        })
+    }
+
+    fn repair_malformed_tags(&self, _path: &Path, _repair: MetadataRepair) -> MetadataResult<bool> {
+        Err(MetadataError::SourceChanged)
+    }
+
+    fn write_metadata(&self, _path: &Path, _change: super::MetadataChange) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn write_rating(&self, _path: &Path, _rating: Rating) -> MetadataResult<()> {
+        Ok(())
+    }
+
+    fn read_artwork(&self, _path: &Path) -> MetadataResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    fn write_artwork(&self, _path: &Path, _artwork: Option<Vec<u8>>) -> MetadataResult<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]

@@ -24,11 +24,15 @@ pub(crate) fn repair_malformed_tag_read_error(
         return Ok(false);
     }
 
-    let bytes = fs::read(path).map_err(|_| MetadataError::ReadFailed)?;
+    let mut file = fs::File::open(path).map_err(|_| MetadataError::ReadFailed)?;
+    let read = SourceVersion::of(&file)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|_| MetadataError::ReadFailed)?;
     let Some(repaired) = repair_id3v2_bytes(&bytes, repair)? else {
         return Ok(false);
     };
-    atomic_write_via_rename(path, |temp_path| {
+    atomic_write_via_rename(path, read, |temp_path| {
         fs::write(temp_path, &repaired).map_err(|_| MetadataError::WriteFailed)
     })?;
     Ok(true)
@@ -231,10 +235,11 @@ const MAX_ID3V2_SYNCHSAFE_SIZE: usize = 0x0fff_ffff;
 // rewrite happening underneath an active playback read.
 pub(crate) fn atomic_save_lofty(
     path: &Path,
+    read: SourceVersion,
     mut save: impl FnMut(&Path) -> Result<(), FileEncodingError>,
 ) -> MetadataResult<()> {
     let is_mp3 = audio_format_from_path(path) == Ok(AudioFormat::Mp3);
-    atomic_write_via_rename(path, |temp_path| {
+    atomic_write_via_rename(path, read, |temp_path| {
         match save(temp_path) {
             Ok(()) => return Ok(()),
             // lofty re-detects the format on write and reports `UnknownFormat`

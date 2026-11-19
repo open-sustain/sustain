@@ -19,7 +19,8 @@
 //! its frames, and a write that changes nothing leaves the file alone.
 
 use std::{
-    io::{Seek, SeekFrom},
+    fs::File,
+    io::{BufReader, Seek, SeekFrom},
     path::Path,
 };
 
@@ -40,7 +41,7 @@ use lofty::{
 use sustain_artwork::validate_encoded_artwork;
 use sustain_domain::{FieldChange, MetadataChange, Rating, TrackMetadata};
 
-use crate::{MetadataError, MetadataResult};
+use crate::{MetadataError, MetadataResult, SourceVersion};
 
 mod fields;
 mod id3;
@@ -189,14 +190,14 @@ impl EditableTag {
     }
 
     /// Saves the tag over the file at `path`, which holds a file of the
-    /// tag's container.
-    pub(crate) fn save(&mut self, path: &Path) -> MetadataResult<()> {
+    /// tag's container, still at version `read` it was read at.
+    pub(crate) fn save(&mut self, path: &Path, read: SourceVersion) -> MetadataResult<()> {
         match self {
             Self::Id3v2(tag) => id3::prepare_for_save(tag),
             Self::Mp4(tag) => mp4::reencode_utf16_text(tag),
             Self::Vorbis(_) => {}
         }
-        crate::tag_write::atomic_save_lofty(path, |temp_path| self.save_to_path(temp_path))
+        crate::tag_write::atomic_save_lofty(path, read, |temp_path| self.save_to_path(temp_path))
     }
 
     fn save_to_path(&self, path: &Path) -> Result<(), FileEncodingError> {
@@ -219,9 +220,17 @@ pub(crate) struct ParsedFile {
     editable: Option<EditableTag>,
     /// The audio properties and every other tag.
     pub(crate) rest: TaggedFile,
+    /// The version of the file this was read from, which a save of an
+    /// edit of it replaces.
+    version: SourceVersion,
 }
 
 impl ParsedFile {
+    /// The version of the file this was read from.
+    pub(crate) fn version(&self) -> SourceVersion {
+        self.version
+    }
+
     /// Reads from the tag Sustain reads values from: the editable tag,
     /// or else another tag the file carries (an MP3's ID3v1 or APE tag, a
     /// WAV's RIFF INFO list, an AIFF's text chunks, a FLAC's ID3v2 tag),
@@ -275,9 +284,14 @@ pub(crate) fn parse(path: &Path, options: ParseOptions) -> MetadataResult<Parsed
     // The container is the one the extension names, as lofty's own read
     // takes it: content of another container behind it fails to parse as
     // that container, and reports the mismatch.
-    let mut probe = Probe::open(path)
-        .map_err(|_| MetadataError::ReadFailed)?
-        .options(options);
+    // Opened here rather than by `Probe::open` (which does the same) to
+    // take the version of the very file read.
+    let file = File::open(path).map_err(|_| MetadataError::ReadFailed)?;
+    let version = SourceVersion::of(&file)?;
+    let mut probe = Probe::new(BufReader::new(file)).options(options);
+    if let Some(file_type) = FileType::from_path(path) {
+        probe = probe.set_file_type(file_type);
+    }
     if probe.file_type().is_none() {
         probe = probe
             .guess_file_type()
@@ -382,6 +396,7 @@ pub(crate) fn parse(path: &Path, options: ParseOptions) -> MetadataResult<Parsed
         family,
         editable,
         rest,
+        version,
     })
 }
 

@@ -25,7 +25,7 @@ pub use sustain_domain::{
 };
 
 mod atomic_file;
-use atomic_file::atomic_write_via_rename;
+use atomic_file::{SourceVersion, atomic_write_via_rename};
 mod hash;
 mod mpeg_frame;
 mod native;
@@ -61,6 +61,10 @@ pub enum MetadataError {
     },
     MalformedTag(MalformedTagError),
     WriteFailed,
+    /// The file changed after Sustain read it, so a write prepared from
+    /// what was read was not made: it would have undone the change.
+    /// Reading the file again and redoing the write makes it.
+    SourceChanged,
     ReadFailed,
 }
 
@@ -159,6 +163,10 @@ pub trait MetadataService: Send + Sync {
             match self.repair_malformed_tags(path, repair) {
                 Ok(true) => pass.file_changed = true,
                 Ok(false) => break,
+                // Another tool changed the file since it was read: what it
+                // holds now is read again, and repaired if it still needs
+                // another repair.
+                Err(MetadataError::SourceChanged) => pass.file_changed = true,
                 Err(error) => {
                     // A failure after the atomic exchange (syncing the
                     // directory) leaves the rewritten file in place.
@@ -341,9 +349,11 @@ impl MetadataService for LoftyMetadataService {
 
     fn write_metadata(&self, path: &Path, change: MetadataChange) -> MetadataResult<()> {
         audio_format_from_path(path)?;
-        let mut tag = native::parse(path, ParseOptions::new())?.into_editable_tag()?;
+        let parsed = native::parse(path, ParseOptions::new())?;
+        let read = parsed.version();
+        let mut tag = parsed.into_editable_tag()?;
         if tag.apply_change(&change) {
-            tag.save(path)?;
+            tag.save(path, read)?;
         }
         Ok(())
     }
@@ -360,9 +370,11 @@ impl MetadataService for LoftyMetadataService {
 
     fn write_rating(&self, path: &Path, rating: Rating) -> MetadataResult<()> {
         audio_format_from_path(path)?;
-        let mut tag = native::parse(path, ParseOptions::new())?.into_editable_tag()?;
+        let parsed = native::parse(path, ParseOptions::new())?;
+        let read = parsed.version();
+        let mut tag = parsed.into_editable_tag()?;
         if tag.set_rating(rating) {
-            tag.save(path)?;
+            tag.save(path, read)?;
         }
         Ok(())
     }
@@ -384,9 +396,11 @@ impl MetadataService for LoftyMetadataService {
                 Ok(picture)
             })
             .transpose()?;
-        let mut tag = native::parse(path, ParseOptions::new())?.into_editable_tag()?;
+        let parsed = native::parse(path, ParseOptions::new())?;
+        let read = parsed.version();
+        let mut tag = parsed.into_editable_tag()?;
         if tag.set_cover(cover)? {
-            tag.save(path)?;
+            tag.save(path, read)?;
         }
         Ok(())
     }
