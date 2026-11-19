@@ -346,8 +346,6 @@ impl PlaylistSidebar {
         music_row.add_css_class("selected");
         selection.set_selected(gtk::INVALID_LIST_POSITION);
 
-        let duplicates_gesture = gtk::GestureClick::new();
-        duplicates_gesture.set_button(gdk::BUTTON_PRIMARY);
         let duplicates_sidebar_row = duplicates_row.clone().upcast::<gtk::Widget>();
         let sidebar_active_transient_row = active_transient_row.clone();
         let persistent_selection_for_duplicates = persistent_selection.clone();
@@ -359,8 +357,7 @@ impl PlaylistSidebar {
         let statistics_row_for_duplicates = statistics_row.clone();
         let on_selection_changed_for_duplicates = on_selection_changed.clone();
         let on_duplicates_selected_for_gesture = on_duplicates_selected.clone();
-        duplicates_gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
-            gesture.set_state(gtk::EventSequenceState::Claimed);
+        connect_row_activation(&duplicates_row, move |_| {
             activate_transient_view_state(
                 &duplicates_sidebar_row,
                 &sidebar_active_transient_row,
@@ -377,7 +374,6 @@ impl PlaylistSidebar {
                 callback();
             }
         });
-        duplicates_row.add_controller(duplicates_gesture);
 
         Self {
             root,
@@ -591,7 +587,7 @@ impl PlaylistSidebar {
                     }
                     let sidebar = self.clone();
                     let device = device.clone();
-                    attach_transient_row_gesture(&row, move |sidebar_row| {
+                    connect_row_activation(&row, move |sidebar_row| {
                         sidebar.activate_transient_view(sidebar_row);
                         if let Some(callback) = sidebar.on_device_selected.borrow().as_ref() {
                             callback(device.clone());
@@ -622,7 +618,7 @@ impl PlaylistSidebar {
                     row_parts.content.append(&eject);
                     let sidebar = self.clone();
                     let snapshot = snapshot.clone();
-                    attach_transient_row_gesture(&row, move |sidebar_row| {
+                    connect_row_activation(&row, move |sidebar_row| {
                         sidebar.activate_transient_view(sidebar_row);
                         if let Some(callback) = sidebar.on_cd_selected.borrow().as_ref() {
                             callback(snapshot.clone());
@@ -863,23 +859,37 @@ impl PlaylistSidebar {
     }
 }
 
-/// Attach the primary-click gesture that activates a transient Devices row.
-/// Shared by the sync-target and audio-CD rows: both claim the gesture,
-/// take over the sidebar highlight, and fire their kind's callback.
+/// Make a standalone sidebar row (a Library destination, a Devices row)
+/// activate on a primary click, and on Enter once focused, both through
+/// `on_activate`. Not Space: that is play/pause everywhere.
 ///
-/// The handler reaches its row through the gesture rather than a captured
-/// clone: the row owns the gesture, so a clone would keep every row a
-/// device refresh removes alive.
-fn attach_transient_row_gesture(row: &gtk::Box, on_pressed: impl Fn(&gtk::Widget) + 'static) {
+/// The handler reaches its row through the controller rather than a
+/// captured clone: the row owns its controllers, so a clone would keep
+/// every row a device refresh removes alive.
+fn connect_row_activation(row: &gtk::Box, on_activate: impl Fn(&gtk::Widget) + 'static) {
+    let on_activate = Rc::new(on_activate);
+    row.set_focusable(true);
+
     let gesture = gtk::GestureClick::new();
     gesture.set_button(gdk::BUTTON_PRIMARY);
+    let on_click = on_activate.clone();
     gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
         if let Some(row) = gesture.widget() {
-            on_pressed(&row);
+            on_click(&row);
         }
     });
     row.add_controller(gesture);
+
+    let keys = gtk::ShortcutController::new();
+    keys.add_shortcut(gtk::Shortcut::new(
+        gtk::ShortcutTrigger::parse_string("Return|KP_Enter"),
+        Some(gtk::CallbackAction::new(move |row, _| {
+            on_activate(row);
+            glib::Propagation::Stop
+        })),
+    ));
+    row.add_controller(keys);
 }
 
 /// Builds a standalone top-level sidebar row (Music, Albums, Devices, …).
@@ -929,21 +939,15 @@ fn build_standalone_sidebar_row_parts(
 /// Trailing eject control for transient device rows. It is a flat per-row
 /// affordance and claims the press before the row's own select gesture, so
 /// clicking eject never also opens the device/CD page.
-fn sidebar_eject_button(on_pressed: impl Fn() + 'static) -> gtk::Button {
+fn sidebar_eject_button(on_eject: impl Fn() + 'static) -> gtk::Button {
     let eject = gtk::Button::from_icon_name("media-eject-symbolic");
     eject.add_css_class("flat");
     eject.add_css_class("playlist-sidebar-eject");
     eject.set_tooltip_text(Some(&gettext("Eject")));
     eject.set_valign(gtk::Align::Center);
-
-    let gesture = gtk::GestureClick::new();
-    gesture.set_button(gdk::BUTTON_PRIMARY);
-    gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
-    gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
-        gesture.set_state(gtk::EventSequenceState::Claimed);
-        on_pressed();
-    });
-    eject.add_controller(gesture);
+    // The button's own activation, so Enter ejects as a click does. Its press is claimed before the row's gesture sees it, so a
+    // click ejects without also opening the row.
+    eject.connect_clicked(move |_| on_eject());
     eject
 }
 
@@ -1192,17 +1196,13 @@ fn connect_library_row(
     launch_selection: &Rc<Cell<Option<SidebarSelection>>>,
     on_selection_changed: Rc<RefCell<Option<SidebarSelectionChangedCallback>>>,
 ) {
-    let gesture = gtk::GestureClick::new();
-    gesture.set_button(gdk::BUTTON_PRIMARY);
-
     let music_row = music_row.clone();
     let albums_row = albums_row.clone();
     let statistics_row = statistics_row.clone();
     let library_state = library_state.clone();
     let selection = selection.clone();
     let launch_selection = launch_selection.clone();
-    gesture.connect_pressed(move |gesture, _n_press, _x, _y| {
-        gesture.set_state(gtk::EventSequenceState::Claimed);
+    connect_row_activation(target_row, move |_| {
         launch_selection.set(None);
         let already_active = library_state.get() == target_state;
         if !already_active {
@@ -1216,7 +1216,6 @@ fn connect_library_row(
             callback(Some(selection));
         }
     });
-    target_row.add_controller(gesture);
 }
 
 fn connect_selection_signal(
@@ -1462,11 +1461,78 @@ mod tests {
     use gtk::{gio, glib};
     use sustain_app_runtime::{ApplicationRuntime, PlaylistId, PlaylistItem};
 
-    use super::{PlaylistSidebar, SidebarDeviceEntry, SidebarSelection, build_row_factory};
+    use super::{
+        PlaylistSidebar, SidebarDeviceEntry, SidebarSelection, build_row_factory,
+        build_standalone_sidebar_row, connect_row_activation, sidebar_eject_button,
+    };
     use sustain_app_runtime::{
         ConnectedDevice, DeviceKind, DeviceTarget, PlaylistTreeNode, RawTocTrack, SyncDeviceId,
         TocSnapshot,
     };
+
+    #[test]
+    fn a_standalone_row_activates_on_enter_once_focused() {
+        crate::test_support::with_gtk(|| {
+            let row = build_standalone_sidebar_row("Statistics", "sustain-statistics-symbolic");
+            let activated = Rc::new(std::cell::Cell::new(0));
+            let counter = activated.clone();
+            connect_row_activation(&row, move |_| counter.set(counter.get() + 1));
+            assert!(row.is_focusable(), "a keyboard user can reach it");
+
+            let controllers = row.observe_controllers();
+            let keys = (0..controllers.n_items())
+                .find_map(|index| {
+                    controllers
+                        .item(index)
+                        .and_downcast::<gtk::ShortcutController>()
+                })
+                .expect("the row handles keys");
+            let shortcut = keys
+                .item(0)
+                .and_downcast::<gtk::Shortcut>()
+                .expect("an activation shortcut");
+            let trigger = shortcut.trigger().expect("a trigger");
+            assert!(
+                trigger.to_str().contains("Return"),
+                "Enter activates it, not {}",
+                trigger.to_str()
+            );
+            let activated_by_key = shortcut.action().expect("an action").activate(
+                gtk::ShortcutActionFlags::empty(),
+                &row,
+                None,
+            );
+
+            assert!(activated_by_key);
+            assert_eq!(activated.get(), 1, "as a click does");
+        });
+    }
+
+    #[test]
+    fn the_eject_button_ejects_from_the_keyboard() {
+        crate::test_support::with_gtk(|| {
+            let ejected = Rc::new(std::cell::Cell::new(0));
+            let counter = ejected.clone();
+            let eject = sidebar_eject_button(move || counter.set(counter.get() + 1));
+            // A button activates only once realized.
+            let window = gtk::Window::new();
+            window.set_child(Some(&eject));
+            window.present();
+
+            // What Enter on the focused button does: the button
+            // shows itself pressed for a moment, then clicks.
+            eject.activate();
+            let context = glib::MainContext::default();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while ejected.get() == 0 && std::time::Instant::now() < deadline {
+                context.iteration(false);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+
+            assert_eq!(ejected.get(), 1);
+            window.destroy();
+        });
+    }
 
     /// A row's widgets must go with the row. The rename entry, the drag
     /// source, the drop target, and the context-menu gesture are wired

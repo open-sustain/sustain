@@ -701,6 +701,13 @@ listview.album-track-table > row:focus-visible {
     padding: 4px 8px;
 }
 
+/* A standalone sidebar row (Library destination, Devices row) takes
+   keyboard focus itself; mark it the way a focused table row is. */
+box.playlist-sidebar-row:focus-visible {
+    outline: 1px solid @theme_fg_color;
+    outline-offset: -3px;
+}
+
 /* Adwaita gives every `listview > row` ~8px vertical padding and a 32px
    minimum height, which pads our sidebar rows well past anything we set on
    the inner Box. Strip both so the row's geometry is driven purely by
