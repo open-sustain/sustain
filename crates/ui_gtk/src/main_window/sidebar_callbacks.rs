@@ -341,7 +341,7 @@ pub(super) fn sidebar_selection_changed_callback(
         playlists_table.flush_pending_layout_save();
         playlists_columns_scope.set(layout_scope_of(selection));
         let mut layout = layout_for_selection(
-            &runtime.borrow(),
+            &mut runtime.borrow_mut(),
             selection,
             playlists_table.factory_layout(),
         );

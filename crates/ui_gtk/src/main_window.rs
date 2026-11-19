@@ -1925,7 +1925,7 @@ fn install_track_column_layout_persistence(
     }));
 
     if let Ok(Some(default)) = runtime
-        .borrow()
+        .borrow_mut()
         .load_track_column_layout(TrackColumnLayoutScope::Default)
     {
         songs_table.apply_layout(&default);
@@ -1966,7 +1966,7 @@ pub(super) fn layout_scope_of(
 }
 
 fn layout_for_selection(
-    runtime: &ApplicationRuntime,
+    runtime: &mut ApplicationRuntime,
     selection: Option<SidebarSelection>,
     factory: TrackColumnLayout,
 ) -> TrackColumnLayout {

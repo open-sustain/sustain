@@ -2699,7 +2699,7 @@ impl ApplicationRuntime {
     }
 
     pub fn load_track_column_layout(
-        &self,
+        &mut self,
         scope: TrackColumnLayoutScope,
     ) -> ApplicationRuntimeResult<Option<TrackColumnLayout>> {
         if let Some(layout) = self.track_column_layouts.borrow().get(scope) {
@@ -2708,9 +2708,16 @@ impl ApplicationRuntime {
         let Some(store) = self.library_store.as_deref() else {
             return Ok(None);
         };
-        let layout = store
-            .load_track_column_layout(scope)
-            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        // Columns that could not be read are not "no columns saved": the
+        // view falls back all the same, but the user is told why (#365).
+        let Ok(layout) = store.load_track_column_layout(scope) else {
+            self.push_ephemeral_notification(
+                NotificationCategory::ColumnLayout,
+                NotificationSeverity::Warning,
+                gettext("Saved columns could not be read; default columns are shown."),
+            );
+            return Err(ApplicationRuntimeError::LibraryStoreFailed);
+        };
         self.track_column_layouts
             .borrow_mut()
             .store(scope, layout.clone());

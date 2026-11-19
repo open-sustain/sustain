@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-19 20:44+0100\n"
+"POT-Creation-Date: 2026-11-19 21:19+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: French\n"
@@ -339,7 +339,7 @@ msgid "Audio"
 msgstr "Audio"
 
 #: crates/app_runtime/src/cd_import/plan.rs:57
-#: crates/ui_gtk/src/cd_import_panel.rs:56 crates/ui_gtk/src/sidebar.rs:604
+#: crates/ui_gtk/src/cd_import_panel.rs:56 crates/ui_gtk/src/sidebar.rs:606
 #, rust-format
 msgid "Audio CD"
 msgstr "CD audio"
@@ -398,7 +398,7 @@ msgstr "Le BPM doit être un nombre supérieur à 0 et au plus {max}."
 msgid "BPM range"
 msgstr "Plage de BPM"
 
-#: crates/app_runtime/src/lib.rs:3099
+#: crates/app_runtime/src/lib.rs:3106
 #, rust-format
 msgid ""
 "Background BPM analysis is enabled. These tracks are already queued by the "
@@ -407,7 +407,7 @@ msgstr ""
 "L’analyse du BPM en arrière-plan est activée. Ces morceaux sont déjà dans la "
 "file de l’analyse globale."
 
-#: crates/app_runtime/src/lib.rs:3105
+#: crates/app_runtime/src/lib.rs:3112
 #, rust-format
 msgid ""
 "Background audio analysis is enabled. These tracks are already queued by the "
@@ -416,7 +416,7 @@ msgstr ""
 "L’analyse audio en arrière-plan est activée. Ces morceaux sont déjà dans la "
 "file de l’analyse globale."
 
-#: crates/app_runtime/src/lib.rs:3102
+#: crates/app_runtime/src/lib.rs:3109
 #, rust-format
 msgid ""
 "Background key detection is enabled. These tracks are already queued by the "
@@ -530,7 +530,7 @@ msgstr "Canaux"
 msgid "Choose"
 msgstr "Choisir"
 
-#: crates/ui_gtk/src/track_info/artwork.rs:241
+#: crates/ui_gtk/src/track_info/artwork.rs:296
 #, rust-format
 msgid "Choose Artwork"
 msgstr "Choisir une illustration"
@@ -582,7 +582,7 @@ msgstr "Fermer la fenêtre"
 msgid "Collapse sidebar"
 msgstr "Masquer la barre latérale"
 
-#: crates/app_runtime/src/lib.rs:2737
+#: crates/app_runtime/src/lib.rs:2744
 #, rust-format
 msgid "Column changes could not be saved and will not survive a restart."
 msgstr ""
@@ -914,7 +914,7 @@ msgstr "Durée (secondes)"
 msgid "Edit…"
 msgstr "Modifier…"
 
-#: crates/ui_gtk/src/cd_import_panel.rs:319 crates/ui_gtk/src/sidebar.rs:936
+#: crates/ui_gtk/src/cd_import_panel.rs:319 crates/ui_gtk/src/sidebar.rs:970
 #, rust-format
 msgid "Eject"
 msgstr "Éjecter"
@@ -1079,7 +1079,7 @@ msgid_plural "Get Info - {count} Tracks"
 msgstr[0] "Lire les informations - {count} morceau"
 msgstr[1] "Lire les informations - {count} morceaux"
 
-#: crates/ui_gtk/src/track_info.rs:494
+#: crates/ui_gtk/src/track_info.rs:495
 #, rust-format
 msgid "Get Info - {track}"
 msgstr "Lire les informations - {track}"
@@ -1102,7 +1102,7 @@ msgstr "Regroupement"
 msgid "High volume"
 msgstr "Volume élevé"
 
-#: crates/ui_gtk/src/track_info/artwork.rs:246
+#: crates/ui_gtk/src/track_info/artwork.rs:301
 #, rust-format
 msgid "Images"
 msgstr "Images"
@@ -1138,7 +1138,7 @@ msgid_plural "Imported {imported} tracks from CD."
 msgstr[0] "{imported} morceau importé depuis le CD."
 msgstr[1] "{imported} morceaux importés depuis le CD."
 
-#: crates/ui_gtk/src/sidebar.rs:608
+#: crates/ui_gtk/src/sidebar.rs:610
 #, rust-format
 msgid "Importing"
 msgstr "Importation"
@@ -1660,7 +1660,7 @@ msgstr ""
 msgid "No genres tagged yet."
 msgstr "Aucun genre renseigné pour l’instant."
 
-#: crates/ui_gtk/src/queue_view.rs:364
+#: crates/ui_gtk/src/queue_view.rs:384
 #, rust-format
 msgid "No manually queued track"
 msgstr "Aucun morceau ajouté manuellement à la file"
@@ -1714,7 +1714,7 @@ msgstr "Espace insuffisant : {needed} nécessaires, {free} disponibles"
 msgid "Nothing added yet."
 msgstr "Rien n’a encore été ajouté."
 
-#: crates/ui_gtk/src/queue_view.rs:96 crates/ui_gtk/src/queue_view.rs:368
+#: crates/ui_gtk/src/queue_view.rs:96 crates/ui_gtk/src/queue_view.rs:388
 #, rust-format
 msgid "Nothing up next"
 msgstr "Rien à suivre"
@@ -2034,21 +2034,21 @@ msgstr "Morceau précédent (Ctrl+[)"
 msgid "Quality"
 msgstr "Qualité"
 
-#: crates/app_runtime/src/lib.rs:3162
+#: crates/app_runtime/src/lib.rs:3169
 #, rust-format
 msgid "Queued {count} track for BPM analysis."
 msgid_plural "Queued {count} tracks for BPM analysis."
 msgstr[0] "{count} morceau mis en file pour l’analyse du BPM."
 msgstr[1] "{count} morceaux mis en file pour l’analyse du BPM."
 
-#: crates/app_runtime/src/lib.rs:3177
+#: crates/app_runtime/src/lib.rs:3184
 #, rust-format
 msgid "Queued {count} track for analysis."
 msgid_plural "Queued {count} tracks for analysis."
 msgstr[0] "{count} morceau mis en file pour l’analyse."
 msgstr[1] "{count} morceaux mis en file pour l’analyse."
 
-#: crates/app_runtime/src/lib.rs:3259
+#: crates/app_runtime/src/lib.rs:3266
 #, rust-format
 msgid "Queued {count} track for artwork retrieval."
 msgid_plural "Queued {count} tracks for artwork retrieval."
@@ -2056,35 +2056,35 @@ msgstr[0] "{count} morceau mis en file pour la récupération de l’illustratio
 msgstr[1] ""
 "{count} morceaux mis en file pour la récupération des illustrations."
 
-#: crates/app_runtime/src/lib.rs:3172
+#: crates/app_runtime/src/lib.rs:3179
 #, rust-format
 msgid "Queued {count} track for audio analysis."
 msgid_plural "Queued {count} tracks for audio analysis."
 msgstr[0] "{count} morceau mis en file pour l’analyse audio."
 msgstr[1] "{count} morceaux mis en file pour l’analyse audio."
 
-#: crates/app_runtime/src/lib.rs:3167
+#: crates/app_runtime/src/lib.rs:3174
 #, rust-format
 msgid "Queued {count} track for key detection."
 msgid_plural "Queued {count} tracks for key detection."
 msgstr[0] "{count} morceau mis en file pour la détection de la tonalité."
 msgstr[1] "{count} morceaux mis en file pour la détection de la tonalité."
 
-#: crates/app_runtime/src/lib.rs:3254
+#: crates/app_runtime/src/lib.rs:3261
 #, rust-format
 msgid "Queued {count} track for lyrics retrieval."
 msgid_plural "Queued {count} tracks for lyrics retrieval."
 msgstr[0] "{count} morceau mis en file pour la récupération des paroles."
 msgstr[1] "{count} morceaux mis en file pour la récupération des paroles."
 
-#: crates/app_runtime/src/lib.rs:3269
+#: crates/app_runtime/src/lib.rs:3276
 #, rust-format
 msgid "Queued {count} track for online retrieval."
 msgid_plural "Queued {count} tracks for online retrieval."
 msgstr[0] "{count} morceau mis en file pour la récupération en ligne."
 msgstr[1] "{count} morceaux mis en file pour la récupération en ligne."
 
-#: crates/app_runtime/src/lib.rs:3264
+#: crates/app_runtime/src/lib.rs:3271
 #, rust-format
 msgid "Queued {count} track for tag enrichment."
 msgid_plural "Queued {count} tracks for tag enrichment."
@@ -2164,7 +2164,7 @@ msgstr "Supprimer de la bibliothèque"
 msgid "Remove from Playlist"
 msgstr "Supprimer de la liste de lecture"
 
-#: crates/ui_gtk/src/queue_view.rs:445
+#: crates/ui_gtk/src/queue_view.rs:465
 #, rust-format
 msgid "Remove from queue"
 msgstr "Retirer de la file d’attente"
@@ -2274,6 +2274,11 @@ msgstr "Fréquence d’échantillonnage"
 #, rust-format
 msgid "Save library path and scan now"
 msgstr "Enregistrer le chemin de la bibliothèque et l’analyser maintenant"
+
+#: crates/app_runtime/src/lib.rs:2717
+#, rust-format
+msgid "Saved columns could not be read; default columns are shown."
+msgstr "Les colonnes enregistrées n'ont pas pu être lues ; les colonnes par défaut sont affichées."
 
 #: crates/ui_gtk/src/preferences/library_tab.rs:86
 #, rust-format
@@ -2475,7 +2480,7 @@ msgstr ""
 "morceau en cours pour choisir le suivant. Activer l’analyse audio permet des "
 "choix encore meilleurs."
 
-#: crates/ui_gtk/src/queue_view.rs:365
+#: crates/ui_gtk/src/queue_view.rs:385
 #, rust-format
 msgid "Smart Shuffle will choose the next track."
 msgstr "La lecture aléatoire intelligente choisira le morceau suivant."
@@ -2652,7 +2657,7 @@ msgstr "Synchronisation partielle : {changes} ; {unplayable}."
 msgid "Sync stopped: {changes}."
 msgstr "Synchronisation arrêtée : {changes}."
 
-#: crates/ui_gtk/src/sidebar.rs:573
+#: crates/ui_gtk/src/sidebar.rs:570
 #, rust-format
 msgid "Syncing"
 msgstr "Synchronisation"
@@ -2698,7 +2703,7 @@ msgstr "Cet appareil n’est plus connecté."
 msgid "That file is already attached to another library track."
 msgstr "Ce fichier est déjà associé à un autre morceau de la bibliothèque."
 
-#: crates/app_runtime/src/lib.rs:3191
+#: crates/app_runtime/src/lib.rs:3198
 #, rust-format
 msgid "That track already has BPM analysis — nothing to queue."
 msgid_plural "All {count} tracks already have BPM analysis — nothing to queue."
@@ -2706,14 +2711,14 @@ msgstr[0] "Ce morceau a déjà une analyse du BPM : rien à mettre en file."
 msgstr[1] ""
 "Les {count} morceaux ont déjà une analyse du BPM : rien à mettre en file."
 
-#: crates/app_runtime/src/lib.rs:3206
+#: crates/app_runtime/src/lib.rs:3213
 #, rust-format
 msgid "That track already has analysis — nothing to queue."
 msgid_plural "All {count} tracks already have analysis — nothing to queue."
 msgstr[0] "Ce morceau est déjà analysé : rien à mettre en file."
 msgstr[1] "Les {count} morceaux sont déjà analysés : rien à mettre en file."
 
-#: crates/app_runtime/src/lib.rs:3201
+#: crates/app_runtime/src/lib.rs:3208
 #, rust-format
 msgid "That track already has audio analysis — nothing to queue."
 msgid_plural ""
@@ -2722,7 +2727,7 @@ msgstr[0] "Ce morceau a déjà une analyse audio : rien à mettre en file."
 msgstr[1] ""
 "Les {count} morceaux ont déjà une analyse audio : rien à mettre en file."
 
-#: crates/app_runtime/src/lib.rs:3196
+#: crates/app_runtime/src/lib.rs:3203
 #, rust-format
 msgid "That track already has key detection — nothing to queue."
 msgid_plural ""
@@ -2802,7 +2807,7 @@ msgstr ""
 "sauts sont additionnés, et la date d’ajout la plus ancienne est conservée. "
 "Décochez un groupe pour l’examiner vous-même."
 
-#: crates/ui_gtk/src/track_info/artwork.rs:282
+#: crates/ui_gtk/src/track_info/artwork.rs:337
 #, rust-format
 msgid "The clipboard holds no image."
 msgstr "Le presse-papiers ne contient aucune image."
@@ -3092,7 +3097,11 @@ msgid ""
 "changed since. Syncing would erase it: remove the drive's PIONEER/rekordbox "
 "and PIONEER/Artwork folders to sync. The player's settings beside them can "
 "stay."
-msgstr "Ce support contient un export Pioneer que Sustain n’a pas écrit, ou qu’un lecteur a modifié depuis. La synchronisation l’effacerait : supprimez les dossiers PIONEER/rekordbox et PIONEER/Artwork du support pour synchroniser. Les réglages du lecteur à côté peuvent rester."
+msgstr ""
+"Ce support contient un export Pioneer que Sustain n’a pas écrit, ou qu’un "
+"lecteur a modifié depuis. La synchronisation l’effacerait : supprimez les "
+"dossiers PIONEER/rekordbox et PIONEER/Artwork du support pour synchroniser. "
+"Les réglages du lecteur à côté peuvent rester."
 
 #: crates/ui_gtk/src/track_info/artwork.rs:129
 #, rust-format
@@ -3233,7 +3242,7 @@ msgstr "Artiste inconnu"
 msgid "Unrated"
 msgstr "Non noté"
 
-#: crates/ui_gtk/src/track_info.rs:488 crates/ui_gtk/src/track_info.rs:505
+#: crates/ui_gtk/src/track_info.rs:489 crates/ui_gtk/src/track_info.rs:506
 #, rust-format
 msgid "Untitled"
 msgstr "Sans titre"
