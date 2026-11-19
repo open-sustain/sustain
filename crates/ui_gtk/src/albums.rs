@@ -656,14 +656,22 @@ impl AlbumsView {
             return;
         };
 
-        let Some(row_y) = self.row_y_for_position(row_position).map(f64::from) else {
+        let layouts = self.row_layouts();
+        let Some(&(_, row_y, _)) = layouts.get(row_position) else {
             return;
         };
+        let content_height = f64::from(content_height(&layouts));
         let adjustment = self.scroller.vadjustment();
-        if adjustment.upper() - adjustment.page_size() < row_y {
+        // The scroller takes the content's new height at its next
+        // allocation; until then a scroll would be clamped to the old one.
+        if adjustment.upper() < content_height {
             return;
         }
-        adjustment.set_value(row_y);
+        adjustment.set_value(album_scroll_target(
+            f64::from(row_y),
+            content_height,
+            adjustment.page_size(),
+        ));
         self.pending_scroll_album.borrow_mut().take();
     }
 
@@ -767,12 +775,8 @@ impl AlbumsView {
     fn place_visible_rows(&self) {
         let width = self.scroller.width();
         let layouts = self.row_layouts();
-        let total_height = layouts
-            .last()
-            .map(|(_, y, height)| y + height + ALBUM_GRID_MARGIN)
-            .unwrap_or(ALBUM_GRID_MARGIN * 2)
-            .max(1);
-        self.content.set_size_request(width, total_height);
+        self.content
+            .set_size_request(width, content_height(&layouts));
 
         let adjustment = self.scroller.vadjustment();
         let visible_top = adjustment.value() - ALBUM_SCROLL_REALIZE_BUFFER_PX;
@@ -812,17 +816,6 @@ impl AlbumsView {
             y += height;
         }
         layouts
-    }
-
-    fn row_y_for_position(&self, row_position: usize) -> Option<i32> {
-        let mut y = ALBUM_GRID_MARGIN;
-        for position in 0..self.row_store.n_items() as usize {
-            if position == row_position {
-                return Some(y);
-            }
-            y += self.row_height(position);
-        }
-        None
     }
 
     fn row_height(&self, row_position: usize) -> i32 {
@@ -1795,6 +1788,22 @@ fn remove_row_store_item(store: &gio::ListStore, position: usize) {
     }
 }
 
+/// The height of the grid laid out as `layouts`, margins included.
+fn content_height(layouts: &[(usize, i32, i32)]) -> i32 {
+    layouts
+        .last()
+        .map(|(_, y, height)| y + height + ALBUM_GRID_MARGIN)
+        .unwrap_or(ALBUM_GRID_MARGIN * 2)
+        .max(1)
+}
+
+/// Where to scroll to bring a row at `row_y` to the top of a
+/// `page_size` view of `content_height`: the row's own top, unless the
+/// grid ends before it can reach the top, in which case the grid's end.
+fn album_scroll_target(row_y: f64, content_height: f64, page_size: f64) -> f64 {
+    row_y.min((content_height - page_size).max(0.0))
+}
+
 /// Positions of the rows in `layouts` that overlap `top..=bottom`.
 fn visible_row_range(layouts: &[(usize, i32, i32)], top: f64, bottom: f64) -> Range<usize> {
     let mut visible = layouts.iter().filter_map(|(position, y, height)| {
@@ -2025,13 +2034,24 @@ mod tests {
         ALBUM_GRID_COLUMN_SPACING, ALBUM_GRID_MARGIN, ALBUM_TILE_COVER_SIZE,
         ALBUM_TILE_COVER_SIZE_EXPANDED, ALBUM_TILE_MIN_WIDTH, ALBUM_TILE_WIDTH, AlbumKey,
         AlbumListRow, AlbumRowWidgets, AlbumViewModel, RowReassignment, album_list_row_at,
-        album_list_rows, album_row_count, align_widget_to_viewport_top, apply_cover_texture,
-        build_album_tile_content, build_cover_widget, columns_for_width,
+        album_list_rows, album_row_count, album_scroll_target, align_widget_to_viewport_top,
+        apply_cover_texture, build_album_tile_content, build_cover_widget, columns_for_width,
         detail_position_for_tile_row, insert_row_store_item, reassign_realized_rows,
         remove_row_store_item, replace_row_store, replace_row_store_item,
         shift_positions_after_insertion, shift_positions_after_removal,
         tile_list_position_for_tile_row,
     };
+
+    #[test]
+    fn a_scroll_brings_the_row_to_the_top_where_the_grid_allows() {
+        // A 1000 px grid in a 400 px view: 600 px is as far as it scrolls.
+        assert_eq!(album_scroll_target(250.0, 1000.0, 400.0), 250.0);
+        assert_eq!(album_scroll_target(600.0, 1000.0, 400.0), 600.0);
+        // A row too near the end stops the scroll at the grid's end.
+        assert_eq!(album_scroll_target(800.0, 1000.0, 400.0), 600.0);
+        // A grid shorter than the view does not scroll.
+        assert_eq!(album_scroll_target(100.0, 300.0, 400.0), 0.0);
+    }
 
     #[test]
     fn columns_follow_available_width() {
