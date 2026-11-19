@@ -903,8 +903,18 @@ pub(crate) fn build_main_window(
 
     let albums_view_for_reveal = albums_view.clone();
     let sidebar_for_show_album = sidebar.clone();
+    let titlebar_for_show_album = titlebar.clone();
     let show_album_action: ShowAlbumAction = Rc::new(move |track_id| {
         sidebar_for_show_album.select_albums();
+        if albums_view_for_reveal.reveal_album_for_track(track_id)
+            || !albums_view_for_reveal.groups_track(track_id)
+        {
+            return;
+        }
+        // The album is there but the search hides it: the Albums page
+        // searches album fields, so a search that found the track need
+        // not find its album. Clear the shared search, then reveal.
+        titlebar_for_show_album.set_search_text("");
         albums_view_for_reveal.reveal_album_for_track(track_id);
     });
     show_album_holder.replace(Some(show_album_action));

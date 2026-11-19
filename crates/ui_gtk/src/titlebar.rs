@@ -418,6 +418,30 @@ fn set_titlebar_control_height(control: &gtk::Button) {
 mod tests {
     use super::*;
 
+    /// Show Album clears the search and reveals the album at once, which
+    /// needs the cleared search to be reported without the search delay.
+    #[test]
+    fn a_cleared_search_is_reported_at_once() {
+        crate::test_support::with_gtk(|| {
+            let now_playing = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let titlebar =
+                build_titlebar(now_playing, VolumePercent::from_clamped(VolumePercent::MAX));
+            titlebar.search.set_text("plain");
+            let reported = Rc::new(RefCell::new(None));
+            let recorder = reported.clone();
+            connect_titlebar_search(
+                &titlebar,
+                Rc::new(move |text| {
+                    recorder.replace(Some(text));
+                }),
+            );
+
+            titlebar.set_search_text("");
+
+            assert_eq!(reported.borrow().as_deref(), Some(""));
+        });
+    }
+
     #[test]
     fn the_top_bar_fits_half_a_full_hd_screen() {
         crate::test_support::with_gtk(|| {

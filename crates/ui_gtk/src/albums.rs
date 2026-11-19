@@ -596,6 +596,15 @@ impl AlbumsView {
         true
     }
 
+    /// Whether an album of the current grouping holds the track, whether
+    /// or not the search admits that album.
+    pub(crate) fn groups_track(&self, track_id: TrackId) -> bool {
+        self.all_albums
+            .borrow()
+            .iter()
+            .any(|album| album.tracks.iter().any(|track| track.id == track_id))
+    }
+
     fn select_album(&self, album_key: AlbumKey) {
         let previous_album = self.selected_album.borrow().clone();
         if previous_album.as_ref() == Some(&album_key) {
