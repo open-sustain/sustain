@@ -22,11 +22,18 @@
 //!   Ephemerals briefly preempt the persistent slot for visibility,
 //!   then expire and the persistent comes back.
 //!
+//! An ephemeral may offer a [`NotificationAction`], which the widget
+//! shows as a button beside its text. An action is how an outcome
+//! offers more than its one line, never a window opening on its own.
+//! The widget holds an ephemeral while the pointer is over it, so its
+//! button can be reached.
+//!
 //! The widget renders the head of `ephemeral_queue` if present, else
 //! the back of `persistent_stack`. Both lists are pure data; the
 //! widget is responsible for animation and timing.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// How long an Ephemeral stays at full opacity once it becomes the
@@ -124,6 +131,37 @@ pub struct Notification {
     pub kind: NotificationKind,
     pub severity: NotificationSeverity,
     pub body: String,
+    /// What the user can do from the notification, if anything.
+    pub action: Option<NotificationAction>,
+}
+
+/// Something the user can do from a notification, offered as a button
+/// beside its text. It carries all it needs, so it stays usable after
+/// its producer has moved on; the frontend decides how to carry it out.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NotificationAction {
+    /// List the files an import left out.
+    ShowImportFailures(ImportFailureReport),
+}
+
+impl NotificationAction {
+    /// The label of the action's button.
+    pub fn label(&self) -> String {
+        match self {
+            Self::ShowImportFailures(_) => gettext("Details…"),
+        }
+    }
+}
+
+/// The files an import left out, for the user to look through.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportFailureReport {
+    /// The files, in the order the import met them.
+    pub failures: Arc<[ImportFailure]>,
+    /// Whether the import went on past them to its end, rather than
+    /// stopping (cancelled, or after an error) with files it never
+    /// reached.
+    pub import_finished: bool,
 }
 
 /// Owns the live persistent stack and ephemeral queue. Held by
@@ -179,6 +217,7 @@ impl NotificationCenter {
             kind: NotificationKind::Persistent { cancellable },
             severity,
             body,
+            action: None,
         });
         id
     }
@@ -196,6 +235,27 @@ impl NotificationCenter {
         severity: NotificationSeverity,
         body: String,
     ) -> NotificationId {
+        self.enqueue_ephemeral(category, severity, body, None)
+    }
+
+    /// [`Self::push_ephemeral`] for an outcome offering `action`.
+    pub fn push_actionable_ephemeral(
+        &mut self,
+        category: NotificationCategory,
+        severity: NotificationSeverity,
+        body: String,
+        action: NotificationAction,
+    ) -> NotificationId {
+        self.enqueue_ephemeral(category, severity, body, Some(action))
+    }
+
+    fn enqueue_ephemeral(
+        &mut self,
+        category: NotificationCategory,
+        severity: NotificationSeverity,
+        body: String,
+        action: Option<NotificationAction>,
+    ) -> NotificationId {
         let id = self.fresh_id();
         let notification = Notification {
             id,
@@ -203,6 +263,7 @@ impl NotificationCenter {
             kind: NotificationKind::Ephemeral,
             severity,
             body,
+            action,
         };
 
         // Skip the head: it is currently being read by the user and
@@ -295,6 +356,7 @@ impl NotificationCenter {
             kind: NotificationKind::Ephemeral,
             severity: NotificationSeverity::Info,
             body,
+            action: None,
         });
         id
     }
@@ -308,7 +370,7 @@ impl NotificationCenter {
 use sustain_i18n::{gettext, ngettext, npgettext, phrase_list, plural_count, tr_format};
 
 use crate::{
-    ApplicationRuntimeError, ImportFailureReason, LibraryConsolidationSummary,
+    ApplicationRuntimeError, ImportFailure, ImportFailureReason, LibraryConsolidationSummary,
     LibraryImportSummary, LibraryScanSummary, VerifiedDuplicateBatchSummary,
 };
 

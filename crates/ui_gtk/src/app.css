@@ -389,7 +389,8 @@ button.preferences-tab-button:checked {
     min-width: 14px;
 }
 
-.task-status-cancel {
+/* The buttons a notification carries: Cancel, or the action it offers. */
+.task-status-button {
     padding: 1px 10px;
     min-height: 0;
     border-radius: 999px;
@@ -399,12 +400,12 @@ button.preferences-tab-button:checked {
     border: 1px solid alpha(@theme_fg_color, 0.16);
 }
 
-.task-status-cancel:hover {
+.task-status-button:hover {
     background-color: alpha(@theme_fg_color, 0.12);
     color: @theme_fg_color;
 }
 
-.task-status-cancel:disabled {
+.task-status-button:disabled {
     opacity: 0.55;
 }
 

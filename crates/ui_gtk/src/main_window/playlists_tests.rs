@@ -76,7 +76,7 @@ impl ShownSmartPlaylist {
             &content_stack,
             &playlists_table,
             &PlaylistsHeader::new(),
-            &StatusBar::new(Rc::new(|| {})),
+            &StatusBar::new(Rc::new(|| {}), Rc::new(|_| {})),
             &Rc::new(Cell::new(true)),
             &LocalTimeZoneMonitor::new().expect("watch the local time zone"),
         );

@@ -20,9 +20,10 @@ use sustain_library_store::StoreResult;
 use sustain_metadata::hash_file_content;
 
 use crate::{
-    ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult,
+    ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, ImportFailureReport,
     LibraryConsolidationResult, LibraryConsolidationTask, LibraryImportResult, LibraryImportTask,
-    NotificationCategory, NotificationSeverity, library_task::LibraryTaskKind, notifications,
+    NotificationAction, NotificationCategory, NotificationSeverity, library_task::LibraryTaskKind,
+    notifications,
 };
 
 mod capabilities;
@@ -102,18 +103,38 @@ impl ApplicationRuntime {
         })
     }
 
+    /// Publishes the import's tracks and reports its outcome. The files
+    /// it left out are offered from the outcome notification, for the
+    /// user to list.
     pub fn apply_library_import_result(&mut self, result: LibraryImportResult) {
-        let summary = result.summary;
+        let LibraryImportResult {
+            tracks,
+            summary,
+            failures,
+        } = result;
         self.last_library_import_summary = Some(summary.clone());
-        self.insert_library_tracks(result.tracks);
+        self.insert_library_tracks(tracks);
         self.refresh_playback_queue_track_ids();
         self.wake_background_sweeps();
         self.finish_library_task(LibraryTaskKind::Import);
-        self.push_ephemeral_notification(
-            NotificationCategory::LibraryImport,
-            NotificationSeverity::Info,
-            notifications::library_import_outcome_text(&summary),
-        );
+        let body = notifications::library_import_outcome_text(&summary);
+        if failures.is_empty() {
+            self.push_ephemeral_notification(
+                NotificationCategory::LibraryImport,
+                NotificationSeverity::Info,
+                body,
+            );
+        } else {
+            self.push_actionable_ephemeral_notification(
+                NotificationCategory::LibraryImport,
+                NotificationSeverity::Info,
+                body,
+                NotificationAction::ShowImportFailures(ImportFailureReport {
+                    failures: failures.into(),
+                    import_finished: !summary.cancelled && !summary.stopped_on_error,
+                }),
+            );
+        }
     }
 
     pub fn update_library_import_progress(&mut self, processed_files: usize, total_files: usize) {

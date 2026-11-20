@@ -12,19 +12,18 @@ use std::path::Path;
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
-use sustain_app_runtime::{ImportFailure, import_failure_reason_text};
+use sustain_app_runtime::{ImportFailure, ImportFailureReport, import_failure_reason_text};
 use sustain_i18n::{gettext, ngettext, plural_count, tr_format};
 
-/// Lists `failures` in a window over `parent`. The list is virtualized, so
-/// an import that left out thousands of files opens it as quickly.
-/// Lists the files an import left out. `import_finished` says whether the
-/// import went on past them to the end, or stopped (cancelled, or after an
-/// error) with files it never reached.
-pub(crate) fn show_import_failures(
-    parent: &gtk::Window,
-    failures: Vec<ImportFailure>,
-    import_finished: bool,
-) {
+/// Lists the files `report` holds, an import left out, in a window over
+/// `parent`. Opened by the user from the import's outcome notification.
+/// The list is virtualized, so an import that left out thousands of files
+/// opens it as quickly.
+pub(crate) fn show_import_failures(parent: &gtk::Window, report: &ImportFailureReport) {
+    let ImportFailureReport {
+        failures,
+        import_finished,
+    } = report;
     let window = gtk::Window::builder()
         .title(gettext("Files Not Imported"))
         .transient_for(parent)
@@ -40,7 +39,7 @@ pub(crate) fn show_import_failures(
     content.set_margin_start(18);
 
     let count = failures.len();
-    let heading = if import_finished {
+    let heading = if *import_finished {
         ngettext(
             "{count} file could not be imported. The rest of the import went ahead.",
             "{count} files could not be imported. The rest of the import went ahead.",
@@ -59,8 +58,8 @@ pub(crate) fn show_import_failures(
     content.append(&heading);
 
     let store = gio::ListStore::new::<glib::BoxedAnyObject>();
-    for failure in failures {
-        store.append(&glib::BoxedAnyObject::new(failure));
+    for failure in failures.iter() {
+        store.append(&glib::BoxedAnyObject::new(failure.clone()));
     }
     let list = gtk::ListView::new(
         Some(gtk::NoSelection::new(Some(store))),
@@ -208,13 +207,16 @@ mod tests {
     fn the_dialog_lists_every_failure() {
         crate::test_support::with_gtk(|| {
             let parent = gtk::Window::new();
-            let failures = (0..3)
-                .map(|index| ImportFailure {
-                    path: PathBuf::from(format!("/music/{index}.flac")),
-                    reason: ImportFailureReason::Unreadable,
-                })
-                .collect();
-            show_import_failures(&parent, failures, true);
+            let report = ImportFailureReport {
+                failures: (0..3)
+                    .map(|index| ImportFailure {
+                        path: PathBuf::from(format!("/music/{index}.flac")),
+                        reason: ImportFailureReason::Unreadable,
+                    })
+                    .collect(),
+                import_finished: true,
+            };
+            show_import_failures(&parent, &report);
             let dialog = gtk::Window::list_toplevels()
                 .into_iter()
                 .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
@@ -234,11 +236,15 @@ mod tests {
     fn the_closed_dialog_is_released() {
         crate::test_support::with_gtk(|| {
             let parent = gtk::Window::new();
-            let failures = vec![ImportFailure {
-                path: PathBuf::from("/music/0.flac"),
-                reason: ImportFailureReason::Unreadable,
-            }];
-            show_import_failures(&parent, failures, true);
+            let report = ImportFailureReport {
+                failures: [ImportFailure {
+                    path: PathBuf::from("/music/0.flac"),
+                    reason: ImportFailureReason::Unreadable,
+                }]
+                .into(),
+                import_finished: true,
+            };
+            show_import_failures(&parent, &report);
             crate::test_support::assert_closes_and_disposes("Files Not Imported");
             parent.destroy();
         });

@@ -172,15 +172,15 @@ pub use metadata_writer::{
     VerifiedDuplicateBatchResult, YoutubeAudioReplacementResult,
 };
 pub use notifications::{
-    EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_QUEUE_HARD_CAP, NOTIFICATION_TRANSITION,
-    Notification, NotificationCategory, NotificationCenter, NotificationId, NotificationKind,
-    NotificationSeverity, analysis_background_outcome_text, analysis_background_running_text,
-    import_failure_reason_text, library_consolidation_outcome_text,
-    library_consolidation_running_text, library_import_outcome_text, library_import_progress_text,
-    library_import_running_text, library_path_change_outcome_text, library_scan_outcome_text,
-    library_scan_running_text, runtime_error_text, sync_blocker_text,
-    verified_duplicate_outcome_text, verified_duplicate_progress_text,
-    waveform_cache_unavailable_text,
+    EPHEMERAL_NOTIFICATION_DURATION, ImportFailureReport, NOTIFICATION_QUEUE_HARD_CAP,
+    NOTIFICATION_TRANSITION, Notification, NotificationAction, NotificationCategory,
+    NotificationCenter, NotificationId, NotificationKind, NotificationSeverity,
+    analysis_background_outcome_text, analysis_background_running_text, import_failure_reason_text,
+    library_consolidation_outcome_text, library_consolidation_running_text,
+    library_import_outcome_text, library_import_progress_text, library_import_running_text,
+    library_path_change_outcome_text, library_scan_outcome_text, library_scan_running_text,
+    runtime_error_text, sync_blocker_text, verified_duplicate_outcome_text,
+    verified_duplicate_progress_text, waveform_cache_unavailable_text,
 };
 
 pub type ApplicationRuntimeResult<T> = Result<T, ApplicationRuntimeError>;
@@ -2172,6 +2172,22 @@ impl ApplicationRuntime {
         body: String,
     ) -> NotificationId {
         let id = self.notifications.push_ephemeral(category, severity, body);
+        self.notify_notification_observer();
+        id
+    }
+
+    /// [`Self::push_ephemeral_notification`] for an outcome offering
+    /// `action`.
+    pub fn push_actionable_ephemeral_notification(
+        &mut self,
+        category: NotificationCategory,
+        severity: NotificationSeverity,
+        body: String,
+        action: NotificationAction,
+    ) -> NotificationId {
+        let id = self
+            .notifications
+            .push_actionable_ephemeral(category, severity, body, action);
         self.notify_notification_observer();
         id
     }

@@ -12,10 +12,10 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 use sustain_app_runtime::{
     CdImportProgress, CdImportRequest, CdImportResult, DeviceTarget, MetadataChange,
-    PlaybackCommand, PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource, PlaybackState,
-    Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating, ShuffleMode,
-    TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId, TrackMetadata,
-    UiSettings, UiSidebarSelection, UiWindowSize, normalize_query,
+    NotificationAction, PlaybackCommand, PlaybackEvent, PlaybackQueueRequest, PlaybackQueueSource,
+    PlaybackState, Playlist, PlaylistEntry, PlaylistFolder, PlaylistFolderId, PlaylistItem, Rating,
+    ShuffleMode, TocSnapshot, Track, TrackColumnLayout, TrackColumnLayoutScope, TrackId,
+    TrackMetadata, UiSettings, UiSidebarSelection, UiWindowSize, normalize_query,
 };
 use sustain_i18n::gettext;
 
@@ -255,11 +255,27 @@ pub(crate) fn build_main_window(
     );
     let status_bar = {
         let runtime_for_cancel = runtime.clone();
-        StatusBar::new(Rc::new(move || {
-            runtime_for_cancel
-                .borrow()
-                .request_background_task_cancellation();
-        }))
+        let window_for_action = window.downgrade();
+        StatusBar::new(
+            Rc::new(move || {
+                runtime_for_cancel
+                    .borrow()
+                    .request_background_task_cancellation();
+            }),
+            Rc::new(move |action| {
+                let Some(window) = window_for_action.upgrade() else {
+                    return;
+                };
+                match action {
+                    NotificationAction::ShowImportFailures(report) => {
+                        crate::import_failures_dialog::show_import_failures(
+                            window.upcast_ref(),
+                            report,
+                        );
+                    }
+                }
+            }),
+        )
     };
     let command_controller: SharedCommandController =
         Rc::new(UiCommandController::new(runtime.clone()));
@@ -818,7 +834,7 @@ pub(crate) fn build_main_window(
     sidebar.set_online_busy_query(sidebar_online_busy_query(&runtime));
     let scan_requested = library_scan_requested_callback(&runtime);
     install_cd_import_requested(&cd_import_panel, &sidebar, &runtime, &playback_changed);
-    let import_requested = library_import_requested_callback(&runtime, window.upcast_ref());
+    let import_requested = library_import_requested_callback(&runtime);
     install_file_drop_target(&songs_drop_overlay, &songs_drop_indicator, import_requested);
     // Re-applies the Views toggles to the live UI the instant they
     // change: the sidebar's Duplicates/Statistics rows and the Now

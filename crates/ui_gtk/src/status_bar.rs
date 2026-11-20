@@ -10,7 +10,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use sustain_app_runtime::{
     ApplicationRuntime, EPHEMERAL_NOTIFICATION_DURATION, NOTIFICATION_TRANSITION, Notification,
-    NotificationId, NotificationKind,
+    NotificationAction, NotificationId, NotificationKind,
 };
 use sustain_i18n::{gettext, ngettext, npgettext, pgettext, phrase_list, plural_count, tr_format};
 
@@ -18,6 +18,9 @@ use super::{STATUS_BAR_HEIGHT, SharedRuntime};
 use crate::track_summary::TrackSummary;
 
 pub(crate) type CancelBackgroundTaskCallback = Rc<dyn Fn()>;
+/// Carries out the action a notification offers, when its button is
+/// clicked.
+pub(crate) type NotificationActionCallback = Rc<dyn Fn(&NotificationAction)>;
 
 /// Read-only model the notification lane renders from. Snapshotted by
 /// `StatusBar` while holding a short borrow on the runtime, so the
@@ -38,7 +41,10 @@ pub(crate) struct StatusBar {
 }
 
 impl StatusBar {
-    pub(crate) fn new(on_cancel_background_task: CancelBackgroundTaskCallback) -> Self {
+    pub(crate) fn new(
+        on_cancel_background_task: CancelBackgroundTaskCallback,
+        on_notification_action: NotificationActionCallback,
+    ) -> Self {
         let root = gtk::CenterBox::new();
         root.add_css_class("status-bar");
         root.set_height_request(STATUS_BAR_HEIGHT);
@@ -47,7 +53,7 @@ impl StatusBar {
         let summary = gtk::Label::new(None);
         summary.set_xalign(0.5);
 
-        let lane = NotificationLane::new(on_cancel_background_task);
+        let lane = NotificationLane::new(on_cancel_background_task, on_notification_action);
 
         let start_cluster = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         start_cluster.set_valign(gtk::Align::Center);
@@ -103,6 +109,7 @@ impl StatusBar {
     /// runtime starts emitting notifications.
     pub(crate) fn attach_to_runtime(&self, runtime: &SharedRuntime) {
         self.refresh_from(&runtime.borrow());
+        self.lane.hold_while_pointed_at(runtime);
         let lane = self.lane.clone();
         let runtime_for_observer = runtime.clone();
         runtime
@@ -146,11 +153,14 @@ struct NotificationSlot {
     container: gtk::Box,
     spinner: gtk::Spinner,
     label: gtk::Label,
+    action_button: gtk::Button,
+    /// The action of the notification the slot shows, for its button.
+    action: Rc<RefCell<Option<NotificationAction>>>,
     cancel: gtk::Button,
 }
 
 impl NotificationSlot {
-    fn new(on_cancel: CancelBackgroundTaskCallback) -> Self {
+    fn new(on_cancel: CancelBackgroundTaskCallback, on_action: NotificationActionCallback) -> Self {
         let container = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         container.add_css_class("task-status");
         container.set_valign(gtk::Align::Center);
@@ -166,7 +176,7 @@ impl NotificationSlot {
         label.set_xalign(1.0);
 
         let cancel = gtk::Button::with_label(&gettext("Cancel"));
-        cancel.add_css_class("task-status-cancel");
+        cancel.add_css_class("task-status-button");
         cancel.set_valign(gtk::Align::Center);
         cancel.set_visible(false);
         cancel.set_tooltip_text(Some(&gettext("Cancel")));
@@ -178,14 +188,30 @@ impl NotificationSlot {
             on_cancel();
         });
 
+        let action_button = gtk::Button::new();
+        action_button.add_css_class("task-status-button");
+        action_button.set_valign(gtk::Align::Center);
+        action_button.set_visible(false);
+        let action = Rc::new(RefCell::new(None::<NotificationAction>));
+        let action_for_click = action.clone();
+        action_button.connect_clicked(move |_| {
+            let action = action_for_click.borrow().clone();
+            if let Some(action) = action {
+                on_action(&action);
+            }
+        });
+
         container.append(&spinner);
         container.append(&label);
+        container.append(&action_button);
         container.append(&cancel);
 
         Self {
             container,
             spinner,
             label,
+            action_button,
+            action,
             cancel,
         }
     }
@@ -206,6 +232,14 @@ impl NotificationSlot {
 
         self.spinner.set_visible(is_persistent);
         self.spinner.set_spinning(is_persistent);
+
+        match &notification.action {
+            Some(action) => self.action_button.set_label(&action.label()),
+            None => self.action_button.set_label(""),
+        }
+        self.action_button
+            .set_visible(notification.action.is_some());
+        self.action.replace(notification.action.clone());
 
         self.cancel.set_visible(cancellable);
         self.cancel.set_sensitive(cancellable && !cancelling);
@@ -228,10 +262,13 @@ struct NotificationLaneInner {
     displayed_id: Cell<Option<NotificationId>>,
     displayed_is_ephemeral: Cell<bool>,
     auto_dismiss_token: RefCell<Option<glib::SourceId>>,
+    /// Whether the pointer is over the lane: an ephemeral is held while
+    /// it is, so it can be read to the end and its button reached.
+    pointer: gtk::EventControllerMotion,
 }
 
 impl NotificationLane {
-    fn new(on_cancel: CancelBackgroundTaskCallback) -> Self {
+    fn new(on_cancel: CancelBackgroundTaskCallback, on_action: NotificationActionCallback) -> Self {
         let stack = gtk::Stack::new();
         stack.add_css_class("notification-lane");
         // GTK4's SlideLeft drives the new child in from the right and
@@ -251,10 +288,12 @@ impl NotificationLane {
         // any extra wiring.
         stack.set_accessible_role(gtk::AccessibleRole::Status);
 
-        let slot_a = NotificationSlot::new(on_cancel.clone());
-        let slot_b = NotificationSlot::new(on_cancel);
+        let slot_a = NotificationSlot::new(on_cancel.clone(), on_action.clone());
+        let slot_b = NotificationSlot::new(on_cancel, on_action);
         stack.add_named(&slot_a.container, Some("a"));
         stack.add_named(&slot_b.container, Some("b"));
+        let pointer = gtk::EventControllerMotion::new();
+        stack.add_controller(pointer.clone());
 
         Self {
             inner: Rc::new(NotificationLaneInner {
@@ -265,6 +304,7 @@ impl NotificationLane {
                 displayed_id: Cell::new(None),
                 displayed_is_ephemeral: Cell::new(false),
                 auto_dismiss_token: RefCell::new(None),
+                pointer,
             }),
         }
     }
@@ -279,10 +319,15 @@ impl NotificationLane {
             self.inner.stack.set_visible(false);
             self.inner.displayed_id.set(None);
             self.inner.displayed_is_ephemeral.set(false);
+            // Nothing can reach the slots' actions any more; what they
+            // carry, such as a long import report, is let go.
+            self.inner.slot_a.action.replace(None);
+            self.inner.slot_b.action.replace(None);
             return;
         };
 
         let is_ephemeral = matches!(notification.kind, NotificationKind::Ephemeral);
+
         let already_displayed = self.inner.displayed_id.get() == Some(notification.id);
 
         let inactive_slot = if self.inner.showing_slot_a.get() {
@@ -334,13 +379,28 @@ impl NotificationLane {
         self.cancel_auto_dismiss();
     }
 
+    /// Hold the displayed ephemeral while the pointer is over the lane:
+    /// its timer stops on entry and starts again, whole, on exit.
+    fn hold_while_pointed_at(&self, runtime: &SharedRuntime) {
+        let lane = self.clone();
+        self.inner.pointer.connect_enter(move |_, _, _| {
+            lane.cancel_auto_dismiss();
+        });
+        let lane = self.clone();
+        let runtime = runtime.clone();
+        self.inner.pointer.connect_leave(move |_| {
+            lane.install_auto_dismiss(&runtime);
+        });
+    }
+
     /// Arm a one-shot timer that expires the current ephemeral after
     /// [`EPHEMERAL_NOTIFICATION_DURATION`]. No-op for persistent
-    /// notifications or when no notification is displayed. Called
-    /// after every refresh so a new ephemeral picks up its timer; the
-    /// `displayed_id` check below makes redundant calls safe.
+    /// notifications, when no notification is displayed, or while the
+    /// pointer holds the lane. Called after every refresh so a new
+    /// ephemeral picks up its timer; the `displayed_id` check below
+    /// makes redundant calls safe.
     fn install_auto_dismiss(&self, runtime: &SharedRuntime) {
-        if !self.inner.displayed_is_ephemeral.get() {
+        if !self.inner.displayed_is_ephemeral.get() || self.inner.pointer.contains_pointer() {
             return;
         }
         if self.inner.auto_dismiss_token.borrow().is_some() {
@@ -460,7 +520,60 @@ pub(crate) fn plural_count_u64(count: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    use sustain_app_runtime::{
+        ImportFailureReport, NotificationAction, NotificationCategory, NotificationSeverity,
+    };
+
     use super::*;
+    use crate::test_support::{descendants, runtime_with_tracks, with_gtk};
+
+    #[test]
+    fn a_notification_offering_an_action_shows_a_button_that_carries_it_out() {
+        with_gtk(|| {
+            let carried_out = Rc::new(RefCell::new(Vec::<NotificationAction>::new()));
+            let carried_out_by_click = carried_out.clone();
+            let status_bar = StatusBar::new(
+                Rc::new(|| {}),
+                Rc::new(move |action| carried_out_by_click.borrow_mut().push(action.clone())),
+            );
+            let runtime = runtime_with_tracks(Vec::new());
+            status_bar.attach_to_runtime(&runtime);
+            let action = NotificationAction::ShowImportFailures(ImportFailureReport {
+                failures: Vec::new().into(),
+                import_finished: true,
+            });
+
+            runtime.borrow_mut().push_actionable_ephemeral_notification(
+                NotificationCategory::LibraryImport,
+                NotificationSeverity::Info,
+                "Imported 1 track; 1 failed".to_owned(),
+                action.clone(),
+            );
+            let shown_button = || {
+                descendants(status_bar.widget().upcast_ref())
+                    .into_iter()
+                    .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+                    .find(|button| {
+                        button.label().as_deref() == Some("Details…")
+                            && button.is_child_visible()
+                            && button.is_visible()
+                            && button.parent().is_some_and(|slot| slot.is_child_visible())
+                    })
+            };
+            let context = glib::MainContext::default();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while shown_button().is_none() && Instant::now() < deadline {
+                context.iteration(false);
+            }
+            shown_button()
+                .expect("the lane shows the action's button")
+                .emit_clicked();
+
+            assert_eq!(*carried_out.borrow(), [action]);
+        });
+    }
 
     #[test]
     fn large_figures_group_their_thousands() {

@@ -10288,3 +10288,40 @@ fn the_library_task_observer_fires_when_a_task_starts_and_when_it_ends() {
         .expect("the slot is free");
     assert_eq!(fired.get(), 2);
 }
+
+#[test]
+fn an_import_outcome_offers_the_files_it_left_out() {
+    let mut runtime = ApplicationRuntime::new();
+    let left_out = crate::ImportFailure {
+        path: PathBuf::from("/music/broken.flac"),
+        reason: crate::ImportFailureReason::Unreadable,
+    };
+
+    runtime.apply_library_import_result(super::LibraryImportResult {
+        tracks: Vec::new(),
+        summary: crate::LibraryImportSummary {
+            discovered_files: 1,
+            failed_files: 1,
+            cancelled: true,
+            ..crate::LibraryImportSummary::default()
+        },
+        failures: vec![left_out.clone()],
+    });
+    runtime.apply_library_import_result(super::LibraryImportResult {
+        tracks: Vec::new(),
+        summary: crate::LibraryImportSummary::default(),
+        failures: Vec::new(),
+    });
+
+    let queue = runtime.notifications().ephemeral_queue();
+    assert_eq!(
+        queue[0].action,
+        Some(crate::NotificationAction::ShowImportFailures(
+            crate::ImportFailureReport {
+                failures: [left_out].into(),
+                import_finished: false,
+            }
+        ))
+    );
+    assert_eq!(queue[1].action, None, "nothing was left out");
+}

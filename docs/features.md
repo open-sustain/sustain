@@ -111,8 +111,9 @@ An import skips a file it cannot bring in (unreadable, tags it cannot read,
 a copy that fails, outside the library folder in reference mode) and carries
 on with the rest; only a failure of the library itself, such as its database
 refusing a write, stops it. At the end, the status bar counts the files left
-out, and a window lists each one with its folder and the reason, so they can
-be found and fixed. *Sustain-native*
+out and offers a **Details…** button, which opens a list of each one with
+its folder and the reason, so they can be found and fixed. The list opens
+only when asked for. *Sustain-native*
 
 ### Hard-link move primitive — *Sustain-native*
 Managed-mode organization uses a same-filesystem metadata move: retain an
@@ -1152,7 +1153,9 @@ Albums, the selected playlist (as filtered) in Playlists, and the tracks of
 the candidate groups in Duplicates. Every background-task update, command outcome, and async
 tag-write result flows through the same lane via `NotificationCenter`.
 The lane owns its own auto-dismiss and animation; producers never poke
-a status widget directly.
+a status widget directly. An outcome stays up while the pointer is over
+it, and one that offers more, such as an import's list of files it left
+out, carries a button for it.
 
 ### Background task cancellation — *Sustain-native*
 While any background task (scan, import, organize) is running, the
