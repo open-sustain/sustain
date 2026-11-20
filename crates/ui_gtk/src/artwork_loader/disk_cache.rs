@@ -22,7 +22,9 @@ use super::decode::{
 
 // 4: a decode failure is no longer stored as a cover's absence; the
 // version drops the rows earlier versions may have stored for one.
-const CACHE_SCHEMA_VERSION: i64 = 4;
+// 5: the cover accent is picked by hue family; the version re-extracts
+// the palettes earlier versions stored.
+const CACHE_SCHEMA_VERSION: i64 = 5;
 const CACHE_SOURCE_KIND_EMBEDDED_TRACK: &str = "embedded-track";
 const CACHE_MAX_BYTES: i64 = 5_i64 * 1024 * 1024 * 1024;
 

@@ -141,9 +141,12 @@ const SECONDARY_MIN_CONTRAST: f64 = 2.2;
 /// pretending the artwork had a chromatic accent it didn't have.
 const SECONDARY_FALLBACK_BLEND: f64 = 0.35;
 
-/// Smallest share of the cover's sampled pixels a colour must cover to
-/// be its accent: a few stray pixels do not colour the chrome.
+/// Smallest share of the cover's sampled pixels a hue family must cover
+/// to give the accent: a few stray pixels do not colour the chrome.
 const ACCENT_MIN_SHARE: f64 = 0.01;
+/// Width of the hue bins colourful buckets are gathered in, in degrees.
+const ACCENT_HUE_BIN_DEGREES: f64 = 10.0;
+const ACCENT_HUE_BINS: usize = 36;
 /// Chroma (max minus min RGB channel) under which a colour reads as grey:
 /// a cover with nothing more colourful keeps its dominant colour.
 const ACCENT_MIN_CHROMA: u8 = 48;
@@ -256,22 +259,56 @@ fn pick_secondary(buckets: &[ColorBucket], background: RgbColor, foreground: Rgb
     blend_toward(foreground, background, SECONDARY_FALLBACK_BLEND)
 }
 
-/// The most colourful colour covering at least [`ACCENT_MIN_SHARE`] of
-/// the cover, so a grey or near-black cover with a coloured motif shows
-/// that motif's colour rather than its grey. A cover with no colour of at
-/// least [`ACCENT_MIN_CHROMA`] keeps `dominant`.
+/// The cover's strongest colour: colourful buckets (chroma of at least
+/// [`ACCENT_MIN_CHROMA`]) are gathered by hue, since one shaded or
+/// noisy motif spreads over many buckets that are each too small to
+/// notice. A hue family is a hue bin with its two neighbours, so a red
+/// either side of 0° stays one family. The family weighing most, each
+/// pixel counted by its chroma, wins if it covers at least
+/// [`ACCENT_MIN_SHARE`] of the cover, and its weightiest bucket is the
+/// accent: a colour the cover holds, not a blend. A white cover with a
+/// red motif shows the red. A cover with no colourful family keeps
+/// `dominant`.
 fn pick_accent(buckets: &[ColorBucket], dominant: RgbColor) -> RgbColor {
     let sampled: u64 = buckets.iter().map(|bucket| bucket.pixels).sum();
-    buckets
+    let colourful: Vec<(usize, RgbColor, u64)> = buckets
         .iter()
-        .filter(|bucket| bucket.pixels as f64 >= sampled as f64 * ACCENT_MIN_SHARE)
-        .filter_map(|bucket| bucket.average())
-        .filter(|color| color.chroma() >= ACCENT_MIN_CHROMA)
-        // Buckets come by descending score: on equal chroma the first,
-        // larger one wins.
+        .filter_map(|bucket| Some((bucket.average()?, bucket.pixels)))
+        .filter(|(color, _)| color.chroma() >= ACCENT_MIN_CHROMA)
+        .map(|(color, pixels)| (color.hue_bin(), color, pixels))
+        .collect();
+    let mut bin_pixels = [0_u64; ACCENT_HUE_BINS];
+    let mut bin_weight = [0_u64; ACCENT_HUE_BINS];
+    for &(bin, color, pixels) in &colourful {
+        bin_pixels[bin] += pixels;
+        bin_weight[bin] += pixels * u64::from(color.chroma());
+    }
+    let family = |bin: usize| {
+        [
+            (bin + ACCENT_HUE_BINS - 1) % ACCENT_HUE_BINS,
+            bin,
+            (bin + 1) % ACCENT_HUE_BINS,
+        ]
+    };
+    let family_sum = |totals: &[u64; ACCENT_HUE_BINS], bin: usize| -> u64 {
+        family(bin).iter().map(|&member| totals[member]).sum()
+    };
+    let Some(centre) = (0..ACCENT_HUE_BINS)
+        .filter(|&bin| family_sum(&bin_pixels, bin) as f64 >= sampled as f64 * ACCENT_MIN_SHARE)
+        // On equal weight the lowest hue wins, so the pick is stable.
         .rev()
-        .max_by_key(|color| color.chroma())
-        .unwrap_or(dominant)
+        .max_by_key(|&bin| family_sum(&bin_weight, bin))
+    else {
+        return dominant;
+    };
+    let members = family(centre);
+    colourful
+        .iter()
+        .filter(|(bin, _, _)| members.contains(bin))
+        // Buckets come by descending score: on equal weight the first wins.
+        .rev()
+        .max_by_key(|(_, color, pixels)| pixels * u64::from(color.chroma()))
+        .map_or(dominant, |&(_, color, _)| color)
 }
 
 fn rgb_distance(a: RgbColor, b: RgbColor) -> f64 {
@@ -428,6 +465,30 @@ impl RgbColor {
         self.red.max(self.green).max(self.blue) - self.red.min(self.green).min(self.blue)
     }
 
+    /// The [`ACCENT_HUE_BIN_DEGREES`]-wide bin the colour's hue falls in.
+    /// A grey's hue is undefined; it falls in bin 0.
+    fn hue_bin(self) -> usize {
+        let (red, green, blue) = (
+            f64::from(self.red),
+            f64::from(self.green),
+            f64::from(self.blue),
+        );
+        let chroma = f64::from(self.chroma());
+        if chroma == 0.0 {
+            return 0;
+        }
+        let max = red.max(green).max(blue);
+        let sector = if max == red {
+            (green - blue) / chroma
+        } else if max == green {
+            (blue - red) / chroma + 2.0
+        } else {
+            (red - green) / chroma + 4.0
+        };
+        let degrees = (sector * 60.0).rem_euclid(360.0);
+        (degrees / ACCENT_HUE_BIN_DEGREES) as usize % ACCENT_HUE_BINS
+    }
+
     /// `self` moved `amount` (0 to 1) of the way to `other`.
     fn mix(self, other: Self, amount: f64) -> Self {
         let channel = |from: u8, to: u8| {
@@ -565,6 +626,46 @@ mod tests {
         ];
 
         assert_eq!(pick_accent(&buckets, grey), RgbColor::new(200, 40, 40));
+    }
+
+    #[test]
+    fn a_motif_spread_over_many_small_buckets_is_the_accent_over_a_white_cover() {
+        let white = RgbColor::new(245, 245, 245);
+        // A shaded red motif: no bucket reaches 1% of the cover, its hue
+        // family does, either side of 0°.
+        let buckets = vec![
+            bucket(245, 245, 245, 900),
+            bucket(200, 30, 45, 4),
+            bucket(220, 50, 40, 4),
+            bucket(180, 20, 25, 4),
+            bucket(160, 10, 20, 4),
+        ];
+
+        assert_eq!(pick_accent(&buckets, white), RgbColor::new(220, 50, 40));
+    }
+
+    #[test]
+    fn the_heavier_hue_family_gives_the_accent() {
+        let white = RgbColor::new(245, 245, 245);
+        // One vivid blue bucket, outweighed by a broad orange family.
+        let buckets = vec![
+            bucket(245, 245, 245, 800),
+            bucket(30, 60, 220, 30),
+            bucket(230, 120, 30, 25),
+            bucket(210, 110, 20, 25),
+            bucket(240, 140, 50, 25),
+        ];
+
+        assert_eq!(pick_accent(&buckets, white), RgbColor::new(230, 120, 30));
+    }
+
+    #[test]
+    fn hues_fall_in_their_ten_degree_bins() {
+        assert_eq!(RgbColor::new(255, 0, 0).hue_bin(), 0);
+        assert_eq!(RgbColor::new(255, 0, 20).hue_bin(), 35);
+        assert_eq!(RgbColor::new(0, 255, 0).hue_bin(), 12);
+        assert_eq!(RgbColor::new(0, 0, 255).hue_bin(), 24);
+        assert_eq!(RgbColor::new(128, 128, 128).hue_bin(), 0);
     }
 
     #[test]

@@ -547,7 +547,8 @@ extends above the visual bar so the target isn't a one-pixel hairline.
 An opt-in View preference ("Show the waveform in Now Playing") replaces
 the progress bar with the playing track's waveform once audio analysis
 has measured it: small vertical bars, rounded on top, the played ones
-in the cover's most colourful noticeable colour, its dominant one when the
+in the cover's strongest colour — gathered by hue, so a small red motif on
+a white cover gives red rather than white — its dominant one when the
 cover is all greys (lightened or darkened just enough to show on the top
 bar in light and dark themes; the theme's foreground for a track without
 artwork) and the rest a neutral gray. It
