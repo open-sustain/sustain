@@ -74,31 +74,52 @@ pub(super) fn connect_setting_switch(
     switch: &gtk::Switch,
     apply: impl Fn(bool) + 'static,
     held: impl Fn() -> bool + 'static,
-) {
-    let held = Rc::new(held);
-    let reverting = Rc::new(Cell::new(false));
-    switch.connect_state_set(move |switch, requested_state| {
-        if reverting.get() {
+) -> SettingSwitch {
+    let setting_switch = SettingSwitch {
+        switch: switch.downgrade(),
+        held: Rc::new(held),
+        reverting: Rc::new(Cell::new(false)),
+    };
+    let handle = setting_switch.clone();
+    switch.connect_state_set(move |_switch, requested_state| {
+        if handle.reverting.get() {
             return Propagation::Proceed;
         }
         apply(requested_state);
-        if held() == requested_state {
+        if (handle.held)() == requested_state {
             return Propagation::Proceed;
         }
-        let switch = switch.downgrade();
-        let held = held.clone();
-        let reverting = reverting.clone();
-        glib::idle_add_local_once(move || {
-            if let Some(switch) = switch.upgrade() {
-                let held_state = held();
-                reverting.set(true);
-                switch.set_active(held_state);
-                switch.set_state(held_state);
-                reverting.set(false);
-            }
-        });
+        let handle = handle.clone();
+        glib::idle_add_local_once(move || handle.show_held());
         Propagation::Stop
     });
+    setting_switch
+}
+
+/// A switch tied to its setting by [`connect_setting_switch`]. It holds
+/// the switch weakly, so keeping it does not keep the switch alive.
+#[derive(Clone)]
+pub(super) struct SettingSwitch {
+    switch: glib::WeakRef<gtk::Switch>,
+    held: Rc<dyn Fn() -> bool>,
+    /// Set while the switch is moved to the held state, so that move does
+    /// not apply the state again.
+    reverting: Rc<Cell<bool>>,
+}
+
+impl SettingSwitch {
+    /// Move the switch to the state its setting holds, without applying
+    /// it: for when another control has just changed the setting.
+    pub(super) fn show_held(&self) {
+        let Some(switch) = self.switch.upgrade() else {
+            return;
+        };
+        let held_state = (self.held)();
+        self.reverting.set(true);
+        switch.set_active(held_state);
+        switch.set_state(held_state);
+        self.reverting.set(false);
+    }
 }
 
 #[cfg(test)]

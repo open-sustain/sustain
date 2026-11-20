@@ -2268,6 +2268,7 @@ dependencies = [
  "sustain-library-store",
  "sustain-playback",
  "sustain-profiler",
+ "sustain-settings",
 ]
 
 [[package]]

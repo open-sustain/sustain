@@ -207,6 +207,12 @@ pub enum ApplicationRuntimeError {
     DuplicateConsolidationFailed,
     DuplicateConsolidationSourceMissing,
     LibraryPathUnavailable,
+    /// A new library folder was asked for that is not a folder on disk:
+    /// adopting it would mark every track missing.
+    LibraryPathNotAFolder,
+    /// A new library folder was asked for that could not be read, for
+    /// want of permission or through a filesystem error.
+    LibraryPathInaccessible,
     ManagedLibraryFilesystemUnsupported(ManagedLibraryFilesystemError),
     LibraryConsolidationFailed,
     LibraryHydrationPending,

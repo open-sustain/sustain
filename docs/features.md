@@ -48,7 +48,11 @@ Sustain never falls back to an in-place tag rewrite.
 ### Library folder picker — *iso-iTunes*
 Preferences exposes a folder chooser plus a manual "Scan Library" trigger.
 The path is the only library root; tracks outside it are never indexed as
-canonical locations under managed mode.
+canonical locations under managed mode. A typed path is saved only by
+Enter, Scan or the folder chooser, and only if it is a folder; while it is
+being typed it changes nothing, so a half-typed path never turns
+organization off or marks tracks missing. "Organize my library" works on
+the saved folder, and can be used while the entry shows it.
 
 ### Background scan — *iTunes-adjacent*
 Scan runs off the GTK main thread. SQLite writes are batched and the

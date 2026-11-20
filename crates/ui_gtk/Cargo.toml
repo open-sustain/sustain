@@ -25,6 +25,7 @@ sustain-profiler = { path = "../profiler" }
 [dev-dependencies]
 sustain-library-store = { path = "../library_store" }
 sustain-playback = { path = "../playback" }
+sustain-settings = { path = "../settings" }
 
 [lints]
 workspace = true

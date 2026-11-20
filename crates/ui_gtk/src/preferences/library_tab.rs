@@ -95,7 +95,7 @@ pub(super) fn build(
         ],
     );
 
-    let library_path_is_valid = library_path_entry_is_valid(&path_entry);
+    let saved_root_usable = saved_root_is_a_folder(&command_controller);
     let management_mode = command_controller
         .runtime()
         .borrow()
@@ -108,17 +108,18 @@ pub(super) fn build(
             "New tracks are copied into clean artist, album, and track folders. \
          Existing tracks are organized in the background when this is turned on.",
         ),
-        library_path_is_valid
-            && management_mode == LibraryManagementMode::CopyAddedFilesIntoLibrary,
+        management_mode == LibraryManagementMode::CopyAddedFilesIntoLibrary,
     );
     let keep_organized_switch = keep_organized_row.switch.clone();
-    keep_organized_switch.set_sensitive(library_path_is_valid);
+    // The switch organizes the saved library folder, never the entry's
+    // draft, and turning it on or off changes the mode alone (#371). It
+    // can be used while the entry shows that folder and it exists: a
+    // draft must be committed first, so the folder the switch acts on is
+    // always the one in view.
+    keep_organized_switch.set_sensitive(saved_root_usable);
 
     let command_controller_for_organization = command_controller.clone();
     let consolidation_requested_for_organization = consolidation_requested.clone();
-    // The switch and the entry each update the other: their handlers reach
-    // one another weakly, so the pair does not outlive the window (#370).
-    let path_entry_for_organization = path_entry.downgrade();
     let command_controller_for_organized = command_controller.clone();
     // Whatever the handler below does, the switch shows the mode the
     // application ends up holding.
@@ -132,23 +133,7 @@ pub(super) fn build(
             == LibraryManagementMode::CopyAddedFilesIntoLibrary
     };
     let organize = move |requested_state: bool| {
-        // The toggle alters two settings at once: the library path (kept
-        // in sync with the entry contents) and the management mode. We
-        // build the full target settings and dispatch a single
-        // UpdateSettings — two dispatches would do every UpdateSettings-
-        // side-effect twice on the GTK main loop.
-        let Some(path_entry) = path_entry_for_organization.upgrade() else {
-            return;
-        };
-        let path_text = path_entry.text().trim().to_owned();
-        let library_path = if path_text.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(path_text))
-        };
-        let path_is_valid = library_path.as_ref().is_some_and(|path| path.is_dir());
-
-        if requested_state && !path_is_valid {
+        if requested_state && !saved_root_is_a_folder(&command_controller_for_organization) {
             notify_library_task(
                 &command_controller_for_organization,
                 NotificationCategory::LibraryConsolidation,
@@ -163,7 +148,6 @@ pub(super) fn build(
             .borrow()
             .settings()
             .clone();
-        settings.library.path = library_path;
         settings.library.management_mode = if requested_state {
             LibraryManagementMode::CopyAddedFilesIntoLibrary
         } else {
@@ -211,36 +195,43 @@ pub(super) fn build(
             Err(_error) => {}
         }
     };
-    connect_setting_switch(&keep_organized_switch, organize, organized);
+    let organize_switch = connect_setting_switch(&keep_organized_switch, organize, organized);
 
-    let keep_organized_for_path_change = keep_organized_switch.downgrade();
-    let command_controller_for_path_change = command_controller.clone();
+    // Enter, the folder chooser and Scan commit the entry's draft. The
+    // commit may change the mode too (an emptied entry ends organization),
+    // so the switch then shows what was saved, and can be used if the
+    // saved folder exists.
+    let commit_path: CommitLibraryPath = {
+        let command_controller = command_controller.clone();
+        let keep_organized_switch = keep_organized_switch.downgrade();
+        Rc::new(move |entry: &gtk::Entry| {
+            let result = save_library_path_from_entry(&command_controller, entry);
+            organize_switch.show_held();
+            if let Some(switch) = keep_organized_switch.upgrade() {
+                switch.set_sensitive(organize_switch_usable(&command_controller, entry));
+            }
+            result
+        })
+    };
+
+    // The entry's text is a draft: typing it saves nothing, and only
+    // decides whether the switch can be used (#371).
+    let keep_organized_for_draft = keep_organized_switch.downgrade();
+    let command_controller_for_draft = command_controller.clone();
     path_entry.connect_changed(move |entry| {
-        let Some(keep_organized_for_path_change) = keep_organized_for_path_change.upgrade() else {
-            return;
-        };
-        let path_is_valid = library_path_entry_is_valid(entry);
-        let library_task_is_running = command_controller_for_path_change
-            .runtime()
-            .borrow()
-            .background_task_status()
-            .is_running();
-        keep_organized_for_path_change.set_sensitive(path_is_valid);
-        if !library_task_is_running && !path_is_valid && keep_organized_for_path_change.is_active()
-        {
-            keep_organized_for_path_change.set_active(false);
+        if let Some(switch) = keep_organized_for_draft.upgrade() {
+            switch.set_sensitive(organize_switch_usable(&command_controller_for_draft, entry));
         }
     });
-
-    let command_controller_for_entry = command_controller.clone();
+    let commit_path_for_entry = commit_path.clone();
     path_entry.connect_activate(move |entry| {
-        let _result = save_library_path_from_entry(&command_controller_for_entry, entry);
+        let _result = commit_path_for_entry(entry);
     });
 
     // The chooser opens over the window the button is in, found when it is
     // clicked: capturing that window would keep it alive once closed
     // (#370). The entry is reached weakly for the same reason.
-    let command_controller_for_folder = command_controller.clone();
+    let commit_path_for_folder = commit_path.clone();
     let path_entry_for_folder = path_entry.downgrade();
     folder_button.connect_clicked(move |button| {
         let (Some(parent), Some(path_entry)) = (
@@ -249,10 +240,11 @@ pub(super) fn build(
         ) else {
             return;
         };
-        open_library_folder_chooser(&parent, &command_controller_for_folder, &path_entry);
+        open_library_folder_chooser(&parent, &commit_path_for_folder, &path_entry);
     });
 
     let command_controller_for_scan = command_controller.clone();
+    let commit_path_for_scan = commit_path;
     let path_entry_for_scan = path_entry.downgrade();
     let scan_requested_for_scan = scan_requested.clone();
     scan_button.connect_clicked(move |_| {
@@ -272,8 +264,7 @@ pub(super) fn build(
         // Save failures are reported by `UiCommandController`; scan
         // start/running/outcome (and a start failure) report through the
         // runtime's LibraryScan notifications. Nothing to render here.
-        if save_library_path_from_entry(&command_controller_for_scan, &path_entry_for_scan).is_ok()
-        {
+        if commit_path_for_scan(&path_entry_for_scan).is_ok() {
             let _ = request_library_scan_from_entry(&path_entry_for_scan, &scan_requested_for_scan);
         }
     });
@@ -352,9 +343,40 @@ fn notify_library_task(
         .push_ephemeral_notification(category, severity, body);
 }
 
+/// Saves the library path the entry holds, as Enter, the folder chooser
+/// and Scan do.
+type CommitLibraryPath = Rc<dyn Fn(&gtk::Entry) -> Result<(), ApplicationRuntimeError>>;
+
+/// Whether the organize switch can be used: the entry shows the saved
+/// library folder, uncommitted text aside, and it is a folder on disk.
+fn organize_switch_usable(
+    command_controller: &SharedCommandController,
+    entry: &gtk::Entry,
+) -> bool {
+    let draft = entry.text().trim().to_owned();
+    let shows_saved_folder = command_controller
+        .runtime()
+        .borrow()
+        .settings()
+        .library_path()
+        .is_some_and(|saved| !draft.is_empty() && saved == std::path::Path::new(&draft));
+    shows_saved_folder && saved_root_is_a_folder(command_controller)
+}
+
+/// Whether the saved library folder is a folder on disk, which the
+/// organize switch needs.
+fn saved_root_is_a_folder(command_controller: &SharedCommandController) -> bool {
+    command_controller
+        .runtime()
+        .borrow()
+        .settings()
+        .library_path()
+        .is_some_and(std::path::Path::is_dir)
+}
+
 fn open_library_folder_chooser(
     parent: &gtk::Window,
-    command_controller: &SharedCommandController,
+    commit_path: &CommitLibraryPath,
     path_entry: &gtk::Entry,
 ) {
     let dialog = gtk::FileDialog::builder()
@@ -369,7 +391,7 @@ fn open_library_folder_chooser(
         dialog.set_initial_folder(Some(&current_folder));
     }
 
-    let command_controller = command_controller.clone();
+    let commit_path = commit_path.clone();
     let path_entry = path_entry.clone();
     dialog.select_folder(Some(parent), None::<&gio::Cancellable>, move |result| {
         let Ok(file) = result else {
@@ -379,7 +401,7 @@ fn open_library_folder_chooser(
             return;
         };
         path_entry.set_text(&folder_path.to_string_lossy());
-        let _result = save_library_path_from_entry(&command_controller, &path_entry);
+        let _result = commit_path(&path_entry);
     });
 }
 
@@ -394,15 +416,13 @@ fn save_library_path_from_entry(
         Some(PathBuf::from(path_text))
     };
     let mut settings = command_controller.runtime().borrow().settings().clone();
-    settings.library.path = library_path;
-    if settings
-        .library
-        .path
-        .as_ref()
-        .is_none_or(|path| !path.is_dir())
-    {
+    // An emptied entry removes the library folder, and a library without
+    // one cannot be kept organized. A path that is not a folder is
+    // refused by the runtime, which reports it and keeps the settings.
+    if library_path.is_none() {
         settings.library.management_mode = LibraryManagementMode::ReferenceFilesInPlace;
     }
+    settings.library.path = library_path;
 
     command_controller.dispatch(ApplicationCommand::UpdateSettings(settings))
 }
@@ -440,11 +460,6 @@ fn lock_path_controls_while_library_task_runs(
         runtime.borrow_mut().clear_library_task_observer();
         glib::Propagation::Proceed
     });
-}
-
-fn library_path_entry_is_valid(path_entry: &gtk::Entry) -> bool {
-    let path_text = path_entry.text().trim().to_owned();
-    !path_text.is_empty() && PathBuf::from(path_text).is_dir()
 }
 
 fn request_library_scan_from_entry(
@@ -485,6 +500,117 @@ mod tests {
             child = widget.next_sibling();
         }
         None
+    }
+
+    /// The Library tab over an organized library in `root`, with its
+    /// path entry and organize switch.
+    fn organized_library_tab(
+        root: &std::path::Path,
+    ) -> (crate::SharedRuntime, gtk::Window, gtk::Entry, gtk::Switch) {
+        let mut settings =
+            sustain_app_runtime::UserSettings::with_library_path(Some(root.to_path_buf()));
+        settings.library.management_mode = LibraryManagementMode::CopyAddedFilesIntoLibrary;
+        let runtime = Rc::new(RefCell::new(
+            ApplicationRuntime::with_settings_store(Box::new(
+                sustain_settings::InMemorySettingsStore::new(settings),
+            ))
+            .expect("load settings"),
+        ));
+        let command_controller: SharedCommandController =
+            Rc::new(UiCommandController::new(runtime.clone()));
+        let window = gtk::Window::new();
+        let page = build(
+            &window,
+            command_controller,
+            Rc::new(|_| Ok(())),
+            Rc::new(|| Ok(())),
+            Rc::new(|| {}),
+        );
+        let entry = crate::test_support::descendants(page.upcast_ref())
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::Entry>().ok())
+            .expect("the library path entry");
+        let organize = switch_labelled(&page, "Organize my library").expect("the organize switch");
+        (runtime, window, entry, organize)
+    }
+
+    #[test]
+    fn a_typed_library_path_is_a_draft_until_it_is_committed() {
+        crate::test_support::with_gtk(|| {
+            let root = std::env::temp_dir();
+            let (runtime, window, entry, organize) = organized_library_tab(&root);
+            let saved = runtime.borrow().settings().clone();
+
+            entry.set_text("/surely/not/a/folder/yet");
+            assert_eq!(runtime.borrow().settings(), &saved, "typing saves nothing");
+            assert!(organize.is_active(), "the switch shows the saved mode");
+            assert!(!organize.is_sensitive(), "a draft must be committed first");
+
+            entry.emit_activate();
+            assert_eq!(
+                runtime.borrow().settings(),
+                &saved,
+                "Enter on a path that is not a folder is refused"
+            );
+
+            // Another existing folder, typed but not committed: the switch
+            // cannot act until the entry shows the saved folder again.
+            let other = root.join(format!("sustain_draft_{}", std::process::id()));
+            std::fs::create_dir_all(&other).expect("create another folder");
+            entry.set_text(&other.to_string_lossy());
+            assert!(!organize.is_sensitive());
+            entry.set_text(&root.to_string_lossy());
+            assert!(organize.is_sensitive(), "the saved folder is in view again");
+            organize.set_active(false);
+            assert_eq!(runtime.borrow().settings().library.path, saved.library.path);
+            assert_eq!(
+                runtime.borrow().settings().library.management_mode,
+                LibraryManagementMode::ReferenceFilesInPlace
+            );
+            std::fs::remove_dir(&other).expect("remove the other folder");
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn an_offline_organized_library_shows_its_mode_but_cannot_be_switched() {
+        crate::test_support::with_gtk(|| {
+            let offline = std::env::temp_dir().join("sustain_offline_drive_not_mounted");
+            let (_runtime, window, _entry, organize) = organized_library_tab(&offline);
+
+            assert!(organize.is_active(), "the saved mode is shown");
+            assert!(
+                !organize.is_sensitive(),
+                "its folder cannot be organized now"
+            );
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn clearing_the_library_folder_shows_organization_ended() {
+        crate::test_support::with_gtk(|| {
+            let root = std::env::temp_dir();
+            let (runtime, window, entry, organize) = organized_library_tab(&root);
+
+            entry.set_text("");
+            entry.emit_activate();
+
+            assert_eq!(runtime.borrow().settings().library.path, None);
+            assert_eq!(
+                runtime.borrow().settings().library.management_mode,
+                LibraryManagementMode::ReferenceFilesInPlace
+            );
+            assert!(!organize.is_active(), "the switch shows what was saved");
+            assert!(!organize.is_sensitive(), "there is no folder to organize");
+
+            entry.set_text(&root.to_string_lossy());
+            entry.emit_activate();
+
+            assert!(organize.is_sensitive(), "the folder can be organized again");
+            assert!(!organize.is_active(), "but is not until asked");
+            window.destroy();
+        });
     }
 
     #[test]

@@ -71,7 +71,8 @@ fn runtime_starts_with_default_settings() {
 fn runtime_accepts_settings_command() {
     let mut runtime = ApplicationRuntime::new();
 
-    let settings = UserSettings::with_library_path(Some(PathBuf::from("/music")));
+    // A new library root must be a folder on disk.
+    let settings = UserSettings::with_library_path(Some(std::env::temp_dir()));
 
     assert_eq!(
         runtime.handle_command(ApplicationCommand::UpdateSettings(settings.clone())),
@@ -255,7 +256,7 @@ fn runtime_handles_every_application_command_intentionally() {
     let playlist_id = playlist_id(1);
     let rating = Rating::new(4).expect("valid test rating");
     let metadata_change = MetadataChange::default();
-    let settings = UserSettings::with_library_path(Some(PathBuf::from("/music")));
+    let settings = UserSettings::with_library_path(Some(std::env::temp_dir()));
 
     let cases = vec![
         (
@@ -4131,7 +4132,7 @@ fn runtime_loads_and_saves_with_settings_store() {
     )));
     let mut runtime =
         ApplicationRuntime::with_settings_store(store).expect("load settings from test store");
-    let updated_settings = UserSettings::with_library_path(Some(PathBuf::from("/updated")));
+    let updated_settings = UserSettings::with_library_path(Some(std::env::temp_dir()));
 
     assert_eq!(
         runtime.settings(),
@@ -10324,4 +10325,40 @@ fn an_import_outcome_offers_the_files_it_left_out() {
         ))
     );
     assert_eq!(queue[1].action, None, "nothing was left out");
+}
+
+#[test]
+fn a_library_root_that_is_not_a_folder_is_refused_and_marks_nothing_missing() {
+    let root = unique_test_directory();
+    std::fs::create_dir_all(&root).expect("create library root");
+    std::fs::write(root.join("present.flac"), b"audio").expect("write present file");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let present_id = track_id(101);
+    assert_eq!(
+        store.save_track(test_track(present_id, "present.flac")),
+        Ok(())
+    );
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+
+    let half_typed = root.join("does-not-exist");
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(
+            UserSettings::with_library_path(Some(half_typed))
+        )),
+        Err(ApplicationRuntimeError::LibraryPathNotAFolder)
+    );
+
+    assert_eq!(runtime.settings().library.path, Some(root.clone()));
+    assert!(!runtime.library_tracks()[0].location.is_missing());
+    let stored = store
+        .track(present_id)
+        .expect("reload the track")
+        .expect("the track row exists");
+    assert!(!stored.location.is_missing());
+    std::fs::remove_dir_all(root).expect("remove test library");
 }

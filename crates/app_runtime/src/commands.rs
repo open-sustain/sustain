@@ -72,6 +72,15 @@ impl ApplicationRuntime {
                         return Err(ApplicationRuntimeError::BackgroundTaskRunning);
                     }
                 }
+                // A new library root must be a folder: tracks are checked
+                // against it at once, so a mistyped or unmounted one would
+                // mark them all missing. Clearing the root, or keeping one
+                // that has since gone away, is not a change to check.
+                if settings.library.path != self.settings.library.path
+                    && let Some(library_path) = settings.library.path.as_deref()
+                {
+                    ensure_library_root_is_a_folder(library_path)?;
+                }
                 let organized_library_contract_changed = settings.library.management_mode
                     == LibraryManagementMode::CopyAddedFilesIntoLibrary
                     && (self.settings.library.management_mode
@@ -389,5 +398,87 @@ impl ApplicationRuntime {
         );
 
         Ok(())
+    }
+}
+
+/// `Ok` when `path` is a folder Sustain can list and open files in: read
+/// and search permission, as the effective user. A missing path, or one
+/// that names a file, is not a folder; any other failure to reach it, such
+/// as a permission refused on it or on the way to it, leaves it
+/// inaccessible.
+fn ensure_library_root_is_a_folder(path: &std::path::Path) -> ApplicationRuntimeResult<()> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Err(ApplicationRuntimeError::LibraryPathNotAFolder),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Err(ApplicationRuntimeError::LibraryPathNotAFolder);
+        }
+        Err(_) => return Err(ApplicationRuntimeError::LibraryPathInaccessible),
+    }
+    rustix::fs::accessat(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::Access::READ_OK | rustix::fs::Access::EXEC_OK,
+        rustix::fs::AtFlags::EACCESS,
+    )
+    .map_err(|_| ApplicationRuntimeError::LibraryPathInaccessible)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::ensure_library_root_is_a_folder;
+    use crate::ApplicationRuntimeError;
+
+    #[test]
+    fn a_library_root_is_a_folder_a_missing_or_file_path_or_an_unreadable_one() {
+        let root = std::env::temp_dir().join(format!("sustain_root_check_{}", std::process::id()));
+        let locked = root.join("locked");
+        std::fs::create_dir_all(locked.join("inside")).expect("create folders");
+        std::fs::write(root.join("file.flac"), b"audio").expect("write a file");
+
+        assert_eq!(ensure_library_root_is_a_folder(&root), Ok(()));
+        assert_eq!(
+            ensure_library_root_is_a_folder(&root.join("missing")),
+            Err(ApplicationRuntimeError::LibraryPathNotAFolder)
+        );
+        assert_eq!(
+            ensure_library_root_is_a_folder(&root.join("file.flac")),
+            Err(ApplicationRuntimeError::LibraryPathNotAFolder)
+        );
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+            .expect("lock the folder");
+        let behind_a_refusal = ensure_library_root_is_a_folder(&locked.join("inside"));
+        let refused = ensure_library_root_is_a_folder(&locked);
+        // Listable, but its files cannot be opened.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o400))
+            .expect("make the folder listable only");
+        let unsearchable = ensure_library_root_is_a_folder(&locked);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("unlock the folder");
+        std::fs::remove_dir_all(&root).expect("remove test folders");
+
+        // Root reads through any permission; the refusal needs a user.
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        assert_eq!(
+            behind_a_refusal,
+            Err(ApplicationRuntimeError::LibraryPathInaccessible)
+        );
+        assert_eq!(
+            refused,
+            Err(ApplicationRuntimeError::LibraryPathInaccessible)
+        );
+        assert_eq!(
+            unsearchable,
+            Err(ApplicationRuntimeError::LibraryPathInaccessible)
+        );
     }
 }

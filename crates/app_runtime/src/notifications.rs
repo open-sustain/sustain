@@ -978,6 +978,12 @@ pub fn runtime_error_text(error: &ApplicationRuntimeError) -> String {
         ApplicationRuntimeError::LibraryPathUnavailable => {
             gettext("Choose a library folder first.")
         }
+        ApplicationRuntimeError::LibraryPathNotAFolder => {
+            gettext("There is no folder at that path; the library folder is unchanged.")
+        }
+        ApplicationRuntimeError::LibraryPathInaccessible => {
+            gettext("That folder could not be opened; the library folder is unchanged.")
+        }
         ApplicationRuntimeError::ManagedLibraryFilesystemUnsupported(error) => error.user_message(),
         ApplicationRuntimeError::LibraryImportFailed => {
             gettext("The files could not be added to the library.")
