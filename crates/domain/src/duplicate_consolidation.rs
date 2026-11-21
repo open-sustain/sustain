@@ -805,18 +805,21 @@ fn rewrite_playlist_entries(
 ) -> Playlist {
     let mut entries = playlist.entries.clone();
     entries.sort_by_key(|entry| entry.position);
+    // A playlist holds each track once: the survivor keeps the first of
+    // the places it and the removed copies held, wherever they stood.
     let mut rewritten = Vec::with_capacity(entries.len());
+    let mut survivor_placed = false;
     for entry in entries {
         let track_id = if removed_ids.contains(&entry.track_id) {
             survivor_id
         } else {
             entry.track_id
         };
-        if rewritten
-            .last()
-            .is_some_and(|previous: &PlaylistEntry| previous.track_id == track_id)
-        {
-            continue;
+        if track_id == survivor_id {
+            if survivor_placed {
+                continue;
+            }
+            survivor_placed = true;
         }
         rewritten.push(PlaylistEntry {
             playlist_id: playlist.id,
@@ -1176,10 +1179,11 @@ mod tests {
             name: "Mix".to_owned(),
             parent_folder_id: None,
             position: 0,
+            // The copies are apart: the merged track must still appear once.
             entries: vec![
-                entry(playlist_id, first.id, 0),
-                entry(playlist_id, second.id, 1),
-                entry(playlist_id, track_id(3), 2),
+                entry(playlist_id, second.id, 0),
+                entry(playlist_id, track_id(3), 1),
+                entry(playlist_id, first.id, 2),
             ],
         }];
 
