@@ -46,6 +46,7 @@ use sustain_app_runtime::{
 };
 use sustain_i18n::{gettext, tr_format};
 
+use crate::STATUS_BAR_INSET;
 use crate::cell_registry::{BindingRegistry, CellBinding};
 use crate::table_cell::TableCell;
 use crate::track_table::{EditSession, EditableField, EmptyRowPainter, InlineEditController};
@@ -453,6 +454,7 @@ impl CdImportPanel {
         table.set_model(Some(&selection));
 
         let scroller = gtk::ScrolledWindow::new();
+        scroller.add_css_class(STATUS_BAR_INSET);
         scroller.set_hexpand(true);
         scroller.set_vexpand(true);
         scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);

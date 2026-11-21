@@ -34,6 +34,7 @@ use super::{
     albums::AlbumsView,
     app_css::install_app_css,
     artwork_loader::ArtworkLoader,
+    backdrop_blur::BackdropBlur,
     cd_import_panel::{CdImportPanel, CdImportRequestedCallback},
     command_controller::{SharedCommandController, UiCommandController},
     content_stack::ContentStack,
@@ -961,8 +962,15 @@ pub(crate) fn build_main_window(
     });
 
     root.append(&titlebar.widget);
-    root.append(&content_area);
-    root.append(&status_bar.widget());
+    // The status bar floats over the bottom of the content, which scrolls
+    // under it blurred (#316); each view's main scroller carries
+    // `STATUS_BAR_INSET` so its last row can scroll clear of the bar.
+    let content_layer = gtk::Overlay::new();
+    content_layer.set_child(Some(&content_area));
+    let status_bar_layer = BackdropBlur::new(&status_bar.widget(), &content_area);
+    status_bar_layer.set_valign(gtk::Align::End);
+    content_layer.add_overlay(&status_bar_layer);
+    root.append(&content_layer);
 
     // `window_frame` is the visible window: it carries `.window-frame`
     // (shadow + rounded corners) and hosts the resize-handle overlays so the

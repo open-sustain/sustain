@@ -14,7 +14,7 @@ use sustain_app_runtime::{
 };
 use sustain_i18n::{gettext, ngettext, npgettext, pgettext, phrase_list, plural_count, tr_format};
 
-use super::{STATUS_BAR_HEIGHT, SharedRuntime};
+use super::SharedRuntime;
 use crate::track_summary::TrackSummary;
 
 pub(crate) type CancelBackgroundTaskCallback = Rc<dyn Fn()>;
@@ -47,7 +47,6 @@ impl StatusBar {
     ) -> Self {
         let root = gtk::CenterBox::new();
         root.add_css_class("status-bar");
-        root.set_height_request(STATUS_BAR_HEIGHT);
         root.set_hexpand(true);
 
         let summary = gtk::Label::new(None);

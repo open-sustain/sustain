@@ -1166,7 +1166,9 @@ tag-write result flows through the same lane via `NotificationCenter`.
 The lane owns its own auto-dismiss and animation; producers never poke
 a status widget directly. An outcome stays up while the pointer is over
 it, and one that offers more, such as an import's list of files it left
-out, carries a button for it.
+out, carries a button for it. The bar floats over the bottom of the
+content, which scrolls under it blurred, as frosted glass
+(*Sustain-native*); every view's last row still scrolls clear of it.
 
 ### Background task cancellation — *Sustain-native*
 While any background task (scan, import, organize) is running, the

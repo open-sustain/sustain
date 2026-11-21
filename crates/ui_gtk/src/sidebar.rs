@@ -20,6 +20,7 @@ use super::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SharedRuntime,
     leading_icon::LeadingIcon, sidebar_context::SidebarContextMenu,
 };
+use crate::STATUS_BAR_INSET;
 
 mod drag_drop;
 mod model;
@@ -271,6 +272,7 @@ impl PlaylistSidebar {
         list_view.set_single_click_activate(false);
 
         let scroller = gtk::ScrolledWindow::new();
+        scroller.add_css_class(STATUS_BAR_INSET);
         scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroller.set_vexpand(true);
         scroller.set_hexpand(true);

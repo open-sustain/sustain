@@ -42,6 +42,7 @@ use sustain_app_runtime::{
 };
 use sustain_i18n::{gettext, ngettext, pgettext, plural_count, tr_format};
 
+use crate::STATUS_BAR_INSET;
 use crate::SharedRuntime;
 use crate::chart::{self, ChartBar, ChartColumn, ChartTone, ColumnSegment, DonutSlice};
 use crate::status_bar::{duration_text, file_size_text, grouped};
@@ -67,6 +68,7 @@ impl StatisticsView {
         content.set_hexpand(true);
 
         let scroller = gtk::ScrolledWindow::new();
+        scroller.add_css_class(STATUS_BAR_INSET);
         scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scroller.set_hexpand(true);
         scroller.set_vexpand(true);

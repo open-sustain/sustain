@@ -12,6 +12,7 @@ use sustain_app_runtime::{Rating, TrackColumnEntry, TrackColumnLayout, TrackColu
 use sustain_i18n::gettext;
 
 use super::track_context::TrackRowContextMenu;
+use crate::STATUS_BAR_INSET;
 use crate::track_summary::TrackSummary;
 pub(crate) use cells::row_track_id;
 use cells::{
@@ -1142,6 +1143,7 @@ pub(crate) fn build_track_table(
     let selection = gtk::MultiSelection::new(Some(store.clone()));
 
     let scroller = gtk::ScrolledWindow::new();
+    scroller.add_css_class(STATUS_BAR_INSET);
     scroller.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
     scroller.set_vexpand(true);
     scroller.set_hexpand(true);

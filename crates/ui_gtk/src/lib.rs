@@ -26,6 +26,7 @@ mod albums;
 mod app_css;
 mod artwork_color;
 mod artwork_loader;
+mod backdrop_blur;
 mod cd_import_panel;
 mod cell_registry;
 mod centered_bar;
@@ -100,7 +101,6 @@ const RESIZE_EDGE_THICKNESS: i32 = 6;
 const SIDEBAR_DEFAULT_WIDTH: i32 = 220;
 const SIDEBAR_MIN_WIDTH: i32 = 150;
 const SIDEBAR_MAX_WIDTH: i32 = 300;
-const STATUS_BAR_HEIGHT: i32 = 28;
 const VOLUME_WIDTH: i32 = 192;
 /// How narrow the volume slider gets in a narrow window.
 const VOLUME_MIN_WIDTH: i32 = VOLUME_WIDTH / 2;
@@ -125,6 +125,11 @@ const PLAYLISTS_VIEW: &str = "playlists";
 const DEVICES_VIEW: &str = "devices";
 const CD_IMPORT_VIEW: &str = "cd-import";
 const DUPLICATES_VIEW: &str = "duplicates";
+/// Style class for a view's main `ScrolledWindow`: the status bar floats
+/// over the bottom of the content (#316), and `app.css` ends the scrolled
+/// content with the bar's height of padding so the last row can scroll
+/// clear of it.
+const STATUS_BAR_INSET: &str = "status-bar-inset";
 
 pub(crate) type SharedRuntime = Rc<RefCell<ApplicationRuntime>>;
 /// Applies the view work a batch of committed library changes calls for.

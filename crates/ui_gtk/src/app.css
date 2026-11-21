@@ -358,8 +358,26 @@ button.preferences-tab-button:checked {
     margin-bottom: 4px;
 }
 
+/* The status bar floats over the bottom of the content, which shows
+   through it blurred (`BackdropBlur`, #316); a faint veil of the window
+   background keeps the summary legible over it. */
 .status-bar {
-    background-color: alpha(@theme_fg_color, 0.04);
+    min-height: 28px;
+    background-color: alpha(@theme_bg_color, 0.6);
+}
+
+/* Each view's main scroller (`STATUS_BAR_INSET`) ends its content, and its
+   scrollbar, the status bar's height above short of the bottom, so the
+   last row can scroll clear of the bar. */
+scrolledwindow.status-bar-inset > listview,
+scrolledwindow.status-bar-inset > gridview,
+scrolledwindow.status-bar-inset > columnview > listview,
+scrolledwindow.status-bar-inset > viewport > * {
+    padding-bottom: 28px;
+}
+
+scrolledwindow.status-bar-inset > scrollbar.vertical {
+    margin-bottom: 28px;
 }
 
 .topbar-search,
@@ -1162,6 +1180,8 @@ listview.device-sync-checklist > row {
    generous padding so the occupation bar and actions breathe. */
 .device-sync-bottom-bar {
     padding: 18px;
+    /* Clear of the status bar, which floats over the bottom of the page. */
+    margin-bottom: 28px;
     border-top: 1px solid alpha(@theme_fg_color, 0.15);
 }
 

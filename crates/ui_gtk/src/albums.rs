@@ -23,6 +23,7 @@ use super::{
     missing_track::LocateMissingTrackCallback,
     track_context::TrackRowContextMenu,
 };
+use crate::STATUS_BAR_INSET;
 use model::{
     AlbumKey, AlbumViewModel, album_subtitle, album_track, group_albums, replace_tracks_in_albums,
 };
@@ -224,6 +225,7 @@ impl AlbumsView {
 
         let scroller = gtk::ScrolledWindow::new();
         scroller.add_css_class("albums-view");
+        scroller.add_css_class(STATUS_BAR_INSET);
         scroller.set_vexpand(true);
         scroller.set_hexpand(true);
         // Rows are rebuilt around the current allocation. Allowing temporary
