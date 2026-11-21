@@ -758,6 +758,7 @@ pub(crate) fn build_main_window(
         let playback_changed = playback_changed.clone();
         let next_button = titlebar.next_button();
         let previous_button = titlebar.previous_button();
+        let window_content = root.clone().upcast::<gtk::Widget>();
         let queue_view_holder = queue_view_holder.clone();
         Box::new(move || {
             // The queue popover opens on a secondary click on the Next
@@ -770,6 +771,7 @@ pub(crate) fn build_main_window(
                 playback_changed,
                 &next_button,
                 &previous_button,
+                &window_content,
             );
             queue_view_holder.replace(Some(queue_view));
         })

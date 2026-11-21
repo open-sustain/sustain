@@ -1,16 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-//! A bar floating over content, drawn as frosted glass: the content behind
-//! it shows through blurred, under the bar's own child (#316).
+//! A surface floating over content, drawn as frosted glass: the content
+//! behind it shows through blurred, under the surface's own child. The
+//! status bar floats over the bottom of the content this way (#316), and
+//! the play-queue popover over the window.
 //!
 //! GTK has no CSS backdrop filter, so the widget draws that content itself,
 //! from a [`gtk::WidgetPaintable`] of the widget it floats over: clipped to
 //! its own bounds, shifted so the part right behind it lines up, blurred.
-//! The paintable renders the content's cached render node, so following a
-//! scroll costs the blur of the bar's own strip, not a second redraw of the
-//! content. It reports a change one frame after the content draws it, so
-//! the blurred copy trails a scroll by a frame.
+//! The shift is the widget's position in the content's coordinates, which
+//! GTK also knows across a popover's own surface. The paintable renders
+//! the content's cached render node, so following a scroll costs the blur
+//! of the widget's own area, not a second redraw of the content. It reports
+//! a change one frame after the content draws it, so the blurred copy
+//! trails a scroll by a frame.
+//!
+//! GTK refreshes a paintable's copy on every frame its widget draws, so the
+//! paintable follows the content only while this widget is mapped: a closed
+//! popover costs nothing.
 
 use std::cell::OnceCell;
 
@@ -27,6 +35,9 @@ mod imp {
 
     #[derive(Default)]
     pub struct BackdropBlur {
+        /// The widget this one floats over.
+        pub(super) content: glib::WeakRef<gtk::Widget>,
+        /// A copy of `content`, following it while this widget is mapped.
         pub(super) backdrop: OnceCell<gtk::WidgetPaintable>,
     }
 
@@ -53,6 +64,20 @@ mod imp {
     }
 
     impl WidgetImpl for BackdropBlur {
+        fn map(&self) {
+            self.parent_map();
+            if let Some(backdrop) = self.backdrop.get() {
+                backdrop.set_widget(self.content.upgrade().as_ref());
+            }
+        }
+
+        fn unmap(&self) {
+            if let Some(backdrop) = self.backdrop.get() {
+                backdrop.set_widget(None::<&gtk::Widget>);
+            }
+            self.parent_unmap();
+        }
+
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let widget = self.obj();
             if let Some(backdrop) = self.backdrop.get()
@@ -85,18 +110,20 @@ glib::wrapper! {
 
 impl BackdropBlur {
     /// `child` drawn over the part of `content` behind this widget, blurred.
-    /// The widget is meant to float over `content`, in a [`gtk::Overlay`].
+    /// The widget is meant to float over `content`: in a [`gtk::Overlay`]
+    /// on it, or in a popover anchored inside it.
     pub(crate) fn new(child: &impl IsA<gtk::Widget>, content: &impl IsA<gtk::Widget>) -> Self {
         let blur: Self = glib::Object::new();
         child.set_parent(&blur);
-        let backdrop = gtk::WidgetPaintable::new(Some(content));
+        let imp = blur.imp();
+        imp.content.set(Some(content.upcast_ref()));
+        let backdrop = gtk::WidgetPaintable::new(None::<&gtk::Widget>);
         backdrop.connect_invalidate_contents(glib::clone!(
             #[weak]
             blur,
             move |_| blur.queue_draw()
         ));
-        blur.imp()
-            .backdrop
+        imp.backdrop
             .set(backdrop)
             .expect("a new backdrop blur has no backdrop yet");
         blur

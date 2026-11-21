@@ -33,6 +33,7 @@ use sustain_i18n::gettext;
 use crate::{
     PlaybackChangedCallback, SharedRuntime,
     artwork_loader::{ArtworkLoader, ArtworkSource, DecodedArtwork},
+    backdrop_blur::BackdropBlur,
     command_controller::SharedCommandController,
     util::{display_artist, display_title},
 };
@@ -148,6 +149,7 @@ impl QueueView {
         playback_changed: PlaybackChangedCallback,
         next_button: &gtk::Button,
         previous_button: &gtk::Button,
+        window_content: &gtk::Widget,
     ) -> Self {
         let store = gio::ListStore::new::<glib::BoxedAnyObject>();
         let stack = gtk::Stack::new();
@@ -229,7 +231,8 @@ impl QueueView {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.add_css_class("queue-popover-content");
         content.append(&stack);
-        popover.set_child(Some(&content));
+        // Frosted glass: the window shows through the popover blurred.
+        popover.set_child(Some(&BackdropBlur::new(&content, window_content)));
         popover.set_parent(next_button);
 
         {
@@ -976,6 +979,7 @@ mod tests {
                 std::rc::Rc::new(|| {}),
                 &next,
                 &previous,
+                controls.upcast_ref(),
             );
 
             let controllers = next.observe_controllers();
@@ -1117,6 +1121,7 @@ mod tests {
             std::rc::Rc::new(|| {}),
             &next,
             &previous,
+            controls.upcast_ref(),
         );
         let controllers = next.observe_controllers();
         let keys = (0..controllers.n_items())

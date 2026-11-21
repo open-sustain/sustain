@@ -915,6 +915,12 @@ popover.queue-popover > contents {
         0 1px 6px 0 alpha(black, 0.22);
 }
 
+/* The window shows through the popover blurred (`BackdropBlur`); the same
+   faint veil as the status bar keeps the rows legible over it. */
+.queue-popover-content {
+    background-color: alpha(@theme_bg_color, 0.6);
+}
+
 .queue-row {
     padding: 6px 8px;
 }
