@@ -111,8 +111,11 @@ pub enum SchedulerProgress {
         failed: u32,
         remaining: u32,
     },
+    /// The run is over: `completed` tracks were checked, `found` of them
+    /// given online data, and `failed` could not be checked.
     Idle {
         completed: u32,
+        found: u32,
         failed: u32,
     },
     /// The attempt stamp (`record_online_attempt`) was rejected by
@@ -121,9 +124,7 @@ pub enum SchedulerProgress {
     /// every batch. The worker stops and waits for an explicit wake; this
     /// event surfaces the failure instead of reporting a clean pass that
     /// will silently repeat. `detail` carries the store error.
-    PersistenceError {
-        detail: String,
-    },
+    PersistenceError { detail: String },
 }
 
 /// Bundle of dependencies the scheduler captures at start-up.
@@ -276,6 +277,7 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
         settings: initial_settings,
         library_path,
         completed: 0,
+        found: 0,
         failed: 0,
         explicit_queue: VecDeque::new(),
         unrecorded_attempt: None,
@@ -310,12 +312,7 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
         let has_explicit_work = !state.explicit_queue.is_empty();
         let has_background_work = !bg_capabilities.is_empty();
         if state.library_path.is_none() || (!has_explicit_work && !has_background_work) {
-            (progress)(SchedulerProgress::Idle {
-                completed: state.completed,
-                failed: state.failed,
-            });
-            state.completed = 0;
-            state.failed = 0;
+            state.end_run(progress.as_ref());
             match receiver.recv() {
                 Ok(SchedulerCommand::Shutdown) | Err(_) => return,
                 Ok(command) => apply_command(command, &mut state),
@@ -362,12 +359,7 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
         }
 
         if batch.is_empty() {
-            (progress)(SchedulerProgress::Idle {
-                completed: state.completed,
-                failed: state.failed,
-            });
-            state.completed = 0;
-            state.failed = 0;
+            state.end_run(progress.as_ref());
             match receiver.recv() {
                 Ok(SchedulerCommand::Shutdown) | Err(_) => return,
                 Ok(command) => apply_command(command, &mut state),
@@ -909,6 +901,8 @@ struct WorkerState {
     settings: OnlineSettings,
     library_path: Option<PathBuf>,
     completed: u32,
+    /// Of the `completed` tracks, those given online data.
+    found: u32,
     failed: u32,
     /// User-initiated work, drained ahead of the background sweep.
     /// Items here keep their own capability mask, independent of the
@@ -920,14 +914,28 @@ struct WorkerState {
 }
 
 impl WorkerState {
+    /// Reports the run's totals and starts the next run's from zero.
+    fn end_run(&mut self, progress: &(dyn Fn(SchedulerProgress) + Send + Sync)) {
+        progress(SchedulerProgress::Idle {
+            completed: self.completed,
+            found: self.found,
+            failed: self.failed,
+        });
+        self.completed = 0;
+        self.found = 0;
+        self.failed = 0;
+    }
+
     /// Counts a track whose attempt is stamped. A rate-limited track is
     /// neither done nor failed: it is tried again, so it reports no
     /// progress.
     fn count_outcome(&mut self, outcome: ProcessOutcome) {
         match outcome {
-            ProcessOutcome::Succeeded | ProcessOutcome::NoMatch => {
+            ProcessOutcome::Succeeded => {
                 self.completed = self.completed.saturating_add(1);
+                self.found = self.found.saturating_add(1);
             }
+            ProcessOutcome::NoMatch => self.completed = self.completed.saturating_add(1),
             ProcessOutcome::Failed => self.failed = self.failed.saturating_add(1),
             ProcessOutcome::RateLimited(_) => {}
         }

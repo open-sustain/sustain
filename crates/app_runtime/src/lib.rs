@@ -1818,7 +1818,11 @@ impl ApplicationRuntime {
                 );
                 self.online_persistence_error_id = Some(id);
             }
-            online_scheduler::SchedulerProgress::Idle { completed, failed } => {
+            online_scheduler::SchedulerProgress::Idle {
+                completed,
+                found,
+                failed,
+            } => {
                 if let Some(id) = self.online_notification_id.take() {
                     self.dismiss_notification(id);
                 }
@@ -1829,7 +1833,11 @@ impl ApplicationRuntime {
                     self.push_ephemeral_notification(
                         NotificationCategory::OnlineBackground,
                         NotificationSeverity::Info,
-                        notifications::online_background_outcome_text(completed, failed),
+                        notifications::online_background_outcome_text(
+                            found,
+                            completed.saturating_sub(found),
+                            failed,
+                        ),
                     );
                 }
             }

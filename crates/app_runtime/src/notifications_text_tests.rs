@@ -172,6 +172,19 @@ fn library_import_partial_error_reports_stopped_state() {
     );
 }
 
+/// A run that found nothing does not say it retrieved data (#351, A9-27).
+#[test]
+fn online_outcome_tells_found_from_not_found_and_failed() {
+    assert_eq!(
+        online_background_outcome_text(0, 2, 0),
+        "Online retrieval complete: 2 not found."
+    );
+    assert_eq!(
+        online_background_outcome_text(3, 1, 2),
+        "Online retrieval complete: 3 updated, 1 not found, 2 failed."
+    );
+}
+
 #[test]
 fn online_progress_always_reads_as_completed_over_total() {
     assert_eq!(

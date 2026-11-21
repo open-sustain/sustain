@@ -325,8 +325,16 @@ pub(super) fn apply_track_metadata_change(
     let Some(mut track) = track(connection, track_id)? else {
         return Ok(());
     };
+    let lyrics_before = track.metadata.lyrics.clone();
     track.metadata.apply_change(change);
     update_track_metadata(connection, track_id, &track.metadata)?;
+    // Synced lines time the old text: Now Playing, which prefers them,
+    // would show it over the user's edit.
+    if track.metadata.lyrics != lyrics_before {
+        connection
+            .execute(DELETE_TRACK_SYNCED_LYRICS_SQL, params![track_id.get()])
+            .map_err(StoreError::from)?;
+    }
     if change.releases_bpm_to_analysis() {
         connection
             .execute(FORGET_TRACK_BPM_ATTEMPT_SQL, params![track_id.get()])

@@ -1644,6 +1644,7 @@ fn a_rate_limited_track_is_tried_again_once_the_cool_down_has_passed() {
         idle,
         SchedulerProgress::Idle {
             completed: 1,
+            found: 0,
             failed: 0
         }
     );
@@ -1760,6 +1761,7 @@ fn a_rate_limit_keeps_the_rest_of_an_explicit_run() {
         idle,
         SchedulerProgress::Idle {
             completed: 3,
+            found: 0,
             failed: 0
         }
     );
@@ -2384,4 +2386,52 @@ fn an_unreadable_synced_lyrics_row_fails_the_attempt_without_contacting_the_prov
     assert_eq!(remote.lyrics_calls.load(Ordering::SeqCst), 0);
 
     scheduler.shutdown();
+}
+
+/// A run tells the tracks it gave online data from those it only checked
+/// (#351, A9-27).
+#[test]
+fn a_run_tells_the_tracks_it_filled_from_those_it_only_checked() {
+    let temp = TempDir::new().expect("temp");
+    let store: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let track = track_with_metadata(temp.path(), "alpha.flac");
+    store.save_track(track.clone()).expect("save");
+    let remote = Arc::new(StubRemote::default().with_lyrics(Ok(None)));
+    let (scheduler, rx, _writer) =
+        explicit_only_scheduler(remote.clone(), store, temp.path(), None);
+    let _idle = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+
+    scheduler.request_explicit_run(vec![track.id], lyrics_only());
+    let missed = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    *remote.lyrics.lock().expect("lock") = Some(Ok(Some(FetchedLyrics {
+        plain: Some("Plain text".to_owned()),
+        synced_lrc: None,
+    })));
+    scheduler.request_explicit_run(vec![track.id], lyrics_only());
+    let filled = wait_for(&rx, Duration::from_secs(2), |progress| {
+        matches!(progress, SchedulerProgress::Idle { .. })
+    });
+    scheduler.shutdown();
+
+    assert_eq!(
+        missed,
+        SchedulerProgress::Idle {
+            completed: 1,
+            found: 0,
+            failed: 0
+        }
+    );
+    assert_eq!(
+        filled,
+        SchedulerProgress::Idle {
+            completed: 1,
+            found: 1,
+            failed: 0
+        }
+    );
 }

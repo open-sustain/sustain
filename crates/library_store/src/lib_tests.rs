@@ -2317,6 +2317,36 @@ fn clear_synced_lyrics_removes_row() {
     store.clear_synced_lyrics(t.id).expect("clear again");
 }
 
+/// A lyrics edit drops the synced lines, which time the old text; an
+/// edit of another field keeps them (#351, A9-14).
+#[test]
+fn a_lyrics_edit_drops_the_synced_lyrics() {
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let mut t = track(1, "a.flac");
+    t.metadata.lyrics = Some("Hello\nWorld".to_owned());
+    store.save_track(t.clone()).expect("save");
+    store
+        .record_synced_lyrics(t.id, &sample_synced_lyrics(), "lrclib")
+        .expect("seed");
+
+    let edit = |change: MetadataChange| {
+        store
+            .apply_track_metadata_change_and_enqueue_mirror(t.id, &change)
+            .expect("edit");
+    };
+    edit(MetadataChange {
+        title: FieldChange::Set("Renamed".to_owned()),
+        ..MetadataChange::default()
+    });
+    assert!(store.load_synced_lyrics(t.id).expect("load").is_some());
+
+    edit(MetadataChange {
+        lyrics: FieldChange::Set("Hello\nCorrected".to_owned()),
+        ..MetadataChange::default()
+    });
+    assert_eq!(store.load_synced_lyrics(t.id), Ok(None));
+}
+
 #[test]
 fn sqlite_cascade_delete_clears_synced_lyrics() {
     let store = SqliteLibraryStore::open_in_memory().expect("open");

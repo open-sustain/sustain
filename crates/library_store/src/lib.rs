@@ -388,8 +388,9 @@ pub trait LibraryStore: Send + Sync {
     ) -> StoreResult<()>;
     /// Apply only explicitly edited metadata fields. A change that
     /// clears the BPM also forgets the track's BPM analysis attempt, so
-    /// a measured tempo can take the user's place; every
-    /// `apply_track_metadata_change*` method shares this rule.
+    /// a measured tempo can take the user's place, and a change to the
+    /// lyrics drops the track's synced lyrics; every
+    /// `apply_track_metadata_change*` method shares these rules.
     fn apply_track_metadata_change(
         &self,
         track_id: TrackId,

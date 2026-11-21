@@ -398,6 +398,12 @@ fn tracks_phrase(count: usize, phrase: TracksPhrase) -> String {
             npgettext("count of tracks", "{count} missing", "{count} missing", n)
         }
         TracksPhrase::Failed => npgettext("count of tracks", "{count} failed", "{count} failed", n),
+        TracksPhrase::NotFound => npgettext(
+            "count of tracks",
+            "{count} not found",
+            "{count} not found",
+            n,
+        ),
         TracksPhrase::Moved => npgettext("count of tracks", "{count} moved", "{count} moved", n),
         TracksPhrase::Pending => {
             npgettext("count of tracks", "{count} pending", "{count} pending", n)
@@ -422,6 +428,7 @@ enum TracksPhrase {
     Updated,
     Missing,
     Failed,
+    NotFound,
     Moved,
     Pending,
     AlreadyOrganized,
@@ -586,30 +593,24 @@ pub fn online_background_running_text(completed: u32, remaining: u32) -> String 
     )
 }
 
-pub fn online_background_outcome_text(completed: u32, failed: u32) -> String {
-    if failed == 0 {
-        return tr_format!(
-            ngettext(
-                "Retrieved online data for {completed} track.",
-                "Retrieved online data for {completed} tracks.",
-                completed
-            ),
-            completed = completed
-        );
-    }
+/// The end of an online retrieval run: how many tracks were given online
+/// data, how many the providers had nothing for, and how many could not
+/// be checked.
+pub fn online_background_outcome_text(found: u32, not_found: u32, failed: u32) -> String {
+    let clauses: Vec<String> = [
+        (found, TracksPhrase::Updated),
+        (not_found, TracksPhrase::NotFound),
+        (failed, TracksPhrase::Failed),
+    ]
+    .into_iter()
+    .filter(|&(count, _)| count > 0)
+    .map(|(count, phrase)| tracks_phrase(count as usize, phrase))
+    .collect();
     tr_format!(
-        // Translators: {tracks} is "{count} track(s)" and {skipped} is
-        // "{count} track(s) skipped", as in "Retrieved online data for
-        // 40 tracks, 2 tracks skipped."
-        gettext("Retrieved online data for {tracks}, {skipped}."),
-        tracks = tr_format!(
-            ngettext("{count} track", "{count} tracks", completed),
-            count = completed
-        ),
-        skipped = tr_format!(
-            ngettext("{count} track skipped", "{count} tracks skipped", failed),
-            count = failed
-        )
+        // Translators: {changes} is a list such as "3 updated, 2 not
+        // found, 1 failed", counting tracks.
+        gettext("Online retrieval complete: {changes}."),
+        changes = phrase_list(&clauses)
     )
 }
 
