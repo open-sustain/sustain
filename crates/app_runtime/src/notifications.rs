@@ -92,6 +92,10 @@ pub enum NotificationCategory {
     /// Device sync (#23/#24): copy/playlist/database progress while a
     /// sync runs, and the one-shot outcome summary when it finishes.
     DeviceSync,
+    /// A device sync that could not be planned, and why. Kept apart from
+    /// [`Self::DeviceSync`]: the plan made again after a sync must not
+    /// take the place of that sync's outcome in the queue.
+    DeviceSyncPlanning,
     /// CD import (#25): extraction/encoding progress while a rip runs, and
     /// the one-shot success/partial/failure summary when it finishes.
     CdImport,
@@ -329,9 +333,14 @@ impl NotificationCenter {
             .retain(|notification| notification.id != id);
     }
 
-    /// Drop the displayed ephemeral once its timer has elapsed. The
-    /// widget calls this when it is ready to slide the next item in.
-    pub fn expire_current_ephemeral(&mut self) -> Option<Notification> {
+    /// Drop the displayed ephemeral `id` once its timer has elapsed. The
+    /// widget calls this when it is ready to slide the next item in. An
+    /// `id` no longer displayed — dismissed while its timer ran — expires
+    /// nothing: the head that took its place has had no time of its own.
+    pub fn expire_ephemeral(&mut self, id: NotificationId) -> Option<Notification> {
+        if self.current_ephemeral()?.id != id {
+            return None;
+        }
         self.ephemeral_queue.pop_front()
     }
 

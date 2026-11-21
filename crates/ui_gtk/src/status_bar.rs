@@ -171,9 +171,14 @@ impl NotificationSlot {
         spinner.set_size_request(14, 14);
         spinner.set_visible(false);
 
+        // A body can carry a path or a diagnostic of any length: it is
+        // cut to one line of the room the status bar has, and read whole
+        // on hover.
         let label = gtk::Label::new(None);
         label.add_css_class("task-status-label");
         label.set_xalign(1.0);
+        label.set_single_line_mode(true);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
 
         let cancel = gtk::Button::with_label(&gettext("Cancel"));
         cancel.add_css_class("task-status-button");
@@ -229,6 +234,7 @@ impl NotificationSlot {
             notification.body.clone()
         };
         self.label.set_text(&label_text);
+        self.label.set_tooltip_text(Some(&label_text));
 
         self.spinner.set_visible(is_persistent);
         self.spinner.set_spinning(is_persistent);
@@ -420,7 +426,11 @@ impl NotificationLane {
             if lane.inner.displayed_id.get() != Some(target_id) {
                 return;
             }
-            runtime.borrow_mut().expire_current_ephemeral_notification();
+            // The runtime may have dismissed it since, ahead of the
+            // refresh that tells the lane: it expires `target_id` only.
+            runtime
+                .borrow_mut()
+                .expire_ephemeral_notification(target_id);
         });
         self.inner.auto_dismiss_token.replace(Some(token));
     }
@@ -572,6 +582,61 @@ mod tests {
                 .emit_clicked();
 
             assert_eq!(*carried_out.borrow(), [action]);
+        });
+    }
+
+    /// A notification naming a long path does not make the status bar,
+    /// and the window holding it, wider than a short one does; its whole
+    /// text is a hover away (#348).
+    #[test]
+    fn a_long_notification_does_not_widen_the_status_bar() {
+        with_gtk(|| {
+            let status_bar = StatusBar::new(Rc::new(|| {}), Rc::new(|_| {}));
+            let runtime = runtime_with_tracks(Vec::new());
+            status_bar.attach_to_runtime(&runtime);
+            let minimum_width = || {
+                status_bar
+                    .widget()
+                    .measure(gtk::Orientation::Horizontal, -1)
+                    .0
+            };
+            let body = format!(
+                "Could not plan the device sync: /media/stick/{}: File name too long",
+                "Music/".repeat(60)
+            );
+            let shown_label = || {
+                descendants(status_bar.widget().upcast_ref())
+                    .into_iter()
+                    .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+                    .find(|label| label.text() == body.as_str())
+            };
+
+            let short = runtime.borrow_mut().push_ephemeral_notification(
+                NotificationCategory::DeviceSyncPlanning,
+                NotificationSeverity::Warning,
+                "Short".to_owned(),
+            );
+            let context = glib::MainContext::default();
+            while context.iteration(false) {}
+            let short_width = minimum_width();
+            runtime.borrow_mut().dismiss_notification(short);
+            runtime.borrow_mut().push_ephemeral_notification(
+                NotificationCategory::DeviceSyncPlanning,
+                NotificationSeverity::Warning,
+                body.clone(),
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while shown_label().is_none() && Instant::now() < deadline {
+                context.iteration(false);
+            }
+
+            let label = shown_label().expect("the lane shows the long notification");
+            assert_eq!(label.tooltip_text().as_deref(), Some(body.as_str()));
+            assert!(
+                minimum_width() <= short_width,
+                "{} > {short_width}",
+                minimum_width()
+            );
         });
     }
 

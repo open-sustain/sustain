@@ -136,7 +136,7 @@ fn newer_persistent_displaces_older_until_dismissed() {
 }
 
 #[test]
-fn expire_current_ephemeral_pops_the_head() {
+fn expiring_the_displayed_ephemeral_pops_the_head() {
     let mut center = NotificationCenter::new();
     let first = center.push_ephemeral(
         NotificationCategory::LibraryScan,
@@ -149,8 +149,29 @@ fn expire_current_ephemeral_pops_the_head() {
         body("Second"),
     );
 
-    let expired = center.expire_current_ephemeral().expect("had a head");
+    let expired = center.expire_ephemeral(first).expect("had a head");
     assert_eq!(expired.id, first);
+    assert_eq!(center.current_ephemeral().map(|n| n.id), Some(second));
+}
+
+/// A notification dismissed while its timer ran expires nothing when
+/// the timer fires: the one shown in its place keeps its own time.
+#[test]
+fn expiring_a_dismissed_ephemeral_leaves_its_successor() {
+    let mut center = NotificationCenter::new();
+    let first = center.push_ephemeral(
+        NotificationCategory::DeviceSyncPlanning,
+        NotificationSeverity::Warning,
+        body("First"),
+    );
+    let second = center.push_ephemeral(
+        NotificationCategory::DeviceSync,
+        NotificationSeverity::Info,
+        body("Second"),
+    );
+    center.dismiss(first);
+
+    assert!(center.expire_ephemeral(first).is_none());
     assert_eq!(center.current_ephemeral().map(|n| n.id), Some(second));
 }
 

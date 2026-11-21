@@ -600,6 +600,9 @@ impl DeviceSyncPanel {
             (0.0, gettext("Device disconnected"))
         } else if pending {
             (0.0, gettext("Calculating device sync plan..."))
+        } else if capacity.is_none() {
+            // Why, if the planner said, reached the user as a notification.
+            (0.0, gettext("Device sync plan unavailable"))
         } else if total_bytes == 0 {
             (0.0, gettext("Device capacity unavailable"))
         } else if over_capacity {

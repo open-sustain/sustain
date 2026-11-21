@@ -514,6 +514,7 @@ impl ApplicationRuntime {
     pub fn request_device_sync_plan(&mut self, connected: &ConnectedDevice) {
         let generation = self.next_device_plan_generation();
         let mount = mount_identity(connected);
+        self.withdraw_device_plan_failure();
         self.device_plan_cache = Some(DevicePlanCache {
             generation,
             mount: mount.clone(),
@@ -521,7 +522,7 @@ impl ApplicationRuntime {
         });
 
         let Some(store) = self.library_store.clone() else {
-            self.mark_device_plan_unavailable(generation, &mount);
+            self.fail_device_plan(generation, &mount, gettext("the library is not open"));
             return;
         };
         let preparation = DevicePlanPreparation {
@@ -531,16 +532,12 @@ impl ApplicationRuntime {
             clock: self.clock.clone(),
             export_date: unix_to_ymd(self.clock_unix_secs()),
         };
-        if self
-            .device_plan_scheduler
-            .request_plan(
-                generation,
-                mount.clone(),
-                Box::new(move |cancelled| preparation.run(cancelled)),
-            )
-            .is_err()
-        {
-            self.mark_device_plan_unavailable(generation, &mount);
+        if let Err(error) = self.device_plan_scheduler.request_plan(
+            generation,
+            mount.clone(),
+            Box::new(move |cancelled| preparation.run(cancelled)),
+        ) {
+            self.fail_device_plan(generation, &mount, error);
         }
     }
 
@@ -548,6 +545,17 @@ impl ApplicationRuntime {
         let generation = self.next_device_plan_generation();
         self.device_plan_scheduler.cancel_before(generation);
         self.device_plan_cache = None;
+        self.withdraw_device_plan_failure();
+    }
+
+    /// Take back the warning of a plan that could not be made, once that
+    /// plan is dropped or another takes its place: why it failed no
+    /// longer holds — the device is gone, another is planned, or what is
+    /// planned for it changed — and the plan made next says for itself.
+    fn withdraw_device_plan_failure(&mut self) {
+        if let Some(id) = self.device_plan_failure_notification_id.take() {
+            self.dismiss_notification(id);
+        }
     }
 
     pub fn device_sync_plan_state(&self, connected: &ConnectedDevice) -> DeviceSyncPlanState {
@@ -566,10 +574,10 @@ impl ApplicationRuntime {
         if cache.generation != result.generation || cache.mount != result.mount {
             return false;
         }
-        cache.state = match result.result {
-            Ok(snapshot) => DeviceSyncPlanState::Ready(snapshot),
-            Err(_) => DeviceSyncPlanState::Unavailable,
-        };
+        match result.result {
+            Ok(snapshot) => cache.state = DeviceSyncPlanState::Ready(snapshot),
+            Err(error) => self.fail_device_plan(result.generation, &result.mount, error),
+        }
         true
     }
 
@@ -581,17 +589,32 @@ impl ApplicationRuntime {
         DevicePlanGeneration::new(self.next_device_plan_generation)
     }
 
-    fn mark_device_plan_unavailable(
+    /// The plan of `generation` for `mount` could not be made, for
+    /// `error`: if it still is the plan asked for, it is unavailable, and
+    /// the user is told why. A plan is made again after each change the
+    /// user makes, and each one that fails says so.
+    fn fail_device_plan(
         &mut self,
         generation: DevicePlanGeneration,
         mount: &DeviceMountIdentity,
+        error: String,
     ) {
-        if let Some(cache) = self.device_plan_cache.as_mut()
-            && cache.generation == generation
-            && cache.mount == *mount
-        {
-            cache.state = DeviceSyncPlanState::Unavailable;
+        let Some(cache) = self.device_plan_cache.as_mut() else {
+            return;
+        };
+        if cache.generation != generation || cache.mount != *mount {
+            return;
         }
+        cache.state = DeviceSyncPlanState::Unavailable;
+        let id = self.push_ephemeral_notification(
+            NotificationCategory::DeviceSyncPlanning,
+            NotificationSeverity::Warning,
+            tr_format!(
+                gettext("Could not plan the device sync: {detail}"),
+                detail = error
+            ),
+        );
+        self.device_plan_failure_notification_id = Some(id);
     }
 
     pub(crate) fn start_device_sync(
@@ -844,7 +867,10 @@ impl DeviceSyncPreparation {
             Err(error) => return Err(DeviceSyncFailure::new(error.to_string())),
         };
         let transport = open_transport(&self.mount.target).map_err(|error| {
-            DeviceSyncFailure::new(format!("could not open the device: {error}"))
+            DeviceSyncFailure::new(tr_format!(
+                gettext("could not open the device: {error}"),
+                error = error
+            ))
         })?;
         let device_id = &self.mount.device_id;
         let mut journal = StoreManifestJournal {
@@ -956,11 +982,21 @@ impl DevicePlanPreparation {
         }
         let transport = match open_transport(&self.mount.target) {
             Ok(transport) => transport,
-            Err(error) => return Some(Err(format!("could not open the device: {error}"))),
+            Err(error) => {
+                return Some(Err(tr_format!(
+                    gettext("could not open the device: {error}"),
+                    error = error
+                )));
+            }
         };
         let capacity = match transport.capacity() {
             Ok(capacity) => capacity,
-            Err(error) => return Some(Err(format!("device capacity probe failed: {error}"))),
+            Err(error) => {
+                return Some(Err(tr_format!(
+                    gettext("device capacity probe failed: {error}"),
+                    error = error
+                )));
+            }
         };
         if cancelled() {
             return None;
@@ -1004,14 +1040,27 @@ fn build_worker_sync_request(
 ) -> Result<Option<SyncRequest>, String> {
     let device = store
         .sync_device(&mount.device_id)
-        .map_err(|error| format!("could not load device configuration: {error:?}"))?
-        .ok_or_else(|| "device configuration is unavailable".to_owned())?;
-    let selection = store
-        .device_selection(&mount.device_id)
-        .map_err(|error| format!("could not load device selection: {error:?}"))?;
+        .map_err(|error| {
+            tr_format!(
+                gettext("could not load device configuration: {error}"),
+                error = format!("{error:?}")
+            )
+        })?
+        .ok_or_else(|| gettext("device configuration is unavailable"))?;
+    let selection = store.device_selection(&mount.device_id).map_err(|error| {
+        tr_format!(
+            gettext("could not load device selection: {error}"),
+            error = format!("{error:?}")
+        )
+    })?;
     let artist_selection = store
         .device_artist_selection(&mount.device_id)
-        .map_err(|error| format!("could not load device artist selection: {error:?}"))?;
+        .map_err(|error| {
+            tr_format!(
+                gettext("could not load device artist selection: {error}"),
+                error = format!("{error:?}")
+            )
+        })?;
     if selection.is_empty() && artist_selection.is_empty() {
         return Ok(Some(SyncRequest {
             device,
@@ -1024,24 +1073,48 @@ fn build_worker_sync_request(
             export_date,
         }));
     }
-    let library_tracks = store
-        .tracks()
-        .map_err(|error| format!("could not load library tracks: {error:?}"))?;
-    let playlists = store
-        .playlists()
-        .map_err(|error| format!("could not load playlists: {error:?}"))?;
-    let smart_playlists = store
-        .smart_playlists()
-        .map_err(|error| format!("could not load smart playlists: {error:?}"))?;
-    let previous_manifest = store
-        .device_manifest(&mount.device_id)
-        .map_err(|error| format!("could not load device manifest: {error:?}"))?;
-    let previous_playlist_files = store
-        .device_playlist_files(&mount.device_id)
-        .map_err(|error| format!("could not load device playlist files: {error:?}"))?;
-    let previous_pioneer_export = store
-        .device_pioneer_export(&mount.device_id)
-        .map_err(|error| format!("could not load device Pioneer export record: {error:?}"))?;
+    let library_tracks = store.tracks().map_err(|error| {
+        tr_format!(
+            gettext("could not load library tracks: {error}"),
+            error = format!("{error:?}")
+        )
+    })?;
+    let playlists = store.playlists().map_err(|error| {
+        tr_format!(
+            gettext("could not load playlists: {error}"),
+            error = format!("{error:?}")
+        )
+    })?;
+    let smart_playlists = store.smart_playlists().map_err(|error| {
+        tr_format!(
+            gettext("could not load smart playlists: {error}"),
+            error = format!("{error:?}")
+        )
+    })?;
+    let previous_manifest = store.device_manifest(&mount.device_id).map_err(|error| {
+        tr_format!(
+            gettext("could not load device manifest: {error}"),
+            error = format!("{error:?}")
+        )
+    })?;
+    let previous_playlist_files =
+        store
+            .device_playlist_files(&mount.device_id)
+            .map_err(|error| {
+                tr_format!(
+                    gettext("could not load device playlist files: {error}"),
+                    error = format!("{error:?}")
+                )
+            })?;
+    let previous_pioneer_export =
+        store
+            .device_pioneer_export(&mount.device_id)
+            .map_err(|error| {
+                tr_format!(
+                    gettext("could not load device Pioneer export record: {error}"),
+                    error = format!("{error:?}")
+                )
+            })?;
     if cancelled() {
         return Ok(None);
     }
@@ -1154,8 +1227,13 @@ fn resolve_sync_track_indices(
                     continue;
                 };
                 let source_path = track.location.absolute_path(library_path);
-                let Some(source) = source_snapshot(store, track.id, &source_path)
-                    .map_err(|error| format!("could not inspect source track: {error:?}"))?
+                let Some(source) =
+                    source_snapshot(store, track.id, &source_path).map_err(|error| {
+                        tr_format!(
+                            gettext("could not inspect source track: {error}"),
+                            error = format!("{error:?}")
+                        )
+                    })?
                 else {
                     continue;
                 };
@@ -1734,6 +1812,104 @@ mod tests {
         assert_eq!(
             request.tracks[0].track_id,
             TrackId::new(1).expect("track id")
+        );
+    }
+
+    /// Each plan the planner could not make is reported with what
+    /// stopped it, apart from the sync outcomes; the plan dropped, or
+    /// another asked for, takes back a report still waiting to be read
+    /// (#348, A8-28).
+    #[test]
+    fn a_planning_failure_is_reported_until_its_plan_is_replaced() {
+        let mut runtime = ApplicationRuntime::new()
+            .with_library_services(
+                std::sync::Arc::new(SqliteLibraryStore::open_in_memory().expect("store")),
+                std::sync::Arc::new(CountingMetadataService::default()),
+            )
+            .expect("library services");
+        let device = connected("stick", "/mnt/stick");
+        // Plans the device to `result`, as a selection change does.
+        let plan = |runtime: &mut ApplicationRuntime, result| {
+            runtime.invalidate_device_sync_plan();
+            runtime.request_device_sync_plan(&device);
+            let generation = runtime
+                .device_plan_cache
+                .as_ref()
+                .expect("plan requested")
+                .generation;
+            assert!(runtime.apply_device_plan_result(DevicePlanResult {
+                generation,
+                mount: mount_identity(&device),
+                result,
+            }));
+        };
+        let reports = |runtime: &ApplicationRuntime| -> Vec<(crate::NotificationCategory, String)> {
+            runtime
+                .notifications()
+                .ephemeral_queue()
+                .iter()
+                .map(|notification| (notification.category, notification.body.clone()))
+                .collect()
+        };
+        let planning = |detail: &str| {
+            (
+                crate::NotificationCategory::DeviceSyncPlanning,
+                format!("Could not plan the device sync: {detail}"),
+            )
+        };
+        let too_long = "/mnt/stick/Music/Mix.m3u8: File name too long";
+        let made = || {
+            Ok(DevicePlanSnapshot {
+                plan: None,
+                capacity: DeviceCapacity::default(),
+            })
+        };
+        // An earlier report holds the lane, as a sync outcome would.
+        runtime.push_ephemeral_notification(
+            crate::NotificationCategory::DeviceSync,
+            crate::NotificationSeverity::Info,
+            "Synced".to_owned(),
+        );
+        let synced = (crate::NotificationCategory::DeviceSync, "Synced".to_owned());
+
+        plan(&mut runtime, Err(too_long.to_owned()));
+        assert_eq!(
+            runtime.device_sync_plan_state(&device),
+            DeviceSyncPlanState::Unavailable
+        );
+        assert_eq!(reports(&runtime), [synced.clone(), planning(too_long)]);
+        plan(&mut runtime, Err(too_long.to_owned()));
+        assert_eq!(reports(&runtime), [synced.clone(), planning(too_long)]);
+        plan(&mut runtime, made());
+        assert_eq!(reports(&runtime), std::slice::from_ref(&synced));
+        plan(&mut runtime, Err(too_long.to_owned()));
+        runtime.invalidate_device_sync_plan();
+        assert_eq!(reports(&runtime), std::slice::from_ref(&synced));
+        // Another device planned takes back what the last one's said.
+        plan(&mut runtime, Err(too_long.to_owned()));
+        runtime.request_device_sync_plan(&connected("card", "/mnt/card"));
+        assert_eq!(reports(&runtime), [synced]);
+    }
+
+    /// A plan that cannot even be asked for says why, as one the planner
+    /// fails does.
+    #[test]
+    fn a_plan_without_a_library_is_reported() {
+        let mut runtime = ApplicationRuntime::new();
+
+        runtime.request_device_sync_plan(&connected("stick", "/mnt/stick"));
+
+        let reported = runtime
+            .notifications()
+            .current_ephemeral()
+            .expect("the failure is reported");
+        assert_eq!(
+            reported.category,
+            crate::NotificationCategory::DeviceSyncPlanning
+        );
+        assert_eq!(
+            reported.body,
+            "Could not plan the device sync: the library is not open"
         );
     }
 

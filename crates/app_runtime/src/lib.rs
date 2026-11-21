@@ -554,6 +554,8 @@ pub struct ApplicationRuntime {
     device_plan_scheduler: DevicePlanScheduler,
     next_device_plan_generation: u64,
     device_plan_cache: Option<device_sync::DevicePlanCache>,
+    /// The warning the last device plan that failed pushed.
+    device_plan_failure_notification_id: Option<NotificationId>,
     // Background worker for device syncs (issues #23/#24). Owns the
     // thread spawn + progress/result channel; the device manifest is
     // persisted by the runtime when a sync completes.
@@ -839,6 +841,7 @@ impl ApplicationRuntime {
             device_plan_scheduler: DevicePlanScheduler::new(),
             next_device_plan_generation: 0,
             device_plan_cache: None,
+            device_plan_failure_notification_id: None,
             device_sync_scheduler: DeviceSyncScheduler::new(),
             device_sync_notification_id: None,
             syncing_device: None,
@@ -2232,11 +2235,12 @@ impl ApplicationRuntime {
         }
     }
 
-    /// Pop the currently-displayed ephemeral. Called by the widget
-    /// when its display timer has elapsed; the widget then renders the
-    /// next head (or falls back to the persistent stack).
-    pub fn expire_current_ephemeral_notification(&mut self) -> Option<Notification> {
-        let expired = self.notifications.expire_current_ephemeral();
+    /// Pop the displayed ephemeral `id`, if it still is the one
+    /// displayed. Called by the widget when its display timer has
+    /// elapsed; the widget then renders the next head (or falls back to
+    /// the persistent stack).
+    pub fn expire_ephemeral_notification(&mut self, id: NotificationId) -> Option<Notification> {
+        let expired = self.notifications.expire_ephemeral(id);
         if expired.is_some() {
             self.notify_notification_observer();
         }
