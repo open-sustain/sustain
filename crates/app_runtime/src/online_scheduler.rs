@@ -47,7 +47,7 @@
 //! waits for the track in progress only, as in the analysis scheduler.
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -111,91 +111,19 @@ pub enum SchedulerProgress {
         failed: u32,
         remaining: u32,
     },
-    /// The run is over, and this is what it came to.
-    Idle(OnlineRunTally),
+    Idle {
+        completed: u32,
+        failed: u32,
+    },
     /// The attempt stamp (`record_online_attempt`) was rejected by
     /// SQLite. Without it the track stays eligible in
     /// `tracks_needing_online` and would be re-fetched over the network
     /// every batch. The worker stops and waits for an explicit wake; this
     /// event surfaces the failure instead of reporting a clean pass that
     /// will silently repeat. `detail` carries the store error.
-    PersistenceError { detail: String },
-}
-
-/// What a run of online retrieval came to, counting each track once, by
-/// the most telling of what its lookups came to: a track given artwork
-/// and no lyrics was updated.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct OnlineRunTally {
-    /// Tracks given online data.
-    pub updated: u32,
-    /// Tracks the providers were asked about and had nothing new for.
-    pub not_found: u32,
-    /// Tracks that already held everything asked for: no provider was
-    /// asked about them.
-    pub already_complete: u32,
-    /// Tracks a rate limit cut short that the run ended before finishing.
-    pub pending: u32,
-    /// Tracks that could not be checked.
-    pub failed: u32,
-}
-
-impl OnlineRunTally {
-    /// Tracks checked to the end, whatever they came to but a failure.
-    pub const fn checked(&self) -> u32 {
-        self.updated
-            .saturating_add(self.not_found)
-            .saturating_add(self.already_complete)
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.checked() == 0 && self.pending == 0 && self.failed == 0
-    }
-
-    const fn counter(&mut self, outcome: TrackOutcome) -> &mut u32 {
-        match outcome {
-            TrackOutcome::AlreadyComplete => &mut self.already_complete,
-            TrackOutcome::NotFound => &mut self.not_found,
-            TrackOutcome::Pending => &mut self.pending,
-            TrackOutcome::Failed => &mut self.failed,
-            TrackOutcome::Updated => &mut self.updated,
-        }
-    }
-}
-
-/// What a track's capabilities came to, ordered from the least to the
-/// most telling: a track is reported by the most telling result among
-/// its capabilities.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum TrackOutcome {
-    AlreadyComplete,
-    NotFound,
-    /// Still owed capabilities a rate limit cut short. Never what a
-    /// capability comes to: it stands for those not yet run.
-    Pending,
-    Failed,
-    Updated,
-}
-
-/// What this run's lookups of one track have come to so far.
-#[derive(Clone, Copy, Debug, Default)]
-struct TrackRecord {
-    /// What its completed capabilities came to.
-    outcome: Option<TrackOutcome>,
-    /// The capabilities a rate limit cut off that have not run since.
-    owed: OnlineCapabilities,
-}
-
-impl TrackRecord {
-    /// How the track is reported: a track still owed capabilities is
-    /// pending unless what it completed says more.
-    fn reported(self) -> Option<TrackOutcome> {
-        if !self.owed.is_empty() {
-            self.outcome.max(Some(TrackOutcome::Pending))
-        } else {
-            self.outcome
-        }
-    }
+    PersistenceError {
+        detail: String,
+    },
 }
 
 /// Bundle of dependencies the scheduler captures at start-up.
@@ -344,7 +272,14 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
         provider_version,
     } = config;
 
-    let mut state = WorkerState::new(initial_settings, library_path);
+    let mut state = WorkerState {
+        settings: initial_settings,
+        library_path,
+        completed: 0,
+        failed: 0,
+        explicit_queue: VecDeque::new(),
+        unrecorded_attempt: None,
+    };
 
     'outer: loop {
         match drain_commands(&receiver, &mut state) {
@@ -368,19 +303,19 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 continue;
             }
             state.unrecorded_attempt = None;
-            state.settle(
-                unrecorded.track_id,
-                unrecorded.outcome,
-                unrecorded.attempted,
-                unrecorded.owed,
-            );
+            state.count_outcome(unrecorded.outcome);
         }
 
         let bg_capabilities = effective_capabilities(&state.settings);
         let has_explicit_work = !state.explicit_queue.is_empty();
         let has_background_work = !bg_capabilities.is_empty();
         if state.library_path.is_none() || (!has_explicit_work && !has_background_work) {
-            state.end_run(progress.as_ref());
+            (progress)(SchedulerProgress::Idle {
+                completed: state.completed,
+                failed: state.failed,
+            });
+            state.completed = 0;
+            state.failed = 0;
             match receiver.recv() {
                 Ok(SchedulerCommand::Shutdown) | Err(_) => return,
                 Ok(command) => apply_command(command, &mut state),
@@ -427,7 +362,12 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
         }
 
         if batch.is_empty() {
-            state.end_run(progress.as_ref());
+            (progress)(SchedulerProgress::Idle {
+                completed: state.completed,
+                failed: state.failed,
+            });
+            state.completed = 0;
+            state.failed = 0;
             match receiver.recv() {
                 Ok(SchedulerCommand::Shutdown) | Err(_) => return,
                 Ok(command) => apply_command(command, &mut state),
@@ -567,12 +507,11 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                         attempted: report.attempted,
                         context,
                         outcome: report.outcome,
-                        owed: report.owed,
                     });
                     // A rate-limited track is itself unfinished: the
                     // capabilities the limit cut off are still owed.
-                    let unfinished =
-                        (!report.is_finished()).then(|| item.without(report.attempted));
+                    let unfinished = matches!(report.outcome, ProcessOutcome::RateLimited(_))
+                        .then(|| item.without(report.attempted));
                     requeue_explicit_items(
                         &mut state.explicit_queue,
                         unfinished.into_iter().chain(batch.by_ref()),
@@ -592,8 +531,8 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 }
             }
 
-            state.settle(item.track_id, report.outcome, report.attempted, report.owed);
-            if let Some(cool_down) = report.rate_limited_for {
+            state.count_outcome(report.outcome);
+            if let ProcessOutcome::RateLimited(cool_down) = report.outcome {
                 // Stop the batch entirely on a rate-limit signal: the
                 // HTTP client refuses every request to the held host
                 // until the cool-down has passed, so the remaining
@@ -612,8 +551,8 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
                 .saturating_add(state.explicit_queue.len() as u32)
                 .saturating_add(explicit_in_batch.count() as u32);
             (progress)(SchedulerProgress::Tick {
-                completed: state.passes_checked,
-                failed: state.passes_failed,
+                completed: state.completed,
+                failed: state.failed,
                 remaining,
             });
 
@@ -636,73 +575,41 @@ fn worker_loop(receiver: mpsc::Receiver<SchedulerCommand>, config: OnlineSchedul
     }
 }
 
-/// Per-track output of [`process_track`]. A rate limit stops the track's
-/// capabilities where it hits: the ones before it completed and are
-/// stamped and reported, and the rest are owed.
-struct ProcessReport {
-    /// What the completed capabilities came to; `None` when the rate
-    /// limit cut off the first of them.
-    outcome: Option<TrackOutcome>,
-    /// The capabilities that completed, stamped into
-    /// `track_online_status`. A rate-limited one is left out so the track
-    /// stays eligible after the cool-down.
-    attempted: OnlineCapabilities,
-    /// The cool-down a provider asked for (HTTP 429/503); the HTTP client
-    /// holds the host until then, so the worker also stops its batch.
-    rate_limited_for: Option<Duration>,
-    /// The capabilities dispatched that the rate limit cut off.
-    owed: OnlineCapabilities,
-    /// At least one capability committed new data for the track, whatever
-    /// the overall outcome: a later capability can still fail or be rate
-    /// limited.
-    changed_track: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessOutcome {
+    /// Provider returned data and the persist path succeeded for at
+    /// least one capability requested.
+    Succeeded,
+    /// Every requested capability ran to completion and produced no
+    /// new data. Still counted as a successful pass — the attempt
+    /// timestamps for the capabilities we tried are stamped.
+    NoMatch,
+    /// A network or provider error occurred for at least one
+    /// capability. Counted as failed for the UI summary; the
+    /// capabilities that *did* complete are still stamped, the
+    /// failing ones are stamped as well so we do not hammer a
+    /// misbehaving provider every cycle.
+    Failed,
+    /// The server explicitly asked us to back off (HTTP 429/503) for
+    /// this long, and the HTTP client holds the host until then. The
+    /// capabilities that hit the rate limit are *not* reported as
+    /// attempted so the track stays eligible on the next pass; the
+    /// worker also stops the current batch.
+    RateLimited(Duration),
 }
 
-impl ProcessReport {
-    const fn new() -> Self {
-        Self {
-            outcome: None,
-            attempted: OnlineCapabilities::none(),
-            rate_limited_for: None,
-            owed: OnlineCapabilities::none(),
-            changed_track: false,
-        }
-    }
-
-    /// Records one capability's attempt, returning whether it completed
-    /// and is to be stamped.
-    fn record(&mut self, attempt: AttemptOutcome) -> bool {
-        let outcome = match attempt {
-            AttemptOutcome::Succeeded => {
-                self.changed_track = true;
-                TrackOutcome::Updated
-            }
-            AttemptOutcome::NoMatch => TrackOutcome::NotFound,
-            AttemptOutcome::AlreadyComplete => TrackOutcome::AlreadyComplete,
-            // What a capability committed before failing stays in the
-            // library: the track was updated.
-            AttemptOutcome::Failed {
-                changed_track: true,
-            } => {
-                self.changed_track = true;
-                TrackOutcome::Updated
-            }
-            AttemptOutcome::Failed {
-                changed_track: false,
-            } => TrackOutcome::Failed,
-            AttemptOutcome::RateLimited(cool_down) => {
-                self.rate_limited_for = Some(cool_down);
-                return false;
-            }
-        };
-        self.outcome = self.outcome.max(Some(outcome));
-        true
-    }
-
-    /// Whether every capability dispatched ran to completion.
-    const fn is_finished(&self) -> bool {
-        self.rate_limited_for.is_none()
-    }
+/// Per-track output of [`process_track`]: the overall outcome (used
+/// for accounting and for the batch-break decision) plus the exact
+/// set of capabilities that actually completed (used to decide what
+/// to stamp into `track_online_status`). Anything that was rate-
+/// limited is intentionally absent from `attempted` so the track
+/// remains eligible for the next batch.
+struct ProcessReport {
+    outcome: ProcessOutcome,
+    attempted: OnlineCapabilities,
+    /// At least one capability committed new data for the track, whatever
+    /// the overall outcome: a later capability can still be rate limited.
+    changed_track: bool,
 }
 
 fn process_track(
@@ -715,7 +622,11 @@ fn process_track(
     genre_bias: &mut Option<LibraryGenres>,
 ) -> ProcessReport {
     let query = query_from_metadata(&track.metadata);
-    let mut report = ProcessReport::new();
+    let mut any_success = false;
+    let mut any_failure = false;
+    let mut partly_changed = false;
+    let mut rate_limited_for = None;
+    let mut attempted = OnlineCapabilities::none();
 
     // Tag enrichment runs first because the matched MusicBrainz
     // recording lets the subsequent artwork attempt walk releases
@@ -725,7 +636,7 @@ fn process_track(
     let mut cached_match: Option<TrackMatch> = None;
 
     if settings.tags {
-        report.attempted.tags = report.record(attempt_tags(
+        match attempt_tags(
             track,
             absolute_path,
             &query,
@@ -734,49 +645,99 @@ fn process_track(
             library_store,
             &mut cached_match,
             genre_bias,
-        ));
+        ) {
+            AttemptOutcome::Succeeded => {
+                any_success = true;
+                attempted.tags = true;
+            }
+            AttemptOutcome::NoMatch => {
+                attempted.tags = true;
+            }
+            AttemptOutcome::Failed { changed_track } => {
+                any_failure = true;
+                partly_changed |= changed_track;
+                attempted.tags = true;
+            }
+            AttemptOutcome::RateLimited(cool_down) => {
+                rate_limited_for = Some(cool_down);
+            }
+        }
     }
 
-    if settings.artwork && report.is_finished() {
-        report.attempted.artwork = report.record(attempt_artwork(
+    if settings.artwork && rate_limited_for.is_none() {
+        match attempt_artwork(
             track,
             absolute_path,
             &query,
             remote_service,
             tag_writer,
             cached_match.as_ref(),
-        ));
+        ) {
+            AttemptOutcome::Succeeded => {
+                any_success = true;
+                attempted.artwork = true;
+            }
+            AttemptOutcome::NoMatch => {
+                attempted.artwork = true;
+            }
+            AttemptOutcome::Failed { changed_track } => {
+                any_failure = true;
+                partly_changed |= changed_track;
+                attempted.artwork = true;
+            }
+            AttemptOutcome::RateLimited(cool_down) => {
+                rate_limited_for = Some(cool_down);
+            }
+        }
     }
 
-    if settings.lyrics && report.is_finished() {
-        report.attempted.lyrics = report.record(attempt_lyrics(
+    if settings.lyrics && rate_limited_for.is_none() {
+        match attempt_lyrics(
             track,
             absolute_path,
             &query,
             remote_service,
             tag_writer,
             library_store,
-        ));
+        ) {
+            AttemptOutcome::Succeeded => {
+                any_success = true;
+                attempted.lyrics = true;
+            }
+            AttemptOutcome::NoMatch => {
+                attempted.lyrics = true;
+            }
+            AttemptOutcome::Failed { changed_track } => {
+                any_failure = true;
+                partly_changed |= changed_track;
+                attempted.lyrics = true;
+            }
+            AttemptOutcome::RateLimited(cool_down) => {
+                rate_limited_for = Some(cool_down);
+            }
+        }
     }
 
-    if !report.is_finished() {
-        let dispatched = OnlineCapabilities {
-            artwork: settings.artwork,
-            tags: settings.tags,
-            lyrics: settings.lyrics,
-        };
-        report.owed = dispatched.without(report.attempted);
+    let outcome = if let Some(cool_down) = rate_limited_for {
+        ProcessOutcome::RateLimited(cool_down)
+    } else if any_success {
+        ProcessOutcome::Succeeded
+    } else if any_failure {
+        ProcessOutcome::Failed
+    } else {
+        ProcessOutcome::NoMatch
+    };
+    ProcessReport {
+        outcome,
+        attempted,
+        changed_track: any_success || partly_changed,
     }
-    report
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AttemptOutcome {
     Succeeded,
     NoMatch,
-    /// The track already held everything the capability fills, so no
-    /// provider was asked.
-    AlreadyComplete,
     /// The capability failed. A failure partway through can still have
     /// committed some of its data, which the library view must learn of.
     Failed {
@@ -816,7 +777,7 @@ fn attempt_artwork(
     // treated as "no embedded art" so the track stays eligible,
     // matching the SQL's `COALESCE(has_embedded_artwork, 0) = 0`.
     if track.has_embedded_artwork == Some(true) {
-        return AttemptOutcome::AlreadyComplete;
+        return AttemptOutcome::NoMatch;
     }
 
     let fetched: Option<FetchedArtwork> = match remote_service.fetch_artwork(query, cached_match) {
@@ -883,7 +844,7 @@ fn attempt_lyrics(
     };
 
     if has_plain && has_synced {
-        return AttemptOutcome::AlreadyComplete;
+        return AttemptOutcome::NoMatch;
     }
 
     let fetched: Option<FetchedLyrics> = match remote_service.fetch_lyrics(query) {
@@ -947,17 +908,8 @@ fn attempt_lyrics(
 struct WorkerState {
     settings: OnlineSettings,
     library_path: Option<PathBuf>,
-    /// The tracks this run has looked up, each counted once in `tally`
-    /// by everything its passes came to, however many it took: a manual
-    /// request and a background sweep can both reach one track, and a
-    /// rate limit can cut a pass short.
-    tracks: HashMap<TrackId, TrackRecord>,
-    tally: OnlineRunTally,
-    /// Passes that ran every capability they dispatched, and how many of
-    /// them failed: the live progress, which only grows, where a track's
-    /// place in `tally` moves as its passes add up.
-    passes_checked: u32,
-    passes_failed: u32,
+    completed: u32,
+    failed: u32,
     /// User-initiated work, drained ahead of the background sweep.
     /// Items here keep their own capability mask, independent of the
     /// global `OnlineSettings`.
@@ -968,73 +920,29 @@ struct WorkerState {
 }
 
 impl WorkerState {
-    fn new(settings: OnlineSettings, library_path: Option<PathBuf>) -> Self {
-        Self {
-            settings,
-            library_path,
-            tracks: HashMap::new(),
-            tally: OnlineRunTally::default(),
-            passes_checked: 0,
-            passes_failed: 0,
-            explicit_queue: VecDeque::new(),
-            unrecorded_attempt: None,
-        }
-    }
-
-    /// Reports the run's totals and starts the next run's from zero.
-    fn end_run(&mut self, progress: &(dyn Fn(SchedulerProgress) + Send + Sync)) {
-        self.tracks.clear();
-        self.passes_checked = 0;
-        self.passes_failed = 0;
-        progress(SchedulerProgress::Idle(std::mem::take(&mut self.tally)));
-    }
-
-    /// Takes a track's stamped pass into account, moving the track in the
-    /// tally to what all its passes have come to. `attempted` are the
-    /// capabilities the pass completed and `owed` those a rate limit cut
-    /// off.
-    fn settle(
-        &mut self,
-        track_id: TrackId,
-        outcome: Option<TrackOutcome>,
-        attempted: OnlineCapabilities,
-        owed: OnlineCapabilities,
-    ) {
-        if owed.is_empty() {
-            match outcome {
-                Some(TrackOutcome::Failed) => {
-                    self.passes_failed = self.passes_failed.saturating_add(1);
-                }
-                Some(_) => self.passes_checked = self.passes_checked.saturating_add(1),
-                None => {}
+    /// Counts a track whose attempt is stamped. A rate-limited track is
+    /// neither done nor failed: it is tried again, so it reports no
+    /// progress.
+    fn count_outcome(&mut self, outcome: ProcessOutcome) {
+        match outcome {
+            ProcessOutcome::Succeeded | ProcessOutcome::NoMatch => {
+                self.completed = self.completed.saturating_add(1);
             }
-        }
-        let record = self.tracks.entry(track_id).or_default();
-        if let Some(previous) = record.reported() {
-            let counter = self.tally.counter(previous);
-            *counter = counter.saturating_sub(1);
-        }
-        record.outcome = record.outcome.max(outcome);
-        record.owed = record.owed.without(attempted).union(owed);
-        if let Some(reported) = record.reported() {
-            let counter = self.tally.counter(reported);
-            *counter = counter.saturating_add(1);
+            ProcessOutcome::Failed => self.failed = self.failed.saturating_add(1),
+            ProcessOutcome::RateLimited(_) => {}
         }
     }
 }
 
 /// A track the provider answered for whose attempt stamp the store
-/// rejected. Its outcome is taken into account once the stamp is
-/// recorded.
+/// rejected. Its outcome is counted once the stamp is recorded.
 #[derive(Clone, Copy, Debug)]
 struct UnrecordedAttempt {
     track_id: TrackId,
     attempted: OnlineCapabilities,
     /// When the provider was asked, not when the stamp finally lands.
     context: OnlineContext,
-    outcome: Option<TrackOutcome>,
-    /// The capabilities dispatched that a rate limit cut off.
-    owed: OnlineCapabilities,
+    outcome: ProcessOutcome,
 }
 
 enum DrainOutcome {
@@ -1210,7 +1118,7 @@ fn attempt_tags(
             || track.metadata.track_total.is_none()
             || track.metadata.disc_number.is_none());
     if !(need_title || need_artist || need_album || need_year || need_genre || need_positional) {
-        return AttemptOutcome::AlreadyComplete;
+        return AttemptOutcome::NoMatch;
     }
 
     let matched = match remote_service.identify_track(query) {

@@ -294,6 +294,39 @@ Core values:
 - Doing it right over doing it now.
 - Honesty above everything.
 
+## Proportionate fixes and review findings
+
+Sustain is a single-user desktop music player. A fix is sized to the real
+harm of the problem it solves, not to the number of edge cases a reviewer
+can imagine. "No hacks" means the smallest fix must be clean and correct
+for the case it addresses; it never means a small problem earns a large
+design.
+
+- Apply the smallest clean fix that removes the reported harm. A finding
+  about a one-line symptom gets a fix of a few lines, not a new
+  subsystem, new state machine, new categories, or a new store contract.
+- Before writing code, judge the danger: does it lose or corrupt user
+  data, crash, hang, or visibly mislead in ordinary use? If not, and the
+  fix is not trivial, close or defer the finding with a one-line reason.
+  Rare races, theoretical ID reuse, exotic file layouts and wording
+  nuances in a status message are usually not worth code.
+- Audit findings (#328 and the issues it spawned) are suggestions, not
+  requirements. Closing one as not worth the complexity is a valid,
+  expected outcome.
+
+Cross-reviewers (Codex and other automated reviewers) are nitpickers by
+design: they ALWAYS find something. Their output is advice, never a
+checklist.
+
+- Run ONE review round per change. Do not loop review → fix → review.
+- Act only on findings that show a real bug introduced by the change
+  itself (a regression, a crash, data loss). Everything else — edge cases
+  of edge cases, pre-existing limits, "also handle X" scope growth — is
+  declined, at most noted in one line on the issue.
+- If following a finding would grow the change beyond the size of the
+  original problem, decline it. Growing complexity to satisfy a reviewer
+  is a failure, not diligence.
+
 ## Lint and code-quality passes
 
 Optimize lint work for durable signal, not warning-count reduction. Enable a

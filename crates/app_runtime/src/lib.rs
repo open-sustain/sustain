@@ -1818,18 +1818,18 @@ impl ApplicationRuntime {
                 );
                 self.online_persistence_error_id = Some(id);
             }
-            online_scheduler::SchedulerProgress::Idle(tally) => {
+            online_scheduler::SchedulerProgress::Idle { completed, failed } => {
                 if let Some(id) = self.online_notification_id.take() {
                     self.dismiss_notification(id);
                 }
                 if let Some(id) = self.online_persistence_error_id.take() {
                     self.dismiss_notification(id);
                 }
-                if !tally.is_empty() {
+                if completed > 0 || failed > 0 {
                     self.push_ephemeral_notification(
                         NotificationCategory::OnlineBackground,
                         NotificationSeverity::Info,
-                        notifications::online_background_outcome_text(&tally),
+                        notifications::online_background_outcome_text(completed, failed),
                     );
                 }
             }

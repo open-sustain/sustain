@@ -381,7 +381,6 @@ use sustain_i18n::{gettext, ngettext, npgettext, phrase_list, plural_count, tr_f
 use crate::{
     ApplicationRuntimeError, ImportFailure, ImportFailureReason, LibraryConsolidationSummary,
     LibraryImportSummary, LibraryScanSummary, VerifiedDuplicateBatchSummary,
-    online_scheduler::OnlineRunTally,
 };
 
 /// "{count} {verb}" for a count of tracks, as an item of a list of what a
@@ -399,12 +398,6 @@ fn tracks_phrase(count: usize, phrase: TracksPhrase) -> String {
             npgettext("count of tracks", "{count} missing", "{count} missing", n)
         }
         TracksPhrase::Failed => npgettext("count of tracks", "{count} failed", "{count} failed", n),
-        TracksPhrase::NotFound => npgettext(
-            "count of tracks",
-            "{count} not found",
-            "{count} not found",
-            n,
-        ),
         TracksPhrase::Moved => npgettext("count of tracks", "{count} moved", "{count} moved", n),
         TracksPhrase::Pending => {
             npgettext("count of tracks", "{count} pending", "{count} pending", n)
@@ -413,12 +406,6 @@ fn tracks_phrase(count: usize, phrase: TracksPhrase) -> String {
             "count of tracks",
             "{count} already organized",
             "{count} already organized",
-            n,
-        ),
-        TracksPhrase::AlreadyComplete => npgettext(
-            "count of tracks",
-            "{count} already complete",
-            "{count} already complete",
             n,
         ),
         TracksPhrase::Copied => npgettext("count of tracks", "{count} copied", "{count} copied", n),
@@ -435,11 +422,9 @@ enum TracksPhrase {
     Updated,
     Missing,
     Failed,
-    NotFound,
     Moved,
     Pending,
     AlreadyOrganized,
-    AlreadyComplete,
     Copied,
     Removed,
 }
@@ -601,27 +586,30 @@ pub fn online_background_running_text(completed: u32, remaining: u32) -> String 
     )
 }
 
-/// The end of an online retrieval run: how many tracks were given online
-/// data, how many the providers had nothing for, how many already held
-/// everything asked for, how many a rate limit left unfinished, and how
-/// many could not be checked.
-pub fn online_background_outcome_text(tally: &OnlineRunTally) -> String {
-    let clauses: Vec<String> = [
-        (tally.updated, TracksPhrase::Updated),
-        (tally.not_found, TracksPhrase::NotFound),
-        (tally.already_complete, TracksPhrase::AlreadyComplete),
-        (tally.pending, TracksPhrase::Pending),
-        (tally.failed, TracksPhrase::Failed),
-    ]
-    .into_iter()
-    .filter(|&(count, _)| count > 0)
-    .map(|(count, phrase)| tracks_phrase(count as usize, phrase))
-    .collect();
+pub fn online_background_outcome_text(completed: u32, failed: u32) -> String {
+    if failed == 0 {
+        return tr_format!(
+            ngettext(
+                "Retrieved online data for {completed} track.",
+                "Retrieved online data for {completed} tracks.",
+                completed
+            ),
+            completed = completed
+        );
+    }
     tr_format!(
-        // Translators: {changes} is a list such as "3 updated, 2 not
-        // found, 1 already complete, 1 failed", counting tracks.
-        gettext("Online retrieval complete: {changes}."),
-        changes = phrase_list(&clauses)
+        // Translators: {tracks} is "{count} track(s)" and {skipped} is
+        // "{count} track(s) skipped", as in "Retrieved online data for
+        // 40 tracks, 2 tracks skipped."
+        gettext("Retrieved online data for {tracks}, {skipped}."),
+        tracks = tr_format!(
+            ngettext("{count} track", "{count} tracks", completed),
+            count = completed
+        ),
+        skipped = tr_format!(
+            ngettext("{count} track skipped", "{count} tracks skipped", failed),
+            count = failed
+        )
     )
 }
 

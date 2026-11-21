@@ -172,39 +172,6 @@ fn library_import_partial_error_reports_stopped_state() {
     );
 }
 
-/// A run that found nothing does not say it retrieved data, and a track
-/// no provider was asked about is not one they found nothing for (#351,
-/// A9-27).
-#[test]
-fn online_outcome_tells_found_from_not_found_and_failed() {
-    let tally = |updated, not_found, already_complete, failed| OnlineRunTally {
-        updated,
-        not_found,
-        already_complete,
-        pending: 0,
-        failed,
-    };
-    assert_eq!(
-        online_background_outcome_text(&tally(0, 2, 0, 0)),
-        "Online retrieval complete: 2 not found."
-    );
-    assert_eq!(
-        online_background_outcome_text(&tally(3, 1, 4, 2)),
-        "Online retrieval complete: 3 updated, 1 not found, 4 already complete, 2 failed."
-    );
-    assert_eq!(
-        online_background_outcome_text(&tally(1, 0, 0, 0)),
-        "Online retrieval complete: 1 updated."
-    );
-    assert_eq!(
-        online_background_outcome_text(&OnlineRunTally {
-            pending: 2,
-            ..OnlineRunTally::default()
-        }),
-        "Online retrieval complete: 2 pending."
-    );
-}
-
 #[test]
 fn online_progress_always_reads_as_completed_over_total() {
     assert_eq!(
