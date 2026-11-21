@@ -293,6 +293,7 @@ pub(super) fn track_context_actions(
             show_album_callback(show_album_holder),
             track_has_album_visibility(runtime),
         ),
+        TrackContextAction::look_up_on_discogs(look_up_on_discogs_callback(runtime, window)),
         TrackContextAction::copy_files(copy_files_callback(runtime, window)),
         TrackContextAction::show_in_folder(show_in_folder_callback(runtime, window)),
         TrackContextAction::consolidate_duplicates(consolidate_duplicates_callback(
@@ -346,6 +347,7 @@ pub(super) fn playlist_track_context_actions(
             show_album_callback(show_album_holder),
             track_has_album_visibility(runtime),
         ),
+        TrackContextAction::look_up_on_discogs(look_up_on_discogs_callback(runtime, window)),
         TrackContextAction::copy_files(copy_files_callback(runtime, window)),
         TrackContextAction::show_in_folder(show_in_folder_callback(runtime, window)),
         TrackContextAction::remove_from_playlist(

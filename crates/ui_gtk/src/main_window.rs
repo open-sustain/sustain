@@ -84,8 +84,8 @@ use super::{
     },
     track_context_ops::{
         GetInfoCallbackContext, add_to_queue_callback, copy_files_callback, get_info_callback,
-        play_next_callback, playback_has_current_track_visibility, show_album_callback,
-        show_in_folder_callback, track_has_album_visibility,
+        look_up_on_discogs_callback, play_next_callback, playback_has_current_track_visibility,
+        show_album_callback, show_in_folder_callback, track_has_album_visibility,
     },
     track_summary::TrackSummary,
     track_table::{

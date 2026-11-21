@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use gtk::{FileLauncher, gdk, gio};
+use gtk::{FileLauncher, gdk, gio, glib};
 use sustain_app_runtime::{
     ApplicationCommand, NotificationCategory, NotificationSeverity, PlaybackCommand, TrackId,
+    TrackMetadata,
 };
 use sustain_i18n::{gettext, tr_format};
 
@@ -166,6 +167,63 @@ pub(crate) fn show_in_folder_callback(
     })
 }
 
+/// Open a Discogs search for the selected track's release, to find its
+/// artwork, label or year (#321).
+pub(crate) fn look_up_on_discogs_callback(
+    runtime: &SharedRuntime,
+    window: &gtk::Window,
+) -> TrackActionCallback {
+    let runtime = runtime.clone();
+    let window = window.clone();
+    Rc::new(move |invocation: TrackActionInvocation| {
+        let Some(url) = invocation.selected_track_ids.first().and_then(|track_id| {
+            runtime
+                .borrow()
+                .library_track(*track_id)
+                .map(|track| discogs_search_url(&track.metadata))
+        }) else {
+            return;
+        };
+        let runtime = runtime.clone();
+        gtk::UriLauncher::new(&url).launch(
+            Some(&window),
+            None::<&gio::Cancellable>,
+            move |result| {
+                if let Err(error) = result
+                    && !error.matches(gtk::DialogError::Dismissed)
+                {
+                    report_action_failure(
+                        &runtime,
+                        tr_format!(gettext("Could not open Discogs: {error}."), error = error),
+                    );
+                }
+            },
+        );
+    })
+}
+
+/// Discogs search URL for a track's artist and album, or its title when
+/// it has no album. Label, year and artwork belong to the release, so the
+/// album is the better query whenever there is one.
+fn discogs_search_url(metadata: &TrackMetadata) -> String {
+    fn present(field: &Option<String>) -> Option<&str> {
+        field
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+    let release_or_song = present(&metadata.album).or_else(|| present(&metadata.title));
+    let query = [present(&metadata.artist), release_or_song]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "https://www.discogs.com/search?q={}&type=all",
+        glib::uri_escape_string(query.as_str(), None::<&str>, false)
+    )
+}
+
 fn absolute_paths_for_tracks(runtime: &SharedRuntime, track_ids: &[TrackId]) -> Vec<PathBuf> {
     let runtime_borrow = runtime.borrow();
     track_ids
@@ -224,4 +282,40 @@ fn show_path_in_folder(runtime: &SharedRuntime, window: &gtk::Window, path: &Pat
             );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use sustain_app_runtime::TrackMetadata;
+
+    use super::discogs_search_url;
+
+    fn metadata(artist: Option<&str>, album: Option<&str>, title: Option<&str>) -> TrackMetadata {
+        TrackMetadata {
+            artist: artist.map(str::to_owned),
+            album: album.map(str::to_owned),
+            title: title.map(str::to_owned),
+            ..TrackMetadata::default()
+        }
+    }
+
+    #[test]
+    fn discogs_search_queries_the_artist_and_album() {
+        assert_eq!(
+            discogs_search_url(&metadata(
+                Some("Daft Punk"),
+                Some("Discovery"),
+                Some("Aerodynamic")
+            )),
+            "https://www.discogs.com/search?q=Daft%20Punk%20Discovery&type=all"
+        );
+    }
+
+    #[test]
+    fn discogs_search_falls_back_to_the_title_without_an_album() {
+        assert_eq!(
+            discogs_search_url(&metadata(Some("Moby"), Some("  "), Some("Porcelain & Co"))),
+            "https://www.discogs.com/search?q=Moby%20Porcelain%20%26%20Co&type=all"
+        );
+    }
 }

@@ -115,6 +115,7 @@ pub(crate) enum TrackContextActionId {
     CopyFiles,
     ShowInFolder,
     ShowAlbum,
+    LookUpOnDiscogs,
     ConsolidateDuplicates,
     RemoveFromLibrary,
     MoveToTrash,
@@ -130,6 +131,7 @@ impl TrackContextActionId {
             Self::CopyFiles => "copy-files",
             Self::ShowInFolder => "show-in-folder",
             Self::ShowAlbum => "show-album",
+            Self::LookUpOnDiscogs => "look-up-on-discogs",
             Self::ConsolidateDuplicates => "consolidate-duplicates",
             Self::RemoveFromLibrary => "remove-from-library",
             Self::MoveToTrash => "move-to-trash",
@@ -160,7 +162,8 @@ pub(crate) enum TrackContextActionSection {
     Queue,
     /// Track inspection: Get Info.
     Info,
-    /// Library navigation: Show Album.
+    /// Navigation, in the library or out to the web: Show Album, Look Up
+    /// on Discogs.
     Navigate,
     /// On-disk file operations: Copy, Show in Folder.
     Files,
@@ -301,6 +304,18 @@ impl TrackContextAction {
             selection: TrackSelectionRequirement::Single,
             confirmation: TrackActionConfirmation::None,
             visibility: Some(visibility),
+            callback,
+        }
+    }
+
+    pub(crate) fn look_up_on_discogs(callback: TrackActionCallback) -> Self {
+        Self {
+            id: TrackContextActionId::LookUpOnDiscogs,
+            label: gettext("Look Up on Discogs"),
+            section: TrackContextActionSection::Navigate,
+            selection: TrackSelectionRequirement::Single,
+            confirmation: TrackActionConfirmation::None,
+            visibility: None,
             callback,
         }
     }
@@ -993,7 +1008,8 @@ mod tests {
             TrackContextAction::show_in_folder(callback.clone()),
             TrackContextAction::show_album(callback.clone(), always_visible()),
             TrackContextAction::remove_from_library(callback.clone()),
-            TrackContextAction::move_to_trash(callback),
+            TrackContextAction::move_to_trash(callback.clone()),
+            TrackContextAction::look_up_on_discogs(callback),
         ];
 
         assert_eq!(actions[0].id, TrackContextActionId::PlayNext);
@@ -1020,6 +1036,9 @@ mod tests {
             actions[7].confirmation,
             TrackActionConfirmation::MoveToTrash
         );
+        assert_eq!(actions[8].id, TrackContextActionId::LookUpOnDiscogs);
+        assert_eq!(actions[8].label, "Look Up on Discogs");
+        assert_eq!(actions[8].selection, TrackSelectionRequirement::Single);
     }
 
     #[test]

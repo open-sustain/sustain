@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-21 08:31+0100\n"
+"POT-Creation-Date: 2026-11-21 12:06+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -98,7 +98,7 @@ msgid ""
 "edit."
 msgstr ""
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:45
+#: crates/ui_gtk/src/preferences/about_tab.rs:44
 #, rust-format
 msgid "A music library manager and player for the Linux desktop."
 msgstr ""
@@ -133,12 +133,12 @@ msgstr ""
 msgid "Add rule"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:587
+#: crates/ui_gtk/src/track_context.rs:602
 #, rust-format
 msgid "Add to Playlist…"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:248
+#: crates/ui_gtk/src/track_context.rs:251
 #, rust-format
 msgid "Add to Queue"
 msgstr ""
@@ -207,8 +207,8 @@ msgstr ""
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:252
 #: crates/ui_gtk/src/sidebar/row_context.rs:317
-#: crates/ui_gtk/src/track_context.rs:771
-#: crates/ui_gtk/src/track_context.rs:813
+#: crates/ui_gtk/src/track_context.rs:786
+#: crates/ui_gtk/src/track_context.rs:828
 #, rust-format
 msgid "All"
 msgstr ""
@@ -253,7 +253,7 @@ msgstr[0] ""
 msgstr[1] ""
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:181
-#: crates/ui_gtk/src/track_context.rs:666
+#: crates/ui_gtk/src/track_context.rs:681
 #, rust-format
 msgid "Analyze…"
 msgstr ""
@@ -296,7 +296,7 @@ msgstr ""
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:550
 #: crates/ui_gtk/src/sidebar/row_context.rs:293
-#: crates/ui_gtk/src/track_context.rs:795 crates/ui_gtk/src/track_info.rs:109
+#: crates/ui_gtk/src/track_context.rs:810 crates/ui_gtk/src/track_info.rs:109
 #, rust-format
 msgid "Artwork"
 msgstr ""
@@ -317,7 +317,7 @@ msgid "Artwork updated."
 msgstr ""
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:223
-#: crates/ui_gtk/src/track_context.rs:755
+#: crates/ui_gtk/src/track_context.rs:770
 #, rust-format
 msgid "Audio"
 msgstr ""
@@ -344,7 +344,7 @@ msgstr ""
 msgid "Audio file"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:825
+#: crates/ui_gtk/src/track_context.rs:840
 #, rust-format
 msgid "Audio from YouTube"
 msgstr ""
@@ -352,7 +352,7 @@ msgstr ""
 #: crates/ui_gtk/src/device_panel.rs:400
 #: crates/ui_gtk/src/duplicate_consolidation.rs:810
 #: crates/ui_gtk/src/sidebar/row_context.rs:215
-#: crates/ui_gtk/src/track_context.rs:749
+#: crates/ui_gtk/src/track_context.rs:764
 #: crates/ui_gtk/src/track_info/details.rs:120
 #: crates/ui_gtk/src/track_info/multi.rs:370
 #: crates/ui_gtk/src/track_table/columns.rs:66
@@ -463,7 +463,7 @@ msgstr ""
 msgid "CD ripping is not available in this build."
 msgstr ""
 
-#: crates/app_runtime/src/playback.rs:165
+#: crates/app_runtime/src/playback.rs:171
 #, rust-format
 msgid "CD track {number}"
 msgstr ""
@@ -608,7 +608,7 @@ msgstr ""
 msgid "Consolidate Duplicate Tracks"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:323
+#: crates/ui_gtk/src/track_context.rs:338
 #, rust-format
 msgid "Consolidate to single track"
 msgstr ""
@@ -618,7 +618,7 @@ msgstr ""
 msgid "Consolidating duplicate tracks..."
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:272
+#: crates/ui_gtk/src/track_context.rs:275
 #, rust-format
 msgid "Copy"
 msgstr ""
@@ -628,7 +628,7 @@ msgstr ""
 msgid "Copying tracks ({completed}/{total})…"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context_ops.rs:197
+#: crates/ui_gtk/src/track_context_ops.rs:255
 #, rust-format
 msgid "Could not copy the files: {error}."
 msgstr ""
@@ -653,6 +653,11 @@ msgstr ""
 msgid "Could not find the mounted device to eject."
 msgstr ""
 
+#: crates/ui_gtk/src/track_context_ops.rs:197
+#, rust-format
+msgid "Could not open Discogs: {error}."
+msgstr ""
+
 #: crates/app_runtime/src/device_sync.rs:613
 #, rust-format
 msgid "Could not plan the device sync: {detail}"
@@ -668,7 +673,7 @@ msgstr ""
 msgid "Could not scan for Android devices: {error}"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context_ops.rs:221
+#: crates/ui_gtk/src/track_context_ops.rs:279
 #, rust-format
 msgid "Could not show the file's folder: {error}."
 msgstr ""
@@ -832,7 +837,7 @@ msgstr ""
 msgid "Disc total"
 msgstr ""
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:68
+#: crates/ui_gtk/src/preferences/about_tab.rs:67
 #, rust-format
 msgid "Documentation"
 msgstr ""
@@ -1040,7 +1045,7 @@ msgctxt "statistics section"
 msgid "Genre"
 msgstr ""
 
-#: crates/ui_gtk/src/shortcuts.rs:115 crates/ui_gtk/src/track_context.rs:260
+#: crates/ui_gtk/src/shortcuts.rs:115 crates/ui_gtk/src/track_context.rs:263
 #, rust-format
 msgid "Get Info"
 msgstr ""
@@ -1129,7 +1134,7 @@ msgstr ""
 msgid "Innocuous"
 msgstr ""
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:227
+#: crates/app_runtime/src/youtube_audio_replacement.rs:230
 #, rust-format
 msgid "Install yt-dlp and FFmpeg before replacing audio from YouTube."
 msgstr ""
@@ -1172,7 +1177,7 @@ msgstr[1] ""
 #: crates/ui_gtk/src/device_panel.rs:402
 #: crates/ui_gtk/src/duplicate_consolidation.rs:811
 #: crates/ui_gtk/src/sidebar/row_context.rs:218
-#: crates/ui_gtk/src/track_context.rs:752
+#: crates/ui_gtk/src/track_context.rs:767
 #: crates/ui_gtk/src/track_info/details.rs:126
 #: crates/ui_gtk/src/track_info/multi.rs:378
 #: crates/ui_gtk/src/track_table/columns.rs:67
@@ -1343,7 +1348,7 @@ msgstr ""
 msgid "Library scanning is not available in this build."
 msgstr ""
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:56
+#: crates/ui_gtk/src/preferences/about_tab.rs:55
 #, rust-format
 msgid "Licensed under GPL-3.0-or-later"
 msgstr ""
@@ -1383,6 +1388,11 @@ msgstr ""
 msgid "Location"
 msgstr ""
 
+#: crates/ui_gtk/src/track_context.rs:314
+#, rust-format
+msgid "Look Up on Discogs"
+msgstr ""
+
 #: crates/ui_gtk/src/preferences/online_tab.rs:23
 #, rust-format
 msgid ""
@@ -1406,7 +1416,7 @@ msgstr ""
 #: crates/ui_gtk/src/duplicate_consolidation.rs:813
 #: crates/ui_gtk/src/now_playing.rs:224
 #: crates/ui_gtk/src/sidebar/row_context.rs:283
-#: crates/ui_gtk/src/track_context.rs:789 crates/ui_gtk/src/track_info.rs:112
+#: crates/ui_gtk/src/track_context.rs:804 crates/ui_gtk/src/track_info.rs:112
 #: crates/ui_gtk/src/track_table/columns.rs:64
 #, rust-format
 msgid "Lyrics"
@@ -1506,9 +1516,9 @@ msgstr ""
 msgid "Most played genres"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:335
-#: crates/ui_gtk/src/track_context.rs:908
-#: crates/ui_gtk/src/track_context.rs:910
+#: crates/ui_gtk/src/track_context.rs:350
+#: crates/ui_gtk/src/track_context.rs:923
+#: crates/ui_gtk/src/track_context.rs:925
 #, rust-format
 msgid "Move to Trash"
 msgstr ""
@@ -1637,7 +1647,7 @@ msgstr ""
 msgid "No playlists yet. Create a playlist to sync it."
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:710
+#: crates/ui_gtk/src/track_context.rs:725
 #, rust-format
 msgid "No playlists."
 msgstr ""
@@ -1806,7 +1816,7 @@ msgstr ""
 msgid "Paste Artwork"
 msgstr ""
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:225
+#: crates/app_runtime/src/youtube_audio_replacement.rs:228
 #, rust-format
 msgid "Paste a valid YouTube URL."
 msgstr ""
@@ -1820,7 +1830,7 @@ msgid ""
 "file."
 msgstr ""
 
-#: crates/app_runtime/src/playback.rs:148
+#: crates/app_runtime/src/playback.rs:154
 #, rust-format
 msgid ""
 "Paused: the audio output was disconnected or taken by another application."
@@ -1855,7 +1865,7 @@ msgctxt "smart playlist field"
 msgid "Play Count"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:233
+#: crates/ui_gtk/src/track_context.rs:236
 #, rust-format
 msgid "Play Next"
 msgstr ""
@@ -1882,12 +1892,12 @@ msgctxt "shortcuts group"
 msgid "Playback"
 msgstr ""
 
-#: crates/app_runtime/src/playback.rs:169
+#: crates/app_runtime/src/playback.rs:175
 #, rust-format
 msgid "Playback failed for {track_name}. Skipping to the next track."
 msgstr ""
 
-#: crates/app_runtime/src/playback.rs:155
+#: crates/app_runtime/src/playback.rs:161
 #, rust-format
 msgid "Playback failed. Skipping to the next track."
 msgstr ""
@@ -1907,7 +1917,7 @@ msgstr ""
 msgid "Playlists"
 msgstr ""
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:98
+#: crates/ui_gtk/src/preferences/about_tab.rs:97
 #, rust-format
 msgid ""
 "Playlists and listening stats live only in Sustain's database — your "
@@ -2082,14 +2092,14 @@ msgstr ""
 msgid "Remove Artwork"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:311
-#: crates/ui_gtk/src/track_context.rs:893
-#: crates/ui_gtk/src/track_context.rs:895
+#: crates/ui_gtk/src/track_context.rs:326
+#: crates/ui_gtk/src/track_context.rs:908
+#: crates/ui_gtk/src/track_context.rs:910
 #, rust-format
 msgid "Remove from Library"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:350
+#: crates/ui_gtk/src/track_context.rs:365
 #, rust-format
 msgid "Remove from Playlist"
 msgstr ""
@@ -2132,7 +2142,7 @@ msgid ""
 "trash."
 msgstr ""
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:73
+#: crates/ui_gtk/src/preferences/about_tab.rs:72
 #, rust-format
 msgid "Report a problem"
 msgstr ""
@@ -2143,7 +2153,7 @@ msgid "Reset"
 msgstr ""
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:185
-#: crates/ui_gtk/src/track_context.rs:677
+#: crates/ui_gtk/src/track_context.rs:692
 #, rust-format
 msgid "Retrieve…"
 msgstr ""
@@ -2278,7 +2288,7 @@ msgstr ""
 msgid "Share of tracks per genre across the whole library."
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:299
+#: crates/ui_gtk/src/track_context.rs:302
 #, rust-format
 msgid "Show Album"
 msgstr ""
@@ -2293,7 +2303,7 @@ msgstr ""
 msgid "Show Statistics in the sidebar"
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:284
+#: crates/ui_gtk/src/track_context.rs:287
 #, rust-format
 msgid "Show in Folder"
 msgstr ""
@@ -2458,7 +2468,7 @@ msgstr ""
 msgid "Sustain"
 msgstr ""
 
-#: crates/app_runtime/src/playback.rs:734
+#: crates/app_runtime/src/playback.rs:740
 #, rust-format
 msgid ""
 "Sustain could not save listening statistics. The pending play count is "
@@ -2551,7 +2561,7 @@ msgid "Syncing {label}…"
 msgstr ""
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:288
-#: crates/ui_gtk/src/track_context.rs:792
+#: crates/ui_gtk/src/track_context.rs:807
 #, rust-format
 msgid "Tags"
 msgstr ""
@@ -2611,12 +2621,12 @@ msgstr[1] ""
 msgid "The CD could not be imported."
 msgstr ""
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:239
+#: crates/app_runtime/src/youtube_audio_replacement.rs:242
 #, rust-format
 msgid "The YouTube audio download exceeded Sustain's time limit."
 msgstr ""
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:242
+#: crates/app_runtime/src/youtube_audio_replacement.rs:245
 #, rust-format
 msgid "The YouTube audio download was cancelled."
 msgstr ""
@@ -2626,7 +2636,7 @@ msgstr ""
 msgid "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
 msgstr ""
 
-#: crates/ui_gtk/src/track_context.rs:918
+#: crates/ui_gtk/src/track_context.rs:933
 #, rust-format
 msgid ""
 "The audio file will be moved to the system trash and the track will be "
@@ -2637,7 +2647,7 @@ msgid_plural ""
 msgstr[0] ""
 msgstr[1] ""
 
-#: crates/ui_gtk/src/track_context.rs:929
+#: crates/ui_gtk/src/track_context.rs:944
 #, rust-format
 msgid ""
 "The audio file will stay on disk, but the track will be removed from "
@@ -2673,7 +2683,7 @@ msgstr ""
 msgid "The disc is being imported. Play it once the import is done."
 msgstr ""
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:236
+#: crates/app_runtime/src/youtube_audio_replacement.rs:239
 #, rust-format
 msgid "The downloaded YouTube replacement exceeded Sustain's size limit."
 msgstr ""
@@ -3088,7 +3098,7 @@ msgstr[1] ""
 msgid "Various Artists"
 msgstr ""
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:52
+#: crates/ui_gtk/src/preferences/about_tab.rs:51
 #, rust-format
 msgid "Version {version}"
 msgstr ""
@@ -3534,12 +3544,12 @@ msgstr ""
 msgid "value"
 msgstr ""
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:230
+#: crates/app_runtime/src/youtube_audio_replacement.rs:233
 #, rust-format
 msgid "yt-dlp could not download usable audio from that YouTube URL."
 msgstr ""
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:233
+#: crates/app_runtime/src/youtube_audio_replacement.rs:236
 #, rust-format
 msgid "yt-dlp returned an unsupported or unsafe audio file."
 msgstr ""

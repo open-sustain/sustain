@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-21 08:31+0100\n"
+"POT-Creation-Date: 2026-11-21 12:06+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Korean\n"
@@ -105,7 +105,7 @@ msgstr ""
 "곳에 복구 상태를 보존했습니다. 파일 시스템 접근 문제를 해결한 후 편집을 다시 "
 "시도하십시오."
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:45
+#: crates/ui_gtk/src/preferences/about_tab.rs:44
 #, rust-format
 msgid "A music library manager and player for the Linux desktop."
 msgstr "Linux 데스크톱용 음악 보관함 관리자이자 플레이어입니다."
@@ -140,12 +140,12 @@ msgstr "아트워크 추가…"
 msgid "Add rule"
 msgstr "규칙 추가"
 
-#: crates/ui_gtk/src/track_context.rs:587
+#: crates/ui_gtk/src/track_context.rs:602
 #, rust-format
 msgid "Add to Playlist…"
 msgstr "재생 목록에 추가…"
 
-#: crates/ui_gtk/src/track_context.rs:248
+#: crates/ui_gtk/src/track_context.rs:251
 #, rust-format
 msgid "Add to Queue"
 msgstr "대기열에 추가"
@@ -214,8 +214,8 @@ msgstr "앨범"
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:252
 #: crates/ui_gtk/src/sidebar/row_context.rs:317
-#: crates/ui_gtk/src/track_context.rs:771
-#: crates/ui_gtk/src/track_context.rs:813
+#: crates/ui_gtk/src/track_context.rs:786
+#: crates/ui_gtk/src/track_context.rs:828
 #, rust-format
 msgid "All"
 msgstr "전체"
@@ -259,7 +259,7 @@ msgid_plural "Analyzed {completed} tracks."
 msgstr[0] "트랙 {completed}개를 분석했습니다."
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:181
-#: crates/ui_gtk/src/track_context.rs:666
+#: crates/ui_gtk/src/track_context.rs:681
 #, rust-format
 msgid "Analyze…"
 msgstr "분석…"
@@ -302,7 +302,7 @@ msgstr "동기화할 아티스트"
 
 #: crates/ui_gtk/src/duplicate_consolidation.rs:550
 #: crates/ui_gtk/src/sidebar/row_context.rs:293
-#: crates/ui_gtk/src/track_context.rs:795 crates/ui_gtk/src/track_info.rs:109
+#: crates/ui_gtk/src/track_context.rs:810 crates/ui_gtk/src/track_info.rs:109
 #, rust-format
 msgid "Artwork"
 msgstr "아트워크"
@@ -323,7 +323,7 @@ msgid "Artwork updated."
 msgstr "아트워크를 업데이트했습니다."
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:223
-#: crates/ui_gtk/src/track_context.rs:755
+#: crates/ui_gtk/src/track_context.rs:770
 #, rust-format
 msgid "Audio"
 msgstr "오디오"
@@ -350,7 +350,7 @@ msgstr "오디오 분석"
 msgid "Audio file"
 msgstr "오디오 파일"
 
-#: crates/ui_gtk/src/track_context.rs:825
+#: crates/ui_gtk/src/track_context.rs:840
 #, rust-format
 msgid "Audio from YouTube"
 msgstr "YouTube 오디오"
@@ -358,7 +358,7 @@ msgstr "YouTube 오디오"
 #: crates/ui_gtk/src/device_panel.rs:400
 #: crates/ui_gtk/src/duplicate_consolidation.rs:810
 #: crates/ui_gtk/src/sidebar/row_context.rs:215
-#: crates/ui_gtk/src/track_context.rs:749
+#: crates/ui_gtk/src/track_context.rs:764
 #: crates/ui_gtk/src/track_info/details.rs:120
 #: crates/ui_gtk/src/track_info/multi.rs:370
 #: crates/ui_gtk/src/track_table/columns.rs:66
@@ -474,7 +474,7 @@ msgstr "CD 읽기 정확도"
 msgid "CD ripping is not available in this build."
 msgstr "이 빌드에서는 CD 리핑을 사용할 수 없습니다."
 
-#: crates/app_runtime/src/playback.rs:165
+#: crates/app_runtime/src/playback.rs:171
 #, rust-format
 msgid "CD track {number}"
 msgstr "CD 트랙 {number}"
@@ -620,7 +620,7 @@ msgstr "통합"
 msgid "Consolidate Duplicate Tracks"
 msgstr "중복 트랙 통합"
 
-#: crates/ui_gtk/src/track_context.rs:323
+#: crates/ui_gtk/src/track_context.rs:338
 #, rust-format
 msgid "Consolidate to single track"
 msgstr "하나의 트랙으로 통합"
@@ -630,7 +630,7 @@ msgstr "하나의 트랙으로 통합"
 msgid "Consolidating duplicate tracks..."
 msgstr "중복 트랙 통합 중…"
 
-#: crates/ui_gtk/src/track_context.rs:272
+#: crates/ui_gtk/src/track_context.rs:275
 #, rust-format
 msgid "Copy"
 msgstr "복사"
@@ -640,7 +640,7 @@ msgstr "복사"
 msgid "Copying tracks ({completed}/{total})…"
 msgstr "트랙 복사 중({completed}/{total})…"
 
-#: crates/ui_gtk/src/track_context_ops.rs:197
+#: crates/ui_gtk/src/track_context_ops.rs:255
 #, rust-format
 msgid "Could not copy the files: {error}."
 msgstr "파일을 복사하지 못했습니다: {error}."
@@ -665,6 +665,11 @@ msgstr "커버 아트를 가져오지 못했습니다."
 msgid "Could not find the mounted device to eject."
 msgstr "꺼낼 마운트된 기기를 찾지 못했습니다."
 
+#: crates/ui_gtk/src/track_context_ops.rs:197
+#, rust-format
+msgid "Could not open Discogs: {error}."
+msgstr "Discogs를 열지 못했습니다: {error}."
+
 #: crates/app_runtime/src/device_sync.rs:613
 #, rust-format
 msgid "Could not plan the device sync: {detail}"
@@ -680,7 +685,7 @@ msgstr "MusicBrainz에 연결할 수 없어 대체 CD 메타데이터를 사용�
 msgid "Could not scan for Android devices: {error}"
 msgstr "Android 기기를 검색하지 못했습니다: {error}"
 
-#: crates/ui_gtk/src/track_context_ops.rs:221
+#: crates/ui_gtk/src/track_context_ops.rs:279
 #, rust-format
 msgid "Could not show the file's folder: {error}."
 msgstr "파일이 있는 폴더를 표시하지 못했습니다: {error}."
@@ -849,7 +854,7 @@ msgstr "디스크 번호"
 msgid "Disc total"
 msgstr "총 디스크 수"
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:68
+#: crates/ui_gtk/src/preferences/about_tab.rs:67
 #, rust-format
 msgid "Documentation"
 msgstr "설명서"
@@ -1060,7 +1065,7 @@ msgctxt "statistics section"
 msgid "Genre"
 msgstr "장르"
 
-#: crates/ui_gtk/src/shortcuts.rs:115 crates/ui_gtk/src/track_context.rs:260
+#: crates/ui_gtk/src/shortcuts.rs:115 crates/ui_gtk/src/track_context.rs:263
 #, rust-format
 msgid "Get Info"
 msgstr "정보 가져오기"
@@ -1145,7 +1150,7 @@ msgstr "CD 가져오는 중…"
 msgid "Innocuous"
 msgstr "무난함"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:227
+#: crates/app_runtime/src/youtube_audio_replacement.rs:230
 #, rust-format
 msgid "Install yt-dlp and FFmpeg before replacing audio from YouTube."
 msgstr "YouTube에서 오디오를 교체하려면 먼저 yt-dlp와 FFmpeg를 설치하십시오."
@@ -1189,7 +1194,7 @@ msgstr[0] "{audio} · {path} 유지 · 사본 {removed}개 제거"
 #: crates/ui_gtk/src/device_panel.rs:402
 #: crates/ui_gtk/src/duplicate_consolidation.rs:811
 #: crates/ui_gtk/src/sidebar/row_context.rs:218
-#: crates/ui_gtk/src/track_context.rs:752
+#: crates/ui_gtk/src/track_context.rs:767
 #: crates/ui_gtk/src/track_info/details.rs:126
 #: crates/ui_gtk/src/track_info/multi.rs:378
 #: crates/ui_gtk/src/track_table/columns.rs:67
@@ -1361,7 +1366,7 @@ msgstr "보관함 경로"
 msgid "Library scanning is not available in this build."
 msgstr "이 빌드에서는 보관함 검사를 사용할 수 없습니다."
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:56
+#: crates/ui_gtk/src/preferences/about_tab.rs:55
 #, rust-format
 msgid "Licensed under GPL-3.0-or-later"
 msgstr "GPL-3.0-or-later 라이선스"
@@ -1401,6 +1406,11 @@ msgstr "누락된 트랙 찾기"
 msgid "Location"
 msgstr "위치"
 
+#: crates/ui_gtk/src/track_context.rs:314
+#, rust-format
+msgid "Look Up on Discogs"
+msgstr "Discogs에서 찾아보기"
+
 #: crates/ui_gtk/src/preferences/online_tab.rs:23
 #, rust-format
 msgid ""
@@ -1429,7 +1439,7 @@ msgstr "낮은 볼륨"
 #: crates/ui_gtk/src/duplicate_consolidation.rs:813
 #: crates/ui_gtk/src/now_playing.rs:224
 #: crates/ui_gtk/src/sidebar/row_context.rs:283
-#: crates/ui_gtk/src/track_context.rs:789 crates/ui_gtk/src/track_info.rs:112
+#: crates/ui_gtk/src/track_context.rs:804 crates/ui_gtk/src/track_info.rs:112
 #: crates/ui_gtk/src/track_table/columns.rs:64
 #, rust-format
 msgid "Lyrics"
@@ -1530,9 +1540,9 @@ msgstr "가장 좋아하는 장르"
 msgid "Most played genres"
 msgstr "가장 많이 재생한 장르"
 
-#: crates/ui_gtk/src/track_context.rs:335
-#: crates/ui_gtk/src/track_context.rs:908
-#: crates/ui_gtk/src/track_context.rs:910
+#: crates/ui_gtk/src/track_context.rs:350
+#: crates/ui_gtk/src/track_context.rs:923
+#: crates/ui_gtk/src/track_context.rs:925
 #, rust-format
 msgid "Move to Trash"
 msgstr "휴지통으로 이동"
@@ -1665,7 +1675,7 @@ msgstr "직접 대기열에 넣은 트랙 없음"
 msgid "No playlists yet. Create a playlist to sync it."
 msgstr "아직 재생 목록이 없습니다. 동기화하려면 재생 목록을 만드십시오."
 
-#: crates/ui_gtk/src/track_context.rs:710
+#: crates/ui_gtk/src/track_context.rs:725
 #, rust-format
 msgid "No playlists."
 msgstr "재생 목록 없음."
@@ -1846,7 +1856,7 @@ msgstr "철저함"
 msgid "Paste Artwork"
 msgstr "아트워크 붙여 넣기"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:225
+#: crates/app_runtime/src/youtube_audio_replacement.rs:228
 #, rust-format
 msgid "Paste a valid YouTube URL."
 msgstr "올바른 YouTube URL을 붙여 넣으십시오."
@@ -1863,7 +1873,7 @@ msgstr ""
 "를 사용해 가장 좋은 오디오를 다운로드합니다. 재생 시간이 일치하고 비트 전송률"
 "이 너무 낮거나 현재 파일보다 나쁘지 않을 때만 교체를 허용합니다."
 
-#: crates/app_runtime/src/playback.rs:148
+#: crates/app_runtime/src/playback.rs:154
 #, rust-format
 msgid ""
 "Paused: the audio output was disconnected or taken by another application."
@@ -1900,7 +1910,7 @@ msgctxt "smart playlist field"
 msgid "Play Count"
 msgstr "재생 횟수"
 
-#: crates/ui_gtk/src/track_context.rs:233
+#: crates/ui_gtk/src/track_context.rs:236
 #, rust-format
 msgid "Play Next"
 msgstr "다음에 재생"
@@ -1927,12 +1937,12 @@ msgctxt "shortcuts group"
 msgid "Playback"
 msgstr "재생"
 
-#: crates/app_runtime/src/playback.rs:169
+#: crates/app_runtime/src/playback.rs:175
 #, rust-format
 msgid "Playback failed for {track_name}. Skipping to the next track."
 msgstr "{track_name} 재생에 실패했습니다. 다음 트랙으로 건너뜁니다."
 
-#: crates/app_runtime/src/playback.rs:155
+#: crates/app_runtime/src/playback.rs:161
 #, rust-format
 msgid "Playback failed. Skipping to the next track."
 msgstr "재생에 실패했습니다. 다음 트랙으로 건너뜁니다."
@@ -1952,7 +1962,7 @@ msgstr "재생 목록"
 msgid "Playlists"
 msgstr "재생 목록"
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:98
+#: crates/ui_gtk/src/preferences/about_tab.rs:97
 #, rust-format
 msgid ""
 "Playlists and listening stats live only in Sustain's database — your "
@@ -2125,14 +2135,14 @@ msgstr "이 빌드에서는 원격 아트워크 가져오기를 사용할 수 �
 msgid "Remove Artwork"
 msgstr "아트워크 제거"
 
-#: crates/ui_gtk/src/track_context.rs:311
-#: crates/ui_gtk/src/track_context.rs:893
-#: crates/ui_gtk/src/track_context.rs:895
+#: crates/ui_gtk/src/track_context.rs:326
+#: crates/ui_gtk/src/track_context.rs:908
+#: crates/ui_gtk/src/track_context.rs:910
 #, rust-format
 msgid "Remove from Library"
 msgstr "보관함에서 제거"
 
-#: crates/ui_gtk/src/track_context.rs:350
+#: crates/ui_gtk/src/track_context.rs:365
 #, rust-format
 msgid "Remove from Playlist"
 msgstr "재생 목록에서 제거"
@@ -2175,7 +2185,7 @@ msgid ""
 "trash."
 msgstr "교체를 설치했지만 이전 오디오 파일을 휴지통으로 옮기지 못했습니다."
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:73
+#: crates/ui_gtk/src/preferences/about_tab.rs:72
 #, rust-format
 msgid "Report a problem"
 msgstr "문제 보고"
@@ -2186,7 +2196,7 @@ msgid "Reset"
 msgstr "초기화"
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:185
-#: crates/ui_gtk/src/track_context.rs:677
+#: crates/ui_gtk/src/track_context.rs:692
 #, rust-format
 msgid "Retrieve…"
 msgstr "가져오기…"
@@ -2331,7 +2341,7 @@ msgstr "비트 전송률 범위별 트랙 비율입니다."
 msgid "Share of tracks per genre across the whole library."
 msgstr "전체 보관함의 장르별 트랙 비율입니다."
 
-#: crates/ui_gtk/src/track_context.rs:299
+#: crates/ui_gtk/src/track_context.rs:302
 #, rust-format
 msgid "Show Album"
 msgstr "앨범 보기"
@@ -2346,7 +2356,7 @@ msgstr "사이드바에 중복 항목 표시"
 msgid "Show Statistics in the sidebar"
 msgstr "사이드바에 통계 표시"
 
-#: crates/ui_gtk/src/track_context.rs:284
+#: crates/ui_gtk/src/track_context.rs:287
 #, rust-format
 msgid "Show in Folder"
 msgstr "폴더에서 보기"
@@ -2521,7 +2531,7 @@ msgstr "엄격한 일치"
 msgid "Sustain"
 msgstr "Sustain"
 
-#: crates/app_runtime/src/playback.rs:734
+#: crates/app_runtime/src/playback.rs:740
 #, rust-format
 msgid ""
 "Sustain could not save listening statistics. The pending play count is "
@@ -2620,7 +2630,7 @@ msgid "Syncing {label}…"
 msgstr "{label} 동기화 중…"
 
 #: crates/ui_gtk/src/sidebar/row_context.rs:288
-#: crates/ui_gtk/src/track_context.rs:792
+#: crates/ui_gtk/src/track_context.rs:807
 #, rust-format
 msgid "Tags"
 msgstr "태그"
@@ -2681,12 +2691,12 @@ msgstr[0] ""
 msgid "The CD could not be imported."
 msgstr "CD를 가져오지 못했습니다."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:239
+#: crates/app_runtime/src/youtube_audio_replacement.rs:242
 #, rust-format
 msgid "The YouTube audio download exceeded Sustain's time limit."
 msgstr "YouTube 오디오 다운로드가 Sustain의 시간 제한을 넘었습니다."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:242
+#: crates/app_runtime/src/youtube_audio_replacement.rs:245
 #, rust-format
 msgid "The YouTube audio download was cancelled."
 msgstr "YouTube 오디오 다운로드가 취소되었습니다."
@@ -2697,7 +2707,7 @@ msgid "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
 msgstr ""
 "아트워크가 지원되지 않거나 손상되었거나 Sustain의 크기 제한을 넘습니다."
 
-#: crates/ui_gtk/src/track_context.rs:918
+#: crates/ui_gtk/src/track_context.rs:933
 #, rust-format
 msgid ""
 "The audio file will be moved to the system trash and the track will be "
@@ -2709,7 +2719,7 @@ msgstr[0] ""
 "오디오 파일 {count}개가 시스템 휴지통으로 이동되고 트랙이 보관함에서 제거됩니"
 "다."
 
-#: crates/ui_gtk/src/track_context.rs:929
+#: crates/ui_gtk/src/track_context.rs:944
 #, rust-format
 msgid ""
 "The audio file will stay on disk, but the track will be removed from "
@@ -2749,7 +2759,7 @@ msgstr "디스크가 바뀌었습니다. 원래 디스크를 다시 넣고 다�
 msgid "The disc is being imported. Play it once the import is done."
 msgstr "디스크를 가져오는 중입니다. 가져오기가 끝나면 재생하십시오."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:236
+#: crates/app_runtime/src/youtube_audio_replacement.rs:239
 #, rust-format
 msgid "The downloaded YouTube replacement exceeded Sustain's size limit."
 msgstr "YouTube에서 다운로드한 대체 파일이 Sustain의 크기 제한을 넘었습니다."
@@ -3183,7 +3193,7 @@ msgstr[0] "이 컴퓨터의 코어 {total}개 중 {workers}개를 사용합니�
 msgid "Various Artists"
 msgstr "여러 아티스트"
 
-#: crates/ui_gtk/src/preferences/about_tab.rs:52
+#: crates/ui_gtk/src/preferences/about_tab.rs:51
 #, rust-format
 msgid "Version {version}"
 msgstr "버전 {version}"
@@ -3627,14 +3637,14 @@ msgstr "제목 없는 스마트 재생 목록"
 msgid "value"
 msgstr "값"
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:230
+#: crates/app_runtime/src/youtube_audio_replacement.rs:233
 #, rust-format
 msgid "yt-dlp could not download usable audio from that YouTube URL."
 msgstr ""
 "yt-dlp가 해당 YouTube URL에서 사용할 수 있는 오디오를 다운로드하지 못했습니"
 "다."
 
-#: crates/app_runtime/src/youtube_audio_replacement.rs:233
+#: crates/app_runtime/src/youtube_audio_replacement.rs:236
 #, rust-format
 msgid "yt-dlp returned an unsupported or unsafe audio file."
 msgstr "yt-dlp가 지원되지 않거나 안전하지 않은 오디오 파일을 반환했습니다."

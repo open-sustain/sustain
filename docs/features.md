@@ -1209,6 +1209,9 @@ retrieval*):
 - **Add to Queue** — append to the tail of the Up Next queue
 - **Get Info** — open the multi-tab editor (`Ctrl+I`)
 - **Show Album** — switch to Albums view, reveal the album
+- **Look Up on Discogs** — *Sustain-native*; for a single track, open
+  a Discogs search for its artist and album (its title when it has no
+  album) in the web browser, to find the release's artwork, label or year
 - **Copy** — copy the audio file itself
 - **Show in folder** — open the system file manager at the file's
   location (`Ctrl+R`)
