@@ -50,7 +50,7 @@ name = "sustain"
 maintainer = "Sustain contributors <https://github.com/open-sustain/sustain>"
 section = "sound"
 priority = "optional"
-depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, libdiscid0"
+depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, libdiscid0, librsvg2-common"
 recommends = "yt-dlp, ffmpeg, gvfs-backends"
 extended-description = """
 Sustain is a Linux desktop music player in the lineage of 2010s iTunes.
@@ -100,13 +100,6 @@ assets = [
     # and docs/licensing.md).
     ["../dsp/LICENSE-MIT", "usr/share/doc/sustain/sustain-dsp/LICENSE-MIT", "644"],
     ["../dsp/LICENSE-APACHE", "usr/share/doc/sustain/sustain-dsp/LICENSE-APACHE", "644"],
-    ["../../data/icons/hicolor/16x16/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
-    ["../../data/icons/hicolor/24x24/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/24x24/apps/", "644"],
-    ["../../data/icons/hicolor/32x32/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
-    ["../../data/icons/hicolor/48x48/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
-    ["../../data/icons/hicolor/64x64/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
-    ["../../data/icons/hicolor/128x128/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
-    ["../../data/icons/hicolor/256x256/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
-    ["../../data/icons/hicolor/512x512/apps/io.github.open_sustain.sustain.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    ["../../data/icons/hicolor/scalable/apps/io.github.open_sustain.sustain.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["../../data/icons/hicolor/scalable/actions/sustain-statistics-symbolic.svg", "usr/share/icons/hicolor/scalable/actions/", "644"],
 ]

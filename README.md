@@ -1,5 +1,5 @@
 <h1>
-  <img src=".github/assets/logo.png" alt="" height="48" align="left" />
+  <img src=".github/assets/logo.svg" alt="" height="48" align="left" />
   Sustain
 </h1>
 

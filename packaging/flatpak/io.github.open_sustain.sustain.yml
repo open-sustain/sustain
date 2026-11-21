@@ -124,12 +124,8 @@ modules:
           ${FLATPAK_DEST}/share/licenses/io.github.open_sustain.sustain/sustain-dsp/LICENSE-MIT
       - install -Dm644 crates/dsp/LICENSE-APACHE
           ${FLATPAK_DEST}/share/licenses/io.github.open_sustain.sustain/sustain-dsp/LICENSE-APACHE
-      - |
-        for size in 16 24 32 48 64 128 256 512; do
-          install -Dm644 \
-            "data/icons/hicolor/${size}x${size}/apps/io.github.open_sustain.sustain.png" \
-            "${FLATPAK_DEST}/share/icons/hicolor/${size}x${size}/apps/io.github.open_sustain.sustain.png"
-        done
+      - install -Dm644 data/icons/hicolor/scalable/apps/io.github.open_sustain.sustain.svg
+          ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/io.github.open_sustain.sustain.svg
     sources:
       # The full repository checkout drives the build. This manifest
       # lives two levels deep under `packaging/flatpak/`, so the source

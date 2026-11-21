@@ -13,10 +13,9 @@ use super::{HELPER_MAX_WIDTH_CHARS, HELPER_MIN_WIDTH_CHARS};
 /// `main_window.rs`. Matches the desktop/MPRIS identity so the About
 /// pane shows the same artwork the user sees in their app launcher.
 const APP_ICON_NAME: &str = "io.github.open_sustain.sustain";
-/// Logical pixels. GTK picks the closest pre-built size from the
-/// hicolor theme and scales it with the display scale factor, so this
-/// looks crisp on HiDPI screens (256/512 sources are shipped under
-/// `data/icons/hicolor`).
+/// Logical pixels. The icon is a scalable SVG in the hicolor theme
+/// (`data/icons/hicolor/scalable/apps`), rendered at this size times the
+/// display scale factor, so it stays crisp on HiDPI screens.
 const APP_ICON_SIZE: i32 = 96;
 
 const DOCUMENTATION_URL: &str =

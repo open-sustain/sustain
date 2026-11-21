@@ -43,9 +43,10 @@ cp "$([ "$(stat -c%s /tmp/ll.webp)" -le "$(stat -c%s /tmp/lossy.webp)" ] \
       && echo /tmp/ll.webp || echo /tmp/lossy.webp)" assets/<name>.webp
 ```
 
-then reference it from `index.html` with the `<picture>` block above. The
-favicon (`<link rel="icon">`) and the `og:image` social preview stay PNG —
-`<picture>` doesn't apply to them and PNG is the no-surprises choice there.
+then reference it from `index.html` with the `<picture>` block above. The logo
+and favicon are the vector `assets/logo.svg` (a copy of the app icon,
+`data/icons/hicolor/scalable/apps/io.github.open_sustain.sustain.svg`); the
+`og:image` social preview stays PNG — crawlers don't accept SVG there.
 
 ## Deployment
 
