@@ -474,9 +474,14 @@ fn assign_artwork(first: u32, num_chunks: usize, next: &mut u32) -> Alloc {
     }
 }
 
+/// The most rows a data page holds. The header's one-byte row count
+/// (`0x18`) is written as it is; readers misread a page past it.
+const MAX_ROWS_PER_PAGE: usize = 255;
+
 /// Greedily pack rows into pages by exact size, accounting for the
-/// row-group footer that grows with row count. Always yields at least
-/// one (possibly empty) chunk so every table writes a data page.
+/// row-group footer that grows with row count, and at most
+/// [`MAX_ROWS_PER_PAGE`] to a page. Always yields at least one
+/// (possibly empty) chunk so every table writes a data page.
 fn chunk_rows(table: &'static str, rows: &[Vec<u8>]) -> Result<Vec<Range<usize>>, PdbError> {
     if rows.is_empty() {
         // A single empty page so the table still has a data page.
@@ -496,7 +501,9 @@ fn chunk_rows(table: &'static str, rows: &[Vec<u8>]) -> Result<Vec<Range<usize>>
                 bytes: row.len(),
             });
         }
-        if count > 0 && HEAP_START + heap + aligned + footer > PAGE_SIZE {
+        if count == MAX_ROWS_PER_PAGE
+            || (count > 0 && HEAP_START + heap + aligned + footer > PAGE_SIZE)
+        {
             chunks.push(start..i);
             start = i;
             heap = 0;
@@ -1506,6 +1513,19 @@ mod tests {
     use super::*;
     use crate::model::PioneerFileType;
     use sustain_domain::Bpm;
+
+    #[test]
+    fn a_page_holds_at_most_255_rows() {
+        // Playlist-entry-sized rows: by size alone, more than 255 fit a page.
+        let rows = vec![vec![0u8; 12]; 600];
+        let chunks = chunk_rows("playlist entries", &rows).expect("chunks");
+        assert!(chunks.iter().all(|chunk| chunk.len() <= MAX_ROWS_PER_PAGE));
+        assert_eq!(
+            chunks.iter().map(ExactSizeIterator::len).sum::<usize>(),
+            600
+        );
+        assert_eq!(chunks[0].len(), MAX_ROWS_PER_PAGE);
+    }
 
     fn track(title: &str, artist: &str, album: &str, n: u32) -> PioneerTrack {
         PioneerTrack {
