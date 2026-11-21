@@ -32,6 +32,7 @@ pub use identity::{
     read_marker_via_transport, write_marker, write_marker_via_transport,
 };
 pub use journal::{JournalError, ManifestJournal};
+pub use layout::device_path_key;
 pub use model::{
     DeviceCapacity, GenreBytes, PioneerTrackAnalysis, Placement, PreparedPioneerAssets,
     PreparedSyncRequest, SourceSnapshot, SyncBlocker, SyncError, SyncFailure, SyncInputPlaylist,

@@ -11,14 +11,26 @@
 //! leaves a short file that the next sync's size/fingerprint diff detects
 //! and recopies. All gio objects are created and used on the calling
 //! thread (the sync worker) and never cross threads.
+//!
+//! Android shared storage ignores letter case, as the engine expects of
+//! every device ([`device_path_key`]): `Age of Love` and `AGE OF LOVE`
+//! are one folder. GVfs matches names exactly, so the folder a path names
+//! may be spelled otherwise on the phone, and asking for the path's own
+//! spelling finds nothing there; writing to it would create an object
+//! the phone already holds, which it refuses (#259). The transport
+//! therefore reaches every path through the device's spelling of it.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::{self, Read};
 use std::path::Path;
+use std::rc::Rc;
 
 use gio::prelude::*;
-use gio::{Cancellable, File, FileCreateFlags, FileQueryInfoFlags, FileType};
+use gio::{Cancellable, File, FileCreateFlags, FileInfo, FileQueryInfoFlags, FileType};
 use sustain_device_sync::{
-    DeviceCapacity, DeviceTransport, DirectoryWorkBudget, MtpTarget, ensure_source_unchanged,
+    DeviceCapacity, DeviceTransport, DirectoryWorkBudget, MtpTarget, device_path_key,
+    ensure_source_unchanged,
 };
 use sustain_domain::{DeviceRelativePath, SourceFileStat};
 
@@ -28,6 +40,16 @@ const COPY_CHUNK_BYTES: usize = 256 * 1024;
 /// An opened MTP storage root. All paths resolve beneath `root`.
 pub struct MtpTransport {
     root: File,
+    /// The entries of each directory listed so far, by the directory's
+    /// device spelling: each entry's [`device_path_key`] to its spelling.
+    ///
+    /// A transport serves one plan or one sync, so the listings are not
+    /// refreshed. They only ever choose between spellings the device takes
+    /// for one name: an entry this transport created since is reached
+    /// under the spelling it was created with, and one it removed since
+    /// is recreated under its old spelling, both names the device would
+    /// give the object anyway.
+    listings: RefCell<HashMap<String, Rc<HashMap<String, String>>>>,
 }
 
 impl MtpTransport {
@@ -36,16 +58,109 @@ impl MtpTransport {
     /// later, when an operation actually talks to the device.
     pub fn open(target: &MtpTarget) -> Self {
         let root = File::for_uri(&target.volume_uri).child(&target.storage);
-        Self { root }
+        Self {
+            root,
+            listings: RefCell::default(),
+        }
     }
 
-    /// Resolve a device-relative path to a gio file beneath the root.
+    /// `path` beneath the root, spelled as given.
     fn resolve(&self, path: &DeviceRelativePath) -> File {
         let mut file = self.root.clone();
         for component in path.components() {
             file = file.child(component);
         }
         file
+    }
+
+    /// `path` beneath the root as the device spells it: each component
+    /// takes the spelling of the entry the device holds under it in any
+    /// letter case, and keeps its own from the first one the device does
+    /// not hold. This is where a write to `path` lands.
+    fn device_spelling(&self, path: &DeviceRelativePath) -> io::Result<File> {
+        let mut file = self.root.clone();
+        let mut spelled = String::new();
+        let mut held = true;
+        for component in path.components() {
+            let spelling = if held {
+                self.listing(&spelled, &file)?
+                    .get(&device_path_key(component))
+                    .cloned()
+            } else {
+                None
+            };
+            held = spelling.is_some();
+            let spelling = spelling.as_deref().unwrap_or(component);
+            if !spelled.is_empty() {
+                spelled.push('/');
+            }
+            spelled.push_str(spelling);
+            file = file.child(spelling);
+        }
+        Ok(file)
+    }
+
+    /// The entries of the directory `dir`, spelled `spelled` beneath the
+    /// root, listed once per transport. A directory the device does not
+    /// hold lists nothing.
+    fn listing(&self, spelled: &str, dir: &File) -> io::Result<Rc<HashMap<String, String>>> {
+        if let Some(listing) = self.listings.borrow().get(spelled) {
+            return Ok(Rc::clone(listing));
+        }
+        let mut entries = HashMap::new();
+        match dir.enumerate_children(
+            "standard::name",
+            FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            Cancellable::NONE,
+        ) {
+            Ok(children) => {
+                for child in children {
+                    let child = child.map_err(map_glib_error)?;
+                    // A name that is not UTF-8 is no spelling of a
+                    // device-relative path.
+                    if let Some(name) = child.name().to_str() {
+                        entries.insert(device_path_key(name), name.to_owned());
+                    }
+                }
+            }
+            Err(error) if is_not_found(&error) || is_not_directory(&error) => {}
+            Err(error) => return Err(map_glib_error(error)),
+        }
+        let listing = Rc::new(entries);
+        self.listings
+            .borrow_mut()
+            .insert(spelled.to_owned(), Rc::clone(&listing));
+        Ok(listing)
+    }
+
+    /// The entry the device holds at `path`, in any letter case, with its
+    /// `attributes`; `None` when it holds none.
+    ///
+    /// The path's own spelling is asked first: nearly always the device
+    /// holds it so, and one query answers without listing a directory.
+    fn lookup(
+        &self,
+        path: &DeviceRelativePath,
+        attributes: &str,
+    ) -> io::Result<Option<(File, FileInfo)>> {
+        let query = |file: File| match file.query_info(
+            attributes,
+            FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
+            Cancellable::NONE,
+        ) {
+            Ok(info) => Ok(Some((file, info))),
+            Err(error) if is_not_found(&error) => Ok(None),
+            Err(error) => Err(map_glib_error(error)),
+        };
+        let given = self.resolve(path);
+        if let Some(found) = query(given.clone())? {
+            return Ok(Some(found));
+        }
+        let spelled = self.device_spelling(path)?;
+        if spelled.equal(&given) {
+            return Ok(None);
+        }
+        query(spelled)
     }
 
     fn stream_copy(
@@ -87,7 +202,7 @@ impl DeviceTransport for MtpTransport {
         if path.is_root() {
             return Ok(());
         }
-        let dir = self.resolve(path);
+        let dir = self.device_spelling(path)?;
         match dir.make_directory_with_parents(Cancellable::NONE) {
             Ok(()) => Ok(()),
             Err(error) if is_exists(&error) => Ok(()),
@@ -100,33 +215,24 @@ impl DeviceTransport for MtpTransport {
     }
 
     fn regular_file_len(&self, path: &DeviceRelativePath) -> io::Result<Option<u64>> {
-        let file = self.resolve(path);
-        match file.query_info(
-            "standard::type,standard::size",
-            FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
-            Cancellable::NONE,
-        ) {
-            Ok(info) if info.file_type() == FileType::Regular => {
+        match self.lookup(path, "standard::type,standard::size")? {
+            Some((_file, info)) if info.file_type() == FileType::Regular => {
                 Ok(Some(info.size().max(0) as u64))
             }
-            Ok(_) => Err(io::Error::new(
+            Some(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("device path is not a regular file: {path}"),
             )),
-            Err(error) if is_not_found(&error) => Ok(None),
-            Err(error) => Err(map_glib_error(error)),
+            None => Ok(None),
         }
     }
 
     fn read_file(&self, path: &DeviceRelativePath, limit: u64) -> io::Result<Vec<u8>> {
-        let file = self.resolve(path);
-        let info = file
-            .query_info(
-                "standard::type,standard::size",
-                FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
-                Cancellable::NONE,
-            )
-            .map_err(map_glib_error)?;
+        let (file, info) = self
+            .lookup(path, "standard::type,standard::size")?
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, format!("no device file at {path}"))
+            })?;
         if info.file_type() != FileType::Regular {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -160,7 +266,7 @@ impl DeviceTransport for MtpTransport {
         if let Some(parent) = parent_of(path) {
             self.ensure_dir_all(&parent)?;
         }
-        let file = self.resolve(path);
+        let file = self.device_spelling(path)?;
         let stream = file
             .replace(
                 None,
@@ -197,7 +303,7 @@ impl DeviceTransport for MtpTransport {
         if let Some(parent) = parent_of(path) {
             self.ensure_dir_all(&parent)?;
         }
-        let file = self.resolve(path);
+        let file = self.device_spelling(path)?;
         let stream = file
             .replace(
                 None,
@@ -224,22 +330,16 @@ impl DeviceTransport for MtpTransport {
     }
 
     fn remove_file_if_exists(&self, path: &DeviceRelativePath) -> io::Result<bool> {
-        let file = self.resolve(path);
-        match file.query_info(
-            "standard::type",
-            FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
-            Cancellable::NONE,
-        ) {
-            Ok(info) if info.file_type() == FileType::Regular => {}
-            Ok(_) => {
+        let file = match self.lookup(path, "standard::type")? {
+            Some((file, info)) if info.file_type() == FileType::Regular => file,
+            Some(_) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("refusing to unlink non-regular device path: {path}"),
                 ));
             }
-            Err(error) if is_not_found(&error) => return Ok(false),
-            Err(error) => return Err(map_glib_error(error)),
-        }
+            None => return Ok(false),
+        };
         match file.delete(Cancellable::NONE) {
             Ok(()) => Ok(true),
             Err(error) if is_not_found(&error) => Ok(false),
@@ -254,22 +354,16 @@ impl DeviceTransport for MtpTransport {
                 "refusing to remove the device storage root",
             ));
         }
-        let dir = self.resolve(path);
-        match dir.query_info(
-            "standard::type",
-            FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
-            Cancellable::NONE,
-        ) {
-            Ok(info) if info.file_type() == FileType::Directory => {}
-            Ok(_) => {
+        let dir = match self.lookup(path, "standard::type")? {
+            Some((dir, info)) if info.file_type() == FileType::Directory => dir,
+            Some(_) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("refusing to remove non-directory device path: {path}"),
                 ));
             }
-            Err(error) if is_not_found(&error) => return Ok(false),
-            Err(error) => return Err(map_glib_error(error)),
-        }
+            None => return Ok(false),
+        };
         // Emptiness is checked here, not left to the delete: what an MTP
         // device does when asked to delete a folder that holds something
         // is the device's own business, and some delete everything in it.
@@ -302,22 +396,16 @@ impl DeviceTransport for MtpTransport {
                 "refusing to remove the device storage root",
             ));
         }
-        let dir = self.resolve(path);
-        match dir.query_info(
-            "standard::type",
-            FileQueryInfoFlags::NOFOLLOW_SYMLINKS,
-            Cancellable::NONE,
-        ) {
-            Ok(info) if info.file_type() == FileType::Directory => {}
-            Ok(_) => {
+        let dir = match self.lookup(path, "standard::type")? {
+            Some((dir, info)) if info.file_type() == FileType::Directory => dir,
+            Some(_) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("refusing to remove non-directory device path: {path}"),
                 ));
             }
-            Err(error) if is_not_found(&error) => return Ok(false),
-            Err(error) => return Err(map_glib_error(error)),
-        }
+            None => return Ok(false),
+        };
         let mut budget = DirectoryWorkBudget::new();
         clear_directory(&dir, &mut budget, 0, cancel)?;
         dir.delete(Cancellable::NONE).map_err(map_glib_error)?;
@@ -400,6 +488,10 @@ fn is_exists(error: &glib::Error) -> bool {
     error.matches(gio::IOErrorEnum::Exists)
 }
 
+fn is_not_directory(error: &glib::Error) -> bool {
+    error.matches(gio::IOErrorEnum::NotDirectory)
+}
+
 #[cfg(test)]
 mod tests {
     use sustain_device_sync::{DeviceTransport, MtpTarget};
@@ -428,5 +520,66 @@ mod tests {
 
         assert_eq!(transport.read_to_string(&path, 3).expect("read"), "abc");
         assert!(transport.read_to_string(&path, 2).is_err());
+    }
+
+    /// A phone's folder, spelled otherwise than the paths into it below.
+    fn seed_device_folder(root: &std::path::Path) -> std::path::PathBuf {
+        let album = root.join("storage/Music/AGE OF LOVE/The Age of Love");
+        std::fs::create_dir_all(&album).expect("album folder");
+        std::fs::write(album.join("16 Track.MP3"), "old").expect("device file");
+        album
+    }
+
+    fn path(value: &str) -> DeviceRelativePath {
+        DeviceRelativePath::new(value).expect("path")
+    }
+
+    #[test]
+    fn a_device_file_is_found_under_any_letter_case() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let transport = local_transport(root.path());
+        seed_device_folder(root.path());
+        let path = path("Music/Age of Love/the age of love/16 Track.mp3");
+
+        assert_eq!(transport.regular_file_len(&path).expect("len"), Some(3));
+        assert_eq!(transport.read_to_string(&path, 3).expect("read"), "old");
+        assert!(transport.remove_file_if_exists(&path).expect("remove"));
+        assert_eq!(transport.regular_file_len(&path).expect("len"), None);
+    }
+
+    #[test]
+    fn a_copy_lands_in_the_device_spelling_of_its_slot() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let transport = local_transport(root.path());
+        let album = seed_device_folder(root.path());
+        let source = tempfile::NamedTempFile::new().expect("source");
+        std::fs::write(source.path(), "new").expect("source bytes");
+        let stat = sustain_device_sync::source_file_stat(source.path()).expect("stat");
+
+        for (target, landed) in [
+            (
+                "Music/Age of Love/The Age of Love/16 Track.mp3",
+                "16 Track.MP3",
+            ),
+            (
+                "Music/Age of Love/The Age of Love/17 Track.mp3",
+                "17 Track.mp3",
+            ),
+        ] {
+            transport
+                .copy_file(source.path(), &path(target), &stat)
+                .expect("copy");
+            assert_eq!(
+                std::fs::read_to_string(album.join(landed)).expect("landed"),
+                "new"
+            );
+        }
+        let mut artists: Vec<_> = std::fs::read_dir(root.path().join("storage/Music"))
+            .expect("music folder")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        artists.sort();
+        assert_eq!(artists, ["AGE OF LOVE"]);
+        assert_eq!(std::fs::read_dir(&album).expect("album").count(), 2);
     }
 }

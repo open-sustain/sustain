@@ -84,7 +84,7 @@ pub(crate) fn plays(layout: DeviceLayout, track: &SyncInputTrack) -> bool {
 /// Letters fold through their single-letter uppercase, the mapping
 /// exFAT's up-case table carries; a letter whose uppercase is several
 /// letters (`ß`) stays as it is, as it does on the device.
-pub(crate) fn device_path_key(path: &str) -> String {
+pub fn device_path_key(path: &str) -> String {
     path.chars()
         .map(|letter| {
             let mut upper = letter.to_uppercase();
