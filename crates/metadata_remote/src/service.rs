@@ -428,10 +428,15 @@ impl ComposedRemoteMetadataService {
         if !recording.genres.is_empty() {
             return Ok(recording);
         }
+        // Many editions share one release group: ask for each group once.
+        let mut looked_up = std::collections::BTreeSet::new();
         for release in &recording.releases {
             let Some(release_group_mbid) = release.release_group_mbid.as_deref() else {
                 continue;
             };
+            if !looked_up.insert(release_group_mbid) {
+                continue;
+            }
             let genres = self
                 .musicbrainz
                 .lookup_release_group_genres(release_group_mbid)?;
