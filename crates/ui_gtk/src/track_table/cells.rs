@@ -231,6 +231,35 @@ impl RatingBindings {
     }
 }
 
+struct FillerBinding {
+    list_item: glib::WeakRef<gtk::ListItem>,
+    cell: glib::WeakRef<TableCell>,
+}
+
+impl CellBinding for FillerBinding {
+    type Live = (gtk::ListItem, TableCell);
+
+    fn upgrade(&self) -> Option<Self::Live> {
+        Some((self.list_item.upgrade()?, self.cell.upgrade()?))
+    }
+}
+
+/// The filler cells, which show nothing but their row's band.
+#[derive(Clone, Default)]
+pub(super) struct FillerBindings(BindingRegistry<FillerBinding>);
+
+impl FillerBindings {
+    /// Re-derive the band of the filler cells in `scope` from their row
+    /// payload.
+    pub(super) fn refresh(&self, scope: RefreshScope<'_>) {
+        self.0.for_each_live(|_, (list_item, cell)| {
+            if scope.includes(&list_item) {
+                apply_row_band(&cell, &list_item);
+            }
+        });
+    }
+}
+
 pub(super) fn build_status_column(
     playing_track_id: Rc<Cell<Option<TrackId>>>,
     bindings: StatusBindings,
@@ -375,8 +404,8 @@ pub(super) fn build_rating_cell_factory(
     factory
 }
 
-pub(super) fn build_filler_column() -> gtk::ColumnViewColumn {
-    let table_column = gtk::ColumnViewColumn::new(None, Some(build_filler_factory()));
+pub(super) fn build_filler_column(bindings: FillerBindings) -> gtk::ColumnViewColumn {
+    let table_column = gtk::ColumnViewColumn::new(None, Some(build_filler_factory(bindings)));
     table_column.set_expand(true);
     table_column.set_resizable(false);
     table_column.set_visible(true);
@@ -435,7 +464,7 @@ fn build_status_cell_factory(
     factory
 }
 
-fn build_filler_factory() -> gtk::SignalListItemFactory {
+fn build_filler_factory(bindings: FillerBindings) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(move |_factory, item| {
         let Some(list_item) = item.downcast_ref::<gtk::ListItem>() else {
@@ -444,6 +473,10 @@ fn build_filler_factory() -> gtk::SignalListItemFactory {
 
         let cell = new_track_cell(list_item);
         list_item.set_child(Some(&cell));
+        bindings.0.push(FillerBinding {
+            list_item: list_item.downgrade(),
+            cell: cell.downgrade(),
+        });
     });
 
     factory.connect_bind(move |_factory, item| {

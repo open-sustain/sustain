@@ -15,8 +15,9 @@ use super::track_context::TrackRowContextMenu;
 use crate::track_summary::TrackSummary;
 pub(crate) use cells::row_track_id;
 use cells::{
-    RatingBindings, RefreshScope, StatusBindings, TextBindings, build_filler_column,
-    build_rating_cell_factory, build_status_column, build_text_cell_factory, install_context_menu,
+    FillerBindings, RatingBindings, RefreshScope, StatusBindings, TextBindings,
+    build_filler_column, build_rating_cell_factory, build_status_column, build_text_cell_factory,
+    install_context_menu,
 };
 use columns::{TRACK_TABLE_COLUMNS, TrackTableColumn};
 use drag_drop::{RowReorderHooks, install_row_reorder_drop_target, install_tracks_drag_source};
@@ -105,6 +106,7 @@ pub(crate) struct TrackTable {
     status_bindings: StatusBindings,
     text_bindings: TextBindings,
     rating_bindings: RatingBindings,
+    filler_bindings: FillerBindings,
     inline_edit: Option<InlineEditController>,
     status_column: gtk::ColumnViewColumn,
     managed_columns: Rc<Vec<ManagedColumn>>,
@@ -219,6 +221,7 @@ impl TrackTable {
         self.rating_bindings.refresh(scope);
         self.status_bindings
             .refresh(scope, self.playing_track_id.get());
+        self.filler_bindings.refresh(scope);
     }
 
     pub(crate) fn summary(&self) -> TrackSummary {
@@ -1128,6 +1131,7 @@ pub(crate) fn build_track_table(
     let status_bindings = StatusBindings::default();
     let text_bindings = TextBindings::default();
     let rating_bindings = RatingBindings::default();
+    let filler_bindings = FillerBindings::default();
     // One controller per table coordinates the edit click on its editable
     // cells and the single open edit session. `None` on tables that did
     // not opt into inline editing (everything but the Songs view today).
@@ -1204,7 +1208,7 @@ pub(crate) fn build_track_table(
             column: table_column,
         });
     }
-    table.append_column(&build_filler_column());
+    table.append_column(&build_filler_column(filler_bindings.clone()));
 
     table.insert_action_group("columns", Some(&column_actions));
 
@@ -1272,6 +1276,7 @@ pub(crate) fn build_track_table(
         status_bindings,
         text_bindings,
         rating_bindings,
+        filler_bindings,
         inline_edit,
         status_column,
         managed_columns,
@@ -1592,6 +1597,17 @@ mod tests {
                     "row {text} must carry its new group band"
                 );
             }
+            // Across the whole row: the status, rating and filler cells too.
+            let cells: Vec<TableCell> = crate::test_support::descendants(&root)
+                .into_iter()
+                .filter(gtk::Widget::is_mapped)
+                .filter_map(|widget| widget.downcast::<TableCell>().ok())
+                .collect();
+            assert!(cells.len() > 2, "the rows' cells are all realized");
+            assert!(
+                cells.iter().all(|cell| !cell.is_banded()),
+                "every cell carries the rows' new group band"
+            );
 
             window.destroy();
         });
