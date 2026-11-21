@@ -19,13 +19,14 @@ use crate::{
         BACKFILL_GENERATED_SORT_FIELDS_SQL, INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL,
         MOVE_WAVEFORMS_TO_CACHE_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL,
         RECORD_CHECKED_LIBRARY_ROOT_SQL, RECORD_TAG_MIRROR_FIELDS_SQL,
-        RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL, RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL,
-        SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL, STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL,
-        VERSION_ANALYSIS_PER_CAPABILITY_SQL, VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
+        RETRY_EMPTY_CONTAINER_ANALYSIS_ATTEMPTS_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL,
+        RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
+        STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
+        VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 25;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 26;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -171,6 +172,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 25,
         description: "record the library root track availability was checked against",
         step: MigrationStep::Sql(RECORD_CHECKED_LIBRARY_ROOT_SQL),
+    },
+    Migration {
+        version: 26,
+        description: "attempt again every WAV, AIFF, MP4 and Ogg Vorbis analysis that left nothing behind",
+        step: MigrationStep::Sql(RETRY_EMPTY_CONTAINER_ANALYSIS_ATTEMPTS_SQL),
     },
 ];
 
@@ -1649,7 +1655,10 @@ mod tests {
                      (track_id, bpm_attempted_at_unix, bpm_analyzer_version,
                       key_attempted_at_unix, key_analyzer_version,
                       audio_attempted_at_unix, audio_analyzer_version)
-                 SELECT id, 1700000000, 17, 1700000000, 17, 1700000000, 15 FROM tracks;",
+                 SELECT id, 1700000000, 17, 1700000000, 17, 1700000000, 15 FROM tracks;
+                 INSERT INTO track_acoustics
+                 SELECT id, -9.0, -7.0, 5.0, 3.0, 0.3, 0.4, 0.3, 0.2, 0.5 FROM tracks;
+                 INSERT INTO track_beat_grid SELECT id, 12800, 0, 1 FROM tracks;",
             )
             .expect("seed analysed tracks");
 
@@ -1692,6 +1701,88 @@ mod tests {
             )
             .expect("track");
         assert_eq!(kept, (Some(6_400), Some("Am".to_string())));
+    }
+
+    #[test]
+    fn upgrade_from_v25_attempts_again_every_empty_analysis_of_a_container_that_records_its_length()
+    {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..25]).expect("schema version 25");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path, bpm_hundredths, musical_key) VALUES
+                     (1, CAST('a.wav' AS BLOB), NULL, NULL),
+                     (2, CAST('b.AIFF' AS BLOB), 12800, 'Am'),
+                     (3, CAST('c.m4a' AS BLOB), NULL, 'Am'),
+                     (4, CAST('d.ogg' AS BLOB), NULL, NULL),
+                     (5, CAST('e.mp3' AS BLOB), NULL, NULL),
+                     (6, CAST('f.opus' AS BLOB), NULL, NULL),
+                     (7, CAST('g.wav.flac' AS BLOB), NULL, NULL),
+                     (8, CAST('h.wav' AS BLOB), 12800, 'Am');
+                 INSERT INTO track_analysis
+                     (track_id, bpm_attempted_at_unix, bpm_analyzer_version,
+                      key_attempted_at_unix, key_analyzer_version,
+                      audio_attempted_at_unix, audio_analyzer_version)
+                 SELECT id, 1700000000, 16, 1700000000, 17, 1700000000, 15 FROM tracks;
+                 INSERT INTO track_acoustics VALUES
+                     (2, -9.0, -7.0, 5.0, 3.0, 0.3, 0.4, 0.3, 0.2, 0.5),
+                     (8, -9.0, -7.0, 5.0, 3.0, 0.3, 0.4, 0.3, 0.2, 0.5);
+                 INSERT INTO track_beat_grid VALUES (2, 12800, 0, 1);",
+            )
+            .expect("seed analysed tracks");
+
+        apply_pending(&connection).expect("upgrade");
+
+        let attempted: Vec<(i64, bool, bool, bool)> = connection
+            .prepare(
+                "SELECT track_id,
+                        bpm_attempted_at_unix IS NOT NULL AND bpm_analyzer_version IS NOT NULL,
+                        key_attempted_at_unix IS NOT NULL AND key_analyzer_version IS NOT NULL,
+                        audio_attempted_at_unix IS NOT NULL AND audio_analyzer_version IS NOT NULL
+                 FROM track_analysis ORDER BY track_id",
+            )
+            .expect("prepare")
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("attempts");
+        assert_eq!(
+            attempted,
+            [
+                // Every attempt came back empty: all three are made again.
+                (1, false, false, false),
+                // Every attempt measured something: all three stand.
+                (2, true, true, true),
+                // Only the key was measured.
+                (3, false, true, false),
+                (4, false, false, false),
+                // Not a container the decoder cut short: empty attempts stand.
+                (5, true, true, true),
+                (6, true, true, true),
+                (7, true, true, true),
+                // A BPM from the file's tags, but no beat grid: the tempo
+                // attempt left nothing behind.
+                (8, false, true, true),
+            ]
+        );
+        let bpm: Option<i64> = connection
+            .query_row(
+                "SELECT bpm_hundredths FROM tracks WHERE id = 8",
+                [],
+                |row| row.get(0),
+            )
+            .expect("track");
+        assert_eq!(bpm, Some(12_800), "the BPM the track holds stays");
+        let leftover: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM temp.sqlite_master WHERE name = 'retried_container_tracks'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("temp schema");
+        assert_eq!(leftover, 0, "the migration leaves no table behind");
     }
 
     /// Migration 15 as `main` briefly defined it before it became

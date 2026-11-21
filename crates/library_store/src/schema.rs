@@ -754,6 +754,52 @@ CREATE TABLE checked_library_root (
 );
 "#;
 
+// A WAV, AIFF, MP4 or Ogg Vorbis track's analysis that left nothing
+// behind is attempted again, as migration 17 did for FLAC. The decoder
+// left out the last 128 bytes of any file whose last 128 bytes start
+// with `TAG`, taking them for an ID3v1 tag; in these containers they can
+// be audio, and losing them failed the decode. Nothing records why an
+// attempt came back empty, so every empty one on such a file is made
+// again: a tempo attempt that left no beat grid — the BPM a track holds
+// may be its file's or the user's, and stays —, a key attempt that left
+// no key, an audio attempt that left no acoustics. Some of them came
+// back empty with nothing to measure — a track too short or too quiet
+// for acoustics, one too long for a grid — and are measured once more
+// for nothing; the waveform cache that would tell a few of them apart is
+// not attached while the library migrates. Opus is not among them:
+// analysis cannot decode it at all.
+pub(super) const RETRY_EMPTY_CONTAINER_ANALYSIS_ATTEMPTS_SQL: &str = r#"
+CREATE TEMP TABLE retried_container_tracks AS
+SELECT id FROM tracks
+WHERE lower(CAST(relative_path AS TEXT)) LIKE '%.wav'
+   OR lower(CAST(relative_path AS TEXT)) LIKE '%.aif'
+   OR lower(CAST(relative_path AS TEXT)) LIKE '%.aiff'
+   OR lower(CAST(relative_path AS TEXT)) LIKE '%.aifc'
+   OR lower(CAST(relative_path AS TEXT)) LIKE '%.m4a'
+   OR lower(CAST(relative_path AS TEXT)) LIKE '%.m4b'
+   OR lower(CAST(relative_path AS TEXT)) LIKE '%.mp4'
+   OR lower(CAST(relative_path AS TEXT)) LIKE '%.ogg'
+   OR lower(CAST(relative_path AS TEXT)) LIKE '%.oga';
+UPDATE track_analysis
+SET bpm_attempted_at_unix = NULL, bpm_analyzer_version = NULL
+WHERE bpm_attempted_at_unix IS NOT NULL
+  AND track_id NOT IN (SELECT track_id FROM track_beat_grid)
+  AND track_id IN (SELECT id FROM retried_container_tracks);
+UPDATE track_analysis
+SET key_attempted_at_unix = NULL, key_analyzer_version = NULL
+WHERE key_attempted_at_unix IS NOT NULL
+  AND track_id IN (
+    SELECT id FROM tracks
+    WHERE musical_key IS NULL
+      AND id IN (SELECT id FROM retried_container_tracks));
+UPDATE track_analysis
+SET audio_attempted_at_unix = NULL, audio_analyzer_version = NULL
+WHERE audio_attempted_at_unix IS NOT NULL
+  AND track_id NOT IN (SELECT track_id FROM track_acoustics)
+  AND track_id IN (SELECT id FROM retried_container_tracks);
+DROP TABLE retried_container_tracks;
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.

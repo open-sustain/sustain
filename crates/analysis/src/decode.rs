@@ -515,6 +515,25 @@ mod tests {
         assert_eq!(audio.samples.len(), frames as usize);
     }
 
+    /// PCM whose bytes spell `TAG` 128 bytes before the end of a WAV is
+    /// audio, not an ID3v1 tag: the RIFF container says where its data
+    /// ends (#346, A7-24).
+    #[test]
+    fn decode_full_reads_a_wav_whose_last_samples_spell_tag() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("ramp.wav");
+        let sample_rate = 8_000;
+        let frames = sample_rate;
+        write_ramp_wav(&path, sample_rate, frames);
+        let mut bytes = std::fs::read(&path).expect("read wav fixture");
+        let tag_start = bytes.len() - 128;
+        bytes[tag_start..tag_start + 3].copy_from_slice(b"TAG");
+        std::fs::write(&path, bytes).expect("write wav fixture");
+
+        let audio = decode_full(&path).expect("decode full").audio;
+        assert_eq!(audio.samples.len(), frames as usize);
+    }
+
     #[test]
     fn decode_window_seeks_to_the_requested_offset() {
         let dir = TempDir::new().expect("temp dir");
