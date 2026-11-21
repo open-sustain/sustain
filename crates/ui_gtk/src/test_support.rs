@@ -230,6 +230,38 @@ pub(crate) fn runtime_with_tracks_and_clock(
     std::rc::Rc::new(std::cell::RefCell::new(runtime))
 }
 
+/// A runtime that can play `tracks`: each one's file exists under `root`,
+/// the library folder, and playback goes to a backend that plays nothing.
+/// The caller owns `root` and removes it.
+pub(crate) fn playable_runtime_with_tracks(
+    root: &std::path::Path,
+    tracks: Vec<sustain_app_runtime::Track>,
+) -> crate::SharedRuntime {
+    use sustain_library_store::LibraryStore;
+
+    std::fs::create_dir_all(root).expect("the library folder is created");
+    let store = sustain_library_store::SqliteLibraryStore::open_in_memory()
+        .expect("an in-memory library store opens");
+    for track in tracks {
+        std::fs::write(track.location.absolute_path(root), b"not real audio")
+            .expect("the track's file is written");
+        store.save_track(track).expect("the store saves the track");
+    }
+    let runtime = sustain_app_runtime::ApplicationRuntime::with_settings_store(Box::new(
+        sustain_settings::InMemorySettingsStore::new(
+            sustain_app_runtime::UserSettings::with_library_path(Some(root.to_path_buf())),
+        ),
+    ))
+    .expect("the runtime loads its settings")
+    .with_library_services(
+        std::sync::Arc::new(store),
+        std::sync::Arc::new(TestFiles { cover: None }),
+    )
+    .expect("the runtime takes the store")
+    .with_playback_service(Box::new(sustain_playback::NullPlaybackService::new()));
+    std::rc::Rc::new(std::cell::RefCell::new(runtime))
+}
+
 /// A track `id` titled `title`, available at `<id>.flac`.
 pub(crate) fn track(id: i64, title: &str) -> sustain_app_runtime::Track {
     sustain_app_runtime::Track {

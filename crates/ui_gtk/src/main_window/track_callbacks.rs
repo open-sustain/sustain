@@ -120,6 +120,8 @@ pub(super) struct LibraryViewUpdateContext<'a> {
     pub(super) current_search_text: &'a Rc<RefCell<String>>,
     pub(super) device_panel: &'a DeviceSyncPanel,
     pub(super) now_playing: &'a NowPlayingView,
+    pub(super) current_track_metadata_changed: Rc<dyn Fn()>,
+    pub(super) queue_view_holder: Rc<RefCell<Option<QueueView>>>,
 }
 
 pub(super) fn library_view_update_callback(
@@ -137,6 +139,8 @@ pub(super) fn library_view_update_callback(
     let visible_summary_refresh = ctx.visible_summary_refresh;
     let device_panel = ctx.device_panel.clone();
     let now_playing = ctx.now_playing.clone();
+    let current_track_metadata_changed = ctx.current_track_metadata_changed;
+    let queue_view_holder = ctx.queue_view_holder;
 
     Rc::new(move |update: &LibraryViewUpdate| {
         let touched = TouchedTracks::of(&runtime.borrow(), &update.track_ids);
@@ -204,6 +208,19 @@ pub(super) fn library_view_update_callback(
         // export readiness; refresh it when that view is on screen.
         device_panel.refresh_readiness();
         now_playing.analysis_changed(&update.analysed);
+
+        // The playback surfaces show tracks' metadata too: the current
+        // track in Now Playing and the desktop media controls, upcoming
+        // ones in an open queue.
+        let playing = runtime.borrow().playback_state().playable();
+        if let Some(sustain_app_runtime::PlayableId::Library(track_id)) = playing
+            && touched.rows.contains_key(&track_id)
+        {
+            current_track_metadata_changed();
+        }
+        if let Some(queue_view) = queue_view_holder.borrow().as_ref() {
+            queue_view.library_changed(&update.track_ids.iter().copied().collect());
+        }
     })
 }
 

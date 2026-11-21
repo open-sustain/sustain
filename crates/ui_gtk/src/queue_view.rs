@@ -18,7 +18,8 @@
 //! secondary (right) click on the Next button opens the popover; being
 //! autohide, it dismisses on click-outside or Escape.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -130,7 +131,14 @@ pub(crate) struct QueueView {
     stack: gtk::Stack,
     empty_state: QueueEmptyState,
     is_open: Rc<Cell<bool>>,
+    artwork_loader: ArtworkLoader,
+    /// Every row the list has set up, so a changed track's row can be
+    /// redrawn in place.
+    list_items: QueueListItems,
 }
+
+/// The list items a queue list has set up, held weakly: GTK owns them.
+type QueueListItems = Rc<RefCell<Vec<glib::WeakRef<gtk::ListItem>>>>;
 
 impl QueueView {
     pub(crate) fn new(
@@ -171,12 +179,16 @@ impl QueueView {
             })
         };
 
-        let factory = build_queue_row_factory(QueueRowContext {
-            runtime: runtime.clone(),
-            artwork_loader,
-            command_controller: command_controller.clone(),
-            on_mutated: on_mutated.clone(),
-        });
+        let list_items = QueueListItems::default();
+        let factory = build_queue_row_factory(
+            QueueRowContext {
+                runtime: runtime.clone(),
+                artwork_loader: artwork_loader.clone(),
+                command_controller: command_controller.clone(),
+                on_mutated: on_mutated.clone(),
+            },
+            list_items.clone(),
+        );
 
         let selection = gtk::NoSelection::new(Some(store.clone()));
         let list = gtk::ListView::new(Some(selection), Some(factory));
@@ -248,6 +260,8 @@ impl QueueView {
             stack,
             empty_state,
             is_open,
+            artwork_loader,
+            list_items,
         };
         install_queue_open(next_button, previous_button, &popover, &view);
         view
@@ -264,6 +278,48 @@ impl QueueView {
     pub(crate) fn refresh_if_visible(&self) {
         if self.is_open.get() {
             self.rebuild();
+        }
+    }
+
+    /// Bring the open queue up to date after a library change, in which
+    /// `track_ids` changed or left the library. The change may have moved
+    /// the runtime's queue — a removed or missing track dropped from it, an
+    /// imported one joining the source it plays — so a queue that no longer
+    /// matches the runtime's is rebuilt. Otherwise the rows of the changed
+    /// tracks are redrawn in place, keeping focus, hover and scroll: a row
+    /// shows its track as it was when bound.
+    pub(crate) fn library_changed(&self, track_ids: &HashSet<TrackId>) {
+        if !self.is_open.get() {
+            return;
+        }
+        let shown: Vec<_> = (0..self.store.n_items())
+            .filter_map(|position| queue_row_entry(self.store.item(position)))
+            .collect();
+        let upcoming = self
+            .runtime
+            .borrow()
+            .playback_queue_upcoming_preview(QUEUE_CONTINUATION_PREVIEW_ROWS);
+        if shown != upcoming {
+            self.rebuild();
+            return;
+        }
+        let list_items: Vec<_> = self
+            .list_items
+            .borrow()
+            .iter()
+            .filter_map(glib::WeakRef::upgrade)
+            .collect();
+        for list_item in list_items {
+            if let Some(PlayableId::Library(track_id)) = queue_row_track_id(list_item.item())
+                && track_ids.contains(&track_id)
+            {
+                show_queue_row_track(
+                    &list_item,
+                    &self.runtime,
+                    &self.artwork_loader,
+                    CoverWhileLoading::Current,
+                );
+            }
         }
     }
 }
@@ -389,7 +445,10 @@ fn empty_queue_text(uses_lazy_continuation: bool) -> (String, Option<String>) {
     }
 }
 
-fn build_queue_row_factory(ctx: QueueRowContext) -> gtk::SignalListItemFactory {
+fn build_queue_row_factory(
+    ctx: QueueRowContext,
+    list_items: QueueListItems,
+) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
     let setup_ctx = ctx.clone();
@@ -400,6 +459,9 @@ fn build_queue_row_factory(ctx: QueueRowContext) -> gtk::SignalListItemFactory {
         let row = build_queue_row();
         install_queue_row_handlers(&row, list_item, &setup_ctx);
         list_item.set_child(Some(&row));
+        let mut list_items = list_items.borrow_mut();
+        list_items.retain(|known| known.upgrade().is_some());
+        list_items.push(list_item.downgrade());
     });
 
     let runtime = ctx.runtime.clone();
@@ -630,16 +692,48 @@ fn bind_queue_row(item: &glib::Object, runtime: &SharedRuntime, artwork_loader: 
     else {
         return;
     };
-    let Some((image, title, artist, _evict)) = queue_row_widgets(&row) else {
-        return;
-    };
     let Some(entry) = queue_row_entry(list_item.item()) else {
         return;
     };
-    let track_id = entry.track_id();
-
     apply_queue_row_tint(&row, list_item.position());
     apply_queue_row_kind(&row, entry);
+    show_queue_row_track(
+        list_item,
+        runtime,
+        artwork_loader,
+        CoverWhileLoading::Placeholder,
+    );
+}
+
+/// What a row shows while its track's cover loads.
+#[derive(Clone, Copy)]
+enum CoverWhileLoading {
+    /// The placeholder: a recycled row must never show the previous
+    /// track's cover.
+    Placeholder,
+    /// The cover shown: the row is redrawn for the same track.
+    Current,
+}
+
+/// Show `list_item`'s track — title, artist, cover — in its row.
+fn show_queue_row_track(
+    list_item: &gtk::ListItem,
+    runtime: &SharedRuntime,
+    artwork_loader: &ArtworkLoader,
+    while_loading: CoverWhileLoading,
+) {
+    let Some(row) = list_item
+        .child()
+        .and_then(|child| child.downcast::<gtk::Box>().ok())
+    else {
+        return;
+    };
+    let Some((image, title, artist, _evict)) = queue_row_widgets(&row) else {
+        return;
+    };
+    let Some(track_id) = queue_row_track_id(list_item.item()) else {
+        return;
+    };
 
     // Resolve text and artwork source under a single short borrow, dropped
     // before any work (the splice-driven rebind, the async request) that
@@ -648,9 +742,7 @@ fn bind_queue_row(item: &glib::Object, runtime: &SharedRuntime, artwork_loader: 
         let runtime = runtime.borrow();
         match track_id {
             PlayableId::Library(track_id) => runtime.library_track(track_id).map(|track| {
-                let source = runtime.absolute_track_path(track).map(|absolute| {
-                    ArtworkSource::embedded_track(track.location.path().to_path_buf(), absolute)
-                });
+                let source = track_artwork_source(&runtime, track);
                 (
                     display_title(track),
                     display_artist(&track.metadata),
@@ -676,28 +768,42 @@ fn bind_queue_row(item: &glib::Object, runtime: &SharedRuntime, artwork_loader: 
     title.set_text(&title_text);
     artist.set_text(&artist_text);
 
-    // Clear first so a recycled row never shows the previous track's cover
-    // in the gap before the new one resolves.
-    apply_queue_missing_artwork(&image);
     let Some(source) = source else {
+        apply_queue_missing_artwork(&image);
         return;
     };
     if let Some(decoded) = artwork_loader.cached(&source) {
         apply_queue_artwork(&image, &decoded);
         return;
     }
+    match while_loading {
+        CoverWhileLoading::Placeholder => apply_queue_missing_artwork(&image),
+        CoverWhileLoading::Current => {}
+    }
 
-    // Async decode: only paint if this recycled row is still bound to the
-    // same track when the texture lands.
+    // Async decode: only paint if this recycled row still shows a track
+    // whose cover is this one when the texture lands — the same track, and
+    // its file not moved since.
     let list_item_weak = list_item.downgrade();
     let image_weak = image.downgrade();
+    let runtime = runtime.clone();
+    let requested = source.clone();
     artwork_loader.request(
         source,
         Box::new(move |decoded| {
             let Some(list_item) = list_item_weak.upgrade() else {
                 return;
             };
-            if queue_row_track_id(list_item.item()) != Some(track_id) {
+            let Some(PlayableId::Library(track_id)) = queue_row_track_id(list_item.item()) else {
+                return;
+            };
+            let current = {
+                let runtime = runtime.borrow();
+                runtime
+                    .library_track(track_id)
+                    .and_then(|track| track_artwork_source(&runtime, track))
+            };
+            if current.as_ref() != Some(&requested) {
                 return;
             }
             let Some(image) = image_weak.upgrade() else {
@@ -706,6 +812,16 @@ fn bind_queue_row(item: &glib::Object, runtime: &SharedRuntime, artwork_loader: 
             apply_queue_artwork(&image, &decoded);
         }),
     );
+}
+
+/// Where the cover of `track`, a library track, is read from.
+fn track_artwork_source(
+    runtime: &sustain_app_runtime::ApplicationRuntime,
+    track: &sustain_app_runtime::Track,
+) -> Option<ArtworkSource> {
+    runtime.absolute_track_path(track).map(|absolute| {
+        ArtworkSource::embedded_track(track.location.path().to_path_buf(), absolute)
+    })
 }
 
 fn apply_queue_artwork(image: &gtk::Image, decoded: &DecodedArtwork) {
@@ -832,6 +948,7 @@ mod tests {
         empty_queue_text, parse_queue_payload, queue_drag_payload, queue_row_is_tinted,
         start_edge_alignment_offset,
     };
+    use gtk::glib;
     use gtk::graphene::Rect;
     use sustain_app_runtime::{PlayableId, TrackId};
 
@@ -887,6 +1004,203 @@ mod tests {
             assert!(view.is_open.get(), "the queue opened");
             window.destroy();
         });
+    }
+
+    /// A library edit redraws the edited track's queue row in place — the
+    /// same row widget, so focus and hover survive — while a track the
+    /// runtime dropped from its queue makes the open queue rebuild.
+    #[test]
+    fn library_changes_redraw_queue_rows_in_place_and_drop_departed_tracks() {
+        crate::test_support::with_gtk(|| {
+            use gtk::prelude::*;
+            use sustain_app_runtime::{
+                ApplicationCommand, FieldChange, MetadataChange, PlaybackCommand,
+                PlaybackQueueRequest, PlaybackQueueSource,
+            };
+            let id = |value| TrackId::new(value).expect("valid test track id");
+            let root = std::env::temp_dir().join(format!(
+                "sustain-ui-test-queue-refresh-{}",
+                std::process::id()
+            ));
+            let runtime = crate::test_support::playable_runtime_with_tracks(
+                &root,
+                vec![
+                    crate::test_support::track(1, "One"),
+                    crate::test_support::track(2, "Two"),
+                    crate::test_support::track(3, "Three"),
+                ],
+            );
+            for command in [
+                PlaybackCommand::PlayTrack {
+                    track_id: id(1),
+                    queue: PlaybackQueueRequest {
+                        source: PlaybackQueueSource::Library,
+                        ordered_track_ids: vec![id(1)],
+                    },
+                },
+                PlaybackCommand::EnqueueLast(vec![id(2), id(3)]),
+            ] {
+                runtime
+                    .borrow_mut()
+                    .handle_command(ApplicationCommand::Playback(command))
+                    .expect("the command runs");
+            }
+            let (window, view) = open_queue_view(&runtime);
+            let row_of = |track: i64| {
+                view.list_items
+                    .borrow()
+                    .iter()
+                    .filter_map(glib::WeakRef::upgrade)
+                    .find(|list_item| {
+                        super::queue_row_track_id(list_item.item()) == Some(track_id(track))
+                    })
+                    .and_then(|list_item| list_item.child())
+                    .and_then(|child| child.downcast::<gtk::Box>().ok())
+                    .expect("the track has a bound row")
+            };
+            let title_of = |row: &gtk::Box| {
+                super::queue_row_widgets(row)
+                    .expect("a queue row")
+                    .1
+                    .text()
+                    .to_string()
+            };
+            let row = row_of(2);
+            assert_eq!(title_of(&row), "Two");
+
+            runtime
+                .borrow_mut()
+                .handle_command(ApplicationCommand::UpdateMetadata {
+                    track_id: id(2),
+                    change: Box::new(MetadataChange {
+                        title: FieldChange::Set("Deux".to_owned()),
+                        ..MetadataChange::default()
+                    }),
+                })
+                .expect("the title changes");
+            view.library_changed(&std::iter::once(id(2)).collect());
+            assert_eq!(row_of(2), row, "the row was redrawn, not replaced");
+            assert_eq!(title_of(&row), "Deux");
+
+            runtime
+                .borrow_mut()
+                .handle_command(ApplicationCommand::RemoveTracksFromLibrary {
+                    track_ids: vec![id(3)],
+                })
+                .expect("the track leaves the library");
+            view.library_changed(&std::iter::once(id(3)).collect());
+            assert_eq!(view.store.n_items(), 1, "the departed track's row is gone");
+            window.destroy();
+            std::fs::remove_dir_all(&root).expect("the library folder is removed");
+        });
+    }
+
+    /// A queue view over `runtime`, opened in a window of its own.
+    fn open_queue_view(runtime: &crate::SharedRuntime) -> (gtk::Window, super::QueueView) {
+        use gtk::prelude::*;
+        let command_controller: crate::command_controller::SharedCommandController =
+            std::rc::Rc::new(crate::command_controller::UiCommandController::new(
+                runtime.clone(),
+            ));
+        let next = gtk::Button::new();
+        let previous = gtk::Button::new();
+        let controls = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        controls.append(&previous);
+        controls.append(&next);
+        let window = gtk::Window::new();
+        window.set_child(Some(&controls));
+        window.present();
+        let view = super::QueueView::new(
+            runtime.clone(),
+            command_controller,
+            crate::test_support::artwork_loader(),
+            std::rc::Rc::new(|| {}),
+            &next,
+            &previous,
+        );
+        let controllers = next.observe_controllers();
+        let keys = (0..controllers.n_items())
+            .find_map(|index| {
+                controllers
+                    .item(index)
+                    .and_downcast::<gtk::ShortcutController>()
+            })
+            .expect("the Next button handles keys");
+        keys.item(0)
+            .and_downcast::<gtk::Shortcut>()
+            .and_then(|shortcut| shortcut.action())
+            .expect("the queue shortcut")
+            .activate(gtk::ShortcutActionFlags::empty(), &next, None);
+        drain_main_context();
+        assert!(view.is_open.get(), "the queue opened");
+        (window, view)
+    }
+
+    /// A track joining the playlist being played joins its continuation,
+    /// and the open queue lists it, though no listed track changed.
+    #[test]
+    fn a_track_joining_the_played_playlist_joins_the_open_queue() {
+        crate::test_support::with_gtk(|| {
+            use gtk::prelude::*;
+            use sustain_app_runtime::{
+                ApplicationCommand, PlaybackCommand, PlaybackQueueRequest, PlaybackQueueSource,
+            };
+            let id = |value| TrackId::new(value).expect("valid test track id");
+            let root = std::env::temp_dir()
+                .join(format!("sustain-ui-test-queue-join-{}", std::process::id()));
+            let runtime = crate::test_support::playable_runtime_with_tracks(
+                &root,
+                vec![
+                    crate::test_support::track(1, "One"),
+                    crate::test_support::track(2, "Two"),
+                ],
+            );
+            let run = |command| {
+                runtime
+                    .borrow_mut()
+                    .handle_command(command)
+                    .expect("the command runs");
+            };
+            run(ApplicationCommand::CreatePlaylist {
+                name: "Mix".to_owned(),
+                parent_folder_id: None,
+            });
+            let playlist_id = runtime.borrow().playlists()[0].id;
+            run(ApplicationCommand::AddTracksToPlaylist {
+                playlist_id,
+                track_ids: vec![id(1)],
+            });
+            run(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+                track_id: id(1),
+                queue: PlaybackQueueRequest {
+                    source: PlaybackQueueSource::Playlist(playlist_id),
+                    ordered_track_ids: vec![id(1)],
+                },
+            }));
+            let (window, view) = open_queue_view(&runtime);
+            assert_eq!(view.store.n_items(), 0, "nothing is up next");
+
+            run(ApplicationCommand::AddTracksToPlaylist {
+                playlist_id,
+                track_ids: vec![id(2)],
+            });
+            view.library_changed(&std::collections::HashSet::new());
+            assert_eq!(
+                super::queue_row_track_id(view.store.item(0)),
+                Some(track_id(2)),
+                "the joining track is up next"
+            );
+            window.destroy();
+            std::fs::remove_dir_all(&root).expect("the library folder is removed");
+        });
+    }
+
+    fn drain_main_context() {
+        let context = glib::MainContext::default();
+        let mut iterations = 0;
+        while context.iteration(false) && iterations < 200 {
+            iterations += 1;
+        }
     }
 
     fn track_id(value: i64) -> PlayableId {

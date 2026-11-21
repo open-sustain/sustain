@@ -60,6 +60,25 @@ pub(super) fn playback_changed_callback(
     })
 }
 
+/// Redraws what shows the current track's metadata — Now Playing and the
+/// desktop media controls — once the track changed in the library while
+/// its playback did not.
+pub(super) fn current_track_metadata_changed_callback(
+    runtime: &SharedRuntime,
+    now_playing: &NowPlayingView,
+    mpris_service: Option<SharedMprisService>,
+) -> Rc<dyn Fn()> {
+    let runtime = runtime.clone();
+    let now_playing = now_playing.clone();
+    Rc::new(move || {
+        let now_playing_state = runtime.borrow().now_playing();
+        now_playing.refresh(&now_playing_state);
+        if let Some(service) = mpris_service.as_deref() {
+            service.publish_now_playing(now_playing_to_mpris_metadata(&now_playing_state));
+        }
+    })
+}
+
 /// The queue source of the Songs list: the library, or under a search the
 /// results the user sees.
 pub(super) fn songs_queue_source(search_text: &str) -> PlaybackQueueSource {

@@ -119,10 +119,10 @@ pub(crate) use sidebar_collapse::SidebarCollapseController;
 
 use mpris_bridge::{install_mpris_command_consumer, now_playing_to_mpris_metadata};
 use playback::{
-    VisibleViewQueues, install_playback_event_callback, install_playlists_header_playback,
-    install_queue_resort, make_toggle_or_start_playback, playback_changed_callback,
-    playlists_queue_source, songs_queue_source, track_activated_callback,
-    update_play_pause_sensitivity,
+    VisibleViewQueues, current_track_metadata_changed_callback, install_playback_event_callback,
+    install_playlists_header_playback, install_queue_resort, make_toggle_or_start_playback,
+    playback_changed_callback, playlists_queue_source, songs_queue_source,
+    track_activated_callback, update_play_pause_sensitivity,
 };
 use playlists::{
     PlaylistsViewRefreshContext, add_to_playlist_callback, add_to_playlist_provider,
@@ -673,6 +673,12 @@ pub(crate) fn build_main_window(
         current_search_text: &current_search_text,
         device_panel: &device_panel,
         now_playing: &now_playing,
+        current_track_metadata_changed: current_track_metadata_changed_callback(
+            &runtime,
+            &now_playing,
+            mpris_service.clone(),
+        ),
+        queue_view_holder: queue_view_holder.clone(),
     });
     artwork_changed_holder.replace(Some(artwork_changed_callback(library_view_update.clone())));
     install_metadata_writer_event_consumer(
