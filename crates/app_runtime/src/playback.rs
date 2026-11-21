@@ -60,12 +60,13 @@ impl ApplicationRuntime {
             PlaybackCommand::PlayNextTrack => self.play_next_track(),
             PlaybackCommand::SkipCurrentTrack => self.skip_current_track(),
             PlaybackCommand::EnqueueNext(track_ids) => {
-                self.playback_queue
-                    .enqueue_after_current(&playables(&track_ids));
+                let track_ids = self.playables_among(&track_ids);
+                self.playback_queue.enqueue_after_current(&track_ids);
                 Ok(())
             }
             PlaybackCommand::EnqueueLast(track_ids) => {
-                self.playback_queue.enqueue_at_end(&playables(&track_ids));
+                let track_ids = self.playables_among(&track_ids);
+                self.playback_queue.enqueue_at_end(&track_ids);
                 Ok(())
             }
             PlaybackCommand::RemoveFromQueue(track_id) => {
@@ -812,6 +813,24 @@ impl ApplicationRuntime {
 
     /// Whether `track_id` is in the library and not missing on disk —
     /// the per-id form of [`Self::playable_track_ids`]'s filter.
+    /// The tracks of `track_ids` the queue can take: a missing one would
+    /// fail at its turn and hold up everything queued behind it. A track
+    /// recorded missing whose file is back is taken; its play attempt
+    /// records it available.
+    fn playables_among(&self, track_ids: &[TrackId]) -> Vec<PlayableId> {
+        track_ids
+            .iter()
+            .copied()
+            .filter(|track_id| {
+                self.track_is_playable(*track_id)
+                    || self
+                        .library_track_path(*track_id)
+                        .is_ok_and(|path| probe_file_presence(&path) == FilePresence::Present)
+            })
+            .map(PlayableId::Library)
+            .collect()
+    }
+
     fn track_is_playable(&self, track_id: TrackId) -> bool {
         self.library_track(track_id)
             .is_some_and(|track| !track.location.is_missing())

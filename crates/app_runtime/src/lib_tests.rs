@@ -4789,6 +4789,47 @@ fn playback_backend_errors_keep_status_text_concise() {
     std::fs::remove_dir_all(root).expect("remove test library");
 }
 
+/// #353 A5-11: Play Next does not take a track whose file is missing.
+#[test]
+fn play_next_skips_a_missing_track() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+    std::fs::remove_file(root.join("c.flac")).expect("remove c.flac");
+    // The play attempt finds the file gone and records it missing.
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(3),
+            queue: library_queue(&runtime),
+        })),
+        Err(ApplicationRuntimeError::TrackUnavailable)
+    );
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: library_queue(&runtime),
+        }))
+        .expect("play track 1");
+
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::EnqueueNext(
+            vec![track_id(3)],
+        )))
+        .expect("enqueue");
+
+    assert_eq!(runtime.playback_queue_next_track_id(), Some(playable(2)));
+
+    // Once the file is back, the track is taken.
+    std::fs::write(root.join("c.flac"), b"not real audio").expect("restore c.flac");
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::EnqueueNext(
+            vec![track_id(3)],
+        )))
+        .expect("enqueue");
+    assert_eq!(runtime.playback_queue_next_track_id(), Some(playable(3)));
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
 /// #352 A5-2: a start that fails leaves the queue on the track before
 /// it. The error must advance past the failed track, not offer it again.
 #[test]
