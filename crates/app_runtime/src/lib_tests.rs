@@ -54,7 +54,9 @@ use super::{
 };
 use crate::{
     TrackChange, TrackChanges, TrackFields, TrackUpdated,
-    file_presence::{FilePresence, probe_file_presence, probe_path_entry_presence},
+    file_presence::{
+        FilePresence, probe_file_presence, probe_library_file_presence, probe_path_entry_presence,
+    },
     managed_library::{
         ManagedLibraryFilesystemError, ManagedLibraryFilesystemValidator, file_ops::FileIdentity,
     },
@@ -3087,6 +3089,11 @@ fn consolidation_restoring_a_track_wakes_an_idle_analysis_sweep() {
         .location
         .with_availability(sustain_domain::TrackAvailability::Missing);
     assert_eq!(store.save_track(track), Ok(()));
+    // Checked so: the track went missing since.
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(&library_root)),
+        Ok(vec![])
+    );
     let mut runtime = managed_runtime_over(&library_root, store);
     let mut settings = runtime.settings().clone();
     settings.analysis.bpm = true;
@@ -3740,6 +3747,325 @@ fn update_settings_re_stats_existing_tracks_when_library_path_changes() {
 }
 
 #[test]
+fn a_root_change_whose_check_failed_is_checked_as_the_library_next_opens() {
+    let old_root = unique_test_directory();
+    let new_root = unique_test_directory();
+    std::fs::create_dir_all(&old_root).expect("create old library root");
+    std::fs::create_dir_all(&new_root).expect("create new library root");
+    std::fs::write(old_root.join("track.flac"), b"audio").expect("write track");
+    // The new root holds another of the tracks: it is the library's.
+    std::fs::write(new_root.join("present.flac"), b"audio").expect("write present track");
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    let id = track_id(105);
+    assert_eq!(store.save_track(test_track(id, "track.flac")), Ok(()));
+    assert_eq!(
+        store.save_track(test_track(track_id(205), "present.flac")),
+        Ok(())
+    );
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(&old_root)),
+        Ok(vec![])
+    );
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(old_root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+    assert_eq!(store.checked_library_root(), Ok(Some(old_root.clone())));
+
+    // The settings are saved; the check that follows is not committed,
+    // which is reported without rejecting the save.
+    store.set_fail_record_track_availability_check(true);
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(
+            UserSettings::with_library_path(Some(new_root.clone()))
+        )),
+        Ok(())
+    );
+    assert_eq!(runtime.settings().library.path, Some(new_root.clone()));
+    assert_eq!(store.checked_library_root(), Ok(None));
+    assert!(
+        runtime
+            .library_tracks()
+            .iter()
+            .all(|track| !track.location.is_missing())
+    );
+    assert_eq!(
+        runtime
+            .notifications()
+            .current_ephemeral()
+            .expect("failed check warning")
+            .body,
+        crate::notifications::library_root_check_failed_text()
+    );
+
+    // The next start opens the library under the saved root.
+    store.set_fail_record_track_availability_check(false);
+    let reopened = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(new_root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+    let track = reopened
+        .library_tracks()
+        .iter()
+        .find(|track| track.id == id)
+        .expect("runtime track");
+    assert!(track.location.is_missing());
+    assert!(
+        store
+            .track(id)
+            .expect("reload track")
+            .expect("track row")
+            .location
+            .is_missing()
+    );
+    assert_eq!(store.checked_library_root(), Ok(Some(new_root.clone())));
+
+    std::fs::remove_dir_all(old_root).expect("remove old library root");
+    std::fs::remove_dir_all(new_root).expect("remove new library root");
+}
+
+#[test]
+fn a_root_chosen_again_is_not_taken_as_checked_until_its_check_commits() {
+    let first_root = unique_test_directory();
+    let second_root = unique_test_directory();
+    std::fs::create_dir_all(&first_root).expect("create first library root");
+    std::fs::create_dir_all(&second_root).expect("create second library root");
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(&first_root)),
+        Ok(vec![])
+    );
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(first_root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+
+    // Away and back, neither check committing: the first root's earlier
+    // check no longer stands for its tracks.
+    store.set_fail_record_track_availability_check(true);
+    for root in [&second_root, &first_root] {
+        assert_eq!(
+            runtime.handle_command(ApplicationCommand::UpdateSettings(
+                UserSettings::with_library_path(Some(root.clone()))
+            )),
+            Ok(())
+        );
+    }
+    assert_eq!(store.checked_library_root(), Ok(None));
+
+    std::fs::remove_dir_all(first_root).expect("remove first library root");
+    std::fs::remove_dir_all(second_root).expect("remove second library root");
+}
+
+#[test]
+fn a_root_change_restoring_a_track_wakes_an_idle_analysis_sweep_to_it() {
+    let old_root = unique_test_directory();
+    let new_root = unique_test_directory();
+    std::fs::create_dir_all(&old_root).expect("create old library root");
+    std::fs::create_dir_all(&new_root).expect("create new library root");
+    std::fs::write(new_root.join("track.flac"), b"audio").expect("write track");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let mut track = test_track(track_id(107), "track.flac");
+    track.location = track
+        .location
+        .with_availability(sustain_domain::TrackAvailability::Missing);
+    assert_eq!(store.save_track(track), Ok(()));
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(&old_root)),
+        Ok(vec![])
+    );
+    let mut settings = UserSettings::with_library_path(Some(old_root.clone()));
+    settings.analysis.bpm = true;
+    let mut runtime =
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(settings.clone())))
+            .expect("load settings")
+            .with_library_services(store, Arc::new(TestMetadataService))
+            .expect("library services initialize");
+    let (sink, progress) = async_channel::unbounded();
+    runtime.set_analysis_progress_sink(sink);
+    runtime
+        .start_analysis_scheduler()
+        .expect("start analysis scheduler");
+    // The only track is missing, so the sweep goes idle with no work.
+    assert_eq!(next_analysis_sweep_idle(&progress), 0);
+
+    // The track is found under the new root before the sweep is told it.
+    settings.library.path = Some(new_root.clone());
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(settings)),
+        Ok(())
+    );
+    assert!(!runtime.library_tracks()[0].location.is_missing());
+
+    assert_eq!(next_analysis_sweep_idle(&progress), 1);
+    runtime.shutdown_analysis_scheduler();
+    std::fs::remove_dir_all(old_root).expect("remove old library root");
+    std::fs::remove_dir_all(new_root).expect("remove new library root");
+}
+
+#[test]
+fn a_library_opened_under_another_root_than_it_was_checked_against_is_checked() {
+    let checked_root = unique_test_directory();
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let id = track_id(106);
+    assert_eq!(store.save_track(test_track(id, "track.flac")), Ok(()));
+    // The root holds one of the tracks: it is the library's.
+    std::fs::write(library_root.join("present.flac"), b"audio").expect("write present track");
+    assert_eq!(
+        store.save_track(test_track(track_id(206), "present.flac")),
+        Ok(())
+    );
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(&checked_root)),
+        Ok(vec![])
+    );
+
+    let runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(library_root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+
+    assert!(runtime.library_tracks()[0].location.is_missing());
+    assert!(
+        store
+            .track(id)
+            .expect("reload track")
+            .expect("track row")
+            .location
+            .is_missing()
+    );
+    assert_eq!(store.checked_library_root(), Ok(Some(library_root.clone())));
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn a_library_hydrated_after_start_is_checked_before_its_rows_are_published() {
+    let checked_root = unique_test_directory();
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let id = track_id(107);
+    assert_eq!(store.save_track(test_track(id, "track.flac")), Ok(()));
+    // The root holds one of the tracks: it is the library's.
+    std::fs::write(library_root.join("present.flac"), b"audio").expect("write present track");
+    assert_eq!(
+        store.save_track(test_track(track_id(207), "present.flac")),
+        Ok(())
+    );
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(&checked_root)),
+        Ok(vec![])
+    );
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(library_root.clone())),
+    )))
+    .expect("load settings");
+    runtime
+        .set_library_services_deferred_hydration(store.clone(), Arc::new(TestMetadataService))
+        .expect("install deferred library services");
+    let receiver = runtime.library_hydration_result_receiver();
+    assert!(runtime.start_library_hydration());
+    let result = receiver.recv_blocking().expect("hydration result");
+    assert!(runtime.apply_library_hydration_result(result));
+
+    // The rows are published as checked: nothing to change after.
+    assert!(runtime.library_tracks()[0].location.is_missing());
+    assert!(runtime.take_library_changes().tracks.is_empty());
+    assert_eq!(
+        runtime
+            .notifications()
+            .current_ephemeral()
+            .map(|notification| notification.severity),
+        Some(NotificationSeverity::Warning)
+    );
+    assert_eq!(store.checked_library_root(), Ok(Some(library_root.clone())));
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn a_library_with_no_checked_root_is_checked_as_it_opens() {
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let id = track_id(108);
+    assert_eq!(store.save_track(test_track(id, "absent.flac")), Ok(()));
+    // The root holds one of the tracks: it is the library's.
+    std::fs::write(library_root.join("present.flac"), b"audio").expect("write present track");
+    assert_eq!(
+        store.save_track(test_track(track_id(208), "present.flac")),
+        Ok(())
+    );
+
+    let runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(library_root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+
+    assert!(runtime.library_tracks()[0].location.is_missing());
+    // The folder did not change: the outcome says what was checked.
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("check outcome");
+    assert_eq!(notification.severity, NotificationSeverity::Warning);
+    assert_eq!(
+        notification.body,
+        crate::notifications::library_root_check_outcome_text(1, 0, 2)
+    );
+    assert_eq!(store.checked_library_root(), Ok(Some(library_root.clone())));
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
+fn a_failed_check_as_the_library_opens_is_reported() {
+    let library_root = unique_test_directory();
+    std::fs::create_dir_all(&library_root).expect("create library root");
+    let backing: Arc<dyn LibraryStore> =
+        Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let store = Arc::new(crate::test_store::FaultyStore::new(backing));
+    store.set_fail_record_track_availability_check(true);
+
+    let runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(library_root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+
+    let notification = runtime
+        .notifications()
+        .current_ephemeral()
+        .expect("failed check warning");
+    assert_eq!(notification.severity, NotificationSeverity::Warning);
+    assert_eq!(
+        notification.body,
+        crate::notifications::library_root_check_failed_text()
+    );
+    assert_eq!(store.checked_library_root(), Ok(None));
+
+    std::fs::remove_dir_all(library_root).expect("remove library root");
+}
+
+#[test]
 fn library_path_change_probe_failure_preserves_existing_availability() {
     let root = unique_test_directory();
     std::fs::create_dir_all(&root).expect("create test library");
@@ -3750,11 +4076,10 @@ fn library_path_change_probe_failure_preserves_existing_availability() {
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
 
-    runtime
-        .reconcile_track_availability_after_library_path_change_with(root.clone(), |_| {
-            FilePresence::ProbeFailed
-        })
-        .expect("preserve availability after unresolved probe");
+    let summary = runtime
+        .check_chosen_root_availability_with(&root, |_| FilePresence::ProbeFailed)
+        .expect("preserve availability after unresolved probe")
+        .expect("a store to check against");
 
     assert!(!runtime.library_tracks()[0].location.is_missing());
     assert!(
@@ -3765,14 +4090,74 @@ fn library_path_change_probe_failure_preserves_existing_availability() {
             .location
             .is_missing()
     );
-    let notification = runtime
-        .notifications()
-        .current_ephemeral()
-        .expect("path-change warning");
-    assert_eq!(notification.severity, NotificationSeverity::Warning);
-    assert!(notification.body.contains("1 could not be checked"));
+    assert_eq!(summary.unresolved, 1);
+    assert_eq!(summary.changed, 0);
+    // No root is recorded, so the track it could not reach is checked
+    // again as the library next opens.
+    assert_eq!(store.checked_library_root(), Ok(None));
 
     std::fs::remove_dir_all(root).expect("remove test library");
+}
+
+#[test]
+fn a_library_opened_under_an_unreachable_root_waits_for_it_to_be_checked() {
+    let checked_root = unique_test_directory();
+    let unplugged_root = unique_test_directory();
+    let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
+    let id = track_id(109);
+    assert_eq!(store.save_track(test_track(id, "track.flac")), Ok(()));
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(&checked_root)),
+        Ok(vec![])
+    );
+
+    let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+        UserSettings::with_library_path(Some(unplugged_root.clone())),
+    )))
+    .expect("load settings")
+    .with_library_services(store.clone(), Arc::new(TestMetadataService))
+    .expect("library services initialize");
+    // Nor does saving the settings again check it while it is away.
+    let mut settings = runtime.settings().clone();
+    settings.library.honor_sort_tags = !settings.library.honor_sort_tags;
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(settings)),
+        Ok(())
+    );
+
+    assert!(!runtime.library_tracks()[0].location.is_missing());
+    assert!(runtime.notifications().current_ephemeral().is_none());
+    assert_eq!(store.checked_library_root(), Ok(Some(checked_root.clone())));
+
+    let reopen = || {
+        ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
+            UserSettings::with_library_path(Some(unplugged_root.clone())),
+        )))
+        .expect("load settings")
+        .with_library_services(store.clone(), Arc::new(TestMetadataService))
+        .expect("library services initialize")
+    };
+    // An empty folder in its place, as a mountpoint without its drive,
+    // holds none of the tracks: the check waits too.
+    std::fs::create_dir_all(&unplugged_root).expect("leave an empty mountpoint");
+    assert!(!reopen().library_tracks()[0].location.is_missing());
+    assert_eq!(store.checked_library_root(), Ok(Some(checked_root.clone())));
+
+    // Back, it is checked as the library next opens.
+    std::fs::write(unplugged_root.join("present.flac"), b"audio").expect("plug the drive back");
+    assert_eq!(
+        store.save_track(test_track(track_id(209), "present.flac")),
+        Ok(())
+    );
+    let reopened = reopen();
+    assert!(reopened.library_tracks()[0].location.is_missing());
+    assert!(!reopened.library_tracks()[1].location.is_missing());
+    assert_eq!(
+        store.checked_library_root(),
+        Ok(Some(unplugged_root.clone()))
+    );
+
+    std::fs::remove_dir_all(unplugged_root).expect("remove library root");
 }
 
 #[test]
@@ -3787,22 +4172,17 @@ fn library_path_change_adopts_no_availability_the_store_did_not_commit() {
     let mut runtime = ApplicationRuntime::new()
         .with_library_services(store.clone(), Arc::new(TestMetadataService))
         .expect("library services initialize");
-    store.set_fail_update_track_locations(true);
+    store.set_fail_record_track_availability_check(true);
 
-    let result = runtime
-        .reconcile_track_availability_after_library_path_change_with(root.clone(), |_| {
-            FilePresence::Absent
-        });
+    let result = runtime.check_chosen_root_availability_with(&root, |_| FilePresence::Absent);
 
     assert_eq!(result, Err(ApplicationRuntimeError::LibraryStoreFailed));
     assert!(!runtime.library_tracks()[0].location.is_missing());
     assert!(runtime.take_library_changes().tracks.is_empty());
 
-    store.set_fail_update_track_locations(false);
+    store.set_fail_record_track_availability_check(false);
     runtime
-        .reconcile_track_availability_after_library_path_change_with(root.clone(), |_| {
-            FilePresence::Absent
-        })
+        .check_chosen_root_availability_with(&root, |_| FilePresence::Absent)
         .expect("mark the track missing");
 
     assert!(runtime.library_tracks()[0].location.is_missing());
@@ -3925,6 +4305,11 @@ fn play_track_probe_failure_does_not_create_a_missing_marker() {
     let store = Arc::new(SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store"));
     let id = track_id(35);
     assert_eq!(store.save_track(test_track(id, "unresolved.flac")), Ok(()));
+    // Checked available: the file went away since.
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(&library_root)),
+        Ok(vec![])
+    );
     let mut runtime = ApplicationRuntime::with_settings_store(Box::new(TestSettingsStore::new(
         UserSettings::with_library_path(Some(library_root.clone())),
     )))
@@ -9194,6 +9579,55 @@ fn file_presence_probes_distinguish_reachable_files_from_directory_entries() {
 }
 
 #[test]
+fn a_library_check_cannot_tell_a_track_behind_a_link_that_leads_nowhere() {
+    let dir = unique_test_directory();
+    std::fs::create_dir_all(dir.join("local")).expect("create a local folder");
+    std::fs::write(dir.join("local/here.flac"), b"x").expect("write a local track");
+    std::os::unix::fs::symlink(dir.join("unmounted-drive"), dir.join("external"))
+        .expect("link to an unmounted drive");
+    std::os::unix::fs::symlink(dir.join("deleted.flac"), dir.join("local/take.flac"))
+        .expect("link to a deleted file");
+
+    assert_eq!(
+        probe_library_file_presence(&dir.join("local/here.flac")),
+        FilePresence::Present
+    );
+    assert_eq!(
+        probe_library_file_presence(&dir.join("local/gone.flac")),
+        FilePresence::Absent
+    );
+    assert_eq!(
+        probe_library_file_presence(&dir.join("external/album/song.flac")),
+        FilePresence::ProbeFailed
+    );
+    assert_eq!(
+        probe_library_file_presence(&dir.join("local/take.flac")),
+        FilePresence::ProbeFailed
+    );
+    std::os::unix::fs::symlink(dir.join("local/loop.flac"), dir.join("local/loop.flac"))
+        .expect("link in a loop");
+    assert_eq!(
+        probe_library_file_presence(&dir.join("local/loop.flac")),
+        FilePresence::ProbeFailed
+    );
+    std::os::unix::fs::symlink(
+        dir.join("local/here.flac/inner.flac"),
+        dir.join("local/through.flac"),
+    )
+    .expect("link through a file");
+    assert_eq!(
+        probe_library_file_presence(&dir.join("local/through.flac")),
+        FilePresence::ProbeFailed
+    );
+    assert_eq!(
+        probe_file_presence(&dir.join("external/album/song.flac")),
+        FilePresence::Absent
+    );
+
+    std::fs::remove_dir_all(&dir).expect("remove probe directory");
+}
+
+#[test]
 fn a_track_whose_link_now_leads_to_another_kind_of_file_is_absent() {
     let dir = unique_test_directory();
     std::fs::create_dir_all(&dir).expect("create probe directory");
@@ -9674,6 +10108,23 @@ impl LibraryStore for CallCountingLibraryStore {
         location: &TrackLocation,
     ) -> StoreResult<()> {
         self.inner.update_track_location(track_id, location)
+    }
+
+    fn checked_library_root(&self) -> StoreResult<Option<std::path::PathBuf>> {
+        self.inner.checked_library_root()
+    }
+
+    fn forget_checked_library_root(&self) -> StoreResult<()> {
+        self.inner.forget_checked_library_root()
+    }
+
+    fn record_track_availability_check(
+        &self,
+        updates: &[(TrackId, TrackLocation)],
+        checked_root: Option<&std::path::Path>,
+    ) -> StoreResult<Vec<bool>> {
+        self.inner
+            .record_track_availability_check(updates, checked_root)
     }
 
     fn update_track_availability_if_path_matches(

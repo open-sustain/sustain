@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use std::{
     num::NonZeroU32,
@@ -180,6 +180,64 @@ fn sqlite_stored_bpm_that_is_not_a_tempo_is_rejected() {
             "bpm hundredths: 0".to_owned()
         ))
     );
+}
+
+#[test]
+fn an_availability_check_records_what_it_found_and_the_root_once_complete() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    let store = &SqliteLibraryStore::open_in_memory().expect("in-memory SQLite store");
+    let kept = track(1, "kept.flac");
+    let gone = track(2, "gone.flac");
+    let moved = track(3, "moved.flac");
+    for track in [&kept, &gone, &moved] {
+        store.save_track(track.clone()).expect("save track");
+    }
+    assert_eq!(store.checked_library_root(), Ok(None));
+    // Moved after it was checked: the check must not undo the move.
+    let moved_to =
+        TrackLocation::available(TrackRelativePath::new("elsewhere.flac").expect("relative path"));
+    store
+        .update_track_location(moved.id, &moved_to)
+        .expect("move track");
+    let missing = |track: &Track| {
+        track
+            .location
+            .clone()
+            .with_availability(sustain_domain::TrackAvailability::Missing)
+    };
+
+    // An incomplete check records what it found, but no root.
+    assert_eq!(
+        store.record_track_availability_check(
+            &[(gone.id, missing(&gone)), (moved.id, missing(&moved))],
+            None
+        ),
+        Ok(vec![true, false])
+    );
+    assert_eq!(store.checked_library_root(), Ok(None));
+    let location = |id| store.track(id).expect("load").expect("track").location;
+    assert_eq!(location(kept.id), kept.location);
+    assert_eq!(location(gone.id), missing(&gone));
+    assert_eq!(location(moved.id), moved_to);
+
+    let root = PathBuf::from(OsString::from_vec(b"/music/caf\xE9".to_vec()));
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(&root)),
+        Ok(vec![])
+    );
+    assert_eq!(store.checked_library_root(), Ok(Some(root)));
+    assert_eq!(
+        store.record_track_availability_check(&[], Some(Path::new("/elsewhere"))),
+        Ok(vec![])
+    );
+    assert_eq!(
+        store.checked_library_root(),
+        Ok(Some(PathBuf::from("/elsewhere")))
+    );
+    // A later incomplete check leaves no root reflected.
+    assert_eq!(store.record_track_availability_check(&[], None), Ok(vec![]));
+    assert_eq!(store.checked_library_root(), Ok(None));
 }
 
 #[test]

@@ -64,6 +64,13 @@ pub(super) fn install_library_hydration_result_consumer(
         let Ok(result) = receiver.recv().await else {
             return;
         };
+        if let (Some(profile), Ok(snapshot)) = (launch_profile, &result) {
+            sustain_profiler::profile!(
+                "activate: library snapshot loaded at {:.1}ms (availability check {:.1}ms)",
+                profile.elapsed_ms(),
+                snapshot.availability_check_elapsed().as_secs_f64() * 1000.0
+            );
+        }
         if !runtime.borrow_mut().apply_library_hydration_result(result) {
             if let Some(profile) = launch_profile {
                 sustain_profiler::profile!(

@@ -3,12 +3,7 @@
 
 use sustain_domain::{ApplicationCommand, LibraryManagementMode};
 
-use crate::{
-    ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult, NotificationCategory,
-    NotificationSeverity,
-    file_presence::{FilePresence, probe_file_presence},
-    notifications,
-};
+use crate::{ApplicationRuntime, ApplicationRuntimeError, ApplicationRuntimeResult};
 
 impl ApplicationRuntime {
     pub fn handle_command(&mut self, command: ApplicationCommand) -> ApplicationRuntimeResult<()> {
@@ -79,7 +74,7 @@ impl ApplicationRuntime {
                 if settings.library.path != self.settings.library.path
                     && let Some(library_path) = settings.library.path.as_deref()
                 {
-                    ensure_library_root_is_a_folder(library_path)?;
+                    crate::library_root_check::ensure_library_root_is_a_folder(library_path)?;
                 }
                 let organized_library_contract_changed = settings.library.management_mode
                     == LibraryManagementMode::CopyAddedFilesIntoLibrary
@@ -97,26 +92,20 @@ impl ApplicationRuntime {
                 let previous_analysis = self.settings.analysis;
                 let previous_online = self.settings.online;
                 let previous_resource_usage = self.settings.background_jobs.resource_usage;
+                if settings.library.path != previous_library_path {
+                    self.forget_checked_library_root()?;
+                }
                 if let Some(settings_store) = &self.settings_store {
                     settings_store
                         .save_settings(settings.clone())
                         .map_err(|_| ApplicationRuntimeError::SettingsSaveFailed)?;
                 }
                 self.settings = settings;
-                // Settings changes that do NOT alter `library.path`
-                // never stat tracks — toggling the management-mode
-                // checkbox in Preferences must not freeze the UI on a
-                // 10k library. A library path change is the exception:
-                // it is structural reconciliation (semantically closer
-                // to a scan than to a preference toggle), the user
-                // just typed/picked the new root, and the cost is
-                // bounded by the library size.
-                let new_library_path = self.settings.library.path.clone();
-                if let (Some(previous), Some(new)) =
-                    (previous_library_path.as_ref(), new_library_path.as_ref())
-                    && previous != new
-                {
-                    self.reconcile_track_availability_after_library_path_change(new.clone())?;
+                // Before the workers learn the root: told it, an idle sweep
+                // polls the store, which must already hold the availability
+                // under it.
+                if self.settings.library.path != previous_library_path {
+                    self.check_track_availability_under_chosen_root();
                 }
                 // Propagate analysis-tickbox changes to the background
                 // scheduler so toggling a capability off stops the
@@ -312,173 +301,5 @@ impl ApplicationRuntime {
         }
 
         Ok(())
-    }
-
-    /// Re-stat every persisted track against `new_library_path` and
-    /// flush the resulting availability flags to SQLite, then surface
-    /// the outcome as an ephemeral notification. Called once per
-    /// accepted library-path change (never on no-op updates, never on
-    /// management-mode toggles), so the user gets an immediate, honest
-    /// picture of what is reachable under the new root instead of
-    /// having to wait until they click a track to discover it is gone.
-    fn reconcile_track_availability_after_library_path_change(
-        &mut self,
-        new_library_path: std::path::PathBuf,
-    ) -> ApplicationRuntimeResult<()> {
-        self.reconcile_track_availability_after_library_path_change_with(
-            new_library_path,
-            probe_file_presence,
-        )
-    }
-
-    pub(super) fn reconcile_track_availability_after_library_path_change_with(
-        &mut self,
-        new_library_path: std::path::PathBuf,
-        probe: impl Fn(&std::path::Path) -> FilePresence,
-    ) -> ApplicationRuntimeResult<()> {
-        let total = self.library_tracks.len();
-        // The index of each track whose availability flips, beside its new
-        // location.
-        let mut flipped = Vec::new();
-        let mut newly_missing = 0usize;
-        let mut unresolved = 0usize;
-        for (index, track) in self.library_tracks.iter().enumerate() {
-            let availability = match probe(&track.location.absolute_path(&new_library_path)) {
-                FilePresence::Present => sustain_domain::TrackAvailability::Available,
-                FilePresence::Absent => sustain_domain::TrackAvailability::Missing,
-                FilePresence::ProbeFailed => {
-                    unresolved += 1;
-                    continue;
-                }
-            };
-            let now_missing = availability == sustain_domain::TrackAvailability::Missing;
-            if now_missing != track.location.is_missing() {
-                if now_missing {
-                    newly_missing += 1;
-                }
-                flipped.push((
-                    index,
-                    track.location.clone().with_availability(availability),
-                ));
-            }
-        }
-
-        if !flipped.is_empty()
-            && let Some(store) = self.library_store.as_ref()
-        {
-            let changed = flipped
-                .iter()
-                .map(|(index, location)| (self.library_tracks[*index].id, location.clone()))
-                .collect::<Vec<_>>();
-            store
-                .update_track_locations(&changed)
-                .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
-        }
-        // Adopt only what the store committed.
-        let changed = !flipped.is_empty();
-        for (index, location) in flipped {
-            let mut track = self.library_tracks[index].clone();
-            track.location = location;
-            self.store_library_track(index, track);
-        }
-
-        if changed {
-            self.refresh_playback_queue_track_ids();
-        }
-
-        let severity = if newly_missing > 0 || unresolved > 0 {
-            NotificationSeverity::Warning
-        } else {
-            NotificationSeverity::Info
-        };
-        self.push_ephemeral_notification(
-            NotificationCategory::LibraryScan,
-            severity,
-            notifications::library_path_change_outcome_text(newly_missing, unresolved, total),
-        );
-
-        Ok(())
-    }
-}
-
-/// `Ok` when `path` is a folder Sustain can list and open files in: read
-/// and search permission, as the effective user. A missing path, or one
-/// that names a file, is not a folder; any other failure to reach it, such
-/// as a permission refused on it or on the way to it, leaves it
-/// inaccessible.
-fn ensure_library_root_is_a_folder(path: &std::path::Path) -> ApplicationRuntimeResult<()> {
-    match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_dir() => {}
-        Ok(_) => return Err(ApplicationRuntimeError::LibraryPathNotAFolder),
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            return Err(ApplicationRuntimeError::LibraryPathNotAFolder);
-        }
-        Err(_) => return Err(ApplicationRuntimeError::LibraryPathInaccessible),
-    }
-    rustix::fs::accessat(
-        rustix::fs::CWD,
-        path,
-        rustix::fs::Access::READ_OK | rustix::fs::Access::EXEC_OK,
-        rustix::fs::AtFlags::EACCESS,
-    )
-    .map_err(|_| ApplicationRuntimeError::LibraryPathInaccessible)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::os::unix::fs::PermissionsExt;
-
-    use super::ensure_library_root_is_a_folder;
-    use crate::ApplicationRuntimeError;
-
-    #[test]
-    fn a_library_root_is_a_folder_a_missing_or_file_path_or_an_unreadable_one() {
-        let root = std::env::temp_dir().join(format!("sustain_root_check_{}", std::process::id()));
-        let locked = root.join("locked");
-        std::fs::create_dir_all(locked.join("inside")).expect("create folders");
-        std::fs::write(root.join("file.flac"), b"audio").expect("write a file");
-
-        assert_eq!(ensure_library_root_is_a_folder(&root), Ok(()));
-        assert_eq!(
-            ensure_library_root_is_a_folder(&root.join("missing")),
-            Err(ApplicationRuntimeError::LibraryPathNotAFolder)
-        );
-        assert_eq!(
-            ensure_library_root_is_a_folder(&root.join("file.flac")),
-            Err(ApplicationRuntimeError::LibraryPathNotAFolder)
-        );
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
-            .expect("lock the folder");
-        let behind_a_refusal = ensure_library_root_is_a_folder(&locked.join("inside"));
-        let refused = ensure_library_root_is_a_folder(&locked);
-        // Listable, but its files cannot be opened.
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o400))
-            .expect("make the folder listable only");
-        let unsearchable = ensure_library_root_is_a_folder(&locked);
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
-            .expect("unlock the folder");
-        std::fs::remove_dir_all(&root).expect("remove test folders");
-
-        // Root reads through any permission; the refusal needs a user.
-        if rustix::process::geteuid().is_root() {
-            return;
-        }
-        assert_eq!(
-            behind_a_refusal,
-            Err(ApplicationRuntimeError::LibraryPathInaccessible)
-        );
-        assert_eq!(
-            refused,
-            Err(ApplicationRuntimeError::LibraryPathInaccessible)
-        );
-        assert_eq!(
-            unsearchable,
-            Err(ApplicationRuntimeError::LibraryPathInaccessible)
-        );
     }
 }

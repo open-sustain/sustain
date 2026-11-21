@@ -18,14 +18,14 @@ use crate::{
         ADD_TRACK_BPM_SET_BY_USER_SQL, ADD_TRACK_COLUMN_SORT_SQL, ADD_TRACK_KEY_ORIGIN_SQL,
         BACKFILL_GENERATED_SORT_FIELDS_SQL, INDEX_PLAYLIST_ENTRIES_BY_TRACK_SQL,
         MOVE_WAVEFORMS_TO_CACHE_SQL, NORMALIZE_EMPTY_TRACK_METADATA_SQL,
-        RECORD_TAG_MIRROR_FIELDS_SQL, RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL,
-        RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL, SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL,
-        STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL, VERSION_ANALYSIS_PER_CAPABILITY_SQL,
-        VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
+        RECORD_CHECKED_LIBRARY_ROOT_SQL, RECORD_TAG_MIRROR_FIELDS_SQL,
+        RETRY_EMPTY_FLAC_ANALYSIS_ATTEMPTS_SQL, RETRY_HIGH_RATE_MP4_ANALYSIS_ATTEMPTS_SQL,
+        SCHEMA_SQL, STORE_BPM_IN_HUNDREDTHS_SQL, STORE_SMART_PLAYLIST_RULE_DATES_AS_DAYS_SQL,
+        VERSION_ANALYSIS_PER_CAPABILITY_SQL, VERSION_ONLINE_ATTEMPTS_PER_CAPABILITY_SQL,
     },
 };
 
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 24;
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 25;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -166,6 +166,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 24,
         description: "record which fields a pending tag mirror writes",
         step: MigrationStep::Sql(RECORD_TAG_MIRROR_FIELDS_SQL),
+    },
+    Migration {
+        version: 25,
+        description: "record the library root track availability was checked against",
+        step: MigrationStep::Sql(RECORD_CHECKED_LIBRARY_ROOT_SQL),
     },
 ];
 
@@ -413,6 +418,7 @@ mod tests {
     use super::*;
 
     const EXPECTED_TABLES: &[&str] = &[
+        "checked_library_root",
         "playlist_entries",
         "playlist_folders",
         "playlists",
@@ -1788,6 +1794,48 @@ WHERE track_id IN (SELECT id FROM tracks WHERE musical_key IS NOT NULL);
         assert!(
             connection
                 .execute("UPDATE tracks SET key_origin = 3 WHERE id = 1", [])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn upgrade_from_v24_records_no_library_root_and_keeps_track_availability() {
+        let connection = Connection::open_in_memory().expect("connection");
+        apply_pending_from_registry(&connection, &MIGRATIONS[..24]).expect("schema version 24");
+        connection
+            .execute_batch(
+                "INSERT INTO tracks (id, relative_path, is_missing) \
+                 VALUES (1, x'61', 0), (2, x'62', 1);",
+            )
+            .expect("seed version 24 tracks");
+
+        apply_pending(&connection).expect("upgrade");
+
+        assert_eq!(
+            user_version(&connection).expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        assert_eq!(tables(&connection), EXPECTED_TABLES);
+        let recorded: i64 = connection
+            .query_row("SELECT count(*) FROM checked_library_root", [], |row| {
+                row.get(0)
+            })
+            .expect("count recorded roots");
+        assert_eq!(recorded, 0);
+        let missing: Vec<(i64, bool)> = connection
+            .prepare("SELECT id, is_missing FROM tracks ORDER BY id")
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("tracks");
+        assert_eq!(missing, [(1, false), (2, true)]);
+        // One root at most.
+        assert!(
+            connection
+                .execute_batch(
+                    "INSERT INTO checked_library_root (id, library_root) VALUES (2, x'2f');"
+                )
                 .is_err()
         );
     }

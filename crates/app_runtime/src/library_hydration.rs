@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 AnnoyingTechnology
 
-use std::{sync::Arc, thread};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    thread,
+};
 
 use sustain_library_store::LibraryStore;
 
 use crate::{
     ApplicationRuntimeError, ApplicationRuntimeResult, Playlist, PlaylistFolder,
     SMART_SHUFFLE_INDEX_SCHEMA_VERSION, SearchIndex, SmartPlaylist, SmartShuffleIndex, Track,
+    library_root_check::{AvailabilityAtOpen, settle_availability_at_open},
 };
 
 /// Track-sized runtime state loaded after the GTK shell reaches first idle.
@@ -15,7 +20,8 @@ use crate::{
 /// Keeping the index beside the tracks makes snapshot adoption O(1) on the
 /// main thread. The worker also restores Smart Shuffle's persisted blob:
 /// decoding that blob scales with the indexed library and therefore belongs
-/// outside the cold-start path too.
+/// outside the cold-start path too, and so does checking the tracks against
+/// the library root when a check of it is still due.
 pub struct LibraryHydrationSnapshot {
     pub(crate) tracks: Vec<Track>,
     pub(crate) search_index: SearchIndex,
@@ -23,6 +29,17 @@ pub struct LibraryHydrationSnapshot {
     pub(crate) playlist_folders: Vec<PlaylistFolder>,
     pub(crate) smart_playlists: Vec<SmartPlaylist>,
     pub(crate) smart_shuffle_index: Option<SmartShuffleIndex>,
+    pub(crate) checked_library_root: Option<PathBuf>,
+    pub(crate) availability_at_open: AvailabilityAtOpen,
+    availability_check_elapsed: std::time::Duration,
+}
+
+impl LibraryHydrationSnapshot {
+    /// How long checking the tracks against the library root took, for
+    /// the startup profile: no time unless a check was due.
+    pub fn availability_check_elapsed(&self) -> std::time::Duration {
+        self.availability_check_elapsed
+    }
 }
 
 /// One-shot worker owned by [`crate::ApplicationRuntime`].
@@ -52,11 +69,12 @@ impl LibraryHydrationWorker {
         self.result_rx.clone()
     }
 
-    pub(crate) fn start(&mut self, store: Arc<dyn LibraryStore>) {
+    /// Load the library, opening it under `library_root`.
+    pub(crate) fn start(&mut self, store: Arc<dyn LibraryStore>, library_root: Option<PathBuf>) {
         debug_assert!(self.handle.is_none(), "library hydration is one-shot");
         let result_tx = self.result_tx.clone();
         self.handle = Some(thread::spawn(move || {
-            let _ = result_tx.send_blocking(load_snapshot(store.as_ref()));
+            let _ = result_tx.send_blocking(load_snapshot(store.as_ref(), library_root.as_deref()));
         }));
     }
 
@@ -75,10 +93,18 @@ impl LibraryHydrationWorker {
 
 pub(crate) fn load_snapshot(
     store: &dyn LibraryStore,
+    library_root: Option<&Path>,
 ) -> ApplicationRuntimeResult<LibraryHydrationSnapshot> {
-    let tracks = store
+    let mut tracks = store
         .tracks()
         .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+    let mut checked_library_root = store
+        .checked_library_root()
+        .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+    let availability_check_started = std::time::Instant::now();
+    let availability_at_open =
+        settle_availability_at_open(store, &mut tracks, library_root, &mut checked_library_root);
+    let availability_check_elapsed = availability_check_started.elapsed();
     let mut search_index = SearchIndex::new();
     search_index.rebuild(&tracks);
     let playlists = store
@@ -98,6 +124,9 @@ pub(crate) fn load_snapshot(
         playlist_folders,
         smart_playlists,
         smart_shuffle_index,
+        checked_library_root,
+        availability_at_open,
+        availability_check_elapsed,
     })
 }
 

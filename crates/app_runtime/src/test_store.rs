@@ -47,7 +47,7 @@ pub(crate) struct FaultyStore {
     fail_device_manifest: AtomicBool,
     fail_delete_sync_device: AtomicBool,
     fail_save_tracks: AtomicBool,
-    fail_update_track_locations: AtomicBool,
+    fail_record_track_availability_check: AtomicBool,
     fail_save_tracks_on_call: AtomicU32,
     fail_flush_durable: AtomicBool,
     fail_track_read: AtomicBool,
@@ -85,7 +85,7 @@ impl FaultyStore {
             fail_device_manifest: AtomicBool::new(false),
             fail_delete_sync_device: AtomicBool::new(false),
             fail_save_tracks: AtomicBool::new(false),
-            fail_update_track_locations: AtomicBool::new(false),
+            fail_record_track_availability_check: AtomicBool::new(false),
             fail_save_tracks_on_call: AtomicU32::new(0),
             fail_flush_durable: AtomicBool::new(false),
             fail_track_read: AtomicBool::new(false),
@@ -173,8 +173,9 @@ impl FaultyStore {
         self.fail_save_tracks.store(on, Ordering::SeqCst);
     }
 
-    pub(crate) fn set_fail_update_track_locations(&self, on: bool) {
-        self.fail_update_track_locations.store(on, Ordering::SeqCst);
+    pub(crate) fn set_fail_record_track_availability_check(&self, on: bool) {
+        self.fail_record_track_availability_check
+            .store(on, Ordering::SeqCst);
     }
 
     pub(crate) fn set_fail_save_tracks_on_call(&self, call: u32) {
@@ -327,12 +328,32 @@ impl LibraryStore for FaultyStore {
     }
 
     fn update_track_locations(&self, updates: &[(TrackId, TrackLocation)]) -> StoreResult<()> {
-        if self.fail_update_track_locations.load(Ordering::SeqCst) {
+        self.inner.update_track_locations(updates)
+    }
+
+    fn checked_library_root(&self) -> StoreResult<Option<std::path::PathBuf>> {
+        self.inner.checked_library_root()
+    }
+
+    fn forget_checked_library_root(&self) -> StoreResult<()> {
+        self.inner.forget_checked_library_root()
+    }
+
+    fn record_track_availability_check(
+        &self,
+        updates: &[(TrackId, TrackLocation)],
+        checked_root: Option<&std::path::Path>,
+    ) -> StoreResult<Vec<bool>> {
+        if self
+            .fail_record_track_availability_check
+            .load(Ordering::SeqCst)
+        {
             return Err(StoreError::Database(
-                "injected update_track_locations failure".to_owned(),
+                "injected record_track_availability_check failure".to_owned(),
             ));
         }
-        self.inner.update_track_locations(updates)
+        self.inner
+            .record_track_availability_check(updates, checked_root)
     }
 
     fn update_track_availability_if_path_matches(

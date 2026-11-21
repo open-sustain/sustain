@@ -89,6 +89,25 @@ impl LibraryStore for SqliteLibraryStore {
         tracks::update_track_locations(&mut connection, updates)
     }
 
+    fn checked_library_root(&self) -> StoreResult<Option<std::path::PathBuf>> {
+        let connection = self.connection_guard()?;
+        tracks::checked_library_root(&connection)
+    }
+
+    fn forget_checked_library_root(&self) -> StoreResult<()> {
+        let connection = self.connection_guard()?;
+        tracks::forget_checked_library_root(&connection)
+    }
+
+    fn record_track_availability_check(
+        &self,
+        updates: &[(TrackId, TrackLocation)],
+        checked_root: Option<&Path>,
+    ) -> StoreResult<Vec<bool>> {
+        let mut connection = self.connection_guard()?;
+        tracks::record_track_availability_check(&mut connection, updates, checked_root)
+    }
+
     fn relocate_track_and_enqueue_mirror(
         &self,
         track_id: TrackId,

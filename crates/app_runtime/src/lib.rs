@@ -106,6 +106,7 @@ mod force_backfill;
 mod freedesktop_trash;
 mod library_hydration;
 mod library_mutation;
+mod library_root_check;
 mod library_scan;
 mod local_clock;
 pub mod managed_library;
@@ -494,6 +495,10 @@ pub struct ApplicationRuntime {
     library_hydration_state: LibraryHydrationState,
     library_hydration_worker: library_hydration::LibraryHydrationWorker,
     library_hydration_notification_id: Option<NotificationId>,
+    /// The library root the store's track availability was last checked
+    /// against, as the store records it. Meaningful once the library is
+    /// hydrated; see [`library_root_check`].
+    checked_library_root: Option<std::path::PathBuf>,
     playlists: Vec<Playlist>,
     playlist_folders: Vec<PlaylistFolder>,
     smart_playlists: Vec<SmartPlaylist>,
@@ -793,6 +798,7 @@ impl ApplicationRuntime {
             library_hydration_state: LibraryHydrationState::Ready,
             library_hydration_worker: library_hydration::LibraryHydrationWorker::new(),
             library_hydration_notification_id: None,
+            checked_library_root: None,
             playlists: Vec::new(),
             playlist_folders: Vec::new(),
             smart_playlists: Vec::new(),
@@ -918,6 +924,16 @@ impl ApplicationRuntime {
             self.report_youtube_replacement_recovery(outcome);
         }
         self.library_tracks = library_scan::load_library_tracks(library_store.as_ref())?;
+        self.checked_library_root = library_store
+            .checked_library_root()
+            .map_err(|_| ApplicationRuntimeError::LibraryStoreFailed)?;
+        let availability_at_open = library_root_check::settle_availability_at_open(
+            library_store.as_ref(),
+            &mut self.library_tracks,
+            self.settings.library_path(),
+            &mut self.checked_library_root,
+        );
+        self.report_availability_at_open(availability_at_open);
         self.rebuild_search_index();
         self.playlists = library_store
             .playlists()
@@ -971,6 +987,7 @@ impl ApplicationRuntime {
         }
         self.library_tracks.clear();
         self.search_index = SearchIndex::new();
+        self.checked_library_root = None;
         self.playlists.clear();
         self.playlist_folders.clear();
         self.smart_playlists.clear();
@@ -1010,7 +1027,8 @@ impl ApplicationRuntime {
             false,
         );
         self.library_hydration_notification_id = Some(notification_id);
-        self.library_hydration_worker.start(store);
+        self.library_hydration_worker
+            .start(store, self.settings.library.path.clone());
         true
     }
 
@@ -1025,6 +1043,8 @@ impl ApplicationRuntime {
             Ok(snapshot) => {
                 self.library_tracks = snapshot.tracks;
                 self.search_index = snapshot.search_index;
+                self.checked_library_root = snapshot.checked_library_root;
+                self.report_availability_at_open(snapshot.availability_at_open);
                 self.playlists = snapshot.playlists;
                 self.playlist_folders = snapshot.playlist_folders;
                 self.smart_playlists = snapshot.smart_playlists;

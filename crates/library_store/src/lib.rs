@@ -330,6 +330,27 @@ pub trait LibraryStore: Send + Sync {
         }
         Ok(())
     }
+    /// The library root the tracks' stored availability reflects: the one a
+    /// check last resolved every track against. `None` when no check has,
+    /// when one has changed availability since without resolving every
+    /// track, or when the root changed after it.
+    fn checked_library_root(&self) -> StoreResult<Option<std::path::PathBuf>>;
+    /// Record that the stored availability reflects no library root, as
+    /// the root is about to change: until a check of the new one commits,
+    /// even a root an earlier check named is not taken as checked.
+    fn forget_checked_library_root(&self) -> StoreResult<()>;
+    /// Atomically record what checking tracks against a library root
+    /// found. Each update sets a track's availability only while the track
+    /// still has the path that was checked, so a move committed meanwhile
+    /// is kept; the result tells, update by update, whether it applied.
+    /// `checked_root`, given when the check resolved every track, is
+    /// recorded as the root the stored availability reflects; without it,
+    /// none is.
+    fn record_track_availability_check(
+        &self,
+        updates: &[(TrackId, TrackLocation)],
+        checked_root: Option<&Path>,
+    ) -> StoreResult<Vec<bool>>;
     /// Atomically attach an existing row to a replacement source file,
     /// invalidate disposable source observations, and retain metadata +
     /// rating courtesy-mirror intents for the replacement file.

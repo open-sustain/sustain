@@ -110,14 +110,14 @@ pub(super) fn update_track_availability_if_path_matches(
     location: &TrackLocation,
 ) -> StoreResult<bool> {
     connection
-        .execute(
-            "UPDATE tracks SET is_missing = ?1 WHERE id = ?2 AND relative_path = ?3",
-            params![
+        .prepare_cached("UPDATE tracks SET is_missing = ?1 WHERE id = ?2 AND relative_path = ?3")
+        .and_then(|mut statement| {
+            statement.execute(params![
                 location.is_missing(),
                 track_id.get(),
                 relative_path_bytes(&location.relative_path),
-            ],
-        )
+            ])
+        })
         .map(|changed| changed > 0)
         .map_err(StoreError::from)
 }
@@ -131,6 +131,56 @@ pub(super) fn update_track_locations(
         update_track_location(&transaction, *track_id, location)?;
     }
     transaction.commit().map_err(StoreError::from)
+}
+
+pub(super) fn checked_library_root(
+    connection: &Connection,
+) -> StoreResult<Option<std::path::PathBuf>> {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    connection
+        .query_row(
+            "SELECT library_root FROM checked_library_root WHERE id = 1",
+            [],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map(|root| root.map(|bytes| OsString::from_vec(bytes).into()))
+        .map_err(StoreError::from)
+}
+
+pub(super) fn forget_checked_library_root(connection: &Connection) -> StoreResult<()> {
+    connection
+        .execute("DELETE FROM checked_library_root", [])
+        .map(|_| ())
+        .map_err(StoreError::from)
+}
+
+pub(super) fn record_track_availability_check(
+    connection: &mut Connection,
+    updates: &[(TrackId, TrackLocation)],
+    checked_root: Option<&Path>,
+) -> StoreResult<Vec<bool>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let transaction = connection.transaction().map_err(StoreError::from)?;
+    let applied = updates
+        .iter()
+        .map(|(track_id, location)| {
+            update_track_availability_if_path_matches(&transaction, *track_id, location)
+        })
+        .collect::<StoreResult<Vec<_>>>()?;
+    match checked_root {
+        Some(checked_root) => transaction.execute(
+            "INSERT INTO checked_library_root (id, library_root) VALUES (1, ?1) \
+             ON CONFLICT (id) DO UPDATE SET library_root = excluded.library_root",
+            params![checked_root.as_os_str().as_bytes()],
+        ),
+        None => transaction.execute("DELETE FROM checked_library_root", []),
+    }
+    .map_err(StoreError::from)?;
+    transaction.commit().map_err(StoreError::from)?;
+    Ok(applied)
 }
 
 pub(super) fn relocate_track(

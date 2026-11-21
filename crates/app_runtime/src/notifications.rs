@@ -907,15 +907,19 @@ pub fn track_reconciliation_retry_text() -> String {
     gettext("Some track changes could not be read from the library database. Sustain will retry.")
 }
 
-/// Outcome string emitted after the user changes their library path.
-/// `newly_missing` is the number of tracks whose file did not resolve under
-/// the new root; `unresolved` counts paths whose reachability could not be
-/// proven either way. `total` is the size of the persisted library.
-pub fn library_path_change_outcome_text(
-    newly_missing: usize,
-    unresolved: usize,
-    total: usize,
-) -> String {
+/// The tracks could not be checked against the library root, as it was
+/// chosen or as the library opened; the check runs again at the next start.
+pub fn library_root_check_failed_text() -> String {
+    gettext(
+        "The tracks could not be checked against the library folder; they will be checked at the next start.",
+    )
+}
+
+/// Outcome string emitted after the tracks are checked against a library
+/// root. `missing` is the number of tracks whose file did not resolve under
+/// it; `unresolved` counts paths whose reachability could not be proven
+/// either way. `total` is the size of the persisted library.
+pub fn library_path_change_outcome_text(missing: usize, unresolved: usize, total: usize) -> String {
     if total == 0 {
         return gettext("Library folder updated.");
     }
@@ -926,12 +930,12 @@ pub fn library_path_change_outcome_text(
                 "Library folder updated: {missing} of {total} tracks not found; {unresolved} could not be checked.",
                 plural_count(total)
             ),
-            missing = newly_missing,
+            missing = missing,
             total = total,
             unresolved = unresolved
         );
     }
-    if newly_missing == 0 {
+    if missing == 0 {
         return tr_format!(
             ngettext(
                 "Library folder updated: all {total} track found.",
@@ -947,7 +951,48 @@ pub fn library_path_change_outcome_text(
             "Library folder updated: {missing} of {total} tracks not found at the new location.",
             plural_count(total)
         ),
-        missing = newly_missing,
+        missing = missing,
+        total = total
+    )
+}
+
+/// Outcome string emitted after the tracks are checked against the library
+/// root they had not been checked against as the library opens, the root
+/// itself unchanged. The counts are those of
+/// [`library_path_change_outcome_text`].
+pub fn library_root_check_outcome_text(missing: usize, unresolved: usize, total: usize) -> String {
+    if total == 0 {
+        return gettext("Library folder checked.");
+    }
+    if unresolved > 0 {
+        return tr_format!(
+            ngettext(
+                "Library folder checked: {missing} of {total} track not found; {unresolved} could not be checked.",
+                "Library folder checked: {missing} of {total} tracks not found; {unresolved} could not be checked.",
+                plural_count(total)
+            ),
+            missing = missing,
+            total = total,
+            unresolved = unresolved
+        );
+    }
+    if missing == 0 {
+        return tr_format!(
+            ngettext(
+                "Library folder checked: all {total} track found.",
+                "Library folder checked: all {total} tracks found.",
+                plural_count(total)
+            ),
+            total = total
+        );
+    }
+    tr_format!(
+        ngettext(
+            "Library folder checked: {missing} of {total} track not found.",
+            "Library folder checked: {missing} of {total} tracks not found.",
+            plural_count(total)
+        ),
+        missing = missing,
         total = total
     )
 }

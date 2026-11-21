@@ -52,7 +52,12 @@ canonical locations under managed mode. A typed path is saved only by
 Enter, Scan or the folder chooser, and only if it is a folder; while it is
 being typed it changes nothing, so a half-typed path never turns
 organization off or marks tracks missing. "Organize my library" works on
-the saved folder, and can be used while the entry shows it.
+the saved folder, and can be used while the entry shows it. Saving a new
+folder checks every track against it and reports how many were not found.
+A check that could not finish, or reach every track, runs again as Sustain
+next starts, and waits while the folder is unreachable or holds none of
+the library's tracks, as the empty mountpoint of an unplugged drive would.
+Tracks behind a link that leads nowhere are left as they were.
 
 ### Background scan — *iTunes-adjacent*
 Scan runs off the GTK main thread. SQLite writes are batched and the

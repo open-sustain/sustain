@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Sustain\n"
 "Report-Msgid-Bugs-To: https://github.com/open-sustain/sustain/issues\n"
-"POT-Creation-Date: 2026-11-21 00:13+0100\n"
+"POT-Creation-Date: 2026-11-21 01:31+0100\n"
 "PO-Revision-Date: 2026-11-16 20:38+0100\n"
 "Last-Translator: Sustain maintainers\n"
 "Language-Team: Spanish\n"
@@ -92,12 +92,12 @@ msgstr ""
 msgid "A device sync is already running."
 msgstr "Ya hay una sincronización de dispositivo en curso."
 
-#: crates/app_runtime/src/notifications.rs:1015
+#: crates/app_runtime/src/notifications.rs:1060
 #, rust-format
 msgid "A folder cannot be moved inside itself."
 msgstr "Una carpeta no se puede mover dentro de sí misma."
 
-#: crates/app_runtime/src/lib.rs:1231
+#: crates/app_runtime/src/lib.rs:1255
 #, rust-format
 msgid ""
 "A managed-library metadata edit could not finish safely. Sustain retained "
@@ -115,7 +115,7 @@ msgid "A music library manager and player for the Linux desktop."
 msgstr ""
 "Un gestor de biblioteca musical y reproductor para el escritorio Linux."
 
-#: crates/app_runtime/src/notifications.rs:1005
+#: crates/app_runtime/src/notifications.rs:1050
 #, rust-format
 msgid "A smart playlist needs at least one rule."
 msgstr "Una lista inteligente necesita al menos una regla."
@@ -279,7 +279,7 @@ msgstr "Analizar…"
 msgid "Analyzing tracks ({processed}/{total})..."
 msgstr "Analizando pistas ({processed}/{total})…"
 
-#: crates/app_runtime/src/notifications.rs:958
+#: crates/app_runtime/src/notifications.rs:1003
 #, rust-format
 msgid "Another background task is already running."
 msgstr "Ya hay otra tarea en segundo plano en curso."
@@ -317,7 +317,7 @@ msgstr "Artistas que sincronizar"
 msgid "Artwork"
 msgstr "Portada"
 
-#: crates/ui_gtk/src/main_window/result_consumers.rs:521
+#: crates/ui_gtk/src/main_window/result_consumers.rs:528
 #, rust-format
 msgid "Artwork fetched. Saving it to the audio file."
 msgstr "Portada obtenida. Guardándola en el archivo de audio."
@@ -327,7 +327,7 @@ msgstr "Portada obtenida. Guardándola en el archivo de audio."
 msgid "Artwork is embedded in the audio file."
 msgstr "La portada está incrustada en el archivo de audio."
 
-#: crates/app_runtime/src/lib.rs:1154
+#: crates/app_runtime/src/lib.rs:1178
 #, rust-format
 msgid "Artwork updated."
 msgstr "Portada actualizada."
@@ -398,7 +398,7 @@ msgstr "El BPM debe ser un número mayor que 0 y como máximo {max}."
 msgid "BPM range"
 msgstr "Rango de BPM"
 
-#: crates/app_runtime/src/lib.rs:3128
+#: crates/app_runtime/src/lib.rs:3152
 #, rust-format
 msgid ""
 "Background BPM analysis is enabled. These tracks are already queued by the "
@@ -407,7 +407,7 @@ msgstr ""
 "El análisis de BPM en segundo plano está activado. Estas pistas ya están en "
 "cola en el recorrido global."
 
-#: crates/app_runtime/src/lib.rs:3134
+#: crates/app_runtime/src/lib.rs:3158
 #, rust-format
 msgid ""
 "Background audio analysis is enabled. These tracks are already queued by the "
@@ -416,7 +416,7 @@ msgstr ""
 "El análisis de audio en segundo plano está activado. Estas pistas ya están "
 "en cola en el recorrido global."
 
-#: crates/app_runtime/src/lib.rs:3131
+#: crates/app_runtime/src/lib.rs:3155
 #, rust-format
 msgid ""
 "Background key detection is enabled. These tracks are already queued by the "
@@ -480,7 +480,7 @@ msgstr[1] "Importación de CD detenida: {imported} pistas importadas."
 msgid "CD read accuracy"
 msgstr "Precisión de lectura del CD"
 
-#: crates/app_runtime/src/notifications.rs:1063
+#: crates/app_runtime/src/notifications.rs:1108
 #, rust-format
 msgid "CD ripping is not available in this build."
 msgstr "La extracción de CD no está disponible en esta compilación."
@@ -525,7 +525,7 @@ msgstr ""
 msgid "Channels"
 msgstr "Canales"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:358
+#: crates/ui_gtk/src/preferences/library_tab.rs:384
 #, rust-format
 msgid "Choose"
 msgstr "Elegir"
@@ -535,22 +535,22 @@ msgstr "Elegir"
 msgid "Choose Artwork"
 msgstr "Elegir portada"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:357
+#: crates/ui_gtk/src/preferences/library_tab.rs:383
 #, rust-format
 msgid "Choose Library Folder"
 msgstr "Elegir carpeta de la biblioteca"
 
-#: crates/app_runtime/src/notifications.rs:979
+#: crates/app_runtime/src/notifications.rs:1024
 #, rust-format
 msgid "Choose a library folder first."
 msgstr "Elige primero una carpeta de biblioteca."
 
-#: crates/app_runtime/src/notifications.rs:1040
+#: crates/app_runtime/src/notifications.rs:1085
 #, rust-format
 msgid "Choose a replacement inside the configured library folder."
 msgstr "Elige un reemplazo dentro de la carpeta de biblioteca configurada."
 
-#: crates/app_runtime/src/notifications.rs:1043
+#: crates/app_runtime/src/notifications.rs:1088
 #, rust-format
 msgid "Choose a supported audio file."
 msgstr "Elige un archivo de audio compatible."
@@ -581,7 +581,7 @@ msgstr "Cerrar ventana"
 msgid "Collapse sidebar"
 msgstr "Contraer barra lateral"
 
-#: crates/app_runtime/src/lib.rs:2766
+#: crates/app_runtime/src/lib.rs:2790
 #, rust-format
 msgid "Column changes could not be saved and will not survive a restart."
 msgstr ""
@@ -648,7 +648,7 @@ msgstr "Consolidando pistas duplicadas…"
 msgid "Copy"
 msgstr "Copiar"
 
-#: crates/app_runtime/src/notifications.rs:1092
+#: crates/app_runtime/src/notifications.rs:1137
 #, rust-format
 msgid "Copying tracks ({completed}/{total})…"
 msgstr "Copiando pistas ({completed}/{total})…"
@@ -668,7 +668,7 @@ msgstr "No se pudo expulsar el dispositivo."
 msgid "Could not eject the disc."
 msgstr "No se pudo expulsar el disco."
 
-#: crates/ui_gtk/src/main_window/result_consumers.rs:548
+#: crates/ui_gtk/src/main_window/result_consumers.rs:555
 #, rust-format
 msgid "Could not fetch cover art."
 msgstr "No se pudo obtener la portada."
@@ -776,12 +776,12 @@ msgstr "Detalles…"
 msgid "Device"
 msgstr "Dispositivo"
 
-#: crates/app_runtime/src/notifications.rs:1151
+#: crates/app_runtime/src/notifications.rs:1196
 #, rust-format
 msgid "Device already up to date."
 msgstr "El dispositivo ya está actualizado."
 
-#: crates/app_runtime/src/notifications.rs:1148
+#: crates/app_runtime/src/notifications.rs:1193
 #, rust-format
 msgid "Device already up to date; {unplayable}."
 msgstr "El dispositivo ya está actualizado; {unplayable}."
@@ -1287,12 +1287,38 @@ msgctxt "shortcuts group"
 msgid "Library"
 msgstr "Biblioteca"
 
-#: crates/app_runtime/src/notifications.rs:920
+#: crates/app_runtime/src/notifications.rs:965
+#, rust-format
+msgid "Library folder checked."
+msgstr "Carpeta de la biblioteca comprobada."
+
+#: crates/app_runtime/src/notifications.rs:982
+#, rust-format
+msgid "Library folder checked: all {total} track found."
+msgid_plural "Library folder checked: all {total} tracks found."
+msgstr[0] "Carpeta de la biblioteca comprobada: {total} pista encontrada."
+msgstr[1] "Carpeta de la biblioteca comprobada: se encontraron las {total} pistas."
+
+#: crates/app_runtime/src/notifications.rs:991
+#, rust-format
+msgid "Library folder checked: {missing} of {total} track not found."
+msgid_plural "Library folder checked: {missing} of {total} tracks not found."
+msgstr[0] "Carpeta de la biblioteca comprobada: no se encontró {missing} de {total} pista."
+msgstr[1] "Carpeta de la biblioteca comprobada: no se encontraron {missing} de {total} pistas."
+
+#: crates/app_runtime/src/notifications.rs:970
+#, rust-format
+msgid "Library folder checked: {missing} of {total} track not found; {unresolved} could not be checked."
+msgid_plural "Library folder checked: {missing} of {total} tracks not found; {unresolved} could not be checked."
+msgstr[0] "Carpeta de la biblioteca comprobada: no se encontró {missing} de {total} pista; {unresolved} no se pudieron comprobar."
+msgstr[1] "Carpeta de la biblioteca comprobada: no se encontraron {missing} de {total} pistas; {unresolved} no se pudieron comprobar."
+
+#: crates/app_runtime/src/notifications.rs:924
 #, rust-format
 msgid "Library folder updated."
 msgstr "Carpeta de la biblioteca actualizada."
 
-#: crates/app_runtime/src/notifications.rs:937
+#: crates/app_runtime/src/notifications.rs:941
 #, rust-format
 msgid "Library folder updated: all {total} track found."
 msgid_plural "Library folder updated: all {total} tracks found."
@@ -1300,7 +1326,7 @@ msgstr[0] "Carpeta de la biblioteca actualizada: {total} pista encontrada."
 msgstr[1] ""
 "Carpeta de la biblioteca actualizada: se encontraron las {total} pistas."
 
-#: crates/app_runtime/src/notifications.rs:946
+#: crates/app_runtime/src/notifications.rs:950
 #, rust-format
 msgid ""
 "Library folder updated: {missing} of {total} track not found at the new "
@@ -1315,7 +1341,7 @@ msgstr[1] ""
 "Carpeta de la biblioteca actualizada: {missing} de {total} pistas no "
 "encontradas en la nueva ubicación."
 
-#: crates/app_runtime/src/notifications.rs:925
+#: crates/app_runtime/src/notifications.rs:929
 #, rust-format
 msgid ""
 "Library folder updated: {missing} of {total} track not found; {unresolved} "
@@ -1335,7 +1361,7 @@ msgstr[1] ""
 msgid "Library organization stopped: {moved}, {pending}."
 msgstr "Organización de la biblioteca detenida: {moved}, {pending}."
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:189
+#: crates/ui_gtk/src/preferences/library_tab.rs:191
 #, rust-format
 msgid "Library organization will stop after the current file."
 msgstr "La organización de la biblioteca se detendrá tras el archivo actual."
@@ -1350,7 +1376,7 @@ msgstr "Biblioteca organizada: {moved}, {organized}, {missing}."
 msgid "Library path"
 msgstr "Ruta de la biblioteca"
 
-#: crates/app_runtime/src/notifications.rs:973
+#: crates/app_runtime/src/notifications.rs:1018
 #, rust-format
 msgid "Library scanning is not available in this build."
 msgstr "El análisis de la biblioteca no está disponible en esta compilación."
@@ -1378,7 +1404,7 @@ msgstr ""
 "Muestra la vista Estadísticas en la sección Biblioteca de la columna "
 "izquierda."
 
-#: crates/app_runtime/src/lib.rs:1009
+#: crates/app_runtime/src/lib.rs:1030
 #, rust-format
 msgid "Loading library…"
 msgstr "Cargando la biblioteca…"
@@ -1638,7 +1664,7 @@ msgstr "No se encontraron archivos de audio."
 msgid "No changes."
 msgstr "Sin cambios."
 
-#: crates/ui_gtk/src/main_window/result_consumers.rs:540
+#: crates/ui_gtk/src/main_window/result_consumers.rs:547
 #, rust-format
 msgid "No cover art found for this track."
 msgstr "No se encontró portada para esta pista."
@@ -1746,7 +1772,7 @@ msgstr "Archivo de audio Ogg"
 msgid "On-drive format"
 msgstr "Formato en el dispositivo"
 
-#: crates/app_runtime/src/notifications.rs:970
+#: crates/app_runtime/src/notifications.rs:1015
 #, rust-format
 msgid ""
 "One or more of the selected files is missing from disk. Restore or remove "
@@ -1788,7 +1814,7 @@ msgstr "Abre Duplicados para analizar la biblioteca."
 msgid "Opus audio file"
 msgstr "Archivo de audio Opus"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:275
+#: crates/ui_gtk/src/preferences/library_tab.rs:285
 #, rust-format
 msgid ""
 "Order the library by the “sort as” tags some files carry (ID3 TSOP/TSOT, "
@@ -1939,7 +1965,7 @@ msgstr "Error al reproducir {track_name}. Saltando a la pista siguiente."
 msgid "Playback failed. Skipping to the next track."
 msgstr "Error de reproducción. Saltando a la pista siguiente."
 
-#: crates/app_runtime/src/notifications.rs:1047
+#: crates/app_runtime/src/notifications.rs:1092
 #, rust-format
 msgid "Playback is not available."
 msgstr "La reproducción no está disponible."
@@ -1990,7 +2016,7 @@ msgstr "Preferencias"
 msgid "Preferences (Ctrl+,)"
 msgstr "Preferencias (Ctrl+,)"
 
-#: crates/app_runtime/src/notifications.rs:1087
+#: crates/app_runtime/src/notifications.rs:1132
 #, rust-format
 msgid "Preparing tracks ({completed}/{total})…"
 msgstr "Preparando pistas ({completed}/{total})…"
@@ -2024,56 +2050,56 @@ msgstr "Pista anterior (Ctrl+[)"
 msgid "Quality"
 msgstr "Calidad"
 
-#: crates/app_runtime/src/lib.rs:3191
+#: crates/app_runtime/src/lib.rs:3215
 #, rust-format
 msgid "Queued {count} track for BPM analysis."
 msgid_plural "Queued {count} tracks for BPM analysis."
 msgstr[0] "{count} pista en cola para análisis de BPM."
 msgstr[1] "{count} pistas en cola para análisis de BPM."
 
-#: crates/app_runtime/src/lib.rs:3206
+#: crates/app_runtime/src/lib.rs:3230
 #, rust-format
 msgid "Queued {count} track for analysis."
 msgid_plural "Queued {count} tracks for analysis."
 msgstr[0] "{count} pista en cola para análisis."
 msgstr[1] "{count} pistas en cola para análisis."
 
-#: crates/app_runtime/src/lib.rs:3288
+#: crates/app_runtime/src/lib.rs:3312
 #, rust-format
 msgid "Queued {count} track for artwork retrieval."
 msgid_plural "Queued {count} tracks for artwork retrieval."
 msgstr[0] "{count} pista en cola para obtener portada."
 msgstr[1] "{count} pistas en cola para obtener portada."
 
-#: crates/app_runtime/src/lib.rs:3201
+#: crates/app_runtime/src/lib.rs:3225
 #, rust-format
 msgid "Queued {count} track for audio analysis."
 msgid_plural "Queued {count} tracks for audio analysis."
 msgstr[0] "{count} pista en cola para análisis de audio."
 msgstr[1] "{count} pistas en cola para análisis de audio."
 
-#: crates/app_runtime/src/lib.rs:3196
+#: crates/app_runtime/src/lib.rs:3220
 #, rust-format
 msgid "Queued {count} track for key detection."
 msgid_plural "Queued {count} tracks for key detection."
 msgstr[0] "{count} pista en cola para detección de tonalidad."
 msgstr[1] "{count} pistas en cola para detección de tonalidad."
 
-#: crates/app_runtime/src/lib.rs:3283
+#: crates/app_runtime/src/lib.rs:3307
 #, rust-format
 msgid "Queued {count} track for lyrics retrieval."
 msgid_plural "Queued {count} tracks for lyrics retrieval."
 msgstr[0] "{count} pista en cola para obtener letra."
 msgstr[1] "{count} pistas en cola para obtener letra."
 
-#: crates/app_runtime/src/lib.rs:3298
+#: crates/app_runtime/src/lib.rs:3322
 #, rust-format
 msgid "Queued {count} track for online retrieval."
 msgid_plural "Queued {count} tracks for online retrieval."
 msgstr[0] "{count} pista en cola para obtención en línea."
 msgstr[1] "{count} pistas en cola para obtención en línea."
 
-#: crates/app_runtime/src/lib.rs:3293
+#: crates/app_runtime/src/lib.rs:3317
 #, rust-format
 msgid "Queued {count} track for tag enrichment."
 msgid_plural "Queued {count} tracks for tag enrichment."
@@ -2129,7 +2155,7 @@ msgstr ""
 "Obtención remota de carátulas y metadatos a través de MusicBrainz, Cover Art "
 "Archive, Deezer, la API de búsqueda de iTunes y LRClib"
 
-#: crates/app_runtime/src/notifications.rs:1054
+#: crates/app_runtime/src/notifications.rs:1099
 #, rust-format
 msgid "Remote artwork retrieval is not available in this build."
 msgstr ""
@@ -2162,7 +2188,7 @@ msgstr "Quitar de la cola"
 msgid "Remove rule"
 msgstr "Quitar regla"
 
-#: crates/app_runtime/src/notifications.rs:1099
+#: crates/app_runtime/src/notifications.rs:1144
 #, rust-format
 msgid "Removing tracks ({completed}/{total})…"
 msgstr "Quitando pistas ({completed}/{total})…"
@@ -2263,7 +2289,7 @@ msgstr "Frecuencia de muestreo"
 msgid "Save library path and scan now"
 msgstr "Guardar la ruta de la biblioteca y analizar ahora"
 
-#: crates/app_runtime/src/lib.rs:2739
+#: crates/app_runtime/src/lib.rs:2763
 #, rust-format
 msgid "Saved columns could not be read; default columns are shown."
 msgstr ""
@@ -2327,7 +2353,7 @@ msgstr "Buscar"
 msgid "Select all tracks"
 msgstr "Seleccionar todas las pistas"
 
-#: crates/app_runtime/src/notifications.rs:1070
+#: crates/app_runtime/src/notifications.rs:1115
 #, rust-format
 msgid "Select at least one track to import."
 msgstr "Selecciona al menos una pista para importar."
@@ -2475,12 +2501,12 @@ msgstr ""
 msgid "Smart Shuffle will choose the next track."
 msgstr "Smart Shuffle elegirá la pista siguiente."
 
-#: crates/app_runtime/src/lib.rs:2667
+#: crates/app_runtime/src/lib.rs:2691
 #, rust-format
 msgid "Smart Shuffle: failed to persist the rebuilt index."
 msgstr "Smart Shuffle: no se pudo guardar el índice reconstruido."
 
-#: crates/app_runtime/src/lib.rs:2653
+#: crates/app_runtime/src/lib.rs:2677
 #, rust-format
 msgid "Smart Shuffle: failed to serialise the rebuilt index."
 msgstr "Smart Shuffle: no se pudo serializar el índice reconstruido."
@@ -2535,7 +2561,7 @@ msgstr ""
 "Vistas Canciones, Álbumes y Listas con una tabla cómoda de usar con el "
 "teclado"
 
-#: crates/ui_gtk/src/preferences/library_tab.rs:273
+#: crates/ui_gtk/src/preferences/library_tab.rs:283
 #, rust-format
 msgid "Sort using sort-order tags"
 msgstr "Ordenar con etiquetas de ordenación"
@@ -2613,12 +2639,12 @@ msgstr "Sincronizar y quitar"
 msgid "Sync anyway"
 msgstr "Sincronizar de todos modos"
 
-#: crates/app_runtime/src/notifications.rs:1176
+#: crates/app_runtime/src/notifications.rs:1221
 #, rust-format
 msgid "Sync complete: {changes}."
 msgstr "Sincronización completada: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1178
+#: crates/app_runtime/src/notifications.rs:1223
 #, rust-format
 msgid "Sync complete: {changes}; {unplayable}."
 msgstr "Sincronización completada: {changes}; {unplayable}."
@@ -2628,17 +2654,17 @@ msgstr "Sincronización completada: {changes}; {unplayable}."
 msgid "Sync device"
 msgstr "Sincronizar dispositivo"
 
-#: crates/app_runtime/src/notifications.rs:1182
+#: crates/app_runtime/src/notifications.rs:1227
 #, rust-format
 msgid "Sync partial: {changes}."
 msgstr "Sincronización parcial: {changes}."
 
-#: crates/app_runtime/src/notifications.rs:1184
+#: crates/app_runtime/src/notifications.rs:1229
 #, rust-format
 msgid "Sync partial: {changes}; {unplayable}."
 msgstr "Sincronización parcial: {changes}; {unplayable}."
 
-#: crates/app_runtime/src/notifications.rs:1130
+#: crates/app_runtime/src/notifications.rs:1175
 #, rust-format
 msgid "Sync stopped: {changes}."
 msgstr "Sincronización detenida: {changes}."
@@ -2663,7 +2689,7 @@ msgstr[1] ""
 "La sincronización quitará de este dispositivo {count} pistas que ya no están "
 "en tus listas seleccionadas."
 
-#: crates/app_runtime/src/notifications.rs:1079
+#: crates/app_runtime/src/notifications.rs:1124
 #, rust-format
 msgid "Syncing {label}…"
 msgstr "Sincronizando {label}…"
@@ -2684,17 +2710,17 @@ msgstr "Tomar todas las etiquetas y la valoración de esta pista"
 msgid "That device is no longer connected."
 msgstr "Ese dispositivo ya no está conectado."
 
-#: crates/app_runtime/src/notifications.rs:1037
+#: crates/app_runtime/src/notifications.rs:1082
 #, rust-format
 msgid "That file is already attached to another library track."
 msgstr "Ese archivo ya está asociado a otra pista de la biblioteca."
 
-#: crates/app_runtime/src/notifications.rs:985
+#: crates/app_runtime/src/notifications.rs:1030
 #, rust-format
 msgid "That folder could not be opened; the library folder is unchanged."
 msgstr "No se pudo abrir esa carpeta; la carpeta de la biblioteca no cambia."
 
-#: crates/app_runtime/src/lib.rs:3220
+#: crates/app_runtime/src/lib.rs:3244
 #, rust-format
 msgid "That track already has BPM analysis — nothing to queue."
 msgid_plural "All {count} tracks already have BPM analysis — nothing to queue."
@@ -2702,14 +2728,14 @@ msgstr[0] "Esa pista ya tiene análisis de BPM: nada que poner en cola."
 msgstr[1] ""
 "Las {count} pistas ya tienen análisis de BPM: nada que poner en cola."
 
-#: crates/app_runtime/src/lib.rs:3235
+#: crates/app_runtime/src/lib.rs:3259
 #, rust-format
 msgid "That track already has analysis — nothing to queue."
 msgid_plural "All {count} tracks already have analysis — nothing to queue."
 msgstr[0] "Esa pista ya está analizada: nada que poner en cola."
 msgstr[1] "Las {count} pistas ya están analizadas: nada que poner en cola."
 
-#: crates/app_runtime/src/lib.rs:3230
+#: crates/app_runtime/src/lib.rs:3254
 #, rust-format
 msgid "That track already has audio analysis — nothing to queue."
 msgid_plural ""
@@ -2718,7 +2744,7 @@ msgstr[0] "Esa pista ya tiene análisis de audio: nada que poner en cola."
 msgstr[1] ""
 "Las {count} pistas ya tienen análisis de audio: nada que poner en cola."
 
-#: crates/app_runtime/src/lib.rs:3225
+#: crates/app_runtime/src/lib.rs:3249
 #, rust-format
 msgid "That track already has key detection — nothing to queue."
 msgid_plural ""
@@ -2727,7 +2753,7 @@ msgstr[0] "Esa pista ya tiene detección de tonalidad: nada que poner en cola."
 msgstr[1] ""
 "Las {count} pistas ya tienen detección de tonalidad: nada que poner en cola."
 
-#: crates/app_runtime/src/notifications.rs:1068
+#: crates/app_runtime/src/notifications.rs:1113
 #, rust-format
 msgid "The CD could not be imported."
 msgstr "No se pudo importar el CD."
@@ -2743,7 +2769,7 @@ msgstr ""
 msgid "The YouTube audio download was cancelled."
 msgstr "Se canceló la descarga del audio de YouTube."
 
-#: crates/app_runtime/src/notifications.rs:1060
+#: crates/app_runtime/src/notifications.rs:1105
 #, rust-format
 msgid "The artwork is unsupported, corrupt, or exceeds Sustain's size limits."
 msgstr ""
@@ -2801,14 +2827,14 @@ msgstr ""
 msgid "The clipboard holds no image."
 msgstr "El portapapeles no contiene ninguna imagen."
 
-#: crates/app_runtime/src/notifications.rs:1066
+#: crates/app_runtime/src/notifications.rs:1111
 #, rust-format
 msgid "The disc changed. Re-insert the original disc and try again."
 msgstr ""
 "El disco ha cambiado. Vuelve a insertar el disco original e inténtalo de "
 "nuevo."
 
-#: crates/app_runtime/src/notifications.rs:1073
+#: crates/app_runtime/src/notifications.rs:1118
 #, rust-format
 msgid "The disc is being imported. Play it once the import is done."
 msgstr ""
@@ -2825,22 +2851,22 @@ msgstr ""
 msgid "The downloaded audio could not be published safely."
 msgstr "El audio descargado no se pudo publicar de forma segura."
 
-#: crates/app_runtime/src/notifications.rs:1028
+#: crates/app_runtime/src/notifications.rs:1073
 #, rust-format
 msgid "The downloaded audio could not safely replace this track."
 msgstr "El audio descargado no pudo reemplazar esta pista de forma segura."
 
-#: crates/app_runtime/src/notifications.rs:967
+#: crates/app_runtime/src/notifications.rs:1012
 #, rust-format
 msgid "The duplicate tracks could not be consolidated safely."
 msgstr "Las pistas duplicadas no se pudieron consolidar de forma segura."
 
-#: crates/ui_gtk/src/main_window/result_consumers.rs:534
+#: crates/ui_gtk/src/main_window/result_consumers.rs:541
 #, rust-format
 msgid "The fetched artwork could not be queued for saving."
 msgstr "La portada obtenida no se pudo poner en cola para guardarla."
 
-#: crates/ui_gtk/src/main_window/result_consumers.rs:544
+#: crates/ui_gtk/src/main_window/result_consumers.rs:551
 #, rust-format
 msgid ""
 "The fetched cover art was rejected because it is unsupported, corrupt, or "
@@ -2849,7 +2875,7 @@ msgstr ""
 "La portada obtenida se rechazó porque no es compatible, está dañada o es "
 "demasiado grande."
 
-#: crates/app_runtime/src/notifications.rs:1057
+#: crates/app_runtime/src/notifications.rs:1102
 #, rust-format
 msgid "The fetched cover was not used: the track's artwork changed meanwhile."
 msgstr ""
@@ -2860,17 +2886,17 @@ msgstr ""
 msgid "The file could not be read."
 msgstr "No se pudo leer el archivo."
 
-#: crates/app_runtime/src/notifications.rs:989
+#: crates/app_runtime/src/notifications.rs:1034
 #, rust-format
 msgid "The files could not be added to the library."
 msgstr "No se pudieron añadir los archivos a la biblioteca."
 
-#: crates/app_runtime/src/notifications.rs:999
+#: crates/app_runtime/src/notifications.rs:1044
 #, rust-format
 msgid "The folder name is not valid."
 msgstr "El nombre de la carpeta no es válido."
 
-#: crates/app_runtime/src/notifications.rs:964
+#: crates/app_runtime/src/notifications.rs:1009
 #, rust-format
 msgid "The library could not be organized."
 msgstr "No se pudo organizar la biblioteca."
@@ -2889,17 +2915,17 @@ msgstr ""
 msgid "The library could not record it, so its copy was removed."
 msgstr "La biblioteca no pudo registrarlo, así que se eliminó su copia."
 
-#: crates/app_runtime/src/notifications.rs:976
+#: crates/app_runtime/src/notifications.rs:1021
 #, rust-format
 msgid "The library database could not be updated."
 msgstr "No se pudo actualizar la base de datos de la biblioteca."
 
-#: crates/app_runtime/src/lib.rs:1045
+#: crates/app_runtime/src/lib.rs:1069
 #, rust-format
 msgid "The music library could not be loaded."
 msgstr "No se pudo cargar la biblioteca musical."
 
-#: crates/app_runtime/src/notifications.rs:992
+#: crates/app_runtime/src/notifications.rs:1037
 #, rust-format
 msgid "The music library is still loading."
 msgstr "La biblioteca musical aún se está cargando."
@@ -2914,27 +2940,27 @@ msgstr "El número de días debe ser al menos 1."
 msgid "The organized library path must be a folder."
 msgstr "La ruta de la biblioteca organizada debe ser una carpeta."
 
-#: crates/app_runtime/src/notifications.rs:1009
+#: crates/app_runtime/src/notifications.rs:1054
 #, rust-format
 msgid "The playlist could not be updated."
 msgstr "No se pudo actualizar la lista de reproducción."
 
-#: crates/app_runtime/src/notifications.rs:1012
+#: crates/app_runtime/src/notifications.rs:1057
 #, rust-format
 msgid "The playlist folder could not be updated."
 msgstr "No se pudo actualizar la carpeta de listas."
 
-#: crates/app_runtime/src/notifications.rs:997
+#: crates/app_runtime/src/notifications.rs:1042
 #, rust-format
 msgid "The playlist name is not valid."
 msgstr "El nombre de la lista de reproducción no es válido."
 
-#: crates/app_runtime/src/notifications.rs:1034
+#: crates/app_runtime/src/notifications.rs:1079
 #, rust-format
 msgid "The replacement track file could not be used."
 msgstr "No se pudo usar el archivo de reemplazo de la pista."
 
-#: crates/app_runtime/src/notifications.rs:961
+#: crates/app_runtime/src/notifications.rs:1006
 #, rust-format
 msgid "The selected folder could not be scanned."
 msgstr "No se pudo analizar la carpeta seleccionada."
@@ -3015,22 +3041,22 @@ msgstr ""
 "La carpeta de biblioteca seleccionada no admite los movimientos por enlace "
 "duro que requiere el modo de biblioteca organizada."
 
-#: crates/app_runtime/src/notifications.rs:1018
+#: crates/app_runtime/src/notifications.rs:1063
 #, rust-format
 msgid "The smart playlist could not be updated."
 msgstr "No se pudo actualizar la lista inteligente."
 
-#: crates/app_runtime/src/notifications.rs:1002
+#: crates/app_runtime/src/notifications.rs:1047
 #, rust-format
 msgid "The smart playlist name is not valid."
 msgstr "El nombre de la lista inteligente no es válido."
 
-#: crates/app_runtime/src/notifications.rs:1051
+#: crates/app_runtime/src/notifications.rs:1096
 #, rust-format
 msgid "The track could not be moved to trash."
 msgstr "No se pudo mover la pista a la papelera."
 
-#: crates/app_runtime/src/notifications.rs:995
+#: crates/app_runtime/src/notifications.rs:1040
 #, rust-format
 msgid "The track metadata could not be updated."
 msgstr "No se pudieron actualizar los metadatos de la pista."
@@ -3041,6 +3067,15 @@ msgid "The track was located, but empty library folders could not be removed."
 msgstr ""
 "Se localizó la pista, pero no se pudieron eliminar las carpetas vacías de la "
 "biblioteca."
+
+#: crates/app_runtime/src/notifications.rs:914
+#, rust-format
+msgid ""
+"The tracks could not be checked against the library folder; they will be "
+"checked at the next start."
+msgstr ""
+"No se pudieron comprobar las pistas en la carpeta de la biblioteca; se "
+"comprobarán en el próximo inicio."
 
 #: crates/app_runtime/src/notifications.rs:899
 #, rust-format
@@ -3061,10 +3096,11 @@ msgstr ""
 "grabación. Cada grupo se fusiona en una sola pista, conservando las opciones "
 "mostradas."
 
-#: crates/app_runtime/src/notifications.rs:982
+#: crates/app_runtime/src/notifications.rs:1027
 #, rust-format
 msgid "There is no folder at that path; the library folder is unchanged."
-msgstr "No hay ninguna carpeta en esa ruta; la carpeta de la biblioteca no cambia."
+msgstr ""
+"No hay ninguna carpeta en esa ruta; la carpeta de la biblioteca no cambia."
 
 #: crates/ui_gtk/src/smart_playlist_editor/model.rs:411
 #, rust-format
@@ -3081,7 +3117,7 @@ msgstr "El escritorio no puede expulsar este dispositivo."
 msgid "This device's selection is empty."
 msgstr "La selección de este dispositivo está vacía."
 
-#: crates/app_runtime/src/notifications.rs:1112
+#: crates/app_runtime/src/notifications.rs:1157
 #, rust-format
 msgid ""
 "This drive holds a Pioneer export Sustain did not write, or one a player "
@@ -3170,7 +3206,7 @@ msgstr "Total de pistas"
 msgid "Track audio replaced from YouTube."
 msgstr "Audio de la pista reemplazado desde YouTube."
 
-#: crates/app_runtime/src/notifications.rs:1049
+#: crates/app_runtime/src/notifications.rs:1094
 #, rust-format
 msgid "Track file is missing."
 msgstr "Falta el archivo de la pista."
@@ -3286,12 +3322,12 @@ msgstr "Esperando las vistas previas de portadas"
 msgid "Waveform"
 msgstr "Forma de onda"
 
-#: crates/app_runtime/src/notifications.rs:1097
+#: crates/app_runtime/src/notifications.rs:1142
 #, rust-format
 msgid "Writing device database…"
 msgstr "Escribiendo la base de datos del dispositivo…"
 
-#: crates/app_runtime/src/notifications.rs:1096
+#: crates/app_runtime/src/notifications.rs:1141
 #, rust-format
 msgid "Writing playlists…"
 msgstr "Escribiendo listas de reproducción…"
@@ -3325,12 +3361,12 @@ msgstr "Año de adición"
 msgid "Yes"
 msgstr "Sí"
 
-#: crates/app_runtime/src/notifications.rs:1025
+#: crates/app_runtime/src/notifications.rs:1070
 #, rust-format
 msgid "YouTube audio replacement is not available."
 msgstr "El reemplazo de audio desde YouTube no está disponible."
 
-#: crates/app_runtime/src/notifications.rs:1031
+#: crates/app_runtime/src/notifications.rs:1076
 #, rust-format
 msgid ""
 "YouTube replacement is available only for present tracks at or below 192 "
@@ -3339,12 +3375,12 @@ msgstr ""
 "El reemplazo desde YouTube solo está disponible para pistas presentes de 192 "
 "kbps o menos."
 
-#: crates/app_runtime/src/notifications.rs:1021
+#: crates/app_runtime/src/notifications.rs:1066
 #, rust-format
 msgid "Your settings could not be loaded."
 msgstr "No se pudieron cargar tus ajustes."
 
-#: crates/app_runtime/src/notifications.rs:1023
+#: crates/app_runtime/src/notifications.rs:1068
 #, rust-format
 msgid "Your settings could not be saved."
 msgstr "No se pudieron guardar tus ajustes."
@@ -3933,7 +3969,7 @@ msgstr[0] "{count} pista"
 msgstr[1] "{count} pistas"
 
 #: crates/app_runtime/src/notifications.rs:712
-#: crates/app_runtime/src/notifications.rs:1158
+#: crates/app_runtime/src/notifications.rs:1203
 #, rust-format
 msgid "{count} track added"
 msgid_plural "{count} tracks added"
@@ -3954,7 +3990,7 @@ msgid_plural "{count} tracks indexed ({percent}% audio profiled)"
 msgstr[0] "{count} pista indexada ({percent} % con perfil de audio)"
 msgstr[1] "{count} pistas indexadas ({percent} % con perfil de audio)"
 
-#: crates/app_runtime/src/notifications.rs:1138
+#: crates/app_runtime/src/notifications.rs:1183
 #, rust-format
 msgid "{count} track left off: the device cannot play its format"
 msgid_plural "{count} tracks left off: the device cannot play their format"

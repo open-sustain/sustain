@@ -32,6 +32,26 @@ pub(crate) fn probe_file_presence(path: &Path) -> FilePresence {
     }
 }
 
+/// [`probe_file_presence`] for a check of the whole library, which, like a
+/// scan, does not take a link that leads nowhere as proof of absence: a
+/// track reached through one, such as a link to an unmounted drive, could
+/// not be checked.
+pub(crate) fn probe_library_file_presence(path: &Path) -> FilePresence {
+    match probe_file_presence(path) {
+        FilePresence::Absent if leads_through_dangling_link(path) => FilePresence::ProbeFailed,
+        presence => presence,
+    }
+}
+
+/// Whether `path`, or a folder on the way to it, is a link that does not
+/// resolve: to nothing, through a file, or in a loop.
+fn leads_through_dangling_link(path: &Path) -> bool {
+    path.ancestors().any(|entry| {
+        std::fs::symlink_metadata(entry).is_ok_and(|metadata| metadata.is_symlink())
+            && std::fs::metadata(entry).is_err()
+    })
+}
+
 /// Probe whether a directory entry exists without following symlinks. This is
 /// retained as a regression helper for the semantic distinction between a
 /// reachable file and a pathname entry.

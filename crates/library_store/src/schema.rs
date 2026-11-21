@@ -740,6 +740,20 @@ DROP TABLE tag_mirror_outbox;
 ALTER TABLE tag_mirror_outbox_fields RENAME TO tag_mirror_outbox;
 "#;
 
+// Migration 25 records the library root the tracks' stored availability
+// reflects: the one a check last resolved every track against (#371). The
+// settings, a separate store, name the root; when the two part, as when the
+// settings fail to save after a check, the library checks its tracks again
+// as it opens. The root is stored as the raw bytes of the Unix `OsStr`, like
+// a track's relative path. A library from before this migration has no row,
+// and is checked once as it next opens.
+pub(super) const RECORD_CHECKED_LIBRARY_ROOT_SQL: &str = r#"
+CREATE TABLE checked_library_root (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    library_root BLOB NOT NULL
+);
+"#;
+
 // Migration 5 heals libraries that captured empty metadata strings from file
 // tags before Sustain normalized them at the read boundary. Empty tag values
 // are semantically absent and not all target containers can round-trip them.
