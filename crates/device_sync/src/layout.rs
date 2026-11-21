@@ -539,9 +539,11 @@ pub(crate) fn write_pioneer(
         };
         let dat = base.join(&record.dat_path);
         let ext = base.join(&drive_relative(&slot.ext_path())?);
+        // A pair cut short (a stick pulled mid-write) is written again.
+        // A longer one is kept: a player adds the cues set on it.
         let current = previous.get(&placement.rel_path) == Some(&&record)
-            && is_file(transport, &dat)?
-            && is_file(transport, &ext)?;
+            && holds_at_least(transport, &dat, dat_bytes.len())?
+            && holds_at_least(transport, &ext, ext_bytes.len())?;
         if !current {
             transport
                 .write_file(&dat, &dat_bytes)
@@ -680,6 +682,18 @@ pub(crate) fn write_pioneer(
 pub(crate) fn drive_relative(path: &str) -> Result<DeviceRelativePath, SyncError> {
     DeviceRelativePath::new(path.trim_start_matches('/').to_owned())
         .ok_or_else(|| SyncError::planning("Pioneer path hash generated an unsafe path"))
+}
+
+/// Whether `path` is a regular file of at least `len` bytes.
+fn holds_at_least(
+    transport: &dyn DeviceTransport,
+    path: &DeviceRelativePath,
+    len: usize,
+) -> Result<bool, SyncError> {
+    transport
+        .regular_file_len(path)
+        .map(|found| found.is_some_and(|found| found >= len as u64))
+        .map_err(|error| SyncError::io(path.as_str(), error))
 }
 
 fn is_file(transport: &dyn DeviceTransport, path: &DeviceRelativePath) -> Result<bool, SyncError> {

@@ -1133,15 +1133,30 @@ mod tests {
         );
         let record = anlz_of(&first.manifest, RUDE_BOY);
         let dat = fx.dest.path().join(record.dat_path.as_str());
-        // A marker the engine would erase if it rewrote the pair.
-        std::fs::write(&dat, b"untouched").expect("mark dat");
+        // A marker the engine would erase if it rewrote the pair, longer
+        // than the pair, as cues a player adds make it: only a pair cut
+        // short is rewritten.
+        let marker = vec![0xA5; std::fs::metadata(&dat).expect("dat").len() as usize + 64];
+        std::fs::write(&dat, &marker).expect("mark dat");
 
         let second = run(
             fx.dest.path(),
             &resync_request(&fx, DeviceLayout::Pioneer, &first, false),
         );
         assert_eq!(anlz_of(&second.manifest, RUDE_BOY), record);
-        assert_eq!(std::fs::read(&dat).expect("dat"), b"untouched");
+        assert_eq!(std::fs::read(&dat).expect("dat"), marker);
+
+        // A pair cut short is written again.
+        std::fs::write(&dat, b"").expect("truncate dat");
+        let truncated = run(
+            fx.dest.path(),
+            &resync_request(&fx, DeviceLayout::Pioneer, &second, false),
+        );
+        assert_eq!(anlz_of(&truncated.manifest, RUDE_BOY), record);
+        assert!(names_audio_path(
+            &std::fs::read(&dat).expect("dat"),
+            RUDE_BOY
+        ));
 
         // New analysis reaches the device although the audio is unchanged.
         let tempo = Bpm::from_whole(124).expect("tempo");
