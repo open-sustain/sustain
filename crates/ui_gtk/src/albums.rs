@@ -75,7 +75,9 @@ pub(crate) struct AlbumsView {
     /// the width watcher after the Albums page has a visible allocation, so
     /// row-position math uses the final column count and live row geometry.
     pending_scroll_album: Rc<RefCell<Option<PendingAlbumScroll>>>,
-    visible_columns: Rc<Cell<usize>>,
+    /// The grid's width at its last allocation, which sets its column
+    /// count ([`Self::columns`]). A hidden page has no allocation, so
+    /// this keeps the width it last had on screen.
     last_width: Rc<Cell<i32>>,
     /// Whether a layout sync is queued for the next frame; see
     /// [`Self::queue_layout_sync`].
@@ -264,7 +266,6 @@ impl AlbumsView {
             row_model_generation: Rc::new(Cell::new(0)),
             measured_detail_height: Rc::new(Cell::new(0)),
             pending_scroll_album: Rc::new(RefCell::new(None)),
-            visible_columns: Rc::new(Cell::new(1)),
             last_width: Rc::new(Cell::new(0)),
             layout_sync_queued: Rc::new(Cell::new(false)),
             artwork_loader,
@@ -401,7 +402,7 @@ impl AlbumsView {
         if album_indices.is_empty() {
             return;
         }
-        let columns = self.visible_columns.get().max(1);
+        let columns = self.columns();
         let detail_tile_row_index = self.selected_detail_tile_row_index();
         let selected_album = self.selected_album.borrow().clone();
         let patched_keys = {
@@ -524,8 +525,6 @@ impl AlbumsView {
                 settings.library.honor_sort_tags,
             );
         }
-        self.visible_columns
-            .set(columns_for_width(self.scroller.width()));
         self.filter_albums();
         let selection_is_gone = self
             .selected_album
@@ -739,20 +738,25 @@ impl AlbumsView {
     }
 
     fn sync_columns_for_width(&self, width: i32) {
-        if width <= 0 || self.last_width.replace(width) == width {
+        if width <= 0 {
             return;
         }
-        let columns = columns_for_width(width);
-        if self.visible_columns.replace(columns) != columns {
+        let previous_width = self.last_width.replace(width);
+        if columns_for_width(previous_width) != columns_for_width(width) {
             self.rebuild_rows();
         }
+    }
+
+    /// Albums per tile row, for the grid's last on-screen width.
+    fn columns(&self) -> usize {
+        columns_for_width(self.last_width.get())
     }
 
     fn rebuild_rows(&self) {
         if !self.activated.get() {
             return;
         }
-        let columns = self.visible_columns.get().max(1);
+        let columns = self.columns();
         let rows = {
             let albums = self.albums.borrow();
             album_list_rows(&albums, columns, self.selected_album.borrow().as_ref())
@@ -955,7 +959,7 @@ impl AlbumsView {
     }
 
     fn tile_row_index_for_album(&self, album_key: &AlbumKey) -> Option<usize> {
-        let columns = self.visible_columns.get().max(1);
+        let columns = self.columns();
         self.albums
             .borrow()
             .iter()
@@ -1118,7 +1122,7 @@ impl AlbumsView {
         tile_row_index: usize,
         refresh: AlbumRowRefresh<'_>,
     ) {
-        let columns = self.visible_columns.get().max(1);
+        let columns = self.columns();
         let Some(start) = tile_row_index.checked_mul(columns) else {
             return;
         };
@@ -1179,7 +1183,7 @@ impl AlbumsView {
             return;
         }
 
-        let columns = self.visible_columns.get().max(1);
+        let columns = self.columns();
         let Some((selected_column, album)) = self.detail_album(album_key, columns) else {
             row.show_empty_state();
             return;
@@ -2414,6 +2418,95 @@ mod tests {
             assert_eq!(widget_y_in_widget(&selected_title, &row), placeholder_y);
 
             window.set_child(None::<&gtk::Widget>);
+            window.destroy();
+        });
+    }
+
+    /// A regroup that waited while the grid was hidden runs when the page
+    /// is shown again, before the page has its allocation back: the rows
+    /// it builds must still span the width the grid has on screen.
+    #[test]
+    fn a_regroup_deferred_while_hidden_keeps_the_grid_columns() {
+        crate::test_support::with_gtk(|| {
+            let tracks = (1..=24)
+                .map(|id| {
+                    let mut track = crate::test_support::track(id, &format!("Song {id}"));
+                    track.metadata.album = Some(format!("Album {id}"));
+                    track
+                })
+                .collect();
+            let runtime = crate::test_support::runtime_with_tracks(tracks);
+            let window = gtk::Window::new();
+            window.set_default_size(1200, 600);
+            let view = super::AlbumsView::new(
+                runtime.clone(),
+                Rc::new(crate::command_controller::UiCommandController::new(runtime)),
+                Rc::new(|| {}),
+                crate::track_context::TrackRowContextMenu::new(
+                    crate::track_context::TrackContextActionSet::new(Vec::new()),
+                    window.clone(),
+                    crate::track_context::TrackContextInvocationState::default(),
+                ),
+                Rc::new(|_, _| {}),
+                crate::test_support::artwork_loader(),
+            );
+            let stack = crate::content_stack::ContentStack::new(
+                &gtk::Label::new(None),
+                &view.widget(),
+                &gtk::Label::new(None),
+                &gtk::Label::new(None),
+                &gtk::Label::new(None),
+                &gtk::Label::new(None),
+                &gtk::Label::new(None),
+            );
+            window.set_child(Some(stack.widget()));
+            window.present();
+
+            let grid_spans_its_width = || {
+                let width = view.scroller.width();
+                width > 0
+                    && view.row_store.n_items() as usize
+                        == album_row_count(24, columns_for_width(width))
+            };
+            let show = |shown: bool| {
+                stack.set_visible_child_name(if shown {
+                    crate::ALBUMS_VIEW
+                } else {
+                    crate::SONGS_VIEW
+                });
+                view.set_shown(shown);
+            };
+            let settles = |done: &dyn Fn() -> bool| {
+                for _ in 0..500 {
+                    pump_gtk();
+                    if done() {
+                        return true;
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                false
+            };
+
+            show(true);
+            assert!(
+                settles(&grid_spans_its_width),
+                "the grid lays out in columns"
+            );
+            assert!(
+                view.row_store.n_items() < 24,
+                "the grid has several columns"
+            );
+
+            show(false);
+            view.replace_tracks();
+            settles(&|| false);
+            show(true);
+            settles(&|| false);
+            assert!(
+                grid_spans_its_width(),
+                "the regrouped grid lays out in as many columns as before",
+            );
+
             window.destroy();
         });
     }
