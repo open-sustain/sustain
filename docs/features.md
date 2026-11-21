@@ -1355,9 +1355,9 @@ wrote there (track → on-device path + content fingerprint), resolves the ticke
 playlists and artists to a track set (smart playlists and artist selections are
 re-evaluated every sync), diffs it
 against the manifest and what is actually on the drive, and copies only what
-changed. The panel shows the plan — to copy / update / unchanged / to remove —
-before you sync; removing tracks no longer selected requires ticking an explicit
-confirmation, and a folder that removal leaves empty goes with its last file,
+changed. The panel's meter shows the space the selection takes on the device
+and warns when it will not fit; removing tracks no longer selected requires
+ticking an explicit confirmation, and a folder that removal leaves empty goes with its last file,
 so the device stops listing an artist or a playlist with nothing in it. The same
 confirmation removes the `.m3u8` of a playlist that was unticked or renamed:
 Sustain records each playlist file it writes and only ever removes one it
