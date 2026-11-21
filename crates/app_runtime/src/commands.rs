@@ -36,9 +36,7 @@ impl ApplicationRuntime {
                 if settings.library != self.settings.library {
                     self.ensure_library_hydrated()?;
                 }
-                if (self.library_task.is_occupied()
-                    || self.has_pending_managed_metadata_retarget()
-                    || self.has_pending_missing_track_relocation())
+                if (self.library_task.is_occupied() || self.has_pending_track_file_work())
                     && settings.library != self.settings.library
                 {
                     // The only narrow exception is the management-mode

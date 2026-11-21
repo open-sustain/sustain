@@ -4789,6 +4789,34 @@ fn playback_backend_errors_keep_status_text_concise() {
     std::fs::remove_dir_all(root).expect("remove test library");
 }
 
+/// #352 A5-2: a start that fails leaves the queue on the track before
+/// it. The error must advance past the failed track, not offer it again.
+#[test]
+fn a_track_that_fails_to_start_is_not_offered_again() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+    runtime
+        .handle_command(ApplicationCommand::Playback(PlaybackCommand::PlayTrack {
+            track_id: track_id(1),
+            queue: library_queue(&runtime),
+        }))
+        .expect("play track 1");
+
+    runtime
+        .handle_playback_backend_error(PlaybackBackendError {
+            track_id: Some(playable(2)),
+            message: "No decoder available.".to_owned(),
+        })
+        .expect("handle backend error");
+
+    assert!(matches!(
+        runtime.playback_state(),
+        PlaybackState::Playing { track_id, .. } if track_id == playable(3)
+    ));
+
+    std::fs::remove_dir_all(root).expect("remove test library");
+}
+
 #[test]
 fn a_pause_request_from_the_sound_server_pauses_playing_audio_and_says_why() {
     let root = unique_test_directory();
@@ -6813,6 +6841,24 @@ fn a_retarget_that_fails_after_committing_still_publishes_the_committed_row() {
             fields_changed(TrackFields::TITLE | TrackFields::LOCATION)
         )])
     );
+}
+
+/// #341 A4-3: a replacement resolves its track against the root current
+/// when the download lands, so the root must not change before then.
+#[test]
+fn a_pending_youtube_replacement_blocks_a_library_root_change() {
+    let root = unique_test_directory();
+    let mut runtime = three_track_playback_runtime(&root);
+    runtime.register_pending_youtube_audio_replacement(track_id(1));
+
+    let mut settings = runtime.settings().clone();
+    settings.library.path = Some(root.join("other-root"));
+    assert_eq!(
+        runtime.handle_command(ApplicationCommand::UpdateSettings(settings)),
+        Err(ApplicationRuntimeError::BackgroundTaskRunning)
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test library");
 }
 
 #[test]

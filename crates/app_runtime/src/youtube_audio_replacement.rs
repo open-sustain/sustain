@@ -186,7 +186,10 @@ impl ApplicationRuntime {
         !self.pending_youtube_audio_replacements.is_empty()
     }
 
-    fn register_pending_youtube_audio_replacement(&mut self, track_id: sustain_domain::TrackId) {
+    pub(crate) fn register_pending_youtube_audio_replacement(
+        &mut self,
+        track_id: sustain_domain::TrackId,
+    ) {
         *self
             .pending_youtube_audio_replacements
             .entry(track_id)

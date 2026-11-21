@@ -471,14 +471,20 @@ impl ApplicationRuntime {
 
     pub(crate) fn ensure_no_conflicting_library_mutation(&self) -> ApplicationRuntimeResult<()> {
         self.ensure_no_background_library_task()?;
-        if self.has_pending_managed_metadata_retarget()
-            || self.has_pending_missing_track_relocation()
-            || self.has_pending_youtube_audio_replacement()
-        {
+        if self.has_pending_track_file_work() {
             return Err(ApplicationRuntimeError::BackgroundTaskRunning);
         }
 
         Ok(())
+    }
+
+    /// Work still in flight that resolves a track's file against the
+    /// current library root when it lands: a managed retarget, a
+    /// missing-track relocation, or a YouTube audio replacement.
+    pub(crate) fn has_pending_track_file_work(&self) -> bool {
+        self.has_pending_managed_metadata_retarget()
+            || self.has_pending_missing_track_relocation()
+            || self.has_pending_youtube_audio_replacement()
     }
 
     /// Wake the durable outbox worker. Tests and headless callers that do not
