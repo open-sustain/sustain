@@ -1914,9 +1914,13 @@ fn a_second_request_for_a_running_track_does_not_repeat_its_pass() {
     scheduler.request_explicit_run(explicit_work(vec![track_id], BPM_ONLY));
     release_tx.send(()).expect("analysis waits for its release");
 
-    let idle = wait_for(&rx, Duration::from_secs(2), |progress| {
-        matches!(progress, SchedulerProgress::Idle { .. })
-    });
+    // The worker may have gone idle once, on nothing, before the first
+    // request reached it: the Idle awaited is the one after the run.
+    let idle = wait_for(
+        &rx,
+        Duration::from_secs(2),
+        |progress| matches!(progress, SchedulerProgress::Idle { completed, failed, .. } if completed + failed > 0),
+    );
     scheduler.shutdown();
 
     assert!(matches!(
