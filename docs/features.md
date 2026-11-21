@@ -1041,7 +1041,9 @@ provider's cool-down and leaves the interrupted capability unstamped,
 so the track is tried again once the cool-down has passed.
 
 Each capability also has a manual entry point. Now Playing offers an
-immediate artwork lookup for a track without a cover, and the per-playlist and
+immediate artwork lookup for a track without a cover — once its file is
+known to have none, not while its cover is still loading or when it could
+not be read — and the per-playlist and
 per-track **Retrieve** submenus run the chosen capability against a
 target set independent of the global toggles. Unlike the background
 sweep, a manual retrieval ignores the per-track attempt stamp, so it

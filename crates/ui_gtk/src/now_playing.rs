@@ -325,12 +325,12 @@ impl NowPlayingView {
 
     /// Called by the result consumer when a remote artwork fetch
     /// finishes. Clears the pending-fetch state if this is the track
-    /// we were waiting on, and resets the tracked artwork path so
-    /// the next refresh re-evaluates from the (now-primed or
-    /// invalidated) cache instead of short-circuiting on
-    /// "same track, same path". Without that reset the freshly
-    /// primed cache entry would never be drawn until something else
-    /// caused a track-change refresh.
+    /// we were waiting on, dismisses the fetch's progress notification,
+    /// and resets the tracked artwork path so the next refresh
+    /// re-evaluates from the (now-primed) cache instead of
+    /// short-circuiting on "same track, same path". Without that reset
+    /// the freshly primed cache entry would never be drawn until
+    /// something else caused a track-change refresh.
     pub(crate) fn notify_artwork_fetch_complete(&self, track_id: TrackId) {
         if self.pending_fetch_track_id.get() == Some(track_id) {
             self.pending_fetch_track_id.set(None);
@@ -449,23 +449,31 @@ impl NowPlayingView {
             self.set_artwork_inner_page(ARTWORK_INNER_STACK_FETCHING, false);
             return;
         }
-        let has_artwork = source
+        let shows_cover = source
             .and_then(|source| self.artwork_loader.cached(source))
-            .and_then(|decoded| {
-                decoded
-                    .tile_texture
-                    .as_ref()
-                    .or(decoded.detail_texture.as_ref())
-                    .map(|_| ())
-            })
-            .is_some();
-        if has_artwork {
+            .is_some_and(|decoded| {
+                decoded.tile_texture.is_some() || decoded.detail_texture.is_some()
+            });
+        if shows_cover {
             self.set_artwork_inner_page(ARTWORK_INNER_STACK_PRESENT, true);
         } else {
             // Only a library track has artwork to fetch: a disc track's
-            // missing cover is not clickable.
-            self.set_artwork_inner_page(ARTWORK_INNER_STACK_MISSING, track_id.is_some());
+            // missing cover is not clickable; nor is one not yet known to
+            // be missing.
+            let fetchable = track_id.is_some()
+                && source.is_some_and(|source| self.artwork_confirmed_missing(source));
+            self.set_artwork_inner_page(ARTWORK_INNER_STACK_MISSING, fetchable);
         }
+    }
+
+    /// Whether `source` is known to have no cover: not while its artwork
+    /// loads, nor after it failed to load, nor when it has one that cannot
+    /// be drawn. Only then may a fetch run, so a fetched cover never
+    /// replaces one the track has.
+    fn artwork_confirmed_missing(&self, source: &ArtworkSource) -> bool {
+        self.artwork_loader
+            .cached(source)
+            .is_some_and(|decoded| !decoded.has_cover())
     }
 
     /// Show the inner artwork page `name`; the present and missing pages
@@ -525,6 +533,17 @@ impl NowPlayingView {
         // the worker is single-slot and we don't want to enqueue
         // background work the user has no surface for.
         if self.pending_fetch_track_id.get().is_some() {
+            return false;
+        }
+        // The tile may show a state the artwork has since left, such as a
+        // cover given meanwhile in Get Info: ask the loader.
+        let source = self
+            .runtime
+            .borrow()
+            .library_track(track_id)
+            .cloned()
+            .and_then(|track| self.artwork_source(&track));
+        if !source.is_some_and(|source| self.artwork_confirmed_missing(&source)) {
             return false;
         }
         if !command_controller.dispatch_succeeded(ApplicationCommand::FetchArtwork { track_id }) {

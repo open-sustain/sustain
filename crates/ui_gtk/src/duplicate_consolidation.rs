@@ -727,7 +727,10 @@ fn install_artwork_previews(
     }
 }
 
+/// How good a cover is to keep, if it is one that can be drawn: a cover the
+/// image loader cannot draw is never the one picked to keep.
 fn artwork_quality(decoded: &DecodedArtwork) -> Option<DuplicateArtworkQuality> {
+    decoded.tile_texture.as_ref()?;
     Some(DuplicateArtworkQuality {
         pixels: decoded.dimensions?.pixels,
         encoded_bytes: decoded.encoded_bytes_len.unwrap_or_default(),

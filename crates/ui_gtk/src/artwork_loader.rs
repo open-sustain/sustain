@@ -53,6 +53,6 @@ mod decode;
 mod disk_cache;
 mod loader;
 
-pub(crate) use decode::DecodedArtwork;
+pub(crate) use decode::{DecodedArtwork, PrimedArtwork};
 pub(crate) use disk_cache::ArtworkSource;
 pub(crate) use loader::ArtworkLoader;

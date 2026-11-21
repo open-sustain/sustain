@@ -15,7 +15,7 @@ use gtk::glib;
 use hashlink::LinkedHashMap;
 use sustain_app_runtime::MetadataService;
 
-use super::decode::{ArtworkLoad, ArtworkVariant, DecodedArtwork, decode_artwork};
+use super::decode::{ArtworkLoad, ArtworkVariant, DecodedArtwork, PrimedArtwork};
 use super::disk_cache::{ArtworkRepository, ArtworkSource};
 
 const WORKER_COUNT_MIN: usize = 4;
@@ -373,56 +373,39 @@ impl ArtworkLoader {
         }
     }
 
-    /// Replace `source`'s artwork with decoded artwork built from
-    /// already-in-memory bytes.
+    /// Replace `source`'s artwork with `artwork`, already decoded off the
+    /// GTK thread.
     ///
-    /// Used after a remote fetch lands: the tag-write that persists
-    /// the bytes is asynchronous, so a naive "invalidate then
-    /// re-request" path would race the writer and briefly display
-    /// the missing-artwork state. Priming the in-memory cache
-    /// directly with the freshly-decoded artwork makes the new cover
-    /// visible on the very next [`Self::cached`] / [`Self::request`]
-    /// call without depending on disk write ordering.
+    /// Used when a cover is accepted (Get Info, a remote fetch): the tag
+    /// write that persists it is asynchronous, so a naive "invalidate then
+    /// re-request" path would race the writer and briefly display the old
+    /// or missing artwork. Priming the in-memory caches directly makes the
+    /// new cover visible on the very next [`Self::cached`] /
+    /// [`Self::request`] call without depending on disk write ordering.
     ///
-    /// Priming advances the source generation, so loads already in
-    /// flight cannot overwrite the primed artwork with what the file
-    /// held before the write. Requests still waiting are answered with
-    /// the primed artwork. The disk cache row is dropped and will be
-    /// repopulated by the next miss-driven worker load once the tag
+    /// Priming advances the source generation, so loads already in flight
+    /// cannot overwrite the primed artwork with what the file held before
+    /// the write. Requests still waiting are answered with the primed
+    /// artwork. A size that failed (bytes that are no image) leaves nothing
+    /// cached, so its next request reads the file again. The disk cache row
+    /// is dropped and
+    /// will be repopulated by the next miss-driven worker load once the tag
     /// write has landed and the file fingerprint has updated.
-    pub(crate) fn prime(&self, source: ArtworkSource, bytes: Vec<u8>) {
-        self.prime_from_bytes(source, Some(bytes));
-    }
-
-    /// Insert an explicit "no artwork" entry for `source`.
-    ///
-    /// Manual artwork removal is committed through the asynchronous tag writer.
-    /// Priming the in-memory caches as absent lets the UI reflect the accepted
-    /// user intent immediately without racing a worker reload against the
-    /// still-pending file rewrite.
-    pub(crate) fn prime_missing(&self, source: ArtworkSource) {
-        self.prime_from_bytes(source, None);
-    }
-
-    fn prime_from_bytes(&self, source: ArtworkSource, bytes: Option<Vec<u8>>) {
+    pub(crate) fn prime(&self, source: ArtworkSource, artwork: PrimedArtwork) {
+        self.inner.tiles.borrow_mut().remove(&source);
+        self.inner.details.borrow_mut().remove(&source);
         self.inner.repository.invalidate(&source);
-        // Populate both caches so the new cover is visible whether the next
-        // reader asks for the tile (now-playing tile) or the detail
-        // (lyrics/artwork overlay). Decoding twice is acceptable: priming
-        // happens once, on a manual cover accept, not on a hot path.
-        //
         // Both caches are filled before any callback runs, so a callback
         // that asks for the other size gets the primed artwork too.
-        let load = |variant| match decode_artwork(bytes.clone(), variant) {
-            Some(decoded) => ArtworkLoad::Settled(decoded.artwork),
-            None => ArtworkLoad::Failed,
-        };
-        let tile = load(ArtworkVariant::Tile);
-        let detail = load(ArtworkVariant::Detail);
-        let tile_callbacks = settle(&self.inner, &source, ArtworkVariant::Tile, &tile);
-        let detail_callbacks = settle(&self.inner, &source, ArtworkVariant::Detail, &detail);
-        answer(tile_callbacks, &tile.shown());
-        answer(detail_callbacks, &detail.shown());
+        let tile_callbacks = settle(&self.inner, &source, ArtworkVariant::Tile, &artwork.tile);
+        let detail_callbacks = settle(
+            &self.inner,
+            &source,
+            ArtworkVariant::Detail,
+            &artwork.detail,
+        );
+        answer(tile_callbacks, &artwork.tile.shown());
+        answer(detail_callbacks, &artwork.detail.shown());
     }
 }
 
@@ -561,7 +544,7 @@ mod tests {
         InitialTags, MetadataChange, MetadataError, MetadataResult, MetadataService, Rating,
     };
 
-    use super::{ArtworkLoader, ArtworkSource, LruCache};
+    use super::{ArtworkLoader, ArtworkSource, LruCache, PrimedArtwork};
 
     const VALID_PNG: &[u8] = &[
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
@@ -774,7 +757,7 @@ mod tests {
             );
             run_main_loop_until(|| service.started() >= 1);
 
-            loader.prime(source.clone(), VALID_PNG.to_vec());
+            loader.prime(source.clone(), PrimedArtwork::decode(Some(VALID_PNG)));
             assert_eq!(
                 answered.get(),
                 Some((true, true)),
@@ -794,6 +777,41 @@ mod tests {
                 .cached(&source)
                 .expect("the primed cover stays cached");
             assert!(cached.tile_texture.is_some());
+        });
+    }
+
+    #[test]
+    fn a_primed_cover_that_does_not_decode_leaves_no_earlier_cover_cached() {
+        crate::test_support::with_gtk(|| {
+            let (loader, _service, source) = gated_loader();
+            loader.prime(source.clone(), PrimedArtwork::decode(Some(VALID_PNG)));
+            assert!(loader.cached(&source).is_some());
+
+            loader.prime(source.clone(), PrimedArtwork::decode(Some(b"not an image")));
+            assert!(
+                loader.cached(&source).is_none(),
+                "the replaced cover is gone, and nothing stands for the new one"
+            );
+            assert!(loader.cached_detail(&source).is_none());
+        });
+    }
+
+    #[test]
+    fn a_primed_cover_that_cannot_be_drawn_replaces_the_earlier_one_texture_less() {
+        crate::test_support::with_gtk(|| {
+            let (loader, _service, source) = gated_loader();
+            loader.prime(source.clone(), PrimedArtwork::decode(Some(VALID_PNG)));
+
+            // A valid header over corrupt pixel data.
+            let mut undrawable = VALID_PNG.to_vec();
+            undrawable[41..52].fill(0xff);
+            assert!(sustain_artwork::validate_encoded_artwork(&undrawable).is_ok());
+            loader.prime(source.clone(), PrimedArtwork::decode(Some(&undrawable)));
+            for cached in [loader.cached(&source), loader.cached_detail(&source)] {
+                let cached = cached.expect("the new cover is installed, not the old one reread");
+                assert!(cached.has_cover(), "the source still has a cover");
+                assert!(cached.tile_texture.is_none() && cached.detail_texture.is_none());
+            }
         });
     }
 

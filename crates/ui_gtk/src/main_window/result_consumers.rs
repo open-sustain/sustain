@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use sustain_app_runtime::{DeviceSyncEvent, TrackUpdated};
 use sustain_i18n::gettext;
 
+use crate::artwork_loader::PrimedArtwork;
 use crate::library_view_update::LibraryViewUpdate;
 
 use super::*;
@@ -467,8 +468,8 @@ pub(super) fn install_smart_shuffle_launch_rebuild(runtime: &SharedRuntime) {
 /// Drains [`ArtworkFetchResult`](sustain_app_runtime::ArtworkFetchResult)s
 /// posted by the background artwork fetcher.
 ///
-/// On a successful fetch, the cache is invalidated, the freshly-
-/// decoded bytes are primed into the loader's in-memory cache (so
+/// On a successful fetch, the bytes are decoded off the GTK thread, then
+/// the cover is accepted and primed into the loader's in-memory cache (so
 /// the imminent now-playing refresh paints the new cover without
 /// waiting for the async tag write), and a follow-up `SetArtwork`
 /// command persists the bytes through the standard tag-writing
@@ -502,6 +503,13 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
             use sustain_app_runtime::ArtworkFetchOutcome;
             let (severity, body) = match &result.outcome {
                 ArtworkFetchOutcome::Fetched(bytes) => {
+                    // Decode off the GTK thread first, so the cover shows
+                    // the moment it is accepted, with nothing in between.
+                    let decode_bytes = bytes.clone();
+                    let decoded =
+                        gio::spawn_blocking(move || PrimedArtwork::decode(Some(&decode_bytes)))
+                            .await
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
                     let applied = command_controller.dispatch(
                         sustain_app_runtime::ApplicationCommand::SetFetchedArtwork {
                             track_id: result.track_id,
@@ -520,7 +528,7 @@ pub(super) fn install_artwork_fetch_result_consumer(context: ArtworkFetchResultC
                         // row: the next miss after the metadata writer
                         // lands the tag write rebuilds it from the
                         // file, with the correct post-write fingerprint.
-                        artwork_loader.prime(source, bytes.clone());
+                        artwork_loader.prime(source, decoded);
                     }
                     if queued {
                         (

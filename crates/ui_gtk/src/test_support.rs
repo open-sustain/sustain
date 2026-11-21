@@ -112,13 +112,15 @@ where
     }
 }
 
-/// A metadata service with no files behind it: every read finds nothing
-/// and every write fails. For widget tests that need an
-/// [`ArtworkLoader`](crate::artwork_loader::ArtworkLoader) but load no
-/// artwork.
-struct NoFiles;
+/// A metadata service with no real files behind it: every file's artwork
+/// is `cover`, every other read finds nothing and every write fails. For
+/// widget tests that need an
+/// [`ArtworkLoader`](crate::artwork_loader::ArtworkLoader).
+struct TestFiles {
+    cover: Option<&'static [u8]>,
+}
 
-impl sustain_app_runtime::MetadataService for NoFiles {
+impl sustain_app_runtime::MetadataService for TestFiles {
     fn read_initial_tags(
         &self,
         _path: &std::path::Path,
@@ -146,7 +148,7 @@ impl sustain_app_runtime::MetadataService for NoFiles {
         &self,
         _path: &std::path::Path,
     ) -> sustain_app_runtime::MetadataResult<Option<Vec<u8>>> {
-        Ok(None)
+        Ok(self.cover.map(<[u8]>::to_vec))
     }
 
     fn write_artwork(
@@ -158,12 +160,23 @@ impl sustain_app_runtime::MetadataService for NoFiles {
     }
 }
 
-/// An artwork loader over [`NoFiles`], caching under a directory of its
-/// own in the system temporary directory.
+/// An artwork loader over files that hold no artwork, caching under a
+/// directory of its own in the system temporary directory.
 pub(crate) fn artwork_loader() -> crate::artwork_loader::ArtworkLoader {
+    artwork_loader_over(TestFiles { cover: None })
+}
+
+/// [`artwork_loader`], over files that all hold `cover`, an encoded image.
+pub(crate) fn artwork_loader_with_cover(
+    cover: &'static [u8],
+) -> crate::artwork_loader::ArtworkLoader {
+    artwork_loader_over(TestFiles { cover: Some(cover) })
+}
+
+fn artwork_loader_over(files: TestFiles) -> crate::artwork_loader::ArtworkLoader {
     let cache_dir =
         std::env::temp_dir().join(format!("sustain-ui-test-artwork-{}", std::process::id()));
-    crate::artwork_loader::ArtworkLoader::new(std::sync::Arc::new(NoFiles), cache_dir)
+    crate::artwork_loader::ArtworkLoader::new(std::sync::Arc::new(files), cache_dir)
 }
 
 /// A runtime whose library holds `tracks`, kept in an in-memory store.
@@ -208,7 +221,10 @@ pub(crate) fn runtime_with_tracks_and_clock(
         store.save_track(track).expect("the store saves the track");
     }
     let runtime = sustain_app_runtime::ApplicationRuntime::new()
-        .with_library_services(std::sync::Arc::new(store), std::sync::Arc::new(NoFiles))
+        .with_library_services(
+            std::sync::Arc::new(store),
+            std::sync::Arc::new(TestFiles { cover: None }),
+        )
         .expect("the runtime takes the store")
         .with_clock(clock);
     std::rc::Rc::new(std::cell::RefCell::new(runtime))

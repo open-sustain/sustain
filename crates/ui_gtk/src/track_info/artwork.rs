@@ -17,7 +17,7 @@ use sustain_artwork::{
 use sustain_i18n::gettext;
 
 use super::{ARTWORK_PREVIEW_SIZE, COVER_THUMB_SIZE};
-use crate::artwork_loader::{ArtworkLoader, ArtworkSource};
+use crate::artwork_loader::{ArtworkLoader, ArtworkSource, PrimedArtwork};
 use crate::command_controller::SharedCommandController;
 use crate::{ArtworkChangedHolder, PlaybackChangedCallback};
 
@@ -35,17 +35,16 @@ struct ArtworkChangePublisher {
 }
 
 impl ArtworkChangePublisher {
+    /// Show `artwork`, already decoded, as `track_id`'s new cover — or as
+    /// its absence — everywhere.
     fn publish(
         &self,
         track_id: TrackId,
         artwork_source: Option<ArtworkSource>,
-        artwork: Option<Vec<u8>>,
+        artwork: PrimedArtwork,
     ) {
         if let Some(source) = artwork_source {
-            match artwork {
-                Some(bytes) => self.artwork_loader.prime(source, bytes),
-                None => self.artwork_loader.prime_missing(source),
-            }
+            self.artwork_loader.prime(source, artwork);
         }
         if let Some(callback) = self.artwork_changed_holder.borrow().as_ref() {
             callback(&[track_id]);
@@ -57,6 +56,8 @@ impl ArtworkChangePublisher {
 pub(super) struct ArtworkPage {
     pub(super) widget: gtk::Box,
     editor: Rc<ArtworkEditor>,
+    /// Advanced by every change of track, so the artwork still loading for
+    /// the last one is not shown for this one.
     load_generation: Rc<Cell<u64>>,
     artwork_loader: ArtworkLoader,
 }
@@ -187,16 +188,23 @@ impl ArtworkPage {
         self.load_generation.set(generation);
         (self.editor.refresh)(None, has_embedded_artwork);
         if let Some(source) = artwork_source {
-            let refresh = self.editor.refresh.clone();
+            // Weak: a slow read must not keep a closed dialog's edits.
+            let editor = Rc::downgrade(&self.editor);
             let load_generation = self.load_generation.clone();
             self.artwork_loader.request_detail(
                 source,
                 Box::new(move |decoded| {
-                    if load_generation.get() != generation {
+                    let Some(editor) = editor.upgrade() else {
+                        return;
+                    };
+                    // Another track took over while the track's artwork
+                    // loaded, or an edit was staged meanwhile, which the
+                    // page shows instead.
+                    if load_generation.get() != generation || editor.staged.borrow().is_some() {
                         return;
                     }
-                    let has_artwork = has_embedded_artwork || decoded.detail_texture.is_some();
-                    refresh(decoded.detail_texture, has_artwork);
+                    let has_artwork = has_embedded_artwork || decoded.has_cover();
+                    (editor.refresh)(decoded.detail_texture, has_artwork);
                 }),
             );
         }
@@ -233,10 +241,12 @@ struct ArtworkEditor {
     staged: RefCell<Option<StagedArtwork>>,
 }
 
-/// An artwork edit not yet written: the new cover, or `None` to remove it.
+/// An artwork edit not yet written: the new cover, or `None` to remove it,
+/// and how it shows once written.
 struct StagedArtwork {
     target: ArtworkTarget,
     artwork: Option<Vec<u8>>,
+    decoded: PrimedArtwork,
 }
 
 /// Where new artwork comes from: an image file, or encoded image bytes
@@ -275,19 +285,21 @@ impl ArtworkEditor {
         let Some(staged) = self.staged.borrow_mut().take() else {
             return true;
         };
-        let StagedArtwork { target, artwork } = staged;
         if !self
             .command_controller
             .dispatch_succeeded(ApplicationCommand::SetArtwork {
-                track_id: target.track_id,
-                artwork: artwork.clone(),
+                track_id: staged.target.track_id,
+                artwork: staged.artwork.clone(),
             })
         {
-            self.staged.replace(Some(StagedArtwork { target, artwork }));
+            self.staged.replace(Some(staged));
             return false;
         }
+        let StagedArtwork {
+            target, decoded, ..
+        } = staged;
         self.publisher
-            .publish(target.track_id, target.artwork_source, artwork);
+            .publish(target.track_id, target.artwork_source, decoded);
         true
     }
 
@@ -347,6 +359,7 @@ impl ArtworkEditor {
         self.staged.replace(Some(StagedArtwork {
             target,
             artwork: None,
+            decoded: PrimedArtwork::decode(None),
         }));
         (self.refresh)(None, false);
     }
@@ -368,8 +381,13 @@ impl ArtworkEditor {
                 };
                 let outcome = match bytes {
                     Ok(bytes) => {
-                        let texture = texture_from_bytes(&bytes, ARTWORK_PREVIEW_SIZE);
-                        LoadedArtwork::Ready { bytes, texture }
+                        let (decoded, preview) =
+                            PrimedArtwork::decode_with_preview(&bytes, ARTWORK_PREVIEW_SIZE);
+                        LoadedArtwork::Ready {
+                            bytes,
+                            decoded,
+                            preview,
+                        }
                     }
                     Err(error) => LoadedArtwork::Failed(error),
                 };
@@ -394,12 +412,17 @@ impl ArtworkEditor {
             return;
         }
         match outcome {
-            LoadedArtwork::Ready { bytes, texture } => {
+            LoadedArtwork::Ready {
+                bytes,
+                decoded,
+                preview,
+            } => {
                 self.staged.replace(Some(StagedArtwork {
                     target,
                     artwork: Some(bytes),
+                    decoded,
                 }));
-                (self.refresh)(texture, true);
+                (self.refresh)(preview, true);
             }
             LoadedArtwork::Failed(error) => {
                 eprintln!("sustain: failed to read new artwork: {error}");
@@ -493,33 +516,16 @@ pub(super) fn set_frame_texture(frame: &gtk::Frame, texture: Option<&gdk::Textur
     }
 }
 
-/// Decode encoded image bytes into a scaled texture. Runs on a worker
-/// thread (pixbuf decode + `gdk::Texture` construction are safe off the
-/// main thread — the shared artwork loader relies on the same property).
-fn texture_from_bytes(bytes: &[u8], size: i32) -> Option<gdk::Texture> {
-    sustain_artwork::validate_encoded_artwork(bytes).ok()?;
-    let bytes = glib::Bytes::from_owned(bytes.to_vec());
-    let stream = gio::MemoryInputStream::from_bytes(&bytes);
-    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(
-        &stream,
-        size,
-        size,
-        true,
-        None::<&gio::Cancellable>,
-    )
-    .ok()?;
-    Some(gdk::Texture::for_pixbuf(&pixbuf))
-}
-
 /// Outcome of the off-thread read+decode of new artwork, chosen or pasted.
 enum LoadedArtwork {
-    /// Valid bytes (always) plus a decoded preview texture when the
-    /// pixbuf decode succeeded. The bytes are still staged even if the
-    /// texture is `None` (a format the policy accepts but pixbuf cannot
-    /// render) so the file's tag is updated and a placeholder shown.
+    /// Valid bytes, how they show once written, and a preview of the
+    /// whole image. The bytes are staged even when they did not decode (a
+    /// format the policy accepts but pixbuf cannot render), so the file's
+    /// tag is updated and a placeholder shown.
     Ready {
         bytes: Vec<u8>,
-        texture: Option<gdk::Texture>,
+        decoded: PrimedArtwork,
+        preview: Option<gdk::Texture>,
     },
     Failed(ArtworkReadError),
 }
@@ -530,8 +536,8 @@ mod tests {
 
     use super::{
         ArtworkPage, LoadedArtwork, MAX_ENCODED_ARTWORK_BYTES, read_capped, set_frame_texture,
-        texture_from_bytes,
     };
+    use crate::artwork_loader::PrimedArtwork;
     use crate::test_support::with_gtk;
     use gtk::prelude::*;
     use gtk::{gio, glib};
@@ -539,6 +545,17 @@ mod tests {
     /// An artwork page on track 1, and how many artwork changes it has
     /// published.
     fn artwork_page() -> (ArtworkPage, Rc<Cell<usize>>) {
+        let (page, published, _header_cover) =
+            artwork_page_over(&crate::test_support::artwork_loader());
+        (page, published)
+    }
+
+    /// [`artwork_page`], over `artwork_loader`, and the header cover it
+    /// updates: the page reaches its widgets weakly, so it shows nothing
+    /// once the header cover is gone.
+    fn artwork_page_over(
+        artwork_loader: &crate::artwork_loader::ArtworkLoader,
+    ) -> (ArtworkPage, Rc<Cell<usize>>, gtk::Frame) {
         let runtime =
             crate::test_support::runtime_with_tracks(vec![crate::test_support::track(1, "One")]);
         let command_controller: crate::command_controller::SharedCommandController =
@@ -549,18 +566,91 @@ mod tests {
             Rc::new(RefCell::new(Some(Rc::new(move |_: &[_]| {
                 counter.set(counter.get() + 1);
             }))));
+        let header_cover = gtk::Frame::new(None);
         let page = ArtworkPage::new(
             &gtk::Window::new(),
             &command_controller,
             &artwork_changed,
             Rc::new(|| {}),
             sustain_app_runtime::TrackId::new(1).expect("valid id"),
-            gtk::Frame::new(None),
-            &crate::test_support::artwork_loader(),
+            header_cover.clone(),
+            artwork_loader,
             None,
             true,
         );
-        (page, published)
+        (page, published, header_cover)
+    }
+
+    /// The page's Remove Artwork button.
+    fn remove_button(page: &ArtworkPage) -> gtk::Button {
+        fn find(widget: &gtk::Widget) -> Option<gtk::Button> {
+            if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                && button.label().as_deref() == Some("Remove Artwork")
+            {
+                return Some(button.clone());
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if let Some(button) = find(&widget) {
+                    return Some(button);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        find(page.widget.upcast_ref()).expect("the page has a Remove Artwork button")
+    }
+
+    /// Show track 1, whose file holds a cover, do `edit` while the page
+    /// still loads that cover, and return whether the page then offers to
+    /// remove artwork, once the cover landed.
+    fn removable_once_the_cover_lands(edit: impl FnOnce(&ArtworkPage)) -> bool {
+        let loader = crate::test_support::artwork_loader_with_cover(VALID_PNG);
+        let (page, _published, _header_cover) = artwork_page_over(&loader);
+        // No file: the cover is read through the metadata service, never
+        // from the disk cache.
+        let path = std::path::PathBuf::from("/nonexistent/sustain-artwork-page-test.flac");
+        let source = crate::artwork_loader::ArtworkSource::embedded_track(path.clone(), path);
+        page.reload(
+            sustain_app_runtime::TrackId::new(1).expect("valid id"),
+            Some(source.clone()),
+            false,
+        );
+        assert!(!remove_button(&page).is_sensitive(), "nothing shown yet");
+
+        // The load is answered on the main loop, so it lands after `edit`.
+        edit(&page);
+        let context = glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while loader.cached_detail(&source).is_none() && std::time::Instant::now() < deadline {
+            context.iteration(false);
+        }
+        while context.iteration(false) {}
+        assert!(loader.cached_detail(&source).is_some(), "the cover landed");
+        remove_button(&page).is_sensitive()
+    }
+
+    #[test]
+    fn a_removal_staged_while_the_tracks_artwork_loads_stays_shown() {
+        with_gtk(|| {
+            assert!(
+                !removable_once_the_cover_lands(|page| page.editor.remove()),
+                "the page still shows the staged removal"
+            );
+        });
+    }
+
+    #[test]
+    fn an_edit_abandoned_while_the_tracks_artwork_loads_lets_it_show() {
+        with_gtk(|| {
+            // An image chosen or pasted, which never arrives.
+            assert!(
+                removable_once_the_cover_lands(|page| {
+                    page.editor.target();
+                }),
+                "the track's cover is shown"
+            );
+        });
     }
 
     #[test]
@@ -594,7 +684,8 @@ mod tests {
                 pasted,
                 LoadedArtwork::Ready {
                     bytes: VALID_PNG.to_vec(),
-                    texture: None,
+                    decoded: PrimedArtwork::decode(Some(VALID_PNG)),
+                    preview: None,
                 },
             );
 
@@ -626,8 +717,9 @@ mod tests {
         // degrade to no texture (the file's bytes are still applied and a
         // placeholder shown) rather than producing a bogus image.
         with_gtk(|| {
-            assert!(texture_from_bytes(b"definitely not an image", 320).is_none());
-            assert!(texture_from_bytes(VALID_PNG, 320).is_some());
+            let preview = |bytes: &[u8]| PrimedArtwork::decode_with_preview(bytes, 320).1;
+            assert!(preview(b"definitely not an image").is_none());
+            assert!(preview(VALID_PNG).is_some());
         });
     }
 
@@ -653,7 +745,9 @@ mod tests {
                 "absent artwork renders the missing-image placeholder"
             );
 
-            let texture = texture_from_bytes(VALID_PNG, 96).expect("valid png decodes");
+            let texture = PrimedArtwork::decode_with_preview(VALID_PNG, 96)
+                .1
+                .expect("valid png decodes");
             set_frame_texture(&frame, Some(&texture), 96);
             let cover = shown_image(&frame);
             assert_eq!(cover.storage_type(), gtk::ImageType::Paintable);

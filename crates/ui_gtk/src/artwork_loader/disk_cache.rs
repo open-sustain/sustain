@@ -16,8 +16,8 @@ use sustain_artwork::{ArtworkDimensions, MAX_ENCODED_ARTWORK_BYTES, validate_dim
 use crate::artwork_color::{ArtworkPalette, ArtworkPaletteComponents};
 
 use super::decode::{
-    ArtworkLoad, ArtworkVariant, DecodedArtwork, decode_artwork, palette_components_from_cache_row,
-    texture_from_png,
+    ArtworkLoad, ArtworkVariant, DecodedArtwork, decode_artwork_record,
+    palette_components_from_cache_row, texture_from_png,
 };
 
 // 4: a decode failure is no longer stored as a cover's absence; the
@@ -157,7 +157,7 @@ impl ArtworkRepository {
                     return ArtworkLoad::Failed;
                 };
                 // Nor may a failed decode, which is not absence either.
-                let Some(decoded) = decode_artwork(bytes, variant) else {
+                let Some(decoded) = decode_artwork_record(bytes, variant) else {
                     return ArtworkLoad::Failed;
                 };
                 if let (Some(cache), Some(fingerprint)) = (self.disk_cache(), fingerprint) {

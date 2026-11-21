@@ -32,6 +32,14 @@ pub(crate) struct DecodedArtwork {
     pub(crate) encoded_bytes_len: Option<usize>,
 }
 
+impl DecodedArtwork {
+    /// Whether the source has a cover, drawable or not: its dimensions are
+    /// known even when no texture could be made of it.
+    pub(crate) const fn has_cover(&self) -> bool {
+        self.dimensions.is_some()
+    }
+}
+
 /// Which cached texture size a request wants.
 ///
 /// The two sizes have very different memory profiles, so they live in
@@ -46,6 +54,16 @@ pub(super) enum ArtworkVariant {
     Tile,
     /// Large panel / overlay cover ([`DETAIL_TEXTURE_MAX_SIDE`]).
     Detail,
+}
+
+impl ArtworkVariant {
+    /// The side of the variant's square texture, at most.
+    const fn max_side(self) -> i32 {
+        match self {
+            Self::Tile => TILE_TEXTURE_MAX_SIDE,
+            Self::Detail => DETAIL_TEXTURE_MAX_SIDE,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -76,82 +94,182 @@ impl ArtworkLoad {
     }
 }
 
-/// Decode `bytes`, a source's embedded artwork or `None` for none. `None`
-/// when there are bytes but they do not decode.
-pub(super) fn decode_artwork(
+/// A source's new artwork, decoded in both sizes: what
+/// [`ArtworkLoader::prime`](super::ArtworkLoader::prime) installs.
+///
+/// Decoding is the expensive part, so it is done first, off the GTK
+/// thread; priming then changes the loader's state at once, leaving no
+/// moment in which the source's old artwork is gone and its new one not
+/// yet there.
+pub(crate) struct PrimedArtwork {
+    pub(super) tile: ArtworkLoad,
+    pub(super) detail: ArtworkLoad,
+}
+
+impl PrimedArtwork {
+    /// Decode `bytes`, a source's new encoded cover or `None` when it no
+    /// longer has one. The image is decoded once, at the detail size, and
+    /// the tile scaled from that. Too slow for the GTK thread: run it on a
+    /// worker.
+    ///
+    /// A cover the image loader cannot draw still is the source's cover:
+    /// it is installed without a texture, shown as the placeholder, so the
+    /// file is not read again for the cover it is about to replace. Only
+    /// bytes that are no image at all fail.
+    pub(crate) fn decode(bytes: Option<&[u8]>) -> Self {
+        match bytes {
+            Some(bytes) => Self::decode_cover(bytes, None).0,
+            None => Self::settled(&DecodedArtwork::default()),
+        }
+    }
+
+    /// [`Self::decode`] a new cover, with a preview of the whole image,
+    /// uncropped, fitting a `side`-pixel square: what an editor shows before
+    /// the cover is accepted. Still one decode.
+    pub(crate) fn decode_with_preview(bytes: &[u8], side: i32) -> (Self, Option<gdk::Texture>) {
+        Self::decode_cover(bytes, Some(side))
+    }
+
+    fn decode_cover(bytes: &[u8], preview_side: Option<i32>) -> (Self, Option<gdk::Texture>) {
+        let max_side = preview_side.map_or(DETAIL_TEXTURE_MAX_SIDE, |side| {
+            side.max(DETAIL_TEXTURE_MAX_SIDE)
+        });
+        if let Some(decoded) = decode_scaled(bytes.to_vec(), max_side) {
+            let preview = preview_side
+                .and_then(|side| fitted_pixbuf(&decoded.pixbuf, side))
+                .map(|pixbuf| gdk::Texture::for_pixbuf(&pixbuf));
+            let primed = Self {
+                tile: ArtworkLoad::Settled(decoded.at(ArtworkVariant::Tile).artwork()),
+                detail: ArtworkLoad::Settled(decoded.at(ArtworkVariant::Detail).artwork()),
+            };
+            return (primed, preview);
+        }
+        let primed = match validate_encoded_artwork(bytes) {
+            Ok(dimensions) => Self::settled(&DecodedArtwork {
+                dimensions: Some(dimensions),
+                encoded_bytes_len: Some(bytes.len()),
+                ..DecodedArtwork::default()
+            }),
+            Err(_) => Self {
+                tile: ArtworkLoad::Failed,
+                detail: ArtworkLoad::Failed,
+            },
+        };
+        (primed, None)
+    }
+
+    fn settled(decoded: &DecodedArtwork) -> Self {
+        Self {
+            tile: ArtworkLoad::Settled(decoded.clone()),
+            detail: ArtworkLoad::Settled(decoded.clone()),
+        }
+    }
+}
+
+/// Decode `bytes`, a source's embedded artwork or `None` for none, at
+/// `variant`'s size, with the cache entry that stores it: the variant's
+/// texture encoded as PNG. `None` when there are bytes but they do not
+/// decode.
+pub(super) fn decode_artwork_record(
     bytes: Option<Vec<u8>>,
     variant: ArtworkVariant,
 ) -> Option<DecodedArtworkRecord> {
     let Some(bytes) = bytes else {
         return Some(DecodedArtworkRecord::default());
     };
-    let encoded_bytes_len = bytes.len();
-    let dimensions = validate_encoded_artwork(&bytes).ok()?;
-    let max_side = match variant {
-        ArtworkVariant::Tile => TILE_TEXTURE_MAX_SIDE,
-        ArtworkVariant::Detail => DETAIL_TEXTURE_MAX_SIDE,
+    let decoded = decode_variant(bytes, variant)?;
+    let png = decoded.texture_pixbuf.as_ref().and_then(pixbuf_png_bytes);
+    let (tile_png, detail_png) = match variant {
+        ArtworkVariant::Tile => (png, None),
+        ArtworkVariant::Detail => (None, png),
     };
-    let (decode_width, decode_height) = scaled_dimensions(dimensions, max_side)?;
-    let pixbuf = pixbuf_from_bytes_at_scale(bytes, decode_width, decode_height)?;
-
-    // Produce only the requested texture size. Tile scrolling must not pay for
-    // the 396px detail PNG; a later detail request merges that variant into the
-    // same disk-cache row if it is actually needed.
-    let tile_pixbuf = (variant == ArtworkVariant::Tile)
-        .then(|| scaled_pixbuf(&pixbuf, TILE_TEXTURE_MAX_SIDE))
-        .flatten();
-    let detail_pixbuf = (variant == ArtworkVariant::Detail)
-        .then(|| scaled_pixbuf(&pixbuf, DETAIL_TEXTURE_MAX_SIDE))
-        .flatten();
-    let palette = ArtworkPalette::from_pixbuf(&pixbuf);
-    let cache_entry = CachedArtwork {
-        dimensions: Some(dimensions),
-        encoded_bytes_len: Some(encoded_bytes_len),
-        tile_png: tile_pixbuf.as_ref().and_then(pixbuf_png_bytes),
-        detail_png: detail_pixbuf.as_ref().and_then(pixbuf_png_bytes),
-        palette: palette.map(ArtworkPalette::components),
-    };
-    let artwork = artwork_for_variant(
-        variant,
-        tile_pixbuf.as_ref(),
-        detail_pixbuf.as_ref(),
-        palette,
-        Some(dimensions),
-        Some(encoded_bytes_len),
-    );
-
     Some(DecodedArtworkRecord {
-        artwork,
-        cache_entry,
+        artwork: decoded.artwork(),
+        cache_entry: CachedArtwork {
+            dimensions: Some(decoded.dimensions),
+            encoded_bytes_len: Some(decoded.encoded_bytes_len),
+            tile_png,
+            detail_png,
+            palette: decoded.palette.map(ArtworkPalette::components),
+        },
     })
 }
 
-/// Assemble the in-memory [`DecodedArtwork`] for a single requested size.
-///
-/// Only the requested variant's `gdk::Texture` is uploaded; the other stays
-/// `None`. This is the crux of the tile/detail split — a grid tile request
-/// never materialises the ~9×-larger detail texture, so scrolling the Albums
-/// grid cannot accumulate detail textures in the small device-local VRAM
-/// heap. The palette and dimensions are size-independent and travel with
-/// either variant.
-fn artwork_for_variant(
+/// Encoded artwork decoded at one variant's size.
+struct VariantDecode {
     variant: ArtworkVariant,
-    tile_pixbuf: Option<&gdk_pixbuf::Pixbuf>,
-    detail_pixbuf: Option<&gdk_pixbuf::Pixbuf>,
+    /// The variant's square texture, `None` if it could not be scaled.
+    texture_pixbuf: Option<gdk_pixbuf::Pixbuf>,
     palette: Option<ArtworkPalette>,
-    dimensions: Option<ArtworkDimensions>,
-    encoded_bytes_len: Option<usize>,
-) -> DecodedArtwork {
-    let (tile_texture, detail_texture) = match variant {
-        ArtworkVariant::Tile => (tile_pixbuf.map(gdk::Texture::for_pixbuf), None),
-        ArtworkVariant::Detail => (None, detail_pixbuf.map(gdk::Texture::for_pixbuf)),
-    };
-    DecodedArtwork {
-        tile_texture,
-        detail_texture,
-        palette,
+    dimensions: ArtworkDimensions,
+    encoded_bytes_len: usize,
+}
+
+/// Decode `bytes` at `variant`'s size only: tile scrolling must not pay for
+/// the 396px detail texture; a later detail request decodes that variant if
+/// it is actually needed.
+fn decode_variant(bytes: Vec<u8>, variant: ArtworkVariant) -> Option<VariantDecode> {
+    decode_scaled(bytes, variant.max_side()).map(|decoded| decoded.at(variant))
+}
+
+/// Encoded artwork decoded at a scale, uncropped.
+struct ScaledDecode {
+    pixbuf: gdk_pixbuf::Pixbuf,
+    palette: Option<ArtworkPalette>,
+    dimensions: ArtworkDimensions,
+    encoded_bytes_len: usize,
+}
+
+/// Decode `bytes` scaled so its shorter side is `max_side`, or its own if
+/// smaller: enough for any variant no larger than that.
+fn decode_scaled(bytes: Vec<u8>, max_side: i32) -> Option<ScaledDecode> {
+    let encoded_bytes_len = bytes.len();
+    let dimensions = validate_encoded_artwork(&bytes).ok()?;
+    let (decode_width, decode_height) = scaled_dimensions(dimensions, max_side)?;
+    let pixbuf = pixbuf_from_bytes_at_scale(bytes, decode_width, decode_height)?;
+    Some(ScaledDecode {
+        palette: ArtworkPalette::from_pixbuf(&pixbuf),
+        pixbuf,
         dimensions,
         encoded_bytes_len,
+    })
+}
+
+impl ScaledDecode {
+    /// The decode at `variant`'s size, which must not exceed the decode's.
+    fn at(&self, variant: ArtworkVariant) -> VariantDecode {
+        VariantDecode {
+            variant,
+            texture_pixbuf: scaled_pixbuf(&self.pixbuf, variant.max_side()),
+            palette: self.palette,
+            dimensions: self.dimensions,
+            encoded_bytes_len: self.encoded_bytes_len,
+        }
+    }
+}
+
+impl VariantDecode {
+    /// The in-memory [`DecodedArtwork`] for the decoded size.
+    ///
+    /// Only that variant's `gdk::Texture` is uploaded; the other stays
+    /// `None`. This is the crux of the tile/detail split — a grid tile
+    /// request never materialises the ~9×-larger detail texture, so
+    /// scrolling the Albums grid cannot accumulate detail textures in the
+    /// small device-local VRAM heap. The palette and dimensions are
+    /// size-independent and travel with either variant.
+    fn artwork(&self) -> DecodedArtwork {
+        let texture = self.texture_pixbuf.as_ref().map(gdk::Texture::for_pixbuf);
+        let (tile_texture, detail_texture) = match self.variant {
+            ArtworkVariant::Tile => (texture, None),
+            ArtworkVariant::Detail => (None, texture),
+        };
+        DecodedArtwork {
+            tile_texture,
+            detail_texture,
+            palette: self.palette,
+            dimensions: Some(self.dimensions),
+            encoded_bytes_len: Some(self.encoded_bytes_len),
+        }
     }
 }
 
@@ -206,6 +324,24 @@ pub(super) fn scaled_pixbuf(
     )?;
     scaled.copy_area(x_offset, y_offset, side, side, &cropped, 0, 0);
     Some(cropped)
+}
+
+/// `pixbuf` scaled down to fit a `side`-pixel square, whole.
+fn fitted_pixbuf(pixbuf: &gdk_pixbuf::Pixbuf, side: i32) -> Option<gdk_pixbuf::Pixbuf> {
+    let (width, height) = (pixbuf.width(), pixbuf.height());
+    let longer_side = width.max(height);
+    if longer_side <= 0 || side <= 0 {
+        return None;
+    }
+    if longer_side <= side {
+        return Some(pixbuf.clone());
+    }
+    let scale = f64::from(side) / f64::from(longer_side);
+    pixbuf.scale_simple(
+        (f64::from(width) * scale).round().max(1.0) as i32,
+        (f64::from(height) * scale).round().max(1.0) as i32,
+        gdk_pixbuf::InterpType::Bilinear,
+    )
 }
 
 pub(super) fn pixbuf_png_bytes(pixbuf: &gdk_pixbuf::Pixbuf) -> Option<Vec<u8>> {
@@ -294,7 +430,31 @@ pub(super) fn rgb_from_cache_columns(
 
 #[cfg(test)]
 mod tests {
-    use super::texture_from_png;
+    use gtk::gdk_pixbuf;
+    use gtk::prelude::*;
+
+    use super::{PrimedArtwork, texture_from_png};
+
+    #[test]
+    fn an_editor_previews_the_whole_image_while_the_covers_stay_square() {
+        let pixbuf = gdk_pixbuf::Pixbuf::new(gdk_pixbuf::Colorspace::Rgb, false, 8, 800, 400)
+            .expect("a pixbuf");
+        pixbuf.fill(0x3366_99ff);
+        let bytes = pixbuf.save_to_bufferv("png", &[]).expect("png encodes");
+
+        let (primed, preview) = PrimedArtwork::decode_with_preview(&bytes, 320);
+
+        let preview = preview.expect("a preview");
+        assert_eq!((preview.width(), preview.height()), (320, 160));
+        let tile = primed.tile.shown().tile_texture.expect("a tile");
+        let detail = primed
+            .detail
+            .shown()
+            .detail_texture
+            .expect("a detail cover");
+        assert_eq!((tile.width(), tile.height()), (132, 132));
+        assert_eq!((detail.width(), detail.height()), (396, 396));
+    }
 
     #[test]
     fn corrupt_cached_png_degrades_to_placeholder() {
